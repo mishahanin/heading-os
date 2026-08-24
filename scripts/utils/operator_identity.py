@@ -123,6 +123,21 @@ def operator_org() -> str:
     return get_operator()["github_org"]
 
 
+def operator_email_domain() -> str:
+    """The domain half of the operator's email, or '' when unconfigured.
+
+    Added 2026-08-23. Two engine scripts had a tenant domain compiled in --
+    `scripts/gal-export.py` defaulted `--domain` to a real company's domain and
+    `scripts/bootcamp-roster.py` read `gal-<that domain>.json` -- so on any other
+    deployment the pair silently disagreed about which file to write and read.
+    The domain is instance identity like the slug and the org, and it belongs
+    beside them rather than in two callers.
+    """
+    email = (get_operator().get("email") or "").strip()
+    _, _, domain = email.partition("@")
+    return domain.lower()
+
+
 def _reset_cache() -> None:
     """Clear the identity cache. Intended for tests; not for production use."""
     _cached.cache_clear()

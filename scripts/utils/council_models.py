@@ -111,6 +111,25 @@ def get_model(provider: str) -> str:
     return FALLBACKS[provider]
 
 
+def is_fallback(provider: str) -> bool:
+    """True when this provider resolved to the baseline, not to a pin.
+
+    `council-models.py --show` used to infer this from `config_path().exists()`,
+    which answers a different question: whether the FILE is there, not whether
+    it names THIS provider. A config holding only `{"grok": ...}` — a partial
+    file, a hand edit, one written by an older version — made gemini and kimi
+    resolve to FALLBACKS and print with no `(fallback)` marker at all, so the
+    operator read a baseline as a deliberate pin. Resolution is per provider,
+    so the question has to be asked per provider.
+    """
+    if provider not in FALLBACKS:
+        raise ValueError(
+            f"Unknown council provider: {provider!r}. Known: {', '.join(PROVIDERS)}"
+        )
+    value = _load_config().get(provider)
+    return not (isinstance(value, str) and value.strip())
+
+
 def load_all() -> dict:
     """Resolved {provider: model} for every known provider."""
     return {provider: get_model(provider) for provider in PROVIDERS}

@@ -12,9 +12,11 @@ disables - clicking twice must not write two entries.
 """
 import json
 import re
-from datetime import datetime
-from scripts.utils.workspace import get_default_tz
+import threading
+from datetime import date, datetime
 from pathlib import Path
+
+from scripts.utils.workspace import get_default_tz
 
 from scripts.bridge_daemon.sources.inbox import (
     CRM_LOGGED_FILE,
@@ -35,8 +37,41 @@ from scripts.utils.paths import get_data_root
 _SLUG_RE = re.compile(r"^[a-z0-9-]{1,80}$")
 
 
-def log_to_crm(workspace_root: Path, conv_id: str, data_root: "Path | None" = None) -> dict:
+_CONTACT_WRITE_LOCK = threading.Lock()
+
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _interaction_date(raw_dt: str) -> str:
+    """The `YYYY-MM-DD` from an ISO timestamp, or today when it is not one.
+
+    The comment promised a fallback when `latest_datetime` was "missing or
+    malformed", but the code only measured LENGTH: any string of ten or more
+    characters was sliced verbatim, so `not-a-date-xx` was written into a CRM
+    contact file as a plausible-looking interaction date.
+    """
+    head = (raw_dt or "")[:10]
+    # Shape first, then a real calendar check. `date.fromisoformat` alone is
+    # too permissive on 3.11: it accepts the compact `20260824` form, and a
+    # producer emitting that would write a date this file never formats.
+    if not _ISO_DATE_RE.match(head):
+        return datetime.now(get_default_tz()).strftime("%Y-%m-%d")
+    try:
+        date(int(head[0:4]), int(head[5:7]), int(head[8:10]))
+    except ValueError:
+        return datetime.now(get_default_tz()).strftime("%Y-%m-%d")
+    return head
+
+
+def log_to_crm(conv_id: str, data_root: "Path | None" = None) -> dict:
     """Append an interaction-log entry for `conv_id` to its CRM contact.
+
+    There is no `workspace_root` parameter, deliberately. One used to sit first
+    in the signature and was never read in the body, while `app.py` passed the
+    DATA root into it -- so the interface advertised a need it did not have, and
+    any later edit that reached for `workspace_root` (to find a script, say)
+    would have silently run against the data overlay. That is exactly how the
+    mark-read finalizer broke.
 
     Returns {ok: True, slug, date} on success, or {ok: False, error}
     when the conversation is missing, has no linked contact, was already
@@ -44,16 +79,21 @@ def log_to_crm(workspace_root: Path, conv_id: str, data_root: "Path | None" = No
 
     HEADING OS engine/data split: the fetch file, the crm-logged dedupe log,
     and the crm/contacts/ file are all DATA, so they resolve under
-    ``data_root`` (falls back to ``workspace_root`` when not supplied).
+    ``data_root`` (falls back to the ``get_data_root()`` seam when not supplied, NOT to ``workspace_root``).
     """
     if data_root is None:
         data_root = get_data_root()
     if not isinstance(conv_id, str) or not conv_id.strip():
         return {"ok": False, "error": "conv_id is required"}
+    # Trimmed, as in inbox.mark_dismissed: the guard above tests the STRIPPED
+    # value, so writing the raw one puts a key in the dedupe log that no read
+    # can match.
+    conv_id = conv_id.strip()
     if len(conv_id) > 500:
         return {"ok": False, "error": "conv_id too long"}
 
-    # Idempotency: a conversation logged once must not be logged again.
+    # Idempotency, fast path. This read is an optimisation only; the check that
+    # decides is the one under the lock further down. See the comment there.
     if conv_id in read_crm_logged(data_root):
         return {"ok": False, "error": "conversation already logged to CRM"}
 
@@ -89,20 +129,33 @@ def log_to_crm(workspace_root: Path, conv_id: str, data_root: "Path | None" = No
     # latest_datetime is ISO; take the date portion as the interaction
     # date, falling back to today if it is missing or malformed.
     raw_dt = conv.get("latest_datetime") or ""
-    log_date = raw_dt[:10] if len(raw_dt) >= 10 else datetime.now(get_default_tz()).strftime("%Y-%m-%d")
+    log_date = _interaction_date(raw_dt)
 
-    try:
-        text = contact_file.read_text(encoding="utf-8")
-        text = bump_last_touch_in_text(text, log_date)
-        text = append_log_entry(
-            text, log_date, "Email", topic,
-            "Logged from the Inbox dashboard.",
-        )
-        atomic_write(contact_file, text)
-    except OSError as e:
-        return {"ok": False, "error": f"CRM write failed: {e}"}
-
-    ok, err = mark_crm_logged(data_root, conv_id, slug)
+    # Locked: this is a read-modify-write on a shared contact file with no
+    # atomicity of its own. Two crm-log clicks for the same contact both read
+    # the pre-write text and the second write dropped the first entry. Every
+    # other mutation path in the daemon holds a lock.
+    #
+    # Check-and-mark is INSIDE the same critical section, since 2026-08-24.
+    # Before that the dedupe read sat above the lock and the marker write below
+    # it, so a double click on ONE conversation passed the check twice, queued
+    # here, and wrote the interaction twice -- the marker only ever recorded
+    # what had already happened. A guard that both racers clear guards nothing;
+    # the check has to be in the same lock as the write it authorises.
+    with _CONTACT_WRITE_LOCK:
+        if conv_id in read_crm_logged(data_root):
+            return {"ok": False, "error": "conversation already logged to CRM"}
+        try:
+            text = contact_file.read_text(encoding="utf-8")
+            text = bump_last_touch_in_text(text, log_date)
+            text = append_log_entry(
+                text, log_date, "Email", topic,
+                "Logged from the Inbox dashboard.",
+            )
+            atomic_write(contact_file, text)
+        except OSError as e:
+            return {"ok": False, "error": f"CRM write failed: {e}"}
+        ok, err = mark_crm_logged(data_root, conv_id, slug)
     if not ok:
         # The CRM entry IS written; only the dedupe record failed. Report
         # success but flag the gap so a retry could double-log.

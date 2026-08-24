@@ -518,20 +518,30 @@ def main(argv=None) -> int:
     )
     args = ap.parse_args(argv)
 
-    if args.compact_history:
-        return compact_history()
-
-    if args.auto:
-        return auto_switch(args.auto)
-
-    if args.unattended:
-        return unattended_switch(args.unattended)
-
-    if args.done is not None:
-        return done_marker(args.done)
-
-    if args.compact_at is not None:
-        return compact_at_switch(args.compact_at)
+    # Run EVERY action the operator asked for, in declaration order. This
+    # dispatched on the first match and returned until 2026-08-24, so
+    # `--auto on --compact-at 35` — the exact pairing the comment on
+    # `compact_at_switch` says the operator types together — silently applied
+    # only the first and never set the threshold. argparse accepts the
+    # combination without complaint, so nothing told them half the command had
+    # been dropped.
+    actions = [
+        (args.compact_history, lambda: compact_history()),
+        (args.auto, lambda: auto_switch(args.auto)),
+        (args.unattended, lambda: unattended_switch(args.unattended)),
+        (args.done is not None, lambda: done_marker(args.done)),
+        (args.compact_at is not None, lambda: compact_at_switch(args.compact_at)),
+    ]
+    requested = [run for wanted, run in actions if wanted]
+    if requested:
+        if args.json:
+            print("--json describes the paths dump and does not apply to an "
+                  "action flag; ignoring it.", file=sys.stderr)
+        # The first refusal is the exit code, and the rest still run: a rejected
+        # threshold must not silently cancel a switch the operator also asked
+        # for, which is the same swallowing in a different direction.
+        codes = [run() for run in requested]
+        return next((c for c in codes if c != 0), 0)
 
     paths = collect(args.kind)
     if args.json:

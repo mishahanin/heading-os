@@ -97,6 +97,11 @@ def get_tracker() -> ErrorTracker:
     return _GLOBAL_TRACKER
 
 
+# The (logger, handler) pair `install_handler` attached, so `_reset_for_tests`
+# can take it back off. None when nothing is attached.
+_ATTACHED: "tuple[logging.Logger, logging.Handler] | None" = None
+
+
 def install_handler(logger: logging.Logger | None = None) -> bool:
     """Attach the tracker handler to the given logger (root by default).
 
@@ -104,20 +109,32 @@ def install_handler(logger: logging.Logger | None = None) -> bool:
     was newly installed (False on subsequent calls). Tests use the
     return value to assert single-attachment semantics.
     """
-    global _INSTALLED
+    global _INSTALLED, _ATTACHED
     with _INSTALL_LOCK:
         if _INSTALLED:
             return False
         target = logger if logger is not None else logging.getLogger()
-        target.addHandler(_TrackerHandler(_GLOBAL_TRACKER))
+        handler = _TrackerHandler(_GLOBAL_TRACKER)
+        target.addHandler(handler)
+        _ATTACHED = (target, handler)
         _INSTALLED = True
         return True
 
 
 def _reset_for_tests() -> None:
-    """Test-only reset hook. Clears events + un-marks the install flag so a
-    fresh handler can be attached in the next test."""
-    global _INSTALLED
+    """Test-only reset hook. Clears events, DETACHES the handler, un-marks the flag.
+
+    The detach used to be missing: flipping `_INSTALLED` back to False let the
+    next `install_handler()` add a SECOND handler to the same logger while the
+    first stayed attached, so every log record after the second test was counted
+    twice. The single-attachment semantics the return value exists to assert
+    were violated by the reset that prepares the assertion.
+    """
+    global _INSTALLED, _ATTACHED
     with _INSTALL_LOCK:
         _GLOBAL_TRACKER.clear()
+        if _ATTACHED is not None:
+            target, handler = _ATTACHED
+            target.removeHandler(handler)
+            _ATTACHED = None
         _INSTALLED = False

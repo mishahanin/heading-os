@@ -18,6 +18,7 @@ import argparse
 import json
 import re
 import sys
+from html import escape as esc
 from datetime import datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -26,6 +27,7 @@ from urllib.request import Request, urlopen
 
 # Workspace utilities
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts.utils.atomic import atomic_write_text
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.workspace import get_default_tz, get_outputs_dir, get_workspace_root
 
@@ -87,8 +89,13 @@ def extract_upstream_tools(content):
             raw = re.sub(r"[^\x20-\x7E]", "", raw).strip()
             current_section = raw
             continue
-        if current_section and current_section in SKIP_SECTIONS:
-            continue
+        # SKIP_SECTIONS used to be dropped HERE, during the parse, which made
+        # every locally registered Telegram or Maritime tool a permanent
+        # false-positive "removed upstream" -- training the operator to ignore
+        # the removed list, so a genuine removal goes unseen. The sections are
+        # parsed now and filtered where they matter: `upstream_relevant` in
+        # check_upstream already keeps only CATEGORY_MAP sections, and those do
+        # not intersect SKIP_SECTIONS, so the "new" list is unchanged.
         tool = re.match(
             r"^[*-]\s+\[([^\]]+)\]\(([^)]+)\)\s*[-\u2013\u2014]\s*(.+)", line
         )
@@ -111,6 +118,11 @@ def extract_upstream_tools(content):
 def extract_local_tools(content):
     """Extract tool entries from osint-advanced-toolkit.md."""
     tools = {}
+    # Bound up front. It used to be assigned only inside the `###` branch while
+    # being read unconditionally below, so a toolkit file whose first URL line
+    # came before any heading raised NameError and killed all four subcommands
+    # with a traceback instead of a diagnostic.
+    current_name = None
     for line in content.splitlines():
         m = re.match(r"^###\s+(.+)", line)
         if m:
@@ -119,6 +131,10 @@ def extract_local_tools(content):
         m = re.match(r"^-\s+URL:\s+(\S+)", line)
         if m:
             url = m.group(1).strip()
+            if current_name is None:
+                print(f"{YELLOW}WARNING: URL {url} appears before any '###' "
+                      f"heading; skipped{RESET}")
+                continue
             key = url.rstrip("/").lower()
             tools[key] = {"name": current_name, "url": url}
     return tools
@@ -159,27 +175,57 @@ def check_upstream(upstream_tools, local_tools):
     }
 
 
-def validate_url(url, method="web"):
-    """Validate a single URL. Returns (status, detail)."""
+def _probe(url, verb):
+    """One HTTP probe. Returns (status, detail)."""
+    req = Request(url, headers={"User-Agent": USER_AGENT})
+    req.method = verb
+    with urlopen(req, timeout=TIMEOUT) as resp:  # nosec B310 - URL from validated registry
+        status = resp.status
+        content_type = resp.headers.get("Content-Type", "")
+    if status < 400:
+        return "WORKING", f"HTTP {status} via {verb} ({content_type[:30]})"
+    return "BLOCKED", f"HTTP {status} via {verb}"
+
+
+def validate_url(url):
+    """Validate a single URL. Returns (status, detail).
+
+    The `method` parameter this used to take was never passed by any caller, so
+    the GET branch was unreachable and a server that refuses HEAD (405, or 501)
+    was reported BLOCKED -- a healthy tool counted as broken. The retry below
+    makes GET reachable for exactly that case and nothing else.
+    """
     parsed = urlparse(url)
     host = parsed.hostname or ""
     if (host == "github.com" or host.endswith(".github.com")) and "/search" not in parsed.path:
         return "CLI", "Repository/CLI tool -- skip HTTP check"
     try:
-        req = Request(url, headers={"User-Agent": USER_AGENT})
-        req.method = "HEAD" if method == "web" else "GET"
-        with urlopen(req, timeout=TIMEOUT) as resp:  # nosec B310 - URL from validated registry
-            status = resp.status
-            content_type = resp.headers.get("Content-Type", "")
-        if status < 400:
-            return "WORKING", f"HTTP {status} ({content_type[:30]})"
-        return "BLOCKED", f"HTTP {status}"
+        return _probe(url, "HEAD")
     except HTTPError as e:
+        if e.code in (405, 501):
+            try:
+                return _probe(url, "GET")
+            except HTTPError as e2:
+                return "BLOCKED", f"HTTP {e2.code} {e2.reason} via GET"
+            except URLError as e2:
+                return "ERROR", str(e2.reason)[:60]
+            except Exception as e2:
+                return "ERROR", str(e2)[:60]
         return "BLOCKED", f"HTTP {e.code} {e.reason}"
     except URLError as e:
         return "ERROR", str(e.reason)[:60]
     except Exception as e:
         return "ERROR", str(e)[:60]
+
+
+def _status_colour(status):
+    """One status-to-colour map, used by both validate paths.
+
+    They had drifted: validate_all painted CLI cyan while validate-one dropped
+    it into the RED else-branch, so a healthy repo-only tool showed red in one
+    subcommand and cyan in another.
+    """
+    return {"WORKING": GREEN, "CLI": CYAN, "BLOCKED": YELLOW}.get(status, RED)
 
 
 def validate_all(local_tools):
@@ -189,7 +235,7 @@ def validate_all(local_tools):
     for key, tool in sorted(local_tools.items()):
         url = tool["url"]
         status, detail = validate_url(url)
-        color = GREEN if status == "WORKING" else (CYAN if status == "CLI" else (YELLOW if status == "BLOCKED" else RED))
+        color = _status_colour(status)
         print(f"  {color}{status:8s}{RESET}  {tool['name']}")
         if status not in ("WORKING", "CLI"):
             print(f"           {GRAY}{detail}{RESET}")
@@ -200,6 +246,16 @@ def validate_all(local_tools):
     errors = sum(1 for r in results if r["status"] == "ERROR")
     print(f"\n{GREEN}WORKING: {working}{RESET}  {YELLOW}BLOCKED: {blocked}{RESET}  {CYAN}CLI: {cli}{RESET}  {RED}ERROR: {errors}{RESET}")
     return results
+
+
+def _cell(value):
+    """Make one value safe to drop into a markdown table cell.
+
+    Tool names and descriptions come verbatim from a third-party README. A `|`
+    in any of them breaks the row out of the table and shifts every later
+    column; a newline ends the row entirely.
+    """
+    return str(value).replace("|", "\\|").replace("\n", " ").replace("\r", " ")
 
 
 def generate_report_md(diff, validation, report_dir):
@@ -214,7 +270,7 @@ def generate_report_md(diff, validation, report_dir):
         "|------|--------|---------|",
     ]
     for r in validation:
-        lines.append(f"| {r['name']} | {r['status']} | {r['detail']} |")
+        lines.append(f"| {_cell(r['name'])} | {_cell(r['status'])} | {_cell(r['detail'])} |")
     lines.extend([
         "",
         "## Upstream Changes",
@@ -246,7 +302,7 @@ def generate_report_md(diff, validation, report_dir):
         "Updates to `reference/osint-advanced-toolkit.md` require manual review and approval.",
     ])
     md_path = report_dir / f"{today}.md"
-    md_path.write_text("\n".join(lines), encoding="utf-8")
+    atomic_write_text(md_path, "\n".join(lines))
     return md_path
 
 
@@ -261,14 +317,16 @@ def generate_report_html(diff, validation, report_dir):
     for r in validation:
         color = "#4ade80" if r["status"] == "WORKING" else ("#22d3ee" if r["status"] == "CLI" else ("#fbbf24" if r["status"] == "BLOCKED" else "#f87171"))
         rows.append(
-            f'<tr><td>{r["name"]}</td>'
-            f'<td style="color:{color};font-weight:bold">{r["status"]}</td>'
-            f'<td style="color:#9ca3af">{r["detail"]}</td></tr>'
+            f'<tr><td>{esc(r["name"])}</td>'
+            f'<td style="color:{color};font-weight:bold">{esc(r["status"])}</td>'
+            f'<td style="color:#9ca3af">{esc(r["detail"])}</td></tr>'
         )
     new_rows = ""
     if diff["new"]:
         for t in diff["new"]:
-            new_rows += f'<tr><td>{t["name"]}</td><td>{t["section"]}</td><td><a href="{t["url"]}" style="color:#60a5fa">{t["url"]}</a></td></tr>'
+            url = esc(t["url"], quote=True)
+            new_rows += (f'<tr><td>{esc(t["name"])}</td><td>{esc(t["section"])}</td>'
+                         f'<td><a href="{url}" style="color:#60a5fa">{url}</a></td></tr>')
     else:
         new_rows = '<tr><td colspan="3" style="color:#9ca3af">No new tools detected</td></tr>'
     html = f"""<!DOCTYPE html>
@@ -323,7 +381,7 @@ Generated by osint-advanced-sync.py -- 31C Intelligence Division
 </body>
 </html>"""
     html_path = report_dir / f"{today}.html"
-    html_path.write_text(html, encoding="utf-8")
+    atomic_write_text(html_path, html)
     return html_path
 
 
@@ -363,7 +421,7 @@ def cmd_validate():
 def cmd_validate_one(url):
     """Validate a single URL."""
     status, detail = validate_url(url)
-    color = GREEN if status == "WORKING" else (YELLOW if status == "BLOCKED" else RED)
+    color = _status_colour(status)
     print(f"{color}{status}{RESET}: {url}")
     print(f"  {detail}")
 

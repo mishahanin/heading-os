@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 import time
 from typing import Any
 
@@ -128,7 +129,11 @@ def create_app(fb_module: Any, secret_token: str, logger: logging.Logger):
         x_telegram_bot_api_secret_token: str | None = Header(default=None),
     ):
         t0 = time.monotonic()
-        if x_telegram_bot_api_secret_token != secret_token:
+        # `compare_digest`, not `!=`. This header is the ONLY authorization on
+        # a publicly reachable endpoint, and `!=` short-circuits at the first
+        # differing byte. A timing side channel is a needless thing to hand an
+        # attacker when the constant-time comparison costs nothing.
+        if not secrets.compare_digest(x_telegram_bot_api_secret_token or "", secret_token):
             logger.warning("webhook: rejected request with invalid/missing secret token")
             raise HTTPException(status_code=401, detail="invalid secret token")
 
@@ -137,6 +142,15 @@ def create_app(fb_module: Any, secret_token: str, logger: logging.Logger):
         except Exception as e:
             logger.exception("webhook: JSON decode failed: %s", e)
             raise HTTPException(status_code=400, detail="invalid JSON")
+
+        if not isinstance(update, dict):
+            # `[]` and `"x"` are valid JSON and reached `.get` as a 500
+            # AttributeError, past the handler's own "invalid JSON -> 400"
+            # boundary. The endpoint is public; a malformed body is the
+            # caller's error, not the server's.
+            logger.warning("webhook: body parsed as %s, not an object",
+                           type(update).__name__)
+            raise HTTPException(status_code=400, detail="update must be a JSON object")
 
         update_id = update.get("update_id")
         if "message" in update:

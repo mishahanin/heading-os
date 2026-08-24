@@ -3,16 +3,19 @@
 Phase 1.5: parse existing workspace files (no new producers required).
 Phase 2 will swap to a refresh_prime cache for performance.
 """
+import contextlib
 import json
 import logging
 import re
+from urllib.parse import quote
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+from scripts.bridge_daemon._shapes import is_undo
 from zoneinfo import ZoneInfo
 
 from scripts.bridge_daemon.sources.pipeline import list_pipeline
 from scripts.bridge_daemon.sources.investors import list_investors
-from scripts.utils.paths import get_data_root
 from scripts.utils.workspace import get_default_tz, get_default_tz_name
 
 
@@ -37,47 +40,72 @@ IN_FLIGHT_WINDOW_DAYS = 7
 
 
 def days_to_odin_5(target_iso: str | None = None) -> int:
-    """Days remaining until the ODIN-5 target date. Negative if already past."""
-    target = date.fromisoformat(target_iso or ODIN_5_TARGET_DEFAULT)
+    """Days remaining until the ODIN-5 target date. Negative if already past.
+
+    A malformed override falls back to the default instead of raising. The
+    header invites operators to set this in a config file, and `pulse_data`
+    called it unguarded, so one typo (`2026-31-12`, `end-2026`) took the whole
+    /pulse assembly down -- while every other config-adjacent read in this
+    module degrades quietly.
+    """
+    try:
+        target = date.fromisoformat(target_iso or ODIN_5_TARGET_DEFAULT)
+    except (TypeError, ValueError):
+        logging.warning("unparseable odin_5_target %r; using %s",
+                        target_iso, ODIN_5_TARGET_DEFAULT)
+        target = date.fromisoformat(ODIN_5_TARGET_DEFAULT)
     return (target - datetime.now(get_default_tz()).date()).days
 
 
-def pipeline_value_and_deals(workspace_root: Path, data_root: "Path | None" = None) -> tuple[int, int]:
+def pipeline_summary_stated(data_root: Path) -> dict[str, int]:
+    """The summary-table figures that are ACTUALLY PRESENT in pipeline.md.
+
+    Keys `value` and `deals`, each present only when its row was found. That is
+    the whole difference from `pipeline_value_and_deals`, which flattens
+    "no summary table" and "a summary table saying zero" into the same `0`.
+    The drift report in `pulse_data` consumed the flattened form, so a workspace
+    with NO summary rows was told its summary disagreed with its deal table on
+    both figures, every single render. A missing row is not a disagreement.
+    """
+    p = data_root / "context" / "pipeline.md"
+    if not p.exists():
+        return {}
+    try:
+        text = p.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    out: dict[str, int] = {}
+    m = re.search(r"\|\s*Total pipeline value[^|]*\|\s*\$([\d,]+)\s*\|", text)
+    if m:
+        # Reachable: `[\d,]+` matches a bare `,`, and `int("")` raises. A row
+        # that does not hold a number is a MISSING row, which is this
+        # function's whole distinction, so it is left out rather than zeroed.
+        with contextlib.suppress(ValueError):
+            out["value"] = int(m.group(1).replace(",", ""))
+    m = re.search(r"\|\s*Total active deals\s*\|\s*(\d+)\s*\|", text)
+    if m:
+        # No guard: `(\d+)` is at least one digit and `int` cannot refuse it.
+        # This carried a `try/except ValueError: pass` that could not fire.
+        out["deals"] = int(m.group(1))
+    return out
+
+
+def pipeline_value_and_deals(data_root: Path) -> tuple[int, int]:
     """Parse context/pipeline.md for total pipeline value and active deal count.
 
     Returns (value_usd, active_deal_count). Both 0 if the file is missing
     or unparseable - silent degradation so the dashboard never throws on
-    a corrupt pipeline file.
+    a corrupt pipeline file. A caller that needs to tell "no summary row"
+    from "a row saying 0" wants `pipeline_summary_stated` instead.
 
-    HEADING OS engine/data split: context/pipeline.md is DATA, resolved
-    under ``data_root`` (falls back to ``workspace_root``).
+    HEADING OS engine/data split: context/pipeline.md is DATA, and
+    the single root this takes IS the data root (it used to take a
+    ``workspace_root`` too, which this module never read).
     """
-    if data_root is None:
-        data_root = get_data_root()
-    p = data_root / "context" / "pipeline.md"
-    if not p.exists():
-        return 0, 0
-    try:
-        text = p.read_text(encoding="utf-8")
-    except OSError:
-        return 0, 0
-    # Match lines like: | Total pipeline value (priced deals only) | $11,000,000 |
-    value = 0
-    m = re.search(r"\|\s*Total pipeline value[^|]*\|\s*\$([\d,]+)\s*\|", text)
-    if m:
-        try:
-            value = int(m.group(1).replace(",", ""))
-        except ValueError:
-            value = 0
-    # Active deals count.
-    deals = 0
-    m = re.search(r"\|\s*Total active deals\s*\|\s*(\d+)\s*\|", text)
-    if m:
-        try:
-            deals = int(m.group(1))
-        except ValueError:
-            deals = 0
-    return value, deals
+    # Delegated, so the two match patterns cannot drift apart. This function
+    # held its own copy of both regexes until 2026-08-24.
+    stated = pipeline_summary_stated(data_root)
+    return stated.get("value", 0), stated.get("deals", 0)
 
 
 # in_flight_count removed 2026-05-24: its tree-walk was a duplicate of the
@@ -97,29 +125,36 @@ _CAL_ROW_RE = re.compile(
 
 
 def _parse_duration_minutes(s: str) -> int:
-    """Parse 'Nm', 'Nh', 'NhMm', 'Nh Mm' into total minutes.
+    """Parse 'Nm', 'Nh', 'NhMm', 'Nh Mm', '1.5h' into total minutes.
 
     Returns 30 on unparseable input (sensible default for an unmarked
     meeting).
+
+    The number may carry a decimal point, and the match refuses to start in the
+    MIDDLE of one. `(\\d+)h` against `1.5h` matched the `5h` and returned 300
+    minutes, so a 90-minute meeting was drawn as a five-hour block and
+    `current_meeting` kept reporting it as in progress for three and a half
+    hours after it ended.
     """
     if not s:
         return 30
     s = s.strip().lower().replace(" ", "")
-    total = 0
+    total = 0.0
     matched_any = False
-    h_match = re.search(r"(\d+)h", s)
+    # The lookbehind is the fix: no digit and no dot immediately before the
+    # number, so `1.5h` matches from the `1` and never from the `5`.
+    h_match = re.search(r"(?<![\d.])(\d+(?:\.\d+)?)h", s)
     if h_match:
-        total += int(h_match.group(1)) * 60
+        total += float(h_match.group(1)) * 60
         matched_any = True
-    m_match = re.search(r"(\d+)m", s)
+    m_match = re.search(r"(?<![\d.])(\d+(?:\.\d+)?)m", s)
     if m_match:
-        total += int(m_match.group(1))
+        total += float(m_match.group(1))
         matched_any = True
-    return total if matched_any else 30
+    return round(total) if matched_any else 30
 
 
-def next_meeting(workspace_root: Path, now: datetime | None = None,
-                 data_root: "Path | None" = None) -> dict | None:
+def next_meeting(data_root: Path, now: datetime | None = None) -> dict | None:
     """Return the next upcoming meeting from today's calendar markdown file.
 
     Returns a dict with time (HH:MM), subject (str), location (str, may be
@@ -131,11 +166,10 @@ def next_meeting(workspace_root: Path, now: datetime | None = None,
     comparison are consistent regardless of the daemon machine's local
     timezone.
 
-    HEADING OS engine/data split: the calendar file is DATA, resolved under
-    ``data_root`` (falls back to ``workspace_root`` when not supplied).
+    HEADING OS engine/data split: the calendar file is DATA, and
+    the single root this takes IS the data root (it used to take a
+    ``workspace_root`` too, which this module never read).
     """
-    if data_root is None:
-        data_root = get_data_root()
     if now is None:
         now = datetime.now(timezone.utc)
     # Always evaluate the calendar in the configured local timezone, even if the daemon runs
@@ -154,7 +188,12 @@ def next_meeting(workspace_root: Path, now: datetime | None = None,
         m = _CAL_ROW_RE.match(line)
         if not m:
             continue
-        # Defensive: skip rows with too many pipes (unescaped | in a cell).
+        # Belt-and-braces. `_CAL_ROW_RE` already bounds this: its cells are
+        # `[^|]` and it anchors on `$`, so a matched row carries at most 5
+        # pipes and neither this line nor its three siblings can fire. They
+        # disagreed anyway -- one said 5, three said 6 -- which is invisible
+        # today and becomes real behaviour the day the regex is loosened.
+        # Left in place, made to agree, and credited to the regex.
         if line.count("|") > 5:
             continue
         time_str = m.group("time")
@@ -186,19 +225,17 @@ def next_meeting(workspace_root: Path, now: datetime | None = None,
     }
 
 
-def current_meeting(workspace_root: Path, now: datetime | None = None,
-                    data_root: "Path | None" = None) -> dict | None:
+def current_meeting(data_root: Path, now: datetime | None = None) -> dict | None:
     """Return the calendar event in progress right now, or None.
 
     A meeting is "in progress" when it started at or before now and ends
     after now (start + duration). Returns
     {focus, until, minutes_remaining} when active.
 
-    HEADING OS engine/data split: the calendar file is DATA, resolved under
-    ``data_root`` (falls back to ``workspace_root`` when not supplied).
+    HEADING OS engine/data split: the calendar file is DATA, and
+    the single root this takes IS the data root (it used to take a
+    ``workspace_root`` too, which this module never read).
     """
-    if data_root is None:
-        data_root = get_data_root()
     if now is None:
         now = datetime.now(timezone.utc)
     now_local = now.astimezone(get_default_tz())
@@ -214,8 +251,8 @@ def current_meeting(workspace_root: Path, now: datetime | None = None,
         m = _CAL_ROW_RE.match(line)
         if not m:
             continue
-        # Defensive: too many pipes -> skip this row.
-        if line.count("|") > 6:
+        # Defensive: see next_meeting -- the regex is what bounds this.
+        if line.count("|") > 5:
             continue
         time_str = m.group("time")
         try:
@@ -242,7 +279,7 @@ WATCH_STALE_DRAFT_HOURS = 24
 WATCH_LARGE_INBOX_THRESHOLD = 25
 
 
-def watch_items(workspace_root: Path, data_root: "Path | None" = None) -> list:
+def watch_items(data_root: Path) -> list:
     """Aggregate cross-source watchpoints for the Pulse top-of-mind block.
 
     Each item: {label, count, severity ('red'|'yellow'), link}.
@@ -255,11 +292,10 @@ def watch_items(workspace_root: Path, data_root: "Path | None" = None) -> list:
       - drafts pending >24h (yellow)   -> #/approvals
       - large unread inbox (>=25, yellow) -> #/inbox
 
-    HEADING OS engine/data split: all watched sources are DATA, resolved
-    under ``data_root`` (falls back to ``workspace_root``).
+    HEADING OS engine/data split: all watched sources are DATA, and
+    the single root this takes IS the data root (it used to take a
+    ``workspace_root`` too, which this module never read).
     """
-    if data_root is None:
-        data_root = get_data_root()
     from .tasks import list_active_tasks
     items: list = []
     try:
@@ -303,8 +339,15 @@ def watch_items(workspace_root: Path, data_root: "Path | None" = None) -> list:
                 continue
             try:
                 mt = datetime.fromisoformat(mtime_iso)
-            except ValueError:
+            except (TypeError, ValueError):
                 continue
+            if mt.tzinfo is None:
+                # A naive stamp compared against the aware `cutoff` raises
+                # TypeError, which this `except ValueError` did not catch: it
+                # escaped to the outer handler and abandoned the ENTIRE stale-
+                # drafts watchpoint over one bad row. Reading it as UTC keeps
+                # the row and matches how every other stamp here is stored.
+                mt = mt.replace(tzinfo=timezone.utc)
             if mt < cutoff:
                 stale += 1
         if stale > 0:
@@ -337,8 +380,7 @@ def watch_items(workspace_root: Path, data_root: "Path | None" = None) -> list:
     return items
 
 
-def next_items(workspace_root: Path, now: datetime | None = None, limit: int = 5,
-               data_root: "Path | None" = None) -> list:
+def next_items(data_root: Path, now: datetime | None = None, limit: int = 5) -> list:
     """Return upcoming items across sources for today.
 
     Combines:
@@ -352,10 +394,9 @@ def next_items(workspace_root: Path, now: datetime | None = None, limit: int = 5
     spanning into tomorrow if relevant.
 
     HEADING OS engine/data split: the calendar files + tasks are DATA,
-    resolved under ``data_root`` (falls back to ``workspace_root``).
+    the single root this takes IS the data root (it used to take a
+    ``workspace_root`` too, which this module never read).
     """
-    if data_root is None:
-        data_root = get_data_root()
     if now is None:
         now = datetime.now(timezone.utc)
     now_local = now.astimezone(get_default_tz())
@@ -374,7 +415,7 @@ def next_items(workspace_root: Path, now: datetime | None = None, limit: int = 5
             m = _CAL_ROW_RE.match(line)
             if not m:
                 continue
-            if line.count("|") > 6:
+            if line.count("|") > 5:
                 continue
             time_str = m.group("time")
             try:
@@ -403,7 +444,7 @@ def next_items(workspace_root: Path, now: datetime | None = None, limit: int = 5
         # is_overdue is evaluated consistently with `now`. Without this,
         # list_active_tasks would use datetime.now(get_default_tz()).date() and disagree with the
         # caller across the UTC midnight boundary.
-        tasks = list_active_tasks(workspace_root, today=now_local.date(), data_root=data_root)
+        tasks = list_active_tasks(data_root, today=now_local.date())
         for t in tasks.get("tasks", []):
             if t.get("due") == today_str and not t.get("is_overdue"):
                 items.append({
@@ -433,7 +474,7 @@ def next_items(workspace_root: Path, now: datetime | None = None, limit: int = 5
             tom_items = []
             for line in text.splitlines():
                 m = _CAL_ROW_RE.match(line)
-                if not m or line.count("|") > 6:
+                if not m or line.count("|") > 5:
                     continue
                 time_str = m.group("time")
                 try:
@@ -465,7 +506,7 @@ def next_items(workspace_root: Path, now: datetime | None = None, limit: int = 5
 _SENDABLE_STATUSES = {"first-5", "parallel-week-1-2", "wave-2"}
 
 
-def raise_progress(workspace_root: Path, data_root: "Path | None" = None) -> dict | None:
+def raise_progress(data_root: Path) -> dict | None:
     """Summarise the active fundraising raise.
 
     Returns None when no active raise program exists (silent degradation,
@@ -477,13 +518,17 @@ def raise_progress(workspace_root: Path, data_root: "Path | None" = None) -> dic
             "sendable_drafts": int,     # sendable firms with a first-touch draft on disk
             "first_5_total": int,
             "first_5_drafts": int,
+            "sendable_sent": int,       # sendable firms already marked sent
+            "first_5_sent": int,
         }
 
-    HEADING OS engine/data split: the fundraising program is DATA, resolved
-    under ``data_root`` (falls back to ``workspace_root``).
+    The last two were returned but undocumented, so a consumer written against
+    this block missed them.
+
+    HEADING OS engine/data split: the fundraising program is DATA, and
+    the single root this takes IS the data root (it used to take a
+    ``workspace_root`` too, which this module never read).
     """
-    if data_root is None:
-        data_root = get_data_root()
     try:
         d = list_investors(data_root)
     except Exception:
@@ -538,7 +583,7 @@ _THREAD_FM_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 _THREAD_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$")
 
 
-def tribe_state_preview(workspace_root: Path, data_root: "Path | None" = None) -> dict:
+def tribe_state_preview(data_root: Path) -> dict | None:
     """Compact tribe-state snapshot for the Pulse footer card.
 
     'on watch' is defined as days_since_touch <= TRIBE_ON_WATCH_DAYS;
@@ -559,10 +604,8 @@ def tribe_state_preview(workspace_root: Path, data_root: "Path | None" = None) -
         or None when the tribe source is unavailable.
 
     HEADING OS engine/data split: the tribe (crm/contacts + roster xlsx) is
-    DATA, resolved under ``data_root`` (falls back to ``workspace_root``).
+    DATA, the single root this takes IS the data root (it used to take a ``workspace_root`` too, which this module never read).
     """
-    if data_root is None:
-        data_root = get_data_root()
     try:
         from .tribe import list_tribe
         d = list_tribe(data_root)
@@ -644,8 +687,7 @@ def _days_at_stage(stage_date_iso: str, today: date | None = None) -> int | None
     return delta if delta >= 0 else None
 
 
-def signals(workspace_root: Path, today: date | None = None, cap: int | None = None,
-            data_root: "Path | None" = None) -> list[dict]:
+def signals(data_root: Path, today: date | None = None, cap: int | None = None) -> list[dict]:
     """Derive operational signals from pipeline data.
 
     Each signal: {kind, severity, title, context, link}
@@ -661,11 +703,10 @@ def signals(workspace_root: Path, today: date | None = None, cap: int | None = N
 
     Returns [] (never None) so callers don't need to nil-check.
 
-    HEADING OS engine/data split: pipeline data is DATA, resolved under
-    ``data_root`` (falls back to ``workspace_root``).
+    HEADING OS engine/data split: pipeline data is DATA, and
+    the single root this takes IS the data root (it used to take a
+    ``workspace_root`` too, which this module never read).
     """
-    if data_root is None:
-        data_root = get_data_root()
     today = today or datetime.now(get_default_tz()).date()
     try:
         pipe = list_pipeline(data_root, today=today)
@@ -763,7 +804,7 @@ def _parse_thread_frontmatter(text: str) -> dict:
     return result
 
 
-def threads_state_preview(workspace_root: Path, data_root: "Path | None" = None) -> dict | None:
+def threads_state_preview(data_root: Path) -> dict | None:
     """Compact threads snapshot for the Pulse footer card.
 
     Walks THREADS_BUSINESS_DIR (threads/business/) for *.md files, parses
@@ -786,11 +827,10 @@ def threads_state_preview(workspace_root: Path, data_root: "Path | None" = None)
     even though the daemon runs on the CEO's machine; this keeps the
     bridge sources portable to any future per-exec workspace.
 
-    HEADING OS engine/data split: threads/business/ is DATA, resolved under
-    ``data_root`` (falls back to ``workspace_root``).
+    HEADING OS engine/data split: threads/business/ is DATA, and
+    the single root this takes IS the data root (it used to take a
+    ``workspace_root`` too, which this module never read).
     """
-    if data_root is None:
-        data_root = get_data_root()
     biz_dir = data_root / THREADS_BUSINESS_DIR
     if not biz_dir.is_dir():
         return None
@@ -837,10 +877,8 @@ def threads_state_preview(workspace_root: Path, data_root: "Path | None" = None)
     }
 
 
-def _today_event_count(workspace_root: Path, data_root: "Path | None" = None) -> int:
+def _today_event_count(data_root: Path) -> int:
     """Total calendar events on today's agenda (local TZ). Returns 0 on any read failure."""
-    if data_root is None:
-        data_root = get_data_root()
     try:
         from .agenda import today_agenda
         agenda = today_agenda(data_root)
@@ -864,7 +902,7 @@ def _derive_mood(event_count: int) -> str:
     return "packed"
 
 
-def sea_state(workspace_root: Path, data_root: "Path | None" = None) -> dict:
+def sea_state(data_root: Path) -> dict:
     """Derive operational state + mood for the topbar pill.
 
     The 31C operational vocabulary uses sea-state metaphors. The pill
@@ -896,10 +934,9 @@ def sea_state(workspace_root: Path, data_root: "Path | None" = None) -> dict:
         }
 
     HEADING OS engine/data split: pipeline, tasks and calendar are DATA,
-    resolved under ``data_root`` (falls back to ``workspace_root``).
+    the single root this takes IS the data root (it used to take a
+    ``workspace_root`` too, which this module never read).
     """
-    if data_root is None:
-        data_root = get_data_root()
     pipe_overdue = 0
     tasks_overdue = 0
     try:
@@ -955,8 +992,7 @@ def _iter_jsonl(log_path: Path):
             yield entry
 
 
-def today_activity(workspace_root: Path, today: date | None = None,
-                   data_root: "Path | None" = None) -> dict:
+def today_activity(data_root: Path, today: date | None = None) -> dict:
     """Count today's CEO actions across the five mutating workflow logs.
 
     Aggregates entries dated today from:
@@ -966,15 +1002,16 @@ def today_activity(workspace_root: Path, today: date | None = None,
       - approvals sent-log (mark-sent entries; tombstones ignored)
       - tasks done-log (mark-done entries; tombstones ignored)
 
-    Returns counts + per-kind entries (capped at TODAY_ACTIVITY_ENTRY_CAP)
-    so the browser can render an expandable recap. Each entry shape:
+    Returns FULL counts plus per-kind entries capped at
+    TODAY_ACTIVITY_ENTRY_CAP, so the browser can render an expandable recap.
+    The count and the list length disagree on a busy day, deliberately: the
+    count is the day's real total. Each entry shape:
       {kind, target, ref, ts, note}
 
-    HEADING OS engine/data split: the five workflow logs are DATA, resolved
-    under ``data_root`` (falls back to ``workspace_root``).
+    HEADING OS engine/data split: the five workflow logs are DATA, and
+    the single root this takes IS the data root (it used to take a
+    ``workspace_root`` too, which this module never read).
     """
-    if data_root is None:
-        data_root = get_data_root()
     today_iso = (today or datetime.now(get_default_tz()).date()).isoformat()
     inv_entries: list[dict] = []
     pipe_entries: list[dict] = []
@@ -987,7 +1024,7 @@ def today_activity(workspace_root: Path, today: date | None = None,
         from .investors import PROGRAM_DIR as _INV_DIR, SEND_LOG_FILE as _SEND_LOG
         log_path = data_root / _INV_DIR / _SEND_LOG
         for entry in _iter_jsonl(log_path):
-            if entry.get("undo") is True:
+            if is_undo(entry):
                 continue
             if entry.get("date") != today_iso:
                 continue
@@ -1003,7 +1040,12 @@ def today_activity(workspace_root: Path, today: date | None = None,
     except Exception as e:
         logging.warning("bridge.pulse.today_activity.investors: source unavailable, skipping: %s", e)
 
-    # Pipeline touch-log.
+    # Pipeline touch-log. NO `undo` filter here, unlike the four blocks above,
+    # and that is not an omission: `sources/pipeline.py` writes no tombstone --
+    # there is no `undo_touch` and nothing sets the key. A filter for a record
+    # that cannot exist reads as protection and tests as nothing. If a
+    # tombstone ever lands there, this block needs the same first line its
+    # siblings have.
     try:
         from .pipeline import TOUCH_LOG_FILE as _TOUCH_LOG
         log_path = data_root / _TOUCH_LOG
@@ -1026,7 +1068,7 @@ def today_activity(workspace_root: Path, today: date | None = None,
         from .inbox import DISMISS_LOG_FILE as _DISMISS_LOG
         log_path = data_root / _DISMISS_LOG
         for entry in _iter_jsonl(log_path):
-            if entry.get("undo") is True:
+            if is_undo(entry):
                 continue
             # Phase 1.80: prefer the explicit 'date' field (local CEO day);
             # fall back to ts.startswith for legacy entries written before
@@ -1057,7 +1099,7 @@ def today_activity(workspace_root: Path, today: date | None = None,
         from .approvals import SENT_LOG_FILE as _APPROVAL_SENT_LOG
         log_path = data_root / _APPROVAL_SENT_LOG
         for entry in _iter_jsonl(log_path):
-            if entry.get("undo") is True:
+            if is_undo(entry):
                 continue
             if entry.get("date") != today_iso:
                 continue
@@ -1081,7 +1123,7 @@ def today_activity(workspace_root: Path, today: date | None = None,
         from .tasks import DONE_LOG_FILE as _TASKS_DONE_LOG
         log_path = data_root / _TASKS_DONE_LOG
         for entry in _iter_jsonl(log_path):
-            if entry.get("undo") is True:
+            if is_undo(entry):
                 continue
             if entry.get("date") != today_iso:
                 continue
@@ -1101,38 +1143,37 @@ def today_activity(workspace_root: Path, today: date | None = None,
     except Exception as e:
         logging.warning("bridge.pulse.today_activity.tasks: source unavailable, skipping: %s", e)
 
-    # Cap each list (most-recent last in the log, so keep tail).
-    inv_entries  = inv_entries[-TODAY_ACTIVITY_ENTRY_CAP:]
-    pipe_entries = pipe_entries[-TODAY_ACTIVITY_ENTRY_CAP:]
-    inbox_entries = inbox_entries[-TODAY_ACTIVITY_ENTRY_CAP:]
-    approval_entries = approval_entries[-TODAY_ACTIVITY_ENTRY_CAP:]
-    task_entries = task_entries[-TODAY_ACTIVITY_ENTRY_CAP:]
-
+    # Counted BEFORE the cap. The counts were taken from the capped lists until
+    # 2026-08-24, so a day with 25 dismissals reported 20 and the recap read
+    # "you dismissed 20 conversations today" -- a wrong number, not a truncated
+    # list. The cap exists to bound the PAYLOAD; it was silently bounding the
+    # tally the page is actually about.
+    by_kind = {
+        "investors_sent": inv_entries,
+        "pipeline_touched": pipe_entries,
+        "inbox_dismissed": inbox_entries,
+        "approvals_sent": approval_entries,
+        "tasks_done": task_entries,
+    }
+    # One expression for the counts and one for the cap, over the same mapping.
+    # The five kinds were spelled out three times over, and the count copy read
+    # the CAPPED list -- five separate chances to make one mistake, and five
+    # separate tests needed to catch it. Written once, the separation between
+    # "how many happened" and "how many we ship" cannot drift per kind.
+    counts = {kind: len(rows) for kind, rows in by_kind.items()}
     return {
-        "investors_sent": len(inv_entries),
-        "pipeline_touched": len(pipe_entries),
-        "inbox_dismissed": len(inbox_entries),
-        "approvals_sent": len(approval_entries),
-        "tasks_done": len(task_entries),
-        "total": (
-            len(inv_entries) + len(pipe_entries)
-            + len(inbox_entries) + len(approval_entries) + len(task_entries)
-        ),
-        "entries": {
-            "investors_sent": inv_entries,
-            "pipeline_touched": pipe_entries,
-            "inbox_dismissed": inbox_entries,
-            "approvals_sent": approval_entries,
-            "tasks_done": task_entries,
-        },
+        **counts,
+        "total": sum(counts.values()),
+        # Most-recent last in the log, so the tail is the recent end.
+        "entries": {kind: rows[-TODAY_ACTIVITY_ENTRY_CAP:]
+                    for kind, rows in by_kind.items()},
     }
 
 
 SUGGESTIONS_CAP = 5  # max suggestions surfaced on Pulse
 
 
-def suggestions(workspace_root: Path, today: date | None = None,
-                data_root: "Path | None" = None) -> list[dict]:
+def suggestions(data_root: Path, today: date | None = None) -> list[dict]:
     """Rule-based 'Suggested for now' list for the Pulse r2 panel.
 
     Maps the workspace's current state to actionable next steps. No ML;
@@ -1146,11 +1187,10 @@ def suggestions(workspace_root: Path, today: date | None = None,
 
     Empty list returned when no rules fire (clean state).
 
-    HEADING OS engine/data split: every source consulted is DATA, resolved
-    under ``data_root`` (falls back to ``workspace_root``).
+    HEADING OS engine/data split: every source consulted is DATA, and
+    the single root this takes IS the data root (it used to take a
+    ``workspace_root`` too, which this module never read).
     """
-    if data_root is None:
-        data_root = get_data_root()
     out: list[dict] = []
 
     # Stalled / drifting deals from the signals analyser - highest leverage,
@@ -1166,7 +1206,11 @@ def suggestions(workspace_root: Path, today: date | None = None,
             "agent": "/follow-up",
             "reason": s.get("title") or "stalled deal",
             "action": "draft a check-in",
-            "link": f"#/pipeline?focus={ref}" if ref else "#/pipeline",
+            # `quote`: a company name carries spaces, `&`, `#` and `?`.
+            # Raw, `#/pipeline?focus=A&B Telecom` focuses "A" and a `#`
+            # truncates the fragment outright, so the deep link landed on
+            # the wrong deal or none.
+            "link": f"#/pipeline?focus={quote(ref)}" if ref else "#/pipeline",
         })
 
     # Drafts waiting for approval - high signal that something is queued.
@@ -1226,21 +1270,53 @@ def suggestions(workspace_root: Path, today: date | None = None,
     return out[:SUGGESTIONS_CAP]
 
 
-def pulse_data(workspace_root: Path, odin_5_target: str | None = None,
-               data_root: "Path | None" = None) -> dict:
+def pulse_data(data_root: Path, odin_5_target: str | None = None) -> dict:
     """Top-level: assemble the /pulse payload from real workspace data.
 
     HEADING OS engine/data split: every sub-source here reads DATA, so the
-    whole assembly runs against ``data_root`` (falls back to
-    ``workspace_root`` when not supplied; identical on transitional ceo-main).
+    whole assembly runs against the single ``data_root`` it is given. It used
+    to take a ``workspace_root`` first, which this module never read.
     """
-    if data_root is None:
-        data_root = get_data_root()
-    value, deals = pipeline_value_and_deals(data_root)
     # Phase 1.29: pull overdue count + stage rollup from /pipeline source.
-    # Silent degradation - if pipeline.md is missing or malformed,
-    # list_pipeline returns zero counts.
-    pipe = list_pipeline(data_root)
+    # `list_pipeline` is wrapped like every other sub-source here. The comment
+    # that used to sit here claimed "silent degradation - if pipeline.md is
+    # missing or malformed, list_pipeline returns zero counts", but the call
+    # was the ONE unguarded one on this page, and `pipe["overdue_count"]` is a
+    # direct index that raises KeyError on a partial return. `signals()` in
+    # this same file already wraps the identical call, which is the tell.
+    try:
+        pipe = list_pipeline(data_root)
+    except Exception:
+        pipe = {}
+    pipe_overdue_count = pipe.get("overdue_count", 0)
+    pipe_stage_counts = pipe.get("counts", {})
+
+    # The headline deal count and value come from the ROWS, not from the
+    # hand-maintained summary table in the same markdown file.
+    #
+    # Both existed and nothing compared them. Measured on the live pipeline on
+    # 2026-08-24: the summary row said 29 active deals, the table held 28, and
+    # the dashboard showed 29. The value agreed at $11,000,000, so the drift
+    # was invisible. A restated number goes stale the first time someone edits
+    # a row and not the summary; a derived one cannot.
+    #
+    # The summary row is still read, and a disagreement is reported rather than
+    # discarded -- the markdown is the operator's document, and being told it
+    # has drifted is more use than having it silently overruled.
+    #
+    # Only rows that EXIST are compared. This read `pipeline_value_and_deals`,
+    # which reports a missing summary table as `(0, 0)`, so a workspace whose
+    # pipeline.md carries no summary rows was told on every render that its
+    # summary disagreed with its deals on both figures. A row that is not there
+    # cannot have drifted.
+    value, deals = pipe.get("total_value_usd", 0), len(pipe.get("deals", []))
+    stated = pipeline_summary_stated(data_root)
+    actual = {"value": value, "deals": deals}
+    summary_drift = {
+        k: {"stated": s, "actual": actual[k]}
+        for k, s in stated.items()
+        if s != actual[k]
+    }
     now_block = current_meeting(data_root)
     raise_block = raise_progress(data_root)
     tribe_block = tribe_state_preview(data_root)
@@ -1274,8 +1350,10 @@ def pulse_data(workspace_root: Path, odin_5_target: str | None = None,
             "days_to_odin_5": days_to_odin_5(odin_5_target),
             "pipeline_value": value,
             "active_deals": deals,
-            "pipeline_overdue": pipe["overdue_count"],
-            "pipeline_stages": pipe["counts"],
+            # Empty when the markdown's own summary table agrees with its rows.
+            "pipeline_summary_drift": summary_drift,
+            "pipeline_overdue": pipe_overdue_count,
+            "pipeline_stages": pipe_stage_counts,
             "in_flight": in_flight_total,
             "next_meeting": next_meeting(data_root),
             "raise_progress": raise_block,

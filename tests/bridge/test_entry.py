@@ -28,62 +28,96 @@ def entry_module():
 
 def test_pick_port_returns_free_port(entry_module):
     """_pick_port returns a port within the requested range when one is free."""
-    pick = entry_module._pick_port
-    p = pick(40000)
-    assert 40000 <= p < 40050
+    p, sock = entry_module._pick_port(40000)
+    try:
+        assert 40000 <= p < 40050
+        assert sock.getsockname()[1] == p, "the held socket IS the returned port"
+    finally:
+        sock.close()
+
+
+def test_pick_port_holds_the_port_it_returns(entry_module):
+    """The point of the change: nothing can take the port after the pick.
+
+    Probing with connect_ex left a window between "this port is free" and
+    uvicorn's bind. A second binder could win it, and the daemon then died with
+    the port file already advertising a port it never held.
+    """
+    p, sock = entry_module._pick_port(40100)
+    try:
+        with (socket.socket(socket.AF_INET, socket.SOCK_STREAM) as thief,
+              pytest.raises(OSError)):
+            thief.bind(("127.0.0.1", p))
+    finally:
+        sock.close()
+
+
+def test_pick_port_releases_the_port_when_the_socket_is_closed(entry_module):
+    p, sock = entry_module._pick_port(40200)
+    sock.close()
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as after:
+        after.bind(("127.0.0.1", p))  # must not raise
 
 
 def test_pick_port_skips_occupied_port(entry_module):
     """When the starting port is occupied, _pick_port advances to the next free port."""
-    pick = entry_module._pick_port
     # Bind a listening socket on a known port to force _pick_port to skip it.
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as occupier:
         occupier.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         occupier.bind(("127.0.0.1", 41000))
         occupier.listen(1)
-        chosen = pick(41000)
-        # Must not have returned the occupied port.
-        assert chosen != 41000
-        assert 41000 < chosen < 41050
+        chosen, sock = entry_module._pick_port(41000)
+        try:
+            # Must not have returned the occupied port.
+            assert chosen != 41000
+            assert 41000 < chosen < 41050
+        finally:
+            sock.close()
 
 
 def test_pick_port_raises_when_range_exhausted(entry_module):
     """If all 50 ports in the range are occupied, _pick_port raises RuntimeError.
-    Phase 1 unit test: instead of binding 50 sockets (slow + flaky), monkeypatch
-    connect_ex so every port appears occupied (returns 0 = 'connection succeeded')."""
-    pick = entry_module._pick_port
+
+    Instead of binding 50 sockets (slow + flaky), make every bind fail. The
+    patch target moved with the implementation: the pick BINDS now, so patching
+    `connect_ex` -- which the old probe used -- would silently find a real free
+    port and the test would pass while asserting nothing.
+    """
     import unittest.mock as mock
-    with mock.patch.object(socket.socket, "connect_ex", return_value=0):
+
+    with mock.patch.object(socket.socket, "bind", side_effect=OSError("in use")):
         with pytest.raises(RuntimeError, match="no free port"):
-            pick(42000)
+            entry_module._pick_port(42000)
 
 
 # Phase S - --port override + _verify_port_free tests.
 
 
 def test_verify_port_free_returns_port_when_free(entry_module):
-    """A free port is returned unchanged."""
-    verify = entry_module._verify_port_free
-    assert verify(43000) == 43000
+    """A free port is returned unchanged, with its socket held."""
+    port, sock = entry_module._verify_port_free(43000)
+    try:
+        assert port == 43000
+        assert sock.getsockname()[1] == 43000
+    finally:
+        sock.close()
 
 
 def test_verify_port_free_raises_when_port_busy(entry_module):
     """An occupied port raises RuntimeError with the port number in the message."""
-    verify = entry_module._verify_port_free
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as occupier:
         occupier.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         occupier.bind(("127.0.0.1", 43100))
         occupier.listen(1)
         with pytest.raises(RuntimeError, match="already in use"):
-            verify(43100)
+            entry_module._verify_port_free(43100)
 
 
 def test_verify_port_free_rejects_out_of_range(entry_module):
     """Ports outside 1..65535 are rejected (fail-fast on bad CLI input)."""
-    verify = entry_module._verify_port_free
     for bad in (0, -1, 65536, 99999):
         with pytest.raises(RuntimeError, match="out of range"):
-            verify(bad)
+            entry_module._verify_port_free(bad)
 
 
 def test_version_flag_prints_and_exits(entry_module, capsys):

@@ -10,7 +10,7 @@ Fleet source of truth is admin/executives.json under the DATA root (new HEADING 
 two-part topology); the legacy config/exec-registry.json + 31c-crm-{slug} model is
 retired.
 
-Output (in <workspace>/crm/aggregated/):
+Output (in <data-root>/crm/aggregated/, via get_personal_root()):
   - company-radar.md     All contacts from all execs with health status
   - by-company.md        Contacts grouped by company name
   - ownership-map.md     Who owns which relationships, counts by type
@@ -39,6 +39,7 @@ from scripts.utils.workspace import (
     get_default_tz,
     get_workspace_root, load_admin_config, get_data_root,
     get_crm_contacts_dir, get_crm_config_path, get_personal_root,
+    repo_name_for,
 )
 from scripts.utils.operator_identity import operator_slug, operator_org
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
@@ -159,20 +160,24 @@ def get_thresholds(fm: dict, config: dict) -> dict:
     rel_type = fm.get("type", "")
     cadence_override = fm.get("cadence", "")
 
-    if rel_type in config:
-        entry = config[rel_type].copy()
-        if cadence_override:
-            try:
-                entry["cadence"] = int(cadence_override)
-            except ValueError:
-                pass
-        return entry
-    elif cadence_override:
+    # An override scales EVERY threshold, whether or not the type is in the
+    # table. Until 2026-08-23 the known-type branch replaced only `cadence`,
+    # the number the radar prints, while `yellow` and `red` kept the type
+    # defaults -- and `calculate_health` reads only those two. So a partner on
+    # `cadence: 60`, touched 20 days ago, displayed "60d" and rendered RED,
+    # while the same override on an unrecognised type rendered GREEN. Every
+    # deliberately-slowed relationship became a false red on the company radar,
+    # which is how the real ones stop standing out.
+    if cadence_override:
         try:
             c = int(cadence_override)
-            return {"cadence": c, "yellow": int(c * 0.7), "red": c}
         except ValueError:
-            pass
+            pass                       # a garbled override falls through to the defaults
+        else:
+            return {"cadence": c, "yellow": int(c * 0.7), "red": c}
+
+    if rel_type in config:
+        return config[rel_type].copy()
 
     return {"cadence": 14, "yellow": 10, "red": 14}
 
@@ -199,8 +204,11 @@ def scan_all_contacts(workspace_root: Path, exec_slugs: list, config: dict,
                       ceo_only: bool, skip_clone: bool) -> tuple:
     """Read CEO own + per-exec contacts. Returns (contacts, errors).
 
-    Reads CEO own from <workspace_root>/crm/contacts/*.md, treats them as
-    owner_slug = first admin slug from admin.json (defaults to 'misha-hanin').
+    Reads CEO own from `get_crm_contacts_dir()`, treats them as owner_slug =
+    the first admin slug in admin.json, defaulting to `operator_slug()`. Both
+    are resolvers, not paths: this docstring named `<workspace_root>/crm/contacts`
+    and a hardcoded operator until 2026-08-23, which is the engine root in a
+    topology whose two roots must not be conflated.
 
     For each active exec slug, ensures the local clone exists (auto-clone via
     `gh repo clone` if not skip_clone), pulls latest, and reads contacts/*.md
@@ -242,8 +250,14 @@ def scan_all_contacts(workspace_root: Path, exec_slugs: list, config: dict,
                 return slug_contacts, slug_errors
             try:
                 org = admin_config.get("github_org") or operator_org()
+                # The roster's `data_repo` wins over the convention, same as
+                # scripts/admin-health.py. This line hardcoded
+                # f"heading-os-data-{slug}" while the health dashboard read the
+                # roster, so an exec with a non-convention repo name was cloned
+                # correctly there and 404'd here -- and their contacts silently
+                # dropped out of the aggregate while it exited 0.
                 result = subprocess.run(
-                    ["gh", "repo", "clone", f"{org}/heading-os-data-{slug}", str(repo_path)],
+                    ["gh", "repo", "clone", f"{org}/{repo_name_for(slug)}", str(repo_path)],
                     capture_output=True, text=True, timeout=120,
                 )
                 if result.returncode != 0:
@@ -253,11 +267,24 @@ def scan_all_contacts(workspace_root: Path, exec_slugs: list, config: dict,
                 slug_errors.append(f"Clone error for {slug}: {e}")
                 return slug_contacts, slug_errors
         elif not skip_clone:
+            # Inspect the result, exactly as the clone branch above does. It
+            # did not until 2026-08-23: only a RAISED exception was recorded, so
+            # a nonzero exit -- expired auth, a merge conflict, a detached HEAD
+            # -- fell through and the aggregate was built from a stale clone and
+            # reported as current. Two branches four lines apart, disagreeing.
             try:
-                subprocess.run(["git", "pull"], cwd=str(repo_path),
-                               capture_output=True, text=True, timeout=60, check=False)
+                pull = subprocess.run(["git", "pull"], cwd=str(repo_path),
+                                      capture_output=True, text=True,
+                                      timeout=60, check=False)
             except (subprocess.TimeoutExpired, OSError) as e:
                 slug_errors.append(f"Pull warning for {slug}: {e}")
+            else:
+                if pull.returncode != 0:
+                    detail = (pull.stderr or pull.stdout or "").strip().splitlines()
+                    slug_errors.append(
+                        f"Pull failed for {slug}: "
+                        f"{detail[-1] if detail else 'no output'} "
+                        f"(reading the local clone, which may be behind)")
 
         contacts_dir = repo_path / "crm" / "contacts"
         if not contacts_dir.exists():
@@ -333,19 +360,34 @@ def get_per_exec_repo_path_for_workspace(workspace_root: Path, slug: str) -> Pat
     return workspace_root.parent / f".heading-os-data-{slug}"
 
 
+class FleetRegistryError(RuntimeError):
+    """`admin/executives.json` exists and cannot be read as a fleet roster."""
+
+
 def load_fleet_registry(data_root: Path) -> dict:
     """Load the fleet registry from <data_root>/admin/executives.json (new model).
 
     Single source of truth for who the executives are. Returns an empty registry
-    when the file is absent (a data-less or pre-provisioning workspace).
+    when the file is ABSENT -- a data-less or pre-provisioning workspace, which
+    genuinely has no fleet.
+
+    Raises `FleetRegistryError` when the file is present and unparseable. Until
+    2026-08-23 both cases returned the same empty roster, so one stray comma in
+    the file that says who the fleet is dropped every executive from the
+    aggregate, and the run still exited 0 reporting success. Absent and
+    unreadable are different facts and must not share an answer.
     """
     path = data_root / "admin" / "executives.json"
-    if path.exists():
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            pass
-    return {"version": 1, "executives": []}
+    if not path.exists():
+        return {"version": 1, "executives": []}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+        raise FleetRegistryError(f"cannot read the fleet roster {path}: {e}") from e
+    if not isinstance(data, dict):
+        raise FleetRegistryError(
+            f"the fleet roster {path} is a {type(data).__name__}, not an object")
+    return data
 
 
 # ============================================================
@@ -405,7 +447,13 @@ def group_by_entity(all_records: list) -> dict:
     # remain legacy, the same person ends up in two buckets - one keyed by
     # entity_ref (CEO) and one by legacy::name (exec). Detect this and merge
     # so dual-owner detection still fires during the migration window.
-    legacy_keys_to_remove = []
+    # A legacy bucket is claimed ONCE. Deletion happens after the loop, so
+    # without this set two distinct entity_refs that share a normalized name --
+    # which is exactly what an inconsistent migration produces -- both extended
+    # themselves from the same legacy bucket, and the same records appeared in
+    # two groups. `detect_shared_contacts` then emitted overlapping duplicate
+    # entries. Found by the 2026-08-23 audit.
+    legacy_keys_to_remove = set()
     for entity_key, entity_records in grouped.items():
         if entity_key.startswith("legacy::"):
             continue
@@ -415,10 +463,12 @@ def group_by_entity(all_records: list) -> dict:
             continue
         sample = entity_records[0]
         candidate_legacy_key = _legacy_fuzzy_key(sample)
+        if candidate_legacy_key in legacy_keys_to_remove:
+            continue                      # already merged into an earlier entity
         if candidate_legacy_key in grouped and candidate_legacy_key != entity_key:
             # Merge legacy records into the entity bucket
             grouped[entity_key].extend(grouped[candidate_legacy_key])
-            legacy_keys_to_remove.append(candidate_legacy_key)
+            legacy_keys_to_remove.add(candidate_legacy_key)
     for k in legacy_keys_to_remove:
         del grouped[k]
     return grouped
@@ -428,9 +478,15 @@ def detect_shared_contacts(contacts: list) -> list:
     """Detect contacts tracked by multiple executives.
 
     When entity_ref is present on a record it is used as the grouping key
-    directly (canonical identity). For records that have not yet been
-    migrated, the legacy two-pass fuzzy fallback applies (exact normalized
-    name, then first+last+company) via group_by_entity / _legacy_fuzzy_key.
+    directly (canonical identity). For records that have not yet been migrated,
+    `_legacy_fuzzy_key` groups on the exact normalized NAME alone, via
+    group_by_entity.
+
+    Pass 1 only. This docstring described "the legacy two-pass fuzzy fallback
+    (exact normalized name, then first+last+company)" until 2026-08-23;
+    `_legacy_fuzzy_key` states in its own docstring that Pass 2 was deliberately
+    omitted, because company names differ across exec repos and including
+    company would break matches that Pass 1 makes.
 
     Returns list of groups: [{"name": ..., "company": ..., "owners": [...]}]
     """
@@ -751,7 +807,13 @@ def main():
     if args.ceo_only:
         exec_slugs = []
     else:
-        registry = load_fleet_registry(get_data_root())
+        try:
+            registry = load_fleet_registry(get_data_root())
+        except FleetRegistryError as e:
+            print(f"{RED}{e}{RESET}", file=sys.stderr)
+            print(f"{YELLOW}Refusing to aggregate: a CEO-only result would look "
+                  f"like a fleet with no executives.{RESET}", file=sys.stderr)
+            sys.exit(2)
         exec_slugs = sorted([
             e["slug"] for e in registry.get("executives", [])
             if e.get("status") == "active" and e.get("role") != "admin" and e.get("slug")

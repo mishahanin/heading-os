@@ -161,7 +161,7 @@ for `.claude/commands/`, so the plugin carried the `/checkpoint` skill and neith
 command that skill tells you to run. Add a command to a bundle through the
 `commands:` list in `config/plugin-bundles.yaml`, beside `skills:` and `hooks:`.
 
-**[Mahmoud Maatuq](https://github.com/mmaatuq)** contributed the proactive offer
+**[Mahmoud Maatuq](https://github.com/mmaatuq)** contributed the proactive offer <!-- content-guard: ok published contributor credit, kept by operator decision 2026-08-24; the only real person named in the engine -->
 and the hands-off auto mode, and found the concurrent-session collision that the
 per-session keying fixes. Thank you.
 

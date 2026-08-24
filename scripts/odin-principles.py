@@ -50,6 +50,12 @@ def main() -> int:
         return 0
 
     if args.keywords:
+        if args.stage:
+            # argparse cannot express the dependency, so it went unsaid: the
+            # keyword branch never reads `stage`, and `--keywords a,b --stage
+            # Negotiation` returned unscoped results while looking scoped.
+            print(f"warning: --stage {args.stage!r} has no effect with --keywords; "
+                  f"the keyword search is not stage-scoped.", file=sys.stderr)
         domains = [k.strip() for k in args.keywords.split(",") if k.strip()]
         results = principles_for_domains(domains, limit=args.limit, brain_root=brain_root)
     else:

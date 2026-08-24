@@ -88,7 +88,6 @@ def test_must_not_mention_uses_the_same_matcher():
     results = runner.run_checks(
         "It does not run continuously.",
         {"must_not_mention": ["continuous"]},
-        SKILLS / "brain-audit",
     )
     # "continuous" is not the word "continuously" under boundary matching.
     assert results[0]["passed"] is True
@@ -113,7 +112,7 @@ def test_the_fixed_case_fails_an_answer_that_dodges_the_question():
     dodge = ("The skill produces a footer summarising the newest source dates "
              "and modality coverage for the entity you name, and it composes "
              "into the synthesis skills that call it at the end of their work.")
-    results = runner.run_checks(dodge, case["checks"], SKILLS / "brain-audit")
+    results = runner.run_checks(dodge, case["checks"])
     assert [r for r in results if not r["passed"]], (
         "the reworked case still passes an answer that never addresses the "
         "three boundaries it asks about"
@@ -130,7 +129,7 @@ def test_the_fixed_case_passes_a_correct_answer():
                "the whole workspace: it reads the source set it is handed and "
                "the canonical locations for the named entity, then emits its "
                "footer and stops.")
-    results = runner.run_checks(correct, case["checks"], SKILLS / "brain-audit")
+    results = runner.run_checks(correct, case["checks"])
     failures = [r["check"] for r in results if not r["passed"]]
     assert failures == [], failures
 

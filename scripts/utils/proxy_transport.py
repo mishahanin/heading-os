@@ -121,17 +121,30 @@ def call_model(model, prompt, *, temperature=0.7, max_tokens=8192, timeout=DEFAU
 
     def _call(tok_budget, call_timeout):
         """One attempt, retrying only the proxy's own transient 503."""
+        first: Exception | None = None
         last: Exception | None = None
         for attempt in range(SERVER_ERROR_ATTEMPTS):
             try:
                 return _attempt(tok_budget, call_timeout)
             except _TransientServerError as e:
+                first = first if first is not None else e
                 last = e
                 if attempt < SERVER_ERROR_ATTEMPTS - 1:
                     time.sleep(SERVER_ERROR_BACKOFF[
                         min(attempt, len(SERVER_ERROR_BACKOFF) - 1)])
+        # Report the FIRST failure alongside the last. When a retry sequence
+        # mixes causes, the last one is the least informative: the proxy parks
+        # an auth in cooldown after the real refusal, so attempt 1 carries the
+        # answer ("usage limit for this billing cycle") and attempts 2-4 carry
+        # only its consequence ("auth_unavailable: no auth available"). Raising
+        # `last` alone reported the consequence as the cause. Measured
+        # 2026-08-24: it sent an hour of diagnosis at a configuration that was
+        # correct, while the proxy's own log had the 403 all along.
+        detail = f"{last}"
+        if first is not None and str(first) != str(last):
+            detail = f"first failure: {first} | last failure: {last}"
         raise RuntimeError(
-            f"{last} Still failing after {SERVER_ERROR_ATTEMPTS} attempts over "
+            f"{detail} Still failing after {SERVER_ERROR_ATTEMPTS} attempts over "
             f"{sum(SERVER_ERROR_BACKOFF):.0f}s of backoff; the provider session "
             f"behind the proxy is not recovering."
         ) from last

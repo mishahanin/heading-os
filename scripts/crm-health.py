@@ -112,6 +112,53 @@ def format_terminal_report(contacts, tribe_warnings=None):
     return "\n".join(lines)
 
 
+_FM_OPEN_RE = re.compile(r"\A---[ \t]*\r?\n")
+_FM_CLOSE_RE = re.compile(r"^---[ \t]*$", re.MULTILINE)
+
+
+def frontmatter_end(text: str) -> int:
+    """Index where the CLOSING frontmatter fence begins, or -1 if there is none.
+
+    Anchored, and requiring the document to OPEN with a fence. This was
+    `text.find("---", 3)`, a plain substring search, and it failed twice over:
+
+    * A frontmatter VALUE containing `---` (`notes: 2026-01-01---draft`) ended
+      the slice early. If `status:` sat after that point the anchored guard
+      found nothing, and the else-branch inserted `status: dormant` at
+      `text.rfind("\\n", 0, fm_end)` — inside the frontmatter, splitting a value
+      line and leaving malformed YAML.
+    * A file with NO frontmatter but a `---` horizontal rule in the body sailed
+      past the `fm_end == -1` guard. `text[:fm_end]` was then body text, and a
+      `^status:` line in an interaction-log entry got rewritten — the exact
+      body-rewrite the comment at the call site says the slicing prevents. The
+      guard tested the wrong thing.
+    """
+    if not _FM_OPEN_RE.match(text):
+        return -1
+    match = _FM_CLOSE_RE.search(text, _FM_OPEN_RE.match(text).end())
+    return -1 if match is None else match.start()
+
+
+def _radar_insert_pos(content: str) -> int:
+    """Where the radar table may be inserted without displacing line 1.
+
+    Never 0. `context-freshness.py` reads ONLY the first line looking for
+    `> Last verified:`, so anything written above it makes a stamped file
+    report as unstamped, and the next `stamp` then adds a second marker.
+
+    Order: after a closing frontmatter fence when the file opens with one;
+    otherwise after the first line, whatever that line is.
+    """
+    if content.startswith("---\n"):
+        close = content.find("\n---", 3)
+        if close != -1:
+            end = content.find("\n", close + 1)
+            if end != -1:
+                return end + 1
+    first_break = content.find("\n")
+    return first_break + 1 if first_break != -1 else len(content)
+
+
 def generate_radar_table(contacts):
     """Generate the Contact Radar markdown table for people.md."""
     lines = []
@@ -145,18 +192,30 @@ def update_people_md(contacts):
     content = PEOPLE_FILE.read_text(encoding="utf-8")
     radar_table = generate_radar_table(contacts)
 
-    # Remove existing radar table if present
-    pattern = r"## Contact Radar\n.*?(?=\n---|\n## [^C])"
-    if re.search(pattern, content, re.DOTALL):
-        content = re.sub(pattern, "", content, flags=re.DOTALL)
+    # Remove the existing radar table. The old lookahead was
+    # `(?=\n---|\n## [^C])`, which required the table to be followed by a rule
+    # or by a `## ` heading whose first letter is NOT C — so it failed in two
+    # ordinary cases: the table sitting at end of file, and the next section
+    # being `## CRM Pipeline` or `## Contacts`. When the lookahead failed the
+    # old table was simply left in place and a second `## Contact Radar` was
+    # appended on every `--update`, stacking one more each run.
+    #
+    # Stop at the next `## ` heading of any letter, at a `---` rule, or at end
+    # of input. `\Z` is what was missing.
+    pattern = r"\n?## Contact Radar\n.*?(?=\n---|\n## |\Z)"
+    content = re.sub(pattern, "", content, flags=re.DOTALL)
 
-    # Insert radar table after the header block (after first ---)
-    first_sep = content.find("---", content.find("---") + 1)
-    if first_sep != -1:
-        insert_pos = content.find("\n", first_sep) + 1
-        content = content[:insert_pos] + "\n" + radar_table + "\n" + content[insert_pos:]
-    else:
-        content = radar_table + "\n" + content
+    # Insert after the frontmatter block. The comment here said "after the
+    # header block (after first ---)" while the code found the SECOND `---`,
+    # which for a file with frontmatter is the closing fence — right, but not
+    # what the comment said. Worse was the else-branch: with fewer than two
+    # `---` separators it put the table at byte 0, pushing the
+    # `> Last verified:` marker off line 1. `context-freshness.py` reads only
+    # the first line, so it then reported "No marker" for a file that has one,
+    # and a later `stamp` inserted a SECOND marker above the table. Two scripts
+    # in this workspace silently corrupted each other's invariant.
+    insert_pos = _radar_insert_pos(content)
+    content = content[:insert_pos] + "\n" + radar_table + "\n" + content[insert_pos:]
 
     atomic_write_text(PEOPLE_FILE, content)
     return True
@@ -255,10 +314,17 @@ def main():
         print(format_terminal_report(contacts, tribe_warnings))
 
     if args.update:
+        # stderr, for the same reason the dangling-ref warning above is on
+        # stderr: `--json --update` printed these lines AFTER the JSON document
+        # on the same stream, so `crm-health.py --json --update | jq .` failed
+        # to parse. The comment twenty lines up already knew stdout must stay
+        # clean for crm_next.py; the flags were simply never made exclusive.
         if update_people_md(contacts):
-            print(f"{GREEN}Radar table updated in {PEOPLE_FILE.name}{RESET}")
+            print(f"{GREEN}Radar table updated in {PEOPLE_FILE.name}{RESET}",
+                  file=sys.stderr)
         else:
-            print(f"{RED}Failed to update {PEOPLE_FILE.name}{RESET}")
+            print(f"{RED}Failed to update {PEOPLE_FILE.name}{RESET}",
+                  file=sys.stderr)
 
     if args.demote_candidates:
         from scripts.utils.crm import find_dormancy_candidates
@@ -283,20 +349,32 @@ def main():
                 print("\nAborted.")
                 return
             if resp == "yes":
+                demoted = 0
                 for c in candidates:
                     path = CONTACTS_DIR / c["file"]
                     text = path.read_text(encoding="utf-8")
                     # Scope the status:-check to the frontmatter slice (text before
                     # the closing ---). Whole-file check would match body content
                     # (e.g., a `status:` literal in an interaction log entry).
-                    fm_end = text.find("---", 3)
+                    fm_end = frontmatter_end(text)
                     if fm_end == -1:
                         # No frontmatter — skip silently. Should not happen for valid
                         # relationship records but defensive.
-                        print(f"  {YELLOW}[skipped]{RESET} {c['slug']}: no frontmatter")
+                        # `c.get("slug", ...)`, matching the defensive chain
+                        # thirty lines up that already treats slug as optional.
+                        # A hard index here crashed mid-demote, AFTER some
+                        # contacts had been rewritten and with no rollback.
+                        label = c.get("slug", c["file"])
+                        print(f"  {YELLOW}[skipped]{RESET} {label}: no frontmatter")
                         continue
                     frontmatter = text[:fm_end]
-                    if "status:" in frontmatter:
+                    # Anchored, like the replacement it guards. `"status:" in
+                    # frontmatter` is a substring test, so frontmatter carrying
+                    # `notes: status: pending` and no top-level `status:` passed
+                    # the guard, the anchored re.sub replaced nothing, the file
+                    # was rewritten byte-identical, and the script printed
+                    # [demoted] over a no-op.
+                    if _re.search(r"^status:", frontmatter, _re.MULTILINE):
                         new_frontmatter = _re.sub(r"^status:.*$", "status: dormant", frontmatter, count=1, flags=_re.MULTILINE)
                         text = new_frontmatter + text[fm_end:]
                     else:
@@ -304,8 +382,16 @@ def main():
                         insert_at = text.rfind("\n", 0, fm_end)
                         text = text[:insert_at] + "\nstatus: dormant" + text[insert_at:]
                     atomic_write(path, text)
+                    demoted += 1
                     print(f"  {GREEN}[demoted]{RESET} {c['file']}")
-                print(f"{GREEN}{len(candidates)} contacts demoted to dormant.{RESET}")
+                # What was WRITTEN, not what was offered. This printed
+                # `len(candidates)`, and the loop above can `continue` past a
+                # file with no frontmatter, so the confirmation line overstated
+                # a human-approved bulk mutation by the number it had skipped.
+                skipped = len(candidates) - demoted
+                print(f"{GREEN}{demoted} contacts demoted to dormant.{RESET}")
+                if skipped:
+                    print(f"{YELLOW}{skipped} skipped (see above).{RESET}")
             else:
                 print("No changes made.")
 

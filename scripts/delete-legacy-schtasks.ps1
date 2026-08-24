@@ -51,8 +51,23 @@ foreach ($t in $tasks) {
         Write-Host "    deleted: $t" -ForegroundColor Green
         $deleted++
     } catch [Microsoft.PowerShell.Cmdletization.Cim.CimJobException] {
-        Write-Host "    not found (already gone): $t" -ForegroundColor Gray
-        $notFound++
+        # The exception TYPE alone does not mean "the task is not there".
+        # CimJobException covers every CIM/WMI failure, so a service error
+        # during enumeration or deletion was counted as notFound, $failed
+        # stayed 0, and the script printed "All clean" while the task was
+        # still registered. Check the category, and send anything else to the
+        # failure branch below.
+        #
+        # NOT EXECUTED: this workspace is WSL/Linux and has no PowerShell, so
+        # the change is a reading, not a measurement. Verify on a Windows host
+        # before trusting the counts.
+        if ($_.CategoryInfo.Category -eq 'ObjectNotFound') {
+            Write-Host "    not found (already gone): $t" -ForegroundColor Gray
+            $notFound++
+        } else {
+            Write-Host "    FAILED (CIM): $t  ($($_.Exception.Message))" -ForegroundColor Red
+            $failed++
+        }
     } catch {
         Write-Host "    FAILED: $t  ($($_.Exception.Message))" -ForegroundColor Red
         $failed++

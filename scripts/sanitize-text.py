@@ -21,6 +21,7 @@ from pathlib import Path
 
 # Workspace import boilerplate
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts.utils.atomic import atomic_write_text
 from scripts.utils.sanitize_text import sanitize, scan
 
 
@@ -58,8 +59,14 @@ def main():
         text = sys.stdin.read()
         source = "stdin"
     else:
-        with open(args.file, "r", encoding="utf-8") as f:
-            text = f.read()
+        try:
+            with open(args.file, "r", encoding="utf-8") as f:
+                text = f.read()
+        except OSError as exc:
+            # A hook chain surfaces a traceback as "the hook failed", with
+            # nothing naming the path that was wrong.
+            print(f"error: cannot read {args.file}: {exc}", file=sys.stderr)
+            return 2
         source = args.file
 
     if args.scan:
@@ -79,8 +86,10 @@ def main():
         sys.stdout.write(clean)
     else:
         output_path = args.output or args.file
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(clean)
+        # Atomic. The in-place form truncated the target first, so an interrupt
+        # mid-write destroyed the original with no copy left -- and hooks and
+        # pre-commit chains run this over source files.
+        atomic_write_text(Path(output_path), clean)
 
     if removed > 0:
         print(f"  Removed {removed} hidden character(s) from {source}", file=sys.stderr)

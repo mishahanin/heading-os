@@ -114,10 +114,11 @@ def _git_changed_files(base: str = "origin/main") -> set[str]:
             return []
         return [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
 
-    base_ok = subprocess.run(
-        ["git", "rev-parse", "--verify", "--quiet", base],
-        cwd=str(ROOT), capture_output=True, text=True,
-    ).returncode == 0
+    # Through `_run`, not around it. This probe had no timeout and no
+    # FileNotFoundError guard, so a machine without git on PATH -- or a hung
+    # repo -- crashed the --changed gate with a traceback, past the very
+    # "degrades clearly, never an exception" contract `_run` implements.
+    base_ok = bool(_run(["rev-parse", "--verify", "--quiet", base]))
     if base_ok:
         files.update(_run(["diff", "--name-only", f"{base}..HEAD"]))
     else:
@@ -185,6 +186,13 @@ def _parse_verdict(text: str) -> dict:
     if start == -1 or end == -1:
         return {"routes_to_target": None, "skill": "?", "reason": f"unparseable: {text[:80]}"}
     try:
+        # The slice above runs from the FIRST `{` to the LAST `}`, so it always
+        # begins with `{`. json.loads on such a string yields a dict or raises;
+        # it cannot yield a list or a scalar. An audit asked for an
+        # `isinstance(parsed, dict)` guard here for the `[{"routes_to_target":
+        # true}]` case -- but the slicing already strips the brackets off that,
+        # and the guard was measurably unreachable. Recorded rather than added,
+        # so the next reader does not re-derive it.
         return json.loads(text[start:end + 1])
     except json.JSONDecodeError:
         return {"routes_to_target": None, "skill": "?", "reason": f"bad json: {text[:80]}"}
@@ -200,12 +208,23 @@ def judge_query(client, model: str, system: str, query: str, target: str) -> dic
     user = build_user(query, target)
     verdict: dict = {}
     for _ in range(JUDGE_ATTEMPTS):
-        response = client.messages.create(
-            model=model,
-            max_tokens=JUDGE_MAX_TOKENS,
-            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-            messages=[{"role": "user", "content": user}],
-        )
+        try:
+            response = client.messages.create(
+                model=model,
+                max_tokens=JUDGE_MAX_TOKENS,
+                system=[{"type": "text", "text": system,
+                         "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": user}],
+            )
+        except Exception as exc:  # noqa: BLE001 - any transport fault, reported not raised
+            # UNMEASURED, not fatal. This call had no handler at all, so one
+            # transient 529 mid-sweep raised through run_skill and threw away a
+            # 96-skill `--all` run -- dozens of paid judge calls already made.
+            # The caller already reads a non-boolean `routes_to_target` as "not
+            # measured", which is exactly the right meaning here.
+            verdict = {"routes_to_target": None, "skill": "?",
+                       "reason": f"api error: {type(exc).__name__}: {exc}"[:160]}
+            continue
         text = "".join(
             b.text for b in response.content if getattr(b, "type", None) == "text"
         ).strip()

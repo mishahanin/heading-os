@@ -171,9 +171,11 @@ def fake_fetch(monkeypatch, tmp_path):
         "datetime": "2026-08-09T18:24:08+00:00",
         "direction": "incoming",
     }
+    # `fetch_emails` returns (messages, truncated) since 2026-08-24: the 100-row
+    # cap was invisible, so the caller could not report it.
     monkeypatch.setattr(
         ei, "fetch_emails",
-        lambda account, folder, cutoff: [msg] if folder == "inbox" else [],
+        lambda account, folder, cutoff: ([msg], False) if folder == "inbox" else ([], False),
     )
     return st
 

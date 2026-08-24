@@ -74,6 +74,20 @@ def _artifact_date(path: Path) -> date | None:
     return None
 
 
+def _dir_slug(name: str) -> str | None:
+    """The slug segment of a `<YYYY-MM-DD>-<slug>` directory, else None.
+
+    On the NAME, never on `Path.stem`: a directory called
+    `2026-01-01-bug-fix` has `.stem == "2026-01-01-bug"`, because `.fix` reads
+    as a file extension. `derive_slug` above is right for a plan FILE and wrong
+    for this, which is why the rule is spelled out twice rather than shared.
+    """
+    if (len(name) >= 12 and name[4] == "-" and name[7] == "-" and name[10] == "-"
+            and all(c.isdigit() or c == "-" for c in name[:10])):
+        return name[11:]
+    return None
+
+
 def check_gate(plan_path, contract_dir=None, today=None, stale_days=STALE_DAYS_DEFAULT):
     """Return (status, detail) for the contract gate check. Never raises on
     normal inputs.
@@ -96,10 +110,24 @@ def check_gate(plan_path, contract_dir=None, today=None, stale_days=STALE_DAYS_D
     if not contract_dir.is_dir():
         return "MISSING", f"no contract for slug '{slug}' (contract dir absent)"
 
-    # Exact suffix match on a DIRECTORY: <date>-<slug>/, NOT a substring glob.
+    # Exact match on the SLUG SEGMENT of a DIRECTORY: <date>-<slug>/, NOT a
+    # substring glob and no longer a suffix of the whole name.
+    #
+    # `iterdir()`, not `glob(f"*-{slug}")`. A slug carrying `[`, `]`, `*` or `?`
+    # -- all legal in a filename, and a slug is derived from one -- turned the
+    # PATTERN into the slug: `a*b` matched `2026-01-01-aZZZb`, and a stray `[`
+    # made the pattern match nothing at all.
+    #
+    # And the filter that replaced it was `p.name.endswith(f"-{slug}")`, which
+    # is a suffix of the whole directory name rather than of the slug segment,
+    # so any slug that ENDS another one collected it: `2026-01-01-bug-fix/`
+    # answered FOUND for the plan `2026-06-28-fix.md`, naming a contract
+    # belonging to a different plan. FOUND is the one signal here that means
+    # "this plan went through the gate", so a wrong FOUND is the only reading
+    # worth preventing.
     matches = [
-        p for p in contract_dir.glob(f"*-{slug}")
-        if p.is_dir() and p.name.endswith(f"-{slug}")
+        p for p in contract_dir.iterdir()
+        if p.is_dir() and _dir_slug(p.name) == slug
     ]
     if not matches:
         return "MISSING", f"no contract for slug '{slug}'"

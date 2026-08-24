@@ -223,6 +223,11 @@ def main():
             value = extract_key(merged, key)
             if value is not _MISSING:
                 output[key] = value
+            else:
+                # A dropped key produced `{}`, which reads identically to "the
+                # key is legitimately empty". In a tool whose whole job is
+                # resolving configuration, a typo must not be silent.
+                print(f"warning: key not found: {key}", file=sys.stderr)
     else:
         output = merged
 

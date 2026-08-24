@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
+from scripts.utils.operator_identity import operator_email_domain  # noqa: E402
 from scripts.utils.workspace import (
     get_datastore_dir,
     get_default_tz,
@@ -43,7 +44,6 @@ from scripts.utils.workspace import (
 )
 
 WS = get_workspace_root()
-GAL_JSON = get_outputs_dir() / "_sync" / "gal-31c.io.json"
 
 # ============================================================
 # Exclusion lists + org chart are per-instance DATA (real Tribe names, titles,
@@ -61,6 +61,16 @@ NON_TRIBE = set(_org_data["non_tribe"])  # dict email -> reason; membership uses
 CHART = _org_data["chart"]
 _LEADER_EMAILS = set(_org_data["leader_emails"])
 _GAL_ALIASES = _org_data["aliases"]
+
+# The GAL export filename carries the tenant domain, and `gal-export.py` writes
+# `gal-<domain>.json`. This module hardcoded one company's domain until
+# 2026-08-23, so on any other deployment the writer and the reader named
+# different files and `build_roster()` died on a missing path. The domain is
+# instance data like everything else here; `operator_email_domain()` is the
+# fallback so a workspace that never edited the org chart still lines up with
+# what `gal-export.py` produced.
+_GAL_DOMAIN = _org_data.get("gal_domain") or operator_email_domain() or "example.com"
+GAL_JSON = get_outputs_dir() / "_sync" / f"gal-{_GAL_DOMAIN}.json"
 
 # Event-specific paths/title are instance DATA resolved from the (private) config;
 # the engine example ships generic placeholders.
@@ -134,10 +144,14 @@ def load_prelim() -> set[str]:
 
 def in_prelim(display_name: str, email_local: str, prelim: set[str]) -> bool:
     """Match prelim short names against full GAL names."""
-    if not display_name:
+    # `if not display_name` rejected "" and passed "   " straight through, and
+    # "   ".split() is [], so [0] raised IndexError and killed the whole roster
+    # build -- after the filtering, so not even a partial file was written.
+    parts = display_name.split()
+    if not parts:
         return False
-    first_name = display_name.split()[0].lower()
-    last_name = display_name.split()[-1].lower() if len(display_name.split()) > 1 else ""
+    first_name = parts[0].lower()
+    last_name = parts[-1].lower() if len(parts) > 1 else ""
     # Exact first-name hit
     if first_name in prelim:
         return True
@@ -263,11 +277,14 @@ def write_excel(rows: list[dict], excluded: dict):
     # Title row
     ws["A1"] = _EVENT.get("title", "Bootcamp - Tribe Roster & Track Recommendations")
     ws["A1"].font = Font(bold=True, size=14)
-    ws.merge_cells("A1:K1")
+    # A:L, not A:K -- `headers` carries 12 entries, so the table runs to
+    # column L ("Rationale", the widest at width 50) and the banner used
+    # to stop one short of it.
+    ws.merge_cells("A1:L1")
     generated = datetime.now(get_default_tz()).date().isoformat()
     ws["A2"] = f"Tribe Roster & Track Recommendations | Generated {generated} from Exchange GAL + org chart"
     ws["A2"].font = Font(italic=True, color="666666")
-    ws.merge_cells("A2:K2")
+    ws.merge_cells("A2:L2")
 
     headers = [
         "#", "Name", "Email", "Title (reconciled)", "GAL Title (raw)",

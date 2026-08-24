@@ -28,12 +28,14 @@ dismissed_at / sent_at / error``.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 from scripts.bridge_daemon._atomic import atomic_write_text
+from scripts.bridge_daemon._jsonl import append_jsonl
 from scripts.utils import dead_letter, tool_risk, tracing
 from scripts.utils.timeparse import parse_iso
 
@@ -53,6 +55,8 @@ PRIORITY_ORDER = {"P1": 0, "P2": 1, "P3": 2}
 # serialises every write to queue.json.
 _LOCK = threading.Lock()
 
+logger = logging.getLogger(__name__)
+
 
 # ============================================================
 # Store IO (callers hold _LOCK for any read-modify-write)
@@ -62,17 +66,58 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _empty_queue() -> dict:
+    return {"version": 1, "generated_at": None, "actions": []}
+
+
+def _quarantine_corrupt_queue(path: Path, why: str) -> None:
+    """Move an unreadable queue.json aside, loudly, before anything overwrites it.
+
+    ABSENT and CORRUPT both used to return the empty default, and every mutating
+    helper then atomically wrote that empty structure back. One torn write or a
+    full disk therefore destroyed every pending and approved card -- drafted
+    email bodies included -- with no error, no backup and no log line, while the
+    endpoint still answered ``{"ok": true}``.
+
+    Renaming costs nothing and keeps the wreck recoverable. The daemon carries
+    on with an empty queue, which is the same behaviour as before; the
+    difference is that the old cards still exist somewhere.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target = path.with_name(f"{path.name}.corrupt-{stamp}")
+    n = 2
+    while target.exists():
+        target = path.with_name(f"{path.name}.corrupt-{stamp}-{n}")
+        n += 1
+    try:
+        path.rename(target)
+    except OSError:
+        logger.error(
+            "queue.json is unreadable (%s) AND could not be moved aside; the "
+            "next write will overwrite it and the pending cards are lost",
+            why, exc_info=True,
+        )
+        return
+    logger.error(
+        "queue.json was unreadable (%s); moved to %s and starting from an empty "
+        "queue. Recover any pending cards from that file by hand.",
+        why, target.name,
+    )
+
+
 def _load_queue(workspace_root: Path) -> dict:
-    """Read queue.json. Returns the default empty structure if absent/corrupt."""
+    """Read queue.json. Empty default when absent; quarantine when corrupt."""
     path = workspace_root / QUEUE_FILE
     if not path.exists():
-        return {"version": 1, "generated_at": None, "actions": []}
+        return _empty_queue()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"version": 1, "generated_at": None, "actions": []}
+    except (OSError, json.JSONDecodeError) as exc:
+        _quarantine_corrupt_queue(path, f"{type(exc).__name__}: {exc}")
+        return _empty_queue()
     if not isinstance(data, dict) or not isinstance(data.get("actions"), list):
-        return {"version": 1, "generated_at": None, "actions": []}
+        _quarantine_corrupt_queue(path, f"unexpected shape: {type(data).__name__}")
+        return _empty_queue()
     return data
 
 
@@ -86,22 +131,22 @@ def _write_queue(workspace_root: Path, data: dict) -> None:
 
 
 def _log_event(workspace_root: Path, event: dict) -> None:
-    """Append one audit event to disposition-log.jsonl. Caller holds _LOCK."""
+    """Append one audit event to disposition-log.jsonl. Caller holds _LOCK.
+
+    Through the shared `append_jsonl` (O_APPEND), not a read-whole-file plus
+    atomic rewrite. The rewrite was O(file size) PER EVENT, so the lifetime cost
+    grew quadratically and peak memory was twice the log -- all of it under the
+    global `_LOCK`, so a long-lived queue made every card mutation wait on a
+    full re-serialisation of its own history. `approvals.py` already appends;
+    this was the last rewriter.
+    """
     event = {"ts": _now_iso(), "trace_id": tracing.get() or "-", **event}
-    log_path = workspace_root / DISPOSITION_LOG
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    existing = ""
-    if log_path.exists():
-        try:
-            existing = log_path.read_text(encoding="utf-8")
-        except OSError:
-            existing = ""
-    if existing and not existing.endswith("\n"):
-        existing += "\n"
     try:
-        atomic_write_text(log_path, existing + json.dumps(event, ensure_ascii=False) + "\n", mode=0o600)
+        append_jsonl(workspace_root / DISPOSITION_LOG, event, mode=0o600)
     except OSError:
-        pass  # audit trail is best-effort; never fail a mutation on log write
+        # Audit trail is best-effort; never fail a mutation on a log write. But
+        # a swallowed write is a hole in the trail, so it gets a line.
+        logger.warning("could not append to the disposition log", exc_info=True)
 
 
 def _dedup_key(card: dict) -> str | None:
@@ -391,7 +436,13 @@ def list_action_queue(workspace_root: Path) -> dict:
     actionable = [c for c in active if _card_tier(c) == "gated"]
     fyi = [c for c in active if _card_tier(c) != "gated"]
     return {
-        "items": active[:ROW_CAP],
+        # NOT capped, and the docstring above says why: the daemon's tier sweep
+        # and `scripts/action-queue.py` both walk `items` to find a card by id.
+        # `active[:ROW_CAP]` made card 101 invisible to both -- the sweep never
+        # applied it and `action-queue.py approve <id>` answered "not found" --
+        # and the sort puts the OLDEST, lowest-priority cards past the cap.
+        # ROW_CAP still bounds the two UI lanes below, which is what it is for.
+        "items": active,
         "total": len(active),
         "actionable": actionable[:ROW_CAP],
         "actionable_total": len(actionable),

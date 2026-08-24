@@ -33,7 +33,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
@@ -250,7 +250,11 @@ def _session_date(envelope: dict, path: Path) -> str:
     days = [d for d in (_iso_day(s) for s in stamps) if d]
     if days:
         return min(days)  # ISO days sort lexicographically -> earliest = start
-    return date.fromtimestamp(path.stat().st_mtime).isoformat()  # noqa: DTZ012 - local mtime date, historical
+    # UTC, like the ISO stamps above it and like the marker filter in
+    # `select_sessions`. This fallback feeds `sdate`, which becomes the marker,
+    # so a local-clock day here reintroduces the same two-clock comparison one
+    # level up. Still a real historical date, never today().
+    return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).date().isoformat()
 
 
 def read_marker() -> str | None:
@@ -303,7 +307,21 @@ def select_sessions(sessions_dir: Path, since: str | None, backfill: bool, limit
         if already_chronicled(f.stem):
             continue
         if cutoff is not None:
-            mday = date.fromtimestamp(f.stat().st_mtime).isoformat()  # noqa: DTZ012 - local mtime date
+            # UTC, because the MARKER is UTC. `capped_marker` writes a date that
+            # `_session_date` read out of the transcript's own ISO stamps, which
+            # are UTC days, and this compared it against `date.fromtimestamp`,
+            # which is libc's LOCAL day. On a host behind UTC, a session started
+            # just after midnight UTC has a local mtime date one day earlier; if
+            # its summarization then failed, the marker was capped at its UTC
+            # date and this filter read `mday < cutoff` as true on every later
+            # run. Permanently invisible, never reported, `cmd_build` exiting 0 —
+            # the exact orphan `capped_marker`'s docstring says `<` prevents. It
+            # only prevents it when both dates come off the same clock.
+            #
+            # mtime is the session's LAST write, so its UTC day is never earlier
+            # than the UTC day of its first turn: a cutoff equal to a session's
+            # own date can no longer exclude that session, in any zone.
+            mday = datetime.fromtimestamp(f.stat().st_mtime, timezone.utc).date().isoformat()
             if mday < cutoff:
                 continue
         selected.append(f)
@@ -514,7 +532,16 @@ def _extract_json(text: str) -> dict | None:
 
 
 def summarize(body: str, timeout: int = 300) -> dict | None:
-    """Return {gist, topics, personal} or None on a hard failure.
+    """One of three shapes, never two.
+
+    * ``{gist, topics, personal, reasoning, considered, open}`` on success. The
+      last three are optional by construction and may be empty.
+    * ``{"skip": True}`` when the model judged the session substance-free.
+      `cmd_build` already branches on this; the docstring simply did not name
+      it, and it said the success shape was the three keys it had when it was
+      written, so every documented caller contract here was wrong in both
+      directions at once.
+    * ``None`` on a hard failure.
 
     Fail-toward-personal: a keyword hit forces personal, and any parse/transport
     failure that still yielded a gist defaults personal. A total failure (no gist)
@@ -694,6 +721,25 @@ def write_entry(path: Path, content: str) -> None:
     tmp.replace(path)  # atomic
 
 
+def capped_marker(newest_processed: str, failed_dates: list[str]) -> str:
+    """The high-water mark, never raised past a session that failed.
+
+    Sessions are walked newest-first, and only the FAILURE branch declined to
+    advance the mark. A newer session that skipped — trivial, or no substantive
+    content — still raised it above an older session whose summarization had
+    failed, and `select_sessions` filters `mday < cutoff`, so that older session
+    became invisible to every later run. It was chronicled never, reported
+    never, and `cmd_build` exited 0 either way, so the nightly timer saw a clean
+    build. Recovery needed a manual `--since` nobody was told to run.
+
+    `<` is the filter, so a cutoff EQUAL to the failed date leaves that session
+    selectable while everything genuinely older stays covered.
+    """
+    if not failed_dates:
+        return newest_processed
+    return min(newest_processed, min(failed_dates))
+
+
 def write_marker(newest_date: str) -> None:
     p = marker_path()
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -719,6 +765,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 
     written = skipped = failed = 0
     newest_processed: str | None = None
+    failed_dates: list[str] = []
     for i, path in enumerate(selected, 1):
         events, _ = parse_jsonl(path)
         envelope = apply_truncation(build_envelope(path, events), ENVELOPE_MAX_BYTES)
@@ -736,6 +783,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         if summary is None:
             print(f"  {YELLOW}{label}  skip (no summary){RESET}")
             failed += 1
+            failed_dates.append(sdate)
             continue
         if summary.get("skip"):
             print(f"  {GRAY}{label}  skip (no substantive content){RESET}")
@@ -757,6 +805,20 @@ def cmd_build(args: argparse.Namespace) -> int:
     if not args.dry_run and newest_processed:
         # High-water = newest session actually processed, NOT wall-clock now, so a
         # partial/limited run never orphans older, still-unprocessed sessions (H3).
+        #
+        # H3 only covered a run that STOPPED early. It did not cover a run that
+        # kept going past a failure, and sessions are walked newest-first, so a
+        # newer session that skipped (trivial, or no substantive content) still
+        # raised the mark above an OLDER session whose summarization had failed.
+        # `select_sessions` filters `mday < cutoff`, so that older session was
+        # then invisible to every later run: chronicled never, reported never,
+        # exit 0 either way, and the nightly timer saw a clean build. Recovery
+        # needed a manual --since nobody was told to run.
+        #
+        # The mark is capped at the OLDEST failure instead. `<` is the filter, so
+        # a cutoff EQUAL to that date keeps the failed session selectable, and
+        # anything genuinely older than it stays covered.
+        newest_processed = capped_marker(newest_processed, failed_dates)
         prev = read_marker()
         if prev is None or newest_processed > prev:
             write_marker(newest_processed)
@@ -893,15 +955,32 @@ def cmd_personal_recall(args: argparse.Namespace) -> int:
     query = args.text
     scored: list[tuple[float, dict]] = []
     mode = "semantic"
+    # The fallback is sound design; the catch-all around it was not. `except
+    # Exception` also swallowed the `strict=True` zip's ValueError, a TypeError,
+    # and any regression inside scripts.utils.embeddings — flipping the operator
+    # to lexical scoring with nothing but the word "(lexical)" in the header to
+    # say so. EmbeddingError was even imported here and never referenced, which
+    # is what the author meant to catch. Narrowed and made audible 2026-08-24.
     try:
         from scripts.utils.embeddings import EmbeddingError, embed, index_embed_target
-        embed_host, embed_model = index_embed_target()
-        vecs = embed([query] + [e["text"] for e in entries],
-                     model=embed_model, host=embed_host)
-        qv, evs = vecs[0], vecs[1:]
-        scored = [(_cosine(qv, ev), e) for ev, e in zip(evs, entries, strict=True)]
-        floor = 0.5
-    except Exception:  # noqa: BLE001 - ollama down or embed failure -> lexical fallback
+    except ImportError as exc:
+        EmbeddingError = ()  # noqa: N806 - nothing to catch if the module is absent
+        print(f"{GRAY}chronicle: embeddings module unavailable ({exc}); "
+              f"scoring lexically.{RESET}", file=sys.stderr)
+        embed = index_embed_target = None
+    if embed is not None:
+        try:
+            embed_host, embed_model = index_embed_target()
+            vecs = embed([query] + [e["text"] for e in entries],
+                         model=embed_model, host=embed_host)
+            qv, evs = vecs[0], vecs[1:]
+            scored = [(_cosine(qv, ev), e) for ev, e in zip(evs, entries, strict=True)]
+            floor = 0.5
+        except (EmbeddingError, OSError) as exc:
+            print(f"{GRAY}chronicle: semantic scoring unavailable ({exc}); "
+                  f"scoring lexically.{RESET}", file=sys.stderr)
+            embed = None
+    if embed is None:
         mode = "lexical"
         scored = [(_lexical_score(query, e["text"]), e) for e in entries]
         floor = 0.34

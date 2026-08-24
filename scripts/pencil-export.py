@@ -367,7 +367,19 @@ def render_editable(work_html: Path, bg_dir: Path, width, height, scale,
                 "(cur)=>{document.querySelectorAll(\"[data-pencil-name^='Slide-']\")"
                 ".forEach(e=>{e.style.visibility=(e.getAttribute('data-pencil-id')===cur)?'':'hidden';});}",
                 d["id"])
+            # `data-pencil-id` can be absent, in which case getAttribute gave
+            # None, the selector looked for the literal string "None", and the
+            # AttributeError from `fr.screenshot` aborted the whole export after
+            # a full render pass with nothing that named the offending slide.
+            if not d["id"]:
+                raise SystemExit(
+                    f"pencil-export: slide {i} ({d.get('name') or 'unnamed'}) has no "
+                    f"data-pencil-id; cannot render the editable export")
             fr = page.query_selector(f'[data-pencil-id="{d["id"]}"]')
+            if fr is None:
+                raise SystemExit(
+                    f"pencil-export: no frame matches data-pencil-id={d['id']!r} "
+                    f"for slide {i}")
             out = bg_dir / f"slide-{i:02d}.{ext}"
             if img_format == "jpeg":
                 fr.screenshot(path=str(out), type="jpeg", quality=quality)

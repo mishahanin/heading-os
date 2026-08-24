@@ -184,6 +184,12 @@ def load_topic_state(state_dir: Path) -> dict:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return dict(default)
+    if not isinstance(data, dict):
+        # The docstring promises defaults for CORRUPT state, and a file holding
+        # `[]` is corrupt for this reader even though it parses. Without this,
+        # `data.setdefault` below raised AttributeError -- the one outcome the
+        # docstring rules out.
+        return dict(default)
     for k, v in default.items():
         data.setdefault(k, v)
     return data

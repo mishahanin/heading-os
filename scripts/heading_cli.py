@@ -35,7 +35,7 @@ import json
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -168,14 +168,31 @@ def build_skill_command(skill, args, *, tier, budget_usd=DEFAULT_BUDGET_USD, mod
     return cmd
 
 
+class OutsideWorkspace(ValueError):
+    """The target resolved outside the workspace root."""
+
+
 def _resolve(target: str, root: Path) -> Path:
     """Resolve a target to an absolute script path under the workspace root.
 
     A bare name (no slash) is looked up under scripts/. A relative path is taken
     as-is from the workspace root.
+
+    CONTAINED, which the docstring already claimed and the code did not check.
+    An ABSOLUTE target replaced `root` entirely under pathlib (`root / "/tmp/x"`
+    is `/tmp/x`), and `../` walked out the same way. `heading` is a constrained
+    command surface, so "under the workspace root" has to be enforced rather
+    than described.
     """
+    if PurePosixPath(target).is_absolute() or PureWindowsPath(target).is_absolute():
+        raise OutsideWorkspace(f"absolute paths are not accepted: {target}")
     rel = target if "/" in target else f"scripts/{target}"
-    return (root / rel).resolve()
+    resolved = (root / rel).resolve()
+    root_resolved = root.resolve()
+    if resolved != root_resolved and root_resolved not in resolved.parents:
+        raise OutsideWorkspace(
+            f"{target} resolves to {resolved}, outside the workspace root {root_resolved}")
+    return resolved
 
 
 def _dispatch(script_path: Path, args: list[str]) -> int:
@@ -277,10 +294,14 @@ def main(argv=None) -> int:
         return 0
     if args.command == "skill":
         return run_skill(args.name, args.args, budget_usd=args.budget, model=args.model)
-    if args.command == "run":
-        return _dispatch(_resolve(args.script, root), args.args)
-    # Named shortcut.
-    return _dispatch(_resolve(REGISTRY[args.command], root), args.args)
+    try:
+        if args.command == "run":
+            return _dispatch(_resolve(args.script, root), args.args)
+        # Named shortcut.
+        return _dispatch(_resolve(REGISTRY[args.command], root), args.args)
+    except OutsideWorkspace as exc:
+        print(f"heading: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

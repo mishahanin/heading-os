@@ -38,6 +38,7 @@ Usage:
 import argparse
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -51,13 +52,23 @@ LOCK_PATH = get_workspace_root() / "skills-lock.json"
 
 def _tree_hash(tree_dir: Path) -> str:
     """Compute the sha256-tree-v1 digest over a vendored skill directory."""
-    files = sorted(
-        (p for p in tree_dir.rglob("*") if p.is_file()),
+    # `is_file()` FOLLOWS symlinks, so a vendored file replaced by a link to an
+    # identical-content file elsewhere hashed the same and the substitution --
+    # the one thing this verifier exists to catch -- went undetected. A link
+    # OUTSIDE the tree also made the digest depend on content the lock does not
+    # cover, and a broken link vanished silently. Links are now recorded as
+    # links, by target, and never followed.
+    entries = sorted(
+        (p for p in tree_dir.rglob("*") if p.is_symlink() or p.is_file()),
         key=lambda p: p.relative_to(tree_dir).as_posix(),
     )
     lines = []
-    for p in files:
+    for p in entries:
         rel = p.relative_to(tree_dir).as_posix()
+        if p.is_symlink():
+            target = os.readlink(p)
+            lines.append(f"{rel}\nsymlink:{target}\n")
+            continue
         # LF-normalize so the digest matches git's `* text=auto` storage and is
         # stable across checkouts (a CRLF working copy must hash the same as a
         # fresh LF CI checkout).
@@ -72,7 +83,17 @@ def _vendored_dir(root: Path, entry: dict) -> Path | None:
     skill_path = entry.get("skillPath")
     if not skill_path:
         return None
-    return root / Path(skill_path).parent
+    rel_parent = Path(skill_path).parent
+    if Path(skill_path).is_absolute() or rel_parent in (Path("."), Path("")):
+        # A parent-less `skillPath` ("SKILL.md") made tree_dir the WORKSPACE
+        # ROOT, and `--relock` would then pin a hash of the entire repository --
+        # changing on every commit and failing verification forever after. No
+        # adversary needed; the footgun is the entry itself.
+        return None
+    tree = (root / rel_parent).resolve()
+    if tree != root.resolve() and root.resolve() not in tree.parents:
+        return None
+    return tree
 
 
 def verify(relock: bool, quiet: bool) -> int:
@@ -86,6 +107,14 @@ def verify(relock: bool, quiet: bool) -> int:
         print(f"{RED}FAIL{RESET}  skills-lock.json unreadable: {e}")
         return 1
 
+    if not isinstance(lock, dict):
+        # Valid JSON, wrong shape. A list here reached `lock.get` as an
+        # AttributeError traceback instead of the clean FAIL path an unreadable
+        # file already gets.
+        print(f"{RED}FAIL{RESET}  skills-lock.json is a "
+              f"{type(lock).__name__}, expected an object")
+        return 1
+
     recipe = lock.get("recipe")
     if recipe != RECIPE:
         print(f"{RED}FAIL{RESET}  lock recipe {recipe!r} != expected {RECIPE!r}")
@@ -93,7 +122,18 @@ def verify(relock: bool, quiet: bool) -> int:
 
     issues = 0
     changed = False
-    for name, entry in sorted(lock.get("skills", {}).items()):
+    skills = lock.get("skills", {})
+    if not isinstance(skills, dict):
+        print(f"{RED}FAIL{RESET}  lock 'skills' is a "
+              f"{type(skills).__name__}, expected an object")
+        return 1
+
+    for name, entry in sorted(skills.items()):
+        if not isinstance(entry, dict):
+            print(f"{RED}FAIL{RESET}  {name}: entry is a "
+                  f"{type(entry).__name__}, expected an object")
+            issues += 1
+            continue
         if entry.get("vendored") is False:
             if not quiet:
                 print(f"{GRAY}SKIP{RESET}  {name}: {entry.get('note', 'not vendored in-repo')}")
@@ -125,6 +165,13 @@ def verify(relock: bool, quiet: bool) -> int:
     if relock and changed:
         LOCK_PATH.write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
         print(f"{BOLD}Re-locked{RESET} {LOCK_PATH.relative_to(root)}")
+        if issues:
+            # `return 0` here DISCARDED `issues`: a missing vendored tree
+            # alongside any other change gave CI a green run, a rewritten lock,
+            # and a stale hash still pinned for the tree nobody could verify.
+            print(f"\n{RED}{BOLD}{issues} entr(ies) could not be verified and were "
+                  f"NOT re-locked.{RESET}")
+            return 1
         return 0
 
     if issues:

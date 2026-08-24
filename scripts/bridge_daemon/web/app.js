@@ -37,6 +37,16 @@ function escapeHtml(s) {
 //   crumb - the route, e.g. 'Today · Approvals'
 //   tail  - the status clause, e.g. '5 pending' (optional)
 //   dataTime - ISO timestamp to surface a relative '5m ago' marker (optional)
+// Only in-app hash routes and http(s) pass. escapeHtml neutralises markup but
+// not a scheme, so a `javascript:...` value arriving in a stored suggested item
+// or critical item would execute in a page that holds the bearer token in
+// memory. Every other link in this file is already gated this way; these two
+// were not. Found by the 2026-08-23 audit.
+function _safeHref(url, fallback) {
+  const v = String(url || '').trim();
+  return (v.startsWith('#/') || /^https?:\/\//i.test(v)) ? v : fallback;
+}
+
 function _breadcrumb(num, crumb, tail, dataTime) {
   let html = `<span class="num">${escapeHtml(num)}</span>`
     + `<span class="sep">&middot;</span>`
@@ -111,7 +121,7 @@ async function bootstrap() {
   state.refresh = b.refresh || {};
 }
 
-function authFetch(path, opts = {}) {
+function _rawAuthFetch(path, opts) {
   return fetch(path, {
     ...opts,
     headers: {
@@ -121,7 +131,43 @@ function authFetch(path, opts = {}) {
   });
 }
 
+// The token is minted once by bootstrap(). A daemon restart rotates it, and
+// every request then 401s forever: page renderers show "Failed to load X",
+// checkVersion counts the 401s as missed heartbeats and settles on "Stale",
+// and nothing ever re-bootstraps. The dashboard could not recover without the
+// operator reloading by hand. One retry, then a reload as the last resort.
+let _reauthInFlight = null;
+
+async function authFetch(path, opts = {}) {
+  const r = await _rawAuthFetch(path, opts);
+  if (r.status !== 401) return r;
+  try {
+    _reauthInFlight = _reauthInFlight || (async () => {
+      const b = await (await fetch('/_bootstrap')).json();
+      state.token = b.token;
+    })();
+    await _reauthInFlight;
+  } catch (e) {
+    console.warn('bridge: re-bootstrap failed:', e);
+    return r;
+  } finally {
+    _reauthInFlight = null;
+  }
+  const retry = await _rawAuthFetch(path, opts);
+  if (retry.status === 401) location.reload();
+  return retry;
+}
+
+let _checkVersionInFlight = false;
+
 async function checkVersion() {
+  // With refresh.status set low and a slow /version + /inbox + render chain, a
+  // second poll started before the first finished. Both could pass the
+  // prevVersion test in _maybeNotifyNewEmail before either wrote
+  // state.lastInboxVersion - a duplicate "New email" toast - and the
+  // missedHeartbeats increment and reset interleaved wrongly.
+  if (_checkVersionInFlight) return;
+  _checkVersionInFlight = true;
   try {
     const r = await authFetch('/version', {
       headers: state.lastEtag ? { 'If-None-Match': state.lastEtag } : {},
@@ -148,6 +194,8 @@ async function checkVersion() {
     state.missedHeartbeats++;
     if (state.missedHeartbeats >= 3) setConnection('stale');
     else setConnection('warn');
+  } finally {
+    _checkVersionInFlight = false;
   }
 }
 
@@ -191,8 +239,18 @@ async function _maybeNotifyNewEmail(snap) {
     }
     // Same top conversation as before - the bump was about something else.
     if (topUnread.id === state.lastInboxTopId) return;
-    // New top-of-inbox conversation. Toast it.
+    // A DIFFERENT top id is not the same thing as a new email. Clicking Done
+    // on the top conversation bumps the inbox version and promotes the one
+    // below it, which used to toast "New email" for mail that may be days old.
+    // Toast only for a conversation id this session has never seen at all.
+    const seen = (state.seenInboxIds = state.seenInboxIds || new Set());
+    const isNew = !seen.has(topUnread.id);
+    for (const c of (d.conversations || d.items || [])) {
+      if (c && c.id) seen.add(c.id);
+    }
+    seen.add(topUnread.id);
     state.lastInboxTopId = topUnread.id;
+    if (!isNew) return;
     showToast(
       'New email',
       topUnread.subject || '(no subject)',
@@ -220,7 +278,13 @@ function setConnection(status) {
 
 function formatRelative(iso) {
   if (!iso) return '-';
-  const sec = (Date.now() - new Date(iso).getTime()) / 1000;
+  const ms = new Date(iso).getTime();
+  // renderSyncIndicator has carried both of these guards from the start; this
+  // one had neither, so an unparseable stamp fell through every comparison to
+  // print the literal "NaNh ago", and a server clock running ahead printed
+  // "-5s ago".
+  if (isNaN(ms)) return '-';
+  const sec = Math.max(0, (Date.now() - ms) / 1000);
   if (sec < 60) return `${Math.round(sec)}s ago`;
   if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
   return `${Math.round(sec / 3600)}h ago`;
@@ -314,21 +378,6 @@ function fmtMinutesUntil(min) {
   return m === 0 ? `in ${h}h` : `in ${h}h ${m}m`;
 }
 
-function nextMeetingHtml(m) {
-  // Returns a SAFE HTML string for the next-meeting line.
-  // All interpolations go through escapeHtml.
-  if (!m || !m.time) return 'none scheduled';
-  const base = `${escapeHtml(m.time)} - ${escapeHtml(m.subject || '(no subject)')}`;
-  const mins = fmtMinutesUntil(m.minutes_until);
-  const minsHtml = mins
-    ? ` <span class="next-mins" data-event-iso="${escapeHtml(m.event_utc_iso || '')}">(${escapeHtml(mins)})</span>`
-    : '';
-  if (m.location && m.location.startsWith('http')) {
-    return `${base} <a href="${escapeHtml(m.location)}" target="_blank" rel="noopener noreferrer" class="next-join">join</a>${minsHtml}`;
-  }
-  return `${base}${minsHtml}`;
-}
-
 function _tickNextMeetingMins() {
   const spans = document.querySelectorAll('.next-mins[data-event-iso]');
   if (spans.length === 0) {
@@ -404,8 +453,14 @@ function _pulseActivityEntriesHtml(activity) {
   ];
   const formatTime = (iso) => {
     if (!iso) return '';
-    const m = iso.match(/T(\d{2}):(\d{2})/);
-    return m ? `${m[1]}:${m[2]}` : '';
+    // Slicing HH:MM out of the ISO string prints UTC. Everything else on this
+    // dashboard - the topbar clock, the greeting, the Day page - renders in
+    // state.tz, so an entry could read hours off local with nothing saying so.
+    const t = new Date(iso);
+    if (isNaN(t.getTime())) return '';
+    return t.toLocaleTimeString('en-GB', {
+      timeZone: state.tz, hour: '2-digit', minute: '2-digit', hour12: false,
+    });
   };
   const sections = order
     .filter(([key]) => (groups[key] || []).length > 0)
@@ -491,7 +546,13 @@ function _pulseSubheadHtml(d) {
     fragments.push(`${escapeHtml(m.subject || 'next meeting')} <strong>${escapeHtml(when)}</strong>`);
   }
 
-  // Pipeline posture: holding (no overdue), shipping (Won > 0), drifting (overdue > 0).
+  // Pipeline posture, in the order the branches actually run:
+  //   drifting  - more than 5 overdue
+  //   shipping  - any Won deal, and 5 or fewer overdue
+  //   flagged   - 1 to 5 overdue and nothing Won
+  //   holding   - nothing overdue
+  // The comment used to say drifting meant ANY overdue and never mentioned
+  // `flagged` at all, so anyone tuning the thresholds from it read them wrong.
   const overdue = d.kpi.pipeline_overdue || 0;
   const stages = d.kpi.pipeline_stages || {};
   let pipelineWord;
@@ -787,7 +848,7 @@ function pulseSuggestedHtml(d) {
     return 'content';
   };
   const renderRow = it => `
-    <a class="pulse-suggested-row" href="${escapeHtml(it.link || '#/pulse')}" data-stop-prop>
+    <a class="pulse-suggested-row" href="${escapeHtml(_safeHref(it.link, '#/pulse'))}" data-stop-prop>
       <span class="pulse-suggested-agent" data-agent="${escapeHtml(_agentToken(it.agent))}">${escapeHtml(it.agent || '')}</span>
       <span class="pulse-suggested-reason">${escapeHtml(it.reason || '')}</span>
       <span class="pulse-suggested-arrow">&rarr;</span>
@@ -919,83 +980,6 @@ function pulseTribeHtml(d) {
     </article>`;
 }
 
-async function _pulseApprovalToggle(rowEl) {
-  // Inline-expand the draft body. Pattern matches the other 8 drill-downs.
-  const existing = document.querySelector('.pulse-approval-expanded');
-  if (existing) {
-    const isThisRow = existing.previousElementSibling === rowEl;
-    existing.remove();
-    if (isThisRow) return;
-  }
-  const path = rowEl.dataset.path;
-  const title = rowEl.dataset.title || '(draft)';
-  const to = rowEl.dataset.to || '';
-  const subject = rowEl.dataset.subject || '';
-  if (!path) return;
-  const panel = document.createElement('div');
-  panel.className = 'card pulse-approval-expanded';
-  panel.innerHTML = '<div class="pulse-approval-loading">Loading...</div>';
-  rowEl.insertAdjacentElement('afterend', panel);
-  try {
-    const r = await authFetch(`/approvals/draft?path=${encodeURIComponent(path)}`);
-    if (!r.ok) {
-      panel.innerHTML = `<div class="pulse-approval-loading">Failed to load: HTTP ${escapeHtml(r.status)}</div>`;
-      return;
-    }
-    const d = await r.json();
-    panel.innerHTML = `
-      <div class="pulse-approval-head">
-        <span class="pulse-approval-title-large">${escapeHtml(title)}</span>
-        <span class="pulse-approval-path">${escapeHtml(d.path)}</span>
-      </div>
-      <div class="pulse-approval-headers">
-        <div><strong>To:</strong> ${escapeHtml(to)}</div>
-        <div><strong>Subject:</strong> ${escapeHtml(subject)}</div>
-      </div>
-      <pre class="pulse-approval-body-pre">${escapeHtml(d.content)}</pre>
-      <div class="pulse-approval-actions">
-        <input class="pulse-approval-note" type="text" maxlength="200"
-               placeholder="Optional note (channel, recipient, ...)" />
-        <button class="pulse-approval-mark-btn" data-path="${escapeHtml(d.path)}">Mark sent</button>
-      </div>
-      <div class="pulse-approval-foot">Sending stays manual via <code>scripts/send-email.py</code>. Mark removes the draft from the queue.</div>`;
-    const btn = panel.querySelector('.pulse-approval-mark-btn');
-    if (btn) btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      _pulseApprovalMarkSent(panel, btn);
-    });
-  } catch (e) {
-    panel.innerHTML = `<div class="pulse-approval-loading">Failed to load.</div>`;
-  }
-}
-
-async function _pulseApprovalInlineMarkSent(btn) {
-  // Phase 1.89: one-click mark-sent from the Pulse approval row (no drill-down).
-  const path = btn.dataset.path;
-  if (!path) return;
-  btn.disabled = true;
-  btn.textContent = '...';
-  try {
-    const r = await authFetch('/approvals/mark-sent', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path, note: '' }),
-    });
-    if (!r.ok) {
-      btn.textContent = 'Retry';
-      btn.disabled = false;
-      showToast('Mark sent failed', 'check daemon log');
-      return;
-    }
-    showToast('Draft cleared', path.split('/').pop());
-    renderCurrentPage();
-  } catch (e) {
-    btn.textContent = 'Retry';
-    btn.disabled = false;
-    showToast('Mark sent failed', 'check daemon log');
-  }
-}
-
 async function _pulseApprovalMarkSent(panelEl, btn) {
   // Phase 1.71: clear a draft from the approvals queue after manual send.
   const path = btn.dataset.path;
@@ -1023,67 +1007,6 @@ async function _pulseApprovalMarkSent(panelEl, btn) {
     btn.textContent = 'Failed - retry';
     btn.disabled = false;
     showToast('Mark sent failed', 'check daemon log');
-  }
-}
-
-async function pulseApprovalsHtml() {
-  // Fetch /approvals lazily; if empty, return ''. The outer caller already
-  // skips us when kpi.approvals_total === 0 to avoid the extra round-trip.
-  try {
-    const r = await authFetch('/approvals');
-    if (!r.ok) return '';
-    const d = await r.json();
-    if (!d.items || d.items.length === 0) return '';
-    // Phase 1.96: v8 approval-card layout - 2-col x 3-row grid so the
-    // subject doesn't compete with the action button for horizontal
-    // space in the narrow Pulse right column. Row 1: chip + title;
-    // row 2: meta (full-width); row 3: actions (right-aligned).
-    // Phase 1.102: cap the Pulse-embedded list at the top 3 most-recent
-    // drafts; overflow link routes to the full /approvals page.
-    const PULSE_APPROVALS_TOP = 3;
-    const top = d.items.slice(0, PULSE_APPROVALS_TOP);
-    const overflow = Math.max(0, d.total - top.length);
-    // Phase 1.106: classify each row by source agent. Only signal we have
-    // is the filename / title - 'follow-up' fires 'followup', everything
-    // else defaults to 'email-respond'. The CSS uses [data-agent] to pick
-    // the dot colour (green for respond, orange for follow-up).
-    const _agentFor = it => {
-      const hay = `${it.path || ''} ${it.filename || ''} ${it.title || ''}`.toLowerCase();
-      if (hay.includes('follow-up') || hay.includes('followup')) return 'followup';
-      return 'email-respond';
-    };
-    const _agentLabel = a => a === 'followup' ? '/follow-up' : '/email-respond';
-    const items = top.map(it => {
-      const agent = _agentFor(it);
-      return `
-      <div class="pulse-approval-item" data-agent="${escapeHtml(agent)}"
-           data-path="${escapeHtml(it.path)}"
-           data-title="${escapeHtml(it.title)}"
-           data-to="${escapeHtml(it.to)}"
-           data-subject="${escapeHtml(it.subject)}">
-        <span class="pulse-approval-kind" data-agent="${escapeHtml(agent)}">${escapeHtml(_agentLabel(agent))}</span>
-        <div class="pulse-approval-subject">${escapeHtml(it.subject || it.title)}</div>
-        <div class="pulse-approval-meta">to ${escapeHtml(it.to || '-')} &middot; ${escapeHtml(formatRelative(it.mtime))}</div>
-        <div class="pulse-approval-actions-row">
-          <button class="pulse-approval-inline-mark" title="Mark this draft sent" data-path="${escapeHtml(it.path)}">Mark sent</button>
-          <a class="pulse-approval-edit" href="#/approvals" data-stop-prop title="Open in Approvals">Edit</a>
-        </div>
-      </div>`;
-    }).join('');
-    const footer = overflow > 0
-      ? `<a class="pulse-approvals-more" href="#/approvals" data-stop-prop>${escapeHtml(overflow)} more draft${overflow === 1 ? '' : 's'} waiting &rarr;</a>`
-      : `<a class="pulse-approvals-more pulse-approvals-more-quiet" href="#/approvals" data-stop-prop>Open Approvals &rarr;</a>`;
-    // Phase 1.106: header uses a real badge chip (replaces 'Approvals waiting · N')
-    return `
-      <section class="pulse-section">
-        <div class="pulse-section-head">
-          <div class="pulse-section-eyebrow">Approvals waiting</div>
-          <span class="pulse-approvals-badge">${escapeHtml(d.total)}</span>
-        </div>
-        <div class="card pulse-approvals-card">${items}${footer}</div>
-      </section>`;
-  } catch (e) {
-    return '';
   }
 }
 
@@ -1213,34 +1136,6 @@ function pulsePipelineHtml(d) {
 // 50-130 days). The signals() SOURCE is kept (it still feeds the
 // Suggested-for-now panel); only the dashboard surfaces were removed:
 // the hero Critical-Signals card, the /signals page, and the KPI red count.
-
-function pulseWatchHtml(watch) {
-  if (!watch || watch.length === 0) return '';
-  const sevClass = {
-    red: 'pulse-watch-red',
-    yellow: 'pulse-watch-yellow',
-  };
-  const items = watch.map(w => {
-    const cls = sevClass[w.severity] || 'pulse-watch-default';
-    const link = w.link
-      ? `<a href="${escapeHtml(w.link)}">${escapeHtml(w.count)} ${escapeHtml(w.label)}</a>`
-      : `${escapeHtml(w.count)} ${escapeHtml(w.label)}`;
-    return `<div class="pulse-watch-item ${cls}">${link}</div>`;
-  }).join('');
-  // Phase 1.108: Watch card uses the section-head pattern. Badge colour
-  // tracks the most severe item (red -> warn, anything else -> quiet)
-  // so the eye lands on a Watch with red items immediately.
-  const hasRed = watch.some(w => w.severity === 'red');
-  const badgeCls = hasRed ? 'pulse-section-badge-warn' : 'pulse-section-badge-quiet';
-  return `
-    <section class="pulse-section">
-      <div class="pulse-section-head">
-        <div class="pulse-section-eyebrow">Watch</div>
-        <span class="pulse-section-badge ${badgeCls}">${escapeHtml(watch.length)}</span>
-      </div>
-      <div class="card pulse-watch-card">${items}</div>
-    </section>`;
-}
 
 async function renderPulse() {
   const r = await authFetch('/pulse');
@@ -1808,7 +1703,7 @@ function _conversationPanelHtml(d, rowEl) {
     : '';
 
   const summary = a.summary
-    ? `<div class="inbox-row-summary">${escapeHtml(a.summary)}</div>`
+    ? `<div class="inbox-detail-summary">${escapeHtml(a.summary)}</div>`
     : '';
 
   const actionsList = (a.proposed_actions && a.proposed_actions.length)
@@ -1913,6 +1808,11 @@ async function _inboxToggleExpand(rowEl) {
   try {
     const r = await authFetch(`/inbox/conversation?id=${encodeURIComponent(id)}`);
     if (!r.ok) {
+      // Stop persisting the expansion. _inboxExpandedId is set before the
+      // fetch and was cleared on no failure path, so renderInbox re-invoked
+      // this toggle on every poll and re-inserted the error panel every ~30s
+      // until the row left the list.
+      _inboxExpandedId = null;
       let msg = `HTTP ${r.status}`;
       try { const j = await r.json(); if (j.detail) msg = j.detail; } catch (_) {}
       panel.innerHTML = `
@@ -1978,10 +1878,14 @@ async function _inboxDismissedToggle() {
             });
           });
         }
+        // Only a SUCCESSFUL load is cached. Marking loaded in every case
+        // meant one transient failure froze the panel on "Failed to load"
+        // until a full page re-render rebuilt the DOM, because the
+        // `if (!exp.dataset.loaded)` guard blocked every retry.
+        exp.dataset.loaded = '1';
       } catch (e) {
         exp.innerHTML = '<div class="inbox-dismissed-loading">Failed to load recent dismisses.</div>';
       }
-      exp.dataset.loaded = '1';
     }
     exp.hidden = false;
     foot.classList.add('inbox-dismissed-open');
@@ -2155,10 +2059,11 @@ async function _inboxDeferredToggle() {
             });
           });
         }
+        // Cache only a SUCCESSFUL load; see the sibling toggle above.
+        exp.dataset.loaded = '1';
       } catch (e) {
         exp.innerHTML = '<div class="inbox-dismissed-loading">Failed to load deferred list.</div>';
       }
-      exp.dataset.loaded = '1';
     }
     exp.hidden = false;
     foot.classList.add('inbox-dismissed-open');
@@ -2398,10 +2303,11 @@ async function _apprSentToggle() {
             });
           });
         }
+        // Cache only a SUCCESSFUL load; see the sibling toggle above.
+        exp.dataset.loaded = '1';
       } catch (e) {
         exp.innerHTML = '<div class="appr-sent-loading">Failed to load recent sends.</div>';
       }
-      exp.dataset.loaded = '1';
     }
     exp.hidden = false;
     foot.classList.add('appr-sent-open');
@@ -2470,7 +2376,7 @@ async function renderTasks(params) {
     await trackPageView('tasks');
     return;
   }
-  const chips = Object.entries(d.counts)
+  const chips = Object.entries(d.counts || {})
     .sort((a, b) => a[0].localeCompare(b[0]))  // P1, P2, P3...
     .map(([p, n]) => `<span class="cat-chip">${escapeHtml(p)} ${escapeHtml(n)}</span>`)
     .join('');
@@ -2486,14 +2392,19 @@ async function renderTasks(params) {
       else dueStr = `in ${escapeHtml(t.days_until_due)}d`;
     }
     const overdueClass = t.is_overdue ? ' task-overdue' : '';
-    const priClass = `task-pri-${t.priority.toLowerCase()}`;
+    // `t.priority.toLowerCase()` threw on any task the parser emits without a
+    // priority, aborting the entire Tasks render - and the very next line
+    // already knew the field can be absent. The class was also the only server
+    // value in this file interpolated into an attribute unescaped; compare
+    // `task-pri-${escapeHtml(...)}` in _taskDoneToggle.
     const priSlug = (t.priority || 'p3').toLowerCase();
+    const priClass = `task-pri-${escapeHtml(priSlug)}`;
     // Phase 1.90: inline Done button drops the task out of the bridge's
     // listing (tasks.md remains canonical - /viraid still owns true
     // completion + Completed-section bookkeeping).
     return `
       <div class="card task-row${overdueClass}" data-pri-slug="${escapeHtml(priSlug)}" data-task-key="${escapeHtml(t.task_key || '')}" data-freshness="${escapeHtml(d.data_time)}" data-stale="${freshnessLevel(d.data_time)}">
-        <div class="task-pri ${priClass}">${escapeHtml(t.priority)}</div>
+        <div class="task-pri ${priClass}">${escapeHtml(t.priority || 'P3')}</div>
         <div>
           <div class="task-desc">${escapeHtml(t.description)}</div>
           <div class="task-meta">${t.kind ? escapeHtml(t.kind) : ''}${t.kind && t.source ? ' &middot; ' : ''}${t.source ? escapeHtml(t.source) : ''}</div>
@@ -2595,10 +2506,11 @@ async function _taskDoneToggle() {
             });
           });
         }
+        // Cache only a SUCCESSFUL load; see the sibling toggle above.
+        exp.dataset.loaded = '1';
       } catch (e) {
         exp.innerHTML = '<div class="task-done-loading">Failed to load recent dones.</div>';
       }
-      exp.dataset.loaded = '1';
     }
     exp.hidden = false;
     foot.classList.add('task-done-open');
@@ -2691,11 +2603,15 @@ async function renderPipeline(params) {
   const overdueChip = d.overdue_count > 0
     ? `<span class="cat-chip is-overdue">overdue ${escapeHtml(d.overdue_count)}</span>`
     : '';
-  const stageChips = Object.entries(d.counts)
+  const stageChips = Object.entries(d.counts || {})
     .sort((a, b) => {
       // Order chips by STAGE progression
       const order = ['Won', 'Negotiation', 'Proposal', 'Demo/POC', 'Qualified', 'Lead'];
-      return order.indexOf(a[0]) - order.indexOf(b[0]);
+      // indexOf returns -1 for a stage not in the list, which sorted unknown
+      // stages FIRST - while the grouping code below appends them LAST. Same
+      // render, opposite order. Push the unknowns to the end of both.
+      const rank = (k) => (order.indexOf(k) === -1 ? order.length : order.indexOf(k));
+      return rank(a[0]) - rank(b[0]);
     })
     .map(([s, n]) => `<span class="cat-chip">${escapeHtml(s)} ${escapeHtml(n)}</span>`)
     .join('');
@@ -2875,22 +2791,33 @@ async function _wireFlagImportant(btn, kind, sourcePage) {
   // of the page. Every flag button then read as unflagged even for flagged
   // items, and clicking one created a duplicate server-side. Stamping 0 on
   // failure makes the very next call retry. Found by the 2026-08-23 audit.
+  // One fetch per page render, not one per row. Callers like renderTasks do
+  // `forEach(btn => _wireFlagImportant(btn, ...))` WITHOUT awaiting, so with 15
+  // tasks all 15 reached the staleness test before any of them had written the
+  // cache: 15 identical GET /critical in flight at once. Sharing the promise
+  // collapses them to one; the second and later callers await the same result.
   if (!window._criticalCache || (Date.now() - window._criticalCacheAt) > 30_000) {
-    try {
-      const r = await authFetch('/critical');
-      if (r.ok) {
-        const d = await r.json();
-        const byRef = {};
-        for (const it of (d.items || [])) byRef[`${it.kind}|${it.ref}`] = it.id;
-        window._criticalCache = byRef;
-        window._criticalCacheAt = Date.now();
-      } else {
-        window._criticalCache = {};
-        window._criticalCacheAt = 0;
+    window._criticalFetch = window._criticalFetch || (async () => {
+      try {
+        const r = await authFetch('/critical');
+        if (r.ok) {
+          const d = await r.json();
+          const byRef = {};
+          for (const it of (d.items || [])) byRef[`${it.kind}|${it.ref}`] = it.id;
+          window._criticalCache = byRef;
+          window._criticalCacheAt = Date.now();
+          return;
+        }
+      } catch (e) {
+        // fall through to the retry-next-call state below
       }
-    } catch (e) {
       window._criticalCache = {};
       window._criticalCacheAt = 0;
+    })();
+    try {
+      await window._criticalFetch;
+    } finally {
+      window._criticalFetch = null;
     }
   }
   const ref = btn.dataset.ref;
@@ -2915,8 +2842,15 @@ async function _wireFlagImportant(btn, kind, sourcePage) {
     const wasFlagged = btn.classList.contains('is-flagged');
     try {
       if (wasFlagged) {
+        // The button says flagged, so the item IS flagged server-side. If the
+        // cache no longer holds its id - a 30s TTL refresh that raced an
+        // external unmark - the old code took the `if` and fell straight out:
+        // no request, no toast, button re-enabled by `finally`. A destructive
+        // control that silently does nothing is worse than one that fails.
         const currentId = window._criticalCache[key];
-        if (currentId) {
+        if (!currentId) {
+          showToast('Unflag failed', 'state moved; refresh the page');
+        } else {
           const r = await authFetch('/critical/unmark', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -3023,10 +2957,12 @@ async function renderInvestors(params) {
     await trackPageView('investors');
     return;
   }
-  const raiseLabel = d.raise_target ? `${escapeHtml(d.raise_target)} anchor` : 'Series B';
+  // _breadcrumb escapes its tail. Pre-escaping here turned `R&D $5M` into the
+  // literal `R&amp;D $5M` in the crumb. Every other caller passes raw.
+  const raiseLabel = d.raise_target ? `${d.raise_target} anchor` : 'Series B';
   const chips = _INV_STATUS_ORDER
-    .filter(s => d.counts[s])
-    .map(s => `<span class="cat-chip inv-chip-${escapeHtml(s)}">${escapeHtml(_INV_STATUS_HEADING[s] || s)} ${escapeHtml(d.counts[s])}</span>`)
+    .filter(s => (d.counts || {})[s])
+    .map(s => `<span class="cat-chip inv-chip-${escapeHtml(s)}">${escapeHtml(_INV_STATUS_HEADING[s] || s)} ${escapeHtml((d.counts || {})[s])}</span>`)
     .join('');
 
   // Group firms by status. Preserve sort order from the server.
@@ -3556,7 +3492,7 @@ async function renderThreads(params) {
   }).join('');
 
   const countChips = (d.bucket_order || [])
-    .map(b => `<span class="cat-chip">${escapeHtml(_THREADS_BUCKET_LABEL[b] || b)} ${escapeHtml(d.counts[b] || 0)}</span>`)
+    .map(b => `<span class="cat-chip">${escapeHtml(_THREADS_BUCKET_LABEL[b] || b)} ${escapeHtml((d.counts || {})[b] || 0)}</span>`)
     .join('');
 
   document.getElementById('canvas').innerHTML = `
@@ -3713,7 +3649,7 @@ async function renderCritical(params) {
         </div>
       </div>
       <div class="critical-row-actions">
-        ${it.source_page ? `<a class="critical-row-open" href="${escapeHtml(_openHref(it))}" data-stop-prop>Open</a>` : ''}
+        ${it.source_page ? `<a class="critical-row-open" href="${escapeHtml(_safeHref(_openHref(it), '#/critical'))}" data-stop-prop>Open</a>` : ''}
         <button class="critical-row-unmark" data-id="${escapeHtml(it.id)}" title="Remove from Important">Unflag</button>
       </div>
     </div>`).join('');
@@ -3793,7 +3729,7 @@ async function _criticalRestoreFootHtml() {
       </div>
       <div class="critical-restore-expanded" id="critical-restore-expanded" hidden>
         ${items.map(it => `
-          <div class="critical-restore-row" data-id="${escapeHtml(it.id)}" data-kind="${escapeHtml(it.kind)}" data-ref="${escapeHtml(it.ref)}" data-label="${escapeHtml(it.label)}" data-source-page="${escapeHtml(it.source_page)}">
+          <div class="critical-restore-row" data-id="${escapeHtml(it.id)}" data-kind="${escapeHtml(it.kind)}" data-ref="${escapeHtml(it.ref)}" data-label="${escapeHtml(it.label)}" data-source-page="${escapeHtml(it.source_page || '')}">
             <span class="critical-restore-label">${escapeHtml(it.label)}</span>
             <span class="critical-restore-meta">${escapeHtml(it.kind)} &middot; ${escapeHtml(formatRelative(it.ts))}</span>
             <button class="critical-restore-btn">Re-flag</button>
@@ -3868,7 +3804,7 @@ async function renderTribe(params) {
     await trackPageView('tribe');
     return;
   }
-  const counts = Object.entries(d.counts)
+  const counts = Object.entries(d.counts || {})
     .sort((a, b) => b[1] - a[1])
     .map(([role, n]) => `<span class="cat-chip">${escapeHtml(role)} ${escapeHtml(n)}</span>`)
     .join('');
@@ -4287,7 +4223,7 @@ async function renderDay(params) {
   if (d.events.length === 0) {
     document.getElementById('canvas').innerHTML = `
       <header class="pulse-hero">
-        <div class="pulse-breadcrumb">${_breadcrumb('01', 'Today · Day', `${dateLabel} · ${escapeHtml(state.tzLabel)}`)}</div>
+        <div class="pulse-breadcrumb">${_breadcrumb('01', 'Today · Day', `${dateLabel} · ${state.tzLabel}`)}</div>
         <h1 class="pulse-greeting">Clear day.</h1>
         <p class="pulse-subhead">No calendar events found for today.${d.data_time ? ` Last sync ${escapeHtml(formatRelative(d.data_time))}.` : ''}</p>
       </header>`;
@@ -4376,7 +4312,7 @@ async function renderDay(params) {
 
   document.getElementById('canvas').innerHTML = `
     <header class="pulse-hero">
-      <div class="pulse-breadcrumb">${_breadcrumb('01', 'Today · Day', `${dateLabel} · ${escapeHtml(state.tzLabel)}`)}</div>
+      <div class="pulse-breadcrumb">${_breadcrumb('01', 'Today · Day', `${dateLabel} · ${state.tzLabel}`)}</div>
       <h1 class="pulse-greeting">Today.</h1>
       <p class="pulse-subhead">
         <strong>${escapeHtml(total)} event${total === 1 ? '' : 's'}</strong> &middot;
@@ -4667,26 +4603,6 @@ async function renderSettings() {
   await trackPageView('settings');
 }
 
-async function launchAction(action, sessionId, cwd) {
-  try {
-    const r = await authFetch('/launch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action,
-        session_id: sessionId || null,
-        cwd: cwd || null,
-        title: action,
-      }),
-    });
-    if (!r.ok) {
-      console.warn(`bridge: /launch returned ${r.status}`);
-    }
-  } catch (e) {
-    console.warn('bridge: /launch failed:', e);
-  }
-}
-
 // Spec section 3.3 deep-link: opens a Claude Code terminal session in
 // the user's named window (wt -w 31c-<slug> on Windows, tmux 31c-<slug>
 // on macOS) with BRIDGE_ORIGIN=browser, BRIDGE_ACTION=<action>, and a
@@ -4716,7 +4632,10 @@ async function _continueInSession({action, title, context, sessionId, cwd}, btn)
     if (!r.ok) {
       const detail = await r.text().catch(() => `HTTP ${r.status}`);
       console.warn('bridge: /launch failed:', detail);
-      if (btn) btn.textContent = `Launch failed: ${r.status}`;
+      // Re-enable: only the success path used to, so one failed click on the
+      // human send-gate control needed a full page re-render before it could
+      // be tried again.
+      if (btn) { btn.disabled = false; btn.textContent = `Launch failed: ${r.status}`; }
       return;
     }
     if (btn) {
@@ -4728,7 +4647,7 @@ async function _continueInSession({action, title, context, sessionId, cwd}, btn)
     }
   } catch (e) {
     console.warn('bridge: /launch error:', e);
-    if (btn) btn.textContent = 'Launch error';
+    if (btn) { btn.disabled = false; btn.textContent = 'Launch error'; }
   }
 }
 
@@ -4753,6 +4672,11 @@ async function _bridgeFlushLastPage() {
   try {
     await authFetch('/telemetry/page-view', {
       method: 'POST',
+      // keepalive lets the request outlive the document. Without it a browser
+      // cancels in-flight fetches during unload, so the beforeunload flush
+      // below delivered nothing on most sessions - while the comment beside
+      // it promised "the last page of every session" gets a duration record.
+      keepalive: true,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ page, duration_s: capped }),
     });
@@ -4776,6 +4700,13 @@ async function trackPageView(page) {
   // the in-flight page when the session ends.
   if (page === _bridgeLastPage) return;
   await _bridgeFlushLastPage();
+  // Do not start a timer the user is not present for. The polling loop keeps
+  // running while the tab is hidden, and a component bump re-renders, which
+  // lands here: the hidden-flush had just nulled _bridgeLastPage, so this
+  // started a FRESH timer mid-hide and every minute of a backgrounded tab was
+  // counted as tab time - re-inflating the exact metric this block exists to
+  // deflate. The next visible render starts the timer honestly.
+  if (document.visibilityState === 'hidden') return;
   _bridgeLastPage = page;
   _bridgeLastPageStartTs = Date.now();
 }
@@ -4794,22 +4725,6 @@ window.addEventListener('beforeunload', () => {
   // beforeunload can't await; fire-and-forget.
   _bridgeFlushLastPage();
 });
-
-async function renderStub() {
-  document.getElementById('canvas').innerHTML = `
-    <header class="pulse-hero">
-      <div class="pulse-breadcrumb">${_breadcrumb('02', 'Work · Conversations', 'Coming in Phase 2')}</div>
-      <h1 class="pulse-greeting">Conversations.</h1>
-      <p class="pulse-subhead">Unified Telegram + Signal + ephemeral chat surface. Lands in Phase 2 (deferred while the Tribe Fireside daemon owns the telethon session).</p>
-    </header>
-    <div class="card">
-      <p>This screen is not yet wired. Phase 1 ships Pulse, Inbox, and Settings.
-         Day, Conversations, Capabilities, Library, Studio, Spaces, and Tribe land
-         in Phase 2 once the Phase 1 adoption gate passes.</p>
-      <p><a href="#/pulse">&laquo; back to Pulse</a></p>
-    </div>`;
-  await trackPageView('stub');
-}
 
 async function renderSearch(params) {
   const q = (params && params.get('q')) || '';
@@ -5175,10 +5090,24 @@ const ROUTES = {
   settings: renderSettings,
   search: renderSearch,
   critical: renderCritical,
-  stub: renderStub,
 };
+// A `stub` key sat here, reachable only by hand-typing #/stub. Its copy said
+// Day, Conversations, Capabilities, Library, Studio and Tribe "land in Phase 2
+// once the Phase 1 adoption gate passes" - all six have had full renderers
+// routed above for a long time. An unreachable page is harmless; an
+// unreachable page that tells the operator his working pages do not exist is
+// not. Removed 2026-08-24 with the renderer behind it.
+
+// Monotonic render generation. renderCurrentPage is entered from four places
+// (hashchange, checkVersion, the sync button, visibilitychange) and each one
+// captures its route, awaits a fetch, then writes the canvas. With two in
+// flight the LAST to resolve won, so a slow render of the page you just left
+// could overwrite the page you navigated to - URL on B, canvas showing A,
+// wrong nav item marked aria-current, self-correcting only on the next poll.
+let _renderGeneration = 0;
 
 async function renderCurrentPage() {
+  const myGeneration = ++_renderGeneration;
   const raw = (location.hash || '#/pulse').replace('#/', '');
   // Split off query string (e.g., "search?q=acme" -> ["search", "q=acme"]).
   const [route, queryStr] = raw.split('?');
@@ -5191,6 +5120,8 @@ async function renderCurrentPage() {
   const fn = ROUTES[route] || renderPulse;
   // Pass params dict to render functions so they can read query state.
   await fn(params);
+  // A newer render started while this one was awaiting; it owns the canvas.
+  if (myGeneration !== _renderGeneration) return;
   document.querySelectorAll('.nav-item').forEach(a => {
     const isActive = a.getAttribute('href') === `#/${route}`;
     a.classList.toggle('active', isActive);
@@ -5232,13 +5163,6 @@ function _loadTweaks() {
   }
   _persistTweaks();  // collapse migrated state into the new key
   _refreshTweaksUI();
-}
-
-function _readTweaks() {
-  try {
-    const raw = localStorage.getItem(TWEAKS_KEY);
-    return raw ? (JSON.parse(raw) || {}) : {};
-  } catch (e) { return {}; }
 }
 
 function _persistTweaks() {
@@ -5332,8 +5256,10 @@ async function _refreshSeaState() {
     }
     const pill = document.getElementById('sea-pill');
     if (pill) {
-      const stateBit = `${d.overdue_total} overdue (${d.pipeline_overdue} deals, ${d.tasks_overdue} tasks)`;
-      const moodBit = `${d.events_today} event${d.events_today === 1 ? '' : 's'} today`;
+      const nOverdue = d.overdue_total || 0, nDeals = d.pipeline_overdue || 0;
+      const nTasks = d.tasks_overdue || 0, nEvents = d.events_today || 0;
+      const stateBit = `${nOverdue} overdue (${nDeals} deals, ${nTasks} tasks)`;
+      const moodBit = `${nEvents} event${nEvents === 1 ? '' : 's'} today`;
       pill.title = `Sea state - ${stateBit}\nMood - ${moodBit}`;
     }
   } catch (e) {
@@ -5559,9 +5485,34 @@ function _isTypingTarget(target) {
   return tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable;
 }
 
+// The help overlay's navigation rows are BUILT from KBD_NAV, never written by
+// hand. Two hand-kept lists drift, and this pair already had: `g e` (Contacts)
+// was live in KBD_NAV and absent from the table, so the only way to find it was
+// to read the source. Labels come from CMDK_DEFAULT_ITEMS, which already maps
+// every routed hash to its display name - a third list would be a third thing
+// to forget. Rendered once, on first open.
+let _kbdHelpNavBuilt = false;
+
+function _buildKbdHelpNav() {
+  if (_kbdHelpNavBuilt) return;
+  const table = document.getElementById('kbd-help-table');
+  if (!table) return;
+  const labelFor = new Map(CMDK_DEFAULT_ITEMS.map(it => [it.hash, it.label]));
+  const rows = Object.entries(KBD_NAV).map(([key, hash]) => {
+    // A hash with no palette entry still gets a row: hiding a live shortcut is
+    // the defect being fixed here, so fall back to the hash itself.
+    const label = labelFor.get(hash) || hash.replace('#/', '');
+    return `<tr><td><kbd>g</kbd> <kbd>${escapeHtml(key)}</kbd></td>`
+         + `<td>${escapeHtml(label)}</td></tr>`;
+  });
+  table.insertAdjacentHTML('beforeend', rows.join(''));
+  _kbdHelpNavBuilt = true;
+}
+
 function _toggleKbdHelp(force) {
   const el = document.getElementById('kbd-help');
   if (!el) return;
+  _buildKbdHelpNav();
   if (force === true) {
     el.hidden = false;
   } else if (force === false) {
@@ -5584,13 +5535,22 @@ document.addEventListener('keydown', (e) => {
   const helpEl = document.getElementById('kbd-help');
   const helpOpen = helpEl && !helpEl.hidden;
 
-  // Esc handling - works even when typing.
+  // Esc handling - works even when typing. stopImmediatePropagation is what
+  // makes it topmost-only: preventDefault does NOT stop other listeners on the
+  // same event, so with the palette open OVER an expanded drill-down, one Esc
+  // used to close both.
   if (e.key === 'Escape') {
+    // The command palette sits ABOVE everything here and owns its own Escape
+    // listener. This listener is registered first, so without yielding, one
+    // Esc closed the palette AND whatever was underneath it.
+    const palette = document.getElementById('cmdk-palette');
+    if (palette && !palette.hidden) return;
     // Close tweaks panel first if open.
     const tweaksPanel = document.getElementById('tweaks');
     if (tweaksPanel && !tweaksPanel.hidden) {
       _closeTweaks();
       e.preventDefault();
+      e.stopImmediatePropagation();
       return;
     }
     // Collapse any open drill-down expansion (library, tribe, studio,
@@ -5600,11 +5560,13 @@ document.addEventListener('keydown', (e) => {
     if (expanded) {
       expanded.remove();
       e.preventDefault();
+      e.stopImmediatePropagation();
       return;
     }
     if (helpOpen) {
       _toggleKbdHelp(false);
       e.preventDefault();
+      e.stopImmediatePropagation();
       return;
     }
     const searchInput = document.getElementById('search-input');
@@ -5673,14 +5635,19 @@ document.addEventListener('click', (e) => {
 
 // ============================================================================
 // CmdK palette - Cmd/Ctrl+K opens a modal action launcher.
-// Default items: 9 page nav actions. Typing triggers live /search via the
+// Default items: one per routed page. The count in this comment used to say
+// "9" against a 17-entry list, and the list carried a Signals entry pointing at
+// #/signals - a route ROUTES has no key for, so selecting it silently rendered
+// Pulse. A palette that offers a destination which does not exist is worse than
+// one that omits it. Removed 2026-08-24; the /signals page was folded into the
+// Pulse hero long before. Keep this list in step with ROUTES, not with a number
+// written in prose. Typing triggers live /search via the
 // existing endpoint, debounced 150ms.
 // ============================================================================
 
 const CMDK_DEFAULT_ITEMS = [
   { icon: 'page', label: 'Pulse',        hash: '#/pulse' },
   { icon: 'page', label: 'Important',    hash: '#/critical' },
-  { icon: 'page', label: 'Signals',      hash: '#/signals' },
   { icon: 'page', label: 'Inbox',        hash: '#/inbox' },
   { icon: 'page', label: 'Approvals',    hash: '#/approvals' },
   { icon: 'page', label: 'Conversations', hash: '#/conversations' },
@@ -5701,6 +5668,12 @@ let _cmdkActiveIndex = 0;
 let _cmdkCurrentItems = [];
 let _cmdkSearchTimer = null;
 let _cmdkLastSearchQuery = '';
+
+function _cmdkSetActive(resultsEl, index) {
+  resultsEl.querySelectorAll('.cmdk-result').forEach((n, i) => {
+    n.classList.toggle('cmdk-active', i === index);
+  });
+}
 
 function _cmdkRender(items) {
   _cmdkCurrentItems = items;
@@ -5724,8 +5697,14 @@ function _cmdkRender(items) {
       _cmdkActivate();
     });
     el.addEventListener('mouseenter', () => {
+      // Move the highlight by toggling a class, never by re-rendering.
+      // _cmdkRender rebuilds resultsEl.innerHTML, which destroys the node
+      // under the pointer and inserts a fresh one at the same coordinates -
+      // and the browser fires mouseenter on THAT, calling _cmdkRender again.
+      // A stationary cursor over the list churned the DOM continuously and
+      // fought the user's scroll with scrollIntoView on every cycle.
       _cmdkActiveIndex = parseInt(el.dataset.index, 10);
-      _cmdkRender(_cmdkCurrentItems);  // re-render to update highlight
+      _cmdkSetActive(resultsEl, _cmdkActiveIndex);
     });
   });
   // Scroll active item into view.

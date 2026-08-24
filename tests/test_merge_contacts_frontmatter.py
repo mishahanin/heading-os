@@ -115,13 +115,13 @@ def test_quotes_survive_on_a_scalar_and_on_a_list_item(mc):
         "---\n"
         'freeze_until: "2026-10-01"\n'
         "other_emails:\n"
-        '  - "seb.mueller@example.com"\n'
+        '  - "felix.leiter@example.com"\n'
         'phone: ""\n'
         "---\n"
     )
     fm, _body = mc.parse_frontmatter(quoted)
     assert fm["freeze_until"] == "2026-10-01"
-    assert fm["other_emails"] == ["seb.mueller@example.com"]
+    assert fm["other_emails"] == ["felix.leiter@example.com"]
     assert fm["phone"] == ""
     assert mc.serialize_frontmatter(fm) == quoted
 

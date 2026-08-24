@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import traceback
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -101,13 +102,25 @@ def main() -> int:
     files = _engine_text_files(root, candidates)
 
     findings: list[tuple[str, int, str, str]] = []
+    unscanned: list[str] = []
     for rel in files:
         try:
             text = (root / rel).read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        except (OSError, UnicodeDecodeError) as exc:
+            # Never silent. This gate exists so nothing unscanned ships, and a
+            # bare `continue` meant an engine-routed file with invalid UTF-8, or
+            # one hitting a transient read error, passed with no record at all —
+            # a clean verdict over a file nobody looked at.
+            unscanned.append(f"{rel}: {exc}")
             continue
         for lineno, matched, category in dl.scan_text(text):
             findings.append((rel, lineno, matched, category))
+
+    if unscanned:
+        print(f"{YELLOW}content-guard: {len(unscanned)} file(s) could not be read "
+              f"and were NOT scanned:{RESET}", file=sys.stderr)
+        for note in unscanned:
+            print(f"  {YELLOW}{note}{RESET}", file=sys.stderr)
 
     if findings:
         # --all is the hand-run sweep of the whole engine surface; no gate drives
@@ -130,10 +143,24 @@ def main() -> int:
 
     if not args.quiet:
         scope = "engine surface" if args.all else f"{len(files)} file(s)"
+        skipped = f", {len(unscanned)} unreadable and NOT scanned" if unscanned else ""
         print(f"{GREEN}content-guard: clean{RESET} {GRAY}({scope}; "
-              f"{len(dl.tokens)} denylist tokens){RESET}")
+              f"{len(dl.tokens)} denylist tokens{skipped}){RESET}")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Exit 2 is the documented "internal error" code and nothing produced it:
+    # `build_denylist` or the workspace resolver raising propagated as a
+    # traceback and Python exited 1 — indistinguishable, to any CI step keying
+    # on the contract, from "a leak was found". A gate that reports a crash as a
+    # catch is worse than one that crashes loudly.
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the documented exit-2 contract
+        print(f"{RED}content-guard: internal error: "
+              f"{type(exc).__name__}: {exc}{RESET}", file=sys.stderr)
+        traceback.print_exc()
+        raise SystemExit(2) from exc

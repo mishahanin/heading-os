@@ -70,8 +70,19 @@ _REWRITE_SUB_YAML = r'\1\2\\"${CLAUDE_PLUGIN_ROOT}\\"/scripts/'
 _FRONTMATTER_RE = re.compile(r"\A(---\r?\n.*?\r?\n---\r?\n)(.*)\Z", re.DOTALL)
 
 # Reference scanners for the completeness gate.
+#
+# WHAT THESE SEE, and what they do not. A literal `scripts/foo/bar.py`, a
+# `.claude/hooks/x.py`, and a `python -m scripts.foo.bar`. They do NOT see an
+# extensionless `scripts/tool`, a `bash scripts/tool.sh`, or a path built at
+# runtime from pieces — those can be broken in an installed bundle while this
+# build still passes, and the gate's report says "no missing targets", not "no
+# broken references". Widening further means guessing at arbitrary shell text,
+# which trades a known blind spot for false failures on every build.
 _SCRIPT_REF_RE = re.compile(r"scripts/([\w./-]+\.py)")
 _HOOK_REF_RE = re.compile(r"\.claude/hooks/([\w./-]+\.py)")
+# `python -m scripts.utils.x`. Added 2026-08-24: the dotted form reaches the
+# same file as a path reference and the gate could not see it at all.
+_DOTTED_REF_RE = re.compile(r"-m\s+scripts\.([\w.]+)")
 
 
 def load_manifest(root: Path) -> dict:
@@ -110,7 +121,6 @@ def completeness_gate(spec: dict, root: Path) -> list[str]:
     and it should fail the build for the same reason.
     """
     bundled_scripts = collect_bundled_scripts(spec, root)
-    bundled_script_names = {Path(p).name for p in bundled_scripts}
     bundled_hooks = set(spec.get("hooks", []))
     missing: list[str] = []
 
@@ -132,12 +142,28 @@ def completeness_gate(spec: dict, root: Path) -> list[str]:
         text = src.read_text(encoding="utf-8")
         for ref in _SCRIPT_REF_RE.findall(text):
             rel = f"scripts/{ref}"
-            # utils/ refs (path or dotted) are always covered; check by path and basename.
-            if rel in bundled_scripts or Path(ref).name in bundled_script_names:
-                continue
-            if ref.startswith("utils/"):
+            # Exact repo-relative membership, and nothing looser. Two bypasses
+            # used to sit here and each let a dead reference ship:
+            #
+            #   `Path(ref).name in bundled_script_names` accepted a BASENAME
+            #   match, so a bundle carrying `scripts/a/tool.py` passed a skill
+            #   referencing `scripts/b/tool.py` — a different file that is not
+            #   in the bundle at all.
+            #
+            #   `if ref.startswith("utils/"): continue` skipped every utils
+            #   reference wholesale, so `scripts/utils/does_not_exist.py` was
+            #   never reported. The blanket skip was never needed:
+            #   `collect_bundled_scripts` already adds every real file under
+            #   `scripts/utils/`, so a utils path that exists matches exactly
+            #   and one that does not SHOULD fail.
+            if rel in bundled_scripts:
                 continue
             missing.append(f"{src.relative_to(root)} -> scripts/{ref}")
+        for ref in _DOTTED_REF_RE.findall(text):
+            rel = "scripts/" + ref.replace(".", "/") + ".py"
+            if rel in bundled_scripts:
+                continue
+            missing.append(f"{src.relative_to(root)} -> {rel} (as -m scripts.{ref})")
         for ref in _HOOK_REF_RE.findall(text):
             if Path(ref).name not in bundled_hooks:
                 missing.append(f"{src.relative_to(root)} -> .claude/hooks/{ref}")

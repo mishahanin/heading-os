@@ -340,3 +340,4 @@ config/skill-custom/*.user.toml
 # leftovers are gone from every clone.
 .canopus/
 
+.claude/worktrees/

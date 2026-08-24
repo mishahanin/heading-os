@@ -30,7 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import (
     get_workspace_root, validate_admin, get_exec_slug, load_fleet,
-    get_corporate_repo_path, load_admin_config,
+    get_corporate_repo_path, load_admin_config, repo_name_for,
     load_github_org, get_per_exec_repo_path, get_all_active_exec_slugs,
     get_per_exec_contacts_dir,
 )
@@ -41,6 +41,7 @@ GITHUB_ORG = load_github_org()
 # Thresholds in seconds, sized for a HUMAN commit cadence. The old values (2h /
 # 24h) were written for a per-minute heartbeat; against commits they painted an
 # executive who worked yesterday as STALE and one who took a week off as DEAD.
+SKEW_TOLERANCE = 300            # 5 min: ordinary NTP jitter, not a broken clock
 OK_THRESHOLD = 7 * 86400        # committed within the week
 STALE_THRESHOLD = 30 * 86400    # quiet for a month
 
@@ -50,18 +51,11 @@ def run_cmd(cmd: list, cwd: str = None, check: bool = True) -> subprocess.Comple
     return subprocess.run(cmd, cwd=cwd, check=check, capture_output=True, text=True)
 
 
-def repo_name_for(slug: str) -> str:
-    """The GitHub repo name for an exec's data overlay, from the fleet roster.
-
-    Falls back to the naming convention when the roster row omits `data_repo`,
-    which is what a hand-added row usually does. The previous hardcoded
-    `31c-crm-{slug}` named the retired aggregation model, so the clone branch
-    could only ever 404.
-    """
-    for row in load_fleet():
-        if row.get("slug") == slug and row.get("data_repo"):
-            return row["data_repo"]
-    return f"heading-os-data-{slug}"
+# repo_name_for moved to scripts/utils/workspace.py so aggregate-crm.py reads
+# the same roster. It lived here and aggregate-crm.py hardcoded the convention,
+# so an exec whose roster row named a different data_repo had their overlay
+# cloned correctly by this tool and 404'd by the aggregation, which then omitted
+# their contacts and exited 0.
 
 
 def ensure_per_exec_repos() -> list:
@@ -75,7 +69,22 @@ def ensure_per_exec_repos() -> list:
     for slug in slugs:
         repo_path = get_per_exec_repo_path(slug)
         if repo_path.exists():
-            run_cmd(["git", "pull"], cwd=str(repo_path), check=False)
+            # Inspect the pull. `check=False` with no look at the exit code
+            # meant auth expiry, a merge conflict or an offline machine left a
+            # stale clone that the dashboard then read and presented as
+            # current. Only the CLONE branch below ever warned, so a failure
+            # was announced the first time and silent every time after.
+            try:
+                pull = run_cmd(["git", "pull"], cwd=str(repo_path), check=False)
+            except (subprocess.CalledProcessError, FileNotFoundError, OSError) as e:
+                print(f"{YELLOW}[warn] {slug}: git pull could not run ({e}); "
+                      f"reading the clone as it stands{RESET}")
+            else:
+                if pull.returncode != 0:
+                    detail = (pull.stderr or pull.stdout or "").strip().splitlines()
+                    print(f"{YELLOW}[warn] {slug}: git pull failed "
+                          f"({detail[-1] if detail else 'no output'}); the rows below "
+                          f"describe the LOCAL clone, which may be behind{RESET}")
             pairs.append((slug, repo_path))
         else:
             repo = repo_name_for(slug)
@@ -111,7 +120,12 @@ def collect_exec_state(exec_repos: list) -> list:
     """One record per exec: last commit in their overlay plus their contact count."""
     records = []
 
-    for slug, _repo_path in exec_repos:
+    # `repo_path`, not `_repo_path`. The loop unpacked into the throwaway name
+    # while `read_last_commit(repo_path)` below read a name that exists nowhere
+    # in this scope, so the FIRST iteration raised NameError and the whole
+    # dashboard died: no table, no JSON, no per-row degradation. The empty-fleet
+    # path never enters the loop, which is how it shipped.
+    for slug, repo_path in exec_repos:
         contacts_dir = get_per_exec_contacts_dir(slug)
 
         contact_count = 0
@@ -153,6 +167,18 @@ def calculate_status(record: dict) -> tuple:
 
     now = datetime.now(timezone.utc)
     delta = (now - sync_time).total_seconds()
+
+    # A commit dated AHEAD of this clock is skew, not freshness. Nothing floored
+    # `delta`, so a negative value cleared every threshold and the row read OK
+    # with "-3600 sec ago" beside it -- the one condition under which this
+    # dashboard should not be trusted was the one guaranteed to look healthy.
+    #
+    # STALE rather than a fourth status: `print_dashboard` sums OK+STALE into
+    # "Active executives" and prints a three-way summary, so a new status would
+    # be counted in one place and dropped in two. SKEW_TOLERANCE covers ordinary
+    # NTP jitter, which must not turn every healthy row yellow.
+    if delta < -SKEW_TOLERANCE:
+        return "STALE", f"{YELLOW}STALE{RESET}", "ahead of this clock"
 
     # Format time ago
     if delta < 60:
@@ -295,7 +321,12 @@ def output_json(records: list, shared_contacts: int) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="31C Fleet Health Dashboard -- monitor executive workspace sync status.",
+        # Not "sync status". The module docstring, the renamed column and
+        # tests/test_admin_health_reports_a_signal_that_exists.py all exist to
+        # stop this tool claiming it measures a sync handshake; --help was the
+        # one surface still saying it did.
+        description="31C Fleet Health Dashboard -- last commit and contact count "
+                    "per executive overlay.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--json", action="store_true",

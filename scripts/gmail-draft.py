@@ -92,20 +92,26 @@ def build_message(to, cc, bcc, subject, body, attachments, in_reply_to=None) -> 
         msg["References"] = in_reply_to
     msg.set_content(body)
 
-    total = 0
     for path in attachments:
         if not path.is_file():
             raise DraftBuildError(f"attachment not found: {path}")
         data = path.read_bytes()
-        total += len(data)
-        if total > MAX_TOTAL_BYTES:
-            raise DraftBuildError(
-                f"attachments exceed Gmail's 25 MB limit at {path.name} "
-                f"({total / 1_048_576:.1f} MB so far)"
-            )
         guessed, _ = mimetypes.guess_type(path.name)
         maintype, subtype = (guessed or "application/octet-stream").split("/", 1)
         msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=path.name)
+
+    # Measure the ASSEMBLED message, which is what Gmail sees. The guard used
+    # to sum the raw attachment bytes as it read them, counting neither the
+    # body, nor the MIME overhead, nor the base64 inflation the transport adds
+    # (msg.as_bytes() is base64url-encoded in main()). ~19 MB of attachments
+    # passed `19 < 25` and then failed at the API -- the exact late failure the
+    # guard exists to prevent.
+    encoded = len(base64.urlsafe_b64encode(msg.as_bytes()))
+    if encoded > MAX_TOTAL_BYTES:
+        raise DraftBuildError(
+            f"message is {encoded / 1_048_576:.1f} MB encoded, over Gmail's "
+            f"{MAX_TOTAL_BYTES / 1_048_576:.0f} MB limit"
+        )
     return msg
 
 

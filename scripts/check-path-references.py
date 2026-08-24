@@ -110,20 +110,40 @@ def gitignored(root: Path, paths: list[str]) -> set[str]:
     if not paths:
         return set()
     out = subprocess.run(
-        ["git", "check-ignore", "--stdin"],
+        ["git", "check-ignore", "--stdin", "-z"],
         cwd=root,
-        input="\n".join(paths),
+        input="\0".join(paths) + "\0",
         capture_output=True,
         text=True,
     )
-    return set(out.stdout.split())
+    # NUL-separated. `.split()` split on every space too, so a gitignored path
+    # containing one came back as fragments that matched nothing and was never
+    # popped from `hits` -- reported as dangling when it is merely ignored.
+    return {p for p in out.stdout.split("\0") if p}
 
 
 def tracked_markdown(root: Path) -> list[str]:
+    """Tracked `*.md`, or an empty list outside a git repo.
+
+    `check=True` made `git ls-files` failing OUTSIDE a repo raise
+    CalledProcessError, and `scan()` and `named_paths()` both call this first
+    -- so the process died on a traceback before `gitignored`'s documented
+    fail-soft path could ever run. The docstring above promised graceful
+    degradation the tool did not have.
+
+    `-z` for the same reason as above: `.split()` turned a tracked
+    `my notes.md` into two names that both fail to open, so that file's prose
+    was never scanned and no dangling path inside it could ever be caught.
+    """
     out = subprocess.run(
-        ["git", "ls-files", "*.md"], cwd=root, capture_output=True, text=True, check=True
-    ).stdout.split()
-    return [f for f in out if f not in _SKIP_FILES]
+        ["git", "ls-files", "-z", "*.md"], cwd=root, capture_output=True, text=True,
+    )
+    if out.returncode != 0:
+        print(f"warning: `git ls-files` failed in {root} ({out.stderr.strip()[:200]}); "
+              f"no Markdown was scanned", file=sys.stderr)
+        return []
+    names = [f for f in out.stdout.split("\0") if f]
+    return [f for f in names if f not in _SKIP_FILES]
 
 
 def scan(root: Path) -> dict[str, list[tuple[str, int]]]:

@@ -68,6 +68,43 @@ def esc(text):
     return html.escape(str(text))
 
 
+SAFE_URL_SCHEMES = ("http://", "https://", "mailto:")
+
+
+def safe_url(url, fallback="#"):
+    """An href value that cannot execute and cannot leave its attribute.
+
+    The Further Reading block interpolated `item["url"]` raw, with no escaping
+    and no scheme check, into `href="{url}"`. A url of `javascript:alert(1)`
+    ran on click, and one containing a double quote escaped the attribute
+    entirely and could add its own. The section is by design a list of EXTERNAL
+    links carried in from scraped intel, which is exactly the channel an
+    attacker-influenced string arrives through.
+
+    Anything that is not http, https or mailto becomes `fallback`. A relative
+    path is refused too: this document is mailed and rendered to PDF, where a
+    relative link resolves against nothing useful.
+    """
+    if not url:
+        return fallback
+    candidate = str(url).strip()
+    if not url_scheme_ok(candidate):
+        return fallback
+    return html.escape(candidate, quote=True)
+
+
+def url_scheme_ok(url) -> bool:
+    """True when the url starts with a scheme that cannot execute.
+
+    Split out for the markdown link renderer, whose input has ALREADY been
+    html-escaped. Escaping it a second time would turn `&` into `&amp;amp;`
+    and corrupt every query string, so that path checks the scheme and leaves
+    the text alone. A scheme name contains nothing html.escape touches, so
+    testing the escaped string is the same test.
+    """
+    return bool(url) and str(url).strip().lower().startswith(SAFE_URL_SCHEMES)
+
+
 def nl2br(text):
     """Convert newlines in a string to <br/> tags (for region names, titles)."""
     if not text:
@@ -93,6 +130,16 @@ def markdown_to_html(text):
             if current:
                 paragraphs.append(" ".join(current))
                 current = []
+        elif stripped.startswith("- "):
+            # A bullet is its own paragraph. Every non-blank line used to be
+            # joined with a space, so "- alpha\n- beta\n- gamma" became one
+            # paragraph and then one <li> reading "alpha - beta - gamma". A
+            # list only rendered correctly with a blank line between every
+            # item, which is the opposite of how markdown is written.
+            if current:
+                paragraphs.append(" ".join(current))
+                current = []
+            paragraphs.append(stripped)
         else:
             current.append(stripped)
     if current:
@@ -103,10 +150,14 @@ def markdown_to_html(text):
         p = html.escape(para)
         # Bold
         p = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", p)
-        # Links
+        # Links. The href used to be the captured group verbatim, so
+        # `[x](javascript:alert(1))` in any body field became a live
+        # javascript: link. Escaping upstream contained the quote breakout;
+        # it never touched the scheme.
         p = re.sub(
             r"\[(.+?)\]\((.+?)\)",
-            r'<a href="\2" target="_blank">\1</a>',
+            lambda m: (f'<a href="{m.group(2)}" target="_blank">{m.group(1)}</a>'
+                       if url_scheme_ok(m.group(2)) else m.group(1)),
             p,
         )
         # Bullet items
@@ -188,6 +239,7 @@ def build_masthead(logo_uri, display_date, issue_num, regions, threat_level):
       </div>
     </div>
   </div>
+</div>
 """
 
 
@@ -397,10 +449,17 @@ def build_navigation_chart(data, section_num=3):
     header = build_section_header(section_num, "Regional Intelligence", "Navigation Chart")
 
     rows = []
+    # "afr" and "africa" are aliases, so a document carrying both used to
+    # render Africa twice. First one present wins.
+    seen_regions = set()
     for key in ["gcc", "cis", "afr", "africa"]:
         region = data.get(key)
         if not region:
             continue
+        canonical = "afr" if key in ("afr", "africa") else key
+        if canonical in seen_regions:
+            continue
+        seen_regions.add(canonical)
         if isinstance(region, str):
             code = key.upper()
             name = key.upper()
@@ -411,8 +470,11 @@ def build_navigation_chart(data, section_num=3):
             body = region.get("body", "")
 
         body_html = markdown_to_html(body)
-        # Use smaller text for region content
-        body_html = body_html.replace("<p>", '<p>', -1)
+        # A `body_html.replace("<p>", '<p>', -1)` sat here under a comment
+        # promising smaller text for region content. It replaced the string
+        # with itself. The class it was meant to add was never written, so
+        # removing the call changes no output; the promise stays unkept and
+        # is now visible instead of hidden behind a line that looks like work.
 
         rows.append(f"""
       <div class="region-row">
@@ -454,9 +516,20 @@ def build_market_depth(data, section_num=4):
     bar_html = ""
     if bars:
         bar_items = []
-        for i, val in enumerate(bars):
-            hi_class = " hi" if val > 60 else ""
-            bar_items.append(f'        <div class="chart-bar{hi_class}" style="height:{val}%"></div>')
+        for val in bars:
+            # `val > 60` on a string raised TypeError, and a string like
+            # "50;position:fixed" went into the style attribute verbatim.
+            # A bar is a percentage or it is not drawn.
+            try:
+                pct = float(val)
+            except (TypeError, ValueError):
+                print(f"Warning: market_depth bar {val!r} is not a number; skipped",
+                      file=sys.stderr)
+                continue
+            pct = max(0.0, min(100.0, pct))
+            hi_class = " hi" if pct > 60 else ""
+            bar_items.append(f'        <div class="chart-bar{hi_class}" '
+                             f'style="height:{pct:g}%"></div>')
         bars_joined = "\n".join(bar_items)
 
         # Stats overlay
@@ -524,7 +597,10 @@ def build_the_heading(data, section_num=5):
     if not data:
         return ""
 
-    body = data if isinstance(data, str) else data.get("body", data)
+    # The fallback used to be `data` itself, so `the_heading: {"kicker": "x"}`
+    # handed a dict to markdown_to_html, which called .strip() on it and
+    # raised AttributeError with nothing catching it: no newsletter at all.
+    body = data if isinstance(data, str) else str(data.get("body", "") or "")
     header = build_section_header(section_num, "31C Perspective", "The Heading")
 
     body_html = markdown_to_html(body)
@@ -579,7 +655,7 @@ def build_recommended_reading(items, section_num=7):
     read_items = []
     for i, item in enumerate(items, 1):
         title = esc(item.get("title", ""))
-        url = item.get("url", "#")
+        url = safe_url(item.get("url"))
         source = esc(item.get("source", ""))
         desc = esc(item.get("description", ""))
         source_line = source
@@ -642,10 +718,14 @@ def generate_newsletter(data, image_paths=None):
 
     # Format display date
     try:
-        dt = date.fromisoformat(date_str)
+        # str() is the fix: a JSON number in `date` used to reach
+        # fromisoformat as an int and raise TypeError, which nothing caught,
+        # so the render died. With the coercion, TypeError is unreachable and
+        # catching it would be dead code.
+        dt = date.fromisoformat(str(date_str))
         display_date = dt.strftime("%d %B %Y")
     except ValueError:
-        display_date = date_str
+        display_date = str(date_str)
 
     css = build_css()
     top_bar = build_top_bar(regions)
@@ -721,7 +801,6 @@ def generate_newsletter(data, image_paths=None):
 
   <!-- INDICATORS -->
 {indicators}
-</div>
 
 <!-- CONTENT -->
 <div class="content">
@@ -738,6 +817,29 @@ def generate_newsletter(data, image_paths=None):
     return newsletter_html
 
 
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def safe_date_segment(raw):
+    """An ISO date safe to use as one path segment. Missing -> today.
+
+    `date.fromisoformat` alone is not enough: on 3.11 it also accepts the
+    compact "20260824" form, which is a different string and a different
+    directory. The shape is checked first, then the calendar.
+    """
+    if raw is None:
+        return datetime.now(get_default_tz()).strftime("%Y-%m-%d")
+    text = str(raw).strip()
+    if not _ISO_DATE_RE.match(text):
+        raise SystemExit(f"date {raw!r} is not YYYY-MM-DD; refusing to use it "
+                         f"as an output directory")
+    try:
+        date(int(text[0:4]), int(text[5:7]), int(text[8:10]))
+    except ValueError as exc:
+        raise SystemExit(f"date {raw!r} is not a real date: {exc}") from exc
+    return text
+
+
 def count_words(html_text):
     """Rough word count from HTML by stripping tags."""
     text = re.sub(r"<[^>]+>", " ", html_text)
@@ -750,15 +852,16 @@ def generate_pdf(html_path, pdf_path):
     """Generate a single-page PDF from the HTML newsletter using Playwright."""
     try:
         from playwright.sync_api import sync_playwright
-        from urllib.parse import quote
     except ImportError:
         print("Warning: playwright not installed. Skipping PDF generation.")
         print("  Install with: pip install playwright && python -m playwright install chromium")
         return False
 
     # Build file URI with proper encoding for paths with special characters
-    abs_path = str(Path(html_path).resolve()).replace("\\", "/")
-    file_url = "file:///" + quote(abs_path, safe=":/")
+    # Path.as_uri() builds this correctly on both platforms. The old
+    # "file:///" + abs_path produced file://// on POSIX, where abs_path
+    # already starts with a slash. Chromium normalises it today.
+    file_url = Path(html_path).resolve().as_uri()
 
     try:
         with sync_playwright() as p:
@@ -811,7 +914,11 @@ def main():
                 image_paths[section] = path
 
     # Determine output directory
-    date_str = data.get("date", datetime.now(get_default_tz()).strftime("%Y-%m-%d"))
+    # `date` is a field of the input document, and it used to become a path
+    # segment verbatim: "../../tmp/escape" wrote the briefing and its PDF
+    # outside the newsletters tree, and mkdir(parents=True) created the way
+    # there. A date is a date or the run stops.
+    date_str = safe_date_segment(data.get("date"))
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:

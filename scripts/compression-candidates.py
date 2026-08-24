@@ -24,6 +24,7 @@ Use the output to batch files into NXPowerLite Desktop's GUI.
 """
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -165,6 +166,14 @@ def format_markdown(candidates: list[dict], workspace: Path) -> str:
     return "\n".join(lines)
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    """Colour escapes out. A terminal renders them; a file just holds them."""
+    return _ANSI_RE.sub("", text)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--path", default="datastore", help="Folder within workspace to scan (default: datastore)")
@@ -190,7 +199,11 @@ def main() -> int:
         output = format_text(candidates, scan_root)
 
     if args.output:
-        args.output.write_text(output, encoding="utf-8")
+        # Strip the colour escapes on the way to a FILE. `--format text` is
+        # built with {BOLD}/{GREEN}/{CYAN} for a terminal, and this wrote it
+        # verbatim — so the docstring's own example, `--output report.md`,
+        # produced a Markdown file full of \x1b[1m sequences.
+        args.output.write_text(_strip_ansi(output), encoding="utf-8")
         print(f"{GREEN}Report written: {args.output}{RESET}")
     else:
         print(output)

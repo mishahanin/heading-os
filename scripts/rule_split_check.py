@@ -284,6 +284,12 @@ def main() -> int:
         missing = [n for n in needles if not any(_norm(n) in g for g in got)]
         print("recall self-test: OK" if not missing else f"recall FAIL: {missing}")
         return 0 if not missing else 1
+    if not a.original:
+        # Every flag branch above is optional, so a bare invocation fell through
+        # to _read_gitref(None) and died on `NoneType.partition` -- the loudest,
+        # least informative failure a gate script can produce in CI.
+        ap.error("--original is required (or use --snapshot / --check / --dump / "
+                 "--recall-selftest)")
     original = _read_gitref(a.original)
     successors = [Path(p).read_text(encoding="utf-8") for p in a.successors]
     lost = check_split(original, successors)

@@ -149,12 +149,35 @@ def changed_python_files() -> list[Path]:
     return out
 
 
-def fingerprint(paths: list[Path]) -> str:
+def deleted_python_files() -> list[str]:
+    """Watched `.py` paths git reports as changed but that are gone from disk.
+
+    Returned as repo-relative STRINGS, because there is no file to read. They
+    feed the fingerprint only: a deletion is not something a compile or import
+    lane can run against, but it absolutely changes what the surviving code
+    does. Without it, a turn whose only change is `rm scripts/foo.py` left the
+    changed-set hash byte-identical to the last pass, so the very turn that
+    broke every importer of `foo` reported `cached`.
+    """
+    gone = []
+    for r in sorted(set(_git(["diff", "--name-only", "HEAD"]))):
+        if not r.endswith(".py") or not r.startswith(WATCHED_PREFIXES):
+            continue
+        if not (ROOT / r).is_file():
+            gone.append(r)
+    return gone
+
+
+def fingerprint(paths: list[Path], deleted: "list[str] | tuple[str, ...]" = ()) -> str:
     """Content hash of the changed set, so an unchanged tree is checked once.
 
     Content, not mtime: a file rewritten with identical bytes is not a new
     thing to check, and an editor that touches mtime on save would otherwise
     re-run the whole lane set for nothing.
+
+    `deleted` carries the paths that no longer exist. They have no bytes to
+    hash, so their NAME goes in behind a marker; that is enough to make the
+    hash move when a file disappears, which is the whole point.
     """
     h = hashlib.sha256()
     for p in paths:
@@ -163,6 +186,9 @@ def fingerprint(paths: list[Path]) -> str:
             h.update(p.read_bytes())
         except OSError:
             h.update(b"<unreadable>")
+    for r in sorted(deleted):
+        h.update(r.encode("utf-8"))
+        h.update(b"<deleted>")
     return h.hexdigest()
 
 
@@ -295,7 +321,15 @@ def matching_tests(paths: list[Path]) -> list[Path]:
     tests_dir = ROOT / "tests"
     if not tests_dir.is_dir():
         return []
-    all_tests = {p.name: p for p in tests_dir.rglob("test_*.py")}
+    # A LIST per basename, not one path. Keyed by `p.name`, two test files with
+    # the same name in different subdirectories collided and one was silently
+    # dropped from ever being matched -- so a module whose only matching test
+    # was the loser ran ZERO tests under a lane that printed `clean`, which is
+    # the silent-zero-coverage failure this script exists to prevent. Measured
+    # 2026-08-24: `test_fleet_health.py` and `test_state.py` each exist twice.
+    all_tests: dict[str, list[Path]] = {}
+    for tp in tests_dir.rglob("test_*.py"):
+        all_tests.setdefault(tp.name, []).append(tp)
     picked: set[Path] = set()
     for p in paths:
         rel = _rel(p).replace("\\", "/")
@@ -304,10 +338,10 @@ def matching_tests(paths: list[Path]) -> list[Path]:
             continue
         picked.update(declared_tests(p))
         stem = p.stem.replace("-", "_")
-        for name, tp in all_tests.items():
+        for name, tps in all_tests.items():
             body = name[len("test_"): -len(".py")]
             if body == stem or body.startswith(stem + "_"):
-                picked.add(tp)
+                picked.update(tps)
     return sorted(picked)
 
 
@@ -382,14 +416,17 @@ def run(timeout: int, use_cache: bool, transcript=None) -> dict:
     """Run the lanes and return a result dict. Never raises."""
     paths = changed_python_files()
     paths, foreign = narrow(paths, transcript)
+    deleted = deleted_python_files()
     if not paths:
         reason = "no uncommitted Python edits"
         if foreign:
             reason = f"no uncommitted Python edits by this session ({foreign} by another)"
+        if deleted:
+            reason += f" ({len(deleted)} deleted, nothing left to run against)"
         return {"status": "idle", "reason": reason, "files": 0,
-                "skipped_foreign": foreign}
+                "skipped_foreign": foreign, "deleted": len(deleted)}
 
-    fp = fingerprint(paths)
+    fp = fingerprint(paths, deleted)
     if use_cache and read_state().get("last_pass") == fp:
         return {"status": "cached", "reason": "unchanged since the last pass",
                 "files": len(paths), "skipped_foreign": foreign}

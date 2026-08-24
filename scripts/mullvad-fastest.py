@@ -60,11 +60,21 @@ def fetch_relays(timeout: int = 15) -> list[dict]:
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+            raw = resp.read()
     except urllib.error.HTTPError as exc:
         raise RuntimeError(f"Mullvad API returned HTTP {exc.code}: {exc.reason}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"Could not reach Mullvad API: {exc.reason}") from exc
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        # A 200 carrying HTML -- a captive portal, a proxy error page -- escaped
+        # past the HTTPError/URLError handlers as a raw traceback, bypassing
+        # this script's own clean error path. RuntimeError is what `main`
+        # already catches.
+        raise RuntimeError(
+            f"the relay list was not JSON ({exc}); a captive portal or proxy may "
+            f"be intercepting the request") from exc
     if not isinstance(data, list):
         raise RuntimeError(f"Unexpected API payload type: {type(data).__name__}")
     return data
@@ -72,8 +82,16 @@ def fetch_relays(timeout: int = 15) -> list[dict]:
 
 def ping_host(ip: str, count: int = 3, timeout_s: int = 2) -> list[float]:
     """Run system ping; return list of RTTs in ms (empty if all failed)."""
-    if platform.system().lower() == "windows":
+    system = platform.system().lower()
+    if system == "windows":
         cmd = ["ping", "-n", str(count), "-w", str(timeout_s * 1000), ip]
+    elif system == "darwin":
+        # BSD/macOS `ping -W` is MILLISECONDS; iputils on Linux takes SECONDS.
+        # The old two-way split sent `-W 2` to both, so on macOS every relay got
+        # a 2ms reply window, `reachable` collapsed toward zero, and the ranking
+        # this tool exists to produce was silently garbage. The Windows branch
+        # is what makes cross-platform the stated intent.
+        cmd = ["ping", "-c", str(count), "-W", str(timeout_s * 1000), ip]
     else:
         cmd = ["ping", "-c", str(count), "-W", str(timeout_s), ip]
     try:
@@ -242,14 +260,25 @@ def main() -> int:
     print_table(results, args.top)
 
     reachable = sum(1 for r in results if r["ping_median_ms"] is not None)
-    fastest = results[0]
-    print(
-        f"\n{GREEN}{reachable}/{len(results)} relays responded. "
-        f"Fastest: {fastest['hostname']} "
-        f"({fastest['city']}, {fastest['country_code'].upper()}) "
-        f"@ {fastest['ping_median_ms']} ms median{RESET}",
-        file=sys.stderr,
-    )
+    if reachable == 0:
+        # `results[0]` with nothing reachable is an UNREACHABLE relay -- the
+        # sort put it first on `inf` -- so the headline read
+        # "0/N relays responded. Fastest: <host> @ None ms median", naming a
+        # winner of a race nobody finished.
+        print(
+            f"\n{YELLOW}0/{len(results)} relays responded — no fastest relay. "
+            f"ICMP may be blocked on this network.{RESET}",
+            file=sys.stderr,
+        )
+    else:
+        fastest = results[0]
+        print(
+            f"\n{GREEN}{reachable}/{len(results)} relays responded. "
+            f"Fastest: {fastest['hostname']} "
+            f"({fastest['city']}, {fastest['country_code'].upper()}) "
+            f"@ {fastest['ping_median_ms']} ms median{RESET}",
+            file=sys.stderr,
+        )
 
     if args.json_out:
         out_path = Path(args.json_out)

@@ -52,6 +52,21 @@ def _slugify(name: str) -> str:
     return s
 
 
+def _mentions(haystack_lower: str, target: str) -> bool:
+    """Whole-word containment, not raw substring.
+
+    `target.lower() in text` matched any target whose letters appear ANYWHERE in
+    the file, so short targets were classified from coincidence: "asia" and "gcc
+    region" both resolved to person off unrelated prose in people.md. This is
+    the same substring defect the region-keyword branch below carried, one layer
+    up and with a bigger haystack.
+    """
+    t = target.strip().lower()
+    if not t:
+        return False
+    return re.search(rf"(?<!\w){re.escape(t)}(?!\w)", haystack_lower) is not None
+
+
 def detect_mode(target: str) -> tuple[str, str]:
     """Return (mode, reason) using CRM/people/pipeline cross-reference, then heuristic.
 
@@ -72,7 +87,7 @@ def detect_mode(target: str) -> tuple[str, str]:
     if people_file.exists():
         try:
             text = people_file.read_text(encoding="utf-8", errors="replace").lower()
-            if target.lower() in text:
+            if _mentions(text, target):
                 return "person", "matched context/people.md"
         except OSError:
             pass
@@ -81,7 +96,7 @@ def detect_mode(target: str) -> tuple[str, str]:
     if pipeline_file.exists():
         try:
             text = pipeline_file.read_text(encoding="utf-8", errors="replace").lower()
-            if target.lower() in text:
+            if _mentions(text, target):
                 return "company", "matched context/pipeline.md"
         except OSError:
             pass
@@ -91,8 +106,16 @@ def detect_mode(target: str) -> tuple[str, str]:
     if parts and parts[-1] in suffixes:
         return "company", "heuristic: corporate suffix"
 
-    region_words = {"market", "telecom", "region", "africa", "asia", "europe", "middle east", "gcc", "cis"}
-    if any(w in target.lower() for w in region_words):
+    # WHOLE words, not substrings. `"asia" in "asiana airlines"` and
+    # `"market" in "marketo"` both classified a company as a market, which then
+    # extracted the target against a market-shaped schema and still reported a
+    # confident resolution_status from name + key_terms alone.
+    region_words = {"market", "telecom", "region", "africa", "asia", "europe",
+                    "gcc", "cis"}
+    region_phrases = {"middle east"}
+    lowered = target.lower()
+    tokens = set(re.findall(r"[a-z]+", lowered))
+    if tokens & region_words or any(ph in lowered for ph in region_phrases):
         return "market", "heuristic: market/region keyword"
 
     if len(target.split()) >= 2 and target[0].isupper():
@@ -333,11 +356,18 @@ def main() -> int:
     queries = build_queries(args.target, mode, args.depth)
 
     aggregated: list[dict] = []
-    backend_used = ""
+    # Every backend that served a query, in first-use order. A single
+    # `backend_used` overwritten each iteration reported only whichever backend
+    # answered LAST, so a run that fell back from Tavily to Brave mid-way
+    # claimed one provenance for sources that came from both.
+    backends_used: list[str] = []
     try:
         for q in queries:
             results, backend = search_with_fallback(q, max_results=5)
-            backend_used = backend
+            if backend and backend not in backends_used:
+                backends_used.append(backend)
+            for r in results:
+                r.setdefault("backend", backend)
             aggregated.extend(results)
     except NoBackendsConfigured as e:
         out = {"error": "no_search_backends_configured",
@@ -377,7 +407,8 @@ def main() -> int:
         "target": args.target,
         "mode": mode,
         "mode_detection": mode_reason if args.mode == "auto" else "explicit",
-        "backend_used": backend_used,
+        "backend_used": backends_used[-1] if backends_used else "",
+        "backends_used": backends_used,
         "resolution_status": resolution_status,
         "model_used": model_used,
         **plan,

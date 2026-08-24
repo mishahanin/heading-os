@@ -236,8 +236,8 @@ def disabled_install_paths(path: Path, repo: Path) -> set:
     return paths
 
 
-def active_install_paths(path: Path, repo: Path | None = None) -> set | None:
-    """Resolved `installPath`s Claude Code actually loads, or None if unknown.
+def active_install_paths(path: Path) -> set | None:
+    """Resolved `installPath`s the loader records, or None if unreadable.
 
     The cache keeps every version it ever fetched; the loader reads exactly one
     per plugin. Walking the cache therefore over-counts, and this tool printed
@@ -245,13 +245,19 @@ def active_install_paths(path: Path, repo: Path | None = None) -> set | None:
     when it reported `superpowers` 6.1.1 and 6.2.0 as two live SessionStart
     hooks. Only 6.2.0 was loaded; 6.1.1 was an orphan the cache had not swept.
 
-    Since 2026-08-20 it also subtracts anything explicitly disabled in a
-    settings file (see `disabled_plugin_keys`), because installed and enabled
-    are different facts and this function reported only the first.
+    INSTALLED, not enabled. A paragraph here used to claim this function also
+    subtracts plugins disabled in a settings file. It never did: that belongs
+    to `_is_loaded`, through the separate `disabled_install_paths` set, and
+    the unused `repo` parameter was the leftover of the reverted attempt. A
+    reader trusting the old text could have "simplified away" the `disabled`
+    argument and put the 2026-08-20 bug straight back.
 
     None means the record could not be read, and a caller must then treat every
     cached hook as live. An audit that hides an executing hook because a JSON
-    file was unreadable fails in the one direction it must not.
+    file was unreadable fails in the one direction it must not. An EMPTY but
+    perfectly readable record returns an empty set, not None: `return active
+    or None` used to collapse "no plugins recorded" into the unreadable
+    sentinel and print a false alarm about file health.
     """
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -268,7 +274,7 @@ def active_install_paths(path: Path, repo: Path | None = None) -> set | None:
             install = entry.get("installPath")
             if isinstance(install, str) and install:
                 active.add(Path(install).resolve())
-    return active or None
+    return active
 
 
 def _surface_files(root: Path):
@@ -588,6 +594,10 @@ def main() -> int:
         description="Audit the harness this workspace installs and executes.")
     parser.add_argument("--manifest", default=None,
                         help="reviewed baseline (default: the private data overlay)")
+    parser.add_argument("--allow-empty", action="store_true",
+                        help="With --update-manifest, accept a surface with no "
+                             "files. Needed because an empty surface is almost "
+                             "always a mistyped root.")
     parser.add_argument("--update-manifest", action="store_true", dest="update",
                         help="accept the current installed surface as reviewed")
     parser.add_argument("--json", action="store_true", dest="as_json")
@@ -606,12 +616,20 @@ def main() -> int:
         # accepting it would mint a baseline everything matches forever. Refusing
         # is the same rule as "a missing baseline is not agreement".
         previous = read_manifest(manifest_path)
-        if not index and previous and previous.get("entries"):
-            print(f"{RED}Refusing to accept an EMPTY surface over a baseline of "
-                  f"{len(previous['entries'])} file(s).{RESET}\n{GRAY}Nothing was "
-                  f"found under {root}. If the plugins really are gone, delete the "
-                  f"baseline deliberately; if the root is wrong, fix it.{RESET}",
-                  file=sys.stderr)
+        # Any empty surface, not only one that replaces a baseline. On a first
+        # run with a mistyped HEADING_OS_PLUGIN_ROOT there IS no previous
+        # baseline, so the old guard stood aside, wrote {"entries": {}}, and
+        # every later run then found index == baseline == empty: no drift, no
+        # findings, exit 0, forever, scanning nothing. --allow-empty makes
+        # accepting nothing a thing the operator typed.
+        if not index and not args.allow_empty:
+            had = len(previous["entries"]) if previous and previous.get("entries") else 0
+            over = (f"over a baseline of {had} file(s)" if had
+                    else "as the first baseline")
+            print(f"{RED}Refusing to accept an EMPTY surface {over}.{RESET}\n"
+                  f"{GRAY}Nothing was found under {root}. If the plugins really "
+                  f"are gone, re-run with --allow-empty; if the root is wrong, "
+                  f"fix it.{RESET}", file=sys.stderr)
             return 2
         atomic_write_text(manifest_path, json.dumps(
             {"version": MANIFEST_VERSION, "entries": index}, indent=2,
@@ -629,7 +647,7 @@ def main() -> int:
             seen.add(entry["path"])
             unreadable.append(entry)
 
-    active = active_install_paths(installed_plugins_path(), repo)
+    active = active_install_paths(installed_plugins_path())
     result = {
         "third_party_hooks": third_party_hooks(
             root, user_settings_path(), active,
@@ -652,8 +670,13 @@ def main() -> int:
         _render(result)
 
     drifted = any(result["drift"][k] for k in ("added", "changed", "removed"))
+    # `unreadable` exits 1 for the same reason `symlinks` does: it is content
+    # this audit cannot vouch for. A chmod-000 payload in a plugin's hooks
+    # directory defeats both the hash baseline and the injection scan, and the
+    # old exit code called that green. The docstring points at CI, where a
+    # green audit that audited nothing is worse than no audit.
     if (result["baseline_missing"] or drifted or result["injection"]
-            or result["symlinks"]):
+            or result["symlinks"] or result["unreadable"]):
         return 1
     return 0
 

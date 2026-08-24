@@ -1,23 +1,46 @@
 {
   "_comment": "EXAMPLE org chart for the bootcamp-roster generator. The engine ships this generic template; the real org chart is private DATA at <data-root>/config/bootcamp-org-chart.json (resolved via get_data_config_dir()). chart: email_local -> {title, function, reports_to}.",
+  "gal_domain": "example.com",
   "shared_mailboxes": [
-    "Holidays@example.com", "CRM@example.com", "Security@example.com", "meeting@example.com"
+    "Holidays@example.com",
+    "CRM@example.com",
+    "Security@example.com",
+    "meeting@example.com"
   ],
   "non_tribe": {
     "partner@example.com": "external reseller per CRM exception",
     "shareholder@example.com": "shareholder (Example Holding)"
   },
   "chart": {
-    "Example.CEO": {"title": "Founder & CEO", "function": "Executive", "reports_to": "—"},
-    "Example.CTO": {"title": "VP Engineering", "function": "Engineering", "reports_to": "Example CEO"},
-    "Example.Engineer": {"title": "Backend Developer", "function": "Engineering / Backend", "reports_to": "Example CTO"},
-    "Example.PM": {"title": "Product Manager", "function": "Product", "reports_to": "Example CEO"}
+    "Example.CEO": {
+      "title": "Founder & CEO",
+      "function": "Executive",
+      "reports_to": "—"
+    },
+    "Example.CTO": {
+      "title": "VP Engineering",
+      "function": "Engineering",
+      "reports_to": "Example CEO"
+    },
+    "Example.Engineer": {
+      "title": "Backend Developer",
+      "function": "Engineering / Backend",
+      "reports_to": "Example CTO"
+    },
+    "Example.PM": {
+      "title": "Product Manager",
+      "function": "Product",
+      "reports_to": "Example CEO"
+    }
   },
   "leader_emails": [
-    "Example.CEO", "Example.CTO"
+    "Example.CEO",
+    "Example.CTO"
   ],
   "aliases": {
-    "example": ["ex"]
+    "example": [
+      "ex"
+    ]
   },
   "event": {
     "dir": "Example Bootcamp, 2026",

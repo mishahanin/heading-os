@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -51,6 +52,30 @@ from scripts.utils.workspace import get_workspace_root
 
 ROOT = get_workspace_root()
 SKILLS_DIR = ROOT / ".claude" / "skills"
+
+# Ceiling for the opt-in --render subprocess. Generous for a non-PDF render,
+# short enough that a stuck renderer fails the case instead of the run.
+RENDER_TIMEOUT_S = 180
+
+_SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+def valid_skill_name(skill: str) -> str:
+    """A skill NAME, not a path fragment.
+
+    `SKILLS_DIR / skill` accepted anything: `..` read cases from outside the
+    skills tree, and an ABSOLUTE value discarded `SKILLS_DIR` entirely under
+    pathlib — after which `_write_benchmark` wrote its sidecar wherever the
+    argument pointed.
+    """
+    if not isinstance(skill, str) or not _SKILL_NAME_RE.match(skill):
+        raise ValueError(
+            f"--skill must be a bare skill name matching [a-z0-9][a-z0-9-]*, got {skill!r}"
+        )
+    resolved = (SKILLS_DIR / skill).resolve()
+    if not str(resolved).startswith(str(SKILLS_DIR.resolve()) + "/"):
+        raise ValueError(f"refusing a skill dir outside {SKILLS_DIR}: {resolved}")
+    return skill
 
 
 # ============================================================
@@ -69,6 +94,14 @@ def load_outcome_cases(skill_dir: Path) -> list[dict]:
             case = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as e:
             cases.append({"id": path.stem, "_path": str(path), "_load_error": str(e)})
+            continue
+        # A case file that parses is not yet a case. `[]`, `null` and a bare
+        # string all decode cleanly, and the next line then raised TypeError
+        # and took the whole runner down — where the docstring promises a
+        # setup error with exit 2.
+        if not isinstance(case, dict):
+            cases.append({"id": path.stem, "_path": str(path),
+                          "_load_error": f"not a JSON object (got {type(case).__name__})"})
             continue
         case["_path"] = str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path)
         cases.append(case)
@@ -139,7 +172,7 @@ def _assert_crm_log(case: dict, sandbox_root: Path, render: bool) -> list[dict]:
     conv_id = o["conv_id"]
     # Sandbox IS the data root for the eval; pass it explicitly so the finalizer
     # reads/writes the sandbox tree, not the real data root (get_data_root()).
-    res = log_to_crm(sandbox_root, conv_id, data_root=sandbox_root)
+    res = log_to_crm(conv_id, data_root=sandbox_root)
 
     expect_ok = o["expect_ok"]
     results.append(_check(
@@ -164,7 +197,7 @@ def _assert_crm_log(case: dict, sandbox_root: Path, render: bool) -> list[dict]:
             ))
 
     if o.get("expect_idempotent"):
-        res2 = log_to_crm(sandbox_root, conv_id, data_root=sandbox_root)
+        res2 = log_to_crm(conv_id, data_root=sandbox_root)
         ok2 = (res2.get("ok") is False
                and res2.get("error") == "conversation already logged to CRM")
         results.append(_check(
@@ -176,10 +209,22 @@ def _assert_crm_log(case: dict, sandbox_root: Path, render: bool) -> list[dict]:
 
 def _render_formats(doctype: str, registry) -> list[str]:
     """Pick the doctype's non-PDF render format(s) for the --render path, so the
-    real-file assertion stays browser-free (PDF needs Playwright/chromium)."""
+    real-file assertion stays browser-free (PDF needs Playwright/chromium).
+
+    Raises when the doctype has no non-PDF format. The fallback used to be
+    `non_pdf or default`, which quietly rendered PDF for a `["pdf"]`-only
+    doctype — the exact thing the comment above says this function exists to
+    avoid. A check that cannot run browser-free is a setup error, not a
+    browser launch nobody asked for.
+    """
     default = registry[doctype]["formats"]
     non_pdf = [f for f in default if f != "pdf"]
-    return non_pdf or default
+    if not non_pdf:
+        raise ValueError(
+            f"doctype {doctype!r} renders only {default!r}; --render is "
+            f"browser-free by contract and has no non-PDF format to assert on"
+        )
+    return non_pdf
 
 
 def _assert_doctype_render(case: dict, sandbox_root: Path, render: bool) -> list[dict]:
@@ -214,12 +259,25 @@ def _assert_doctype_render(case: dict, sandbox_root: Path, render: bool) -> list
         render_script = ROOT / "scripts" / "render-doctype.py"
         # No env= override: X31C_TRACE_ID is inherited from os.environ
         # automatically (trace-id.md). Non-PDF format keeps it browser-free.
-        proc = subprocess.run(
-            [sys.executable, str(render_script), "--type", doctype,
-             "--data", str(data_path), "--out", str(out_dir),
-             "--formats", ",".join(fmts)],
-            capture_output=True, text=True, cwd=str(ROOT),
-        )
+        # A bounded wait. Without one, a renderer deadlock (a lock wait, a
+        # stuck browser child, a loop) hung the WHOLE eval run with no output
+        # and no failing case — a hang reads as "still working", never as the
+        # failure it is.
+        try:
+            proc = subprocess.run(
+                [sys.executable, str(render_script), "--type", doctype,
+                 "--data", str(data_path), "--out", str(out_dir),
+                 "--formats", ",".join(fmts)],
+                capture_output=True, text=True, cwd=str(ROOT),
+                timeout=RENDER_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            results.append(_check(
+                f"render produced a {'/'.join(fmts)} file",
+                False,
+                f"renderer did not exit within {RENDER_TIMEOUT_S}s and was killed",
+            ))
+            return results
         produced = list(out_dir.rglob("*"))
         produced_files = [p for p in produced if p.is_file()]
         results.append(_check(
@@ -269,12 +327,19 @@ def run_skill(skill: str, case_filter: str | None, render: bool,
     """Run all outcome cases for one skill. Returns (passed, total, setup_error)."""
     skill_dir = SKILLS_DIR / skill
     cases = load_outcome_cases(skill_dir)
+    setup_error = False
     if case_filter:
         cases = [c for c in cases if c.get("id") == case_filter]
+        # A --case typo used to reduce the list to zero, and zero checks took
+        # the `overall_total == 0` branch and exited 0. A targeted regression
+        # run that matched nothing must never report green.
+        if not cases:
+            print(f"{RED}--case {case_filter!r} matched no outcome case in "
+                  f"{skill}{RESET}", file=sys.stderr)
+            setup_error = True
 
     print(f"\n{BOLD}{CYAN}{skill}{RESET}  ({len(cases)} outcome case(s))")
     skill_passed = skill_total = 0
-    setup_error = False
     bench_cases: list[dict] = []
 
     for case in cases:
@@ -322,9 +387,18 @@ def _write_benchmark(skill_dir: Path, passed: int, total: int, cases: list[dict]
     existing["last_run"] = last_run
     if "baseline" not in existing:
         existing["baseline"] = last_run.copy()
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(existing, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    # A unique scratch name per writer. One fixed `<name>.json.tmp` per skill
+    # meant two concurrent runs of the same skill wrote the same scratch path,
+    # and one `os.replace` moved the other's file out from under it.
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(existing, fh, indent=2)
+        os.replace(tmp, path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 # ============================================================
@@ -346,7 +420,25 @@ def main() -> int:
     if args.all:
         skills = list_skills_with_outcomes()
     else:
-        skills = [args.skill]
+        try:
+            skills = [valid_skill_name(args.skill)]
+        except ValueError as e:
+            print(f"{RED}{e}{RESET}", file=sys.stderr)
+            return 2
+        # A misspelled skill used to load zero cases, and zero checks exited 0.
+        # An explicitly named skill with nothing to grade is a setup error,
+        # never a green run.
+        #
+        # ONE check, not two. The first draft also tested `skill_dir.is_dir()`
+        # separately; a missing skill directory necessarily has no outcomes
+        # directory under it, so that branch could not change any outcome
+        # (mutation-checked 2026-08-24 — disabling it kept every test green).
+        # The message names both cases instead.
+        outcomes_dir = SKILLS_DIR / args.skill / "evals" / "outcomes"
+        if not outcomes_dir.is_dir():
+            print(f"{RED}nothing to grade for {args.skill!r}: no such skill, or it has "
+                  f"no evals/outcomes/ directory ({outcomes_dir}){RESET}", file=sys.stderr)
+            return 2
     if not skills:
         print(f"{YELLOW}No skills with evals/outcomes/ found.{RESET}", file=sys.stderr)
         return 2

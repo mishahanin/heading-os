@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""Canopus: the three thin commands the standard's steps 4 and 7 need.
+"""Canopus: the three thin commands the standard's steps 3 and 7 need.
 
     python scripts/canopus.py probe tests/contract/     # step 3, is it vacuous
     python scripts/canopus.py note <slug> --value ...   # step 7, the record
     python scripts/canopus.py check --range A..B        # the four clauses
+
+The header read "steps 4 and 7" until 2026-08-24, which the very next line
+contradicted. Step 4 is the operator's approval COMMIT and needs no command;
+`probe` belongs to step 3, where the standard measures vacuity before that
+commit. `check` is the CI gate over the recorded notes, not one of the seven
+steps, so it is named by what it does.
 
 `note` and `check` hold no logic of their own. `note` validates and writes
 through `scripts/utils/canopus_note.write_note`, and `check` calls
@@ -41,8 +47,14 @@ notice" exactly once, before the code exists, and then never again: a shipped
 slice's contract is retired into the ordinary suite and nothing re-asks. Armed
 with `--after-build`, the same wrong implementations are put in front of tests
 covering code that ALREADY EXISTS, and every test that stays green under all
-three is named. It reports and exits 0; it never refuses. A reading nobody has
-calibrated must not become a gate.
+three is named. It reports; it never refuses on what the reading SAYS, so a page
+naming twenty survivors exits 0 exactly like a page naming none. The one
+non-zero exit is 1, when no reading could be made at all, because a page saying
+nothing survived must not be mistaken for a run that measured nothing. This said
+"exits 0; it never refuses" until 2026-08-24, contradicting both the function's
+own docstring and the flag's help, and an operator scripting against the module
+doc would treat exit 1 as impossible. A reading nobody has calibrated must not
+become a gate.
 
 What replaced the rest. Until 2026-08-07 this file also held a freeze
 lifecycle - approve, freeze, verify, status, release, repin, pack, where - that

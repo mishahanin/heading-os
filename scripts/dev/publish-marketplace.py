@@ -130,10 +130,16 @@ def write_repo_meta(repo_dir: Path, engine_root: Path, mkt: dict) -> None:
 
 
 def ensure_identity(repo_dir: Path, engine_root: Path) -> None:
-    """Mirror the engine's git identity into the marketplace repo if it has none."""
-    if _run(["git", "config", "user.email"], cwd=repo_dir, check=False).stdout.strip():
-        return
+    """Mirror the engine's git identity into the marketplace repo if it has none.
+
+    BOTH keys are checked. The early return asked about `user.email` alone, so
+    a clone carrying an email and no name returned here with the name still
+    unset, and the `git commit` below — which runs with `check=True` — died on
+    a raw CalledProcessError. git requires both.
+    """
     for key in ("user.name", "user.email"):
+        if _run(["git", "config", key], cwd=repo_dir, check=False).stdout.strip():
+            continue
         val = _run(["git", "config", key], cwd=engine_root, check=False).stdout.strip()
         if val:
             _run(["git", "config", key, val], cwd=repo_dir)
@@ -152,13 +158,31 @@ def commit_and_push(repo_dir: Path, engine_root: Path, message: str, push: bool)
         print(f"{GRAY}--no-push: commit made, not pushed.{RESET}")
         return 0
     _run(["git", "push", "-u", "origin", "HEAD"], cwd=repo_dir)
-    behind_ahead = _run(
-        ["git", "rev-list", "--left-right", "--count", "origin/main...HEAD"],
+    # Verify against the branch that was actually pushed, and treat a FAILED
+    # verification as a failure.
+    #
+    # Two defects met here. The comparison was hardcoded to `origin/main`,
+    # while the push is `HEAD` — so on any branch that is not main a wholly
+    # successful push reported "Push verification failed" and exited 1. And
+    # `rev-list` ran with `check=False` while `""` sat in the accepted set, so
+    # when the command ERRORED (bad ref, no upstream, damaged clone) its empty
+    # stdout read as "in sync" and the script printed "verified in sync". On a
+    # distribution path, a verification that passes when it could not run is
+    # worse than no verification: it is a claim nothing established.
+    proc = _run(
+        ["git", "rev-list", "--left-right", "--count", "@{upstream}...HEAD"],
         cwd=repo_dir,
         check=False,
-    ).stdout.strip()
-    if behind_ahead not in ("0\t0", ""):
-        print(f"{RED}Push verification failed (ahead/behind = {behind_ahead!r}).{RESET}")
+    )
+    behind_ahead = proc.stdout.strip()
+    if proc.returncode != 0:
+        print(f"{RED}Push verification could not run "
+              f"(git rev-list exited {proc.returncode}): "
+              f"{proc.stderr.strip() or 'no stderr'}.{RESET}")
+        print(f"{RED}The push may have succeeded; this run cannot say.{RESET}")
+        return 1
+    if behind_ahead != "0\t0":
+        print(f"{RED}Push verification failed (behind/ahead = {behind_ahead!r}).{RESET}")
         return 1
     print(f"{GREEN}Pushed to {REPO_SLUG} (verified in sync).{RESET}")
     return 0

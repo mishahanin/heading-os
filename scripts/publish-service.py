@@ -19,9 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
-import stat
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -30,15 +28,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.workspace import get_workspace_root, get_data_config_dir
+from scripts.utils.atomic import atomic_write_text
+from scripts.utils.rmtree import rmtree_force
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
+from scripts.utils.git_push import supervised_push
 
 STATIC_IGNORE_PATTERNS = ("__pycache__", "*.pyc", "*.pyo", ".venv*", ".pytest_cache")
-
-
-def _on_rm_error(func, path, exc):
-    """Windows: clear the read-only bit and retry (reference_windows_readonly_unlink)."""
-    os.chmod(path, stat.S_IWRITE)
-    func(path)
 
 
 def load_manifest(workspace: Path) -> tuple[list[str], list[str], str]:
@@ -61,17 +56,32 @@ def load_manifest(workspace: Path) -> tuple[list[str], list[str], str]:
     return includes, exclude_names, downstream_repo
 
 
+def _contained(base: Path, rel: str) -> Path:
+    """`base / rel`, refused unless it stays under `base`.
+
+    `include` entries come from a hand-maintained manifest and were joined onto
+    the destination with no normalisation, so `../../x` or an absolute path
+    wrote outside the downstream clone -- and because directories are rmtree'd
+    before the copy, it was a delete primitive out there too.
+    """
+    joined = (base / rel).resolve()
+    root = base.resolve()
+    if joined != root and root not in joined.parents:
+        raise ValueError(f"manifest include {rel!r} escapes {base}")
+    return joined
+
+
 def copy_includes(workspace: Path, dest: Path, includes: list[str], exclude_names: list[str]) -> None:
     ignore = shutil.ignore_patterns(*STATIC_IGNORE_PATTERNS, *exclude_names)
     for rel in includes:
-        src = workspace / rel
-        dst = dest / rel
+        src = _contained(workspace, rel)
+        dst = _contained(dest, rel)
         if not src.exists():
             print(f"  {YELLOW}skip (not in source yet): {rel}{RESET}")
             continue
         if src.is_dir():
             if dst.exists():
-                shutil.rmtree(dst, onexc=_on_rm_error)
+                rmtree_force(dst)
             shutil.copytree(src, dst, ignore=ignore)
         else:
             dst.parent.mkdir(parents=True, exist_ok=True)
@@ -87,15 +97,49 @@ def write_build_marker(dest: Path) -> int:
             build = int(json.loads(marker.read_text(encoding="utf-8")).get("build", 0)) + 1
         except (json.JSONDecodeError, ValueError):
             build = 1
-    marker.write_text(
+    # Atomic: a torn SERVICE-BUILD.json makes the NEXT run's json.loads fail,
+    # which silently resets the build counter to 1.
+    atomic_write_text(
+        marker,
         json.dumps(
             {"build": build, "published_at": datetime.now(timezone.utc).isoformat(timespec="seconds")},
             indent=2,
         )
         + "\n",
-        encoding="utf-8",
     )
     return build
+
+
+SCANNER = Path(__file__).resolve().parent / "secret-scanner.py"
+
+
+def secret_scan(dest: Path) -> bool:
+    """Scan every tracked-or-new file in the downstream clone before committing.
+
+    This is a SECOND publication path out of the workspace and it had no gate at
+    all: the manifest is hand-maintained config, so one secret-bearing file
+    added to `include` propagated to the VM-pullable mirror with no friction --
+    exactly the leak class push-all.py's walls exist to stop.
+    """
+    listing = subprocess.run(
+        ["git", "-C", str(dest), "ls-files", "-z", "--cached", "--others",
+         "--exclude-standard"],
+        capture_output=True, text=True)
+    files = [f for f in listing.stdout.split("\0") if f]
+    if not files:
+        return True
+    proc = subprocess.run(
+        [sys.executable, str(SCANNER), "--stdin"],
+        cwd=str(dest), input="\n".join(sorted(files)),
+        capture_output=True, text=True)
+    if proc.returncode != 0:
+        sys.stdout.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        reason = ("secret-like CONTENT in a file about to be published"
+                  if proc.returncode == 1 else "secret-scanner error")
+        print(f"{RED}REFUSING TO PUBLISH -- {reason}.{RESET}")
+        return False
+    return True
 
 
 def git(dest: Path, *args: str) -> subprocess.CompletedProcess:
@@ -112,6 +156,9 @@ def publish(dest: Path, push: bool) -> int:
     for line in status.stdout.strip().splitlines():
         print(f"  {line}")
 
+    if not secret_scan(dest):
+        return 2
+
     build = write_build_marker(dest)
     git(dest, "add", "-A")
     commit = git(dest, "commit", "-m", f"service-host: publish build {build}")
@@ -121,9 +168,13 @@ def publish(dest: Path, push: bool) -> int:
     print(f"{GREEN}Committed build {build}.{RESET}")
 
     if push:
-        result = git(dest, "push", "origin", "main")
-        if result.returncode != 0:
-            print(f"{RED}Push failed:{RESET}\n{result.stderr}")
+        # Supervised, not bare. `git push` can exit 0 without advancing the ref
+        # -- the failure mode push-all.py documents and guards against -- and
+        # this is the second publication path out of the workspace.
+        verdict = supervised_push(dest, branch="main", stall_window=120,
+                                  label="publish-service")
+        if verdict["state"] != "ok":
+            print(f"{RED}Push failed ({verdict['state']}):{RESET} {verdict['reason']}")
             return 1
         print(f"{GREEN}Pushed build {build} to origin/main.{RESET}")
     else:

@@ -16,6 +16,7 @@ Prerequisites:
 """
 
 import argparse
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -72,12 +73,12 @@ def extract_xlsx(filepath):
             continue
 
         # Build markdown table
-        headers = [str(h) if h is not None else "" for h in header_row]
+        headers = [_cell(h) for h in header_row]
         lines.append("| " + " | ".join(headers) + " |")
         lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
 
         for row in rows[data_start:]:
-            cells = [str(c) if c is not None else "" for c in row]
+            cells = [_cell(c) for c in row]
             # Truncate long cells
             cells = [c[:100] + "..." if len(c) > 100 else c for c in cells]
             # Pad to header length
@@ -88,6 +89,20 @@ def extract_xlsx(filepath):
         lines.append("")
 
     return "\n".join(lines)
+
+
+def _cell(value) -> str:
+    """One spreadsheet cell, safe inside a markdown table row.
+
+    Cells were joined straight into `" | "`, so any value containing a pipe
+    added a phantom column and any value containing a newline ended the row
+    early — and the companion `-extract.md` stopped representing the sheet it
+    claims to be an extract of.
+    """
+    if value is None:
+        return ""
+    text = str(value)
+    return text.replace("\\", "\\\\").replace("|", "\\|").replace("\r", " ").replace("\n", " ")
 
 
 def extract_pptx(filepath):
@@ -152,6 +167,7 @@ def scan_and_extract(target_dir=None, force=False):
         return []
 
     extracted = []
+    failures: list[tuple[Path, str]] = []
     for filepath in sorted(binary_files):
         companion = get_companion_path(filepath)
 
@@ -161,11 +177,22 @@ def scan_and_extract(target_dir=None, force=False):
 
         print(f"  {BOLD}Extracting{RESET}  {filepath.name}...")
 
-        if filepath.suffix.lower() == ".xlsx":
-            content = extract_xlsx(filepath)
-        elif filepath.suffix.lower() == ".pptx":
-            content = extract_pptx(filepath)
-        else:
+        # Per file, not per batch. `load_workbook`/`Presentation` raise on a
+        # corrupt zip, an encrypted file or a parser error, and with nothing
+        # catching them here the exception left the LOOP: one bad binary in a
+        # datastore folder meant every later extractable file was never
+        # processed, and the run ended on a traceback rather than a report.
+        try:
+            if filepath.suffix.lower() == ".xlsx":
+                content = extract_xlsx(filepath)
+            elif filepath.suffix.lower() == ".pptx":
+                content = extract_pptx(filepath)
+            else:
+                continue
+        except Exception as exc:  # noqa: BLE001 - one file's parser, not the batch
+            print(f"  {RED}Failed{RESET}  {filepath.name}: "
+                  f"{type(exc).__name__}: {exc}")
+            failures.append((filepath, f"{type(exc).__name__}: {exc}"))
             continue
 
         if content:
@@ -174,6 +201,15 @@ def scan_and_extract(target_dir=None, force=False):
             extracted.append((filepath, companion))
         else:
             print(f"  {RED}Failed{RESET}  Could not extract {filepath.name}")
+            failures.append((filepath, "extractor returned nothing"))
+
+    if failures:
+        # Named, not swallowed. The batch surviving one bad file is only half
+        # the fix; the other half is that the operator can tell a run of 40
+        # that produced 40 from a run of 40 that produced 38.
+        print(f"\n{YELLOW}{len(failures)} file(s) could not be extracted:{RESET}")
+        for path, why in failures:
+            print(f"  {YELLOW}{path.name}{RESET}: {why}")
 
     return extracted
 
@@ -189,7 +225,15 @@ def update_index(extracted_files):
 
     new_rows = []
     for orig, companion in extracted_files:
-        rel_path = orig.relative_to(DATASTORE_DIR)
+        # A target outside `datastore/` is allowed on the CLI, and
+        # `relative_to` raised ValueError for it — AFTER every file had already
+        # been extracted, so the work was done and the index update died.
+        try:
+            rel_path = orig.relative_to(DATASTORE_DIR)
+        except ValueError:
+            print(f"{YELLOW}Skipping index row for {orig}: it is outside "
+                  f"{DATASTORE_DIR}, which INDEX.md rows are relative to.{RESET}")
+            continue
         domain = rel_path.parts[0] if rel_path.parts else "unknown"
         # Check if already in index
         if str(rel_path) in content:
@@ -200,18 +244,29 @@ def update_index(extracted_files):
         print(f"{GREEN}INDEX.md already up to date{RESET}")
         return
 
-    # Insert rows before the closing comment or at end of documents table
-    insert_marker = "<!--"
-    if insert_marker in content:
-        content = content.replace(insert_marker, "\n".join(new_rows) + "\n\n" + insert_marker, 1)
+    # Insert before the LAST HTML comment, not the first one anywhere in the
+    # file. The comment above this said "before the closing comment", and the
+    # code replaced the first `<!--` it found — so an INDEX.md opening with a
+    # header note or a licence comment got data rows injected above it, before
+    # the table they belong to.
+    marker = content.rfind("<!--")
+    block = "\n".join(new_rows)
+    if marker != -1:
+        content = content[:marker] + block + "\n\n" + content[marker:]
     else:
-        content += "\n" + "\n".join(new_rows)
+        content = content.rstrip("\n") + "\n" + block + "\n"
 
-    # Update the "Last updated" date
-    content = content.replace(
-        f"> Last updated:",
-        f"> Last updated: {today}  \n> Previous: ",
-        1,
+    # Rewrite the whole "Last updated" LINE, and carry its old value into a
+    # single Previous line. Replacing only the literal prefix left the old date
+    # dangling after `> Previous: `, and the next run did it again — nesting
+    # one more stale Previous into the block every time.
+    content = re.sub(
+        r"^> Last updated:[^\n]*(?:\n> Previous:[^\n]*)?",
+        lambda m: (f"> Last updated: {today}  \n> Previous: "
+                   f"{m.group(0).split(':', 1)[1].split(chr(10))[0].strip()}"),
+        content,
+        count=1,
+        flags=re.MULTILINE,
     )
 
     INDEX_FILE.write_text(content, encoding="utf-8")

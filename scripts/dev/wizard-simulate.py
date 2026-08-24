@@ -32,8 +32,13 @@ def main(argv=None):
     # Safety: refuse to run against the CEO master workspace.
     # The `--force-ceo-master` flag below bypasses apply-script detection, but
     # we do NOT want this dev harness to ever touch a real ceo-master workspace
-    # by accident. No override flag is offered - if you need to test against a
-    # ceo-master identity, copy the identity file into a fixture tmpdir.
+    # by accident. No override flag is offered.
+    #
+    # The guard reads `.workspace-identity.json` from WHATEVER `--workspace`
+    # points at, so copying a ceo-master identity into a tmpdir is refused
+    # exactly like the real workspace. This comment used to recommend that as
+    # the workaround; it cannot work. To exercise a master-like layout, copy
+    # the workspace and EDIT the `type` field to something else.
     identity = args.workspace / ".workspace-identity.json"
     if identity.exists():
         try:
@@ -50,7 +55,17 @@ def main(argv=None):
                   file=sys.stderr)
             return 2
 
-    canned = yaml.safe_load(args.answers.read_text(encoding="utf-8")) or {}
+    # Checked, like the identity file and the apply script around it. A typo'd
+    # path used to give a raw FileNotFoundError traceback instead of the clean
+    # `ERROR: ...` this file uses everywhere else.
+    if not args.answers.is_file():
+        print(f"ERROR: answers file not found: {args.answers}", file=sys.stderr)
+        return 2
+    try:
+        canned = yaml.safe_load(args.answers.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        print(f"ERROR: could not read {args.answers}: {exc}", file=sys.stderr)
+        return 2
     # Resolve apply-wizard-answers.py relative to this harness's location.
     # If the harness is ever moved out of scripts/dev/, fail fast with a clear error.
     apply_script = Path(__file__).resolve().parent.parent / "apply-wizard-answers.py"

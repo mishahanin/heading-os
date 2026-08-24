@@ -123,6 +123,17 @@ def main() -> int:
         or os.environ.get("ODIN_CADENCE_TELEGRAM_TARGET")
         or DEFAULT_RECIPIENT
     )
+    # The comment beside DEFAULT_RECIPIENT says an empty target means no send is
+    # ever ATTEMPTED, and the code did not implement that: it called
+    # `notify("", line)` and left the decision to a module this file does not
+    # own. Whether an unconfigured install fired a doomed API call every day
+    # depended entirely on `telegram_notify` rejecting an empty chat id
+    # internally. Make the comment true here, where it is written.
+    if not recipient:
+        _log("no telegram target configured (COUNCIL_MODELS_TELEGRAM_TARGET, "
+             "OPS_RADAR_TELEGRAM_TARGET, ODIN_CADENCE_TELEGRAM_TARGET all "
+             "unset) -- nudge not sent; /prime will backstop")
+        return 0
     if not telegram_notify.notify(recipient, line):
         _log("nudge not delivered (see telegram_notify log); /prime will backstop")
         return 0

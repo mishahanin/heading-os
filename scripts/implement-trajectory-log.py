@@ -106,18 +106,22 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import glob
 import re
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.utils.checkpoint_paths import file_lock  # noqa: E402
 from scripts.utils.colors import GREEN, RED, RESET, YELLOW  # noqa: E402
 from scripts.utils.workspace import (  # noqa: E402
     get_outputs_dir,
+    get_data_root,
     get_plans_dir,
     get_workspace_root,
 )
@@ -175,15 +179,64 @@ def mint_run_id(plan_path: str) -> str:
     return f"{timestamp}_{slug}"
 
 
+def mint_unique_run_id(plan_path: str, attempts: int = 8) -> str:
+    """A run_id no trajectory file already uses, created EXCLUSIVELY.
+
+    One-second resolution is not unique. Two runs of the same plan inside one
+    second minted the same id: sequentially the second died on FileExistsError,
+    and concurrently BOTH passed `path.exists()` before either appended, so two
+    `run_start` events landed in one trajectory -- which the verifier does not
+    reject, because it only checks that the FIRST event is a run_start.
+
+    `O_CREAT | O_EXCL` is what makes the check and the create one step: the
+    filesystem refuses the second creator rather than this code losing a race
+    with it. A suffix is added only on an actual collision, so the ordinary id
+    keeps its readable shape.
+    """
+    base = mint_run_id(plan_path)
+    for attempt in range(attempts):
+        run_id = base if attempt == 0 else f"{base}-{uuid.uuid4().hex[:6]}"
+        path = trajectory_path(run_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            continue
+        os.close(fd)
+        return run_id
+    raise FileExistsError(
+        f"could not mint an unused run_id for {plan_path} after {attempts} attempts")
+
+
 # ============================================================
 # Atomic append (cross-platform)
 # ============================================================
 def _append_jsonl_posix(path: Path, record: dict) -> None:
-    """POSIX path: O_APPEND ensures atomicity for line writes < PIPE_BUF."""
+    """POSIX path: O_APPEND, writing the whole record or raising.
+
+    `os.write()` may write FEWER bytes than it was given and report how many.
+    The return value was discarded, so a short write left a truncated JSONL
+    line in the log and `append_event` returned normally -- a corrupt record
+    that the verifier is then asked to make sense of. The loop below writes the
+    remainder until there is none.
+
+    The old docstring credited `PIPE_BUF` for atomicity. PIPE_BUF is a
+    guarantee about pipes and FIFOs, not about regular files, and nothing here
+    bounded a record to it anyway. `O_APPEND` is what keeps concurrent writers
+    from interleaving at the offset; it does not promise a single write call.
+    """
     line = json.dumps(record, ensure_ascii=False) + "\n"
+    payload = memoryview(line.encode("utf-8"))
     fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
     try:
-        os.write(fd, line.encode("utf-8"))
+        written = 0
+        while written < len(payload):
+            n = os.write(fd, payload[written:])
+            if n <= 0:
+                raise OSError(
+                    f"short write to {path}: {written} of {len(payload)} bytes "
+                    f"and no progress; the record is truncated")
+            written += n
     finally:
         os.close(fd)
 
@@ -208,14 +261,24 @@ def _append_jsonl_windows(path: Path, record: dict) -> None:
                     last_err = exc
                     time.sleep(_LOCK_RETRY_DELAY_S)
                     continue
+                # `msvcrt.locking` works from the CURRENT file position, so
+                # the position has to be put back before unlocking: after the
+                # write it has advanced by len(data), and the old code
+                # unlocked the range AFTER the new bytes rather than the range
+                # it had locked. The resulting OSError was then discarded, so
+                # an ineffective unlock looked like a successful one.
+                locked_at = f.tell()
                 try:
                     f.write(data)
                     f.flush()
                 finally:
                     try:
+                        f.seek(locked_at)
                         msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, len(data))
-                    except OSError:
-                        pass  # best-effort unlock
+                    except OSError as unlock_exc:
+                        print(f"trajectory-log: unlock of {path} failed: "
+                              f"{unlock_exc}; the range stays locked until close",
+                              file=sys.stderr)
                 return
         except OSError as exc:
             last_err = exc
@@ -309,7 +372,10 @@ def build_payload_from_flags(event_type: str, args: argparse.Namespace) -> dict:
 
 def write_run_start(run_id: str, plan_path: str) -> Path:
     path = trajectory_path(run_id)
-    if path.exists():
+    # A NON-EMPTY file is an existing trajectory. `mint_unique_run_id` creates
+    # the file empty and exclusively to reserve the id, so plain `exists()`
+    # would now refuse the very run it just reserved.
+    if path.exists() and path.stat().st_size > 0:
         # Refuse to overwrite an existing trajectory - this would clobber audit history.
         raise FileExistsError(f"trajectory already exists: {path}")
     try:
@@ -441,7 +507,7 @@ def cmd_new(args: argparse.Namespace) -> int:
     if not args.plan:
         print(f"{RED}ERROR: --new requires --plan <plan-path>{RESET}", file=sys.stderr)
         return 2
-    run_id = mint_run_id(args.plan)
+    run_id = mint_unique_run_id(args.plan)
     try:
         path = write_run_start(run_id, args.plan)
     except FileExistsError as exc:
@@ -484,43 +550,71 @@ def cmd_event(args: argparse.Namespace) -> int:
         payload = build_payload_from_flags(args.type, args)
     step_number = payload.get("step", payload.get("step_number"))
 
-    # Emit-time sequencing guard: reject a mis-ordered step marker the moment
-    # it is emitted (exit 5), so a bad marker cannot land silently. Wave-aware:
-    # an open parallel wave suspends the guard (its member steps legitimately
-    # interleave). This rejects a single --event call, never the run.
-    if args.type in ("step_start", "step_end"):
-        open_steps, parallel_open = _open_state(_read_events(path))
-        if args.type == "step_start" and open_steps and not parallel_open:
-            print(f"{RED}ERROR: sequencing violation: cannot open step "
-                  f"{step_number} while step(s) {sorted(open_steps)} are still "
-                  f"open. Emit their step_end first, or open a parallel "
-                  f"wave_start for legitimate interleaving.{RESET}",
-                  file=sys.stderr)
-            return 5
-        if args.type == "step_end" and step_number not in open_steps:
-            print(f"{RED}ERROR: sequencing violation: step_end for step "
-                  f"{step_number} has no open step_start.{RESET}",
-                  file=sys.stderr)
-            return 5
-
     record = {
         "timestamp": now_iso(),
         "event_type": args.type,
         "step_number": step_number,
         "payload": payload,
     }
-    try:
-        append_event(path, record)
-    except OSError as exc:
-        print(f"{RED}ERROR: append failed: {exc}{RESET}", file=sys.stderr)
-        return 3
+
+    # Read the state, judge it, and append -- as ONE step, under the lock.
+    #
+    # The guard and the append were two separate operations, so two concurrent
+    # `--event --type step_start` calls could both read "no open step" and both
+    # append. The result is a non-parallel interleaving that the VERIFIER also
+    # accepts, because it deliberately does not assert step-bracket non-overlap
+    # (parallel waves legitimately interleave). So the one check that could
+    # catch it was the emit-time guard, and it was racing.
+    #
+    # `file_lock` is the workspace's one exclusive-lock primitive. It is
+    # BOUNDED and degrades to running unlocked with a line on stderr rather
+    # than blocking, which is the right trade here too: a trajectory log must
+    # never wedge the run it is recording.
+    lock_path = path.with_name(path.name + ".lock")
+    with file_lock(lock_path, label="trajectory-log"):
+        # Emit-time sequencing guard: reject a mis-ordered step marker the
+        # moment it is emitted (exit 5), so a bad marker cannot land silently.
+        # Wave-aware: an open parallel wave suspends the guard (its member
+        # steps legitimately interleave). This rejects a single --event call,
+        # never the run.
+        if args.type in ("step_start", "step_end"):
+            open_steps, parallel_open = _open_state(_read_events(path))
+            if args.type == "step_start" and open_steps and not parallel_open:
+                print(f"{RED}ERROR: sequencing violation: cannot open step "
+                      f"{step_number} while step(s) {sorted(open_steps)} are still "
+                      f"open. Emit their step_end first, or open a parallel "
+                      f"wave_start for legitimate interleaving.{RESET}",
+                      file=sys.stderr)
+                return 5
+            if args.type == "step_end" and step_number not in open_steps:
+                print(f"{RED}ERROR: sequencing violation: step_end for step "
+                      f"{step_number} has no open step_start.{RESET}",
+                      file=sys.stderr)
+                return 5
+
+        try:
+            append_event(path, record)
+        except OSError as exc:
+            print(f"{RED}ERROR: append failed: {exc}{RESET}", file=sys.stderr)
+            return 3
     return 0
 
 
 # ============================================================
 # Self-check (--verify)
 # ============================================================
-_GLOB_CHARS = ("*", "{", "}")
+# `*`, `{` and `}` only, until 2026-08-24: `?` and character classes like
+# `[ab]` are standard glob syntax and passed the literal-path check, and so did
+# the empty string. `glob.has_magic` covers `*?[`; the braces stay because they
+# are this project's own shorthand and glob does not treat them as magic.
+_GLOB_CHARS = ("{", "}")
+
+
+def _is_literal_path(value: object) -> bool:
+    """A usable literal file path: a non-blank string with no glob magic."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    return not glob.has_magic(value) and not any(c in value for c in _GLOB_CHARS)
 
 # The plan is the other half of the record. Three of the 2026-08-09 scrutiny
 # findings (M1, M2, N1) were all one shape: the run diverged from its own plan
@@ -541,7 +635,16 @@ def resolve_plan_path(plan_path: str) -> Path | None:
     defect.
     """
     raw = Path(plan_path)
-    candidates = [raw, get_plans_dir() / raw.name, WORKSPACE_ROOT / raw]
+    # A RELATIVE recorded path is never resolved against the caller's current
+    # directory. `plans/foo.md` used to be tried as-is first, so verifying from
+    # `/tmp` read `/tmp/plans/foo.md` -- an unrelated or planted file -- and
+    # the plan-derived advisories were computed from it. The two roots this
+    # workspace actually keeps plans under are the only candidates.
+    if raw.is_absolute():
+        candidates = [raw]
+    else:
+        candidates = [get_plans_dir() / raw.name, WORKSPACE_ROOT / raw,
+                      get_plans_dir() / raw]
     for candidate in candidates:
         try:
             if candidate.is_file():
@@ -588,16 +691,49 @@ def declared_deviation_count(plan_text: str) -> int:
     return count
 
 
+def _tree_prefixes() -> tuple[str, ...]:
+    """The prefixes a recorded path may legitimately carry, and no others.
+
+    A run records a path against the engine tree or the data overlay, and it
+    may spell either as an absolute root, as that root's directory name, or as
+    the word "engine". That is the whole set. Anything else is a different
+    file.
+    """
+    roots = [WORKSPACE_ROOT, get_data_root()]
+    out = {"engine"}
+    for root in roots:
+        out.add(str(root).rstrip("/"))
+        out.add(Path(root).name)
+    return tuple(sorted(out, key=len, reverse=True))
+
+
+def _repo_relative(value: str) -> str:
+    """`value` with ONE known tree prefix stripped, if it carries one."""
+    text = str(value).strip()
+    # A leading "./" only. `lstrip("./")` takes a SET of characters, so it ate
+    # the leading dot of `.heading-os-data/...` and the prefix never matched.
+    while text.startswith("./"):
+        text = text[2:]
+    for prefix in _tree_prefixes():
+        marker = prefix.rstrip("/") + "/"
+        if text.startswith(marker):
+            return text[len(marker):]
+    return text
+
+
 def _covers(recorded: str, planned: str) -> bool:
     """Whether a recorded path and a planned path name the same file.
 
-    Suffix-tolerant in both directions: the plan writes a repo-relative path and
-    a run may record it with a different prefix (engine vs data overlay). Anchored
-    on a path separator so `record.py` never matches `scrutinize_record.py`.
+    Exact equality after stripping ONE known tree prefix from each side.
+
+    It used to accept any common suffix in either direction, which is far wider
+    than the engine-versus-overlay prefix difference it was written for: a plan
+    naming `scripts/reports/a.py` was satisfied by a run recording
+    `other/scripts/reports/a.py` -- a different file -- and the reconciliation
+    advisory went quiet. The bound is now a NAMED set of prefixes rather than
+    "any number of leading directories".
     """
-    if recorded == planned:
-        return True
-    return recorded.endswith("/" + planned) or planned.endswith("/" + recorded)
+    return _repo_relative(recorded) == _repo_relative(planned)
 
 
 def _git_changed_files(git_head: str) -> set[str]:
@@ -678,25 +814,47 @@ def verify_trajectory(run_id: str) -> list[str]:
     path = trajectory_path(run_id)
     defects: list[str] = []
     events: list[dict] = []
-    for i, raw in enumerate(path.read_text(encoding="utf-8").splitlines()):
+    # A verifier that dies on the file it is verifying reports nothing. One
+    # invalid byte, or a file that turned unreadable after the caller's
+    # existence check, used to leave a traceback where a defect string belongs.
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        return [f"trajectory could not be read: {exc}"]
+    for i, raw in enumerate(text.splitlines()):
         raw = raw.strip()
         if not raw:
             continue
         try:
-            events.append(json.loads(raw))
+            obj = json.loads(raw)
         except json.JSONDecodeError as exc:
             defects.append(f"line {i + 1}: malformed JSON ({exc})")
+            continue
+        # A JSONL line can be valid JSON and not an event: `[]`, `"x"`, `null`
+        # all decode, and every `.get()` below then raises AttributeError.
+        if not isinstance(obj, dict):
+            defects.append(
+                f"line {i + 1}: record is a {type(obj).__name__}, not an event object")
+            continue
+        events.append(obj)
     if not events:
         defects.append("trajectory is empty")
         return defects
 
     types = [e.get("event_type") for e in events]
 
-    # run_start present and first.
+    # run_start present, first, and EXACTLY ONE. The count was never checked,
+    # so two processes racing to create the same run_id both appended a
+    # run_start and the trajectory read as clean: the only test was that the
+    # FIRST event is a run_start, which stayed true.
     if "run_start" not in types:
         defects.append("run_start event is missing")
     elif types[0] != "run_start":
         defects.append("run_start is not the first event")
+    if types.count("run_start") > 1:
+        defects.append(
+            f"{types.count('run_start')} run_start events in one trajectory "
+            f"(two runs wrote to the same run_id)")
 
     # run_end present and last (a trajectory missing run_end is incomplete).
     if "run_end" not in types:
@@ -730,7 +888,12 @@ def verify_trajectory(run_id: str) -> list[str]:
     # run whose only wave_end was an orphan had its successes count checked
     # against nothing and passed clean while matching neither the declared
     # membership nor the steps that actually ran (2026-08-09 /scrutinize, M1).
-    wave_starts: dict[Any, int] = {}
+    # A STACK of open start indices per wave number, not one index. A dict
+    # entry was overwritten by a second `wave_start` for the same wave, so the
+    # first start vanished: one later `wave_end` reconciled the second, and the
+    # first was never reported unmatched -- breaking the verifier's own stated
+    # invariant that every wave_start pairs with a wave_end.
+    wave_starts: dict[Any, list[int]] = {}
     wave_spans: list[tuple[int, int]] = []
     saw_wave_event = False
     last_boundary = 0
@@ -739,7 +902,13 @@ def verify_trajectory(run_id: str) -> list[str]:
         payload = e.get("payload") or {}
         if et == "wave_start":
             saw_wave_event = True
-            wave_starts[payload.get("wave")] = idx
+            wave_no = payload.get("wave")
+            open_for_wave = wave_starts.setdefault(wave_no, [])
+            if open_for_wave:
+                defects.append(
+                    f"wave_start for wave {wave_no} at position {idx} opens a "
+                    f"wave already opened at position {open_for_wave[-1]}")
+            open_for_wave.append(idx)
             if "step_count" not in payload or "parallel" not in payload:
                 defects.append(
                     f"(advisory) wave_start for wave {payload.get('wave')} at "
@@ -749,7 +918,8 @@ def verify_trajectory(run_id: str) -> list[str]:
         elif et == "wave_end":
             saw_wave_event = True
             w = payload.get("wave")
-            start_idx = wave_starts.pop(w, None)
+            open_for_wave = wave_starts.get(w) or []
+            start_idx = open_for_wave.pop() if open_for_wave else None
             if start_idx is None:
                 defects.append(
                     f"wave_end for wave {w} at position {idx} has no matching wave_start")
@@ -771,9 +941,11 @@ def verify_trajectory(run_id: str) -> list[str]:
                     f"wave {w}: wave_end.successes={declared} but {where} "
                     f"ok/deviation step_end count={ok_ends}")
             last_boundary = idx
-    for w, start_idx in wave_starts.items():
-        defects.append(f"wave {w}: wave_start never closed by a wave_end")
-        wave_spans.append((start_idx, len(events)))
+    for w, open_indices in wave_starts.items():
+        for start_idx in open_indices:
+            defects.append(
+                f"wave {w}: wave_start at position {start_idx} never closed by a wave_end")
+            wave_spans.append((start_idx, len(events)))
 
     # Steps outside every wave bracket. Only meaningful in a run that uses
     # waves at all - a bare sequential run legitimately has none, and the plan
@@ -814,11 +986,11 @@ def verify_trajectory(run_id: str) -> list[str]:
             continue
         for entry in (e.get("payload") or {}).get("files_affected") or []:
             s = str(entry)
-            is_count = s[:1] == "+" and s[1:2].isdigit()
-            if any(c in s for c in _GLOB_CHARS) or is_count:
+            is_count = s.strip()[:1] == "+" and s.strip()[1:2].isdigit()
+            if not _is_literal_path(entry) or is_count:
                 defects.append(
                     f"step_end at position {idx}: files_affected entry "
-                    f"'{s}' is not a literal path (glob/shorthand/count)")
+                    f"{s!r} is not a literal path (glob/shorthand/count/blank)")
 
     # Run-level files reconciliation (advisory). Compare the current engine
     # working tree against run_start.git_head; flag any changed engine file

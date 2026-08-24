@@ -39,7 +39,10 @@ Exit codes: 0 ok, 1 usage/validation error, 2 state file missing for a mutate.
 import argparse
 import json
 import os
+import re
+import tempfile
 import sys
+from datetime import date as _date_cls
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -100,8 +103,31 @@ def _tier_for(action_type: str) -> tuple[str, str]:
 # State IO (atomic: tmp + os.replace)
 # ============================================================
 
+def _valid_date(date: str) -> str:
+    """`date` as an exact YYYY-MM-DD, or a clean refusal.
+
+    The value went straight into a filename, so a `--date` carrying separators
+    and `..` escaped `outputs/operations/email-intelligence/` entirely and
+    `propose` created directories and wrote JSON wherever it pointed. Nothing
+    validated it. `strptime` accepts only the shape this file names its state
+    after, which closes the traversal and the typo in one check.
+    """
+    # A shape check plus a calendar check, and no `strptime`: this is a
+    # date-only value used as a filename, and `strptime` would build a naive
+    # datetime that the workspace's DTZ ruleset (at zero) correctly refuses.
+    # `fromisoformat` alone is not enough either — it accepts `20260801`.
+    text = str(date or "")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        raise ValueError(f"--date must be an exact YYYY-MM-DD, got {date!r}")
+    try:
+        _date_cls.fromisoformat(text)
+    except ValueError:
+        raise ValueError(f"--date is not a real calendar date: {date!r}") from None
+    return text
+
+
 def _state_path(root: Path, date: str) -> Path:
-    return root / STATE_DIR / f"sweep-actions-{date}.json"
+    return root / STATE_DIR / f"sweep-actions-{_valid_date(date)}.json"
 
 
 def _today() -> str:
@@ -110,17 +136,31 @@ def _today() -> str:
     return datetime.now(get_default_tz()).strftime("%Y-%m-%d")
 
 
+class SweepUnreadable(Exception):
+    """The sweep file exists and cannot be used. NOT the same as absent.
+
+    `_load` returned None for both, and `cmd_propose` reads
+    `_load(...) or {new sweep}` — so a half-written or hand-corrupted approval
+    queue was treated as "no sweep yet" and REPLACED by `_save`. An approval
+    queue is the one file in this flow that must never be silently discarded.
+    """
+
+
 def _load(root: Path, date: str) -> dict | None:
+    """The sweep for `date`, or None when there is no file yet.
+
+    Raises SweepUnreadable when a file IS there and cannot be parsed or has the
+    wrong shape, so a caller that mutates can refuse rather than overwrite.
+    """
     p = _state_path(root, date)
     if not p.exists():
         return None
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
-        print(f"{RED}sweep file unreadable: {e}{RESET}", file=sys.stderr)
-        return None
+        raise SweepUnreadable(f"{p}: {e}") from e
     if not isinstance(data, dict) or not isinstance(data.get("actions"), list):
-        return None
+        raise SweepUnreadable(f"{p}: not a sweep object with an actions list")
     return data
 
 
@@ -128,9 +168,21 @@ def _save(root: Path, date: str, data: dict) -> None:
     p = _state_path(root, date)
     p.parent.mkdir(parents=True, exist_ok=True)
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, p)
+    # A unique tmp name per writer. Every writer used the SAME
+    # `sweep-actions-<date>.json.tmp`, so two concurrent commands could both
+    # write it and one `os.replace` moved the other's file out from under it —
+    # losing an update, or raising FileNotFoundError. This does not serialize
+    # the load-modify-save transaction (see the note in cmd_propose); it stops
+    # the two writers from fighting over one scratch path.
+    fd, tmp_name = tempfile.mkstemp(dir=str(p.parent), prefix=p.name + ".", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2, ensure_ascii=False)
+        os.replace(tmp, p)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 # ============================================================
@@ -152,12 +204,32 @@ def cmd_propose(root: Path, args) -> int:
         return 1
 
     date = args.date or _today()
-    data = _load(root, date) or {
+    try:
+        existing = _load(root, date)
+    except SweepUnreadable as e:
+        print(f"{RED}refusing to overwrite an unreadable sweep: {e}{RESET}",
+              file=sys.stderr)
+        print(f"{YELLOW}Move or repair the file, then re-run. A corrupt "
+              f"approval queue is recoverable; a replaced one is not.{RESET}",
+              file=sys.stderr)
+        return 1
+    data = existing or {
         "date": date,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "actions": [],
     }
-    next_id = max((a.get("id", 0) for a in data["actions"]), default=0) + 1
+    # Only NUMERIC ids count toward the next one. `_load` validates that
+    # `actions` is a list and nothing more, so a persisted `{"id": "7"}` made
+    # `max` return a string and `+ 1` a TypeError — a crash where a clean
+    # state error belongs.
+    bad_ids = [a.get("id") for a in data["actions"]
+               if isinstance(a, dict) and not isinstance(a.get("id"), int)]
+    if bad_ids:
+        print(f"{RED}sweep state has non-numeric action id(s): {bad_ids}. "
+              f"Repair the file before proposing.{RESET}", file=sys.stderr)
+        return 1
+    next_id = max((a.get("id", 0) for a in data["actions"]
+                   if isinstance(a, dict)), default=0) + 1
 
     added = 0
     for raw in proposed:
@@ -343,7 +415,18 @@ def main() -> int:
         "propose": cmd_propose, "list": cmd_list, "pending": cmd_pending,
         "approve": cmd_approve, "skip": cmd_skip, "edit": cmd_edit, "set": cmd_set,
     }
-    return dispatch[args.cmd](root, args)
+    try:
+        return dispatch[args.cmd](root, args)
+    except SweepUnreadable as e:
+        # Read-only commands surface it here rather than each repeating the
+        # handler; `propose` catches it itself, because it is the one command
+        # that would otherwise WRITE over the file.
+        print(f"{RED}sweep file unusable: {e}{RESET}", file=sys.stderr)
+        return 2
+    except ValueError as e:
+        # `_valid_date` refuses anything that is not an exact YYYY-MM-DD.
+        print(f"{RED}{e}{RESET}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

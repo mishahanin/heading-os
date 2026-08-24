@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate ODUN.ONE AI Monetization Use Cases DOCX using 31C corporate template."""
 
-import shutil, zipfile, os, sys
+import shutil, zipfile, os, sys, tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -50,19 +50,28 @@ OUTPUT = str(get_outputs_dir() / "documents"
 
 def load_template():
     """Load .dotx as .docx by fixing content type."""
-    tmp = str(get_outputs_dir() / "_tmp_tpl.docx")
-    shutil.copy2(TMPL, tmp)
-    with zipfile.ZipFile(tmp, "r") as zin:
-        ct = zin.read("[Content_Types].xml").decode("utf-8")
-        ct = ct.replace("template.main+xml", "document.main+xml")
-        names = zin.namelist()
-        data = {n: zin.read(n) for n in names}
-        data["[Content_Types].xml"] = ct.encode("utf-8")
-    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
-        for n in names:
-            zout.writestr(n, data[n])
-    doc = Document(tmp)
-    os.remove(tmp)
+    # The scratch copy used to be one fixed name in the operator-facing
+    # outputs directory, removed by a bare os.remove at the end. A corrupt
+    # template (BadZipFile), a missing [Content_Types].xml (KeyError) or any
+    # python-docx parse failure left the file sitting there, and two
+    # concurrent runs wrote the same path. A per-run temp directory, removed
+    # in a finally, closes both.
+    tmpdir = tempfile.mkdtemp(prefix="usecases-tpl-")
+    tmp = str(Path(tmpdir) / "template.docx")
+    try:
+        shutil.copy2(TMPL, tmp)
+        with zipfile.ZipFile(tmp, "r") as zin:
+            ct = zin.read("[Content_Types].xml").decode("utf-8")
+            ct = ct.replace("template.main+xml", "document.main+xml")
+            names = zin.namelist()
+            data = {n: zin.read(n) for n in names}
+            data["[Content_Types].xml"] = ct.encode("utf-8")
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+            for n in names:
+                zout.writestr(n, data[n])
+        doc = Document(tmp)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
     # Clear placeholder content
     for p in list(doc.paragraphs):
         p._element.getparent().remove(p._element)
@@ -156,7 +165,7 @@ def build():
         "ODUN.ONE transforms Deep Packet Inspection into Deep Packet Intelligence (DPI+). "
         "By embedding AI at the core of the platform \u2014 not as a bolt-on \u2014 ODUN.ONE enables telco operators "
         "to unlock revenue streams, reduce operational costs, and future-proof their networks against "
-        "encrypted and AI-generated traffic. This document presents 20 use cases across six categories, "
+        "encrypted and AI-generated traffic. This document presents 41 use cases across ten sections, "
         "each demonstrating how AI-driven network intelligence directly increases monetization and profitability. "
         "Sections I\u2013VI cover AI-native intelligence capabilities. Sections VII\u2013IX detail policy-driven revenue "
         "engineering, subscriber experience monetization, and vertical application bundles. Section X covers "

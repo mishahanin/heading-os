@@ -30,6 +30,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import get_data_root, get_workspace_root  # noqa: E402
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
 
+# Ceiling for one index query. Generous for a warm store plus a cold-model
+# load, short enough that a stuck query fails the run instead of hanging it.
+QUERY_TIMEOUT_S = 300
+
 # Each phase has its own frozen set and its own bar, because the corpora differ.
 # Commits are 1,090 items of deliberate human prose; symbols are 9,562 items of
 # code, only half of which carry a docstring. The same number would not mean the
@@ -80,9 +84,18 @@ def query(text: str, layer: str, top_k: int, threshold: float | None = None) -> 
            "--layer", layer, "--top-k", str(top_k), "--json"]
     if threshold is not None:
         cmd += ["--threshold", str(threshold)]
-    proc = subprocess.run(
-        cmd, cwd=get_workspace_root(), capture_output=True, text=True,
-    )
+    # A bounded wait. Without one, a single hung index query stalled the whole
+    # frozen-set run with no result and no error — a hang reads as "still
+    # measuring", never as the failure it is.
+    try:
+        proc = subprocess.run(
+            cmd, cwd=get_workspace_root(), capture_output=True, text=True,
+            timeout=QUERY_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"query did not answer within {QUERY_TIMEOUT_S}s and was killed: {text[:80]!r}"
+        ) from exc
     if proc.returncode != 0:
         raise RuntimeError(f"query failed: {proc.stderr.strip()[:300]}")
     try:
@@ -162,7 +175,10 @@ def main() -> int:
     if args.json:
         print(json.dumps({"phase": args.phase, "layer": layer, "top_k": args.top_k,
                           "summary": out, "cases": results}, ensure_ascii=False, indent=2))
-        return 0
+        # The SAME below-bar measurement exited 1 in terminal mode and 0 here,
+        # so the machine-readable mode — the one CI reads — could not see a
+        # failing index at all. One measurement, one verdict.
+        return 0 if out["A"]["rate"] >= bar_a else 1
 
     thr = "index default" if args.threshold is None else f"forced {args.threshold}"
     print(f"{BOLD}{CYAN}Phase {args.phase} — layer {layer}, top-{args.top_k}, threshold {thr}{RESET}")

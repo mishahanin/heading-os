@@ -34,6 +34,22 @@ def test_user_overrides_corporate(workspace_root):
     assert cfg["refresh"]["inflight"] == 60  # corporate retained
 
 
+def _snapshot_with_user(workspace_root, user_cfg):
+    """Write the USER layer, then snapshot the merged result.
+
+    Since 2026-08-24 a snapshot holds the two layers apart and a revert restores
+    only `user`, so a test that reverts and expects a value back has to have put
+    that value in the user layer. Handing it to `snapshot_config` as part of the
+    merged dict is not enough any more, and that is the point of the change:
+    the old revert could not tell an override from a corporate default, so it
+    restored both and froze the corporate half forever.
+    """
+    path = workspace_root / ".daemon-state" / "config.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(user_cfg), encoding="utf-8")
+    return snapshot_config(workspace_root, load_config(workspace_root))
+
+
 # Phase 1.154 - snapshot + revert tests.
 
 def test_snapshot_writes_yaml(workspace_root):
@@ -45,7 +61,9 @@ def test_snapshot_writes_yaml(workspace_root):
     # Verify it can be round-tripped through YAML.
     import yaml as _y
     reloaded = _y.safe_load(out.read_text())
-    assert reloaded["refresh"]["email"] == cfg["refresh"]["email"]
+    assert reloaded["schema"] == 2
+    assert reloaded["merged"]["refresh"]["email"] == cfg["refresh"]["email"]
+    assert reloaded["corporate"] == {} and reloaded["user"] == {}
 
 
 def test_snapshot_trims_to_keep_3(workspace_root):
@@ -71,13 +89,15 @@ def test_list_snapshots_newest_first(workspace_root):
 
 
 def test_revert_config_restores_prior(workspace_root):
-    snapshot_config(workspace_root, {"refresh": {"email": 100}})
-    snapshot_config(workspace_root, {"refresh": {"email": 999}})
+    _snapshot_with_user(workspace_root, {"refresh": {"email": 100}})
+    _snapshot_with_user(workspace_root, {"refresh": {"email": 999}})
     restored = revert_config(workspace_root)
     user_cfg = workspace_root / ".daemon-state" / "config.yaml"
     assert user_cfg.exists()
-    assert user_cfg.read_text() == restored.read_text()
-    # Re-loading should now see the reverted value.
+    # The snapshot is the layered document; the user layer is one part of
+    # it, so the two files are no longer byte-identical.
+    assert yaml.safe_load(user_cfg.read_text()) == \
+        yaml.safe_load(restored.read_text())["user"]
     cfg = load_config(workspace_root)
     assert cfg["refresh"]["email"] == 100
 
@@ -94,9 +114,9 @@ def test_revert_config_zero_snapshots(workspace_root):
 
 
 def test_revert_config_to_specific_snapshot(workspace_root):
-    snapshot_config(workspace_root, {"refresh": {"email": 100}})
-    snapshot_config(workspace_root, {"refresh": {"email": 200}})
-    snapshot_config(workspace_root, {"refresh": {"email": 300}})
+    _snapshot_with_user(workspace_root, {"refresh": {"email": 100}})
+    _snapshot_with_user(workspace_root, {"refresh": {"email": 200}})
+    _snapshot_with_user(workspace_root, {"refresh": {"email": 300}})
     snaps = list_snapshots(workspace_root)
     # Pick the oldest snapshot explicitly (newest-first sort -> index 2)
     oldest_name = snaps[2].name
@@ -113,7 +133,7 @@ def test_revert_config_to_unknown_snapshot(workspace_root):
 
 
 def test_revert_config_to_writes_user_override(workspace_root):
-    snapshot_config(workspace_root, {"refresh": {"email": 100}})
+    _snapshot_with_user(workspace_root, {"refresh": {"email": 100}})
     snaps = list_snapshots(workspace_root)
     revert_config_to(workspace_root, snaps[0].name)
     user_cfg = workspace_root / ".daemon-state" / "config.yaml"
@@ -142,18 +162,19 @@ def test_rapid_snapshots_do_not_collide(workspace_root):
     names = [p.name for p in snaps]
     assert len(set(names)) == 3, names
     # Newest-first ordering must remain chronological (write order i=0,1,2).
-    contents = [yaml.safe_load(p.read_text())["refresh"]["email"] for p in snaps]
+    contents = [yaml.safe_load(p.read_text())["merged"]["refresh"]["email"]
+                for p in snaps]
     assert contents == [102, 101, 100], contents
 
 
 def test_rapid_snapshots_revert_to_each(workspace_root):
     # Three rapid snapshots in the same second, then revert to each by name.
     for i in range(3):
-        snapshot_config(workspace_root, {"refresh": {"email": 100 + i}})
+        _snapshot_with_user(workspace_root, {"refresh": {"email": 100 + i}})
     snaps = list_snapshots(workspace_root)
     assert len(snaps) == 3
     for snap in snaps:
-        expected = yaml.safe_load(snap.read_text())["refresh"]["email"]
+        expected = yaml.safe_load(snap.read_text())["user"]["refresh"]["email"]
         restored = revert_config_to(workspace_root, snap.name)
         assert restored.name == snap.name
         assert load_config(workspace_root)["refresh"]["email"] == expected

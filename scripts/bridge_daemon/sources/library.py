@@ -1,8 +1,12 @@
 """Real-data source for the /library endpoint.
 
-Walks knowledge/ (excluding INDEX.md and dotfiles), parses YAML
-frontmatter, returns 50 most-recently-updated notes sorted DESC by the
-'updated' field (falling back to file mtime if absent).
+Walks knowledge/, skipping dotfiles, the `SKIP_DIRS` subtrees and the
+`SKIP_NAMES` filenames at any depth. Parses YAML frontmatter, returns 50
+most-recently-updated notes sorted DESC by the 'updated' field (falling
+back to file mtime if absent).
+
+This line named only INDEX.md and dotfiles until 2026-08-24, and never
+mentioned README.md or the three skipped subtrees.
 
 Phase 1.12 is browse-only. Phase 2 will add full-text search + a click
 handler that drills into the note detail.
@@ -11,7 +15,7 @@ import re
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from scripts.utils.paths import get_data_root
+from scripts.bridge_daemon._safepath import contains_symlink
 
 LIBRARY_ROW_CAP = 50
 KNOWLEDGE_ROOT = "knowledge"
@@ -59,7 +63,7 @@ def _parse_iso_date(s: str | None) -> date | None:
         return None
 
 
-def list_library(workspace_root: Path, data_root: "Path | None" = None) -> dict:
+def list_library(data_root: Path) -> dict:
     """Walk knowledge/ for markdown notes with frontmatter.
 
     Returns:
@@ -81,12 +85,13 @@ def list_library(workspace_root: Path, data_root: "Path | None" = None) -> dict:
             "data_time": ISO 8601 UTC of most-recent file mtime,
         }
 
-    HEADING OS engine/data split: knowledge/ is DATA, so it resolves under
-    ``data_root``. Back-compat: falls back to ``workspace_root`` when not
-    supplied (identical on transitional ceo-main).
+    HEADING OS engine/data split: knowledge/ is DATA, so the single root this
+    takes IS the data root. It used to take a ``workspace_root`` too, and the
+    docstring promised a fallback to it; the body never read it, substituting
+    the global ``get_data_root()`` instead. A caller that passed the engine
+    root got the data overlay anyway, and one that passed both got a
+    TypeError. Both parameters are now one honest name.
     """
-    if data_root is None:
-        data_root = get_data_root()
     root = data_root / KNOWLEDGE_ROOT
     if not root.exists():
         return {"notes": [], "counts": {}, "total": 0, "data_time": None}
@@ -105,13 +110,20 @@ def list_library(workspace_root: Path, data_root: "Path | None" = None) -> dict:
         # Skip helper subtrees.
         if any(seg in SKIP_DIRS for seg in parts_relative):
             continue
-        # Skip top-level convention files.
+        # Skip the convention filenames AT ANY DEPTH -- this matches on the
+        # basename, so a per-folder `knowledge/odin-brain/README.md` is dropped
+        # too. The comment said "top-level" until 2026-08-24, which described a
+        # narrower rule than the one below and would send anyone debugging a
+        # missing nested note looking in the wrong place.
         if p.name in SKIP_NAMES:
             continue
         try:
             text = p.read_text(encoding="utf-8")
             stat_result = p.stat()
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # UnicodeDecodeError is a ValueError, NOT an OSError, so one note
+            # saved in Latin-1 used to abort the walk and 500 /library.
+            # `read_note` below already catches both.
             continue
         fm = _parse_frontmatter(text)
         ntype = fm.get("type", "")
@@ -177,12 +189,12 @@ def list_library(workspace_root: Path, data_root: "Path | None" = None) -> dict:
 NOTE_MAX_BYTES = 200_000  # 200 KB upper bound for any zk note
 
 
-def read_note(workspace_root: Path, rel_path: str, data_root: "Path | None" = None) -> dict:
+def read_note(data_root: Path, rel_path: str) -> dict:
     """Read a single note file safely.
 
     Path validation:
     - Must start with 'knowledge/'
-    - Must resolve to a file inside workspace_root/knowledge
+    - Must resolve to a file inside data_root/knowledge
     - Must not be a symlink (avoid /etc/passwd via symlink trick)
     - Must be under NOTE_MAX_BYTES
 
@@ -191,11 +203,10 @@ def read_note(workspace_root: Path, rel_path: str, data_root: "Path | None" = No
         OR
         {"ok": False, "error": str}
 
-    HEADING OS engine/data split: knowledge/ is DATA, so it resolves under
-    ``data_root`` (falls back to ``workspace_root`` when not supplied).
+    HEADING OS engine/data split: knowledge/ is DATA, and the single root this
+    takes IS the data root. See ``list_library`` for why the old
+    ``workspace_root`` parameter is gone.
     """
-    if data_root is None:
-        data_root = get_data_root()
     if not rel_path or not isinstance(rel_path, str):
         return {"ok": False, "error": "missing path"}
     # Normalize forward slashes (Windows-friendly).
@@ -206,7 +217,8 @@ def read_note(workspace_root: Path, rel_path: str, data_root: "Path | None" = No
     parts = [p for p in rel_path.split("/") if p]
     if any(p == ".." or p.startswith(".") for p in parts):
         return {"ok": False, "error": "invalid path segment"}
-    target = (data_root / rel_path).resolve()
+    target_raw = data_root / rel_path
+    target = target_raw.resolve()
     knowledge_root = (data_root / "knowledge").resolve()
     # Resolved target must still be inside knowledge_root.
     try:
@@ -219,7 +231,7 @@ def read_note(workspace_root: Path, rel_path: str, data_root: "Path | None" = No
     # the resolve() above already follows symlinks, then our relative_to
     # check would catch any escape. Still, explicit is good.
     try:
-        if target.is_symlink():
+        if contains_symlink(data_root / "knowledge", target_raw):
             return {"ok": False, "error": "symlinks not allowed"}
     except OSError:
         return {"ok": False, "error": "stat failed"}

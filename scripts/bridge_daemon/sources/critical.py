@@ -21,17 +21,20 @@ Schema for a tombstone:
     {"id": str, "undo": true, "ts": ISO 8601 UTC}
 
 Mirrors the approval-sent-log / inbox-dismiss-log / task-done-log
-patterns. JSONL append + atomic write so concurrent writers don't
-corrupt the file.
+patterns. Writes go through ``_jsonl.append_jsonl`` (a real ``O_APPEND``
+line), so a writer in another PROCESS cannot silently overwrite an entry;
+the module-level ``threading.Lock`` only ever covered this one. Reads go
+through ``_jsonl.read_jsonl_capped``, which keeps the newest entries when
+the log outgrows its cap rather than rendering the page empty.
 """
 import hashlib
-import json
 import threading
 from datetime import date, datetime, timezone
 from scripts.utils.workspace import get_default_tz
 from pathlib import Path
 
-from scripts.bridge_daemon._atomic import atomic_write_text
+from scripts.bridge_daemon._jsonl import append_jsonl, read_jsonl_capped
+from scripts.bridge_daemon._shapes import entry_ts, is_undo
 
 CRITICAL_LOG_FILE = "outputs/operations/bridge/critical-items.jsonl"  # leak-guard: ok (relative suffix rooted by caller)
 CRITICAL_LOG_MAX_BYTES = 1_000_000  # 1 MB safety cap
@@ -49,51 +52,37 @@ def _make_id(kind: str, ref: str, ts: str) -> str:
     return h[:12]
 
 
-def _read_log_lines(workspace_root: Path) -> list[dict]:
-    """Return ALL log entries in append order (active + tombstones).
+def _read_log_lines(workspace_root: Path) -> tuple[list[dict], bool]:
+    """Return ``(entries, truncated)`` in append order (active + tombstones).
 
     Caller filters; returning the raw stream keeps this primitive
-    small and testable.
+    small and testable. Over CRITICAL_LOG_MAX_BYTES the reader keeps the
+    newest entries and says so, instead of returning an empty list that a
+    page renders as "you have flagged nothing".
     """
-    log_path = workspace_root / CRITICAL_LOG_FILE
-    if not log_path.exists():
-        return []
-    try:
-        if log_path.stat().st_size > CRITICAL_LOG_MAX_BYTES:
-            return []
-        text = log_path.read_text(encoding="utf-8")
-    except OSError:
-        return []
-    out: list[dict] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(entry, dict):
-            out.append(entry)
-    return out
+    return read_jsonl_capped(workspace_root / CRITICAL_LOG_FILE,
+                             CRITICAL_LOG_MAX_BYTES)
 
 
-def _active_entries(workspace_root: Path) -> dict[str, dict]:
-    """Return {id: entry} for entries that survive tombstone replay.
+def _active_entries(workspace_root: Path) -> tuple[dict[str, dict], bool]:
+    """Return ``({id: entry}, truncated)`` for entries surviving tombstone replay.
 
-    Iteration order: append. Last write per id wins; an `undo: true`
-    tombstone removes the id from the active map.
+    Iteration order: append. Last write per id wins; an `undo` tombstone
+    removes the id from the active map. Truthiness, not ``is True``: a
+    tombstone hand-edited to ``"undo": 1`` used to be read as an ACTIVE entry,
+    resurrecting an item the operator had unmarked.
     """
+    entries, truncated = _read_log_lines(workspace_root)
     active: dict[str, dict] = {}
-    for entry in _read_log_lines(workspace_root):
+    for entry in entries:
         eid = entry.get("id")
         if not isinstance(eid, str) or not eid:
             continue
-        if entry.get("undo") is True:
+        if is_undo(entry):
             active.pop(eid, None)
             continue
         active[eid] = entry
-    return active
+    return active, truncated
 
 
 def list_critical(workspace_root: Path) -> dict:
@@ -103,16 +92,19 @@ def list_critical(workspace_root: Path) -> dict:
         {
             "items": [entry, ...],   # active entries, ts DESC
             "total": int,
+            "truncated": bool,       # the log outgrew its cap; older marks
+                                     # are on disk but not in this list
             "data_time": ISO 8601 of the newest entry's ts (or None).
         }
     """
-    active = _active_entries(workspace_root)
+    active, truncated = _active_entries(workspace_root)
     items = list(active.values())
-    items.sort(key=lambda e: e.get("ts", ""), reverse=True)
-    data_time = items[0].get("ts") if items else None
+    items.sort(key=entry_ts, reverse=True)
+    data_time = entry_ts(items[0]) or None if items else None
     return {
         "items": items,
         "total": len(items),
+        "truncated": truncated,
         "data_time": data_time,
     }
 
@@ -129,12 +121,13 @@ def recent_unmarked(workspace_root: Path, limit: int = 10) -> list[dict]:
     # 'what was it?' context.
     last_active: dict[str, dict] = {}
     tombstoned_at: dict[str, str] = {}
-    for entry in _read_log_lines(workspace_root):
+    entries, _truncated = _read_log_lines(workspace_root)
+    for entry in entries:
         eid = entry.get("id")
         if not isinstance(eid, str) or not eid:
             continue
-        if entry.get("undo") is True:
-            tombstoned_at[eid] = entry.get("ts", "")
+        if is_undo(entry):
+            tombstoned_at[eid] = entry_ts(entry)
         else:
             last_active[eid] = entry
             tombstoned_at.pop(eid, None)  # active again, drop tombstone
@@ -181,6 +174,12 @@ def mark_critical(
         return {"ok": False, "error": "source_page must start with '#/'"}
     ref = ref.strip()
     label = label.strip()
+    # `note` is the one field that had no isinstance guard, so a non-string
+    # from a direct Python caller raised AttributeError instead of the
+    # validation error its three siblings return. (The HTTP path is safe:
+    # pydantic rejects a non-string `note` before this function sees it.)
+    if note is not None and not isinstance(note, str):
+        return {"ok": False, "error": "note must be a string"}
     safe_note = (note or "").replace("\n", " ").replace("\r", " ").strip()[:NOTE_MAX_CHARS]
     now = datetime.now(timezone.utc)
     ts = now.isoformat()
@@ -196,20 +195,9 @@ def mark_critical(
         "date": datetime.now(get_default_tz()).date().isoformat(),
     }
     log_path = workspace_root / CRITICAL_LOG_FILE
-    log_path.parent.mkdir(parents=True, exist_ok=True)
     with _LOCK:
-        existing = ""
-        if log_path.exists():
-            try:
-                existing = log_path.read_text(encoding="utf-8")
-            except OSError:
-                existing = ""
-        new_content = existing
-        if existing and not existing.endswith("\n"):
-            new_content += "\n"
-        new_content += json.dumps(entry) + "\n"
         try:
-            atomic_write_text(log_path, new_content, mode=0o644)
+            append_jsonl(log_path, entry)
         except OSError as e:
             return {"ok": False, "error": f"write failed: {e}"}
     return {"ok": True, "id": eid, "ts": ts, "date": entry["date"]}
@@ -223,20 +211,9 @@ def unmark_critical(workspace_root: Path, item_id: str) -> dict:
     now = datetime.now(timezone.utc)
     entry = {"id": item_id, "undo": True, "ts": now.isoformat()}
     log_path = workspace_root / CRITICAL_LOG_FILE
-    log_path.parent.mkdir(parents=True, exist_ok=True)
     with _LOCK:
-        existing = ""
-        if log_path.exists():
-            try:
-                existing = log_path.read_text(encoding="utf-8")
-            except OSError:
-                existing = ""
-        new_content = existing
-        if existing and not existing.endswith("\n"):
-            new_content += "\n"
-        new_content += json.dumps(entry) + "\n"
         try:
-            atomic_write_text(log_path, new_content, mode=0o644)
+            append_jsonl(log_path, entry)
         except OSError as e:
             return {"ok": False, "error": f"write failed: {e}"}
     return {"ok": True, "id": item_id, "ts": entry["ts"]}

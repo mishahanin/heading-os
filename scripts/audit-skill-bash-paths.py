@@ -44,8 +44,10 @@ _COMMAND = re.compile(r"python \S|scripts/|>\s|--out\b|--output\b")
 # 2026-06-16. A skill exceeding its baseline (or a new skill appearing) is a
 # regression and fails --check. Lowering a baseline (cleaning a SKILL) is welcome;
 # update the number here in the same change.
+# `calibrate` was here at 1. Its only hit was `-> threads/{layer}/{slug}.md`,
+# an arrow in a diagram inside an UNLABELLED fence, which the scanner used to
+# treat as bash. It is not a command, so the entry went with the widening.
 BASELINE = {
-    "calibrate": 1,
     "ceo-intel": 2,
     "corporate-letter": 1,
     "dashboard": 1,
@@ -59,8 +61,18 @@ BASELINE = {
 }
 
 
+# The empty string used to be in here, so all 78 UNLABELLED fences across the
+# skills were scanned as bash too -- output samples, diagrams, pasted diffs. The
+# scanner said "bash blocks" and read anything. One diagram arrow was already
+# counted as a misroute candidate and frozen into the baseline, and any new one
+# would fail --check on content that is not a command at all. The authoritative
+# guarantee is tests/test_engine_tree_clean.py, so the narrower scan loses
+# nothing that matters.
+_BASH_FENCES = ("bash", "sh", "shell")
+
+
 def scan_skill(path: Path) -> list[tuple[int, str]]:
-    """Return (lineno, stripped_line) candidates inside bash fenced blocks."""
+    """Return (lineno, stripped_line) candidates inside bash-LABELLED fences."""
     hits: list[tuple[int, str]] = []
     in_block = False
     cur_bash = False
@@ -68,7 +80,7 @@ def scan_skill(path: Path) -> list[tuple[int, str]]:
         if line.strip().startswith("```"):
             if not in_block:
                 lang = line.strip().strip("`").lower()
-                cur_bash = lang in ("bash", "sh", "shell", "")
+                cur_bash = lang in _BASH_FENCES
             in_block = not in_block
             continue
         if in_block and cur_bash and _COMMAND.search(line):
@@ -124,7 +136,10 @@ def main() -> int:
                 print(f"  {RED}{r}{RESET}", file=sys.stderr)
             print(f"{YELLOW}Resolve via get_*_dir()/$OUTPUTS_DIR, or update BASELINE if intentional.{RESET}", file=sys.stderr)
             return 1
-        print(f"\n{GREEN}OK{RESET} -- no SKILL bash data-path regressions vs baseline.")
+        # stderr, like the FAIL path two lines up. On stdout it landed AFTER the
+        # --json document, so `--json --check | json.tool` died on trailing text.
+        print(f"\n{GREEN}OK{RESET} -- no SKILL bash data-path regressions vs baseline.",
+              file=sys.stderr)
     return 0
 
 

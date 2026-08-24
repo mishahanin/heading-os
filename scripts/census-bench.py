@@ -39,13 +39,24 @@ Usage:
     python scripts/census-bench.py --operating-point
     python scripts/census-bench.py --recall-crosscheck [--crosscheck-answers FILE]
 
-Exit codes:
-    0  ran, verdict BUILD or NARROW
-    1  ran, verdict FIX-RECALL, or the RECALL-BROKEN flag is up (both are real
-       outcomes; the code distinguishes them for scripting, not for alarm)
+Exit codes. They exist for scripting, so they are listed per mode: 1 is a real
+outcome everywhere it appears, never an error.
+
+    0  the run produced the favourable reading
+    1  the run produced the unfavourable one, which differs by mode:
+         --baseline           verdict FIX-RECALL, or the RECALL-BROKEN flag
+         --score              verdict REJECTED, or NOT-COMPARABLE (which
+                              includes "no baseline report to compare against")
+         --recall-crosscheck  the ceiling's meaning as an upper bound was
+                              contradicted by at least one answer
     2  instrument failure: empty truth, index missing, too few measurable
-       questions, or a mode that is not implemented yet
+       questions, an unreadable or malformed input file, or a mode that is not
+       implemented yet
     3  the retrieval layer could not be called
+
+Until 2026-08-24 this table named only the two --baseline outcomes and gave
+them as the whole meaning of 1, so a wrapper reading exit codes labelled a
+NOT-COMPARABLE acceptance run, or a falsified ceiling, as FIX-RECALL.
 """
 from __future__ import annotations
 
@@ -257,6 +268,17 @@ def _run_state(corpus: CorpusPaths, root: Path, today: date) -> dict:
 # Retrieval measurement
 # ============================================================
 
+# Everything a call into `memory-index.py` can fail with, in ONE place, so the
+# three call sites cannot drift apart again. They had: `mode_baseline` caught
+# `RuntimeError` alone, `mode_operating_point` caught three types, and the
+# crosscheck print pass caught nothing. `subprocess.TimeoutExpired` is a
+# SubprocessError and NOT a RuntimeError, so the 600-second and 300-second
+# timeouts escaped every one of them and surfaced as a traceback with exit 1 —
+# where the docstring documents exit 3, "the retrieval layer could not be
+# called".
+QUERY_FAILURES = (RuntimeError, OSError, json.JSONDecodeError, subprocess.SubprocessError)
+
+
 def query_index(root: Path, text: str, depth: int = QUERY_DEPTH) -> tuple[list[dict], float]:
     """One deep query. Returns (hits, elapsed_seconds).
 
@@ -302,7 +324,15 @@ def measure_question(root: Path, question: dict, answer: OracleAnswer) -> Questi
         if not text:
             continue
         hits, elapsed = query_index(root, text)
-        order = {hit.get("path"): i for i, hit in enumerate(hits) if hit.get("path")}
+        # FIRST occurrence wins. A dict comprehension keeps the LAST index for
+        # a duplicated path, so a truth item returned twice was recorded at its
+        # worst rank — overstating the rank and understating every k_min_full
+        # and ceiling derived from it.
+        order: dict[str, int] = {}
+        for i, hit in enumerate(hits):
+            path = hit.get("path")
+            if path and path not in order:
+                order[path] = i
         ranks = {p: order.get(p) for p in sorted(answer.paths)}
         found = sum(1 for r in ranks.values() if r is not None)
         ceiling = found / answer.cardinality if answer.cardinality else 0.0
@@ -573,8 +603,8 @@ def mode_baseline(questions: list[dict], corpus: CorpusPaths, root: Path,
     for question in questions:
         try:
             results.append(measure_question(root, question, truth[question["id"]]))
-        except RuntimeError as exc:
-            print(f"{RED}Запрос не удался на {question['id']}:{RESET} {exc}", file=sys.stderr)
+        except QUERY_FAILURES as exc:
+            print(f"{RED}Запрос не удался на {question['id']}:{RESET} {exc!r}", file=sys.stderr)
             return 3
 
     print_table(results)
@@ -647,12 +677,24 @@ def grade_one(answer_record: dict, truth: OracleAnswer,
         return STATUS_REFUSED, (answer_record.get("error") or "no answer given")
 
     answer = answer_record["answer"]
+    if not isinstance(answer, dict):
+        # An LLM-emitted answers file can carry anything here. This used to
+        # reach `.get` on a string or a list and die with AttributeError, on
+        # the acceptance path, with a traceback and exit 1.
+        return STATUS_WRONG, f"answer is a {type(answer).__name__}, not an object"
     kind = answer.get("kind")
 
-    cited = [s for s in answer.get("sources", []) if isinstance(s, str)]
+    # `_seq` and not `answer.get("sources", [])`: the default applies only when
+    # the key is ABSENT. `"sources": null` is a realistic LLM-emitted shape, and
+    # it returned None, which `set()` and iteration both refuse with TypeError.
+    def _seq(key: str) -> list:
+        value = answer.get(key)
+        return value if isinstance(value, list) else []
+
+    cited = [s for s in _seq("sources") if isinstance(s, str)]
     invented = [s for s in cited if s not in existing]
     if kind == "paths":
-        invented += [p for p in answer.get("paths", []) if p not in existing]
+        invented += [p for p in _seq("paths") if p not in existing]
 
     if kind == "count" and truth.kind == "count":
         correct = answer.get("value") == truth.value
@@ -661,9 +703,9 @@ def grade_one(answer_record: dict, truth: OracleAnswer,
         # question; graded on the half it answered.
         correct = answer.get("value") == len(truth.paths)
     elif kind == "paths" and truth.kind == "paths":
-        correct = set(answer.get("paths", [])) == set(truth.paths)
+        correct = set(_seq("paths")) == set(truth.paths)
     elif kind == "pairs" and truth.kind == "pairs":
-        correct = ({tuple(p) for p in answer.get("pairs", [])}
+        correct = ({tuple(p) for p in _seq("pairs") if isinstance(p, (list, tuple))}
                    == {tuple(p) for p in (truth.value or [])})
     else:
         return STATUS_WRONG, f"answer kind {kind!r} does not answer a {truth.kind!r} question"
@@ -686,9 +728,32 @@ def score_answers(answers_path: str, today: date | None = None) -> dict:
     root = get_workspace_root()
     corpus = CorpusPaths.from_workspace()
     payload = json.loads(Path(answers_path).read_text(encoding="utf-8"))
-    answers = {a.get("question_id"): a for a in payload.get("answers", [])}
+    # ValueError, so `main` reports it and returns the documented exit 2. Only
+    # the per-answer records were hardened when `--score` moved inside that try
+    # (`"sources": null`, a non-dict `answer`); the two levels ABOVE them were
+    # left as they were, and `json.loads` accepts any JSON value. A file that is
+    # a bare list, or an `answers` object instead of a list, or one bad record
+    # among good ones, reached `.get` on a non-mapping and died with an
+    # AttributeError traceback and exit 1 — which the docstring assigns to a
+    # real benchmark verdict, so a harness reading exit codes scores the crash
+    # as a result. This is the acceptance gate; it refuses, it does not guess.
+    if not isinstance(payload, dict):
+        raise ValueError(f"файл ответов должен быть объектом, "
+                         f"получено {type(payload).__name__}")
+    records = payload.get("answers", [])
+    if not isinstance(records, list):
+        raise ValueError(f"поле answers должно быть списком, "
+                         f"получено {type(records).__name__}")
+    malformed = [i for i, a in enumerate(records) if not isinstance(a, dict)]
+    if malformed:
+        raise ValueError(f"записи ответов должны быть объектами; не объекты "
+                         f"на позициях {malformed}")
+    answers = {a.get("question_id"): a for a in records}
 
     stated = payload.get("run_state") or {}
+    if not isinstance(stated, dict):
+        raise ValueError(f"поле run_state должно быть объектом, "
+                         f"получено {type(stated).__name__}")
     graded_today = today or _today_from(stated)
     question_list = load_questions(root)
     truth = load_truth(question_list, corpus, graded_today)
@@ -888,7 +953,7 @@ def best_ceiling_at(root: Path, question: dict, expected: set[str],
 
 
 def mode_operating_point(questions: list[dict], corpus: CorpusPaths,
-                         root: Path, today: date) -> int:
+                         root: Path, today: date, write: bool = True) -> int:
     """Obligation 2: what the ceiling is where /recall actually runs.
 
     The baseline reported the control group 5 of 5 at 1.00 and concluded the
@@ -911,8 +976,8 @@ def mode_operating_point(questions: list[dict], corpus: CorpusPaths,
                                             QUERY_DEPTH, QUERY_THRESHOLD)
             op, op_pool = best_ceiling_at(root, question, expected,
                                           OPERATING_TOP_K, OPERATING_THRESHOLD)
-        except (RuntimeError, OSError, json.JSONDecodeError) as exc:
-            print(f"{RED}{qid}: запрос не выполнен: {exc}{RESET}", file=sys.stderr)
+        except QUERY_FAILURES as exc:
+            print(f"{RED}{qid}: запрос не выполнен: {exc!r}{RESET}", file=sys.stderr)
             return 3
         rows.append({"id": qid, "group": question["group"],
                      "question_class": question.get("question_class", ""),
@@ -938,6 +1003,10 @@ def mode_operating_point(questions: list[dict], corpus: CorpusPaths,
     out_dir = get_outputs_dir() / "operations" / "census-bench"
     stem = (f"{datetime.now(tz=get_default_tz()).date().isoformat()}"
             "_operating-point_census")
+    # `--no-write` reached only `--baseline`; this mode wrote its report anyway.
+    if not write:
+        print(f"{GRAY}--no-write: отчёт не записан{RESET}")
+        return 0
     atomic_write_text(out_dir / f"{stem}.json", json.dumps({
         "schema_version": 1, "mode": "operating-point",
         "generated": datetime.now(tz=get_default_tz()).isoformat(),
@@ -967,7 +1036,7 @@ def _crosscheck_shown_path() -> Path:
 
 def mode_recall_crosscheck(questions: list[dict], corpus: CorpusPaths,
                            root: Path, today: date,
-                           answers_path: str | None) -> int:
+                           answers_path: str | None, write: bool = True) -> int:
     """Obligation 1: does the ceiling predict what the MODEL-composed path does?
 
     Step 1 claimed to have checked this and had not. It queried the raw index at
@@ -999,7 +1068,20 @@ def mode_recall_crosscheck(questions: list[dict], corpus: CorpusPaths,
         for qid in CROSSCHECK_QUESTIONS:
             question = by_id[qid]
             text = question.get("question_ru") or question.get("question_en")
-            hits = query_at(root, text, OPERATING_TOP_K, OPERATING_THRESHOLD)
+            if not text:
+                # `measure_question` already refuses this; here `None` went
+                # straight into a subprocess argv and raised TypeError.
+                raise ValueError(f"{qid}: no question text in any language")
+            # Guarded like the other two query sites. This one had no try at
+            # all, so a non-zero exit from `memory-index.py` (RuntimeError) or
+            # a 300-second timeout produced a traceback instead of the exit 3
+            # the docstring documents for "the retrieval layer could not be
+            # called".
+            try:
+                hits = query_at(root, text, OPERATING_TOP_K, OPERATING_THRESHOLD)
+            except QUERY_FAILURES as exc:
+                print(f"{RED}{qid}: запрос не выполнен: {exc!r}{RESET}", file=sys.stderr)
+                return 3
             shown[qid] = [{"path": h.get("path"), "score": h.get("score", 0)}
                           for h in hits]
             print(f"\n{BOLD}{qid}{RESET} ({question['group']}, "
@@ -1055,7 +1137,29 @@ def mode_recall_crosscheck(questions: list[dict], corpus: CorpusPaths,
         print(f"{YELLOW}Корпус изменился между проходами ({', '.join(diverged)}). "
               f"Оценка идёт по показанной выдаче, отчёт помечен.{RESET}")
 
+    # Validated like `mode_score` does. A typo'd path used to raise
+    # FileNotFoundError -- an OSError, which main() did not catch -- and exit 1
+    # on a traceback.
+    if not Path(answers_path).is_file():
+        print(f"{RED}файл ответов не найден: {answers_path}{RESET}", file=sys.stderr)
+        return 2
     given = json.loads(Path(answers_path).read_text(encoding="utf-8"))
+    if not isinstance(given, dict):
+        print(f"{RED}файл ответов должен быть объектом "
+              f"{{qid: ответ}}, получено {type(given).__name__}{RESET}", file=sys.stderr)
+        return 2
+    # The per-question values, checked like the top level above them. This mode
+    # is the interactive one: the operator writes this file by hand, hours after
+    # the print pass, so `{"agg-03": "see notes.txt"}` is the EXPECTED mistake,
+    # not an exotic one. Every other input error here exits 2 with a message;
+    # this one fell through `answer.get("refused")` as an AttributeError nothing
+    # in the call chain catches, so it exited 1 with a traceback and no report.
+    wrong_shape = sorted(qid for qid in CROSSCHECK_QUESTIONS
+                         if qid in given and not isinstance(given[qid], dict))
+    if wrong_shape:
+        print(f"{RED}ответы должны быть объектами; не объекты для: "
+              f"{', '.join(wrong_shape)}{RESET}", file=sys.stderr)
+        return 2
     rows = []
     for qid in CROSSCHECK_QUESTIONS:
         expected = truth[qid]
@@ -1107,6 +1211,11 @@ def mode_recall_crosscheck(questions: list[dict], corpus: CorpusPaths,
     out_dir = get_outputs_dir() / "operations" / "census-bench"
     stem = (f"{datetime.now(tz=get_default_tz()).date().isoformat()}"
             "_recall-crosscheck_census")
+    # Only the REPORT is suppressed. The `shown_path` write above is state the
+    # grading pass reads back, not a report, so `--no-write` must not skip it.
+    if not write:
+        print(f"{GRAY}--no-write: отчёт не записан{RESET}")
+        return 1 if contradicted else 0
     atomic_write_text(out_dir / f"{stem}.json", json.dumps({
         "schema_version": 1, "mode": "recall-crosscheck",
         "generated": datetime.now(tz=get_default_tz()).isoformat(),
@@ -1123,13 +1232,18 @@ def mode_recall_crosscheck(questions: list[dict], corpus: CorpusPaths,
     return 1 if contradicted else 0
 
 
-def mode_score(path: str) -> int:
-    """Grade /census answers against the oracles and print the verdict."""
+def mode_score(path: str, today: date | None = None, write: bool = True) -> int:
+    """Grade /census answers against the oracles and print the verdict.
+
+    `today` is threaded through because the oracles are date-sensitive. It used
+    not to be: `--score answers.json --today 2026-08-01` graded against a
+    different date, silently, on an acceptance gate.
+    """
     if not Path(path).is_file():
         print(f"{RED}answers file not found: {path}{RESET}", file=sys.stderr)
         return 2
 
-    report = score_answers(path)
+    report = score_answers(path, today)
 
     print(f"{BOLD}{'id':<8} {'класс':<13} {'статус':<18} причина{RESET}")
     for row in report["questions"]:
@@ -1155,10 +1269,24 @@ def mode_score(path: str) -> int:
 
     if report["latency_median_s"] is not None:
         base = report["baseline_latency_median_s"]
+        # An explicit key and an explicit None test. This was
+        # `base.get("median_s") or base.get("median")`: `or` treats 0.0 as
+        # absent, and `build_report` writes `median`, never `median_s`, so the
+        # first half of that expression could only ever be dead weight holding
+        # the trap open. Worse, the comparison then vanished with no note —
+        # in a file whose stated principle is that a dropped measurement is
+        # named, never silent. `median` is legitimately None when the baseline
+        # run measured no latencies, which is the common way this happens.
         if isinstance(base, dict):
-            base = base.get("median_s") or base.get("median")
-        print(f"\n  медиана времени ответа {report['latency_median_s']:.2f} с"
-              f"{'' if not isinstance(base, (int, float)) else f' против {base:.2f} с базовой линии'}")
+            base = base.get("median")
+        if isinstance(base, (int, float)):
+            against = f" против {base:.2f} с базовой линии"
+        elif base is None:
+            against = f" {GRAY}(базовой линии для сравнения нет){RESET}"
+        else:
+            against = f" {GRAY}(базовая линия непригодна: {base!r}){RESET}"
+        print(f"\n  медиана времени ответа "
+              f"{report['latency_median_s']:.2f} с{against}")
 
     verdict_name = report["verdict"]
     colour = {VERDICT_ACCEPTED: GREEN, VERDICT_REJECTED: RED}.get(verdict_name, YELLOW)
@@ -1168,9 +1296,12 @@ def mode_score(path: str) -> int:
     out_dir = get_outputs_dir() / "operations" / "census-bench"
     stem = (f"{datetime.now(tz=get_default_tz()).date().isoformat()}"
         "_acceptance_census-primitive")
-    atomic_write_text(out_dir / f"{stem}.json",
-                      json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-    print(f"\n{GREEN}Отчёт:{RESET} {out_dir / (stem + '.json')}")
+    # `--no-write` reached only `--baseline`; every other mode wrote its report
+    # regardless of the flag that says not to.
+    if write:
+        atomic_write_text(out_dir / f"{stem}.json",
+                          json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+        print(f"\n{GREEN}Отчёт:{RESET} {out_dir / (stem + '.json')}")
 
     return 0 if verdict_name == VERDICT_ACCEPTED else 1
 
@@ -1198,8 +1329,22 @@ def main() -> int:
     parser.add_argument("--no-write", action="store_true", help="do not write the report files")
     args = parser.parse_args()
 
+    # `--crosscheck-answers` only means something with `--recall-crosscheck`.
+    # It parsed happily beside `--baseline` and was then never read: operator
+    # input accepted and silently discarded.
+    if args.crosscheck_answers and not args.recall_crosscheck:
+        print(f"{RED}--crosscheck-answers only applies with --recall-crosscheck{RESET}",
+              file=sys.stderr)
+        return 2
+
     root = get_workspace_root()
-    today = date.fromisoformat(args.today) if args.today else datetime.now(get_default_tz()).date()
+    # Parsed inside the guard: a malformed --today used to raise ValueError here,
+    # OUTSIDE any try, and exit 1 on a traceback instead of the documented 2.
+    try:
+        today = date.fromisoformat(args.today) if args.today else datetime.now(get_default_tz()).date()
+    except ValueError as exc:
+        print(f"{RED}--today is not an ISO date:{RESET} {exc}", file=sys.stderr)
+        return 2
     corpus = CorpusPaths.from_workspace()
 
     try:
@@ -1208,24 +1353,41 @@ def main() -> int:
         print(f"{RED}Набор вопросов не читается:{RESET} {exc}", file=sys.stderr)
         return 2
 
-    if args.score:
-        return mode_score(args.score)
-
+    # INSIDE the try, and carrying `today` and `write`. `--score` used to run
+    # above it, so a malformed answers file, a corrupt baseline report, or an
+    # answer record with `"sources": null` each produced a traceback and exit 1
+    # rather than the documented exit 2 — on the acceptance path this file
+    # exists to protect. It also never received `--today`, so pinning the
+    # oracle date changed nothing and the grade was computed against a
+    # different day with no warning.
     try:
+        if args.score:
+            return mode_score(args.score, today, write=not args.no_write)
         if args.show_truth:
             return mode_show_truth(questions, corpus, today)
         if args.operating_point:
-            return mode_operating_point(questions, corpus, root, today)
+            return mode_operating_point(questions, corpus, root, today,
+                                        write=not args.no_write)
         if args.recall_crosscheck:
             return mode_recall_crosscheck(questions, corpus, root, today,
-                                          args.crosscheck_answers)
+                                          args.crosscheck_answers,
+                                          write=not args.no_write)
         return mode_baseline(questions, corpus, root, today, write=not args.no_write)
     except ValueError as exc:
         print(f"{RED}Прибор отказал:{RESET} {exc}", file=sys.stderr)
         return 2
     except KeyError as exc:
-        print(f"{RED}Вопрос ссылается на неизвестный оракул:{RESET} {exc}", file=sys.stderr)
+        print(f"{RED}Не найден ключ:{RESET} {exc}", file=sys.stderr)
         return 2
+    except json.JSONDecodeError as exc:
+        print(f"{RED}Файл не читается как JSON:{RESET} {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(f"{RED}Файл недоступен:{RESET} {exc}", file=sys.stderr)
+        return 2
+    except subprocess.SubprocessError as exc:
+        print(f"{RED}Слой поиска не удалось вызвать:{RESET} {exc!r}", file=sys.stderr)
+        return 3
 
 
 if __name__ == "__main__":

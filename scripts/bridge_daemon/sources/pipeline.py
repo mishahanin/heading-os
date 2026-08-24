@@ -8,14 +8,13 @@ The CEO uses this for sales pipeline visibility. Phase 1.28 was read-only;
 Phase 1.55 adds per-deal touch tracking so the CEO can suppress
 stalled-signal noise without editing pipeline.md by hand.
 """
-import json
 import re
 import threading
 from datetime import date, datetime, timezone
 from scripts.utils.workspace import get_default_tz
 from pathlib import Path
 
-from scripts.bridge_daemon._atomic import atomic_write_text
+from scripts.bridge_daemon._jsonl import append_jsonl, read_jsonl_capped
 
 # Stage progression: higher index = closer to closed-won.
 # We sort by -stage_rank so Won appears first, Lead last.
@@ -37,7 +36,15 @@ _TOUCH_LOG_LOCK = threading.Lock()
 _ROW_RE = re.compile(
     r"^\|\s*(?P<company>[^|]+?)\s*\|\s*(?P<country>[^|]*?)\s*\|\s*(?P<stage>[^|]*?)\s*\|\s*"
     r"(?P<value>[^|]*?)\s*\|\s*(?P<stage_date>[^|]*?)\s*\|\s*(?P<owner>[^|]*?)\s*\|\s*"
-    r"(?P<next_action>[^|]+?)\s*\|\s*(?P<due_date>[^|]*?)\s*\|"
+    # `[^|]*?` on next_action. A deal row with a ZERO-WIDTH Next Action cell
+    # (`||`) used to fail the whole match and disappear from /pipeline, from
+    # the counts and from total_value_usd, silently. No next action is exactly
+    # the state a deal is in when the operator most needs to see it.
+    #
+    # Measured 2026-08-24, narrower than the audit reported: `[^|]+?` needed
+    # one character and a SPACE is one, so `|  |` always matched. Only the
+    # zero-width cell was lost.
+    r"(?P<next_action>[^|]*?)\s*\|\s*(?P<due_date>[^|]*?)\s*\|"
 )
 
 _VALUE_USD_RE = re.compile(r"\$([\d,]+)")
@@ -94,31 +101,18 @@ def _company_key(company: str) -> str:
 
 
 def read_touch_log(workspace_root: Path) -> dict:
-    """Read _touch-log.jsonl. Returns {company_key: {date, ts, note}}.
+    """Read _touch-log.jsonl. Returns {company_key: {date, ts, note, company}}.
+
+    `company` is the display name; this line listed only three of the four keys
+    until 2026-08-24, and the display name is the one a caller reaches for.
 
     Last entry per company key wins (so re-marking overwrites the prior ts).
     Corrupt lines are skipped silently.
     """
     log_path = workspace_root / TOUCH_LOG_FILE
-    if not log_path.exists():
-        return {}
-    try:
-        if log_path.stat().st_size > TOUCH_LOG_MAX_BYTES:
-            return {}
-        text = log_path.read_text(encoding="utf-8")
-    except OSError:
-        return {}
+    entries, _truncated = read_jsonl_capped(log_path, TOUCH_LOG_MAX_BYTES)
     out: dict[str, dict] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(entry, dict):
-            continue
+    for entry in entries:
         key = entry.get("company_key")
         if not isinstance(key, str) or not key:
             continue
@@ -156,21 +150,26 @@ def mark_touched(workspace_root: Path, company: str, note: str = "") -> dict:
     }
     log_path = workspace_root / TOUCH_LOG_FILE
     with _TOUCH_LOG_LOCK:
-        existing = ""
-        if log_path.exists():
-            try:
-                existing = log_path.read_text(encoding="utf-8")
-            except OSError:
-                existing = ""
-        new_content = existing
-        if existing and not existing.endswith("\n"):
-            new_content += "\n"
-        new_content += json.dumps(entry) + "\n"
         try:
-            atomic_write_text(log_path, new_content, mode=0o644)
+            append_jsonl(log_path, entry)
         except OSError as e:
             return {"ok": False, "error": f"write failed: {e}"}
     return {"ok": True, "date": entry["date"], "ts": entry["ts"], "company_key": key}
+
+
+def _empty_pipeline() -> dict:
+    """The zero payload, in the SAME SHAPE the parsed one returns.
+
+    Both early exits used to spell the dict out, and both omitted
+    ``touched_total`` -- so the one key added after they were written was
+    missing exactly when pipeline.md is absent or unreadable. One writer, so
+    the next key added cannot go missing from the degraded path only.
+    """
+    return {
+        "deals": [], "counts": {}, "overdue_count": 0,
+        "total_value_usd": 0, "tbd_count": 0, "touched_total": 0,
+        "data_time": None,
+    }
 
 
 def list_pipeline(workspace_root: Path, today: date | None = None) -> dict:
@@ -197,29 +196,30 @@ def list_pipeline(workspace_root: Path, today: date | None = None) -> dict:
             "overdue_count": int,
             "total_value_usd": int (sum of priced deals),
             "tbd_count": int,
+            "touched_total": int (deals touched inside the touch-log window),
             "data_time": ISO mtime of pipeline.md or None,
         }
     """
     pipeline_path = workspace_root / PIPELINE_FILE
     if not pipeline_path.exists():
-        return {
-            "deals": [], "counts": {}, "overdue_count": 0,
-            "total_value_usd": 0, "tbd_count": 0, "data_time": None,
-        }
+        return _empty_pipeline()
     try:
         text = pipeline_path.read_text(encoding="utf-8")
         mtime = pipeline_path.stat().st_mtime
     except OSError:
-        return {
-            "deals": [], "counts": {}, "overdue_count": 0,
-            "total_value_usd": 0, "tbd_count": 0, "data_time": None,
-        }
+        return _empty_pipeline()
 
     # Find the '## Active Deals' section and walk lines until the next ## heading.
     in_active = False
     deals = []
     for line in text.splitlines():
         stripped = line.strip()
+        # An H1 ends the section too. It used to end only at an H2, so a later
+        # `# Archive` heading carrying an 8-column table had its rows ingested
+        # as live deals.
+        if stripped.startswith("# "):
+            in_active = False
+            continue
         if stripped.startswith("## "):
             in_active = stripped.startswith("## Active Deals")
             continue

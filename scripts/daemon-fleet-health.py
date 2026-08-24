@@ -138,8 +138,16 @@ def _read_corporate_config_version(workspace_root: Path) -> str | None:
     cfg_path = workspace_root / "corporate" / "daemon" / "config.yaml"
     if not cfg_path.is_file():
         return None
+    # The import is INSIDE its own try. With it in the same block as the read,
+    # an ImportError from a missing PyYAML sent Python to evaluate the
+    # `except (OSError, yaml.YAMLError)` tuple with `yaml` still unbound — a
+    # NameError, from a function whose docstring promises None when the file is
+    # missing or unparseable.
     try:
         import yaml
+    except ImportError:
+        return None
+    try:
         data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
         return None
@@ -167,12 +175,17 @@ def _classify(
     last_hb = record.get("last_heartbeat")
     if not last_hb:
         return "error"
+    # TypeError too. A heartbeat file can hold VALID JSON with a non-string
+    # timestamp — `{"last_heartbeat": 123}` — and `fromisoformat` raises
+    # TypeError on that, not ValueError. One malformed beat then took down the
+    # whole grid, the JSON output and the exit code with a traceback, instead
+    # of classifying that one workspace as `error`.
     try:
         dt = datetime.fromisoformat(last_hb)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         age = (datetime.now(timezone.utc) - dt).total_seconds()
-    except ValueError:
+    except (TypeError, ValueError):
         return "error"
     if age > stale_threshold_s:
         return "stale"
@@ -205,12 +218,17 @@ def _classify_beat(record: dict, stale_threshold_s: int) -> str:
     last_hb = record.get("last_heartbeat")
     if not last_hb:
         return "error"
+    # TypeError too. A heartbeat file can hold VALID JSON with a non-string
+    # timestamp — `{"last_heartbeat": 123}` — and `fromisoformat` raises
+    # TypeError on that, not ValueError. One malformed beat then took down the
+    # whole grid, the JSON output and the exit code with a traceback, instead
+    # of classifying that one workspace as `error`.
     try:
         dt = datetime.fromisoformat(last_hb)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         age = (datetime.now(timezone.utc) - dt).total_seconds()
-    except ValueError:
+    except (TypeError, ValueError):
         return "error"
     return "stale" if age > stale_threshold_s else "ok"
 

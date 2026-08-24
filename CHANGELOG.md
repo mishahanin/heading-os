@@ -857,7 +857,7 @@ by measuring something that had only ever reported success.
   adds ([docs/PLUGINS.md](docs/PLUGINS.md)).
 
   Auto mode and the proactive threshold offer were contributed by
-  [Mahmoud Maatuq](https://github.com/mmaatuq), who packaged this system as a
+  [Mahmoud Maatuq](https://github.com/mmaatuq), who packaged this system as a <!-- content-guard: ok published contributor credit, kept by operator decision 2026-08-24; the only real person named in the engine -->
   plugin independently and found the concurrent-session collision fixed below.
 
 - **Auto mode is now a per-session switch, offered from the prompt itself.**

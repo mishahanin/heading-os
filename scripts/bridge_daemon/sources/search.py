@@ -51,7 +51,7 @@ def search(data_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LIMIT,
            workspace_root: Path | None = None) -> dict:
     """Run a unified search against all known sources.
 
-    TWO ROOTS, because the sources do not share one. Seven of the eight read
+    TWO ROOTS, because the sources do not share one. Eight of the nine read
     the DATA overlay; `list_capabilities` reads `.claude/skills`, which is
     ENGINE. Until 2026-08-23 this took a single root, `app.py` passed
     `data_root`, and the capability results came from
@@ -66,7 +66,7 @@ def search(data_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LIMIT,
     Returns:
         {
             "query": str,
-            "categories": {
+            "categories": {          # a key appears ONLY when it has hits
                 "inbox": [...],
                 "tribe": [...],
                 "tasks": [...],
@@ -74,6 +74,8 @@ def search(data_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LIMIT,
                 "studio": [...],
                 "day": [...],
                 "capabilities": [...],
+                "pipeline": [...],
+                "investors": [...],
             },
             "total": int (sum of hits across categories),
             "data_time": ISO 8601 UTC of when the search ran,
@@ -98,7 +100,7 @@ def search(data_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LIMIT,
     # dir, etc.), the others should still return results. "5 of 7
     # categories returned" beats "search broken because of an Inbox bug."
     try:
-        inbox = read_inbox(data_root, data_root=data_root)
+        inbox = read_inbox(data_root)
         # Phase 1.32: inbox is banded - flatten every band into one list.
         rows = [r for band in inbox["bands"].values() for r in band]
         hits = [r for r in rows if _match(query, r.get("subject"))]
@@ -113,7 +115,7 @@ def search(data_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LIMIT,
 
     # --- Tribe ---
     try:
-        tribe = list_tribe(data_root, data_root=data_root)
+        tribe = list_tribe(data_root)
         hits = [m for m in tribe["members"] if _match(query, m.get("name"), m.get("role"), m.get("slug"))]
         if hits:
             categories["tribe"] = [
@@ -125,7 +127,7 @@ def search(data_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LIMIT,
 
     # --- Tasks ---
     try:
-        tasks = list_active_tasks(data_root, data_root=data_root)
+        tasks = list_active_tasks(data_root)
         hits = [t for t in tasks["tasks"] if _match(query, t.get("description"), t.get("kind"), t.get("source"))]
         if hits:
             categories["tasks"] = [
@@ -137,7 +139,7 @@ def search(data_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LIMIT,
 
     # --- Library ---
     try:
-        library = list_library(data_root, data_root=data_root)
+        library = list_library(data_root)
         hits = []
         for n in library["notes"]:
             kw_str = " ".join(n.get("keywords") or [])
@@ -153,7 +155,7 @@ def search(data_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LIMIT,
 
     # --- Studio ---
     try:
-        studio = recent_inflight_items(data_root, data_root=data_root)
+        studio = recent_inflight_items(data_root)
         hits = [it for it in studio["items"] if _match(query, it.get("name"), it.get("path"), it.get("category"))]
         if hits:
             categories["studio"] = [
@@ -165,7 +167,7 @@ def search(data_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LIMIT,
 
     # --- Day (today's agenda) ---
     try:
-        day = today_agenda(data_root, data_root=data_root)
+        day = today_agenda(data_root)
         hits = [e for e in day["events"] if _match(query, e.get("subject"), e.get("location"))]
         if hits:
             categories["day"] = [

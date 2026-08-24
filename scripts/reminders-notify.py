@@ -52,13 +52,19 @@ def _format(rec: dict) -> str:
     return "\n".join(lines)
 
 
-def send_due(today: date, send_fn) -> list[str]:
+def send_due(today: date, send_fn, due=None) -> list[str]:
     """Send every due reminder via send_fn(message)->bool. Mark fired on success.
 
     Returns the ids successfully sent. Pure of Telegram: send_fn is injected.
+
+    `due` is the record list main() already read. It used to be re-read here, so
+    the store was parsed twice per tick, the count main() logged could disagree
+    with the set actually attempted, and a store that went corrupt between the
+    two reads raised out of this function instead of exiting 1 through main()'s
+    handler. `None` keeps the old self-reading behaviour for direct callers.
     """
     sent: list[str] = []
-    for rec in rs.due_records(today):
+    for rec in (rs.due_records(today) if due is None else due):
         try:
             ok = send_fn(_format(rec))
         except Exception as exc:  # noqa: BLE001 - one bad send must not drop the rest
@@ -76,6 +82,19 @@ def _telegram_sender():
         or os.environ.get("ODIN_CADENCE_TELEGRAM_TARGET")
         or DEFAULT_RECIPIENT
     )
+
+    if not recipient:
+        # The module docstring promises "unconfigured (no send)". Calling notify
+        # with "" instead produced a failed send per due reminder per tick,
+        # forever, and left every reminder unmarked -- so an unconfigured box
+        # looked exactly like a broken Telegram.
+        _log("no REMINDERS_TELEGRAM_TARGET / ODIN_CADENCE_TELEGRAM_TARGET "
+             "configured; not sending. /prime will backstop.")
+
+        def _no_target(_message: str) -> bool:
+            return False
+
+        return _no_target
 
     def _send(message: str) -> bool:
         if not telegram_notify.notify(recipient, message):
@@ -99,7 +118,7 @@ def main() -> int:
     if not due:
         _log("nothing due")
         return 0
-    sent = send_due(today, _telegram_sender())
+    sent = send_due(today, _telegram_sender(), due)
     _log(f"sent {len(sent)}/{len(due)} due reminder(s)")
     return 0
 

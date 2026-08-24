@@ -12,13 +12,17 @@ The heartbeat carries:
 - config_loaded_version: version of the merged config currently in
   memory (lets the fleet-health script flag execs running stale
   config after a `/push-updates`)
-- uptime_s: seconds since the daemon booted
+- uptime_s: seconds since this MODULE was imported (`_BOOT_TS = time.time()`
+  runs at import), which is a close proxy for daemon boot and not the same
+  thing -- a reader diagnosing a restart loop should know which it is
 - last_heartbeat: ISO-8601 UTC of this write (used by the reader to
   detect a stale daemon - file mtime works too, but the embedded
   timestamp is canonical)
 - last_error: last logged exception or None (best-effort)
-- recent_error_count: errors logged in the last hour (best-effort,
-  currently always 0; Phase 3 wires a logging filter to update it)
+- recent_error_count: errors logged in the last hour, read live from
+  `error_tracker` (the logging filter that Phase 3 was going to add has
+  shipped; this line claimed "currently always 0" long after the payload
+  started calling `tracker.recent_count()`)
 - active_sessions: count of Claude Code sessions currently
   registered by bridge-hook.py session-start
 
@@ -66,7 +70,16 @@ def write_heartbeat(workspace_root: Path, config_version: str | None = None) -> 
     so the scheduler keeps running and only the one heartbeat is lost.
     """
     path = workspace_root / ".daemon-state" / HEARTBEAT_FILE
-    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        # Inside the guard. `mkdir` sat above the try until 2026-08-24, so a
+        # read-only mount or a `.daemon-state` that is a file raised OSError
+        # straight out of a function whose docstring promises the opposite.
+        # Every 60-second tick then logged a full job traceback instead of the
+        # one designed warning line.
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logging.warning("heartbeat directory unavailable: %s", e)
+        return
     now = datetime.now(timezone.utc).isoformat()
     # Phase J: read error tracker for last_error + recent_error_count.
     # The tracker is fed by the logging.Handler installed at boot, so it
@@ -84,7 +97,11 @@ def write_heartbeat(workspace_root: Path, config_version: str | None = None) -> 
         "active_sessions": _active_session_count(workspace_root),
     }
     try:
-        atomic_write_text(path, json.dumps(payload, indent=2) + "\n", mode=0o644)
+        # 0600, matching the token and queue files in the same directory. The
+        # payload embeds `last_error`, which is raw log text and can carry file
+        # paths, conversation ids or mail subjects; 0644 published that to every
+        # account on the box. Aggregators run as the same user.
+        atomic_write_text(path, json.dumps(payload, indent=2) + "\n", mode=0o600)
     except OSError as e:
         logging.warning("heartbeat write failed: %s", e)
 

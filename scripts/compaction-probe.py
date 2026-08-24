@@ -123,7 +123,14 @@ def _archives(project: Path) -> tuple[dict[str, list[dict]], list[str]]:
     """Handoff archives grouped by session slug, read from filenames only."""
     try:
         directory = CP.handoff_dir(project)
-    except Exception as exc:  # noqa: BLE001 - an unresolvable overlay is reported, not fatal
+    except (OSError, ValueError, KeyError) as exc:
+        # Narrowed 2026-08-24. A bare `except Exception` here also converted a
+        # TypeError — a programming error, such as an arity change in
+        # `CP.handoff_dir` — into the benign-looking note below, which then
+        # seeds the violations list and poisons every handoff assertion with no
+        # trace of the real cause. The overlay failing to resolve is a
+        # condition; a signature mismatch is a bug, and the two must not read
+        # the same in the output.
         return {}, [f"handoff archive unresolved: {exc}"]
     if not directory.is_dir():
         return {}, [f"no handoff archive at {directory}"]

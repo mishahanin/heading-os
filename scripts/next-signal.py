@@ -68,7 +68,13 @@ def read_handoff() -> dict | None:
     f = get_outputs_dir() / HANDOFF_LATEST_SUFFIX
     if not f.is_file():
         return None
-    text = f.read_text(encoding="utf-8")
+    try:
+        text = f.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        # The module docstring promises a plain message when outputs/ is
+        # unreadable. Only FileNotFoundError was converted; a permission error
+        # (or, before `errors=`, a non-UTF-8 byte) came out as a traceback.
+        return None
     out = {"source": "", "generated": "", "objective": "", "next_steps": []}
     section = None
     for line in text.splitlines():
@@ -153,9 +159,20 @@ def active_threads(limit: int) -> list[dict]:
     base = get_threads_dir() / "business"
     if not base.is_dir():
         return []
+    # Stat ONCE per file, and tolerate the file going away between the glob and
+    # the stat. There were two unguarded calls here -- also a TOCTOU double-stat
+    # -- so a thread archived mid-run crashed the whole signal, while
+    # `recent_outputs` guards exactly this case a few lines up.
+    stamped = []
+    for p in base.glob("*.md"):
+        try:
+            stamped.append((p.stat().st_mtime, p))
+        except OSError:
+            continue
+    stamped.sort(key=lambda pair: -pair[0])
     items = []
-    for p in sorted(base.glob("*.md"), key=lambda x: -x.stat().st_mtime):
-        items.append({"slug": p.stem, "mtime": _iso(p.stat().st_mtime)})
+    for mtime, p in stamped:
+        items.append({"slug": p.stem, "mtime": _iso(mtime)})
         if len(items) >= limit:
             break
     return items

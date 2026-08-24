@@ -152,8 +152,18 @@ def test_a_vanished_untracked_file_is_dropped_but_a_tracked_one_is_not():
             ghost.unlink(missing_ok=True)
 
         # A TRACKED test file that vanishes is a real finding.
-        victim["path"] = next(iter(sorted(TESTS.rglob("test_*.py"))))
-        assert _tracked(victim["path"].relative_to(ROOT).as_posix())
+        #
+        # Pick the first TRACKED file, not the first file. This used to take
+        # `sorted(...)[0]` and assert it was tracked, which quietly assumed the
+        # alphabetically-first test module is always committed. On 2026-08-24 a
+        # new, not-yet-committed `tests/bridge/test_a_...py` sorted ahead of
+        # everything and failed the assertion -- a green suite turning red on a
+        # file that had nothing to do with this guard. Writing a new test should
+        # never break an unrelated one.
+        victim["path"] = next(
+            p for p in sorted(TESTS.rglob("test_*.py"))
+            if _tracked(p.relative_to(ROOT).as_posix())
+        )
         monkeypatch.setattr(Path, "read_text", _read)
         with pytest.raises(AssertionError, match="tracked by git"):
             test_no_test_module_carries_its_own_copy_of_the_guard()

@@ -272,6 +272,11 @@ def strip_noise(text):
     Blocks that span lines are blanked to their own height rather than deleted -
     see `_blank_out` for what that costs when they are not.
     """
+    # CRLF first, or the frontmatter pattern below (which needs bare \n) misses
+    # on a Windows-authored file and the YAML block gets style-checked as prose:
+    # false findings on `description:` and `name:`, with every later line number
+    # shifted. This repo advertises Windows support and gates docs on this file.
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(
         r"<!--\s*ste-skip-start\s*-->[\s\S]*?<!--\s*ste-skip-end\s*-->",
         _blank_out, text, flags=re.IGNORECASE,

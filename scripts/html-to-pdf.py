@@ -2,7 +2,6 @@
 """Convert an HTML file to PDF using Playwright."""
 import sys
 from pathlib import Path
-from urllib.parse import quote
 
 def main():
     if len(sys.argv) < 2:
@@ -27,8 +26,11 @@ def main():
         print("[HINT] If a transitive dep (e.g. 'greenlet') is missing: pip install <name> -- check requirements.txt")
         sys.exit(1)
 
-    abs_path = str(html_path).replace("\\", "/")
-    file_url = "file:///" + quote(abs_path, safe=":/")
+    # `Path.as_uri()`, not a hand-built string. The old form replaced
+    # backslashes and prefixed `file:///`, so a Windows UNC input
+    # `\\server\share\page.html` became `file://///server/share/page.html` --
+    # an empty host and four spare slashes, which Chromium cannot load.
+    file_url = html_path.resolve().as_uri()
 
     try:
         with sync_playwright() as p:

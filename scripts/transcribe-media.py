@@ -100,14 +100,15 @@ def render_txt(segments: list[dict], timestamps: bool = False) -> str:
 
 def render_srt(segments: list[dict]) -> str:
     """SubRip subtitles, 1-indexed cues."""
+    # Filter FIRST, then number. Numbering before the empty-text skip left gaps
+    # (1, 2, 4, ...) and SRT cues are required to be sequential -- some players
+    # and validators reject or misbehave on a gap.
     blocks = []
-    for index, seg in enumerate(segments, start=1):
-        text = seg["text"].strip()
-        if not text:
-            continue
+    kept = [seg for seg in segments if seg["text"].strip()]
+    for index, seg in enumerate(kept, start=1):
         start = format_timestamp(seg["start"], ",")
         end = format_timestamp(seg["end"], ",")
-        blocks.append(f"{index}\n{start} --> {end}\n{text}\n")
+        blocks.append(f"{index}\n{start} --> {end}\n{seg['text'].strip()}\n")
     return "\n".join(blocks)
 
 
@@ -287,7 +288,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--format", dest="fmt", choices=FORMATS, default="txt", help="output format (default: txt)")
     parser.add_argument("--out", type=Path, default=None, help="write to this path (default: stdout)")
     parser.add_argument("--timestamps", action="store_true", help="prefix each txt line with its start time")
-    parser.add_argument("--word-timestamps", action="store_true", help="include per-word times (json format)")
+    parser.add_argument("--word-timestamps", action="store_true", help="include per-word times; ONLY --format json emits them")
     parser.add_argument("--no-vad", action="store_true", help="disable voice-activity filtering")
     parser.add_argument(
         "--compute-type",
@@ -331,6 +332,16 @@ def main() -> int:
         print(
             f"{CYAN}Model:{RESET} {BOLD}{args.model}{RESET} "
             f"({args.compute_type}, {threads} threads, {mode}){GRAY} - first run downloads it{RESET}",
+            file=sys.stderr,
+        )
+
+    if args.word_timestamps and args.fmt != "json" and not args.quiet:
+        # Word timing is real decode work, and only render_json reads it back.
+        # Paying for it and then dropping it silently was the whole complaint;
+        # this does not refuse the combination, it just stops it being invisible.
+        print(
+            f"{RED}[WARN]{RESET} --word-timestamps costs decode time but only "
+            f"--format json emits the words; --format {args.fmt} discards them.",
             file=sys.stderr,
         )
 

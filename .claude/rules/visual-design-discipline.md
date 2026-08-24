@@ -78,7 +78,7 @@ Tabler's "light/dark parity treated as equal parents, not parent/child" is the s
 
 AI dashboards fail at hierarchy because RLHF rewards "balanced." Every metric card identical width, every chart identical height, every padding token the same. Real operator dashboards have **heterogeneous card weight**. The money metric occupies 60% or more of viewport above-fold. Everything else is supporting context. Datadog's density is legitimate because SRE specialists are trained on the chunks; Salesforce's density is illegitimate because every tile gets equal weight regardless of operator priority.
 
-**Slide-level: the money slide.** One chart or number anchors the argument, gets full bleed, no decoration. Every other slide is supporting context. Stripe's keynote register does this aggressively: three data points centered on a slide, the speaker carries the rest, one Patrick Collison opener with no title at all because the audience already knows what they came to hear.
+**Slide-level: the money slide.** One chart or number anchors the argument, gets full bleed, no decoration. Every other slide is supporting context. Stripe's keynote register does this aggressively: three data points centered on a slide, the speaker carries the rest, one Patrick Collison opener with no title at all because the audience already knows what they came to hear. <!-- content-guard: ok public figure cited as a design reference, not a workspace contact -->
 
 **Parametric rule (auditable):**
 

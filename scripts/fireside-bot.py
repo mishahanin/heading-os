@@ -45,6 +45,7 @@ if sys.platform == "win32":
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 import argparse
+import contextlib
 import json
 import os
 import socket
@@ -61,7 +62,14 @@ import urllib3.util.connection as _urllib3_connection
 # picks the IPv6 result first and stalls 30s before falling back to IPv4. On
 # 2026-05-25 every webhook handler was taking 30s+ per sendMessage because of
 # this. Forcing AF_INET via urllib3's allowed_gai_family hook cuts the call
-# from 30.09s to 0.07s (measured on the VM). No-op on hosts where IPv6 works.
+# from 30.09s to 0.07s (measured on the VM).
+#
+# NOT a no-op on a host where IPv6 works, which this comment used to claim. The
+# hook is PROCESS-GLOBAL urllib3 state: every urllib3 user in the interpreter,
+# including any future `requests` caller that has nothing to do with Telegram,
+# resolves IPv4-only from here on. That is a real constraint accepted for a
+# 400x latency win on the one host this bot runs on, not an absence of one.
+# Anything that needs IPv6 in this process has to undo it explicitly.
 _urllib3_connection.allowed_gai_family = lambda: socket.AF_INET
 
 from scripts.utils.colors import GREEN, YELLOW, RED, GRAY, CYAN, BOLD, RESET
@@ -118,9 +126,36 @@ VP_TITLE_FRAGMENTS = (
 _FIRESIDE_SCHEDULE_FILE = resolve_config_with_example(
     "fireside-schedule.json", WORKSPACE_ROOT / "scripts" / "fireside-schedule.example.json"
 )
-_fireside_schedule = json.loads(_FIRESIDE_SCHEDULE_FILE.read_text(encoding="utf-8"))
-CYCLE_1_START_MONDAY = datetime.fromisoformat(_fireside_schedule["cycle_1_start_monday"]).date()
-WEEK_1_TO_9_SCHEDULE = _fireside_schedule["weeks"]
+# Guarded, and non-fatal. This parse runs at IMPORT, so a missing or malformed
+# `fireside-schedule.json` used to kill every invocation of the file before
+# argparse ran -- `--help` included, and every subcommand that never touches the
+# cycle config. An operator whose config was broken got a traceback instead of
+# the usage text that would have told them which file to fix. The constants fall
+# back to empty and the commands that need them fail with a sentence.
+try:
+    _fireside_schedule = json.loads(_FIRESIDE_SCHEDULE_FILE.read_text(encoding="utf-8"))
+    CYCLE_1_START_MONDAY = datetime.fromisoformat(
+        _fireside_schedule["cycle_1_start_monday"]).date()
+    WEEK_1_TO_9_SCHEDULE = _fireside_schedule["weeks"]
+    _FIRESIDE_CONFIG_ERROR = None
+except (OSError, ValueError, KeyError, TypeError) as _exc:
+    _fireside_schedule = {}
+    CYCLE_1_START_MONDAY = None
+    WEEK_1_TO_9_SCHEDULE = []
+    _FIRESIDE_CONFIG_ERROR = f"{_FIRESIDE_SCHEDULE_FILE}: {type(_exc).__name__}: {_exc}"
+
+
+def require_fireside_config() -> None:
+    """Refuse a command that needs the cycle config when it did not load.
+
+    Called by the subcommands that read `CYCLE_1_START_MONDAY` or
+    `WEEK_1_TO_9_SCHEDULE`. Everything else -- `--help`, `health-check`,
+    `xlsx-check` -- runs without it, which is the point of not raising at import.
+    """
+    if _FIRESIDE_CONFIG_ERROR:
+        raise SystemExit(
+            f"fireside schedule config could not be read: {_FIRESIDE_CONFIG_ERROR}"
+        )
 
 
 def _load_fireside_config_fresh() -> tuple:
@@ -267,6 +302,86 @@ def append_jsonl(filename: str, event: dict) -> None:
         f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
+@contextlib.contextmanager
+def locked_state(filename: str, default):
+    """Read-modify-write ONE fireside state file under a cross-process lock.
+
+    Yields the loaded value; whatever the block leaves in it is saved when the
+    block exits without raising. On an exception nothing is written.
+
+    `save_state` makes each WRITE atomic, which is a different guarantee from
+    making a read and its following write atomic. Cron subcommands and update
+    handlers both load-modify-save `schedule.json` and `helmsmen.json`, and
+    overlapping runs simply lost the earlier change: `helmsman set` writes a
+    record while `helmsman-brief` rewrites the dict it loaded before that, and
+    two swap callbacks can both pass their status checks before either terminal
+    event is on disk.
+
+    NOT the shared `checkpoint_paths.locked_state`: that one reads through
+    `read_json` and hands back a dict, and the fireside schedule is a LIST.
+    Same lock primitive underneath, different state shape on top.
+
+    Bounded, never blocking, exactly like the primitive it wraps: on expiry the
+    block runs UNLOCKED with a line on stderr, because a Telegram handler that
+    hangs is worse than one that races.
+    """
+    from scripts.utils.checkpoint_paths import file_lock
+
+    path = state_path(filename)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with file_lock(path.with_name(path.name + ".lock"), label="fireside"):
+        value = load_state(filename)
+        if value is None:
+            value = default
+        yield value
+        save_state(filename, value)
+
+
+def misha_user_id() -> int:
+    """The operator's Telegram id from the environment, or 0 when unusable.
+
+    Sixteen call sites did `misha_user_id()`
+    raw. A typo in that variable therefore raised ValueError out of whatever was
+    running -- a cron subcommand mid-job, or an update handler after its side
+    effects had already landed -- instead of behaving like the "not configured"
+    case every one of those sites already handles by checking for 0.
+    """
+    raw = os.environ.get("MISHA_TELEGRAM_USER_ID", "0")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        log_error(f"MISHA_TELEGRAM_USER_ID is {raw!r}, not an integer; "
+                  f"treating the operator as unconfigured")
+        return 0
+
+
+def _read_jsonl_rows(path: Path) -> list[dict]:
+    """Every parseable JSON object in a JSONL file. Missing file -> empty list.
+
+    One reader, so a caller cannot forget the `exists()` guard the way
+    `cmd_email_backup` did on its second pass over dm-log.jsonl.
+    """
+    rows: list[dict] = []
+    if not path.exists():
+        return rows
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        log_error(f"could not read {path}")
+        return rows
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
 def log_error(message: str, exception: Optional[BaseException] = None) -> None:
     """Append an error line to errors.log with ISO-8601 local timestamp."""
     path = state_path(ERRORS_LOG)
@@ -304,6 +419,18 @@ def get_bot() -> TelegramBot:
 # ============================================================
 # xlsx reader
 # ============================================================
+
+def _first_present(headers: dict, *names: str):
+    """The index of the first header name present, or None.
+
+    Membership, not truthiness. `headers.get(a) or headers.get(b)` reads
+    correctly right up until the preferred column sits at index 0.
+    """
+    for name in names:
+        if name in headers:
+            return headers[name]
+    return None
+
 
 def load_tribe_metadata() -> dict:
     """Read 31C_Tribe.xlsx and return metadata keyed by telegram_username.
@@ -351,8 +478,12 @@ def load_tribe_metadata() -> dict:
     name_col = headers.get("Name")
     email_col = headers.get("Email")
     tg_username_col = headers.get("Telegram Username")
-    title_col = headers.get("Title (reconciled)") or headers.get("Title")
-    function_col = headers.get("Function / Department") or headers.get("Function")
+    # `_first_present`, not `or`: these are COLUMN INDEXES and index 0 is falsy,
+    # so a sheet whose first column is "Title (reconciled)" fell through to
+    # "Title" and then to None. The preferred column being first is the normal
+    # case, and it was the one that silently lost its metadata.
+    title_col = _first_present(headers, "Title (reconciled)", "Title")
+    function_col = _first_present(headers, "Function / Department", "Function")
 
     if name_col is None:
         raise ValueError(f"'Name' column not found in {TRIBE_XLSX}")
@@ -366,6 +497,11 @@ def load_tribe_metadata() -> dict:
         )
 
     roster: dict[str, dict] = {}
+    # Duplicate Telegram usernames used to overwrite in silence, so the roster
+    # came back SHORTER than the sheet and nothing said which member had gone.
+    # A membership count that quietly drops is the worst shape for this file:
+    # every downstream count, schedule and discrepancy report agrees with it.
+    seen_usernames: dict[str, str] = {}
     for row in ws.iter_rows(min_row=header_row_idx + 1, values_only=True):
         if not row or row[name_col] is None:
             continue
@@ -395,6 +531,14 @@ def load_tribe_metadata() -> dict:
 
         title_lower = title.lower()
         is_vp = any(frag in title_lower for frag in VP_TITLE_FRAGMENTS)
+
+        if username.lower() in seen_usernames:
+            raise ValueError(
+                f"{TRIBE_XLSX}: Telegram username @{username} appears twice "
+                f"({seen_usernames[username.lower()]} and {name}). One username "
+                f"is one member; fix the sheet before the roster is rebuilt."
+            )
+        seen_usernames[username.lower()] = name
 
         roster[username] = {
             "name": name,
@@ -452,6 +596,11 @@ def build_schedule(roster_by_name: dict, start_monday=None,
     """
     from datetime import timedelta
 
+    if start_monday is None or weeks is None:
+        # The module constants are the fallback and they are empty when the
+        # cycle config failed to load at import. Say which file, once, instead
+        # of building a zero-week schedule and reporting success.
+        require_fireside_config()
     if start_monday is None:
         start_monday = CYCLE_1_START_MONDAY
     if weeks is None:
@@ -708,15 +857,35 @@ def cross_reference(xlsx_roster: dict, telegram_members: dict) -> tuple[dict, di
 
 
 def build_roster_by_name(roster: dict) -> dict:
-    """Build a name -> roster_entry index for schedule lookups."""
-    by_name = {}
+    """Build a name -> roster_entry index for schedule lookups.
+
+    An AMBIGUOUS name maps to nothing. Schedule rows join on display name, and
+    two active members called "Alex Kim" used to collapse into whichever entry
+    the dict iteration reached last -- so every "Alex Kim" session silently
+    bound to one of them and DM'd the wrong person. Refusing to guess leaves
+    the slot unbound, which the discrepancy report already surfaces; picking one
+    is a wrong answer that looks like a right one.
+    """
+    by_name: dict = {}
+    ambiguous: dict[str, list[str]] = {}
     for username, data in roster.items():
-        # Index by exact name match (xlsx 'name' field)
         full_name = data.get("name", "").strip()
-        if full_name:
-            entry = dict(data)
-            entry["telegram_username"] = username
-            by_name[full_name] = entry
+        if not full_name:
+            continue
+        if full_name in by_name:
+            ambiguous.setdefault(full_name, [by_name[full_name]["telegram_username"]])
+            ambiguous[full_name].append(username)
+            continue
+        entry = dict(data)
+        entry["telegram_username"] = username
+        by_name[full_name] = entry
+    for full_name, usernames in ambiguous.items():
+        by_name.pop(full_name, None)
+        log_error(
+            f"roster name {full_name!r} maps to {len(usernames)} usernames "
+            f"({', '.join('@' + u for u in usernames)}); leaving it UNBOUND "
+            f"rather than guessing which member a schedule row means"
+        )
     return by_name
 
 
@@ -1198,11 +1367,12 @@ def cmd_poll(args) -> None:
     offset = int(last.get("offset", 0))
     total_processed = 0
 
-    # Append a poll-start marker to dm-log so health-check can detect liveness
-    append_jsonl(DM_LOG, {
-        "ts": local_now().isoformat(),
-        "dm_type": "poll-tick",
-    })
+    # The liveness marker is written AFTER the first getUpdates succeeds, not
+    # before it. Written first, a host with a revoked token or no route to
+    # Telegram still stamped a fresh tick every five minutes, and health-check
+    # read "alive" for the whole outage. The marker now means "this process
+    # reached Telegram", which is the thing health-check is being asked.
+    ticked = False
 
     while True:
         try:
@@ -1210,6 +1380,12 @@ def cmd_poll(args) -> None:
         except TelegramAPIError as e:
             print(f"{RED}poll: getUpdates failed: {e}{RESET}", file=sys.stderr)
             return
+        if not ticked:
+            append_jsonl(DM_LOG, {
+                "ts": local_now().isoformat(),
+                "dm_type": "poll-tick",
+            })
+            ticked = True
 
         if not updates:
             break
@@ -1461,10 +1637,8 @@ def _maybe_forward_outsider(bot: "TelegramBot", user_id: int,
     Rate-limited via OUTSIDER_RATE state file. Failures to forward are silent;
     callers still log to sessions.jsonl regardless.
     """
-    try:
-        misha_id = int(os.environ.get("MISHA_TELEGRAM_USER_ID", "0"))
-    except ValueError:
-        misha_id = 0
+    # No try/except: `misha_user_id()` already returns 0 rather than raising.
+    misha_id = misha_user_id()
     if not misha_id:
         return
     rate = load_state(OUTSIDER_RATE) or {}
@@ -1486,8 +1660,13 @@ def _maybe_forward_outsider(bot: "TelegramBot", user_id: int,
             f"(id={user_id}):\n{preview}",
             parse_mode="",
         )
-    except TelegramAPIError:
-        pass
+    except TelegramAPIError as e:
+        # The cooldown was written whatever happened, so a forward that FAILED
+        # still silenced that outsider for the next hour: the operator never saw
+        # the message and never saw a second chance at it either. A cooldown
+        # suppresses a REPEAT of something delivered; there was no delivery.
+        log_error(f"outsider forward to Misha failed for user {user_id}", e)
+        return
     rate[str(user_id)] = local_now().isoformat()
     save_state(OUTSIDER_RATE, rate)
 
@@ -1590,7 +1769,12 @@ def find_swap_candidates(schedule: list, current_username: str, today,
             continue
         entries = by_date[date_iso]
         day = entries[0].get("day", "")
-        filled_slots = {e["slot"] for e in entries if e.get("speaker_username")}
+        # A slot is filled when it has a SPEAKER, bound or not. Keying on
+        # `speaker_username` treated every unresolved name -- exactly what
+        # `build_schedule()` writes when a roster lookup misses -- as an open
+        # slot, so /swap offered a session that already had a speaker.
+        filled_slots = {e["slot"] for e in entries
+                        if e.get("speaker_username") or e.get("speaker_name")}
         # Vacancy: missing slot number, or entry with null speaker
         for slot_num in (1, 2, 3):
             if slot_num not in filled_slots:
@@ -1694,7 +1878,23 @@ def _apply_vacancy_swap(a_username: str, a_current_date: str, a_current_slot: in
       - The entry at A's old slot is removed (creates a vacancy at the old date).
       - A new entry is appended for the target slot with A's name + swapped_with metadata.
     """
-    schedule = load_state(SCHEDULE) or []
+    # Under the lock, and the revalidation below is why: the read, the
+    # occupancy check and the write have to be one indivisible step or the
+    # check is answering a question about a schedule that no longer exists.
+    with locked_state(SCHEDULE, []) as schedule:
+        ok = _vacancy_swap_locked(schedule, a_username, a_current_date, a_current_slot,
+                                  target_date, target_slot, target_day,
+                                  theme_target, week_target)
+    return ok
+
+
+def _vacancy_swap_locked(schedule: list, a_username: str, a_current_date: str,
+                         a_current_slot: int, target_date: str, target_slot: int,
+                         target_day: str, theme_target: str, week_target: int) -> bool:
+    """The body of `_apply_vacancy_swap`, mutating `schedule` IN PLACE.
+
+    Split out so the lock in the caller spans the whole read-modify-write.
+    """
     uname_lc = a_username.lower()
     # Find A's entry to lift name + display name
     a_entry = None
@@ -1711,6 +1911,24 @@ def _apply_vacancy_swap(a_username: str, a_current_date: str, a_current_slot: in
         new_schedule.append(e)
     if a_entry is None:
         log_error(f"_apply_vacancy_swap: A's slot not found ({a_username} @ {a_current_date} #{a_current_slot})")
+        return False
+    # Revalidate the TARGET against the schedule as it is now, not as it was
+    # when the keyboard was built. The candidate list is a snapshot: A can open
+    # /swap, someone else fills the vacancy, and A taps a button that was
+    # correct a minute ago. Appending without this check double-booked the slot
+    # and neither speaker was told.
+    occupant = next(
+        (e for e in new_schedule
+         if e.get("session_date") == target_date and e.get("slot") == target_slot
+         and (e.get("speaker_username") or e.get("speaker_name"))),
+        None,
+    )
+    if occupant is not None:
+        log_error(
+            f"_apply_vacancy_swap: {target_date} #{target_slot} was taken by "
+            f"{occupant.get('speaker_name') or occupant.get('speaker_username')} "
+            f"before @{a_username} tapped; refusing to double-book"
+        )
         return False
     new_schedule.append({
         "cycle": a_entry.get("cycle", 1),
@@ -1730,7 +1948,8 @@ def _apply_vacancy_swap(a_username: str, a_current_date: str, a_current_slot: in
         "no_show": False,
         "completed": False,
     })
-    save_state(SCHEDULE, new_schedule)
+    # In place: the caller holds the lock and saves what this leaves behind.
+    schedule[:] = new_schedule
     return True
 
 
@@ -1741,7 +1960,18 @@ def _apply_bilateral_swap(a_username: str, a_current_date: str, a_current_slot: 
     Both entries are updated in-place: speaker_name/username swap between them,
     and both get `swapped_with` metadata pointing to the other.
     """
-    schedule = load_state(SCHEDULE) or []
+    # Under the lock: two callbacks racing this used to both find their
+    # entries, both mutate a private copy, and the later save silently undid the
+    # earlier swap.
+    with locked_state(SCHEDULE, []) as schedule:
+        return _bilateral_swap_locked(schedule, a_username, a_current_date,
+                                      a_current_slot, b_username, b_date, b_slot)
+
+
+def _bilateral_swap_locked(schedule: list, a_username: str, a_current_date: str,
+                           a_current_slot: int, b_username: str, b_date: str,
+                           b_slot: int) -> bool:
+    """The body of `_apply_bilateral_swap`, mutating `schedule` IN PLACE."""
     uname_lc_a = a_username.lower()
     uname_lc_b = (b_username or "").lower()
     a_idx = b_idx = None
@@ -1786,7 +2016,7 @@ def _apply_bilateral_swap(a_username: str, a_current_date: str, a_current_slot: 
         "old_slot": a_current_slot,
         "swapped_at": swap_ts,
     }
-    save_state(SCHEDULE, schedule)
+    # Entries are mutated in place above; the caller holds the lock and saves.
     return True
 
 
@@ -1830,7 +2060,7 @@ def _sweep_expired_swap_requests(bot: TelegramBot) -> None:
                 )
         except TelegramAPIError:
             pass
-        misha_id = int(os.environ.get("MISHA_TELEGRAM_USER_ID", "0"))
+        misha_id = misha_user_id()
         if misha_id:
             try:
                 bot.send_message(
@@ -1873,7 +2103,7 @@ def _swap_kickoff_for_a(bot: TelegramBot, user_id: int, username: str) -> None:
             "he'll reach out shortly to arrange a different date.",
             parse_mode="",
         )
-        misha_id = int(os.environ.get("MISHA_TELEGRAM_USER_ID", "0"))
+        misha_id = misha_user_id()
         if misha_id:
             try:
                 bot.send_message(
@@ -2001,7 +2231,7 @@ def _handle_callback_query(bot: TelegramBot, cq: dict) -> None:
 def _handle_cycle_invite_tap(bot: TelegramBot, cq_id, data: str,
                              tapper_user_id, msg_chat_id, msg_id) -> None:
     """Process the CEO's tap on the cycle-end invite draft (send | cancel)."""
-    misha_id = int(os.environ.get("MISHA_TELEGRAM_USER_ID", "0"))
+    misha_id = misha_user_id()
     if not misha_id or tapper_user_id != misha_id:
         if cq_id:
             try:
@@ -2187,7 +2417,7 @@ def _handle_a_tap(bot: TelegramBot, cq_id: str, rid: str, choice: str,
                 )
         except TelegramAPIError:
             pass
-        misha_id = int(os.environ.get("MISHA_TELEGRAM_USER_ID", "0"))
+        misha_id = misha_user_id()
         if misha_id:
             try:
                 bot.send_message(
@@ -2215,7 +2445,7 @@ def _handle_a_tap(bot: TelegramBot, cq_id: str, rid: str, choice: str,
         except TelegramAPIError:
             pass
         # Fall back to manual
-        misha_id = int(os.environ.get("MISHA_TELEGRAM_USER_ID", "0"))
+        misha_id = misha_user_id()
         if misha_id:
             try:
                 bot.send_message(
@@ -2342,7 +2572,7 @@ def _handle_b_tap(bot: TelegramBot, cq_id: str, rid: str, choice: str,
                 )
             except TelegramAPIError:
                 pass
-        misha_id = int(os.environ.get("MISHA_TELEGRAM_USER_ID", "0"))
+        misha_id = misha_user_id()
         if misha_id:
             try:
                 bot.send_message(
@@ -2409,7 +2639,7 @@ def _handle_b_tap(bot: TelegramBot, cq_id: str, rid: str, choice: str,
             )
         except TelegramAPIError:
             pass
-    misha_id = int(os.environ.get("MISHA_TELEGRAM_USER_ID", "0"))
+    misha_id = misha_user_id()
     if misha_id:
         try:
             bot.send_message(
@@ -2540,7 +2770,7 @@ def _handle_message(bot: TelegramBot, message: dict) -> None:
         return
 
     # Unrecognised message from authorized user - forward to Misha so the Tribe member feels heard
-    misha_id = int(os.environ.get("MISHA_TELEGRAM_USER_ID", "0"))
+    misha_id = misha_user_id()
     if misha_id and text:
         try:
             preview = text[:300] + ("..." if len(text) > 300 else "")
@@ -2616,7 +2846,7 @@ def _handle_chat_member(event: dict) -> None:
 
     if new_status in ("member", "administrator") and old_status in ("left", "kicked", ""):
         _log_event("tribe_join", user_id=user_id, username=username)
-        misha_id = int(os.environ.get("MISHA_TELEGRAM_USER_ID", "0"))
+        misha_id = misha_user_id()
         if misha_id:
             try:
                 bot = get_bot()
@@ -2745,17 +2975,33 @@ def cmd_sunday_preview(args) -> None:
 
     bot = get_bot()
     chat_id = int(os.environ["FIRESIDE_TRIBE_CHAT_ID"])
+    # The SEND and the PIN are separate outcomes. They used to share one `try`,
+    # so a pin that failed after a successful post left `LAST_PINNED` unwritten
+    # and reported the whole command as failed. A rerun then posted the preview
+    # to the group a SECOND time, and `unpin-weekly` had no message id to unpin.
+    # Record the post the moment it lands; treat the pin as a separate step that
+    # can fail on its own.
     try:
         result = bot.send_message(chat_id, text)
-        msg_id = result.get("message_id")
-        bot.pin_chat_message(chat_id, msg_id, disable_notification=True)
-        save_state(LAST_PINNED, {"message_id": msg_id, "week": week_num,
-                                 "posted_at": local_now().isoformat()})
-        _log_event("sunday_preview_posted", week=week_num, message_id=msg_id)
-        print(f"{GREEN}sunday-preview{RESET}: posted week {week_num}, message_id={msg_id}, pinned")
-        hc_ping("FIRESIDE_HC_SUNDAY_PREVIEW")
     except TelegramAPIError as e:
-        print(f"{RED}sunday-preview failed: {e}{RESET}", file=sys.stderr)
+        print(f"{RED}sunday-preview failed to post: {e}{RESET}", file=sys.stderr)
+        return
+    msg_id = result.get("message_id")
+    save_state(LAST_PINNED, {"message_id": msg_id, "week": week_num,
+                             "posted_at": local_now().isoformat()})
+    _log_event("sunday_preview_posted", week=week_num, message_id=msg_id)
+    pinned = True
+    try:
+        bot.pin_chat_message(chat_id, msg_id, disable_notification=True)
+    except TelegramAPIError as e:
+        pinned = False
+        print(f"{YELLOW}sunday-preview: posted week {week_num} "
+              f"(message_id={msg_id}) but the pin failed: {e}. Do NOT rerun -- "
+              f"the message is already in the group; pin it by hand.{RESET}",
+              file=sys.stderr)
+    if pinned:
+        print(f"{GREEN}sunday-preview{RESET}: posted week {week_num}, message_id={msg_id}, pinned")
+    hc_ping("FIRESIDE_HC_SUNDAY_PREVIEW")
 
 
 # ============================================================
@@ -2819,7 +3065,7 @@ def cmd_topic_digest(args) -> None:
         print(f"{CYAN}--- end ---{RESET}")
         return
 
-    misha_id = int(os.environ.get("MISHA_TELEGRAM_USER_ID", "0"))
+    misha_id = misha_user_id()
     if not misha_id:
         print(f"{RED}topic-digest: MISHA_TELEGRAM_USER_ID not set{RESET}", file=sys.stderr)
         return
@@ -2882,7 +3128,7 @@ def cmd_cycle_end_invite(args) -> None:
         print(f"{CYAN}--- end ---{RESET}")
         return
 
-    misha_id = int(os.environ.get("MISHA_TELEGRAM_USER_ID", "0"))
+    misha_id = misha_user_id()
     if not misha_id:
         print(f"{RED}cycle-end-invite: MISHA_TELEGRAM_USER_ID not set{RESET}", file=sys.stderr)
         return
@@ -2967,7 +3213,7 @@ def cmd_cycle_rollover(args) -> None:
           f"unslotted={len(unslotted)}")
 
     # Heads-up DM to the CEO (best-effort; never fail the job on a send error).
-    misha_id = int(os.environ.get("MISHA_TELEGRAM_USER_ID", "0"))
+    misha_id = misha_user_id()
     if misha_id:
         note = ("Fireside cycle rolled over automatically.\n"
                 f"New schedule: {dates[0]} -> {dates[-1]} ({len(entries)} slots).\n"
@@ -3150,7 +3396,7 @@ def _nudge_ceo_on_helmsman_gaps(schedule: list, helmsmen: dict, today: Any,
     if not near:
         return
 
-    misha_id = int(os.environ.get("MISHA_TELEGRAM_USER_ID", "0"))
+    misha_id = misha_user_id()
     if not misha_id:
         print(f"{YELLOW}helmsman gap: {', '.join(near)} (no MISHA_TELEGRAM_USER_ID to nudge){RESET}")
         return
@@ -3181,8 +3427,21 @@ def cmd_helmsman_brief(args) -> None:
     The earlier tight `today + 7 days == key` rule meant any missed run (bot down, scheduler
     failure) silently skipped the brief forever. Window-based + idempotent via `briefed` flag
     means a missed day catches up on the next run.
+
+    ONE PER RUN, and "catches up" means one per DAY, not all at once. That is a
+    deliberate rate limit on DMs to real people, not an oversight -- but it does
+    mean a backlog of N pending Helmsmen takes N days to clear, and one whose
+    week starts sooner than that is never briefed in time. The count is printed
+    when more than one is waiting, so the backlog is visible rather than
+    implied; clearing it faster is the operator's call, since it is more DMs in
+    one run than this job has ever sent.
     """
     schedule = load_state(SCHEDULE) or []
+    # `helmsmen` is loaded and saved much further down, with a Telegram DM in
+    # between. It is NOT held under a lock for that whole span on purpose: the
+    # send can take seconds and a lock across a network call is how a bot
+    # deadlocks itself. The write is instead re-read under the lock at the end,
+    # so a concurrent `helmsman set` is merged rather than overwritten.
     helmsmen = load_state(HELMSMEN) or {}
     opt_ins = load_state(OPT_INS) or {"helmsman": [], "wildcard": []}
     roster = load_state(TRIBE_ROSTER) or {}
@@ -3198,6 +3457,11 @@ def cmd_helmsman_brief(args) -> None:
         hc_ping("FIRESIDE_HC_HELMSMAN_BRIEF")
         return
 
+    if len(candidates) > 1:
+        later = ", ".join(str(c[1]) for c in candidates[1:])
+        print(f"{YELLOW}helmsman-brief: {len(candidates)} Helmsmen pending; this run "
+              f"briefs the closest only. Still waiting: {later}{RESET}",
+              file=sys.stderr)
     target_date, target_week_start, helmsman_entry = candidates[0]
 
     user_id = helmsman_entry.get("user_id")
@@ -3217,6 +3481,17 @@ def cmd_helmsman_brief(args) -> None:
 
     mon = _week_speakers(schedule, week_num, "Mon")
     wed = _week_speakers(schedule, week_num, "Wed")
+    # Guarded, the way `sunday-preview` already guards. `mon[0]` and `wed[0]`
+    # below assume both days exist; a week holding only one of them raised
+    # IndexError BEFORE the entry was marked `briefed`, so the daily job hit the
+    # same candidate again the next day, and the next -- a permanent failure
+    # loop over one malformed week, and no Helmsman ever briefed.
+    if not mon or not wed:
+        print(f"{RED}helmsman-brief: week {week_num} starting {target_week_start} "
+              f"has {len(mon)} Mon and {len(wed)} Wed session(s); both are needed. "
+              f"Fix the schedule -- this candidate is skipped, not marked briefed."
+              f"{RESET}", file=sys.stderr)
+        return
     monday_speakers = ", ".join(s["speaker_name"] for s in mon)
     wednesday_speakers = ", ".join(s["speaker_name"] for s in wed)
     wildcard_lines = "\n".join(
@@ -3238,9 +3513,19 @@ def cmd_helmsman_brief(args) -> None:
     bot = get_bot()
     try:
         bot.send_dm(user_id, text)
-        helmsman_entry["briefed"] = True
-        helmsman_entry["briefed_at"] = local_now().isoformat()
-        save_state(HELMSMEN, helmsmen)
+        # Re-read under the lock and stamp only THIS entry. Saving the dict
+        # loaded before the DM overwrote whatever `helmsman set` wrote while the
+        # send was in flight -- an assignment the operator had just made,
+        # silently gone.
+        with locked_state(HELMSMEN, {}) as fresh:
+            row = fresh.get(target_week_start)
+            if isinstance(row, dict):
+                row["briefed"] = True
+                row["briefed_at"] = local_now().isoformat()
+            else:
+                helmsman_entry["briefed"] = True
+                helmsman_entry["briefed_at"] = local_now().isoformat()
+                fresh[target_week_start] = helmsman_entry
         _log_event("helmsman_briefed", week=week_num, user_id=user_id)
         print(f"{GREEN}helmsman-brief{RESET}: sent to {name} (user_id={user_id}) for week {week_num}")
         hc_ping("FIRESIDE_HC_HELMSMAN_BRIEF")
@@ -3320,20 +3605,23 @@ def cmd_helmsman(args) -> Optional[int]:
               file=sys.stderr)
         return 1
 
-    previous = helmsmen.get(week)
-    record = {
-        "name": entry.get("name"),
-        "username": username,
-        "user_id": user_id,
-        "briefed": False,
-        "assigned_at": _today_local_date().isoformat(),
-    }
-    if args.note:
-        record["note"] = args.note
-    if previous:
-        record["previous_helmsman_for_week"] = previous
-    helmsmen[week] = record
-    save_state(HELMSMEN, helmsmen)
+    # Re-read under the lock rather than saving the dict loaded at the top of
+    # this command: `helmsman-brief` runs daily and rewrites the same file, and
+    # whichever of the two saved second used to erase the other's change.
+    with locked_state(HELMSMEN, {}) as fresh:
+        previous = fresh.get(week)
+        record = {
+            "name": entry.get("name"),
+            "username": username,
+            "user_id": user_id,
+            "briefed": False,
+            "assigned_at": _today_local_date().isoformat(),
+        }
+        if args.note:
+            record["note"] = args.note
+        if previous:
+            record["previous_helmsman_for_week"] = previous
+        fresh[week] = record
     _log_event("helmsman_assigned", week=week, user_id=user_id)
     verb = "reassigned" if previous else "assigned"
     print(f"{GREEN}helmsman set{RESET}: {week} {verb} to {record['name']} (@{username})")
@@ -3423,13 +3711,18 @@ def cmd_weekly_discrepancy_report(args) -> None:
             lines.append(f"  - {g}")
     text = "\n".join(lines).rstrip()
 
-    misha_id = int(os.environ.get("MISHA_TELEGRAM_USER_ID", "0"))
+    misha_id = misha_user_id()
     if not misha_id:
         print(text)
         return
     bot = get_bot()
     try:
-        bot.send_message(misha_id, text, parse_mode="Markdown")
+        # parse_mode="", like every other send in this file. Legacy Markdown
+        # here interpolated raw @handles, full names and roster data, so a
+        # single `_` in a username made Telegram reject the message with
+        # "can't parse entities" -- the discrepancy report failed precisely when
+        # the data was messy, which is the only time it has anything to say.
+        bot.send_message(misha_id, text, parse_mode="")
         print(f"{GREEN}weekly-discrepancy-report{RESET}: DM sent to Misha")
     except TelegramAPIError as e:
         print(f"{RED}weekly-discrepancy-report DM failed: {e}{RESET}", file=sys.stderr)
@@ -3447,23 +3740,20 @@ def cmd_email_backup(args) -> None:
     schedule = load_state(SCHEDULE) or []
     roster = load_state(TRIBE_ROSTER) or {}
     today = _today_local_date()
-    dm_log_path = state_path(DM_LOG)
 
-    # Read entire DM log once into a per-user response set
+    # Engagement lives in sessions.jsonl, NOT dm-log.jsonl. `_log_event` writes
+    # `start_received` / `swap_requested` with an `event_type` key to
+    # SESSIONS_LOG; dm-log rows carry `dm_type` and have no `event_type` at all.
+    # Scanning the wrong file meant `responded_user_ids` was ALWAYS empty, so a
+    # member who had answered the bot was never recognised as responsive and
+    # stayed on the backup-email list.
     responded_user_ids: set[int] = set()
-    if dm_log_path.exists():
-        with open(dm_log_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    e = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if e.get("event_type") in ("start_received", "swap_requested"):
-                    if e.get("user_id"):
-                        responded_user_ids.add(int(e["user_id"]))
+    for e in _read_jsonl_rows(state_path(SESSIONS_LOG)):
+        if e.get("event_type") in ("start_received", "swap_requested") and e.get("user_id"):
+            try:
+                responded_user_ids.add(int(e["user_id"]))
+            except (TypeError, ValueError):
+                continue
 
     sent = 0
     skipped = 0
@@ -3483,25 +3773,20 @@ def cmd_email_backup(args) -> None:
         if not email:
             continue
         if user_id and user_id in responded_user_ids:
-            continue  # they've engaged via bot, no need for email
-        # Only email if the bot has tried to DM them at least once and either failed or got no response
-        try_send = False
-        with open(dm_log_path, "r", encoding="utf-8") as f:
-            for line in f:
-                try:
-                    e = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if (e.get("speaker_username") == username
-                        and e.get("session_date") == entry["session_date"]
-                        and e.get("dm_type") in ("2wk", "3day")
-                        and not e.get("delivered")):
-                    try_send = True
-                    break
-        if not try_send:
             skipped += 1
-            continue
+            continue  # they've engaged via bot, no need for email
 
+        # Silence is the trigger, not a failed DM. Until 2026-08-24 this line
+        # also required a dm-log row with `dm_type in ("2wk", "3day")` and
+        # `not delivered`, so only a member whose DM had FAILED got mail. A
+        # member whose DM arrived and who then said nothing -- the exact
+        # "unresponsive Tribe member" the command is named for -- got none, and
+        # neither did a member with no Telegram account at all. Operator ruled
+        # on it: "шли всегда". Everyone in the 1..14 day window who has an email
+        # and has not engaged with the bot is mailed now.
+        #
+        # This mails on both Sundays inside the window, mirroring the two DM
+        # nudges (2wk and 3day). It is two emails per session, not one.
         name = roster_entry["name"].split()[0]
         subject = EMAIL_BACKUP_SUBJECT.format(session_date=entry["session_date"])
         body_text = EMAIL_BACKUP_BODY.format(
@@ -3592,7 +3877,12 @@ def cmd_stats(args) -> None:
     completed = sum(1 for s in schedule if s.get("completed"))
     sessions_total = len(set((s["session_date"]) for s in schedule))
     completed_sessions = len(set(s["session_date"] for s in schedule if s.get("completed")))
-    current_week = _current_or_upcoming_week(schedule, today) or 1
+    # `or 1` turned "no current or upcoming session" into "week 1 of 9", so a
+    # finished cycle reported itself as just starting. None means the cycle is
+    # over (or has not begun); the line below says that instead of inventing a
+    # week the schedule does not contain.
+    current_week = _current_or_upcoming_week(schedule, today)
+    current_week_label = f"**{current_week}** of 9" if current_week else "**no active week** (cycle complete or not started)"
 
     # Tribe rotation health
     all_speakers = sorted({s["speaker_name"] for s in schedule})
@@ -3603,7 +3893,7 @@ def cmd_stats(args) -> None:
         f"# Tribe Fireside Stats — {today.isoformat()}",
         "",
         f"## Cycle progress",
-        f"- Current week: **{current_week}** of 9",
+        f"- Current week: {current_week_label}",
         f"- Sessions completed: **{completed_sessions}** of {sessions_total}",
         f"- Speaker entries completed: **{completed}** of {len(schedule)}",
         "",
@@ -3683,10 +3973,26 @@ def cmd_health_check(args) -> None:
             last_tick_ts = e.get("ts")
 
     now = local_now()
+    last_dt = None
+    if last_tick_ts is not None:
+        # Guarded. An unparseable or naive `ts` raised ValueError/TypeError out
+        # of the one command whose job is to NOTICE that something is wrong --
+        # health-check crashed instead of alerting, which reads as a silent
+        # daemon either way.
+        try:
+            last_dt = datetime.fromisoformat(last_tick_ts)
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=now.tzinfo)
+        except (TypeError, ValueError):
+            last_dt = None
+
     if last_tick_ts is None:
         msg = "⚠️ Fireside Bot health-check: no liveness tick ever recorded. Bot may not be running."
+    elif last_dt is None:
+        msg = (f"⚠️ Fireside Bot health-check: the newest liveness tick has an "
+               f"unreadable timestamp ({last_tick_ts!r}). Liveness is UNKNOWN, "
+               f"which is not the same as healthy.")
     else:
-        last_dt = datetime.fromisoformat(last_tick_ts)
         age = now - last_dt
         if age > timedelta(minutes=30):
             mins = int(age.total_seconds() // 60)
@@ -3697,7 +4003,7 @@ def cmd_health_check(args) -> None:
             print(f"{GREEN}health-check{RESET}: last tick {int(age.total_seconds())}s ago, healthy")
             return
 
-    misha_id = int(os.environ.get("MISHA_TELEGRAM_USER_ID", "0"))
+    misha_id = misha_user_id()
     if not misha_id:
         print(msg)
         return
@@ -3764,6 +4070,20 @@ def cmd_log_session(args) -> None:
         elif entry["speaker_name"] in shared_names:
             entry["completed"] = True
             updated += 1
+
+    # A date that matched NO schedule entry is a typo, not a session. The event
+    # used to be logged and success printed regardless, so `--date 2026-99-99`
+    # (or a real date off by one) wrote a `session_logged` row into the stats
+    # corpus while the schedule went untouched, and the line beneath said
+    # "schedule entries updated=0" as though that were a normal outcome.
+    if updated == 0:
+        dates = sorted({e["session_date"] for e in schedule})
+        near = [d for d in dates if d[:7] == args.date[:7]] or dates[-5:]
+        print(f"{RED}log-session: no schedule entry matches --date {args.date} "
+              f"and the named speakers; nothing logged. Sessions this month: "
+              f"{', '.join(near) or '(none)'}{RESET}", file=sys.stderr)
+        sys.exit(1)
+
     save_state(SCHEDULE, schedule)
 
     _log_event(

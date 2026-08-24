@@ -15,7 +15,10 @@ from datetime import date, datetime, timezone
 from scripts.utils.workspace import get_default_tz
 from pathlib import Path
 
-from scripts.bridge_daemon._atomic import atomic_write_text
+from scripts.bridge_daemon._shapes import is_undo
+
+from scripts.bridge_daemon._jsonl import append_jsonl
+from scripts.bridge_daemon._safepath import contains_symlink
 
 PROGRAM_DIR = "outputs/operations/fundraising/2026-05-17_investor-outreach-program"  # leak-guard: ok (relative suffix rooted by caller)
 SHORTLIST_FILE = "00-master-shortlist-v1.md"
@@ -68,13 +71,21 @@ STATUS_LABEL = {
 _REGION_ROW_RE = re.compile(
     r"^\|\s*(?P<num>\d+)\s*\|\s*(?P<firm>[^|]+?)\s*\|\s*(?P<type>[^|]+?)\s*\|\s*"
     r"(?P<hq>[^|]+?)\s*\|\s*(?P<cheque>[^|]+?)\s*\|\s*(?P<fit>[^|]+?)\s*\|\s*"
-    r"(?P<notes>[^|]+?)\s*\|"
+    # `[^|]*?`, not `[^|]+?`: a firm row whose Notes cell is blank used to fail
+    # the whole match and vanish from `firms`, the counts and the total, with no
+    # error. An empty note is not a reason to hide a firm.
+    r"(?P<notes>[^|]*?)\s*\|"
 )
 
 # Decisions-locked row pattern.
 # | Slot | Firm | Wave | Notes |
+# `notes` is `[^|]*?`, not `[^|]+?`. With the plus, a row whose Notes cell is
+# truly empty (`| Wave 1 ||`, no spacing) failed to match at all, so its firms
+# never entered `statuses` and fell back to "TBD" on the dashboard. The region
+# table in this same file was fixed for exactly this, with a comment reading
+# "an empty note is not a reason to hide a firm"; the decisions row was not.
 _DECISION_ROW_RE = re.compile(
-    r"^\|\s*(?P<slot>[^|]+?)\s*\|\s*(?P<firms>[^|]+?)\s*\|\s*(?P<wave>[^|]+?)\s*\|\s*(?P<notes>[^|]+?)\s*\|"
+    r"^\|\s*(?P<slot>[^|]+?)\s*\|\s*(?P<firms>[^|]+?)\s*\|\s*(?P<wave>[^|]+?)\s*\|\s*(?P<notes>[^|]*?)\s*\|"
 )
 
 
@@ -121,15 +132,24 @@ def _parse_status_from_decisions(text: str) -> dict[str, str]:
             in_out_of_scope = False
             continue
         if in_section and stripped.startswith("#"):
-            # Next major heading - leave section unless it's just a sub-header.
+            # A heading always ends a table, whatever else it does. Only H1 and
+            # `## Out-of-scope` used to reset `in_table`, so an ordinary
+            # `## Rationale` inside the decisions area left the flag SET and
+            # every markdown row under it was matched as a decision row.
+            # `_match_status` matches on substrings, so one bogus firm key was
+            # enough to re-label a real firm's wave on the raise dashboard.
+            in_table = False
+            # Any heading ENDS the out-of-scope list. It used to end only at an
+            # H1, so an ordinary `## Notes` or `## Rationale` after the
+            # out-of-scope block left the flag set, and every `- **Name**`
+            # bullet down to the next H1 was filed as out-of-scope. `_match_status`
+            # matches on substrings, so one stray key was enough to push a live
+            # firm to the bottom of the raise dashboard as "Out of scope".
+            in_out_of_scope = stripped.startswith("## Out-of-scope")
             if stripped.startswith("# ") or stripped.startswith("## Out-of-scope"):
-                if stripped.startswith("## Out-of-scope"):
-                    # Enter the out-of-scope list; its bullets are read below.
-                    in_out_of_scope = True
-                else:
+                if not in_out_of_scope:
                     # Walked off the section.
                     in_table = False
-                    in_out_of_scope = False
                     if stripped.startswith("# "):
                         in_section = False
                     continue
@@ -147,14 +167,27 @@ def _parse_status_from_decisions(text: str) -> dict[str, str]:
             slot = m.group("slot").strip().lower()
             firms_cell = m.group("firms").strip()
             status_token: str
+            # An explicitly numbered wave is the more specific signal, so it is
+            # tested BEFORE the "parallel" catch-all. It used to come after, and
+            # a slot reading "Parallel to Wave 3" was filed as week 1-2 and
+            # sorted above the firms actually being contacted first.
+            #
+            # The catch-all is now one term. It was
+            # `"parallel" in slot and "wave 1" in slot.replace(...) or "parallel" in slot`,
+            # which `and` binding tighter than `or` collapses to the second term
+            # alone: the wave-1 conjunct and the `week ` normalisation could
+            # never affect the result. Measured against the live shortlist, they
+            # never did anyway -- its parallel slot reads "parallel-track week
+            # 1-2" and contains no "wave 1" at all, so the dead conjunct was
+            # matching nothing and the catch-all was doing all the work.
             if "first 5" in slot:
                 status_token = "first-5"
-            elif "parallel" in slot and "wave 1" in slot.replace("week ", "week") or "parallel" in slot:
-                status_token = "parallel-week-1-2"
             elif "wave 2" in slot:
                 status_token = "wave-2"
             elif "wave 3" in slot:
                 status_token = "wave-3"
+            elif "parallel" in slot:
+                status_token = "parallel-week-1-2"
             else:
                 status_token = DEFAULT_WAVE
             # Firm cell may list multiple firms separated by commas; capture
@@ -194,8 +227,20 @@ def _first_token(name: str) -> str:
 
 
 def _acronym(name: str) -> str:
-    """Build initialism from capitalized words. 'Northwind Innovation Fund' -> 'NIF'."""
-    words = re.findall(r"[A-Z][a-zA-Z]*", name)
+    """Build an initialism. 'Northwind Innovation Fund' -> 'NIF'.
+
+    Case-INSENSITIVE, and that is the fix. It used to match ``[A-Z][a-zA-Z]*``,
+    so it needed a capital letter to see a word at all -- while every key it is
+    called against is lowercased when the decisions table is parsed. It
+    therefore returned "" for each of them and the acronym fallback below could
+    only ever fire on a key that literally WAS the acronym. The documented
+    resolution, a regional table naming a fund by its initials against a
+    decisions table naming it in full, silently never worked.
+
+    Stopwords are dropped so "Fund of Funds" gives FF, not FOF.
+    """
+    words = [w for w in re.findall(r"[A-Za-z0-9]+", name)
+             if w.lower() not in _STOPWORDS]
     return "".join(w[0] for w in words).upper()
 
 
@@ -218,11 +263,19 @@ def _match_status(firm_canonical: str, statuses: dict[str, str]) -> str:
             if _first_token(key) == name_first:
                 return status
     # Acronym fallback. "NIF" -> "Northwind Innovation Fund".
+    #
+    # Now that `_acronym` actually reads a lowercased key, this fallback fires,
+    # and a fallback that fires can be wrong. It is the LAST resort, three
+    # strategies down, and its output is a wave status the operator sorts a live
+    # raise by -- so it refuses an AMBIGUOUS match rather than picking one. Two
+    # funds whose initials collide leave the firm at the default wave, which
+    # reads as "not yet placed", instead of borrowing the other one's status.
     name_acronym = firm_canonical.upper() if firm_canonical.isupper() else _acronym(firm_canonical)
     if name_acronym and len(name_acronym) >= 2:
-        for key, status in statuses.items():
-            if key.upper() == name_acronym or _acronym(key) == name_acronym:
-                return status
+        matched = {status for key, status in statuses.items()
+                   if key and (key.upper() == name_acronym or _acronym(key) == name_acronym)}
+        if len(matched) == 1:
+            return matched.pop()
     return DEFAULT_WAVE
 
 
@@ -326,7 +379,7 @@ def _read_send_log(workspace_root: Path) -> dict:
         if not isinstance(firm_num, int):
             continue
         # Tombstone: cancel any prior mark for this firm.
-        if entry.get("undo") is True:
+        if is_undo(entry):
             out.pop(firm_num, None)
             continue
         out[firm_num] = {
@@ -341,8 +394,13 @@ def mark_sent(workspace_root: Path, firm_num: int, note: str = "") -> dict:
     """Append a send-log entry for `firm_num`. Returns {ok, date, ts}.
 
     Validates firm_num is in [1, 100] (defensive — the shortlist tops out
-    at 22). Atomically rewrites the log on each append to avoid partial
-    lines on crash. Note is trimmed to 200 chars + sanitized of newlines.
+    at 22). Note is trimmed to 200 chars + sanitized of newlines.
+
+    Appends ONE line via the shared O_APPEND primitive. This block claimed an
+    "atomic rewrite on each append" until 2026-08-24, which is the read-modify-
+    rewrite `_jsonl.py` exists to have replaced; the rest of this module (the
+    lock comment, `undo_sent`, the tombstone replay in `_read_send_log`) is
+    built around an append-only log, so the promise was the stale part.
     """
     if not isinstance(firm_num, int):
         return {"ok": False, "error": "firm_num must be an integer"}
@@ -362,18 +420,8 @@ def mark_sent(workspace_root: Path, firm_num: int, note: str = "") -> dict:
     }
     log_path = workspace_root / PROGRAM_DIR / SEND_LOG_FILE
     with _SEND_LOG_LOCK:
-        existing = ""
-        if log_path.exists():
-            try:
-                existing = log_path.read_text(encoding="utf-8")
-            except OSError:
-                existing = ""
-        new_content = existing
-        if existing and not existing.endswith("\n"):
-            new_content += "\n"
-        new_content += json.dumps(entry) + "\n"
         try:
-            atomic_write_text(log_path, new_content, mode=0o644)
+            append_jsonl(log_path, entry)
         except OSError as e:
             return {"ok": False, "error": f"write failed: {e}"}
     return {"ok": True, "date": entry["date"], "ts": entry["ts"], "firm_num": firm_num}
@@ -397,18 +445,8 @@ def undo_sent(workspace_root: Path, firm_num: int) -> dict:
     }
     log_path = workspace_root / PROGRAM_DIR / SEND_LOG_FILE
     with _SEND_LOG_LOCK:
-        existing = ""
-        if log_path.exists():
-            try:
-                existing = log_path.read_text(encoding="utf-8")
-            except OSError:
-                existing = ""
-        new_content = existing
-        if existing and not existing.endswith("\n"):
-            new_content += "\n"
-        new_content += json.dumps(entry) + "\n"
         try:
-            atomic_write_text(log_path, new_content, mode=0o644)
+            append_jsonl(log_path, entry)
         except OSError as e:
             return {"ok": False, "error": f"write failed: {e}"}
     return {"ok": True, "firm_num": firm_num, "ts": entry["ts"]}
@@ -584,7 +622,8 @@ def read_dossier(workspace_root: Path, rel_path: str) -> dict:
     parts = [p for p in rel_path.split("/") if p]
     if any(p == ".." or p.startswith(".") for p in parts):
         return {"ok": False, "error": "invalid path segment"}
-    target = (workspace_root / rel_path).resolve()
+    target_raw = workspace_root / rel_path
+    target = target_raw.resolve()
     program_root = (workspace_root / PROGRAM_DIR).resolve()
     try:
         target.relative_to(program_root)
@@ -593,7 +632,7 @@ def read_dossier(workspace_root: Path, rel_path: str) -> dict:
     if not target.exists():
         return {"ok": False, "error": "not found"}
     try:
-        if target.is_symlink():
+        if contains_symlink(workspace_root / PROGRAM_DIR, target_raw):
             return {"ok": False, "error": "symlinks not allowed"}
     except OSError:
         return {"ok": False, "error": "stat failed"}

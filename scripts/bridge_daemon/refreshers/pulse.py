@@ -53,8 +53,14 @@ def refresh(workspace_root: Path, state_obj: "State", cfg_state: "ConfigState",
     sibling but keeps its cache local. ``data_root`` defaults to
     ``get_data_root()`` when not injected.
 
-    Always bumps the pulse component so the freshness UI advances, even
-    when compute or write fails - matches the pattern in email.py.
+    Always bumps the pulse component so the freshness UI advances, even when
+    compute or write fails. This is DELIBERATELY not what mail.py does, though
+    this line claimed to match "email.py" until 2026-08-24 -- a file that does
+    not exist, describing a policy that is the opposite of the one in the file
+    that does. `mail.py` calls ``bump("inbox", fresh=fetched)``, so its
+    freshness clock advances only on a run that actually fetched. Pulse can
+    bump unconditionally because its snapshot carries its own ``computed_at``,
+    which is what the UI reads for real data age.
     """
     if data_root is None:
         data_root = get_data_root()
@@ -98,6 +104,22 @@ def read_snapshot(workspace_root: Path) -> dict | None:
     if not f.exists():
         return None
     try:
-        return json.loads(f.read_text(encoding="utf-8"))
+        data = json.loads(f.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
+    # Shape check, not just parse. A snapshot holding valid non-object JSON --
+    # a bare list from a partial or hand-rolled write -- came back as-is, and
+    # `/pulse` then called `.get` on a list and 500'd with AttributeError
+    # instead of taking the designed inline-compute fallback.
+    #
+    # Required keys too, not just "is a dict". The fallback only ever fired on
+    # missing or unparseable JSON, so a snapshot written by an older schema was
+    # served as-is and the endpoint answered with a payload shaped for a
+    # different version of the page. A schema miss IS a miss.
+    if not isinstance(data, dict):
+        return None
+    if not isinstance(data.get("data"), dict) or "computed_at" not in data:
+        logging.warning("bridge.pulse: snapshot at %s has an unexpected shape "
+                        "(keys=%s); treating it as a miss", f, sorted(data)[:8])
+        return None
+    return data

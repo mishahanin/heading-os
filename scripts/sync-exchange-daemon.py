@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import logging
 import os
 import signal
@@ -37,6 +38,7 @@ sys.path.insert(0, str(WORKSPACE))
 
 from scripts.utils import daemon_heartbeat  # noqa: E402
 from scripts.utils import tracing  # noqa: E402
+from scripts.utils.pid_liveness import pid_is_running  # noqa: E402
 from scripts.utils.scheduler_defaults import JOB_DEFAULTS  # noqa: E402
 from scripts.utils.trace_filter import install_log_factory  # noqa: E402
 from scripts.utils.workspace import get_default_tz, get_default_tz_name, load_env  # noqa: E402
@@ -109,29 +111,13 @@ def is_daemon_alive() -> bool:
 
 
 def _pid_is_running(pid: int) -> bool:
-    """Cross-platform: is the given PID alive?"""
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        import ctypes
-        PROCESS_QUERY_LIMITED_INFO = 0x1000
-        STILL_ACTIVE = 259
-        h = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFO, False, pid)
-        if not h:
-            return False
-        try:
-            code = ctypes.c_ulong(0)
-            if ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(code)) == 0:
-                return False
-            return code.value == STILL_ACTIVE
-        finally:
-            ctypes.windll.kernel32.CloseHandle(h)
-    else:
-        try:
-            os.kill(pid, 0)
-            return True
-        except (ProcessLookupError, PermissionError):
-            return False
+    """Cross-platform: is the given PID alive? See scripts/utils/pid_liveness.
+
+    The private implementation that stood here (and its verbatim twin in
+    sync-exchange-pulse.py) treated PermissionError as dead, so a daemon owned
+    by another user read as stopped and the pulse spawned a duplicate.
+    """
+    return pid_is_running(pid)
 
 
 # ============================================================
@@ -272,14 +258,47 @@ async def _run_daemon(logger: logging.Logger) -> None:
         logger.info("daemon-stop")
 
 
+def _acquire_start_lock():
+    """An exclusive lock held for this process's lifetime, or None.
+
+    POSIX only for now: `fcntl.flock` is released by the kernel on exit, so a
+    crashed daemon leaves no stale lock. Windows has no lock here and the gap is
+    named rather than assumed away -- this daemon runs on Linux.
+    """
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    handle = (RUNTIME_DIR / "daemon.start.lock").open("w", encoding="utf-8")  # noqa: SIM115
+    if os.name == "nt":
+        return handle
+    import fcntl
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
 def cmd_daemon(args) -> None:
+    # Check-then-act is not enough on its own: `is_daemon_alive()` reads the PID
+    # file, which `_run_daemon` writes much later, so two starters both passed
+    # the check and two APScheduler instances then ran the same two-hour
+    # Exchange sync (`max_instances=1` dedupes only within ONE scheduler). The
+    # pulse script makes that likely, because it spawns detached and does not
+    # wait for the PID file. The lock below closes the window; the kernel
+    # releases it when this process exits, so it cannot go stale.
     if is_daemon_alive():
         print("sync-exchange-daemon: already running")
+        sys.exit(1)
+    lock_handle = _acquire_start_lock()
+    if lock_handle is None:
+        print("sync-exchange-daemon: another instance is starting")
         sys.exit(1)
     logger = _setup_logging()
     try:
         asyncio.run(_run_daemon(logger))
     finally:
+        with contextlib.suppress(OSError):
+            lock_handle.close()
         if PID_FILE.exists():
             try:
                 PID_FILE.unlink()

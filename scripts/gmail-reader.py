@@ -70,33 +70,48 @@ def get_header(headers, name):
     return ""
 
 
+NO_TEXT_BODY = "(no text body)"
+
+
 def decode_body(payload):
     """Extract plain text body from message payload."""
     if payload.get("body", {}).get("data"):
         return base64.urlsafe_b64decode(payload["body"]["data"]).decode("utf-8", errors="replace")
 
-    parts = payload.get("parts", [])
-    # Prefer text/plain
+    return _decode_parts(payload.get("parts", [])) or NO_TEXT_BODY
+
+
+def _decode_parts(parts):
+    """Best available text in a part list, or "" when there is none.
+
+    Plain text wins at every depth before any HTML is considered. The old
+    order ran the top-level HTML fallback BEFORE recursing, so a
+    multipart/mixed carrying text/html beside a multipart/alternative whose
+    text/plain sat one level down returned the stripped HTML and never saw
+    the plain part, contradicting the docstring above.
+
+    Returning "" for "nothing here" is the other half. The recursion used to
+    test `if result:` against a function whose worst case was the non-empty
+    string "(no text body)", so the first part that merely HAD sub-parts
+    ended the loop and a later sibling holding the real text was never read.
+    """
     for part in parts:
-        mime = part.get("mimeType", "")
-        if mime == "text/plain" and part.get("body", {}).get("data"):
-            return base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8", errors="replace")
-    # Fallback to text/html stripped
-    for part in parts:
-        mime = part.get("mimeType", "")
-        if mime == "text/html" and part.get("body", {}).get("data"):
-            raw = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8", errors="replace")
-            text = re.sub(r"<[^>]+>", " ", raw)
-            text = html.unescape(text)
-            text = re.sub(r"\s+", " ", text).strip()
-            return text
-    # Recurse into multipart
+        if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
+            return base64.urlsafe_b64decode(
+                part["body"]["data"]).decode("utf-8", errors="replace")
     for part in parts:
         if part.get("parts"):
-            result = decode_body(part)
-            if result:
-                return result
-    return "(no text body)"
+            nested = _decode_parts(part["parts"])
+            if nested:
+                return nested
+    for part in parts:
+        if part.get("mimeType") == "text/html" and part.get("body", {}).get("data"):
+            raw = base64.urlsafe_b64decode(
+                part["body"]["data"]).decode("utf-8", errors="replace")
+            text = re.sub(r"<[^>]+>", " ", raw)
+            text = html.unescape(text)
+            return re.sub(r"\s+", " ", text).strip()
+    return ""
 
 
 def list_messages(service, query, count):
@@ -104,6 +119,53 @@ def list_messages(service, query, count):
         userId="me", q=query, maxResults=count
     ).execute()
     return results.get("messages", [])
+
+
+PAGE_SIZE = 500
+MAX_LIST_PAGES = 200        # 100,000 messages, then stop and say so
+
+
+def list_all_messages(service, query, max_pages=MAX_LIST_PAGES):
+    """Messages matching `query`, following nextPageToken. Returns (rows, complete).
+
+    `mark-all-read` used to call list_messages(..., 100), which passes
+    maxResults=100 and follows no page token, then printed "Marked N emails
+    as read." With 101 unread the operator was told the mailbox was clean
+    while 1 was still unread -- a silent partial completion on a command whose
+    own usage line says "marks ALL unread as read".
+
+    `complete` is False when either bound below stopped the walk. The caller
+    reports that, because "marked N as read" over a truncated list is the very
+    defect this function was written to fix.
+    """
+    # The paging loop is bounded twice, and the reason is not hypothetical.
+    # The first version trusted the server to stop handing out tokens, with no
+    # bound of its own. On 2026-08-24 a mutation-test run disabled the line
+    # that sends the token, the stub replied with the same page forever, and
+    # the process reached 47 GB before the kernel OOM-killer took it and every
+    # other process in the WSL session with it. A loop whose termination
+    # depends entirely on a remote party is a loop that can consume all
+    # memory. So: a page cap, and a refusal to follow a token already followed.
+    out = []
+    token = None
+    seen_tokens = set()
+    for _ in range(max_pages):
+        kwargs = {"userId": "me", "q": query, "maxResults": PAGE_SIZE}
+        if token:
+            kwargs["pageToken"] = token
+        results = service.users().messages().list(**kwargs).execute()
+        out.extend(results.get("messages", []))
+        token = results.get("nextPageToken")
+        if not token:
+            return out, True
+        if token in seen_tokens:
+            print(f"warning: the server repeated page token {token!r}; "
+                  f"stopping after {len(out)} message(s)", file=sys.stderr)
+            return out, False
+        seen_tokens.add(token)
+    print(f"warning: stopped at the {max_pages}-page cap with {len(out)} "
+          f"message(s); more remain", file=sys.stderr)
+    return out, False
 
 
 def get_message_summary(service, msg_id):
@@ -209,7 +271,7 @@ def cmd_mark_read(args):
 
 def cmd_mark_all_read(args):
     service = get_service()
-    messages = list_messages(service, "is:unread", 100)
+    messages, complete = list_all_messages(service, "is:unread")
     if not messages:
         print("No unread emails.")
         return
@@ -220,7 +282,15 @@ def cmd_mark_all_read(args):
             body={"removeLabelIds": ["UNREAD"]}
         ).execute()
         print(f"  [x] {s['subject']}")
-    print(f"\nMarked {len(messages)} emails as read.")
+    if complete:
+        print(f"\nMarked {len(messages)} emails as read.")
+    else:
+        # The whole point of this command's fix: never report completion over
+        # a list that was truncated. `list_all_messages` has already said on
+        # stderr why it stopped.
+        print(f"\nMarked {len(messages)} emails as read. NOT all of them: the "
+              f"listing was cut short (see the warning above). Run the command "
+              f"again to continue.")
 
 
 def main():

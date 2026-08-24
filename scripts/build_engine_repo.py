@@ -32,6 +32,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.utils.atomic import atomic_write_text
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.workspace import (
     get_outputs_dir,
@@ -165,12 +166,15 @@ def main() -> int:
     # data-dir literal instead would drop the manifest into the engine clone -- the
     # exact seam bypass tests/test_data_root_no_bypass.py forbids, and now covers
     # this file (the former blanket exemption hid this very write, 2026-06-28).
+    # Atomic (tmp + os.replace), per the workspace's no-non-atomic-state-writes
+    # rule. A plain write_text left a truncated manifest behind on a crash or a
+    # concurrent read, and the provenance comment directly above is what other
+    # tooling trusts this file to be.
     src_manifest = get_outputs_dir() / "operations" / "workspace" / "engine-build-manifest.json"
-    src_manifest.parent.mkdir(parents=True, exist_ok=True)
-    src_manifest.write_text(
+    atomic_write_text(
+        src_manifest,
         json.dumps({"engine_count": len(engine), "copied": copied,
-                    "target": str(target)}, indent=2),
-        encoding="utf-8",
+                    "target": str(target)}, indent=2) + "\n",
     )
 
     print(f"{GREEN}  built: {copied} files copied, fresh git history, no remote.{RESET}")

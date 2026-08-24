@@ -33,7 +33,7 @@ _NOT_A_SEND = (
 )
 
 
-def send_drafted(workspace_root: Path, artifact_id: str, data_root: "Path | None" = None) -> dict:
+def send_drafted(data_root: "Path | None", artifact_id: str) -> dict:
     """Locate a drafted email by `artifact_id`. NEVER sends.
 
     Looks under `outputs/operations/email-intelligence/drafts/{artifact_id}.json`.
@@ -44,8 +44,11 @@ def send_drafted(workspace_root: Path, artifact_id: str, data_root: "Path | None
     caller that reads only `sent` gets the honest answer, and a caller that wants
     to know whether the draft exists has a field that says so.
 
-    HEADING OS engine/data split: the draft sidecar is DATA, so it resolves under
-    `data_root` (falls back to `workspace_root` when not supplied).
+    HEADING OS engine/data split: the draft sidecar is DATA, so it resolves
+    under `data_root`, which falls back to the `get_data_root()` seam when not
+    supplied. It never fell back to a caller-passed root: the dead leading
+    `workspace_root` this took until 2026-08-24 was read by nothing, and this
+    line promising a fallback to it was wrong the whole time.
     """
     if data_root is None:
         data_root = get_data_root()

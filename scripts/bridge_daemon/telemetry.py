@@ -45,7 +45,16 @@ from pathlib import Path
 class Telemetry:
     def __init__(self, workspace_root: Path):
         self.path = workspace_root / ".daemon-state" / "usage.jsonl"
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Guarded, for the same reason `event()` swallows OSError: a read-only
+        # or full filesystem must not take the daemon down over ANALYTICS. This
+        # mkdir ran at construction, before any of that hardening existed, so
+        # the one failure mode the class was written to absorb killed startup
+        # instead. `event()` re-attempts the directory on each write.
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            logging.warning("telemetry directory %s is not writable; events "
+                            "will be dropped", self.path.parent, exc_info=True)
         self._lock = threading.Lock()
 
     def event(self, name: str, **kwargs) -> None:
@@ -53,15 +62,30 @@ class Telemetry:
         FS does not propagate as HTTP 500 to the caller that triggered the
         event. The Phase J error tracker (scripts/bridge_daemon/error_tracker)
         picks up the warning and surfaces it in the next heartbeat."""
+        # `**kwargs` first, then the real fields: a caller passing `event=` or
+        # `ts=` used to silently overwrite the timestamp and the event name.
         rec = {
+            **kwargs,
             "ts": datetime.now(timezone.utc).isoformat(),
             "event": name,
-            **kwargs,
         }
-        line = json.dumps(rec) + "\n"
         with self._lock:
             try:
+                # `json.dumps` INSIDE the try. It used to sit above it, and it
+                # raises TypeError -- not OSError -- for a non-serialisable
+                # kwarg such as a Path, a datetime or a set. The docstring
+                # above promises a failed telemetry write never reaches the
+                # caller as a 500; with the serialise outside the guard, the
+                # first caller to log a timedelta broke the very action the
+                # event was attached to.
+                line = json.dumps(rec, default=str) + "\n"
+                # Re-attempt the directory here, inside the OSError guard. The
+                # constructor's mkdir is best-effort now, so a daemon that
+                # booted while the tree was unwritable must be able to start
+                # logging once it becomes writable -- otherwise the guard up
+                # there converts a transient fault into a permanent one.
+                self.path.parent.mkdir(parents=True, exist_ok=True)
                 with self.path.open("a", encoding="utf-8") as f:
                     f.write(line)
-            except OSError as e:
+            except (OSError, TypeError, ValueError) as e:
                 logging.warning("telemetry write failed (event=%s): %s", name, e)

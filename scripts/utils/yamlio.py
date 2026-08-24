@@ -39,7 +39,14 @@ except ImportError:  # pragma: no cover - wheel built without libyaml
 
 # Exported so callers/tests can assert which parser is actually in use.
 SafeLoader = _Loader
-USING_LIBYAML = _Loader.__name__ == "CSafeLoader"
+# Identity against the class we would have bound, NOT a comparison of
+# ``__name__`` to the string "CSafeLoader". A name is not a capability: an
+# alias, a subclass or a rename in a future PyYAML would leave this flag
+# reporting the wrong parser with nothing raising. ``yaml.__with_libyaml__``
+# answers "was PyYAML built with libyaml", which is close but not the question
+# either -- this flag has to say whether THIS module bound the C loader, and
+# the import above can fail for reasons the build flag knows nothing about.
+USING_LIBYAML = _Loader is getattr(yaml, "CSafeLoader", None)
 
 
 def safe_load(stream: str | bytes | IO[str] | IO[bytes]) -> Any:

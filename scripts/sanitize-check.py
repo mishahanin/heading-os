@@ -13,7 +13,9 @@ standalone OSS repo and is no longer part of this workspace.)
 The critical-terms list is a deliberately small subset: things whose exposure
 to the fleet would be a compliance incident, not just awkward:
 - Credentials (API keys, session tokens) - caught separately by prevent-secrets hook
-- Personal contact data (mobile numbers, home addresses) not meant for all execs
+- Personal mail addresses (@gmail.com), which are the operator's, not the org's
+  (there is NO mobile-number or postal-address pattern here; adding one is a
+  change to SUBSTRING_CRITICAL, not a claim this docstring may make for it)
 - CEO-only file paths (`crm/contacts/`, `knowledge/odin-brain/`, `_secure/`)
 
 The `_secure/` path marker is retained as a defensive scan term even though the
@@ -81,7 +83,6 @@ TEXT_EXTENSIONS = {
     ".toml",
     ".cfg",
     ".ini",
-    ".env.example",
 }
 
 
@@ -93,16 +94,33 @@ def is_text_file(path: Path) -> bool:
     return False
 
 
+class GitUnavailable(RuntimeError):
+    """git could not report the staged set. NOT the same as an empty staged set."""
+
+
 def staged_files() -> list[Path]:
-    """Return git-staged files (adds + modifies) relative to workspace root."""
+    """Return git-staged files (adds + modifies) relative to workspace root.
+
+    Raises GitUnavailable when git itself fails. Returning `[]` there made a
+    broken git environment -- no repo, no git binary, a corrupt index -- read as
+    "nothing staged", and this gate then printed a gray note and exited 0. A
+    leak gate that fails OPEN on its own tooling error publishes unscanned
+    content while looking healthy.
+
+    `cwd` is pinned to the workspace root for the same reason: without it the
+    command reported whatever repo the caller's directory happened to sit in,
+    and those paths then failed to exist under the engine root -- another silent
+    pass.
+    """
     result = subprocess.run(
         ["git", "diff", "--cached", "--name-only", "--diff-filter=AM"],
         capture_output=True,
         text=True,
         check=False,
+        cwd=str(get_workspace_root()),
     )
     if result.returncode != 0:
-        return []
+        raise GitUnavailable((result.stderr or "git failed").strip())
     return [Path(line) for line in result.stdout.splitlines() if line]
 
 
@@ -152,12 +170,28 @@ def main() -> int:
     boundary_terms = set(WORD_BOUNDARY_CRITICAL)
 
     if args.staged:
-        files = staged_files()
+        try:
+            files = staged_files()
+        except GitUnavailable as exc:
+            print(f"{RED}[ERROR]{RESET} cannot read the staged set: {exc}",
+                  file=sys.stderr)
+            return 2
         if not files:
             print(f"{GRAY}No staged changes to scan.{RESET}")
             return 0
     else:
         files = [Path(f) for f in args.files]
+        # An EXPLICITLY named file that is absent is an invocation error, not a
+        # clean file. `scan_file` returns [] for a missing path, so a typo'd
+        # argument used to be counted as scanned and reported PASS -- the exact
+        # miss this gate exists to prevent. The silent skip stays for --staged,
+        # where a file deleted between the diff and the scan is legitimate.
+        missing = [f for f in files if not (get_workspace_root() / f).exists()
+                   and not f.exists()]
+        if missing:
+            print(f"{RED}[ERROR]{RESET} file(s) not found: "
+                  f"{', '.join(str(m) for m in missing)}", file=sys.stderr)
+            return 2
 
     if not files:
         parser.print_help()

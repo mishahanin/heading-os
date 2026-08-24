@@ -38,6 +38,7 @@ Examples:
 """
 
 import argparse
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -104,8 +105,15 @@ def run(args, cwd, check=True, capture=True):
 
 
 def _have(tool: str) -> bool:
-    """True if a CLI tool is on PATH."""
-    return run(["bash", "-lc", f"command -v {tool}"], cwd=Path.cwd(), check=False).returncode == 0
+    """True if a CLI tool is on PATH.
+
+    `shutil.which`, not `bash -lc "command -v"`. On a Windows host with no
+    Git-bash on PATH, `subprocess.run(["bash", ...])` raises FileNotFoundError
+    — so the PRECONDITION CHECK itself died on a traceback instead of printing
+    "git is not installed", which is the one thing it exists to do. Every other
+    script in this area goes out of its way to stay portable.
+    """
+    return shutil.which(tool) is not None
 
 
 def _gh_authenticated() -> bool:
@@ -237,7 +245,14 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="show what would happen; make no changes")
     args = ap.parse_args()
 
-    target = Path(args.path).expanduser()
+    # Resolved to absolute, because two different working directories consume
+    # this value. `init-data.py` is spawned with `cwd=get_workspace_root()`, so
+    # a relative `--path mydata` scaffolded the tree at `<workspace>/mydata`,
+    # while the .gitignore/README writes and every git command below ran
+    # against `<caller cwd>/mydata`. Running from anywhere but the engine root
+    # produced an empty scaffold in one directory and a git repo with no data
+    # tree in another, and then pushed the wrong one.
+    target = Path(args.path).expanduser().resolve()
     repo_name = args.repo_name or target.name.lstrip(".")
     private = not args.public
 

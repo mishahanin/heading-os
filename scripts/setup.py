@@ -50,16 +50,17 @@ WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 # Constants
 # ---------------------------------------------------------------------------
 
-# Load the GitHub org through the operator seam (operator.yaml/env -> admin.json
-# -> shim). The bootstrap fallback is empty (not a personal literal) because the
-# operator seam cannot be imported here if this except fired; on a healthy fresh
-# clone load_github_org() already returns "" until the operator sets one.
-try:
-    sys.path.insert(0, str(WORKSPACE_ROOT))
-    from scripts.utils.workspace import load_github_org
-    GITHUB_ORG = load_github_org()
-except (ImportError, OSError):
-    GITHUB_ORG = ""
+# GITHUB_ORG used to be computed here and read NOWHERE in this module. The block
+# that produced it also mutated sys.path at import time and called into the
+# workspace seam, which can raise types its `except` did not name -- so a module
+# whose docstring promises "self-contained at import" could die on import, for a
+# value nothing used. `sync-corporate.py` resolves the org itself, where it is
+# actually needed.
+#
+# CORPORATE_REPO STAYS, and is not dead: it is the canonical corporate repo name
+# for the whole workspace, and `tests/test_docs_name_the_corporate_repo_the_code_uses.py`
+# reads this literal out of this file to check every doc against it. Deleting it
+# unanchors that guard, which is how it was caught.
 CORPORATE_REPO = "heading-os-corporate"
 
 # Colors
@@ -147,7 +148,15 @@ def save_state(state: dict):
     """Save setup state."""
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     state["last_updated"] = datetime.now(timezone.utc).isoformat()
-    STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    # Atomic, written inline with stdlib only: a crash mid-write left truncated
+    # JSON, `load_state` swallowed the parse error, and the idempotency
+    # mechanism reset all progress -- at the one moment it exists to help, an
+    # interrupted setup. `scripts.utils.atomic` is deliberately NOT imported:
+    # this module's docstring promises a self-contained stdlib import surface,
+    # and the sys.path mutation that would need was just removed.
+    tmp = STATE_FILE.with_suffix(STATE_FILE.suffix + ".tmp")
+    tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    os.replace(tmp, STATE_FILE)
 
 
 def mark_done(state: dict, step: str):
@@ -305,7 +314,12 @@ def step_setup_env(state: dict) -> bool:
         # of this file and was, until 2026-08-23, never used.
         api_key = getpass.getpass("  Enter your ANTHROPIC_API_KEY (input hidden, "
                                   "or press Enter to skip): ").strip()
-    except (EOFError, KeyboardInterrupt):
+    except EOFError:
+        # KeyboardInterrupt is NOT caught here. Swallowing it wrote a keyless
+        # .env and ran ten more steps, so the user trying to bail out got a
+        # half-configured workspace -- and because .env then "already exists",
+        # the key prompt never appeared again. `main` has a handler that says
+        # "re-run to continue"; this let nothing reach it.
         print()
 
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -324,11 +338,18 @@ def step_setup_env(state: dict) -> bool:
         # GITHUB_TOKEN=
     """)
 
-    env_file.write_text(env_content, encoding="utf-8")
-    # Secrets file: restrict to owner-only (0600) on POSIX so the API key is not
-    # world-readable. Windows uses ACLs, not POSIX modes, so skip the chmod there.
+    # Created 0600 FROM BIRTH, not chmod'd afterwards. `write_text` applies the
+    # process umask (commonly 0644), so the API key sat world-readable for the
+    # window between the write and the chmod -- and the write was not atomic
+    # either, so a concurrent reader could see a partial key.
     if platform.system() != "Windows":
+        fd = os.open(str(env_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(env_content)
         env_file.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    else:
+        # Windows uses ACLs, not POSIX modes; the mode argument is ignored there.
+        env_file.write_text(env_content, encoding="utf-8")
     if api_key:
         ok(".env created with API key")
     else:
@@ -361,12 +382,16 @@ def step_clone_corporate(state: dict) -> bool:
         )
         if result.returncode == 0:
             ok(".corporate-repo/ ready (clone/pull via sync-corporate.py)")
+            mark_done(state, "clone_corporate")
         else:
-            warn("sync-corporate.py reported an issue -- continuing with existing content")
+            # NOT marked done. Marking a failed clone complete meant the
+            # "idempotent, safe to re-run" promise actively prevented recovery:
+            # the workspace never got .corporate-repo/, and the only way to
+            # retry was to delete .sync/setup-state.json by hand.
+            warn("sync-corporate.py reported an issue -- NOT marking this step "
+                 "done; re-run setup to retry the clone")
     except (FileNotFoundError, OSError) as e:
-        warn(f"Could not run sync-corporate.py: {e}")
-
-    mark_done(state, "clone_corporate")
+        warn(f"Could not run sync-corporate.py: {e} -- NOT marking this step done")
     return True
 
 
@@ -544,8 +569,11 @@ def step_install_python_deps(state: dict) -> bool:
 
     files_installed = []
 
-    # Layer 1: corporate/requirements.txt (shared 31C platform deps from corporate sync)
-    corp_req = WORKSPACE_ROOT / "corporate" / "requirements.txt"
+    # Layer 1: the corporate clone's requirements, if it publishes one.
+    # This read `corporate/requirements.txt`, a path only the deleted
+    # copy-into-workspace step ever produced, so the branch was dead on every
+    # install while its output claimed a layered design the repo dropped.
+    corp_req = WORKSPACE_ROOT / ".corporate-repo" / "requirements.txt"
     if corp_req.exists():
         print(f"  Layer 1: {corp_req.relative_to(WORKSPACE_ROOT)}")
         print(f"    Running: {sys.executable} -m pip install -r {corp_req}")
@@ -637,7 +665,10 @@ def step_verify(state: dict) -> bool:
 
     # Check corporate content
     checks_total += 1
-    biz_info = WORKSPACE_ROOT / "corporate" / "context" / "business-info.md"
+    # `.corporate-repo/`, not `corporate/`: the in-tree copy was retired, so
+    # this check failed on every correctly-set-up workspace and trained the
+    # operator to ignore a permanent "Checks passed: 3/4".
+    biz_info = WORKSPACE_ROOT / ".corporate-repo" / "context" / "business-info.md"
     if biz_info.exists():
         ok("corporate/context/business-info.md exists")
         checks_passed += 1
@@ -697,9 +728,16 @@ def step_summary(identity: dict):
 
     print(f"\n{BOLD}Workspace:{RESET}  {WORKSPACE_ROOT}")
     print(f"{BOLD}Identity:{RESET}   {slug} ({identity.get('type', 'unknown')})")
-    print(f"{BOLD}Corporate:{RESET}  .corporate-repo/ -> corporate/ (read-only)")
-    print(f"{BOLD}CRM:{RESET}        .crm-central-repo/contacts/{slug}/")
-    print(f"{BOLD}Sync:{RESET}       Scheduled (hourly)")
+    # The last thing a new operator reads, so it has to be true. All three
+    # lines here described a world that no longer exists: the corporate copy
+    # into an in-tree corporate/ (step 8's docstring says nothing is copied),
+    # the CRM-central repo (steps 7 and 9 call it deprecated), and the hourly
+    # sync (step 11's docstring says it was retired).
+    print(f"{BOLD}Corporate:{RESET}  read in place from .corporate-repo/ (nothing is copied in)")
+    print(f"{BOLD}Data:{RESET}       your own work lives in the data overlay; "
+          f"push it with scripts/push-all.py")
+    print(f"{BOLD}Sync:{RESET}       code-down: git pull  |  data-up: push-all.py  |  "
+          f"Sentinel on a 15-min schedule")
 
     print(f"\n{BOLD}Next steps:{RESET}")
     print(f"  1. Edit {CYAN}.env{RESET} to add/verify your API keys")

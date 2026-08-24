@@ -27,15 +27,14 @@ Output:
 """
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.perplexity_client import research as _pplx_research
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-WORKSPACE_ROOT = os.path.dirname(SCRIPT_DIR)
+# SCRIPT_DIR / WORKSPACE_ROOT were computed here and read nowhere, implying
+# this script resolves its own workspace when perplexity_client does all of it.
 
 
 def query_perplexity(question, model="sonar-pro", system_prompt=None,

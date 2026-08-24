@@ -15,6 +15,7 @@ light theme).
 """
 
 import argparse
+import functools
 import html as html_stdlib
 import json
 import re
@@ -30,6 +31,7 @@ except ImportError:
     print("ERROR: markdown library not installed. Run: pip install markdown pymdown-extensions", file=sys.stderr)
     sys.exit(2)
 
+from scripts.utils.atomic import atomic_write_text  # noqa: E402
 from scripts.utils.workspace import get_data_root, get_workspace_root  # noqa: E402
 
 ROOT = get_workspace_root()
@@ -315,7 +317,7 @@ def sync_nav(html_path: Path, quiet: bool = False) -> bool:
     )
     new_text = NAV_BLOCK_RE.sub(lambda _m: replacement, text, count=1)
     if new_text != text:
-        html_path.write_text(new_text, encoding="utf-8")
+        atomic_write_text(html_path, new_text)
         if not quiet:
             print(f"  nav-synced {_display_path(html_path)}")
     return True
@@ -492,9 +494,12 @@ def build_search_index(quiet: bool = False) -> int:
                 "t": sec["text"],
             })
     SEARCH_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SEARCH_INDEX_PATH.write_text(
+    # Atomic. This index is served live on the public docs site, so an
+    # interrupted --all used to leave a truncated JSON that broke search
+    # site-wide until the next successful run.
+    atomic_write_text(
+        SEARCH_INDEX_PATH,
         json.dumps(records, ensure_ascii=False, separators=(",", ":")),
-        encoding="utf-8",
     )
     if not quiet:
         kb = SEARCH_INDEX_PATH.stat().st_size / 1024
@@ -522,12 +527,13 @@ def inject_search(html_path: Path, quiet: bool = False) -> bool:
     if "assets/search.js" not in text and "</body>" in text:
         text = text.replace("</body>", SEARCH_SCRIPT + "\n</body>", 1)
     if text != orig:
-        html_path.write_text(text, encoding="utf-8")
+        atomic_write_text(html_path, text)
         if not quiet:
             print(f"  search-injected {_display_path(html_path)}")
     return True
 
 
+@functools.lru_cache(maxsize=1)
 def load_css() -> str:
     if not CSS_PATH.exists():
         print(f"ERROR: CSS template missing: {CSS_PATH}", file=sys.stderr)
@@ -759,7 +765,7 @@ def regenerate(md_path: Path, quiet: bool = False) -> bool:
             source_name=html_stdlib.escape(md_path.name),
         )
 
-    html_path.write_text(full_html, encoding="utf-8")
+    atomic_write_text(html_path, full_html)
     if not quiet:
         print(f"  {_display_path(md_path)} -> {_display_path(html_path)}")
     return True
@@ -864,7 +870,18 @@ def main():
         pairs = find_tracked_pairs()
         if not args.quiet:
             print(f"Regenerating {len(pairs)} HTML file(s)...")
-        ok = all(regenerate(md, quiet=args.quiet) for md in pairs)
+        # A LIST, then all() -- not a generator. `all()` short-circuits, so the
+        # first unreadable markdown file stopped every later page from being
+        # regenerated at all, while --check and the drift guard then flagged a
+        # tree this run never attempted. The search index was rebuilt from that
+        # partially-stale HTML.
+        results = [regenerate(md, quiet=args.quiet) for md in pairs]
+        ok = all(results)
+        if not ok:
+            failed = [str(md) for md, good in zip(pairs, results, strict=True) if not good]
+            print(f"{len(failed)} page(s) failed to regenerate:", file=sys.stderr)
+            for path in failed:
+                print(f"  {path}", file=sys.stderr)
         if not args.quiet:
             print("Syncing nav + search box on hand-authored site pages...")
         ok = sync_all_navs(quiet=args.quiet) and ok

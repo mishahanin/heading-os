@@ -110,6 +110,13 @@ def parse_registry() -> tuple[dict[str, dict], list[str]]:
         routing["exclusions"] = [e.strip() for e in exclusions_cell.split(EXCL_SEP)]
         routing["compound"] = compound_cell
         routing["router"] = "manual" if "NEVER auto-trigger" in triggers_cell else "auto"
+        if name in rows:
+            # Every other anomaly in this parser appends a warning; a duplicate
+            # row silently replaced the first, so one category's triggers were
+            # lost with no signal at all.
+            warnings.append(
+                f"duplicate router row for {name}: the later one wins and the "
+                f"earlier row's triggers are dropped")
         rows[name] = routing
     return rows, warnings
 
@@ -146,9 +153,19 @@ def apply_block(skill_md: Path, routing: dict) -> str:
     """Insert/replace the x-heading-routing block at the end of the frontmatter. Returns the
     rendered block text (for dry-run display)."""
     text = skill_md.read_text(encoding="utf-8")
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        raise ValueError(f"{skill_md}: malformed frontmatter")
+    # Split on FENCE LINES, not on the substring `---` anywhere in the file.
+    # `text.split("---", 2)` had two failure modes, and both CORRUPTED the file
+    # while reporting success: a frontmatter value containing `---`
+    # (`description: "alpha --- beta"`) was split mid-frontmatter, so the block
+    # landed inside the YAML and the closing fence inside a value; and a file
+    # with NO frontmatter but two horizontal rules in its body passed the
+    # `len(parts) < 3` check and had the block spliced into its prose.
+    if not text.startswith("---\n"):
+        raise ValueError(f"{skill_md}: does not open with a frontmatter fence")
+    close = re.search(r"^---[ \t]*$", text[4:], re.MULTILINE)
+    if close is None:
+        raise ValueError(f"{skill_md}: frontmatter is never closed")
+    parts = ["", text[4:4 + close.start()], text[4 + close.end():]]
     block = _render_block(routing)  # ends with a trailing newline
     fm_yaml = parts[1].strip("\n")  # pure frontmatter body, no fence-adjacent newlines
     fm_lines = _strip_existing_block(fm_yaml.split("\n"))

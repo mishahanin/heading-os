@@ -25,6 +25,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -53,14 +54,37 @@ DEFAULT_SESSIONS_DIR = _derive_sessions_dir()
 DEFAULT_MAX_BYTES = 800_000
 
 
+def _mtime(path: Path) -> float:
+    """Modification time, or 0.0 for a file that vanished mid-sort.
+
+    Transcripts rotate. `sorted(..., key=lambda p: p.stat().st_mtime)` stats
+    each candidate AFTER the glob listed it, so a file deleted in between
+    raised an uncaught FileNotFoundError and crashed the whole run with exit 1
+    instead of skipping the one candidate that no longer exists.
+    """
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def locate_session(sessions_dir: Path) -> Path | None:
     """Return the newest .jsonl file in sessions_dir by mtime, or None."""
-    candidates = sorted(sessions_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    candidates = sorted(sessions_dir.glob("*.jsonl"), key=_mtime, reverse=True)
     return candidates[0] if candidates else None
 
 
 def parse_jsonl(path: Path) -> tuple[list, list]:
-    """Return (events, skipped_line_numbers). Tolerate malformed lines."""
+    """Return (events, skipped_line_numbers). Tolerate malformed lines.
+
+    "Malformed" covers two shapes, and until 2026-08-24 it covered only the
+    first. Unparseable JSON was skipped, but a line holding well-formed JSON
+    that is not an OBJECT — `null`, `123`, `"text"`, `[]` — was appended as an
+    event, and every consumer downstream calls `.get()` on it: `build_envelope`
+    at the type switch, the first/last timestamp reads, and the `--since-utc`
+    filter. One odd line killed the entire run with an AttributeError, which is
+    the opposite of the tolerance this docstring promises.
+    """
     events = []
     skipped = []
     with path.open("r", encoding="utf-8") as fh:
@@ -69,9 +93,14 @@ def parse_jsonl(path: Path) -> tuple[list, list]:
             if not line:
                 continue
             try:
-                events.append(json.loads(line))
+                obj = json.loads(line)
             except json.JSONDecodeError:
                 skipped.append(lineno)
+                continue
+            if not isinstance(obj, dict):
+                skipped.append(lineno)
+                continue
+            events.append(obj)
     return events, skipped
 
 
@@ -127,11 +156,20 @@ def build_envelope(session_path: Path, events: list) -> dict:
                 assistant_turns.append({"ts": ts, "text": text})
         elif ev_type == "tool_use":
             tool = ev.get("tool", "")
-            cmd = ev.get("input", {}).get("command", "")
+            # `.get("input", {})` only defaults when the KEY IS ABSENT, so an
+            # explicit `"input": null` (or a string) went straight to
+            # AttributeError. The correct idiom is four lines above this one,
+            # on `message` — an inconsistent guard, not a design choice.
+            raw_input = ev.get("input")
+            cmd = raw_input.get("command", "") if isinstance(raw_input, dict) else ""
             if tool:
                 last_tool_use_cmd[tool] = cmd
         elif ev_type == "tool_result":
-            exit_code = ev.get("exit_code", 0)
+            # A null exit_code means "the harness did not record one", not
+            # "failed": `None != 0` was recording every such result as an error.
+            exit_code = ev.get("exit_code")
+            if exit_code is None:
+                exit_code = 0
             stderr = ev.get("stderr", "")
             if exit_code != 0 or stderr:
                 tool = ev.get("tool", "")
@@ -162,16 +200,130 @@ def build_envelope(session_path: Path, events: list) -> dict:
     }
 
 
+def _instant(ts: str):
+    """An ISO timestamp as an aware datetime, or None if it will not parse."""
+    if not isinstance(ts, str) or not ts:
+        return None
+    try:
+        parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def filter_since(events: list, since_utc: str) -> list:
+    """Keep events at or after `since_utc`, comparing instants, not strings.
+
+    `ev["timestamp"] >= args.since_utc` was a LEXICOGRAPHIC comparison until
+    2026-08-24, and a transcript mixes offset notations. `'+' < 'Z'`, so
+    `2026-08-22T10:00:00+00:00` sorts before `2026-08-22T10:00:00Z` even though
+    they are the same instant, and an event exactly at the threshold was
+    dropped or kept depending on which form the harness happened to write.
+
+    An unparseable `--since-utc` is a caller error and raises. An unparseable
+    event timestamp is data, so it is KEPT: over-reporting beats silently
+    discarding a turn the filter could not read.
+    """
+    floor = _instant(since_utc)
+    if floor is None:
+        raise ValueError(f"--since-utc is not an ISO timestamp: {since_utc!r}")
+    out = []
+    for ev in events:
+        stamp = _instant(ev.get("timestamp", ""))
+        if stamp is None or stamp >= floor:
+            out.append(ev)
+    return out
+
+
+def envelope_bytes(envelope: dict) -> int:
+    """Serialized size of the envelope, in the encoding `main` prints."""
+    return len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
+
+
+def _pop_oldest(envelope: dict, keys: tuple[str, ...]) -> bool:
+    """Drop the single oldest entry across `keys`. False when all are empty.
+
+    Each list is already chronological, so the oldest overall is whichever
+    list's head has the earliest `ts`. Shedding both sides together keeps the
+    surviving tail a two-sided conversation; draining one list first would
+    leave the questions without the answers.
+
+    Compared as INSTANTS, not as strings. The heads were sorted raw until
+    2026-08-24, which is the same defect `filter_since` documents twenty lines
+    up: a transcript mixes offset notations and `'+' < 'Z'`, so
+    `...T09:00:00Z` sorts before `...T10:00:00+05:00` while being four hours
+    LATER. Under truncation that shed the newer turn and kept the older one.
+    The module already had `_instant`; this was the one place that did not
+    reach for it.
+    """
+    heads = [(envelope[k][0].get("ts", ""), k) for k in keys if envelope.get(k)]
+    if not heads:
+        return False
+
+    def _age(head):
+        moment = _instant(head[0])
+        # An unplaceable stamp sheds FIRST. It cannot be compared against a
+        # datetime without a TypeError, and falling back to string order is
+        # the bug this function exists to stop.
+        return (0, 0.0) if moment is None else (1, moment.timestamp())
+
+    heads.sort(key=_age)
+    envelope[heads[0][1]].pop(0)
+    return True
+
+
 def apply_truncation(envelope: dict, max_bytes: int) -> dict:
-    """Drop oldest user_turns until serialized envelope fits within max_bytes."""
-    serialized = json.dumps(envelope, ensure_ascii=False)
-    if len(serialized.encode("utf-8")) <= max_bytes:
+    """Shed oldest entries toward `max_bytes`, and never fake having reached it.
+
+    This shed ONLY `user_turns` until 2026-08-24, and stopped when that list
+    emptied — returning an envelope that could still be many times `max_bytes`,
+    stamped `"truncated": True`, with no warning and exit 0. Doubly wrong
+    because this module's own measurement (`_turn_text`) found assistant turns
+    carry 96% of the prose: the loop shed the lighter side and never touched
+    the heavy one.
+
+    Order: harness boilerplate first, then the oldest prose from both sides
+    together, then the small diagnostic list. `tool_errors` goes last because
+    it is cheap and it is what the /calibrate skill reads for failure patterns.
+
+    The size is a target, not a guarantee — a `max_bytes` smaller than the bare
+    metadata cannot be met by shedding anything. Callers check
+    `envelope_bytes()` against their own budget; `main` warns on stderr.
+    """
+    if envelope_bytes(envelope) <= max_bytes:
         return envelope
     envelope["truncated"] = True
-    # Drop oldest user_turns first - they're typically the heaviest
-    while envelope["user_turns"] and len(json.dumps(envelope, ensure_ascii=False).encode("utf-8")) > max_bytes:
-        envelope["user_turns"].pop(0)
+    while envelope["system_reminders"] and envelope_bytes(envelope) > max_bytes:
+        envelope["system_reminders"].pop(0)
+    while envelope_bytes(envelope) > max_bytes:
+        if not _pop_oldest(envelope, ("user_turns", "assistant_turns")):
+            break
+    while envelope["tool_errors"] and envelope_bytes(envelope) > max_bytes:
+        envelope["tool_errors"].pop(0)
     return envelope
+
+
+def _ceo_only_paths() -> list[str]:
+    """The path prefixes the routing map resolves to `private`.
+
+    This field was a hardcoded `[]` until 2026-08-24 while both the module
+    docstring and this function's own docstring promised it was enumerated, so
+    a consumer could not tell "no ceo-only paths exist" from "this is a stub" —
+    the coverage claim `.claude/rules/scope-claims.md` forbids. The routing map
+    is the workspace's single classification input, so read it rather than
+    restate it: a second list would be the copy that stops being updated.
+    """
+    try:
+        from scripts.utils.workspace import load_routing_map
+    except ImportError:
+        return []
+    try:
+        rules = load_routing_map()["rules"]
+    except Exception as exc:  # a broken map must not take the envelope down
+        print(f"{YELLOW}[workspace warning]{RESET} routing map unreadable "
+              f"({exc}); ceo_only_paths omitted.", file=sys.stderr)
+        return []
+    return sorted(k for k, dest in rules.items() if dest == "private")
 
 
 def populate_workspace_block(repo_root: Path) -> dict:
@@ -180,7 +332,7 @@ def populate_workspace_block(repo_root: Path) -> dict:
     rules_dir = repo_root / ".claude" / "rules"
     skills = sorted(p.name for p in skills_dir.iterdir() if p.is_dir() and p.name != "archive") if skills_dir.exists() else []
     rules = sorted(p.name for p in rules_dir.glob("*.md")) if rules_dir.exists() else []
-    return {"skills": skills, "rules": rules, "ceo_only_paths": []}
+    return {"skills": skills, "rules": rules, "ceo_only_paths": _ceo_only_paths()}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -210,10 +362,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{YELLOW}[parser warning]{RESET} skipped {len(skipped)} malformed line(s): {skipped}", file=sys.stderr)
 
     if args.since_utc:
-        events = [ev for ev in events if ev.get("timestamp", "") >= args.since_utc]
+        try:
+            events = filter_since(events, args.since_utc)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 1
 
     envelope = build_envelope(session_path, events)
     envelope = apply_truncation(envelope, args.max_bytes)
+    actual = envelope_bytes(envelope)
+    if actual > args.max_bytes:
+        print(f"{YELLOW}[truncation warning]{RESET} envelope is {actual} bytes "
+              f"after shedding every droppable list; --max-bytes "
+              f"{args.max_bytes} could not be met.", file=sys.stderr)
     if not args.no_workspace:
         envelope["workspace"] = populate_workspace_block(get_workspace_root())
 

@@ -38,7 +38,7 @@ def _draft(root: Path, artifact_id: str) -> Path:
 
 def test_an_existing_draft_is_found_but_never_reported_as_sent(tmp_path):
     _draft(tmp_path, "abc123")
-    result = send_drafted(tmp_path, "abc123", data_root=tmp_path)
+    result = send_drafted(tmp_path, "abc123")
     assert result["sent"] is False, "nothing in this function can send an email"
     assert result["found"] is True
     assert "action-queue.py approve" in result["error"], (
@@ -47,7 +47,7 @@ def test_an_existing_draft_is_found_but_never_reported_as_sent(tmp_path):
 
 
 def test_a_missing_draft_is_not_sent_either(tmp_path):
-    result = send_drafted(tmp_path, "nope", data_root=tmp_path)
+    result = send_drafted(tmp_path, "nope")
     assert result["sent"] is False
     assert result["found"] is False
     assert "not found" in result["error"]
@@ -71,4 +71,4 @@ def test_the_module_reaches_no_transport(tmp_path):
 
 def test_a_traversing_artifact_id_is_still_refused(tmp_path):
     with pytest.raises(ValueError):
-        send_drafted(tmp_path, "../../etc/passwd", data_root=tmp_path)
+        send_drafted(tmp_path, "../../etc/passwd")

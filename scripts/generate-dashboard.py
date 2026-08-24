@@ -19,7 +19,7 @@ import json
 import re
 import subprocess
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -36,6 +36,7 @@ from scripts.utils.workspace import (
     get_people_file,
 )
 from scripts.utils.markdown import parse_frontmatter as _parse_fm
+from scripts.utils.markdown import parse_md_table
 
 # ============================================================
 # Paths
@@ -46,7 +47,6 @@ WORKSPACE = SCRIPT_DIR.parent
 PIPELINE_FILE = get_context_dir() / "pipeline.md"
 STRATEGY_FILE = get_context_dir() / "strategy.md"
 METRICS_FILE = get_context_dir() / "current-data.md"
-PEOPLE_FILE = get_people_file()
 CALENDAR_FILE = get_outputs_dir() / "_sync" / "calendar" / "upcoming.md"
 EMAIL_FILE = get_outputs_dir() / "_sync" / "emails" / "inbox-latest.md"
 HTML_TO_PDF_SCRIPT = SCRIPT_DIR / "html-to-pdf.py"
@@ -80,9 +80,10 @@ def load_font_b64(path):
 TODAY = datetime.now(get_default_tz()).date()
 NOW = datetime.now(get_default_tz())
 
-# Calendar times from Exchange are stored in UTC.
-# Convert to CEO local timezone (the configured timezone = UTC+4).
-CALENDAR_UTC_OFFSET_HOURS = 4
+# Calendar times from Exchange are stored in UTC. collect_calendar() converts
+# them with get_default_tz(), the same seam the rest of this file uses.
+# CALENDAR_UTC_OFFSET_HOURS = 4 used to live here and was applied instead: a
+# constant offset beside a comment asserting it equalled the configured zone.
 
 
 # ============================================================
@@ -100,57 +101,38 @@ def read_file(path):
     return ""
 
 
-def parse_md_table(text, header_pattern=None):
-    """Parse a markdown table into list of dicts. Optionally start from a line
-    matching header_pattern."""
-    lines = text.split("\n")
-    start = 0
-    if header_pattern:
-        for i, line in enumerate(lines):
-            if re.search(header_pattern, line):
-                start = i
-                break
-        else:
-            return []
-
-    # Find header row (first line with |)
-    headers = None
-    data_start = None
-    for i in range(start, min(start + 20, len(lines))):
-        line = lines[i].strip()
-        if "|" in line and "---" not in line and not headers:
-            cells = [c.strip() for c in line.split("|")]
-            headers = [c for c in cells if c]
-            continue
-        if headers and "---" in line:
-            data_start = i + 1
-            break
-
-    if not headers or data_start is None:
-        return []
-
-    rows = []
-    for i in range(data_start, len(lines)):
-        line = lines[i].strip()
-        if not line or not line.startswith("|"):
-            if line.startswith("#") or line.startswith("---"):
-                break
-            if not line:
-                continue
-            break
-        cells = [c.strip() for c in line.split("|")]
-        cells = [c for c in cells if c != ""]
-        if len(cells) >= len(headers):
-            row = {}
-            for j, h in enumerate(headers):
-                row[h] = cells[j] if j < len(cells) else ""
-            rows.append(row)
-    return rows
+# parse_md_table used to live here, and an identical copy lived in
+# generate-crm-dashboard.py. Both carried the same two defects: an empty cell
+# was deleted instead of held in place, and a row that came out shorter than
+# the header was DROPPED without a word. One empty Notes cell removed a whole
+# deal from the count, the total, the weighted total and the top three. The
+# shared implementation in scripts/utils/markdown.py pads and warns instead.
 
 
 # ============================================================
 # Data Collectors
 # ============================================================
+HEALTH_BUCKETS = ("red", "yellow", "green", "gray")
+
+
+def health_bucket(contact):
+    """The card a contact belongs on. Never raises, never silently vanishes.
+
+    `result[c["health"]]` was a bare lookup, so one contact whose health
+    scanned as "RED" or "unknown" raised KeyError, which the broad
+    `except Exception` in collect_crm_health caught -- leaving the buckets
+    HALF filled and commitments_due EMPTY. The Urgent Items panel then read
+    "All Clear" while overdue commitments existed.
+    """
+    health = str(contact.get("health") or "gray").strip().lower()
+    if health not in HEALTH_BUCKETS:
+        print(f"  Warning: contact {contact.get('name', '?')!r} has health "
+              f"{contact.get('health')!r}; counted as gray", file=sys.stderr)
+        return "gray"
+    return health
+
+
+
 def collect_crm_health():
     """Scan CRM contacts via in-process import (no subprocess overhead).
 
@@ -187,8 +169,13 @@ def collect_crm_health():
         result["contacts"] = contacts
         result["total"] = len(contacts)
         for c in contacts:
-            health = c.get("health", "gray")
-            result[health].append(c)
+            # `result[health]` was a bare lookup, so one contact whose health
+            # scanned as "RED" or "unknown" raised KeyError, which the broad
+            # `except Exception` below caught -- leaving the buckets HALF
+            # filled and commitments_due EMPTY. The Urgent Items panel then
+            # showed "All Clear" while overdue commitments existed. An
+            # unrecognised value is grey now, and says so once.
+            result[health_bucket(c)].append(c)
             for commit in c.get("commitments", []):
                 due = commit.get("due")
                 if due:
@@ -228,16 +215,14 @@ def collect_pipeline():
         "Proposal": 0.50, "Negotiation": 0.75, "Won": 1.0,
     }
 
-    # Pipeline Summary table (pre-computed totals as fallback)
-    summary_rows = parse_md_table(content, r"##\s*Pipeline Summary")
-    summary = {}
-    for row in summary_rows:
-        metric = row.get("Metric", "")
-        value = row.get("Value", "")
-        summary[metric] = value
+    # The Pipeline Summary table used to be parsed into a `summary` dict here
+    # under a comment calling it a "fallback". Nothing read it. The totals
+    # below are computed from the Active Deals rows, so either the fallback was
+    # never written or it was removed and its parse left behind; parsing a
+    # table to throw it away is not a fallback either way.
 
     # Active Deals table
-    deals = parse_md_table(content, r"##\s*Active Deals")
+    deals = parse_md_table(content, r"##\s*Active Deals", source=str(PIPELINE_FILE))
     result["deals"] = deals
     result["total_deals"] = len(deals)
 
@@ -250,12 +235,8 @@ def collect_pipeline():
         stage = d.get("Stage", "Unknown").strip()
         result["stages"][stage] = result["stages"].get(stage, 0) + 1
 
-        # Parse estimated value
-        val_str = d.get("Est. Value", "").replace("$", "").replace(",", "").strip()
-        try:
-            val = int(val_str)
-        except (ValueError, TypeError):
-            val = 0
+        val = parse_money(d.get("Est. Value", ""),
+                          where=f"{PIPELINE_FILE} deal {d.get('Company', '?')!r}")
         total_value += val
 
         prob = stage_prob.get(stage, 0.05)
@@ -282,21 +263,65 @@ def collect_pipeline():
     result["top_deals"] = [(d, w) for d, w in deal_weighted[:3]]
 
     # Investor Conversations
-    investors = parse_md_table(content, r"##\s*Investor Conversations")
+    investors = parse_md_table(content, r"##\s*Investor Conversations", source=str(PIPELINE_FILE))
     result["investors"] = investors
     result["total_investors"] = len(investors)
 
     # Partnership Discussions
-    partnerships = parse_md_table(content, r"##\s*Partnership Discussions")
+    partnerships = parse_md_table(content, r"##\s*Partnership Discussions", source=str(PIPELINE_FILE))
     result["partnerships"] = partnerships
     result["total_partnerships"] = len(partnerships)
 
     # Won / Closed
-    won = parse_md_table(content, r"##\s*Won\s*/\s*Closed")
+    won = parse_md_table(content, r"##\s*Won\s*/\s*Closed", source=str(PIPELINE_FILE))
     result["won"] = won
     result["total_won"] = len(won)
 
     return result
+
+
+_MONEY_RE = re.compile(r"^~?\$?\s*([0-9]+(?:\.[0-9]+)?)\s*([kmb])?$", re.IGNORECASE)
+_MONEY_SCALE = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
+
+
+def parse_money(raw, where="pipeline"):
+    """A deal value in whole units. Unparseable is 0 AND a warning.
+
+    `int(val_str)` after stripping `$` and `,` was the whole parser, so
+    `$1.5M`, `2.5m`, `~500000` and `500k` all became 0 in silence: the total
+    and weighted pipeline understated by the size of the deal, and the
+    Top 3 ranking put a real deal below a parsed-to-zero one. A value that
+    cannot be read is still 0, because inventing a number is worse, but it
+    no longer happens without saying so.
+    """
+    text = str(raw or "").replace(",", "").strip()
+    if not text:
+        return 0
+    m = _MONEY_RE.match(text)
+    if not m:
+        print(f"  Warning: cannot read value {raw!r} in {where}; counted as 0",
+              file=sys.stderr)
+        return 0
+    amount = float(m.group(1)) * _MONEY_SCALE.get((m.group(2) or "").lower(), 1)
+    return int(amount)
+
+
+def _as_int_or_count(value):
+    """A count from a field whose shape the producer never promised.
+
+    `reflect_clusters` arrives verbatim from `odin-cadence.py --json`. The
+    dashboard compared it with `> 0` on two lines, so a list of clusters --
+    a perfectly plausible shape for a field with that name -- raised
+    TypeError and took the whole dashboard down. A list is counted, a number
+    is used, anything else is None (rendered as "-").
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value)
+    return None
 
 
 def collect_calendar():
@@ -312,35 +337,47 @@ def collect_calendar():
     if sync_match:
         result["sync_time"] = sync_match.group(1).strip()
 
-    # Find today's section
-    today_str = TODAY.strftime("%Y-%m-%d")
-    today_pattern = rf"##\s*{re.escape(today_str)}"
-    today_match = re.search(today_pattern, content)
-    if not today_match:
-        return result
-
-    # Extract text from today's header to next date header
-    rest = content[today_match.start():]
-    next_header = re.search(r"\n##\s*\d{4}-\d{2}-\d{2}", rest[3:])
-    if next_header:
-        section = rest[:next_header.start() + 3]
-    else:
-        section = rest
-
-    # Parse the meeting table in this section
-    meetings = parse_md_table(section)
-
-    # Convert meeting times from UTC to the configured local timezone
-    for m in meetings:
-        raw_time = m.get("Time", "").strip()
-        if raw_time and re.match(r"\d{1,2}:\d{2}", raw_time):
+    # Every UTC-dated section, converted, then filtered by LOCAL date.
+    #
+    # This used to find the one section whose header equalled the LOCAL today,
+    # then add a hardcoded four hours. Two things were wrong. The offset was a
+    # constant while the rest of the file derives its timezone from
+    # get_default_tz(), so a different configured zone, or any zone that
+    # observes DST, made every calendar time wrong and nothing else. And the
+    # section was chosen BEFORE conversion, so a 22:30 UTC meeting was shown as
+    # 02:30 under today's heading when it belongs to tomorrow, while tomorrow's
+    # early meetings never appeared at all.
+    tz = get_default_tz()
+    meetings = []
+    for sec in re.finditer(r"##\s*(\d{4}-\d{2}-\d{2})", content):
+        try:
+            section_date = date.fromisoformat(sec.group(1))
+        except ValueError:
+            continue
+        rest = content[sec.start():]
+        nxt = re.search(r"\n##\s*\d{4}-\d{2}-\d{2}", rest[3:])
+        section = rest[:nxt.start() + 3] if nxt else rest
+        for m in parse_md_table(section, source=str(CALENDAR_FILE)):
+            raw_time = m.get("Time", "").strip()
+            if not re.match(r"\d{1,2}:\d{2}", raw_time):
+                continue
             try:
-                t = datetime.strptime(raw_time, "%H:%M").replace(tzinfo=timezone.utc)
-                t += timedelta(hours=CALENDAR_UTC_OFFSET_HOURS)
-                m["Time"] = t.strftime("%H:%M")
+                # `time.fromisoformat`, not `datetime.strptime(...).time()`.
+                # Only the clock is wanted here — the zone is applied one line
+                # below — and building a naive datetime to throw it away put a
+                # tz-less datetime on the page for a linter to flag and for the
+                # next reader to wonder about.
+                clock = time.fromisoformat(raw_time[:5])
             except ValueError:
-                pass
+                continue
+            local = datetime.combine(section_date, clock,
+                                     tzinfo=timezone.utc).astimezone(tz)
+            if local.date() != TODAY:
+                continue
+            m["Time"] = local.strftime("%H:%M")
+            meetings.append(m)
 
+    meetings.sort(key=lambda m: m.get("Time", ""))
     result["meetings"] = meetings
     return result
 
@@ -361,7 +398,7 @@ def collect_emails():
     if count_match:
         result["count"] = int(count_match.group(1))
 
-    emails = parse_md_table(content)
+    emails = parse_md_table(content, source=str(EMAIL_FILE))
     result["emails"] = emails
     return result
 
@@ -437,7 +474,10 @@ def collect_freshness():
         ("pipeline.md", CONTEXT_DIR / "pipeline.md"),
         ("current-data.md", CONTEXT_DIR / "current-data.md"),
         ("strategy.md", CONTEXT_DIR / "strategy.md"),
-        ("people.md", CONTEXT_DIR / "people.md"),
+        # get_people_file() is the seam; a second literal here checked a
+        # different file whenever the two disagreed, and PEOPLE_FILE (which
+        # held the seam value) was assigned at import and read nowhere.
+        ("people.md", get_people_file()),
     ]
     result = []
     for name, path in files_to_check:
@@ -448,7 +488,18 @@ def collect_freshness():
         match = re.search(r"Last verified:\s*(\d{4}-\d{2}-\d{2})", content)
         if match:
             date_str = match.group(1)
-            verified = date.fromisoformat(date_str)
+            try:
+                verified = date.fromisoformat(date_str)
+            except ValueError:
+                # The regex matches the SHAPE of a date, not a real one, so
+                # `Last verified: 2026-02-30` used to raise here and kill the
+                # whole run: no dashboard at all, from one bad line in one of
+                # four files. One unreadable marker degrades one row instead.
+                print(f"  Warning: {name} has an impossible "
+                      f"'Last verified: {date_str}'", file=sys.stderr)
+                result.append({"name": name, "date": date_str, "age": None,
+                               "health": "gray"})
+                continue
             age = (TODAY - verified).days
             health = "green" if age <= 7 else ("yellow" if age <= 14 else "red")
             result.append({"name": name, "date": date_str, "age": age, "health": health})
@@ -465,26 +516,14 @@ def collect_hiring():
     if not content:
         return result
 
-    current_priority = None
-    for line in content.split("\n"):
-        # Detect priority headers
-        if re.search(r"###\s*P1\b", line, re.IGNORECASE):
-            current_priority = "p1"
-            continue
-        elif re.search(r"###\s*P2\b", line, re.IGNORECASE):
-            current_priority = "p2"
-            continue
-        elif re.search(r"###\s*P3\b", line, re.IGNORECASE):
-            current_priority = "p3"
-            continue
-        elif line.strip().startswith("##") and current_priority:
-            current_priority = None
-            continue
+    # A `current_priority` state machine used to run over every line here,
+    # assigning p1/p2/p3 and never reading the result. The three
+    # parse_md_table calls below are what actually reads the sections.
 
     # Parse tables for each priority section
-    p1 = parse_md_table(content, r"###\s*P1")
-    p2 = parse_md_table(content, r"###\s*P2")
-    p3 = parse_md_table(content, r"###\s*P3")
+    p1 = parse_md_table(content, r"###\s*P1", source=str(HIRING_FILE))
+    p2 = parse_md_table(content, r"###\s*P2", source=str(HIRING_FILE))
+    p3 = parse_md_table(content, r"###\s*P3", source=str(HIRING_FILE))
 
     result["p1"] = p1
     result["p2"] = p2
@@ -558,7 +597,12 @@ def collect_viraid():
             if re.match(r"##\s*Active", line, re.IGNORECASE):
                 in_active = True
                 continue
-            if re.match(r"##\s*Completed", line, re.IGNORECASE):
+            # ANY other level-2 heading ends the Active section. Only
+            # "## Completed" used to, so a "## Backlog" or "## On Hold"
+            # between the two left in_active True and its unchecked items
+            # were counted as active work, inflating the P1-P3 counts and
+            # the aging counts with tasks nobody had started.
+            if re.match(r"##(?!#)", line.strip()):
                 in_active = False
                 continue
             if in_active and line.strip().startswith("- [ ]"):
@@ -642,7 +686,10 @@ def collect_capture_payoff():
                 capture_output=True, text=True, timeout=30,
             )
             data = json.loads(out.stdout) if out.stdout.strip() else {}
-            promote_ready = data.get("reflect_clusters")
+            # A non-numeric value here used to reach `promote > 0` and
+            # raise TypeError, uncaught, killing the whole dashboard -- and
+            # only on the days when there WERE clusters to promote.
+            promote_ready = _as_int_or_count(data.get("reflect_clusters"))
             last_collect = data.get("last_collect")
             days_since = data.get("days_since")
         except (subprocess.SubprocessError, json.JSONDecodeError, OSError, ValueError) as e:
@@ -765,7 +812,7 @@ def build_urgent(crm):
 <div class="alert-card">
   <div class="alert-label">Relationship Overdue</div>
   <div class="alert-text"><strong>{esc(c['name'])}</strong> ({esc(c.get('company', ''))}) &mdash; {esc(c.get('type', ''))}</div>
-  <div class="alert-sub">Last touch: {esc(days_str)} &bull; Cadence: {c.get('cadence', '?')} days</div>
+  <div class="alert-sub">Last touch: {esc(days_str)} &bull; Cadence: {esc(c.get('cadence', '?'))} days</div>
 </div>""")
 
     # Upcoming commitments (not overdue)
@@ -1167,11 +1214,9 @@ def build_content_cadence(cadence):
 
     # Newsletter indicator
     if nl_days is not None:
-        nl_cls = "ok" if nl_status == "ON TRACK" else ""
         nl_color = "var(--green)" if nl_status == "ON TRACK" else "var(--red)"
         nl_detail = f"Last issue: {esc(nl_last)} ({nl_days}d ago)"
     else:
-        nl_cls = ""
         nl_color = "var(--ink35)"
         nl_detail = "No newsletter issues found"
         nl_status = "NO DATA"
@@ -1326,7 +1371,9 @@ def build_footer():
 # ============================================================
 def generate_html(crm, pipeline, calendar, emails, strategy, metrics, freshness,
                    hiring, content_cadence, viraid, capture_payoff=None):
-    blue_logo_b64 = load_logo_base64(LOGO_BLUE_PATH)
+    # blue_logo_b64 = load_logo_base64(LOGO_BLUE_PATH) used to be read here.
+    # Only the white logo is rendered, so this was a file read per run for a
+    # value nothing used.
     white_logo_b64 = load_logo_base64(LOGO_WHITE_PATH)
     gt_light_b64 = load_font_b64(GT_LIGHT_FONT)
     gt_medium_b64 = load_font_b64(GT_MEDIUM_FONT)

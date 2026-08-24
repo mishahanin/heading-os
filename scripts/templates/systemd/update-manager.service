@@ -5,7 +5,11 @@ After=network.target
 [Service]
 Type=oneshot
 WorkingDirectory={{WORKSPACE}}
-ExecStart=/bin/bash -c '{{PYTHON}} {{WORKSPACE}}/scripts/update-manager.py check && {{PYTHON}} {{WORKSPACE}}/scripts/update-manager.py apply --auto'
+# Quoted: the two placeholders are substituted verbatim, so an unquoted
+# expansion split a workspace path containing a space into two arguments and
+# the unit failed with a confusing "can't open file". Every sibling unit uses
+# direct exec; this one needs the shell only for the `&&`.
+ExecStart=/bin/bash -c '"{{PYTHON}}" "{{WORKSPACE}}/scripts/update-manager.py" check && "{{PYTHON}}" "{{WORKSPACE}}/scripts/update-manager.py" apply --auto'
 Environment=TZ={{TZ}}
 Environment=PYTHONUNBUFFERED=1
 StandardOutput=journal

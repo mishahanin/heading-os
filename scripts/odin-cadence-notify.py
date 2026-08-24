@@ -89,9 +89,16 @@ def _brain_snapshot(brain_dir: Path) -> dict:
     if not brain_dir.is_dir():
         return snap
     for p in sorted(brain_dir.rglob("*")):
-        if p.is_file():
+        try:
+            if not p.is_file():
+                continue
             st = p.stat()
-            snap[str(p.relative_to(brain_dir))] = (st.st_size, st.st_mtime_ns)
+        except OSError:
+            # A file removed between rglob and stat raised FileNotFoundError out
+            # of the very function annotated "(never raises)" -- and out of the
+            # caller annotated "NEVER raises" -- crashing the integrity check.
+            continue
+        snap[str(p.relative_to(brain_dir))] = (st.st_size, st.st_mtime_ns)
     return snap
 
 
@@ -130,7 +137,15 @@ def _run_headless_propose(root: Path) -> Optional[Path]:
     if not cluster_detail:
         return None
 
-    from scripts.heading_cli import PROPOSE_DEFAULT_BUDGET_USD  # local: only needed here
+    try:
+        from scripts.heading_cli import PROPOSE_DEFAULT_BUDGET_USD
+    except ImportError as exc:
+        # This function's docstring says NEVER raises, and the module is built
+        # so a failure leaves the unit un-failed and exits 0. A bare import here
+        # broke both, and because `_maybe_headless_propose` runs BEFORE the
+        # Telegram send, it also killed the counts nudge on the way out.
+        _log(f"propose skipped: {exc}")
+        return None
 
     brain_dir = get_data_root() / "knowledge" / "odin-brain"
     brain_before = _brain_snapshot(brain_dir)
@@ -268,6 +283,15 @@ def main() -> int:
         proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, timeout=120)
     except Exception as exc:  # noqa: BLE001 - boundary; a missed nudge is non-critical
         _log(f"cadence check failed to run ({type(exc).__name__}: {exc}); exiting 0")
+        return 0
+
+    if proc.returncode != 0:
+        # A crash -- non-zero exit, traceback on stderr, empty stdout -- was
+        # indistinguishable from "nothing due", and the log affirmatively said
+        # "up to date". The propose path in this same file already checks the
+        # return code; this one did not.
+        err = (proc.stderr or "").strip().splitlines()[-1:] or ["no stderr"]
+        _log(f"cadence check exited {proc.returncode} ({err[0]}); NOT a nudge verdict")
         return 0
 
     line = proc.stdout.strip()

@@ -91,6 +91,7 @@ SECRET_TRACKED = re.compile(
 # bypassed commit is still caught before anything leaves the machine. There is
 # no flag to skip it.
 SCANNER = Path(__file__).resolve().parent / "secret-scanner.py"
+SCANNER_TIMEOUT_S = 300
 
 
 class RepoNotPushable(Exception):
@@ -181,11 +182,18 @@ def content_scan(repo: Path) -> None:
     # path in the engine and in the data overlay produce two records nothing can
     # tell apart, which is the ambiguity the context field exists to remove.
     env = dict(os.environ, **{CONTEXT_ENV: f"push:{repo.name}"})
-    proc = subprocess.run(
-        [sys.executable, str(SCANNER), "--stdin"],
-        cwd=str(repo), input="\n".join(sorted(files)),
-        capture_output=True, text=True, env=env,
-    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(SCANNER), "--stdin"],
+            cwd=str(repo), input="\n".join(sorted(files)),
+            capture_output=True, text=True, env=env, timeout=SCANNER_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        # Bounded for the same reason the pushes are: an indefinite stall in the
+        # only irreplaceable-half backup path is worse than a named failure.
+        print(f"{RED}REFUSING TO PUSH -- secret scanner exceeded "
+              f"{SCANNER_TIMEOUT_S}s in {repo.name}.{RESET}")
+        sys.exit(2)
     if proc.returncode != 0:
         sys.stdout.write(proc.stdout)
         sys.stderr.write(proc.stderr)
@@ -324,7 +332,6 @@ def run(args, cwd, env=None, check=True, capture=True):
 
 def gh_token() -> str | None:
     """Return GH_TOKEN (the variable gh reads), loading the engine .env if needed."""
-    import os
     if "GH_TOKEN" not in os.environ:
         try:
             load_env(get_workspace_root())  # loads engine .env into os.environ
@@ -383,8 +390,19 @@ def push_repo(name: str, repo: Path, message: str, do_commit: bool, dry_run: boo
         if dry_run:
             print(f"{YELLOW}[dry-run]{RESET} would commit:\n{status}")
         else:
-            run(["git", "add", "-A"], repo)
-            run(["git", "commit", "-m", message], repo)
+            try:
+                run(["git", "add", "-A"], repo)
+                run(["git", "commit", "-m", message], repo)
+            except subprocess.CalledProcessError as exc:
+                # The commonest failure here is a pre-commit hook refusing the
+                # commit, and `run` captures output -- so without this the
+                # operator saw a bare traceback and the scanner's explanation of
+                # WHAT it refused was swallowed with the CompletedProcess.
+                sys.stdout.write(exc.stdout or "")
+                sys.stderr.write(exc.stderr or "")
+                print(f"{RED}COMMIT REFUSED in {repo.name} "
+                      f"(exit {exc.returncode}) — see the hook output above.{RESET}")
+                sys.exit(2)
             head = run(["git", "rev-parse", "--short", "HEAD"], repo).stdout.strip()
             print(f"{GREEN}committed{RESET} {head}: {message.splitlines()[0]}")
     elif status and not do_commit:
@@ -552,7 +570,6 @@ def main() -> None:
     if not token and not args.dry_run:
         print(f"{RED}GH_TOKEN not found in engine .env — cannot authenticate push.{RESET}")
         sys.exit(2)
-    import os
     push_env = dict(os.environ)
     if token:
         push_env["GH_TOKEN"] = token

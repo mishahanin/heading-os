@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import re
 from pathlib import Path
 
 import pytest
@@ -72,9 +73,16 @@ def test_no_inline_event_handler_survives_in_the_app():
 
 
 def test_the_links_still_declare_they_stop_propagation():
-    """Deleting the attribute entirely would also pass the test above."""
+    """Deleting the attribute entirely would also pass the test above.
+
+    The floor moved from 23 to 21 on 2026-08-24 when six dead functions and the
+    stale `renderStub` page were removed; two of the attributes lived in markup
+    nothing could reach. A count is a poor invariant - it can only be lowered
+    honestly by someone who checks WHY - so the derived test below is the one
+    that matters, and this stays as the anti-vacuity floor it was written to be.
+    """
     src = APP_JS.read_text(encoding="utf-8")
-    assert src.count("data-stop-prop") >= 23, src.count("data-stop-prop")
+    assert src.count("data-stop-prop") >= 21, src.count("data-stop-prop")
 
 
 @requires_node
@@ -182,12 +190,22 @@ def test_a_failed_critical_fetch_does_not_freeze_the_cache_forever():
 
 
 def test_every_branch_stamps_the_timestamp():
-    """The direct claim, so a rewrite that drops one branch is caught."""
+    """The invariant, not a count of the branches that satisfy it.
+
+    This asserted `== 3` on both writes. The refactor of 2026-08-24 collapsed
+    the two failure branches into one shared fall-through - the invariant held
+    perfectly and the test went red on the arithmetic. Pairing each write with
+    the stamp that must follow it survives any number of branches.
+    """
     src = APP_JS.read_text(encoding="utf-8")
     start = src.index("async function _wireFlagImportant")
     block = src[start:src.index("const ref = btn.dataset.ref;", start)]
-    assert block.count("window._criticalCache =") == 3, block
-    assert block.count("window._criticalCacheAt =") == 3, (
-        "a branch sets the cache without stamping the timestamp; "
-        "`Date.now() - undefined` is NaN and the refresh never fires again"
-    )
+    writes = [m.start() for m in re.finditer(r"window\._criticalCache = ", block)]
+    assert writes, block
+    for pos in writes:
+        after = block[pos:pos + 200]
+        assert re.search(r"window\._criticalCacheAt = ", after), (
+            "a branch sets the cache without stamping the timestamp; "
+            "`Date.now() - undefined` is NaN, so the 30s refresh never fires "
+            f"again:\n  {block[pos:pos + 120]}"
+        )

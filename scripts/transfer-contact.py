@@ -5,12 +5,11 @@ Moves the contact file from one exec's directory to another, updates the
 owner field, logs the transfer, and commits the change.
 
 Usage:
-    python transfer-contact.py --contact "priya-anand" --from "misha-hanin" --to "marlow-carter" [--repo PATH]
+    python transfer-contact.py --contact "priya-anand" --from "james-bond" --to "marlow-carter"
 """
 
 import argparse
 import re
-import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -20,11 +19,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import (
     get_default_tz,
     get_workspace_root, validate_admin,
-    get_corporate_repo_path, load_admin_config,
+    get_corporate_repo_path, get_admin_slugs,
     get_per_exec_repo_path, get_per_exec_contacts_dir, get_all_active_exec_slugs,
     get_crm_contacts_dir,
 )
-from scripts.utils.operator_identity import operator_slug
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
 
 
@@ -69,10 +67,17 @@ def append_transfer_note(text: str, from_exec: str, to_exec: str) -> str:
 
 
 def git_commit(repo: Path, files: list[Path], message: str) -> None:
-    """Stage files and commit in the given repo."""
-    for f in files:
-        subprocess.run(["git", "add", str(f)], cwd=str(repo), check=True,
-                       capture_output=True)
+    """Stage exactly `files` -- present OR deleted -- and commit.
+
+    `git add <path>` on a path that no longer exists is a no-op with older git
+    and an error with none of them staging the removal, so passing only the
+    `.md.transferred` backup left the ORIGINAL contact still tracked in the
+    source repo: the transfer was not durable (a fresh clone resurrected the
+    contact in both places) and `git status` kept an unstaged deletion forever.
+    `-A --` stages the removal as well as the addition, which is what a move is.
+    """
+    subprocess.run(["git", "add", "-A", "--", *[str(f) for f in files]],
+                   cwd=str(repo), check=True, capture_output=True)
     subprocess.run(["git", "commit", "-m", message], cwd=str(repo), check=True,
                    capture_output=True)
 
@@ -91,12 +96,14 @@ def main() -> None:
     validate_admin()
 
     workspace_root = get_workspace_root()
-    admin_slugs = set()
-    try:
-        cfg = load_admin_config()
-        admin_slugs = set(cfg.get("admin_slugs") or [])
-    except Exception:
-        admin_slugs = {operator_slug()}
+    # `get_admin_slugs()` is the shared resolver `validate_admin()` itself uses,
+    # so the two agree by construction. The local reimplementation this replaces
+    # read `admin.json` directly and fell back to an EMPTY set whenever the file
+    # was absent or lacked the key -- and an empty set means the operator is not
+    # an admin, so their own contacts resolved to a per-exec overlay directory
+    # instead of the CEO crm tree. The transfer then succeeded, silently, into
+    # the wrong repo.
+    admin_slugs = set(get_admin_slugs())
 
     def _contacts_dir(exec_slug: str) -> Path:
         if exec_slug in admin_slugs:
@@ -136,15 +143,30 @@ def main() -> None:
     print(f"{GREEN}Contact written:{RESET} {target_path}")
 
     # Backup source
-    backup_path = source_path.with_suffix(".md.transferred")
+    # Date-stamped, and never clobbering: `with_suffix(".md.transferred")` is a
+    # single fixed name, so transferring the same contact a second time renamed
+    # the new file over the previous backup and destroyed it silently.
+    stamp = datetime.now(get_default_tz()).strftime("%Y%m%d")
+    backup_path = source_path.with_name(f"{source_path.stem}.md.transferred-{stamp}")
+    suffix = 2
+    while backup_path.exists():
+        backup_path = source_path.with_name(f"{source_path.stem}.md.transferred-{stamp}-{suffix}")
+        suffix += 1
     source_path.rename(backup_path)
     print(f"{YELLOW}Source backed up:{RESET} {backup_path}")
 
     # Commit changes in each affected per-exec repo
     to_repo = to_contacts.parent
     from_repo = from_contacts.parent
+    # When both execs live in ONE repo, the target commit must carry the move
+    # entire -- the new file, the backup, and the deletion of the original. The
+    # `if to_repo != from_repo` guard below was the ONLY commit that touched the
+    # backup, so in the same-repo case it was left uncommitted altogether.
+    first_paths = [target_path]
+    if to_repo == from_repo:
+        first_paths += [backup_path, source_path]
     try:
-        git_commit(to_repo, [target_path], (
+        git_commit(to_repo, first_paths, (
             f"Transfer contact {args.contact} from {args.from_exec} to {args.to}"
         ))
         print(f"{GREEN}Committed to {args.to} repo.{RESET}")
@@ -153,7 +175,9 @@ def main() -> None:
         print(f"  {exc.stderr.decode().strip() if exc.stderr else exc}")
     if to_repo != from_repo:
         try:
-            git_commit(from_repo, [backup_path], (
+            # source_path as well as backup_path: the rename above left the
+            # original tracked, and only naming it stages the deletion.
+            git_commit(from_repo, [backup_path, source_path], (
                 f"Backup transferred contact {args.contact} (moved to {args.to})"
             ))
             print(f"{GREEN}Committed backup to {args.from_exec} repo.{RESET}")

@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts.utils.atomic import atomic_write_text
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
 from scripts.utils.workspace import get_workspace_root, get_context_dir, get_default_tz
 
@@ -93,6 +94,19 @@ def parse_date(text):
     return None
 
 
+def _split_row(line):
+    """Split one markdown table row into cells, KEEPING interior empties.
+
+    The previous form dropped every falsy cell after splitting, so a row with an
+    empty middle column shifted all later columns left by one:
+    `| Acme | | $500K | 2026-01-01 |` parsed as Stage="$500K",
+    Est. Value="2026-01-01". The deal was then weighted at the default stage and
+    its value vanished from the totals this script exists to produce. Only the
+    two artifacts of the outer pipes are removed.
+    """
+    return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
 def parse_table_rows(content, header_marker):
     """Extract table rows after a header containing header_marker.
 
@@ -114,8 +128,7 @@ def parse_table_rows(content, header_marker):
             continue
         if header_found and not in_table and "|" in line and line.strip().startswith("|"):
             # This is the column header row
-            columns = [c.strip() for c in line.split("|")]
-            columns = [c for c in columns if c]
+            columns = _split_row(line)
             in_table = True
             continue
         if in_table and not separator_seen and "---" in line:
@@ -123,9 +136,8 @@ def parse_table_rows(content, header_marker):
             continue
         if in_table and separator_seen:
             if "|" in line and line.strip().startswith("|"):
-                cells = [c.strip() for c in line.split("|")]
-                cells = [c for c in cells if c]
-                if cells:
+                cells = _split_row(line)
+                if any(cells):
                     row = {}
                     for i, col in enumerate(columns):
                         row[col] = cells[i] if i < len(cells) else ""
@@ -423,7 +435,9 @@ def main():
 
     if args.update:
         updated = replace_summary_block(content, summary_text)
-        PIPELINE_FILE.write_text(updated, encoding="utf-8")
+        # Atomic: this rewrites the whole pipeline file in place, and a crash
+        # part-way through would truncate every deal below the summary block.
+        atomic_write_text(PIPELINE_FILE, updated)
         print(f"{GREEN}Pipeline summary written to {PIPELINE_FILE.name}{RESET}")
 
     # Print terminal output

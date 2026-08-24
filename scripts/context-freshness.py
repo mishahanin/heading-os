@@ -108,6 +108,24 @@ def main():
         filepath = Path(sys.argv[2])
         if not filepath.is_absolute():
             filepath = WORKSPACE / filepath
+        # Resolve, then check containment. Nothing normalised the path before
+        # 2026-08-24, so `stamp ../../notes/anything.md` walked out of the
+        # workspace and prepended a `> Last verified:` line into whatever it
+        # found. Local CLI, so this is a footgun rather than an attack path —
+        # but a footgun that edits line 1 of an arbitrary file.
+        filepath = filepath.resolve()
+        try:
+            filepath.relative_to(WORKSPACE.resolve())
+        except ValueError:
+            print(f"{RED}Error: {filepath} is outside the workspace "
+                  f"({WORKSPACE}).{RESET}")
+            sys.exit(1)
+        if filepath.suffix.lower() != ".md":
+            # `stamp_file` inserts a markdown blockquote at line 1. On anything
+            # else that is not a stamp, it is corruption.
+            print(f"{RED}Error: {filepath.name} is not a .md file; the marker "
+                  f"is a markdown blockquote and would corrupt it.{RESET}")
+            sys.exit(1)
         if not filepath.exists():
             print(f"{RED}Error: {filepath} not found{RESET}")
             sys.exit(1)

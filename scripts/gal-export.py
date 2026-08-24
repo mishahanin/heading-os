@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enumerate the Exchange Global Address List for all @31c.io addresses.
+"""Enumerate the Exchange Global Address List for one domain's addresses.
 
 Uses exchangelib's protocol.resolve_names() with a-z prefix sweep, then
 filters to a target domain. Returns full contact data (job title,
@@ -7,7 +7,8 @@ department, phone) when available.
 
 Usage:
     python scripts/gal-export.py
-    python scripts/gal-export.py --domain 31c.io --out outputs/_sync/gal-31c.json
+    python scripts/gal-export.py --domain example.com \\
+        --out outputs/_sync/gal-example.com.json
 """
 
 from __future__ import annotations
@@ -25,10 +26,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
+from scripts.utils.operator_identity import operator_email_domain  # noqa: E402
 from scripts.utils.workspace import get_outputs_dir, get_workspace_root, load_env
 
 # exchangelib names are bound lazily (F-2.1: import stays pure).
 Account = Configuration = Credentials = DELEGATE = Version = Build = None
+
+
+def _in_domain(email: str, domain: str) -> bool:
+    """True when `email`'s domain part IS `domain`, not merely contains it.
+
+    Substring matching accepts a lookalike: for a domain `acme.example`, both
+    `alice@notacme.example` and `bob@acme.example.evil.test` contain it and
+    neither belongs to the tenant.
+    """
+    local, _, host = (email or "").rpartition("@")
+    return bool(local) and host.lower() == (domain or "").lower().lstrip("@")
 
 
 def _ensure_exchangelib():
@@ -110,9 +123,14 @@ def sweep_gal(account: Account, domain: str) -> list[dict]:
     """Sweep the GAL with a-z + 0-9 prefixes, dedupe by email, filter by domain."""
     seen: dict[str, dict] = {}
     queries = list(string.ascii_lowercase) + list(string.digits)
-    # Also try common 31c-specific prefixes that might surface admin/shared
-    extra = ["31c", "info", "sales", "support", "admin", "hr", "finance", "noreply", "@31c.io"]
-    queries.extend(extra)
+    # Prefixes that surface admin and shared mailboxes the a-z sweep can miss.
+    # Two were the tenant's own name and `@<tenant domain>`, written in as
+    # literals; both are derived from `domain` now, so the sweep is as thorough
+    # on any deployment as it was on the one it was written for.
+    label = domain.split(".", 1)[0]
+    extra = [label, "info", "sales", "support", "admin", "hr", "finance",
+             "noreply", f"@{domain}"]
+    queries.extend(dict.fromkeys(extra))       # de-dupe, order preserved
 
     print(f"[INFO] Sweeping GAL with {len(queries)} prefix queries (filter: @{domain})...")
 
@@ -140,7 +158,11 @@ def sweep_gal(account: Account, domain: str) -> list[dict]:
             if isinstance(item, Exception):
                 continue
             email = getattr(mailbox, "email_address", None)
-            if not email or domain.lower() not in email.lower():
+            # Exact domain match, not a substring search. `domain in email`
+            # accepted a lookalike domain and a suffixed one, so an export that
+            # says it filtered to one tenant could carry identities from
+            # another. See `_in_domain` for the shapes.
+            if not email or not _in_domain(email, domain):
                 continue
             email_key = email.lower()
             if email_key in seen:
@@ -162,13 +184,21 @@ def sweep_gal(account: Account, domain: str) -> list[dict]:
 
 def main():
     ap = argparse.ArgumentParser(description="Enumerate Exchange GAL by domain")
-    ap.add_argument("--domain", default="31c.io", help="Domain filter (default: 31c.io)")
+    ap.add_argument(
+        "--domain", default=operator_email_domain() or None,
+        help=("Domain filter. Defaults to the domain of the operator email in "
+              "operator.yaml; required when that is unset. It used to default to "
+              "one company's domain, compiled into the engine."))
     ap.add_argument(
         "--out",
         default=None,
         help="Output JSON path (default: outputs/_sync/gal-<domain>.json)",
     )
     args = ap.parse_args()
+    if not args.domain:
+        ap.error("no --domain given and operator.yaml carries no email to derive "
+                 "one from. Pass --domain explicitly; an empty filter would sweep "
+                 "the whole address book.")
 
     out_path = (
         Path(args.out)

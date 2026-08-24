@@ -85,7 +85,7 @@ def test_a_person_in_both_files_is_marked_as_both(fleet):
 
 
 def test_a_business_exec_with_no_install_is_not_a_user(fleet):
-    """Maxim's real shape: on the org chart, no HEADING OS install."""
+    """The shape a business-only exec has: on the org chart, no install."""
     r = _fleet()["business-only"]
     assert r["is_business_exec"] is True
     assert r["is_heading_os_user"] is False

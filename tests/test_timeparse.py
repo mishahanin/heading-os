@@ -109,8 +109,9 @@ def test_inbox_band_sort_survives_offsetless_ts(tmp_path):
         {"id": "c3", "topic": "garbled", "latest_datetime": "nonsense", "priority": "P1"},
     ]}), encoding="utf-8")
 
-    result = read_inbox(tmp_path, now=datetime(2026, 8, 19, 12, 0, tzinfo=timezone.utc),
-                        data_root=tmp_path)
+    # One root, named for what it is: read_inbox takes the DATA root. It used
+    # to take a `workspace_root` as well, which the body never read.
+    result = read_inbox(tmp_path, now=datetime(2026, 8, 19, 12, 0, tzinfo=timezone.utc))
 
     subjects = [r["subject"] for r in result["bands"]["needs-you"]]
     assert subjects == ["aware", "offset-less", "garbled"]

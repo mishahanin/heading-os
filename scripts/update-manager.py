@@ -104,13 +104,20 @@ def cmd_check(_args) -> int:
 
 
 def cmd_status(_args) -> int:
-    p = state_path()
-    if not p.exists():
-        print("no state yet -- run: python scripts/update-manager.py check")
+    # `_read_state()`, not a second raw `json.loads`. The copy this replaces
+    # crashed `status` with a JSONDecodeError traceback on a truncated state
+    # file, while `check` -- reading the same file through `_read_state` --
+    # degraded politely. The operator-facing command was the fragile one.
+    state = _read_state()
+    if not state:
+        print("no state yet (or unreadable) -- run: python scripts/update-manager.py check")
         return 1
-    state = json.loads(p.read_text(encoding="utf-8"))
+    components = state.get("components") or {}
+    if not components:
+        print("state file has no components -- run: python scripts/update-manager.py check")
+        return 1
     print(f"{'component':22} {'current':14} {'latest':14} {'tier':9} status")
-    for name, e in state["components"].items():
+    for name, e in components.items():
         print(f"{name:22} {e['current']:14} {e['latest']:14} {e['tier']:9} {e['status']}")
     return 0
 
@@ -129,7 +136,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "status":
         return cmd_status(args)
     if args.cmd == "apply":
-        import fcntl  # noqa: PLC0415
+        # `fcntl` is UNIX-ONLY, and this repo ships ps1 installers and a
+        # cross-platform schedule helper -- a hard import made the whole apply
+        # tier a ModuleNotFoundError traceback on the Windows host. The lock is
+        # advisory anyway: without it two concurrent applies can interleave, so
+        # Windows degrades with a named warning rather than losing the command.
+        fcntl = None
+        if os.name == "posix":
+            import fcntl  # noqa: PLC0415
         from scripts.utils.update_apply import cmd_apply  # noqa: PLC0415
         lock_path = state_path().parent / ".apply.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)

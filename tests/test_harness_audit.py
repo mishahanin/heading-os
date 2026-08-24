@@ -127,7 +127,11 @@ def test_a_symlink_is_never_resolved_out_of_the_plugin_root(tmp_path):
     (cache / "link.md").symlink_to(outside)
 
     manifest = tmp_path / "m.json"
-    _run(["--manifest", str(manifest), "--update-manifest"], tmp_path / "cache")
+    # --allow-empty because a surface of nothing but symlinks IS empty of real
+    # files, and since 2026-08-24 accepting an empty surface has to be typed:
+    # the commonest cause of one is a mistyped plugin root.
+    _run(["--manifest", str(manifest), "--update-manifest", "--allow-empty"],
+         tmp_path / "cache")
     entries = json.loads(manifest.read_text(encoding="utf-8"))["entries"]
     assert entries == {}, f"a symlink was hashed as though it were installed: {entries}"
 

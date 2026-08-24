@@ -84,8 +84,17 @@ def get_headers():
 def handle_response(resp, context=""):
     """Handle HTTP response, exit cleanly on errors."""
     if resp.status_code == 429:
-        wait = int(resp.headers.get("Retry-After", 5))
-        print(f"Rate limited. Retry after {wait}s.", file=sys.stderr)
+        # RFC 7231 lets Retry-After be an HTTP-date, not only a second count:
+        # `Retry-After: Wed, 21 Oct 2026 07:28:00 GMT` sent `int()` straight to
+        # an uncaught ValueError, so the clean "Rate limited" exit turned into a
+        # traceback on the one path that exists to be clean. The default 5 only
+        # ever applied when the header was ABSENT.
+        raw = resp.headers.get("Retry-After", "5")
+        try:
+            wait = f"{int(raw)}s"
+        except (TypeError, ValueError):
+            wait = f"whatever the server means by {raw!r}"
+        print(f"Rate limited. Retry after {wait}.", file=sys.stderr)
         sys.exit(1)
     if resp.status_code != 200:
         msg = STATUS_MESSAGES.get(resp.status_code, f"HTTP {resp.status_code} error.")
@@ -253,9 +262,19 @@ def main():
         ver = args.version if args.version.startswith("v") else f"v{args.version}"
         available = best.get("versions", [])
         # Find matching version
+        # `startswith` at a version-segment boundary, and nothing looser. The
+        # `or ver in v` clause that used to be here made `--version 1` match
+        # `v15.2.0`, because "v1" IS a substring of "v15.2.0" — so whichever of
+        # the two appeared first in `available` won, and asking for major
+        # version 1 silently returned v15 docs. `startswith` alone is not
+        # enough either: "v1" still prefixes "v15.2.0". The next character has
+        # to end the segment.
         match = None
         for v in available:
-            if v.startswith(ver) or ver in v:
+            if v == ver:
+                match = v
+                break
+            if v.startswith(ver) and not v[len(ver):len(ver) + 1].isdigit():
                 match = v
                 break
         if match:

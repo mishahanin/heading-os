@@ -32,8 +32,10 @@ import json
 import os
 import re
 import sys
+import tempfile
 import urllib.error
 import urllib.request
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -116,8 +118,34 @@ def _slugify(text: str) -> str:
     return (s[:40] or "flagged")
 
 
+_SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+def _valid_skill(skill: str) -> str:
+    """A skill NAME, not a path fragment.
+
+    `SKILLS_DIR / skill` accepted anything: `..` walked out of the skills tree,
+    and an ABSOLUTE value discarded `SKILLS_DIR` altogether under pathlib — so
+    `_stage_draft` created an `evals/outcomes/_staged/` directory and wrote a
+    JSON draft at whatever location was asked for. With an absolute path the
+    later `relative_to(ROOT)` then raised, AFTER the file had been written.
+    """
+    if not isinstance(skill, str) or not _SKILL_NAME_RE.match(skill):
+        raise ValueError(
+            f"--skill must be a bare skill name matching [a-z0-9][a-z0-9-]*, "
+            f"got {skill!r}"
+        )
+    return skill
+
+
 def _staged_dir(skill: str) -> Path:
-    return SKILLS_DIR / skill / "evals" / "outcomes" / "_staged"
+    staged = (SKILLS_DIR / _valid_skill(skill) / "evals" / "outcomes" / "_staged")
+    resolved = staged.resolve()
+    # Belt and braces: the name rule already forbids traversal, and the prefix
+    # check is what makes that a guarantee rather than a claim.
+    if not str(resolved).startswith(str(SKILLS_DIR.resolve()) + "/"):
+        raise ValueError(f"refusing a staged dir outside {SKILLS_DIR}: {resolved}")
+    return staged
 
 
 def _stage_draft(skill: str, draft: dict) -> Path:
@@ -125,17 +153,32 @@ def _stage_draft(skill: str, draft: dict) -> Path:
     staged = _staged_dir(skill)
     staged.mkdir(parents=True, exist_ok=True)
     path = staged / f"{draft['id']}.json"
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(draft, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
+    # A unique scratch name per writer. One fixed `<id>.json.tmp` meant two
+    # concurrent captures could write the same scratch path, and one
+    # `os.replace` moved the other writer's file out from under it.
+    fd, tmp_name = tempfile.mkstemp(dir=str(staged), prefix=path.name + ".", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(draft, fh, indent=2, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
     return path
 
 
 def _new_draft(description: str, input_text: str, trace_id: str, source: str,
                case_type: str) -> dict:
     ts = datetime.now(get_default_tz()).strftime("%Y-%m-%dT%H%M%S")
+    # The id is also the filename. Second resolution plus a slug of the
+    # description meant two captures of the same regression inside one second
+    # produced the SAME path, and the second silently overwrote the first —
+    # one of the two reported regressions simply gone. The suffix is what makes
+    # each capture its own file.
+    uniq = uuid.uuid4().hex[:6]
     draft: dict = {
-        "id": f"flag-{ts}-{_slugify(description)}",
+        "id": f"flag-{ts}-{_slugify(description)}-{uniq}",
         "description": description or "(untitled)",
         "input": input_text,
         "trace_id": trace_id,

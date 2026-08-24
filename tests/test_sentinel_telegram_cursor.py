@@ -86,7 +86,7 @@ class FakeClient:
         return [m for m in self._messages if m.id > min_id][:limit]
 
 
-def _user(user_id: int = 7, first_name: str = "Orkhan", bot: bool = False):
+def _user(user_id: int = 7, first_name: str = "James", bot: bool = False):
     return types.User(id=user_id, bot=bot, first_name=first_name)
 
 

@@ -586,6 +586,20 @@ def check_over_fragmentation(text):
     return findings
 
 
+def _is_clause_tail(text: str, end: int) -> bool:
+    """Is the match at `end` sitting at the end of its clause?
+
+    ONE definition, used by both the explicit-list path and the generic
+    pattern. They had two: the generic one applied this window and the explicit
+    list applied nothing, so the same phrase was a warning in one path and a
+    hard error in the other depending on which list happened to contain it.
+    """
+    if end >= len(text):
+        return True
+    window = text[end:end + 25]
+    return bool(re.search(r"^[\w\s]{0,20}[.!?]", window))
+
+
 def check_ing_tail_phrases(text):
     """Detect -ing tail analytical phrases tacked onto sentence ends.
 
@@ -594,10 +608,18 @@ def check_ing_tail_phrases(text):
     per the comprehensive PDF source 2026-04-28.
     """
     findings = []
-    # Explicit phrase list
+    # Explicit phrase list. The clause-end test below is the SAME one the
+    # generic pattern applies, and it was missing here: the explicit list
+    # required only a preceding comma, so ordinary mid-sentence use --
+    # "The update is strategic, highlighting its importance, and it clarifies
+    # the roadmap." -- was reported as an ERROR and failed the audit on prose
+    # that has nothing wrong with it. The function's own name and docstring say
+    # "tail", and "tail" is exactly what was not being checked.
     for phrase in ING_TAIL_PHRASES:
         pattern = re.compile(r",\s+" + re.escape(phrase), re.IGNORECASE)
         for m in pattern.finditer(text):
+            if not _is_clause_tail(text, m.end()):
+                continue
             findings.append({
                 "type": "ing_tail_phrase",
                 "severity": "error",
@@ -620,8 +642,7 @@ def check_ing_tail_phrases(text):
             continue  # Already caught by explicit list
         # Filter out legitimate present participles (e.g., "...ensuring the report is correct")
         # by requiring the word to be at clause-end (followed by punctuation within ~20 chars)
-        end_window = text[m.end():m.end() + 25]
-        if re.search(r"^[\w\s]{0,20}[.!?]", end_window) or m.end() == len(text):
+        if _is_clause_tail(text, m.end()):
             findings.append({
                 "type": "ing_tail_phrase",
                 "severity": "warning",
@@ -691,8 +712,16 @@ def check_burstiness(text):
       shortness (1-3 word sentences mixed with 15-word) - that IS bursty, just on a
       different range. CV catches this; the fixed-threshold rule does not.
 
-    The systemic-burstiness error fires only when >50% of qualifying paragraphs fail
-    AND the document is recognisably outbound prose (>200 words; not pure documentation).
+    The systemic-burstiness error fires only when MORE THAN 60% of qualifying
+    paragraphs fail AND the document is recognisably outbound prose (>200 words;
+    not pure documentation).
+
+    This line said ">50%" until 2026-08-24 while the code tested `rate > 0.6`,
+    so a document failing exactly 60% of its paragraphs was documented as a
+    failure and accepted in practice. The DOCSTRING was corrected, not the
+    number: moving the threshold to 0.5 changes how many real deliverables fail
+    a gate the operator relies on, which is a calibration decision, not a
+    defect fix.
     """
     findings = []
     paras = get_paragraphs(text)
@@ -898,11 +927,23 @@ def check_title_case_headings(text):
         words = re.findall(r"\b[A-Za-z][a-zA-Z]*\b", heading)
         if len(words) < 3:
             continue
-        # Skip headings that are mostly proper nouns or all-caps acronyms
-        cap_count = sum(1 for w in words if w[0].isupper() and not w.isupper() and len(w) > 3)
         # Common stop words that stay lowercase in title case
         stop_words = {"a", "an", "and", "as", "at", "but", "by", "for", "from", "in", "of", "on", "or", "the", "to", "via", "with"}
-        non_stop = [w for w in words if w.lower() not in stop_words]
+        # ALL-CAPS acronyms carry no case information, so they are excluded
+        # from the ratio rather than counted as evidence of Title Case.
+        #
+        # There is NO proper-noun exemption, and the comment here used to
+        # promise one: it said headings "mostly proper nouns or all-caps
+        # acronyms" were skipped, computed a `cap_count` that would have
+        # measured it, and then never read the variable. Not implemented,
+        # deliberately. Any test for a proper noun is a guess at capitalisation,
+        # and guessing wrong here means SKIPPING a real Title Case heading --
+        # a false negative in a style gate, which is worse than the false
+        # positive it would prevent. `# NASA API Gateway Design` still warns on
+        # "Gateway Design", correctly: sentence case would be "NASA API gateway
+        # design". This is a warning, and --strict is opt-in.
+        non_stop = [w for w in words
+                    if w.lower() not in stop_words and not (w.isupper() and len(w) > 1)]
         if len(non_stop) < 2:
             continue
         cap_non_stop = sum(1 for w in non_stop if w[0].isupper())
@@ -1063,7 +1104,17 @@ def main():
         if not path.exists():
             print(f"Error: {path} does not exist", file=sys.stderr)
             sys.exit(2)
-        text = path.read_text(encoding="utf-8")
+        # `exists()` says a path is there, not that it is a readable regular
+        # file with valid UTF-8 in it. A directory, an unreadable file, or a
+        # byte sequence that is not UTF-8 escaped `read_text` as a traceback
+        # and exited 1 -- which this script's own docstring defines as
+        # "findings present". A read failure reported as a clean audit with
+        # findings is the worst of the three outcomes.
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            print(f"Error: cannot read {path}: {exc}", file=sys.stderr)
+            sys.exit(2)
         source = str(path)
 
     result = audit(text, strict=args.strict)

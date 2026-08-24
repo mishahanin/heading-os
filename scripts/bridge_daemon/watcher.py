@@ -78,54 +78,95 @@ WATCHED_COMPONENTS = (
 def classify_path(rel_path: str) -> tuple[str, ...]:
     """Every component a change to this path invalidates. Empty when none.
 
-    LONGEST prefix wins, so `outputs/content/linkedin/` is not shadowed by a
+    LONGEST match wins, so `outputs/content/linkedin/` is not shadowed by a
     shorter `outputs/` entry if one is ever added.
+
+    A key ending in `/` is a directory prefix; any other key is a FILE and must
+    match exactly. Only one key is a file today, `context/pipeline.md`, and
+    prefix-matching it also matched `context/pipeline.md.bak`, `.mdx` and
+    `.tmp` - every atomic write to the pipeline therefore bumped the page
+    twice, once for the temp file and once for the rename. The directory keys
+    were never affected: their trailing slash already excludes `knowledge-old/`.
     """
     p = str(PurePosixPath(rel_path.replace("\\", "/")))
     best: tuple[str, ...] = ()
     best_len = -1
-    for prefix, components in PATH_TO_COMPONENTS.items():
-        if p.startswith(prefix) and len(prefix) > best_len:
-            best, best_len = components, len(prefix)
+    for key, components in PATH_TO_COMPONENTS.items():
+        matched = p.startswith(key) if key.endswith("/") else p == key
+        if matched and len(key) > best_len:
+            best, best_len = components, len(key)
     return best
 
 class DebouncedBumper:
     """Fires `bump_fn(component)` after `interval` seconds of quiet.
-    Subsequent schedule() calls reset the timer."""
+    Subsequent schedule() calls reset the timer.
+
+    Each timer carries the generation it was scheduled under, because
+    `threading.Timer.cancel()` cannot stop a timer whose function has already
+    started running. Without the token this interleaving broke the contract
+    above, and it was reproduced on 2026-08-24:
+
+    1. timer T1 for `inbox` expires and enters `_fire`, before taking the lock;
+    2. `schedule("inbox")` runs, `cancel()` on T1 is a no-op, T2 is stored;
+    3. T1 takes the lock and pops - T2, not itself.
+
+    Two bumps for one burst, the first at the wrong time; and T2 is now absent
+    from `_timers`, so no later `schedule()` can cancel it. A third call
+    creates T3 and both fire. The measured run showed the dict empty, T2 alive
+    and untracked, and `bump_fn` called twice.
+    """
     def __init__(self, bump_fn: Callable[[str], None], interval: float = 0.5):
         self.bump_fn = bump_fn
         self.interval = interval
         self._timers: dict[str, threading.Timer] = {}
+        self._generations: dict[str, int] = {}
         self._lock = threading.Lock()
 
     def schedule(self, component: str) -> None:
         with self._lock:
             if t := self._timers.get(component):
                 t.cancel()
-            t = threading.Timer(self.interval, self._fire, args=[component])
+            gen = self._generations[component] = self._generations.get(component, 0) + 1
+            t = threading.Timer(self.interval, self._fire, args=[component, gen])
             t.daemon = True
             self._timers[component] = t
             t.start()
 
-    def _fire(self, component: str) -> None:
+    def _fire(self, component: str, generation: int) -> None:
         with self._lock:
+            if self._generations.get(component) != generation:
+                return  # superseded while this timer was waking; the newer one owns the bump
             self._timers.pop(component, None)
         self.bump_fn(component)
 
 class _Handler(FileSystemEventHandler):
-    def __init__(self, workspace_root: Path, bumper: DebouncedBumper):
-        self.root = workspace_root
+    """One watched tree. `root` is whichever root this handler was given -
+    the engine root or the data root - and is never both."""
+
+    def __init__(self, root: Path, bumper: DebouncedBumper):
+        self.root = root
         self.bumper = bumper
 
     def on_any_event(self, event):
         if event.is_directory:
             return
-        try:
-            rel = Path(event.src_path).relative_to(self.root)
-        except ValueError:
-            return
-        for component in classify_path(str(rel)):
+        # A move carries TWO paths and only `dest_path` says where the file now
+        # lives. Classifying `src_path` alone bumped the page the file LEFT and
+        # never the page it arrived on: `knowledge/x.md` -> `threads/x.md`
+        # bumped `library` and left the Threads page stale. Measured against
+        # real watchdog on 2026-08-24, which also refuted the reported case -
+        # a move in from OUTSIDE the tree arrives as a FileCreatedEvent whose
+        # src_path is already the destination, so that path was never broken.
+        paths = [event.src_path, getattr(event, "dest_path", None)]
+        for component in {c for p in paths if p for c in self._classify(p)}:
             self.bumper.schedule(component)
+
+    def _classify(self, abs_path: str) -> tuple[str, ...]:
+        try:
+            rel = Path(abs_path).relative_to(self.root)
+        except ValueError:
+            return ()
+        return classify_path(str(rel))
 
 def start_observer(workspace_root: Path, state, interval: float = 0.5,
                    data_root: "Path | None" = None) -> Observer:
@@ -139,13 +180,23 @@ def start_observer(workspace_root: Path, state, interval: float = 0.5,
     skip it. When they differ (a data-less engine clone + its data sibling) each
     handler is rooted at its own tree; ``classify_path`` keys are relative
     prefixes, so each handler simply never matches paths absent from its root.
+
+    Both roots are resolved once, up front. The equality test below always
+    resolved them while the paths actually scheduled and matched against did
+    not, which is the shape of an oversight rather than a decision: a caller
+    passing a relative root leaves ``relative_to`` comparing a relative root
+    against whatever form the platform's watchdog backend reports. Linux
+    inotify echoes the string it was given, so this never bit here; the macOS
+    FSEvents backend canonicalises to absolute, and every event would then
+    raise ValueError into the silent branch - a watcher that starts cleanly and
+    does nothing, forever.
     """
-    if data_root is None:
-        data_root = get_data_root()
+    workspace_root = Path(workspace_root).resolve()
+    data_root = Path(data_root if data_root is not None else get_data_root()).resolve()
     bumper = DebouncedBumper(lambda c: state.bump(c), interval=interval)
     observer = Observer()
     observer.schedule(_Handler(workspace_root, bumper), str(workspace_root), recursive=True)
-    if Path(data_root).resolve() != Path(workspace_root).resolve():
+    if data_root != workspace_root:
         observer.schedule(_Handler(data_root, bumper), str(data_root), recursive=True)
     observer.start()
     return observer

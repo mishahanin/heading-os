@@ -241,9 +241,43 @@ def print_manual_checklist(slug: str, exec_info: dict) -> None:
 
 
 def main():
-    print(f"\n{RED}{BOLD}DEPRECATED: emergency-revoke.py needs migration to per-exec CRM model.{RESET}")
-    print(f"{YELLOW}The legacy 31c-crm-central revoke path no longer applies.{RESET}")
-    print(f"{YELLOW}Update or replace this script before next emergency. Tracking: scrutinize H4.{RESET}")
+    # This script is DISABLED, deliberately and fail-closed: the legacy
+    # 31c-crm-central revoke path it automates no longer exists, so running it
+    # would report success against a repo that is gone. Tracking: scrutinize H4.
+    #
+    # What changed 2026-08-24, and what did NOT. The automation stays off —
+    # re-enabling GitHub access revocation is an outward-facing change that
+    # needs the operator's decision and a real test, not a night-shift patch.
+    # Two things about the DEAD END are fixed, because an emergency runbook
+    # entry that exits 2 with no further help is worse than the gap itself:
+    #
+    #   1. `--help` now works. It exited 2 before argparse ever ran, so the one
+    #      command an operator types under pressure told them nothing.
+    #   2. The urgent MANUAL checklist is printed. It was already written, in
+    #      `print_manual_checklist`, and sat unreachable below this exit — the
+    #      exact information someone needs at 3am, behind the wall.
+    parser = argparse.ArgumentParser(
+        description="DISABLED. Emergency access revocation for a 31C executive.",
+        epilog=("This script does NOT revoke anything. It prints the manual "
+                "checklist and exits 2. See scrutinize H4."),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--exec", dest="exec_slug",
+                        help="Exec slug to revoke (e.g., 'marlow-carter')")
+    parser.add_argument("--reason",
+                        help="Reason for emergency revocation (e.g., 'laptop stolen')")
+    args = parser.parse_args()
+
+    print(f"\n{RED}{BOLD}DISABLED: emergency-revoke.py automates a revoke path that no "
+          f"longer exists.{RESET}")
+    print(f"{YELLOW}The legacy 31c-crm-central path was retired; nothing below it "
+          f"has been re-pointed at the per-exec model.{RESET}")
+    print(f"{YELLOW}NOTHING HAS BEEN REVOKED BY THIS RUN. Do the manual steps "
+          f"below, now.{RESET}")
+    print(f"{YELLOW}Tracking: scrutinize H4.{RESET}")
+    slug = args.exec_slug or "<exec-slug>"
+    exec_info = get_exec_info(slug) if args.exec_slug else None
+    print_manual_checklist(slug, exec_info)
     sys.exit(2)
     # Original code below — kept for reference; do not execute until refactored.
 

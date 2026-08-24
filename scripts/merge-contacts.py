@@ -23,7 +23,11 @@ from scripts.utils.workspace import (
     get_crm_contacts_dir,
 )
 from scripts.utils.operator_identity import operator_slug
+from scripts.utils.atomic import atomic_write_text
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
+
+# A CRM contact filename stem: no separators, no dots, no traversal.
+_CONTACT_SLUG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +107,37 @@ CADENCE_RANK = {
 }
 
 
+def _split_flow(inner: str) -> list[str]:
+    """Split a YAML flow-list body on commas OUTSIDE quotes.
+
+    A plain `.split(",")` cut inside quoted items, so
+    `tags: ["acme, inc", partner]` parsed as three entries and was written back
+    as three -- silently rewriting a field the merge was never asked to touch.
+    """
+    out: list[str] = []
+    buf: list[str] = []
+    quote = ""
+    for ch in inner:
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in "\"'":
+            quote = ch
+            buf.append(ch)
+            continue
+        if ch == ",":
+            out.append("".join(buf).strip())
+            buf = []
+            continue
+        buf.append(ch)
+    tail = "".join(buf).strip()
+    if tail:
+        out.append(tail)
+    return [item for item in out if item]
+
+
 def parse_frontmatter(text: str) -> tuple[dict, str]:
     """Return (frontmatter_dict, body) from a markdown file with YAML front matter.
 
@@ -143,7 +178,7 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
         value = value.strip()
         if value.startswith("[") and value.endswith("]"):
             # A flow list on one line: "tags: [a, b]".
-            value = [_scalar(v.strip()) for v in value[1:-1].split(",") if v.strip()]
+            value = [_scalar(v) for v in _split_flow(value[1:-1]) if v]
         elif not value:
             # A key with nothing after the colon may own a block list on the
             # lines below it. Those lines carry no colon, so the loop used to
@@ -352,7 +387,13 @@ def main() -> None:
     try:
         cfg = load_admin_config()
         admin_slugs = set(cfg.get("admin_slugs") or [])
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - reported, then a named fallback
+        # Silently narrowing the admin set to the current operator routed real
+        # admins to per-exec repo paths that hold none of their contacts, so the
+        # tool either said "Source file not found" or merged against the wrong
+        # tree. Neither said why.
+        print(f"{YELLOW}Warning:{RESET} could not read the admin config ({exc}); "
+              f"treating only {operator_slug()!r} as an admin. Paths may be wrong.")
         admin_slugs = {operator_slug()}
 
     def _contacts_dir(exec_slug: str) -> Path:
@@ -363,8 +404,35 @@ def main() -> None:
     from_contacts = _contacts_dir(args.from_exec)
     into_contacts = _contacts_dir(args.into)
 
+    # A CONTACT SLUG, not a path fragment. `--contact "../../address-book/vip"`
+    # escaped the contacts directory entirely, and this tool then overwrote one
+    # arbitrary file and renamed another -- its two destructive operations,
+    # outside the intended tree. `validate_admin()` gates WHO, never WHERE, and
+    # `memory-touch.py` already sets the house standard of refusing any path
+    # that does not resolve inside its directory.
+    if not _CONTACT_SLUG_RE.fullmatch(args.contact):
+        print(f"{RED}ERROR:{RESET} --contact must be a bare slug "
+              f"(letters, digits, hyphen, underscore); got {args.contact!r}")
+        sys.exit(2)
+
     source_path = from_contacts / f"{args.contact}.md"
     target_path = into_contacts / f"{args.contact}.md"
+
+    for label, path, root in (("source", source_path, from_contacts),
+                              ("target", target_path, into_contacts)):
+        resolved, root_resolved = path.resolve(), root.resolve()
+        if resolved != root_resolved and root_resolved not in resolved.parents:
+            print(f"{RED}ERROR:{RESET} {label} path escapes {root}: {resolved}")
+            sys.exit(2)
+
+    if source_path.resolve() == target_path.resolve():
+        # Both slugs resolving to one contacts dir (two admins, or a typo) made
+        # source and target the SAME file: the merge was written, then the only
+        # copy was renamed to `.merged`, and the tool reported success over a
+        # contact that had left its canonical path.
+        print(f"{RED}ERROR:{RESET} --from and --into resolve to the same file "
+              f"({source_path}); nothing to merge.")
+        sys.exit(2)
 
     # Validate both files exist
     if not source_path.exists():
@@ -404,7 +472,9 @@ def main() -> None:
     merged_text = serialize_frontmatter(merged_fm) + merged_body
 
     # Write merged file
-    target_path.write_text(merged_text, encoding="utf-8")
+    # Atomic: this is the authoritative merged CRM record, and a torn write
+    # leaves it truncated.
+    atomic_write_text(target_path, merged_text)
     print(f"{GREEN}Merged file written:{RESET} {target_path}")
 
     # Backup source

@@ -53,6 +53,11 @@ def _result(status: str, action: str, path: str, message: str) -> dict:
     return {"status": status, "action": action, "path": path, "message": message}
 
 
+# Bounded because this runs headless from setup.py and /sync.
+PULL_TIMEOUT_S = 120
+CLONE_TIMEOUT_S = 300
+
+
 def sync_corporate(dry_run: bool = False) -> dict:
     """Clone or fast-forward the corporate content clone. Returns a result dict."""
     root = get_workspace_root()
@@ -68,11 +73,28 @@ def sync_corporate(dry_run: bool = False) -> dict:
     clone = root / CLONE_DIRNAME
     org = load_github_org()
 
+    # `load_github_org()` returns "" until the operator configures one, and the
+    # clone then targeted "/heading-os-corporate" -- surfacing as a confusing gh
+    # error instead of naming the seam that has to be set.
+    org_note = ("" if org else
+                " (NO GitHub org configured: set `github_org` in your "
+                "operator.yaml, or HEADING_OS_GITHUB_ORG)")
+
     if dry_run:
+        # A dry run still REPORTS, because writing nothing is the whole contract
+        # -- it just says the org is missing rather than printing a plausible
+        # target built from an empty string.
         action = "pull" if (clone / ".git").is_dir() else "clone"
         return _result(
             "dry-run", action, str(clone),
-            f"would {action} {org}/{CORPORATE_REPO} at {clone}",
+            f"would {action} {org}/{CORPORATE_REPO} at {clone}{org_note}",
+        )
+
+    if not org:
+        return _result(
+            "error", "none", str(clone),
+            "no GitHub org configured: set `github_org` in your operator.yaml "
+            "(or HEADING_OS_GITHUB_ORG) before syncing corporate content.",
         )
 
     # gh reads GH_TOKEN; load the engine .env so a headless run authenticates.
@@ -82,10 +104,20 @@ def sync_corporate(dry_run: bool = False) -> dict:
         print(f"{GRAY}note: could not load engine .env ({exc}); relying on gh auth.{RESET}")
 
     if (clone / ".git").is_dir():
-        proc = subprocess.run(
-            ["git", "pull", "--ff-only"],
-            cwd=str(clone), capture_output=True, text=True,
-        )
+        try:
+            proc = subprocess.run(
+                ["git", "pull", "--ff-only"],
+                cwd=str(clone), capture_output=True, text=True, timeout=PULL_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            # This file promises to degrade clearly and never silently, and it
+            # is called from setup.py and /sync -- potentially headless, where a
+            # stalled network or a gh auth prompt on captured stdout hung the
+            # caller forever with nothing printed.
+            return _result(
+                "error", "pull", str(clone),
+                f"git pull --ff-only exceeded {PULL_TIMEOUT_S}s",
+            )
         if proc.returncode != 0:
             return _result(
                 "error", "pull", str(clone),
@@ -97,10 +129,25 @@ def sync_corporate(dry_run: bool = False) -> dict:
         )
 
     # First run: clone.
-    proc = subprocess.run(
-        ["gh", "repo", "clone", f"{org}/{CORPORATE_REPO}", str(clone)],
-        cwd=str(root), capture_output=True, text=True,
-    )
+    if clone.exists():
+        # A directory with no .git is the residue of an interrupted clone, and
+        # `gh repo clone` refuses a non-empty target -- so one Ctrl+C bricked
+        # the seam permanently, with an error that never said why.
+        return _result(
+            "error", "clone", str(clone),
+            f"{clone} exists but is not a git clone (an interrupted clone leaves "
+            f"this). Delete it and re-run: rm -rf {clone}",
+        )
+    try:
+        proc = subprocess.run(
+            ["gh", "repo", "clone", f"{org}/{CORPORATE_REPO}", str(clone)],
+            cwd=str(root), capture_output=True, text=True, timeout=CLONE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return _result(
+            "error", "clone", str(clone),
+            f"gh repo clone exceeded {CLONE_TIMEOUT_S}s",
+        )
     if proc.returncode != 0:
         return _result(
             "error", "clone", str(clone),

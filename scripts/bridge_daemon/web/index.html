@@ -149,26 +149,16 @@
   <div id="kbd-help" class="kbd-help-overlay" hidden>
     <div class="kbd-help-panel" role="dialog" aria-label="Keyboard shortcuts">
       <h3>Keyboard shortcuts</h3>
-      <table class="kbd-help-table">
+      <table class="kbd-help-table" id="kbd-help-table">
         <tr><td><kbd>/</kbd></td><td>focus search</td></tr>
         <tr><td><kbd>Esc</kbd></td><td>blur search / close this overlay</td></tr>
         <tr><td><kbd>?</kbd></td><td>toggle this overlay</td></tr>
         <tr><td><kbd>Ctrl</kbd> + <kbd>K</kbd></td><td>open command palette</td></tr>
         <tr><td colspan="2" class="kbd-help-section">Navigation (press <kbd>g</kbd> then...)</td></tr>
-        <tr><td><kbd>g</kbd> <kbd>p</kbd></td><td>Pulse</td></tr>
-        <tr><td><kbd>g</kbd> <kbd>m</kbd></td><td>Important</td></tr>
-        <tr><td><kbd>g</kbd> <kbd>i</kbd></td><td>Inbox</td></tr>
-        <tr><td><kbd>g</kbd> <kbd>a</kbd></td><td>Approvals</td></tr>
-        <tr><td><kbd>g</kbd> <kbd>o</kbd></td><td>Conversations</td></tr>
-        <tr><td><kbd>g</kbd> <kbd>d</kbd></td><td>Day</td></tr>
-        <tr><td><kbd>g</kbd> <kbd>t</kbd></td><td>Tasks</td></tr>
-        <tr><td><kbd>g</kbd> <kbd>n</kbd></td><td>Pipeline</td></tr>
-        <tr><td><kbd>g</kbd> <kbd>v</kbd></td><td>Investors</td></tr>
-        <tr><td><kbd>g</kbd> <kbd>s</kbd></td><td>Studio</td></tr>
-        <tr><td><kbd>g</kbd> <kbd>h</kbd></td><td>Threads</td></tr>
-        <tr><td><kbd>g</kbd> <kbd>r</kbd></td><td>Tribe</td></tr>
-        <tr><td><kbd>g</kbd> <kbd>c</kbd></td><td>Capabilities</td></tr>
-        <tr><td><kbd>g</kbd> <kbd>l</kbd></td><td>Library</td></tr>
+        <!-- Filled by app.js from KBD_NAV, which is the only place a g-shortcut
+             is defined. These rows were hand-written until 2026-08-24 and had
+             already drifted: `g e` (Contacts) worked and was documented
+             nowhere, so the one way to discover it was to read the source. -->
       </table>
       <div class="kbd-help-close">Press <kbd>Esc</kbd> or click outside to close</div>
     </div>

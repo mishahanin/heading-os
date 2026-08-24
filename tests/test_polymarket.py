@@ -23,29 +23,34 @@ from scripts import polymarket as pm
 
 
 # ---------- whitelist precedence (P2 fix) ----------
+#
+# `match_whitelist` returns THREE values since 2026-08-24. The third is the
+# list of whitelist terms that actually fired: the filter used to require the
+# whole topic string verbatim in a market question, which can never agree with
+# a whitelist that fires on any one term.
 
 
 def test_whitelist_positive_only_returns_category():
-    cat, has_neg = pm.match_whitelist("AI agents trending now")
+    cat, has_neg, _terms = pm.match_whitelist("AI agents trending now")
     assert cat == "ai_big_tech"
     assert has_neg is False
 
 
 def test_whitelist_negative_only_returns_none_with_negative_flag():
-    cat, has_neg = pm.match_whitelist("DPI vendor landscape the legacy incumbent")
+    cat, has_neg, _terms = pm.match_whitelist("DPI vendor landscape the legacy incumbent")
     assert cat is None
     assert has_neg is True
 
 
 def test_whitelist_neither_returns_none_no_negative():
-    cat, has_neg = pm.match_whitelist("random gardening question")
+    cat, has_neg, _terms = pm.match_whitelist("random gardening question")
     assert cat is None
     assert has_neg is False
 
 
 def test_whitelist_positive_wins_when_both_match():
     """P2: positive wins when both positive and negative keywords present."""
-    cat, has_neg = pm.match_whitelist("AI policy in DPI ecosystem")
+    cat, has_neg, _terms = pm.match_whitelist("AI policy in DPI ecosystem")
     assert cat == "ai_big_tech"
     assert has_neg is True
     # Caller fires anyway because positive matched
@@ -77,10 +82,23 @@ def _gamma_market(question: str, volume: float, prices=("0.65", "0.35"),
 def test_outside_whitelist_skips_without_api_call():
     """Whitelist miss -> outside_whitelist, no HTTP call made."""
     with patch.object(pm.urllib.request, "urlopen") as urlopen:
-        result = pm.query_polymarket("DPI vendor landscape")
+        result = pm.query_polymarket("random gardening question")
     assert result["skip_reason"] == "outside_whitelist"
+    assert result["negative_match"] is False
     assert result["markets"] == []
     assert result["whitelist_match"] is None
+    urlopen.assert_not_called()
+
+
+def test_a_negative_only_topic_is_reported_as_such():
+    """The negative list used to be computed and discarded, so a skip for a
+    suppressed term was indistinguishable from a skip for an unknown one. The
+    reason stays `outside_whitelist` on purpose -- two SKILL.md files enumerate
+    the three known values -- and the distinction rides in its own field."""
+    with patch.object(pm.urllib.request, "urlopen") as urlopen:
+        result = pm.query_polymarket("DPI vendor landscape")
+    assert result["skip_reason"] == "outside_whitelist"
+    assert result["negative_match"] is True
     urlopen.assert_not_called()
 
 

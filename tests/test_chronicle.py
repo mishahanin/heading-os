@@ -7,7 +7,7 @@ topic-based title, and the fail-toward-personal keyword pre-filter.
 
 import os
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -45,14 +45,26 @@ def test_session_date_prefers_started_when_valid():
 
 
 def test_session_date_mtime_fallback_never_today(tmp_path):
-    # No timestamps anywhere -> fall back to the file mtime date, NOT today().
+    """No timestamps anywhere -> the file mtime date, NOT today().
+
+    In UTC, and that is the point rather than a detail. This asserted
+    `date.fromtimestamp(past)`, the HOST's local day, mirroring code that used
+    the same call — while every other date this function can return comes from
+    the transcript's UTC ISO stamps, and `select_sessions` compares the result
+    against a marker written from them. On a host away from UTC the two clocks
+    disagree by a day, and a session whose summarization failed could be filtered
+    out by its own high-water mark, forever. Both are UTC since 2026-08-24, so a
+    literal is now the honest assertion: on the machine this was written on
+    (UTC+4) the local day is 2023-11-15 and the UTC day is 2023-11-14.
+    """
     f = tmp_path / "s.jsonl"
     f.write_text("{}", encoding="utf-8")
-    past = 1_700_000_000  # 2023-11-14 UTC-ish; a real historical mtime
+    past = 1_700_000_000  # 2023-11-14T22:13:20Z; a real historical mtime
     os.utime(f, (past, past))
     env = {"started_at_utc": "", "user_turns": [], "assistant_turns": [], "system_reminders": []}
     got = _session_date(env, f)
-    assert got == date.fromtimestamp(past).isoformat()  # noqa: DTZ012 - local mtime date, mirrors code under test
+    assert got == "2023-11-14"
+    assert got == datetime.fromtimestamp(past, timezone.utc).date().isoformat()
     assert got != date.today().isoformat()  # noqa: DTZ011 - asserting NOT today
 
 

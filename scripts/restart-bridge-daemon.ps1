@@ -1,8 +1,9 @@
 # Restart the bridge daemon. Stops any running pythonw process serving
 # bridge-daemon.py, then relaunches via the installed launcher .bat.
 #
-# Usage (from an elevated PowerShell, anywhere):
-#   & "C:\ai\claude-workspaces\ceo-main\scripts\restart-bridge-daemon.ps1"
+# Usage (from an elevated PowerShell, anywhere) -- point it at YOUR checkout;
+# the script derives the workspace root from its own location:
+#   & "<workspace-root>\scripts\restart-bridge-daemon.ps1"
 
 $ErrorActionPreference = "Continue"
 
@@ -13,7 +14,10 @@ $launcherBat = Join-Path $workspaceRoot "scripts\launch-bridge-daemon.bat"
 # Step 1: find any pythonw process running bridge-daemon.py and kill it.
 $killed = $false
 Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -and $_.CommandLine -like "*bridge-daemon.py*" } |
+    # The FULL path, not the bare file name. Matching "*bridge-daemon.py*"
+    # anywhere on the machine force-killed a second workspace's daemon mid-write
+    # on a box that deliberately runs more than one checkout.
+    Where-Object { $_.CommandLine -and $_.CommandLine -like "*$daemonScript*" } |
     ForEach-Object {
         Write-Host "Stopping bridge daemon: pid $($_.ProcessId)"
         Stop-Process -Id $_.ProcessId -Force

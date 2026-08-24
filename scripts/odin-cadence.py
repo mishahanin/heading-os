@@ -37,7 +37,12 @@ threads/business/*.md, crm/contacts/*.md (excluding .migration-backup/ + aggrega
 outputs/operations/viraid/state.json -- same globs, same exclusions, same gate.
 If mode-catalog's allowlist or detection regexes change, change this script too.
 
-Needs no ollama (pure counting). Exit 0 always.
+Needs no ollama (pure counting). Exit 0 on every COUNTING outcome --
+including "nothing due", which is not a failure. An OSError from the
+filesystem (permissions, a full disk, a dropped mount) still propagates
+and exits non-zero: that is not a cadence verdict and must not be
+reported as one. The claim used to be a flat "Exit 0 always", which the
+notifier then read as "up to date" whenever this crashed.
 
 Gap #5 enrichment: when reflect-ready clusters exist, `main()` also writes a
 dated report (episode membership + shared tags per cluster) under
@@ -158,7 +163,13 @@ def read_marker(root: Path):
     try:
         d = date.fromisoformat(raw[:10])
     except ValueError:
-        return raw, None
+        # A corrupt marker returned as TRUTHY made `compute` use the garbage
+        # string as its lexicographic `since` floor, so `"2026-..." >= "garbage"`
+        # was False for every entry and all un-harvested counts silently read 0
+        # -- while the reason said "never collected" beside a marker file that
+        # plainly exists. None here falls the caller through to EPOCH_FLOOR,
+        # which counts everything: the safe direction for an unreadable marker.
+        return None, None
     return raw, (datetime.now(get_default_tz()).date() - d).days
 
 
@@ -387,10 +398,20 @@ def analyze_reflect_clusters(root: Path, today: date | None = None) -> dict[str,
         waits = [nodes[i][1] for i in unreviewed if nodes[i][1] is not None]
         age = max(waits) if waits else None  # the oldest thing not yet looked at
         ages.append(age)
-        shared_tags = sorted(set().union(*(nodes[i][0] for i in idxs)))
+        # `shared_tags` KEEPS its union semantics: `tests/test_odin_cadence.py`
+        # pins it ("shared_tags is the tag union"), so it is a deliberate,
+        # consumed shape and not a slip. The defect the audit found is real but
+        # it is in the NAME and the report label, which both claimed the tags
+        # were common to every member -- with transitive A-B-C membership,
+        # usually none of them are. `common_tags` carries the honest
+        # intersection alongside it, and the report says which is which.
+        tag_sets = [set(nodes[i][0]) for i in idxs]
+        shared_tags = sorted(set().union(*tag_sets)) if tag_sets else []
+        common_tags = sorted(set.intersection(*tag_sets)) if tag_sets else []
         clusters.append({
             "episodes": [nodes[i][2] for i in idxs],
             "shared_tags": shared_tags,
+            "common_tags": common_tags,
             "age_days": age,
         })
 
@@ -473,8 +494,16 @@ def write_cadence_report(root: Path, result: dict[str, Any], today: date) -> Pat
     ]
     for c in clusters:
         tags = ", ".join(c["shared_tags"]) if c["shared_tags"] else "(none)"
+        common = ", ".join(c.get("common_tags") or []) or "(none in common)"
         age = f"{c['age_days']}d" if c["age_days"] is not None else "unknown age"
-        lines.append(f"- Episodes: {', '.join(c['episodes'])} | shared tags: {tags} | newest {age}")
+        # "oldest unreviewed", not "newest". `age_days` is max(waits) -- the wait
+        # of the OLDEST thing not yet looked at -- and the compute docstring
+        # spends a paragraph on why, condemning the newest reading as "measured
+        # the opposite thing". The report label reintroduced it for the CEO.
+        lines.append(f"- Episodes: {', '.join(c['episodes'])} "
+                     f"| tags across the cluster: {tags} "
+                     f"| in every member: {common} "
+                     f"| oldest unreviewed {age}")
     lines.append("")
     text = "\n".join(lines)
     tmp = path.with_suffix(".md.tmp")
@@ -514,7 +543,11 @@ def suggestion_line(r: dict[str, Any], report_rel: str | None = None) -> str:
     if clusters:
         tail.append("/odin reflect")
     detail = ", ".join(parts) if parts else "cadence due"
-    line = f"Odin cadence: {when} — {detail}. Run {' or '.join(tail)}."
+    # A days-only nudge (no new entries, no clusters) left `tail` empty and this
+    # line, sent verbatim to Telegram, ended "Run .".
+    line = f"Odin cadence: {when} — {detail}."
+    if tail:
+        line += f" Run {' or '.join(tail)}."
     if report_rel:
         line += f" (report: {report_rel})"
     return line

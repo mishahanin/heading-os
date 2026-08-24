@@ -53,7 +53,8 @@ comment block at the call site explaining why):
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Optional, Tuple
+import sys
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
     import yaml
@@ -192,5 +193,102 @@ def parse_config(text: str, key: str) -> Optional[str]:
         if value.startswith('"') and value.endswith('"') or value.startswith("'") and value.endswith("'"):
             value = value[1:-1]
         return value
+    return None
+
+
+# ============================================================
+# Markdown tables
+# ============================================================
+
+HEADER_SCAN_LINES = 20
+
+
+def _stderr_warn(message: str) -> None:
+    print(f"parse_md_table: {message}", file=sys.stderr)
+
+
+def split_table_row(line: str) -> List[str]:
+    """Cells of one markdown table row, empty cells preserved positionally.
+
+    The two dashboard generators each carried `[c for c in cells if c != ""]`,
+    which DELETED an empty cell rather than keeping its position. A radar row
+    `| Alice | | Smith | 14 | RED |` came back one cell short, so every value
+    after the blank shifted one column left: Owner showed the company, health
+    showed a number. Splitting on the pipes and dropping only the two outside
+    the first and last pipe keeps the columns lined up.
+    """
+    cells = line.split("|")
+    if cells and not cells[0].strip():
+        cells = cells[1:]
+    if cells and not cells[-1].strip():
+        cells = cells[:-1]
+    return [c.strip() for c in cells]
+
+
+def parse_md_table(text: str, header_pattern: Optional[str] = None, *,
+                   source: str = "<text>",
+                   warn: Optional[Callable[[str], None]] = None) -> List[Dict[str, str]]:
+    """Rows of the first markdown table in `text`, as dicts keyed by header.
+
+    `header_pattern` is a regex; the search for the table starts at the first
+    line matching it. `source` names the file in warnings. `warn` overrides the
+    stderr warning sink.
+
+    Loud where the two script-local copies were silent. Both of those dropped
+    any row with fewer cells than headers, so a pipeline deal with one empty
+    Notes cell vanished from the deal count, the total value, the weighted
+    value, the stage counts and the top-three, with nothing written anywhere.
+    A short row is now padded and reported; the row survives.
+
+    A blank line ends the table. The old copies did `if not line: continue`
+    inside the row loop, so two tables separated by one blank line merged and
+    the second table's header row was parsed as data of the first.
+    """
+    emit = warn or _stderr_warn
+    lines = text.split("\n")
+    start = 0
+    if header_pattern:
+        for i, line in enumerate(lines):
+            if re.search(header_pattern, line):
+                start = i
+                break
+        else:
+            return []
+
+    headers: Optional[List[str]] = None
+    data_start: Optional[int] = None
+    for i in range(start, min(start + HEADER_SCAN_LINES, len(lines))):
+        line = lines[i].strip()
+        if "|" in line and "---" not in line and not headers:
+            headers = split_table_row(line)
+            continue
+        if headers and "---" in line:
+            data_start = i + 1
+            break
+
+    if not headers or data_start is None:
+        if header_pattern:
+            # Silence here read as "the table is empty". It also covers "the
+            # table is more than HEADER_SCAN_LINES below its heading", which
+            # renders as "No data available" and looks legitimate.
+            emit(f"{source}: no table found within {HEADER_SCAN_LINES} lines of "
+                 f"/{header_pattern}/")
+        return []
+
+    rows: List[Dict[str, str]] = []
+    for i in range(data_start, len(lines)):
+        line = lines[i].strip()
+        if not line or not line.startswith("|"):
+            break
+        cells = split_table_row(line)
+        if len(cells) < len(headers):
+            emit(f"{source} line {i + 1}: row has {len(cells)} cells, header has "
+                 f"{len(headers)}; padding. Row: {line}")
+        elif len(cells) > len(headers):
+            emit(f"{source} line {i + 1}: row has {len(cells)} cells, header has "
+                 f"{len(headers)}; extra cells dropped. Row: {line}")
+        rows.append({h: cells[j] if j < len(cells) else ""
+                     for j, h in enumerate(headers)})
+    return rows
 
     return None

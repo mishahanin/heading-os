@@ -12,14 +12,21 @@ to stdout:
       "error": "...", "classification": "transient",
       "attempt": 1, "next_attempt_at": "2026-06-04T12:34:56+00:00"}]
 
-It does NOT write ``queue.json``. The spawning daemon job captures this stdout
-and applies the status changes in-process under the queue lock (keeps the file
-single-writer). The executor reads ``attempt`` / ``next_attempt_at`` off each
-card to honour backoff and emits the next ``attempt`` / ``next_attempt_at`` for
-transient failures so the daemon can persist them; the executor itself writes
-nothing. Spawned every ~2 min by a config-gated daemon job; idempotent because
-once the daemon marks a card ``sent`` it is no longer ``approved`` and the next
-run skips it (the daemon job is ``max_instances=1`` so runs never overlap).
+It does NOT write ``queue.json``. A caller captures this stdout and applies the
+status changes in-process under the queue lock (keeps the file single-writer).
+The executor reads ``attempt`` / ``next_attempt_at`` off each card to honour
+backoff and emits the next ``attempt`` / ``next_attempt_at`` for transient
+failures so the caller can persist them; the executor itself writes nothing.
+
+**Nothing spawns ``main()`` today.** The daemon's send-executor spawn was
+REMOVED on 2026-06-27 (``scripts/bridge-daemon.py``, ``_executor_job``): the
+synchronous terminal ``scripts/action-queue.py approve`` is now the SOLE send
+path, and the daemon never sends. This docstring claimed "Spawned every ~2 min
+by a config-gated daemon job" until 2026-08-23, and an auditor reading it
+reasoned correctly about a batch sender that has not run for two months. What
+stays live here is ``send_card``, which ``action-queue.py`` imports and calls
+for the one card the CEO approved. ``main()`` is retained as the batch entry
+point should a caller ever want it back.
 
 Failure classification (scrutiny M1 - honest within what is deterministic).
 ``send-email.py`` exits 1 for both connection blips and permanent config /
@@ -78,12 +85,20 @@ def send_card(engine_root: Path, card: dict, now: datetime | None = None) -> dic
     now = datetime.now(timezone.utc) if now is None else now
     aid = card.get("id")
     action_type = card.get("action_type")
+    # Derived up here, not further down, because the first branch that returns
+    # a send_failed result is the telegram one below.
+    attempt = card.get("attempt") or 0
+    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 0:
+        attempt = 0
     # telegram_send is reserved-and-gated but has no executor yet (F-L6): explicit
     # 501, never a silent skip. A gated send that cannot send.
     if action_type == "telegram_send":
+        # `attempt` too: every other send_failed path carries it, and the
+        # docstring's result shape promises it, so a caller persisting
+        # res["attempt"] uniformly hit KeyError on this one branch.
         return {"action_id": aid, "result": "send_failed",
                 "error": "telegram executor not implemented (501)",
-                "classification": "permanent"}
+                "classification": "permanent", "attempt": attempt}
     if action_type != "email_send":
         return {"action_id": aid, "result": "skipped",
                 "error": f"not a send type ({action_type})", "classification": "none"}
@@ -93,9 +108,6 @@ def send_card(engine_root: Path, card: dict, now: datetime | None = None) -> dic
                 "error": f"{action_type} does not resolve gated - refusing to send",
                 "classification": "none"}
 
-    attempt = card.get("attempt") or 0
-    if not isinstance(attempt, int) or attempt < 0:
-        attempt = 0
     to = (card.get("to") or "").strip()
     subject = card.get("subject") or ""
     body = card.get("draft_body") or ""
@@ -104,11 +116,25 @@ def send_card(engine_root: Path, card: dict, now: datetime | None = None) -> dic
                 "error": "draft not written (run /cold-sweep to fill the body)",
                 "classification": "permanent", "attempt": attempt}
     send_script = engine_root / "scripts" / "send-email.py"
-    cmd = [sys.executable, str(send_script), "--to", to, "--subject", subject, "--body", body]
+    # The body goes on STDIN, never in argv. Two reasons, both measured
+    # 2026-08-23. An argv element is readable by any local account via `ps` for
+    # the up-to-120-second life of the send, and outbound CRM content is the
+    # most commercially sensitive text here. And Linux caps one argument at
+    # MAX_ARG_STRLEN = 131072 bytes: a 100,000-byte body spawned, 131,072 raised
+    # OSError [Errno 7]. See tests/test_send_body_never_reaches_argv.py.
+    cmd = [sys.executable, str(send_script), "--to", to, "--subject", subject,
+           "--body-stdin"]
     try:
-        p = subprocess.run(cmd, cwd=str(engine_root), capture_output=True, text=True, timeout=SEND_TIMEOUT_S)
+        p = subprocess.run(cmd, cwd=str(engine_root), capture_output=True,
+                           text=True, timeout=SEND_TIMEOUT_S, input=body)
     except subprocess.TimeoutExpired:
         return _transient_result(aid, "send timed out", attempt, now)
+    except OSError as exc:
+        # A spawn can still fail for reasons this code does not control:
+        # ENOMEM, EMFILE, a missing interpreter. Returning a result keeps the
+        # caller on the recorded path; raising made it a raw traceback out of
+        # `action-queue.py approve`, the CEO's own send command.
+        return _transient_result(aid, f"could not start the sender: {exc}", attempt, now)
     if p.returncode == 0:
         return {"action_id": aid, "result": "sent", "classification": "sent", "attempt": attempt}
     error = (p.stderr or p.stdout or "send failed")[-300:].strip()
@@ -138,7 +164,19 @@ def main() -> int:
             when = parse_iso(next_at)
             if when is not None and when > now:
                 continue
-        res = send_card(root, card, now=now)
+        # One card must never discard the batch. Results are printed ONCE,
+        # after this loop, so an exception here loses the record of every card
+        # already SENT in this run: those stay `approved`, and the next run
+        # sends them again. Duplicate mail to an external counterparty is the
+        # single failure a send-gated queue exists to prevent, so the guard is
+        # deliberately broad.
+        try:
+            res = send_card(root, card, now=now)
+        except Exception as exc:                        # noqa: BLE001 - see above
+            res = {"action_id": card.get("id"), "result": "send_failed",
+                   "error": f"executor raised: {exc!r}",
+                   "classification": "permanent",
+                   "attempt": (card.get("attempt") or 0) + 1}
         # Preserve batch behaviour: non-send / non-gated cards are silently
         # skipped (not surfaced as failures); everything else is reported.
         if res.get("result") in ("skipped", "refused"):

@@ -37,7 +37,7 @@ Usage:
 
     # Threaded reply (to the sender of the matched message, preserves thread):
     python scripts/send-email.py --reply \
-        --match-from "pat.nolan@globex.com" \
+        --match-from "alice@example.com" \
         --match-subject "31C / Globex" \
         --body "<p>Alex, ...</p>"
 
@@ -49,7 +49,7 @@ Usage:
     # Threaded forward (quotes the original AND carries its attachments):
     python scripts/send-email.py --forward \
         --match-subject "Acme Group" \
-        --to "carol@31c.io" "dave@31c.io" \
+        --to "bob@example.org" "carol@example.net" \
         --body "<p>Marlow, Alex, ...</p>"
 
     # Most precise: identify the original by exact Exchange item id.
@@ -437,21 +437,27 @@ def _autolog_to(to_list, subject, body):
 
 
 def _send_email_core(account, to, subject, body, cc=None, bcc=None, attach=None,
-                     signature=None, sig_attachments=None):
+                     signature=None):
     """Inner core: build and send one message on an established account.
 
     Returns ``{"to": [...], "status": "sent"|"failed", "error": str|None}``.
     Does NOT call ``sys.exit`` on failure - callers decide how to handle.
 
-    ``signature`` and ``sig_attachments`` can be pre-loaded by the caller
-    (batch mode) so we do not re-read the signature HTML or re-build the
-    inline FileAttachment objects on every message.
+    ``signature`` can be pre-loaded by the caller (batch mode) so the signature
+    HTML is not re-read per message.
+
+    There is NO matching `sig_attachments` parameter, and the one that used to
+    sit here was a lie: it was documented as letting batch mode skip rebuilding
+    the inline images, but the body ignored it and called
+    `build_signature_attachments()` again regardless. It has to: a
+    FileAttachment binds to a Message once `.attach()` is called, so the objects
+    genuinely cannot be shared across messages. Removing the parameter is the
+    honest form -- keeping it invited a caller to rely on an optimisation that
+    never existed.
     """
     _ensure_exchangelib()
     if signature is None:
         signature = load_signature()
-    if sig_attachments is None:
-        sig_attachments = build_signature_attachments()
     file_attachments = build_file_attachments(attach)
 
     # SEC-001: plain-text bodies are HTML-escaped inside _build_full_html.
@@ -480,12 +486,18 @@ def _send_email_core(account, to, subject, body, cc=None, bcc=None, attach=None,
     # Attach inline signature images (rebuild per-message - FileAttachment
     # objects are bound to a Message after .attach()).
     fresh_sig_attachments = build_signature_attachments()
-    for att in fresh_sig_attachments:
-        msg.attach(att)
-
-    # Attach any user-supplied files (non-inline)
-    for att in file_attachments:
-        msg.attach(att)
+    # Guarded. An oversized file or an EWS error here used to raise straight
+    # through send_batch, aborting every remaining message with a traceback and
+    # no per-message result -- after this draft had already been saved. The
+    # batch contract is "a status dict per message", so a failure returns one.
+    try:
+        for att in fresh_sig_attachments:
+            msg.attach(att)
+        for att in file_attachments:
+            msg.attach(att)
+    except Exception as e:
+        return {"to": list(to), "status": "failed",
+                "error": f"attach failed ({e}); the draft was saved but NOT sent"}
 
     # Send with retry. See `_is_safe_to_resend`: only a failure that proves the
     # request never reached the server is retried.
@@ -633,10 +645,14 @@ def _send_threaded_core(account, mode, original, body, to=None, cc=None, bcc=Non
         return {"to": to or [], "status": "failed", "error": f"fetch saved draft failed: {e}"}
 
     fresh_sig_attachments = build_signature_attachments()
-    for att in fresh_sig_attachments:
-        draft.attach(att)
-    for att in file_attachments:
-        draft.attach(att)
+    try:
+        for att in fresh_sig_attachments:
+            draft.attach(att)
+        for att in file_attachments:
+            draft.attach(att)
+    except Exception as e:
+        return {"to": to or [], "status": "failed",
+                "error": f"attach failed ({e}); the draft was saved but NOT sent"}
 
     last_error = None
     for attempt in range(1, 4):
@@ -718,7 +734,9 @@ def send_batch(account, messages):
     # FileAttachment objects must be rebuilt per message because each one
     # is bound to its Message after .attach()).
     signature = load_signature()
-    sig_attachments_template = build_signature_attachments()  # presence check
+    # Presence check only: this proves the signature images are readable BEFORE
+    # the batch starts, so a missing asset fails once rather than N times.
+    build_signature_attachments()
 
     results = []
     for idx, m in enumerate(messages, start=1):
@@ -737,7 +755,7 @@ def send_batch(account, messages):
         result = _send_email_core(
             account=account, to=to, subject=subject, body=body,
             cc=cc, bcc=bcc, attach=attach,
-            signature=signature, sig_attachments=sig_attachments_template,
+            signature=signature,
         )
         results.append(result)
     return results
@@ -756,6 +774,27 @@ def main():
     parser.add_argument("--bcc", nargs="+", help="BCC recipient(s)")
     parser.add_argument("--subject", help="Email subject")
     parser.add_argument("--body", help="Email body (HTML or plain text)")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Validate the arguments, print what WOULD be sent, and exit 0 "
+            "without connecting to Exchange. Added 2026-08-23 because the "
+            "script had no way to exercise its own argument contract: checking "
+            "that a flag parses meant sending a real message, and doing that "
+            "once put a message on the wire that nobody wanted."
+        ),
+    )
+    parser.add_argument(
+        "--body-stdin",
+        action="store_true",
+        help=(
+            "Read the body from stdin instead of --body. Use this for anything "
+            "a person did not type at a prompt: an argv element is visible to "
+            "any local account via `ps` for the life of the send, and Linux "
+            "caps one at 131072 bytes, which a long HTML body exceeds."
+        ),
+    )
     parser.add_argument(
         "--attach",
         nargs="+",
@@ -788,6 +827,43 @@ def main():
                         help="Folder to search for the original: Inbox (default) or Sent.")
 
     args = parser.parse_args()
+
+    # A test must never put a message on the wire. Added 2026-08-23 after it
+    # happened three times in one hour: checking that a new flag parsed meant
+    # running this script, and a mutation check that removed the --dry-run
+    # guard sent a real message through Exchange from inside pytest.
+    #
+    # pytest exports PYTEST_CURRENT_TEST into os.environ, and a subprocess
+    # inherits it, so this catches both an in-process import and a spawned CLI.
+    # It refuses rather than silently no-opping: a test that expected a send and
+    # got a quiet success would be a worse lie than a loud refusal.
+    if os.environ.get("PYTEST_CURRENT_TEST") and not args.dry_run:
+        print("[REFUSED] send-email.py will not send from inside a test run. "
+              "Use --dry-run, or stub the transport.", file=sys.stderr)
+        sys.exit(3)
+
+    # Resolve --body-stdin into args.body once, here, so every downstream mode
+    # (single, threaded) keeps reading exactly one attribute.
+    if args.body_stdin:
+        if args.body:
+            parser.error("pass either --body or --body-stdin, not both")
+        args.body = sys.stdin.read()
+        if not args.body:
+            parser.error("--body-stdin was given but stdin was empty")
+
+    # --dry-run stops HERE: after every argparse check and after the body has
+    # been resolved, and before load_config() reads a credential or connect()
+    # opens a session. Placed at the last point where nothing has left the
+    # machine, so the whole argument contract is testable and no send happens.
+    if args.dry_run:
+        body = args.body or ""
+        print("[DRY-RUN] nothing was sent.")
+        print(f"          to={args.to} cc={args.cc} bcc={args.bcc}")
+        print(f"          subject={args.subject!r}")
+        print(f"          body: {len(body)} char(s), "
+              f"source={'stdin' if args.body_stdin else '--body'}")
+        print(f"          attach={args.attach} batch={args.batch}")
+        return
 
     # Batch mode: amortise exchangelib import + Account build over N messages.
     if args.batch:
@@ -829,6 +905,19 @@ def main():
             parser.error(f"--{threaded_mode.replace('_', '-')} requires --body")
         if not (args.match_id or args.match_from or args.match_subject):
             parser.error("threaded mode requires one of --match-id, --match-from, --match-subject")
+        if args.cc or args.bcc:
+            # REFUSED, not dropped. `_send_threaded_core` accepts cc/bcc and
+            # never passes them to create_reply / create_reply_all /
+            # create_forward, so an operator running `--forward --to X --cc Y`
+            # believed Y was copied and the mail went out without them: silent
+            # loss on an irreversible outbound action. Wiring them onto the
+            # saved draft is the other repair, and it belongs to a change that
+            # can be exercised against a live Exchange account -- which this one
+            # deliberately is not.
+            parser.error(
+                f"--cc/--bcc are not supported with --{threaded_mode.replace('_', '-')}; "
+                f"they were silently discarded before. Send a new message with "
+                f"--to/--cc, or reply and copy the address into --to.")
         if threaded_mode == "forward" and not args.to:
             parser.error("--forward requires --to (the recipients to forward to)")
 

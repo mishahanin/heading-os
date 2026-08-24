@@ -16,13 +16,14 @@ Usage:
 import argparse
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import get_workspace_root, load_env
 from scripts.utils.colors import GREEN, YELLOW, RED, BOLD, RESET
 from scripts.utils.crm_autolog import resolve_recipient, bump_last_touch_in_text, atomic_write
+from scripts.utils.markdown import parse_frontmatter_str
 
 
 def _get_exchange_config() -> dict:
@@ -87,9 +88,44 @@ def fetch_sent_items_recent(days: int) -> list:
         sys.exit(1)
 
 
+def _stored_date(raw: str) -> str:
+    """A frontmatter `last_touch` value as a bare YYYY-MM-DD, or "".
+
+    The comparison downstream is a STRING compare, and it assumed the stored
+    value was already bare. It is not always: `last_touch: "2026-04-01"` and
+    `last_touch: 2026-04-01T09:00:00` are both things a contact file carries. A
+    leading quote sorts BELOW every digit, so a quoted date made every backfill
+    run propose a bump even when the stored date was newer, and the dry-run
+    showed that wrong list as if it were right. Unparseable returns "", which
+    compares below any real date, so the bump is proposed and the operator sees
+    it rather than the value being silently trusted.
+
+    That last sentence described `--dry-run` only until 2026-08-24: `--apply`
+    had no gate, so an unreadable value was overwritten with a stderr line as
+    its whole notice. `compute_proposed_bumps` now tells an ABSENT value from an
+    unreadable one, and `cmd_apply` SKIPS the unreadable ones — the promise the
+    paragraph above makes, kept on the path that writes.
+    """
+    value = (raw or "").strip().strip('"').strip("'").strip()
+    if not value:
+        return ""
+    head = value.split("T", 1)[0].split(" ", 1)[0]
+    try:
+        return date.fromisoformat(head).isoformat()
+    except ValueError:
+        print(f"crm-backfill: unreadable last_touch {raw.strip()!r}; treating as "
+              f"unset.", file=sys.stderr)
+        return ""
+
+
 def compute_proposed_bumps(items: list) -> dict:
     """For each unique (entity, max(send_date)), determine if a last_touch bump
-    is proposed. Returns {relationship_path: (current_last_touch, proposed_date)}.
+    is proposed. Returns
+    {relationship_path: (current_last_touch, proposed_date, unreadable)}.
+
+    `unreadable` is True when the file HAS a `last_touch` that could not be
+    parsed, as opposed to not having one: `cmd_apply` skips the first and writes
+    the second.
 
     Two-pass design:
       1. Walk all send events, accumulating max send date per resolved path
@@ -110,13 +146,23 @@ def compute_proposed_bumps(items: list) -> dict:
     proposed: dict = {}
     for rel_path, proposed_date in max_by_path.items():
         text = rel_path.read_text(encoding="utf-8")
-        current = ""
-        for line in text.split("\n")[:30]:
-            if line.startswith("last_touch:"):
-                current = line.split(":", 1)[1].strip()
-                break
+        # The whole frontmatter block, through the shared parser, and no longer
+        # `text.split("\n")[:30]`. The WRITER, `bump_last_touch_in_text`, matches
+        # `^last_touch:` over the entire file with no line cap; only this READER
+        # stopped at line 30. A contact whose frontmatter runs longer (many tags,
+        # aliases, entity refs) read as unset, "" compares below every ISO date,
+        # so a bump was proposed and `--apply` then REGRESSED `last_touch` to an
+        # older send — silently rewriting the one field `crm-health.py` scores
+        # on, and pushing a healthy contact toward red.
+        raw = str(parse_frontmatter_str(text)[0].get("last_touch", ""))
+        current = _stored_date(raw)
+        # An ABSENT value and an unreadable one both read as "", and they are not
+        # the same thing. `_stored_date`'s docstring justifies the "" by saying
+        # the operator "sees it rather than the value being silently trusted" —
+        # true of --dry-run, and false of --apply, which had no gate at all.
+        unreadable = bool(raw.strip()) and not current
         if proposed_date > current:
-            proposed[rel_path] = (current, proposed_date)
+            proposed[rel_path] = (current, proposed_date, unreadable)
     return proposed
 
 
@@ -129,9 +175,14 @@ def cmd_dry_run(days: int) -> int:
         print(f"{GREEN}No bumps needed - all relationship records already up to date.{RESET}")
         return 0
     print(f"{BOLD}Proposed bumps:{RESET}")
-    for path, (current, proposed_date) in sorted(proposed.items()):
-        print(f"  {path.name}: {current or '(none)'} -> {proposed_date}")
-    print(f"\n{YELLOW}{len(proposed)} relationship records would be updated.{RESET}")
+    for path, (current, proposed_date, unreadable) in sorted(proposed.items()):
+        note = f"  {YELLOW}(last_touch unreadable; --apply will SKIP it){RESET}" if unreadable else ""
+        print(f"  {path.name}: {current or '(none)'} -> {proposed_date}{note}")
+    writable = sum(1 for _c, _d, bad in proposed.values() if not bad)
+    print(f"\n{YELLOW}{writable} relationship records would be updated.{RESET}")
+    if writable != len(proposed):
+        print(f"{YELLOW}{len(proposed) - writable} skipped: last_touch unreadable, "
+              f"fix by hand.{RESET}")
     print(f"Run with --apply (no --dry-run) to apply.")
     return 0
 
@@ -142,12 +193,25 @@ def cmd_apply(days: int) -> int:
     if not proposed:
         print(f"{GREEN}No bumps needed.{RESET}")
         return 0
-    for path, (current, proposed_date) in sorted(proposed.items()):
+    applied = 0
+    skipped = []
+    for path, (current, proposed_date, unreadable) in sorted(proposed.items()):
+        if unreadable:
+            # The review `_stored_date`'s docstring promises, actually held. An
+            # unreadable value is the one signal that this file needs a human,
+            # and overwriting it destroys that signal with no confirmation.
+            skipped.append(path.name)
+            print(f"  {YELLOW}[skipped]{RESET} {path.name}: last_touch is present "
+                  f"and unreadable; fix it by hand rather than have it overwritten")
+            continue
         text = path.read_text(encoding="utf-8")
         new_text = bump_last_touch_in_text(text, proposed_date)
         atomic_write(path, new_text)
+        applied += 1
         print(f"  {GREEN}[bumped]{RESET} {path.name}: {current or '(none)'} -> {proposed_date}")
-    print(f"\n{GREEN}Applied {len(proposed)} bumps.{RESET}")
+    print(f"\n{GREEN}Applied {applied} bumps.{RESET}")
+    if skipped:
+        print(f"{YELLOW}Skipped {len(skipped)}: {', '.join(skipped)}{RESET}")
     return 0
 
 

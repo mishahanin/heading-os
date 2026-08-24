@@ -70,7 +70,12 @@ def _run_llm_fit_report(workspace_root: Path) -> None:
             check=False,
         )
         if result.returncode == 0:
-            logging.info("llm_fit_report: ok (%s)", result.stdout.strip().splitlines()[-1] if result.stdout else "")
+            # `.splitlines()[-1]` on a whitespace-only stdout is an IndexError:
+            # `"\n"` is truthy, `.strip()` empties it, and the list is empty. It
+            # escaped both `except` clauses and turned a SUCCESSFUL report into a
+            # scheduler job error, feeding the heartbeat error count with noise.
+            lines = (result.stdout or "").strip().splitlines()
+            logging.info("llm_fit_report: ok (%s)", lines[-1] if lines else "")
         else:
             logging.warning(
                 "llm_fit_report: exited %d; stderr=%s",
@@ -130,9 +135,19 @@ def _cold_sweep_job(workspace_root: Path, state, data_root: Path | None = None) 
         logging.exception("cold_sweep job failed (non-fatal)")
 
 
+# The tier alone used to decide this, so ANY type `config/tool-risk.json` maps
+# to `notify` -- today's, or one a later config edit adds -- was flipped to
+# `applied` by the daemon with nothing executed and, absent a `prev_value` the
+# producer never stamps yet, nothing for `undo_card` to revert either. A config
+# edit could therefore mutate CEO-facing queue state on its own. `tiered-risk.md`
+# lets the ledger RAISE friction freely and never lower it, so the code carries
+# its own allowlist and an unlisted notify type simply waits for the CEO.
+_AUTO_APPLY_TYPES = frozenset({"pipeline_update"})
+
+
 def _sweep_non_gated_cards(data_root: Path, aq) -> int:
-    """R3 tier routing: dispose autonomous cards and auto-apply notify cards
-    in-process under the queue lock, before the send executor runs.
+    """R3 tier routing: auto-apply the notify types listed in
+    ``_AUTO_APPLY_TYPES``, in-process under the queue lock.
 
     Routing (tier resolved from config/tool-risk.json via tool_risk.tier_for):
 
@@ -141,14 +156,23 @@ def _sweep_non_gated_cards(data_root: Path, aq) -> int:
       executable action; they are surfaced read-only. (CEO decision 2026-06-04:
       Cold-Sweep deposits cold/drop recommendations as ``note`` cards, so
       auto-disposing them would hide advice the CEO meant to read. Notes are
-      surfaced, not swept.)
+      surfaced, not swept.) The summary line above said this function DISPOSED
+      them until 2026-08-24, which is the opposite of the routing below. No
+      branch tests for this tier: the dispatch below matches ``notify`` only, so
+      an autonomous card falls through it untouched. The explicit branch that
+      used to say so was deleted the same day as provably behaviour-neutral.
     - ``notify`` ``pipeline_update`` -> auto-apply (status ``applied``). The
       reversible ``prev_value`` the producer (R4, future) stamps on the card is
       preserved so ``undo_card`` can revert it; the daemon never invents
       pipeline state here.
+    - any OTHER ``notify`` type -> left pending. It reaches the CEO instead of
+      being applied by a daemon that knows nothing about what it means.
 
-    ``gated`` cards (email_send) are untouched - they flow through the send
-    executor below only once the CEO has approved them.
+    ``gated`` cards (email_send) are untouched. There is no send executor here
+    and no "below" for one to run in: the spawn was REMOVED 2026-06-27 and the
+    terminal ``action-queue.py approve`` is the sole send path. This docstring
+    claimed otherwise until 2026-08-24, pointing readers at a component that
+    does not exist.
 
     Returns the count of cards applied (for the bump decision).
     """
@@ -163,15 +187,31 @@ def _sweep_non_gated_cards(data_root: Path, aq) -> int:
         if not aid or not atype:
             continue
         tier = tool_risk.tier_for(atype)
-        if tier == tool_risk.AUTONOMOUS:
-            # Display-only autonomous types (note, alert) are surfaced read-only
-            # and left for the CEO to dismiss - never auto-disposed.
-            continue
-        elif tier == tool_risk.NOTIFY:
+        # Only the notify tier is dispatched. Every other tier falls through
+        # untouched, which is the disposition both of them need: a gated send
+        # belongs to the terminal approve path alone (lethal-trifecta), and
+        # autonomous display-only types are surfaced read-only for the CEO to
+        # dismiss - never auto-disposed.
+        #
+        # An explicit `tier == AUTONOMOUS -> continue` branch stood here until
+        # 2026-08-24. Mutation testing could not kill it, and the reason was not
+        # a missing test: neither arm below can fire on a non-notify tier, so
+        # the branch and the fall-through disposed of an autonomous card
+        # identically, and no test can separate two paths that do the same
+        # thing. It was dead code wearing the CEO decision of 2026-06-04 as a
+        # label. That decision is now held by something that can actually fail:
+        # the tier check on the arm below, plus
+        # `test_no_auto_apply_type_resolves_outside_notify`, which resolves the
+        # allowlist through the real ledger instead of restating it.
+        if tier == tool_risk.NOTIFY and atype in _AUTO_APPLY_TYPES:
             # Auto-apply. prev_value (if the producer supplied it) stays on the
             # card so undo_card can revert; we do not synthesise it.
             aq.apply_status(data_root, aid, "applied", event="auto_apply")
             swept += 1
+        elif tier == tool_risk.NOTIFY:
+            logging.warning(
+                "action-queue card %s is notify-tier %r, which this daemon does "
+                "not auto-apply; leaving it pending for the CEO", aid, atype)
     return swept
 
 
@@ -180,9 +220,12 @@ def _executor_job(workspace_root: Path, state, data_root: Path | None = None) ->
 
     The synchronous terminal ``action-queue.py approve`` is now the SOLE send
     path; the daemon NO LONGER SENDS. This slimmed job only sweeps the queue
-    in-process for non-gated cards: autonomous ``note`` cards are disposed,
-    autonomous ``alert`` cards are left for the CEO, and notify ``pipeline_update``
-    cards are auto-applied (with ``prev_value`` preserved for undo). It never
+    in-process for non-gated cards: autonomous types (``note``, ``alert``) are
+    surfaced read-only and LEFT for the CEO to dismiss -- never auto-disposed,
+    per the CEO decision of 2026-06-04 -- and notify ``pipeline_update`` cards
+    are auto-applied (with ``prev_value`` preserved for undo). This paragraph
+    said ``note`` cards were disposed until 2026-08-23, which is the opposite of
+    the branch in ``_sweep_non_gated_cards`` and of that decision. It never
     spawns the send executor and never transitions a gated send. Non-fatal on any
     error - a sweep failure must never take the daemon down.
 
@@ -357,17 +400,81 @@ def _register_spine_jobs(sched, cfg: dict, workspace_root: Path, state,
 # ============================================================
 # Daemon lifecycle & port management
 # ============================================================
-def _pick_port(start: int) -> int:
-    """Find the first free TCP port in [start, start+50). Raises if none."""
+def _bind_listener(port: int) -> socket.socket:
+    """Bind and listen on 127.0.0.1:port, returning the OPEN socket.
+
+    Binding, not probing. `connect_ex` answers "is someone accepting here",
+    which is a weaker question than "can I have this port": it misses a socket
+    bound but not listening, and it misses a bind to a different interface. It
+    also cannot HOLD the port -- and holding is the point, see `_pick_port`.
+
+    Raises OSError when the port is unavailable. No SO_REUSEADDR: a permissive
+    rebind is exactly what must fail here.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", port))
+        sock.listen(128)
+    except OSError:
+        sock.close()
+        raise
+    return sock
+
+
+def _pick_port(start: int) -> tuple[int, socket.socket]:
+    """First free TCP port in [start, start+50), with the socket HELD OPEN.
+
+    The socket comes back with the number because the two used to be separate
+    moments. The port was probed free, written to `.daemon-state/port` and
+    `BRIDGE_PORT`, and only bound later inside `uvicorn.run` -- so anything
+    that grabbed it in between (a second `--start` racing boot, an unrelated
+    dev server) left the daemon dead and the port file confidently advertising
+    a port it never held. `--health` then probed a stranger.
+
+    The caller passes this socket straight to uvicorn, so nothing can take the
+    port between the check and the bind: there is no longer an "in between".
+    """
     for p in range(start, start + 50):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(("127.0.0.1", p)) != 0:
-                return p
+        try:
+            return p, _bind_listener(p)
+        except OSError:
+            continue
     raise RuntimeError(f"no free port in range {start}..{start + 50}")
 
 
-def _verify_port_free(port: int) -> int:
-    """Assert that an explicit port is free; raise RuntimeError otherwise.
+def _live_daemon_port(timeout: float = 2.0) -> int | None:
+    """The port an ALREADY-RUNNING daemon answers on, or None.
+
+    `_pick_port` exists so a boot survives a busy port, which also means a
+    second `--start` succeeds on the next one. Both instances then share the
+    singleton `.daemon-state/port` and `heartbeat.json`: the second overwrote
+    the port file with its own port, and its exit unlinked that file while the
+    FIRST daemon was still bound and serving. `--health` then reported "daemon
+    not running" for a daemon answering fine, and `--status` printed `port=-`.
+
+    A stale file whose port nothing answers returns None, so a crashed daemon
+    never blocks the next start.
+    """
+    import urllib.error
+    import urllib.request
+    port_file = WORKSPACE_ROOT / ".daemon-state" / "port"
+    try:
+        port_str = port_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not port_str.isdigit() or not (1 <= int(port_str) <= 65535):
+        return None
+    port = int(port_str)
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health",
+                                    timeout=timeout):
+            return port
+    except (urllib.error.URLError, OSError):
+        return None
+
+
+def _verify_port_free(port: int) -> tuple[int, socket.socket]:
+    """Claim an explicit port or raise; returns it with the socket held open.
 
     Used by the --port CLI override (Phase S) so a CEO request for a
     specific port fails fast instead of silently falling back to the
@@ -375,10 +482,10 @@ def _verify_port_free(port: int) -> int:
     """
     if not (1 <= port <= 65535):
         raise RuntimeError(f"port {port} out of range (1..65535)")
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        if s.connect_ex(("127.0.0.1", port)) == 0:
-            raise RuntimeError(f"port {port} is already in use")
-    return port
+    try:
+        return port, _bind_listener(port)
+    except OSError as exc:
+        raise RuntimeError(f"port {port} is already in use") from exc
 
 
 def _configure_logging(log_path: Path = LOG_PATH) -> logging.Logger:
@@ -427,10 +534,27 @@ def start_daemon(explicit_port: int | None = None):
 
     Phase S: when explicit_port is set, skip the auto-pick range and bind
     exactly that port. Fails fast if it's busy. Without explicit_port,
-    auto-pick from cfg["port_range_start"] (default 31415, scanning +50).
+    auto-pick from cfg["port_range_start"] (scanning +50). The 31415 default
+    comes from DEFAULTS in scripts/bridge_daemon/config.py, which load_config
+    merges under every override -- not from this function, which subscripts
+    the key directly.
     """
     import uvicorn
     from scripts.bridge_daemon.app import build_app
+
+    # Single instance. Before this check a second --start bound the next port,
+    # took over the shared port file, and on exit deleted it out from under the
+    # daemon that was still serving. Checked before logging is configured so the
+    # refusal is one line on the operator's terminal, not a log entry.
+    already = _live_daemon_port()
+    if already is not None:
+        print(f"bridge daemon is already running on 127.0.0.1:{already}. "
+              f"Refusing to start a second one: the two share "
+              f".daemon-state/port and heartbeat.json, and whichever exits "
+              f"first would leave the survivor unreachable to --health.",
+              file=sys.stderr)
+        raise SystemExit(1)
+
     # R12: mint a trace ID for this daemon's process tree and install the
     # record factory before any logging so every line (and every subprocess
     # this daemon spawns) carries the same [trace_id].
@@ -439,6 +563,8 @@ def start_daemon(explicit_port: int | None = None):
 
     observer = None
     sched = None
+    port = None          # bound below; referenced by the cleanup clause
+    listener = None      # the held listening socket; handed to uvicorn
     try:
         # Phase B / spec 3.6: ConfigState owns the merged config in memory
         # and exposes reconcile() for the 60-second mtime check. build_app
@@ -468,10 +594,10 @@ def start_daemon(explicit_port: int | None = None):
         # the defensive fallback also routes through it (never a bare literal).
         user_slug = cfg.get("user_slug") or operator_slug()
         if explicit_port is not None:
-            port = _verify_port_free(explicit_port)
+            port, listener = _verify_port_free(explicit_port)
             logging.info(f"using explicit port {port} (from --port flag)")
         else:
-            port = _pick_port(cfg["port_range_start"])
+            port, listener = _pick_port(cfg["port_range_start"])
         atomic_write_text(WORKSPACE_ROOT / ".daemon-state" / "port", str(port), mode=0o644)
         os.environ["BRIDGE_PORT"] = str(port)
         # HEADING OS engine/data split: data (outputs/crm/threads/knowledge/pipeline)
@@ -561,16 +687,74 @@ def start_daemon(explicit_port: int | None = None):
                 logging.exception("initial pulse prime failed (non-fatal; endpoint will fall back to inline compute)")
         logging.info(f"bridge daemon starting on port {port}")
         app = build_app(WORKSPACE_ROOT, state, token, user_slug, cfg_state=cfg_state, data_root=data_root)
-        uvicorn.run(app, host="127.0.0.1", port=port, log_config=None)
+        # `Server.run(sockets=[...])` rather than `uvicorn.run(host, port)`:
+        # the listener is already bound, so uvicorn adopts it instead of racing
+        # for the same port a second time. host/port stay on the Config for the
+        # sake of the log line uvicorn prints.
+        server = uvicorn.Server(
+            uvicorn.Config(app, host="127.0.0.1", port=port, log_config=None)
+        )
+        server.run(sockets=[listener])
     except Exception:
         logging.exception("bridge daemon failed during startup or runtime")
         raise
     finally:
+        # The listener is uvicorn's once handed over, but a failure between the
+        # bind and that handover leaves it held by a process that is exiting;
+        # close it so a retry can take the port back immediately.
+        if listener is not None:
+            try:
+                listener.close()
+            except OSError:
+                logging.warning("listening socket close failed during cleanup",
+                                exc_info=True)
+        # Every cleanup step is guarded on its own. `sched` is bound long before
+        # `sched.start()`, and on a scheduler that never started APScheduler
+        # 3.11.3 raises SchedulerNotRunningError -- from inside the finally,
+        # where it REPLACED the real startup failure. The operator was then told
+        # "Scheduler is not running", which is true and useless, while the
+        # heartbeat error or malformed job that actually killed the boot was
+        # gone. The observer pair had the same shape: `stop()` raising both
+        # skipped `join()` and hid the original.
+        #
+        # Guarded, not silent: a cleanup that fails is still a fact worth a line.
         if sched is not None:
-            sched.shutdown(wait=False)
+            try:
+                sched.shutdown(wait=False)
+            except Exception:                     # noqa: BLE001 - see above
+                logging.warning("scheduler shutdown failed during cleanup",
+                                exc_info=True)
         if observer is not None:
-            observer.stop()
-            observer.join()
+            try:
+                observer.stop()
+            except Exception:                     # noqa: BLE001 - see above
+                logging.warning("watchdog observer stop failed during cleanup",
+                                exc_info=True)
+            try:
+                observer.join()
+            except Exception:                     # noqa: BLE001 - see above
+                logging.warning("watchdog observer join failed during cleanup",
+                                exc_info=True)
+        # Drop the port file on the way out. It is written BEFORE uvicorn binds
+        # -- the scheduler start, the pulse prime and build_app all run in
+        # between -- so a startup that failed after that write left a file
+        # naming a port nothing listens on, and `--status` treats a present file
+        # as a live daemon while treating absence as "not running". Removing it
+        # here makes a failed start indistinguishable from no start.
+        #
+        # This comment used to say the probe-then-bind race between two daemons
+        # was still open and "needs binding the socket first and handing uvicorn
+        # the fd". That is exactly what this file now does: `_pick_port` returns
+        # a BOUND, listening socket and `server.run(sockets=[listener])` adopts
+        # it, so there is no gap left to race. The residual multi-instance
+        # hazard was the port file itself, which `_live_daemon_port` now guards.
+        try:
+            port_file = WORKSPACE_ROOT / ".daemon-state" / "port"
+            if (port is not None and port_file.exists()
+                    and port_file.read_text().strip() == str(port)):
+                port_file.unlink()
+        except OSError:
+            logging.warning("could not remove the stale port file", exc_info=True)
 
 
 # ============================================================
@@ -584,7 +768,12 @@ def rotate_token():
         token_file.unlink()
     new = get_or_create_token(WORKSPACE_ROOT)
     print(f"new token written to {token_file}")
-    print(f"preview: {new[:16]}...")
+    # The last 4, not the FIRST 16. A 16-character prefix of a live bearer token
+    # is enough of the secret to matter, and stdout is terminal scrollback, tmux
+    # history, and any provisioning log that captured the command -- none of
+    # which have the 0600 the token file gets. 4 trailing characters still let
+    # the operator confirm the rotation happened.
+    print(f"ends with: ...{new[-4:]}")
     print()
     print("WARNING: a running daemon still holds the old token in memory.")
     print("Restart the daemon (Ctrl+C and re-run --start) for the new token to take effect.")
@@ -610,8 +799,14 @@ def show_status():
     so cron / shell pipelines can grep for fields without running both
     --health and reading the heartbeat manually. No HTTP call, no auth.
 
-    Output format (tab-separated for easy `cut -f`):
-      port=PORT  pid=PID  uptime=Ns  version=V  config_v=CV  last_hb=ISO
+    Output format, tab-separated for `cut -f`, in this field order:
+      port  pid  uptime  version  config_v  sessions  errors  last_hb
+
+    The separator was two spaces until 2026-08-24, under this same docstring
+    promising `cut -f`: with no tab in the line every `cut -fN` returned the
+    whole line, or with `-s` nothing at all. The documented field list also
+    stopped at `last_hb` and omitted `sessions` and `errors`, so even the
+    positions it implied were wrong.
 
     Exit codes:
       0 - status available (port file or heartbeat readable)
@@ -635,7 +830,7 @@ def show_status():
         f"errors={hb.get('recent_error_count', '-') if hb else '-'}",
         f"last_hb={hb.get('last_heartbeat', '-') if hb else '-'}",
     ]
-    print("  ".join(fields))
+    print("\t".join(fields))
 
 
 def check_health():
@@ -665,7 +860,17 @@ def check_health():
         sys.exit(2)
     port_str = port_file.read_text().strip()
     if not port_str.isdigit() or not (1 <= int(port_str) <= 65535):
+        # Exit 2 is documented as "neither could be read", and this branch used
+        # to take it without ever trying the heartbeat -- losing the last known
+        # pid, version and uptime in the one scenario (a corrupt state file)
+        # where they are worth the most. Every other failure path here falls
+        # back first; this one now does too.
         print(f"corrupted port file: {port_str!r}", file=sys.stderr)
+        hb = _read_heartbeat_fallback()
+        if hb is not None:
+            print("# Showing last heartbeat from disk:", file=sys.stderr)
+            print(json.dumps(hb, indent=2))
+            sys.exit(1)
         sys.exit(2)
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port_str}/health", timeout=2) as r:

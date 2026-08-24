@@ -49,10 +49,18 @@ Exit codes:
   4  the corpus fits in the context window - use /recall instead
   5  the sandbox refused the run (no bubblewrap, air-gapped path, timeout)
   6  the return exceeded the return budget
+  7  the run completed but its record could not be written to --emit-answers
+
+`--emit-answers` records a run that was REFUSED by the sandbox (exit 5) as an
+answer of None, which the scorer counts as a refusal rather than a wrong
+answer. That is deliberate: the attempt happened and the acceptance file is a
+record of attempts. A run that never started, because the corpus fits the
+context window (exit 4), returns before the record is written.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import tempfile
@@ -80,6 +88,7 @@ EXIT_TRAVERSAL_FAILED = 3
 EXIT_CORPUS_FITS_WINDOW = 4
 EXIT_SANDBOX_REFUSED = 5
 EXIT_RETURN_BUDGET = 6
+EXIT_ANSWERS_WRITE_FAILED = 7
 
 # Below this, reading the corpus outright beats traversing it.
 #
@@ -164,7 +173,14 @@ def _mount_name_for(path: Path, requested: str) -> str:
         root = Path(CorpusPaths.from_workspace().root).resolve()
         return path.resolve().relative_to(root).as_posix()
     except (ValueError, OSError):
-        return requested.replace("/", "-").strip("-.") or "corpus"
+        # A stable, collision-free fallback. `requested.replace("/", "-")`
+        # mapped `../foo` and `foo` both to `foo`, and `mounts` is keyed by
+        # PATH -- so two distinct scopes kept two entries under one mount name
+        # and one silently shadowed the other inside the sandbox. The digest of
+        # the resolved path is what makes the name unique to the directory.
+        stem = requested.replace("/", "-").strip("-.") or "corpus"
+        digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:8]
+        return f"{stem}-{digest}"
 
 
 DIAGNOSTIC_CHARS = 400
@@ -193,14 +209,34 @@ def _diagnostic(stderr: str | None) -> str:
 
 
 def corpus_bytes(paths: list[Path]) -> int:
+    """Total size of the corpus, skipping anything that vanishes mid-scan.
+
+    `stat()` between `rglob`/`is_file` and the read is a TOCTOU: a file removed
+    while this walks raised an uncaught OSError and killed the CLI before the
+    window check could answer. The sibling `_candidate_docs` already guarded
+    exactly this. Skipping an unreadable file UNDER-counts, which errs toward
+    "the corpus fits the window" -- so the skip is reported rather than
+    swallowed.
+    """
     total = 0
+    skipped = 0
     for path in paths:
-        if path.is_file():
-            total += path.stat().st_size
+        try:
+            if path.is_file():
+                total += path.stat().st_size
+                continue
+        except OSError:
+            skipped += 1
             continue
         for item in path.rglob("*"):
-            if item.is_file() and item.suffix.lower() in CORPUS_SUFFIXES:
-                total += item.stat().st_size
+            try:
+                if item.is_file() and item.suffix.lower() in CORPUS_SUFFIXES:
+                    total += item.stat().st_size
+            except OSError:
+                skipped += 1
+    if skipped:
+        print(f"warning: {skipped} corpus file(s) vanished or were unreadable "
+              f"during sizing; the total below is a LOWER bound", file=sys.stderr)
     return total
 
 
@@ -307,6 +343,33 @@ def run_census(*, question: str, program: Path, corpus_paths: list[Path],
 # Answers file
 # ============================================================
 
+def _emit_record(args, record: dict) -> int | None:
+    """Append `record` to `--emit-answers`. An exit code on failure, else None.
+
+    One writer, called from both exit-5 paths. Guarded, and that guard is the
+    reason it exists: `append_answer` raises RuntimeError on an answers file it
+    cannot use and OSError on a failed write, and NOTHING in `main` caught
+    either — so a traversal that had already run for up to 180 seconds printed
+    its answer and then died on a traceback with exit 1, a code this file's
+    docstring does not define, and the record was lost.
+    """
+    if not args.emit_answers:
+        return None
+    corpus = CorpusPaths.from_workspace()
+    state = run_state(corpus.root, Path(__file__).resolve().parent.parent,
+                      datetime.now(tz=get_default_tz()).date(),
+                      tz=get_default_tz())
+    try:
+        append_answer(args.emit_answers, record, args.question_id, state)
+    except (RuntimeError, OSError) as exc:
+        print(f"{RED}the run finished but its record was NOT written to "
+              f"{args.emit_answers}: {exc}{RESET}", file=sys.stderr)
+        print(f"{YELLOW}The answer above is real; the acceptance file is "
+              f"missing it.{RESET}", file=sys.stderr)
+        return EXIT_ANSWERS_WRITE_FAILED
+    return None
+
+
 def append_answer(path: Path, record: dict, question_id: str,
                   state: dict) -> None:
     """Append one record to the acceptance answers file, atomically.
@@ -324,6 +387,18 @@ def append_answer(path: Path, record: dict, question_id: str,
             raise RuntimeError(
                 f"cannot read the existing answers file {path}: {exc}; refusing "
                 "to overwrite it, move it aside or repair it") from exc
+        # The same refusal for a file that DECODES and is the wrong shape. Only
+        # unreadable and undecodable were guarded, so `[]` reached
+        # `payload["answers"]` as a TypeError and a dict without the key reached
+        # it as a KeyError. Neither is RuntimeError or OSError, so `main`'s
+        # handler let both through: traceback, exit 1, record lost after a
+        # traversal that may have run for 180 seconds — the exact failure the
+        # comment above that handler says was fixed.
+        if not isinstance(payload, dict) or not isinstance(payload.get("answers"), list):
+            raise RuntimeError(
+                f"the existing answers file {path} is valid JSON of the wrong "
+                "shape (no 'answers' list); refusing to overwrite it, move it "
+                "aside or repair it")
     else:
         payload = {"schema_version": 1, "run_state": state, "answers": []}
     entry = dict(record)
@@ -335,16 +410,21 @@ def append_answer(path: Path, record: dict, question_id: str,
     # level down. `run_state_drift` names the answers produced against a
     # different corpus than the file claims.
     entry["run_state"] = state
-    first = payload.get("run_state") or {}
-    payload["run_state_drift"] = sorted({
-        a["question_id"] for a in payload["answers"] + [entry]
-        if (a.get("run_state") or first).get("corpus_content_sha256")
-        != first.get("corpus_content_sha256")
-    })
+    # Dedup FIRST, then compute drift over what the file will actually contain.
+    # The order was reversed, so a question re-run against a now-consistent
+    # corpus kept its old answer's question_id in `run_state_drift` -- the flag
+    # whose whole job is to name a drifted answer named one that is no longer
+    # in the file.
     payload["answers"] = [a for a in payload["answers"]
                           if a.get("question_id") != question_id]
     payload["answers"].append(entry)
     payload["answers"].sort(key=lambda a: a.get("question_id", ""))
+    first = payload.get("run_state") or {}
+    payload["run_state_drift"] = sorted({
+        a["question_id"] for a in payload["answers"]
+        if (a.get("run_state") or first).get("corpus_content_sha256")
+        != first.get("corpus_content_sha256")
+    })
     atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
 
 
@@ -440,7 +520,17 @@ def main(argv: list[str] | None = None) -> int:
         denial = air_gap_reason(path)
         if denial:
             print(f"{RED}{denial}{RESET}", file=sys.stderr)
-            return EXIT_SANDBOX_REFUSED
+            # Recorded, like the other exit-5 refusal. This returned straight
+            # out, so the one exit code this file's docstring PROMISES is
+            # written as `answer: None` left no row at all — and a missing row
+            # is read by the scorer as "not answered", which loses the reason.
+            # The docstring carves out exactly one unrecorded exit, 4, the
+            # corpus that fits the window; this was a second, unnamed one.
+            record = {"question": args.question, "mounts": {},
+                      "corpus": [str(p) for p in corpus_paths],
+                      "elapsed_s": 0.0, "answer": None, "error": denial}
+            failed = _emit_record(args, record)
+            return failed if failed is not None else EXIT_SANDBOX_REFUSED
 
     fits = refuse_if_corpus_fits_window(corpus_paths)
     if fits:
@@ -462,12 +552,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print_record(record, exit_code)
 
-    if args.emit_answers:
-        corpus = CorpusPaths.from_workspace()
-        state = run_state(corpus.root, Path(__file__).resolve().parent.parent,
-                          datetime.now(tz=get_default_tz()).date(),
-                          tz=get_default_tz())
-        append_answer(args.emit_answers, record, args.question_id, state)
+    failed = _emit_record(args, record)
+    if failed is not None:
+        return failed
 
     return exit_code
 

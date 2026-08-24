@@ -66,10 +66,10 @@ def test_agg_02_pipeline_companies_named_in_no_active_thread(corpus):
 
 
 def test_agg_03_people_without_a_crm_card(corpus):
-    """Rustam Bekov alone; Alba Karimova and Henrik Vale both hold cards."""
+    """James Bond alone; Alba Karimova and Henrik Vale both hold cards."""
     a = answer(corpus, "agg-03")
     assert a.value == 1
-    assert a.detail["names"] == ["Rustam Bekov"]
+    assert a.detail["names"] == ["James Bond"]
     assert a.detail["people_total"] == 3
 
 
@@ -93,7 +93,7 @@ def test_agg_05_stale_prospects(corpus):
 
 
 def test_agg_06_threads_naming_a_counterparty_with_no_card(corpus):
-    """Contoso names Rustam Bekov and Quarterly names Dmitri Voll; neither has a card."""
+    """Contoso names James Bond and Quarterly names Dmitri Voll; neither has a card."""
     a = answer(corpus, "agg-06")
     assert a.paths == {
         f"{T}/2026-02-05-contoso-capital-raise.md",
@@ -329,7 +329,7 @@ def test_agg_06_resolves_a_counterparty_written_with_a_role_suffix(tmp_path):
         tmp_path,
         threads={"a.md": _thread("A", counterparties=["Alba Karimova (Northwind, CTO)"]),
                  "b.md": _thread("B", counterparties=["alba-karimova"]),
-                 "c.md": _thread("C", counterparties=["Rustam Bekov (no card)"])},
+                 "c.md": _thread("C", counterparties=["James Bond (no card)"])},
         contacts={"alba.md": _card("Alba Karimova")},
     )
     a = resolve("agg-06")(corpus, TODAY)

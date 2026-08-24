@@ -19,10 +19,16 @@ Usage:
   python3 scripts/crm_migrate_to_entity_model.py --rollback   # restore from backup
 """
 
-# Pre-imported for Tasks 0.13 (--apply) and 0.14 (--rollback):
-# json (for migration map writing), os (chmod for atomic writes),
-# shutil (rmtree for backup cleanup), stat (S_IWRITE for Windows read-only handling).
+# For --apply and --rollback: os (chmod, for Windows read-only bits), shutil
+# (rmtree for staging and backup cleanup), stat (S_IWRITE), json (the
+# applied-manifest that makes rollback symmetric).
+#
+# This comment said json was "for migration map writing" and that was never
+# true: the review map is markdown, written by `write_review_map`, and until
+# 2026-08-24 no `json.` call existed anywhere in the file. A reader trusting it
+# went looking for a JSON map path that did not exist.
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -34,6 +40,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts.utils.atomic import atomic_write_text
 from scripts.utils.crm import parse_frontmatter
 from scripts.utils.workspace import (
     get_workspace_root,
@@ -621,6 +628,10 @@ def cmd_apply() -> int:
     contacts_staging.mkdir(parents=True)
 
     # Generate address book entries (one per group) + per-record relationship records
+    collisions: list[tuple[str, list[str]]] = []
+    # staged filename -> the legacy file it was rendered from. Drives both the
+    # legacy-file cleanup below and the rollback manifest.
+    created_from: dict[str, str] = {}
     for g in groups:
         slug = g["proposed_slug"]
         if not slug:
@@ -628,12 +639,39 @@ def cmd_apply() -> int:
         ab_text = render_address_book_entry(g)
         (address_book_staging / f"{slug}.md").write_text(ab_text, encoding="utf-8")
 
-        for r in g["records"]:
-            if r["owner"] != "owner-exec-a":
-                # Exec records go to per-exec staging area (separate migration step per exec)
-                continue
+        # A group is "the same person"; it can legitimately hold two CEO-owned
+        # legacy files for them, which is precisely what this migration exists
+        # to merge. Every one of them rendered to the SAME
+        # `contacts_staging/<slug>.md`, so the last write won and the earlier
+        # record's Interaction Log and Active Commitments were gone. Validation
+        # checks file SHAPE, not record count, so it passed: silent data loss
+        # with a green checkmark, over the CEO's relationship history, in a
+        # one-shot migration.
+        #
+        # This refuses rather than merging. Concatenating two interaction logs
+        # is a judgement about what actually happened with a person, and a
+        # migration should not make that judgement silently. The operator gets
+        # both paths and merges by hand, then re-runs.
+        owned = [r for r in g["records"] if r["owner"] == "owner-exec-a"]
+        if len(owned) > 1:
+            collisions.append((slug, [r["file_path"] for r in owned]))
+            continue
+        for r in owned:
             rel_text = render_relationship_record(r, slug)
             (contacts_staging / f"{slug}.md").write_text(rel_text, encoding="utf-8")
+            created_from[f"{slug}.md"] = r["file_path"]
+
+    if collisions:
+        print("Aborting: two or more of your own contact files map to one slug.")
+        print("Merging their Interaction Logs is a judgement about what happened "
+              "with a person, so this refuses instead of picking one.\n")
+        for slug, paths in collisions:
+            print(f"  {slug}.md would be written from {len(paths)} files:")
+            for p in paths:
+                print(f"    {p}")
+        print("\nMerge each set into one file, then re-run --propose and --apply.")
+        shutil.rmtree(staging, ignore_errors=True)
+        return 1
 
     # Validate every staged file against the new schemas
     val = subprocess.run(
@@ -681,10 +719,47 @@ def cmd_apply() -> int:
                 pass
         os.replace(str(staged), str(target))
 
+    # Remove the legacy files this migration replaced. The docstring says each
+    # contact file is REWRITTEN as a thin relationship record, but the rename
+    # above only moves the new slug-named files IN — and legacy names are
+    # name-derived, not slug-derived, so `os.replace` never overwrote them.
+    # `crm/contacts/` was left holding both generations: every downstream
+    # consumer saw each contact twice, health scores double-counted, the radar
+    # showed duplicate rows. The backup two steps up is what makes this safe,
+    # and its existence is why the deletion was clearly meant to be here.
+    removed: list[str] = []
+    for staged_name, legacy_path in created_from.items():
+        legacy = Path(legacy_path)
+        if legacy.name == staged_name or not legacy.is_file():
+            continue  # already replaced by the rename, or gone
+        with contextlib.suppress(OSError):
+            os.chmod(legacy, stat.S_IWRITE | stat.S_IREAD)
+        try:
+            legacy.unlink()
+        except OSError as exc:
+            print(f"Could not remove legacy file {legacy}: {exc}")
+            continue
+        removed.append(str(legacy))
+
     # Clean staging
     shutil.rmtree(staging, ignore_errors=True)
 
+    # The manifest is what makes --rollback symmetric. Without it, rollback
+    # restored the legacy files and left every slug-named file apply had
+    # created, so an apply-then-rollback cycle ended with BOTH generations on
+    # disk while printing "Rollback complete" — the same duplication as above,
+    # in a state the operator believes is restored.
+    manifest = {
+        "applied_at_utc": datetime.now(timezone.utc).isoformat(),
+        "created_contacts": sorted(created_from),
+        "created_address_book": sorted(p.name for p in final_ab.glob("*.md")),
+        "removed_legacy": sorted(removed),
+    }
+    atomic_write_text(backup_dir / "applied-manifest.json",
+                      json.dumps(manifest, indent=2) + "\n")
+
     print(f"Migration applied. Address book at {final_ab} (~{len(list(final_ab.glob('*.md')))} entities).")
+    print(f"Removed {len(removed)} legacy contact file(s); all are in the backup.")
     print(f"Backup at {backup_dir} (run --rollback to restore).")
     return 0
 
@@ -717,6 +792,39 @@ def cmd_rollback() -> int:
     ab = crm_root / "address-book"
     if ab.exists():
         shutil.rmtree(ab)
+
+    # Undo what --apply CREATED, before restoring what it replaced. Rollback
+    # only ever restored, so the slug-named relationship records apply had
+    # written survived it, and an apply-then-rollback cycle left both
+    # generations in crm/contacts/ under the words "Rollback complete". The
+    # manifest names exactly what to remove; without one (a backup from before
+    # this fix) say so rather than guessing which files are which.
+    manifest_path = latest / "applied-manifest.json"
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            print(f"Applied-manifest unreadable ({exc}); aborting rather than "
+                  f"restoring on top of files it should have removed.")
+            return 1
+        contacts_dir = get_crm_contacts_dir()
+        for name in manifest.get("created_contacts", []):
+            created = contacts_dir / name
+            if not created.is_file():
+                continue
+            with contextlib.suppress(OSError):
+                os.chmod(created, stat.S_IWRITE | stat.S_IREAD)
+            try:
+                created.unlink()
+            except OSError as exc:
+                print(f"Could not remove {created}: {exc}")
+        print(f"Removed {len(manifest.get('created_contacts', []))} record(s) "
+              f"this migration created.")
+    else:
+        print("No applied-manifest.json in this backup: it predates the "
+              "manifest, so this rollback restores the originals but cannot "
+              "remove the slug-named records the apply created. Check "
+              f"{get_crm_contacts_dir()} for duplicates afterwards.")
 
     # Restore each file. Clear read-only bit before overwrite so Windows
     # doesn't reject the copy (per reference_windows_readonly_unlink memory).

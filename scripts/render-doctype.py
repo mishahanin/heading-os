@@ -80,13 +80,23 @@ def build_filename(data: dict, doctype: str, ext: str) -> str:
     return f"{date_part}_{doctype}_{recipient_slug}_{subject_slug}.{ext}"
 
 
+PDF_TIMEOUT_S = 180
+
+
 def render_pdf(html_path: Path, pdf_path: Path, workspace_root: Path) -> None:
     html_to_pdf = workspace_root / "scripts" / "html-to-pdf.py"
-    result = subprocess.run(
-        [sys.executable, str(html_to_pdf), str(html_path), str(pdf_path)],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [sys.executable, str(html_to_pdf), str(html_path), str(pdf_path)],
+            capture_output=True,
+            text=True,
+            timeout=PDF_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # A deadlocked headless browser used to hang the calling skill forever
+        # with no diagnostic naming the document that stuck.
+        raise RuntimeError(
+            f"PDF render of {html_path.name} exceeded {PDF_TIMEOUT_S}s") from exc
     if result.returncode != 0:
         print(f"{RED}[PDF ERROR]{RESET} {result.stderr}")
         raise RuntimeError(f"PDF generation failed for {html_path}")

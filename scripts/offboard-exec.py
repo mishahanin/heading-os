@@ -57,9 +57,22 @@ def safety_gate(slug: str) -> bool:
     return True
 
 
-def revoke_github_access(slug: str, exec_info: dict) -> None:
-    """Revoke GitHub access from all 31C repos."""
-    print(f"\n{BOLD}Step 1: Revoking GitHub access{RESET}")
+def revoke_github_access(slug: str, exec_info: dict) -> bool:
+    """Remove the exec as a DIRECT COLLABORATOR on the three per-exec repos.
+
+    Returns True when every DELETE either succeeded or reported 404.
+
+    Scope, stated because the previous version overstated it: the collaborators
+    endpoint removes a direct grant and NOTHING else. A user who reaches these
+    repos through org membership or a team is not a collaborator at all, so the
+    common case returned 404 on all three and printed "No access found" while
+    the offboarded exec still had read (and possibly write) on every private
+    repo. `check_residual_access` now looks for exactly that, and removing it is
+    a MUTATION this script does not perform -- it goes on the manual checklist,
+    because deleting an org membership is a wider, harder-to-undo action than
+    anything else here and belongs to a human.
+    """
+    print(f"\n{BOLD}Step 1: Removing direct collaborator grants{RESET}")
 
     repos = [
         f"{GITHUB_ORG}/heading-os-corporate",
@@ -70,6 +83,7 @@ def revoke_github_access(slug: str, exec_info: dict) -> None:
     # github_username from exec-registry.json (field: github_user); falls back to slug.
     github_username = exec_info.get("github_user") or slug
 
+    all_ok = True
     for repo in repos:
         try:
             result = run_cmd([
@@ -78,13 +92,63 @@ def revoke_github_access(slug: str, exec_info: dict) -> None:
                 "-X", "DELETE",
             ], check=False)
             if result.returncode == 0:
-                print(f"  {GREEN}[ok]{RESET} Revoked access from {repo}")
+                print(f"  {GREEN}[ok]{RESET} Removed direct collaborator grant on {repo}")
             elif "404" in (result.stderr or ""):
-                print(f"  {YELLOW}[skip]{RESET} No access found on {repo}")
+                print(f"  {YELLOW}[skip]{RESET} Not a direct collaborator on {repo} "
+                      f"(this does NOT mean they have no access)")
             else:
+                all_ok = False
                 print(f"  {RED}[error]{RESET} Failed for {repo}: {result.stderr}")
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        except FileNotFoundError as e:
+            all_ok = False
             print(f"  {RED}[error]{RESET} {repo}: {e}")
+    return all_ok
+
+
+def check_residual_access(slug: str, exec_info: dict) -> list[str]:
+    """Read-only: report access routes the collaborator DELETE cannot reach.
+
+    Returns a list of human-readable residual-access descriptions; empty means
+    none were found. Purely GET requests -- this function never mutates.
+    """
+    print(f"\n{BOLD}Step 1b: Checking for residual org/team access{RESET}")
+    github_username = exec_info.get("github_user") or slug
+    residual: list[str] = []
+
+    try:
+        member = run_cmd(
+            ["gh", "api", f"orgs/{GITHUB_ORG}/memberships/{github_username}"],
+            check=False)
+        if member.returncode == 0:
+            residual.append(f"org membership in {GITHUB_ORG}")
+        elif "404" not in (member.stderr or ""):
+            residual.append(
+                f"org membership in {GITHUB_ORG} COULD NOT BE CHECKED: "
+                f"{(member.stderr or '').strip()}")
+
+        teams = run_cmd(
+            ["gh", "api", f"orgs/{GITHUB_ORG}/teams", "--jq", ".[].slug"],
+            check=False)
+        if teams.returncode == 0:
+            for team in (teams.stdout or "").split():
+                got = run_cmd(
+                    ["gh", "api",
+                     f"orgs/{GITHUB_ORG}/teams/{team}/memberships/{github_username}"],
+                    check=False)
+                if got.returncode == 0:
+                    residual.append(f"team membership in {GITHUB_ORG}/{team}")
+        else:
+            residual.append(
+                f"team memberships COULD NOT BE CHECKED: {(teams.stderr or '').strip()}")
+    except FileNotFoundError as e:
+        residual.append(f"org and team access COULD NOT BE CHECKED: {e}")
+
+    if residual:
+        for item in residual:
+            print(f"  {RED}[residual]{RESET} {item}")
+    else:
+        print(f"  {GREEN}[ok]{RESET} No org or team access found")
+    return residual
 
 
 def archive_workspace_repo(slug: str) -> None:
@@ -132,8 +196,11 @@ def preserve_crm_contacts(slug: str) -> bool:
     if not per_exec_repo.exists():
         try:
             run_cmd(["gh", "repo", "clone", f"{GITHUB_ORG}/31c-crm-{slug}", str(per_exec_repo)])
-        except subprocess.CalledProcessError:
-            print(f"  {RED}[error]{RESET} Could not clone 31c-crm-{slug}")
+        except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+            # FileNotFoundError = no `gh` on PATH. Catching only CalledProcessError
+            # let that crash the run partway through an offboard, leaving contacts
+            # unpreserved and the registry untouched with no rollback.
+            print(f"  {RED}[error]{RESET} Could not clone 31c-crm-{slug}: {exc}")
             return False
     else:
         run_cmd(["git", "pull"], cwd=str(per_exec_repo), check=False)
@@ -152,7 +219,15 @@ def preserve_crm_contacts(slug: str) -> bool:
             shutil.copy2(item, dst / item.name)
             count += 1
 
-    print(f"  {GREEN}[ok]{RESET} Preserved {count} contacts to {dst.relative_to(workspace_root)}/")
+    # `dst` comes from get_outputs_dir(), which resolves under the DATA overlay --
+    # a SIBLING of the engine clone on every conforming deployment, so
+    # relative_to(workspace_root) raised ValueError and crashed the step AFTER
+    # the contacts were already copied.
+    try:
+        shown = dst.relative_to(workspace_root)
+    except ValueError:
+        shown = dst
+    print(f"  {GREEN}[ok]{RESET} Preserved {count} contacts to {shown}/")
     return True
 
 
@@ -186,7 +261,13 @@ def reassign_contacts(slug: str, reassign_to: str) -> None:
             if match:
                 pre, frontmatter, post = match.group(1), match.group(2), match.group(3)
                 rest = content[match.end():]
-                frontmatter = re.sub(r"^owner:\s*.*$", f"owner: {reassign_to}", frontmatter, flags=re.MULTILINE)
+                frontmatter, n = re.subn(r"^owner:\s*.*$", f"owner: {reassign_to}",
+                                         frontmatter, flags=re.MULTILINE)
+                if n == 0:
+                    # No `owner:` line to rewrite. `re.sub` returned the frontmatter
+                    # unchanged and the contact landed in the new CRM still owned by
+                    # nobody, which is the one thing "reassign" is supposed to do.
+                    frontmatter = frontmatter + f"owner: {reassign_to}\n"
                 content = pre + frontmatter + post + rest
             dest_file = dst / item.name
             if dest_file.exists():
@@ -272,8 +353,28 @@ def log_offboarding(slug: str, exec_info: dict, reassign_to: str | None) -> None
     else:
         existing = "# Offboarding Log\n\nChronological record of executive offboardings.\n"
 
-    log_file.write_text(existing + entry, encoding="utf-8")
+    # Atomic: a crash mid-write left a TRUNCATED audit log, and this file is the
+    # only durable record that the offboard happened at all.
+    atomic_write_text(log_file, existing + entry)
     print(f"  {GREEN}[ok]{RESET} Logged to audit/offboarding-log.md")
+
+
+def offboard_verdict(revoke_ok: bool, preserved: bool,
+                     residual: list[str]) -> tuple[bool, list[str]]:
+    """Decide whether this run may claim the offboard is complete.
+
+    Pure, so it is testable without touching GitHub. The script used to print
+    "Offboarding complete" unconditionally, including on a run where every
+    collaborator DELETE returned 404 and the exec kept org-wide access.
+    """
+    reasons: list[str] = []
+    if not revoke_ok:
+        reasons.append("at least one collaborator removal failed")
+    if not preserved:
+        reasons.append("CRM contacts were not preserved")
+    for item in residual:
+        reasons.append(f"access remains: {item} (remove it by hand)")
+    return (not reasons), reasons
 
 
 def print_manual_checklist(slug: str, exec_info: dict) -> None:
@@ -281,7 +382,14 @@ def print_manual_checklist(slug: str, exec_info: dict) -> None:
     name = exec_info.get("name", slug) if exec_info else slug
     email = exec_info.get("email", "unknown") if exec_info else "unknown"
 
+    github_username = exec_info.get("github_user") or slug if exec_info else slug
+
     print(f"\n{BOLD}{YELLOW}Manual Checklist (requires human action):{RESET}")
+    print(f"  [ ] Remove org membership (this script only removes DIRECT collaborators):")
+    print(f"       gh api orgs/{GITHUB_ORG}/memberships/{github_username} -X DELETE")
+    print(f"  [ ] Remove every team membership:")
+    print(f"       gh api orgs/{GITHUB_ORG}/teams --jq '.[].slug' | while read t; do \\")
+    print(f"         gh api orgs/{GITHUB_ORG}/teams/$t/memberships/{github_username} -X DELETE; done")
     print(f"  [ ] Revoke API keys (Anthropic, Firecrawl, Telegram, etc.)")
     print(f"  [ ] Disable email account: {email}")
     print(f"  [ ] Remove from Slack/Teams channels")
@@ -335,14 +443,21 @@ def main():
     if not safety_gate(slug):
         sys.exit(1)
 
-    # Execute offboarding steps
-    revoke_github_access(slug, exec_info or {})
-    archive_workspace_repo(slug)
-    archive_per_exec_crm_repo(slug)
-    preserve_crm_contacts(slug)
+    # Execute offboarding steps.
+    #
+    # Order matters and used to be wrong: the two archive calls ran BEFORE
+    # preserve/reassign, so the irreversible step happened first and any
+    # preserve failure left the contacts sitting in an archived repo. Recovery
+    # steps now run first; archiving is last.
+    revoke_ok = revoke_github_access(slug, exec_info or {})
+    residual = check_residual_access(slug, exec_info or {})
+    preserved = preserve_crm_contacts(slug)
 
     if args.reassign_to:
         reassign_contacts(slug, args.reassign_to)
+
+    archive_workspace_repo(slug)
+    archive_per_exec_crm_repo(slug)
 
     # Best-effort removal of scheduled tasks on the admin machine if the
     # exec's local workspace lived alongside the CEO workspace. Remote exec
@@ -366,10 +481,17 @@ def main():
 
     print_manual_checklist(slug, exec_info)
 
+    complete, reasons = offboard_verdict(revoke_ok, preserved, residual)
     print(f"\n{'=' * 50}")
-    print(f"{BOLD}{GREEN}Offboarding complete for {slug}.{RESET}")
+    if complete:
+        print(f"{BOLD}{GREEN}Offboarding complete for {slug}.{RESET}")
+    else:
+        print(f"{BOLD}{RED}Offboarding INCOMPLETE for {slug}.{RESET}")
+        for reason in reasons:
+            print(f"  {RED}-{RESET} {reason}")
     print(f"{'=' * 50}")
+    return 0 if complete else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

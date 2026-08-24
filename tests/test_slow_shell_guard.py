@@ -259,3 +259,24 @@ def test_ignores_non_bash_tools() -> None:
 
 def test_empty_command_is_not_blocked() -> None:
     assert _deny_reason(*_run_hook(_bash(""))) is None
+
+
+def test_an_unexpanded_variable_is_refused_and_the_reason_says_so() -> None:
+    """`pytest $T` cannot be judged narrow: the hook reads the command text,
+    not the shell's environment. Failing closed is right -- `$T` may well be
+    `tests/`. What was missing is saying so: the deny message listed the narrow
+    shapes and left the author to guess why a variable was not one, which cost
+    a retry on 2026-08-23.
+    """
+    reason = _deny_reason(*_run_hook(_bash(".venv/bin/python -m pytest $T -q"))[:2])
+    assert reason is not None, "an unexpanded target must still be refused"
+    assert "UNEXPANDED shell variable" in reason, (
+        "the deny message does not explain why a variable is not a narrow target"
+    )
+
+
+def test_a_written_out_path_still_passes() -> None:
+    """The instruction the message gives must actually work."""
+    reason = _deny_reason(
+        *_run_hook(_bash(".venv/bin/python -m pytest tests/test_slow_shell_guard.py -q"))[:2])
+    assert reason is None, reason

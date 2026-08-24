@@ -6,5 +6,5 @@
 ## Top contacts (summary)
 
 - Alba Karimova (CTO, Northwind Telecom) - core upgrade owner.
-- Rustam Bekov (Partner, Contoso Capital) - lead investor contact.
+- James Bond (Partner, Contoso Capital) - lead investor contact.
 - Henrik Vale (Director, Vantage Systems) - integration partner.

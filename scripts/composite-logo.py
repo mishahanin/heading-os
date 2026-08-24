@@ -44,8 +44,20 @@ def main() -> int:
     x = img_w - target_w - padding
     y = img_h - target_h - padding
 
-    # Composite using alpha channel
+    # Composite using the logo's alpha channel. `paste` needs a mask in mode
+    # "1", "L", "LA" or "RGBA", and the logo was passed as its own mask with
+    # nothing checking it had one — so any JPEG or plain-RGB logo raised
+    # `ValueError: bad transparency mask` and exited on a traceback, bypassing
+    # the usage-error path. A JPEG is an ordinary input for an untyped
+    # `<logo_image>` argument. Converting is free when the alpha is already
+    # there and gives an opaque logo when it is not, which is what pasting an
+    # image without transparency should mean.
+    if logo_resized.mode not in ("LA", "RGBA"):
+        logo_resized = logo_resized.convert("RGBA")
     img.paste(logo_resized, (x, y), logo_resized)
+    if img.mode == "RGBA" and Path(output_path).suffix.lower() in (".jpg", ".jpeg"):
+        # JPEG has no alpha channel; saving RGBA raises. Flatten instead.
+        img = img.convert("RGB")
     img.save(output_path)
 
     print(f"Saved to {output_path}")

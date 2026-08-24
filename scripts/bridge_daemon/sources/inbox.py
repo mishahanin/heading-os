@@ -18,8 +18,8 @@ from datetime import date, datetime, timedelta, timezone
 from scripts.utils.workspace import get_default_tz
 from pathlib import Path
 
-from scripts.bridge_daemon._atomic import atomic_write_text
-from scripts.utils.paths import get_data_root
+from scripts.bridge_daemon._jsonl import append_jsonl, read_jsonl_capped
+from scripts.bridge_daemon._shapes import as_mapping, entry_ts, is_undo
 from scripts.utils.timeparse import parse_iso
 
 # Phase 1.32: priority -> band. P1/P2 need a decision or reply (full cards);
@@ -46,44 +46,27 @@ CRM_LOGGED_MAX_BYTES = 1_000_000
 _CRM_LOGGED_LOCK = threading.Lock()
 
 
-def read_dismiss_log(workspace_root: Path) -> set[str]:
+def read_dismiss_log(data_root: Path) -> set[str]:
     """Return the set of dismissed conversation IDs.
 
     Last entry per conv_id wins, so a tombstone entry ('undo': True)
     cancels a prior dismiss. Mirrors the mark-sent/undo pattern.
     """
-    log_path = workspace_root / DISMISS_LOG_FILE
-    if not log_path.exists():
-        return set()
-    try:
-        if log_path.stat().st_size > DISMISS_LOG_MAX_BYTES:
-            return set()
-        text = log_path.read_text(encoding="utf-8")
-    except OSError:
-        return set()
+    log_path = data_root / DISMISS_LOG_FILE
+    entries, _truncated = read_jsonl_capped(log_path, DISMISS_LOG_MAX_BYTES)
     out: dict[str, dict] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(entry, dict):
-            continue
+    for entry in entries:
         conv_id = entry.get("conv_id")
         if not isinstance(conv_id, str) or not conv_id:
             continue
-        if entry.get("undo") is True:
+        if is_undo(entry):
             out.pop(conv_id, None)
             continue
         out[conv_id] = entry
     return set(out.keys())
 
 
-def dismiss_log_recent(workspace_root: Path, limit: int = 20,
-                       data_root: "Path | None" = None) -> list[dict]:
+def dismiss_log_recent(data_root: Path, limit: int = 20) -> list[dict]:
     """Return the most-recent active dismiss entries (tombstoned omitted).
 
     Each entry: {conv_id, ts, date, note}. Ordered by ts DESC. Used by
@@ -94,34 +77,16 @@ def dismiss_log_recent(workspace_root: Path, limit: int = 20,
     the UI can show a readable label, falling back to conv_id otherwise.
 
     HEADING OS engine/data split: the dismiss log + the fetch file are DATA,
-    so they resolve under ``data_root`` (falls back to ``workspace_root``).
+    so the single root this takes IS the data root (it used to take a ``workspace_root`` too, which the body never read).
     """
-    if data_root is None:
-        data_root = get_data_root()
     log_path = data_root / DISMISS_LOG_FILE
-    if not log_path.exists():
-        return []
-    try:
-        if log_path.stat().st_size > DISMISS_LOG_MAX_BYTES:
-            return []
-        text = log_path.read_text(encoding="utf-8")
-    except OSError:
-        return []
+    entries, _truncated = read_jsonl_capped(log_path, DISMISS_LOG_MAX_BYTES)
     active: dict[str, dict] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(entry, dict):
-            continue
+    for entry in entries:
         conv_id = entry.get("conv_id")
         if not isinstance(conv_id, str) or not conv_id:
             continue
-        if entry.get("undo") is True:
+        if is_undo(entry):
             active.pop(conv_id, None)
             continue
         active[conv_id] = entry
@@ -133,7 +98,7 @@ def dismiss_log_recent(workspace_root: Path, limit: int = 20,
     fetch_path = data_root / "outputs" / "operations" / "email-intelligence" / "_latest-fetch.json"
     if fetch_path.exists():
         try:
-            data = json.loads(fetch_path.read_text(encoding="utf-8"))
+            data = as_mapping(json.loads(fetch_path.read_text(encoding="utf-8")))
             for c in data.get("conversations", []) or []:
                 if isinstance(c, dict) and c.get("id"):
                     topics[c["id"]] = c.get("topic") or ""
@@ -145,7 +110,7 @@ def dismiss_log_recent(workspace_root: Path, limit: int = 20,
         rows.append({
             "conv_id": conv_id,
             "topic": topics.get(conv_id) or conv_id[:80],
-            "ts": entry.get("ts", ""),
+            "ts": entry_ts(entry),
             "date": entry.get("date", ""),
             "note": entry.get("note", ""),
         })
@@ -153,10 +118,16 @@ def dismiss_log_recent(workspace_root: Path, limit: int = 20,
     return rows[: max(0, int(limit))]
 
 
-def mark_dismissed(workspace_root: Path, conv_id: str, note: str = "") -> dict:
+def mark_dismissed(data_root: Path, conv_id: str, note: str = "") -> dict:
     """Append a dismiss entry for `conv_id`. Returns {ok, conv_id, ts}."""
     if not isinstance(conv_id, str) or not conv_id.strip():
         return {"ok": False, "error": "conv_id is required"}
+    # Stored stripped, because that is what the guard above validated. The raw
+    # value used to be written verbatim, so a conv_id arriving with a trailing
+    # space passed the check and then matched nothing: the reads compare against
+    # the untrimmed `id` in _latest-fetch.json, so the card came straight back
+    # and the CEO's dismiss looked like it had done nothing.
+    conv_id = conv_id.strip()
     if len(conv_id) > 500:
         return {"ok": False, "error": "conv_id too long"}
     safe_note = (note or "").replace("\n", " ").replace("\r", " ").strip()[:DISMISS_NOTE_MAX_CHARS]
@@ -169,45 +140,26 @@ def mark_dismissed(workspace_root: Path, conv_id: str, note: str = "") -> dict:
         "ts": now.isoformat(),
         "note": safe_note,
     }
-    log_path = workspace_root / DISMISS_LOG_FILE
+    log_path = data_root / DISMISS_LOG_FILE
     with _DISMISS_LOG_LOCK:
-        existing = ""
-        if log_path.exists():
-            try:
-                existing = log_path.read_text(encoding="utf-8")
-            except OSError:
-                existing = ""
-        new_content = existing
-        if existing and not existing.endswith("\n"):
-            new_content += "\n"
-        new_content += json.dumps(entry) + "\n"
         try:
-            atomic_write_text(log_path, new_content, mode=0o644)
+            append_jsonl(log_path, entry)
         except OSError as e:
             return {"ok": False, "error": f"write failed: {e}"}
     return {"ok": True, "conv_id": conv_id, "ts": entry["ts"]}
 
 
-def undo_dismissed(workspace_root: Path, conv_id: str) -> dict:
+def undo_dismissed(data_root: Path, conv_id: str) -> dict:
     """Tombstone a prior dismiss for `conv_id`. Idempotent."""
     if not isinstance(conv_id, str) or not conv_id.strip():
         return {"ok": False, "error": "conv_id is required"}
+    conv_id = conv_id.strip()  # see mark_dismissed: the guard trims, so the write must too
     now = datetime.now(timezone.utc)
     entry = {"conv_id": conv_id, "undo": True, "ts": now.isoformat()}
-    log_path = workspace_root / DISMISS_LOG_FILE
+    log_path = data_root / DISMISS_LOG_FILE
     with _DISMISS_LOG_LOCK:
-        existing = ""
-        if log_path.exists():
-            try:
-                existing = log_path.read_text(encoding="utf-8")
-            except OSError:
-                existing = ""
-        new_content = existing
-        if existing and not existing.endswith("\n"):
-            new_content += "\n"
-        new_content += json.dumps(entry) + "\n"
         try:
-            atomic_write_text(log_path, new_content, mode=0o644)
+            append_jsonl(log_path, entry)
         except OSError as e:
             return {"ok": False, "error": f"write failed: {e}"}
     return {"ok": True, "conv_id": conv_id, "ts": entry["ts"]}
@@ -230,64 +182,40 @@ def _parse_date(s: str | None) -> date | None:
 def _read_jsonl(log_path: Path, max_bytes: int) -> list[dict]:
     """Read a jsonl log into a list of dict entries.
 
-    Tolerant of corrupt lines and oversized files (returns [] if the
-    log exceeds max_bytes, matching the dismiss-log guard).
+    Tolerant of corrupt lines. Over ``max_bytes`` it keeps the NEWEST entries
+    rather than returning [] -- an empty result meant every deferred and
+    CRM-logged conversation was instantly forgotten while writes kept
+    succeeding, with nothing surfaced anywhere.
     """
-    if not log_path.exists():
-        return []
-    try:
-        if log_path.stat().st_size > max_bytes:
-            return []
-        text = log_path.read_text(encoding="utf-8")
-    except OSError:
-        return []
+    entries, _truncated = read_jsonl_capped(log_path, max_bytes)
     out: list[dict] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(entry, dict):
-            out.append(entry)
+    out.extend(entries)
     return out
 
 
 def _append_jsonl(log_path: Path, lock: threading.Lock, entry: dict) -> tuple[bool, str | None]:
-    """Append one JSON entry as a line to a jsonl log, atomically.
+    """Append one JSON entry as a line to a jsonl log, under `lock`.
 
-    Returns (True, None) on success or (False, error) on a write
-    failure. Mirrors the read-append-atomic-write pattern the dismiss
-    log uses.
+    Returns (True, None) on success or (False, error) on a write failure.
+    The write itself is `_jsonl.append_jsonl`, a real O_APPEND line; `lock`
+    only orders the writers inside this process.
     """
     with lock:
-        existing = ""
-        if log_path.exists():
-            try:
-                existing = log_path.read_text(encoding="utf-8")
-            except OSError:
-                existing = ""
-        new_content = existing
-        if existing and not existing.endswith("\n"):
-            new_content += "\n"
-        new_content += json.dumps(entry) + "\n"
         try:
-            atomic_write_text(log_path, new_content, mode=0o644)
+            append_jsonl(log_path, entry)
         except OSError as e:
             return False, str(e)
     return True, None
 
 
-def _fetch_topics(workspace_root: Path) -> dict:
+def _fetch_topics(data_root: Path) -> dict:
     """Map conv_id -> topic from the latest fetch (best-effort, may be {})."""
     topics: dict = {}
-    fetch_path = workspace_root / LATEST_FETCH_FILE
+    fetch_path = data_root / LATEST_FETCH_FILE
     if not fetch_path.exists():
         return topics
     try:
-        data = json.loads(fetch_path.read_text(encoding="utf-8"))
+        data = as_mapping(json.loads(fetch_path.read_text(encoding="utf-8")))
     except (json.JSONDecodeError, OSError):
         return topics
     for c in data.get("conversations", []) or []:
@@ -296,21 +224,21 @@ def _fetch_topics(workspace_root: Path) -> dict:
     return topics
 
 
-def _active_defers(workspace_root: Path) -> dict:
+def _active_defers(data_root: Path) -> dict:
     """Return {conv_id: latest defer entry}, with undo tombstones applied."""
     active: dict = {}
-    for entry in _read_jsonl(workspace_root / DEFER_LOG_FILE, DEFER_LOG_MAX_BYTES):
+    for entry in _read_jsonl(data_root / DEFER_LOG_FILE, DEFER_LOG_MAX_BYTES):
         conv_id = entry.get("conv_id")
         if not isinstance(conv_id, str) or not conv_id:
             continue
-        if entry.get("undo") is True:
+        if is_undo(entry):
             active.pop(conv_id, None)
             continue
         active[conv_id] = entry
     return active
 
 
-def read_defer_log(workspace_root: Path, today: date | None = None) -> set[str]:
+def read_defer_log(data_root: Path, today: date | None = None) -> set[str]:
     """Return conv_ids currently deferred (defer_until still in the future).
 
     A defer whose date has arrived is not returned - the conversation
@@ -318,17 +246,18 @@ def read_defer_log(workspace_root: Path, today: date | None = None) -> set[str]:
     """
     today = today or datetime.now(get_default_tz()).date()
     deferred = set()
-    for conv_id, entry in _active_defers(workspace_root).items():
+    for conv_id, entry in _active_defers(data_root).items():
         until = _parse_date(entry.get("defer_until"))
         if until is not None and until > today:
             deferred.add(conv_id)
     return deferred
 
 
-def mark_deferred(workspace_root: Path, conv_id: str, defer_until: str, note: str = "") -> dict:
+def mark_deferred(data_root: Path, conv_id: str, defer_until: str, note: str = "") -> dict:
     """Defer `conv_id` until `defer_until` (YYYY-MM-DD, must be a future date)."""
     if not isinstance(conv_id, str) or not conv_id.strip():
         return {"ok": False, "error": "conv_id is required"}
+    conv_id = conv_id.strip()  # see mark_dismissed: the guard trims, so the write must too
     if len(conv_id) > 500:
         return {"ok": False, "error": "conv_id too long"}
     until = _parse_date(defer_until)
@@ -343,37 +272,38 @@ def mark_deferred(workspace_root: Path, conv_id: str, defer_until: str, note: st
         "ts": datetime.now(timezone.utc).isoformat(),
         "note": safe_note,
     }
-    ok, err = _append_jsonl(workspace_root / DEFER_LOG_FILE, _DEFER_LOG_LOCK, entry)
+    ok, err = _append_jsonl(data_root / DEFER_LOG_FILE, _DEFER_LOG_LOCK, entry)
     if not ok:
         return {"ok": False, "error": f"write failed: {err}"}
     return {"ok": True, "conv_id": conv_id, "defer_until": entry["defer_until"]}
 
 
-def undo_deferred(workspace_root: Path, conv_id: str) -> dict:
+def undo_deferred(data_root: Path, conv_id: str) -> dict:
     """Tombstone a prior defer for `conv_id`. Idempotent."""
     if not isinstance(conv_id, str) or not conv_id.strip():
         return {"ok": False, "error": "conv_id is required"}
+    conv_id = conv_id.strip()  # see mark_dismissed: the guard trims, so the write must too
     entry = {
         "conv_id": conv_id,
         "undo": True,
         "ts": datetime.now(timezone.utc).isoformat(),
     }
-    ok, err = _append_jsonl(workspace_root / DEFER_LOG_FILE, _DEFER_LOG_LOCK, entry)
+    ok, err = _append_jsonl(data_root / DEFER_LOG_FILE, _DEFER_LOG_LOCK, entry)
     if not ok:
         return {"ok": False, "error": f"write failed: {err}"}
     return {"ok": True, "conv_id": conv_id}
 
 
-def defer_log_recent(workspace_root: Path, today: date | None = None, limit: int = 20) -> list[dict]:
+def defer_log_recent(data_root: Path, today: date | None = None, limit: int = 20) -> list[dict]:
     """Return still-deferred conversations, most-recently-set first.
 
     Each entry: {conv_id, topic, defer_until, ts, note}. Drives the
     'Deferred' footer so the CEO can see and undo a defer.
     """
     today = today or datetime.now(get_default_tz()).date()
-    topics = _fetch_topics(workspace_root)
+    topics = _fetch_topics(data_root)
     rows = []
-    for conv_id, entry in _active_defers(workspace_root).items():
+    for conv_id, entry in _active_defers(data_root).items():
         until = _parse_date(entry.get("defer_until"))
         if until is None or until <= today:
             continue
@@ -381,31 +311,31 @@ def defer_log_recent(workspace_root: Path, today: date | None = None, limit: int
             "conv_id": conv_id,
             "topic": topics.get(conv_id) or conv_id[:80],
             "defer_until": entry.get("defer_until", ""),
-            "ts": entry.get("ts", ""),
+            "ts": entry_ts(entry),
             "note": entry.get("note", ""),
         })
     rows.sort(key=lambda r: r["ts"], reverse=True)
     return rows[: max(0, int(limit))]
 
 
-def read_crm_logged(workspace_root: Path) -> set[str]:
+def read_crm_logged(data_root: Path) -> set[str]:
     """Return conv_ids already logged as a CRM interaction (append-only set)."""
     out = set()
-    for entry in _read_jsonl(workspace_root / CRM_LOGGED_FILE, CRM_LOGGED_MAX_BYTES):
+    for entry in _read_jsonl(data_root / CRM_LOGGED_FILE, CRM_LOGGED_MAX_BYTES):
         conv_id = entry.get("conv_id")
         if isinstance(conv_id, str) and conv_id:
             out.add(conv_id)
     return out
 
 
-def mark_crm_logged(workspace_root: Path, conv_id: str, slug: str = "") -> tuple[bool, str | None]:
+def mark_crm_logged(data_root: Path, conv_id: str, slug: str = "") -> tuple[bool, str | None]:
     """Record that `conv_id` was logged to CRM. Append-only, no undo."""
     entry = {
         "conv_id": conv_id,
         "slug": slug,
         "ts": datetime.now(timezone.utc).isoformat(),
     }
-    return _append_jsonl(workspace_root / CRM_LOGGED_FILE, _CRM_LOGGED_LOCK, entry)
+    return _append_jsonl(data_root / CRM_LOGGED_FILE, _CRM_LOGGED_LOCK, entry)
 
 
 def _external_sender(participants: list) -> str:
@@ -431,12 +361,17 @@ def _inbox_row(conv: dict, crm_logged: set[str], now: datetime) -> dict:
     button so a conversation cannot be logged twice. `aging` is True
     when the conversation has been unread more than 24h.
     """
-    analysis = conv.get("analysis") or {}
+    # `or {}` only replaces a FALSY value, so `"analysis": "some string"` came
+    # through as a string and the next `.get()` raised AttributeError, taking
+    # every band down over one malformed conversation. The fetch is written by
+    # a separate pipeline and is hand-editable; valid JSON of the wrong shape
+    # is the case the json.JSONDecodeError guard above cannot see.
+    analysis = conv.get("analysis") if isinstance(conv.get("analysis"), dict) else {}
     priority = conv.get("priority") or analysis.get("priority") or "P3"
     if priority not in _PRIORITY_BAND:
         priority = "P3"
-    crm = conv.get("crm_context") or {}
-    pipe = conv.get("pipeline_context") or {}
+    crm = conv.get("crm_context") if isinstance(conv.get("crm_context"), dict) else {}
+    pipe = conv.get("pipeline_context") if isinstance(conv.get("pipeline_context"), dict) else {}
     actions = analysis.get("proposed_actions")
     actions = actions if isinstance(actions, list) else []
     # Phase 1.34: flag conversations unread more than 24h so nothing the
@@ -472,8 +407,7 @@ def _inbox_row(conv: dict, crm_logged: set[str], now: datetime) -> dict:
     }
 
 
-def read_inbox(workspace_root: Path, now: datetime | None = None,
-               data_root: "Path | None" = None) -> dict:
+def read_inbox(data_root: Path, now: datetime | None = None) -> dict:
     """Read the analyzed Inbox unread set and return banded conversations.
 
     Phase 1.34: the source `_latest-fetch.json` is now produced by
@@ -497,13 +431,18 @@ def read_inbox(workspace_root: Path, now: datetime | None = None,
     the freshness UI surfaces staleness via data_time).
 
     HEADING OS engine/data split: the fetch file + the dismiss/defer/crm
-    logs are DATA, so they resolve under ``data_root`` (falls back to
-    ``workspace_root`` when not supplied).
+    logs are DATA, so the single root this takes IS the data root. It used to
+    take a ``workspace_root`` as well; the body never read it, and every
+    caller was already passing the data root into that slot.
     """
-    if data_root is None:
-        data_root = get_data_root()
     now = now or datetime.now(timezone.utc)
-    today = now.date()
+    # The operator's calendar day, not UTC's. `mark_deferred` validates
+    # "must be a future date" against `get_default_tz()`, and the footer
+    # (`defer_log_recent`) filters on it too, so deriving "today" from a UTC
+    # `now` made the listing disagree with both of them for the hours between
+    # local midnight and UTC midnight: a defer set for tomorrow could already
+    # read as expired, or an expired one stay hidden.
+    today = now.astimezone(get_default_tz()).date()
     fetch_file = data_root / "outputs" / "operations" / "email-intelligence" / "_latest-fetch.json"
     dismissed = read_dismiss_log(data_root)
     deferred = read_defer_log(data_root, today)
@@ -523,7 +462,7 @@ def read_inbox(workspace_root: Path, now: datetime | None = None,
     if not fetch_file.exists():
         return _empty()
     try:
-        data = json.loads(fetch_file.read_text(encoding="utf-8"))
+        data = as_mapping(json.loads(fetch_file.read_text(encoding="utf-8")))
     except (json.JSONDecodeError, OSError):
         return _empty()
 
@@ -587,8 +526,7 @@ RAW_EMAIL_SNIPPET_BYTES = 1200  # cap any single raw email body excerpt
 MAX_RAW_EMAILS_RETURNED = 5     # cap chain length to avoid huge payloads
 
 
-def _read_state_conversation(workspace_root: Path, conv_id: str,
-                             data_root: "Path | None" = None) -> dict | None:
+def _read_state_conversation(data_root: Path, conv_id: str) -> dict | None:
     """Phase 1.100: fall-back lookup for conversations that aren't in the
     most recent fetch file. The triage state.json keeps a wider rolling
     window than _latest-fetch.json's rich payload, so older conversations
@@ -596,15 +534,13 @@ def _read_state_conversation(workspace_root: Path, conv_id: str,
     the basic info that IS available so the drill-down isn't a dead-end.
 
     HEADING OS engine/data split: state.json is DATA (resolved under
-    ``data_root``; falls back to ``workspace_root`` when not supplied).
+    the single root this takes IS the data root (it used to take a ``workspace_root`` too, which the body never read).
     """
-    if data_root is None:
-        data_root = get_data_root()
     state_file = data_root / "outputs" / "operations" / "email-intelligence" / "state.json"
     if not state_file.exists():
         return None
     try:
-        data = json.loads(state_file.read_text(encoding="utf-8"))
+        data = as_mapping(json.loads(state_file.read_text(encoding="utf-8")))
     except (json.JSONDecodeError, OSError):
         return None
     convs = data.get("conversations", {})
@@ -639,8 +575,7 @@ def _read_state_conversation(workspace_root: Path, conv_id: str,
     }
 
 
-def read_conversation(workspace_root: Path, conv_id: str,
-                      data_root: "Path | None" = None) -> dict:
+def read_conversation(data_root: Path, conv_id: str) -> dict:
     """Look up a single conversation - rich data from _latest-fetch.json
     if present, else degraded fallback from state.json.
 
@@ -653,10 +588,8 @@ def read_conversation(workspace_root: Path, conv_id: str,
     a rich analysis exists.
 
     HEADING OS engine/data split: the fetch file + state.json are DATA
-    (resolved under ``data_root``; falls back to ``workspace_root``).
+    the single root this takes IS the data root (it used to take a ``workspace_root`` too, which the body never read).
     """
-    if data_root is None:
-        data_root = get_data_root()
     if not conv_id or not isinstance(conv_id, str):
         return {"ok": False, "error": "missing conversation id"}
     fetch_path = data_root / LATEST_FETCH_FILE
@@ -667,13 +600,17 @@ def read_conversation(workspace_root: Path, conv_id: str,
             return {"ok": True, "conversation": fallback}
         return {"ok": False, "error": "no latest fetch on disk (run /email-intel first)"}
     try:
-        data = json.loads(fetch_path.read_text(encoding="utf-8"))
+        data = as_mapping(json.loads(fetch_path.read_text(encoding="utf-8")))
     except (json.JSONDecodeError, OSError) as e:
         return {"ok": False, "error": f"fetch file unreadable: {e}"}
     conversations = data.get("conversations", [])
     if not isinstance(conversations, list):
         return {"ok": False, "error": "unexpected fetch schema"}
-    match = next((c for c in conversations if c.get("id") == conv_id), None)
+    # `isinstance` before `.get`: read_inbox already guards this at its own
+    # loop, and this reader consumed the same list without it, so one non-dict
+    # element 500'd the drill-down while the listing shrugged it off.
+    match = next((c for c in conversations
+                  if isinstance(c, dict) and c.get("id") == conv_id), None)
     if match is None:
         # Phase 1.100: don't error out - try state.json so the UI can show
         # at least the topic + last_seen instead of a blank drill-down.
@@ -683,7 +620,11 @@ def read_conversation(workspace_root: Path, conv_id: str,
         return {"ok": False, "error": "conversation older than last fetch window"}
 
     # Trim raw_emails: cap count + truncate body snippets to bound payload.
-    raw_emails_in = match.get("raw_emails") or []
+    # A dict here used to raise TypeError on the slice below (dicts are not
+    # sliceable); the per-element isinstance guard only helps once the
+    # CONTAINER is a list.
+    raw_emails_in = match.get("raw_emails")
+    raw_emails_in = raw_emails_in if isinstance(raw_emails_in, list) else []
     raw_emails_out = []
     for em in raw_emails_in[:MAX_RAW_EMAILS_RETURNED]:
         if not isinstance(em, dict):
@@ -700,9 +641,10 @@ def read_conversation(workspace_root: Path, conv_id: str,
             "body": body,
         })
 
-    analysis = match.get("analysis") or {}
-    crm_ctx = match.get("crm_context") or {}
-    pipe_ctx = match.get("pipeline_context") or {}
+    analysis = match.get("analysis") if isinstance(match.get("analysis"), dict) else {}
+    crm_ctx = match.get("crm_context") if isinstance(match.get("crm_context"), dict) else {}
+    pipe_ctx = (match.get("pipeline_context")
+                if isinstance(match.get("pipeline_context"), dict) else {})
     return {
         "ok": True,
         "conversation": {

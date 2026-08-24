@@ -22,8 +22,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.utils.workspace import get_workspace_root, get_classification, get_outputs_dir
-from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
+from scripts.utils.workspace import (
+    get_workspace_root, get_classification, get_outputs_dir, load_routing_map,
+    matched_routing_rule,
+)
+from scripts.utils.colors import GRAY, GREEN, YELLOW, RED, CYAN, BOLD, RESET
 
 # Directories to skip entirely
 SKIP_DIRS = {
@@ -58,13 +61,38 @@ def walk_workspace(root: Path) -> list[str]:
 
 
 def classify_files(root: Path) -> dict:
-    """Classify all workspace files and return results."""
+    """Classify all workspace files and return results.
+
+    Three lists, and the third OVERLAPS the first two rather than replacing a
+    slice of either. `corporate` and `ceo_only` partition every file by the
+    two-value collapse `get_classification` performs; `unclassified` re-reports
+    whichever of them took the map default instead of matching a rule.
+
+    Which of the two it lands in, measured rather than assumed: an unmatched
+    path resolves `engine`, `get_classification` collapses everything that is
+    not `private` to `"corporate"`, so a file with no rule is counted CORPORATE.
+    This docstring said it "was counted as CEO-only" until 2026-08-24. That was
+    never true of any code this repository has carried, and the 2026-08-23 audit
+    read the sentence, reasoned from it, and reported a counting defect that
+    does not exist. A wrong claim about the past is read as a claim about the
+    present.
+
+    What WAS added on 2026-08-24 is the third list itself. `--unclassified` was
+    a registered argument nothing read, so an operator who ran it got the
+    ordinary summary and reasonably concluded there were none.
+
+    "Unclassified" is a real, askable question: it means the routing map matched
+    no rule and the path took the map default. `matched_routing_rule` answers it.
+    """
     files = walk_workspace(root)
     corporate = []
     ceo_only = []
+    unclassified = []
 
     for f in files:
         classification = get_classification(f)
+        if matched_routing_rule(f) is None:
+            unclassified.append(f)
         if classification == "corporate":
             corporate.append(f)
         else:
@@ -74,6 +102,7 @@ def classify_files(root: Path) -> dict:
         "total": len(files),
         "corporate": corporate,
         "ceo_only": ceo_only,
+        "unclassified": unclassified,
     }
 
 
@@ -88,6 +117,14 @@ def print_report(results: dict):
     print(f"  Total files:  {total}")
     print(f"  {GREEN}Corporate:  {corp_count}{RESET}")
     print(f"  {YELLOW}CEO-only:   {ceo_count}{RESET}")
+    # Reported, not alarmed. Taking the map default is the DESIGNED outcome for
+    # shareable engine code (`.claude/rules/classification.md`: "A new file left
+    # at the engine default needs no entry only when it is genuinely shareable
+    # code"), so most of this count is correct and colouring it red would make
+    # every healthy run look broken. What the number is for is the inverse: a
+    # path under here that should NOT be engine has no rule saying so.
+    print(f"  {CYAN}No explicit rule (took the map default): "
+          f"{len(results['unclassified'])}{RESET}  {GREEN}--unclassified to list{RESET}")
     print()
 
 
@@ -100,12 +137,52 @@ def print_corporate(results: dict):
     print()
 
 
+def print_unclassified(results: dict):
+    """Print the paths no routing rule governs, grouped by top-level directory.
+
+    The flag this serves was registered and never read, and the list it needs
+    did not exist, so the operator who ran `--unclassified` saw the ordinary
+    summary. Both are new 2026-08-24. A default-taker is counted CORPORATE by
+    `classify_files`, not CEO-only; see the correction in its docstring.
+
+    This is a REVIEW list, not a defect list. The map's default is `engine`, and
+    that default is the right answer for most code, so the grouped counts come
+    first: the question worth asking is whether any GROUP here should have been
+    private or corporate, not whether each of two thousand engine files needs a
+    line in the map.
+    """
+    unclassified = sorted(results["unclassified"])
+    default = load_routing_map().get("default", "engine")
+    print(f"\n{BOLD}Paths with no explicit routing rule ({len(unclassified)}){RESET}")
+    print(f"{'-' * 60}")
+    if not unclassified:
+        print(f"  {GREEN}none: every scanned path matches a rule in "
+              f"config/routing-map.yaml{RESET}\n")
+        return
+    print(f"  All of these resolve to the map default: {CYAN}{default}{RESET}.")
+    print(f"  {GRAY}Normal for shareable code. Check whether any group below "
+          f"should not be {default}.{RESET}\n")
+    groups: dict[str, int] = {}
+    for f in unclassified:
+        head = f.split("/", 1)[0] if "/" in f else "(repo root)"
+        groups[head] = groups.get(head, 0) + 1
+    for head, count in sorted(groups.items(), key=lambda kv: -kv[1]):
+        print(f"  {count:>5}  {head}")
+    print(f"\n{GRAY}  Full list:{RESET}")
+    for f in unclassified:
+        print(f"    {f}")
+    print(f"\n  To pin one: add its path under `rules:` in "
+          f"config/routing-map.yaml, then re-run this check.\n")
+
+
 def print_json(results: dict):
     """Print JSON output."""
     output = {
         "total": results["total"],
         "corporate_count": len(results["corporate"]),
         "ceo_only_count": len(results["ceo_only"]),
+        "unclassified_count": len(results["unclassified"]),
+        "unclassified_files": sorted(results["unclassified"]),
         "corporate_files": sorted(results["corporate"]),
         "ceo_only_files": sorted(results["ceo_only"]),
     }
@@ -196,6 +273,8 @@ def main():
 
     if args.json:
         print_json(results)
+    elif args.unclassified:
+        print_unclassified(results)
     elif args.corporate_only:
         print_corporate(results)
     else:

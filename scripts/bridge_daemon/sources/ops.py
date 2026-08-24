@@ -1,7 +1,11 @@
 """Operational visibility sources for the Settings page.
 
-- read_telemetry_summary: counts page_view/launch/return_to_browser/finalize
-  events from .daemon-state/usage.jsonl, scoped to today + last 7 days.
+- read_telemetry_summary: counts EVERY event type present in
+  .daemon-state/usage.jsonl, scoped to today + last 7 days.
+  TELEMETRY_EVENT_TYPES names the four the daemon writes today; it is
+  documentation of the expected vocabulary, not a filter. Counting only those
+  four would hide a writer-side change instead of showing it, which is why the
+  totals are deliberately open-ended.
 - read_log_tail: returns the last N lines from .daemon-state/bridge.log,
   capped by line count + total bytes.
 
@@ -14,11 +18,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from scripts.utils.timeparse import parse_iso
+from scripts.utils.workspace import get_default_tz
 
 LOG_TAIL_LINES = 50
 LOG_TAIL_MAX_BYTES = 200_000  # cap total bytes returned even if 50 lines is huge
 USAGE_MAX_LINES = 20_000  # safety: stop after this many lines (the file rotates eventually)
 
+# The event types the daemon writes today. Read the module docstring before
+# turning this into a filter: it is expected vocabulary, not an allowlist.
 TELEMETRY_EVENT_TYPES = ("page_view", "launch", "return_to_browser", "finalize")
 
 
@@ -38,7 +45,14 @@ def read_telemetry_summary(workspace_root: Path, now: datetime | None = None) ->
     """
     if now is None:
         now = datetime.now(timezone.utc)
-    today_str = now.strftime("%Y-%m-%d")
+    # The operator's calendar day, matching inbox.py, investors.py and
+    # pipeline.py, which all define "today" via get_default_tz(). It used to be
+    # a UTC date compared as a STRING PREFIX of the raw `ts` field, which is two
+    # defects in one line: UTC is not the day the operator is having, and a
+    # prefix test silently misses any stamp whose date is not at position 0.
+    # Comparing parsed, zone-converted dates fixes both.
+    local_tz = get_default_tz()
+    today_local = now.astimezone(local_tz).date()
     cutoff_7d = now - timedelta(days=7)
 
     usage_path = workspace_root / ".daemon-state" / "usage.jsonl"
@@ -79,7 +93,7 @@ def read_telemetry_summary(workspace_root: Path, now: datetime | None = None) ->
                     continue
                 if ts >= cutoff_7d:
                     last_7d_counts[evt] += 1
-                if ts_str.startswith(today_str):
+                if ts.astimezone(local_tz).date() == today_local:
                     today_counts[evt] += 1
                 last_event_ts = ts_str  # JSONL is append-only, last line wins
     except OSError as e:
@@ -118,22 +132,33 @@ def read_log_tail(workspace_root: Path, n_lines: int = LOG_TAIL_LINES) -> dict:
     try:
         size = log_path.stat().st_size
         # Read from end, decode last LOG_TAIL_MAX_BYTES, then take last n_lines.
+        offset = max(0, size - LOG_TAIL_MAX_BYTES)
         with log_path.open("rb") as f:
-            f.seek(max(0, size - LOG_TAIL_MAX_BYTES))
+            # Is the byte before the slice a newline? If so the first line in
+            # `tail_bytes` is COMPLETE and dropping it loses a real line. The
+            # old code dropped it whenever the file was over the cap, without
+            # looking.
+            starts_clean = True
+            if offset:
+                f.seek(offset - 1)
+                starts_clean = f.read(1) == b"\n"
+            else:
+                f.seek(0)
             tail_bytes = f.read()
     except OSError as e:
         return {"ok": False, "lines": [], "size_bytes": None, "error": f"read failed: {e}"}
 
-    # Decode bytes; on partial UTF-8 at the start, drop the first incomplete chunk.
-    try:
-        tail_text = tail_bytes.decode("utf-8", errors="replace")
-    except UnicodeDecodeError:
-        return {"ok": False, "lines": [], "size_bytes": size, "error": "decode failed"}
+    # `errors="replace"` cannot raise, so the try/except that used to wrap this
+    # was unreachable and its "decode failed" result was fiction. A partial
+    # UTF-8 sequence at the slice boundary becomes U+FFFD, and the partial-line
+    # drop below removes the line carrying it.
+    tail_text = tail_bytes.decode("utf-8", errors="replace")
 
-    # Split, drop the leading partial line if we sliced mid-file, take last n_lines.
     lines = tail_text.splitlines()
-    if size > LOG_TAIL_MAX_BYTES and lines:
-        lines = lines[1:]  # drop possibly-truncated first line
-    lines = lines[-n_lines:]
+    if not starts_clean and lines:
+        lines = lines[1:]  # the slice landed mid-line
+    # `lines[-0:]` is `lines[0:]`, i.e. EVERYTHING -- the exact inverse of what
+    # a caller asking for zero lines wants, and up to 200 KB of it.
+    lines = lines[-n_lines:] if n_lines > 0 else []
 
     return {"ok": True, "lines": lines, "size_bytes": size}

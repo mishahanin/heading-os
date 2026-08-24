@@ -11,6 +11,20 @@ from fastapi.testclient import TestClient
 from scripts.bridge_daemon.app import build_app
 from scripts.bridge_daemon.state import State
 
+# On the POSIX branch `spawn_or_focus` now READS the tmux exit code, so a bare
+# MagicMock Popen reports a nonzero one and /launch correctly answers 503. These
+# tests are about the endpoint, not about tmux failing, so they say tmux
+# succeeded. Until 2026-08-24 they passed with an unconfigured mock because
+# nothing looked at the exit code at all - which was the defect.
+# The launcher captures tmux stderr, so the mock must answer `communicate`
+# and carry a real `returncode`; `wait` alone left returncode a MagicMock,
+# which is not 0 and turned every mocked launch into a 400.
+_TMUX_OK = {
+    "return_value.wait.return_value": 0,
+    "return_value.returncode": 0,
+    "return_value.communicate.return_value": (b"", b""),
+}
+
 def _make_client(workspace_root, token="testtoken"):  # noqa: S107  test fixture default, not a real secret
     state = State()
     app = build_app(workspace_root=workspace_root, state=state, token=token,
@@ -345,7 +359,8 @@ def test_launch_requires_auth(workspace_root):
 def test_launch_with_session_id(workspace_root):
     """When body supplies session_id, /launch uses it directly and spawns wt.exe."""
     client, _ = _make_client(workspace_root, token="t1")
-    with patch("scripts.bridge_daemon.terminal.subprocess.Popen") as mock_popen, \
+    with patch("scripts.bridge_daemon.terminal._tmux_has_session", return_value=False), \
+         patch("scripts.bridge_daemon.terminal.subprocess.Popen", **_TMUX_OK) as mock_popen, \
          patch("scripts.bridge_daemon.terminal.shutil.which",
                return_value=r"C:\Windows\System32\wt.exe"):
         r = client.post("/launch",
@@ -371,7 +386,8 @@ def test_launch_falls_back_to_registry_when_session_id_missing(workspace_root, t
     reg.parent.mkdir(parents=True)
     reg.write_text(json.dumps({str(workspace_root): {"session_id": "registry-sid-xyz"}}))
     client, _ = _make_client(workspace_root, token="t1")
-    with patch("scripts.bridge_daemon.terminal.subprocess.Popen") as mock_popen, \
+    with patch("scripts.bridge_daemon.terminal._tmux_has_session", return_value=False), \
+         patch("scripts.bridge_daemon.terminal.subprocess.Popen", **_TMUX_OK) as mock_popen, \
          patch("scripts.bridge_daemon.terminal.shutil.which",
                return_value=r"C:\Windows\System32\wt.exe"):
         r = client.post("/launch",
@@ -396,7 +412,8 @@ def test_launch_rejects_malformed_action(workspace_root):
     """A malformed action (e.g., contains spaces) fails terminal allowlist
     and surfaces as 400, not 500."""
     client, _ = _make_client(workspace_root, token="t1")
-    with patch("scripts.bridge_daemon.terminal.subprocess.Popen") as _, \
+    with patch("scripts.bridge_daemon.terminal._tmux_has_session", return_value=False), \
+         patch("scripts.bridge_daemon.terminal.subprocess.Popen", **_TMUX_OK) as _, \
          patch("scripts.bridge_daemon.terminal.shutil.which",
                return_value=r"C:\Windows\System32\wt.exe"):
         r = client.post("/launch",
@@ -418,7 +435,8 @@ def test_launch_no_session_no_cwd_omits_resume(workspace_root):
     """When both session_id and cwd are absent, /launch falls back to
     workspace_root and spawns Claude WITHOUT --resume (fresh session)."""
     client, _ = _make_client(workspace_root, token="t1")
-    with patch("scripts.bridge_daemon.terminal.subprocess.Popen") as mock_popen, \
+    with patch("scripts.bridge_daemon.terminal._tmux_has_session", return_value=False), \
+         patch("scripts.bridge_daemon.terminal.subprocess.Popen", **_TMUX_OK) as mock_popen, \
          patch("scripts.bridge_daemon.terminal.shutil.which",
                return_value=r"C:\Windows\System32\wt.exe"):
         r = client.post("/launch",
@@ -609,7 +627,8 @@ def test_page_view_requires_auth(workspace_root):
 def test_launch_emits_telemetry(workspace_root):
     """Successful /launch writes a 'launch' event to usage.jsonl."""
     client, _ = _make_client(workspace_root, token="t1")
-    with patch("scripts.bridge_daemon.terminal.subprocess.Popen"), \
+    with patch("scripts.bridge_daemon.terminal._tmux_has_session", return_value=False), \
+         patch("scripts.bridge_daemon.terminal.subprocess.Popen", **_TMUX_OK), \
          patch("scripts.bridge_daemon.terminal.shutil.which",
                return_value=r"C:\Windows\System32\wt.exe"):
         r = client.post("/launch",

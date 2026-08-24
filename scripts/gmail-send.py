@@ -102,14 +102,38 @@ def cmd_list(args):
     return 0
 
 
+def _resolve_draft_id(service, draft_id):
+    """Confirm one draft id exists, without listing. Raises on a real miss."""
+    from googleapiclient.errors import HttpError
+    try:
+        service.users().drafts().get(
+            userId="me", id=draft_id, format="minimal").execute()
+    except HttpError as exc:
+        if getattr(exc, "status_code", None) == 404 or "404" in str(exc):
+            raise DraftSelectionError(f"no draft with id {draft_id}") from exc
+        raise
+    return draft_id
+
+
 def cmd_send(args):
     from scripts.utils.gmail_auth import get_service
 
     service = get_service()
     account = service.users().getProfile(userId="me").execute().get("emailAddress", "?")
-    drafts = fetch_drafts(service, args.limit)
     try:
-        chosen = select_draft(drafts, args.draft_id, args.match_subject)
+        if args.draft_id and args.match_subject:
+            raise DraftSelectionError("give exactly one of --draft-id or --match-subject")
+        if args.draft_id:
+            # Straight to the id. This used to search inside the first
+            # --limit (25) drafts, so an operator pasting the id that
+            # gmail-draft.py had just printed got "no draft with id ..." as
+            # soon as they had 26 drafts. The draft existed; the lookup had
+            # not paged far enough, and the message sent them hunting for a
+            # problem that was not there.
+            chosen = _resolve_draft_id(service, args.draft_id)
+        else:
+            drafts = fetch_drafts(service, args.limit)
+            chosen = select_draft(drafts, args.draft_id, args.match_subject)
     except DraftSelectionError as exc:
         print(f"{YELLOW}{exc}{RESET}", file=sys.stderr)
         return 2

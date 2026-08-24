@@ -222,7 +222,11 @@ def imports_in(paths: list[str]) -> list[str]:
             continue
         try:
             tree = ast.parse(p.read_text(encoding="utf-8", errors="ignore"))
-        except (OSError, SyntaxError):
+        except (OSError, SyntaxError, ValueError):
+            # ValueError: ast.parse raises it on source holding a null byte.
+            # `schedules_work` already guarded for it; without it here the
+            # currency check -- documented as NEVER fatal -- died on one
+            # malformed file in scope.
             continue
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -301,10 +305,33 @@ _VERDICT_RE = re.compile(
     r"|INCORRECT|AMBIGUOUS)\b")
 
 
+_VERDICT_LINE_RE = re.compile(
+    r"^\s*(?:\*\*)?VERDICT(?:\*\*)?\s*[:\-]\s*(?:\*\*)?\s*"
+    r"(REFUTE_PARTIAL|REFUTATION_FAILED|REFUTED|CORRECT_DOWNGRADE|CORRECT"
+    r"|INCORRECT|AMBIGUOUS)\b",
+    re.MULTILINE | re.IGNORECASE)
+
+
 def _verdict_in(text: str) -> str | None:
-    """First recognised verdict token in a judge response, or None."""
-    match = _VERDICT_RE.search(text or "")
-    return match.group(1) if match else None
+    """The judge's RULING, not the first verdict word it happens to type.
+
+    Taking the first regex match anywhere in free text recorded the opposite of
+    the ruling whenever the judge reasoned before concluding: "This is not
+    REFUTED because ... Overall: CORRECT_DOWNGRADE" was recorded as REFUTED, and
+    that record is the artefact `--validate` reconciles as ground truth.
+
+    Order of trust:
+      1. an explicit `VERDICT: <TOKEN>` line -- the LAST one, so a restated
+         conclusion wins over the format example a judge may quote;
+      2. failing that, the LAST bare token in the text, which is where a
+         conclusion sits when the prose runs to the end.
+    """
+    body = text or ""
+    lines = list(_VERDICT_LINE_RE.finditer(body))
+    if lines:
+        return lines[-1].group(1).upper()
+    bare = list(_VERDICT_RE.finditer(body))
+    return bare[-1].group(1) if bare else None
 
 
 # ============================================================
@@ -600,7 +627,20 @@ def main(argv: list[str] | None = None) -> int:
         family = assign_families(swap=swap_for_run(args.run_id))[args.side]
     brief = ""
     if args.brief_file:
-        brief = Path(args.brief_file).read_text(encoding="utf-8")
+        try:
+            brief = Path(args.brief_file).read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"{RED}ERROR: cannot read --brief-file: {exc}{RESET}",
+                  file=sys.stderr)
+            return 2
+    if family == "kimi" and not brief.strip():
+        # An external judge answering an EMPTY prompt still returns a verdict,
+        # and that verdict was recorded with the same standing as a real
+        # adjudication -- a check that cannot meaningfully fail, plus a paid
+        # call for it.
+        print(f"{RED}ERROR: --brief-file with non-empty content is required "
+              f"for the kimi judge{RESET}", file=sys.stderr)
+        return 2
     return judge(run_id=args.run_id, target=args.target, finding_id=args.finding,
                  pass_=args.pass_, brief=brief, family=family, verdict=args.verdict)
 

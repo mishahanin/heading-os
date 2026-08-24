@@ -19,7 +19,6 @@ import argparse
 import json
 import os
 import platform
-import re
 import shutil
 import subprocess
 import sys
@@ -49,6 +48,15 @@ def detect_paths():
     """Return (user_data_dir, antigravity_cli_path) for the current platform."""
     system = platform.system()
     if system == "Windows":
+        # A bare KeyError here reads as a crash, not as "this shell has no
+        # APPDATA". Stripped-down environments (CI, `runas`, some SSH
+        # sessions) really do lack them.
+        missing = [v for v in ("APPDATA", "LOCALAPPDATA") if not os.environ.get(v)]
+        if missing:
+            raise SystemExit(
+                f"cannot locate the Antigravity profile: {', '.join(missing)} is not set "
+                f"in this environment"
+            )
         user_data = Path(os.environ["APPDATA"]) / "Antigravity" / "User"
         cli = Path(os.environ["LOCALAPPDATA"]) / "Programs" / "Antigravity" / "bin" / "antigravity.cmd"
         if not cli.exists():
@@ -72,16 +80,43 @@ def is_sensitive_key(key: str) -> bool:
     return any(pat in lowered for pat in SENSITIVE_KEY_PATTERNS)
 
 
+def _mask_every_string(value, path: str, masked_keys: list):
+    """Mask every non-empty string anywhere inside `value`.
+
+    Called once a KEY has been judged sensitive. Everything under that key is
+    secret by association: `{"apiKeys": ["sk-a", "sk-b"]}` and
+    `{"token": {"value": "ghp_..."}}` are the ordinary ways an extension stores
+    more than one credential.
+    """
+    if isinstance(value, str):
+        if value:
+            masked_keys.append(path)
+            return "***MASKED***"
+        return value
+    if isinstance(value, dict):
+        return {k: _mask_every_string(v, f"{path}.{k}", masked_keys) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_mask_every_string(v, f"{path}[{i}]", masked_keys) for i, v in enumerate(value)]
+    return value
+
+
 def mask_sensitive(obj, path: str = "", masked_keys=None):
-    """Walk a JSON-like structure and mask string values under sensitive keys."""
+    """Walk a JSON-like structure and mask string values under sensitive keys.
+
+    A sensitive key masks its WHOLE value, at any depth. The first version
+    masked only `isinstance(v, str)` and recursed into anything else looking
+    for more sensitive KEY NAMES — and list elements have no names, so
+    `{"apiKeys": ["sk-real"]}` went into the zip in cleartext while the console
+    reported "0 keys masked". A redaction tool that reports success while
+    shipping the secret is worse than no redaction tool.
+    """
     if masked_keys is None:
         masked_keys = []
     if isinstance(obj, dict):
         for k, v in list(obj.items()):
             key_path = f"{path}.{k}" if path else k
-            if is_sensitive_key(k) and isinstance(v, str) and v:
-                obj[k] = "***MASKED***"
-                masked_keys.append(key_path)
+            if is_sensitive_key(k):
+                obj[k] = _mask_every_string(v, key_path, masked_keys)
             else:
                 mask_sensitive(v, key_path, masked_keys)
     elif isinstance(obj, list):
@@ -137,9 +172,44 @@ def strip_jsonc(text: str) -> str:
             continue
         out.append(c)
         i += 1
-    stripped = "".join(out)
-    stripped = re.sub(r",(\s*[}\]])", r"\1", stripped)
-    return stripped
+    return _drop_trailing_commas("".join(out))
+
+
+def _drop_trailing_commas(text: str) -> str:
+    """Remove a comma whose next non-space character closes a container.
+
+    A `re.sub(r",(\\s*[}\\]])", r"\\1", text)` over the whole document did this
+    INSIDE string literals too, throwing away the scanner's careful `in_string`
+    bookkeeping one line above it. A setting whose value ended `", ]"` came out
+    of the exporter as `" ]"` — valid JSON carrying corrupted data, which the
+    recipient then imports. This pass tracks strings the same way the scanner
+    does.
+    """
+    out = []
+    in_string = False
+    escape = False
+    for i, c in enumerate(text):
+        if escape:
+            out.append(c)
+            escape = False
+            continue
+        if in_string:
+            out.append(c)
+            if c == "\\":
+                escape = True
+            elif c == '"':
+                in_string = False
+            continue
+        if c == '"':
+            in_string = True
+            out.append(c)
+            continue
+        if c == ",":
+            rest = text[i + 1:].lstrip()
+            if rest[:1] in ("}", "]"):
+                continue  # trailing comma, outside any string
+        out.append(c)
+    return "".join(out)
 
 
 def build_readme(date_str: str, masked_count: int) -> str:
@@ -230,21 +300,34 @@ def main():
 
     with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as zf:
         if settings_src.exists():
-            raw = settings_src.read_text(encoding="utf-8")
-            out_text = raw
+            # utf-8-sig, because a BOM is an ordinary state for an
+            # editor-written file and `json.loads("﻿{...}")` raises. The
+            # BOM alone used to send this straight down the fail-open branch.
+            raw = settings_src.read_text(encoding="utf-8-sig")
+            out_text = None
             try:
                 data = json.loads(strip_jsonc(raw))
                 if not args.no_mask:
                     data, masked_keys = mask_sensitive(data)
                 out_text = json.dumps(data, indent=2)
             except json.JSONDecodeError as e:
-                print(f"  {YELLOW}[warn]{RESET} settings.json would not parse as JSON after JSONC strip ({e}). "
-                      f"Copying raw content without masking.")
-            zf.writestr("settings.json", out_text)
-            size = len(out_text.encode("utf-8"))
-            print(f"  {GREEN}[ok]{RESET} settings.json ({size} bytes, {len(masked_keys)} keys masked)")
-            for k in masked_keys:
-                print(f"         - masked: {k}")
+                # FAIL CLOSED. This branch used to print a warning and then
+                # write the RAW file into the zip — so the one input the
+                # masker could not read was the one input that shipped
+                # unmasked, and the README still said "0 keys masked".
+                print(f"  {RED}[error]{RESET} settings.json would not parse as JSON after "
+                      f"JSONC strip ({e}).")
+                print(f"  {RED}       {RESET} EXCLUDED from the export rather than shipped "
+                      f"unmasked. Fix the file, or re-run with --no-mask if you have "
+                      f"checked it by hand.")
+                if args.no_mask:
+                    out_text = raw  # the operator asked for the raw file explicitly
+            if out_text is not None:
+                zf.writestr("settings.json", out_text)
+                size = len(out_text.encode("utf-8"))
+                print(f"  {GREEN}[ok]{RESET} settings.json ({size} bytes, {len(masked_keys)} keys masked)")
+                for k in masked_keys:
+                    print(f"         - masked: {k}")
         else:
             print(f"  {YELLOW}[skip]{RESET} no settings.json at {settings_src}")
 
@@ -262,9 +345,12 @@ def main():
         ext_count = 0
         if cli:
             try:
+                # Bounded. A first-run setup prompt or an updater lock made the
+                # CLI wait forever, and the export hung with the zip half
+                # written and no message.
                 result = subprocess.run(
                     [str(cli), "--list-extensions"],
-                    capture_output=True, text=True, check=False,
+                    capture_output=True, text=True, check=False, timeout=60,
                 )
                 if result.returncode == 0:
                     ext_list = result.stdout.strip()
@@ -273,6 +359,9 @@ def main():
                     print(f"  {GREEN}[ok]{RESET} extensions.txt ({ext_count} extensions)")
                 else:
                     print(f"  {YELLOW}[warn]{RESET} antigravity --list-extensions failed: {result.stderr.strip()}")
+            except subprocess.TimeoutExpired:
+                print(f"  {RED}[error]{RESET} antigravity --list-extensions did not exit "
+                      f"within 60s; extensions.txt skipped")
             except (OSError, subprocess.SubprocessError) as e:
                 print(f"  {RED}[error]{RESET} CLI invocation failed: {e}")
         else:

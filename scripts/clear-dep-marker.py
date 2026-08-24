@@ -19,13 +19,20 @@ from pathlib import Path
 # Workspace imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import GREEN, YELLOW, RESET
+from scripts.utils.workspace import get_workspace_root
 
 
 def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8")
 
-    cwd = Path.cwd()
-    marker = cwd / ".sync" / "dep-update-pending.json"
+    # The workspace root, not `Path.cwd()`. Every sibling script anchors here;
+    # this one did not, so a cron entry, an absolute-path invocation
+    # (`python /path/to/scripts/clear-dep-marker.py`) or a run from any
+    # subdirectory looked at the wrong place, printed "Nothing to clear" and
+    # exited 0 while the real marker survived — and the session-start banner
+    # kept firing after a successful install. Wrong-looking-success, and the
+    # only hint was the absolute path in the message nobody reads.
+    marker = get_workspace_root() / ".sync" / "dep-update-pending.json"
 
     if not marker.exists():
         print(f"{YELLOW}Nothing to clear:{RESET} {marker} does not exist.")

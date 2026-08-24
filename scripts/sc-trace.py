@@ -15,6 +15,12 @@ Reads two things and writes nothing. It proves a criterion has a test CLAIMING
 to decide it; it cannot prove the test decides it. That limitation is printed
 under every clean trace on purpose: the reading "every criterion is decided" is
 false, and an operator who adopts it stops reading the tests.
+
+Exit codes:
+  0  clean
+  1  trace refusal (one of the three findings)
+  2  bad arguments, or a missing artifact / contract path
+
 """
 from __future__ import annotations
 

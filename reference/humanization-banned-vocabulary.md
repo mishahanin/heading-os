@@ -261,7 +261,7 @@ this because it avoids naming who acted.
 | "the market rewards X" | Buyers pay for X. |
 | "a bet lives or dies in days" | Someone kills the project or ships it. |
 
-Fix: name the human. "Boris rebuilt the topology on 3 July" beats "the
+Fix: name the human. "Felix rebuilt the topology on 3 July" beats "the
 architecture evolved". When no specific person fits, use "you" and put the
 reader in the seat.
 

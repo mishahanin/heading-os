@@ -48,9 +48,21 @@ _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---", re.DOTALL)
 _H1_TOPIC_RE = re.compile(r"^# (?:Council Consultation\s*-\s*)?(.*?)$", re.MULTILINE)
 _SECTION_RES = {
     "question": re.compile(r"^## (?:Question|Question\s*/\s*Draft|Draft).*?\n(.*?)(?=^## |\Z)", re.DOTALL | re.MULTILINE),
-    "gemini":   re.compile(r"^## Gemini'?s full response.*?\n(.*?)(?=^## (?!Side-by-side)|\Z)", re.DOTALL | re.MULTILINE),
-    "grok":     re.compile(r"^## Grok'?s full response.*?\n(.*?)(?=^## (?!Side-by-side)|\Z)", re.DOTALL | re.MULTILINE),
-    "kimi":     re.compile(r"^## Kimi'?s full response.*?\n(.*?)(?=^## (?!Side-by-side)|\Z)", re.DOTALL | re.MULTILINE),
+    # The plain terminator, like `question` and `claude` two lines away. These
+    # three carried `(?!Side-by-side)`, so a `## Side-by-side` heading did NOT
+    # end the capture and that section's content — the COMPARISON table — was
+    # folded into whichever model's response preceded it, in the file whose
+    # whole job is attributing an answer to a model.
+    #
+    # It never fired on the canonical layout, where Side-by-side comes after
+    # every full response and after Claude's view
+    # (`.claude/skills/council/references/transcript-format.md`). It fired on a
+    # transcript that deviates: one model present, then the table. Dead on the
+    # normal path, wrong on the abnormal one, and inconsistent with its siblings
+    # for no recorded reason.
+    "gemini":   re.compile(r"^## Gemini'?s full response.*?\n(.*?)(?=^## |\Z)", re.DOTALL | re.MULTILINE),
+    "grok":     re.compile(r"^## Grok'?s full response.*?\n(.*?)(?=^## |\Z)", re.DOTALL | re.MULTILINE),
+    "kimi":     re.compile(r"^## Kimi'?s full response.*?\n(.*?)(?=^## |\Z)", re.DOTALL | re.MULTILINE),
     "claude":   re.compile(r"^## Claude'?s (?:view|response|answer|critique).*?\n(.*?)(?=^## |\Z)", re.DOTALL | re.MULTILINE),
 }
 
@@ -102,7 +114,20 @@ def _parse_frontmatter(text: str) -> dict:
 
 
 def parse_transcript(path: Path) -> Transcript | None:
-    """Parse one transcript file. Returns None on shape mismatch."""
+    """Parse one transcript file. Returns None on shape mismatch.
+
+    It never did. Only `OSError` returned None, so ANY readable `.md` that
+    landed in the council directory — a scratch note, a README, anything not
+    prefixed `_` or `.` — became a Transcript with `mode="?"`, empty snippets,
+    and a rendered "_(pending CEO verdict)_" row. Those inflate the Pending
+    count that feeds the Phase-3b calibration gate ("once >= 20 verdicts
+    accumulate"), so a stray file moves a threshold the operator reads as a
+    measurement.
+
+    A council transcript is recognisable: it carries frontmatter with a `mode`,
+    or at least one of the sections this aggregator renders. A file with
+    neither is not one.
+    """
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
@@ -114,6 +139,9 @@ def parse_transcript(path: Path) -> Transcript | None:
     def _section(key: str) -> str:
         m = _SECTION_RES[key].search(text)
         return m.group(1).strip() if m else ""
+
+    if not fm.get("mode") and not any(_section(k) for k in _SECTION_RES):
+        return None
 
     return Transcript(
         path=path,

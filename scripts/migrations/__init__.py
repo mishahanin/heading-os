@@ -32,6 +32,17 @@ def registered_migrations():
         if isinstance(ver, int):
             out.append((ver, mod))
     out.sort(key=lambda t: t[0])
+    # Two modules shipping the same VERSION both ran, in whatever order the sort
+    # happened to produce, and `_write_version` stamped the number twice. The
+    # runner's entire contract is ORDERED migrations, so a duplicate is a config
+    # error, not a tie to break silently.
+    seen: dict = {}
+    for ver, mod in out:
+        if ver in seen:
+            raise ValueError(
+                f"duplicate migration VERSION {ver}: {seen[ver].__name__} and "
+                f"{mod.__name__} both claim it; migrations must be ordered")
+        seen[ver] = mod
     return out
 
 

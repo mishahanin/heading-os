@@ -170,7 +170,7 @@ def test_public_contributor_name_is_not_flagged(tmp_path):
     would flag that deliberate credit as a leak. The allowlist is what keeps the
     gate from crying wolf on published attribution."""
     dl = build_denylist(_make_overlay(tmp_path))
-    assert dl.scan_text("Contributed by Mahmoud Maatuq.") == []
+    assert dl.scan_text("Contributed by Mahmoud Maatuq.") == []  # content-guard: ok the published contributor this very assertion allowlists
 
 
 def test_an_unparseable_curated_list_marks_the_gate_degraded(tmp_path):

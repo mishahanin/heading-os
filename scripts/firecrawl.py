@@ -43,12 +43,13 @@ import sys
 import time
 from datetime import datetime, timezone
 from functools import wraps
+from urllib.parse import urlparse
 
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.api import load_api_key
-from scripts.utils.workspace import get_outputs_dir
+from scripts.utils.workspace import get_data_root, get_outputs_dir, get_reference_dir
 
 # ============================================================
 # Configuration
@@ -70,10 +71,38 @@ DEFAULT_TTLS = {
 # ============================================================
 # State Management / Cache
 # ============================================================
-def load_blocked_domains():
-    """Parse blocked domains from reference/search-domains.md."""
-    domains_file = str(Path(WORKSPACE_ROOT) / "reference" / "search-domains.md")
-    if not os.path.exists(domains_file):
+def find_search_domains_file():
+    """Where `search-domains.md` actually is, or None.
+
+    `config/routing-map.yaml` routes this file `private`, so on the operator's
+    machine it lives in the DATA overlay. This function used to look ONLY at
+    `WORKSPACE_ROOT / "reference"`, which is the ENGINE tree — the file was not
+    there, `os.path.exists` was False, and `load_blocked_domains()` returned an
+    empty list. Measured 2026-08-24 on the operator's own workspace: zero
+    domains loaded, so the blocked-domain filter had been a complete no-op.
+    The DATA path is tried first and the engine path second, so a public clone
+    shipping a generic list still works.
+    """
+    for candidate in (get_data_root() / "reference" / "search-domains.md",
+                      get_reference_dir() / "search-domains.md"):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def load_blocked_domains(verbose=True):
+    """Parse blocked domains from reference/search-domains.md.
+
+    Says so on stderr when it loads nothing. A filter that silently degrades to
+    a no-op reports the same clean output as a filter that is working, and this
+    one is a content-quality and sourcing control.
+    """
+    domains_file = find_search_domains_file()
+    if domains_file is None:
+        if verbose:
+            print("[warn] search-domains.md not found in the data overlay or the "
+                  "engine reference/ dir; NO domains are being blocked",
+                  file=sys.stderr)
         return []
 
     blocked = []
@@ -85,13 +114,62 @@ def load_blocked_domains():
                 continue
             if in_blocked and line.startswith("##"):
                 break
-            if in_blocked and line.strip() and not line.startswith("-") and not line.startswith("#"):
-                # Parse comma-separated domains
-                for domain in line.strip().split(","):
-                    d = domain.strip()
-                    if d and "." in d:
-                        blocked.append(d)
+            if not in_blocked:
+                continue
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            # A leading `-` used to skip the line outright, on the assumption
+            # that a bullet is prose. A Markdown bullet list is the ordinary
+            # way to write a domain list, so the bullet is stripped and the
+            # rest parsed like any other line.
+            if stripped.startswith(("- ", "* ", "-\t")):
+                stripped = stripped[1:].strip()
+            elif stripped == "-":
+                continue
+            for domain in stripped.split(","):
+                d = domain.strip().strip("`*_")
+                # A domain, not a sentence. The prose paragraph under the
+                # heading ("Content farms, stub-only paywalled sites, and
+                # low-signal aggregators. Apply as `blocked_domains`...") has
+                # dots in it too.
+                if d and "." in d and " " not in d:
+                    blocked.append(d)
+    if not blocked and verbose:
+        print(f"[warn] {domains_file} has a Blocked Domains section that parsed to "
+              f"ZERO domains; nothing is being blocked", file=sys.stderr)
     return blocked
+
+
+def is_blocked_url(url, blocked):
+    """Is `url` on the blocked list, matched on the HOST, not the whole string?
+
+    `any(bd in url for bd in blocked)` matched anywhere in the URL, so blocking
+    `abc.com` also blocked `abc.com.au`, `notabc.com`, and any URL carrying
+    `abc.com` in a query parameter. An entry may still name a path prefix
+    (`linkedin.com/pulse` is in the live list), so both forms are handled: the
+    host part must match as a whole label sequence, and the path part must be
+    a real prefix of the path.
+    """
+    try:
+        parsed = urlparse(url if "//" in url else f"//{url}", scheme="https")
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    path = parsed.path or "/"
+    if not host:
+        return False
+    for entry in blocked:
+        entry = entry.strip().lower().rstrip("/")
+        if not entry:
+            continue
+        bd_host, _, bd_path = entry.partition("/")
+        if host != bd_host and not host.endswith("." + bd_host):
+            continue
+        if bd_path and not (path.lstrip("/") + "/").startswith(bd_path + "/"):
+            continue
+        return True
+    return False
 
 
 def get_cache_key(identifier, command):
@@ -146,14 +224,14 @@ def _retry(max_attempts=3, backoff_base=2):
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
-            last_error = None
+            # No `last_error` accumulator: it only ever fed the `raise
+            # last_error` below the loop, which nothing could reach.
             for attempt in range(1, max_attempts + 1):
                 try:
                     return func(*args, **kwargs)
                 except KeyboardInterrupt:
                     raise
                 except Exception as e:
-                    last_error = e
                     err_str = str(e).lower()
                     # Only retry on transient/network errors
                     if any(kw in err_str for kw in ("timeout", "connection", "rate limit", "429", "500", "502", "503", "504")):
@@ -162,8 +240,13 @@ def _retry(max_attempts=3, backoff_base=2):
                             print(f"[retry] Attempt {attempt}/{max_attempts} failed: {e}. Retrying in {wait}s...", file=sys.stderr)
                             time.sleep(wait)
                             continue
-                    raise  # Non-transient error, don't retry
-            raise last_error
+                    # Reached on a non-transient error OR on the last attempt of
+                    # a transient one. The old comment claimed only the first,
+                    # and a `raise last_error` sat below the loop where nothing
+                    # could reach it: every path above returns, continues, or
+                    # raises here.
+                    raise
+            raise AssertionError("unreachable: the loop above always exits")  # pragma: no cover
         return wrapper
     return decorator
 
@@ -205,6 +288,52 @@ def format_output(content, output_format="markdown"):
     return str(content)
 
 
+# Each aggregate command renders its OWN wrapper dict, and both the fresh path
+# and the cache-hit path call the same renderer. They used to differ: the fresh
+# path built markdown inline while the cache-hit path handed the wrapper to
+# `format_output`, which found no "markdown" key and dumped raw JSON. The same
+# command therefore printed markdown once and JSON on the next run inside the
+# TTL, and anything parsing the output broke depending on cache state.
+
+def render_crawl(crawl_data, output_format):
+    if output_format == "json":
+        return json.dumps(crawl_data, indent=2, ensure_ascii=False)
+    parts = []
+    for doc in crawl_data.get("documents", []):
+        meta = doc.get("metadata") or {}
+        page_url = meta.get("source_url") or meta.get("url") or "unknown"
+        content = doc.get("markdown") or doc.get("html") or ""
+        parts.append(f"--- {page_url} ---\n{content}")
+    return "\n\n".join(parts)
+
+
+def render_map(map_data, output_format):
+    if output_format == "json":
+        return json.dumps(map_data, indent=2, ensure_ascii=False)
+    links = map_data.get("links", [])
+    parts = [f"# Site Map: {map_data.get('url', '')}", f"Found {len(links)} URLs\n"]
+    for link in links:
+        line = link.get("url", "")
+        title = link.get("title")
+        if title:
+            line += f"  -- {title}"
+        parts.append(line)
+    return "\n".join(parts)
+
+
+def render_search(search_data, output_format):
+    if output_format == "json":
+        return json.dumps(search_data, indent=2, ensure_ascii=False)
+    parts = [f"# Search: {search_data.get('query', '')}\n"]
+    for r in search_data.get("results", []):
+        meta = r.get("metadata") or {}
+        url = r.get("url") or meta.get("source_url") or "unknown"
+        title = r.get("title") or meta.get("title") or ""
+        markdown = r.get("markdown") or r.get("description") or ""
+        parts.append(f"## {title}\n**URL:** {url}\n\n{markdown}")
+    return "\n\n---\n\n".join(parts)
+
+
 def document_to_dict(doc):
     """Convert a Firecrawl Document to a serializable dict."""
     if hasattr(doc, "model_dump"):
@@ -222,7 +351,7 @@ def document_to_dict(doc):
 def cmd_scrape(args):
     """Scrape a single URL."""
     url = args.target
-    ttl = args.cache_ttl or DEFAULT_TTLS["scrape"]
+    ttl = args.cache_ttl if args.cache_ttl is not None else DEFAULT_TTLS["scrape"]
     cache_key = get_cache_key(url, "scrape")
 
     if not args.no_cache:
@@ -279,7 +408,7 @@ def cmd_batch(args):
         print("Error: No valid URLs provided.", file=sys.stderr)
         sys.exit(1)
 
-    ttl = args.cache_ttl or DEFAULT_TTLS["batch"]
+    ttl = args.cache_ttl if args.cache_ttl is not None else DEFAULT_TTLS["batch"]
 
     # Check cache for each URL
     results = {}
@@ -310,6 +439,12 @@ def cmd_batch(args):
             docs = batch_result.data
         elif isinstance(batch_result, list):
             docs = batch_result
+        else:
+            # Same defect as the crawl path: an unrecognised shape printed
+            # `--- <url> ---\n{}` for every requested URL and exited 0.
+            print(f"[error] batch_scrape returned an unexpected shape "
+                  f"({type(batch_result).__name__} with no .data); "
+                  f"{len(urls_to_fetch)} URL(s) produced nothing", file=sys.stderr)
 
         credits = len(urls_to_fetch)
         print(f"[{credits} credits] Batch scraped {len(urls_to_fetch)} URLs", file=sys.stderr)
@@ -338,15 +473,14 @@ def cmd_batch(args):
 def cmd_crawl(args):
     """Crawl a website, discovering and scraping pages."""
     url = args.target
-    limit = args.limit or 25
-    ttl = args.cache_ttl or DEFAULT_TTLS["crawl"]
+    limit = args.limit if args.limit is not None else 25
+    ttl = args.cache_ttl if args.cache_ttl is not None else DEFAULT_TTLS["crawl"]
     cache_key = get_cache_key(f"{url}|limit={limit}|inc={args.include}|exc={args.exclude}", "crawl")
 
     if not args.no_cache:
         cached = check_cache(cache_key, ttl)
         if cached is not None:
-            output = format_output(cached, args.format)
-            return write_output(output, args.output)
+            return write_output(render_crawl(cached, args.format), args.output)
 
     client = get_client(args.timeout)
 
@@ -369,8 +503,15 @@ def cmd_crawl(args):
     # CrawlJob has .data (list of Documents) and .credits_used
     docs = []
     credits = 0
-    if hasattr(result, "data"):
+    shape_ok = hasattr(result, "data")
+    if shape_ok:
         docs = [document_to_dict(d) for d in result.data]
+    else:
+        # An unrecognised return shape used to leave `docs` empty with no
+        # message, and the empty result was then CACHED for 48 hours -- so one
+        # SDK change made the command answer "0 pages" for two days.
+        print(f"[error] crawl returned an unexpected shape ({type(result).__name__} "
+              f"with no .data); not caching this result", file=sys.stderr)
     if hasattr(result, "credits_used"):
         credits = result.credits_used
 
@@ -383,21 +524,10 @@ def cmd_crawl(args):
 
     print(f"[{credits} credits] Crawled {len(docs)} pages from {url}", file=sys.stderr)
 
-    if not args.no_cache:
+    if not args.no_cache and shape_ok:
         write_cache(cache_key, crawl_data, "crawl", url, credits, ttl)
 
-    # Format output
-    if args.format == "json":
-        output = json.dumps(crawl_data, indent=2, ensure_ascii=False)
-    else:
-        parts = []
-        for doc in docs:
-            page_url = doc.get("metadata", {}).get("source_url") or doc.get("metadata", {}).get("url") or "unknown"
-            content = doc.get("markdown") or doc.get("html") or ""
-            parts.append(f"--- {page_url} ---\n{content}")
-        output = "\n\n".join(parts)
-
-    return write_output(output, args.output)
+    return write_output(render_crawl(crawl_data, args.format), args.output)
 
 
 # ============================================================
@@ -406,19 +536,18 @@ def cmd_crawl(args):
 def cmd_map(args):
     """Discover all URLs on a site."""
     url = args.target
-    ttl = args.cache_ttl or DEFAULT_TTLS["map"]
+    ttl = args.cache_ttl if args.cache_ttl is not None else DEFAULT_TTLS["map"]
     cache_key = get_cache_key(url, "map")
 
     if not args.no_cache:
         cached = check_cache(cache_key, ttl)
         if cached is not None:
-            output = format_output(cached, args.format)
-            return write_output(output, args.output)
+            return write_output(render_map(cached, args.format), args.output)
 
     client = get_client(args.timeout)
 
     kwargs = {}
-    if args.limit:
+    if args.limit is not None:
         kwargs["limit"] = args.limit
 
     @_retry()
@@ -436,6 +565,10 @@ def cmd_map(args):
                 links.append({"url": link})
             elif isinstance(link, dict):
                 links.append(link)
+            else:
+                print(f"[warn] map: skipping a link of unexpected type "
+                      f"{type(link).__name__}; links_found undercounts",
+                      file=sys.stderr)
 
     map_data = {"url": url, "links_found": len(links), "links": links}
     print(f"[1 credit] Mapped {len(links)} URLs from {url}", file=sys.stderr)
@@ -443,19 +576,7 @@ def cmd_map(args):
     if not args.no_cache:
         write_cache(cache_key, map_data, "map", url, 1, ttl)
 
-    if args.format == "json":
-        output = json.dumps(map_data, indent=2, ensure_ascii=False)
-    else:
-        parts = [f"# Site Map: {url}", f"Found {len(links)} URLs\n"]
-        for link in links:
-            line = link.get("url", "")
-            title = link.get("title")
-            if title:
-                line += f"  -- {title}"
-            parts.append(line)
-        output = "\n".join(parts)
-
-    return write_output(output, args.output)
+    return write_output(render_map(map_data, args.format), args.output)
 
 
 # ============================================================
@@ -464,15 +585,14 @@ def cmd_map(args):
 def cmd_search(args):
     """Search the web and return full page content."""
     query = args.target
-    limit = args.limit or 5
-    ttl = args.cache_ttl or DEFAULT_TTLS["search"]
+    limit = args.limit if args.limit is not None else 5
+    ttl = args.cache_ttl if args.cache_ttl is not None else DEFAULT_TTLS["search"]
     cache_key = get_cache_key(f"{query}|limit={limit}", "search")
 
     if not args.no_cache:
         cached = check_cache(cache_key, ttl)
         if cached is not None:
-            output = format_output(cached, args.format)
-            return write_output(output, args.output)
+            return write_output(render_search(cached, args.format), args.output)
 
     client = get_client(args.timeout)
 
@@ -487,19 +607,32 @@ def cmd_search(args):
         for item in result.web:
             results_list.append(document_to_dict(item))
 
+    # Firecrawl charges per RESULT IT RETURNED. Counting after the local
+    # blocked-domain filter under-reported real spend against the 500-credit
+    # tier, which is the number the budget is tracked against.
+    credits = len(results_list)
+
     # Filter out blocked domains
     blocked = load_blocked_domains()
     if blocked:
         filtered = []
         for r in results_list:
-            url = r.get("url") or r.get("metadata", {}).get("source_url") or ""
-            if not any(bd in url for bd in blocked):
-                filtered.append(r)
-            else:
+            meta = r.get("metadata") or {}
+            url = r.get("url") or meta.get("source_url") or ""
+            if not url:
+                # A result with no URL used to pass unconditionally, because
+                # `any(bd in "")` is False. The filter cannot judge it, so it
+                # is dropped and said so -- a filter says what it could not
+                # check rather than waving it through.
+                print("[filtered] result carries no URL; cannot check it "
+                      "against the blocked list", file=sys.stderr)
+                continue
+            if is_blocked_url(url, blocked):
                 print(f"[filtered] Blocked domain: {url}", file=sys.stderr)
+                continue
+            filtered.append(r)
         results_list = filtered
 
-    credits = len(results_list)
     search_data = {
         "query": query,
         "results_count": len(results_list),
@@ -512,18 +645,7 @@ def cmd_search(args):
     if not args.no_cache:
         write_cache(cache_key, search_data, "search", query, credits, ttl)
 
-    if args.format == "json":
-        output = json.dumps(search_data, indent=2, ensure_ascii=False)
-    else:
-        parts = [f"# Search: {query}\n"]
-        for r in results_list:
-            url = r.get("url") or r.get("metadata", {}).get("source_url") or "unknown"
-            title = r.get("title") or r.get("metadata", {}).get("title") or ""
-            markdown = r.get("markdown") or r.get("description") or ""
-            parts.append(f"## {title}\n**URL:** {url}\n\n{markdown}")
-        output = "\n\n---\n\n".join(parts)
-
-    return write_output(output, args.output)
+    return write_output(render_search(search_data, args.format), args.output)
 
 
 # ============================================================
@@ -532,7 +654,7 @@ def cmd_search(args):
 def cmd_extract(args):
     """Extract structured data from URLs."""
     url = args.target
-    ttl = args.cache_ttl or DEFAULT_TTLS["extract"]
+    ttl = args.cache_ttl if args.cache_ttl is not None else DEFAULT_TTLS["extract"]
     prompt_str = args.prompt or ""
     schema_str = args.schema or ""
     cache_key = get_cache_key(f"{url}|prompt={prompt_str}|schema={schema_str}", "extract")

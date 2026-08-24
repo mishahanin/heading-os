@@ -2,7 +2,7 @@
 """Run the integration and parser test suites with coverage reporting.
 
 Suites included:
-    tests/integration/          -- sentinel integration tests (14 tests)
+    tests/integration/          -- sentinel integration tests
     tests/test_calibrate_parser.py -- calibrate JSONL parser tests (CEO-only)
 
 Usage:
@@ -18,6 +18,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -52,11 +53,15 @@ def run_tests(quiet: bool = False, with_coverage: bool = True) -> int:
     print(f"{GRAY}Command: {' '.join(cmd)}{RESET}")
     print(f"{GRAY}cwd: {WORKSPACE_ROOT}{RESET}\n")
 
-    try:
-        result = subprocess.run(cmd, check=False, cwd=str(WORKSPACE_ROOT))
-    except FileNotFoundError:
+    # Probe FIRST. The `except FileNotFoundError` that stood here could never
+    # fire -- the missing thing is pytest, not sys.executable -- so a box without
+    # pytest got exit 1 and the words "One or more tests failed", pointing triage
+    # at the tests instead of at the environment.
+    if importlib.util.find_spec("pytest") is None:
         print(f"{RED}pytest not installed. Run: pip install pytest pytest-asyncio pytest-cov{RESET}")
         return 2
+
+    result = subprocess.run(cmd, check=False, cwd=str(WORKSPACE_ROOT))
 
     print()
     if result.returncode == 0:

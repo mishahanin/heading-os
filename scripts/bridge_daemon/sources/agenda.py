@@ -11,9 +11,8 @@ a 'next_index' marker so the browser can highlight the next one.
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 from scripts.utils.paths import get_data_root
-from scripts.utils.workspace import get_default_tz, get_default_tz_name
+from scripts.utils.workspace import get_default_tz
 
 
 # Calendar table row format:
@@ -31,8 +30,8 @@ def _clean_location(loc: str) -> str:
     return "" if loc in ("-", "—") else loc
 
 
-def today_agenda(workspace_root: Path, now: datetime | None = None,
-                 data_root: "Path | None" = None) -> dict:
+def today_agenda(data_root: "Path | None" = None,
+                 now: datetime | None = None) -> dict:
     """Return today's calendar in local time.
 
     Returns:
@@ -46,8 +45,8 @@ def today_agenda(workspace_root: Path, now: datetime | None = None,
         }
 
     HEADING OS engine/data split: the calendar file is DATA, so it resolves
-    under ``data_root``. Back-compat: when ``data_root`` is not supplied it
-    falls back to ``workspace_root`` (identical on transitional ceo-main).
+    under ``data_root``, which falls back to the ``get_data_root()`` seam when
+    not supplied. The dead leading ``workspace_root`` went on 2026-08-24.
     """
     if data_root is None:
         data_root = get_data_root()
@@ -74,11 +73,12 @@ def today_agenda(workspace_root: Path, now: datetime | None = None,
         # corrupted the column boundaries. Skip rather than emit garbage.
         if line.count("|") > 5:
             continue
+        # No try/except around the int(): the regex already matched
+        # `\d{2}:\d{2}`, so the parse cannot raise. The handler advertised a
+        # robustness this parse does not need, while the range check below is
+        # the one that actually rejects "99:99".
         time_str = m.group("time")
-        try:
-            hh, mm = (int(x) for x in time_str.split(":"))
-        except ValueError:
-            continue
+        hh, mm = (int(x) for x in time_str.split(":"))
         if not (0 <= hh < 24 and 0 <= mm < 60):
             continue
         events.append({

@@ -51,6 +51,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils import claude_models  # noqa: E402
+from scripts.utils.atomic import atomic_write_text  # noqa: E402
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET  # noqa: E402
 from scripts.utils.observability import observe  # noqa: E402
 from scripts.utils.workspace import get_workspace_root, load_env  # noqa: E402
@@ -143,7 +144,7 @@ def any_match(output: str, term) -> bool:
     return any(term_pattern(t).search(output) for t in terms)
 
 
-def run_checks(output: str, checks: dict, skill_dir: Path) -> list[dict]:
+def run_checks(output: str, checks: dict) -> list[dict]:
     """Apply check specifications against the model output. Returns list of results."""
     results = []
 
@@ -314,7 +315,7 @@ def run_one_skill(skill_name: str, case_filter: str | None, model_override: str 
             print(f"{RED}API ERROR{RESET} {e}")
             return (passed_total, check_total, OUTCOME_API_ERROR)
 
-        results = run_checks(output, case.get("checks", {}), skill_dir)
+        results = run_checks(output, case.get("checks", {}))
         passed = sum(1 for r in results if r["passed"])
         total = len(results)
         passed_total += passed
@@ -343,6 +344,14 @@ def run_one_skill(skill_name: str, case_filter: str | None, model_override: str 
             try:
                 existing = json.loads(benchmark_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
+                # Keep the corrupt file and SAY SO. Silently resetting to {}
+                # deleted the baseline -- the one artefact that makes future runs
+                # comparable -- and the run that did it looked entirely normal.
+                backup = benchmark_path.with_suffix(".json.corrupt")
+                benchmark_path.replace(backup)
+                print(f"{YELLOW}benchmark.json was unparseable; kept it at "
+                      f"{backup.name} and starting a fresh baseline{RESET}",
+                      file=sys.stderr)
                 existing = {}
         existing["last_run"] = {
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -364,7 +373,9 @@ def run_one_skill(skill_name: str, case_filter: str | None, model_override: str 
         existing["baseline_is_self_seed"] = (
             existing["baseline"].get("source") == "seeded-from-first-run"
         )
-        benchmark_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+        # Atomic: an interrupt here left unparseable JSON, which the branch
+        # above then had to deal with.
+        atomic_write_text(benchmark_path, json.dumps(existing, indent=2))
         print(f"  {GREEN}benchmark.json updated{RESET} -> {benchmark_path.relative_to(ROOT)}")
         if existing["baseline_is_self_seed"]:
             print(f"  {YELLOW}baseline is a self-seed{RESET} - this run was compared "

@@ -52,6 +52,21 @@ REQUIRED_FIELDS = {
 # ============================================================
 # Brain Loading
 # ============================================================
+
+def _date_key(value) -> str:
+    """One orderable string for a frontmatter date of any shape.
+
+    Dates and datetimes both render ISO, so they sort against each other and
+    against an ISO string correctly. Anything unparseable (notably the literal
+    "unknown") sorts to the bottom rather than raising.
+    """
+    import datetime as _dt
+    if isinstance(value, (_dt.datetime, _dt.date)):
+        return value.isoformat()
+    text = str(value or "").strip()
+    return text if text[:4].isdigit() else ""
+
+
 def parse_frontmatter(filepath):
     """Extract YAML frontmatter from a markdown file. Returns dict or None.
 
@@ -432,7 +447,13 @@ def generate_index(files):
             status = fm.get("status", "open")
             recent.append((date, f"Conflict {status}: {fm.get('title', f.stem)}"))
 
-    recent.sort(key=lambda x: x[0], reverse=True)
+    # A COMPARABLE key. `yaml.safe_load` turns `ingested: 2026-08-20` into a
+    # datetime.date and a missing field into the string "unknown", and Python 3
+    # will not order those against each other -- so `--update-index` raised
+    # TypeError on any brain holding one dated note and one undated one. A
+    # timestamp with a time component (datetime) against a bare date crashes the
+    # same way, with no field missing at all.
+    recent.sort(key=lambda x: _date_key(x[0]), reverse=True)
     if not recent:
         lines.append("*No activity yet.*")
     else:

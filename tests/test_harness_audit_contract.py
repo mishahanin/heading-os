@@ -322,9 +322,28 @@ def test_the_report_is_machine_readable_and_human_readable(plugin_root, manifest
 def test_a_missing_plugin_root_is_not_a_crash(tmp_path):
     """A fresh clone with no plugins installed is a legitimate state, not an
     error, and the audit must still report on our own tree."""
-    proc = _run(["--manifest", str(tmp_path / "m.json"), "--update-manifest"],
-                plugin_root=tmp_path / "absent")
+    proc = _run(["--manifest", str(tmp_path / "m.json"), "--update-manifest",
+                 "--allow-empty"], plugin_root=tmp_path / "absent")
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_accepting_a_first_empty_baseline_needs_the_flag(tmp_path):
+    """A mistyped root on a FIRST run used to mint an empty baseline silently.
+
+    Every later run then found index == baseline == empty: no drift, no
+    findings, exit 0, forever, scanning nothing. The old guard only fired
+    when a previous NON-EMPTY baseline existed, which a first run does not
+    have -- exactly the case its own comment described.
+    """
+    refused = _run(["--manifest", str(tmp_path / "m.json"), "--update-manifest"],
+                   plugin_root=tmp_path / "absent")
+    assert refused.returncode == 2, refused.stdout + refused.stderr
+    assert not (tmp_path / "m.json").exists(), "an empty baseline was written anyway"
+
+    allowed = _run(["--manifest", str(tmp_path / "m2.json"), "--update-manifest",
+                    "--allow-empty"], plugin_root=tmp_path / "absent")
+    assert allowed.returncode == 0, allowed.stdout + allowed.stderr
+    assert (tmp_path / "m2.json").exists()
 
 
 def test_an_unreadable_file_is_reported_rather_than_silently_skipped(

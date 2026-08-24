@@ -17,6 +17,7 @@ from scripts.utils.workspace import get_default_tz
 from pathlib import Path
 
 from scripts.utils.paths import get_data_root
+from scripts.bridge_daemon._safepath import contains_symlink
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ _FRONTMATTER_RE = re.compile(
 _KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$")
 
 # The contact's display name is on a `# Name (...)` H1 line after the
-# frontmatter. Example: "# Omar Said (misha-hanin)".
+# frontmatter. Example: "# James Bond (james-bond)".
 _H1_RE = re.compile(r"^#\s+(?P<name>.+?)(?:\s+\([^)]*\))?\s*$")
 
 
@@ -184,6 +185,15 @@ def _merge_tribe(crm_members: list[dict], roster: list[dict]) -> list[dict]:
     who is also a CRM tribe contact also carries the CRM fields (slug,
     role, last_touch, ...). CRM tribe members absent from the roster are
     kept too, so nothing is lost. Match is by email, then normalised name.
+
+    One CRM record is claimed by AT MOST ONE roster row. Two roster rows that
+    resolve to the same contact -- the same person listed twice, or one row
+    matching by email and another by name -- both used to be emitted carrying
+    that contact's slug, last_touch and status. The person then appeared twice
+    on the page, was counted twice in the role tally, and any slug-keyed action
+    fired against a row that was not the one the operator clicked. The later
+    row still appears, because it IS in the roster; it just carries no CRM
+    fields, which is the honest reading when two rows claim one record.
     """
     by_email: dict = {}
     by_name: dict = {}
@@ -201,6 +211,12 @@ def _merge_tribe(crm_members: list[dict], roster: list[dict]) -> list[dict]:
             crm = by_email[email]
         elif _norm_name(rr["name"]) in by_name:
             crm = by_name[_norm_name(rr["name"])]
+        if crm is not None and crm["slug"] in matched_slugs:
+            logger.warning(
+                "roster row %r resolves to CRM contact %r, already claimed by an "
+                "earlier row; emitting it without CRM fields",
+                rr.get("name"), crm["slug"])
+            crm = None
         if crm is not None:
             matched_slugs.add(crm["slug"])
         merged.append({
@@ -232,8 +248,7 @@ def _merge_tribe(crm_members: list[dict], roster: list[dict]) -> list[dict]:
     return merged
 
 
-def list_tribe(workspace_root: Path, today: date | None = None,
-               data_root: "Path | None" = None) -> dict:
+def list_tribe(data_root: "Path | None" = None, today: date | None = None) -> dict:
     """Return the Tribe roster: the full org roster from 31C_Tribe.xlsx,
     enriched with CRM data (slug, role, last_touch, ...) where a person
     matches a crm/contacts/ tribe contact.
@@ -261,9 +276,12 @@ def list_tribe(workspace_root: Path, today: date | None = None,
 
     Degrades to CRM-only when the roster xlsx is missing/unreadable.
 
-    HEADING OS engine/data split: crm/contacts/ and the roster xlsx are
-    DATA, so they resolve under ``data_root`` (falls back to
-    ``workspace_root`` when not supplied; identical on transitional ceo-main).
+    HEADING OS engine/data split: crm/contacts/ and the roster xlsx are DATA,
+    so they resolve under ``data_root``, which falls back to the
+    ``get_data_root()`` seam when not supplied, NOT to any root the caller
+    passed. This took a leading ``workspace_root`` until 2026-08-24 and never
+    read it; three audit shards reported the resulting calls as HIGH-severity
+    bugs and all three were wrong. The name was the defect.
     """
     if data_root is None:
         data_root = get_data_root()
@@ -353,7 +371,7 @@ def _extract_section(text: str, heading: str) -> str:
     return "\n".join(body_lines).strip()
 
 
-def read_contact(workspace_root: Path, slug: str, data_root: "Path | None" = None) -> dict:
+def read_contact(data_root: "Path | None", slug: str) -> dict:
     """Read a CRM contact file safely. Returns parsed metadata + sections.
 
     Path safety:
@@ -367,8 +385,9 @@ def read_contact(workspace_root: Path, slug: str, data_root: "Path | None" = Non
          "active_commitments": str, "interaction_log": str, "size": int}
         OR {"ok": False, "error": str}
 
-    HEADING OS engine/data split: crm/contacts/ is DATA, so it resolves
-    under ``data_root`` (falls back to ``workspace_root`` when not supplied).
+    HEADING OS engine/data split: crm/contacts/ is DATA, so it resolves under
+    ``data_root``, which falls back to the ``get_data_root()`` seam when not
+    supplied. The dead leading ``workspace_root`` went on 2026-08-24.
     """
     if data_root is None:
         data_root = get_data_root()
@@ -377,7 +396,8 @@ def read_contact(workspace_root: Path, slug: str, data_root: "Path | None" = Non
     if not CONTACT_SLUG_RE.match(slug):
         return {"ok": False, "error": "invalid slug"}
     contacts_dir = (data_root / "crm" / "contacts").resolve()
-    target = (data_root / "crm" / "contacts" / f"{slug}.md").resolve()
+    target_raw = data_root / "crm" / "contacts" / f"{slug}.md"
+    target = target_raw.resolve()
     try:
         target.relative_to(contacts_dir)
     except ValueError:
@@ -385,7 +405,7 @@ def read_contact(workspace_root: Path, slug: str, data_root: "Path | None" = Non
     if not target.exists():
         return {"ok": False, "error": "not found"}
     try:
-        if target.is_symlink():
+        if contains_symlink(data_root / "crm" / "contacts", target_raw):
             return {"ok": False, "error": "symlinks not allowed"}
     except OSError:
         return {"ok": False, "error": "stat failed"}

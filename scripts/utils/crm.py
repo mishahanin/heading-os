@@ -159,14 +159,33 @@ def calculate_health(last_touch_str: str, cadence_days: int, yellow_days: int,
 def is_radar_frozen(radar_freeze_until, today=None) -> bool:
     """True if a contact is inside an active radar-freeze window.
 
-    Accepts an ISO date (``YYYY-MM-DD``) or full ISO datetime string. Empty or
-    unparseable values mean not frozen. Matches the freeze semantics already
-    honored by cold_sweep_core.route() and crm_next.rank_candidates().
+    THE single implementation. Accepts an ISO date (``YYYY-MM-DD``) or a full
+    ISO datetime string, with or without a ``Z``. An empty value means not
+    frozen; an UNPARSEABLE one means frozen, and says so on stderr.
+
+    Failing closed, and the consolidation, are both from 2026-08-24. This
+    docstring used to end "Matches the freeze semantics already honored by
+    cold_sweep_core.route() and crm_next.rank_candidates()" — an accurate
+    description of THREE separate implementations of one suppression control,
+    every one of them silently fail-open. A typo in `radar_freeze_until` turned
+    a do-not-contact marker into an outreach card in all three, and a fix
+    applied to any one of them left the other two wrong. The other two now call
+    this function.
+
+    Fail closed because the two errors are not symmetric: a contact wrongly
+    held back is a question the operator can ask, and the other direction is a
+    message to someone who was explicitly frozen.
     """
-    if not radar_freeze_until or not str(radar_freeze_until).strip():
+    if radar_freeze_until is None or not str(radar_freeze_until).strip():
         return False
     if today is None:
         today = datetime.now(get_default_tz()).date()
+    if isinstance(today, datetime):
+        today = today.date()
+    # No `.replace("Z", "+00:00")`: `pyproject.toml` sets
+    # `requires-python = ">=3.11"` and `fromisoformat` has parsed the `Z` form
+    # natively since 3.11, so it would be dead code — a mutation deleting it
+    # stayed green because it changes nothing on any supported interpreter.
     raw = str(radar_freeze_until).strip()
     try:
         freeze = datetime.fromisoformat(raw).date()
@@ -174,7 +193,10 @@ def is_radar_frozen(radar_freeze_until, today=None) -> bool:
         try:
             freeze = date.fromisoformat(raw)
         except ValueError:
-            return False
+            print(f"crm: radar_freeze_until {str(radar_freeze_until).strip()!r} "
+                  f"is not an ISO date; treating the contact as frozen.",
+                  file=sys.stderr)
+            return True
     return freeze > today
 
 

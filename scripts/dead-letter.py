@@ -110,6 +110,19 @@ def cmd_purge(args) -> int:
     return 0
 
 
+def _why(entry: dict) -> str:
+    """The recorded failure reason, in at most 120 characters.
+
+    Total on purpose. A dead-letter entry is written by whatever failed, so its
+    `error` can be absent, null, or a non-string; the retry path must not be
+    the thing that breaks over it.
+    """
+    value = entry.get("error")
+    if value is None or value == "":
+        return "failed send"
+    return str(value)[:120]
+
+
 def cmd_retry(args) -> int:
     path = _resolve(args.id)
     entry = dead_letter.load(path)
@@ -135,19 +148,32 @@ def cmd_retry(args) -> int:
         "contact_file": payload.get("contact_file", ""),
         "title": payload.get("title") or f"Retry send to {to}",
         "priority": "P1",
-        "reasoning": f"Re-enqueued from dead-letter ({entry.get('error', 'failed send')[:120]})",
+        # `.get(k, default)` supplies the default only when the KEY IS
+        # ABSENT, and a dead-letter entry can carry `"error": null` — then
+        # `None[:120]` is a TypeError and a retryable send cannot be
+        # re-enqueued at all, which is the one thing this command is for.
+        "reasoning": f"Re-enqueued from dead-letter ({_why(entry)})",
         "source": "dead-letter-retry",
     }
     # Daemon-free deposit (2026-06-27): append in-process under the DATA root.
     resp = append_cards(get_data_root(), [card])
     if resp.get("added"):
         # Recovered: drop the artifact so it doesn't linger as a duplicate.
+        removed = True
         try:
             path.unlink()
-        except OSError:
-            pass
+        except OSError as exc:
+            # Was `pass`, and the line below then said "Dead-letter entry
+            # removed" regardless: the artifact stayed on disk as a possible
+            # duplicate while the operator was told recovery had completed.
+            removed = False
+            print(f"{YELLOW}could not remove the dead-letter artifact "
+                  f"{path.name}: {exc}{RESET}", file=sys.stderr)
+        tail = ("Dead-letter entry removed." if removed
+                else f"Dead-letter entry KEPT at {path} - remove it by hand, or "
+                     f"a later retry will re-enqueue the same send.")
         print(f"{GREEN}re-enqueued{RESET} {to} as a fresh pending card "
-              f"(needs approval; nothing sent). Dead-letter entry removed.")
+              f"(needs approval; nothing sent). {tail}")
         return 0
     print(f"{YELLOW}deposit returned no new card{RESET} "
           f"(likely deduped against an existing card): {CYAN}{resp}{RESET}")

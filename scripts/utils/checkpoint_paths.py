@@ -294,7 +294,7 @@ def lower_unattended(state: dict) -> dict:
     return state
 
 
-def transcript_dir(project: Path) -> Path:
+def transcript_dir(project: Path | str) -> Path | None:
     """Where Claude Code keeps this workspace's session transcripts.
 
     The harness mangles the project path into a single directory name by
@@ -303,11 +303,25 @@ def transcript_dir(project: Path) -> Path:
     is the dot following a slash, not a typo. Derived rather than hardcoded, so a
     clone at a different path resolves its own transcripts.
 
-    Shared by `scripts/compact-now.py` and `scripts/compaction-probe.py`, which
-    both need it. It lives here rather than in either caller because the second
-    copy of a path-mangling rule is the one that stops being fixed.
+    It lives here rather than in a caller because the second copy of a
+    path-mangling rule is the one that stops being fixed. That prediction came
+    true inside this repository: `scripts/archive-transcripts.py` carried a
+    third copy until 2026-08-23, pointing at `scripts/calibrate.py` as a fourth
+    authority. Callers are `compact-now.py`, `compaction-probe.py` and
+    `archive-transcripts.py`.
+
+    **Returns None off POSIX, rather than guessing.** The two replacements do
+    not touch a backslash or a drive colon, so on Windows `C:\\Users\\...`
+    mangles to a name no directory can carry, and every caller then reads an
+    absent directory as an empty one. `archive-transcripts.py --status` printed
+    `live 0 file(s)` on every run and exited 0 - silent transcript loss, which is
+    the thing it exists to prevent. The correct Windows slug is not something
+    this repository can verify, and an unverifiable guess is worse than a
+    refusal a caller can report.
     """
-    mangled = str(project.resolve()).replace("/", "-").replace(".", "-")
+    if os.name != "posix":
+        return None                # before any Path(): off POSIX it is what raises
+    mangled = str(Path(project).resolve()).replace("/", "-").replace(".", "-")
     return Path.home() / ".claude" / "projects" / mangled
 
 
@@ -320,7 +334,7 @@ def newest_session_id(project: Path) -> str | None:
     `compact-now.py` and merely an empty window for the probe.
     """
     directory = transcript_dir(project)
-    if not directory.is_dir():
+    if directory is None or not directory.is_dir():
         return None
     newest = None
     newest_mtime = -1.0
@@ -757,12 +771,18 @@ LOCK_POLL_SECONDS = 0.01
 
 
 @contextlib.contextmanager
-def file_lock(lock_path: Path, *, wait: float = LOCK_WAIT_SECONDS):
+def file_lock(lock_path: Path, *, wait: float = LOCK_WAIT_SECONDS, label: str = "checkpoint"):
     """Hold an exclusive lock on `lock_path` for the duration of the block.
 
     Yields True when the lock is held and False when it is not, so a caller that
     wants to say something different in the degraded case can. Most callers
     ignore the value: the block runs either way.
+
+    `label` prefixes the two stderr lines. It exists because this primitive is
+    no longer checkpoint-only: `scripts/email-intelligence.py` serialises its
+    state file with it, and a message reading "checkpoint: ... busy" from an
+    email run points its reader at the wrong file. One implementation, correct
+    attribution — a second copy is the one that stops being fixed.
 
     **Bounded, never blocking.** A hook that waits forever is worse than a hook
     that races - the Stop hook has a 90-second budget and the statusline runs on
@@ -800,14 +820,14 @@ def file_lock(lock_path: Path, *, wait: float = LOCK_WAIT_SECONDS):
             except OSError:
                 if time.monotonic() >= deadline:
                     print(
-                        f"checkpoint: {lock_path.name} busy for {wait:.0f}s; "
+                        f"{label}: {lock_path.name} busy for {wait:.0f}s; "
                         "writing unlocked",
                         file=sys.stderr,
                     )
                     break
                 time.sleep(LOCK_POLL_SECONDS)
     except OSError as exc:
-        print(f"checkpoint: could not open {lock_path.name}: {exc}", file=sys.stderr)
+        print(f"{label}: could not open {lock_path.name}: {exc}", file=sys.stderr)
 
     try:
         yield held

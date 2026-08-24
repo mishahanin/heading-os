@@ -22,8 +22,8 @@ def apply_sanitize_map(
 
     Terms listed in `word_boundary_terms` (case-insensitive) use \\b...\\b regex
     matching instead of plain str.replace, preventing them from matching substrings
-    inside unrelated words (e.g., "odin" not matching "decoding", "maxim" not
-    matching "maximum").
+    inside unrelated words: "odin" does not match "decoding", and the English
+    word for a saying does not match "maximum".
 
     Args:
         content: The text to sanitize.

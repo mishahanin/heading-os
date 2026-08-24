@@ -93,8 +93,11 @@ def _check_dependencies():
     try:
         from google.auth.transport.requests import Request  # noqa: F401
     except ImportError:
+        # google.auth.transport.requests is provided by google-auth (and
+        # needs `requests`), NOT by google-auth-httplib2. Naming the wrong
+        # package sent the operator to install something that cannot fix it.
         if "google-api-python-client" not in missing:
-            missing.append("google-auth-httplib2")
+            missing.append("google-auth")
     if missing:
         print(f"{RED}[ERROR] Missing packages: {', '.join(missing)}{RESET}", file=sys.stderr)
         print(
@@ -118,6 +121,16 @@ def _get_credentials_path():
         resolved = env_path if os.path.isabs(env_path) else str(Path(WORKSPACE_ROOT) / env_path)
         if os.path.exists(resolved):
             return resolved
+        # A typo, a moved file or an unmounted overlay used to fall through to
+        # the default credentials.json -- a possibly different Google project
+        # and a different account. `add`, `edit` and `delete` then wrote to the
+        # wrong person's contacts with nothing said. An override that was set
+        # on purpose and cannot be read is an error, not a hint.
+        print(f"{RED}[ERROR] GOOGLE_CONTACTS_CREDENTIALS_PATH points at "
+              f"{resolved}, which does not exist.{RESET}", file=sys.stderr)
+        print("        Fix the path or unset the variable to use the default.",
+              file=sys.stderr)
+        sys.exit(1)
 
     default_path = str(Path(SESSION_DIR) / "credentials.json")
     if os.path.exists(default_path):
@@ -338,31 +351,54 @@ def cmd_search(service, query, as_json=False):
     return people
 
 
+class ContactInputError(ValueError):
+    """A --name the People API cannot be given."""
+
+
+def split_name(name):
+    """(givenName, familyName) from one --name string.
+
+    `name.strip().split(None, 1)` then `parts[0]` raised IndexError on
+    `--name "   "`, which the dispatch catch-all printed as
+    "[ERROR] list index out of range" -- and in cmd_edit only AFTER the
+    contact had been fetched.
+    """
+    parts = str(name or "").strip().split(None, 1)
+    if not parts:
+        raise ContactInputError("--name is empty; give at least a given name")
+    return parts[0], (parts[1] if len(parts) > 1 else "")
+
+
 def cmd_add(service, name, email=None, phone=None, company=None, title=None,
             notes=None, address=None, url=None, as_json=False):
     """Create a new contact."""
-    parts = name.strip().split(None, 1)
-    body = {"names": [{"givenName": parts[0]}]}
-    if len(parts) > 1:
-        body["names"][0]["familyName"] = parts[1]
+    given, family = split_name(name)
+    body = {"names": [{"givenName": given}]}
+    if family:
+        body["names"][0]["familyName"] = family
 
+    # Plain single-element lists. `_replace_first(current, ...)` was wired in
+    # here at 22e6997 and `current` does not exist in this function: every
+    # `add` carrying --email, --phone, --company, --address or --url raised
+    # NameError before it reached the API. The helper belongs in cmd_edit,
+    # which has a fetched contact to preserve; a new contact has nothing.
     if email:
-        body["emailAddresses"] = _replace_first(current, "emailAddresses", {"value": email})
+        body["emailAddresses"] = [{"value": email}]
     if phone:
-        body["phoneNumbers"] = _replace_first(current, "phoneNumbers", {"value": phone})
+        body["phoneNumbers"] = [{"value": phone}]
     if company or title:
         org = {}
         if company:
             org["name"] = company
         if title:
             org["title"] = title
-        body["organizations"] = _replace_first(current, "organizations", org)
+        body["organizations"] = [org]
     if notes:
         body["biographies"] = [{"value": notes, "contentType": "TEXT_PLAIN"}]
     if address:
-        body["addresses"] = _replace_first(current, "addresses", {"formattedValue": address})
+        body["addresses"] = [{"formattedValue": address}]
     if url:
-        body["urls"] = _replace_first(current, "urls", {"value": url})
+        body["urls"] = [{"value": url}]
 
     result = service.people().createContact(
         body=body,
@@ -424,31 +460,37 @@ def cmd_edit(service, resource_name, name=None, email=None, phone=None,
     body = {"etag": etag, "resourceName": resource_name}
 
     if name:
-        parts = name.strip().split(None, 1)
-        body["names"] = [{"givenName": parts[0], "familyName": parts[1] if len(parts) > 1 else ""}]
+        given, family = split_name(name)
+        body["names"] = [{"givenName": given, "familyName": family}]
         update_fields.append("names")
     if email:
-        body["emailAddresses"] = [{"value": email}]
+        body["emailAddresses"] = _replace_first(current, "emailAddresses", {"value": email})
         update_fields.append("emailAddresses")
     if phone:
-        body["phoneNumbers"] = [{"value": phone}]
+        body["phoneNumbers"] = _replace_first(current, "phoneNumbers", {"value": phone})
         update_fields.append("phoneNumbers")
     if company or title:
-        org = current.get("organizations", [{}])[0].copy() if current.get("organizations") else {}
+        # The org branch used to copy element [0] and submit a one-element
+        # list, which reads as preservation and is not: a contact with a
+        # current employer and a board seat lost the board seat on any
+        # --company or --title edit, because updatePersonFields replaces the
+        # WHOLE list with what the body carries.
+        orgs = [o for o in (current.get("organizations") or []) if isinstance(o, dict)]
+        org = dict(orgs[0]) if orgs else {}
         if company:
             org["name"] = company
         if title:
             org["title"] = title
-        body["organizations"] = [org]
+        body["organizations"] = [org] + orgs[1:]
         update_fields.append("organizations")
     if notes:
         body["biographies"] = [{"value": notes, "contentType": "TEXT_PLAIN"}]
         update_fields.append("biographies")
     if address:
-        body["addresses"] = [{"formattedValue": address}]
+        body["addresses"] = _replace_first(current, "addresses", {"formattedValue": address})
         update_fields.append("addresses")
     if url:
-        body["urls"] = [{"value": url}]
+        body["urls"] = _replace_first(current, "urls", {"value": url})
         update_fields.append("urls")
 
     if not update_fields:
@@ -614,6 +656,11 @@ def main():
             cmd_list(service, limit=args.limit, as_json=args.json)
         elif args.command == "delete":
             cmd_delete(service, args.resource)
+    except ContactInputError as e:
+        # A validation failure, printed as one. Falling into the API branch
+        # below dressed "--name is empty" as an unexplained runtime error.
+        print(f"{RED}[ERROR] {e}{RESET}", file=sys.stderr)
+        sys.exit(2)
     except Exception as e:
         error_str = str(e)
         if "HttpError 404" in error_str:

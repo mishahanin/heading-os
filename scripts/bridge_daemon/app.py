@@ -1,5 +1,6 @@
 """FastAPI app builder. All authed endpoints require Authorization: Bearer <token>.
 /_bootstrap and /health are unauthenticated for browser bootstrap and ops scripts."""
+import logging
 import os
 import time
 from datetime import datetime, timezone
@@ -24,6 +25,8 @@ from pydantic import (
 )
 from scripts.utils.paths import get_data_root
 from scripts.utils.workspace import get_default_tz_name
+
+_log = logging.getLogger(__name__)
 
 
 class ActionCardModel(_PydanticBaseModel):
@@ -123,12 +126,19 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
         Handles IPv6 bracket form ([::1]:8765 -> ::1) and the common
         host:port form (127.0.0.1:8765 -> 127.0.0.1). A bare hostname with
         no port is returned unchanged.
+
+        An UNBRACKETED IPv6 literal is returned whole. `rsplit(":", 1)` treated
+        `::1` as host:port and handed back `::`, which is not in the loopback
+        set, so a legitimate loopback client sending that Host got a 421. More
+        than one colon means it cannot be host:port -- a port has exactly one.
         """
         raw = raw.strip()
         if raw.startswith("["):
             # IPv6 bracket form: take what is between the brackets.
             end = raw.find("]")
             return raw[1:end] if end != -1 else raw[1:]
+        if raw.count(":") > 1:
+            return raw
         return raw.rsplit(":", 1)[0] if ":" in raw else raw
 
     @app.middleware("http")
@@ -163,8 +173,8 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
     # pulse/finalize refreshers) read content from the data overlay, so they
     # receive `data_root`. ENGINE sources keep `workspace_root`: capabilities
     # (.claude/skills), ops/telemetry + config snapshots (.daemon-state), the
-    # workspace display fields, and the terminal launch cwd. On ceo-main today
-    # data_root == workspace_root (in-tree), so this is a no-op; post-cutover it
+    # workspace display fields, and the terminal launch cwd. In an in-tree
+    # layout data_root == workspace_root, so this is a no-op; after the split it
     # resolves to ../.heading-os-data. Injectable for tests (which pass a tmp
     # root holding the fixture data); production leaves it None -> get_data_root().
     if data_root is None:
@@ -197,10 +207,22 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
 
     @app.get("/health")
     def health():
-        # Intentionally minimal: this endpoint is unauthed (ops scripts and
-        # the browser bootstrap rely on it). Component version counters used
-        # to be returned here but they leak workflow cadence to any local
-        # process. Authenticated callers can get full state via /version.
+        # Minimal, but do NOT read that as "local processes are untrusted".
+        # They are trusted: `/_bootstrap` above is unauthenticated and hands
+        # the full bearer token to any loopback caller, so a hostile local
+        # process reads /version, /pulse and every mutating endpoint whatever
+        # this one omits. The earlier comment here claimed the omission denied
+        # information to "any local process", which was not true of the server
+        # it described.
+        #
+        # The real boundary is the loopback bind plus the Host check above: a
+        # remote or cross-origin caller cannot reach either endpoint. Within
+        # the machine, the operator's own uid is the trust boundary.
+        #
+        # Keeping this response small is still worth the zero it costs; it just
+        # is not a control. Gating /_bootstrap behind the 0600 token file on
+        # disk would make it one, and that is an open design question, not
+        # something this comment should imply is already done.
         return {
             "pid": os.getpid(),
             "version": __version__,
@@ -215,7 +237,11 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
         snap = state.snapshot()
         etag = f'"g{snap["global"]}"'
         if if_none_match == etag:
-            return Response(status_code=304)
+            # The validator goes on the 304 too (RFC 9110 §15.4.5). Without it
+            # a client that refreshes its cached validator set from response
+            # headers loses the ETag and degrades to unconditional fetches --
+            # half-implemented conditional requests cost more than none.
+            return Response(status_code=304, headers={"ETag": etag})
         response.headers["ETag"] = etag
         return snap
 
@@ -239,23 +265,30 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
         # Phase 1.157: surface the config-history snapshots so the CEO
         # can see what --revert-config would roll back to.
         from .config import list_snapshots as _list_snaps
+        # One unreadable file skips ITSELF, not the list. A blanket
+        # `except Exception: snapshots = []` used to discard every entry with no
+        # log line, so the CEO's view of what `--revert-config` would roll back
+        # to silently became "nothing to roll back to". The second `p.stat()`
+        # for the size also sat outside the inner try, which is how a single
+        # bad file reached that outer handler in the first place.
         snapshots = []
         try:
-            for p in _list_snaps(workspace_root):
-                try:
-                    mtime = p.stat().st_mtime
-                except OSError:
-                    mtime = None
-                snapshots.append({
-                    "name": p.name,
-                    "size_bytes": p.stat().st_size if p.exists() else None,
-                    "mtime_iso": (
-                        __import__("datetime").datetime.fromtimestamp(mtime, tz=__import__("datetime").timezone.utc).isoformat()
-                        if mtime else None
-                    ),
-                })
-        except Exception:
-            snapshots = []
+            candidates = list(_list_snaps(workspace_root))
+        except OSError:
+            _log.warning("could not list config snapshots", exc_info=True)
+            candidates = []
+        for snap_path in candidates:
+            try:
+                st = snap_path.stat()
+            except OSError:
+                _log.warning("skipping unreadable config snapshot %s", snap_path,
+                             exc_info=True)
+                continue
+            snapshots.append({
+                "name": snap_path.name,
+                "size_bytes": st.st_size,
+                "mtime_iso": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+            })
         return {
             "pid": os.getpid(),
             "version": __version__,
@@ -296,8 +329,7 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
             payload = dict(snap["data"])
             _attach_freshness(payload, "pulse", computed_at=snap.get("computed_at"))
             return payload
-        import logging
-        logging.warning("bridge.app: pulse snapshot missing/corrupt, falling back to inline compute")
+        _log.warning("bridge.app: pulse snapshot missing/corrupt, falling back to inline compute")
         odin_5 = (cfg_state.config.get("kpi", {}) or {}).get("odin_5_target_date")
         payload = _pulse_source(data_root, odin_5_target=odin_5)
         _attach_freshness(payload, "pulse")
@@ -334,8 +366,12 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
     def inbox(authorization: str | None = Header(None)):
         _require_token(authorization)
         payload = _inbox_source(data_root)
-        # data_time prefers the email-intel state's last_run; fall back to
-        # the version-counter timestamp if that's not available.
+        # No preference chain here, whatever this comment used to say: passing
+        # no `computed_at` stamps data_time as NOW, and `_attach_freshness`
+        # documents that it OVERRIDES any data_time the source already set. The
+        # comment described a source-side preference the override had silently
+        # defeated, on the one field the rest of this file treats as
+        # load-bearing.
         _attach_freshness(payload, "inbox")
         return payload
 
@@ -367,12 +403,34 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
         # so the next unread refresh will not re-surface it. If Exchange
         # cannot be updated, fail loudly - a dismiss that did not sync
         # would leave the email unread in Outlook and reappear later.
-        mr = _inbox_mark_conv_read(data_root, body.conv_id, mark_read=True)
+        # workspace_root, NOT data_root: `mark_conversation_read` locates
+        # `scripts/email-intelligence.py` and cwd's there, and that script is
+        # ENGINE. Post-cutover the data overlay has no `scripts/` tree, so this
+        # returned 502 "email-intelligence.py not found" on every dismiss. It
+        # only worked because the two roots still coincide today.
+        mr = _inbox_mark_conv_read(workspace_root, body.conv_id, mark_read=True)
         if not mr.get("ok"):
             raise HTTPException(status_code=502, detail=f"Exchange not updated: {mr.get('error')}")
         result = _inbox_mark_dismissed(data_root, body.conv_id, body.note)
         if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("error", "bad request"))
+            # Exchange is ALREADY mutated at this point: the conversation is
+            # marked read, so the next unread fetch will not re-surface it, and
+            # the dismiss log has no record of why. It vanishes with no audit
+            # trail and no undo path. The 400 alone said none of that, so the
+            # half-applied state went into a log nobody reads.
+            _log.critical(
+                "HALF-APPLIED DISMISS: conv_id=%s was marked READ in Exchange but "
+                "the local dismiss log write failed (%s). The conversation will "
+                "not re-surface and has no undo entry. Restore it with "
+                "POST /inbox/undo-dismiss, or mark it unread in Outlook.",
+                body.conv_id, result.get("error"),
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=(f"Exchange was updated but the local dismiss log was not: "
+                        f"{result.get('error', 'write failed')}. "
+                        f"conv_id={body.conv_id} is now READ with no dismiss record."),
+            )
         state.bump("inbox")
         return {**result, "messages_changed": mr.get("messages_changed", 0)}
 
@@ -381,12 +439,26 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
         _require_token(authorization)
         # Undo marks the conversation unread again in Exchange so it
         # genuinely returns to the inbox, then tombstones the dismiss log.
-        mr = _inbox_mark_conv_read(data_root, body.conv_id, mark_read=False)
+        mr = _inbox_mark_conv_read(workspace_root, body.conv_id, mark_read=False)  # engine root, see /inbox/dismiss
         if not mr.get("ok"):
             raise HTTPException(status_code=502, detail=f"Exchange not updated: {mr.get('error')}")
         result = _inbox_undo_dismissed(data_root, body.conv_id)
         if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("error", "bad request"))
+            # Mirror of /inbox/dismiss: the conversation is already UNREAD in
+            # Exchange while the dismiss log still holds the original dismiss,
+            # so it reappears in the inbox and still reads as dismissed here.
+            _log.critical(
+                "HALF-APPLIED UNDO: conv_id=%s was marked UNREAD in Exchange but "
+                "the tombstone write failed (%s). It is back in the inbox while "
+                "the dismiss log still says it was dismissed.",
+                body.conv_id, result.get("error"),
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=(f"Exchange was updated but the tombstone was not: "
+                        f"{result.get('error', 'write failed')}. "
+                        f"conv_id={body.conv_id} is now UNREAD but still logged as dismissed."),
+            )
         state.bump("inbox")
         return result
 
@@ -434,7 +506,7 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
     @app.post("/inbox/crm-log")
     def inbox_crm_log(body: InboxDismissBody, authorization: str | None = Header(None)):
         _require_token(authorization)
-        result = _inbox_log_to_crm(data_root, body.conv_id)
+        result = _inbox_log_to_crm(body.conv_id, data_root=data_root)
         if not result.get("ok"):
             raise HTTPException(status_code=400, detail=result.get("error", "bad request"))
         state.bump("inbox")
@@ -859,12 +931,19 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
     from pydantic import BaseModel
     from . import terminal as terminal_mod
     from .sessions import session_for_cwd
+    from scripts.utils.operator_identity import operator_org
+
+    _DEFAULT_TERMINAL_TITLE = operator_org() or "HEADING OS"
 
     class LaunchBody(BaseModel):
         action: str
         session_id: str | None = None
         cwd: str | None = None
-        title: str = "31C"
+        # Default from the operator seam, not a literal. The org name is the
+        # operator's own public identity and is NOT being scrubbed -- it is
+        # simply not the engine's to hardcode for a second instance, whose
+        # terminal tab would otherwise read someone else's company.
+        title: str = _DEFAULT_TERMINAL_TITLE
         # Spec section 3.3: 'context' carries any extra payload the
         # skill needs (e.g. conv_id for email-respond, prospect_id for
         # deal-strategy). Serialized to BRIDGE_CONTEXT env var (JSON
@@ -916,7 +995,14 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
         # Daemon's own URL - relies on BRIDGE_PORT being set by the CLI
         # launcher (Task 18). Fallback to the default starting port if not
         # set so this endpoint is functional in dev/test environments too.
-        port = int(os.environ.get("BRIDGE_PORT", "31415"))
+        # Guarded: a stray `BRIDGE_PORT=auto` in the environment turned an
+        # authenticated endpoint into an unhandled ValueError -> 500.
+        raw_port = os.environ.get("BRIDGE_PORT", "31415")
+        try:
+            port = int(raw_port)
+        except ValueError:
+            _log.warning("BRIDGE_PORT=%r is not a number; using 31415", raw_port)
+            port = 31415
         url = f"http://127.0.0.1:{port}/#/{body.target_page}"
         webbrowser.open(url, new=0)
         tel.event("return_to_browser", session_id=body.session_id, target=body.target_page)
@@ -926,7 +1012,10 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
     from .finalizers.send_email import send_drafted
 
     # Phase 1: single send-email action. Phase 2 adds archive, dismiss.
-    # Handler signature: (workspace_root: Path, artifact_id: str) -> dict
+    # Handler signature: (data_root: Path, artifact_id: str) -> dict. This line
+    # said `workspace_root` until 2026-08-24 while the dispatch below passed
+    # data_root, which is the same two-roots-one-name confusion the /inbox
+    # dismiss comment records as a prior production break.
     _FINALIZE_ACTIONS: dict = {"send-email": send_drafted}
 
     class RefreshBody(BaseModel):
@@ -952,8 +1041,7 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
                 _r_pulse.refresh(workspace_root, state, cfg_state, data_root=data_root)
                 recomputed = True
             except Exception as e:
-                import logging
-                logging.warning("bridge.app: POST /refresh pulse recompute failed: %s", e)
+                _log.warning("bridge.app: POST /refresh pulse recompute failed: %s", e)
                 state.bump(body.component)
         else:
             state.bump(body.component)

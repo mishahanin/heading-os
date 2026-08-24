@@ -102,6 +102,9 @@ SPARSE_COS_MARGIN = 0.05
 # below this cap). A token matching more files than this is a generic directory
 # word (outputs, datastore, a year) and stays gated, so it cannot flood results.
 PATH_TOKEN_DF_CAP = 25
+# Long enough to outlast a per-file build commit, short enough that a
+# genuinely wedged store still fails rather than hanging a recall.
+SQLITE_BUSY_TIMEOUT_S = 30.0
 TOKEN_RE = re.compile(r"\w+", re.UNICODE)  # query -> bare word tokens (RU/EN)
 
 # Air-gap predicate (is_denied + hard-coded denies) lives in scripts/utils/air_gap.py,
@@ -228,7 +231,15 @@ CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(id UNINDEXED, body);
 def open_store(root: Path, store_rel: str = STORE_REL) -> sqlite3.Connection:
     store_path = root / store_rel
     store_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(store_path))
+    # `timeout` is what stops the read path dying under the nightly build. Every
+    # open runs schema DDL and the migrations below, so a query IS a writer, and
+    # with the default 5s a recall hook firing during a per-file build commit got
+    # `database is locked` -- an uncaught traceback on the one path this file
+    # insists must still answer.
+    # No separate `PRAGMA busy_timeout` here: `connect(timeout=)` sets it
+    # (measured, 30.0 -> 30000ms), so the PRAGMA was a no-op that read like a
+    # second control.
+    conn = sqlite3.connect(str(store_path), timeout=SQLITE_BUSY_TIMEOUT_S)
     conn.executescript(SCHEMA)
     # Migrate a pre-hybrid store: add the body column the FTS channel reads from.
     cols = {row[1] for row in conn.execute("PRAGMA table_info(notes)")}
@@ -347,6 +358,23 @@ def expand_brace_glob(pattern: str):
     for option in m.group(1).split(","):
         results.extend(expand_brace_glob(pre + option + post))
     return results
+
+
+def _would_truncate(body: str, chunk_cfg: dict) -> bool:
+    """True only when the cap actually DROPS text, not when it is filled exactly.
+
+    `chunk_text` truncates at `max_chunks`, so `len(pieces) >= max_chunks` was
+    the same test as `== max_chunks` and a file that fit the cap perfectly was
+    reported as a drop. Re-chunking with one extra slot answers the real
+    question: would there have been more?
+    """
+    probe = chunk_text(
+        body,
+        max_chars=chunk_cfg["max_chars"],
+        overlap=chunk_cfg["overlap"],
+        max_chunks=chunk_cfg["max_chunks"] + 1,
+    )
+    return len(probe) > chunk_cfg["max_chunks"]
 
 
 def chunk_text(body: str, *, max_chars, overlap, max_chunks):
@@ -876,7 +904,11 @@ def _build_store(cfg, root, store_rel, layers, force) -> int:
                         overlap=chunk_cfg["overlap"],
                         max_chunks=chunk_cfg["max_chunks"],
                     )
-                    if len(pieces) >= chunk_cfg["max_chunks"]:
+                    # `chunk_text` truncates AT max_chunks, so `>=` was `==`: a
+                    # file that filled the cap exactly, losing nothing, was
+                    # logged as "hit chunk cap". Compare against what the text
+                    # would have produced unbounded instead.
+                    if _would_truncate(info["raw_body"], chunk_cfg):
                         capped += 1
                     embed_texts = [
                         f"{title}\n{pc}".strip() if title else pc.strip()
@@ -943,6 +975,19 @@ def _build_store(cfg, root, store_rel, layers, force) -> int:
                 )
             except EmbeddingError as e:
                 conn.commit()  # preserve files already embedded this run
+                # `resync_fts` promises "the two channels can never drift", and
+                # this early return skipped it. Prune and changed-file DELETEs
+                # are committed at file boundaries during the loop, so a failure
+                # here left `notes` short of rows `notes_fts` still held, and the
+                # lexical channel stayed stale until the next SUCCESSFUL build.
+                try:
+                    resync_fts(conn)
+                    conn.commit()
+                except sqlite3.Error as sync_exc:
+                    sys.stderr.write(
+                        f"{YELLOW}FTS resync after the failure also failed "
+                        f"({sync_exc}); the lexical channel may be stale until the "
+                        f"next successful build.{RESET}\n")
                 sys.stderr.write(f"{RED}Embedding failed:{RESET} {e}\n")
                 sys.stderr.write(
                     f"{YELLOW}Committed {done_files} files "
@@ -1062,14 +1107,22 @@ def _path_match_ids(text, ids, cos_by_id, in_layer_fn, df_cap=PATH_TOKEN_DF_CAP)
     toks = {t for t in TOKEN_RE.findall(text.lower()) if len(t) >= 2}
     if not toks:
         return []
-    by_tok = {}
+    by_tok: dict = {}
+    docs_by_tok: dict = {}
     for id_ in ids:
+        # `ids` is one row per CHUNK (`path#N`), and `humanize_path` strips the
+        # suffix -- so counting rows counted a 12-chunk file twelve times and a
+        # genuinely rare project name could cross df_cap on two long notes,
+        # denying the bypass to exactly the corpus chunking exists for. The
+        # docstring says document-frequency; this now measures it.
+        doc = id_.rsplit("#", 1)[0]
         ptoks = set(humanize_path(id_).lower().split())
         for t in toks & ptoks:
             by_tok.setdefault(t, []).append(id_)
+            docs_by_tok.setdefault(t, set()).add(doc)
     admitted = set()
     for t, lst in by_tok.items():
-        if len(lst) <= df_cap:            # rare token -> specific identifier
+        if len(docs_by_tok[t]) <= df_cap:   # rare token -> specific identifier
             admitted.update(i for i in lst if in_layer_fn(i))
     return sorted(admitted, key=lambda i: cos_by_id.get(i, 0.0), reverse=True)
 
@@ -1159,6 +1212,12 @@ def _combined(cos, recency, importance, weights):
             + weights["importance"] * importance)
 
 
+def _best_in_scope(ids, cos_by_id, in_layer_fn):
+    """The best cosine among rows the query could actually have returned."""
+    in_scope = [cos_by_id[i] for i in ids if in_layer_fn(i)]
+    return float(max(in_scope)) if in_scope else None
+
+
 def _query_store(conn, qvec, full_text, *, threshold, layer, allowed, near_miss_margin=0.0):
     """Full hybrid retrieval (dense + BM25 + path-token) for ONE store.
 
@@ -1243,7 +1302,11 @@ def _query_store(conn, qvec, full_text, *, threshold, layer, allowed, near_miss_
         "cos_by_id": cos_by_id,
         "metas": metas,
         "chunks_total": chunks_total,
-        "best": (float(scores.max()) if len(scores) else None),
+        # SCOPED. `scores.max()` over the whole matrix reported a best from a
+        # layer the query was scoped away from, so `--layer odin` could print
+        # "Nothing above threshold 0.55 (best 0.62)" -- a number contradicting
+        # the message, from a row that was never a candidate.
+        "best": _best_in_scope(ids, cos_by_id, in_layer),
     }
 
 
@@ -1361,7 +1424,11 @@ def cmd_query(args) -> int:
                 latency_ms=round((time.perf_counter() - _t0) * 1000, 1),
                 hit_paths=[h.get("path") for h in hits_list],
             )
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - recall must answer regardless
+            # Reported, THEN swallowed -- this file's standard everywhere else.
+            # A silent return meant a broken ops log was noticed only when
+            # somebody went to read it and found nothing.
+            sys.stderr.write(f"{YELLOW}recall ops-log write failed:{RESET} {exc}\n")
             return
 
     cfg = load_config(get_workspace_root())  # memory-index.yaml is engine config
@@ -1398,7 +1465,15 @@ def cmd_query(args) -> int:
     if layer:
         allowed = {layer}
         lmap = _layer_store_map(cfg)
-        stores = [lmap[layer]] if layer in lmap else []
+        if layer not in lmap:
+            # Routing to zero stores made a typo'd layer read as an empty index,
+            # so the operator was told to rebuild something that was fine.
+            # Unknown COLLECTIONS already get a named error; layers did not.
+            sys.stderr.write(
+                f"{RED}Unknown layer:{RESET} {layer!r}. "
+                f"Configured layers: {', '.join(sorted(lmap)) or '(none)'}\n")
+            return 2
+        stores = [lmap[layer]]
     elif collection == "all":
         allowed = None
         stores = [(t["root"], t["store_rel"]) for t in targets]
@@ -1588,7 +1663,11 @@ def cmd_query(args) -> int:
         if fallback:
             payload["embed_fallback"] = fallback
         print(json.dumps(payload, ensure_ascii=False))
-        _emit(gap=False, hits_list=hits)
+        # `gap=not near_miss`: the UI labels a near-miss "relevance NOT
+        # established", and logging it as gap=False trained the recall-quality
+        # dashboard to count it as a hit. The touch path already refuses to
+        # learn from near-misses; the ops log now agrees with it.
+        _emit(gap=near_miss, hits_list=hits)
         return 0
 
     if near_miss:
@@ -1610,7 +1689,7 @@ def cmd_query(args) -> int:
             f"{ntype}{cls}  {h['title']}{chunk}"
         )
         print(f"          {GRAY}{h['path']}{RESET}")
-    _emit(gap=False, hits_list=hits)
+    _emit(gap=near_miss, hits_list=hits)
     return 0
 
 

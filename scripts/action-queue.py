@@ -41,6 +41,7 @@ from scripts.utils import tool_risk
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.workspace import get_data_root, get_workspace_root
 from scripts.bridge_daemon.sources.action_queue import (
+    ACTIVE_STATUSES,
     append_cards,
     apply_status,
     approve_card,
@@ -57,6 +58,12 @@ _spec = importlib.util.spec_from_file_location(
 _AQX = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_AQX)
 send_card = _AQX.send_card
+
+# The statuses `approve` will send from. DERIVED from the queue's own active
+# set, minus `approved` — a card already in `approved` has been through this
+# path once, and sending it again is the duplicate this guard exists to stop.
+# Deriving it means a new active status cannot silently become sendable.
+SENDABLE_STATUSES = frozenset(ACTIVE_STATUSES) - {"approved"}
 
 
 def _resolve_id(items: list[dict], prefix: str) -> str:
@@ -112,6 +119,24 @@ def approve_and_send(engine_root: Path, data_root: Path, id_or_prefix: str) -> d
         if tool_risk.tier_for(atype) != tool_risk.GATED:
             return {"result": "refused", "action_id": aid,
                     "error": f"{atype} does not resolve gated - refusing to send"}
+        # A STATUS guard, which `cmd_retry` has and this did not. Nothing here
+        # looked at `card["status"]`, so running `approve <id>` twice sent the
+        # same email twice -- a repeat keystroke, or a card already moved to
+        # `approved` by another surface, was enough. Duplicate mail to an
+        # external counterparty is the one failure a send-gated queue exists
+        # to prevent.
+        #
+        # What this does NOT do, stated rather than implied: there is no
+        # claiming transition. The card stays `approved` for the up-to-120s
+        # life of the send, so a concurrent batch executor could still select
+        # it. Nothing schedules that executor today (the bridge daemon is
+        # stopped by decision), and adding a `sending` status touches the
+        # shared ACTIVE_STATUSES the daemon UI and sweep both read -- a change
+        # to the send gate, which is the operator's to approve.
+        if card.get("status") not in SENDABLE_STATUSES:
+            return {"result": "blocked", "action_id": aid,
+                    "error": (f"card is {card.get('status')!r}; approve only sends a "
+                              f"card in {sorted(SENDABLE_STATUSES)}")}
         if atype == "email_send" and card.get("draft_status") != "ready_for_review":
             return {"result": "blocked", "action_id": aid,
                     "error": "draft not ready_for_review - edit it first"}
@@ -199,12 +224,24 @@ def cmd_dismiss(engine_root: Path, data_root: Path, args) -> int:
 
 
 def cmd_edit(engine_root: Path, data_root: Path, args) -> int:
-    items = list_action_queue(data_root).get("items", [])
-    aid = _resolve_id(items, args.id)
+    # Usage errors first, cheapest first: nothing to edit, then an unreadable
+    # body file, then the id. The read used to sit after the id lookup and was
+    # unguarded, so a mistyped --body-file path produced a raw OSError traceback
+    # against a file whose own contract says "Exit codes: 0 ok, 1 request/usage
+    # error". Checking it first also names the typo the operator actually made.
     if args.subject is None and not args.body_file:
         print(f"{RED}nothing to edit - pass --subject and/or --body-file{RESET}", file=sys.stderr)
         return 1
-    body = Path(args.body_file).read_text(encoding="utf-8") if args.body_file else None
+    body = None
+    if args.body_file:
+        try:
+            body = Path(args.body_file).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            print(f"{RED}cannot read --body-file {args.body_file}: {e}{RESET}",
+                  file=sys.stderr)
+            return 1
+    items = list_action_queue(data_root).get("items", [])
+    aid = _resolve_id(items, args.id)
     edit_card(data_root, aid, subject=args.subject, draft_body=body,
               draft_status="ready_for_review")
     print(f"{GREEN}edited{RESET} {aid[:8]} (draft_status -> ready_for_review)")

@@ -20,15 +20,16 @@ from scripts.utils.workspace import (
     get_workspace_root, validate_admin,
     get_corporate_repo_path, load_admin_config, get_default_tz,
 )
-from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
+from scripts.utils.colors import GREEN, GRAY, YELLOW, RED, CYAN, BOLD, RESET
+from scripts.utils.git_push import current_branch, supervised_push
+from scripts.utils.atomic import atomic_write_text
+from scripts.utils.knowledge import KNOWLEDGE_TYPES
+from scripts.utils.paths import get_data_root
 
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
-VALID_TYPES = [
-    "fleeting", "signals", "decisions", "meetings",
-    "research", "strategy", "people", "technology",
-]
+VALID_TYPES = list(KNOWLEDGE_TYPES)
 
 
 def parse_frontmatter_raw(text: str) -> tuple[str | None, str]:
@@ -79,14 +80,40 @@ def rebuild_file(fm_raw: str, body: str) -> str:
 
 
 def git_commit_and_push(repo: Path, files: list[Path], message: str) -> None:
-    """Stage, commit, and push in the given repo."""
+    """Stage, commit, and push in the given repo. Raises on any failure.
+
+    The push is SUPERVISED. A bare `git push` can exit 0 without advancing the
+    ref -- the failure this repo documented and fixed elsewhere -- and this
+    script then told the operator the note had reached every exec when it had
+    not left the laptop.
+    """
     for f in files:
         subprocess.run(["git", "add", str(f)], cwd=str(repo), check=True,
                        capture_output=True)
     subprocess.run(["git", "commit", "-m", message], cwd=str(repo), check=True,
                    capture_output=True)
-    subprocess.run(["git", "push"], cwd=str(repo), check=True,
-                   capture_output=True)
+    branch = current_branch(str(repo)) or "main"
+    verdict = supervised_push(str(repo), branch=branch, stall_window=120,
+                              label="promote-knowledge")
+    if verdict["state"] != "ok":
+        raise subprocess.CalledProcessError(
+            1, "git push (supervised)",
+            stderr=f"{verdict['state']}: {verdict['reason']}".encode())
+
+
+def _provenance(source: Path) -> str:
+    """Where the note came from, WITHOUT the private overlay's absolute path.
+
+    `str(source)` recorded the CEO's fully resolved path -- machine username and
+    the private overlay's directory layout -- into frontmatter that is then
+    committed and pushed to the corporate repo every exec pulls. Relative to the
+    data root it stays useful provenance and leaks nothing; if the note sits
+    outside the data root, only its file name goes out.
+    """
+    try:
+        return str(source.relative_to(get_data_root().resolve()))
+    except ValueError:
+        return source.name
 
 
 def main() -> None:
@@ -99,6 +126,8 @@ def main() -> None:
                         help="Knowledge type / subdirectory (e.g. signals, research)")
     parser.add_argument("--corporate-repo", type=Path, default=None,
                         help="Path to heading-os-corporate repo (default: auto-detect)")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="Replace an existing shared note of the same name")
     args = parser.parse_args()
 
     validate_admin()
@@ -123,8 +152,15 @@ def main() -> None:
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / source.name
 
+    if target_path.exists() and not args.overwrite:
+        # Refuse, do not warn-and-clobber. This is a SHARED repo: the existing
+        # note may be another exec's, the overwrite is irreversible, and the
+        # push propagates it to everyone before the warning has scrolled away.
+        print(f"{RED}ERROR:{RESET} Target already exists: {target_path}")
+        print(f"{GRAY}Pass --overwrite to replace it deliberately.{RESET}")
+        sys.exit(1)
     if target_path.exists():
-        print(f"{YELLOW}Warning:{RESET} Target already exists and will be overwritten: {target_path}")
+        print(f"{YELLOW}Overwriting existing shared note:{RESET} {target_path}")
 
     # Read and parse
     text = source.read_text(encoding="utf-8")
@@ -134,25 +170,32 @@ def main() -> None:
 
     # Prepare promoted version
     promoted_fields = {
-        "promoted_from": str(source),
+        "promoted_from": _provenance(source),
         "promoted_date": today,
         "status": "growing",
     }
     new_fm = inject_frontmatter_fields(fm_raw, promoted_fields)
     promoted_text = rebuild_file(new_fm, body)
 
-    # Write promoted file
-    target_path.write_text(promoted_text, encoding="utf-8")
-    print(f"{GREEN}Promoted note written:{RESET} {target_path}")
-
-    # Mark original
+    # Mark the ORIGINAL first, then write the target. Both atomic.
+    #
+    # Order matters on a crash between the two writes. Marked-but-not-promoted
+    # is a visible, self-correcting state -- the marker points at a shared note
+    # the operator can see is missing, and a re-run completes it. The old order
+    # produced the opposite: a promoted note in the corporate repo with no trace
+    # in the source, which nothing surfaces. The marker is idempotent, so a
+    # re-run does not stack a second one.
     promotion_note = (
         f"\n\n---\n\n> **Promoted to corporate** on {today} "
         f"-- shared/{args.type}/{source.name}\n"
     )
     original_text = source.read_text(encoding="utf-8")
-    source.write_text(original_text.rstrip("\n") + promotion_note, encoding="utf-8")
+    if promotion_note.strip() not in original_text:
+        atomic_write_text(source, original_text.rstrip("\n") + promotion_note)
     print(f"{CYAN}Original marked:{RESET}       {source}")
+
+    atomic_write_text(target_path, promoted_text)
+    print(f"{GREEN}Promoted note written:{RESET} {target_path}")
 
     # Commit and push corporate repo
     try:
@@ -161,8 +204,16 @@ def main() -> None:
         ))
         print(f"{GREEN}Committed and pushed to corporate repo.{RESET}")
     except subprocess.CalledProcessError as exc:
-        print(f"{YELLOW}Warning:{RESET} git commit/push failed — handle manually.")
-        print(f"  {exc.stderr.decode().strip() if exc.stderr else exc}")
+        detail = exc.stderr.decode().strip() if exc.stderr else str(exc)
+        print(f"{RED}ERROR:{RESET} git commit/push failed; the note did NOT reach "
+              f"the corporate repo.")
+        print(f"  {detail}")
+        print(f"{GRAY}The local files were written; re-run after resolving, or "
+              f"commit and push {corp_repo} by hand.{RESET}")
+        # Non-zero, and no completion banner. Printing "Promotion complete" here
+        # is what let a note be marked "Promoted to corporate" in the source
+        # while it never left the laptop.
+        sys.exit(1)
 
     # Confirmation
     print(f"\n{BOLD}Promotion complete:{RESET}")

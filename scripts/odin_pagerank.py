@@ -51,11 +51,14 @@ _DEFAULT_PAGERANK_CFG = {
     "max_iterations": 100,
     "mode": "r7+ppr",
     "blend_weights": {"relevance": 0.50, "pagerank": 0.50},
-    "seed_threshold": 0.45,
 }
 
 WIKILINK_RE = re.compile(r"\[\[\s*([^\]|]+?)\s*(?:\|[^\]]*)?\]\]")
-FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+# `\n---\s*(?:\n|\Z)`: the closing fence may end the FILE. Requiring a newline
+# after it left the frontmatter of an EOF-terminated note unstripped, so its
+# `[[wikilinks]]` became graph edges -- the exact thing the caller strips it to
+# prevent. The shared parser already accepts this form; this regex did not.
+FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---[ \t]*(?:\n|\Z)", re.DOTALL)
 
 _STOPWORDS = {
     "the", "a", "an", "and", "or", "but", "for", "of", "to", "in", "on", "at",
@@ -177,7 +180,17 @@ def build_graph(brain_root: Path, workspace_root: Path | None = None) -> BrainGr
         try:
             rel = str(path.relative_to(workspace_root)).replace("\\", "/")
         except ValueError:
-            rel = str(path).replace("\\", "/")
+            # The brain lives under the DATA root and `workspace_root` is the
+            # ENGINE root, so this raised for EVERY note and the fallback put an
+            # absolute data-root path into `rel` -- leaked into CLI/JSON output
+            # against this repo's leak-guard norm, and handed to `is_denied`,
+            # which expects a workspace-relative path. Falling back to the brain
+            # root keeps it relative and keeps the air-gap check meaningful; the
+            # bare filename is the last resort.
+            try:
+                rel = str(path.relative_to(brain_root)).replace("\\", "/")
+            except ValueError:
+                rel = path.name
         if is_denied(rel):
             continue
         text = path.read_text(encoding="utf-8", errors="replace")

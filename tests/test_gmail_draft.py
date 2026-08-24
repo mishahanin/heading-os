@@ -102,10 +102,32 @@ def test_missing_attachment_raises_before_any_api_call(tmp_path):
 
 
 def test_oversized_attachments_raise(tmp_path, monkeypatch):
+    """The guard measures the ENCODED message, so its wording moved with it.
+
+    It used to sum the raw attachment bytes as it read them and say "25 MB
+    limit"; the limit that matters applies to the base64url-encoded message,
+    which is ~4/3 the size and also carries the body and the MIME overhead.
+    """
     monkeypatch.setattr(gmail_draft, "MAX_TOTAL_BYTES", 32)
     big = _attachment(tmp_path, "large.pdf", size=64)
-    with pytest.raises(DraftBuildError, match="25 MB limit"):
+    with pytest.raises(DraftBuildError, match="over Gmail"):
         build_message(["them@example.com"], [], [], "Claim", "body\n", [big])
+
+
+def test_the_size_guard_counts_base64_inflation_not_raw_bytes(tmp_path, monkeypatch):
+    """19 MB of raw attachments used to pass `19 < 25` and fail at the API."""
+    monkeypatch.setattr(gmail_draft, "MAX_TOTAL_BYTES", 1000)
+    # 800 raw bytes is under the cap; base64 makes it ~1068, which is not.
+    attachment = _attachment(tmp_path, "mid.bin", size=800)
+    with pytest.raises(DraftBuildError, match="over Gmail"):
+        build_message(["them@example.com"], [], [], "Claim", "body\n", [attachment])
+
+
+def test_a_message_inside_the_encoded_limit_is_built(tmp_path, monkeypatch):
+    monkeypatch.setattr(gmail_draft, "MAX_TOTAL_BYTES", 100_000)
+    attachment = _attachment(tmp_path, "small.bin", size=800)
+    msg = build_message(["them@example.com"], [], [], "Claim", "body\n", [attachment])
+    assert msg["Subject"] == "Claim"
 
 
 def test_reply_headers_are_set_for_threading():

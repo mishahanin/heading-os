@@ -408,9 +408,9 @@ def get_per_exec_contacts_dir(slug: str) -> Path:
     `get_per_exec_repo_path` describes. Five call sites joined `contacts`
     straight onto the repo root instead, one level too high, and read an empty
     directory as an empty fleet: on 2026-08-23 `admin-health.py` reported the
-    whole fleet DEAD with 0 contacts while Dima's overlay held 11 files and
-    Jochanan's held 7. Two of the five WROTE there, filing contacts into a
-    directory no reader ever opens.
+    whole fleet DEAD with 0 contacts while two live exec overlays held 11 and
+    7 files. Two of the five WROTE there, filing contacts into a directory no
+    reader ever opens.
 
     Exists as a helper rather than a path join so the layout is stated once.
     """
@@ -524,6 +524,26 @@ _SYSTEM_FIELDS = {"name": "name", "github_user": "github_user",
                   "data_repo": "data_repo", "status": "provisioning_status"}
 
 
+def repo_name_for(slug: str) -> str:
+    """The GitHub repo name for an exec's data overlay, from the fleet roster.
+
+    Falls back to the `heading-os-data-{slug}` convention when the roster row
+    omits `data_repo`, which is what a hand-added row usually does.
+
+    It lives here, not in a caller, because it had a caller that did not use
+    it. `scripts/admin-health.py` resolved the name through the roster while
+    `scripts/aggregate-crm.py` hardcoded the convention, so an exec whose row
+    named a different repo had their overlay cloned correctly by the health
+    dashboard and 404'd by the CRM aggregation -- which then contributed zero
+    of their contacts and exited 0. Two fleet tools cannot drift on a repo name
+    they both read from one function.
+    """
+    for row in load_fleet():
+        if row.get("slug") == slug and row.get("data_repo"):
+            return row["data_repo"]
+    return f"heading-os-data-{slug}"
+
+
 def load_fleet() -> list[dict]:
     """Join the org chart and the fleet roster on `slug`. Sorted by slug.
 
@@ -633,6 +653,31 @@ def load_routing_map() -> dict:
     return {"default": m["default"], "rules": dict(m["rules"])}
 
 
+def matched_routing_rule(file_path: str) -> str | None:
+    """The routing-map key that governs `file_path`, or None if none does.
+
+    Split out of `get_routing_destination` on 2026-08-24 so a caller can tell
+    "this path has an explicit rule" from "this path fell through to the map
+    default". `classification-health.py --unclassified` needs exactly that
+    distinction and had no way to ask for it, so its third bucket did not exist
+    and an unclassified file was silently counted as CEO-only.
+
+    Most-specific (longest matching) key wins. A key ending in '/' matches the
+    path as a directory prefix; a key without a trailing '/' matches either that
+    exact file or that path as a prefix.
+    """
+    rules = load_routing_map()["rules"]
+    # normalize: strip leading slash, convert backslashes, collapse to posix
+    norm = file_path.replace("\\", "/").lstrip("/")
+    best_key = None
+    for key in rules:
+        k = key.rstrip("/")
+        if norm == k or norm.startswith(k + "/"):
+            if best_key is None or len(key) > len(best_key):
+                best_key = key
+    return best_key
+
+
 def get_routing_destination(file_path: str) -> str:
     """Resolve a workspace-relative path to 'engine' | 'private' | 'corporate'.
 
@@ -643,18 +688,10 @@ def get_routing_destination(file_path: str) -> str:
     Fails closed: load_routing_map() already defaults to 'private' on error.
     """
     m = load_routing_map()
-    rules = m["rules"]
-    # normalize: strip leading slash, convert backslashes, collapse to posix
-    norm = file_path.replace("\\", "/").lstrip("/")
-    best_key = None
-    for key in rules:
-        k = key.rstrip("/")
-        if norm == k or norm.startswith(k + "/"):
-            if best_key is None or len(key) > len(best_key):
-                best_key = key
+    best_key = matched_routing_rule(file_path)
     if best_key is None:
         return m["default"]
-    return rules[best_key]
+    return m["rules"][best_key]
 
 
 def get_classification(file_path: str) -> str:

@@ -102,7 +102,11 @@ def test_crm_dashboard_css_carries_accent_and_font_stack():
 def test_partner_enablement_html_carries_accent_and_font_stack(argv, accent):
     mod = _load("generate-partner-enablement.py", argv=argv)
 
-    html = mod.build_html("HDR", "PAGE", "BLUE", "BLACK")
+    # Three arguments since 2026-08-24: `page_logo_b64` was accepted and never
+    # referenced, so a caller wiring a distinct page logo got the blue one
+    # silently. This call passed "PAGE" into that slot and asserted nothing
+    # about it, which is exactly why the dead parameter survived.
+    html = mod.build_html("HDR", "BLUE", "BLACK")
     assert f"--accent: {accent};" in html, "theme accent missing - document rendered unstyled"
     assert "fonts.googleapis.com" in html and "'Inter'" in html
     assert "<!DOCTYPE html>" in html and "</html>" in html

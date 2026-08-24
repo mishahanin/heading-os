@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 import urllib.parse
@@ -81,23 +82,45 @@ WHITELIST_NEGATIVE: list[str] = [
 ]
 
 
-def match_whitelist(topic: str) -> tuple[str | None, bool]:
+def _term_in(term: str, text: str) -> bool:
+    """Is `term` present in `text` as a WHOLE word (or whole phrase)?
+
+    Plain `term in text` fired on every short entry inside an unrelated word:
+    "ai" matched Bahrain, Thailand and email; "war" matched toward; "eth"
+    matched together; "modi" matched modified. Every one of those issues a
+    pointless 500-market fetch and injects irrelevant market prose into a
+    brief -- precisely the noise the whitelist exists to prevent.
+    """
+    return re.search(rf"\b{re.escape(term)}\b", text) is not None
+
+
+def match_whitelist(topic: str) -> tuple[str | None, bool, list[str]]:
     """Apply precedence rule (P2): positive match required to fire.
 
-    Returns (positive_category_or_None, has_negative_match).
+    Returns (positive_category_or_None, has_negative_match, matched_terms).
+
     Caller logic: if positive matched, fire (positive wins over negative).
-    If only negative matched (no positive), skip.
-    If neither matched, also skip.
+    If only negative matched (no positive), skip. If neither matched, skip.
+
+    `matched_terms` is the third return value because the caller needs it:
+    the whitelist fires on ANY single term while the market filter required
+    the WHOLE topic string verbatim in a market question, so a documented
+    example like "Iran tensions" fired on "iran" and could then only match a
+    question containing the literal phrase "iran tensions". The filter is given
+    the terms that actually fired instead.
     """
     topic_lower = topic.lower()
     positive_match: str | None = None
+    matched_terms: list[str] = []
     for category, terms in WHITELIST_POSITIVE.items():
-        if any(t in topic_lower for t in terms):
+        hits = [t for t in terms if _term_in(t, topic_lower)]
+        if hits:
             positive_match = category
+            matched_terms = hits
             break
 
-    has_negative = any(neg in topic_lower for neg in WHITELIST_NEGATIVE)
-    return positive_match, has_negative
+    has_negative = any(_term_in(neg, topic_lower) for neg in WHITELIST_NEGATIVE)
+    return positive_match, has_negative, matched_terms
 
 
 def _http_get(url: str, timeout: int = DEFAULT_TIMEOUT) -> dict | list:
@@ -156,19 +179,30 @@ def filter_markets(
     topic: str,
     keywords: list[str] | None,
     min_volume_usd: float,
+    match_terms: list[str] | None = None,
 ) -> list[dict]:
-    """P3: client-side filter on `question` field, case-insensitive substring.
+    """P3: client-side filter on `question` field, case-insensitive.
 
-    A market passes if the topic appears in the question text. Keywords (P4)
-    further narrow the match - market must contain at least one keyword if any
-    are provided. P5: drop markets below the volume threshold.
+    A market passes if any of `match_terms` -- the whitelist terms that fired
+    for this topic -- appears in the question as a whole word. Falls back to
+    the whole topic string when no terms are supplied.
+
+    It required the WHOLE topic verbatim before, which could not agree with a
+    whitelist that fires on any ONE term: the module's own example
+    `polymarket.py "Iran tensions"` fired on "iran" and then matched only
+    questions containing the literal phrase "iran tensions", so the documented
+    use cases returned `no_matches` while relevant markets existed.
+
+    Keywords (P4) further narrow the match - a market must contain at least one
+    keyword if any are provided. P5: drop markets below the volume threshold.
     """
     topic_lower = topic.lower()
+    needles = [t.lower() for t in (match_terms or []) if t.strip()] or [topic_lower]
     keyword_set = {k.strip().lower() for k in (keywords or []) if k.strip()}
     out: list[dict] = []
     for m in markets:
         question = (m.get("question") or "").lower()
-        if topic_lower not in question:
+        if not any(_term_in(n, question) for n in needles):
             continue
         if keyword_set and not any(kw in question for kw in keyword_set):
             continue
@@ -264,12 +298,26 @@ def query_polymarket(
             "skip_reason": null | "outside_whitelist" | "no_matches" | "fetch_error",
             "query_used": "...",
             "whitelist_match": "ai_big_tech" | ... | null,
+            # Only on an outside_whitelist skip: True when a WHITELIST_NEGATIVE
+            # term matched, so a suppressed topic is distinguishable from an
+            # unknown one. Kept out of skip_reason on purpose -- this file and
+            # two SKILL.md files each enumerate the three reasons above.
+            "negative_match": true | false,
             "error": null | "...",  # only when fetch fails
         }
     """
-    positive, _has_negative = match_whitelist(topic)
+    positive, has_negative, matched_terms = match_whitelist(topic)
     if positive is None:
+        # The negative list is now READ, and reported in its OWN field.
+        # It was computed, returned, and discarded, while the docstring
+        # described it as a precedence rule -- so the whole list did nothing.
+        #
+        # Deliberately NOT a fourth `skip_reason` value: `scripts/polymarket.py`
+        # itself and two SKILL.md files each enumerate the three known reasons,
+        # and a new one would fall through all three. The reason stays
+        # `outside_whitelist`; `negative_match` says which kind it was.
         return {"markets": [], "skip_reason": "outside_whitelist",
+                "negative_match": has_negative,
                 "query_used": topic, "whitelist_match": None}
 
     try:
@@ -279,7 +327,8 @@ def query_polymarket(
                 "query_used": topic, "whitelist_match": positive,
                 "error": f"Gamma API failed: {str(e)[:200]}"}
 
-    filtered = filter_markets(raw_markets, topic, keywords, min_volume_usd)
+    filtered = filter_markets(raw_markets, topic, keywords, min_volume_usd,
+                              match_terms=matched_terms)
     if not filtered:
         return {"markets": [], "skip_reason": "no_matches",
                 "query_used": topic, "whitelist_match": positive}
@@ -313,6 +362,15 @@ def main() -> int:
     else:
         if result.get("skip_reason") == "outside_whitelist":
             return 0
+        if result.get("skip_reason") == "fetch_error":
+            # A DOWN SOURCE is not an empty result. This fell through to
+            # `render_markdown([])`, which prints "No matching prediction
+            # markets found." -- so /market-brief and /ceo-intel told an
+            # executive there was no market signal when the API had 403'd.
+            # The error string was set in `query_polymarket` and surfaced
+            # nowhere outside --output json.
+            print(f"_Polymarket unavailable: {result.get('error', 'fetch failed')}_")
+            return 1
         print(render_markdown(result.get("markets", [])))
 
     return 0

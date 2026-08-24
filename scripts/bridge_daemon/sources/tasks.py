@@ -12,14 +12,15 @@ items from its own surface. Each task gets a derived stable key
 (captured | priority | first chars of description) since tasks.md has
 no explicit IDs.
 """
-import json
 import re
 import threading
 from datetime import date, datetime, timezone
 from scripts.utils.workspace import get_default_tz
 from pathlib import Path
 
-from scripts.bridge_daemon._atomic import atomic_write_text
+from scripts.bridge_daemon._shapes import entry_ts, is_undo
+
+from scripts.bridge_daemon._jsonl import append_jsonl, read_jsonl_capped
 from scripts.utils.paths import get_data_root
 
 PRIORITY_ORDER = {"P1": 0, "P2": 1, "P3": 2, "P4": 3}
@@ -44,95 +45,53 @@ def _task_key(captured: str, priority: str, description: str) -> str:
     return f"{captured}|{priority}|{desc}"
 
 
-def read_done_log(workspace_root: Path) -> set[str]:
+def read_done_log(data_root: Path) -> set[str]:
     """Return the set of task keys marked done via the dashboard.
 
     Last entry per key wins (tombstones restore the row).
     """
-    log_path = workspace_root / DONE_LOG_FILE
-    if not log_path.exists():
-        return set()
-    try:
-        if log_path.stat().st_size > DONE_LOG_MAX_BYTES:
-            return set()
-        text = log_path.read_text(encoding="utf-8")
-    except OSError:
-        return set()
+    log_path = data_root / DONE_LOG_FILE
+    entries, _truncated = read_jsonl_capped(log_path, DONE_LOG_MAX_BYTES)
     out: dict[str, dict] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(entry, dict):
-            continue
+    for entry in entries:
         key = entry.get("task_key")
         if not isinstance(key, str) or not key:
             continue
-        if entry.get("undo") is True:
+        if is_undo(entry):
             out.pop(key, None)
             continue
         out[key] = entry
     return set(out.keys())
 
 
-def _write_done_entry(workspace_root: Path, entry: dict) -> dict:
-    """Append a JSONL line under the lock, atomic-write the file."""
-    log_path = workspace_root / DONE_LOG_FILE
+def _write_done_entry(data_root: Path, entry: dict) -> dict:
+    """Append a JSONL line under the lock, via the shared O_APPEND primitive."""
+    log_path = data_root / DONE_LOG_FILE
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with _DONE_LOG_LOCK:
-        existing = ""
-        if log_path.exists():
-            try:
-                existing = log_path.read_text(encoding="utf-8")
-            except OSError:
-                existing = ""
-        new_content = existing
-        if existing and not existing.endswith("\n"):
-            new_content += "\n"
-        new_content += json.dumps(entry) + "\n"
         try:
-            atomic_write_text(log_path, new_content, mode=0o644)
+            append_jsonl(log_path, entry)
         except OSError as e:
             return {"ok": False, "error": f"write failed: {e}"}
     return {"ok": True}
 
 
-def done_log_recent(workspace_root: Path, limit: int = 20) -> list[dict]:
+def done_log_recent(data_root: Path, limit: int = 20) -> list[dict]:
     """Return the most-recent active done entries (tombstoned omitted).
 
     Each entry: {task_key, ts, date, note, description (parsed from key)}.
     Ordered by ts DESC. Used by the /tasks 'Recently done' footer so the
     CEO can restore an accidental mark-done.
     """
-    log_path = workspace_root / DONE_LOG_FILE
-    if not log_path.exists():
-        return []
-    try:
-        if log_path.stat().st_size > DONE_LOG_MAX_BYTES:
-            return []
-        text = log_path.read_text(encoding="utf-8")
-    except OSError:
-        return []
+    log_path = data_root / DONE_LOG_FILE
+    entries, _truncated = read_jsonl_capped(log_path, DONE_LOG_MAX_BYTES)
     # Last record per key wins (matches read_done_log semantics).
     active: dict[str, dict] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(entry, dict):
-            continue
+    for entry in entries:
         key = entry.get("task_key")
         if not isinstance(key, str) or not key:
             continue
-        if entry.get("undo") is True:
+        if is_undo(entry):
             active.pop(key, None)
             continue
         active[key] = entry
@@ -146,7 +105,7 @@ def done_log_recent(workspace_root: Path, limit: int = 20) -> list[dict]:
             "task_key": key,
             "description": description,
             "priority": priority,
-            "ts": entry.get("ts", ""),
+            "ts": entry_ts(entry),
             "date": entry.get("date", ""),
             "note": entry.get("note", ""),
         })
@@ -154,7 +113,7 @@ def done_log_recent(workspace_root: Path, limit: int = 20) -> list[dict]:
     return rows[: max(0, int(limit))]
 
 
-def mark_done(workspace_root: Path, task_key: str, note: str = "") -> dict:
+def mark_done(data_root: Path, task_key: str, note: str = "") -> dict:
     """Append a done entry for `task_key`. Returns {ok, task_key, ts, date}."""
     if not isinstance(task_key, str) or not task_key.strip():
         return {"ok": False, "error": "task_key is required"}
@@ -168,19 +127,19 @@ def mark_done(workspace_root: Path, task_key: str, note: str = "") -> dict:
         "ts": now.isoformat(),
         "note": safe_note,
     }
-    result = _write_done_entry(workspace_root, entry)
+    result = _write_done_entry(data_root, entry)
     if not result["ok"]:
         return result
     return {"ok": True, "task_key": task_key, "ts": entry["ts"], "date": entry["date"]}
 
 
-def undo_done(workspace_root: Path, task_key: str) -> dict:
+def undo_done(data_root: Path, task_key: str) -> dict:
     """Tombstone a prior done entry for `task_key`. Idempotent."""
     if not isinstance(task_key, str) or not task_key.strip():
         return {"ok": False, "error": "task_key is required"}
     now = datetime.now(timezone.utc)
     entry = {"task_key": task_key, "undo": True, "ts": now.isoformat()}
-    result = _write_done_entry(workspace_root, entry)
+    result = _write_done_entry(data_root, entry)
     if not result["ok"]:
         return result
     return {"ok": True, "task_key": task_key, "ts": entry["ts"]}
@@ -239,14 +198,15 @@ def _strip_metadata_suffix(rest: str) -> tuple[str, str | None, str | None]:
     return body, meta_kind, meta_source
 
 
-def list_active_tasks(workspace_root: Path, today: date | None = None,
-                      data_root: "Path | None" = None) -> dict:
+def list_active_tasks(data_root: "Path | None" = None,
+                      today: date | None = None) -> dict:
     """Parse viraid tasks.md and return active items.
 
     Returns:
         {
             "tasks": [
                 {
+                    "task_key": str,           # the id mark_done/undo_done take
                     "captured": "YYYY-MM-DD",  # date the task was captured
                     "priority": "P1" | "P2" | ...,
                     "description": str,
@@ -260,25 +220,45 @@ def list_active_tasks(workspace_root: Path, today: date | None = None,
             ] sorted by (priority, days_until_due, captured),
             "counts": {"P1": N, "P2": N, "P3": N},
             "overdue_count": int,
+            "done_filtered": int,      # rows hidden because they are marked done
+            "done_log_count": int,     # active entries in the done log
             "data_time": ISO 8601 UTC of file mtime (None if missing),
         }
 
+    `task_key`, `done_filtered` and `done_log_count` were all returned and none
+    of them documented. `task_key` is the worst of the three: the mark-done
+    workflow needs it and a caller could not discover it from this block.
+
     HEADING OS engine/data split: tasks.md is DATA, so it resolves under
-    ``data_root`` (falls back to ``workspace_root`` when not supplied). The
-    dashboard-side done log is also DATA and uses ``data_root`` too.
+    ``data_root``, which falls back to the ``get_data_root()`` seam when not
+    supplied. The done log is DATA too and shares that root; both used to sit
+    behind a dead leading ``workspace_root``, which is what made an audit read
+    the writer and the reader as pointing at different trees. They never did.
     """
     if data_root is None:
         data_root = get_data_root()
     today = today or datetime.now(get_default_tz()).date()
     tasks_md = data_root / "outputs" / "operations" / "viraid" / "tasks.md"
+
+    def _empty() -> dict:
+        # `done_filtered` and `done_log_count` are in the Returns block above,
+        # and both early exits used to omit them -- so a consumer indexing
+        # either one got a KeyError exactly when tasks.md was missing. The done
+        # LOG can be non-empty in that state, which is why the count is read
+        # rather than hardcoded to 0: the "Recently done" footer still has
+        # rows to show.
+        return {"tasks": [], "counts": {}, "overdue_count": 0,
+                "done_filtered": 0, "done_log_count": len(read_done_log(data_root)),
+                "data_time": None}
+
     if not tasks_md.exists():
-        return {"tasks": [], "counts": {}, "overdue_count": 0, "data_time": None}
+        return _empty()
 
     try:
         text = tasks_md.read_text(encoding="utf-8")
         mtime = tasks_md.stat().st_mtime
     except OSError:
-        return {"tasks": [], "counts": {}, "overdue_count": 0, "data_time": None}
+        return _empty()
 
     # Phase 1.90: pull the done-key set up front so we can filter cheaply.
     # The done log is DATA too; read it from the resolved data_root.

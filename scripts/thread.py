@@ -56,10 +56,28 @@ def _initial_body(title: str) -> str:
 
 
 def _find_thread_by_id(threads_root: Path, thread_id: str) -> Path:
-    for type_ in ("business", "personal"):
-        candidate = threads_root / type_ / f"{thread_id}.md"
-        if candidate.exists():
-            return candidate
+    """Resolve an ID to one thread file, refusing an ambiguous hit.
+
+    The scan used to return the first match and `business` is scanned first, so
+    an ID present under BOTH types silently resolved to the business copy. That
+    is the wrong direction to fail in: personal threads are CEO-only, and a
+    `log` aimed at the personal one landed in the business file with no signal.
+    """
+    matches = [
+        threads_root / type_ / f"{thread_id}.md"
+        for type_ in ("business", "personal")
+        if (threads_root / type_ / f"{thread_id}.md").exists()
+    ]
+    if len(matches) > 1:
+        where = ", ".join(m.parent.name for m in matches)
+        raise ValueError(
+            f"thread '{thread_id}' exists under both {where}; rename one, the ID must be unique")
+    if matches:
+        # Unpacked, not indexed: the guard above already refused len > 1, so
+        # there is exactly one. `matches[0]` read as "prefer the first", which
+        # is the behaviour this function was fixed to stop having.
+        (only,) = matches
+        return only
     raise FileNotFoundError(f"thread '{thread_id}' not found in business/ or personal/")
 
 
@@ -108,17 +126,53 @@ def _prepend_log_entry(body: str, entry: str) -> str:
     return body[:insert_at] + "\n\n" + entry.rstrip("\n") + "\n" + body[insert_at:].lstrip("\n")
 
 
-def _tick_followup(body: str, index: int) -> str:
-    """Convert the Nth `- [ ]` line to `- [x]`. Index is stable: items are appended, never prepended."""
+FOLLOWUPS_HEADER = "## Open follow-ups"
+
+
+def _section_bounds(body: str, section_header: str) -> tuple[int, int] | None:
+    """(start, end) line indices of a section's BODY, or None if absent.
+
+    Same boundary rule as `_append_under_section`: a section runs to the next
+    level-2 header or end of file.
+    """
     lines = body.split("\n")
-    cursor = 0
+    start = None
     for i, line in enumerate(lines):
-        if line.lstrip().startswith("- [ ]"):
+        if line.strip() == section_header:
+            start = i + 1
+            break
+    if start is None:
+        return None
+    for j in range(start, len(lines)):
+        if lines[j].startswith("## "):
+            return start, j
+    return start, len(lines)
+
+
+def _tick_followup(body: str, index: int) -> str:
+    """Convert the Nth `- [ ]` line IN THE FOLLOW-UPS SECTION to `- [x]`.
+
+    Index is stable: items are appended, never prepended.
+
+    The scan used to run over the whole file, while the CLI help promised an
+    "index of follow-up". Any checkbox in Notes or Decisions -- or one written
+    by hand above the section -- shifted every index, so `--done 0` ticked an
+    unrelated line and left the follow-up open, silently.
+    """
+    lines = body.split("\n")
+    bounds = _section_bounds(body, FOLLOWUPS_HEADER)
+    if bounds is None:
+        raise IndexError(f"no `{FOLLOWUPS_HEADER}` section in this thread")
+    start, end = bounds
+    cursor = 0
+    for i in range(start, end):
+        if lines[i].lstrip().startswith("- [ ]"):
             if cursor == index:
-                lines[i] = line.replace("- [ ]", "- [x]", 1)
+                lines[i] = lines[i].replace("- [ ]", "- [x]", 1)
                 return "\n".join(lines)
             cursor += 1
-    raise IndexError(f"no follow-up at index {index}")
+    raise IndexError(
+        f"no follow-up at index {index}; the section holds {cursor} open item(s)")
 
 
 def cmd_open(args: argparse.Namespace) -> int:
@@ -247,6 +301,10 @@ def _set_status(thread_id: str, new_status: str, index_action: str,
         try:
             remove_thread_from_index(memory_md, path=rel_path)
         except ValueError:
+            # Line already absent -- the thread was closed or on-hold, so it was
+            # never in the active index. Same expected case its twin in
+            # cmd_archive_scan documents; the frontmatter write above already
+            # landed and is what every reader consults.
             pass
     elif index_action == "add":
         ensure_active_threads_section(memory_md)
@@ -449,11 +507,15 @@ def main(argv: list[str] | None = None) -> int:
     p_quiet = sub.add_parser(
         "quiet", help="Suppress a thread from proactive surfacing until a date")
     p_quiet.add_argument("thread_id")
-    p_quiet.add_argument("--until", metavar="YYYY-MM-DD",
-                         help="Last date on which the thread stays quiet")
-    p_quiet.add_argument("--indefinite", action="store_true",
-                         help="Quiet with no end date; lifts only when you raise it")
-    p_quiet.add_argument("--clear", action="store_true", help="Lift the quiet period")
+    # Mutually exclusive: the three express one choice, and combining them used
+    # to be accepted silently with --clear winning, so `--until 2026-09-01
+    # --clear` reported "quiet period cleared" for someone who meant to set one.
+    q_mode = p_quiet.add_mutually_exclusive_group(required=True)
+    q_mode.add_argument("--until", metavar="YYYY-MM-DD",
+                        help="Last date on which the thread stays quiet")
+    q_mode.add_argument("--indefinite", action="store_true",
+                        help="Quiet with no end date; lifts only when you raise it")
+    q_mode.add_argument("--clear", action="store_true", help="Lift the quiet period")
     p_quiet.set_defaults(func=cmd_quiet)
     p_reindex = sub.add_parser(
         "reindex", help="Rewrite every MEMORY.md hook from thread frontmatter")
@@ -474,8 +536,9 @@ def main(argv: list[str] | None = None) -> int:
     p_arch.add_argument("--apply", action="store_true", help="Actually move files (default: dry-run)")
     p_arch.set_defaults(func=cmd_archive_scan)
     args = parser.parse_args(argv)
-    if not hasattr(args, "func"):
-        parser.error(f"subcommand '{args.cmd}' has no handler registered")
+    # No `hasattr(args, "func")` guard here: subparsers are required=True and
+    # every one sets a handler, so the branch could not run. The invariant is
+    # checked at CI time instead, by test_every_thread_subcommand_has_a_handler.
     try:
         return args.func(args)
     except (FileNotFoundError, IndexError, RuntimeError, ValueError) as exc:

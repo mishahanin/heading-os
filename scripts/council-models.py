@@ -34,6 +34,7 @@ from scripts.utils.council_models import (  # noqa: E402
     PROVIDERS,
     config_path,
     get_model,
+    is_fallback,
     load_all,
     set_model,
 )
@@ -46,7 +47,7 @@ def show() -> int:
     print(f"{BOLD}Council model pins{RESET} {GRAY}({config_path()}){RESET}")
     for provider in PROVIDERS:
         model = resolved[provider]
-        flag = f" {GRAY}(fallback){RESET}" if model == FALLBACKS[provider] and not config_path().exists() else ""
+        flag = f" {GRAY}(fallback){RESET}" if is_fallback(provider) else ""
         print(f"  {CYAN}{provider:<8}{RESET} {model}{flag}")
     return 0
 

@@ -20,8 +20,8 @@ sets up GitHub repos, clones corporate content, registers exec in CRM central, a
 installs scheduled sync.
 
 Usage:
-    python provision-exec.py --name "Omar Said" --title "COO" \\
-        --email "erin@31c.io" --role coo --github-user emposha \\
+    python provision-exec.py --name "James Bond" --title "COO" \\
+        --email "james.bond@example.com" --role coo --github-user example-user \\
         [--workspace-dir PATH] [--reprovisioning]
 """
 
@@ -44,7 +44,9 @@ from scripts.utils.workspace import (
     get_crm_central_path, load_admin_config,
     load_github_org,
 )
+from scripts.utils.atomic import atomic_write_text
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
+from scripts.utils.knowledge import KNOWLEDGE_TYPES
 
 # ============================================================
 # Constants
@@ -84,10 +86,7 @@ PREREQUISITES = {
     "claude": {"check": ["claude", "--version"], "install": "https://docs.anthropic.com/en/docs/claude-code"},
 }
 
-KNOWLEDGE_SUBDIRS = [
-    "fleeting", "signals", "decisions", "meetings",
-    "research", "strategy", "people", "technology",
-]
+KNOWLEDGE_SUBDIRS = list(KNOWLEDGE_TYPES)
 
 # ============================================================
 # Templates
@@ -202,8 +201,9 @@ GETTING_STARTED_TEMPLATE = textwrap.dedent("""\
 
     ## Sync
 
-    Corporate content syncs automatically on schedule.
-    Your personal content is backed up when you run `/backup`.
+    Pull corporate updates with `git pull` in `corporate/`.
+    Push your own work with `/backup` (which runs `push-all.py`).
+    Sentinel runs on a 15-minute schedule; there is no hourly auto-sync.
 
     ## Need Help?
 
@@ -240,7 +240,9 @@ def save_provision_state(workspace_dir: Path, state: dict) -> None:
     state_dir = workspace_dir / ".sync"
     state_dir.mkdir(parents=True, exist_ok=True)
     state_file = state_dir / "provision-state.json"
-    state_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    # Atomic: a torn provision-state.json loses the step ledger this
+    # script uses to know what a re-run may skip.
+    atomic_write_text(state_file, json.dumps(state, indent=2))
 
 
 def mark_step_done(workspace_dir: Path, state: dict, step: str) -> None:
@@ -351,7 +353,7 @@ def create_workspace_identity(state: dict, args, workspace_dir: Path, slug: str)
         "type": "exec-workspace",
     }
     identity_file = workspace_dir / ".workspace-identity.json"
-    identity_file.write_text(json.dumps(identity, indent=2), encoding="utf-8")
+    atomic_write_text(identity_file, json.dumps(identity, indent=2))
     print(f"  {GREEN}[ok]{RESET} .workspace-identity.json created (slug: {slug})")
 
     mark_step_done(workspace_dir, state, "create_workspace_identity")
@@ -571,7 +573,7 @@ def create_settings_local_json(state: dict, args, workspace_dir: Path) -> bool:
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "python3 .claude/hooks/session-start.py",
+                            "command": _hook_command("session-start.py"),
                             "timeout": 15,
                         }
                     ],
@@ -583,7 +585,7 @@ def create_settings_local_json(state: dict, args, workspace_dir: Path) -> bool:
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "python3 .claude/hooks/post-write-sanitize.py",
+                            "command": _hook_command("post-write-sanitize.py"),
                             "timeout": 15,
                         }
                     ],
@@ -915,8 +917,12 @@ def create_crm_repo(state: dict, args, workspace_dir: Path, slug: str) -> bool:
             "gh", "repo", "clone", full_repo, str(clone_dir),
         ], capture_output=True, text=True, timeout=60)
         if result.returncode != 0:
+            # Step NOT marked done, so a re-run retries the seed. Marking it
+            # complete here meant the exec kept an empty CRM repo forever: the
+            # idempotent re-run this script is built around skipped the only
+            # step that could have fixed it.
             print(f"  {YELLOW}[warn]{RESET} Could not clone for seed: {result.stderr}")
-            mark_step_done(workspace_dir, state, "create_crm_repo")
+            print(f"  {YELLOW}[warn]{RESET} Seed skipped; re-run provisioning to retry.")
             return True
         (clone_dir / "contacts").mkdir(exist_ok=True)
         (clone_dir / "contacts" / ".gitkeep").write_text("", encoding="utf-8")
@@ -986,7 +992,9 @@ def register_in_exec_registry(state: dict, args, workspace_dir: Path, slug: str)
         if args.github_user:
             entry["github_user"] = args.github_user
         registry["executives"].append(entry)
-        registry_file.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+        # Atomic: on a parse failure the loader silently resets the registry
+        # to an EMPTY executives list, so a torn write wipes every exec.
+        atomic_write_text(registry_file, json.dumps(registry, indent=2))
         print(f"  {GREEN}[ok]{RESET} Added {slug} to exec-registry.json")
 
     # Try to commit and push if in a git repo
@@ -1105,8 +1113,14 @@ def main():
     # which the two-part HEADING OS topology replaces. Running it would create an
     # old-model layout that no longer syncs. Use the admin-layer tool instead.
     # Escape hatch (transition only): set HEADING_OS_ALLOW_LEGACY_PROVISION=1.
+    #
+    # `--help` is let through FIRST. The refusal used to run before argparse
+    # existed, so reading this tool's interface -- the stated reason the file is
+    # kept, to port the canary logic -- exited 2 with the banner and no usage.
     import os as _os
-    if _os.environ.get("HEADING_OS_ALLOW_LEGACY_PROVISION") != "1":
+    if any(a in ("-h", "--help") for a in sys.argv[1:]):
+        pass
+    elif _os.environ.get("HEADING_OS_ALLOW_LEGACY_PROVISION") != "1":
         print(
             f"{RED}REFUSED: scripts/provision-exec.py provisions the retired "
             f"single-workspace model and is deprecated.{RESET}\n"
@@ -1122,9 +1136,10 @@ def main():
         description="Provision a new 31C executive workspace.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--name", required=True, help="Full name (e.g., 'Marlow Carter')")
+    parser.add_argument("--name", required=True, help="Full name (e.g., 'James Bond')")
     parser.add_argument("--title", required=True, help="Title (e.g., 'CSO')")
-    parser.add_argument("--email", required=True, help="Corporate email (e.g., 'bob@31c.io')")
+    parser.add_argument("--email", required=True,
+                        help="Corporate email (e.g., 'james.bond@example.com')")
     parser.add_argument("--role", required=True, help="Role identifier (e.g., 'cso')")
     parser.add_argument("--github-user", default=None,
                         help="Exec's GitHub username (for collaborator access)")
@@ -1209,8 +1224,8 @@ def main():
     print(f"  GitHub repo: {GITHUB_ORG}/31c-workspace-{slug}")
     if args.github_user:
         print(f"  GitHub user: {args.github_user} (collaborator invite sent)")
-    print(f"  CRM central: contacts/{slug}/")
-    print(f"  Sync:        Scheduled (hourly)")
+    print(f"  Sync:        git pull (corporate down) / push-all.py (own work up)")
+    print(f"  Scheduled:   Sentinel every 15 min; the hourly sync task was retired")
 
     print(f"\n{BOLD}Next steps for {args.name}:{RESET}")
     if args.github_user:

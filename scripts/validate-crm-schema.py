@@ -30,6 +30,9 @@ from __future__ import annotations
 import argparse
 import json
 import re
+
+# A CRM record filename stem: no separators, no dots, no traversal.
+_CONTACT_SLUG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 import sys
 from pathlib import Path
 
@@ -227,11 +230,31 @@ def main() -> int:
             print(f"{RED}ERROR{RESET}: schema not found at {schemas_dir / schema_file}", file=sys.stderr)
             return 2
 
-    schemas = load_schemas()
+    try:
+        schemas = load_schemas()
+    except (OSError, json.JSONDecodeError) as exc:
+        # Exit 2, not 1. `main` checked the schema files EXIST but not that they
+        # parse, so a truncated schema raised out as exit 1 -- which this
+        # script's own contract defines as "one or more invalid records",
+        # sending the reader to hunt for a data defect in healthy data.
+        print(f"{RED}ERROR{RESET}: a schema file is unreadable or not valid JSON: "
+              f"{exc}", file=sys.stderr)
+        return 2
     validators = {name: jsonschema.Draft202012Validator(s) for name, s in schemas.items()}
 
+    searched: list[Path] = []
     if args.contact:
+        # A CONTACT SLUG, not a path fragment. `CONTACTS_DIR / f"{arg}.md"` with
+        # `../../somewhere/thing` resolved outside the contacts directory and
+        # validated an arbitrary .md file. The user already has a shell, so this
+        # is not a privilege boundary -- the path handling was simply wrong.
+        if not _CONTACT_SLUG_RE.fullmatch(args.contact):
+            print(f"{RED}ERROR{RESET}: --contact must be a bare slug "
+                  f"(letters, digits, hyphen, underscore); got {args.contact!r}",
+                  file=sys.stderr)
+            return 2
         # Single-contact mode: search contacts dir only
+        searched = [CONTACTS_DIR]
         paths = [CONTACTS_DIR / f"{args.contact}.md"]
         if not paths[0].exists():
             print(f"{RED}ERROR{RESET}: {paths[0]} not found", file=sys.stderr)
@@ -247,6 +270,7 @@ def main() -> int:
         else:
             contacts_dir = CONTACTS_DIR
             address_book_dir = ADDRESS_BOOK_DIR
+        searched = [contacts_dir, address_book_dir]
         paths = sorted(contacts_dir.glob("*.md")) if contacts_dir.exists() else []
         if address_book_dir.exists():
             paths = paths + sorted(address_book_dir.glob("*.md"))
@@ -272,6 +296,24 @@ def main() -> int:
                 print(f"  {RED}FAIL{RESET}  {path.stem}  ({schema_name})")
                 for err in errors:
                     print(f"    - {err}")
+
+    # An EMPTY corpus is a setup error, not a pass. `valid == len(paths) == 0`
+    # printed "All 0 records pass schema." and exited 0 for a typo'd --dir, a
+    # moved CRM tree, or a fresh clone with no contacts -- a fully green gate
+    # over nothing validated. The comment block above records this exact
+    # fail-open class as a measured incident; it was closed for the missing
+    # jsonschema path and left open here.
+    if not paths:
+        if args.json:
+            print(json.dumps({"total": 0, "valid": 0, "invalid": 0,
+                              "error": "no records found", "results": []}, indent=2))
+        else:
+            print(f"{RED}No records found to validate.{RESET} Checked: "
+                  f"{', '.join(str(d) for d in searched) or '(nothing)'}",
+                  file=sys.stderr)
+            print(f"{RED}Refusing to report a pass over an empty corpus.{RESET}",
+                  file=sys.stderr)
+        return 2
 
     if args.json:
         print(json.dumps({"total": len(paths), "valid": valid, "invalid": len(paths) - valid, "results": results}, indent=2))

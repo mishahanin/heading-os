@@ -66,7 +66,9 @@ def _roadmap_version(root: Path) -> str | None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Assert version parity across README/CHANGELOG/pyproject.")
+    parser = argparse.ArgumentParser(
+        description="Assert version parity across README, CHANGELOG, pyproject "
+                    "and ROADMAP.")
     parser.add_argument("--quiet", action="store_true", help="print only on failure")
     args = parser.parse_args()
 

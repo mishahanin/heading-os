@@ -10,12 +10,15 @@ The older `recent_inflight_items` / `read_inflight` functions below scan
 the in-flight output directories; `recent_inflight_items` is retained
 because the unified search (sources/search.py) still consumes it.
 """
+import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from scripts.utils.paths import get_data_root
+from scripts.bridge_daemon._safepath import contains_symlink
+
+logger = logging.getLogger(__name__)
 
 # Must stay in sync with sources/pulse.IN_FLIGHT_DIRS (path components).
 # Pulse's count and Studio's item list must agree on the in-flight scope.
@@ -38,7 +41,7 @@ STUDIO_ROW_CAP = 50
 _SKIP_DIRS = frozenset({"_archive", "_work", "_build", "_template"})
 
 
-def _scan_inflight_tree(workspace_root: Path, window_days: int) -> list[dict]:
+def _scan_inflight_tree(data_root: Path, window_days: int) -> list[dict]:
     """Walk IN_FLIGHT_DIRS once, returning every recent file as a dict.
 
     Uses os.scandir + manual recursion so we can prune _SKIP_DIRS BEFORE
@@ -54,7 +57,7 @@ def _scan_inflight_tree(workspace_root: Path, window_days: int) -> list[dict]:
     cutoff_ts = (datetime.now(timezone.utc) - timedelta(days=window_days)).timestamp()
     items: list[dict] = []
     for rel_dir, category in IN_FLIGHT_DIRS:
-        root = workspace_root / rel_dir
+        root = data_root / rel_dir
         if not root.exists():
             continue
         stack = [str(root)]
@@ -79,7 +82,7 @@ def _scan_inflight_tree(workspace_root: Path, window_days: int) -> list[dict]:
                             continue
                         if st.st_mtime < cutoff_ts:
                             continue
-                        rel = Path(entry.path).relative_to(workspace_root).as_posix()
+                        rel = Path(entry.path).relative_to(data_root).as_posix()
                         items.append({
                             "path": rel,
                             "name": name,
@@ -92,8 +95,7 @@ def _scan_inflight_tree(workspace_root: Path, window_days: int) -> list[dict]:
     return items
 
 
-def recent_inflight_items(workspace_root: Path, window_days: int = IN_FLIGHT_WINDOW_DAYS,
-                          data_root: "Path | None" = None) -> dict:
+def recent_inflight_items(data_root: Path, window_days: int = IN_FLIGHT_WINDOW_DAYS) -> dict:
     """Scan in-flight dirs for files modified within the window.
 
     Returns:
@@ -105,11 +107,13 @@ def recent_inflight_items(workspace_root: Path, window_days: int = IN_FLIGHT_WIN
                 (pre-cap; what pulse.kpi.in_flight reports).
         }
 
-    HEADING OS engine/data split: the in-flight output dirs are DATA,
-    resolved under ``data_root`` (falls back to ``workspace_root``).
+    HEADING OS engine/data split: the in-flight output dirs are DATA, so
+    ``data_root`` is REQUIRED -- there is no default and no fallback. This
+    line promised a ``get_data_root()`` fallback until 2026-08-24; the
+    signature has no default, the body never called the seam, and the import
+    that made the claim look true was unused. A caller who trusted it would
+    have omitted the argument and got a TypeError.
     """
-    if data_root is None:
-        data_root = get_data_root()
     all_items = _scan_inflight_tree(data_root, window_days)
     all_items.sort(key=lambda r: r["mtime"], reverse=True)
     total_count = len(all_items)
@@ -135,11 +139,11 @@ TEXT_EXTENSIONS = {".md", ".txt", ".json", ".py", ".yaml", ".yml", ".csv", ".htm
 FILE_MAX_BYTES = 1_000_000  # 1 MB upper bound for any in-flight file
 
 
-def _is_path_under_inflight_dir(workspace_root: Path, rel_path: str) -> bool:
+def _is_path_under_inflight_dir(data_root: Path, rel_path: str) -> bool:
     """True if rel_path resolves inside one of the IN_FLIGHT_DIRS."""
-    target = (workspace_root / rel_path).resolve()
+    target = (data_root / rel_path).resolve()
     for d, _ in IN_FLIGHT_DIRS:
-        root = (workspace_root / d).resolve()
+        root = (data_root / d).resolve()
         try:
             target.relative_to(root)
             return True
@@ -148,7 +152,7 @@ def _is_path_under_inflight_dir(workspace_root: Path, rel_path: str) -> bool:
     return False
 
 
-def read_inflight(workspace_root: Path, rel_path: str) -> dict:
+def read_inflight(data_root: Path, rel_path: str) -> dict:
     """Read a single in-flight file safely.
 
     Path validation:
@@ -177,14 +181,15 @@ def read_inflight(workspace_root: Path, rel_path: str) -> dict:
     # Skip helper subtrees explicitly.
     if any(seg in {"_archive", "_work", "_build", "_template"} for seg in parts):
         return {"ok": False, "error": "path in excluded subtree"}
-    target = (workspace_root / rel_path).resolve()
+    target_raw = data_root / rel_path
+    target = target_raw.resolve()
     # Defense-in-depth: resolved target must still match one of the IN_FLIGHT_DIRS roots.
-    if not _is_path_under_inflight_dir(workspace_root, rel_path):
+    if not _is_path_under_inflight_dir(data_root, rel_path):
         return {"ok": False, "error": "path escapes in-flight dirs"}
     if not target.exists():
         return {"ok": False, "error": "not found"}
     try:
-        if target.is_symlink():
+        if contains_symlink(data_root, target_raw):
             return {"ok": False, "error": "symlinks not allowed"}
     except OSError:
         return {"ok": False, "error": "stat failed"}
@@ -226,6 +231,22 @@ ARTIFACT_MD_MAX_BYTES = 500_000
 _ARTIFACT_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$")
 _FM_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 _FM_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$")
+
+
+def _artifact_md_is_readable(md: Path) -> bool:
+    """False for a symlink or an over-cap markdown source.
+
+    Both guards lived only in `read_artifact`, the DETAIL view.
+    `list_artifacts` walks the same tree on every /studio poll and called
+    `read_text()` with neither, so the cheap page carried the risk the
+    expensive one had already refused: a symlink out of the artifact tree, and
+    an unbounded read into the daemon's memory. A guard on one of two readers
+    of the same files is a guard on neither.
+    """
+    try:
+        return not md.is_symlink() and md.stat().st_size <= ARTIFACT_MD_MAX_BYTES
+    except OSError:
+        return False
 
 
 def _artifact_frontmatter(text: str) -> tuple[dict, str]:
@@ -270,30 +291,45 @@ def _title_from_slug(slug: str) -> str:
     return s.replace("-", " ").replace("_", " ").strip().title() or slug
 
 
-def _artifact_images(folder: Path, workspace_root: Path) -> list[str]:
-    """Workspace-relative paths of every image file in an artifact folder."""
+def _artifact_images(folder: Path, data_root: Path) -> list[str]:
+    """Workspace-relative paths of every image file in an artifact folder.
+
+    An unreadable folder yields no images rather than an OSError. The markdown
+    read beside this call is already guarded; this `iterdir` was not, so one
+    permission-denied artifact directory failed the WHOLE Studio listing.
+    """
+    try:
+        entries = list(folder.iterdir())
+    except OSError:
+        logger.warning("skipping unreadable artifact folder %s", folder, exc_info=True)
+        return []
     return sorted(
-        str(p.relative_to(workspace_root)).replace("\\", "/")
-        for p in folder.iterdir()
+        str(p.relative_to(data_root)).replace("\\", "/")
+        for p in entries
         if p.is_file() and p.suffix.lower() in ARTIFACT_IMAGE_EXTS
     )
 
 
-def list_artifacts(workspace_root: Path) -> dict:
+def list_artifacts(data_root: Path) -> dict:
     """Scan datastore/content/linkedin-archive/{posts,articles}/.
 
     Each folder is one content item (the {slug}.md source + image
     variants). Returns {artifacts, counts, total, data_time}, sorted by
     date DESC.
     """
-    root = workspace_root / ARTIFACT_ROOT
+    root = data_root / ARTIFACT_ROOT
     artifacts: list[dict] = []
     most_recent: float = 0.0
     for subdir, kind in _ARTIFACT_SUBDIRS:
         base = root / subdir
         if not base.is_dir():
             continue
-        for folder in sorted(base.iterdir()):
+        try:
+            folders = sorted(base.iterdir())
+        except OSError:
+            logger.warning("skipping unreadable artifact tree %s", base, exc_info=True)
+            continue
+        for folder in folders:
             if not folder.is_dir() or folder.name.startswith((".", "_")):
                 continue
             slug = folder.name
@@ -305,13 +341,17 @@ def list_artifacts(workspace_root: Path) -> dict:
                 if not mds:
                     continue
                 md = mds[0]
+            if not _artifact_md_is_readable(md):
+                logger.warning("skipping artifact %s: source is a symlink or "
+                               "over the %d byte cap", md, ARTIFACT_MD_MAX_BYTES)
+                continue
             try:
                 text = md.read_text(encoding="utf-8")
                 mtime = md.stat().st_mtime
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 continue
             fm, body = _artifact_frontmatter(text)
-            images = _artifact_images(folder, workspace_root)
+            images = _artifact_images(folder, data_root)
             artifacts.append({
                 "kind": kind,
                 "slug": slug,
@@ -339,13 +379,13 @@ def list_artifacts(workspace_root: Path) -> dict:
             "total": len(artifacts), "data_time": data_time}
 
 
-def _artifact_folder(workspace_root: Path, kind: str, slug: str) -> Path | None:
+def _artifact_folder(data_root: Path, kind: str, slug: str) -> Path | None:
     """Resolve + validate the folder for (kind, slug). Returns Path or None."""
     subdir = {"post": "posts", "article": "articles"}.get(kind)
     if subdir is None or not slug or not _ARTIFACT_SLUG_RE.match(slug):
         return None
-    base = (workspace_root / ARTIFACT_ROOT / subdir).resolve()
-    folder = (workspace_root / ARTIFACT_ROOT / subdir / slug).resolve()
+    base = (data_root / ARTIFACT_ROOT / subdir).resolve()
+    folder = (data_root / ARTIFACT_ROOT / subdir / slug).resolve()
     try:
         folder.relative_to(base)
     except ValueError:
@@ -353,13 +393,13 @@ def _artifact_folder(workspace_root: Path, kind: str, slug: str) -> Path | None:
     return folder if folder.is_dir() else None
 
 
-def read_artifact(workspace_root: Path, kind: str, slug: str) -> dict:
+def read_artifact(data_root: Path, kind: str, slug: str) -> dict:
     """Read one artifact - full markdown source + image list.
 
     Returns {ok: True, kind, slug, title, date, content, images} or
     {ok: False, error}.
     """
-    folder = _artifact_folder(workspace_root, kind, slug)
+    folder = _artifact_folder(data_root, kind, slug)
     if folder is None:
         return {"ok": False, "error": "artifact not found"}
     md = folder / f"{slug}.md"
@@ -369,7 +409,7 @@ def read_artifact(workspace_root: Path, kind: str, slug: str) -> dict:
             return {"ok": False, "error": "no markdown source"}
         md = mds[0]
     try:
-        if md.is_symlink() or md.stat().st_size > ARTIFACT_MD_MAX_BYTES:
+        if not _artifact_md_is_readable(md):
             return {"ok": False, "error": "source unreadable"}
         text = md.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as e:
@@ -380,11 +420,11 @@ def read_artifact(workspace_root: Path, kind: str, slug: str) -> dict:
         "title": fm.get("title") or _title_from_slug(slug),
         "date": fm.get("date") or _date_from_slug(slug),
         "content": text,
-        "images": _artifact_images(folder, workspace_root),
+        "images": _artifact_images(folder, data_root),
     }
 
 
-def resolve_artifact_image(workspace_root: Path, rel_path: str) -> Path | None:
+def resolve_artifact_image(data_root: Path, rel_path: str) -> Path | None:
     """Validate `rel_path` points at an image inside the LinkedIn archive.
 
     Returns the absolute Path to serve, or None on any validation
@@ -398,8 +438,9 @@ def resolve_artifact_image(workspace_root: Path, rel_path: str) -> Path | None:
     parts = [p for p in rel.split("/") if p]
     if any(p == ".." or p.startswith(".") for p in parts):
         return None
-    archive_root = (workspace_root / ARTIFACT_ROOT).resolve()
-    target = (workspace_root / rel).resolve()
+    archive_root = (data_root / ARTIFACT_ROOT).resolve()
+    target_raw = data_root / rel
+    target = target_raw.resolve()
     try:
         target.relative_to(archive_root)
     except ValueError:
@@ -407,7 +448,7 @@ def resolve_artifact_image(workspace_root: Path, rel_path: str) -> Path | None:
     if target.suffix.lower() not in ARTIFACT_IMAGE_EXTS:
         return None
     try:
-        if target.is_symlink() or not target.is_file():
+        if contains_symlink(data_root / ARTIFACT_ROOT, target_raw) or not target.is_file():
             return None
         if target.stat().st_size > ARTIFACT_IMAGE_MAX_BYTES:
             return None

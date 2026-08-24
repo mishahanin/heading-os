@@ -250,6 +250,21 @@ def _candidate_docs(min_len: int, want: int) -> list[Path]:
     return picked
 
 
+def _doc_length(path: Path) -> int:
+    """Characters in the decoded document, 0 when it cannot be read.
+
+    Characters, matching `_has_chars` and `build_cases`'s `text[:width]` cut.
+    Sorting on `st_size` would reintroduce the byte-versus-character confusion
+    that under-filled every long slice on a Cyrillic corpus until 2026-08-23.
+    An unreadable file sorts last rather than raising: the fallback's job is to
+    fill the slice, not to refuse the run.
+    """
+    try:
+        return len(path.read_text(encoding="utf-8", errors="ignore"))
+    except OSError:
+        return 0
+
+
 def _has_chars(path: Path, min_len: int) -> bool:
     """True when the decoded document holds at least `min_len` characters."""
     try:
@@ -312,13 +327,30 @@ def build_cases(width: int, marker: str, doc_count: int = DOC_COUNT) -> list[Cas
             continue
         cases.append(_case(path, sliced, width, marker, len(cases)))
     if len(cases) < doc_count:
-        # Fall back to the longest available rather than silently under-sampling.
-        for path in _candidate_docs(min_len=0, want=doc_count * 4):
+        # The longest available, BY LENGTH. This comment said "the longest
+        # available" while the loop took `_candidate_docs`'s output in path
+        # order, which `sorted(root.glob(...))` makes lexicographic; `min_len=0`
+        # switches off both size filters, so the fallback filled with whatever
+        # sorted first. A slice could then be failed as ВЫРОЖДЕН while the
+        # corpus held documents long enough to measure it — the degenerate-width
+        # verdict this file exists to produce, produced wrongly.
+        #
+        # The pool is still capped at `doc_count * 4` candidates: this sorts
+        # what the fallback already looked at, it does not widen the walk.
+        fallback = _candidate_docs(min_len=0, want=doc_count * 4)
+        fallback.sort(key=_doc_length, reverse=True)
+        for path in fallback:
             if len(cases) >= doc_count:
                 break
             if any(c.path == path for c in cases):
                 continue
-            sliced = path.read_text(encoding="utf-8", errors="ignore")[:width]
+            try:
+                sliced = path.read_text(encoding="utf-8", errors="ignore")[:width]
+            except OSError:
+                # The primary loop above already guards this; the fallback did
+                # not, so a file deleted between `_candidate_docs` and the read
+                # crashed the whole run.
+                continue
             cases.append(_case(path, sliced, width, marker, len(cases)))
     return cases[:doc_count]
 
@@ -429,6 +461,12 @@ def _describe_failure(exc: BaseException) -> str:
 # Measurement
 # ============================================================
 
+# Everything a model call can fail with. Named once because `score_speed`
+# had three call sites and only two of them were guarded.
+TRANSPORT_FAILURES = (urllib.error.URLError, urllib.error.HTTPError, KeyError,
+                      TimeoutError, OSError, ValueError)
+
+
 def score_accuracy(runner: Runner, cases: list[Case], marker: str) -> dict | None:
     prompt_head = TASK_PROMPT.format(field_key=FIELD_KEY, section=SECTION, marker=marker)
     prompts = [prompt_head + case.text for case in cases]
@@ -436,8 +474,7 @@ def score_accuracy(runner: Runner, cases: list[Case], marker: str) -> dict | Non
     try:
         with ThreadPoolExecutor(max_workers=PARALLELISM) as pool:
             raws = list(pool.map(lambda p: call_model(runner, p), prompts))
-    except (urllib.error.URLError, urllib.error.HTTPError, KeyError,
-            TimeoutError, OSError, ValueError) as exc:
+    except TRANSPORT_FAILURES as exc:
         print(f"  {runner.label:<34} {RED}пропущена{RESET} {GRAY}{_describe_failure(exc)}{RESET}")
         return None
     wall = time.perf_counter() - started
@@ -467,11 +504,17 @@ def score_accuracy(runner: Runner, cases: list[Case], marker: str) -> dict | Non
 def score_speed(runner: Runner, cases: list[Case], marker: str) -> dict | None:
     prompt_head = TASK_PROMPT.format(field_key=FIELD_KEY, section=SECTION, marker=marker)
     prompts = [prompt_head + case.text for case in cases]
+    if not prompts:
+        # `prompts[0]` below used to raise IndexError on an empty corpus, with
+        # nothing catching it -- where the module docstring promises exit 2 for
+        # "no documents", and `--dry-run` already refuses the same condition.
+        print(f"  {runner.label:<34} {RED}пропущена{RESET} "
+              f"{GRAY}нет документов для замера{RESET}")
+        return None
     started = time.perf_counter()
     try:
         call_model(runner, prompts[0])
-    except (urllib.error.URLError, urllib.error.HTTPError, KeyError,
-            TimeoutError, OSError, ValueError) as exc:
+    except TRANSPORT_FAILURES as exc:
         print(f"  {runner.label:<34} {RED}пропущена{RESET} {GRAY}{_describe_failure(exc)}{RESET}")
         return None
     cold = time.perf_counter() - started
@@ -481,16 +524,24 @@ def score_speed(runner: Runner, cases: list[Case], marker: str) -> dict | None:
         mark = time.perf_counter()
         try:
             call_model(runner, prompt)
-        except (urllib.error.URLError, urllib.error.HTTPError, KeyError,
-                TimeoutError, OSError, ValueError) as exc:
+        except TRANSPORT_FAILURES as exc:
             print(f"  {runner.label:<34} {RED}сбой в прогоне{RESET} {GRAY}{_describe_failure(exc)}{RESET}")
             return None
         latencies.append(time.perf_counter() - mark)
 
     started = time.perf_counter()
     batch = prompts[:PARALLELISM]
-    with ThreadPoolExecutor(max_workers=PARALLELISM) as pool:
-        list(pool.map(lambda p: call_model(runner, p), batch))
+    # Guarded like the warmup and the serial loop. This one sat outside any
+    # try, so a failure that only shows up under parallel load -- a 429, a
+    # connection reset -- escaped as a traceback and threw away every result
+    # collected so far.
+    try:
+        with ThreadPoolExecutor(max_workers=PARALLELISM) as pool:
+            list(pool.map(lambda p: call_model(runner, p), batch))
+    except TRANSPORT_FAILURES as exc:
+        print(f"  {runner.label:<34} {RED}сбой в параллельном прогоне{RESET} "
+              f"{GRAY}{_describe_failure(exc)}{RESET}")
+        return None
     parallel_wall = time.perf_counter() - started
     # Divide by what was actually submitted. Dividing by PARALLELISM while
     # submitting fewer understated per-call time by up to 8x on a small --docs run.
@@ -639,14 +690,41 @@ def main() -> int:
         ),
     }
     reached = 0
+    empty_widths: list[int] = []
 
     if args.mode in ("speed", "all"):
-        print(f"\n{BOLD}Скорость{RESET} {GRAY}(срез 4k){RESET}")
-        cases = build_cases(SLICE_WIDTHS[0], args.marker, args.docs)
-        for runner in enabled:
+        speed_width = SLICE_WIDTHS[0]
+        cases = build_cases(speed_width, args.marker, args.docs)
+        # The header used to print "срез 4k" unconditionally while the slices
+        # could be far shorter on a corpus of short documents -- the same
+        # degenerate-width hole the accuracy path already measures, unmeasured
+        # here. Now it says what it actually sliced.
+        speed_filled = sum(1 for c in cases if c.filled)
+        speed_degenerate = (not cases
+                            or speed_filled / len(cases) < MIN_FILLED_FRACTION)
+        speed_tag = f" {RED}[ВЫРОЖДЕН]{RESET}" if speed_degenerate else ""
+        print(f"\n{BOLD}Скорость{RESET} {GRAY}(срез {speed_width}){RESET}{speed_tag} "
+              f"{GRAY}заполнено {speed_filled}/{len(cases)}{RESET}")
+        if not cases:
+            # The same condition the accuracy path below records, recorded the
+            # same way. Without this, `score_speed` refused every runner on its
+            # own empty-prompts guard WITHOUT making a single network call,
+            # `reached` stayed 0, and the run exited 3 — "every enabled runner
+            # was unreachable". Nothing was unreachable; nothing was attempted.
+            # The docstring assigns "no documents" to exit 2, and `score_speed`'s
+            # own comment says so, but only the accuracy path delivered it.
+            # Automation reading exit 3 goes and looks at the proxy.
+            print(f"  {RED}нет документов для этого среза; замер не "
+                  f"проводился{RESET}", file=sys.stderr)
+            empty_widths.append(speed_width)
+        for runner in enabled if cases else ():
             result = score_speed(runner, cases, args.marker)
             if result:
                 reached += 1
+                result["width"] = speed_width
+                result["filled"] = speed_filled
+                result["n"] = len(cases)
+                result["degenerate"] = speed_degenerate
                 report["speed"].append(result)
                 print(f"  {runner.label:<34} медиана {result['median_s']:>6.2f}s | "
                       f"на вызов при {PARALLELISM} параллельно {result['per_call_parallel_s']:>5.2f}s | "
@@ -666,6 +744,16 @@ def main() -> int:
                   f"{GRAY}заполнено {filled}/{len(cases)}, "
                   f"различных истин {distinct:.0%}, "
                   f"пол константного ответа {floor_hits}/{floor_max}{RESET}")
+            if not cases:
+                # `score_accuracy` on `[]` returns a truthy dict with n=0 and
+                # max=0, `reached` increments, a report is written and the run
+                # exits 0 -- a completed benchmark that measured nothing, which
+                # is exactly the silent success this file exists to prevent.
+                # `--dry-run` already refuses this with exit 2.
+                print(f"  {RED}нет документов для этого среза; замер не "
+                      f"проводился{RESET}", file=sys.stderr)
+                empty_widths.append(width)
+                continue
             for runner in enabled:
                 result = score_accuracy(runner, cases, args.marker)
                 if result:
@@ -682,6 +770,21 @@ def main() -> int:
                           f"= {result['total']}/{result['max']}  "
                           f"JSON {result['parsed_ok']}/{result['n']}  "
                           f"{result['wall_s']:.1f}s")
+
+    measured = report["accuracy"] or report["speed"]
+    if empty_widths:
+        # The exit stays 2: a partial run is a setup error, not a result, and
+        # the neighbouring comment is right that a benchmark which measured
+        # nothing must not read as a success. What was wrong is throwing the
+        # cells that DID run away with it. Those cost real model calls, and the
+        # return sat above `_write_report`, so a partial accuracy run left no
+        # artefact at all. Write what was measured, then refuse.
+        if measured:
+            path = _write_report(report)
+            print(f"{YELLOW}Частичный отчёт сохранён:{RESET} {path}", file=sys.stderr)
+        print(f"{RED}Нет документов для срез(ов) {empty_widths}; это ошибка "
+              f"настройки, а не результат.{RESET}", file=sys.stderr)
+        return 2
 
     if reached == 0:
         print(f"{RED}Ни одна включённая модель не ответила.{RESET}", file=sys.stderr)

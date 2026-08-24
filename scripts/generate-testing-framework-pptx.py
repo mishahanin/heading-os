@@ -175,8 +175,15 @@ def build():
         txt(s2, x + Inches(0.25), sy + Inches(1.0), cw - Inches(0.5), Inches(1.0),
             purposes[i][1], size=11.5, color=LIGHT_GRAY)
 
-    # Row 2: 2 cards centered
-    rx = Inches(0.6) + (cw + gap) * 0.5
+    # Row 2: 2 cards centered.
+    #
+    # `Emu` is an int subclass, but `emu * 0.5` returns a plain FLOAT, and the
+    # sum stayed float — so every shape and textbox on this row was positioned
+    # with a non-integer EMU. OOXML's coordinate type is xsd:long, so the value
+    # either truncates on the way out or serialises as `2377440.0`, which is
+    # schema-invalid and can trigger PowerPoint's repair prompt. Integer
+    # division states the intent instead of relying on implicit truncation.
+    rx = Inches(0.6) + (cw + gap) // 2
     for i in range(2):
         idx = i + 3
         x = rx + i * (cw + gap)

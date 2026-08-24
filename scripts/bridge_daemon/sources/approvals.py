@@ -13,14 +13,15 @@ with tombstone undo, mirroring the inbox-dismiss pattern.
 A future phase may extend coverage to other draft surfaces (LinkedIn
 posts in outputs/content/linkedin/, fundraising first-touches, etc.).
 """
-import json
 import re
 import threading
 from datetime import date, datetime, timezone
+from scripts.bridge_daemon._safepath import contains_symlink
 from scripts.utils.workspace import get_default_tz
 from pathlib import Path
 
-from scripts.bridge_daemon._atomic import atomic_write_text
+from scripts.bridge_daemon._jsonl import append_jsonl, read_jsonl_capped
+from scripts.bridge_daemon._shapes import entry_ts, is_undo
 
 EMAIL_DRAFTS_DIR = "outputs/communications/email"  # leak-guard: ok (relative suffix rooted by caller)
 APPROVALS_ROW_CAP = 20  # safety cap; CEO unlikely to have more pending
@@ -38,8 +39,38 @@ _HDR_RE = re.compile(r"^\*\*([A-Za-z]+):\*\*\s*(.+?)\s*$")
 
 
 def _normalize_rel_path(rel_path: str) -> str:
-    """Lowercase + forward-slash so log entries are comparable across OSes."""
+    """Forward-slash + trim, so log entries are comparable across OSes.
+
+    It does NOT lowercase, whatever this line claimed until 2026-08-24, and it
+    must not start: the value is used to build a real path, and `outputs/` sits
+    on a case-sensitive filesystem here. A reader who trusted the old wording
+    would conclude that comparisons in this module are case-insensitive; they
+    are not.
+    """
     return rel_path.replace("\\", "/").strip()
+
+
+def validate_draft_rel_path(rel_path: str) -> str | None:
+    """Return an error string for a bad draft path, or None when it is fine.
+
+    One validator for `read_draft`, `mark_sent` and `undo_sent`, which guard the
+    same directory and used to disagree: the writers checked only the
+    `EMAIL_DRAFTS_DIR` prefix, so a traversal-shaped string like
+    `outputs/.../email/../email/x.md` was rejected by the reader and written
+    straight into the sent log by the writer. Two validators on one tree drift;
+    the weaker one is the one attackers and typos find.
+    """
+    if not isinstance(rel_path, str) or not rel_path.strip():
+        return "path is required"
+    normalised = _normalize_rel_path(rel_path)
+    if not normalised.startswith(EMAIL_DRAFTS_DIR + "/"):
+        return "path must be under email drafts dir"
+    parts = [p for p in normalised.split("/") if p]
+    if any(p == ".." or p.startswith(".") for p in parts):
+        return "invalid path segment"
+    if not normalised.endswith(".md"):
+        return "path must be a .md draft"
+    return None
 
 
 def read_sent_log(workspace_root: Path) -> set[str]:
@@ -49,30 +80,14 @@ def read_sent_log(workspace_root: Path) -> set[str]:
     the set so the draft surfaces again. Mirrors the inbox-dismiss log.
     """
     log_path = workspace_root / SENT_LOG_FILE
-    if not log_path.exists():
-        return set()
-    try:
-        if log_path.stat().st_size > SENT_LOG_MAX_BYTES:
-            return set()
-        text = log_path.read_text(encoding="utf-8")
-    except OSError:
-        return set()
+    entries, _truncated = read_jsonl_capped(log_path, SENT_LOG_MAX_BYTES)
     out: dict[str, dict] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(entry, dict):
-            continue
+    for entry in entries:
         path = entry.get("path")
         if not isinstance(path, str) or not path:
             continue
         path = _normalize_rel_path(path)
-        if entry.get("undo") is True:
+        if is_undo(entry):
             out.pop(path, None)
             continue
         out[path] = entry
@@ -87,31 +102,15 @@ def sent_log_recent(workspace_root: Path, limit: int = 20) -> list[dict]:
     restore an accidental mark-sent.
     """
     log_path = workspace_root / SENT_LOG_FILE
-    if not log_path.exists():
-        return []
-    try:
-        if log_path.stat().st_size > SENT_LOG_MAX_BYTES:
-            return []
-        text = log_path.read_text(encoding="utf-8")
-    except OSError:
-        return []
+    entries, _truncated = read_jsonl_capped(log_path, SENT_LOG_MAX_BYTES)
     # Last record per path wins (matches read_sent_log semantics).
     active: dict[str, dict] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(entry, dict):
-            continue
+    for entry in entries:
         path = entry.get("path")
         if not isinstance(path, str) or not path:
             continue
         path = _normalize_rel_path(path)
-        if entry.get("undo") is True:
+        if is_undo(entry):
             active.pop(path, None)
             continue
         active[path] = entry
@@ -120,7 +119,7 @@ def sent_log_recent(workspace_root: Path, limit: int = 20) -> list[dict]:
         rows.append({
             "path": path,
             "filename": path.rsplit("/", 1)[-1],
-            "ts": entry.get("ts", ""),
+            "ts": entry_ts(entry),
             "date": entry.get("date", ""),
             "note": entry.get("note", ""),
         })
@@ -134,11 +133,10 @@ def mark_sent(workspace_root: Path, rel_path: str, note: str = "") -> dict:
     Path must be under EMAIL_DRAFTS_DIR; otherwise rejected. Note is
     capped at SENT_NOTE_MAX_CHARS and stripped of newlines.
     """
-    if not isinstance(rel_path, str) or not rel_path.strip():
-        return {"ok": False, "error": "path is required"}
+    problem = validate_draft_rel_path(rel_path)
+    if problem:
+        return {"ok": False, "error": problem}
     rel_path = _normalize_rel_path(rel_path)
-    if not rel_path.startswith(EMAIL_DRAFTS_DIR + "/"):
-        return {"ok": False, "error": "path must be under email drafts dir"}
     safe_note = (note or "").replace("\n", " ").replace("\r", " ").strip()[:SENT_NOTE_MAX_CHARS]
     # Phase 1.80: 'date' is local (CEO calendar day), 'ts' stays UTC.
     now = datetime.now(timezone.utc)
@@ -151,18 +149,8 @@ def mark_sent(workspace_root: Path, rel_path: str, note: str = "") -> dict:
     log_path = workspace_root / SENT_LOG_FILE
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with _SENT_LOG_LOCK:
-        existing = ""
-        if log_path.exists():
-            try:
-                existing = log_path.read_text(encoding="utf-8")
-            except OSError:
-                existing = ""
-        new_content = existing
-        if existing and not existing.endswith("\n"):
-            new_content += "\n"
-        new_content += json.dumps(entry) + "\n"
         try:
-            atomic_write_text(log_path, new_content, mode=0o644)
+            append_jsonl(log_path, entry)
         except OSError as e:
             return {"ok": False, "error": f"write failed: {e}"}
     return {"ok": True, "path": rel_path, "ts": entry["ts"], "date": entry["date"]}
@@ -170,26 +158,17 @@ def mark_sent(workspace_root: Path, rel_path: str, note: str = "") -> dict:
 
 def undo_sent(workspace_root: Path, rel_path: str) -> dict:
     """Tombstone a prior mark-sent for `rel_path`. Idempotent."""
-    if not isinstance(rel_path, str) or not rel_path.strip():
-        return {"ok": False, "error": "path is required"}
+    problem = validate_draft_rel_path(rel_path)
+    if problem:
+        return {"ok": False, "error": problem}
     rel_path = _normalize_rel_path(rel_path)
     now = datetime.now(timezone.utc)
     entry = {"path": rel_path, "undo": True, "ts": now.isoformat()}
     log_path = workspace_root / SENT_LOG_FILE
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with _SENT_LOG_LOCK:
-        existing = ""
-        if log_path.exists():
-            try:
-                existing = log_path.read_text(encoding="utf-8")
-            except OSError:
-                existing = ""
-        new_content = existing
-        if existing and not existing.endswith("\n"):
-            new_content += "\n"
-        new_content += json.dumps(entry) + "\n"
         try:
-            atomic_write_text(log_path, new_content, mode=0o644)
+            append_jsonl(log_path, entry)
         except OSError as e:
             return {"ok": False, "error": f"write failed: {e}"}
     return {"ok": True, "path": rel_path, "ts": entry["ts"]}
@@ -204,15 +183,17 @@ def _parse_headers(text: str) -> dict:
     headers: dict = {}
     body_offset = 0
     pos = 0
-    in_header_block = True
+    # No `in_header_block` flag here. It was initialised True, never set False,
+    # and gated a `continue` that could not run -- the `---` break above is what
+    # actually ends the header scan. A dead flag reads as unfinished logic and
+    # leaves the next reader unsure whether post-`---` headers were meant to be
+    # skipped.
     for raw in text.splitlines(keepends=True):
         line = raw.rstrip()
         pos += len(raw)
         if line == "---":
             body_offset = pos
             break
-        if not in_header_block:
-            continue
         m = _HDR_RE.match(line)
         if m:
             key = m.group(1).strip().lower()
@@ -308,24 +289,29 @@ def list_approvals(workspace_root: Path) -> dict:
 def read_draft(workspace_root: Path, rel_path: str) -> dict:
     """Read a single draft file safely.
 
-    Path validation: must start with EMAIL_DRAFTS_DIR, must resolve inside
-    that directory, must be a .md file, must not be a symlink, must be
-    under DRAFT_MAX_BYTES.
+    Path validation: `validate_draft_rel_path` for the string, then the
+    filesystem checks this function owns -- resolves inside the drafts
+    directory, no symlink, a real file, under DRAFT_MAX_BYTES.
+
+    The string half USED to be a second copy of that validator, and the copy
+    was the looser one on two counts. It stripped with `.lstrip("./")`, which
+    removes a CHARACTER SET rather than a prefix, so `./outputs/...` was
+    accepted here and refused by `mark_sent`; and it tested the suffix with
+    `.lower()`, so `x.MD` read fine and could never be marked sent. The whole
+    point of the shared validator is that the reader and the writers agree on
+    what a draft path is.
 
     Returns:
         {"ok": True, "path": rel_path, "content": str, "size": int}
         OR
         {"ok": False, "error": str}
     """
-    if not rel_path or not isinstance(rel_path, str):
-        return {"ok": False, "error": "missing path"}
-    rel_path = rel_path.replace("\\", "/").lstrip("./")
-    if not rel_path.startswith(EMAIL_DRAFTS_DIR + "/"):
-        return {"ok": False, "error": "path must be under email drafts dir"}
-    parts = [p for p in rel_path.split("/") if p]
-    if any(p == ".." or p.startswith(".") for p in parts):
-        return {"ok": False, "error": "invalid path segment"}
-    target = (workspace_root / rel_path).resolve()
+    err = validate_draft_rel_path(rel_path)
+    if err:
+        return {"ok": False, "error": err}
+    rel_path = _normalize_rel_path(rel_path)
+    target_raw = workspace_root / rel_path
+    target = target_raw.resolve()
     drafts_root = (workspace_root / EMAIL_DRAFTS_DIR).resolve()
     try:
         target.relative_to(drafts_root)
@@ -334,14 +320,17 @@ def read_draft(workspace_root: Path, rel_path: str) -> dict:
     if not target.exists():
         return {"ok": False, "error": "not found"}
     try:
-        if target.is_symlink():
+        if contains_symlink(workspace_root / EMAIL_DRAFTS_DIR, target_raw):
             return {"ok": False, "error": "symlinks not allowed"}
     except OSError:
         return {"ok": False, "error": "stat failed"}
     if not target.is_file():
         return {"ok": False, "error": "not a file"}
-    if target.suffix.lower() != ".md":
-        return {"ok": False, "error": "only .md files allowed"}
+    # No suffix check here any more. It was the ONLY thing enforcing `.md` on
+    # this path, and it used `.lower()`, which is what let `x.MD` through.
+    # `validate_draft_rel_path` above now requires a lowercase `.md` on the
+    # string itself, and the symlink refusal three lines up means the resolved
+    # target cannot carry a different suffix from the string that named it.
     try:
         size = target.stat().st_size
     except OSError:

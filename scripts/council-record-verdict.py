@@ -103,7 +103,8 @@ def main(argv: list[str] | None = None) -> int:
     # recorded (CEO might be backfilling from memory before the file lands),
     # but flag it so a typo'd id doesn't silently rot in the JSONL.
     transcript = COUNCIL_DIR / f"{args.id}.md"
-    if not transcript.exists():
+    missing = not transcript.exists()
+    if missing:
         print(f"{YELLOW}WARN: no transcript at {transcript}. Verdict still recorded; "
               f"check --id for typo if this was unexpected.{RESET}", file=sys.stderr)
 
@@ -111,7 +112,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"{GREEN}recorded: id={rec['verdict_id']} choice={rec['choice']} "
           f"notes={(rec['notes'][:60] + '...') if len(rec['notes']) > 60 else rec['notes']}{RESET}")
     print(render_tally(latest_verdicts(VERDICTS_PATH)))
-    return 0
+    # Exit 3, as the docstring has always contracted: "transcript file for --id
+    # not found (verdict still written; warning)". It returned 0, so a wrapper
+    # using the exit code to catch a typo'd id — precisely the failure the
+    # docstring describes — could not. The verdict is still appended; the code
+    # says the id was not resolvable, not that the write failed.
+    return 3 if missing else 0
 
 
 if __name__ == "__main__":

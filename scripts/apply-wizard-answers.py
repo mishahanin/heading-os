@@ -6,6 +6,7 @@ See docs/superpowers/specs/2026-04-24-setup-wizard-design.md section 8 for the f
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -99,6 +100,14 @@ def detect_audience(workspace_root: Path) -> str:
         data = json.loads(identity_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         raise SchemaError(f".workspace-identity.json is malformed: {e}") from e
+    if not isinstance(data, dict):
+        # json.loads accepts any JSON value. `[]`, `"x"` and `42` all parse,
+        # and `data.get` then raised AttributeError -- a traceback, not the
+        # SchemaError this docstring promises. load_answers already checks.
+        raise SchemaError(
+            f".workspace-identity.json holds a {type(data).__name__}, not an "
+            f"object."
+        )
     type_ = data.get("type")
     if type_ not in VALID_IDENTITY_TYPES:
         raise SchemaError(
@@ -111,6 +120,32 @@ def detect_audience(workspace_root: Path) -> str:
 # ============================================================
 # State / Answer Persistence
 # ============================================================
+# What each question type needs inside `target`. Validated at LOAD time, so a
+# malformed bank fails once with the question id, instead of reaching
+# `cmd_question` and raising a bare KeyError from an index expression. Only
+# `target`'s EXISTENCE was checked until 2026-08-23; `cmd_all` already caught
+# KeyError while planning, which is what showed the gap was unintended.
+_TARGET_FIELDS = {
+    "placeholder": ("files", "placeholder"),
+    "list": ("files", "placeholders"),
+    "rich": ("template", "output"),
+    "secret": ("env_var",),
+}
+
+
+def _validate_target(q: dict) -> None:
+    target = q["target"]
+    if not isinstance(target, dict):
+        raise SchemaError(
+            f"Question {q['id']!r}: target must be a mapping, not "
+            f"{type(target).__name__}")
+    for field in _TARGET_FIELDS.get(q["type"], ()):
+        if field not in target:
+            raise SchemaError(
+                f"Question {q['id']!r} is type {q['type']!r} and its target is "
+                f"missing {field!r}")
+
+
 def load_questions(workspace_root: Path) -> list[dict]:
     """Load and validate config/wizard-questions.yaml. Raise SchemaError on problems."""
     path = resolve_read_path(workspace_root, QUESTIONS_REL_PATH)
@@ -139,6 +174,7 @@ def load_questions(workspace_root: Path) -> list[dict]:
         for aud in q["audience"]:
             if aud not in VALID_AUDIENCES:
                 raise SchemaError(f"Question {q['id']!r} has invalid audience {aud!r}")
+        _validate_target(q)
         if "depends_on" in q:
             dep = q["depends_on"]
             if not isinstance(dep, dict) or "question" not in dep or "equals" not in dep:
@@ -182,7 +218,15 @@ def load_answers(workspace_root: Path) -> dict:
             "applied_at": None,
             "answers": {},
         }
-    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+        # The schema check below already raises SchemaError; this one did not,
+        # so every subcommand died with a raw JSONDecodeError instead.
+        raise SchemaError(f"cannot read answers.json at {path}: {e}") from e
+    if not isinstance(data, dict):
+        raise SchemaError(
+            f"answers.json at {path} is a {type(data).__name__}, not an object")
     if data.get("schema_version") != SCHEMA_VERSION:
         raise SchemaError(
             f"answers.json schema_version {data.get('schema_version')} "
@@ -191,8 +235,18 @@ def load_answers(workspace_root: Path) -> dict:
     return data
 
 
+class StateWriteError(RuntimeError):
+    """The workspace was modified and the answer could not be recorded."""
+
+
 def save_answers(workspace_root: Path, state: dict) -> None:
-    """Atomic write of state dict to .setup/answers.json."""
+    """Atomic write of state dict to .setup/answers.json.
+
+    Raises StateWriteError on any OS failure. Every caller in `cmd_question`
+    modifies the workspace FIRST and saves afterwards, so a raw OSError here
+    left the files changed, the answer unrecorded, and `--status` none the
+    wiser -- reported as a traceback rather than as the divergence it is.
+    """
     setup_dir = workspace_root / ".setup"
     setup_dir.mkdir(exist_ok=True)
     path = setup_dir / "answers.json"
@@ -200,8 +254,29 @@ def save_answers(workspace_root: Path, state: dict) -> None:
     state["last_updated"] = _now_iso()
     if state.get("started_at") is None:
         state["started_at"] = state["last_updated"]
-    tmp.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
+    try:
+        tmp.write_text(json.dumps(state, indent=2, ensure_ascii=False),
+                       encoding="utf-8")
+    except OSError as e:
+        raise StateWriteError(
+            f"the workspace was modified but the answer could not be recorded "
+            f"to {path}: {e}. Re-run with --status to see what is out of sync."
+        ) from e
+    # Mode BEFORE the replace, the same order `.env` uses: chmod after
+    # os.replace leaves a window where the new file carries umask defaults.
+    # This file holds the last four characters of every secret plus every other
+    # answer, and it is exactly the state file that reaches a backup or a sync.
+    # A filesystem without POSIX modes cannot honour this and that is not fatal;
+    # the write itself below is.
+    with contextlib.suppress(OSError):
+        os.chmod(tmp, 0o600)
+    try:
+        os.replace(tmp, path)
+    except OSError as e:
+        raise StateWriteError(
+            f"the workspace was modified but the answer could not be recorded "
+            f"to {path}: {e}. Re-run with --status to see what is out of sync."
+        ) from e
 
 
 # ============================================================
@@ -212,11 +287,40 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
+def _iso_after(a: str, b: str) -> bool:
+    """True when timestamp `a` is strictly later than `b`.
+
+    Falls back to the string compare when either side will not parse, which is
+    what the caller did for both sides before 2026-08-23. A stale reading is
+    better than a crash in a status command.
+    """
+    try:
+        return datetime.fromisoformat(a) > datetime.fromisoformat(b)
+    except (TypeError, ValueError):
+        return a > b
+
+
 def _is_valid_env_var_name(name: str) -> bool:
     return bool(re.fullmatch(r"[A-Z_][A-Z0-9_]*", name))
 
 
 def _upsert_env_line(env_path: Path, key: str, value: str) -> None:
+    """Set `key=value` in `.env`, atomically and with no readable window.
+
+    A control character in `value` is REFUSED. The value arrives as JSON on
+    stdin, where `"\\n"` is an ordinary character, and this function wrote
+    `f"{key}={value}"` verbatim until 2026-08-23: one paste with a trailing
+    newline, or a multi-line PEM, split into extra `KEY=...` lines that silently
+    defined variables nobody asked for and corrupted the file for every later
+    reader. Refusing is right here rather than escaping, because a secret with
+    an embedded newline is far more likely a paste accident than an intent.
+    """
+    if any(ch in value for ch in "\r\n\x00"):
+        raise SchemaError(
+            f"the value for {key} contains a newline or NUL. A .env line cannot "
+            "carry one: it would split into extra KEY=... lines. Strip it and "
+            "pass the value again."
+        )
     lines = []
     if env_path.exists():
         lines = env_path.read_text(encoding="utf-8").splitlines()
@@ -231,28 +335,48 @@ def _upsert_env_line(env_path: Path, key: str, value: str) -> None:
         lines.append(new_line)
     tmp = env_path.with_suffix(env_path.suffix + ".tmp")
     tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.replace(tmp, env_path)
+    # Mode BEFORE the rename. Setting it afterwards left the new .env at umask
+    # defaults -- commonly 0644 -- for the gap between the two calls, on a file
+    # that exists to hold credentials.
     if os.name == "posix":
-        os.chmod(env_path, 0o600)
-    elif os.name == "nt":
-        # Best-effort ACL restriction on Windows: remove inheritance, grant current user only.
-        # Failures are logged but non-fatal (icacls may be absent in mingw/WSL-on-Windows paths).
+        os.chmod(tmp, 0o600)
+    os.replace(tmp, env_path)
+    if os.name == "nt":
+        # Best-effort ACL restriction on Windows: remove inheritance, grant the
+        # current user only. Reported, not swallowed: the comment here promised
+        # "failures are logged" above a bare `except: pass` and an unread exit
+        # code, so an inherited ACL on .env left no signal anywhere.
         try:
             import getpass
             import subprocess as _subprocess
-            _subprocess.run(
+            acl = _subprocess.run(
                 ["icacls", str(env_path), "/inheritance:r", "/grant:r",
                  f"{getpass.getuser()}:F"],
-                check=False, capture_output=True,
+                check=False, capture_output=True, text=True,
             )
-        except (OSError, FileNotFoundError):
-            pass
+            if acl.returncode != 0:
+                print(f"WARNING: could not restrict ACLs on {env_path}: "
+                      f"{(acl.stderr or acl.stdout or '').strip()[:200]}",
+                      file=sys.stderr)
+        except OSError as e:
+            print(f"WARNING: could not restrict ACLs on {env_path}: {e}",
+                  file=sys.stderr)
 
 
 def _mask_secret(value: str) -> str:
+    """A display stub for `.setup/answers.json`. Keeps the last four and nothing else.
+
+    It kept `value[:10]` as well until 2026-08-23, so fourteen characters of
+    every real credential were persisted. `save_answers` chmods the file 0600
+    now; this paragraph claimed it had "no mode of its own", which described
+    the pre-2026-08-23 state as though it were current and would have misled
+    the next reader weighing whether the mask is still needed. `_display_value` is the only reader and it renders
+    `val[-4:]`, so the prefix served nobody; and a verified prefix plus suffix
+    lets whoever steals this file confirm a candidate key.
+    """
     if len(value) <= 8:
         return "****"
-    return value[:10] + "-REDACTED-" + value[-4:]
+    return "*" * 12 + value[-4:]
 
 
 def _log(workspace_root: Path, message: str) -> None:
@@ -266,6 +390,26 @@ def _iter_matching_files(workspace_root: Path, globs: list[str]):
     """Yield files matching any glob, honoring SKIP_DIRS and PROCESSABLE_EXTENSIONS."""
     files, _ = _collect_matching_files(workspace_root, globs)
     yield from files
+
+
+def _resolve_output_path(workspace_root: Path, out_rel: str) -> Path:
+    """A rich question's output path, proven to stay inside the workspace.
+
+    `_collect_matching_files` enforces containment for glob targets with a
+    comment stating the invariant: "A question bank may not reach past the
+    workspace root." The rich `output` / `output_exec` path had no equivalent,
+    so `../../tmp/escape.md` was written to, and `--reset` then DELETED it.
+    """
+    candidate = workspace_root / out_rel
+    try:
+        candidate.resolve().relative_to(workspace_root.resolve())
+    except ValueError:
+        raise SchemaError(
+            f"the rich output {out_rel!r} resolves outside the workspace at "
+            f"{workspace_root}. A question bank may not reach past the "
+            f"workspace root."
+        ) from None
+    return candidate
 
 
 def _collect_matching_files(workspace_root: Path, globs: list[str]) -> tuple[list[Path], int]:
@@ -285,7 +429,19 @@ def _collect_matching_files(workspace_root: Path, globs: list[str]) -> tuple[lis
             if path in seen:
                 continue
             seen.add(path)
-            if any(part in SKIP_DIRS for part in path.relative_to(workspace_root).parts):
+            # Containment, stated. A bank glob containing `..` matches outside
+            # the workspace, and the only thing that stopped the substitution
+            # engine rewriting those files was `relative_to` raising an
+            # UNCAUGHT ValueError two lines down -- an accident, not a check.
+            try:
+                rel = path.resolve().relative_to(workspace_root.resolve())
+            except ValueError:
+                raise SchemaError(
+                    f"the glob {pattern!r} matched {path}, which is outside the "
+                    f"workspace at {workspace_root}. A question bank may not "
+                    f"reach past the workspace root."
+                ) from None
+            if any(part in SKIP_DIRS for part in rel.parts):
                 skipped += 1
                 continue
             if path.suffix.lower() not in PROCESSABLE_EXTENSIONS:
@@ -324,9 +480,17 @@ def _read_stdin_payload() -> dict:
     if not raw:
         raise SchemaError("--value-from-stdin requires JSON on stdin")
     try:
-        return json.loads(raw)
+        payload = json.loads(raw)
     except json.JSONDecodeError as e:
         raise SchemaError(f"stdin payload not valid JSON: {e}") from e
+    if not isinstance(payload, dict):
+        # Only the SYNTAX was validated, so `[1]` and `42` passed and every
+        # `payload.get(...)` downstream raised AttributeError -- a traceback,
+        # bypassing this script's SchemaError -> clean exit-1 convention.
+        raise SchemaError(
+            f"stdin payload is a {type(payload).__name__}, not a JSON object"
+        )
+    return payload
 
 
 def render_template(template: str, context: dict) -> str:
@@ -392,7 +556,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Read JSON payload from stdin for --question")
     parser.add_argument("--skip", metavar="ID", help="Mark a question skipped")
     parser.add_argument("--all", action="store_true",
-                        help="Re-apply every answered question transactionally")
+                        help="Re-apply every answered question. Plans all writes first and aborts before writing if the plan fails, but the writes themselves are sequential and are NOT rolled back if one of them fails partway.")
     parser.add_argument("--check", action="store_true", help="Dry run")
     parser.add_argument("--audience", choices=["public", "exec"],
                         help="Override detected audience")
@@ -411,19 +575,54 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     workspace_root = Path.cwd()
-    args.resolved_audience = resolve_audience(args, workspace_root)
     args.workspace_root = workspace_root
 
-    if args.status:
-        return cmd_status(args)
-    if args.question:
-        return cmd_question(args)
-    if args.skip:
-        return cmd_skip(args)
-    if args.all:
-        return cmd_all(args)
-    if args.reset:
-        return cmd_reset(args)
+    # One handler at the dispatch, because the raisers are spread across the
+    # file and their callers were not consistent. `load_answers` raises
+    # SchemaError on a corrupt answers.json and NO subcommand wrapped it, so a
+    # corrupt file still killed every subcommand with a traceback -- the exact
+    # outcome its own inline comment claimed to have fixed. `save_answers`
+    # raises StateWriteError after the workspace has already been modified, and
+    # its docstring complained that this surfaced "as a traceback rather than
+    # as the divergence it is"; nothing caught it either.
+    try:
+        # Inside the try, though resolve_audience currently catches its own
+        # SchemaError and sys.exits. Placement, not a fix: it is a raiser, and
+        # a raiser that stops exiting on its own should not become a traceback
+        # because it sat outside the handler.
+        args.resolved_audience = resolve_audience(args, workspace_root)
+        if args.status:
+            return cmd_status(args)
+        if args.question:
+            return cmd_question(args)
+        if args.skip:
+            return cmd_skip(args)
+        if args.all:
+            return cmd_all(args)
+        if args.reset:
+            return cmd_reset(args)
+    except SchemaError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return EXIT_SCHEMA_ERROR
+    except StateWriteError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        print("       The workspace files may already have been changed while "
+              "the answer went unrecorded; run --status to see the divergence.",
+              file=sys.stderr)
+        return EXIT_FILE_WRITE_ERROR
+    except OSError as e:
+        # The write side of every apply branch. `_apply_placeholder_substitution`
+        # guards only its READ (UnicodeDecodeError / PermissionError); the
+        # tmp-write and os.replace beneath it, the rich branch's template read,
+        # and its output write were all unguarded, so a read-only directory, a
+        # full disk or a missing template raised a traceback AFTER some target
+        # files had been rewritten and BEFORE the answer was recorded. Same
+        # divergence StateWriteError exists to name, reached a different way.
+        print(f"ERROR: {type(e).__name__}: {e}", file=sys.stderr)
+        print("       Some workspace files may already have been changed while "
+              "the answer went unrecorded; run --status to see the divergence.",
+              file=sys.stderr)
+        return EXIT_FILE_WRITE_ERROR
 
     parser.print_help()
     return EXIT_OK
@@ -503,7 +702,13 @@ def cmd_status(args) -> int:
         if not state.get("applied_at"):
             unapplied = True
         else:
-            unapplied = state["last_updated"] > state["applied_at"]
+            # Parse, do not compare strings. `_now_iso()` writes local time
+            # WITH an offset, so across a DST change the offsets differ and
+            # lexicographic order stops matching chronological order: answered
+            # at 01:30:00-04:00 (05:30 UTC) then applied at 01:00:00-05:00
+            # (06:00 UTC) is applied LATER, and the string compare said
+            # unapplied. Wrong for about an hour, twice a year.
+            unapplied = _iso_after(state["last_updated"], state["applied_at"])
 
     payload = {
         "audience": audience,
@@ -660,10 +865,17 @@ def cmd_question(args) -> int:
             return EXIT_OK
         if payload.get("archive_draft"):
             entry = answers.get(q["id"], {})
-            if entry.get("draft"):
-                prev = entry.setdefault("draft_previous", [])
-                prev.insert(0, {"draft": entry["draft"], "archived_at": _now_iso()})
-                entry["draft_previous"] = prev[:3]
+            if not entry.get("draft"):
+                # Nothing to archive. This used to fall through, write an empty
+                # `{}` entry (which --status reads as pending with a blank
+                # display), stamp last_updated, and print {"archived": id} --
+                # reporting success for an operation that did nothing.
+                print(f"ERROR: {q['id']} has no draft to archive",
+                      file=sys.stderr)
+                return EXIT_SCHEMA_ERROR
+            prev = entry.setdefault("draft_previous", [])
+            prev.insert(0, {"draft": entry["draft"], "archived_at": _now_iso()})
+            entry["draft_previous"] = prev[:3]
             answers[q["id"]] = entry
             state["audience"] = audience
             # Archiving means the rendered file no longer reflects the current canonical draft.
@@ -698,7 +910,7 @@ def cmd_question(args) -> int:
             out_rel = q["target"]["output_exec"]
         else:
             out_rel = q["target"]["output"]
-        out_path = workspace_root / out_rel
+        out_path = _resolve_output_path(workspace_root, out_rel)
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
         if out_path.exists() and out_path.read_text(encoding="utf-8") == rendered:
@@ -937,7 +1149,11 @@ def _plan_question(workspace_root, q, entry, all_answers, audience):
         env_path = workspace_root / ".env"
         if entry.get("env_written"):
             env_content = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
-            if f"{env_var}=" not in env_content:
+            # Line-anchored, like the writer `_upsert_env_line`. A substring
+            # test let `OTHER_API_KEY=x` satisfy a check for `API_KEY`, so the
+            # "marked written but missing" warning never fired.
+            if not any(line.startswith(f"{env_var}=")
+                       for line in env_content.splitlines()):
                 _planner_warning(
                     f"{env_var} marked written but missing from .env. "
                     f"Re-run /setup-wizard and re-answer to restore."
@@ -949,22 +1165,6 @@ def _plan_question(workspace_root, q, entry, all_answers, audience):
 def cmd_reset(args) -> int:
     import subprocess
     workspace_root = args.workspace_root
-    if not args.force:
-        status_out = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=workspace_root, capture_output=True, text=True,
-        )
-        if status_out.returncode != 0:
-            print(f"ERROR: git status failed: {status_out.stderr}", file=sys.stderr)
-            return EXIT_SCHEMA_ERROR
-        dirty = [line for line in status_out.stdout.splitlines()
-                 if line.strip() and not line.startswith("??")]
-        if dirty:
-            print("ERROR: uncommitted changes detected. Commit or stash them, or re-run with --force.",
-                  file=sys.stderr)
-            for line in dirty[:10]:
-                print(f"  {line}", file=sys.stderr)
-            return EXIT_SCHEMA_ERROR
 
     state = load_answers(workspace_root)
     try:
@@ -986,7 +1186,79 @@ def cmd_reset(args) -> int:
             out_rel = (q["target"].get("output_exec")
                        if args.resolved_audience == "exec" and q["target"].get("output_exec")
                        else q["target"]["output"])
-            touched.add(workspace_root / out_rel)
+            touched.add(_resolve_output_path(workspace_root, out_rel))
+
+    # The dirty check runs HERE, after `touched` is known, and ignores it.
+    #
+    # It ran first until 2026-08-23 and refused on any dirty tracked file --
+    # which is the state the wizard itself creates, so the non-force path was
+    # reachable only when reset would do nothing. An always-failing gate is not
+    # a safety check; it is training to pass --force, and --force discards the
+    # unrelated hand edits this check exists to protect.
+    if not args.force:
+        try:
+            status_out = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=workspace_root, capture_output=True, text=True,
+            )
+        except FileNotFoundError:
+            print("ERROR: git is not installed; cannot check for uncommitted "
+                  "changes.", file=sys.stderr)
+            return EXIT_SCHEMA_ERROR
+        if status_out.returncode != 0:
+            print(f"ERROR: git status failed: {status_out.stderr}", file=sys.stderr)
+            return EXIT_SCHEMA_ERROR
+        ours = {str(p.relative_to(workspace_root)) for p in touched}
+        dirty = []
+        for line in status_out.stdout.splitlines():
+            if not line.strip() or line.startswith("??"):
+                continue
+            # porcelain v1: two status columns, a space, then the path.
+            rel = line[3:].strip().strip('"')
+            rel = rel.split(" -> ")[-1]          # a rename reports both sides
+            if rel not in ours:
+                dirty.append(line)
+        if dirty:
+            print("ERROR: uncommitted changes outside the wizard's own output. "
+                  "Commit or stash them, or re-run with --force.", file=sys.stderr)
+            for line in dirty[:10]:
+                print(f"  {line}", file=sys.stderr)
+            return EXIT_SCHEMA_ERROR
+
+    # A git index must exist before anything is deleted.
+    #
+    # The loop below reverts a tracked file and DELETES an untracked one. In a
+    # workspace that is not a git repository, `git ls-files --error-unmatch`
+    # fails for every file, so every file took the delete branch: `--reset
+    # --force` destroyed the operator's files outright, with no index to
+    # restore them from, under a help line reading "Revert touched files to
+    # git-index state". --force skipped the `git status` gate above, so nothing
+    # else checked either. A missing `git` binary raised FileNotFoundError.
+    try:
+        inside = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=workspace_root, capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        print("ERROR: git is not installed. --reset restores files from the "
+              "git index and cannot run without it.", file=sys.stderr)
+        return EXIT_SCHEMA_ERROR
+    if inside.returncode != 0:
+        # git ran and refused to answer. "not a git repository" is the common
+        # cause, but "detected dubious ownership" exits 128 here too, and
+        # reporting that one as "not a git work tree" sends the operator
+        # looking for the wrong thing entirely. Quote git instead of guessing.
+        print(f"ERROR: git refused to say whether {workspace_root} is a work "
+              f"tree, so --reset will not DELETE the {len(touched)} touched "
+              f"file(s). Refusing.", file=sys.stderr)
+        for line in (inside.stderr or "").strip().splitlines()[:3]:
+            print(f"  git: {line}", file=sys.stderr)
+        return EXIT_SCHEMA_ERROR
+    if inside.stdout.strip() != "true":
+        print(f"ERROR: {workspace_root} is not a git work tree. --reset would "
+              f"DELETE the {len(touched)} touched file(s) with no index to "
+              f"restore them from. Refusing.", file=sys.stderr)
+        return EXIT_SCHEMA_ERROR
 
     errors = []
     for path in touched:

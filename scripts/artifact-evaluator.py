@@ -45,11 +45,17 @@ ROOT = get_workspace_root()
 
 
 def check(name, passed, detail="", warn=False):
-    """Build a single check result dict."""
-    if warn and not passed:
-        status = "warn"
-    else:
-        status = "pass" if passed else "fail"
+    """Build a single check result dict.
+
+    `passed=None` means UNVERIFIABLE and is passed through as `status=None`.
+    It used to be folded into the falsy branch, so every plan criterion that
+    "requires manual verification" was stamped `"fail"` in `--json` -- an
+    unverified item reported as a verified failure, which any pipeline reading
+    that field would rightly block on.
+    """
+    if passed is None:
+        return {"name": name, "status": None, "detail": detail}
+    status = "warn" if (warn and not passed) else ("pass" if passed else "fail")
     return {"name": name, "status": status, "detail": detail}
 
 
@@ -127,7 +133,11 @@ def parse_yaml_frontmatter(text):
     """Extract YAML frontmatter from text. Returns (dict, error_str|None)."""
     if not text.startswith("---"):
         return None, "No YAML frontmatter found"
-    match = re.match(r"^---\n(.*?)\n---", text, re.DOTALL)
+    # `\r?` on both sides: a CRLF checkout (core.autocrlf=true on Windows)
+    # otherwise failed the match, returned "Invalid frontmatter format",
+    # and took the required-field and metadata checks down with it -- so
+    # the verdict on identical content depended on the checkout OS.
+    match = re.match(r"^---\r?\n(.*?)\r?\n---", text, re.DOTALL)
     if not match:
         return None, "Invalid frontmatter format"
     try:
@@ -589,10 +599,14 @@ def print_report(artifact_path, artifact_type, checks, plan_criteria=None):
     if plan_criteria:
         print(f"\n{BOLD}Plan Criteria{RESET}")
         for c in plan_criteria:
-            if c["status"] is None:
-                symbol = f"{GRAY}----{RESET}"
-            else:
-                symbol = STATUS_SYMBOLS.get("pass" if c["status"] else "fail", "?")
+            # Look the status up directly. This read `"pass" if c["status"]
+            # else "fail"`, and `c["status"]` is a STRING -- so `"fail"` is
+            # truthy and every failed criterion printed as PASS, while the
+            # `is None` arm above was dead because `check` could not emit None.
+            # The terminal said everything passed; --json said the manual items
+            # failed. Two opposite lies about the same list.
+            symbol = (f"{GRAY}----{RESET}" if c["status"] is None
+                      else STATUS_SYMBOLS.get(c["status"], "?"))
             print(f"  {symbol}  {c['detail']}")
 
     print()
@@ -697,7 +711,12 @@ def main():
     if not artifact_path.is_absolute():
         artifact_path = ROOT / artifact_path
 
-    artifact_type = args.type or detect_type(args.path)
+    # The ROOT-anchored path, not the raw argument. `detect_type` tests
+    # `p.is_dir()`, which resolves against the process cwd, while main()
+    # evaluates `ROOT / args.path`. Run from anywhere else with a relative
+    # skill directory, detection said "unknown" and exited 1 on a skill
+    # the evaluator was about to read successfully.
+    artifact_type = args.type or detect_type(artifact_path)
 
     if artifact_type == "unknown":
         print(f"{RED}Cannot detect artifact type for: {args.path}{RESET}", file=sys.stderr)
@@ -746,8 +765,15 @@ def main():
         print_report(artifact_path, artifact_type, checks, plan_criteria)
 
     # Exit code
-    has_failures = any(c["status"] == "fail" for c in checks)
-    sys.exit(1 if has_failures else 0)
+    #
+    # `plan_criteria` counts. It used to be built, printed, put in the JSON, and
+    # then left out of this line entirely: a plan whose success criteria named a
+    # file that does not exist produced `"status": "fail"` and exit 0, so every
+    # gate keyed on the exit code (the normal contract here) waved it through.
+    # An unverifiable criterion carries status None, not "fail", so a criterion
+    # reading "requires manual verification" still does not fail the run.
+    failed = [c for c in [*checks, *(plan_criteria or [])] if c["status"] == "fail"]
+    sys.exit(1 if failed else 0)
 
 
 if __name__ == "__main__":

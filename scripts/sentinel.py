@@ -138,10 +138,18 @@ class SentinelConfig:
 # ============================================================
 
 class StateManager:
-    """Persistent state tracking to avoid duplicate processing."""
+    """Persistent state tracking to avoid duplicate processing.
 
-    def __init__(self, state_path: Path = STATE_FILE):
+    `read_only` makes `save()` a no-op. A dry run still marks items in memory --
+    that is what stops one cycle from processing the same message twice -- but
+    it must not PERSIST those marks: doing so meant `--test` permanently
+    consumed real state, and the production daemon was then blind to every
+    message and invite the test had seen, with nothing said about it.
+    """
+
+    def __init__(self, state_path: Path = STATE_FILE, read_only: bool = False):
         self.path = state_path
+        self.read_only = read_only
         self.data = self._load()
 
     def _load(self) -> dict:
@@ -171,6 +179,8 @@ class StateManager:
         }
 
     def save(self):
+        if self.read_only:
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix('.tmp')
         with open(tmp, "w", encoding="utf-8") as f:
@@ -1420,11 +1430,17 @@ class TelegramSource:
 class UrgencyAnalyzer:
     """Classify message urgency using Claude API."""
 
-    SYSTEM_PROMPT = """You are Sentinel, an urgency triage system for Misha Hanin, CEO of 31 Concept (31C).
-31C builds ODUN.ONE, a sovereign deep packet intelligence platform.
+    # `{operator}` is filled from `get_operator()`, which resolves from the DATA
+    # overlay and yields "Operator" on a fresh clone. It used to be the
+    # operator's name, employer and product hardcoded here, so a stranger who
+    # cloned the public engine got a triage system that believed it worked for
+    # somebody else. What the business actually IS belongs in
+    # `{business_context}`, loaded from the overlay's `context_files` -- which
+    # is the mechanism that already exists for exactly this.
+    SYSTEM_PROMPT = """You are Sentinel, an urgency triage system for {operator}.
 
 Your job: analyze incoming messages and score their urgency on a 1-10 scale.
-Misha is extremely busy running a high-growth startup with active deals across multiple regions.
+{operator} is extremely busy; treat their attention as the scarce resource.
 
 URGENCY SCORING GUIDE:
 - 9-10: CRITICAL - Requires immediate action. Deal at risk, security incident, investor/partner emergency, legal deadline, production system down.
@@ -1444,7 +1460,7 @@ RECOMMENDED ACTIONS - be specific and CEO-appropriate. Use one of these categori
 - "FYI only - no action needed" - for informational items
 - "Escalate: [why and to whom]" - for items requiring immediate escalation
 
-Consider Misha's priorities: active deals (multiple regions), ODUN.ONE product development, investor relations, and Tribe management. Flag anything affecting deal velocity, partner relationships, or product delivery.
+Consider the priorities named in the business context above. Flag anything affecting deal velocity, partner relationships, or product delivery.
 
 Respond ONLY in this JSON format (no markdown, no code fences):
 {{"urgency_score": <1-10>, "reason": "<1 sentence>", "summary": "<2-3 sentences>", "recommended_action": "<specific action using categories above>"}}"""
@@ -1455,6 +1471,7 @@ Respond ONLY in this JSON format (no markdown, no code fences):
         self.logger = logger
         self.client = None
         self.business_context = ""
+        self.operator_name = get_operator()["name"]
 
         # Load business context from files
         context_files = config.get("context_files", [])
@@ -1532,7 +1549,8 @@ BODY:
         """Analyze a single item for urgency. Returns dict with score and details."""
         client = self._get_client()
 
-        system_prompt = self.SYSTEM_PROMPT.format(business_context=self.business_context)
+        system_prompt = self.SYSTEM_PROMPT.format(
+            business_context=self.business_context, operator=self.operator_name)
 
         user_prompt = f"Analyze this incoming message:\n\n{self._format_item_prompt(item)}"
 
@@ -1564,6 +1582,22 @@ BODY:
             return None
 
     @observe()
+    @staticmethod
+    def _clamp_score(value) -> int:
+        """A usable 1-10 urgency, whatever the model returned.
+
+        `urgency_score` was trusted to be an int. A well-formed
+        `{"urgency_score": "8"}` parses fine and then raises TypeError at the
+        first `score >= threshold`, or later in the digest's sort -- and
+        `record_digest_item` had already poisoned `items_by_urgency`, so every
+        subsequent evening digest crashed too.
+        """
+        try:
+            score = int(float(value))
+        except (TypeError, ValueError):
+            return 5
+        return max(1, min(10, score))
+
     def analyze_batch(self, items: list) -> list:
         """Analyze multiple items in a single LLM call. Returns list of dicts."""
         if not items:
@@ -1573,7 +1607,8 @@ BODY:
             return [result]
 
         client = self._get_client()
-        system_prompt = self.SYSTEM_PROMPT.format(business_context=self.business_context)
+        system_prompt = self.SYSTEM_PROMPT.format(
+            business_context=self.business_context, operator=self.operator_name)
 
         # Build combined prompt
         parts = [f"Analyze these {len(items)} incoming messages. For EACH message, provide a separate JSON object.\n"
@@ -1616,6 +1651,17 @@ BODY:
             elif isinstance(parsed, dict):
                 # Single object returned despite batch request — use for first item
                 return [parsed] + [self.analyze(item) for item in items[1:]]
+            else:
+                # Valid JSON that is neither list nor dict -- a bare string or
+                # number. There was no else here, so the function fell off the
+                # end and returned None; `all_analyses.extend(None)` then raised
+                # TypeError, and neither run_cycle nor start() catches it, so one
+                # type-deviant response killed the daemon. Same fallback as a
+                # parse error, for the same reason.
+                self.logger.warning(
+                    f"Batch LLM analysis returned {type(parsed).__name__}, not a "
+                    f"list or object; falling back to individual calls")
+                return [self.analyze(item) for item in items]
 
         except json.JSONDecodeError as e:
             self.logger.warning(f"Batch LLM analysis JSON parse error ({e}), falling back to individual calls")
@@ -1695,7 +1741,7 @@ class TelegramNotifier:
             self.logger.info("Digest sent")
 
     def _format_message(self, item: dict, analysis: dict) -> str:
-        score = analysis.get("urgency_score", 0)
+        score = UrgencyAnalyzer._clamp_score(analysis.get("urgency_score"))
 
         if score >= 9:
             icon = "\U0001f534"  # red circle
@@ -1752,7 +1798,8 @@ class Sentinel:
         self.config = SentinelConfig(config_path)
         self.dry_run = dry_run
         self.logger = self._setup_logging()
-        self.state = StateManager()
+        # A dry run reads the real state but never writes it back.
+        self.state = StateManager(read_only=dry_run)
         self.email_source = EmailSource(self.config.email, self.state, self.logger)
         self.telegram_source = TelegramSource(self.config.telegram, self.state, self.logger)
         self.analyzer = UrgencyAnalyzer(self.config.llm, self.logger)
@@ -1821,9 +1868,17 @@ class Sentinel:
             if sys.platform != "win32":
                 import fcntl
                 fcntl.flock(self._pid_file_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            # On Windows, msvcrt.locking holds the file locked and blocks readers.
-            # Windows already prevents two processes from writing the same PID file
-            # atomically, so no explicit lock is needed - we just write and close.
+            # WINDOWS HAS NO LOCK HERE, and the justification that used to sit
+            # on this line was false: it claimed "Windows already prevents two
+            # processes from writing the same PID file atomically". It does not.
+            # Two processes can each open this path with "w" and truncate it, so
+            # on Windows two daemons -- or a --test beside the live one -- can
+            # run concurrently, double-notify, race on state.json and the
+            # Telethon SQLite session, and leave --stop pointing at the wrong
+            # PID. This daemon runs on Linux, where the flock above is real, so
+            # the gap is named rather than papered over; closing it needs an
+            # msvcrt byte-range lock (or an O_CREAT|O_EXCL lock file) held for
+            # the process lifetime, plus a separate PID namespace for --test.
         except (IOError, OSError):
             self._pid_file_handle.close()
             self.logger.error("Another Sentinel instance is already running (PID file locked)")
@@ -1857,7 +1912,12 @@ class Sentinel:
             )
 
         # Connect Telegram (needed for reading Telegram sources)
-        if self.config.telegram.get("enabled", True) or not self.dry_run:
+        # `enabled OR not dry_run` is always true in live mode, so the flag was
+        # dead at the one place it matters: an operator who set
+        # `telegram.enabled: false` still had connect() called, and connect()
+        # raises ValueError on absent credentials with no handler here -- so
+        # email-only monitoring could not boot at all.
+        if self.config.telegram.get("enabled", True):
             await self.telegram_source.connect()
 
         # Connect Exchange
@@ -2023,17 +2083,26 @@ class Sentinel:
         elapsed = (datetime.now(timezone.utc) - cycle_start).total_seconds()
         self.logger.info(f"Cycle complete: {len(items)} items in {elapsed:.1f}s")
 
+    def _mark_item_processed(self, item: dict) -> None:
+        """Record that an email reached a terminal outcome this cycle."""
+        if item.get("source") == "email" and item.get("message_id"):
+            self.state.mark_email_processed(item["message_id"])
+
     async def _analyze_and_notify(self, items: list):
         threshold = self.config.urgency_threshold
         max_notifs = self.config.notification.get("max_notifications_per_cycle", 10)
         sent_count = 0
 
-        # Pre-process: mark emails, dedup, collect items needing LLM analysis
+        # Pre-process: dedup and collect items needing LLM analysis.
+        #
+        # Emails are NOT marked processed here any more. Marking before analysis
+        # meant an Anthropic outage, or a cycle that hit
+        # max_notifications_per_cycle, permanently consumed the message: never
+        # retried, never in the digest, never notified. Silence is the worst
+        # failure an urgency monitor has. A message is now marked only once it
+        # reaches a terminal outcome below.
         items_to_analyze = []  # (item, content_hash) pairs
         for item in items:
-            if item.get("source") == "email" and item.get("message_id"):
-                self.state.mark_email_processed(item["message_id"])
-
             content_hash = hashlib.md5(
                 f"{item.get('source')}{item.get('sender')}{item.get('body', '')[:500]}".encode(),
                 usedforsecurity=False,
@@ -2060,7 +2129,9 @@ class Sentinel:
         # Process results
         for (item, content_hash), analysis in zip(items_to_analyze, all_analyses):
             if analysis is None:
-                # LLM failed -- fallback for VIP
+                # LLM failed. NOT marked processed: the next cycle retries it.
+                # The VIP fallback below is a best-effort notify on top of that,
+                # not a substitute for the retry.
                 if item.get("is_vip") and self.notifier:
                     fallback_analysis = {
                         "urgency_score": 7,
@@ -2076,8 +2147,11 @@ class Sentinel:
                         self.logger.error(f"Fallback notification failed: {e}")
                 continue
 
-            score = analysis.get("urgency_score", 0)
+            score = UrgencyAnalyzer._clamp_score(analysis.get("urgency_score"))
             self.state.record_digest_item(item, score)
+            # Terminal: it has been scored and it is in the digest, so it is
+            # accounted for whether or not a notification goes out below.
+            self._mark_item_processed(item)
 
             self.logger.info(
                 f"  [{score}/10] {item.get('source')}: {item.get('sender')} - {item.get('subject', '')[:60]}"
@@ -2234,8 +2308,23 @@ Top senders:{senders_str}"""
             decision = result["decision"]
             reasons = result["reasons"]
 
-            # Execute decision
-            if decision == "accept" and self.config.calendar.get("auto_accept", True):
+            # Execute decision.
+            #
+            # `--test` is documented as a dry run, and until now it only muted
+            # Telegram: accept_invite and decline_invite had no dry_run guard,
+            # so a first "safe" test run against a real Exchange account really
+            # accepted invites and really sent decline replies to real people.
+            # Nothing about the auto-accept/auto-decline POLICY changes here --
+            # that design is the operator's and is untouched. What changes is
+            # that the dry run stops lying.
+            if self.dry_run and decision in ("accept", "decline"):
+                self.logger.info(
+                    f"[dry-run] would {decision} invite {invite.get('subject')!r} "
+                    f"({'; '.join(reasons) or 'no reason recorded'}); no calendar "
+                    f"action taken and no reply sent")
+                await self._escalate_invite(invite, reasons)
+
+            elif decision == "accept" and self.config.calendar.get("auto_accept", True):
                 try:
                     self.invite_source.accept_invite(invite["item"])
                     await self._notify_invite_decision(invite, "ACCEPTED", reasons)
@@ -2263,7 +2352,17 @@ Top senders:{senders_str}"""
 
             else:
                 # Escalate (VIP, external, soft violations, or auto-action disabled)
-                await self._escalate_invite(invite, reasons)
+                escalated = await self._escalate_invite(invite, reasons)
+                if not escalated:
+                    # Leave it UNPROCESSED so the next cycle re-escalates. The
+                    # escalation path exists precisely for the invites a human
+                    # must see -- VIP, external, RUNE overrides -- and marking
+                    # them processed after a failed notify meant the operator
+                    # never learned they existed.
+                    self.logger.warning(
+                        f"Invite {invite_id} left unprocessed: escalation was not "
+                        f"delivered; it will be retried next cycle")
+                    continue
 
             self.state.mark_invite_processed(invite_id)
             self.state.record_invite_decision(
@@ -2300,10 +2399,22 @@ Policy check:
         except Exception as e:
             self.logger.error(f"Invite notification failed: {e}")
 
-    async def _escalate_invite(self, invite: dict, reasons: list):
-        """Send urgent notification requiring CEO decision on an invite."""
+    async def _escalate_invite(self, invite: dict, reasons: list) -> bool:
+        """Send urgent notification requiring CEO decision on an invite.
+
+        Returns True when the escalation was delivered (or when there is no
+        notifier at all), False when a configured notifier failed. The caller
+        retries on False, so the two cases must not be conflated: a missing
+        notifier is a permanent configuration state, and returning False for it
+        would leave every escalated invite unprocessed forever, retried on every
+        cycle. That is a startup-level gap, logged here and never silent.
+        """
         if not self.notifier:
-            return
+            self.logger.warning(
+                f"No notifier configured; invite {invite.get('subject')!r} needs a "
+                f"decision and NOBODY WAS TOLD. Configure Telegram, or handle it "
+                f"in Outlook.")
+            return True
 
         reasons_str = "\n".join(f"  - {r}" for r in reasons)
         start_str = str(invite.get("start", ""))[:16]
@@ -2327,6 +2438,8 @@ Reply with your decision or handle in Outlook."""
             await self.notifier.send_digest(msg)
         except Exception as e:
             self.logger.error(f"Invite escalation notification failed: {e}")
+            return False
+        return True
 
     async def shutdown(self):
         self.logger.info("Sentinel shutting down...")
@@ -2366,13 +2479,65 @@ def _is_pid_alive(pid: int) -> bool:
             return False
 
 
+def _read_pid_file() -> int | None:
+    """The PID in PID_FILE, or None when it is absent, empty or corrupt.
+
+    All three CLI paths (--status, --stop, and the already-running check in
+    main) did a bare `int(PID_FILE.read_text().strip())`, so a truncated file --
+    the normal residue of a crash mid-write -- raised ValueError out of main as
+    a traceback instead of a diagnosable state.
+    """
+    try:
+        raw = PID_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _pid_is_sentinel(pid: int) -> bool:
+    """True only when `pid` is THIS program, not merely a live process.
+
+    `--stop` used to verify the PID existed and then SIGKILL / `taskkill /F` it.
+    After a crash the PID file outlives the process, the number gets reused, and
+    the operator's next `--stop` destroys whatever unrelated program inherited
+    it. Liveness is not identity.
+
+    Unknown (unreadable /proc, tasklist unavailable) returns False: refusing to
+    kill a process we cannot identify is the safe direction, and the stale PID
+    file is cleaned either way.
+    """
+    if sys.platform == "win32":
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        # tasklist gives the image name only; python.exe/pythonw.exe running
+        # this daemon is as tight as it gets without WMI.
+        return "python" in (result.stdout or "").lower()
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\x00", b" ").decode(
+            "utf-8", "replace")
+    except OSError:
+        return False
+    return "sentinel.py" in cmdline
+
+
 def check_status():
     """Check if Sentinel is running."""
     if not PID_FILE.exists():
         print("Sentinel is NOT running (no PID file)")
         return
 
-    pid = int(PID_FILE.read_text().strip())
+    pid = _read_pid_file()
+    if pid is None:
+        print(f"Sentinel status UNKNOWN: the PID file at {PID_FILE} is empty or corrupt")
+        return
     if _is_pid_alive(pid):
         print(f"Sentinel is RUNNING (PID: {pid})")
     else:
@@ -2402,9 +2567,20 @@ def stop_daemon():
         print("Sentinel is not running")
         return
 
-    pid = int(PID_FILE.read_text().strip())
+    pid = _read_pid_file()
+    if pid is None:
+        print(f"PID file at {PID_FILE} is empty or corrupt; removing it.")
+        PID_FILE.unlink(missing_ok=True)
+        return
+
     if not _is_pid_alive(pid):
         print(f"Process {pid} not found (already stopped?)")
+        PID_FILE.unlink(missing_ok=True)
+        return
+
+    if not _pid_is_sentinel(pid):
+        print(f"REFUSING to kill PID {pid}: it is alive but is not this daemon "
+              f"(the PID was reused after a crash). Removing the stale PID file.")
         PID_FILE.unlink(missing_ok=True)
         return
 
@@ -2472,7 +2648,10 @@ def launch_daemon(config_path):
 
 def main():
     parser = argparse.ArgumentParser(description="Sentinel -- Unified Comms Monitor")
-    parser.add_argument("--test", action="store_true", help="Run one cycle (dry-run; notifications are logged, never sent)")
+    parser.add_argument("--test", action="store_true",
+                        help="Run one cycle as a TRUE dry run: notifications are "
+                             "logged not sent, calendar invites are neither accepted "
+                             "nor declined, and state is read but never written back")
     parser.add_argument("--status", action="store_true", help="Check if Sentinel is running")
     parser.add_argument("--stop", action="store_true", help="Stop running Sentinel daemon")
     parser.add_argument("--daemon", action="store_true", help="Launch as detached background process (cross-platform; on Linux, prefer systemd user unit)")
@@ -2493,8 +2672,8 @@ def main():
 
     # Check if already running
     if not args.test and PID_FILE.exists():
-        pid = int(PID_FILE.read_text().strip())
-        if _is_pid_alive(pid):
+        pid = _read_pid_file()
+        if pid is not None and _is_pid_alive(pid):
             print(f"Sentinel is already running (PID: {pid}). Use --stop first.")
             sys.exit(1)
         else:

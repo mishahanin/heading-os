@@ -91,7 +91,14 @@ def _cache_get(key: str) -> dict | None:
             cache_file.unlink(missing_ok=True)
             return None
         return data
-    except (json.JSONDecodeError, OSError, KeyError) as e:
+    except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError) as e:
+        # TypeError and ValueError joined the tuple on 2026-08-24. This handler
+        # exists so a corrupt entry REGENERATES cleanly, and the two things a
+        # corrupt `_cached_at` actually raises were both outside it:
+        # `fromisoformat` raises ValueError on a malformed string and TypeError
+        # on a non-string, and a naive datetime stored there raises TypeError
+        # at the subtraction below. Any of them crashed the whole parse run —
+        # the precise scenario the handler was built to absorb.
         print(f"  {YELLOW}Warning:{RESET} Cache entry corrupt, regenerating: {e}", file=sys.stderr)
         cache_file.unlink(missing_ok=True)
         return None
@@ -264,6 +271,17 @@ def find_boxes_for_quote(
         norm_char_to_item.pop()
 
     concat = "".join(norm_chars).lower()
+    if concat != norm_concat:
+        # `norm_concat` was computed and never used. That is not harmless here:
+        # the loop above RE-IMPLEMENTS `_normalize_text` inline, because it has
+        # to carry the char-to-item mapping along, and the two copies must
+        # agree for the box lookup to point at the right text. With the
+        # variable unused, nothing compared them, so an edit to
+        # `_normalize_text` would desync the matcher silently. Comparing is the
+        # whole reason to keep it.
+        print(f"  {YELLOW}Warning:{RESET} the inline normalization in "
+              f"find_boxes_for_quote has drifted from _normalize_text; "
+              f"bounding boxes may point at the wrong text.", file=sys.stderr)
     pos = concat.find(norm_quote)
     if pos == -1:
         return []
@@ -385,7 +403,7 @@ def _generate_report_html(
         img_bytes = page_screenshots.get(screenshot_key)
         if img_bytes:
             img_b64 = base64.b64encode(img_bytes).decode("ascii")
-            img_src = f"data:image/jpeg;base64,{img_b64}"
+            img_src = f"data:{_image_mime(img_bytes)};base64,{img_b64}"
         else:
             img_src = ""
 
@@ -399,21 +417,21 @@ def _generate_report_html(
             )
 
         card = f"""
-    <section class="citation-card" id="cite-{cit_id}">
+    <section class="citation-card" id="cite-{html.escape(str(cit_id), quote=True)}">
       <div class="card-header">
-        <span class="cite-num">[{cit_id}]</span>
-        <span class="cite-source">{html.escape(file_name)} - Page {page_num}</span>
+        <span class="cite-num">[{html.escape(str(cit_id))}]</span>
+        <span class="cite-source">{html.escape(file_name)} - Page {html.escape(str(page_num))}</span>
       </div>
       <div class="card-body">
         <div class="page-view">
           {"" if not img_src else f'''<div class="page-image-container">
-            <img src="{img_src}" class="page-image" alt="Page {page_num}">
+            <img src="{img_src}" class="page-image" alt="Page {html.escape(str(page_num))}">
             <svg class="highlight-overlay" viewBox="0 0 {page_w_px:.0f} {page_h_px:.0f}"
                  preserveAspectRatio="none">
               {svg_rects}
             </svg>
           </div>'''}
-          <div class="page-label">Page {page_num}</div>
+          <div class="page-label">Page {html.escape(str(page_num))}</div>
         </div>
         <div class="finding-panel">
           <div class="quote-block">
@@ -757,6 +775,28 @@ def _setup_install():
 # Subcommand: parse
 # ============================================================
 
+def _password(args) -> str | None:
+    """The document password, preferring the environment over argv.
+
+    `--password` puts the secret in the process table for the life of the run
+    and in the operator's shell history for ever. `DOCPARSE_PASSWORD` does
+    neither. The flag stays, because a caller may already depend on it, but it
+    now says what it costs and the environment wins when both are set.
+    """
+    import os
+    from_env = os.environ.get("DOCPARSE_PASSWORD")
+    if from_env:
+        if getattr(args, "password", None):
+            print(f"  {GRAY}Both --password and DOCPARSE_PASSWORD are set; "
+                  f"using the environment.{RESET}", file=sys.stderr)
+        return from_env
+    if getattr(args, "password", None):
+        print(f"  {YELLOW}Warning:{RESET} --password is visible to any local "
+              f"account via `ps` and is written to shell history. Prefer "
+              f"DOCPARSE_PASSWORD.", file=sys.stderr)
+    return getattr(args, "password", None)
+
+
 def cmd_parse(args):
     """Parse one or more documents."""
     results = {"files": [], "summary": {}}
@@ -782,7 +822,7 @@ def cmd_parse(args):
             try:
                 doc = parse_document(
                     f, pages=args.pages, dpi=args.dpi,
-                    password=args.password, no_cache=args.no_cache,
+                    password=_password(args), no_cache=args.no_cache,
                 )
                 hit = doc.pop("_cache_hit", False)
                 doc.pop("_cached_at", None)
@@ -876,9 +916,19 @@ def cmd_report(args):
         )
         pages_to_screenshot = dict(list(pages_to_screenshot.items())[:max_pages])
 
-    # Take screenshots
-    cli = shutil.which("liteparse")
-    parser = LiteParse(cli_path=cli) if cli else LiteParse()
+    # Take screenshots.
+    #
+    # `LiteParse()`, with no `cli_path`. The note at the top of
+    # `parse_document` says plainly that liteparse 2.0 REMOVED that keyword
+    # (the bindings locate the CLI themselves), and this line passed it
+    # whenever the CLI was on PATH — which is the documented, prerequisite
+    # setup. So `report` raised TypeError before taking a single screenshot
+    # while `parse` worked fine, which is the hardest kind of breakage to
+    # place. `shutil.which` is kept as the availability check it now is.
+    if not shutil.which("liteparse"):
+        print(f"{YELLOW}Warning:{RESET} the liteparse CLI is not on PATH; "
+              f"screenshots may fail.", file=sys.stderr)
+    parser = LiteParse()
     page_screenshots: dict[tuple[str, int], bytes] = {}
 
     # Group by file for efficient screenshotting
@@ -935,12 +985,22 @@ def cmd_report(args):
         if pdf_script.exists():
             pdf_path = html_path.with_suffix(".pdf")
             try:
-                subprocess.run(
+                proc = subprocess.run(
                     [sys.executable, str(pdf_script), str(html_path), str(pdf_path)],
-                    timeout=60, capture_output=True,
+                    timeout=60, capture_output=True, text=True,
                 )
                 if pdf_path.exists():
                     print(f"{GREEN}PDF:{RESET}    {pdf_path}", file=sys.stderr)
+                else:
+                    # There was no `else`, and the return code was never read,
+                    # so a converter that exited non-zero without writing the
+                    # file produced no PDF and no message: the run "completed"
+                    # and the operator had no flag that would have told them.
+                    detail = (proc.stderr or proc.stdout or "").strip()
+                    print(f"{YELLOW}PDF conversion produced no file{RESET} "
+                          f"(html-to-pdf.py exited {proc.returncode})"
+                          + (f": {detail[:300]}" if detail else "."),
+                          file=sys.stderr)
             except (subprocess.TimeoutExpired, OSError) as e:
                 print(f"{YELLOW}PDF conversion skipped:{RESET} {e}", file=sys.stderr)
 
@@ -957,6 +1017,19 @@ def _png_to_jpeg(png_bytes: bytes, quality: int = 85) -> bytes:
         return buf.getvalue()
     except ImportError:
         return png_bytes  # fallback to PNG if Pillow unavailable
+
+
+def _image_mime(data: bytes) -> str:
+    """The MIME type these bytes actually are.
+
+    `_png_to_jpeg` returns the ORIGINAL PNG when Pillow is absent, and the
+    report embedded whatever came back under a hardcoded
+    `data:image/jpeg;base64,` label. Rendering then relied on browser
+    content-sniffing, and a strict consumer — this repo pipes the HTML through
+    `html-to-pdf.py` — can drop the image entirely. Cheap to be honest: the PNG
+    signature is eight fixed bytes.
+    """
+    return "image/png" if data[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
 
 
 # ============================================================
@@ -1002,7 +1075,12 @@ def cmd_clear_cache(args):
         for entry in CACHE_DIR.glob("*.json"):
             try:
                 data = json.loads(entry.read_text(encoding="utf-8"))
-                if data.get("file") == str(fp) or Path(data.get("file", "")).name == fp.name:
+                # Exact path only. The basename fallback deleted the cache of
+                # every document sharing a filename across directories — asking
+                # to clear `~/drafts/q3.pdf` also cleared `~/contracts/q3.pdf`.
+                # The cost is only recompute, but the deletion was broader than
+                # what was asked for, and the exact match already sufficed.
+                if data.get("file") == str(fp):
                     entry.unlink()
                     removed += 1
             except (json.JSONDecodeError, OSError):
@@ -1042,7 +1120,11 @@ def main():
     sp_parse.add_argument("--files", nargs="+", required=True, help="File paths or directories")
     sp_parse.add_argument("--pages", default=None, help="Page range, e.g. '1-5,10'")
     sp_parse.add_argument("--dpi", type=int, default=DEFAULT_DPI, help="Render DPI (default: 150)")
-    sp_parse.add_argument("--password", default=None, help="Document password")
+    sp_parse.add_argument(
+        "--password", default=None,
+        help="Document password. Prefer DOCPARSE_PASSWORD in the environment: "
+             "an argv element is readable by any local account through `ps` "
+             "for the life of the run, and lands in shell history.")
     sp_parse.add_argument("--no-cache", action="store_true", help="Skip cache")
     sp_parse.add_argument("--output-json", required=True, help="Output JSON path")
 

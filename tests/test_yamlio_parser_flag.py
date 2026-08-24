@@ -21,11 +21,33 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import yaml  # noqa: E402
+
 from scripts.utils import yamlio  # noqa: E402
 
 
 def test_the_flag_matches_the_loader_that_is_bound():
-    assert yamlio.USING_LIBYAML is (yamlio.SafeLoader.__name__ == "CSafeLoader")
+    """Checked against PyYAML's OWN class, not against a name string.
+
+    This assertion used to be `USING_LIBYAML is (SafeLoader.__name__ ==
+    "CSafeLoader")`, which was the implementation restated: both sides read the
+    same `__name__`, so an alias or a rename would move them together and the
+    test could not fail. Comparing to the class object is an independent source.
+    """
+    assert yamlio.USING_LIBYAML is (yamlio.SafeLoader is getattr(yaml, "CSafeLoader", None))
+
+
+def test_the_flag_agrees_with_pyyamls_build_flag():
+    """`yaml.__with_libyaml__` is the third, independent witness.
+
+    They can legitimately differ only one way: libyaml present but the
+    `from yaml import CSafeLoader` above failing for some other reason. That
+    would be worth a loud failure, not a silent pass.
+    """
+    assert yaml.__with_libyaml__ == yamlio.USING_LIBYAML, (
+        f"yamlio bound {yamlio.SafeLoader.__name__} while PyYAML reports "
+        f"__with_libyaml__={yaml.__with_libyaml__}"
+    )
 
 
 def test_the_bound_loader_is_one_of_the_two_safe_ones():

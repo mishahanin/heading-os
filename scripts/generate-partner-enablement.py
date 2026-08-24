@@ -43,8 +43,14 @@ def load_logo_b64(filename):
 # ============================================================
 # Rendering / HTML Document Builder
 # ============================================================
-def build_html(header_logo_b64, page_logo_b64, blue_b64, black_b64):
+def build_html(header_logo_b64, blue_b64, black_b64):
     """Render the partner-enablement document from the locked brand template.
+
+    There is no `page_logo_b64` parameter. There was one, it was never
+    referenced, and the caller passed `blue_b64` into it — so anyone wiring a
+    genuinely different page logo through that slot got the blue logo on pages
+    2 and 3 with no error and no warning. A parameter that silently does
+    nothing is worse than an absent one.
 
     The markup lives in datastore/brand/templates/generators/partner-enablement.html;
     everything below is the theme layer, the only thing that varies between the
@@ -139,7 +145,7 @@ def main():
     blue_b64 = load_logo_b64("31C_Logo_Palantinate_Blue_Color.png")
     black_b64 = load_logo_b64("31C_Logo_Black_Color.png")
 
-    html = build_html(white_b64, blue_b64, blue_b64, black_b64)
+    html = build_html(white_b64, blue_b64, black_b64)
 
     outdir = get_outputs_dir() / "content" / "partner-enablement"
     outdir.mkdir(parents=True, exist_ok=True)

@@ -236,6 +236,20 @@ body {
   color: var(--ink);
 }
 
+/* The `hidden` attribute wins over any display this sheet sets.
+   Every collapsible panel here is toggled with `el.hidden`, and the UA rule
+   behind that is `[hidden] { display: none }` - which ANY later `display:`
+   declaration silently defeats. The sheet had been answering that one panel at
+   a time: five per-selector `[hidden]` guards existed, and three panels that
+   needed one had never got it. `.task-done-expanded`, `.appr-sent-expanded`
+   and `.inbox-dismissed-expanded` all ship `hidden` in the markup, all set
+   `display: flex`, and all therefore rendered as an empty bordered box on
+   /tasks, /approvals and /inbox while collapsed. Found by the 2026-08-23
+   audit, confirmed against app.js on 2026-08-24. One rule ends the class. */
+[hidden] {
+  display: none !important;
+}
+
 .topbar {
   grid-column: 1 / -1;
   grid-row: 1;
@@ -599,7 +613,8 @@ body {
   position: fixed;
   top: 40px;
   right: 0;
-  bottom: 56px;
+  /* Was 56px, clearing the footer cmd-bar Phase 1.36 removed. */
+  bottom: 0;
   width: 280px;
   background: var(--surface);
   border-left: 1px solid var(--hairline);
@@ -608,10 +623,6 @@ body {
   z-index: 90;
   overflow-y: auto;
   animation: slide-in-right var(--dur-base) var(--ease-out);
-}
-
-.tweaks[hidden] {
-  display: none;
 }
 
 @keyframes slide-in-right {
@@ -1178,14 +1189,10 @@ h2 { font-size: 20px; margin: 0 0 18px; font-weight: 600; }
   flex-direction: column;
   gap: var(--space-4);
 }
-/* The explicit display:flex above overrides the UA [hidden] rule, which made
-   the collapsed (empty) activity panel render as a large empty bordered box in
-   the prime hero area. Restore hidden semantics so it occupies zero space until
-   the activity line is expanded. */
-.pulse-activity-expanded[hidden] {
-  display: none;
-}
-
+/* The `display: flex` above defeats the UA `[hidden]` rule, which made the
+   collapsed panel render as a large empty bordered box in the prime hero area.
+   Its per-selector guard is gone: the `[hidden]` reset near the top of this
+   sheet now covers this panel and the three siblings that never got one. */
 .pulse-activity-group-head {
   font-family: var(--font-mono);
   font-size: 10px;
@@ -1438,7 +1445,10 @@ a.pulse-activity-link:hover {
   display: inline-flex;
   align-items: center;
   padding: 4px 10px;
-  background: var(--surface-2, var(--bg-soft));
+  /* The fallback used to be `var(--bg-soft)`, a token this sheet never
+     defines - so it was inert either way, and it was the one reference that
+     stopped "every token used is defined" from being checkable. */
+  background: var(--surface-2);
   border: 1px solid var(--hairline);
   border-radius: var(--r-pill, 999px);
   font-family: var(--font-mono);
@@ -1798,10 +1808,10 @@ a.kpi-tile:hover {
 }
 
 .pulse-approval-item[data-agent="email-respond"] {
-  border-left-color: var(--ok, oklch(0.72 0.16 145));
+  border-left-color: var(--state-ok);
 }
 .pulse-approval-item[data-agent="followup"] {
-  border-left-color: var(--warn, oklch(0.74 0.16 60));
+  border-left-color: var(--state-warn);
 }
 
 .pulse-approval-item .pulse-approval-kind {
@@ -1916,10 +1926,10 @@ a.kpi-tile:hover {
   flex-shrink: 0;
 }
 .pulse-approval-kind[data-agent="email-respond"]::before {
-  background: var(--ok, oklch(0.72 0.16 145));
+  background: var(--state-ok);
 }
 .pulse-approval-kind[data-agent="followup"]::before {
-  background: var(--warn, oklch(0.74 0.16 60));
+  background: var(--state-warn);
 }
 
 /* Phase 1.106: section-head row pairs the eyebrow with a real badge
@@ -1959,7 +1969,7 @@ a.kpi-tile:hover {
   height: 22px;
   padding: 0 7px;
   border-radius: var(--r-pill);
-  background: var(--warn, oklch(0.74 0.16 60));
+  background: var(--state-warn);
   color: var(--ink-on-accent);
   font-family: var(--font-mono);
   font-size: 11px;
@@ -2000,7 +2010,7 @@ a.kpi-tile:hover {
   border: 1px solid var(--hairline);
 }
 .pulse-section-badge-warn {
-  background: var(--warn, oklch(0.74 0.16 60));
+  background: var(--state-warn);
   color: var(--ink-on-accent);
 }
 
@@ -2862,6 +2872,16 @@ a.pulse-signal-link:hover .pulse-signal-title {
   grid-template-columns: 1fr 1fr;
 }
 
+/* The base class collapses via auto-fit/minmax; hardcoding two columns threw
+   that away, so below ~600px the two cards crushed instead of stacking. Every
+   comparable grid here (.pulse-kpi-grid, .pulse-now-hero, .pulse-triage-grid)
+   already carries this fallback. */
+@media (max-width: 700px) {
+  .pulse-footer-row-2up {
+    grid-template-columns: 1fr;
+  }
+}
+
 .pulse-footer-card {
   background: var(--surface);
   border: 1px solid var(--hairline);
@@ -3248,7 +3268,10 @@ a.pulse-tribe-link:hover .pulse-tribe-name {
    Phase 1 minimal; Phase 2 will add proper icons. */
 body[data-sidebar="collapsed"] {
   grid-template-columns: 56px 1fr;
-  grid-template-rows: 40px 1fr 56px;
+  /* Phase 1.36 removed the footer cmd-bar and the base `body` rule dropped to
+     two rows; this variant kept a third 56px track nothing is placed in, so
+     collapsing the sidebar cost 56px of the canvas to dead space. */
+  grid-template-rows: 40px 1fr;
 }
 
 body[data-sidebar="collapsed"] .topbar {
@@ -3393,7 +3416,12 @@ body[data-sidebar="collapsed"] .nav-item {
 .day-card-body::before {
   content: "";
   position: absolute;
-  left: -8px;
+  /* The rail is at a fixed 78px and the body column starts at 70px + the grid
+     gap, so a fixed -8px put the rail on the dot's LEFT EDGE rather than
+     through its centre. Deriving the offset from the same token the gap uses
+     centres it under both density modes (--space-4 is 16px normally, 12px on
+     compact): 70 + gap + (1 - gap) + 7 = 78. */
+  left: calc(1px - var(--space-4));
   top: 20px;
   width: 14px; height: 14px;
   border-radius: 50%;
@@ -3771,7 +3799,13 @@ body[data-sidebar="collapsed"] .nav-item {
               background var(--dur-fast) var(--ease-out);
 }
 
-.inbox-filter-chip:hover:not(:disabled) {
+/* The audit reported `:not(:disabled)` as a guard that never fires, because
+   stubs are marked with `.is-stub`. Measured 2026-08-24: all five stub chips
+   in app.js carry the attribute AND the class, so it did fire. The class is
+   named here anyway - it is what the `.is-stub` rule below reacts to when it
+   paints the not-allowed cursor, and a chip marked one way but not the other
+   would light up on hover while refusing the click. */
+.inbox-filter-chip:hover:not(:disabled):not(.is-stub) {
   border-color: var(--hairline-strong);
   color: var(--ink);
 }
@@ -3916,7 +3950,14 @@ body[data-sidebar="collapsed"] .nav-item {
 .hdg-overdue { color: #DC2626; }
 .hdg-sent { color: #16A34A; }
 
-.inbox-row-summary {
+/* The drill-down analyst summary. This used to reuse `.inbox-row-summary`,
+   the compact-row class defined above, and the two rules fought: this one
+   put a bordered card, 12px padding and 12px margins around a summary whose
+   own comment says it exists to keep rows COMPACT, while that one's
+   `-webkit-line-clamp: 2` was never unset here, so the "full" summary this
+   rule styles with `white-space: pre-wrap` was still truncated to two lines.
+   Found by the 2026-08-23 audit; split on 2026-08-24. */
+.inbox-detail-summary {
   font-size: 13px;
   line-height: 1.55;
   color: var(--ink);
@@ -4150,10 +4191,6 @@ body[data-sidebar="collapsed"] .nav-item {
   gap: var(--space-2);
   margin-top: var(--space-2);
   flex-wrap: wrap;
-}
-
-.inbox-defer-presets[hidden] {
-  display: none;
 }
 
 .inbox-defer-label {
@@ -4846,10 +4883,6 @@ a.search-result-link:hover .search-result-title {
   z-index: 1000;
 }
 
-.kbd-help-overlay[hidden] {
-  display: none;
-}
-
 .kbd-help-panel {
   background: var(--surface);
   border: 1px solid var(--hairline);
@@ -5025,10 +5058,6 @@ kbd {
   justify-content: center;
   padding-top: 10vh;
   z-index: 1100;
-}
-
-.cmdk-overlay[hidden] {
-  display: none;
 }
 
 .cmdk-panel {
@@ -5300,7 +5329,7 @@ kbd {
 }
 
 .lib-row:hover {
-  background: rgba(0, 0, 0, 0.02);
+  background: var(--surface-2);
 }
 
 .lib-row-expanded {
@@ -5351,7 +5380,7 @@ kbd {
 }
 
 .tribe-row:hover {
-  background: rgba(0, 0, 0, 0.02);
+  background: var(--surface-2);
 }
 
 .tribe-row-expanded {
@@ -5438,7 +5467,7 @@ kbd {
 }
 
 .studio-row:hover {
-  background: rgba(0, 0, 0, 0.02);
+  background: var(--surface-2);
 }
 
 .studio-row-expanded {
@@ -5592,7 +5621,7 @@ kbd {
 }
 
 .cap-row:hover {
-  background: rgba(0, 0, 0, 0.02);
+  background: var(--surface-2);
 }
 
 .cap-row-expanded {
@@ -6114,7 +6143,7 @@ kbd {
 }
 
 .pipe-row:hover {
-  background: rgba(0, 0, 0, 0.02);
+  background: var(--surface-2);
 }
 
 .pipe-row-expanded {
@@ -6186,7 +6215,7 @@ kbd {
 }
 
 .inv-row:hover {
-  background: rgba(0, 0, 0, 0.02);
+  background: var(--surface-2);
 }
 
 /* Phase 1.99: inline Mark-sent + sent-check on each investor row. */
@@ -6946,6 +6975,16 @@ kbd {
 .inv-undo-btn,
 .inv-inline-mark,
 .critical-row-unmark,
-.critical-restore-btn {
+.critical-restore-btn,
+/* The three note fields and the action hint were left behind when their
+   submit buttons went. Each is a live, focusable `<input maxlength="200">`
+   with nothing that can submit it, on a surface whose comment above says only
+   view controls are kept. The `*-foot` expand toggles are deliberately NOT
+   hidden: the history they reveal is read-only information, which is exactly
+   what this surface is for. Found by the 2026-08-23 audit. */
+.pulse-approval-note,
+.pipe-touch-note,
+.inv-send-note,
+.inbox-action-hint {
   display: none !important;
 }

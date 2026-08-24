@@ -6,11 +6,20 @@ checksums, verify sha256, back up the current binary, atomic-swap, restart the
 systemd-user service, health-check, and roll back on failure. Reads no secrets;
 config.yaml (chmod 600, outside the repo) is never touched.
 
-Exit 0 on healthy new version; non-zero on rollback.
+Exit codes:
+  0  already current, or the new version is healthy
+  1  the swap or the health gate failed and a rollback was attempted
+  2  could not resolve, fetch, or stage a release; NOTHING was swapped
+  3  checksum missing or mismatched; refused an unverified swap
+
+The old line read "Exit 0 on healthy new version; non-zero on rollback",
+which described 2 and 3 -- both of which roll back nothing -- as rollbacks.
 """
 from __future__ import annotations
 
 import hashlib
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -29,6 +38,8 @@ REPO = "router-for-me/CLIProxyAPI"
 SERVICE = "cliproxyapi.service"
 HEALTH_TIMEOUT_S = 30.0
 HEALTH_INTERVAL_S = 1.0
+# The release tarball is single-digit MB; this is a runaway guard, not a fit.
+MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
 
 
 def _download(url: str, dest: Path) -> None:
@@ -40,8 +51,40 @@ def _download(url: str, dest: Path) -> None:
     if not url.startswith("https://"):
         raise ValueError(f"refusing a non-https download URL: {url!r}")
     req = urllib.request.Request(url, headers={"User-Agent": "heading-os-update-manager"})  # noqa: S310 - scheme checked above
+    # Capped. `copyfileobj` streamed without limit, and the URL is API-response
+    # data -- an endless chunked body fills the disk, and the staging dir is
+    # frequently a small tmpfs.
+    written = 0
     with urllib.request.urlopen(req, timeout=120) as resp, dest.open("wb") as fh:  # noqa: S310 - scheme checked above
-        shutil.copyfileobj(resp, fh)
+        while True:
+            chunk = resp.read(1 << 20)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > MAX_DOWNLOAD_BYTES:
+                raise ValueError(
+                    f"download exceeded {MAX_DOWNLOAD_BYTES} bytes; refusing: {url!r}")
+            fh.write(chunk)
+
+
+def select_binary_member(members) -> tuple:
+    """The one regular file named exactly `cli-proxy-api`, or (None, reason).
+
+    `endswith("cli-proxy-api")` also matched `docs/old-cli-proxy-api`, a
+    DIRECTORY of that name, and `not-cli-proxy-api` -- and the `next()` around
+    it took whichever came first in archive order, so the wrong member could be
+    staged as the new binary. That `next()` also sat outside the try/except, so
+    an archive with no match died on StopIteration instead of refusing.
+    """
+    candidates = [m for m in members
+                  if m.isfile() and Path(m.name).name == "cli-proxy-api"]
+    if not candidates:
+        return None, "no `cli-proxy-api` file in the release tarball; refusing the swap"
+    if len(candidates) > 1:
+        names = ", ".join(m.name for m in candidates)
+        return None, (f"{len(candidates)} members named `cli-proxy-api` in the "
+                      f"tarball ({names}); refusing an ambiguous swap")
+    return candidates[0], ""
 
 
 def _sha256(path: Path) -> str:
@@ -52,10 +95,27 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+# `expected HTTP 200, got HTTP 502` CONTAINS "HTTP 200". The old substring gate
+# therefore declared a dead service healthy on the canonical failure message,
+# turning a bad swap into a reported success and skipping the rollback. Matching
+# stderr as well as stdout widened the same hole.
+_HEALTH_FAIL_RE = re.compile(r"\b(?:got|actual|received)\b[^\n]*\bHTTP\s+\d{3}",
+                             re.IGNORECASE)
+_HEALTH_OK_RE = re.compile(r"(?<![\w-])HTTP\s+200\b")
+
+
 def _health_ok() -> bool:
-    res = subprocess.run(["bash", "-c", f"{Path.home()}/.local/bin/cliproxy health"],
+    # No shell: the path was interpolated unquoted into `bash -c`, so a home
+    # directory with a space broke the probe and every update ended in a
+    # spurious rollback.
+    res = subprocess.run([str(Path.home() / ".local" / "bin" / "cliproxy"), "health"],
                          capture_output=True, text=True, check=False)
-    return "HTTP 200" in (res.stdout + res.stderr)
+    if res.returncode != 0:
+        return False
+    text = res.stdout or ""
+    if _HEALTH_FAIL_RE.search(text) or _HEALTH_FAIL_RE.search(res.stderr or ""):
+        return False
+    return bool(_HEALTH_OK_RE.search(text))
 
 
 def _wait_healthy(timeout_s: float = HEALTH_TIMEOUT_S,
@@ -77,11 +137,33 @@ def _wait_healthy(timeout_s: float = HEALTH_TIMEOUT_S,
         time.sleep(interval_s)
 
 
+def _normalise_version(raw: str) -> str:
+    """Bare dotted digits, from either side of the comparison.
+
+    `_current_version` was grep-normalised to `[0-9.]+` while the GitHub tag was
+    used verbatim, so a `v7.2.104` tag never equalled a `7.2.104` binary: every
+    scheduled run stopped the service, swapped the SAME version in, restarted,
+    and overwrote the backup -- forever, with a rollback roulette each time.
+    """
+    m = re.search(r"\d[\d.]*", raw or "")
+    return m.group(0).rstrip(".") if m else ""
+
+
+def _version_tuple(v: str) -> tuple:
+    """Dotted version as a comparable tuple of ints."""
+    return tuple(int(part) for part in v.split(".") if part.isdigit())
+
+
 def _current_version() -> str:
-    res = subprocess.run(["bash", "-c",
-                          f"{BIN} -version 2>&1 | grep -oP 'Version: \\K[0-9.]+' | head -1"],
+    # No shell, and no grep -P (GNU-only): the path was interpolated unquoted
+    # into `bash -c`, so a home directory with a space broke this too.
+    res = subprocess.run([str(BIN), "-version"],
                          capture_output=True, text=True, check=False)
-    return res.stdout.strip()
+    for line in ((res.stdout or "") + (res.stderr or "")).splitlines():
+        m = re.search(r"Version:\s*([0-9][0-9.]*)", line)
+        if m:
+            return m.group(1)
+    return ""
 
 
 def main() -> int:
@@ -89,9 +171,17 @@ def main() -> int:
     if not latest:
         print("could not resolve latest version")
         return 2
-    if _current_version() == latest:
+    current_n = _normalise_version(_current_version())
+    latest_n = _normalise_version(latest)
+    if current_n and latest_n and current_n == latest_n:
         print(f"already {latest}")
         return 0
+    if current_n and latest_n and _version_tuple(latest_n) < _version_tuple(current_n):
+        # `==` is not an ordering. A retracted release or an API quirk resolving
+        # "latest" to something OLDER made this cheerfully downgrade, restart
+        # included.
+        print(f"refusing a downgrade: installed {current_n}, 'latest' is {latest_n}")
+        return 2
 
     asset = update_sources.github_asset_url({"repo": REPO}, "amd64")
     if not asset:
@@ -99,6 +189,20 @@ def main() -> int:
         return 2
     checksums_url = asset.rsplit("/", 1)[0] + "/checksums.txt"
 
+    try:
+        return _fetch_verify_and_swap(asset, checksums_url, latest, current_n)
+    except (OSError, ValueError, tarfile.TarError, UnicodeDecodeError) as exc:
+        # Every step below -- the two downloads, reading checksums.txt, opening
+        # the tarball -- could raise straight out as a traceback with exit 1,
+        # against the exit contract in this module's docstring. A 404 on the
+        # derived checksums URL and an HTML error page served with HTTP 200 are
+        # the two that actually happen.
+        print(f"update aborted before any swap ({type(exc).__name__}: {exc})")
+        return 2
+
+
+def _fetch_verify_and_swap(asset: str, checksums_url: str, latest: str,
+                           current_n: str) -> int:
     with tempfile.TemporaryDirectory(prefix="cpx-upd.") as td:
         stage = Path(td)
         tarball = stage / "cpx.tar.gz"
@@ -124,14 +228,25 @@ def main() -> int:
             return 3
 
         with tarfile.open(tarball) as tf:
-            member = next(m for m in tf.getmembers() if m.name.endswith("cli-proxy-api"))
+            member, why = select_binary_member(tf.getmembers())
+            if member is None:
+                print(why)
+                return 2
             # filter="data" needs Python >= 3.12 (backported to 3.11.4/3.10.12).
             # The workspace runs modern Python; if targeting older, drop the kwarg.
             tf.extract(member, stage, filter="data")
             newbin = stage / member.name
 
-        backup = CPX_DIR / f"cli-proxy-api.{_current_version() or 'prev'}.bak"
-        shutil.copy2(BIN, backup)
+        backup = CPX_DIR / f"cli-proxy-api.{current_n or 'prev'}.bak"
+        try:
+            shutil.copy2(BIN, backup)
+        except OSError as exc:
+            # A fresh machine, a renamed binary, or a broken prior run raised
+            # FileNotFoundError here with no handler in sight -- and this is the
+            # copy that makes the rollback below possible at all.
+            print(f"cannot back up {BIN} ({exc}); refusing to swap without a "
+                  f"restore point")
+            return 2
 
         def _restore() -> None:
             subprocess.run(["systemctl", "--user", "stop", SERVICE], check=False)
@@ -145,8 +260,15 @@ def main() -> int:
         try:
             subprocess.run(["systemctl", "--user", "stop", SERVICE], check=True)
             shutil.copymode(BIN, newbin)
-            shutil.move(str(newbin), str(BIN))
-            BIN.chmod(0o755)
+            # Stage BESIDE the target, then os.replace. `shutil.move` from the
+            # tempdir degrades to copy-and-delete across filesystems (TMPDIR is
+            # commonly tmpfs), so the "atomic-swap" this file's docstring
+            # promises was not one: a kill mid-copy left a PARTIAL binary with
+            # the service stopped, and no exception for `_restore` to catch.
+            side = BIN.with_name(BIN.name + ".incoming")
+            shutil.copy2(newbin, side)
+            side.chmod(0o755)
+            os.replace(side, BIN)
             subprocess.run(["systemctl", "--user", "start", SERVICE], check=True)
         except Exception as exc:  # noqa: BLE001 - any swap failure must restore
             print(f"swap failed ({type(exc).__name__}: {exc}); restoring backup")
@@ -158,7 +280,16 @@ def main() -> int:
             return 0
 
         _restore()
-        print("health failed; rolled back to previous binary")
+        if _wait_healthy():
+            print("health failed; rolled back to the previous binary, "
+                  "which is now healthy")
+        else:
+            # The rollback runs check=False throughout, so "rolled back" was
+            # printed whether or not the old binary came back up. If the cause
+            # was environmental -- a port conflict, a bad config -- the service
+            # is still down and the log used to say otherwise.
+            print("health failed; rolled back to the previous binary AND IT IS "
+                  "STILL NOT HEALTHY -- the service is down, investigate now")
         return 1
 
 

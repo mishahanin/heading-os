@@ -16,8 +16,9 @@ data-root helpers so imports land in the data overlay, never the engine tree):
 
 Collision policy is fail-safe: a destination file that already exists is NEVER
 overwritten -- it is counted as "skipped" and reported. Re-running is therefore
-idempotent (a second run imports 0 files). Copies are atomic (temp file in the
-destination directory, then os.replace).
+idempotent (a second run imports 0 files). Copies go through a UNIQUE temp file
+in the destination directory and land via `os.link`, which the filesystem refuses
+if the destination appeared in the meantime.
 
 Usage:
     # dry-run first -- shows exactly what WOULD be copied, writes nothing
@@ -34,9 +35,11 @@ Usage:
 """
 
 import argparse
+import errno
 import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -101,14 +104,49 @@ def _resolve_source(from_root: Path, rel_candidates: list) -> Path | None:
 
 
 def _atomic_copy(src_file: Path, dest_file: Path) -> None:
-    """Copy src_file to dest_file atomically (temp in dest dir, then os.replace).
+    """Copy src_file to dest_file atomically, never overwriting anything.
 
-    Preconditions: dest_file does not exist; caller verified path safety.
+    Preconditions: caller verified path safety.
+
+    Two ways this destroyed data before 2026-08-24, both from the fixed scratch
+    name `<dest>.tmp-import`:
+
+      - a file ALREADY at that name in the destination directory was
+        overwritten by `copy2` and then moved away by `os.replace`, so its
+        contents were gone. This importer's whole documented invariant is that
+        an existing destination file is never overwritten, and the scratch path
+        is a destination file like any other.
+      - two concurrent imports of the same relative path wrote the one scratch
+        path and raced.
+
+    `mkstemp` gives each writer its own scratch name, and `os.link` + unlink
+    replaces the check-then-`os.replace` with a create-if-absent that the
+    filesystem enforces: `link` fails with EEXIST if the destination appeared
+    between the caller's check and this call. Falls back to `os.replace` where
+    hard links are unavailable, and says so rather than pretending.
     """
     dest_file.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest_file.parent / (dest_file.name + ".tmp-import")
-    shutil.copy2(src_file, tmp)
-    os.replace(tmp, dest_file)
+    fd, tmp_name = tempfile.mkstemp(dir=str(dest_file.parent),
+                                    prefix=dest_file.name + ".", suffix=".tmp-import")
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        shutil.copy2(src_file, tmp)
+        try:
+            os.link(tmp, dest_file)
+        except OSError as exc:
+            if exc.errno == errno.EEXIST:
+                raise FileExistsError(
+                    f"{dest_file} appeared after the existence check; not overwritten"
+                ) from exc
+            # No hard-link support on this filesystem. `os.replace` is the only
+            # option left and it CAN clobber, so the window is named, not hidden.
+            os.replace(tmp, dest_file)
+            return
+        tmp.unlink()
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _import_subtree(

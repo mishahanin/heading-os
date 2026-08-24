@@ -24,6 +24,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import get_workspace_root, get_outputs_dir, get_crm_contacts_dir, get_default_tz
 from scripts.utils.colors import GREEN, YELLOW, RED, BOLD, RESET
+from scripts.utils.atomic import atomic_write_text
+from scripts.utils.crm import is_radar_frozen
 
 _ENTRY_RE = re.compile(r"^(?:###\s+|-\s+)(\d{4}-\d{2}-\d{2}\b.*)$", re.MULTILINE)
 
@@ -39,6 +41,20 @@ STAGE_TIER = {
 }
 
 
+def _overdue_days(value) -> int:
+    """`days_overdue` as a sortable int, whatever the health output carried.
+
+    `int(c.get("days_overdue", 0))` defaults only when the KEY IS ABSENT, so an
+    explicit `None`, `""` or `"unknown"` raised inside the sort key and no
+    queue was generated at all. A missing number is not a reason to produce no
+    follow-ups; it sorts last.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def rank_candidates(contacts: list, top_n: int = 3, today=None) -> list:
     """Rank RED contacts by (stage_tier, -days_overdue). Filters frozen contacts and non-REDs."""
     if today is None:
@@ -49,19 +65,66 @@ def rank_candidates(contacts: list, top_n: int = 3, today=None) -> list:
     for c in contacts:
         if c.get("health") != "red":
             continue
-        freeze = c.get("radar_freeze_until", "") or ""
-        if freeze:
-            try:
-                if date.fromisoformat(freeze) > today_date:
-                    continue
-            except (ValueError, TypeError):
-                pass
+        # `is_radar_frozen`, not a local parse. This was the third private copy
+        # of one suppression control, and like the other two it swallowed a
+        # parse failure into `pass` — so an unparseable `radar_freeze_until`
+        # left a contact the operator had explicitly frozen sitting in the
+        # outreach queue. The shared helper fails closed and says so.
+        if is_radar_frozen(c.get("radar_freeze_until"), today_date):
+            continue
         filtered.append(c)
     filtered.sort(key=lambda c: (
         STAGE_TIER.get(c.get("stage", ""), 6),
-        -int(c.get("days_overdue", 0)),
+        -_overdue_days(c.get("days_overdue", 0)),
     ))
     return filtered[:top_n]
+
+
+def _fenced(body: str) -> list[str]:
+    """`body` inside a code fence long enough that the body cannot end it.
+
+    Both fenced blocks in the queue carry text this script does not control: an
+    interaction-log excerpt read from a relationship record, and a draft
+    containing the contact's own name. A triple backtick anywhere in either one
+    closed the fence early, and everything after it was rendered as queue
+    markdown — arbitrary headings and links injected into the file the operator
+    reads to approve outreach. CommonMark allows any run of three or more, so
+    one longer than the longest run inside cannot be closed by the content.
+    """
+    longest = 0
+    run = 0
+    for ch in body:
+        run = run + 1 if ch == "`" else 0
+        longest = max(longest, run)
+    fence = "`" * max(3, longest + 1)
+    return [fence, body, fence]
+
+
+def _contact_path(contact: dict) -> Path | None:
+    """The contact's record, or None when the name does not resolve inside it.
+
+    `get_crm_contacts_dir() / c["file"]` trusted the health output twice over.
+    A `file` value that is ABSOLUTE discards the base entirely under pathlib
+    (`Path("/a") / "/etc/passwd"` is `/etc/passwd`), and `../../x` walks out of
+    the tree — after which `last_interaction_excerpt` reads it and copies what
+    it finds into the queue the operator reviews. A missing `file` key was a
+    bare KeyError. Neither is exploitable from outside this machine, but an
+    arbitrary-read primitive pointed at a review artifact is worth closing.
+    """
+    name = contact.get("file")
+    if not name:
+        print(f"crm-next: contact {contact.get('name', '?')!r} has no `file`; "
+              f"no interaction excerpt.", file=sys.stderr)
+        return None
+    base = get_crm_contacts_dir().resolve()
+    candidate = (base / str(name)).resolve()
+    try:
+        candidate.relative_to(base)
+    except ValueError:
+        print(f"crm-next: refusing contact file {name!r} — it resolves outside "
+              f"{base}.", file=sys.stderr)
+        return None
+    return candidate
 
 
 def last_interaction_excerpt(contact_file_path: Path) -> str:
@@ -98,14 +161,20 @@ def render_draft(contact: dict, last_excerpt: str) -> str:
     name and title. A sign-off here would double with that block.
     """
     name = contact.get("name", "there")
-    days_overdue = contact.get("days_overdue", 0) or 0
-    cadence = contact.get("cadence", 14) or 14
+    days_overdue = _overdue_days(contact.get("days_overdue", 0))
+    cadence = _overdue_days(contact.get("cadence", 14)) or 14
     # Total elapsed since last contact = cadence threshold + overdue beyond it
     days_since = days_overdue + cadence
     subject = "Quick check-in"
 
+    # `name.split()[0] if name else ...` treats "   " as truthy, and
+    # `"   ".split()` is `[]`, so a whitespace-only name raised IndexError. The
+    # None and empty cases were handled; this one was not.
+    parts = str(name or "").split()
+    first_name = parts[0] if parts else "there"
+
     body_lines = [
-        f"Hey {name.split()[0] if name else 'there'},",
+        f"Hey {first_name},",
         "",
         f"Wanted to check back in - it's been {days_since} days since our last exchange.",
         "",
@@ -137,7 +206,22 @@ def generate_queue(today=None) -> Path:
     if health_json.returncode != 0:
         print(f"{RED}crm-health.py --json failed:{RESET}\n{health_json.stderr}", file=sys.stderr)
         sys.exit(1)
-    contacts = json.loads(health_json.stdout)
+    # A zero exit does not promise parseable JSON, and only the exit code was
+    # checked: malformed stdout raised JSONDecodeError and the daily job died
+    # on a traceback. A dict instead of a list was worse — `rank_candidates`
+    # iterated its KEYS and failed later, further from the cause.
+    try:
+        contacts = json.loads(health_json.stdout)
+    except ValueError as exc:
+        print(f"{RED}crm-health.py --json exited 0 but its output is not JSON "
+              f"({exc}).{RESET}\nFirst 200 bytes: {health_json.stdout[:200]!r}",
+              file=sys.stderr)
+        sys.exit(1)
+    if not isinstance(contacts, list):
+        print(f"{RED}crm-health.py --json returned a "
+              f"{type(contacts).__name__}, not a list of contacts.{RESET}",
+              file=sys.stderr)
+        sys.exit(1)
 
     candidates = rank_candidates(contacts, top_n=3, today=today)
 
@@ -156,16 +240,23 @@ def generate_queue(today=None) -> Path:
         "**v0 workflow (this build):** read the drafts below, copy the body of any you want to send, and run:",
         "",
         "```bash",
-        "python3 scripts/send-email.py --to <recipient> --subject \"<subject>\" --body \"<body>\"",
+        "python3 scripts/send-email.py --to <recipient> --subject \"<subject>\" --body-stdin <<'BODY'",
+        "<paste the draft body here>",
+        "BODY",
         "```",
+        "",
+        "`--body-stdin`, not `--body`: an argv element is visible to every local "
+        "account through `ps` for the life of the send, and outreach text is not "
+        "something to leave in shell history either.",
         "",
         "Auto-log fires on the send (Phase 1), so last_touch + interaction log update without further action.",
         "",
     ]
 
     for i, c in enumerate(candidates, start=1):
-        contact_file = get_crm_contacts_dir() / c["file"]
-        last_excerpt = last_interaction_excerpt(contact_file)
+        contact_file = _contact_path(c)
+        last_excerpt = (last_interaction_excerpt(contact_file)
+                        if contact_file else "(no prior interaction)")
         draft = render_draft(c, last_excerpt)
         lines.append(f"## {i}. {c.get('name')} - {c.get('company', '')}")
         lines.append("")
@@ -175,17 +266,17 @@ def generate_queue(today=None) -> Path:
         lines.append(f"- Email: `{c.get('email', '(missing)')}`")
         lines.append("")
         lines.append("### Most recent interaction")
-        lines.append("```")
-        lines.append(last_excerpt)
-        lines.append("```")
+        lines.extend(_fenced(last_excerpt))
         lines.append("")
         lines.append("### Draft")
-        lines.append("```")
-        lines.append(draft)
-        lines.append("```")
+        lines.extend(_fenced(draft))
         lines.append("")
 
-    out_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # Atomic. The path is deterministic (`next-<today>.md`), so two runs on the
+    # same day, or one run while the operator has the file open, raced on a
+    # plain write_text: a reader could see a truncated approval queue, and two
+    # writers could interleave.
+    atomic_write_text(out_file, "\n".join(lines) + "\n")
     return out_file
 
 
@@ -197,7 +288,9 @@ def main():
     if args.send:
         # v0: send is a manual step - print instructions
         print("To send approved drafts, copy the draft body from the queue file into send-email.py:")
-        print("  python3 scripts/send-email.py --to <addr> --subject <subj> --body \"<body>\"")
+        print("  python3 scripts/send-email.py --to <addr> --subject <subj> --body-stdin")
+        print("  (then paste the body and press Ctrl-D)")
+        print("Not --body: an argv element is readable by any local account via `ps`.")
         print("Auto-send wiring is a Phase 3 follow-up (separate task).")
         return
 

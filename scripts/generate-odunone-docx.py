@@ -41,12 +41,14 @@ TABLE_ALT_BG = "F0F4FF"     # Light blue-purple tint
 # docx names + brand colours are bound lazily (F-2.1: import stays pure).
 Document = Pt = Cm = RGBColor = Emu = None
 WD_ALIGN_PARAGRAPH = WD_TABLE_ALIGNMENT = qn = nsdecls = parse_xml = None
+InvalidXmlError = None
 ORANGE = PURPLE = BLUE = BLACK = WHITE = None
 
 
 def _ensure_docx():
     global Document, Pt, Cm, RGBColor, Emu
     global WD_ALIGN_PARAGRAPH, WD_TABLE_ALIGNMENT, qn, nsdecls, parse_xml
+    global InvalidXmlError
     global ORANGE, PURPLE, BLUE, BLACK, WHITE
     if Document is not None:
         return
@@ -54,6 +56,8 @@ def _ensure_docx():
     Document, Pt, Cm, RGBColor, Emu = d.Document, d.Pt, d.Cm, d.RGBColor, d.Emu
     WD_ALIGN_PARAGRAPH, WD_TABLE_ALIGNMENT = d.WD_ALIGN_PARAGRAPH, d.WD_TABLE_ALIGNMENT
     qn, nsdecls, parse_xml = d.qn, d.nsdecls, d.parse_xml
+    from docx.oxml.exceptions import InvalidXmlError as _IXE
+    InvalidXmlError = _IXE
     ORANGE = RGBColor(0xFF, 0x92, 0x35)
     PURPLE = RGBColor(0x74, 0x7D, 0xBE)
     BLUE = RGBColor(0x42, 0x3B, 0xFF)
@@ -110,8 +114,13 @@ def add_bullet(doc, text, bold_prefix=None):
     p = doc.add_paragraph(style='List Paragraph')
     # Apply the numbering from the template (numId=1, ilvl=0)
     ppr = p._element.get_or_add_pPr()
-    num_pr = parse_xml(f'<w:numPr {nsdecls("w")}><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>')
-    ppr.insert(0, num_pr)
+    # `get_or_add_numPr()` puts the element where CT_PPr's schema sequence says
+    # it goes. `ppr.insert(0, ...)` put `numPr` BEFORE `pStyle`, and the
+    # sequence requires `pStyle` first — schema-invalid, and Word is free to
+    # drop the numbering, which is the whole point of this function.
+    num_pr = ppr.get_or_add_numPr()
+    num_pr.append(parse_xml(f'<w:ilvl {nsdecls("w")} w:val="0"/>'))
+    num_pr.append(parse_xml(f'<w:numId {nsdecls("w")} w:val="1"/>'))
 
     if bold_prefix:
         run_b = p.add_run(bold_prefix)
@@ -128,6 +137,27 @@ def add_bullet(doc, text, bold_prefix=None):
 # ============================================================
 # Table & Page Helpers
 # ============================================================
+def get_or_add_tbl_pr(tbl):
+    """The table's `tblPr`, created and ATTACHED when it is missing.
+
+    A named function so this branch can be reached by a test: through
+    `add_table` it cannot be, because python-docx always builds a `tblPr`.
+
+    Two defects lived here. The fallback built a fresh `tblPr` and never
+    inserted it into the table, so borders appended to it vanished with no
+    error. And the guard was `tbl.tblPr if tbl.tblPr is not None else ...`,
+    which could not fire at all: `CT_Tbl.tblPr` RAISES `InvalidXmlError` when
+    the child is absent rather than returning None (measured 2026-08-24).
+    `tblPr` must be the FIRST child of `tbl`.
+    """
+    try:
+        return tbl.tblPr
+    except InvalidXmlError:
+        tbl_pr = parse_xml(f'<w:tblPr {nsdecls("w")}/>')
+        tbl.insert(0, tbl_pr)
+        return tbl_pr
+
+
 def add_table(doc, headers, rows, col_widths_cm=None):
     """Add a styled table matching 31C brand."""
     table = doc.add_table(rows=1 + len(rows), cols=len(headers))
@@ -136,7 +166,7 @@ def add_table(doc, headers, rows, col_widths_cm=None):
     table.style = 'Normal Table'
     # Add table borders
     tbl = table._tbl
-    tbl_pr = tbl.tblPr if tbl.tblPr is not None else parse_xml(f'<w:tblPr {nsdecls("w")}/>')
+    tbl_pr = get_or_add_tbl_pr(tbl)
     borders_xml = f'''<w:tblBorders {nsdecls("w")}>
         <w:top w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
         <w:left w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
@@ -145,7 +175,16 @@ def add_table(doc, headers, rows, col_widths_cm=None):
         <w:insideH w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
         <w:insideV w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
     </w:tblBorders>'''
-    tbl_pr.append(parse_xml(borders_xml))
+    # POSITION matters. CT_TblPr has a fixed child sequence and `tblBorders`
+    # belongs before `tblLook`, which python-docx always appends. A plain
+    # `append()` put it last, after `tblLook` — schema-invalid, and the visible
+    # symptom is a table with no borders at all.
+    borders = parse_xml(borders_xml)
+    tbl_look = tbl_pr.find(qn("w:tblLook"))
+    if tbl_look is not None:
+        tbl_look.addprevious(borders)
+    else:
+        tbl_pr.append(borders)
 
     # Header row
     for i, header in enumerate(headers):

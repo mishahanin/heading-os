@@ -45,7 +45,8 @@ def test_email_backup_spawns_sys_executable(fb, tmp_path, monkeypatch, capsys):
     roster = {"testspeaker": {"name": "Test Speaker", "email": "test@example.com",
                               "telegram_user_id": 42, "active": True}}
 
-    # A 2wk DM that was attempted and never delivered is what arms the fallback.
+    # A failed 2wk DM. Since 2026-08-24 silence alone arms the fallback, so this
+    # row is no longer the trigger; it is left as one realistic shape of it.
     dm_log = tmp_path / fb.DM_LOG
     dm_log.write_text(json.dumps({
         "dm_type": "2wk", "speaker_username": "testspeaker",

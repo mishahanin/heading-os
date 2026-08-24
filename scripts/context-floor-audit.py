@@ -276,19 +276,27 @@ def main() -> int:
         render(result)
 
     if args.baseline:
+        # The verdict goes to stderr, never stdout. With `--json --baseline`
+        # these three lines were printed AFTER the JSON document on the same
+        # stream, so a machine caller got an unparseable mix. `crm-health.py`
+        # already routes its warnings to stderr for exactly this reason, and
+        # says so in a comment.
+        def verdict(line: str) -> None:
+            print(line, file=sys.stderr)
+
         if not baseline_file.is_file():
-            print(f"\n{YELLOW}No baseline at {BASELINE_PATH}; "
-                  f"write one with --write-baseline.{RESET}")
+            verdict(f"\n{YELLOW}No baseline at {BASELINE_PATH}; "
+                    f"write one with --write-baseline.{RESET}")
             return 1
         recorded = json.loads(baseline_file.read_text(encoding="utf-8"))
         was = recorded.get("total_bytes", 0)
         now = result["total_bytes"]
         ceiling = was * (1 + GROWTH_TOLERANCE)
         if now > ceiling:
-            print(f"\n{RED}Floor grew: {was} -> {now} bytes "
-                  f"(tolerance {int(GROWTH_TOLERANCE * 100)}%).{RESET}")
+            verdict(f"\n{RED}Floor grew: {was} -> {now} bytes "
+                    f"(tolerance {int(GROWTH_TOLERANCE * 100)}%).{RESET}")
             return 1
-        print(f"\n{GREEN}Floor within tolerance: {was} -> {now} bytes.{RESET}")
+        verdict(f"\n{GREEN}Floor within tolerance: {was} -> {now} bytes.{RESET}")
     return 0
 
 

@@ -12,6 +12,13 @@ WorkingDirectory={{WORKSPACE}}
 # Exit 0 always on a clean run (including "nothing expired"); a non-zero exit
 # means a real script error, so no SuccessExitStatus override is declared.
 ExecStart={{PYTHON}} {{WORKSPACE}}/scripts/memory-auto-retire.py
+# `OnCalendar ... {{TZ}}` in the .timer pins WHEN this unit fires, not the
+# process timezone. Without this line the script still computed date.today()
+# in the host's libc zone, so on a host on another zone it misdated its own
+# report and compared dates a day off -- precisely the failure the timer's
+# comment claims is prevented. Siblings (reminders, ops-radar, odin,
+# chronicle) already set it.
+Environment=TZ={{TZ}}
 Environment=PYTHONUNBUFFERED=1
 StandardOutput=journal
 StandardError=journal

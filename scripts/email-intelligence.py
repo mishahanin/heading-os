@@ -40,6 +40,10 @@ from scripts.utils.llm_fallback import call_anthropic_with_fallback
 from scripts.utils.observability import observe
 from scripts.utils.workspace import get_workspace_root, load_env, resolve_config_with_example, get_outputs_dir, get_crm_contacts_dir, get_context_dir, get_default_tz
 from scripts.utils.atomic import atomic_write_text
+# The one exclusive-lock primitive this workspace has. It lives beside the
+# checkpoint code because that is where it was first needed, not because it is
+# checkpoint-specific; `label` is what keeps its stderr honest here.
+from scripts.utils.checkpoint_paths import file_lock
 from scripts.utils.untrusted_input import format_untrusted_emails
 
 # ============================================================
@@ -106,6 +110,70 @@ DEFAULT_IGNORE_PATTERNS = [
 # State Management
 # ============================================================
 
+MAX_PROCESSED_IDS = 500
+MAX_CONVERSATIONS = 200
+
+
+def merge_state(on_disk: dict, mine: dict) -> dict:
+    """Combine what another run committed with what this run holds.
+
+    Pure, so it can be tested without a mailbox, a lock, or a clock.
+
+    The caps below are the SAME caps `mark_processed` and `mark_conversation`
+    apply, and they are applied again here: a union of two already-capped
+    lists can exceed the cap, and a merged file that grows past it every run
+    is the slow version of the bug this fixes.
+
+    `stats` counters take the larger of the two rather than a sum. Both runs
+    counted up from a shared base, so adding them double-counts that base;
+    the max can under-count instead. That is a deliberate choice, and it is
+    stated here rather than left for a reader to infer: these three numbers
+    are a display total, and a total slightly low is cheaper than a total
+    that inflates itself on every overlap.
+    """
+    out = dict(on_disk)
+
+    seen: set[str] = set()
+    ids: list[str] = []
+    for mid in list(on_disk.get("processed_message_ids") or []) + list(mine.get("processed_message_ids") or []):
+        if mid not in seen:
+            seen.add(mid)
+            ids.append(mid)
+    out["processed_message_ids"] = ids[-MAX_PROCESSED_IDS:]
+
+    convs = dict(on_disk.get("conversations") or {})
+    for cid, entry in (mine.get("conversations") or {}).items():
+        prev = convs.get(cid)
+        shapes_unknown = not isinstance(prev, dict) or not isinstance(entry, dict)
+        if shapes_unknown or str(entry.get("last_seen", "")) >= str(prev.get("last_seen", "")):
+            convs[cid] = entry
+    if len(convs) > MAX_CONVERSATIONS:
+        newest = sorted(convs, key=lambda k: str((convs[k] or {}).get("last_seen", "")))
+        for k in newest[: len(convs) - MAX_CONVERSATIONS]:
+            del convs[k]
+    out["conversations"] = convs
+
+    learned = list(on_disk.get("learned_ignore_senders") or [])
+    for sender in mine.get("learned_ignore_senders") or []:
+        if sender not in learned:
+            learned.append(sender)
+    out["learned_ignore_senders"] = learned
+
+    for key in ("last_run", "last_inbox_datetime", "last_sent_datetime"):
+        a, b = on_disk.get(key), mine.get(key)
+        out[key] = max(str(a or ""), str(b or "")) or None
+
+    stats = dict(on_disk.get("stats") or {})
+    for key, value in (mine.get("stats") or {}).items():
+        prev = stats.get(key)
+        stats[key] = max(prev, value) if isinstance(prev, (int, float)) and isinstance(value, (int, float)) else value
+    out["stats"] = stats
+
+    out["last_run_status"] = mine.get("last_run_status", on_disk.get("last_run_status"))
+    out["version"] = mine.get("version", on_disk.get("version", 1))
+    return out
+
+
 class StateManager:
     """Persistent state for email intelligence runs."""
 
@@ -116,9 +184,17 @@ class StateManager:
     def _load(self) -> dict:
         if self.path.exists():
             try:
-                return json.loads(self.path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                pass
+                loaded = json.loads(self.path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    return loaded
+                raise ValueError(f"state is a {type(loaded).__name__}, not an object")
+            except (json.JSONDecodeError, OSError, ValueError) as e:
+                # A corrupt state file used to `pass` into a FRESH state, and
+                # the next `save()` replaced the damaged file with it. Every
+                # processed-message id, every conversation and every learned
+                # sender went with it, and the only symptom was old mail being
+                # analysed again. Keep the evidence and say so.
+                self._quarantine(e)
         return {
             "version": 1,
             "last_run": None,
@@ -131,8 +207,44 @@ class StateManager:
             "stats": {"total_runs": 0, "total_conversations": 0, "total_filtered": 0},
         }
 
+    def _quarantine(self, reason: Exception) -> None:
+        """Move an unusable state file aside instead of overwriting it."""
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        dest = self.path.with_name(f"{self.path.name}.corrupt-{stamp}")
+        try:
+            os.replace(self.path, dest)
+            where = str(dest)
+        except OSError as move_err:
+            where = f"(could not move it aside: {move_err})"
+        print(
+            f"{RED}email-intel state is unusable: {reason}{RESET}\n"
+            f"{YELLOW}Kept at {where}. Starting from an empty state — mail already "
+            f"processed will be analysed again until the file is restored.{RESET}",
+            file=sys.stderr,
+        )
+
     def save(self):
-        atomic_write_text(self.path, json.dumps(self.data, indent=2, default=str))
+        """Write this run's state, merged with whatever landed while it ran.
+
+        A plain write was a read-modify-write with minutes of LLM calls in the
+        middle: two overlapping runs each loaded the same state, each added
+        their own message ids, and the second write erased the first run's.
+        The lock makes the re-read and the write one step; the merge is what
+        makes the other run's work survive.
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with file_lock(self.path.with_name(self.path.name + ".lock"), label="email-intel"):
+            on_disk = None
+            if self.path.exists():
+                try:
+                    candidate = json.loads(self.path.read_text(encoding="utf-8"))
+                    if isinstance(candidate, dict):
+                        on_disk = candidate
+                except (json.JSONDecodeError, OSError):
+                    on_disk = None  # already reported at load time; do not lose this run
+            merged = merge_state(on_disk, self.data) if on_disk is not None else self.data
+            self.data = merged
+            atomic_write_text(self.path, json.dumps(merged, indent=2, default=str))
 
     def is_processed(self, message_id: str) -> bool:
         return message_id in self.data["processed_message_ids"]
@@ -141,15 +253,15 @@ class StateManager:
         ids = self.data["processed_message_ids"]
         if message_id not in ids:
             ids.append(message_id)
-        if len(ids) > 500:
-            self.data["processed_message_ids"] = ids[-500:]
+        if len(ids) > MAX_PROCESSED_IDS:
+            self.data["processed_message_ids"] = ids[-MAX_PROCESSED_IDS:]
 
     def mark_conversation(self, conv_id: str, topic: str):
         convs = self.data["conversations"]
         convs[conv_id] = {"topic": topic, "last_seen": datetime.now(timezone.utc).isoformat()}
-        if len(convs) > 200:
+        if len(convs) > MAX_CONVERSATIONS:
             sorted_keys = sorted(convs, key=lambda k: convs[k].get("last_seen", ""))
-            for k in sorted_keys[: len(convs) - 200]:
+            for k in sorted_keys[: len(convs) - MAX_CONVERSATIONS]:
                 del convs[k]
 
 
@@ -170,7 +282,10 @@ def commit_state(state: "StateManager", payload: dict) -> None:
         state.mark_conversation(conv["id"], conv.get("topic", ""))
 
     state.data["last_run"] = datetime.now(timezone.utc).isoformat()
-    state.data["last_run_status"] = "complete"
+    # The status is the RUN's, not a constant. A run that lost a folder to a
+    # fetch error, or that hit the fetch cap, was still stamped "complete" —
+    # so the one field that could have flagged the gap agreed with the gap.
+    state.data["last_run_status"] = payload.get("status") or "complete"
     cutoff = payload.get("cutoff")
     if payload.get("inbox_count"):
         state.data["last_inbox_datetime"] = cutoff
@@ -211,16 +326,27 @@ def commit_state_from_file(path: Path, state: "StateManager | None" = None) -> d
 def _load_ignore_patterns() -> list[str]:
     """Load ignore patterns from sentinel_config.yaml, fallback to defaults."""
     patterns = list(DEFAULT_IGNORE_PATTERNS)
-    if SENTINEL_CONFIG.exists():
-        try:
-            import yaml
-            cfg = yaml.safe_load(SENTINEL_CONFIG.read_text(encoding="utf-8"))
-            extra = cfg.get("email", {}).get("ignore_patterns", [])
-            for p in extra:
-                if p not in patterns:
-                    patterns.append(p)
-        except (yaml.YAMLError, OSError, AttributeError) as e:
-            print(f"{GRAY}[debug] sentinel config ignore_patterns fallback: {e}{RESET}", file=sys.stderr)
+    if not SENTINEL_CONFIG.exists():
+        return patterns
+    # The import is its OWN try. It used to sit inside the block below, whose
+    # `except` tuple names `yaml.YAMLError` — so on a machine without PyYAML the
+    # ImportError was raised, Python evaluated the tuple to match it, `yaml` was
+    # unbound, and the handler died with NameError. The documented fallback to
+    # DEFAULT_IGNORE_PATTERNS never ran.
+    try:
+        import yaml
+    except ImportError as e:
+        print(f"{GRAY}[debug] PyYAML not installed; using default ignore patterns: {e}{RESET}",
+              file=sys.stderr)
+        return patterns
+    try:
+        cfg = yaml.safe_load(SENTINEL_CONFIG.read_text(encoding="utf-8"))
+        extra = cfg.get("email", {}).get("ignore_patterns", [])
+        for p in extra:
+            if p not in patterns:
+                patterns.append(p)
+    except (yaml.YAMLError, OSError, AttributeError) as e:
+        print(f"{GRAY}[debug] sentinel config ignore_patterns fallback: {e}{RESET}", file=sys.stderr)
     return patterns
 
 
@@ -273,12 +399,18 @@ def connect_exchange():
 
 
 def fetch_emails(account, folder_name: str, cutoff: datetime | None,
-                 limit: int = 100, unread_only: bool = False) -> list[dict]:
-    """Fetch emails from a folder. Returns list of normalized dicts.
+                 limit: int = 100, unread_only: bool = False) -> tuple[list[dict], bool]:
+    """Fetch emails from a folder. Returns (normalized dicts, truncated).
 
     When unread_only is True, fetches every unread message regardless of
     age (cutoff is ignored) - the live Inbox unread set. Otherwise
     fetches messages received/sent since cutoff.
+
+    `truncated` is the second return value because the cap is real and used to
+    be invisible. The docstring said "every unread message" while the slice
+    kept the newest `limit`; message 101 and older simply were not in the
+    result, and nothing anywhere said so. One extra row is requested so the
+    answer is exact rather than the ambiguous "we got exactly `limit`".
     """
     from exchangelib import EWSDateTime, EWSTimeZone
 
@@ -292,12 +424,13 @@ def fetch_emails(account, folder_name: str, cutoff: datetime | None,
         folder = account.inbox
         date_field = "datetime_received"
 
+    probe = limit + 1  # one over the cap, so "capped" is measured and not guessed
     if unread_only:
         items = (
             folder
             .filter(is_read=False)
             .only(*FIELDS)
-            .order_by(f"-{date_field}")[:limit]
+            .order_by(f"-{date_field}")[:probe]
         )
     else:
         tz = EWSTimeZone("UTC")
@@ -306,7 +439,7 @@ def fetch_emails(account, folder_name: str, cutoff: datetime | None,
             folder
             .filter(**{f"{date_field}__gte": ews_cutoff})
             .only(*FIELDS)
-            .order_by(f"-{date_field}")[:limit]
+            .order_by(f"-{date_field}")[:probe]
         )
 
     results = []
@@ -361,7 +494,16 @@ def fetch_emails(account, folder_name: str, cutoff: datetime | None,
             "direction": "sent" if folder_name == "sent" else "incoming",
         })
 
-    return results
+    truncated = len(results) > limit
+    if truncated:
+        del results[limit:]
+        print(
+            f"{YELLOW}  {folder_name}: more than {limit} matching messages; "
+            f"only the {limit} newest were fetched. Older matches are NOT in "
+            f"this run.{RESET}",
+            file=sys.stderr,
+        )
+    return results, truncated
 
 
 # ============================================================
@@ -449,9 +591,12 @@ def group_conversations(emails: list[dict]) -> dict[str, dict]:
                 if r["email"] and r["email"] not in participants:
                     participants[r["email"]] = {"name": r["name"], "email": r["email"], "role": "recipient"}
 
-        # Determine if internal
-        all_addrs = list(participants.keys())
-        is_internal = all(a.endswith(f"@{INTERNAL_DOMAIN}") for a in all_addrs if a)
+        # Determine if internal. `all()` over an EMPTY generator is True, so a
+        # conversation with no usable address at all was classified internal
+        # and silently dropped from the external-analysis path. No address is
+        # not evidence of an internal thread; it is no evidence.
+        all_addrs = [a for a in participants if a]
+        is_internal = bool(all_addrs) and all(a.endswith(f"@{INTERNAL_DOMAIN}") for a in all_addrs)
 
         conversations[conv_id] = {
             "id": conv_id,
@@ -599,44 +744,44 @@ For EACH conversation, respond with a JSON object containing:
 Be concise. Focus on actionable intelligence."""
 
 
-def _extract_json_object(text: str) -> dict:
-    """Extract first valid JSON object from LLM response."""
+def _extract_json(text: str, opener: str):
+    """The first JSON value starting at `opener` ({ or [), prose around it ignored.
+
+    Both extractors trimmed everything AFTER the closing bracket and nothing
+    before the opening one, so a perfectly good `Here is the result: {...}` was
+    handed to `json.loads` with the prose still attached and raised. The model
+    is asked for bare JSON and usually obliges; when it does not, a sentence of
+    preamble is the most ordinary way for it to disobey, and it was the one
+    case this could not survive.
+
+    `raw_decode` replaces the hand-rolled depth counter, which counted braces
+    inside string literals as structure — `{"note": "a } here"}` closed early.
+    """
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```\s*$", "", text)
-    brace_depth = 0
-    json_end = -1
-    for i, ch in enumerate(text):
-        if ch == "{":
-            brace_depth += 1
-        elif ch == "}":
-            brace_depth -= 1
-            if brace_depth == 0:
-                json_end = i + 1
-                break
-    if json_end > 0:
-        text = text[:json_end]
-    return json.loads(text)
+    decoder = json.JSONDecoder()
+    start = text.find(opener)
+    while start != -1:
+        try:
+            value, _ = decoder.raw_decode(text, start)
+            return value
+        except json.JSONDecodeError:
+            # That opener began no valid value (it was inside prose, or inside
+            # a string). Try the next one rather than giving up on the whole
+            # response.
+            start = text.find(opener, start + 1)
+    raise json.JSONDecodeError(f"no JSON value starting with {opener!r}", text, 0)
+
+
+def _extract_json_object(text: str) -> dict:
+    """Extract first valid JSON object from LLM response."""
+    return _extract_json(text, "{")
 
 
 def _extract_json_array(text: str) -> list:
     """Extract first valid JSON array from LLM response."""
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```\s*$", "", text)
-    bracket_depth = 0
-    json_end = -1
-    for i, ch in enumerate(text):
-        if ch == "[":
-            bracket_depth += 1
-        elif ch == "]":
-            bracket_depth -= 1
-            if bracket_depth == 0:
-                json_end = i + 1
-                break
-    if json_end > 0:
-        text = text[:json_end]
-    return json.loads(text)
+    return _extract_json(text, "[")
 
 
 @observe()
@@ -740,9 +885,18 @@ def analyze_conversations(conversations: list[dict], crm_map: dict, pipeline_tex
                         "proposed_actions": ["Review manually"],
                         "commitments": [], "relationship_signal": "stable",
                     })
-                all_results.extend(parsed[:len(batch)])
-            else:
+                # A LENGTH match is not a SHAPE match. `["not an object"]`
+                # against a one-conversation batch passed the length test, and
+                # `build_output` then called `.get("priority")` on a string and
+                # died with AttributeError — after the API call was paid for.
+                all_results.extend(
+                    item if isinstance(item, dict) else _fallback_analysis(conv)
+                    for item, conv in zip(parsed[:len(batch)], batch, strict=True)
+                )
+            elif isinstance(parsed, dict):
                 all_results.extend([parsed] + [_fallback_analysis(c) for c in batch[1:]])
+            else:
+                all_results.extend(_fallback_analysis(c) for c in batch)
 
         except Exception as e:
             # Chain exhausted (anthropic + every fallback failed) or a permanent
@@ -843,31 +997,48 @@ def _connect_with_retries():
     raise RuntimeError(f"Exchange connection failed after 3 attempts: {last_err}")
 
 
-def set_conversation_read(account, conv_id: str, mark_read: bool) -> int:
-    """Set is_read on every Inbox message of a conversation. Returns count changed.
+UNDO_SCAN_LIMIT = 2000
+
+
+def set_conversation_read(account, conv_id: str, mark_read: bool) -> tuple[int, bool]:
+    """Set is_read on Inbox messages of a conversation. Returns (changed, exhaustive).
 
     mark_read=True scans the unread set (the conversation is on the
-    dashboard, hence unread). mark_read=False (undo) scans recent Inbox
-    items, since the messages were just marked read.
+    dashboard, hence unread), which is exhaustive.
+
+    mark_read=False (undo) walks recent Inbox items newest-first, because the
+    messages were just marked read and there is no unread set to search. That
+    walk is BOUNDED, and the bound is the second return value. It used to be a
+    silent `[:200]`: once 200 newer messages had arrived, the conversation was
+    outside the slice, nothing was changed, and the caller still reported
+    `ok: true, messages_changed: 0` — indistinguishable from "already unread".
+    Now the caller can tell "not found within the bound" from "nothing to do".
     """
     changed = 0
+    exhaustive = True
     if mark_read:
         candidates = account.inbox.filter(is_read=False).only("is_read", "conversation_id")
     else:
         candidates = (
             account.inbox.all()
             .only("is_read", "conversation_id", "datetime_received")
-            .order_by("-datetime_received")[:200]
+            .order_by("-datetime_received")[:UNDO_SCAN_LIMIT]
         )
+    scanned = 0
+    found = False
     for item in candidates:
+        scanned += 1
         cid = str(item.conversation_id.id if item.conversation_id else "")
         if cid != conv_id:
             continue
+        found = True
         if item.is_read != mark_read:
             item.is_read = mark_read
             item.save(update_fields=["is_read"])
             changed += 1
-    return changed
+    if not mark_read and not found and scanned >= UNDO_SCAN_LIMIT:
+        exhaustive = False
+    return changed, exhaustive
 
 
 def run_mark_read_mode(conv_id: str, mark_read: bool) -> None:
@@ -886,14 +1057,48 @@ def run_mark_read_mode(conv_id: str, mark_read: bool) -> None:
         print(json.dumps({"ok": False, "error": str(e)}))
         sys.exit(1)
     try:
-        changed = set_conversation_read(account, conv_id, mark_read)
+        changed, exhaustive = set_conversation_read(account, conv_id, mark_read)
     except Exception as e:  # noqa: BLE001 - any EWS write failure -> JSON error
         print(json.dumps({"ok": False, "error": f"Exchange write failed: {e}"}))
+        sys.exit(1)
+    if not exhaustive:
+        print(json.dumps({
+            "ok": False, "conv_id": conv_id, "is_read": mark_read,
+            "messages_changed": changed,
+            "error": (f"conversation not found in the {UNDO_SCAN_LIMIT} newest "
+                      f"Inbox messages; nothing was changed"),
+        }))
         sys.exit(1)
     print(json.dumps({
         "ok": True, "conv_id": conv_id,
         "is_read": mark_read, "messages_changed": changed,
     }))
+
+
+def _cache_key(conv: dict) -> tuple:
+    """What must be identical for a prior analysis to still describe this thread.
+
+    `message_count` alone was the key, and a count is not an identity: read one
+    unread message in Outlook and let a different unread reply land before the
+    next bridge tick, and the count is still 1 while the content is new. The
+    dashboard then showed the OLD analysis against the NEW mail.
+
+    The set of message ids IS the identity, and it is the whole key. The first
+    version of this fix also carried `message_count` and `latest_datetime`;
+    both are derived from the same rows the ids come from, so neither could
+    ever differ while the ids matched. Mutation-checked on 2026-08-24: removing
+    either changed no outcome. Redundant precision reads as extra safety and is
+    really just a second thing to keep in step.
+
+    Works on both shapes this is called with: the live conversation and the
+    prior one read back out of `_latest-fetch.json`, which keeps `message_id`
+    on every row.
+    """
+    return tuple(sorted(
+        str(em.get("message_id", ""))
+        for em in (conv.get("raw_emails") or [])
+        if isinstance(em, dict)
+    ))
 
 
 def run_unread_mode(verbose: bool = False) -> None:
@@ -923,7 +1128,7 @@ def run_unread_mode(verbose: bool = False) -> None:
     # daemon stops accumulating identical tracebacks in recent_error_count.
     # See threads/business/2026-05-27-bridge-email-refresher-wsl-failure.md
     try:
-        emails = fetch_emails(account, "inbox", cutoff=None, unread_only=True)
+        emails, unread_truncated = fetch_emails(account, "inbox", cutoff=None, unread_only=True)
     except (KeyError, Exception) as e:  # noqa: BLE001 - distinguish below
         from exchangelib.errors import TransportError
         if isinstance(e, (TransportError, KeyError)):
@@ -965,7 +1170,7 @@ def run_unread_mode(verbose: bool = False) -> None:
     cached_analysis: dict = {}
     for conv in convs:
         p = prior_by_id.get(conv["id"])
-        if p and p.get("analysis") and p.get("message_count") == conv["message_count"]:
+        if p and p.get("analysis") and _cache_key(p) == _cache_key(conv):
             cached_analysis[conv["id"]] = p["analysis"]
         else:
             to_analyze.append(conv)
@@ -989,10 +1194,21 @@ def run_unread_mode(verbose: bool = False) -> None:
         "internal_count": internal_count,
         "analyzed_fresh": len(to_analyze),
         "analyzed_cached": len(cached_analysis),
+        "truncated": unread_truncated,
+        "status": "partial" if unread_truncated else "complete",
     }
     output = build_output(convs, analyses, run_info)
     try:
-        fetch_path.write_text(json.dumps(output, indent=2, default=str), encoding="utf-8")
+        # One call fixes both defects the audit found here. The old
+        # `fetch_path.write_text(...)` raised FileNotFoundError on a fresh
+        # workspace where this directory does not exist yet -- after the fetch
+        # and the whole LLM analysis had been paid for -- and it truncated in
+        # place, so the bridge (which reads this on a timer) could parse a half
+        # document and an interrupted run left the feed corrupt until the next
+        # success. `atomic_write_text` creates the parents AND replaces via a
+        # same-directory tempfile. An explicit mkdir beside it was dead:
+        # mutation-checked 2026-08-24, deleting it changed nothing.
+        atomic_write_text(fetch_path, json.dumps(output, indent=2, default=str))
     except OSError as e:
         print(json.dumps({"error": f"_latest-fetch.json write failed: {e}"}))
         sys.exit(1)
@@ -1008,8 +1224,12 @@ def run_unread_mode(verbose: bool = False) -> None:
 def main():
     parser = argparse.ArgumentParser(description="Email Intelligence Processor")
     parser.add_argument("--hours", type=int, default=24, help="Hours to scan back (default: 24)")
-    parser.add_argument("--inbox-only", action="store_true", help="Scan inbox only")
-    parser.add_argument("--sent-only", action="store_true", help="Scan sent items only")
+    # Mutually exclusive, because together they meant "skip the Inbox AND skip
+    # Sent" — argparse accepted the pair and the run reported a clean, empty,
+    # complete scan of nothing.
+    folder_scope = parser.add_mutually_exclusive_group()
+    folder_scope.add_argument("--inbox-only", action="store_true", help="Scan inbox only")
+    folder_scope.add_argument("--sent-only", action="store_true", help="Scan sent items only")
     parser.add_argument("--dry-run", action="store_true", help="Skip state update")
     parser.add_argument("--json", action="store_true",
                         help="JSON output for skill consumption (state is NOT committed - "
@@ -1079,28 +1299,39 @@ def main():
     all_emails = []
     inbox_count = 0
     sent_count = 0
+    # A folder that failed to fetch used to be reported ONLY under --verbose.
+    # Without it the run produced a plausible digest with a zero count, and
+    # terminal mode recorded it as complete — a transient Exchange blip became
+    # a silent loss of a whole folder's intelligence. Both channels see it now,
+    # and the run says it was partial.
+    folder_errors: dict[str, str] = {}
+    truncated_folders: list[str] = []
 
     if not args.sent_only:
         try:
-            inbox = fetch_emails(account, "inbox", cutoff)
+            inbox, inbox_truncated = fetch_emails(account, "inbox", cutoff)
             inbox_count = len(inbox)
             all_emails.extend(inbox)
+            if inbox_truncated:
+                truncated_folders.append("inbox")
             if args.verbose:
                 print(f"{GREEN}  Inbox: {inbox_count} emails fetched{RESET}")
-        except Exception as e:
-            if args.verbose:
-                print(f"{RED}  Inbox fetch failed: {e}{RESET}")
+        except Exception as e:  # noqa: BLE001 - recorded, never swallowed
+            folder_errors["inbox"] = str(e)
+            print(f"{RED}  Inbox fetch FAILED: {e}{RESET}", file=sys.stderr)
 
     if not args.inbox_only:
         try:
-            sent = fetch_emails(account, "sent", cutoff)
+            sent, sent_truncated = fetch_emails(account, "sent", cutoff)
             sent_count = len(sent)
             all_emails.extend(sent)
+            if sent_truncated:
+                truncated_folders.append("sent")
             if args.verbose:
                 print(f"{GREEN}  Sent: {sent_count} emails fetched{RESET}")
-        except Exception as e:
-            if args.verbose:
-                print(f"{RED}  Sent fetch failed: {e}{RESET}")
+        except Exception as e:  # noqa: BLE001 - recorded, never swallowed
+            folder_errors["sent"] = str(e)
+            print(f"{RED}  Sent fetch FAILED: {e}{RESET}", file=sys.stderr)
 
     # --- Filter ---
     clean, noise_filtered = filter_noise(all_emails, state, ignore_patterns)
@@ -1143,15 +1374,24 @@ def main():
         "noise_filtered": noise_filtered,
         "internal_skipped": internal_skipped,
         "conversations_processed": len(convs_list),
+        "folder_errors": folder_errors,
+        "truncated_folders": truncated_folders,
+        "status": "partial" if (folder_errors or truncated_folders) else "complete",
     }
 
     commit_payload = {
+        # Every id that reached `clean`, which INCLUDES internal-only threads:
+        # they pass filter_noise and are dropped later at `external_convs`, so
+        # committing from `convs_list` would leave them unprocessed and
+        # resurface them on every run. (Audited 2026-08-24: this was already
+        # correct, and the check now lives in a test rather than in a reading.)
         "message_ids": [msg["message_id"] for msg in clean],
         "conversations": [{"id": c["id"], "topic": c["topic"]} for c in convs_list],
         "inbox_count": inbox_count,
         "sent_count": sent_count,
         "noise_filtered": noise_filtered,
         "cutoff": cutoff.isoformat(),
+        "status": run_info["status"],
     }
 
     # --- Commit state ---
@@ -1176,6 +1416,11 @@ def main():
         print(json.dumps(output, indent=2, default=str))
     else:
         print(f"\n{BOLD}Results{RESET}")
+        if run_info["status"] != "complete":
+            for folder, err in folder_errors.items():
+                print(f"  {RED}PARTIAL: {folder} could not be fetched: {err}{RESET}")
+            for folder in truncated_folders:
+                print(f"  {YELLOW}PARTIAL: {folder} hit the fetch cap; older matches were not read{RESET}")
         print(f"  Inbox: {inbox_count} | Sent: {sent_count} | Filtered: {noise_filtered} | Internal: {internal_skipped}")
         print(f"  Conversations analyzed: {len(convs_list)}")
         for conv_out in output["conversations"]:

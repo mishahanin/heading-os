@@ -52,6 +52,10 @@ SKIP_PATHS = {
 }
 
 
+class UnreadableFile(OSError):
+    """A file the scanner could not read. Never silently treated as clean."""
+
+
 def scan_file(filepath: str) -> list:
     """Scan a single file for secret patterns.
 
@@ -77,8 +81,13 @@ def scan_file(filepath: str) -> list:
     try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
-    except (OSError, PermissionError):
-        return findings
+    except OSError as exc:
+        # An unreadable file is UNKNOWN, not clean. Returning `findings` (empty)
+        # here made a permission-denied or transiently unreadable file pass the
+        # gate silently -- failing open exactly when the filesystem misbehaves,
+        # with nothing logged. `PermissionError` is a subclass of `OSError`, so
+        # the old two-item tuple was redundant as well.
+        raise UnreadableFile(f"{filepath}: {exc}") from exc
 
     for line_num, line in enumerate(lines, 1):
         if ALLOWLIST_TOKEN in line:
@@ -102,10 +111,39 @@ def check_vault_path(filepath: str) -> bool:
     return "/_secure/" in normalized or normalized.startswith("_secure/")
 
 
-def scan_files(file_list: list) -> dict:
-    """Scan multiple files. Returns {filepath: [(line_num, desc), ...]}."""
+WALK_SKIP_DIRS = frozenset({
+    ".git", ".hg", ".svn", ".venv", "venv", "node_modules", "__pycache__",
+    ".pytest_cache", ".mypy_cache", ".ruff_cache", ".memory-index",
+    ".memory-index-code", ".codegraph",
+})
+# Above this, a "text" file is a build artefact or a data dump, not source.
+WALK_MAX_BYTES = 5 * 1024 * 1024
+
+
+def _walk_scannable(root: Path):
+    """Yield files under `root`, skipping VCS/dependency trees and huge files."""
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in WALK_SKIP_DIRS]
+        for name in filenames:
+            path = Path(dirpath) / name
+            try:
+                if path.stat().st_size > WALK_MAX_BYTES:
+                    continue
+            except OSError:
+                continue
+            yield path
+
+
+def scan_files(file_list: list, unreadable: list | None = None) -> dict:
+    """Scan multiple files. Returns {filepath: [(line_num, desc), ...]}.
+
+    Paths the scanner could not read are appended to `unreadable` rather than
+    counted as clean; `main` turns a non-empty list into exit 2.
+    """
     results = {}
     vault_files = []
+    if unreadable is None:
+        unreadable = []
     for filepath in file_list:
         filepath = filepath.strip()
         if not filepath or not os.path.isfile(filepath):
@@ -113,7 +151,11 @@ def scan_files(file_list: list) -> dict:
         if check_vault_path(filepath):
             vault_files.append(filepath)
             continue
-        findings = scan_file(filepath)
+        try:
+            findings = scan_file(filepath)
+        except UnreadableFile as exc:
+            unreadable.append(str(exc))
+            continue
         if findings:
             results[filepath] = findings
 
@@ -164,9 +206,12 @@ def main():
         file_list = sys.stdin.read().strip().split("\n")
     elif args.scan_dir:
         scan_dir = Path(args.scan_dir)
-        for path in scan_dir.rglob("*"):
-            if path.is_file():
-                file_list.append(str(path))
+        # Prune whole trees rather than filtering afterwards. The bare rglob fed
+        # every byte of .git (packfiles read as text), .venv and node_modules
+        # through the pattern set, which is where the recursive sweep spent its
+        # time and where its false positives came from.
+        for path in _walk_scannable(scan_dir):
+            file_list.append(str(path))
     elif args.files:
         file_list = args.files
     else:
@@ -174,8 +219,15 @@ def main():
         sys.exit(2)
 
     try:
-        results = scan_files(file_list)
+        unreadable: list = []
+        results = scan_files(file_list, unreadable)
         print_results(results)
+        if unreadable:
+            print(f"{RED}{BOLD}SCANNER ERROR: {len(unreadable)} file(s) could not "
+                  f"be read and were NOT scanned:{RESET}", file=sys.stderr)
+            for item in unreadable:
+                print(f"  {item}", file=sys.stderr)
+            sys.exit(2)
         # Count the refusal, one record per refused file. The reason names the
         # pattern description only; log_denial redacts, but the finding tuples
         # never carried the matched text in the first place. When the push wall

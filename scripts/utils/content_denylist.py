@@ -31,7 +31,11 @@ Sources harvested from the DATA overlay:
                                  AND, from the frontmatter, the organisation
                                  field (``pipeline_company`` / ``company`` /
                                  ...) and every e-mail address
-* ``admin/executives.json``   -- exec slugs, names, github users, data-repo names
+* ``admin/executives.json``   -- exec slugs, full names, github users, data-repo
+                                 names, AND each bare given/family name. The
+                                 bare form is in the DEFAULT gate: the roster is
+                                 a handful of real colleagues, so it costs six
+                                 tokens, unlike the CRM slug decomposition below
 * ``config/*.json|*.yaml``    -- e-mails (regex), Telegram-ID-shaped ints, and
                                  fireside roster handles (member-dict keys)
 * ``config/content-denylist.yaml`` -- CURATED non-person tokens (companies,
@@ -74,7 +78,16 @@ ALLOW_IDENTITY = {
     # docs/PLUGINS.md. Each is also a CRM contact, so the display-name harvest
     # would read published attribution as a leak. Add a person here only when
     # their name is ALREADY deliberately public in this repo.
-    "mahmoud maatuq",
+    #
+    # This is the ONLY real person named anywhere in the engine, and it is a
+    # deliberate exception the operator confirmed on 2026-08-24. The standing
+    # rule that day: real names live in the DATA repo, the engine carries
+    # invented ones for examples. A published contributor credit is the one
+    # thing that cannot follow it, because removing someone's public thank-you
+    # is an outward-facing act and they linked their own GitHub profile beside
+    # it. Everything else in the tree was moved to Bond-universe placeholders
+    # the same day. Do not add a second name here without asking.
+    "mahmoud maatuq",  # content-guard: ok the allowlist entry naming itself
 }
 
 # Fictional / illustrative names that legitimately appear in rule, skill, and test
@@ -109,6 +122,17 @@ STOPWORDS = {
     # tree -- the placeholder set and the one-surviving-word rule handle the rest,
     # so nothing else needs listing here.
     "solana",
+    # Added 2026-08-24, and the reason is the deep-audit mode's usability rather
+    # than the gate's. Both words are pieces of real contact slugs, so ``--strict``
+    # emitted them and then fired on ordinary prose: measured over the engine
+    # surface, ``security`` produced 967 findings and ``likely`` 56, out of 1,052
+    # in total. Ninety-two percent noise is why nobody ran the flag, and while
+    # nobody ran it two real given names sat in tracked engine files. Silencing
+    # the two words makes the remaining ~29 findings readable, which is what
+    # turns a deep-audit mode from a thing that exists into a thing that is used.
+    # Neither word can hide a person: the full slug and the space-separated name
+    # stay tokens in the DEFAULT gate.
+    "security", "likely",
 }
 
 # Frontmatter keys on a CRM contact that name an organisation.
@@ -285,7 +309,7 @@ def _harvest_contact_frontmatter(data_root: Path, tokens: dict[str, str]) -> Non
                 _add(tokens, form, "crm-org")
 
 
-def _harvest_executives(data_root: Path, tokens: dict[str, str], strict: bool) -> None:
+def _harvest_executives(data_root: Path, tokens: dict[str, str]) -> None:
     p = data_root / "admin" / "executives.json"
     if not p.is_file():
         return
@@ -298,9 +322,26 @@ def _harvest_executives(data_root: Path, tokens: dict[str, str], strict: bool) -
             val = ex.get(key)
             if val:
                 _add(tokens, str(val), "exec")
-        if strict:
-            for word in str(ex.get("name", "")).replace("-", " ").split():
-                _add(tokens, word, "exec-name")
+        # Bare given/family names, in the DEFAULT gate -- not behind ``strict``.
+        #
+        # They used to sit beside the CRM slug decomposition, and that pairing is
+        # what made them invisible. Slug decomposition IS noisy: it turns 300+
+        # contact slugs into ordinary English (``security`` alone accounts for 967
+        # of the 1,052 findings a strict sweep prints), so ``strict`` is labelled
+        # "deep-audit only" and no gate runs it. The exec roster is nothing like
+        # that source. Measured on the live overlay 2026-08-24: promoting it adds
+        # SIX tokens, against the 263 that all of ``strict`` adds, and the engine
+        # tree stays clean.
+        #
+        # What the pairing cost: a real executive's given name sat in a tracked
+        # engine test (``tests/test_sentinel_telegram_cursor.py``) and another in
+        # a ``scripts/utils/workspace.py`` docstring, and the gate that exists to
+        # stop exactly that reported the surface clean, because the full name was
+        # a token and the given name alone was not. One of the two reached the
+        # public repo. Colleagues are few, curated, and real; ordinary English is
+        # neither. Only the noisy source stays opt-in.
+        for word in str(ex.get("name", "")).replace("-", " ").split():
+            _add(tokens, word, "exec-name")
 
 
 def _harvest_config(data_root: Path, tokens: dict[str, str], strict: bool) -> None:
@@ -395,7 +436,7 @@ def build_denylist(data_root: Path | None, curated_path: Path | None = None,
     try:
         _harvest_person_slugs(data_root, dl.tokens, strict)
         _harvest_contact_frontmatter(data_root, dl.tokens)
-        _harvest_executives(data_root, dl.tokens, strict)
+        _harvest_executives(data_root, dl.tokens)
         _harvest_config(data_root, dl.tokens, strict)
         _harvest_curated(data_root, dl.tokens, curated_path)
     except Exception:

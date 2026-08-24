@@ -133,7 +133,11 @@ def test_the_baseline_flags_growth_beyond_tolerance(tree, monkeypatch, capsys):
     baseline.write_text(json.dumps({"total_bytes": 10}), encoding="utf-8")
     monkeypatch.setattr(sys, "argv", ["context-floor-audit.py", "--baseline"])
     assert audit.main() == 1
-    assert "Floor grew" in capsys.readouterr().out
+    # stderr since 2026-08-24. `--json --baseline` printed the verdict onto
+    # stdout AFTER the JSON document, so a machine caller got an unparseable
+    # mix; this test asserted the stream rather than the invariant, which is
+    # "the verdict is reported".
+    assert "Floor grew" in capsys.readouterr().err
 
 
 def test_the_baseline_passes_when_the_floor_holds(tree, monkeypatch, capsys):
@@ -150,7 +154,7 @@ def test_a_missing_baseline_is_reported_not_assumed_clean(tree, monkeypatch, cap
     monkeypatch.setattr(audit, "get_workspace_root", lambda: tree)
     monkeypatch.setattr(sys, "argv", ["context-floor-audit.py", "--baseline"])
     assert audit.main() == 1
-    assert "No baseline" in capsys.readouterr().out
+    assert "No baseline" in capsys.readouterr().err  # stderr since 2026-08-24
 
 
 def test_the_output_states_what_it_cannot_see(tree, monkeypatch, capsys):

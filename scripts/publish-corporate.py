@@ -29,6 +29,7 @@ Exit codes:
   5  (retired) was: classification config missing — now resolved via routing-map; never emitted
   6  copy failed (filesystem error)
   7  post-copy verify failed (one or more files do not match)
+  8  corporate .gitattributes lacks '* text=auto'
 """
 from __future__ import annotations
 
@@ -41,8 +42,12 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(WORKSPACE_ROOT))
+# Bootstrap only. This one is derived from __file__ because `get_workspace_root`
+# lives behind the very sys.path entry it is adding; the authoritative value is
+# reassigned from that helper immediately after the imports below. An audit read
+# the pair as a dead first assignment -- removing it breaks every import here.
+_BOOTSTRAP_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_BOOTSTRAP_ROOT))
 
 from scripts.utils.colors import CYAN, GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
 from scripts.utils.workspace import (  # noqa: E402
@@ -367,7 +372,11 @@ def bump_build(summary: str = "Workspace update", structural: bool = False,
         minor, patch = minor + 1, 0
     else:
         patch += 1
-    payload = {
+    # Start from the file as found so a future BUILD.json key survives the bump.
+    # Rebuilding from scratch and re-grafting only `history` erased everything
+    # else, and guaranteed the same erasure for whatever key is added next.
+    payload = dict(cur)
+    payload |= {
         "version": f"{major}.{minor}.{patch}",
         "build": new_build,
         "timestamp": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
@@ -376,11 +385,9 @@ def bump_build(summary: str = "Workspace update", structural: bool = False,
         "files_changed": files_changed,
     }
     # An old BUILD.json may still carry a `history` array from when the
-    # since-removed promotion gate wrote force-promote records here. Carried
-    # forward so a bump does not delete an old audit trail; nothing writes new
-    # entries into it any more.
-    if "history" in cur:
-        payload["history"] = cur["history"]
+    # since-removed promotion gate wrote force-promote records here. `dict(cur)`
+    # above carries it (and anything else) forward, so no bump deletes an old
+    # audit trail; nothing writes new entries into it any more.
     tmp = CORPORATE_ROOT / "BUILD.json.tmp"
     tmp.write_text(json.dumps(payload, indent=4) + "\n", encoding="utf-8")
     tmp.replace(build_path)
@@ -419,7 +426,11 @@ def main(argv: list[str] | None = None) -> int:
         return mode_verify()
     if args.bump_build:
         return bump_build(summary=args.summary, structural=args.structural)
-    return 2
+    # Unreachable: the mode group is `required=True`, so argparse exits 2 itself
+    # before any of the four branches is missed. Kept as an assertion rather than
+    # a `return 2` the docstring documents as an argument error this path cannot
+    # produce.
+    raise AssertionError("no mode selected despite a required mutually exclusive group")
 
 
 if __name__ == "__main__":

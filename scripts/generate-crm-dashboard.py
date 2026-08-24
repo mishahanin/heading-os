@@ -26,8 +26,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.html_templates import load_template
 from scripts.utils.image import load_logo_base64
+from scripts.utils.markdown import parse_md_table
 from scripts.utils.workspace import (
-    get_workspace_root,
     get_crm_contacts_dir,
     get_data_config_dir,
     get_context_dir,
@@ -79,54 +79,12 @@ def read_file(path):
     return ""
 
 
-def parse_md_table(text, header_pattern=None):
-    """Parse a markdown table into a list of dicts.
-
-    Optionally start searching from a line matching header_pattern.
-    Handles missing columns gracefully.
-    """
-    lines = text.split("\n")
-    start = 0
-    if header_pattern:
-        for i, line in enumerate(lines):
-            if re.search(header_pattern, line):
-                start = i
-                break
-        else:
-            return []
-
-    # Find header row (first line with |)
-    headers = None
-    data_start = None
-    for i in range(start, min(start + 20, len(lines))):
-        line = lines[i].strip()
-        if "|" in line and "---" not in line and not headers:
-            cells = [c.strip() for c in line.split("|")]
-            headers = [c for c in cells if c]
-            continue
-        if headers and "---" in line:
-            data_start = i + 1
-            break
-
-    if not headers or data_start is None:
-        return []
-
-    rows = []
-    for i in range(data_start, len(lines)):
-        line = lines[i].strip()
-        if not line or not line.startswith("|"):
-            if line.startswith("#") or line.startswith("---"):
-                break
-            if not line:
-                continue
-            break
-        cells = [c.strip() for c in line.split("|")]
-        cells = [c for c in cells if c != ""]
-        row = {}
-        for j, h in enumerate(headers):
-            row[h] = cells[j] if j < len(cells) else ""
-        rows.append(row)
-    return rows
+# parse_md_table used to live here, byte-for-byte the same as the copy in
+# generate-dashboard.py, and with the same defect: `[c for c in cells if c]`
+# deleted an empty cell instead of keeping its position, so every value after a
+# blank shifted one column left -- Owner showed the company, health showed a
+# number. The docstring claimed it "handles missing columns gracefully". The
+# shared implementation in scripts/utils/markdown.py holds the position.
 
 
 def count_files_in_dir(dirpath):
@@ -167,7 +125,7 @@ def collect_radar():
     content = read_file(COMPANY_RADAR_FILE)
     if not content:
         return []
-    rows = parse_md_table(content)
+    rows = parse_md_table(content, source=str(COMPANY_RADAR_FILE))
     contacts = []
     for r in rows:
         health = r.get("Health", "GRAY").strip().upper()
@@ -262,7 +220,7 @@ def collect_shared_contacts():
         return []
     if "No shared contacts detected" in content:
         return []
-    return parse_md_table(content)
+    return parse_md_table(content, source=str(SHARED_CONTACTS_FILE))
 
 
 def collect_exec_registry():
@@ -280,13 +238,21 @@ def collect_heartbeat():
     from scripts.utils.workspace import get_all_active_exec_slugs, get_per_exec_contacts_dir
     heartbeat = {}
     try:
-        for slug in get_all_active_exec_slugs():
-            repo_path = get_per_exec_repo_path(slug)
+        slugs = list(get_all_active_exec_slugs())
+    except (OSError, ImportError, KeyError, ValueError) as e:
+        print(f"[generate-crm-dashboard] heartbeat roster unreadable: {e}",
+              file=sys.stderr)
+        return heartbeat
+    # Per slug, not around the loop. The try used to wrap the whole `for`, so a
+    # KeyError on exec #2 of 10 left execs 3-10 uncounted and the dashboard
+    # rendered those zeros with no sign that the sweep had stopped early.
+    for slug in slugs:
+        try:
             contacts_dir = get_per_exec_contacts_dir(slug)
             heartbeat[slug] = count_files_in_dir(contacts_dir)
-    except (OSError, ImportError, KeyError, ValueError) as e:
-        # Best-effort per-exec heartbeat; return whatever was collected but surface why.
-        print(f"[generate-crm-dashboard] heartbeat collect failed: {e}", file=sys.stderr)
+        except (OSError, ImportError, KeyError, ValueError) as e:
+            print(f"[generate-crm-dashboard] heartbeat failed for {slug}: {e}",
+                  file=sys.stderr)
     return heartbeat
 
 
@@ -295,7 +261,7 @@ def collect_pipeline_companies():
     content = read_file(PIPELINE_FILE)
     if not content:
         return []
-    deals = parse_md_table(content, r"##\s*Active Deals")
+    deals = parse_md_table(content, r"##\s*Active Deals", source=str(PIPELINE_FILE))
     companies = []
     for d in deals:
         company = d.get("Company", "").strip()
@@ -370,12 +336,39 @@ def build_header(logo_b64, exec_count, total_contacts):
 """
 
 
-def build_health_summary(contacts):
+def active_exec_count(exec_registry):
+    """Executives the console counts. Active only.
+
+    The header badge used to count every registry row while main() filters on
+    `status == "active"`, so a registry holding one inactive exec printed
+    "4 active executives" on the console beside a badge reading "5 Execs".
+    """
+    return sum(1 for e in exec_registry.get("executives", [])
+               if e.get("status") == "active")
+
+
+def _health_counts(contacts):
+    """Contacts per health card. Every contact lands in exactly one.
+
+    Both call sites did `if h in counts: counts[h] += 1`, so a contact whose
+    Health column read "BLUE", "amber" or nothing at all was counted in the
+    header's total and in none of the four cards. The cards stopped summing to
+    the total and nothing said why. An unrecognised value is GRAY, and named
+    once on stderr so the source row can be fixed.
+    """
     counts = {"RED": 0, "YELLOW": 0, "GREEN": 0, "GRAY": 0}
     for c in contacts:
-        h = c["health"].upper()
-        if h in counts:
-            counts[h] += 1
+        h = str(c.get("health") or "").strip().upper()
+        if h not in counts:
+            print(f"  Warning: contact {c.get('name', '?')!r} has health "
+                  f"{c.get('health')!r}; counted as GRAY", file=sys.stderr)
+            h = "GRAY"
+        counts[h] += 1
+    return counts
+
+
+def build_health_summary(contacts):
+    counts = _health_counts(contacts)
     return f"""
 <div class="health-row">
   <div class="health-card red">
@@ -678,7 +671,7 @@ def generate_html(radar_contacts, ownership_data, shared, heartbeat,
     css = build_css()
     logo_b64 = load_logo_base64(LOGO_PATH)
 
-    exec_count = len(exec_registry.get("executives", []))
+    exec_count = active_exec_count(exec_registry)
     total_contacts = len(radar_contacts)
 
     sections = [
@@ -716,12 +709,10 @@ def generate_html(radar_contacts, ownership_data, shared, heartbeat,
 # Output / JSON Export
 # ============================================================
 def build_json_export(radar_contacts, ownership_data, shared, heartbeat,
-                      exec_registry, pipeline_correlations):
-    counts = {"RED": 0, "YELLOW": 0, "GREEN": 0, "GRAY": 0}
-    for c in radar_contacts:
-        h = c["health"].upper()
-        if h in counts:
-            counts[h] += 1
+                      pipeline_correlations):
+    # `exec_registry` used to sit between heartbeat and pipeline_correlations,
+    # accepted, passed by the caller, and read nowhere in the body.
+    counts = _health_counts(radar_contacts)
 
     return {
         "generated": NOW.isoformat(),
@@ -799,10 +790,16 @@ def main():
     print(f"  Correlations: {len(correlations)} CRM-pipeline matches")
 
     # Step 3: Generate output
+    if args.json and args.pdf:
+        # The PDF branch lives inside the HTML branch, so --json --pdf used to
+        # produce JSON and no word about the PDF that was asked for.
+        print(f"  {YELLOW}Warning: --pdf is ignored with --json "
+              f"(the PDF is rendered from the HTML output){RESET}",
+              file=sys.stderr)
     if args.json:
         json_path = out_dir / "crm-command-center.json"
         data = build_json_export(radar_contacts, ownership_data, shared,
-                                 heartbeat, exec_registry, correlations)
+                                 heartbeat, correlations)
         json_path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
         print(f"\n{GREEN}JSON: {json_path}{RESET}")
         print(f"  Size: {json_path.stat().st_size:,} bytes")

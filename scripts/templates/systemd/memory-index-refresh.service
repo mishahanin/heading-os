@@ -12,6 +12,12 @@ WorkingDirectory={{WORKSPACE}}
 # down the build commits what it embedded and exits non-zero (journald records
 # it) and the next fire resumes -- no corruption, no partial-dim rows.
 ExecStart={{PYTHON}} {{WORKSPACE}}/scripts/memory-index.py build
+# `OnCalendar ... {{TZ}}` in the .timer pins WHEN this fires, not what the
+# process thinks the date is. A systemd user unit inherits no TZ, so without
+# this line a naive `date.today()` inside the build ran on the host's libc
+# timezone -- a different day near midnight from the one the schedule meant.
+# The installer already substitutes {{TZ}}; only the line was missing.
+Environment=TZ={{TZ}}
 Environment=PYTHONUNBUFFERED=1
 StandardOutput=journal
 StandardError=journal

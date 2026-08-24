@@ -15,11 +15,13 @@ Output policy:
     - Polling stale (>15 min): WARN
     - Non-transient error burst: WARN
 """
+import contextlib
 import json
 import os
 import socket
 import subprocess
 import sys
+import time
 import io
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -44,7 +46,29 @@ _SVC = json.loads(
 )
 _FIRESIDE_UNIT = _SVC.get("fireside_unit", "fireside.service")
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+def _force_utf8_stdout() -> None:
+    """Re-wrap stdout as UTF-8, but only when it needs it and can take it.
+
+    This ran unconditionally at import and REPLACED the process's stdout, so
+    any importer got its own stream swapped out as a side effect of an import.
+    Under pytest that breaks capture with "I/O operation on closed file"; the
+    same shape would break any caller that had installed its own stream.
+
+    The Windows console is the reason it exists (cp1252 cannot print the emoji
+    in this script's output), so it still fires there. It skips when the stream
+    is already UTF-8, and when there is no `.buffer` to wrap.
+    """
+    stream = sys.stdout
+    if getattr(stream, "encoding", "").lower().replace("-", "") == "utf8":
+        return
+    buffer = getattr(stream, "buffer", None)
+    if buffer is None:
+        return
+    with contextlib.suppress(AttributeError, ValueError, OSError):
+        sys.stdout = io.TextIOWrapper(buffer, encoding="utf-8")
+
+
+_force_utf8_stdout()
 
 # Probe script executed on the managed service-host VM when .fireside/remote-host
 # is set. Stdlib only - no external dependencies on the remote end. The unit name
@@ -185,7 +209,17 @@ def _print_remote_status(host: str) -> None:
         # The SSH probe failing establishes that the probe failed, not that the
         # daemon is down (see .claude/rules/scope-claims.md). Ask the webhook
         # port before saying anything about the daemon.
-        port = int(_SVC.get("webhook_port", 8443))
+        # Guarded: this line sits on the path that reports "daemon state
+        # UNKNOWN" after an SSH probe failed. A bad `webhook_port` in the
+        # private config turned that careful report into a stack trace, which
+        # is a worse answer than the unknown it was about to give.
+        raw_port = _SVC.get("webhook_port", 8443)
+        try:
+            port = int(raw_port)
+        except (TypeError, ValueError):
+            print(f"pulse: webhook_port is {raw_port!r}, not a port number; "
+                  f"using 8443 for the hint below", file=sys.stderr)
+            port = 8443
         listening = _webhook_listening(host, port)
         if listening:
             print(f"🔥 Fireside (service-host {host}): SSH probe failed, unit state UNKNOWN "
@@ -235,9 +269,15 @@ def _daemon_alive() -> tuple[bool, int | None]:
     else:
         try:
             os.kill(pid, 0)
-            return True, pid
-        except (ProcessLookupError, PermissionError):
+        except ProcessLookupError:
             return False, None
+        except PermissionError:
+            # The process EXISTS and belongs to another user. Reading that as
+            # "dead" made pulse spawn a second daemon beside a running one --
+            # two bots on one Telegram token. Alive is the safe answer, and it
+            # is also the true one: signal 0 only reaches a live pid.
+            return True, pid
+        return True, pid
 
 
 def _spawn_detached_daemon() -> int | None:
@@ -290,7 +330,18 @@ def _spawn_detached_daemon() -> int | None:
             # cmd.exe builtin and our subprocess.Popen returns the cmd.exe PID
             # which exits within milliseconds. The daemon writes its real PID
             # to .fireside/daemon.pid; callers should read that.
-            return -1  # success sentinel; caller already prints generic message
+            # The pid file is the proof, not the spawn. `start` is a cmd.exe
+            # builtin: our Popen returns cmd.exe's pid, cmd exits in
+            # milliseconds, and it exits 0 whether or not the target launched.
+            # Returning the sentinel unconditionally made pulse print "started
+            # detached" when the daemon script was missing or the interpreter
+            # failed. Wait briefly for the daemon to write its real pid.
+            for _ in range(20):                     # up to ~4s
+                time.sleep(0.2)
+                alive, real_pid = _daemon_alive()
+                if alive and real_pid:
+                    return real_pid
+            return None
         proc = subprocess.Popen(
             [str(venv_py), str(daemon), "daemon"],
             cwd=str(WORKSPACE),
@@ -352,7 +403,12 @@ def derive_state():
 
     last_poll_ts = None
     for e in reversed(dm_log):
-        if e.get("dm_type") == "poll-tick":
+        # Both tick types, matching `_PROBE_TEMPLATE`. In webhook mode the
+        # daemon skips the poll job BY DESIGN and writes heartbeat-tick instead,
+        # so accepting only poll-tick left `last_poll_ts` None on a perfectly
+        # healthy daemon and fired the 15-minute stale-poll WARN forever. The
+        # remote probe already knew this; the local path did not.
+        if e.get("dm_type") in ("poll-tick", "heartbeat-tick"):
             last_poll_ts = e.get("ts")
             break
 
@@ -384,10 +440,27 @@ def derive_state():
 
 
 def load_checkpoint():
-    if CHECKPOINT.exists():
+    """The saved baseline, or None when there is not a usable one.
+
+    None means "re-baseline", which is what an absent file already meant. A
+    truncated or hand-edited `pulse-checkpoint.json` used to raise out of every
+    run, so the operator got no status at all -- from the tool whose entire job
+    is to report status -- until they deleted the file by hand.
+    """
+    if not CHECKPOINT.exists():
+        return None
+    try:
         with CHECKPOINT.open(encoding="utf-8") as f:
-            return json.load(f)
-    return None
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"pulse: checkpoint at {CHECKPOINT} is unreadable ({exc}); "
+              f"re-baselining", file=sys.stderr)
+        return None
+    if not isinstance(data, dict):
+        print(f"pulse: checkpoint at {CHECKPOINT} is a {type(data).__name__}, "
+              f"not an object; re-baselining", file=sys.stderr)
+        return None
+    return data
 
 
 def save_checkpoint(state):
@@ -443,7 +516,13 @@ def main():
     prior = load_checkpoint()
     names = load_roster_names()
     started_count = len(state["started_uids"])
-    tribe_size = len(names) or 55
+    # No invented denominator. `or 55` printed "started 12/55" when the roster
+    # was absent, unreadable or empty -- a ratio against a number nothing on
+    # this machine had measured.
+    tribe_size = len(names)
+    # "?" rather than a number the roster never supplied. A denominator of 0
+    # renders as "12/0", which reads as a bug; "12/?" reads as what it is.
+    tribe_label = str(tribe_size) if tribe_size else "?"
     poll_age = poll_age_minutes(state["last_poll_ts"])
 
     # Fireside daemon liveness check + auto-spawn
@@ -464,13 +543,13 @@ def main():
                   f"{venv_hint} scripts/fireside-bot-daemon.py daemon manually.")
     else:
         print(f"🔥 Fireside: ✅ daemon up pid={pid}, "
-              f"started {started_count}/{tribe_size}, "
+              f"started {started_count}/{tribe_label}, "
               f"last poll {poll_age} min ago")
 
     # First run: initialise silently, print baseline only
     if prior is None:
         save_checkpoint(state)
-        print(f"pulse: baseline set | started {started_count}/{tribe_size} | last poll {poll_age} min ago | sessions {state['session_count']} | errors {state['non_transient_errors']}")
+        print(f"pulse: baseline set | started {started_count}/{tribe_label} | last poll {poll_age} min ago | sessions {state['session_count']} | errors {state['non_transient_errors']}")
         return
 
     deltas = []
@@ -514,11 +593,11 @@ def main():
 
     # Output
     if deltas:
-        print(f"fireside pulse @ {state['ts'][:19]} | started {started_count}/{tribe_size} | last poll {poll_age} min")
+        print(f"fireside pulse @ {state['ts'][:19]} | started {started_count}/{tribe_label} | last poll {poll_age} min")
         for d in deltas:
             print(f"  - {d}")
     else:
-        print(f"ok | started {started_count}/{tribe_size} | last poll {poll_age} min | no news")
+        print(f"ok | started {started_count}/{tribe_label} | last poll {poll_age} min | no news")
 
     save_checkpoint(state)
 

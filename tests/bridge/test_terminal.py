@@ -96,7 +96,12 @@ def test_tmux_build_with_session_id():
     )
     assert cmd[0] == "tmux"
     assert "new-session" in cmd
-    assert "-A" in cmd  # idempotent attach-or-create
+    # No -A. It read as "idempotent attach-or-create" and is the opposite from
+    # a daemon: with the session already present, -A turns new-session into
+    # attach-session, which needs a terminal. Measured on tmux 3.4 with no
+    # controlling tty, the repeat launch exits 1 with "open terminal failed:
+    # not a terminal". _run_tmux_session owns the already-exists case now.
+    assert "-A" not in cmd
     assert "-d" in cmd  # detached so daemon can spawn it
     assert "31c-misha" in cmd
     # tmux passes the shell command as the last arg; check both env + claude resume.

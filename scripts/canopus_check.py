@@ -24,7 +24,12 @@ from: a timestamp comparison got the order wrong and `git merge-base
         collected is not run and an all-skipped file exits 0
 
 **Cost bound, stated so the first slow run is not a surprise.** C1 and C2 are
-two git commands each and run over EVERY note, always. C3 and C4 spawn a
+at most two git commands each and run over EVERY note, always: C2 is always
+exactly one (`merge-base --is-ancestor`), and C1 is one (`diff --quiet`) for a
+live note and two for a retired one, whose window end costs a `cat-file -e`
+first. `--range` adds up to two more per note, the `rev-parse` calls
+`_in_range` makes to place the note in the push. This line said "two git
+commands each", which described no note that exists. C3 and C4 spawn a
 worktree and a test run, so they run ONLY for notes whose `approval_sha` or
 `retired_sha` falls inside `--range`, which CI passes as the push range. The CI
 job carries `timeout-minutes: 10`, and this keeps the per-push cost proportional
@@ -323,6 +328,22 @@ def C4(root: Path, note: dict) -> tuple[bool, str]:
     return True, f"{slug}: {target} ran {ran} test(s) green at HEAD"
 
 
+def _text(value) -> str:
+    """The field as a usable string, or an empty one when it is not a string.
+
+    This was `str(value).strip()`, which converts a YAML null into the
+    non-empty `"None"`. `read_note` hands frontmatter straight from
+    `yaml.safe_load`, so a `approval_sha:` with nothing after the colon arrives
+    as None, the note passed as checkable, and C1 then put that same None into
+    an argv list. `subprocess.run` raises TypeError on it; TypeError is not in
+    `_git`'s except tuple, so it never became a CheckError, and `main` has no
+    try around its clause loop — the run died before the remaining notes were
+    checked. That is the outcome the docstring below names, arriving through a
+    different exception. An int or a list does the same.
+    """
+    return value.strip() if isinstance(value, str) else ""
+
+
 def _unreadable(note: dict) -> str:
     """Why this note cannot be checked at all, or an empty string.
 
@@ -331,8 +352,8 @@ def _unreadable(note: dict) -> str:
     KeyError traceback is a run that stops before the other notes are checked.
     """
     missing = [name for name in ("slug", "approval_sha", "contract")
-               if not str(note.get(name, "")).strip()]
-    if note.get("retired_sha") and not str(note.get("promoted_to", "")).strip():
+               if not _text(note.get(name))]
+    if note.get("retired_sha") and not _text(note.get("promoted_to")):
         missing.append("promoted_to")
     return f"the note is missing {', '.join(missing)}" if missing else ""
 

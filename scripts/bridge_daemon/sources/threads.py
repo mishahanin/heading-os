@@ -23,6 +23,7 @@ from .pulse import (
     THREADS_ACTIVE_STATUSES,
     _parse_thread_frontmatter,
 )
+from scripts.bridge_daemon._safepath import contains_symlink
 
 THREADS_ROW_CAP = 50
 THREAD_MAX_BYTES = 200_000  # 200 KB upper bound on any thread body read
@@ -46,7 +47,7 @@ def _recency_bucket(days_since: int | None) -> str:
     return "older"
 
 
-def list_active_threads(workspace_root: Path) -> dict:
+def list_active_threads(data_root: Path) -> dict:
     """Return all active threads with recency sectioning.
 
     Returns:
@@ -71,7 +72,7 @@ def list_active_threads(workspace_root: Path) -> dict:
             "data_time": ISO 8601 UTC of most-recent file mtime,
         }
     """
-    biz_dir = workspace_root / THREADS_BUSINESS_DIR
+    biz_dir = data_root / THREADS_BUSINESS_DIR
     if not biz_dir.is_dir():
         return {
             "threads": [], "counts": {}, "bucket_order": [],
@@ -107,7 +108,7 @@ def list_active_threads(workspace_root: Path) -> dict:
         raw_threads.append({
             "id": fm.get("id", p.stem),
             "title": fm.get("title") or p.stem,
-            "path": str(p.relative_to(workspace_root)).replace("\\", "/"),
+            "path": str(p.relative_to(data_root)).replace("\\", "/"),
             "status": status,
             "type": fm.get("type", ""),
             "last_touched": last_touched_raw,
@@ -146,7 +147,7 @@ def list_active_threads(workspace_root: Path) -> dict:
     }
 
 
-def read_thread(workspace_root: Path, rel_path: str) -> dict:
+def read_thread(data_root: Path, rel_path: str) -> dict:
     """Read a thread .md file safely.
 
     Path validation: must start with threads/business/, must resolve
@@ -165,8 +166,9 @@ def read_thread(workspace_root: Path, rel_path: str) -> dict:
     parts = [p for p in rel_path.split("/") if p]
     if any(p == ".." or p.startswith(".") for p in parts):
         return {"ok": False, "error": "invalid path segment"}
-    target = (workspace_root / rel_path).resolve()
-    threads_root = (workspace_root / THREADS_BUSINESS_DIR).resolve()
+    target_raw = data_root / rel_path
+    target = target_raw.resolve()
+    threads_root = (data_root / THREADS_BUSINESS_DIR).resolve()
     try:
         target.relative_to(threads_root)
     except ValueError:
@@ -174,7 +176,7 @@ def read_thread(workspace_root: Path, rel_path: str) -> dict:
     if not target.exists():
         return {"ok": False, "error": "not found"}
     try:
-        if target.is_symlink():
+        if contains_symlink(data_root / THREADS_BUSINESS_DIR, target_raw):
             return {"ok": False, "error": "symlinks not allowed"}
     except OSError:
         return {"ok": False, "error": "stat failed"}

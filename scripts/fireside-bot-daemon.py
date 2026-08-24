@@ -4,7 +4,10 @@
 Subcommands:
     daemon  : run forever (the scheduler). Default for /prime auto-start.
     run J   : execute job J once, out-of-band (smoke test or backfill).
-    status  : print PID, uptime, next scheduled run for each job.
+    status  : print PID, uptime, and the names of the registered jobs.
+              NOT next-run times: `status` is a separate process with no
+              access to the daemon's live scheduler, so it cannot know them.
+              The line used to promise them anyway.
     stop    : signal a running daemon to shut down cleanly.
 
 PID file:  .fireside/daemon.pid
@@ -49,9 +52,12 @@ STARTED_AT_FILE = RUNTIME_DIR / "started_at"
 STOP_SENTINEL = RUNTIME_DIR / "stop"  # touch to request clean shutdown on Windows
 
 JOB_SPECS: dict[str, dict] = {
-    # Note: IntervalTrigger does NOT fire immediately on daemon start — first
-    # poll runs `now + 5min`. Acceptable: Telegram queues updates server-side,
-    # so /start events sent during the gap are picked up at the first poll.
+    # Note: IntervalTrigger does NOT fire immediately on daemon start — the
+    # first poll runs one interval later, so `now + 5s` for the value below.
+    # Acceptable: Telegram queues updates server-side, so /start events sent
+    # during the gap are picked up at the first poll. (The comment used to say
+    # "now + 5min", describing a gap sixty times longer than the trigger. It
+    # was left over from a 300-second interval; the interval is the truth.)
     "poll": {"trigger": {"kind": "interval", "seconds": 5}, "critical": True},
     # heartbeat pings FIRESIDE_HC_POLL every minute so the fireside-poll
     # healthchecks.io check stays green in webhook mode (where cmd_poll never
@@ -97,15 +103,20 @@ def _setup_logging() -> logging.Logger:
     stream.setFormatter(fmt)
     logger.addHandler(stream)
 
-    # Also attach the same handlers to the scripts.utils.healthchecks logger
+    # Attach the SAME handler objects to the scripts.utils.healthchecks logger,
     # so the hc-ping helper's exception/warning lines land in daemon.log too
     # (otherwise its _logger.exception is functionally silent in production).
+    #
+    # The same OBJECT, not a second RotatingFileHandler on the same path. The
+    # comment above already said "the same handlers" while the code below built
+    # a new one, giving one file two open handles with independent rotation
+    # state: on Windows the rename fails with PermissionError because the other
+    # handle holds the file, and on POSIX the handler that did not rotate keeps
+    # writing into the renamed `daemon.log.1`, splitting the stream in two.
     hc_logger = logging.getLogger("scripts.utils.healthchecks")
     hc_logger.setLevel(logging.INFO)
     if not hc_logger.handlers:
-        hc_handler = RotatingFileHandler(LOG_FILE, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
-        hc_handler.setFormatter(fmt)
-        hc_logger.addHandler(hc_handler)
+        hc_logger.addHandler(handler)
         hc_logger.addHandler(stream)
 
     return logger
@@ -127,15 +138,25 @@ def _load_fireside_bot():
 # PID file management
 # ============================================================
 
-def is_daemon_alive() -> bool:
-    """Check whether a daemon process is currently running per PID file."""
-    if not PID_FILE.exists():
-        return False
+def live_daemon_pid() -> int | None:
+    """The running daemon's PID, or None. ONE read, then one liveness check.
+
+    `status` and `stop` used to call `is_daemon_alive()` and then re-read the
+    PID file as a separate unguarded `int(PID_FILE.read_text())`. A daemon that
+    exited in between removed the file, and both subcommands died on an
+    unhandled FileNotFoundError traceback. Reading once and handing the value
+    back closes that gap.
+    """
     try:
         pid = int(PID_FILE.read_text().strip())
     except (ValueError, OSError):
-        return False
-    return _pid_is_running(pid)
+        return None
+    return pid if _pid_is_running(pid) else None
+
+
+def is_daemon_alive() -> bool:
+    """Check whether a daemon process is currently running per PID file."""
+    return live_daemon_pid() is not None
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -160,9 +181,14 @@ def _pid_is_running(pid: int) -> bool:
     else:
         try:
             os.kill(pid, 0)
-            return True
-        except (ProcessLookupError, PermissionError):
+        except ProcessLookupError:
             return False
+        except PermissionError:
+            # The process EXISTS and belongs to another user. Reporting it dead
+            # let `is_daemon_alive()` say "not running", which permits a second
+            # daemon start and makes `status` lie.
+            return True
+        return True
 
 
 # ============================================================
@@ -214,6 +240,86 @@ class JobDispatcher:
 # ============================================================
 # Subcommand: daemon
 # ============================================================
+
+def make_webhook_death_handler(stop_event: "asyncio.Event", logger: logging.Logger):
+    """A done-callback that stops the daemon when the webhook task ends early.
+
+    In webhook mode the `poll` job is deliberately skipped, so this server is
+    the ONLY way an update reaches the bot. Nothing used to observe the task:
+    it was awaited solely inside the shutdown `finally`, and because the
+    variable held a reference asyncio never even logged an unretrieved
+    exception. A port already bound, a certificate that expired mid-run, or an
+    ASGI error killed the ingress while the `heartbeat` job kept pinging
+    healthchecks.io every minute — Telegram POSTed into a dead endpoint,
+    retried, and dropped the updates, and every monitor stayed green.
+
+    A monitor that cannot go red is not a monitor.
+
+    Module-level and returning the callback, rather than a closure inside
+    `_run_daemon`, so the behaviour can be tested without standing up a
+    scheduler, a bot and a TLS listener.
+    """
+    def _webhook_died(task) -> None:
+        if stop_event.is_set():
+            return  # ordinary shutdown; the finally block is already running
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            exc = None
+        if exc is not None:
+            logger.error("webhook-server DIED: %r - the only ingress path is gone; "
+                         "shutting the daemon down so the heartbeat stops going green",
+                         exc)
+        else:
+            logger.error("webhook-server exited on its own with no error - the only "
+                         "ingress path is gone; shutting the daemon down")
+        stop_event.set()
+
+    return _webhook_died
+
+
+def _remove_own_pid_file(logger: logging.Logger) -> None:
+    """Delete the PID and start-time files ONLY when the PID file names us.
+
+    Deleting them unconditionally is what let a start-race loser erase the
+    winner's PID file: `status` then reported NOT RUNNING while a live daemon
+    kept firing all fourteen jobs, and a third start was permitted on top of
+    it. The check and the PID write are not atomic, so the race itself is still
+    possible; what this removes is the invisible aftermath.
+    """
+    try:
+        owner = int(PID_FILE.read_text().strip())
+    except (OSError, ValueError):
+        return
+    if owner != os.getpid():
+        logger.warning("PID file names %d, not this process (%d); leaving it alone",
+                       owner, os.getpid())
+        return
+    for path in (PID_FILE, STARTED_AT_FILE):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning("could not remove %s: %s", path.name, exc)
+
+
+def _shutdown_and_clean(scheduler, logger: logging.Logger) -> None:
+    """Stop the scheduler and remove THIS process's runtime files.
+
+    One function for both exits. The webhook-config abort used to
+    `scheduler.shutdown(); return` and skip the PID and start-time cleanup that
+    the normal shutdown path did, so an aborted start left a stale PID file and
+    the next `status` reported RUNNING.
+
+    The PID file is removed only when it names US. It was deleted
+    unconditionally, so after two daemons raced to start (the check and the
+    write are not atomic), the loser's exit erased the WINNER's PID file:
+    `status` then said NOT RUNNING while a live daemon kept firing all
+    fourteen jobs, and a third start was permitted on top.
+    """
+    scheduler.shutdown(wait=False)
+    _remove_own_pid_file(logger)
+    logger.info("daemon-stop")
+
 
 async def _run_daemon(logger: logging.Logger) -> None:
     load_env()
@@ -273,32 +379,50 @@ async def _run_daemon(logger: logging.Logger) -> None:
     webhook_server = None
     webhook_task = None
     if webhook_enabled:
-        import uvicorn  # local import — only needed in webhook mode
-        from scripts.fireside_webhook import create_app
+        # The WHOLE setup is guarded, not just the missing-credential check.
+        # The explicit abort below used to `scheduler.shutdown(); return`
+        # outside any try, so it skipped the PID and start-time cleanup that
+        # the `finally` further down performs — and `import uvicorn`,
+        # `int(FIRESIDE_WEBHOOK_PORT)` and `create_app` could each raise BEFORE
+        # reaching that guard, taking the scheduler down with no shutdown at
+        # all and leaving a stale PID file behind.
+        try:
+            import uvicorn  # local import — only needed in webhook mode
+            from scripts.fireside_webhook import create_app
 
-        secret = os.environ.get("FIRESIDE_WEBHOOK_SECRET", "")
-        host = os.environ.get("FIRESIDE_WEBHOOK_HOST", "0.0.0.0")  # noqa: S104  # nosec B104 — public webhook must bind all interfaces so Telegram can reach it
-        port = int(os.environ.get("FIRESIDE_WEBHOOK_PORT", "8443"))
-        cert = os.environ.get("FIRESIDE_WEBHOOK_CERT")
-        key = os.environ.get("FIRESIDE_WEBHOOK_KEY")
-        if not secret or not cert or not key:
-            logger.error("webhook mode requested but FIRESIDE_WEBHOOK_SECRET/CERT/KEY missing in .env; aborting")
-            scheduler.shutdown(wait=False)
+            secret = os.environ.get("FIRESIDE_WEBHOOK_SECRET", "")
+            host = os.environ.get("FIRESIDE_WEBHOOK_HOST", "0.0.0.0")  # noqa: S104  # nosec B104 — public webhook must bind all interfaces so Telegram can reach it
+            port = int(os.environ.get("FIRESIDE_WEBHOOK_PORT", "8443"))
+            cert = os.environ.get("FIRESIDE_WEBHOOK_CERT")
+            key = os.environ.get("FIRESIDE_WEBHOOK_KEY")
+            if not secret or not cert or not key:
+                raise RuntimeError(
+                    "webhook mode requested but FIRESIDE_WEBHOOK_SECRET/CERT/KEY "
+                    "missing in .env"
+                )
+
+            app = create_app(fb, secret, logger)
+            config = uvicorn.Config(app, host=host, port=port,
+                                    ssl_certfile=cert, ssl_keyfile=key,
+                                    log_level="warning", access_log=False)
+            webhook_server = uvicorn.Server(config)
+            webhook_task = asyncio.create_task(webhook_server.serve())
+            logger.info("webhook-server listening on %s:%d", host, port)
+        except Exception as exc:  # noqa: BLE001 - reported, then a clean abort
+            logger.error("webhook setup failed (%r); aborting", exc)
+            _shutdown_and_clean(scheduler, logger)
             return
-
-        app = create_app(fb, secret, logger)
-        config = uvicorn.Config(app, host=host, port=port,
-                                ssl_certfile=cert, ssl_keyfile=key,
-                                log_level="warning", access_log=False)
-        webhook_server = uvicorn.Server(config)
-        webhook_task = asyncio.create_task(webhook_server.serve())
-        logger.info("webhook-server listening on %s:%d", host, port)
 
     stop_event = asyncio.Event()
 
     def _request_stop(*_args):
         logger.info("signal received; shutting down")
         stop_event.set()
+
+    if webhook_task is not None:
+        webhook_task.add_done_callback(
+            make_webhook_death_handler(stop_event, logger)
+        )
 
     if os.name == "nt":
         # On Windows, signal.signal under asyncio is effectively a no-op (the
@@ -339,19 +463,15 @@ async def _run_daemon(logger: logging.Logger) -> None:
                 except asyncio.TimeoutError:
                     logger.warning("webhook-server did not shut down within 5s; cancelling")
                     webhook_task.cancel()
-        scheduler.shutdown(wait=False)
-        if PID_FILE.exists():
-            try:
-                PID_FILE.unlink()
-            except OSError:
-                pass
-        # I-3: Remove start-time file on clean shutdown.
-        if STARTED_AT_FILE.exists():
-            try:
-                STARTED_AT_FILE.unlink()
-            except OSError:
-                pass
-        logger.info("daemon-stop")
+                except Exception as exc:  # noqa: BLE001 - reported, and cleanup still runs
+                    # `wait_for` RE-RAISES whatever killed the task. Only
+                    # TimeoutError was caught, so a webhook that died of a bad
+                    # certificate took `scheduler.shutdown()`, the PID and
+                    # start-time cleanup, and the `daemon-stop` line with it —
+                    # the process exited on a traceback leaving a stale PID
+                    # file that makes the next `status` report RUNNING.
+                    logger.error("webhook-server ended with %r; continuing shutdown", exc)
+        _shutdown_and_clean(scheduler, logger)
 
 
 def cmd_daemon(args) -> None:
@@ -364,12 +484,11 @@ def cmd_daemon(args) -> None:
     finally:
         # I-1: Belt-and-suspenders: if asyncio.run exits via Ctrl-C or any
         # unhandled exception the _run_daemon finally-block may not have run.
-        # Ensure PID file is gone so is_daemon_alive() is correct on next start.
-        if PID_FILE.exists():
-            try:
-                PID_FILE.unlink()
-            except OSError:
-                pass
+        # Ensure OUR PID file is gone so is_daemon_alive() is correct on the
+        # next start. Ownership-checked for the same reason as
+        # `_shutdown_and_clean`: this used to delete the file whoever wrote it,
+        # so a loser of a start race erased the live winner's PID.
+        _remove_own_pid_file(logger)
 
 
 # ============================================================
@@ -388,10 +507,10 @@ def cmd_run(args) -> None:
 # ============================================================
 
 def cmd_status(args) -> None:
-    if not is_daemon_alive():
+    pid = live_daemon_pid()
+    if pid is None:
         print("fireside-daemon: NOT RUNNING")
         return
-    pid = int(PID_FILE.read_text().strip())
     # I-3: Compute human-readable uptime from the wall-clock epoch stored at start.
     uptime_str = "unknown"
     if STARTED_AT_FILE.exists():
@@ -412,19 +531,33 @@ def cmd_status(args) -> None:
 # ============================================================
 
 def cmd_stop(args) -> None:
-    if not is_daemon_alive():
+    pid = live_daemon_pid()
+    if pid is None:
         print("fireside-daemon: NOT RUNNING")
         return
-    pid = int(PID_FILE.read_text().strip())
     if os.name == "nt":
         # On Windows, CTRL_BREAK_EVENT propagates to the entire console process
         # group and kills the caller too. Use a sentinel file instead: the daemon
         # polls STOP_SENTINEL every second and shuts down cleanly when it appears.
         RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
         STOP_SENTINEL.write_text(str(pid))
-        print(f"fireside-daemon: stop sentinel written for pid={pid} (daemon will exit within ~1s)")
+        # "requested", not "will exit": nothing here confirms the daemon
+        # consumed the sentinel, and a wedged event loop never will.
+        print(f"fireside-daemon: stop requested for pid={pid} via sentinel; "
+              f"run `status` to confirm it exited")
     else:
-        os.kill(pid, signal.SIGTERM)
+        # The check-then-kill gap is real and cannot be closed without a lock:
+        # if the daemon died uncleanly and the OS recycled its PID, this
+        # targets a stranger. What CAN be handled is the ordinary race, where
+        # the process is simply gone by now.
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            print(f"fireside-daemon: pid={pid} already gone")
+            return
+        except PermissionError:
+            print(f"fireside-daemon: pid={pid} is not ours to signal", file=sys.stderr)
+            sys.exit(1)
         print(f"fireside-daemon: SIGTERM sent to pid={pid}")
 
 

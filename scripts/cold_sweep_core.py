@@ -7,7 +7,11 @@ consumers (plan 2026-06-03, Design Decision 5):
 - the bridge daemon's scheduled job imports this and calls ``run()`` in-process,
   then appends via ``action_queue.append_cards`` under the queue lock;
 - the thin ``scripts/cold-sweep.py`` CLI calls ``run()`` for manual runs and
-  deposits via the daemon's ``/action-queue/deposit`` endpoint.
+  appends in-process through ``action_queue.append_cards``, exactly as the
+  daemon does. It reached the daemon's ``/action-queue/deposit`` endpoint until
+  2026-06-27; this line still said so until 2026-08-24, which taught a reader an
+  architecture that no longer exists and implied a manual run needs the bridge
+  daemon up. It does not (``.claude/rules/console-first.md``).
 
 Snake_case filename because it is imported, not just executed (hyphens are
 illegal in module names). ``build_cards`` is a pure function (synthetic rows in,
@@ -34,21 +38,24 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts.utils.crm import is_radar_frozen  # noqa: E402
+
 CONTACTS_DIR_REL = "crm/contacts"  # leak-guard: ok (relative reference string, not a filesystem path)
 OVERDUE_HEALTH = ("red", "yellow")
 
 
 def _frozen(radar_freeze_until: str | None, now: datetime) -> bool:
-    """True if the contact is within an active radar-freeze window."""
-    if not radar_freeze_until or not str(radar_freeze_until).strip():
-        return False
-    try:
-        dt = datetime.fromisoformat(str(radar_freeze_until).strip())
-    except ValueError:
-        return False
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt > now
+    """True if the contact is within an active radar-freeze window.
+
+    A thin delegate, deliberately. This was a third private copy of the same
+    parse, alongside `crm_next.rank_candidates` and `crm.is_radar_frozen`, and
+    all three silently treated an unparseable value as NOT frozen — so a typo
+    in a contact file turned a do-not-contact marker into an outreach card, and
+    fixing any one of them left the other two wrong. Consolidated 2026-08-24;
+    the fail-closed behaviour and its reasoning live in `is_radar_frozen`.
+    """
+    return is_radar_frozen(radar_freeze_until, now)
 
 
 def route(row: dict, now: datetime) -> tuple[str, str, str] | None:

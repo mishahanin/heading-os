@@ -701,7 +701,10 @@ Use the runner, which has passed `-n auto` since the push gate was parallelized:
 Or add the flag to the command you had: `-n auto`.
 
 Narrow runs are untouched — a file path, a directory below the suite root such \
-as `tests/security`, a node id, `-k`, or `--collect-only` all pass. \
+as `tests/security`, a node id, `-k`, or `--collect-only` all pass. An \
+UNEXPANDED shell variable (`pytest $T`) is not one of them: this hook reads the \
+command text, not the shell's environment, so it cannot tell `$T` from the whole \
+suite and refuses. Write the path out. \
 For a deliberate serial run (a baseline measurement, a plugin that will not \
 distribute), append `# {escape}` and it goes through."""
 

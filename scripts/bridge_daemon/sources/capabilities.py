@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
+from scripts.bridge_daemon._safepath import contains_symlink
 
 # Locked archive directory (per workspace convention) - skip.
 ARCHIVE_NAMES = {"archive"}
@@ -76,7 +77,13 @@ def skill_category(slug: str) -> str:
 # trailing content on the same line (some generated skills append an HTML
 # comment, e.g. `---<!-- AUTO-GENERATED -->`), so match `---` to end-of-line
 # rather than requiring it to stand alone.
-_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---[^\n]*\n", re.DOTALL)
+#
+# The end anchor is `(?:\n|\Z)`, matching the canonical parser in
+# scripts/utils/markdown.py. Requiring a literal trailing newline meant a
+# SKILL.md whose last byte is the closing `---` parsed as NO frontmatter, and
+# the skill then listed under its directory name with a blank description,
+# version and author -- a plausible-looking row with nothing behind it.
+_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---[^\n]*(?:\n|\Z)", re.DOTALL)
 
 
 def _parse_frontmatter(text: str) -> dict:
@@ -149,7 +156,11 @@ def list_capabilities(workspace_root: Path) -> dict:
         try:
             text = skill_md.read_text(encoding="utf-8")
             mtime = skill_md.stat().st_mtime
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # UnicodeDecodeError is a ValueError, NOT an OSError, so it used to
+            # escape this handler and 500 the whole /capabilities endpoint over
+            # one badly-encoded SKILL.md. `read_skill` below already catches
+            # both; the list path was the copy that did not.
             continue
         fm = _parse_frontmatter(text)
         name = _clean(fm.get("name")) or d.name
@@ -229,7 +240,8 @@ def read_skill(workspace_root: Path, slug: str) -> dict:
     if ":" in slug:
         return {"ok": False, "error": "namespaced skills not yet supported"}
     skills_root = (workspace_root / ".claude" / "skills").resolve()
-    target = (workspace_root / ".claude" / "skills" / slug / "SKILL.md").resolve()
+    target_raw = workspace_root / ".claude" / "skills" / slug / "SKILL.md"
+    target = target_raw.resolve()
     try:
         target.relative_to(skills_root)
     except ValueError:
@@ -237,7 +249,7 @@ def read_skill(workspace_root: Path, slug: str) -> dict:
     if not target.exists():
         return {"ok": False, "error": "not found"}
     try:
-        if target.is_symlink():
+        if contains_symlink(workspace_root / ".claude" / "skills", target_raw):
             return {"ok": False, "error": "symlinks not allowed"}
     except OSError:
         return {"ok": False, "error": "stat failed"}

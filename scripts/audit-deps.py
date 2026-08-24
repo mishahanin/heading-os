@@ -12,7 +12,12 @@ dev and transitive included -- by exporting the full `uv.lock`. It is the single
 auditing primitive shared by the pre-commit hook and the scheduled CI workflow.
 
 Dependency set, in resolution order:
-  1. `uv export --no-hashes --format requirements-txt`  (full graph, incl dev)
+  1. `uv export --no-hashes --all-extras --no-emit-project --format requirements-txt`
+     (full graph: dev + transitive + every optional extra). Both extra flags are
+     load-bearing, and this line named neither of them until 2026-08-24: without
+     `--all-extras` the export drops every optional package, which is the blind
+     spot this script exists to close; without `--no-emit-project` the export
+     carries `-e .` and pip-audit refuses the file.
   2. fallback: the live virtualenv (`pip-audit` over installed packages) when
      `uv` is not on PATH.
 
@@ -54,8 +59,17 @@ def _reexec_in_venv_if_needed() -> None:
     """
     if _have("pip_audit") or os.environ.get("_AUDIT_DEPS_REEXEC"):
         return
-    venv_py = ROOT / ".venv" / "bin" / "python"
-    if venv_py.exists() and Path(sys.executable).resolve() != venv_py.resolve():
+    # Both layouts. Windows venvs put the interpreter at Scripts/python.exe, so
+    # checking only bin/python meant this function returned silently there and
+    # the CVE gate took the graceful-skip path on every Windows machine -- the
+    # exact silent skip the docstring above says it exists to eliminate, across
+    # a whole platform.
+    candidates = [
+        ROOT / ".venv" / "bin" / "python",
+        ROOT / ".venv" / "Scripts" / "python.exe",
+    ]
+    venv_py = next((c for c in candidates if c.exists()), None)
+    if venv_py is not None and Path(sys.executable).resolve() != venv_py.resolve():
         os.environ["_AUDIT_DEPS_REEXEC"] = "1"
         # Safe: venv_py is a workspace-local path, sys.argv[1:] is from the same process.
         # No shell, no user input, all arguments are trusted paths.
@@ -116,7 +130,10 @@ def main() -> int:
             scope = "full locked graph incl extras (uv export --all-extras -- dev + transitive)"
         else:
             scope = "active virtualenv (uv unavailable -- fallback)"
-        print(f"pip-audit scope: {scope}")
+        # stderr, always. With --json this line used to land on stdout directly
+        # in front of pip-audit's JSON document, so the mode the docstring calls
+        # "machine-readable" emitted something no parser accepts.
+        print(f"pip-audit scope: {scope}", file=sys.stderr)
         return subprocess.run(cmd).returncode
 
 

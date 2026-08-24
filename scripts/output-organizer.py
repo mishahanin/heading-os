@@ -78,6 +78,24 @@ def report():
         print()
 
 
+
+def _free_name(dst: Path) -> Path:
+    """A destination path that does not already exist.
+
+    `shutil.move` onto an existing FILE overwrites it on POSIX, so a housekeeping
+    script silently destroyed the earlier file and the dry-run gave no warning
+    that a collision was coming. Numbered suffixes keep both.
+    """
+    if not dst.exists():
+        return dst
+    stem, suffix, parent = dst.stem, dst.suffix, dst.parent
+    for n in range(2, 1000):
+        candidate = parent / f"{stem}-{n}{suffix}"
+        if not candidate.exists():
+            return candidate
+    raise FileExistsError(f"could not find a free name beside {dst}")
+
+
 def organize(execute=False):
     """Move files into subdirectories by type."""
     if not OUTPUTS_DIR.exists():
@@ -103,11 +121,13 @@ def organize(execute=False):
 
     for src, dst, dst_dir in sorted(moves, key=lambda m: m[1]):
         category = dst_dir.name
-        print(f"  {src.name} -> {category}/{src.name}")
+        collision = dst.exists()
+        note = f"  {YELLOW}[name taken; will be renamed]{RESET}" if collision else ""
+        print(f"  {src.name} -> {category}/{src.name}{note}")
 
         if execute:
             dst_dir.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(src), str(dst))
+            shutil.move(str(src), str(_free_name(dst)))
 
     if execute:
         print(f"\n{GREEN}Moved {len(moves)} files.{RESET}")
@@ -146,7 +166,7 @@ def archive(days, execute=False):
 
         if execute:
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(f), str(target))
+            shutil.move(str(f), str(_free_name(target)))
 
     if execute:
         print(f"\n{GREEN}Archived {len(old_files)} files to outputs/archive/{RESET}")

@@ -64,14 +64,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.workspace import get_outputs_dir, get_workspace_root  # noqa: E402
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET  # noqa: E402
+from scripts.utils.atomic import atomic_write_text  # noqa: E402
 
 WORKSPACE_ROOT = get_workspace_root()
 
 # Browser configuration table. Per-platform paths for each supported
 # Chromium-family browser the workspace knows how to launch with CDP.
-# Comet is the default on Windows/macOS (Perplexity-native, has Linux NO build).
-# Brave is the cross-platform fallback (Linux/macOS/Windows) — useful on Linux
-# where Comet does not exist, or as a clean second profile on any OS.
+# Brave is the default on every platform (see DEFAULT_BROWSER below and the
+# module docstring). Comet is a Windows/macOS-only opt-in fallback and has no
+# Linux build at all. This comment said the reverse until 2026-08-24, which
+# contradicted both the constant twenty lines down and the module header —
+# anyone editing the table from the comment would have reasoned backwards.
 _BROWSER_CONFIGS = {
     "comet": {
         "win32": {
@@ -213,6 +216,84 @@ def is_running(browser: str = DEFAULT_BROWSER) -> bool:
         return False
 
 
+def _write_lock(port: int, pid: int, browser: str) -> None:
+    """Record the CDP session so `stop` can find it. Atomic.
+
+    A plain `write_text` was the write here until 2026-08-24, against the
+    workspace's own no-non-atomic-state-writes rule. A crash or a concurrent
+    read mid-write leaves truncated JSON; `stop_comet` swallows the parse error
+    into an empty state, and on Windows — where `_pids_for_cdp_port` cannot
+    recover the owner from `ps` — that empty state leaves nothing to signal, so
+    the session can never be stopped through this tool again.
+    """
+    atomic_write_text(
+        LOCK_FILE,
+        json.dumps({"port": port, "pid": pid, "browser": browser}, indent=2) + "\n",
+    )
+
+
+def _adopt_running_cdp(port: int, browser: str) -> int:
+    """Reuse a CDP endpoint that is already up, or refuse it.
+
+    `_cdp_ready` answers for ANY Chromium-family process serving
+    `/json/version` on the port. Until 2026-08-24 that was the whole check, so
+    launching Brave while a stray Chrome (or Comet) owned 9222 "succeeded": it
+    returned 0 rather than the PID its docstring promised, wrote no lock file,
+    and every later `attach()` silently drove the wrong browser while `stop`
+    reported "nothing tracked to stop".
+    """
+    owners = _pids_for_cdp_port(port)
+    mine = [pid for pid in owners if _pid_is_browser(pid, browser)]
+    if owners and not mine:
+        raise RuntimeError(
+            f"Port {port} already serves CDP, but PID {owners[0]} is not "
+            f"{browser}. Stop that browser, or launch on another --port."
+        )
+    if not mine:
+        # No `ps` to read (Windows) or the owner's cmdline is unreadable. The
+        # endpoint answers and we cannot say whose it is; say that, rather than
+        # record a lock naming a browser nothing verified.
+        _log(f"CDP already ready on port {port}, but this platform cannot "
+             f"identify its owner; reusing it without a lock file.", YELLOW)
+        return 0
+    pid = mine[0]
+    _write_lock(port, pid, browser)
+    _log(f"CDP already ready on port {port} (PID {pid}, {browser}); reusing.", GREEN)
+    return pid
+
+
+def _abandon_launch(proc: subprocess.Popen, port: int, browser: str) -> None:
+    """Kill a browser we launched that never opened its CDP port.
+
+    Until 2026-08-24 the timeout path raised and left the child running: an
+    untracked browser on the pre-authenticated ClaudeCode profile, holding an
+    unauthenticated loopback debug port any local process could attach to, with
+    no lock file — so `stop` answered "nothing tracked to stop" while the
+    process kept the port. The next `launch` then took the "CDP already ready"
+    branch, and the session was permanently unstoppable through this tool.
+    """
+    for pid in _pids_for_cdp_port(port):
+        if pid == proc.pid:
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+            _log(f"Launch timed out; sent SIGTERM to CDP owner PID {pid}", YELLOW)
+        except ProcessLookupError:
+            pass
+        except OSError as e:
+            _log(f"Launch timed out; SIGTERM to PID {pid} failed: {e}", RED)
+    with contextlib.suppress(OSError):
+        proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError):
+            proc.kill()
+        _log(f"Launch timed out; killed {browser} launcher PID {proc.pid}", YELLOW)
+    else:
+        _log(f"Launch timed out; terminated {browser} launcher PID {proc.pid}", YELLOW)
+
+
 def launch_comet(
     port: int = DEFAULT_PORT,
     initial_url: Optional[str] = None,
@@ -222,18 +303,25 @@ def launch_comet(
 ) -> int:
     """Launch the chosen browser externally with CDP enabled. Returns PID.
 
-    The `browser` parameter selects between supported Chromium-family browsers
-    (default: 'comet'; pass 'brave' on Linux where Comet has no build).
+    The `browser` parameter selects between supported Chromium-family browsers.
+    It defaults to `DEFAULT_BROWSER` ('brave'), which is the primary on every
+    platform; 'comet' is a Windows/macOS-only opt-in with no Linux build. This
+    docstring said the default was 'comet' until 2026-08-24, and the signature
+    had not agreed with it for months.
 
     Refuses to launch if the browser is already running — CDP won't attach to
-    an already-owned profile.
+    an already-owned profile — and refuses to reuse a CDP port owned by some
+    OTHER browser.
+
+    The returned PID is 0 in exactly one case: the port already served CDP and
+    this platform could not identify the owning process (see
+    `_adopt_running_cdp`).
 
     Note: function name retained for backward compatibility with existing
     callers. For new code, prefer `launch_browser()`.
     """
     if _cdp_ready(port):
-        _log(f"CDP already ready on port {port}; reusing.", GREEN)
-        return 0
+        return _adopt_running_cdp(port, browser)
 
     paths = _browser_paths(browser)
 
@@ -276,6 +364,7 @@ def launch_comet(
     while time.time() < deadline and not _cdp_ready(port):
         time.sleep(0.5)
     if not _cdp_ready(port):
+        _abandon_launch(proc, port, browser)
         raise TimeoutError(f"CDP did not become ready on port {port} within {wait_timeout}s")
 
     # Record the process that actually owns the CDP port, not Popen's PID. On
@@ -287,8 +376,7 @@ def launch_comet(
     if real_pid != proc.pid:
         _log(f"{browser} re-parented: launcher {proc.pid} -> browser {real_pid}", GRAY)
 
-    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
-    LOCK_FILE.write_text(json.dumps({"port": port, "pid": real_pid, "browser": browser}, indent=2))
+    _write_lock(port, real_pid, browser)
     _log(f"CDP ready on http://127.0.0.1:{port}", GREEN)
     return real_pid
 
@@ -312,10 +400,12 @@ def launch_browser(
 
 @contextlib.contextmanager
 def attach(port: int = DEFAULT_PORT) -> Iterator[Tuple[object, object]]:
-    """Attach Playwright to an externally-launched Comet. Yields (browser, context).
+    """Attach Playwright to an externally-launched browser. Yields (browser, context).
 
-    On exit, drops the CDP connection but does NOT close Comet. Calling
-    `browser.close()` on a CDP-attached Comet terminates the browser — avoid.
+    On exit, drops the CDP connection but does NOT close the browser. Calling
+    `browser.close()` on a CDP-attached session terminates the whole browser —
+    avoid. (Named Comet here until 2026-08-24; Brave has been the default on
+    every platform since the 2026-05-24 rename.)
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -324,8 +414,8 @@ def attach(port: int = DEFAULT_PORT) -> Iterator[Tuple[object, object]]:
 
     if not _cdp_ready(port):
         raise ConnectionError(
-            f"No CDP endpoint on port {port}. Call launch_comet() first, "
-            f"or ensure Comet was launched with --remote-debugging-port={port}."
+            f"No CDP endpoint on port {port}. Call launch_browser() first, "
+            f"or ensure the browser was launched with --remote-debugging-port={port}."
         )
 
     with sync_playwright() as pw:
@@ -407,7 +497,29 @@ def _pid_is_browser(pid: int, browser_name: str = DEFAULT_BROWSER) -> bool:
         return False
     # Match the executable only (argv[0]), never the whole command line: a URL
     # or a path component containing the browser name would false-positive.
-    return process_name.lower() in Path(cmdline.split()[0]).name.lower()
+    return _exe_name_matches(Path(cmdline.split()[0]).name, process_name)
+
+
+def _exe_name_matches(exe_name: str, process_name: str) -> bool:
+    """True when `exe_name` names `process_name`'s binary, at a name boundary.
+
+    A plain `in` test was the guard here until 2026-08-24, and it defeated the
+    PID-reuse protection this function exists to be: `"comet" in "competent"`
+    and `"brave" in "unbrave-daemon"` are both True, so a recycled PID landing
+    on any process whose basename merely CONTAINS the browser name verified as
+    the browser and was then SIGTERMed by `stop_comet`.
+
+    Equality alone is not the fix, because it breaks the common case: on
+    Debian/Ubuntu the configured `process_name` is `brave` while the binary on
+    disk is `brave-browser`, so an `==` guard would make `stop` ignore every
+    tracked PID on Linux. The boundary rule keeps that and refuses the rest —
+    the name matches, or it matches as a prefix followed by a separator.
+    """
+    exe = exe_name.lower()
+    want = process_name.lower()
+    if exe == want:
+        return True
+    return exe.startswith(want) and not exe[len(want):len(want) + 1].isalnum()
 
 
 def _parse_cdp_owner_pids(ps_output: str, port: int, self_pid: int) -> List[int]:
@@ -477,6 +589,14 @@ def _wait_until_cdp_down(port: int, timeout: float) -> bool:
         time.sleep(0.25)
 
 
+def _clear_lock(lock) -> None:
+    """Remove the lock file if there is one. No-op when stopping by port alone."""
+    if lock is None:
+        return
+    with contextlib.suppress(OSError):
+        lock.unlink()
+
+
 def stop_comet(port: Optional[int] = None, timeout: float = 10.0) -> bool:
     """Stop the CDP browser session. Returns True only if it actually stopped.
 
@@ -484,15 +604,38 @@ def stop_comet(port: Optional[int] = None, timeout: float = 10.0) -> bool:
     verifies as the browser), waits for the port to close, escalates to SIGKILL
     if SIGTERM is ignored, and clears the lock file only on confirmed shutdown.
     A surviving browser leaves the lock in place so the caller can retry.
+
+    `port` alone is a complete instruction: with no lock file this stops
+    whatever holds that port. Only the no-lock AND no-port case has nothing to
+    act on.
     """
     lock = _active_lock_file()
-    if lock is None:
-        _log("No lock file; nothing tracked to stop.", YELLOW)
+    # An explicit `port` is enough on its own. A missing lock used to end the
+    # function here, which made a session UNSTOPPABLE from the CLI in the two
+    # states this file already documents: `_adopt_running_cdp` reuses a live
+    # endpoint "without a lock file", and an unreadable lock leaves no tracked
+    # PID to recover on Windows. With a port named, there is something to aim
+    # at whether or not a lock exists.
+    if lock is None and port is None:
+        _log("No lock file and no port given; nothing tracked to stop. "
+             "Pass --port to stop an untracked session.", YELLOW)
         return False
 
     state = {}
-    with contextlib.suppress(Exception):
-        state = json.loads(lock.read_text())
+    if lock is None:
+        _log(f"No lock file; stopping whatever holds CDP port {port}.", YELLOW)
+    else:
+        try:
+            state = json.loads(lock.read_text())
+        except (OSError, ValueError) as e:
+            # Never silent: an unreadable lock means the tracked PID is gone, and
+            # on Windows `_pids_for_cdp_port` cannot recover it, so `stop` is
+            # about to signal nothing at all. Say which file and why.
+            _log(f"Lock {lock.name} is unreadable ({e}); falling back to whatever "
+                 f"holds the CDP port.", YELLOW)
+        if not isinstance(state, dict):
+            _log(f"Lock {lock.name} does not hold an object; ignoring its contents.", YELLOW)
+            state = {}
     port = port or state.get("port") or DEFAULT_PORT
     browser_name = state.get("browser") or DEFAULT_BROWSER
     tracked = state.get("pid")
@@ -504,9 +647,9 @@ def stop_comet(port: Optional[int] = None, timeout: float = 10.0) -> bool:
         _log(f"Tracked PID {tracked} is not {browser_name}; ignoring it.", GRAY)
 
     if not targets and not _cdp_ready(port):
-        _log("Browser already stopped; clearing lock.", GREEN)
-        with contextlib.suppress(Exception):
-            lock.unlink()
+        _log("Browser already stopped; clearing lock." if lock
+             else f"Nothing is holding CDP port {port}.", GREEN)
+        _clear_lock(lock)
         return True
 
     sigkill = getattr(signal, "SIGKILL", signal.SIGTERM)
@@ -522,8 +665,7 @@ def stop_comet(port: Optional[int] = None, timeout: float = 10.0) -> bool:
                 _log(f"{label} to PID {pid} failed: {e}", RED)
         if _wait_until_cdp_down(port, wait):
             _log(f"CDP port {port} closed; browser stopped.", GREEN)
-            with contextlib.suppress(Exception):
-                lock.unlink()
+            _clear_lock(lock)
             return True
         if sig is not sigkill:
             _log(f"Still up after {label}; escalating.", YELLOW)
@@ -546,12 +688,29 @@ def cmd_launch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _lock_state() -> dict:
+    """The recorded session, or an empty dict. Never raises."""
+    lock = _active_lock_file()
+    if lock is None:
+        return {}
+    try:
+        state = json.loads(lock.read_text())
+    except (OSError, ValueError):
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
 def cmd_status(args: argparse.Namespace) -> int:
+    # Probe the port the session is actually on. `status` probed DEFAULT_PORT
+    # unconditionally until 2026-08-24 and offered no --port, so a session
+    # launched with `--port 9333` reported "not listening / not reachable" and
+    # exited 2 — a false "down" reading on a healthy browser.
+    port = args.port or _lock_state().get("port") or DEFAULT_PORT
     running = is_running(args.browser)
-    port_open = _port_listening(DEFAULT_PORT)
-    cdp = _cdp_ready(DEFAULT_PORT)
+    port_open = _port_listening(port)
+    cdp = _cdp_ready(port)
     _log(f"{args.browser} running: {running}")
-    _log(f"CDP port {DEFAULT_PORT} listening: {port_open}")
+    _log(f"CDP port {port} listening: {port_open}")
     _log(f"CDP endpoint reachable: {cdp}")
     lock = _active_lock_file()
     if lock is not None:
@@ -559,8 +718,16 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0 if cdp else 2
 
 
-def cmd_stop(_: argparse.Namespace) -> int:
-    return 0 if stop_comet() else 1
+def cmd_stop(args: argparse.Namespace) -> int:
+    # `--port`, for the same reason `status` grew one on 2026-08-24. `stop_comet`
+    # has always taken a port and this command always discarded its args, so a
+    # session on a non-default port was UNSTOPPABLE from the CLI in exactly the
+    # states the rest of this file engineers around: `_adopt_running_cdp` reuses
+    # a live endpoint without writing a lock file, and on Windows `stop_comet`
+    # cannot recover an owner from an unreadable lock. With no lock and no way
+    # to name the port, `stop` printed "nothing tracked to stop" and exited 1
+    # while the browser kept serving.
+    return 0 if stop_comet(port=getattr(args, "port", None)) else 1
 
 
 def main() -> int:
@@ -583,9 +750,15 @@ def main() -> int:
     sp.add_argument("--browser", default=DEFAULT_BROWSER,
                     choices=sorted(_BROWSER_CONFIGS),
                     help="Which browser to check (default '%(default)s')")
+    sp.add_argument("--port", type=int, default=None,
+                    help=f"CDP port to probe (default: the lock file's port, "
+                         f"else {DEFAULT_PORT})")
     sp.set_defaults(func=cmd_status)
 
-    sp = sub.add_parser("stop", help="Terminate tracked Comet CDP session")
+    sp = sub.add_parser("stop", help="Terminate the tracked browser CDP session")
+    sp.add_argument("--port", type=int, default=None,
+                    help=f"CDP port to stop (default: the lock file's port, "
+                         f"else {DEFAULT_PORT})")
     sp.set_defaults(func=cmd_stop)
 
     args = p.parse_args()

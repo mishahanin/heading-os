@@ -41,6 +41,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils import ops_signals as ops  # noqa: E402
+from scripts.utils.checkpoint_paths import file_lock  # noqa: E402
 from scripts.utils.workspace import (  # noqa: E402
     get_data_root,
     get_outputs_dir,
@@ -256,7 +257,10 @@ def cmd_ack(args, state_dir: Path, engine_root: Path, data_root: Path) -> int:
     if key not in KNOWN_KEYS:
         print(f"ops-radar: unknown signal key {key!r}. Known: {', '.join(sorted(KNOWN_KEYS))}",
               file=sys.stderr)
-        return 0
+        # 2, not 0. "Always exit 0" is the DETECTOR contract; `ack` is a
+        # mutation, and returning success on a typo meant the caller could not
+        # tell the ack never happened while the signal kept firing.
+        return 2
     # Acked band = the signal's CURRENT severity, so a later worsening re-surfaces.
     signals = gather_live_signals(engine_root, data_root)
     cur = next((s for s in signals if s["key"] == key), None)
@@ -378,6 +382,19 @@ def run_autoheal(state_dir: Path, engine_root: Path, data_root: Path,
         signals = gather_live_signals(engine_root, data_root)
     restart_fn = restart_fn or restart_ollama
     rebuild_fn = rebuild_fn or (lambda: rebuild_index(engine_root))
+    # Locked for the whole read-modify-write. `save_json_atomic` makes each WRITE
+    # atomic but does nothing about the gap between the load above and the save
+    # below: a timer fire and a manual `heal` overlapping there each wrote a
+    # counter derived from the state before the other ran, so a failure streak
+    # reset itself and the escalation into the Tier-B nudge was delayed or
+    # doubled.
+    state_dir.mkdir(parents=True, exist_ok=True)
+    with file_lock(state_dir / (AUTOHEAL_FILE + ".lock"), label="ops-radar-autoheal"):
+        return _autoheal_locked(state_dir, engine_root, signals, restart_fn, rebuild_fn)
+
+
+def _autoheal_locked(state_dir: Path, engine_root: Path, signals,
+                     restart_fn, rebuild_fn) -> dict:
     autoheal = load_json(state_dir / AUTOHEAL_FILE)
     by_key = {s["key"]: s for s in signals}
     actions: list[dict] = []

@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts.utils.atomic import atomic_write_text  # noqa: E402
 from scripts.utils.colors import GREEN, RED, YELLOW, BOLD, RESET  # noqa: E402
 from scripts.utils.workspace import get_context_dir  # noqa: E402
 
@@ -79,9 +80,17 @@ def parse_partnerships(content: str) -> list[dict]:
 
 
 def _health(stage: str) -> str:
+    """Map a stage string to a health colour on WORD boundaries.
+
+    Plain `key in s` made every stage containing the substring "active" GREEN,
+    "Inactive" included. This module's own docstring says a wrong GREEN on a
+    partner nobody has spoken to is worse than an empty cell, and a dead partner
+    rendering GREEN into partners.md is read as fact by /deal-strategy and
+    /investor-pitch.
+    """
     s = stage.lower()
     for key, colour in STAGE_HEALTH.items():
-        if key in s:
+        if re.search(rf"(?<![a-z]){re.escape(key)}(?![a-z])", s):
             return colour
     return "--"
 
@@ -114,7 +123,12 @@ def splice(partners_md: str, table: str) -> str:
         )
     pattern = re.compile(
         re.escape(BEGIN) + r"[\s\S]*?" + re.escape(END), re.MULTILINE)
-    return pattern.sub(f"{BEGIN}\n\n{table}\n\n{END}", partners_md, count=1)
+    # A FUNCTION replacement, not a string one: as a string, `re.sub` reads
+    # backslashes in the generated table as escape sequences, so a partner name
+    # or topic holding a Windows path either corrupted the output or raised
+    # re.error, and `--check` then reported drift that no edit could clear.
+    block = f"{BEGIN}\n\n{table}\n\n{END}"
+    return pattern.sub(lambda _match: block, partners_md, count=1)
 
 
 def main(argv=None) -> int:
@@ -154,7 +168,9 @@ def main(argv=None) -> int:
 
     if args.update:
         try:
-            partners.write_text(splice(current, table), encoding="utf-8")
+            # Atomic: partners.md holds human-written prose around the generated
+            # block, and a torn write loses it.
+            atomic_write_text(partners, splice(current, table))
         except ValueError as exc:
             print(f"{RED}{exc}{RESET}", file=sys.stderr)
             return 1

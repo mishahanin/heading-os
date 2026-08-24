@@ -31,7 +31,7 @@ from scripts.utils.colors import BOLD, GREEN, RED, RESET, YELLOW
 from scripts.utils.content_denylist import build_denylist
 from scripts.utils.egress_proof import EGRESS_CLEAR, egress_state
 from scripts.utils.router_payload import dirty_sources, outbound_texts
-from scripts.utils.sensitive import is_sensitive, sensitivity_is_declared
+from scripts.utils.sensitive import sensitivity_is_declared
 from scripts.utils.workspace import (
     get_data_root,
     get_datastore_dir,
@@ -184,8 +184,12 @@ def run(model: str) -> int:
     the proof may govern it; a person who typed the variable knows something no
     denylist can, and a machine proof must not overrule them.
 
-    Every exit here is 0. A refusal is not a failure, and a nightly unit that
-    reports failed is a nightly unit the operator learns to ignore.
+    Every REFUSAL here exits 0. A refusal is not a failure, and a nightly unit
+    that reports failed is a nightly unit the operator learns to ignore. A
+    harness that actually crashed is different: `_run_harness` returns 1 and
+    this function propagates it, because that one the operator does need to see.
+    The docstring used to claim "every exit here is 0", which was false for
+    exactly that case.
     """
     # Before anything below can read the clock. The previous slice put this
     # inside `_run_harness` so its frozen contract tests stayed hermetic, and
@@ -231,7 +235,11 @@ def main(argv=None) -> int:
         print(f"{BOLD}router-accuracy paths:{RESET}")
         print(f"  dated artifact: {target}/<YYYY-MM-DD>.json")
         print(f"  trend:          {target}/trend.jsonl")
-        print(f"  sensitive now:  {is_sensitive()}")
+        # `sensitivity_is_declared()`, not `is_sensitive()`. The dry-run exists to
+        # predict tonight's timer behaviour, and run() stopped consulting
+        # is_sensitive() -- so the diagnostic reported a mechanism that no longer
+        # decides anything.
+        print(f"  sensitivity declared: {sensitivity_is_declared()}")
         return 0
 
     return run(args.model)

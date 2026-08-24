@@ -90,6 +90,12 @@ def main() -> int:
         or os.environ.get("ODIN_CADENCE_TELEGRAM_TARGET")
         or DEFAULT_RECIPIENT
     )
+    if not recipient:
+        # The docstring above promises "never a send attempt" when nothing is
+        # configured. Passing "" through made that promise depend on how
+        # telegram_notify happens to treat an empty target.
+        _log("no recipient configured; skipping send")
+        return 0
     if telegram_notify.notify(recipient, line):
         _log(f"nudge delivered to {recipient}: {line}")
     else:

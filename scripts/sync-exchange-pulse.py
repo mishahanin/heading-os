@@ -24,6 +24,10 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 WORKSPACE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(WORKSPACE))
+
+from scripts.utils.pid_liveness import pid_is_running  # noqa: E402
+
 RUNTIME_DIR = WORKSPACE / ".sync-exchange"
 PID_FILE = RUNTIME_DIR / "daemon.pid"
 LOG_FILE = RUNTIME_DIR / "daemon.log"
@@ -32,32 +36,19 @@ STARTED_AT_FILE = RUNTIME_DIR / "started_at"
 
 
 def _daemon_alive() -> tuple[bool, int | None]:
-    """Return (alive, pid). Mirrors is_daemon_alive() in sync-exchange-daemon."""
+    """Return (alive, pid), using the SHARED liveness helper.
+
+    The body here was a verbatim copy of the daemon's, carrying the same defect:
+    PermissionError read as dead, so a daemon owned by another user looked
+    stopped and this script spawned a duplicate beside it.
+    """
     if not PID_FILE.exists():
         return False, None
     try:
         pid = int(PID_FILE.read_text().strip())
     except (ValueError, OSError):
         return False, None
-    if pid <= 0:
-        return False, None
-    if sys.platform == "win32":
-        import ctypes
-        h = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
-        if not h:
-            return False, None
-        try:
-            code = ctypes.c_ulong(0)
-            ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(code))
-            return code.value == 259, pid
-        finally:
-            ctypes.windll.kernel32.CloseHandle(h)
-    else:
-        try:
-            os.kill(pid, 0)
-            return True, pid
-        except (ProcessLookupError, PermissionError):
-            return False, None
+    return (pid_is_running(pid), pid if pid > 0 else None)
 
 
 def _resolve_pythonw() -> Path | None:
@@ -172,17 +163,21 @@ def main():
                 "🔄 Sync-Exchange: ❌ daemon NOT RUNNING and auto-start failed. "
                 "Run manually: python scripts/sync-exchange-daemon.py daemon"
             )
-            return
+            # Non-zero. This is the liveness check /prime's health helper calls,
+            # and exiting 0 here reported a healthy sync pipeline while the
+            # daemon was down -- indefinitely, because nothing else looks.
+            return 1
         tag = f"pid {new_pid}" if new_pid > 0 else "detached"
         print(f"🔄 Sync-Exchange: daemon was NOT RUNNING — started {tag}")
-        return
+        return 0
 
     last_ok = _last_job_ok()
     if last_ok:
         print(f"🔄 Sync-Exchange: ✅ daemon up pid={pid}, last sync {last_ok}")
     else:
         print(f"🔄 Sync-Exchange: ✅ daemon up pid={pid}, no sync logged yet")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

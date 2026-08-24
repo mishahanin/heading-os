@@ -20,6 +20,7 @@ Commands:
 """
 
 import argparse
+import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -60,6 +61,23 @@ def get_tmp_dir() -> Path:
 def timestamp() -> str:
     """Return a compact UTC timestamp for default filenames."""
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+
+def scratch_name(prefix: str, suffix: str) -> str:
+    """A temp filename no concurrent run of this script can collide with.
+
+    `f"render-{timestamp()}.html"` has one-second resolution and lives in a
+    SHARED tmp dir, so two renders started in the same second wrote the same
+    path: one process could screenshot the other's HTML, or delete it out from
+    under it. The PID and a counter make the name unique per process and per
+    call without giving up the human-readable timestamp.
+    """
+    global _SCRATCH_SEQ
+    _SCRATCH_SEQ += 1
+    return f"{prefix}-{timestamp()}-{os.getpid()}-{_SCRATCH_SEQ}{suffix}"
+
+
+_SCRATCH_SEQ = 0
 
 
 _FONT_URL_RE = re.compile(r"""url\(\s*['"]?((?:\.\./)+datastore/brand/fonts/[^'")]+)['"]?\s*\)""")
@@ -139,7 +157,7 @@ def resolve_html(args) -> str:
 
 def render_screenshot(html: str, width: int, height: int, scale: int, output_path: Path) -> Path:
     """Render HTML to PNG at exact viewport dimensions using Playwright."""
-    tmp_path = get_tmp_dir() / f"render-{timestamp()}.html"
+    tmp_path = get_tmp_dir() / scratch_name("render", ".html")
     try:
         tmp_path.write_text(html, encoding="utf-8")
         file_url = f"file:///{tmp_path.as_posix()}"
@@ -163,7 +181,7 @@ def render_screenshot(html: str, width: int, height: int, scale: int, output_pat
 
 def render_pdf(html: str, output_path: Path) -> Path:
     """Render HTML to PDF using Playwright."""
-    tmp_path = get_tmp_dir() / f"pdf-{timestamp()}.html"
+    tmp_path = get_tmp_dir() / scratch_name("pdf", ".html")
     try:
         tmp_path.write_text(html, encoding="utf-8")
         file_url = f"file:///{tmp_path.as_posix()}"

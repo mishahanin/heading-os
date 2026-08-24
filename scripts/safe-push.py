@@ -44,8 +44,17 @@ from scripts.utils.workspace import get_data_root, get_workspace_root
 _EXIT = {"ok": 0, "failed": 1, "hung": 2, "postcondition_failed": 4}
 
 
-def _repos() -> dict[str, Path]:
-    return {"engine": get_workspace_root(), "data": get_data_root()}
+def _repo_path(name: str) -> Path:
+    """Resolve ONE repo root, on demand.
+
+    The dict form resolved both eagerly, so `--repo engine` -- the advertised
+    standalone usage -- called `get_data_root()` and failed on a fresh clone
+    with no private overlay configured, before any push was attempted.
+    """
+    return get_workspace_root() if name == "engine" else get_data_root()
+
+
+REPO_NAMES = ("engine", "data")
 
 
 def _push_one(name: str, repo: Path, token: str, *, branch: str,
@@ -94,8 +103,7 @@ def main() -> int:
         return 3
 
     status_dir = get_workspace_root() / ".push-state"
-    repos = _repos()
-    targets = ["engine", "data"] if args.repo == "all" else [args.repo]
+    targets = list(REPO_NAMES) if args.repo == "all" else [args.repo]
 
     verdicts = []
     for name in targets:
@@ -103,7 +111,7 @@ def main() -> int:
             print(f"{CYAN}supervised push -> {name}{RESET} "
                   f"{GRAY}(stall-window {args.stall_window:.0f}s; HUNG only on "
                   f"no output + no CPU, never on elapsed time){RESET}")
-        v = _push_one(name, repos[name], token, branch=args.branch,
+        v = _push_one(name, _repo_path(name), token, branch=args.branch,
                       remote=args.remote, stall_window=args.stall_window,
                       status_dir=status_dir)
         verdicts.append(v)

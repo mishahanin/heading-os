@@ -65,6 +65,15 @@ def _fetch_card(root: Path, prefix: str) -> dict:
         sys.exit(1)
     except urllib.error.URLError:
         _die_no_daemon()
+    except ValueError as e:
+        # `json.loads` sits inside the `with`, and ValueError matches neither
+        # HTTPError nor URLError — so a 200 carrying a non-JSON body (a version
+        # mismatch, a proxy on the port, a crashed handler returning HTML) died
+        # on a traceback instead of one of the exit codes this module's
+        # docstring promises.
+        print(f"{RED}the daemon answered 200 with a body that is not JSON "
+              f"({e}).{RESET}", file=sys.stderr)
+        sys.exit(1)
     items = data.get("items", [])
     exact = [c for c in items if c.get("id") == prefix]
     matches = exact or [c for c in items if str(c.get("id", "")).startswith(prefix)]

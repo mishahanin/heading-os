@@ -58,7 +58,13 @@ REF_START = '  <h2 id="reference">Skill reference: every skill in detail</h2>'
 TAIL_START = "  <h2>MCP servers</h2>"
 MAIN_CLOSE = "</main>"
 
-CAT_DIVIDER_RE = re.compile(r'<h3 class="cat" id="(cat-[a-z-]+)">')
+# The WHOLE divider element, closing tag and trailing newline included.
+# It used to match only the opening tag, so `m.end()` landed right after the
+# `>` and every category chunk began with the category name text plus an
+# orphan `</h3>` — invalid HTML at the top of each generated page, from a
+# splitter whose docstring promises the cards are preserved verbatim and whose
+# inline comment says the divider line is dropped.
+CAT_DIVIDER_RE = re.compile(r'<h3 class="cat" id="(cat-[a-z-]+)">.*?</h3>\n?', re.DOTALL)
 SECTION_ID_RE = re.compile(r'<section class="skill" id="(s-[a-z0-9-]+)">\n<h3>')
 SECTION_COUNT_RE = re.compile(r'<section class="skill"')
 
@@ -155,7 +161,20 @@ def main() -> int:
     tail = _slice(text, TAIL_START, MAIN_CLOSE)
 
     # Move each card's anchor id from the <section> onto its <h3> so search indexes it.
-    detail = SECTION_ID_RE.sub(r'<section class="skill">\n<h3 id="\1">', detail)
+    section_total = detail.count('<section class="skill"')
+    detail, moved = SECTION_ID_RE.subn(r'<section class="skill">\n<h3 id="\1">', detail)
+    if moved != section_total:
+        # SECTION_ID_RE needs byte-exact `<section ...>\n<h3>` adjacency. Any
+        # formatting drift — an attribute on the h3, a blank line, indentation
+        # — makes the substitution silently skip that card, so it never enters
+        # `skill_to_page`, and the quick-index rewrite below leaves its
+        # `href="#s-x"` untouched via the `match.group(0)` fallback: a broken
+        # same-page anchor on the rebuilt index, with no diagnostic. The
+        # docstring promises those links still resolve after the split.
+        print(f"{YELLOW}{section_total - moved} skill section(s) did not match "
+              f"the id-move pattern; their index links would break. "
+              f"Aborting.{RESET}")
+        return 1
 
     # Split the detail body into per-category chunks and build skill -> page map + counts.
     dividers = list(CAT_DIVIDER_RE.finditer(detail))
@@ -163,10 +182,22 @@ def main() -> int:
         print(f"{YELLOW}expected {len(CAT_PAGES)} category dividers, found {len(dividers)}. "
               f"Aborting to avoid a bad split.{RESET}")
         return 1
+    # Identity, not just count. The guard above checks HOW MANY dividers there
+    # are; with eight present but one id renamed, the split proceeded and died
+    # on an uncaught KeyError at `page_by_cat[cat_id]` — after half the outputs
+    # had been planned — instead of the clean abort this guard exists to give.
+    found_ids = sorted(m.group(1) for m in dividers)
+    expected_ids = sorted(cat_id for cat_id, _page, _title in CAT_PAGES)
+    if found_ids != expected_ids:
+        print(f"{YELLOW}category divider ids do not match the expected set. "
+              f"Aborting to avoid a bad split.{RESET}")
+        print(f"  unexpected: {sorted(set(found_ids) - set(expected_ids))}")
+        print(f"  missing:    {sorted(set(expected_ids) - set(found_ids))}")
+        return 1
     cat_chunks: dict[str, str] = {}
     for idx, m in enumerate(dividers):
         cat_id = m.group(1)
-        start = m.end()  # drop the divider line itself; h1 names the category
+        start = m.end()  # past the full <h3 class="cat">...</h3>; the h1 names the category
         end = dividers[idx + 1].start() if idx + 1 < len(dividers) else len(detail)
         cat_chunks[cat_id] = detail[start:end].strip("\n")
 
@@ -186,8 +217,18 @@ def main() -> int:
         return f'href="{page}#{sid}"' if page else match.group(0)
 
     intro = re.sub(r'href="#(s-[a-z0-9-]+)"', _xref, intro)
+    _stale = ('in <a href="#reference">Skill reference: every skill in detail</a> '
+              'further down this page.')
+    if _stale not in intro:
+        # An exact-literal replacement that silently no-ops leaves the intro
+        # pointing readers at a per-skill reference the split just removed from
+        # this page. Everything else in this tool refuses to run on unexpected
+        # input; this one transform used to be unverified.
+        print(f"{YELLOW}the intro's 'further down this page' sentence has "
+              f"changed wording; it now points at a section this split "
+              f"removes. Update the literal in this script.{RESET}")
     intro = intro.replace(
-        'in <a href="#reference">Skill reference: every skill in detail</a> further down this page.',
+        _stale,
         'on the per-category pages linked from <a href="#reference">Skill reference by category</a> below.',
     )
 

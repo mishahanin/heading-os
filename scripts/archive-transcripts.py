@@ -41,6 +41,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import BOLD, GRAY, GREEN, RESET, YELLOW  # noqa: E402
+from scripts.utils import checkpoint_paths as CP  # noqa: E402
 from scripts.utils.workspace import get_data_root, get_workspace_root  # noqa: E402
 
 # How long a transcript must sit untouched before it counts as finished. A live
@@ -51,15 +52,25 @@ from scripts.utils.workspace import get_data_root, get_workspace_root  # noqa: E
 SETTLE_SECONDS = 2 * 60 * 60
 
 
-def transcript_dir() -> Path:
-    """Where Claude Code keeps THIS workspace's transcripts.
+UNRESOLVED = (
+    "the transcript directory could not be resolved on this platform "
+    "(the harness project-slug rule is POSIX-only). Nothing was read, and "
+    "nothing was archived - this is NOT an empty archive."
+)
 
-    Same slug rule `scripts/calibrate.py` uses: the absolute workspace path with
-    every separator and dot turned into a dash.
+
+def transcript_dir() -> Path | None:
+    """Where Claude Code keeps THIS workspace's transcripts, or None.
+
+    One line, because the slug rule has exactly one owner:
+    `scripts/utils/checkpoint_paths.transcript_dir`. This function held a second
+    copy of that rule until 2026-08-23, and pointed its docstring at
+    `scripts/calibrate.py` as a third authority.
+
+    None means the platform is not POSIX and the resolver refused to guess.
+    Every caller here reports that out loud instead of counting zero files.
     """
-    root = get_workspace_root().resolve()
-    slug = str(root).replace("/", "-").replace(".", "-")
-    return Path.home() / ".claude" / "projects" / slug
+    return CP.transcript_dir(get_workspace_root())
 
 
 def archive_root() -> Path:
@@ -130,6 +141,10 @@ def archive(*, now: float | None = None, dry_run: bool = False) -> dict:
     counts = {"archived": 0, "skipped": 0, "too_fresh": 0, "failed": 0}
 
     source_dir = transcript_dir()
+    if source_dir is None:
+        print(f"{YELLOW}archive-transcripts: {UNRESOLVED}{RESET}", file=sys.stderr)
+        counts["unresolved"] = 1
+        return counts
     if not source_dir.is_dir():
         return counts
 
@@ -165,15 +180,33 @@ def archive(*, now: float | None = None, dry_run: bool = False) -> dict:
     return counts
 
 
+def _total_bytes(paths) -> int:
+    """Sum sizes, skipping anything that disappeared between glob and stat.
+
+    `archive()` already guards each file; `status()` did not, so the harness
+    deleting a transcript mid-scan -- the entire premise of this script --
+    produced an uncaught traceback from a read-only command.
+    """
+    total = 0
+    for path in paths:
+        try:
+            total += path.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
 def status() -> dict:
     """What is live, what is archived, and how much the archive holds."""
-    live = sorted(transcript_dir().glob("*.jsonl")) if transcript_dir().is_dir() else []
+    source_dir = transcript_dir()
+    live = sorted(source_dir.glob("*.jsonl")) if source_dir and source_dir.is_dir() else []
     archived = sorted(archive_root().rglob("*.jsonl.gz")) if archive_root().is_dir() else []
     return {
+        "unresolved": source_dir is None,
         "live_count": len(live),
-        "live_bytes": sum(p.stat().st_size for p in live),
+        "live_bytes": _total_bytes(live),
         "archived_count": len(archived),
-        "archived_bytes": sum(p.stat().st_size for p in archived),
+        "archived_bytes": _total_bytes(archived),
         "oldest_archived": archived[0].name if archived else None,
     }
 
@@ -196,6 +229,9 @@ def main(argv=None) -> int:
 
     if args.status:
         s = status()
+        if s["unresolved"]:
+            print(f"{YELLOW}archive-transcripts: {UNRESOLVED}{RESET}", file=sys.stderr)
+            return 2
         print(f"{BOLD}Transcript archive{RESET}")
         print(f"  live      {s['live_count']:4d} file(s)  {_human(s['live_bytes'])}"
               f"  {GRAY}{transcript_dir()}{RESET}")
@@ -206,6 +242,15 @@ def main(argv=None) -> int:
         return 0
 
     counts = archive(dry_run=args.dry_run)
+    if counts.get("unresolved"):
+        # Exit 2, the same code --status uses for this condition. archive mode
+        # never looked at the flag, so an unresolvable transcript directory
+        # printed "archived 0, 0 already current, 0 still live, 0 failed" and
+        # exited 0 -- indistinguishable from success to the cron job calling
+        # it, on a script whose whole purpose is preventing silent transcript
+        # loss. The warning is already on stderr; this makes it visible to
+        # automation, which does not read stderr.
+        return 2
     verb = "would archive" if args.dry_run else "archived"
     print(f"{GREEN}{verb} {counts['archived']}{RESET}, "
           f"{counts['skipped']} already current, "

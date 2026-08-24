@@ -24,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.utils.atomic import atomic_write_text
 from scripts.utils.colors import BOLD, GREEN, RED, RESET, YELLOW
 from scripts.utils.paths import DATA_SCHEMA_VERSION
 from scripts.utils.workspace import get_routing_destination, get_workspace_root
@@ -81,8 +82,13 @@ def main() -> int:
         shutil.copy2(src, dst)
         copied += 1
 
-    # Schema marker for the engine's compatibility handshake.
-    (target / ".schema-version").write_text(f"{DATA_SCHEMA_VERSION}\n", encoding="utf-8")
+    # Schema marker for the engine's compatibility handshake. Atomic (tmp +
+    # os.replace), per the workspace's no-non-atomic-state-writes rule and to
+    # match `build_engine_repo.py`, which routes its equivalent marker the same
+    # way. A plain `write_text` interrupted mid-call leaves a zero-byte or
+    # partial version string, and this file is the ONLY handshake signal in the
+    # overlay: there is no second source for a reader to fall back to.
+    atomic_write_text(target / ".schema-version", f"{DATA_SCHEMA_VERSION}\n")
 
     def _cfg(key: str) -> str:
         r = subprocess.run(["git", "config", key], cwd=str(root),

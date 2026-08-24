@@ -113,14 +113,19 @@ def _native_from_hook(data: dict) -> Path | None:
     tp = data.get("transcript_path")
     if tp:
         return Path(tp).expanduser().parent / "memory"
-    if os.name != "posix":
+    from scripts.utils.checkpoint_paths import transcript_dir
+
+    # One owner for the harness project-slug rule, and it returns None off
+    # POSIX rather than guessing a Windows form nobody here can verify.
+    # The raw string, not a Path: off POSIX `Path()` raises before the
+    # resolver can refuse.
+    project = transcript_dir(data.get("cwd") or os.getcwd())
+    if project is None:
         print("[memory-reconcile] no transcript_path and the cwd-slug fallback is "
               "POSIX-only; skipping rather than guessing a store path",
               file=sys.stderr)
         return None
-    cwd = data.get("cwd") or os.getcwd()
-    slug = str(Path(cwd).resolve()).replace("/", "-").replace(".", "-")
-    return Path.home() / ".claude" / "projects" / slug / "memory"
+    return project / "memory"
 
 
 def main() -> int:

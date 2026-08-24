@@ -7,7 +7,7 @@ def test_groups_exact_email_match():
     from scripts.crm_migrate_to_entity_model import group_records
     records = [
         {"owner": "exec-a", "name": "Marlow Tester", "email": "marlow@example.com", "company": "AllianceCo"},
-        {"owner": "exec-b", "name": "Samuel Tester", "email": "marlow@example.com", "company": "AllianceCo"},
+        {"owner": "exec-b", "name": "Felix Leiter", "email": "marlow@example.com", "company": "AllianceCo"},
     ]
     groups = group_records(records)
     assert len(groups) == 1
@@ -39,9 +39,9 @@ def test_low_confidence_grouping_name_match_no_email():
 
 def test_canonical_slug_generation():
     from scripts.crm_migrate_to_entity_model import generate_slug
-    assert generate_slug("Samuel Tester") == "samuel-tester"
+    assert generate_slug("Felix Leiter") == "felix-leiter"
     assert generate_slug("Maria Lopez") == "maria-lopez"
-    assert generate_slug("Carol Nguyen") == "carol-nguyen"
+    assert generate_slug("Carol Moneypenny") == "carol-moneypenny"
     # Collision case
     assert generate_slug("John Smith", existing={"john-smith"}) == "john-smith-2"
 

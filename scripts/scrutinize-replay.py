@@ -196,10 +196,29 @@ def stratified_sample(samples: list[FindingSample], n: int) -> list[FindingSampl
     quota = max(1, n // 5)
     picked: list[FindingSample] = []
     rng = random.Random(42)  # noqa: S311 - deterministic sampling for reproducible benchmarks, not cryptographic
-    for sev in ("BLOCKER", "HIGH", "MEDIUM", "LOW", "NIT"):
+    tiers = ("BLOCKER", "HIGH", "MEDIUM", "LOW", "NIT")
+    for sev in tiers:
         bucket = by_sev.get(sev, [])
         rng.shuffle(bucket)
         picked.extend(bucket[:quota])
+
+    # Second pass: redistribute the capacity thin tiers could not use.
+    #
+    # Without it, every tier was capped at `quota` and leftover slots were
+    # simply lost: `--sample 8` over 500 MEDIUM findings plus one BLOCKER
+    # returned 2, and the kappa statistic this sheet exists to compute was
+    # computed over that. Deterministic, because the whole sampler is.
+    if len(picked) < n:
+        chosen = {id(x) for x in picked}
+        # No second shuffle here. `rng.shuffle(bucket)` in the tier loop above
+        # mutates `by_sev[sev]` IN PLACE -- it is the same list object -- so the
+        # leftovers are already in random order. A shuffle here was measurably a
+        # no-op: replacing it with `leftovers.reverse()` changed no observable
+        # behaviour, which is how it was found.
+        leftovers = [x for sev in tiers for x in by_sev.get(sev, [])
+                     if id(x) not in chosen]
+        picked.extend(leftovers[:n - len(picked)])
+
     rng.shuffle(picked)
     return picked[:n]
 

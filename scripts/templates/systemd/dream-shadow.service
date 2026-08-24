@@ -11,6 +11,13 @@ WorkingDirectory={{WORKSPACE}}
 # Resolution stays with /dream (human-gated). Report lands under
 # outputs/operations/dream/.
 ExecStart={{PYTHON}} {{WORKSPACE}}/scripts/dream-shadow.py
+# `OnCalendar ... {{TZ}}` in the .timer pins WHEN this unit fires, not the
+# process timezone. Without this line the script still computed date.today()
+# in the host's libc zone, so on a host on another zone it misdated its own
+# report and compared dates a day off -- precisely the failure the timer's
+# comment claims is prevented. Siblings (reminders, ops-radar, odin,
+# chronicle) already set it.
+Environment=TZ={{TZ}}
 Environment=PYTHONUNBUFFERED=1
 StandardOutput=journal
 StandardError=journal

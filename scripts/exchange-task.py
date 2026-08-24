@@ -107,7 +107,12 @@ def parse_args() -> argparse.Namespace:
         description="Create and manage Exchange Tasks from the CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    mode = p.add_mutually_exclusive_group(required=True)
+    # NOT required. The group carried `required=True` while the usage block and
+    # the --create help both say creation is the default when --subject is
+    # given, so the documented primary command failed argument parsing before
+    # it reached Exchange. `main()` already falls through to create, so the
+    # code always meant this; only the parser disagreed.
+    mode = p.add_mutually_exclusive_group(required=False)
     mode.add_argument("--create", action="store_true", help="Create a new task (default when --subject is given)")
     mode.add_argument("--list", action="store_true", help="List tasks")
     mode.add_argument("--complete", metavar="SUBJECT", help="Mark a task complete by subject keyword")
@@ -127,7 +132,13 @@ def parse_args() -> argparse.Namespace:
         help="Task status filter for --list, or initial status for --create (default: NotStarted)",
     )
     p.add_argument("--all-statuses", action="store_true", help="List tasks of all statuses (overrides --status filter)")
-    return p.parse_args()
+    args = p.parse_args()
+    # Dropping `required=True` must not let a bare invocation reach Exchange
+    # and try to create a task with no subject. Create is the default mode, so
+    # the subject is what makes it a create.
+    if not args.list and not args.complete and not args.subject:
+        p.error("nothing to do: pass --subject to create a task, or --list, or --complete SUBJECT")
+    return args
 
 # ============================================================
 # Create

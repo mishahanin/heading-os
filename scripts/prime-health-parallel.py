@@ -3,9 +3,11 @@
 
 Replaces the previous serial chain of subprocess invocations the /prime skill
 executed. The checks are defined in the CHECKS registry and rendered in
-DISPLAY_ORDER (crm-health, knowledge-health, memory file scan, email-intel
-state read, thread.py archive-scan, fireside-pulse, sync-exchange health, and
-the read-only odin-cadence nudge). Each runs in its own thread via
+DISPLAY_ORDER -- see those two objects below for the live set, which is the
+only place it is stated. This sentence used to enumerate eight checks by name
+while the registry held twelve; four (ops_radar, reminders_due, dream_shadow,
+updates) had been added and never written down, which is how a check gets
+added in one place and missed in another. Each runs in its own thread via
 concurrent.futures.ThreadPoolExecutor(max_workers=8). Output blocks are emitted
 in the same fixed order /prime expects so the CEO-facing brief stays unchanged.
 
@@ -234,14 +236,20 @@ def run_email_intel_status(workspace_root: Path) -> dict[str, Any]:
     # Check pending P1 tasks
     tasks_path = state_path.parent / "tasks.md"
     p1_open = 0
+    tasks_note = ""
     if tasks_path.exists():
         try:
             for line in tasks_path.read_text(encoding="utf-8", errors="ignore").splitlines():
                 stripped = line.strip()
                 if stripped.startswith("- [ ]") and "P1" in stripped:
                     p1_open += 1
-        except OSError:
-            pass
+        except OSError as exc:
+            # UNKNOWN is not ZERO. A bare `pass` here reported `p1_open = 0`,
+            # so an unreadable tasks.md told the operator there were no pending
+            # P1 tasks when the count was simply not available -- a silent
+            # failure on a priority signal.
+            tasks_note = f" tasks.md unreadable ({exc}); P1 count UNKNOWN."
+            p1_open = None
 
     if hours_ago > 20:
         body = (
@@ -253,9 +261,11 @@ def run_email_intel_status(workspace_root: Path) -> dict[str, Any]:
 
     if p1_open:
         body += f" Pending P1 tasks: {p1_open}."
+    body += tasks_note
 
     return {
-        "status": "ok",
+        # An unreadable tasks.md is a partial answer, not an ok one.
+        "status": "ok" if p1_open is not None else "error",
         "output": body,
         "last_run_hours_ago": hours_ago,
         "p1_open": p1_open,
@@ -317,7 +327,9 @@ def run_fireside_health(workspace_root: Path) -> dict[str, Any]:
         text=True,
         timeout=CHECK_TIMEOUT,
     )
-    return {"status": "ok" if proc.returncode == 0 else "failed",
+    # "error", not "failed": one failure word across every check, so the
+    # renderer and the checks cannot disagree about which one means trouble.
+    return {"status": "ok" if proc.returncode == 0 else "error",
             "output": proc.stdout or proc.stderr or "(no output)"}
 
 
@@ -333,7 +345,9 @@ def run_sync_exchange_health(workspace_root: Path) -> dict[str, Any]:
         text=True,
         timeout=CHECK_TIMEOUT,
     )
-    return {"status": "ok" if proc.returncode == 0 else "failed",
+    # "error", not "failed": one failure word across every check, so the
+    # renderer and the checks cannot disagree about which one means trouble.
+    return {"status": "ok" if proc.returncode == 0 else "error",
             "output": proc.stdout or proc.stderr or "(no output)"}
 
 
@@ -492,20 +506,34 @@ def run_updates(workspace_root: Path) -> dict[str, Any]:
                 "omit_if_empty": True}
 
     lines: list[str] = []
+    # `.get` with a fallback on every field. The state file is written by a
+    # DIFFERENT component (update-manager), so any version skew between writer
+    # and reader used to turn one entry missing one of four keys into a KeyError
+    # that took the whole updates section down -- hiding every other valid
+    # update behind a traceback. The statuses below are update-manager's
+    # vocabulary, not this script's check statuses; they are unrelated words
+    # that happen to look alike.
     for name, e in state.get("components", {}).items():
+        if not isinstance(e, dict):
+            lines.append(f"{name}: malformed entry ({type(e).__name__}), skipped")
+            continue
+        display = e.get("display", name)
+        current = e.get("current", "?")
+        latest = e.get("latest", "?")
+        tier = e.get("tier", "?")
         status = e.get("status")
         if status == "waiting":
             lines.append(
-                f"{e['display']} {e['current']}->{e['latest']} "
-                f"({e['tier']} - apply: update-manager apply {name})"
+                f"{display} {current}->{latest} "
+                f"({tier} - apply: update-manager apply {name})"
             )
         elif status == "failed":
             lines.append(
-                f"{e['display']}: auto-apply FAILED (rolled back, "
+                f"{display}: auto-apply FAILED (rolled back, "
                 f"{e.get('fail_count', 0)}x) - check logs"
             )
         elif status == "observed-stale":
-            lines.append(f"{e['display']} {e['current']}->{e['latest']} (observed - self-updates)")
+            lines.append(f"{display} {current}->{latest} (observed - self-updates)")
     if not lines:
         return {"status": "ok", "output": "", "omit_if_empty": True}
     return {"status": "ok", "output": "Updates waiting:\n  " + "\n  ".join(lines),
@@ -548,10 +576,15 @@ def run_all(workspace_root: Path) -> dict[str, dict[str, Any]]:
                 "output": f"timeout after {exc.timeout}s",
             }
         except Exception as exc:  # noqa: BLE001 - boundary; reported inline
+            # The traceback goes to STDERR, not into the result dict. `--json`
+            # prints the dict, and a formatted traceback carries absolute paths
+            # -- home directory, username, workspace layout -- into output that
+            # is designed to be pasted elsewhere. Text mode never rendered it
+            # anyway.
+            print(traceback.format_exc(), file=sys.stderr)
             res = {
                 "status": "error",
                 "output": f"{type(exc).__name__}: {exc}",
-                "traceback": traceback.format_exc(),
             }
         res.setdefault("elapsed_ms", round((time.perf_counter() - t0) * 1000, 1))
         return key, res
@@ -563,6 +596,11 @@ def run_all(workspace_root: Path) -> dict[str, dict[str, Any]]:
             results[key] = res
 
     return results
+
+
+# The statuses that are NOT a failure. Everything else is, including a value
+# added later that nobody thought to list here.
+NON_FAILURE_STATUSES = frozenset({"ok", "skipped", "missing"})
 
 
 def render_text(results: dict[str, dict[str, Any]]) -> str:
@@ -580,7 +618,13 @@ def render_text(results: dict[str, dict[str, Any]]) -> str:
         if not body:
             body = "(no output)"
         lines.append(body)
-        if res.get("status") == "error":
+        # Anything that is NOT a known-good status is a failure, so its stderr
+        # is shown. Keying on `== "error"` alone meant the two checks that
+        # report `"failed"` (fireside, sync-exchange) had their diagnostics
+        # silently dropped -- exactly the two daemon checks where the stderr is
+        # the whole point. Deriving the failure set from the good one means a
+        # NEW status string cannot hide a diagnostic by accident.
+        if res.get("status") not in NON_FAILURE_STATUSES:
             stderr = res.get("stderr", "").strip()
             if stderr:
                 lines.append(f"[stderr] {stderr}")

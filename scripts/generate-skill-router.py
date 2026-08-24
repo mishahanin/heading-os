@@ -11,7 +11,11 @@ router, optional label). This script renders those rows into a two-layer split (
      Skill | Triggers | Exclusions | Compound table -- read on demand for disambiguation.
 
 Everything outside the markers (protocol header, corporate-docs guardrail, compound-
-workflow section, plugin notes, ...) is preserved byte-for-byte. ``--check`` regenerates
+workflow section, plugin notes, ...) is preserved unchanged, LINE ENDINGS ASIDE:
+`read_text`/`write_text` apply universal-newline translation, so a CRLF router file
+is rewritten LF on POSIX. "byte-for-byte" was the old wording and it was false for
+any non-LF file. The repository is LF, `--check` compares translated text, and the
+claim is narrowed rather than the I/O rewritten. ``--check`` regenerates
 BOTH layers in memory and diffs against disk, failing on any *content* drift, so a router
 row can no longer disagree with its skill.
 
@@ -105,13 +109,22 @@ def parse_frontmatter(skill_md: Path) -> tuple[dict, str]:
         text = skill_md.read_text(encoding="utf-8")
     except OSError as exc:
         return {}, f"unreadable: {exc}"
-    if not text.startswith("---"):
+    # Split on FENCE LINES, not on the three characters wherever they land.
+    # `text.split("---", 2)` matched `---` inside a scalar, so a description
+    # like `handles drift --- state check` either failed the gate with a
+    # misleading "invalid YAML" message or, worse, parsed a TRUNCATED mapping:
+    # every key after the embedded `---` silently dropped, the routing row
+    # generated from partial data, and `--check` ratifying it. The same defect
+    # was fixed in `scripts/dev/extract-router-rows.py` on 2026-08-24; this was
+    # the second copy.
+    if not re.match(r"^---[ \t]*$", text.split("\n", 1)[0]):
         return {}, "no frontmatter (missing opening ---)"
-    parts = text.split("---", 2)
-    if len(parts) < 3:
+    closing = re.search(r"^---[ \t]*$", text[4:], re.MULTILINE)
+    if closing is None:
         return {}, "malformed frontmatter (missing closing ---)"
+    body = text[4:4 + closing.start()]
     try:
-        data = yaml.safe_load(parts[1])
+        data = yaml.safe_load(body)
     except yaml.YAMLError as exc:
         return {}, f"invalid YAML frontmatter: {exc}"
     if data is None:
@@ -147,6 +160,17 @@ def _as_list(value, *, field: str) -> list[str]:
         return []
     if isinstance(value, str):
         return [value]
+    if not isinstance(value, list):
+        # A MAPPING iterates its keys, and every key is a string, so
+        # `triggers: {alpha: 1, beta: 2}` was coerced into the plausible-looking
+        # list `[alpha, beta]` with the values silently dropped, and both gates
+        # stayed green. The docstring above says this function exists to stop a
+        # structural mistake becoming valid-looking output; the non-str ITEM
+        # case was guarded and the non-list CONTAINER case was not.
+        raise ValueError(
+            f"{field}: value is a {type(value).__name__}, not a list: "
+            f"{str(value)[:80]!r}. Write it as a YAML list of strings."
+        )
     out: list[str] = []
     for item in value:
         if not isinstance(item, str):
@@ -167,9 +191,14 @@ def load_routing_rows() -> tuple[list[dict], list[str]]:
     triggers, exclusions, compound, router. errors is a list of human-readable
     strings (missing block, bad category, ...); a non-empty errors list means the
     registry must not be generated.
+
+    Advisory warnings go straight to stderr and never block. They exist so a
+    disagreement between a field and the prose it describes is VISIBLE without
+    a night-shift decision to make it fatal.
     """
     rows: list[dict] = []
     errors: list[str] = []
+    warnings: list[str] = []
     if not SKILLS_DIR.exists():
         return rows, [f"skills dir not found: {SKILLS_DIR}"]
 
@@ -204,6 +233,42 @@ def load_routing_rows() -> tuple[list[dict], list[str]]:
         except ValueError as exc:
             errors.append(f"{rel}: {exc}")
             continue
+        router = routing.get("router", "auto")
+        if router not in ("auto", "manual"):
+            errors.append(f"{rel}: {ROUTING_KEY}.router must be 'auto' or 'manual', "
+                          f"got {router!r}")
+            continue
+        # The `router` field was LOADED and never read again: not validated, not
+        # rendered, not used to filter. `FIX_IT_SNIPPET` documents it as
+        # `manual (NEVER auto-trigger skills)`, so an author who set it believed
+        # they had switched a safety control that did nothing. It is read now,
+        # in two steps of very different strength.
+        #
+        # HARD: the value must be one of the two documented ones. A typo used to
+        # pass silently.
+        #
+        # SOFT: a warning when the field disagrees with the trigger cell, which
+        # is what the always-on rule actually shows the model. Measured across
+        # all 94 skills on 2026-08-24: 23 manual, all 23 already saying "NEVER
+        # auto-trigger", and no auto skill saying it. So the convention holds
+        # everywhere today -- but it is a convention about ENGLISH PROSE in a
+        # free-form list, and a future author writing "explicit invocation only"
+        # would be correct and still fail a hard gate. Turning this into an
+        # error is a change to how skills are authored, which is the operator's
+        # call, not a night-shift one.
+        #
+        # NOT tied to `disable-model-invocation`, the harness-enforced flag that
+        # is the real control: `brain-audit` is `router: manual` and
+        # deliberately does NOT set it, because composing skills invoke it
+        # through the Skill tool and the flag would block them. One measured
+        # exception is enough to say that link is not an invariant either.
+        says_never = "never auto-trigger" in " ".join(triggers).lower()
+        if (router == "manual") != says_never:
+            warnings.append(
+                f"{rel}: {ROUTING_KEY}.router is {router!r} but the triggers "
+                f"{'do not say' if router == 'manual' else 'say'} "
+                f"'NEVER auto-trigger'. The trigger cell is what the always-on "
+                f"router rule shows the model; the two should agree.")
         rows.append(
             {
                 "name": name,
@@ -212,9 +277,11 @@ def load_routing_rows() -> tuple[list[dict], list[str]]:
                 "triggers": triggers,
                 "exclusions": exclusions,
                 "compound": str(routing.get("compound", "No")),
-                "router": routing.get("router", "auto"),
+                "router": router,
             }
         )
+    for warning in warnings:
+        print(f"{CYAN}note{RESET}: {warning}", file=sys.stderr)
     return rows, errors
 
 
@@ -224,8 +291,18 @@ def load_routing_rows() -> tuple[list[dict], list[str]]:
 
 def escape_pipes(text: str) -> str:
     """Escape a raw ``|`` as ``\\|`` for markdown-table safety, leaving an already
-    escaped ``\\|`` untouched (negative lookbehind on the backslash)."""
-    return re.sub(r"(?<!\\)\|", r"\\|", text)
+    escaped ``\\|`` untouched.
+
+    Parity-aware. A plain negative lookbehind treated ANY preceding backslash as
+    an escape, so a literal backslash that is DATA (`C:\\|foo`) left its pipe
+    unescaped and split the table cell into a spurious column. A pipe is already
+    escaped only when preceded by an ODD run of backslashes.
+    """
+    def _fix(match: "re.Match") -> str:
+        slashes = match.group(1)
+        return match.group(0) if len(slashes) % 2 else slashes + "\\|"
+
+    return re.sub(r"(\\*)\|", _fix, text)
 
 
 def render_row(row: dict) -> str:
@@ -363,11 +440,13 @@ def cmd_split_write(rows: list[dict]) -> int:
         print(f"{RED}ERROR{RESET}: {exc}", file=sys.stderr)
         return 2
 
+    # DETAIL FILES FIRST, the core index last. Neither order is atomic, but the
+    # order decides what a reader sees if a write fails mid-way: the router
+    # index is the always-on layer the model reads every session, so it is the
+    # one that must never point at detail files that have not caught up. This
+    # ran the other way round, so a permissions or disk failure inside the loop
+    # left the always-on index describing frontmatter the detail files did not.
     wrote_any = False
-    if new_text != router_text:
-        ROUTER_FILE.write_text(new_text, encoding="utf-8")
-        wrote_any = True
-
     CATEGORY_FILE_DIR.mkdir(parents=True, exist_ok=True)
     for category in CATEGORY_ORDER:
         path = CATEGORY_FILE_DIR / f"{category_slug(category)}.md"
@@ -376,6 +455,10 @@ def cmd_split_write(rows: list[dict]) -> int:
         if existing != content:
             path.write_text(content, encoding="utf-8")
             wrote_any = True
+
+    if new_text != router_text:
+        ROUTER_FILE.write_text(new_text, encoding="utf-8")
+        wrote_any = True
 
     if wrote_any:
         print(f"{GREEN}WROTE{RESET}: regenerated compact core index + "
@@ -449,9 +532,13 @@ def main() -> int:
                      help="Write the split layout in place: compact core index + per-category files (default).")
     mode.add_argument("--check", action="store_true",
                      help="Regenerate both layers and diff; exit 1 on drift (CI / pre-commit).")
-    parser.add_argument("--flat", action="store_true",
-                        help="Print the legacy flat monolith to stdout (debug + semantics proof); no write.")
-    parser.add_argument(
+    # INSIDE the group. `--check --flat` used to be accepted, print the flat
+    # monolith, and exit 0 WITHOUT running the drift check -- a CI invocation
+    # with a typo'd flag combination going green while checking nothing.
+    # `--write --flat` silently discarded the write the same way.
+    mode.add_argument("--flat", action="store_true",
+                      help="Print the legacy flat monolith to stdout (debug + semantics proof); no write.")
+    mode.add_argument(
         "--split-by-category", action="store_true",
         help="Explicit synonym of the default split write (compact core + per-category files).",
     )

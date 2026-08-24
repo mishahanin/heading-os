@@ -42,8 +42,14 @@ def st():
 
 
 def _run(monkeypatch, tmp_path, st, result):
-    monkeypatch.setattr(mail, "PRODUCER_SCRIPT", tmp_path / "producer.py")
-    (tmp_path / "producer.py").write_text("", encoding="utf-8")
+    # The producer is placed under the root that is PASSED IN, not patched over
+    # a module constant. `refresh()` resolves it from its `workspace_root`
+    # argument as of 2026-08-24; before that the argument was decoration and the
+    # module constant was the only lookup, so a refresh against one root could
+    # run a script out of another tree.
+    script = tmp_path / "scripts" / "email-intelligence.py"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("", encoding="utf-8")
     monkeypatch.setattr(mail.subprocess, "run", lambda *a, **k: result)
     mail.refresh(tmp_path, st)
 
@@ -101,3 +107,24 @@ def test_bump_defaults_to_fresh_for_every_existing_caller(st):
     """26 call sites pass no keyword; none of them may change behaviour."""
     st.bump("tasks")
     assert st.data_time("tasks") is not None
+
+
+def test_the_producer_is_resolved_under_the_root_it_was_handed(monkeypatch, tmp_path, st, caplog):
+    """A root with no producer must be reported as missing, whatever this
+    module's own tree holds. The engine clone running the daemon always has
+    `scripts/email-intelligence.py`, so a module-constant lookup found it and
+    ran it -- against the OTHER root's cwd -- instead of skipping."""
+    called = []
+    monkeypatch.setattr(mail.subprocess, "run",
+                        lambda *a, **k: called.append(a) or _Result(0))
+    with caplog.at_level(logging.WARNING):
+        mail.refresh(tmp_path, st)          # tmp_path has no scripts/ tree
+    assert not called, "ran a producer that does not exist under the given root"
+    assert "producer script missing" in caplog.text
+    assert str(tmp_path) in caplog.text
+
+
+def test_producer_script_defaults_to_this_modules_engine_root():
+    """The old constant still resolves, for importers that never pass a root."""
+    assert mail.producer_script().name == "email-intelligence.py"
+    assert mail.producer_script() == mail.PRODUCER_SCRIPT

@@ -784,6 +784,27 @@ def test_reset_reverts_tracked_file_to_git_index(tmp_workspace):
 
 
 def test_reset_refuses_on_unrelated_uncommitted_changes(tmp_workspace):
+    """The bank is part of the fixture as of 2026-08-23.
+
+    `cmd_reset` now computes the set of files it owns BEFORE the dirty check, so
+    the check can ignore its own output -- the wizard dirties tracked files by
+    design, and the old ordering refused every real reset. Loading the bank is
+    what produces that set, so a workspace with no bank now fails on the missing
+    bank instead. That is the honest answer (nothing to reset), but it is not
+    the assertion below, so the fixture now supplies one.
+    """
+    (tmp_workspace / "config").mkdir()
+    (tmp_workspace / "config" / "wizard-questions.yaml").write_text(
+        "- id: test_q\n"
+        "  audience: [public]\n"
+        "  type: placeholder\n"
+        "  required: true\n"
+        '  prompt: "Test?"\n'
+        '  example: "example"\n'
+        "  target:\n"
+        '    placeholder: "{TEST}"\n'
+        '    files: ["*.md"]\n'
+    )
     subprocess.run(["git", "init", "-q"], cwd=tmp_workspace, check=True)
     subprocess.run(["git", "config", "user.email", "t@t.io"], cwd=tmp_workspace, check=True)
     subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_workspace, check=True)

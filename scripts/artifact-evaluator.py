@@ -147,15 +147,79 @@ def parse_yaml_frontmatter(text):
             return None, "Frontmatter must be a YAML dictionary"
         return data, None
     except ImportError:
-        # Fallback: basic key extraction without PyYAML
-        data = {}
-        for line in match.group(1).splitlines():
-            if ":" in line and not line.startswith(" "):
-                key, val = line.split(":", 1)
-                data[key.strip()] = val.strip().strip('"').strip("'")
-        return data, None
+        return _frontmatter_without_pyyaml(match.group(1)), None
     except Exception as exc:
         return None, f"YAML parse error: {exc}"
+
+
+def _frontmatter_without_pyyaml(block):
+    """One level of nesting, for the host that has no PyYAML.
+
+    The fallback skipped every indented line, so a nested block collapsed to its
+    own header: the standard skill shape
+
+        metadata:
+          author: x
+          version: "1.0"
+
+    parsed as ``{"metadata": ""}``. `evaluate_skill` then asks
+    ``isinstance(fm.get("metadata", {}), dict)``, which a string fails, so on a
+    machine without PyYAML EVERY skill drew a `metadata should be a dict`
+    warning no matter how correct its frontmatter was. The fallback could not
+    satisfy the evaluator's own requirement -- the check was not measuring the
+    artifact, it was measuring whether PyYAML was installed.
+
+    Deliberately a subset of YAML: one level of nesting, scalars and simple
+    lists, which is the whole shape this evaluator reads. Anything deeper needs
+    PyYAML, which is a core dependency here; this path exists for a bare
+    interpreter, not as a second parser to maintain.
+    """
+    def _scalar(raw):
+        return raw.strip().strip('"').strip("'")
+
+    data = {}
+    top = None       # the top-level key whose nested block is open
+    sub = None       # the second-level key whose list is open, inside `top`
+    for line in block.splitlines():
+        body = line.strip()
+        if not body or body.startswith("#"):
+            continue
+        if line[0] not in " \t":
+            sub = None
+            if ":" not in body:
+                top = None
+                continue
+            key, val = body.split(":", 1)
+            key, val = key.strip(), _scalar(val)
+            data[key] = val
+            # An empty value opens a nested block; a scalar closes any open one.
+            top = key if val == "" else None
+            continue
+        if top is None:
+            continue
+        if body.startswith("- "):
+            item = _scalar(body[2:])
+            if sub is None:
+                # A list directly under the top-level key.
+                if not isinstance(data.get(top), list):
+                    data[top] = []
+                data[top].append(item)
+            else:
+                # A list under a second-level key. Appending to `data[top]`
+                # here REPLACED the mapping that key's siblings live in, so
+                # `shared_state:` wiped `parallel_safe` off the block above it.
+                container = data[top]
+                if not isinstance(container.get(sub), list):
+                    container[sub] = []
+                container[sub].append(item)
+        elif ":" in body:
+            if not isinstance(data.get(top), dict):
+                data[top] = {}
+            sub_key, sub_val = body.split(":", 1)
+            sub_key, sub_val = sub_key.strip(), _scalar(sub_val)
+            data[top][sub_key] = sub_val
+            sub = sub_key if sub_val == "" else None
+    return data
 
 
 # ============================================================
@@ -634,7 +698,15 @@ def run_trigger_test(artifact_path, threshold=0.9):
             capture_output=True, text=True, timeout=300,
         )
     except (subprocess.TimeoutExpired, OSError) as e:
-        return check("trigger_test", True, f"trigger-test could not run: {e}", warn=True)
+        # passed=False, or `warn=True` does nothing. `check` computes
+        # `"warn" if (warn and not passed) else ("pass" if passed else "fail")`,
+        # so warn is inert whenever passed is True: this returned
+        # `"status": "pass"` carrying the detail "trigger-test could not run".
+        # A check that never ran was reported as a check that passed, to the
+        # terminal report and to any pipeline reading the JSON. The skip two
+        # branches down passes `warn=False` for a genuine clean pass, which is
+        # what shows the two cases were meant to differ.
+        return check("trigger_test", False, f"trigger-test could not run: {e}", warn=True)
 
     if proc.returncode == 3:
         # Degraded: no API key or SDK. Advisory skip, not a failure.
@@ -642,7 +714,7 @@ def run_trigger_test(artifact_path, threshold=0.9):
     try:
         data = json.loads(proc.stdout)
     except (json.JSONDecodeError, ValueError):
-        return check("trigger_test", True,
+        return check("trigger_test", False,
                      f"trigger-test output unparseable (exit {proc.returncode})", warn=True)
 
     rate = data.get("overall_rate", 0.0)

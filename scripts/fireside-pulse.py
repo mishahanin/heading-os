@@ -8,12 +8,21 @@ the changes since the last run. Designed to be invoked every ~10 min by
 Usage:
     python scripts/fireside-pulse.py
 
-Output policy:
-    - First run (no checkpoint): initialise silently, print baseline summary
-    - No changes: single line "ok: <last_poll_age>, started <N>/<tribe>"
-    - Changes: bulleted list of new events
-    - Polling stale (>15 min): WARN
-    - Non-transient error burst: WARN
+Output policy (the lines this actually prints; the block below used to describe
+an older format, and a wrapper matching it got nothing):
+    - Every run first prints one daemon-status line, "Fireside: ..." -- the
+      first run is NOT silent
+    - First run (no checkpoint): plus "pulse: baseline set | started <N>/<tribe>
+      | last poll <age> | sessions <n> | errors <n>"
+    - No changes: plus "ok | started <N>/<tribe> | last poll <age> | no news"
+    - Changes: plus a header line and a bulleted list of new events
+    - Polling stale (>15 min): a WARN bullet
+    - Non-transient error burst (>=3 new): a WARN bullet
+
+`<age>` is "<N> min ago" or the words "no tick recorded"; it is never the
+string "None".
+
+Tests: tests/test_a_spawn_that_reported_a_daemon_it_never_confirmed.py
 """
 import contextlib
 import json
@@ -21,6 +30,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import io
 from datetime import datetime, timezone, timedelta
@@ -244,6 +254,57 @@ def _print_remote_status(host: str) -> None:
         print(f"  - WARN: daemon has not ticked (poll/heartbeat) in {tick_age} min")
 
 
+def _remote_host_from(text: str) -> str:
+    """The first real SSH target in `.fireside/remote-host`, ignoring comments.
+
+    Only line 1 used to be examined, and a `#` on it made the whole pointer
+    invisible. The `startswith("#")` test proves comments were anticipated, so a
+    documented pointer file --
+
+        # fireside lives on the service-host VM
+        fireside-vm
+
+    -- read as "no remote host", fell through to the LOCAL path, and that path
+    calls `_spawn_detached_daemon`. The operator who commented their own config
+    got a second bot spawned beside the remote one, on one Telegram token: the
+    exact disaster the PermissionError branch of `_daemon_alive` was written to
+    avoid. Every line is scanned now, so a comment can never silence the pointer.
+    """
+    for line in (text or "").splitlines():
+        candidate = line.strip()
+        if candidate and not candidate.startswith("#"):
+            return candidate
+    return ""
+
+
+def _windows_alive(open_ok: bool, get_exit_ok: bool, exit_code: int) -> bool:
+    """Is the Windows process alive, given the three things the API tells us?
+
+    Split out because it is the DECISION, and the decision is what was wrong;
+    the ctypes calls around it cannot be exercised from this workspace, so
+    leaving the logic inline left it untestable and therefore untested.
+
+    Two of the three shapes below re-created a hazard the POSIX branch had
+    already been fixed for -- reading "I could not tell" as "dead", after which
+    `main()` spawns a SECOND daemon beside a live one:
+
+    * `OpenProcess` failing (elevated or protected process) was read as dead.
+      POSIX answers ALIVE for the equivalent `PermissionError`, and says why.
+    * `GetExitCodeProcess`'s BOOL return was never checked, so a failed call
+      left `exit_code` at its initialised 0 and a live daemon read as dead.
+
+    The third shape is the opposite and is accepted: a process that genuinely
+    exited with 259 (`STILL_ACTIVE`) reads as alive. Telling those apart needs
+    `WaitForSingleObject`, and it fails SAFE -- it suppresses an auto-start
+    rather than duplicating a bot.
+    """
+    if not open_ok:
+        return True          # could not tell; never answer "dead" on a guess
+    if not get_exit_ok:
+        return True          # ditto: an unchecked 0 used to mean "dead"
+    return exit_code == 259  # STILL_ACTIVE
+
+
 def _daemon_alive() -> tuple[bool, int | None]:
     """Return (alive, pid). Mirror of is_daemon_alive() in fireside-bot-daemon."""
     pid_file = WORKSPACE / ".fireside" / "daemon.pid"
@@ -259,11 +320,13 @@ def _daemon_alive() -> tuple[bool, int | None]:
         import ctypes
         h = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
         if not h:
-            return False, None
+            # NOT `False`. See `_windows_alive`: "could not open" is not "dead",
+            # and answering dead here spawns a second bot on one token.
+            return _windows_alive(False, False, 0), pid
         try:
             code = ctypes.c_ulong(0)
-            ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(code))
-            return code.value == 259, pid
+            ok = ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(code))
+            return _windows_alive(True, bool(ok), code.value), pid
         finally:
             ctypes.windll.kernel32.CloseHandle(h)
     else:
@@ -342,7 +405,7 @@ def _spawn_detached_daemon() -> int | None:
                 if alive and real_pid:
                     return real_pid
             return None
-        proc = subprocess.Popen(
+        subprocess.Popen(
             [str(venv_py), str(daemon), "daemon"],
             cwd=str(WORKSPACE),
             stdin=subprocess.DEVNULL,
@@ -351,7 +414,20 @@ def _spawn_detached_daemon() -> int | None:
             close_fds=True,
             start_new_session=True,
         )
-        return proc.pid
+        # The pid file is the proof, not the spawn -- the same rule the Windows
+        # branch above already follows, and for the same reason it gives: a
+        # `Popen` that returns a pid proves the INTERPRETER launched, not that
+        # the daemon did. A missing `fireside-bot-daemon.py`, an import that
+        # raises, or an immediate exit all leave `proc.pid` naming a process that
+        # is already gone, and `main()` then printed "daemon was NOT RUNNING -
+        # started pid N" while the daemon stayed down. That fix was applied to
+        # Windows and not here, on the platform this workspace actually runs.
+        for _ in range(20):                     # up to ~4s, matching Windows
+            time.sleep(0.2)
+            alive, real_pid = _daemon_alive()
+            if alive and real_pid:
+                return real_pid
+        return None
     except Exception:
         return None
 
@@ -464,24 +540,62 @@ def load_checkpoint():
 
 
 def save_checkpoint(state):
+    """Write the checkpoint atomically, on a scratch path nobody else can hold.
+
+    `os.replace` is atomic; a SHARED scratch name is not. This wrote every run's
+    state to the one fixed path `pulse-checkpoint.tmp`, and this script is what
+    `/loop` fires every ten minutes -- so a manual run beside the loop, or one
+    run overrunning into the next, had both writing that same file and one
+    `replace` moved the other's half-written bytes into place as the baseline.
+    `mkstemp` gives each writer its own name in the same directory, which is all
+    `os.replace` needs to stay atomic.
+    """
     CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CHECKPOINT.with_suffix(".tmp")
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2)
-    tmp.replace(CHECKPOINT)
+    fd, tmp_name = tempfile.mkstemp(dir=str(CHECKPOINT.parent),
+                                    prefix=CHECKPOINT.name + ".", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+        os.replace(tmp, CHECKPOINT)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def load_roster_names():
-    """Return dict of {user_id: name} for friendly output."""
+    """Return dict of {user_id: name} for friendly output, {} when unreadable.
+
+    Guarded the way `load_checkpoint` above it already is, and for the same
+    reason: a truncated or hand-edited `tribe-roster.json` raised straight out of
+    `main()`, so the tool whose only job is to report status reported nothing at
+    all. The roster is decoration here -- names instead of raw ids, and the
+    denominator -- so its absence degrades the line rather than the run.
+    """
     path = STATE_DIR / "tribe-roster.json"
     if not path.exists():
         return {}
-    with path.open(encoding="utf-8") as f:
-        roster = json.load(f)
-    return {m.get("telegram_user_id"): m.get("name", k) for k, m in roster.items()}
+    try:
+        with path.open(encoding="utf-8") as f:
+            roster = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"pulse: roster at {path} is unreadable ({exc}); "
+              f"names and the tribe total are unavailable", file=sys.stderr)
+        return {}
+    if not isinstance(roster, dict):
+        print(f"pulse: roster at {path} is a {type(roster).__name__}, not an "
+              f"object; names and the tribe total are unavailable", file=sys.stderr)
+        return {}
+    return {m.get("telegram_user_id"): m.get("name", k)
+            for k, m in roster.items() if isinstance(m, dict)}
 
 
 def poll_age_minutes(last_poll_ts):
+    """Minutes since `last_poll_ts`, or None when that cannot be established.
+
+    None means UNKNOWN, never zero and never "fine" -- `poll_label` below turns
+    it into a word rather than letting it render as the string "None".
+    """
     if not last_poll_ts:
         return None
     try:
@@ -490,8 +604,25 @@ def poll_age_minutes(last_poll_ts):
             t = t.replace(tzinfo=get_default_tz())
         now = datetime.now(t.tzinfo)
         return int((now - t).total_seconds() / 60)
-    except Exception:
+    except (TypeError, ValueError):
+        # Narrow, not bare. An unparseable stamp is the one failure this can
+        # have, and a catch-all here would hide a real bug as "unknown age".
+        print(f"pulse: liveness stamp {last_poll_ts!r} is unreadable; "
+              f"the tick age is UNKNOWN", file=sys.stderr)
         return None
+
+
+def poll_label(age):
+    """The tick age as words. None is a fact to state, not a value to print.
+
+    Every status line interpolated `poll_age` straight into "last poll {} min
+    ago", so a bot that had never ticked -- or whose newest stamp would not
+    parse -- reported "last poll None min ago" on a line the operator reads to
+    decide whether the daemon is healthy. `_print_remote_status` already said
+    "no tick recorded" for the same state; only the LOCAL path printed the word
+    None, exactly as it did for the poll-tick/heartbeat-tick split above it.
+    """
+    return f"{age} min ago" if age is not None else "no tick recorded"
 
 
 def main():
@@ -500,9 +631,8 @@ def main():
     # the local one. Used on the laptop when fireside lives on the service-host VM.
     remote_host_file = WORKSPACE / ".fireside" / "remote-host"
     if remote_host_file.exists():
-        host = remote_host_file.read_text(encoding="utf-8").strip().splitlines()[0:1]
-        host = host[0].strip() if host else ""
-        if host and not host.startswith("#"):
+        host = _remote_host_from(remote_host_file.read_text(encoding="utf-8"))
+        if host:
             _print_remote_status(host)
             return
 
@@ -524,6 +654,7 @@ def main():
     # renders as "12/0", which reads as a bug; "12/?" reads as what it is.
     tribe_label = str(tribe_size) if tribe_size else "?"
     poll_age = poll_age_minutes(state["last_poll_ts"])
+    poll_text = poll_label(poll_age)
 
     # Fireside daemon liveness check + auto-spawn
     alive, pid = _daemon_alive()
@@ -544,18 +675,24 @@ def main():
     else:
         print(f"🔥 Fireside: ✅ daemon up pid={pid}, "
               f"started {started_count}/{tribe_label}, "
-              f"last poll {poll_age} min ago")
+              f"last poll {poll_text}")
 
     # First run: initialise silently, print baseline only
     if prior is None:
         save_checkpoint(state)
-        print(f"pulse: baseline set | started {started_count}/{tribe_label} | last poll {poll_age} min ago | sessions {state['session_count']} | errors {state['non_transient_errors']}")
+        print(f"pulse: baseline set | started {started_count}/{tribe_label} | last poll {poll_text} | sessions {state['session_count']} | errors {state['non_transient_errors']}")
         return
 
     deltas = []
 
     # New /start events
-    new_started_uids = set(state["started_uids"]) - set(prior["started_uids"])
+    # `.get`, like every other read in this block. `load_checkpoint` deliberately
+    # returns any well-formed dict, and its docstring promises a hand-edited
+    # checkpoint will not take the tool down -- but this one line indexed
+    # directly, so a checkpoint merely MISSING the key (an older schema, a hand
+    # edit, a partial write repaired by hand) raised KeyError and killed the run
+    # the guard above exists to keep alive.
+    new_started_uids = set(state["started_uids"]) - set(prior.get("started_uids", []))
     if new_started_uids:
         new_names = sorted(names.get(uid, f"uid={uid}") for uid in new_started_uids)
         deltas.append(f"new /start ({len(new_names)}): " + ", ".join(new_names))
@@ -593,11 +730,11 @@ def main():
 
     # Output
     if deltas:
-        print(f"fireside pulse @ {state['ts'][:19]} | started {started_count}/{tribe_label} | last poll {poll_age} min")
+        print(f"fireside pulse @ {state['ts'][:19]} | started {started_count}/{tribe_label} | last poll {poll_text}")
         for d in deltas:
             print(f"  - {d}")
     else:
-        print(f"ok | started {started_count}/{tribe_label} | last poll {poll_age} min | no news")
+        print(f"ok | started {started_count}/{tribe_label} | last poll {poll_text} | no news")
 
     save_checkpoint(state)
 

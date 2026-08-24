@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
-from scripts.utils.docx_helpers import load_docx
+from scripts.utils.docx_helpers import load_docx, save_docx
 from scripts.utils.workspace import get_outputs_dir
 
 # docx names are bound lazily (F-2.1: import stays pure).
@@ -199,7 +199,7 @@ def create_letter_docx(md_path, docx_path):
         add_formatted_text(p, line)
         i += 1
 
-    doc.save(docx_path)
+    save_docx(doc, docx_path)
     print(f"DOCX created: {docx_path}")
 
 

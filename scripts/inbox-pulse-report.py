@@ -11,6 +11,8 @@ Usage:
     python scripts/inbox-pulse-report.py --days 3 --no-open
     python scripts/inbox-pulse-report.py --days 1 --no-open
 
+Tests: tests/test_a_day_that_could_not_be_read_and_was_called_quiet.py, tests/test_inbox_pulse_unreachable.py
+
 Options:
     --days N     Number of calendar days to include (default 1 - today only).
     --no-open    Skip opening the report in VS Code.
@@ -22,6 +24,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from collections import defaultdict
@@ -69,30 +72,51 @@ SUGGEST_CRM_KNOWN_LOW_MIN_ENTRIES = 3
 
 
 SSH_TRANSPORT_FAILURE = 255  # ssh(1)'s own exit status when it cannot connect
+REMOTE_FILE_ABSENT = 66      # our own sentinel, raised by the remote `test -f`
 
 
 def ssh_read(remote_path: str) -> str | None:
     """Read a remote file via SSH.
 
-    Returns the text, `""` when the remote file is simply absent, or None when
-    the TRANSPORT failed. The three are different answers and the caller needs
-    them apart: an absent day-log means the daemon wrote nothing, an unreachable
-    host means this report knows nothing at all.
+    Returns the text, `""` when the remote file is CONFIRMED absent, or None
+    when anything else went wrong. The three are different answers and the
+    caller needs them apart: an absent day-log means the daemon wrote nothing,
+    and anything else means this report knows nothing about that day.
+
+    Absence is proved by a remote `test -f`, not inferred from a non-zero exit.
+    It used to be inferred, and every remote-side failure -- an unreadable
+    file, a full disk, a broken login shell -- came back as `""`, which
+    `fetch_jsonl_for_date` reads as "genuinely empty day". A day whose log
+    existed and could not be read was reported as a quiet inbox, with exit 0
+    and no warning: the report's numbers were wrong and its own docstring said
+    they were not.
+
+    The probe is ONE argv element on purpose. ssh joins its remaining arguments
+    with spaces and hands the result to the remote login shell, so quoting done
+    on this side is lost; the string below is already shell-quoted for that
+    shell, which is also what makes a path containing a space work.
     """
+    quoted = shlex.quote(remote_path)
+    probe = f"test -f {quoted} || exit {REMOTE_FILE_ABSENT}; exec cat {quoted}"
     try:
         result = subprocess.run(
             ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-             VM_HOST, "cat", remote_path],
+             VM_HOST, probe],
             capture_output=True,
             text=True,
             timeout=SSH_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
         return None
+    if result.returncode == REMOTE_FILE_ABSENT:
+        return ""
     if result.returncode == SSH_TRANSPORT_FAILURE:
         return None
     if result.returncode != 0:
-        return ""          # reached the host; `cat` found no such file
+        print(f"{YELLOW}ssh: reading {remote_path} failed with exit "
+              f"{result.returncode}: {result.stderr.strip() or '(no stderr)'}"
+              f"{RESET}", file=sys.stderr)
+        return None
     return result.stdout
 
 
@@ -279,20 +303,24 @@ def aggregate(
     # "Known good but LOW" - domain is in CRM or YAML always_critical/always_important,
     # but scored LOW. Excludes always_normal (those SHOULD score LOW by design).
     # "All known" for deduplication purposes (suppresses unknown-domain section).
-    always_normal_domains = _yaml_domain_set({"always_normal": yaml_overrides["always_normal"]})
-    priority_known_domains = (
-        known_crm_domains
-        | _yaml_domain_set({"always_critical": yaml_overrides["always_critical"]})
-        | _yaml_domain_set({"always_important": yaml_overrides["always_important"]})
+    always_normal_pats = yaml_overrides["always_normal"]
+    priority_pats = (
+        yaml_overrides["always_critical"] | yaml_overrides["always_important"]
     )
-    all_known = known_crm_domains | _yaml_domain_set(yaml_overrides)
+
+    def _priority_known(d: str) -> bool:
+        return d in known_crm_domains or _domain_matches_any(d, priority_pats)
+
+    def _known(d: str) -> bool:
+        return d in known_crm_domains or _domain_in_yaml(d, yaml_overrides)
 
     known_good_low: dict[str, dict[str, Any]] = {}
     for e in low:
         domain = e.get("sender_domain", "").lower()
         # Only flag if domain is "priority known" (CRM or critical/important overrides)
         # Skip if it's in always_normal (expected to be LOW).
-        if domain and domain in priority_known_domains and domain not in always_normal_domains:
+        if domain and _priority_known(domain) and not _domain_matches_any(
+                domain, always_normal_pats):
             if domain not in known_good_low:
                 known_good_low[domain] = {"count": 0, "last_ts": ""}
             known_good_low[domain]["count"] += 1
@@ -308,7 +336,7 @@ def aggregate(
         domain = e.get("sender_domain", "").lower()
         if not domain:
             continue
-        if domain not in all_known:
+        if not _known(domain):
             all_domains_in_window[domain]["count"] += 1
             tier = e.get("tier_guess", TIER_LOW)
             all_domains_in_window[domain]["tiers"][tier] += 1
@@ -342,17 +370,26 @@ def aggregate(
     }
 
 
-def _yaml_domain_set(yaml_overrides: dict[str, set[str]]) -> set[str]:
-    """Extract plain domain strings from YAML patterns (best-effort)."""
-    domains: set[str] = set()
-    for patterns in yaml_overrides.values():
-        for pat in patterns:
-            pat = pat.lower()
-            if pat.startswith("*@"):
-                domains.add(pat[2:])
-            elif "@" in pat:
-                domains.add(pat.split("@", 1)[1])
-    return domains
+def _domain_matches_any(domain: str, patterns: "set[str]") -> bool:
+    """True when `domain` is covered at DOMAIN level by any of `patterns`.
+
+    One matcher, `_pattern_matches_domain`, decides this everywhere. It
+    replaces `_yaml_domain_set`, which built a set of "domains" by splitting
+    each pattern at its `@` and keeping the right side, and so disagreed with
+    the matcher about the same YAML file. `alice@example.com` became the domain
+    `example.com`, which made every OTHER sender at example.com count as
+    YAML-covered: they were listed as false-negative candidates and suppressed
+    from the unknown-domains section on the strength of a rule naming one
+    person. `newsletter@*` contributed the literal domain `"*"`.
+
+    A left-side pattern (`newsletter@*`) still does not make its senders'
+    domains known, and that is deliberate rather than an oversight: it covers
+    one local part across every domain and says nothing about the other senders
+    at any of them. Calling those domains covered would hide real unknown
+    traffic, and the report's suggestion to add `*@domain` is a WIDENING of
+    that rule, not a duplicate of it.
+    """
+    return any(_pattern_matches_domain(pat, domain) for pat in patterns)
 
 
 def _compute_suggestions(
@@ -660,7 +697,9 @@ def render_report(
         if not has_7day:
             lines.append("")
             lines.append(
-                "_7-day averages not available (run with --days 7 or more to enable)._"
+                "_7-day averages not available: the past 7 days' logs were "
+                "empty or could not be read. `--days 7` does not change this -- "
+                "those days are fetched for the average whatever `--days` says._"
             )
     lines.append("")
 
@@ -718,7 +757,14 @@ def main() -> int:
     # Fetch all entries
     all_entries_by_date: dict[date, list[dict[str, Any]]] = {}
     all_entries: list[dict[str, Any]] = []
+    # Two lists, because they mean different things to the reader. A day
+    # inside --days was meant to be counted and is missing from the totals; a
+    # day fetched only to compute the 7-day average never entered the totals at
+    # all. One list said "The counts above EXCLUDE those days" about both,
+    # which is false for the second kind and turned a transient SSH blip six
+    # days back into a red coverage warning about a window it was never in.
     unreachable: list[date] = []
+    unreachable_avg_only: list[date] = []
     for i in range(days):
         target = today - timedelta(days=i)
         print(f"  {GRAY}SSH cat log-{target}.jsonl ...{RESET}", end=" ", flush=True)
@@ -739,7 +785,7 @@ def main() -> int:
             if target not in all_entries_by_date:
                 day_entries = fetch_jsonl_for_date(target)
                 if day_entries is None:
-                    unreachable.append(target)
+                    unreachable_avg_only.append(target)
                     day_entries = []
                 all_entries_by_date[target] = day_entries
 
@@ -825,6 +871,15 @@ def main() -> int:
     )
     print(f"Tuning suggestions: {suggestion_count}")
     print(f"Report: {out_path}")
+
+    if unreachable_avg_only:
+        # Not an error: these days were never in the window, so no total is
+        # missing anything. The trend section is what degrades.
+        print(f"{YELLOW}{len(unreachable_avg_only)} day(s) outside the "
+              f"--days window could not be read from {VM_HOST}: "
+              f"{', '.join(d.isoformat() for d in sorted(unreachable_avg_only))}. "
+              f"The 7-day average is computed over fewer days.{RESET}",
+              file=sys.stderr)
 
     if unreachable:
         # Say what the report does NOT cover, and exit non-zero so a scheduler

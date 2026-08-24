@@ -24,6 +24,8 @@ Console-first and offline-first: the loopback is used ONLY to resolve a live
 card's content; the offline path always works with the browser/daemon down.
 
 Exit codes: 0 ok, 1 usage error, 2 daemon not reachable (only on the <id> path).
+
+Tests: tests/test_a_revocation_that_reported_clear_for_the_dangerous_case.py
 """
 from __future__ import annotations
 
@@ -141,9 +143,16 @@ def _valid_skill(skill: str) -> str:
 def _staged_dir(skill: str) -> Path:
     staged = (SKILLS_DIR / _valid_skill(skill) / "evals" / "outcomes" / "_staged")
     resolved = staged.resolve()
-    # Belt and braces: the name rule already forbids traversal, and the prefix
-    # check is what makes that a guarantee rather than a claim.
-    if not str(resolved).startswith(str(SKILLS_DIR.resolve()) + "/"):
+    # Belt and braces: the name rule already forbids traversal, and this check is
+    # what makes that a guarantee rather than a claim.
+    #
+    # `is_relative_to`, not a string prefix. The old test appended a literal "/"
+    # to the parent, so on Windows -- where `resolve()` returns backslashes -- it
+    # matched NOTHING and refused every legitimate skill. A containment guard
+    # that is correct only by accident of separator is the wrong shape for a
+    # security check, and this same file already uses the right primitive at the
+    # `relative_to(ROOT)` call below.
+    if not resolved.is_relative_to(SKILLS_DIR.resolve()):
         raise ValueError(f"refusing a staged dir outside {SKILLS_DIR}: {resolved}")
     return staged
 

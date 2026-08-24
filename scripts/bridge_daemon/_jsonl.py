@@ -71,6 +71,24 @@ def append_jsonl(path: Path, entry: dict, mode: int = 0o644) -> None:
             # Unreadable tail: append anyway rather than refuse the write. A
             # stray glued line is recoverable; a dropped critical mark is not.
             logger.warning("could not inspect the tail of %s", path, exc_info=True)
+    if not existed:
+        # Create it EMPTY, at the requested mode, before a byte goes in.
+        # `open("a")` creates at the process umask -- commonly 0o644 -- and the
+        # chmod below landed only AFTER the first record was written, so a
+        # caller asking for 0o600 got a window in which the file was
+        # world-readable and already held content. `_atomic.py`, in this same
+        # package, carries a comment about closing exactly this race by
+        # chmodding before `os.replace`; this function had reopened it.
+        #
+        # The chmod after stays. `os.open` masks the mode with the umask, so
+        # under a strict umask a requested 0o644 would come out 0o600; the
+        # chmod restores the caller's intent. That direction is safe -- briefly
+        # too NARROW, never too wide.
+        try:
+            os.close(os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, mode))
+        except OSError:  # pragma: no cover - the append below reports the real failure
+            logger.warning("could not pre-create %s at mode %o", path, mode,
+                           exc_info=True)
     with path.open("a", encoding="utf-8") as f:
         if needs_newline:
             f.write("\n")

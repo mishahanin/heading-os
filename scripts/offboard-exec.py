@@ -4,8 +4,19 @@
 Revokes GitHub access, archives workspace, preserves CRM contacts,
 optionally reassigns contacts, and logs the offboarding event.
 
+Revocation means the exec can no longer reach the data, and the run VERIFIES
+that rather than asserting it. Direct collaborator grants, team memberships and
+the organisation membership are all removed, and `has_repo_access` then asks
+GitHub whether each repo is still reachable by any route. A repo that answers
+"yes" makes the run exit 1 and says so in words. Until 2026-08-25 only the
+direct grants were removed, the org and team removals sat on a manual
+checklist, and two of the three repo names it used had been retired -- so an
+exec's actual data overlay was never in the list at all.
+
 Usage:
     python offboard-exec.py --exec "marlow-carter" [--reassign-to "jordan-blake"]
+
+Tests: tests/test_an_offboard_that_left_the_door_open.py
 """
 
 import argparse
@@ -23,7 +34,7 @@ from scripts.utils.workspace import (
     get_workspace_root, validate_admin, get_exec_slug, load_exec_registry,
     get_data_config_dir,
     load_admin_config,
-    load_github_org, get_crm_contacts_dir, get_outputs_dir,
+    load_github_org, get_crm_contacts_dir, get_outputs_dir, repo_name_for,
 )
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
 from scripts.utils.git_push import current_branch, supervised_push
@@ -48,8 +59,10 @@ def get_exec_info(slug: str) -> dict | None:
 def safety_gate(slug: str) -> bool:
     """Require the user to type the exec slug to confirm offboarding."""
     print(f"\n{RED}{BOLD}WARNING: You are about to offboard '{slug}'.{RESET}")
-    print(f"This will revoke GitHub access, archive their workspace repo,")
-    print(f"and preserve their CRM contacts.\n")
+    print(f"This will remove their direct collaborator grants, their TEAM")
+    print(f"memberships, and their MEMBERSHIP OF THE {GITHUB_ORG} ORGANISATION,")
+    print(f"archive their workspace repo, and preserve their CRM contacts.")
+    print(f"Org removal reaches every repo in the org, not only this workspace.\n")
     confirmation = input(f"Type the exec slug to confirm [{slug}]: ").strip()
     if confirmation != slug:
         print(f"\n{RED}Confirmation failed. Aborting.{RESET}")
@@ -57,28 +70,79 @@ def safety_gate(slug: str) -> bool:
     return True
 
 
-def revoke_github_access(slug: str, exec_info: dict) -> bool:
-    """Remove the exec as a DIRECT COLLABORATOR on the three per-exec repos.
+def exec_repos(slug: str) -> list[str]:
+    """Every private repo an offboarded exec may hold a grant on.
 
-    Returns True when every DELETE either succeeded or reported 404.
+    Two of the three names this used were RETIRED. `31c-crm-{slug}` and
+    `31c-workspace-{slug}` belong to the pre-cutover model; an exec provisioned
+    on the current one holds their data in `repo_name_for(slug)`, and that repo
+    was never in the list -- so the revocation 404'd on two names that do not
+    exist, printed "not a direct collaborator" for all of them, and left the
+    departing exec's access to their actual data untouched.
 
-    Scope, stated because the previous version overstated it: the collaborators
-    endpoint removes a direct grant and NOTHING else. A user who reaches these
-    repos through org membership or a team is not a collaborator at all, so the
-    common case returned 404 on all three and printed "No access found" while
-    the offboarded exec still had read (and possibly write) on every private
-    repo. `check_residual_access` now looks for exactly that, and removing it is
-    a MUTATION this script does not perform -- it goes on the manual checklist,
-    because deleting an org membership is a wider, harder-to-undo action than
-    anything else here and belongs to a human.
+    The retired names are kept deliberately. A 404 on a repo that no longer
+    exists costs one request; missing a repo an exec is still on costs their
+    continued access to it.
+
+    The ENGINE repo is absent on purpose: it is public, so there is no grant to
+    remove and no data behind it.
+    """
+    names = [
+        "heading-os-corporate",
+        repo_name_for(slug),
+        f"31c-crm-{slug}",          # retired name, still checked
+        f"31c-workspace-{slug}",    # retired name, still checked
+    ]
+    seen: set[str] = set()
+    out = []
+    for name in names:
+        if name not in seen:
+            seen.add(name)
+            out.append(f"{GITHUB_ORG}/{name}")
+    return out
+
+
+def has_repo_access(repo: str, github_username: str) -> bool | None:
+    """Does this user reach `repo` by ANY route? True / False / None-if-unknown.
+
+    `GET /repos/{repo}/collaborators/{user}` answers 204 when the user is a
+    collaborator through a direct grant, an org membership, OR a team, and 404
+    when they are not. That makes it the only honest proof that a revocation
+    worked -- the DELETE's own exit status says nothing about the other routes.
+
+    Returns None when GitHub gave neither answer, so a caller cannot read an
+    unreachable API as "no access".
+    """
+    try:
+        result = run_cmd(
+            ["gh", "api", f"repos/{repo}/collaborators/{github_username}"],
+            check=False)
+    except FileNotFoundError:
+        return None
+    if result.returncode == 0:
+        return True
+    if "404" in (result.stderr or ""):
+        return False
+    return None
+
+
+def revoke_github_access(slug: str, exec_info: dict) -> tuple[bool, list[str]]:
+    """Remove direct collaborator grants, then VERIFY the access is gone.
+
+    Returns `(all_deletes_ok, repos_still_reachable)`.
+
+    The collaborators DELETE removes a direct grant and nothing else, so a user
+    who reaches these repos through an org membership or a team is not a
+    collaborator at all: the DELETE answered 404 and the old code printed
+    "skip", which reads as "already clear" for the one case that is dangerous.
+    The verification pass below closes that. Whatever it still finds is handed
+    to `remove_residual_access`, which now removes it rather than writing it on
+    a checklist -- offboarding means the exec no longer reaches the data, and a
+    checklist item is not a revocation.
     """
     print(f"\n{BOLD}Step 1: Removing direct collaborator grants{RESET}")
 
-    repos = [
-        f"{GITHUB_ORG}/heading-os-corporate",
-        f"{GITHUB_ORG}/31c-crm-{slug}",
-        f"{GITHUB_ORG}/31c-workspace-{slug}",
-    ]
+    repos = exec_repos(slug)
 
     # github_username from exec-registry.json (field: github_user); falls back to slug.
     github_username = exec_info.get("github_user") or slug
@@ -102,7 +166,21 @@ def revoke_github_access(slug: str, exec_info: dict) -> bool:
         except FileNotFoundError as e:
             all_ok = False
             print(f"  {RED}[error]{RESET} {repo}: {e}")
-    return all_ok
+
+    print(f"\n{BOLD}Step 1a: Verifying the access is actually gone{RESET}")
+    still: list[str] = []
+    for repo in repos:
+        reachable = has_repo_access(repo, github_username)
+        if reachable is True:
+            still.append(repo)
+            print(f"  {RED}[STILL HAS ACCESS]{RESET} {repo}")
+        elif reachable is None:
+            all_ok = False
+            print(f"  {RED}[UNKNOWN]{RESET} {repo}: GitHub did not answer; "
+                  f"treat as access RETAINED until checked by hand")
+        else:
+            print(f"  {GREEN}[ok]{RESET} No access to {repo}")
+    return all_ok, still
 
 
 def check_residual_access(slug: str, exec_info: dict) -> list[str]:
@@ -149,6 +227,75 @@ def check_residual_access(slug: str, exec_info: dict) -> list[str]:
     else:
         print(f"  {GREEN}[ok]{RESET} No org or team access found")
     return residual
+
+
+def remove_residual_access(slug: str, exec_info: dict) -> list[str]:
+    """Remove the team and org grants a collaborator DELETE cannot reach.
+
+    Returns what is STILL present afterwards; empty means the exec no longer
+    reaches anything.
+
+    This used to be read-only, and the removal sat on the manual checklist
+    because deleting an org membership is wider than anything else here. The
+    operator overruled that on 2026-08-25: an executive who has left 31C must
+    not still reach the data, and a checklist entry is a reminder, not a
+    revocation. The gate that makes it safe is `safety_gate`, which already
+    requires the slug to be typed out; this function only ever runs behind it,
+    and only inside `offboard-exec.py`, whose entire purpose is departure.
+
+    Teams are removed BEFORE the org membership even though removing the org
+    membership would take the teams with it. Doing it in that order makes the
+    log name each team that granted access, which is what an audit of the
+    incident needs afterwards.
+    """
+    print(f"\n{BOLD}Step 1c: Removing org and team access{RESET}")
+    github_username = exec_info.get("github_user") or slug
+
+    try:
+        teams = run_cmd(
+            ["gh", "api", f"orgs/{GITHUB_ORG}/teams", "--jq", ".[].slug"],
+            check=False)
+        if teams.returncode == 0:
+            for team in (teams.stdout or "").split():
+                got = run_cmd(
+                    ["gh", "api",
+                     f"orgs/{GITHUB_ORG}/teams/{team}/memberships/{github_username}"],
+                    check=False)
+                if got.returncode != 0:
+                    continue
+                gone = run_cmd(
+                    ["gh", "api",
+                     f"orgs/{GITHUB_ORG}/teams/{team}/memberships/{github_username}",
+                     "-X", "DELETE"], check=False)
+                if gone.returncode == 0:
+                    print(f"  {GREEN}[ok]{RESET} Removed from team {GITHUB_ORG}/{team}")
+                else:
+                    print(f"  {RED}[error]{RESET} Could not remove from team "
+                          f"{GITHUB_ORG}/{team}: {(gone.stderr or '').strip()}")
+        else:
+            print(f"  {RED}[error]{RESET} Could not list teams: "
+                  f"{(teams.stderr or '').strip()}")
+
+        member = run_cmd(
+            ["gh", "api", f"orgs/{GITHUB_ORG}/memberships/{github_username}"],
+            check=False)
+        if member.returncode == 0:
+            gone = run_cmd(
+                ["gh", "api", f"orgs/{GITHUB_ORG}/memberships/{github_username}",
+                 "-X", "DELETE"], check=False)
+            if gone.returncode == 0:
+                print(f"  {GREEN}[ok]{RESET} Removed org membership in {GITHUB_ORG}")
+            else:
+                print(f"  {RED}[error]{RESET} Could not remove org membership: "
+                      f"{(gone.stderr or '').strip()}")
+                print(f"    {RED}An organisation OWNER cannot be removed this way. "
+                      f"Demote them in the GitHub UI first.{RESET}")
+    except FileNotFoundError as e:
+        print(f"  {RED}[error]{RESET} gh is unavailable: {e}")
+        return [f"org and team access COULD NOT BE REMOVED: {e}"]
+
+    print(f"\n{BOLD}Step 1d: Re-checking after removal{RESET}")
+    return check_residual_access(slug, exec_info)
 
 
 def archive_workspace_repo(slug: str) -> None:
@@ -360,12 +507,18 @@ def log_offboarding(slug: str, exec_info: dict, reassign_to: str | None) -> None
 
 
 def offboard_verdict(revoke_ok: bool, preserved: bool,
-                     residual: list[str]) -> tuple[bool, list[str]]:
+                     residual: list[str],
+                     repos_reachable: list[str] | None = None) -> tuple[bool, list[str]]:
     """Decide whether this run may claim the offboard is complete.
 
     Pure, so it is testable without touching GitHub. The script used to print
     "Offboarding complete" unconditionally, including on a run where every
     collaborator DELETE returned 404 and the exec kept org-wide access.
+
+    `repos_reachable` is the verification pass: a repo the exec can still reach
+    AFTER every removal ran. It is the only one of these signals that measures
+    the thing the operator actually cares about, so it is named separately and
+    never folded into `residual`.
     """
     reasons: list[str] = []
     if not revoke_ok:
@@ -374,6 +527,8 @@ def offboard_verdict(revoke_ok: bool, preserved: bool,
         reasons.append("CRM contacts were not preserved")
     for item in residual:
         reasons.append(f"access remains: {item} (remove it by hand)")
+    for repo in (repos_reachable or []):
+        reasons.append(f"THE EXEC CAN STILL REACH {repo} - revoke it by hand NOW")
     return (not reasons), reasons
 
 
@@ -385,11 +540,12 @@ def print_manual_checklist(slug: str, exec_info: dict) -> None:
     github_username = exec_info.get("github_user") or slug if exec_info else slug
 
     print(f"\n{BOLD}{YELLOW}Manual Checklist (requires human action):{RESET}")
-    print(f"  [ ] Remove org membership (this script only removes DIRECT collaborators):")
+    print(f"  {BOLD}Org and team access is now removed by this script.{RESET} Run "
+          f"these ONLY if a step above reported an error:")
     print(f"       gh api orgs/{GITHUB_ORG}/memberships/{github_username} -X DELETE")
-    print(f"  [ ] Remove every team membership:")
     print(f"       gh api orgs/{GITHUB_ORG}/teams --jq '.[].slug' | while read t; do \\")
     print(f"         gh api orgs/{GITHUB_ORG}/teams/$t/memberships/{github_username} -X DELETE; done")
+    print(f"       An organisation OWNER cannot be removed by API. Demote first.")
     print(f"  [ ] Revoke API keys (Anthropic, Firecrawl, Telegram, etc.)")
     print(f"  [ ] Disable email account: {email}")
     print(f"  [ ] Remove from Slack/Teams channels")
@@ -449,8 +605,18 @@ def main():
     # preserve/reassign, so the irreversible step happened first and any
     # preserve failure left the contacts sitting in an archived repo. Recovery
     # steps now run first; archiving is last.
-    revoke_ok = revoke_github_access(slug, exec_info or {})
+    revoke_ok, _first_pass = revoke_github_access(slug, exec_info or {})
     residual = check_residual_access(slug, exec_info or {})
+    if residual:
+        residual = remove_residual_access(slug, exec_info or {})
+    # Verified LAST, after every removal has run. The first pass tells the
+    # removal step what to work on; only this one answers "can they still get
+    # in?", which is the question the offboard exists to close.
+    github_username = (exec_info or {}).get("github_user") or slug
+    repos_reachable = [
+        repo for repo in exec_repos(slug)
+        if has_repo_access(repo, github_username) is not False
+    ]
     preserved = preserve_crm_contacts(slug)
 
     if args.reassign_to:
@@ -481,7 +647,8 @@ def main():
 
     print_manual_checklist(slug, exec_info)
 
-    complete, reasons = offboard_verdict(revoke_ok, preserved, residual)
+    complete, reasons = offboard_verdict(revoke_ok, preserved, residual,
+                                         repos_reachable)
     print(f"\n{'=' * 50}")
     if complete:
         print(f"{BOLD}{GREEN}Offboarding complete for {slug}.{RESET}")

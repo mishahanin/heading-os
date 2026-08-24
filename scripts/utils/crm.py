@@ -22,6 +22,8 @@ Public surface:
 
 Extracted from scripts/crm-health.py in Phase 6.1 of the 2026-05-12
 workspace performance tune-up. Behaviour is preserved byte-for-byte.
+
+Tests: tests/test_a_queue_that_read_corrupt_as_empty.py
 """
 
 from __future__ import annotations
@@ -200,6 +202,51 @@ def is_radar_frozen(radar_freeze_until, today=None) -> bool:
     return freeze > today
 
 
+def normalize_name(name: str) -> str:
+    """Normalize a name for comparison. The single definition."""
+    return " ".join(name.lower().strip().split())
+
+
+def contact_identity_key(record: dict) -> str:
+    """"Is this the same person?", answered one way for every tool.
+
+    `entity_ref` when the record carries one, exact normalized NAME otherwise.
+    Company is deliberately absent from the legacy key: company strings differ
+    across exec repos for known dual-owned contacts, so including it breaks
+    matches the name alone makes. `_legacy_fuzzy_key` in `aggregate-crm.py`
+    carries the full rationale and now delegates here.
+
+    `admin-health.py` grouped on FILENAME instead, so a person saved as
+    `jordan-kim.md` by one exec and `kim-jordan.md` by another was shared to
+    the aggregator and not shared to the dashboard, and the two disagreed about
+    a number they both print.
+    """
+    ref = record.get("entity_ref")
+    if ref:
+        return f"entity::{ref}"
+    return f"legacy::name::{normalize_name(record.get('name') or '')}"
+
+
+def is_contact_file(path: Path) -> bool:
+    """One rule for "is this a contact record?", because three copies disagreed.
+
+    `aggregate-crm.py` excluded `readme.md` case-INSENSITIVELY.
+    `admin-health.py` excluded exactly `README.md`, so a `readme.md` in an exec
+    overlay was counted as a contact by the dashboard and not by the
+    aggregator, and the two tools reported different totals for one directory.
+    `_get_contact_files` here excluded nothing at all: a README only stayed out
+    of the results because `scan_contacts` later drops records with no `name`
+    and no `entity_ref`, which is an accident, not a rule -- a README carrying
+    frontmatter would have counted.
+
+    The suffix test is case-insensitive too. A `.MD` file on a case-insensitive
+    filesystem is the same file to everything except this predicate.
+    """
+    return (path.is_file()
+            and path.suffix.lower() == ".md"
+            and path.name.lower() != "readme.md")
+
+
 def _get_contact_files(contacts_dir: Path) -> list:
     """Collect all contact .md files from personal and corporate directories."""
     seen = set()
@@ -207,6 +254,8 @@ def _get_contact_files(contacts_dir: Path) -> list:
     # Personal contacts first (take precedence)
     if contacts_dir.exists():
         for f in sorted(contacts_dir.glob("*.md")):
+            if not is_contact_file(f):
+                continue
             seen.add(f.name)
             files.append(f)
     # Corporate contacts (Tribe members shared from CEO workspace)
@@ -214,7 +263,7 @@ def _get_contact_files(contacts_dir: Path) -> list:
         corp_crm = get_corporate_root() / "crm" / "contacts"
         if corp_crm.exists():
             for f in sorted(corp_crm.glob("*.md")):
-                if f.name not in seen:
+                if is_contact_file(f) and f.name not in seen:
                     files.append(f)
     return files
 

@@ -46,6 +46,7 @@ No single file owns the brand. The authorities below, collectively, are the refe
 | `--accent` | `#5B5FFF` | Primary accent, card top border, blue accent blocks |
 | `--orange` | `#F5922B` | Signature orange corner block (56x68px) |
 | `--orange-hi` | `#FF8C00` | Highlight text |
+| `--orange-display` | `#FF9235` | Large display numerals and section headers. Cost/impact counters set in 31C Horizontal T03 Clarity, and `#423BFF`'s counterpart in section headings. Comes from the 03-Jul-2026 Investor Deck and is carried by the `31c-investor` MARP variant. Per-element detail: `reference/31c-typeface-usage.md`. |
 | `--bg-light` | `#EEECEA` | Content document background |
 | `--bg-dark` | `#000000` | Cover slides, hero pages |
 | `--card-light` | `#FFFFFF` | Light-mode cards |

@@ -157,9 +157,21 @@ def _parse_duration_minutes(s: str) -> int:
 def next_meeting(data_root: Path, now: datetime | None = None) -> dict | None:
     """Return the next upcoming meeting from today's calendar markdown file.
 
-    Returns a dict with time (HH:MM), subject (str), location (str, may be
-    empty or a URL), and minutes_until (int from now to event, can be 0).
-    Returns None if there's no calendar file or no future events today.
+    Returns:
+        {
+            "time": "HH:MM" in the workspace timezone,
+            "subject": str,
+            "location": str (may be empty, or a URL),
+            "minutes_until": int from now to the event, can be 0,
+            "event_utc_iso": the event instant as an ISO 8601 UTC string,
+        }
+        or None when there is no calendar file or no future event today.
+
+    The block above replaced a prose sentence that named four of the five
+    keys. `event_utc_iso` was the omitted one, and it is the only field that
+    lets a consumer render the meeting in a zone other than the workspace
+    default: `time` is already local and carries no offset, so nothing else in
+    the payload can be converted.
 
     Calendar files use the configured timezone per workspace convention; we resolve
     'today' and 'now' in that timezone so the date selection and event

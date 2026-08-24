@@ -131,8 +131,17 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
         `::1` as host:port and handed back `::`, which is not in the loopback
         set, so a legitimate loopback client sending that Host got a 421. More
         than one colon means it cannot be host:port -- a port has exactly one.
+
+        Lowercased, because DNS hostnames are case-insensitive (RFC 4343) and
+        `_LOOPBACK_HOSTS` holds them lowercase. `curl http://LOCALHOST:31415/`
+        sends the name as typed, so a bona fide loopback request was answered
+        421 by a loopback-bound server. The Origin check on the same middleware
+        never had this bug -- `urlsplit(...).hostname` lowercases for you --
+        which is why only one half of one guard was wrong. Hex in an IPv6
+        literal is case-insensitive too, so lowering is safe for every form
+        this returns.
         """
-        raw = raw.strip()
+        raw = raw.strip().lower()
         if raw.startswith("["):
             # IPv6 bracket form: take what is between the brackets.
             end = raw.find("]")
@@ -1030,8 +1039,20 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
         # snapshot the UI reads), actually trigger the refresher inline so
         # the user-initiated "refresh" produces fresh data, not just a
         # version bump. Per-request endpoints don't need this - they
-        # recompute on every GET anyway. state.bump still fires so any
-        # ETag-watching client sees a new version.
+        # recompute on every GET anyway.
+        #
+        # WHERE the bump comes from, per branch, because the previous wording
+        # ("state.bump still fires") read as a promise this function makes and
+        # is not: the pulse success path below never calls bump. It does not
+        # need to. `refreshers.pulse.refresh` bumps "pulse" itself on every one
+        # of its own paths, including its internal compute failure, and its
+        # docstring says so. The 2026-08-25 k3 audit flagged this as a missing
+        # bump on exactly that reading, so the sentence is now specific rather
+        # than reassuring.
+        #
+        #   pulse, refresher returned  -> the refresher bumped
+        #   pulse, refresher RAISED    -> this function bumps (nothing else did)
+        #   any other component        -> this function bumps
         recomputed = False
         if body.component == "pulse":
             from .refreshers import pulse as _r_pulse

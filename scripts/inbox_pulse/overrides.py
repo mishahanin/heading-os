@@ -14,6 +14,8 @@ Sovereignty discipline
 This module does NOT log email content. It accepts addresses and subjects
 as arguments and returns classification labels only. No caller-supplied
 string is written to logs inside this module.
+
+Tests: tests/test_a_day_that_could_not_be_read_and_was_called_quiet.py
 """
 
 from __future__ import annotations
@@ -59,6 +61,13 @@ class RulesEngine:
     _config: dict = field(default_factory=dict, repr=False)
     _last_mtime: float = field(default=0.0, repr=False)
     _missing_warned: bool = field(default=False, repr=False)
+    # The mtime of the last version of the file that failed to load. A broken
+    # file keeps its mtime above _last_mtime (which only advances on success),
+    # so reload_if_changed() retries every poll cycle and each retry logged the
+    # full warning again -- forever, at the same rate the missing-file case was
+    # throttled to avoid. Retrying is right; saying so 2,880 times a day is not.
+    # Keyed on mtime, so SAVING the file warns again if it is still broken.
+    _bad_load_warned_mtime: float | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         self.reload()
@@ -71,7 +80,8 @@ class RulesEngine:
         """Re-read the YAML file. Return True if config changed, False if unchanged.
 
         On parse error or missing file the engine keeps its prior config and
-        logs a warning -- it never raises.
+        logs a warning -- it never raises. The bad-load warning is throttled by
+        mtime, for the reason given on `_bad_load_warned_mtime`.
         """
         try:
             mtime = self.yaml_path.stat().st_mtime
@@ -87,12 +97,21 @@ class RulesEngine:
             raw = self.yaml_path.read_text(encoding="utf-8")
             parsed = yaml.safe_load(raw)
         except Exception as exc:  # noqa: BLE001
-            log.warning("Failed to parse %s: %s; keeping prior config", self.yaml_path, exc)
+            if self._bad_load_warned_mtime != mtime:
+                log.warning("Failed to parse %s: %s; keeping prior config",
+                            self.yaml_path, exc)
+                self._bad_load_warned_mtime = mtime
             return False
 
         if not parsed or not isinstance(parsed, dict):
-            log.warning("%s parsed as empty or non-dict; keeping prior config", self.yaml_path)
+            if self._bad_load_warned_mtime != mtime:
+                log.warning("%s parsed as empty or non-dict; keeping prior config",
+                            self.yaml_path)
+                self._bad_load_warned_mtime = mtime
             return False
+
+        # A good load clears the throttle, so the next breakage warns at once.
+        self._bad_load_warned_mtime = None
 
         if parsed == self._config:
             # File changed mtime but content is identical (e.g., touch).

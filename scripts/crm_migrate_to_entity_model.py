@@ -9,7 +9,14 @@ Workflow:
   3. Generate proposed migration map at outputs/operations/crm/2026-05-15_migration-map.md
      for CEO review. CEO inspects, flags any mis-groupings, approves.
   4. On approval, generate address book entries (one per group) and rewrite
-     each contact file as a thin relationship record.
+     THE CEO'S contact files as thin relationship records. Exec-owned records
+     are read for grouping (two execs' files are how a duplicate is found at
+     all) and are NOT written: this script has no write path into another
+     person's repository, and inventing one would edit files their owner has
+     not reviewed. `--apply` reports the exec records it left alone, because
+     they stay legacy-shaped and are re-grouped on every later `--propose` --
+     the run is idempotent for the CEO's side only. This step used to say
+     "each contact file", which named a behaviour the code has never had.
   5. All writes go to crm/.migration-staging/; only renamed into place after
      every file passes validation. Backup at crm/.migration-backup/<date>/.
 
@@ -17,6 +24,8 @@ Usage:
   python3 scripts/crm_migrate_to_entity_model.py --propose    # generate review map only
   python3 scripts/crm_migrate_to_entity_model.py --apply      # apply the proposed map (after review)
   python3 scripts/crm_migrate_to_entity_model.py --rollback   # restore from backup
+
+Tests: tests/test_a_rollback_that_deleted_what_it_never_backed_up.py
 """
 
 # For --apply and --rollback: os (chmod, for Windows read-only bits), shutil
@@ -142,11 +151,28 @@ def group_records(records: list[dict]) -> list[dict]:
 
     # Pass 2: low-confidence by name+company for records without email
     name_groups: dict = {}
+    # A record with no email AND no usable name still has to come out
+    # somewhere. `continue` dropped it: it entered no group, so every count in
+    # the review map -- all of which derive from `groups` -- was computed as if
+    # it did not exist, and `--apply` backed it up, never migrated it, and
+    # never removed it. An unmigrated legacy file the summary says is not
+    # there. It becomes its own singleton, which is what the docstring above
+    # has always promised for "everyone else".
+    nameless: list = []
     for rec in no_email:
         key = (_normalize_name(rec.get("name", "")), _normalize_company(rec.get("company", "")))
         if not key[0]:
+            nameless.append(rec)
             continue
         name_groups.setdefault(key, []).append(rec)
+
+    for rec in nameless:
+        groups.append({
+            "records": [rec],
+            "confidence": "singleton",
+            "canonical_name": rec.get("name", ""),
+            "proposed_slug": None,
+        })
 
     for key, rec_list in name_groups.items():
         if len(rec_list) >= 2:
@@ -453,6 +479,22 @@ def extract_body_sections(file_path: Path, exclude: list[str]) -> str:
     return "\n".join(out).strip()
 
 
+# YAML 1.1 resolves every one of these to a boolean or a null, not a string.
+_PLAIN_UNSAFE = frozenset({
+    "y", "n", "yes", "no", "true", "false", "on", "off",
+    "null", "~", "none",
+})
+
+
+def _looks_numeric(s: str) -> bool:
+    """True when a YAML reader would hand this back as a number, not a string."""
+    try:
+        float(s)
+    except ValueError:
+        return False
+    return True
+
+
 def _yaml_quote(value: str) -> str:
     """Quote a string value if it contains YAML-special characters.
 
@@ -466,7 +508,13 @@ def _yaml_quote(value: str) -> str:
         return ""
     # Characters that require quoting in YAML scalar context
     specials = set(":#[]{}\"'&*?|>!%@`")
-    if any(c in specials for c in s):
+    # ...and whole WORDS that a YAML 1.1 reader resolves to something that is
+    # not a string. The guard tested characters only, so a region of `NO`
+    # (Norway) came back as False, `~` as None, and `007` as an int -- for
+    # exactly the name/employer/region fields the docstring above says it
+    # protects. `_PLAIN_UNSAFE` is the YAML 1.1 boolean/null set; the numeric
+    # test is separate because no word list can cover every number.
+    if s.lower() in _PLAIN_UNSAFE or _looks_numeric(s) or any(c in specials for c in s):
         # Use double-quoted form, escape internal double quotes
         return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
     return s
@@ -546,7 +594,13 @@ def render_relationship_record(record: dict, entity_slug: str) -> str:
     fm = [
         "---",
         f"entity_ref: {entity_slug}",
-        f"relationship_type: {record.get('type', '')}",
+        # Through _yaml_quote, like every field in render_address_book_entry.
+        # These three were interpolated raw, so a company of `Holdings: Europe`
+        # or a source of `A # B` produced frontmatter that is invalid YAML or
+        # parses to the wrong value -- aborting the staged validation mid-run,
+        # after the backup and before the rename, or landing mis-parsed in a
+        # live record if the validator is lenient.
+        f"relationship_type: {_yaml_quote(record.get('type', ''))}",
         f"last_touch: {today_rec}",
         f"created: {created}",
     ]
@@ -554,11 +608,11 @@ def render_relationship_record(record: dict, entity_slug: str) -> str:
     if cadence not in (None, "", 0):
         fm.append(f"cadence: {cadence}")
     if record.get("source"):
-        fm.append(f"source: {record['source']}")
+        fm.append(f"source: {_yaml_quote(record['source'])}")
     fm.append("status: active")
     fm.append("tags: []")
     if record.get("company"):
-        fm.append(f"pipeline_company: {record['company']}")
+        fm.append(f"pipeline_company: {_yaml_quote(record['company'])}")
     fm.append(f"radar_freeze_until: \"{record.get('radar_freeze_until') or ''}\"")
     fm.append(f"owner: {record['owner']}")
     fm.append("---")
@@ -596,11 +650,24 @@ def cmd_apply() -> int:
     ws = get_workspace_root()  # engine root: subprocess cwd + backup relativity (ws.parent)
     crm_root = get_crm_contacts_dir().parent  # DATA crm/ root (.heading-os-data for the CEO)
     today = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
-    map_file = get_outputs_dir() / "operations" / "crm" / f"{today}_migration-map.md"
-    if not map_file.exists():
-        print(f"Migration map not found: {map_file}")
+    # The MOST RECENT map, not today's. The documented workflow is propose ->
+    # CEO reviews -> apply, and nothing in it says the review must finish
+    # before midnight; a CEO who read the map the next morning got "Migration
+    # map not found. Run --propose first." about a file sitting right there.
+    # The date bought nothing either: --apply re-scans and re-groups from disk
+    # and never parses the map, so requiring today's copy only forced a
+    # pointless re-run.
+    map_dir = get_outputs_dir() / "operations" / "crm"
+    maps = sorted(map_dir.glob("*_migration-map.md")) if map_dir.is_dir() else []
+    if not maps:
+        print(f"Migration map not found in {map_dir}")
         print("Run --propose first.")
         return 1
+    map_file = maps[-1]
+    if not map_file.name.startswith(today):
+        print(f"Applying against {map_file.name}, which is not from today. "
+              f"--apply re-scans from disk, so re-run --propose first if the "
+              f"contacts have changed since that map was written.")
 
     # Re-derive the groups by re-running the scan + group (deterministic).
     records = scan_all_contacts()
@@ -616,7 +683,24 @@ def cmd_apply() -> int:
         dst = backup_dir / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
+    # The pre-existing address book, which the loop above never touched: it
+    # iterates `records`, and records are contact FILES. Rollback nonetheless
+    # ran `rmtree` over the whole `crm/address-book/`, so any entry that
+    # existed before the migration was destroyed with no copy anywhere. The
+    # manifest already records exactly what apply created; the backup now
+    # records what it found.
+    existing_ab = crm_root / "address-book"
+    if existing_ab.is_dir():
+        shutil.copytree(existing_ab, backup_dir / "address-book-pre-existing",
+                        dirs_exist_ok=True)
     print(f"Backup written to {backup_dir} ({len(records)} files)")
+
+    # Exec-owned records are read for grouping and never written; say so, since
+    # they stay legacy-shaped and re-group on every later --propose.
+    foreign = [r for r in records if r["owner"] != "owner-exec-a"]
+    if foreign:
+        print(f"{len(foreign)} exec-owned record(s) were used for grouping and "
+              f"are NOT migrated; their files are unchanged.")
 
     # Staging dir
     staging = crm_root / ".migration-staging"
@@ -788,10 +872,36 @@ def cmd_rollback() -> int:
         print("Aborted.")
         return 1
 
-    # Remove address book
+    # Remove ONLY the entries this migration created. `shutil.rmtree(ab)` took
+    # the whole directory, including entries that predated the migration and
+    # that the backup loop -- which iterates contact FILES -- never copied. A
+    # rollback of a migration destroyed unrelated data the tool had recorded
+    # precisely enough to spare. The manifest read below already exists for the
+    # created contacts; `created_address_book` was written and never read.
     ab = crm_root / "address-book"
-    if ab.exists():
-        shutil.rmtree(ab)
+    manifest_path = latest / "applied-manifest.json"
+    if ab.is_dir():
+        if manifest_path.exists():
+            try:
+                created_ab = json.loads(
+                    manifest_path.read_text(encoding="utf-8")
+                ).get("created_address_book", [])
+            except ValueError:
+                created_ab = None
+            if created_ab is None:
+                print("Applied-manifest unreadable; leaving crm/address-book/ "
+                      "in place rather than removing entries it did not create.")
+            else:
+                for name in created_ab:
+                    with contextlib.suppress(OSError):
+                        (ab / name).unlink()
+                with contextlib.suppress(OSError):
+                    ab.rmdir()   # only if the migration left it empty
+        else:
+            # A backup from before the manifest existed cannot say what apply
+            # created, so it cannot say what is safe to delete either.
+            print("No applied-manifest in this backup; leaving crm/address-book/ "
+                  "in place. Remove it by hand if it is entirely migration output.")
 
     # Undo what --apply CREATED, before restoring what it replaced. Rollback
     # only ever restored, so the slug-named relationship records apply had
@@ -799,7 +909,6 @@ def cmd_rollback() -> int:
     # generations in crm/contacts/ under the words "Rollback complete". The
     # manifest names exactly what to remove; without one (a backup from before
     # this fix) say so rather than guessing which files are which.
-    manifest_path = latest / "applied-manifest.json"
     if manifest_path.exists():
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

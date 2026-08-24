@@ -13,6 +13,8 @@ Each exec's /sync pushes to their own repo. The deprecated 31c-crm-central
 aggregate is still read as a fallback for execs whose per-exec mirror is
 not present on disk; that fallback will be removed once every active exec
 has been migrated.
+
+Tests: tests/bridge/test_two_layers_that_disagreed_about_the_same_file.py
 """
 import logging
 import re
@@ -73,9 +75,24 @@ def _owner_label(owner: str) -> str:
 
 
 def _is_contact_file(path: Path) -> bool:
-    """A contact file is a .md that is not a README or an underscore-file."""
-    name = path.name.lower()
-    return name.endswith(".md") and name != "readme.md" and not name.startswith("_")
+    """A contact file is a lowercase `.md` that is not a README or an underscore-file.
+
+    The extension test is case-EXACT; only the README and underscore tests
+    fold case. It used to lower the whole name first, which said `Jane.MD`
+    was a contact file - an acceptance neither of the two layers around it
+    can honour. `_scan`'s `glob("*.md")` is case-sensitive on posix, so the
+    file never reached this function there and vanished from `/contacts` with
+    no log line; on Windows, where pathlib globs case-insensitively, it DID
+    reach here, was listed with `slug = "Jane"`, and then `read_one_contact`
+    (which only ever opens `{slug}.md`, and whose `CONTACT_SLUG_RE` is
+    lowercase-only) could never open the row. One rule, in one place: only a
+    lowercase `.md` is a contact file, and `_scan` names the ones it skips.
+    """
+    name = path.name
+    if not name.endswith(".md"):
+        return False
+    lowered = name.lower()
+    return lowered != "readme.md" and not lowered.startswith("_")
 
 
 def _contact_record(path: Path, owner: str, today: date | None) -> dict | None:
@@ -128,9 +145,18 @@ def list_contacts(workspace_root: Path, today: date | None = None,
     the scan read "every exec's crm-central contacts", which is the source
     that LOSES.)
 
-    Returns {contacts, counts, owner_counts, total, data_time}. contacts
-    is sorted days-since-touch DESC (longest-overlooked first, None
-    last), matching the Tribe page.
+    Returns:
+        {
+            "contacts": [row, ...] sorted days-since-touch DESC
+                        (longest-overlooked first, None last), matching the
+                        Tribe page,
+            "counts": {relationship_type: int},
+            "owner_counts": {owner: int},
+            "total": int - the rows RETURNED, which is every row: this scan
+                     applies no cap,
+            "data_time": ISO 8601 UTC of the most-recent contact file mtime,
+                         or None,
+        }
 
     HEADING OS engine/data split: the CEO's own crm/contacts/ is DATA, so it
     resolves under ``data_root`` (falls back to the ``get_data_root()`` seam when not
@@ -146,8 +172,21 @@ def list_contacts(workspace_root: Path, today: date | None = None,
         nonlocal most_recent_mtime
         if not directory.is_dir():
             return
-        for p in directory.glob("*.md"):
+        # `*.[mM][dD]` rather than `*.md`, so a case-variant extension is SEEN
+        # and reported here instead of being dropped by a case-sensitive glob
+        # before anything could say so. The row is still skipped: the
+        # drill-down only opens `{slug}.md`, so listing it would produce a
+        # contact that cannot be opened.
+        for p in directory.glob("*.[mM][dD]"):
             if not _is_contact_file(p):
+                lowered = p.name.lower()
+                # Only a file that WOULD have been a contact but for its
+                # extension case; a README.MD is excluded on its own merits
+                # and needs no rename.
+                if (not p.name.endswith(".md") and lowered != "readme.md"
+                        and not lowered.startswith("_")):
+                    logger.warning("skipping contact file with a non-lowercase "
+                                   "extension (rename it to .md): %s", p)
                 continue
             rec = _contact_record(p, owner, today)
             if rec is None:

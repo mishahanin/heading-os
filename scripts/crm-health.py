@@ -2,6 +2,8 @@
 """
 CRM Relationship Health Scorer for 31C Workspace
 
+Tests: tests/test_a_closing_fence_that_only_half_read_crlf.py
+
 Reads contact files from crm/contacts/, calculates health scores based on
 last_touch dates and expected cadence, and outputs a relationship radar.
 
@@ -113,7 +115,13 @@ def format_terminal_report(contacts, tribe_warnings=None):
 
 
 _FM_OPEN_RE = re.compile(r"\A---[ \t]*\r?\n")
-_FM_CLOSE_RE = re.compile(r"^---[ \t]*$", re.MULTILINE)
+# `\r?` on the close too. The OPEN fence spells out `\r?\n`, so this file
+# already claims to read CRLF; the close did not, and on a CRLF file the
+# fence line is `---\r`, which `[ \t]*$` cannot match (Python's `$` sits
+# before `\n`, not before `\r`). frontmatter_end then returned -1 for every
+# CRLF contact, and --demote-candidates reported "no frontmatter" about
+# files whose frontmatter was fine. Two regexes, two line-ending policies.
+_FM_CLOSE_RE = re.compile(r"^---[ \t]*\r?$", re.MULTILINE)
 
 
 def frontmatter_end(text: str) -> int:
@@ -148,13 +156,20 @@ def _radar_insert_pos(content: str) -> int:
 
     Order: after a closing frontmatter fence when the file opens with one;
     otherwise after the first line, whatever that line is.
+
+    Uses `frontmatter_end`, whose docstring above explains why a substring
+    search is wrong. This function kept the substring form and reproduced both
+    halves of it: `startswith("---\n")` refused an opener of `--- ` or `---\r\n`,
+    and `find("\n---", 3)` matched any line merely BEGINNING with `---` -- a
+    `----` rule, or `--- draft` inside a block scalar. Both mistakes land in the
+    same place. The fallback below is "after the first line", and on a file with
+    frontmatter the first line IS the opening fence, so `--update` spliced the
+    Contact Radar table INTO the YAML of the file it was writing.
     """
-    if content.startswith("---\n"):
-        close = content.find("\n---", 3)
-        if close != -1:
-            end = content.find("\n", close + 1)
-            if end != -1:
-                return end + 1
+    fm_end = frontmatter_end(content)
+    if fm_end != -1:
+        line_end = content.find("\n", fm_end)
+        return line_end + 1 if line_end != -1 else len(content)
     first_break = content.find("\n")
     return first_break + 1 if first_break != -1 else len(content)
 

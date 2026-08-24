@@ -99,7 +99,12 @@ def today_agenda(data_root: "Path | None" = None,
     for idx, e in enumerate(events):
         hh, mm = (int(x) for x in e["time"].split(":"))
         event_dt = now_local.replace(hour=hh, minute=mm, second=0, microsecond=0)
-        e["minutes_until"] = int((event_dt - now_local).total_seconds() // 60)
+        # Truncate toward zero, not floor. `//` floors toward MINUS infinity, so
+        # an event that began one second ago has total_seconds() in (-60, 0),
+        # `// 60` gives -1, and the row rendered "1 minute ago" for the whole
+        # first minute of every meeting. `is_past` is computed by comparison
+        # below and was always right; only the magnitude lied.
+        e["minutes_until"] = int((event_dt - now_local).total_seconds() / 60)
         if event_dt < now_local:
             e["is_past"] = True
         elif not next_marked:

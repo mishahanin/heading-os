@@ -11,6 +11,8 @@ conversation IDs persist to a gitignored jsonl log; reads filter them out.
 Phase 1.32 reframes the listing into three priority bands sourced from
 the rich _latest-fetch.json analysis (summary + recommended actions per
 conversation), replacing the flat now/later zoned list.
+
+Tests: tests/bridge/test_two_layers_that_disagreed_about_the_same_file.py
 """
 import json
 import threading
@@ -427,6 +429,24 @@ def read_inbox(data_root: Path, now: datetime | None = None) -> dict:
     carries an `aging` flag set when the conversation has been unread
     more than 24h.
 
+    Returns:
+        {
+            "bands": {"needs-you": [row, ...], "fyi": [...], "noise": [...]},
+            "counts": {band: int} - rows per band, after filtering,
+            "dismissed_count": int - conversations in THIS fetch filtered out
+                               as dismissed,
+            "dismiss_log_count": int - every active dismiss entry, including
+                                 conversations not in this fetch,
+            "deferred_count": int - conversations in THIS fetch filtered out
+                              as deferred,
+            "defer_log_count": int - every still-deferred conversation,
+            "data_time": ISO 8601 from the fetch's run_info, or None,
+        }
+
+    That block did not exist until 2026-08-25: the function returned seven
+    keys and named none of them, so the two count pairs (which measure
+    deliberately different things) had to be reverse-engineered from the body.
+
     Returns empty bands on missing/corrupt fetch (silent degradation;
     the freshness UI surfaces staleness via data_time).
 
@@ -469,7 +489,13 @@ def read_inbox(data_root: Path, now: datetime | None = None) -> dict:
     conversations = data.get("conversations", [])
     if not isinstance(conversations, list):
         return _empty()
-    data_time = (data.get("run_info") or {}).get("timestamp")
+    # `or {}` only substitutes when the value is FALSY, so a `"run_info"` that
+    # arrived as a string or a list came straight through and the `.get` below
+    # raised AttributeError - which no `except (json.JSONDecodeError, OSError)`
+    # catches, taking the whole /inbox endpoint down. The fetch is written by a
+    # separate pipeline and is hand-editable; `_inbox_row` and `read_conversation`
+    # already guard their own reads of it this way.
+    data_time = as_mapping(data.get("run_info")).get("timestamp")
 
     dismissed_count = 0
     deferred_count = 0

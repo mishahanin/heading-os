@@ -28,6 +28,8 @@ Subcommands (current implementation status in parentheses):
 Usage:
   python scripts/fireside-bot.py <subcommand> [args]
   python scripts/fireside-bot.py --help
+
+Tests: tests/test_a_sweep_that_reported_the_letters_it_never_read.py
 """
 
 import io
@@ -110,10 +112,15 @@ SWAP_HORIZON_WEEKS = 4  # how far ahead to scan for candidate sessions
 SWAP_B_RESPONSE_TTL_HOURS = 24  # how long B has to accept/decline before request expires
 SWAP_CANDIDATES_LIMIT = 2  # how many buttons to show A
 
-# Senior-leader title fragments for VP detection in xlsx
+# Senior-leader title fragments for VP detection in xlsx.
+#
+# "vice president" is spelled out in the sheet more often than it is abbreviated,
+# and until 2026-08-25 only the abbreviations were listed: "VP of Engineering"
+# matched, "Vice President of Engineering" and "Senior Vice President" did not.
+# The fragment carries a space, so it covers the senior/executive prefixes too.
 VP_TITLE_FRAGMENTS = (
     "ceo", "cfo", "cto", "csto", "cso", "cmo", "chro", "cio", "clo",
-    "chief ", "vp ", "svp ", "vp,", "svp,",
+    "chief ", "vp ", "svp ", "vp,", "svp,", "vice president",
     "founder", "co-founder",
 )
 
@@ -231,7 +238,25 @@ def ensure_state_dir() -> None:
                     entry["excluded_at"] = excluded[username.lower()].get("excluded_at", "")
                 roster[username] = entry
             save_state(TRIBE_ROSTER, roster)
-        except (FileNotFoundError, ValueError):
+        except FileNotFoundError as exc:
+            # No sheet to heal from. An empty placeholder is the honest state.
+            log_error(f"self-heal wrote an EMPTY tribe-roster.json: {exc}")
+            print(f"{YELLOW}init-state: tribe-roster.json is EMPTY - {TRIBE_XLSX} "
+                  f"was not found. Every DM will be refused as an outsider until "
+                  f"`bootstrap` runs.{RESET}", file=sys.stderr)
+            save_state(TRIBE_ROSTER, {})
+        except ValueError as exc:
+            # `load_tribe_metadata` raises this ONLY for a sheet the operator has
+            # to fix -- a Telegram handle claimed by two members, or a missing
+            # column. Swallowing it wrote `{}` in silence, and an empty roster is
+            # precisely the state this self-heal exists to prevent: the bot then
+            # refuses every DM as an outsider, exactly as it would with no file at
+            # all, while `init-state` printed OK and listed the file's size.
+            log_error(f"self-heal wrote an EMPTY tribe-roster.json: {exc}")
+            print(f"{RED}init-state: tribe-roster.json is EMPTY because the Tribe "
+                  f"sheet could not be read: {exc}{RESET}", file=sys.stderr)
+            print(f"{YELLOW}      Until that is fixed and `bootstrap` re-run, the "
+                  f"bot refuses every DM as an outsider.{RESET}", file=sys.stderr)
             save_state(TRIBE_ROSTER, {})
 
     initial: dict[str, Any] = {
@@ -1428,8 +1453,13 @@ def _handle_update(bot: TelegramBot, update: dict) -> None:
     elif "chat_member" in update:
         _handle_chat_member(update["chat_member"])
     elif "my_chat_member" in update:
-        # bot's own membership changed; log and ignore for now
-        log_error(f"my_chat_member event: {json.dumps(update['my_chat_member'])[:200]}")
+        # The bot's own membership changed. A routine event, recorded and not
+        # acted on -- so it belongs in sessions.jsonl, not errors.log. It used to
+        # be appended there under an "ERROR:" prefix, which is the file an
+        # operator opens to find what broke; a Telegram event that broke nothing
+        # diluted it.
+        _log_event("my_chat_member",
+                   detail=json.dumps(update["my_chat_member"])[:200])
 
 
 def _resolve_my_username(user_id: int) -> Optional[str]:
@@ -1696,10 +1726,19 @@ def _new_request_id() -> str:
 
 
 def _format_dm_date(date_iso: str, day: str) -> str:
-    """'2026-06-08' + 'Mon' -> 'Mon, 8 Jun'."""
+    """'2026-06-08' + 'Mon' -> 'Mon, 8 Jun'. A blank day is read off the date.
+
+    Three call sites pass no day at all. `_handle_a_tap` reads `ctx["a_day"]`,
+    which `_swap_kickoff_for_a` has never written, and `_handle_b_tap` passes ""
+    outright, twice. Formatting a blank straight into the template produced
+    ", 8 Jun" -- a label opening on a comma with the weekday silently gone --
+    inside the swap proposal B reads and both confirmations after B accepts.
+    Those three are the highest-stakes DMs this bot sends: two real people are
+    agreeing to trade slots on the strength of the date in them.
+    """
     from datetime import date as _date
     d = _date.fromisoformat(date_iso)
-    return f"{day}, {d.day} {d.strftime('%b')}"
+    return f"{day or d.strftime('%a')}, {d.day} {d.strftime('%b')}"
 
 
 def _user_current_slot(schedule: list, username: str, today) -> Optional[dict]:
@@ -3340,14 +3379,31 @@ def speaker_gaps(roster: Optional[dict], schedule: list) -> list:
     every week, and reported nowhere. Returned as "Name (@username)" strings.
 
     An empty schedule makes everyone a gap - callers check the schedule first.
+
+    A slot is credited to the member who HOLDS it, by username, whenever the row
+    is bound. Matching on display name alone reopened the exact hole this
+    function exists to close: two active members sharing a display name both read
+    as covered while only one of them had a slot, so the other sat out the whole
+    cycle and nothing anywhere said so. `build_roster_by_name` refuses to guess
+    between such members and logs the ambiguity; this counted it as resolved.
+    Only a row `build_schedule` could not bind (a speaker name with no roster
+    match, `speaker_username` None) still falls back to the name, because a name
+    is the only thing that row carries.
     """
-    scheduled = {str(e.get("speaker_name") or "").strip() for e in schedule}
+    scheduled_handles = {str(e.get("speaker_username") or "").strip().lower()
+                         for e in schedule if e.get("speaker_username")}
+    unbound_names = {str(e.get("speaker_name") or "").strip()
+                     for e in schedule if not e.get("speaker_username")}
     out = []
     for username, rec in (roster or {}).items():
         if not rec.get("active", True) or rec.get("excluded_from_fireside"):
             continue
         name = str(rec.get("name") or "").strip()
-        if not name or name in scheduled:
+        if not name:
+            continue
+        if str(username).strip().lower() in scheduled_handles:
+            continue
+        if name in unbound_names:
             continue
         out.append(f"{name} (@{username})")
     return sorted(out)
@@ -3757,6 +3813,14 @@ def cmd_email_backup(args) -> None:
 
     sent = 0
     skipped = 0
+    # Two silent drops used to leave no trace at all. The summary line reported
+    # `sent` and `skipped`, where `skipped` counts ONLY the members who had
+    # already engaged with the bot -- so a speaker with no e-mail in the sheet,
+    # or one whose schedule row names a handle the roster does not carry, fell
+    # out of the loop and the line read as though the whole window was handled.
+    # They are exactly the people this command exists for. Counted and named now.
+    no_email: list[str] = []
+    not_in_roster: list[str] = []
     for entry in schedule:
         username = entry.get("speaker_username")
         if not username:
@@ -3767,10 +3831,12 @@ def cmd_email_backup(args) -> None:
             continue  # only current 2-week window
         roster_entry = roster.get(username)
         if not roster_entry:
+            not_in_roster.append(str(username))
             continue
         user_id = roster_entry.get("telegram_user_id")
         email = roster_entry.get("email")
         if not email:
+            no_email.append(str(username))
             continue
         if user_id and user_id in responded_user_ids:
             skipped += 1
@@ -3787,7 +3853,14 @@ def cmd_email_backup(args) -> None:
         #
         # This mails on both Sundays inside the window, mirroring the two DM
         # nudges (2wk and 3day). It is two emails per session, not one.
-        name = roster_entry["name"].split()[0]
+        # Guarded: `roster_entry["name"].split()[0]` raised KeyError on a record
+        # with no Name and IndexError on a blank one, out of the middle of a send
+        # loop. Earlier addressees had their mail, later ones never would, and the
+        # summary line below was never reached -- a partial send that reported
+        # nothing at all. A handle is a worse greeting than a first name and a
+        # better one than a dead job.
+        raw_name = str(roster_entry.get("name") or "").strip()
+        name = raw_name.split()[0] if raw_name else f"@{username}"
         subject = EMAIL_BACKUP_SUBJECT.format(session_date=entry["session_date"])
         body_text = EMAIL_BACKUP_BODY.format(
             name=name,
@@ -3822,7 +3895,14 @@ def cmd_email_backup(args) -> None:
         _log_dm("email-backup", username, entry["session_date"], user_id, ok, error=err)
         if ok:
             sent += 1
-    print(f"{GREEN}email-backup{RESET}: sent={sent} skipped={skipped}")
+    line = f"{GREEN}email-backup{RESET}: sent={sent} skipped={skipped}"
+    if no_email:
+        line += (f" {YELLOW}no-email={len(no_email)}{RESET} ("
+                 + ", ".join("@" + u for u in sorted(set(no_email))) + ")")
+    if not_in_roster:
+        line += (f" {YELLOW}not-in-roster={len(not_in_roster)}{RESET} ("
+                 + ", ".join("@" + u for u in sorted(set(not_in_roster))) + ")")
+    print(line)
 
 
 # ============================================================
@@ -4043,8 +4123,15 @@ def cmd_unpin_weekly(args) -> None:
 def cmd_log_session(args) -> None:
     """Manually log a session result. Run after each Mon/Wed session.
 
+    `--shared` and `--no-shows` take DISPLAY NAMES, matched against each
+    schedule row's `speaker_name`. Not handles: the example here passed
+    lower-case handles, which match no row, so the documented invocation logged
+    nothing. Since the zero-match guard below it now exits 1, following the
+    docstring produced an error rather than a silent no-op -- but the error names
+    the date, not the thing that was actually wrong.
+
     CLI: python scripts/fireside-bot.py log-session --date 2026-05-12 \
-                                                    --shared misha,junaid,sabina \
+                                                    --shared "Vesper Lynd,Felix Leiter" \
                                                     --no-shows ""
     """
     if not args.date:
@@ -4232,8 +4319,10 @@ def main() -> int:
 
     log_session = sub.add_parser("log-session", help="Log session result, manual (Phase 3)")
     log_session.add_argument("--date", help="Session date YYYY-MM-DD")
-    log_session.add_argument("--shared", help="Comma-separated speakers who shared")
-    log_session.add_argument("--no-shows", default="", help="Comma-separated speakers who no-showed")
+    log_session.add_argument("--shared",
+                             help="Comma-separated speaker DISPLAY NAMES who shared (not handles)")
+    log_session.add_argument("--no-shows", default="",
+                             help="Comma-separated speaker DISPLAY NAMES who no-showed")
     log_session.add_argument("--swaps", default="", help="Comma-separated swap notes")
 
     # Phase 4 - webhook subcommands

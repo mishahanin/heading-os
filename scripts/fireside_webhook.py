@@ -15,6 +15,8 @@ poll cron job is skipped in that mode (Telegram does not allow both webhook
 and getUpdates on the same bot).
 
 Snake-case filename because this module is imported by the daemon.
+
+Tests: tests/test_a_spawn_that_reported_a_daemon_it_never_confirmed.py
 """
 from __future__ import annotations
 
@@ -87,17 +89,34 @@ def create_app(fb_module: Any, secret_token: str, logger: logging.Logger):
         """
         update_id = update.get("update_id")
         bot = fb_module.get_bot()
-        t_start = time.monotonic()
+        t_queued = time.monotonic()
         async with handler_lock:
+            # Started AFTER the lock. Taking it before meant `handler_ms`
+            # silently included time spent queued behind another update, so
+            # under contention it converged on `total_ms` and an operator
+            # graphing handler latency saw lock queueing mislabelled as handler
+            # slowness. The lock's comment above makes a point of STATING the
+            # queueing cost; the metric named "handler" then hid it.
+            t_start = time.monotonic()
             try:
                 await asyncio.to_thread(fb_module._handle_update, bot, update)
             except Exception as e:
-                logger.exception("webhook: _handle_update raised for update=%s: %s",
-                                 update_id, e)
+                # The offset is deliberately NOT advanced: this update's work did
+                # not happen, and acking it would drop it. What was missing is any
+                # record that it failed -- so a permanently-raising update is
+                # re-fetched and re-raised on every poll fallback, forever, with
+                # nothing anywhere naming it. The id is logged at ERROR now, so
+                # the poison message is findable in the daemon log.
+                logger.exception(
+                    "webhook: _handle_update raised for update=%s kind=%s: %s "
+                    "(offset NOT advanced; this update will be re-served on a "
+                    "poll fallback)", update_id, kind, e)
                 return
             t_done = time.monotonic()
-            logger.info("webhook: ok update=%s kind=%s handler_ms=%d total_ms=%d",
+            logger.info("webhook: ok update=%s kind=%s handler_ms=%d queued_ms=%d "
+                        "total_ms=%d",
                         update_id, kind, int((t_done - t_start) * 1000),
+                        int((t_start - t_queued) * 1000),
                         int((t_done - t_recv) * 1000))
             try:
                 if isinstance(update_id, int):
@@ -155,14 +174,20 @@ def create_app(fb_module: Any, secret_token: str, logger: logging.Logger):
         update_id = update.get("update_id")
         if "message" in update:
             kind = "message"
-            msg = update["message"]
+            # `or {}` on both, matching the callback_query branch below. A body
+            # with `"message": null`, `"message": "hi"`, or `"from": null` hit
+            # `.get` on a non-dict and left as a 500 AttributeError -- past this
+            # handler's own stated boundary two comments up, that a malformed
+            # body is the caller's error. Only the logging preview needs these;
+            # `_handle_update` does its own type checks.
+            msg = update["message"] if isinstance(update["message"], dict) else {}
             text_preview = (msg.get("text") or "")[:40]
-            user = msg.get("from", {}).get("username", "?")
+            user = (msg.get("from") or {}).get("username", "?")
             logger.info("webhook: recv update=%s message from=@%s text=%r",
                         update_id, user, text_preview)
         elif "callback_query" in update:
             kind = "callback_query"
-            cq = update["callback_query"]
+            cq = update["callback_query"] if isinstance(update["callback_query"], dict) else {}
             data_preview = (cq.get("data") or "")[:40]
             user = (cq.get("from") or {}).get("username", "?")
             logger.info("webhook: recv update=%s callback_query from=@%s data=%r",

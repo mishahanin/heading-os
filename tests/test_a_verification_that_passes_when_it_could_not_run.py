@@ -398,10 +398,24 @@ def test_the_citation_id_and_page_number_are_escaped():
 
 
 def test_the_dead_normalisation_variable_became_a_drift_check():
-    assert "if concat != norm_concat:" in DOCPARSE_CODE, (
+    """The comparison moved off the lowered text, and had to.
+
+    This asserted `if concat != norm_concat:`, where `concat` was the LOWERED
+    join. That worked only while lowering preserved length. It does not:
+    `"İ".lower()` is two code points, so the lowered join legitimately differs
+    from `_normalize_text`'s output and the guard fired on correct input. The
+    check now compares the pre-lowering sequences, which is what
+    `_normalize_text` actually produces. The invariant is unchanged and the
+    reference value is still read.
+    """
+    assert 'if "".join(norm_chars) != norm_concat:' in DOCPARSE_CODE, (
         "the loop re-implements _normalize_text inline to carry the "
         "char-to-item map; with the reference value unused, nothing compared "
         "them and an edit to _normalize_text would desync the matcher silently"
+    )
+    assert "norm_concat = _normalize_text(raw_concat)" in DOCPARSE_CODE, (
+        "the reference must come from _normalize_text itself, or the guard "
+        "compares the inline copy against another inline copy"
     )
 
 

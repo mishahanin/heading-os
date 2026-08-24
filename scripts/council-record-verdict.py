@@ -25,6 +25,8 @@ Exit codes:
   0 ok (verdict appended; tally printed to stdout)
   2 argument error
   3 transcript file for --id not found (verdict still written; warning)
+
+Tests: tests/test_a_closing_fence_that_only_half_read_crlf.py
 """
 from __future__ import annotations
 
@@ -64,6 +66,15 @@ def latest_verdicts(path: Path) -> dict[str, dict]:
         try:
             rec = json.loads(line)
         except json.JSONDecodeError:
+            continue
+        # `json.loads` answers with any JSON value, and the handler above
+        # catches only a decode failure. A ledger line of `null`, `[]` or `42`
+        # parses fine and then raises AttributeError on `.get` -- after the new
+        # verdict has already been appended, and on every run afterwards until
+        # someone hand-edits the file. `council-models-notify.py` carries this
+        # exact guard with a comment explaining it; the fix had not reached
+        # here.
+        if not isinstance(rec, dict):
             continue
         vid = rec.get("verdict_id")
         if vid:

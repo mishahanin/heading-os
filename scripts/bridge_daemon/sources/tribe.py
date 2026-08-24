@@ -9,6 +9,8 @@ morning glance surfaces who needs attention. Note the CEO memory rule:
 'ALL Tribe members - no cadence alerts; CEO talks daily, only track
 recorded action items' - so days-since-touch is informational, not an
 alert state. We DO NOT mark anyone stale or red based on touch age.
+
+Tests: tests/bridge/test_a_link_the_listing_followed_and_a_search_that_saw_fifty.py
 """
 import logging
 import re
@@ -386,8 +388,13 @@ def read_contact(data_root: "Path | None", slug: str) -> dict:
         OR {"ok": False, "error": str}
 
     HEADING OS engine/data split: crm/contacts/ is DATA, so it resolves under
-    ``data_root``, which falls back to the ``get_data_root()`` seam when not
-    supplied. The dead leading ``workspace_root`` went on 2026-08-24.
+    ``data_root``. Passing None there falls back to the ``get_data_root()``
+    seam; the argument itself is REQUIRED and has no default, unlike its
+    sibling ``list_tribe``. That sentence used to read "when not supplied",
+    which invites ``read_contact(slug=...)`` and a TypeError. The signature
+    cannot take a default without inventing one for ``slug`` as well, so the
+    sentence is what changed. The dead leading ``workspace_root`` went on
+    2026-08-24.
     """
     if data_root is None:
         data_root = get_data_root()

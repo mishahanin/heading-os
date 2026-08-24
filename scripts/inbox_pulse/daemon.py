@@ -31,6 +31,8 @@ On first start (no cursor), the cursor is bootstrapped to now() -- skipping
 any historical email. Each successful poll advances the cursor to the
 datetime_received of the most-recent item processed, so daemon restarts
 resume exactly where they left off.
+
+Tests: tests/test_a_day_that_could_not_be_read_and_was_called_quiet.py
 """
 
 from __future__ import annotations
@@ -147,7 +149,15 @@ def health_check() -> int:
             print(f"{RED}FAIL: {var} not set in .env{RESET}", file=sys.stderr)
             return 1
 
-    # 2. State dir writable
+    # 2. State dir writable.
+    #
+    # `state_dir` is bound BEFORE the try, because get_state_dir() itself
+    # mkdirs and can raise. When it did, the except clause reached for an
+    # unbound local while building its own message, and the operator got
+    # `UnboundLocalError: cannot access local variable 'state_dir'` instead of
+    # the FAIL line this function exists to print. A diagnostic that crashes on
+    # the failure it diagnoses is worse than none.
+    state_dir = "<unresolved>"
     try:
         state_dir = get_state_dir()
         test_file = state_dir / ".health-check.tmp"

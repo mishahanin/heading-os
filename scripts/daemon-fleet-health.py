@@ -21,6 +21,8 @@ Status conventions (matches spec section 3.7):
 
 Phase 3 will plug this into a CEO dashboard surface; for now it's a
 CLI so the CEO can run it from `/state-check` or as a cron.
+
+Tests: tests/test_a_rollback_that_deleted_what_it_never_backed_up.py
 """
 from __future__ import annotations
 
@@ -141,6 +143,18 @@ def _read_heartbeat(workspace: Path, kind: str = "local") -> dict:
     return data
 
 
+def _error_count(value) -> int:
+    """`value` as a count. Anything unreadable counts as one error, not zero."""
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return 1
+
+
 def _read_corporate_config_version(workspace_root: Path) -> str | None:
     """Read corporate/daemon/config.yaml and return its `version:` field
     as a string, or None if the file is missing or unparseable.
@@ -165,6 +179,14 @@ def _read_corporate_config_version(workspace_root: Path) -> str | None:
     try:
         data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
+        return None
+    # `yaml.safe_load` answers with any YAML value. A config of `- a-list` or
+    # a bare scalar parses fine, is truthy so `or {}` does not fire, and then
+    # raises AttributeError on `.get` -- which is not in the except tuple
+    # above. One malformed corporate/daemon/config.yaml took the whole fleet
+    # report down before a single daemon was classified, against a docstring
+    # promising None "if the file is missing or unparseable".
+    if not isinstance(data, dict):
         return None
     v = data.get("version")
     return str(v) if v is not None else None
@@ -204,7 +226,14 @@ def _classify(
         return "error"
     if age > stale_threshold_s:
         return "stale"
-    if record.get("recent_error_count", 0) > 0:
+    # Coerced, not compared raw. Heartbeats are written by other machines --
+    # this file's own comments establish that threat model twice for
+    # `last_heartbeat` -- so `{"recent_error_count": "2"}` is reachable, and
+    # `"2" > 0` raises TypeError, taking down the report, the --json output and
+    # the exit code together. A count that cannot be read as a number is
+    # treated as an error rather than as zero: this branch exists to raise the
+    # alarm, and an unreadable field is not evidence of health.
+    if _error_count(record.get("recent_error_count", 0)) > 0:
         return "error"
     if ceo_version and record.get("version") and record["version"] != ceo_version:
         return "version-mismatch"
@@ -397,7 +426,14 @@ def _print_grid(
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=timezone.utc)
                 age_str = _format_age((datetime.now(timezone.utc) - dt).total_seconds())
-            except ValueError:
+            except (TypeError, ValueError):
+                # TypeError too. `_classify` and `_classify_beat` were widened
+                # to this pair because a heartbeat file can hold VALID JSON
+                # with a non-string timestamp (`{"last_heartbeat": 123}`), and
+                # the grid's own parse of the SAME field was not. So that input
+                # classified cleanly as `error` and then killed the table with
+                # an uncaught TypeError -- the human path down, --json fine, in
+                # the one tool whose job is reporting that things are down.
                 age_str = "?"
         uptime_str = "-"
         if isinstance(r.get("uptime_s"), int):
@@ -426,7 +462,7 @@ def _print_grid(
                     if bdt.tzinfo is None:
                         bdt = bdt.replace(tzinfo=timezone.utc)
                     bage = _format_age((datetime.now(timezone.utc) - bdt).total_seconds())
-                except ValueError:
+                except (TypeError, ValueError):
                     bage = "?"
             print(f"      {GRAY}└ {bname:<14}{RESET} {bcol}{bs:<10}{RESET} {GRAY}beat {bage}{RESET}")
     print()

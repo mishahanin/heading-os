@@ -12,6 +12,8 @@ Usage:
 Environment:
     REPLICATE_API_TOKEN  Loaded from .env via workspace utils.
                          Get one at: https://replicate.com/account/api-tokens
+
+Tests: tests/test_a_retry_that_promised_a_longer_timeout.py
 """
 
 import argparse
@@ -205,19 +207,21 @@ def _download(url: str, dest: Path) -> None:
 def _create_prediction(token: str, model_id: str, input_params: dict) -> dict:
     """Create a prediction and poll until completion."""
     owner, name = model_id.split("/", 1)
+    # The clock starts BEFORE the POST. That request carries `Prefer: wait`,
+    # which Replicate holds open for up to a minute, and it runs with its own
+    # `urlopen(timeout=POLL_TIMEOUT)` -- so starting the clock after it
+    # returned put the single longest wait outside the budget the timeout
+    # message advertises, and "budget 120s" could be printed after 240s of
+    # real blocking. The earlier fix made the LOOP honest and left this.
+    started = time.monotonic()
     prediction = _api_request("POST", f"/models/{owner}/{name}/predictions", token, {"input": input_params})
 
     pred_id = prediction.get("id")
     status = prediction.get("status")
-    info(f"Prediction {pred_id} - status: {status}")
+    info(f"Prediction {pred_id} - status: {status} ({time.monotonic() - started:.0f}s)")
 
     # Measured, not counted. `elapsed += POLL_INTERVAL` summed the SLEEPS and
-    # nothing else, so every poll request's own duration was invisible to it —
-    # and the first POST above carries `Prefer: wait`, which Replicate holds open
-    # for up to a minute before the loop starts. "Timed out after 120s" could
-    # print four minutes in, and each "Status: ... (Ns)" line under-reported the
-    # wait by however long the API took to answer.
-    started = time.monotonic()
+    # nothing else, so every poll request's own duration was invisible to it.
     while status not in ("succeeded", "failed", "canceled"):
         time.sleep(POLL_INTERVAL)
         elapsed = time.monotonic() - started

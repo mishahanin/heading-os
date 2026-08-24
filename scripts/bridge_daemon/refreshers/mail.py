@@ -59,7 +59,18 @@ def read_email_state(data_root: "Path | None" = None) -> dict:
     return data if isinstance(data, dict) else {"messages": []}
 
 def count_unread(state: dict) -> int:
-    return sum(1 for m in state.get("messages", []) if m.get("unread"))
+    """Unread messages in a state dict, however that dict is shaped.
+
+    `read_email_state` above validates only the TOP level, so `messages` can be
+    a list of strings, a dict (iterating one yields its keys), or a number. Each
+    made `m.get` an AttributeError out of a reader family whose stated contract,
+    three lines up, is "degrade to empty". The shape check stopped one level
+    short of the value it actually reads.
+    """
+    messages = state.get("messages")
+    if not isinstance(messages, list):
+        return 0
+    return sum(1 for m in messages if isinstance(m, dict) and m.get("unread"))
 
 def _failure_detail(result: "subprocess.CompletedProcess") -> str:
     """Best available reason for a non-zero producer exit.

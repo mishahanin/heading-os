@@ -10,6 +10,8 @@ Usage:
     python scripts/generate-newsletter-html.py <input.json> [--output-dir DIR] [--images section=path ...]
 
 If --output-dir is omitted, saves to outputs/intel/newsletters/YYYY-MM-DD/
+
+Tests: tests/test_a_morning_calendar_shifted_by_its_own_timezone.py, tests/test_a_table_that_lost_a_deal_and_a_revert_that_froze_the_source.py
 """
 
 import json
@@ -249,8 +251,15 @@ def build_hero(hero_data):
         return ""
 
     kicker = esc(hero_data.get("kicker", "Intelligence Briefing"))
-    title_raw = hero_data.get("title", "")
-    accent_word = hero_data.get("accent_word", "")
+    # `str(... or "")`, matching the guards this file already carries for
+    # `date` ("a JSON number reached fromisoformat and the render died") and
+    # for `the_heading`'s body. The hero title had none: `"title": 42` made
+    # `.split` raise AttributeError, uncaught, and produced no newsletter.
+    # The input JSON is an external document, so its types are not ours.
+    title_raw = str(hero_data.get("title") or "")
+    # Same reason: a non-string here made `accent_word in line` raise
+    # TypeError one loop below.
+    accent_word = str(hero_data.get("accent_word") or "")
     deck = esc(hero_data.get("deck", ""))
 
     # Build title with accent word highlighted and line breaks
@@ -625,7 +634,12 @@ def build_signal_watch(items, section_num=6):
     rows = []
     for i, item in enumerate(items, 1):
         # Support markdown bold in signal items
-        item_html = html.escape(item)
+        # `esc`, not `html.escape`. Every other text path in this file
+        # coerces with `str()` first; this one line did not, and
+        # `html.escape` calls `.replace` on what it is given -- so a bare
+        # number in the JSON list ("signal_watch": ["...", 2026]) raised
+        # AttributeError and no newsletter was produced at all.
+        item_html = esc(item)
         item_html = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", item_html)
         rows.append(f"""
       <div class="signal-row">

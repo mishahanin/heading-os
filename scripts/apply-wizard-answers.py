@@ -2,6 +2,8 @@
 """apply-wizard-answers.py -- sole writer for setup wizard state and output files.
 
 See docs/superpowers/specs/2026-04-24-setup-wizard-design.md section 8 for the full contract.
+
+Tests: tests/test_a_wizard_that_reached_outside_its_own_workspace.py
 """
 from __future__ import annotations
 
@@ -42,6 +44,98 @@ ANSWERS_REL_PATH = Path(".setup") / "answers.json"
 LOG_REL_PATH = Path(".setup") / "wizard.log"
 
 
+def _read_text(path: Path) -> str:
+    """Read UTF-8, and turn a decode failure into this file's own error type.
+
+    `UnicodeDecodeError` subclasses `ValueError`, NOT `OSError`. Every read site
+    here sat under a handler chain of `SchemaError` / `StateWriteError` /
+    `OSError` (`main`) or `(SchemaError, OSError, KeyError)` (`cmd_all`'s
+    planner), so not one of them saw it: a `.env`, a template, a question bank
+    or a rendered output holding a single non-UTF-8 byte produced a raw
+    traceback, including out of the read-only `--all --check`. The file already
+    stated the intended convention in three places -- `load_answers` catches
+    `UnicodeDecodeError` explicitly, `_apply_placeholder_substitution` guards
+    its read, and `main`'s comments call a traceback the thing they exist to
+    prevent -- so the read sites were inconsistent with the script's own
+    contract rather than expressing a different one.
+
+    The path goes in the message. `UnicodeDecodeError` carries the codec, the
+    byte and its offset and never the file it came from, so the bare error told
+    the operator a byte was bad and not which of the workspace's files to open.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        raise SchemaError(
+            f"{path} is not valid UTF-8 ({e.reason} at byte {e.start}). "
+            f"The wizard reads and writes UTF-8 text only."
+        ) from e
+
+
+def _text_or_none(path: Path) -> str | None:
+    """The file's text, or None when it cannot be compared as text.
+
+    For the two "is the file already what we would write?" comparisons. An
+    undecodable or unreadable file is not equal to the rendered text, so None
+    is the honest answer and the caller proceeds to write. Mirrors the
+    `(UnicodeDecodeError, PermissionError)` guard `_apply_placeholder_substitution`
+    already uses, rather than inventing a second convention beside it.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, PermissionError):
+        return None
+
+
+def _git_rel(workspace_root: Path, path: Path) -> str:
+    """A workspace-relative path spelled the way git spells one.
+
+    Two corrections to `str(path.relative_to(workspace_root))`, and `cmd_reset`
+    used that form on both sides of its conversation with git.
+
+    Forward slashes. `str()` on a `WindowsPath` gives backslashes; `git status
+    --porcelain` reports forward slashes on every platform. The dirty check
+    compared `docs\\setup.md` against git's `docs/setup.md`, so on Windows every
+    file the wizard had just written failed the "is this ours?" filter and was
+    reported as foreign uncommitted work. `--reset` without `--force` therefore
+    refused in exactly the state the wizard creates -- the same always-failing
+    gate the comment above that check says was fixed on 2026-08-23, reached
+    again through the path separator. Windows is supported here; the `icacls`
+    branch in `_upsert_env_line` exists for it.
+
+    Resolved, not lexical. `_resolve_output_path` returns the UNRESOLVED join,
+    so a bank output of `docs/../notes.md` stays `docs/../notes.md` through
+    `relative_to`, on Linux too.
+
+    The second consumer is why this matters beyond a refusal. The revert loop
+    feeds `rel` to `git ls-files --error-unmatch` and treats a non-zero exit as
+    "untracked", whose branch is `path.unlink()`. A spelling git will not match
+    does not merely mis-report: it routes a TRACKED file, which `git checkout
+    --` would have restored, into the delete branch instead, under a help line
+    reading "Revert touched files to git-index state".
+    """
+    return path.resolve().relative_to(workspace_root.resolve()).as_posix()
+
+
+def _require_inside(workspace_root: Path, candidate: Path, described: str) -> Path:
+    """Return `candidate`, or raise SchemaError when it leaves the workspace.
+
+    One definition for the invariant the file states twice in prose: "A question
+    bank may not reach past the workspace root." It was enforced on the glob
+    targets and on the rich OUTPUT path, and the two enforcements were separate
+    copies of the same four lines, which is how the third site (the template
+    READ) came to have none at all.
+    """
+    try:
+        candidate.resolve().relative_to(workspace_root.resolve())
+    except ValueError:
+        raise SchemaError(
+            f"{described} resolves outside the workspace at {workspace_root}. "
+            f"A question bank may not reach past the workspace root."
+        ) from None
+    return candidate
+
+
 def resolve_read_path(workspace_root: Path, rel_path) -> Path:
     """Resolve a read-only config/template path across workspace layouts.
 
@@ -51,12 +145,24 @@ def resolve_read_path(workspace_root: Path, rel_path) -> Path:
     checks the root layout first, then falls back to corporate/. Returns the
     primary (root) path if neither exists so error messages point to the
     expected location.
+
+    Containment applies to the READ side too. `target.template` reaches this
+    function straight from the bank, and both branches selected purely on
+    `.exists()`, so `template: "../../etc/hostname"` was read and RENDERED INTO
+    the output document -- an arbitrary host file copied into a workspace file,
+    through the one path the sibling checks had been written for and did not
+    cover. An absolute `rel_path` was the same hole by a shorter route:
+    `workspace_root / "/etc/hostname"` discards the root entirely. Traversal
+    also skipped the root-then-corporate resolution this function exists to do,
+    since `..` climbs out before the fallback is ever consulted.
     """
     rel = Path(rel_path)
-    primary = workspace_root / rel
+    primary = _require_inside(workspace_root, workspace_root / rel,
+                              f"the path {str(rel_path)!r}")
     if primary.exists():
         return primary
-    fallback = workspace_root / "corporate" / rel
+    fallback = _require_inside(workspace_root, workspace_root / "corporate" / rel,
+                               f"the path {str(rel_path)!r}")
     if fallback.exists():
         return fallback
     return primary
@@ -97,7 +203,7 @@ def detect_audience(workspace_root: Path) -> str:
     if not identity_path.exists():
         return "public"
     try:
-        data = json.loads(identity_path.read_text(encoding="utf-8"))
+        data = json.loads(_read_text(identity_path))
     except json.JSONDecodeError as e:
         raise SchemaError(f".workspace-identity.json is malformed: {e}") from e
     if not isinstance(data, dict):
@@ -152,7 +258,7 @@ def load_questions(workspace_root: Path) -> list[dict]:
     if not path.exists():
         raise SchemaError(f"Question bank not found: {path}")
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        data = yaml.safe_load(_read_text(path))
     except yaml.YAMLError as e:
         raise SchemaError(f"Question bank YAML parse error: {e}") from e
     if not isinstance(data, list):
@@ -323,7 +429,7 @@ def _upsert_env_line(env_path: Path, key: str, value: str) -> None:
         )
     lines = []
     if env_path.exists():
-        lines = env_path.read_text(encoding="utf-8").splitlines()
+        lines = _read_text(env_path).splitlines()
     updated = False
     new_line = f"{key}={value}"
     for i, line in enumerate(lines):
@@ -380,10 +486,27 @@ def _mask_secret(value: str) -> str:
 
 
 def _log(workspace_root: Path, message: str) -> None:
+    """Append one diary line. A failure here reports itself and nothing else.
+
+    The single caller is the secret branch, which logs AFTER `.env` is written
+    and the answer is durably saved, and one line before it prints its success
+    JSON. An OSError out of here -- `.setup/wizard.log` existing as a directory
+    is enough -- reached `main`'s OSError handler, which printed "Some workspace
+    files may already have been changed while the answer went unrecorded" and
+    returned EXIT_FILE_WRITE_ERROR. Every part of that was false: the `.env` was
+    written, the answer WAS recorded, and the caller reads the exit code and the
+    absent JSON as a failure, so it may prompt for the same secret again.
+
+    A diary that cannot be written is worth a warning, never a verdict on the
+    operation it was describing.
+    """
     log_path = workspace_root / LOG_REL_PATH
-    log_path.parent.mkdir(exist_ok=True)
-    with log_path.open("a", encoding="utf-8") as f:
-        f.write(f"{_now_iso()} {message}\n")
+    try:
+        log_path.parent.mkdir(exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(f"{_now_iso()} {message}\n")
+    except OSError as e:
+        print(f"WARNING: could not append to {log_path}: {e}", file=sys.stderr)
 
 
 def _iter_matching_files(workspace_root: Path, globs: list[str]):
@@ -400,16 +523,8 @@ def _resolve_output_path(workspace_root: Path, out_rel: str) -> Path:
     workspace root." The rich `output` / `output_exec` path had no equivalent,
     so `../../tmp/escape.md` was written to, and `--reset` then DELETED it.
     """
-    candidate = workspace_root / out_rel
-    try:
-        candidate.resolve().relative_to(workspace_root.resolve())
-    except ValueError:
-        raise SchemaError(
-            f"the rich output {out_rel!r} resolves outside the workspace at "
-            f"{workspace_root}. A question bank may not reach past the "
-            f"workspace root."
-        ) from None
-    return candidate
+    return _require_inside(workspace_root, workspace_root / out_rel,
+                           f"the rich output {out_rel!r}")
 
 
 def _collect_matching_files(workspace_root: Path, globs: list[str]) -> tuple[list[Path], int]:
@@ -451,15 +566,40 @@ def _collect_matching_files(workspace_root: Path, globs: list[str]) -> tuple[lis
     return files, skipped
 
 
-def _apply_placeholder_substitution(path: Path, mapping: dict) -> bool:
-    # Reject values that themselves look like a placeholder token. Prevents
-    # feedback loops if a user answers "{COMPANY}" as their company name.
+def _reject_token_values(mapping: dict) -> None:
+    """Refuse an answer that carries a placeholder token, anywhere in it.
+
+    `search`, not `fullmatch`. The guard rejected an answer that IS a token and
+    passed one that merely CONTAINS one, and the contained case is the one that
+    diverges. `--question` applies a single question's mapping, so `"see {B} for
+    details"` lands verbatim; `--all` merges every answered question's mapping
+    per file and applies them in sequence, so question B's `str.replace` then
+    rewrites the text question A's answer had just inserted. The same answers
+    produce two different files depending on which command wrote them, and the
+    re-apply path reports success either way.
+
+    Refusing is the fix rather than one simultaneous pass, because the single-
+    question path stays order-dependent whichever way `--all` behaves: answer A
+    before B and the token is substituted later, answer B before A and it
+    survives as literal text. There is no application order that makes an answer
+    containing a live token mean one thing.
+
+    `--all` also never ran this guard at all. It builds its merged mapping in
+    `cmd_all` and applies it there, bypassing `_apply_placeholder_substitution`
+    entirely -- so an answer recorded before this check existed, or written by
+    hand into `answers.json`, reached the files unexamined.
+    """
     for placeholder, value in mapping.items():
-        if _PLACEHOLDER_TOKEN_RE.fullmatch(value.strip() if isinstance(value, str) else ""):
+        if _PLACEHOLDER_TOKEN_RE.search(value if isinstance(value, str) else ""):
             raise SchemaError(
-                f"value for {placeholder!r} looks like a placeholder token "
-                f"({value!r}); pick a literal string instead"
+                f"value for {placeholder!r} contains a placeholder token "
+                f"({value!r}); a later question would substitute into it. "
+                f"Pick a literal string instead."
             )
+
+
+def _apply_placeholder_substitution(path: Path, mapping: dict) -> bool:
+    _reject_token_values(mapping)
     try:
         original = path.read_text(encoding="utf-8")
     except (UnicodeDecodeError, PermissionError):
@@ -894,7 +1034,8 @@ def cmd_question(args) -> int:
                   file=sys.stderr)
             return EXIT_SCHEMA_ERROR
 
-        template_text = resolve_read_path(workspace_root, q["target"]["template"]).read_text(encoding="utf-8")
+        template_text = _read_text(
+            resolve_read_path(workspace_root, q["target"]["template"]))
         ctx = {"generated_date": datetime.now().astimezone().date().isoformat()}
         for aid, aentry in answers.items():
             if isinstance(aentry.get("value"), str):
@@ -913,7 +1054,7 @@ def cmd_question(args) -> int:
         out_path = _resolve_output_path(workspace_root, out_rel)
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if out_path.exists() and out_path.read_text(encoding="utf-8") == rendered:
+        if out_path.exists() and _text_or_none(out_path) == rendered:
             files_changed = 0
         else:
             tmp = out_path.with_suffix(out_path.suffix + ".tmp")
@@ -1053,6 +1194,10 @@ def cmd_all(args) -> int:
     # Build the final list of (path, new_bytes) by applying merged mappings.
     merged_journal: list[tuple] = []
     for path, mapping in subst_by_file.items():
+        # The same guard `--question` applies, on the path that never had it.
+        # Raised here rather than during planning because the merge is where the
+        # cross-substitution becomes possible, and nothing has been written yet.
+        _reject_token_values(mapping)
         try:
             original = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, PermissionError):
@@ -1064,8 +1209,12 @@ def cmd_all(args) -> int:
     merged_journal.extend(write_entries)
 
     if args.check:
+        # `_text_or_none`, so the DRY RUN cannot be the thing that crashes. A
+        # rich question whose output file holds non-UTF-8 bytes raised
+        # UnicodeDecodeError straight out of `--check`, past every handler,
+        # from a command whose whole contract is that it writes nothing.
         would = sum(1 for p, nb in merged_journal
-                    if not p.exists() or p.read_text(encoding="utf-8") != nb)
+                    if not p.exists() or _text_or_none(p) != nb)
         print(json.dumps({"dry_run": True, "would_update": would,
                           "planned": [str(p.relative_to(workspace_root))
                                       for p, _ in merged_journal]}))
@@ -1074,7 +1223,7 @@ def cmd_all(args) -> int:
     files_changed = 0
     for path, new_bytes in merged_journal:
         try:
-            if path.exists() and path.read_text(encoding="utf-8") == new_bytes:
+            if path.exists() and _text_or_none(path) == new_bytes:
                 continue
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(path.suffix + ".tmp")
@@ -1127,7 +1276,8 @@ def _plan_question(workspace_root, q, entry, all_answers, audience):
         for path in _iter_matching_files(workspace_root, q["target"]["files"]):
             plans.append(("subst", path, mapping))
     elif q["type"] == "rich":
-        template_text = resolve_read_path(workspace_root, q["target"]["template"]).read_text(encoding="utf-8")
+        template_text = _read_text(
+            resolve_read_path(workspace_root, q["target"]["template"]))
         ctx = {"generated_date": datetime.now().astimezone().date().isoformat()}
         for aid, aentry in all_answers.items():
             if isinstance(aentry.get("value"), str):
@@ -1138,7 +1288,16 @@ def _plan_question(workspace_root, q, entry, all_answers, audience):
         out_rel = (q["target"].get("output_exec")
                    if audience == "exec" and q["target"].get("output_exec")
                    else q["target"]["output"])
-        plans.append(("write", workspace_root / out_rel, rendered))
+        # `_resolve_output_path`, not a bare join. `cmd_question` routed the
+        # single-question path through the guard and this planning path did
+        # not, so `output: "../../tmp/escape.md"` was REFUSED by `--question`
+        # and silently written outside the workspace by `--all`. `cmd_reset`
+        # does check, so it would then refuse to clean up what `--all` created.
+        # An ABSOLUTE `out_rel` was worse still: `workspace_root / "/abs"`
+        # discards the root entirely under pathlib, and `--all --check` then
+        # raised an uncaught ValueError from `relative_to` -- a traceback out
+        # of a dry run.
+        plans.append(("write", _resolve_output_path(workspace_root, out_rel), rendered))
     elif q["type"] == "secret":
         # --all intentionally does NOT regenerate .env lines from masked state.
         # The real secret exists only in .env. If the user deletes .env and runs
@@ -1148,7 +1307,7 @@ def _plan_question(workspace_root, q, entry, all_answers, audience):
         env_var = q["target"]["env_var"]
         env_path = workspace_root / ".env"
         if entry.get("env_written"):
-            env_content = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+            env_content = _read_text(env_path) if env_path.exists() else ""
             # Line-anchored, like the writer `_upsert_env_line`. A substring
             # test let `OTHER_API_KEY=x` satisfy a check for `API_KEY`, so the
             # "marked written but missing" warning never fired.
@@ -1208,7 +1367,7 @@ def cmd_reset(args) -> int:
         if status_out.returncode != 0:
             print(f"ERROR: git status failed: {status_out.stderr}", file=sys.stderr)
             return EXIT_SCHEMA_ERROR
-        ours = {str(p.relative_to(workspace_root)) for p in touched}
+        ours = {_git_rel(workspace_root, p) for p in touched}
         dirty = []
         for line in status_out.stdout.splitlines():
             if not line.strip() or line.startswith("??"):
@@ -1262,7 +1421,7 @@ def cmd_reset(args) -> int:
 
     errors = []
     for path in touched:
-        rel = str(path.relative_to(workspace_root))
+        rel = _git_rel(workspace_root, path)
         check = subprocess.run(
             ["git", "ls-files", "--error-unmatch", rel],
             cwd=workspace_root, capture_output=True, text=True,

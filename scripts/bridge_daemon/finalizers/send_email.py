@@ -52,7 +52,13 @@ def send_drafted(data_root: "Path | None", artifact_id: str) -> dict:
     """
     if data_root is None:
         data_root = get_data_root()
-    if not _ARTIFACT_ID_RE.match(artifact_id):
+    # `isinstance` FIRST. `re.match` on a non-string raises TypeError, not the
+    # ValueError this guard is written to produce, so a JSON body carrying
+    # `"artifact_id": null` reached the endpoint as an unhandled 500 rather than
+    # a clean rejection. The sibling finalizer already does it the right way:
+    # `crm_log.py` opens with `if not isinstance(conv_id, str) or not
+    # conv_id.strip()`. This was the one input validator that did not.
+    if not isinstance(artifact_id, str) or not _ARTIFACT_ID_RE.match(artifact_id):
         raise ValueError(f"invalid artifact_id: {artifact_id!r}")
     draft = data_root / "outputs" / "operations" / "email-intelligence" / "drafts" / f"{artifact_id}.json"
     if not draft.exists():

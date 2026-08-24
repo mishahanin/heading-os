@@ -102,6 +102,13 @@ def _sandbox(tmp_path: Path, seeds: dict[str, str], templates: list[str]) -> Pat
     env var redirects both the template read and the artifact write.
     """
     data_root = tmp_path / "data"
+    # The ROOT itself must exist before `HEADING_OS_DATA` can point at it:
+    # `env_data_root()` honours the override only when it names a real
+    # directory, and a miss falls back to the live overlay. Until 2026-08-24
+    # this line was absent and the root came into being only as a side effect
+    # of pre-creating the output leaves below -- so the two cases with neither
+    # a seed file nor a brand template silently ran against real data.
+    data_root.mkdir(parents=True, exist_ok=True)
     real_templates = get_datastore_dir() / "brand" / "templates"
     if templates:
         dest = data_root.joinpath(*TEMPLATE_DIR)
@@ -115,12 +122,14 @@ def _sandbox(tmp_path: Path, seeds: dict[str, str], templates: list[str]) -> Pat
         target = data_root / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(INPUTS / fixture, target)
-    # Four of the eight save straight to a path without mkdir-ing its parent —
-    # they were written against a workspace where outputs/documents already
-    # existed. Pre-create the standard leaves so the sandbox matches that
-    # assumption; this is scaffolding, not a behaviour change.
-    for leaf in ("documents", "proposals", "deliverables/documents"):
-        (data_root / "outputs" / leaf).mkdir(parents=True, exist_ok=True)
+    # The output leaves are deliberately NOT pre-created. Seven of the eight
+    # saved straight to a path without mkdir-ing its parent, and this sandbox
+    # used to create `documents`, `proposals` and `deliverables/documents` to
+    # match that assumption — scaffolding that made a real FileNotFoundError
+    # on a fresh data root unreachable from the suite. The count in that
+    # comment was wrong too: it said four, and a sweep on 2026-08-24 found
+    # seven. All seven now go through `docx_helpers.save_docx`, which creates
+    # its own parent, so leaving the sandbox bare is what proves it.
     return data_root
 
 

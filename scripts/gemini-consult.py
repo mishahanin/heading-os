@@ -23,6 +23,8 @@ Exit codes:
   0  success, response printed to stdout
   2  argument error or missing API key (argparse + custom validation share this code)
   3  API call failed (network, rate limit, invalid model, etc.)
+
+Tests: tests/test_a_spawn_that_reported_a_daemon_it_never_confirmed.py
 """
 
 from __future__ import annotations
@@ -174,6 +176,17 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"{RED}Error:{RESET} {msg}", file=sys.stderr)
             return 2
         print(f"{RED}Error:{RESET} {msg}", file=sys.stderr)
+        return 3
+    except Exception as e:  # noqa: BLE001 - the exit code IS the contract
+        # Exit 3 is documented as "API call failed", and the /council skill is
+        # written against these codes. A catch limited to RuntimeError let
+        # anything the proxy layer did not wrap -- a ValueError from a malformed
+        # response, an unwrapped OSError -- escape as a traceback and exit 1,
+        # which the skill reads as neither "API failed" nor "ok". The type is
+        # named so an unexpected failure is still diagnosable, rather than
+        # disappearing into a generic message.
+        print(f"{RED}Error:{RESET} unexpected {type(e).__name__} from the proxy "
+              f"call: {e}", file=sys.stderr)
         return 3
 
     # Print response to stdout for the skill to capture

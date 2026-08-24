@@ -4,6 +4,8 @@ Generate ODUN.ONE Complete Capability Document as DOCX.
 Opens the 31C Master Template DOCX (v1.01) which preserves all styles,
 header (logo), footer (31C branding), fonts (GT Standard M), and page setup.
 Clears template body content and writes the full document using native styles.
+
+Tests: tests/test_docx_helpers.py
 """
 
 import sys
@@ -14,11 +16,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
-from scripts.utils.docx_helpers import load_docx, set_cell_shading
+from scripts.utils.docx_helpers import load_docx, save_docx, set_cell_shading
 from scripts.utils.workspace import get_datastore_dir, get_outputs_dir
 
 from copy import deepcopy
-import os
+import re
 
 # ============================================================
 # Configuration / Paths
@@ -32,7 +34,9 @@ OUTPUT = str(get_outputs_dir() / "deliverables" / "documents" /
 # Heading 1: GT Standard M Medium, 18pt, #747DBE (purple-blue)
 # Heading 2: GT Standard M Medium, 14pt, #423BFF (blue)
 # Normal: GT Standard M Light, 11pt, #000000, justified, space_after=8pt
-# Bullets: List Paragraph with numId=1, orange accent #FF9235
+# Bullets: List Paragraph with numId=1. #FF9235 is applied to the bullet
+# TEXT RUNS, not to the marker glyph -- see `add_bullet`. This line used to
+# read "orange accent", which describes the marker.
 # Title: GT Standard M Medium, 36pt, bold, centered, #747DBE
 # Cover metadata: orange #FF9235
 TABLE_HEADER_BG = "423BFF"   # Heading 2 blue for table headers
@@ -79,6 +83,73 @@ def clear_body(doc):
             body.remove(child)
 
 
+# The document's top-level sections, in order: (contents-page text, heading text).
+# ONE list, read by the contents page and by every `h1()` call, so the two cannot
+# disagree again. The two forms differ in case and are both kept verbatim rather
+# than derived from each other: `.title()` turns "AI & MACHINE LEARNING" into
+# "Ai & Machine Learning", and the typography here is the brand's, not ours.
+SECTIONS = (
+    ("Executive Summary", "EXECUTIVE SUMMARY"),
+    ("The Market Imperative", "THE MARKET IMPERATIVE"),
+    ("Platform Overview: The ODUN Methodology", "PLATFORM OVERVIEW: THE ODUN METHODOLOGY"),
+    ("Core Platform Modules", "CORE PLATFORM MODULES"),
+    ("AI & Machine Learning Architecture", "AI & MACHINE LEARNING ARCHITECTURE"),
+    ("AI Training Pipeline: Sovereign Intelligence Without Limits",
+     "AI TRAINING PIPELINE: SOVEREIGN INTELLIGENCE WITHOUT LIMITS"),
+    ("Intelligence Modules", "INTELLIGENCE MODULES"),
+    ("Telecom Use Cases: AI-Driven Network Intelligence",
+     "TELECOM USE CASES: AI-DRIVEN NETWORK INTELLIGENCE"),
+    ("Law Enforcement & National Security Use Cases",
+     "LAW ENFORCEMENT & NATIONAL SECURITY USE CASES"),
+    # Was "AI Analytics for Telco & Law Enforcement: Training Scenarios" on the
+    # contents page and "AI ANALYTICS: TELCO & ..." in the body. The heading wins.
+    ("AI Analytics: Telco & Law Enforcement Training Scenarios",
+     "AI ANALYTICS: TELCO & LAW ENFORCEMENT TRAINING SCENARIOS"),
+    ("Deployment Architecture & Data Sovereignty", "DEPLOYMENT ARCHITECTURE & DATA SOVEREIGNTY"),
+    ("Technical Specifications", "TECHNICAL SPECIFICATIONS"),
+    ("Integration Architecture", "INTEGRATION ARCHITECTURE"),
+    ("Security, Compliance & Governance", "SECURITY, COMPLIANCE & GOVERNANCE"),
+    ("Why ODUN.ONE", "WHY ODUN.ONE"),
+    # Present in the body since this generator was written, absent from the
+    # contents page for just as long.
+    ("Licensing & Support", "LICENSING & SUPPORT"),
+)
+
+_HEADINGS = {heading for _, heading in SECTIONS}
+
+
+def h1(heading):
+    """A top-level heading the contents page is guaranteed to list.
+
+    Wrapping the literal is what makes the guarantee mechanical: a new section
+    added to the body without an entry in SECTIONS raises here instead of
+    shipping a document whose contents page quietly omits it.
+    """
+    if heading not in _HEADINGS:
+        raise KeyError(f"{heading!r} is not in SECTIONS; the contents page "
+                       f"would not list it")
+    return heading
+
+
+
+def contents_lines():
+    """The contents page, one line per section, numbered in document order.
+
+    A function rather than a comprehension inline in `build_document`, because
+    a comprehension buried in a 1300-line builder can only be tested by
+    re-typing it in the test -- and a test that re-implements the code under
+    test passes whatever the code does. Three mutations proved that: reading
+    the wrong half of each tuple, and numbering from zero, both survived a
+    test that recomputed the expression instead of calling it.
+
+    The two-space gap for single digits keeps the titles aligned once the
+    numbering reaches double figures, which it now does: there are sixteen
+    sections, and the list used to stop at fifteen.
+    """
+    return [f"{i}.{'  ' if i < 10 else ' '}{toc}"
+            for i, (toc, _) in enumerate(SECTIONS, 1)]
+
+
 def add_heading(doc, text, level=1):
     """Add heading using template's native Heading styles."""
     h = doc.add_heading(text, level=level)
@@ -110,7 +181,22 @@ def add_rich_para(doc, parts):
 
 
 def add_bullet(doc, text, bold_prefix=None):
-    """Add bullet using template's List Paragraph + numId=1 (orange bullet)."""
+    """Add a bullet: template List Paragraph + numId=1, ORANGE BULLET TEXT.
+
+    The docstring used to say "orange bullet" and the header comment said
+    "orange accent #FF9235", both of which name the MARKER glyph -- whose colour
+    comes from the template's numbering.xml and is untouched by anything here.
+    What the code actually does is set `run.font.color.rgb = ORANGE` on the text
+    runs, so every one of the roughly 150 bulleted lines renders as orange body
+    text rather than the brand's black Normal.
+
+    Described, not changed. Whether a customer-facing capability document should
+    carry orange bullet body text is a brand decision and the operator's, not a
+    defect to fix mid-audit -- and #FF9235 matches neither `--orange` (#F5922B)
+    nor `--orange-hi` (#FF8C00) in reference/corporate-style-guide.md, which is a
+    third question for the same person. What IS fixed is the contradiction: a
+    reader can no longer take the docstring's word for what the colour applies to.
+    """
     p = doc.add_paragraph(style='List Paragraph')
     # Apply the numbering from the template (numId=1, ilvl=0)
     ppr = p._element.get_or_add_pPr()
@@ -230,6 +316,45 @@ def add_table(doc, headers, rows, col_widths_cm=None):
 # ============================================================
 # Rendering / Document Builder
 # ============================================================
+
+# Editorial placeholders the document ships with, and the scan that names them.
+# `[N]+`, `[$X]B` and the two `[HQ City ...]` tokens go to the recipient verbatim
+# inside a file called "Complete Capability Document.docx" that generates its own
+# "Confidential -- For Authorized Recipients Only" line. They are deliberate --
+# this IS a template for a human editing pass -- and nothing anywhere said so,
+# and nothing checked whether the pass had happened.
+#
+# So the scan reports rather than refuses. Refusing would break the workflow that
+# produces the template; staying silent is what let a placeholder reach a
+# customer. The count and the tokens are printed after every build.
+PLACEHOLDER_RE = re.compile(r"\[(?:[A-Z$][^\]]*)\]")
+
+
+def find_placeholders(doc):
+    """Every unresolved `[TOKEN]` in the document body and its tables."""
+    found = []
+    for para in doc.paragraphs:
+        found.extend(PLACEHOLDER_RE.findall(para.text))
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                found.extend(PLACEHOLDER_RE.findall(cell.text))
+    return found
+
+
+def report_placeholders(doc):
+    """Name what still needs a human before this goes out. Never fatal."""
+    found = find_placeholders(doc)
+    if not found:
+        return []
+    unique = sorted(set(found))
+    print(f"[generate-odunone-docx] {len(found)} editorial placeholder(s) remain, "
+          f"{len(unique)} distinct: {', '.join(unique)}", file=sys.stderr)
+    print("[generate-odunone-docx] REPLACE THESE BEFORE SENDING. The document "
+          "declares itself confidential and complete.", file=sys.stderr)
+    return unique
+
+
 def build_document():
     """Build the complete DOCX from the 31C template."""
     _ensure_docx()
@@ -295,23 +420,14 @@ def build_document():
     # ============================================================
     add_heading(doc, "TABLE OF CONTENTS", 1)
 
-    toc_items = [
-        "1.  Executive Summary",
-        "2.  The Market Imperative",
-        "3.  Platform Overview: The ODUN Methodology",
-        "4.  Core Platform Modules",
-        "5.  AI & Machine Learning Architecture",
-        "6.  AI Training Pipeline: Sovereign Intelligence Without Limits",
-        "7.  Intelligence Modules",
-        "8.  Telecom Use Cases: AI-Driven Network Intelligence",
-        "9.  Law Enforcement & National Security Use Cases",
-        "10. AI Analytics for Telco & Law Enforcement: Training Scenarios",
-        "11. Deployment Architecture & Data Sovereignty",
-        "12. Technical Specifications",
-        "13. Integration Architecture",
-        "14. Security, Compliance & Governance",
-        "15. Why ODUN.ONE",
-    ]
+    # Derived from SECTIONS, never re-typed. The list here used to be sixteen
+    # hand-written strings for a document with seventeen Heading 1s: LICENSING &
+    # SUPPORT was missing from the contents page entirely, and entry 10 read "AI
+    # Analytics for Telco & Law Enforcement: Training Scenarios" against a
+    # heading that says "AI ANALYTICS: TELCO & LAW ENFORCEMENT TRAINING
+    # SCENARIOS" -- close enough to look right, different enough that searching
+    # the contents entry against the body finds nothing.
+    toc_items = contents_lines()
     for item in toc_items:
         p = doc.add_paragraph(style='Normal')
         run = p.add_run(item)
@@ -322,7 +438,7 @@ def build_document():
     # ============================================================
     # SECTION 1: EXECUTIVE SUMMARY
     # ============================================================
-    add_heading(doc, "EXECUTIVE SUMMARY", 1)
+    add_heading(doc, h1("EXECUTIVE SUMMARY"), 1)
 
     add_normal(doc, "ODUN.ONE is the world's first AI-native sovereign deep packet intelligence platform. Built from a clean-slate architecture with zero legacy code, it transforms raw network traffic into actionable intelligence at carrier scale -- observing, decoding, understanding, and navigating terabits of data per second in real time.")
 
@@ -365,7 +481,7 @@ def build_document():
     # ============================================================
     # SECTION 2: THE MARKET IMPERATIVE
     # ============================================================
-    add_heading(doc, "THE MARKET IMPERATIVE", 1)
+    add_heading(doc, h1("THE MARKET IMPERATIVE"), 1)
     add_heading(doc, "Four Unstoppable Forces", 2)
 
     add_normal(doc, "The network intelligence landscape is being reshaped by four forces that legacy DPI systems were never designed to handle:")
@@ -388,7 +504,7 @@ def build_document():
     # ============================================================
     # SECTION 3: PLATFORM OVERVIEW
     # ============================================================
-    add_heading(doc, "PLATFORM OVERVIEW: THE ODUN METHODOLOGY", 1)
+    add_heading(doc, h1("PLATFORM OVERVIEW: THE ODUN METHODOLOGY"), 1)
     add_normal(doc, "ODUN.ONE operates through a continuous four-step intelligence cycle that transforms raw network data into decisive action:")
 
     odun_steps = [
@@ -431,7 +547,7 @@ def build_document():
     # ============================================================
     # SECTION 4: CORE PLATFORM MODULES
     # ============================================================
-    add_heading(doc, "CORE PLATFORM MODULES", 1)
+    add_heading(doc, h1("CORE PLATFORM MODULES"), 1)
     add_normal(doc, "ODUN.ONE is built from four modular components, each deployable independently or as an integrated suite:")
 
     # DataONE
@@ -519,7 +635,7 @@ def build_document():
     # ============================================================
     # SECTION 5: AI & ML ARCHITECTURE
     # ============================================================
-    add_heading(doc, "AI & MACHINE LEARNING ARCHITECTURE", 1)
+    add_heading(doc, h1("AI & MACHINE LEARNING ARCHITECTURE"), 1)
 
     add_heading(doc, "Why AI-Native Matters", 2)
     add_normal(doc, "ODUN.ONE was designed from day one with artificial intelligence at its core -- not as an afterthought bolted onto a legacy inspection engine. Every architectural decision, from the data pipeline to the storage layer to the API surface, was made to support continuous machine learning at carrier scale.")
@@ -569,7 +685,7 @@ def build_document():
     # ============================================================
     # SECTION 6: AI TRAINING PIPELINE
     # ============================================================
-    add_heading(doc, "AI TRAINING PIPELINE: SOVEREIGN INTELLIGENCE WITHOUT LIMITS", 1)
+    add_heading(doc, h1("AI TRAINING PIPELINE: SOVEREIGN INTELLIGENCE WITHOUT LIMITS"), 1)
 
     add_heading(doc, "The Sovereignty Advantage in AI Training", 2)
     add_normal(doc, "This is the single most important differentiator of ODUN.ONE's AI architecture.", bold=True)
@@ -650,7 +766,7 @@ def build_document():
     # ============================================================
     # SECTION 7: INTELLIGENCE MODULES
     # ============================================================
-    add_heading(doc, "INTELLIGENCE MODULES", 1)
+    add_heading(doc, h1("INTELLIGENCE MODULES"), 1)
     add_normal(doc, "ODUN.ONE organizes its intelligence outputs into four use-case-driven modules:")
 
     intel_modules = [
@@ -689,7 +805,7 @@ def build_document():
     # ============================================================
     # SECTION 8: TELECOM USE CASES
     # ============================================================
-    add_heading(doc, "TELECOM USE CASES: AI-DRIVEN NETWORK INTELLIGENCE", 1)
+    add_heading(doc, h1("TELECOM USE CASES: AI-DRIVEN NETWORK INTELLIGENCE"), 1)
 
     add_heading(doc, "Data Monetization & Revenue Optimization", 2)
     for bold_part, normal_part in [
@@ -729,7 +845,7 @@ def build_document():
     # ============================================================
     # SECTION 9: LAW ENFORCEMENT & NATIONAL SECURITY
     # ============================================================
-    add_heading(doc, "LAW ENFORCEMENT & NATIONAL SECURITY USE CASES", 1)
+    add_heading(doc, h1("LAW ENFORCEMENT & NATIONAL SECURITY USE CASES"), 1)
     add_normal(doc, "ODUN.ONE provides comprehensive capabilities for authorized law enforcement and national security operations. Every capability is designed with built-in governance, audit trails, and compliance frameworks.")
 
     # 9.1
@@ -885,7 +1001,7 @@ def build_document():
     # ============================================================
     # SECTION 10: AI TRAINING SCENARIOS
     # ============================================================
-    add_heading(doc, "AI ANALYTICS: TELCO & LAW ENFORCEMENT TRAINING SCENARIOS", 1)
+    add_heading(doc, h1("AI ANALYTICS: TELCO & LAW ENFORCEMENT TRAINING SCENARIOS"), 1)
     add_normal(doc, "This section describes how ODUN.ONE's sovereign AI platform can be trained for specific use cases. Because the platform operates entirely within sovereign infrastructure, there are virtually no restrictions on what the AI can be taught to detect, classify, predict, or act upon.")
 
     add_heading(doc, "Telco AI Training Scenarios", 2)
@@ -977,7 +1093,7 @@ def build_document():
     # ============================================================
     # SECTION 11: DEPLOYMENT ARCHITECTURE
     # ============================================================
-    add_heading(doc, "DEPLOYMENT ARCHITECTURE & DATA SOVEREIGNTY", 1)
+    add_heading(doc, h1("DEPLOYMENT ARCHITECTURE & DATA SOVEREIGNTY"), 1)
 
     add_heading(doc, "Deployment Options", 2)
 
@@ -1011,7 +1127,7 @@ def build_document():
     # ============================================================
     # SECTION 12: TECHNICAL SPECIFICATIONS
     # ============================================================
-    add_heading(doc, "TECHNICAL SPECIFICATIONS", 1)
+    add_heading(doc, h1("TECHNICAL SPECIFICATIONS"), 1)
 
     add_heading(doc, "Hardware Reference Configuration", 2)
     add_normal(doc, "HP ProLiant DL385 G11 (2U Rack-Mounted)", italic=True)
@@ -1072,7 +1188,7 @@ def build_document():
     # ============================================================
     # SECTION 13: INTEGRATION ARCHITECTURE
     # ============================================================
-    add_heading(doc, "INTEGRATION ARCHITECTURE", 1)
+    add_heading(doc, h1("INTEGRATION ARCHITECTURE"), 1)
 
     add_heading(doc, "4G EPC Integration", 2)
     add_table(doc,
@@ -1117,7 +1233,7 @@ def build_document():
     # ============================================================
     # SECTION 14: SECURITY, COMPLIANCE & GOVERNANCE
     # ============================================================
-    add_heading(doc, "SECURITY, COMPLIANCE & GOVERNANCE", 1)
+    add_heading(doc, h1("SECURITY, COMPLIANCE & GOVERNANCE"), 1)
 
     add_heading(doc, "Security Features", 2)
     add_table(doc,
@@ -1165,7 +1281,7 @@ def build_document():
     # ============================================================
     # SECTION 15: WHY ODUN.ONE
     # ============================================================
-    add_heading(doc, "WHY ODUN.ONE", 1)
+    add_heading(doc, h1("WHY ODUN.ONE"), 1)
 
     add_heading(doc, "The Only Platform That Combines", 2)
 
@@ -1203,7 +1319,7 @@ def build_document():
     # ============================================================
     # LICENSING & SUPPORT
     # ============================================================
-    add_heading(doc, "LICENSING & SUPPORT", 1)
+    add_heading(doc, h1("LICENSING & SUPPORT"), 1)
 
     add_heading(doc, "Licensing Models", 2)
     for b in [
@@ -1284,10 +1400,11 @@ def build_document():
     run.font.size = Pt(8.5)
     run.italic = True
 
-    # Save
-    os.makedirs(os.path.dirname(OUTPUT), exist_ok=True)
-    doc.save(OUTPUT)
+    # Save. `save_docx` creates the parent itself, so the `os.makedirs` that
+    # used to sit here is gone with it.
+    save_docx(doc, OUTPUT)
     print(f"DOCX generated successfully: {OUTPUT}")
+    report_placeholders(doc)
 
 
 # ============================================================

@@ -72,10 +72,22 @@ def body_text(path: Path, after_separator: bool = False) -> str:
 
 
 def reply_subject(parent_subject: str) -> str:
-    """Prefix with Re: unless the parent subject already carries one."""
-    if parent_subject.lower().startswith("re:"):
-        return parent_subject
-    return f"Re: {parent_subject}"
+    """Prefix with Re: unless the parent subject already carries one.
+
+    Returns "" for a parent with no subject, rather than the bare "Re: ".
+    `parent_headers` defaults a missing Subject header to "", and this used to
+    hand back `"Re: "` -- a TRUTHY string with a trailing space, which then
+    sailed past the `if not subject` guard in `main()` that exists to refuse a
+    subject-less draft. A Gmail message with no Subject header is ordinary, so
+    the path was reachable, and the result was a draft addressed to a real
+    recipient whose subject line read "Re: " and nothing else.
+    """
+    stripped = (parent_subject or "").strip()
+    if not stripped:
+        return ""
+    if stripped.lower().startswith("re:"):
+        return stripped
+    return f"Re: {stripped}"
 
 
 def build_message(to, cc, bcc, subject, body, attachments, in_reply_to=None) -> EmailMessage:
@@ -149,6 +161,11 @@ def main() -> int:
         in_reply_to, parent_subject, thread_id = parent_headers(service, args.reply_to_message)
         if not subject:
             subject = reply_subject(parent_subject)
+            if not subject:
+                print(f"{YELLOW}the message being replied to has no Subject, "
+                      f"so there is nothing to build a reply subject from; "
+                      f"pass --subject explicitly{RESET}", file=sys.stderr)
+                return 2
     if not subject:
         print(f"{YELLOW}--subject is required unless --reply-to-message is given{RESET}", file=sys.stderr)
         return 2

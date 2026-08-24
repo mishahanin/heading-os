@@ -12,6 +12,8 @@ Usage:
     python scripts/generate-crm-dashboard.py --pdf            # HTML + PDF
     python scripts/generate-crm-dashboard.py --json           # raw data as JSON
     python scripts/generate-crm-dashboard.py --output-dir DIR # custom output dir
+
+Tests: tests/test_a_data_root_override_that_was_silently_ignored.py, tests/test_html_generators_render.py
 """
 
 import argparse
@@ -229,7 +231,17 @@ def collect_exec_registry():
         return {"version": "1.0", "executives": []}
     try:
         return json.loads(EXEC_REGISTRY_FILE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as e:
+        # Named, not swallowed. A trailing comma in exec-registry.json used to
+        # produce the perfectly legitimate-looking line "Registry: 0 active
+        # executives", a header badge reading "0 Execs", and scorecards with
+        # every title blank -- with nothing anywhere distinguishing a corrupt
+        # file from a company that has no executives. Both sibling collectors
+        # in this module print on failure; this one did not.
+        print(f"[generate-crm-dashboard] exec registry unreadable "
+              f"({EXEC_REGISTRY_FILE}): {e}. Continuing with an EMPTY registry "
+              f"-- titles and exec counts below are not to be trusted.",
+              file=sys.stderr)
         return {"version": "1.0", "executives": []}
 
 
@@ -317,7 +329,19 @@ def build_css():
 # ============================================================
 def build_header(logo_b64, exec_count, total_contacts):
     date_long = NOW.strftime("%A, %B %d, %Y")
+    # The zone's own abbreviation, not the words "the configured timezone".
+    # That literal was a placeholder nobody replaced, and it rendered verbatim
+    # in every dashboard and every PDF: a page headed "Internal - CEO Eyes
+    # Only" told its reader the time was "14:32 (the configured timezone)".
+    # `NOW` is already built with `get_default_tz()`, so the real name was
+    # there the whole time. `tzname()` can return None for a zone with no
+    # abbreviation, and the whole parenthetical is dropped when it does. Not
+    # because "None" would print -- `esc()` maps a falsy value to "" -- but
+    # because it would leave a bare "14:32 ()" in the header, which reads as a
+    # rendering fault rather than as a time.
     time_str = NOW.strftime("%H:%M")
+    zone = NOW.tzname()
+    time_html = f"{esc(time_str)} ({esc(zone)})" if zone else esc(time_str)
     logo_html = ""
     if logo_b64:
         logo_html = f'<img class="header-logo" src="{logo_b64}" alt="31C"/>'
@@ -330,7 +354,7 @@ def build_header(logo_b64, exec_count, total_contacts):
   <div class="header-right">
     <span class="header-badge badge-accent">{exec_count} Exec{"s" if exec_count != 1 else ""}</span>
     <span class="header-badge badge-muted">{total_contacts} Contacts</span>
-    <div class="header-date">{esc(date_long)}<br/>{esc(time_str)} (the configured timezone)</div>
+    <div class="header-date">{esc(date_long)}<br/>{time_html}</div>
   </div>
 </div>
 """
@@ -347,6 +371,9 @@ def active_exec_count(exec_registry):
                if e.get("status") == "active")
 
 
+_HEALTH_WARNED: set[tuple[str, str]] = set()
+
+
 def _health_counts(contacts):
     """Contacts per health card. Every contact lands in exactly one.
 
@@ -354,14 +381,24 @@ def _health_counts(contacts):
     Health column read "BLUE", "amber" or nothing at all was counted in the
     header's total and in none of the four cards. The cards stopped summing to
     the total and nothing said why. An unrecognised value is GRAY, and named
-    once on stderr so the source row can be fixed.
+    on stderr so the source row can be fixed.
+
+    "Named ONCE" is what this used to promise and could not keep: the helper
+    runs two or three times per invocation (the health cards, the exec
+    scorecards' source data, the JSON export, and since 2026-08-24 the console
+    summary too), so one bad row printed one warning per call. The dedupe set
+    below makes the claim true again -- once per offending contact and value,
+    for the life of the process, no matter how many callers ask.
     """
     counts = {"RED": 0, "YELLOW": 0, "GREEN": 0, "GRAY": 0}
     for c in contacts:
         h = str(c.get("health") or "").strip().upper()
         if h not in counts:
-            print(f"  Warning: contact {c.get('name', '?')!r} has health "
-                  f"{c.get('health')!r}; counted as GRAY", file=sys.stderr)
+            key = (str(c.get("name", "?")), str(c.get("health")))
+            if key not in _HEALTH_WARNED:
+                _HEALTH_WARNED.add(key)
+                print(f"  Warning: contact {c.get('name', '?')!r} has health "
+                      f"{c.get('health')!r}; counted as GRAY", file=sys.stderr)
             h = "GRAY"
         counts[h] += 1
     return counts
@@ -413,12 +450,30 @@ def build_exec_scorecards(ownership_data, radar_contacts, heartbeat):
         # Get contact count from heartbeat
         file_count = heartbeat.get(ex["slug"], ex["total"])
 
-        # Find top 3 overdue contacts for this exec
+        # Find top 3 overdue contacts for this exec.
+        #
+        # Matched on the WHOLE owner string, not on a surname substring. Both
+        # sides of this comparison are produced by one function from one slug:
+        # `aggregate-crm.slug_to_display_name` writes the radar's Owner cell
+        # and the `## <name> (`slug`)` header of ownership-map.md that
+        # `collect_ownership` parses into `ex["name"]`. Substring-matching the
+        # last word of that against free text was wrong in both directions.
+        # False positive: exec "Ann Li" claimed every contact owned by "Julia
+        # Li", "Ali Reza" or "Compliance Team". False negative: an Owner cell
+        # reading "A. Li", initials, or two names dropped out of every
+        # scorecard, so a card could read "3 red" and list no overdue names at
+        # all, or list names belonging to someone else. Wrong names under the
+        # wrong executive, on a page headed CEO Eyes Only.
+        #
+        # Two execs whose slugs collapse to one display name would both match.
+        # That ambiguity is in the data format, not here, and the substring
+        # version had it too.
+        owner_key = ex["name"].strip().lower()
         overdue = []
         for c in radar_contacts:
             if (c["health"] == "RED"
                     and c["owner"]
-                    and ex["name"].split()[-1].lower() in c["owner"].lower()):
+                    and c["owner"].strip().lower() == owner_key):
                 overdue.append(c["name"])
                 if len(overdue) >= 3:
                     break
@@ -765,11 +820,14 @@ def main():
     print(f"  Registry: {len(active_execs)} active executives")
 
     radar_contacts = collect_radar()
-    health_counts = {"RED": 0, "YELLOW": 0, "GREEN": 0, "GRAY": 0}
-    for c in radar_contacts:
-        h = c["health"].upper()
-        if h in health_counts:
-            health_counts[h] += 1
+    # Through `_health_counts`, like the HTML and the JSON export. This block
+    # used to carry its own copy of the exact pattern that helper's docstring
+    # describes as the OLD defect -- `if h in counts: counts[h] += 1` -- so a
+    # contact whose Health cell read "amber", "BLUE" or nothing landed in the
+    # header total and in none of the four buckets. The rendered page counted
+    # it as GRAY and the console line below did not, and the two outputs of one
+    # run disagreed by one with nothing saying why.
+    health_counts = _health_counts(radar_contacts)
     print(f"  Radar: {len(radar_contacts)} contacts "
           f"({health_counts['RED']} red, {health_counts['YELLOW']} yellow, "
           f"{health_counts['GREEN']} green, {health_counts['GRAY']} gray)")

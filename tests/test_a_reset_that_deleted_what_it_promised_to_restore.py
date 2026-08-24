@@ -228,11 +228,18 @@ def test_a_path_that_only_looks_like_an_escape_is_allowed(wiz, tmp_path):
         (tmp_path / "b.md").resolve()
 
 
-def test_both_rich_paths_go_through_the_resolver():
+def test_every_rich_path_goes_through_the_resolver():
+    """Three call sites now, not two.
+
+    `cmd_question` and `cmd_reset` were the original pair. `_plan_question`'s
+    rich branch was the third and had a bare join, which is what let `--all`
+    write outside the workspace while `--question` refused the same bank.
+    """
     code = _code("apply-wizard-answers.py")
     assert "out_path = workspace_root / out_rel" not in code
     assert "touched.add(workspace_root / out_rel)" not in code
-    assert code.count("_resolve_output_path(workspace_root, out_rel)") == 2
+    assert 'plans.append(("write", workspace_root / out_rel' not in code
+    assert code.count("_resolve_output_path(workspace_root, out_rel)") == 3
 
 
 # ============================================================

@@ -6,8 +6,14 @@ Phase 1.154 adds config snapshot/revert support per spec section 3.6:
   daemon boot, keeping only the last 3 snapshots. The `seq` prefix is what
   orders them; the timestamp is for humans.
 - list_snapshots() returns sorted snapshot paths (newest first).
-- revert_config() restores the most recent snapshot to
-  .daemon-state/config.yaml (per-user override path). NO RESTART IS NEEDED:
+- revert_config() restores the most recent PRIOR snapshot to
+  .daemon-state/config.yaml (per-user override path) -- index 1, not index 0,
+  because index 0 is the snapshot this boot just took. This line read "the most
+  recent snapshot" until 2026-08-25, which describes a no-op: an operator
+  reading only this header would expect `--revert-config` to restore the file
+  it is already running, and be surprised when it rolled back a generation.
+  `revert_config`'s own docstring had it right the whole time. NO RESTART IS
+  NEEDED:
   ConfigState.reconcile() stats both layers on a 60-second tick and reloads on
   an mtime change, so a revert applies within that tick. This said "CEO must
   restart the daemon to apply", which sent an operator to restart something
@@ -23,6 +29,7 @@ Phase 1.154 adds config snapshot/revert support per spec section 3.6:
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
+from stat import S_ISREG
 from typing import Any
 import yaml
 
@@ -121,13 +128,32 @@ def load_config(workspace_root: Path) -> dict[str, Any]:
     return cfg
 
 
+def _mtime_or_none(path: Path) -> float | None:
+    """One `stat`, no pre-check. Missing, unreadable, or not a file -> None.
+
+    `path.stat() if path.is_file() else None` asks twice and can get two
+    different answers: a config deleted between the check and the stat raises
+    FileNotFoundError, and that escaped `ConfigState.reconcile()` into whatever
+    drives the 60-second tick. Every other read in this file treats a missing
+    or unreadable layer as absent and says so ("SKIPPED, never fatal"); this
+    one call was the exception, in the function that runs on a timer.
+
+    Still regular-file only. `stat()` succeeds on a DIRECTORY, where `is_file()`
+    said no, and a directory's mtime moves whenever a file is added inside it --
+    which would have turned a misconfigured path into a reload every tick.
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return st.st_mtime if S_ISREG(st.st_mode) else None
+
+
 def _config_mtimes(workspace_root: Path) -> dict[str, float | None]:
     """Return current mtimes for both config layers. Missing -> None."""
-    corp = workspace_root / "corporate" / "daemon" / "config.yaml"
-    user = workspace_root / ".daemon-state" / "config.yaml"
     return {
-        "corporate": corp.stat().st_mtime if corp.is_file() else None,
-        "user": user.stat().st_mtime if user.is_file() else None,
+        "corporate": _mtime_or_none(_corp_path(workspace_root)),
+        "user": _mtime_or_none(_user_path(workspace_root)),
     }
 
 
@@ -167,10 +193,26 @@ class ConfigState:
         current = _config_mtimes(self.workspace_root)
         if current == self._mtimes:
             return False
+        moved = [layer for layer, mtime in current.items()
+                 if mtime != self._mtimes.get(layer)]
         self.config = load_config(self.workspace_root)
         self._mtimes = current
         self.last_reload_at = datetime.now(timezone.utc)
         self.reload_count += 1
+        # The line the class docstring quotes the spec as requiring, and which
+        # this method never emitted. A corporate config push -- including a bad
+        # one -- was applied in total silence: nothing on disk recorded WHEN the
+        # daemon's behaviour changed or WHICH layer moved. `last_reload_at` and
+        # `reload_count` live in memory only, so a restart takes the sole
+        # evidence with it, and a restart is what usually follows the change
+        # somebody is trying to explain.
+        #
+        # The moved layer is named too. "config_reloaded" alone does not say
+        # whether the push came from corporate or from a local override, which
+        # is the first question anyone asks.
+        logger.info("config_reloaded version=%s layers=%s reload_count=%s",
+                    self.config.get("version"), ",".join(moved) or "none",
+                    self.reload_count)
         return True
 
 

@@ -16,6 +16,8 @@ Prerequisites:
     Node.js 18+  (https://nodejs.org/)
     npm install -g @llamaindex/liteparse
     pip install liteparse==2.0.0
+
+Tests: tests/test_a_citation_that_pointed_at_the_wrong_document.py
 """
 
 import argparse
@@ -65,13 +67,32 @@ PLAINTEXT_EXTENSIONS = {".txt", ".md", ".rst", ".csv", ".tsv"}
 # Cache Helpers
 # ============================================================
 
-def _cache_key(file_path: Path, password: str = "") -> str:
-    """Compute cache key from resolved path, size, mtime, and optional password.
+def _cache_key(
+    file_path: Path,
+    password: str = "",
+    pages: str | None = None,
+    dpi: int = DEFAULT_DPI,
+) -> str:
+    """Compute the cache key for one parse REQUEST, not just for the file.
 
-    Uses Path.resolve() which normalizes case on Windows NTFS.
+    `pages` and `dpi` are part of the key because they change the content of
+    the returned document. Keyed on the file alone, `--pages 1-2` wrote a
+    two-page result that every later full parse of the same file was served as
+    if it were the whole document -- and the cached dict carries `"dpi": dpi`
+    from whichever run populated it, so the substitution labelled itself
+    truthfully while being wrong. `scrape_cache_key` in `firecrawl.py` carries
+    the same fix for the same reason.
+
+    `Path.resolve()` case-normalizes on Windows NTFS, and that guarantee is
+    real HERE specifically: `stat()` on the line below establishes the file
+    exists, so `realpath` reaches `_getfinalpathname`
+    (`GetFinalPathNameByHandle`), which returns the casing as stored on disk.
+    The non-strict fallback, which does NOT canonicalize a missing tail, is
+    unreachable for a file that just stat-ed.
     """
     stat = file_path.stat()
-    raw = f"{file_path.resolve()}:{stat.st_size}:{stat.st_mtime_ns}"
+    raw = (f"{file_path.resolve()}:{stat.st_size}:{stat.st_mtime_ns}"
+           f":pages={pages or 'all'}:dpi={dpi}")
     if password:
         raw += f":{hashlib.sha256(password.encode()).hexdigest()}"
     return hashlib.sha256(raw.encode()).hexdigest()
@@ -144,7 +165,7 @@ def parse_document(
         raise FileNotFoundError(f"File not found: {fp}")
 
     pwd = password or ""
-    key = _cache_key(fp, pwd)
+    key = _cache_key(fp, pwd, pages, dpi)
 
     if not no_cache:
         cached = _cache_get(key)
@@ -233,9 +254,9 @@ def find_boxes_for_quote(
             char_to_item.append(idx)
 
     raw_concat = "".join(raw_chars)
-    # Apply normalization to both the full text and the quote
-    norm_concat = _normalize_text(raw_concat).lower()
-    norm_quote = _normalize_text(quote).lower()
+    # Compared BEFORE lowering, because lowering is not part of
+    # `_normalize_text` and comparing after it hid a real desync (see below).
+    norm_concat = _normalize_text(raw_concat)
 
     # Rebuild char_to_item mapping after normalization (whitespace collapsing
     # can shift indices). We re-walk the raw text applying the same transforms.
@@ -252,7 +273,7 @@ def find_boxes_for_quote(
         if nch == "":
             continue  # soft hyphen removed
         for c in nch:  # ligatures expand to multiple chars
-            if c in " \t\n\r":
+            if _WS_CHAR_RE.fullmatch(c):
                 if not prev_space:
                     norm_chars.append(" ")
                     norm_char_to_item.append(char_to_item[i])
@@ -270,8 +291,7 @@ def find_boxes_for_quote(
         norm_chars.pop()
         norm_char_to_item.pop()
 
-    concat = "".join(norm_chars).lower()
-    if concat != norm_concat:
+    if "".join(norm_chars) != norm_concat:
         # `norm_concat` was computed and never used. That is not harmless here:
         # the loop above RE-IMPLEMENTS `_normalize_text` inline, because it has
         # to carry the char-to-item mapping along, and the two copies must
@@ -282,6 +302,27 @@ def find_boxes_for_quote(
         print(f"  {YELLOW}Warning:{RESET} the inline normalization in "
               f"find_boxes_for_quote has drifted from _normalize_text; "
               f"bounding boxes may point at the wrong text.", file=sys.stderr)
+    # Lower PER CHARACTER, growing the mapping with it. Lowering the joined
+    # string left the mapping at its pre-lowering length, so a character whose
+    # lowercase is longer than itself (U+0130, capital I with dot above,
+    # lowercases to two code points) shifted every index after it and the
+    # boxes landed on neighbouring text. It was silent: the drift guard
+    # lowercased both sides identically, so it never saw a difference. The
+    # quote is lowered the same way, which keeps the two sides consistent even
+    # where per-character and whole-string lowercasing legitimately differ
+    # (Greek final sigma).
+    lowered = []
+    lowered_to_item = []
+    # strict=True: the two lists are appended in lockstep just above, so a
+    # length mismatch is an internal bug, and silently truncating to the
+    # shorter one is how a char-to-item map goes quietly wrong.
+    for ch, item_idx in zip(norm_chars, norm_char_to_item, strict=True):
+        low = ch.lower()
+        lowered.append(low)
+        lowered_to_item.extend([item_idx] * len(low))
+    concat = "".join(lowered)
+    norm_quote = "".join(c.lower() for c in _normalize_text(quote))
+
     pos = concat.find(norm_quote)
     if pos == -1:
         return []
@@ -289,8 +330,8 @@ def find_boxes_for_quote(
     # Find which items are involved in the match
     matched_items = set()
     for i in range(pos, pos + len(norm_quote)):
-        if i < len(norm_char_to_item):
-            matched_items.add(norm_char_to_item[i])
+        if i < len(lowered_to_item):
+            matched_items.add(lowered_to_item[i])
 
     # Collect and merge bounding boxes
     boxes = []
@@ -305,6 +346,17 @@ def find_boxes_for_quote(
 
     return _merge_adjacent_boxes(boxes)
 
+
+# ONE definition of "whitespace", compiled two ways. `_normalize_text` used
+# `\s+` while the inline walk in `find_boxes_for_quote` tested `c in " \t\n\r"`,
+# and `\s` matches more than those four -- `\x0b`, `\x0c` (form feed, common in
+# extracted PDF text), `U+0085`, `U+2028`, `U+2029`. A quote spanning a form
+# feed normalized to a space on one side and stayed a form feed on the other,
+# so the lookup missed, the citation rendered with no highlight, and the drift
+# guard fired about the very desync it was added to catch.
+_WS_PATTERN = r"\s"
+_WS_CHAR_RE = re.compile(_WS_PATTERN)
+_WS_RUN_RE = re.compile(_WS_PATTERN + "+")
 
 _REPLACEMENTS = {
     "\u2018": "'", "\u2019": "'",  # smart single quotes
@@ -321,8 +373,9 @@ def _normalize_text(text: str) -> str:
     """Normalize typographic variations for matching."""
     for old, new in _REPLACEMENTS.items():
         text = text.replace(old, new)
-    # Collapse whitespace
-    text = re.sub(r"\s+", " ", text).strip()
+    # Collapse whitespace. Same `_WS_PATTERN` the inline walk in
+    # `find_boxes_for_quote` tests against, so the two cannot disagree.
+    text = _WS_RUN_RE.sub(" ", text).strip()
     return text
 
 
@@ -388,7 +441,7 @@ def _generate_report_html(
         screenshot_key = (file_name, page_num)
 
         # Find bounding boxes for this quote
-        page_data = _find_page_in_parse(parse_data, file_name, page_num)
+        page_data, ambiguous = _find_page_in_parse(parse_data, file_name, page_num)
         dpi = DEFAULT_DPI
         if page_data:
             boxes = find_boxes_for_quote(page_data.get("text_items", []), quote_text, dpi)
@@ -399,8 +452,9 @@ def _generate_report_html(
             page_w_px = 800
             page_h_px = 600
 
-        # Screenshot image
-        img_bytes = page_screenshots.get(screenshot_key)
+        # Screenshot image. Withheld when the name resolves to more than one
+        # document: showing SOME page under an unresolved name is the defect.
+        img_bytes = None if ambiguous else page_screenshots.get(screenshot_key)
         if img_bytes:
             img_b64 = base64.b64encode(img_bytes).decode("ascii")
             img_src = f"data:{_image_mime(img_bytes)};base64,{img_b64}"
@@ -416,12 +470,18 @@ def _generate_report_html(
                 f'fill="rgba(91,95,255,0.2)" stroke="#5B5FFF" stroke-width="2"/>\n'
             )
 
+        ambiguity_note = "" if not ambiguous else (
+            f'\n      <div class="cite-ambiguous">More than one parsed document '
+            f'is named {html.escape(file_name)}. This citation does not say '
+            f'which, so no page image or highlight is shown. Cite the full path '
+            f'to resolve it.</div>')
+
         card = f"""
     <section class="citation-card" id="cite-{html.escape(str(cit_id), quote=True)}">
       <div class="card-header">
         <span class="cite-num">[{html.escape(str(cit_id))}]</span>
         <span class="cite-source">{html.escape(file_name)} - Page {html.escape(str(page_num))}</span>
-      </div>
+      </div>{ambiguity_note}
       <div class="card-body">
         <div class="page-view">
           {"" if not img_src else f'''<div class="page-image-container">
@@ -548,6 +608,14 @@ def _generate_report_html(
     margin-right: 8px;
   }}
   .cite-source {{ color: var(--text-muted); }}
+  .cite-ambiguous {{
+    margin: 0 1.25rem 0.75rem;
+    padding: 0.6rem 0.85rem;
+    border-left: 3px solid #F5922B;
+    background: rgba(245,146,43,0.08);
+    color: var(--text-muted);
+    font-size: 0.85rem;
+  }}
 
   .card-body {{
     display: grid;
@@ -646,14 +714,43 @@ def _generate_report_html(
 </html>"""
 
 
-def _find_page_in_parse(parse_data: dict, file_name: str, page_num: int) -> dict | None:
-    """Find a specific page in the parse data by file name and page number."""
-    for f in parse_data.get("files", []):
-        if f.get("file_name") == file_name or Path(f.get("file", "")).name == file_name:
-            for p in f.get("pages", []):
-                if p.get("page_num") == page_num:
-                    return p
-    return None
+def _resolve_parse_file(parse_data: dict, file_name: str) -> tuple[dict | None, bool]:
+    """Resolve a citation's `file` to EXACTLY one parsed file.
+
+    Returns `(file_dict, ambiguous)`. Matching was on basename alone, and
+    `parse --files dirA dirB` auto-discovers both, so two different documents
+    called `report.pdf` collided: the first one found answered for both, and a
+    citation about the second rendered the first document's page and the first
+    document's highlight boxes with no visible sign of the substitution. A
+    mis-citation shown with full confidence is worse than a missing one, so
+    where the name does not identify one file this refuses to pick.
+
+    `cmd_clear_cache` already treats the shared-basename case as a hazard; this
+    is the same hazard on the reporting side.
+    """
+    files = parse_data.get("files", [])
+    for f in files:
+        if f.get("file") == file_name:      # a full path identifies one file
+            return f, False
+    matches = [f for f in files
+               if f.get("file_name") == file_name
+               or Path(f.get("file", "")).name == file_name]
+    if len(matches) == 1:
+        return matches[0], False
+    return None, len(matches) > 1
+
+
+def _find_page_in_parse(
+    parse_data: dict, file_name: str, page_num: int
+) -> tuple[dict | None, bool]:
+    """Find one page by file name and number. Returns `(page, ambiguous)`."""
+    parse_file, ambiguous = _resolve_parse_file(parse_data, file_name)
+    if parse_file is None:
+        return None, ambiguous
+    for p in parse_file.get("pages", []):
+        if p.get("page_num") == page_num:
+            return p, False
+    return None, False
 
 
 def _markdown_to_html(md: str) -> str:
@@ -901,10 +998,14 @@ def cmd_report(args):
         page = cit.get("page", 0)
         if page <= 0:
             continue
-        for f in parse_data.get("files", []):
-            if f.get("file_name") == fname or Path(f.get("file", "")).name == fname:
-                pages_to_screenshot[(fname, page)] = f["file"]
-                break
+        parse_file, ambiguous = _resolve_parse_file(parse_data, fname)
+        if ambiguous:
+            print(f"  {YELLOW}AMBIGUOUS{RESET}  more than one parsed document is "
+                  f"named {fname}; citation p{page} rendered without an image",
+                  file=sys.stderr)
+            continue
+        if parse_file is not None:
+            pages_to_screenshot[(fname, page)] = parse_file["file"]
 
     # Limit screenshots
     max_pages = getattr(args, "max_pages", MAX_REPORT_PAGES)

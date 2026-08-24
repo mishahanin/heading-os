@@ -50,8 +50,22 @@ def _make_overlay(tmp_path: Path) -> Path:
             {"slug": "vex-thorne", "name": "Vex Thorne", "github_user": "vthorne",
              "data_repo": "heading-os-data-vex-thorne", "status": "active"}
         ]}), encoding="utf-8")
-    # fireside roster: a member dict -> handle + name + telegram id
+    # The cycle config, in the shape the real file actually has: speakers are
+    # PLAIN STRINGS under weeks[].mon / weeks[].wed. This fixture used to write a
+    # member dict here instead, which is the shape `_iter_member_dicts` wants but
+    # one `fireside-schedule.json` has never carried -- so the test passed against
+    # an invented file while the harvester found zero members in the real one, and
+    # every Tribe-only member went unguarded. Two real handles and a real full
+    # name reached the public repo behind that green test.
     (data / "config" / "fireside-schedule.json").write_text(
+        json.dumps({"cycle": 3, "cycle_1_start_monday": "2026-09-21",
+                    "weeks": [{"week": 1, "theme": "Origins",
+                               "mon": ["Qorvath Lune"], "wed": ["Sethra Vaig"]}]}),
+        encoding="utf-8")
+    # The membership source of truth, where the member dicts really live.
+    fireside_state = data / "datastore" / "operations" / "tribe" / "fireside-state"
+    fireside_state.mkdir(parents=True)
+    (fireside_state / "tribe-roster.json").write_text(
         json.dumps({"qorvath": {"name": "Qorvath Lune", "telegram_user_id": 581234567,
                                 "active": True}}), encoding="utf-8")
     # a config carrying a real-ish e-mail

@@ -149,12 +149,29 @@ def test_the_exit_code_reads_both_lists():
 # ============================================================
 
 def _fake_audit_run(deps, monkeypatch, *, exported=True):
-    """Drive main() without pip-audit, uv, or a re-exec."""
+    """Drive main() without pip-audit, uv, or a re-exec.
+
+    `_export_full_requirements` returns one of three strings since 2026-08-25,
+    not a bool. It returned False for both "uv is absent" and "uv is here and
+    the export failed", and the caller read both as the first -- so a corrupt
+    lockfile silently downgraded the audit to the active virtualenv. The
+    `exported=False` case here is the ABSENT one, which still falls back;
+    the failed one is covered in
+    `tests/test_a_gate_that_reported_a_scope_it_never_assembled.py`.
+    """
     monkeypatch.setattr(deps, "_reexec_in_venv_if_needed", lambda: None)
     monkeypatch.setattr(deps, "_have", lambda _n: True)
-    monkeypatch.setattr(deps, "_export_full_requirements",
-                        lambda dest: (dest.write_text("x==1\n", encoding="utf-8")
-                                      or True) if exported else False)
+    def _export(dest):
+        # A named function, not `write_text(...) or EXPORT_OK`. `write_text`
+        # returns the CHARACTER COUNT, which is truthy, so `or` short-circuits
+        # on it. The old form returned 5 where it meant True and got away with
+        # it only because the caller tested truthiness.
+        if not exported:
+            return deps.EXPORT_NO_UV
+        dest.write_text("x==1\n", encoding="utf-8")
+        return deps.EXPORT_OK
+
+    monkeypatch.setattr(deps, "_export_full_requirements", _export)
 
     class _R:
         returncode = 0

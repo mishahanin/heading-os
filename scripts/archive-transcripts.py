@@ -25,10 +25,13 @@ Usage:
   python scripts/archive-transcripts.py                 # archive settled transcripts
   python scripts/archive-transcripts.py --dry-run       # report, write nothing
   python scripts/archive-transcripts.py --status        # what is archived vs live
+
+Tests: tests/test_a_wizard_that_reached_outside_its_own_workspace.py
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import gzip
 import json
 import os
@@ -149,6 +152,7 @@ def archive(*, now: float | None = None, dry_run: bool = False) -> dict:
         return counts
 
     for source in sorted(source_dir.glob("*.jsonl")):
+        tmp: Path | None = None
         try:
             if now - source.stat().st_mtime < SETTLE_SECONDS:
                 counts["too_fresh"] += 1
@@ -176,6 +180,17 @@ def archive(*, now: float | None = None, dry_run: bool = False) -> dict:
             # not cost the rest of the run.
             print(f"{YELLOW}skip {source.name}:{RESET} {exc}", file=sys.stderr)
             counts["failed"] += 1
+        finally:
+            # The half-written `.gz.tmp` goes with the failure that made it.
+            # `os.replace` consumes the tmp on the success path, so this only
+            # ever finds one after a torn copy -- and nothing else did: the
+            # name ends `.jsonl.gz.tmp`, which `status()` does not glob
+            # (`*.jsonl.gz`) and no later run revisits, so every failed run
+            # left a compressed partial transcript sitting in the DATA overlay
+            # permanently, invisible to the command that reports what is there.
+            if tmp is not None:
+                with contextlib.suppress(OSError):
+                    tmp.unlink(missing_ok=True)
 
     return counts
 

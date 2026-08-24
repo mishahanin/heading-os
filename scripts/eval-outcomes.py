@@ -31,6 +31,8 @@ Usage:
 
 Exit codes: 0 all checks passed, 1 one or more checks failed, 2 setup error
 (a malformed case, an unknown outcome type, or an assertor that could not run).
+
+Tests: tests/test_a_revocation_that_reported_clear_for_the_dangerous_case.py
 """
 from __future__ import annotations
 
@@ -73,7 +75,12 @@ def valid_skill_name(skill: str) -> str:
             f"--skill must be a bare skill name matching [a-z0-9][a-z0-9-]*, got {skill!r}"
         )
     resolved = (SKILLS_DIR / skill).resolve()
-    if not str(resolved).startswith(str(SKILLS_DIR.resolve()) + "/"):
+    # `is_relative_to`, not a string prefix with a hardcoded "/" separator. See
+    # the twin guard in scripts/eval-flag.py `_staged_dir`: on Windows,
+    # `resolve()` yields backslashes and the prefix test matched nothing, so this
+    # refused every valid skill and `main()` returned 2 -- a setup error, for a
+    # skill that was fine. Same defect, same file pair, one fix.
+    if not resolved.is_relative_to(SKILLS_DIR.resolve()):
         raise ValueError(f"refusing a skill dir outside {SKILLS_DIR}: {resolved}")
     return skill
 

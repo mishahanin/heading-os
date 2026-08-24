@@ -68,6 +68,13 @@ The 31C TypeFace is a **display/accent font only**. It is never used for readabl
    - Orange (#FF9235) for cost/impact/warning items
    - Inherited/dark for neutral numbered lists
 
+   The orange here is `--orange-display`, a THIRD brand orange, distinct from
+   `--orange` (#F5922B, the corner block) and `--orange-hi` (#FF8C00, highlight
+   text). All three are listed in `reference/corporate-style-guide.md` § Colors,
+   which is the locked palette. Until 2026-08-25 this file used #FF9235 and that
+   file listed only the other two, so which orange was correct depended on which
+   document you happened to open.
+
 5. **Size hierarchy:**
    - 173pt - hero/closing display only (one per presentation)
    - 54-60pt - primary numbered markers (section-level items)

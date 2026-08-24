@@ -12,6 +12,7 @@ expect a check that does not exist. The random nonce is the only entropy that
 matters; the other two are metadata.
 """
 import os
+import stat
 import time
 import logging
 import secrets
@@ -79,6 +80,37 @@ def generate_token(workspace_root: Path) -> str:
     raw = f"{_machine_id()}|{workspace_root}|{nonce}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
+TOKEN_MODE = 0o600
+
+
+def _enforce_token_mode(token_file: Path) -> None:
+    """Narrow an over-permissive token file to 0600, and say so when it was.
+
+    Best-effort by design: a filesystem with no POSIX modes cannot honour this,
+    and refusing to serve there would be worse than the exposure. The WARNING
+    is the point either way -- a token that was readable by other local accounts
+    should be treated as disclosed and rotated, and a silent chmod would hide
+    the one fact that decides that.
+    """
+    try:
+        current = stat.S_IMODE(token_file.stat().st_mode)
+    except OSError:
+        logger.warning("could not read the mode of %s", token_file, exc_info=True)
+        return
+    if current == TOKEN_MODE:
+        return
+    try:
+        os.chmod(token_file, TOKEN_MODE)
+    except OSError:
+        logger.warning("token file at %s is mode %o and could not be narrowed "
+                       "to %o", token_file, current, TOKEN_MODE, exc_info=True)
+        return
+    logger.warning("token file at %s was mode %o, narrowed to %o. Anything that "
+                   "could read it may hold the daemon's bearer token; rotate it "
+                   "if that is possible on this machine.",
+                   token_file, current, TOKEN_MODE)
+
+
 def get_or_create_token(workspace_root: Path) -> str:
     """Read the daemon's bearer token, regenerating an unusable one.
 
@@ -87,6 +119,15 @@ def get_or_create_token(workspace_root: Path) -> str:
     daemon then answered 401 to every authenticated request forever, with no
     log line naming the cause and no path back except deleting the file by
     hand. An empty token is not a token.
+
+    The MODE is re-asserted on every read, not only at creation. This module's
+    header says the token is "Stored at .daemon-state/token with 0600 perms",
+    and `mode=0o600` was passed on the write path only -- so a file that
+    arrived some other way kept whatever mode it came with, forever. The header
+    itself documents two such ways: a copy from another machine, and a restore
+    from backup. Both commonly land 0644. This token is the whole auth boundary
+    for every endpoint, so a group- or world-readable one hands the daemon to
+    any other local account, and nothing in the system would have noticed.
     """
     token_file = workspace_root / ".daemon-state" / "token"
     if token_file.exists():
@@ -97,6 +138,7 @@ def get_or_create_token(workspace_root: Path) -> str:
                            token_file, exc_info=True)
             existing = ""
         if existing:
+            _enforce_token_mode(token_file)
             return existing
         logger.warning("token file at %s was empty; regenerating it", token_file)
     token = generate_token(workspace_root)

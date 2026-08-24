@@ -49,20 +49,37 @@ def scan_inflight(workspace_root: Path, retention_hours: int = 24) -> list[dict]
         d = workspace_root / rel
         if not d.exists():
             continue
-        for p in d.iterdir():
-            if not p.is_file() or p.suffix != ".md":
+        # Per-DIRECTORY: a tree that became unreadable after `exists()` passed
+        # took the whole scan with it, including the categories already walked.
+        try:
+            entries = sorted(d.iterdir())
+        except OSError:
+            logger.warning("inflight: could not list %s; skipping that category",
+                           d, exc_info=True)
+            continue
+        for p in entries:
+            if p.suffix != ".md":
                 continue
-            if p.stat().st_mtime < cutoff:
-                continue
+            # Per-FILE, and ONE stat. These are producers' output directories,
+            # where files rotate while this walks them, and the only exception
+            # caught here was UnicodeDecodeError. A file unlinked between
+            # `iterdir` and `stat`, or between the two SEPARATE stats this used
+            # to take, raised OSError out of `scan_inflight` -- and `refresh`
+            # catches it, so the price was the entire scan: every LinkedIn and
+            # OSINT row already collected was thrown away and the component
+            # version left alone, until a tick happened to race nothing.
             try:
+                mtime = p.stat().st_mtime
+                if not p.is_file() or mtime < cutoff:
+                    continue
                 text = p.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
+            except (OSError, UnicodeDecodeError):
                 continue
             rows.append({
                 "id": p.stem,
                 "category": category,
                 "path": str(p.relative_to(workspace_root)),
-                "modified_at": p.stat().st_mtime,
+                "modified_at": mtime,
                 "session_id": _extract_session_id(text),
             })
     return sorted(rows, key=lambda r: r["modified_at"], reverse=True)

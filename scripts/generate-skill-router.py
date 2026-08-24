@@ -36,7 +36,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.utils.colors import RED, GREEN, CYAN, RESET  # noqa: E402
+from scripts.utils.colors import RED, GREEN, CYAN, YELLOW, RESET  # noqa: E402
 from scripts.utils.workspace import get_workspace_root  # noqa: E402
 
 # ============================================================
@@ -213,7 +213,21 @@ def load_routing_rows() -> tuple[list[dict], list[str]]:
         if err:
             errors.append(f"{rel}: {err}")
             continue
-        name = fm.get("name") or child.name
+        # Validated like every other field. `name` was taken raw, so a YAML
+        # `name: 7` produced an int that reached `sorted(key=lambda r: r["name"])`
+        # and raised `TypeError: '<' not supported between 'str' and 'int'` --
+        # an uncaught traceback instead of the curated `{rel}: {err}` line this
+        # gate exists to print. `name: 0` and `name: false` were quieter still:
+        # both are falsy, so `or child.name` swallowed them and the directory
+        # name silently stood in for a value the author had set on purpose.
+        raw_name = fm.get("name")
+        if raw_name is not None and not isinstance(raw_name, str):
+            errors.append(
+                f"{rel}: 'name' is {raw_name!r} ({type(raw_name).__name__}); "
+                f"it must be a string. An unquoted YAML scalar like `name: 7` "
+                f"or `name: no` is not.")
+            continue
+        name = raw_name or child.name
         routing = fm.get(ROUTING_KEY)
         if not isinstance(routing, dict):
             errors.append(
@@ -262,6 +276,27 @@ def load_routing_rows() -> tuple[list[dict], list[str]]:
         # deliberately does NOT set it, because composing skills invoke it
         # through the Skill tool and the flag would block them. One measured
         # exception is enough to say that link is not an invariant either.
+        # `str()` on an unvalidated value, and PyYAML is YAML 1.1: an unquoted
+        # `compound: No` parses to the BOOLEAN False, and `str(False)` is
+        # "False". The always-on router rule then showed `| False |` in the
+        # Compound column -- and because the corruption is deterministic,
+        # `--check` regenerated the same wrong cell and passed. Every other
+        # field here is type-checked for exactly this reason; this one was not.
+        compound_raw = routing.get("compound", "No")
+        if isinstance(compound_raw, bool):
+            errors.append(
+                f"{rel}: {ROUTING_KEY}.compound is the YAML boolean "
+                f"{compound_raw!r}. Unquoted No/Yes/On/Off are booleans in "
+                f"YAML 1.1 -- write compound: \"No\" (quoted) or a real "
+                f"description like 'Yes: Meeting Prep'.")
+            continue
+        if not isinstance(compound_raw, str):
+            errors.append(
+                f"{rel}: {ROUTING_KEY}.compound is {compound_raw!r} "
+                f"({type(compound_raw).__name__}); it must be a string.")
+            continue
+        compound = compound_raw
+
         says_never = "never auto-trigger" in " ".join(triggers).lower()
         if (router == "manual") != says_never:
             warnings.append(
@@ -276,7 +311,7 @@ def load_routing_rows() -> tuple[list[dict], list[str]]:
                 "label": routing.get("label") or f"/{name}",
                 "triggers": triggers,
                 "exclusions": exclusions,
-                "compound": str(routing.get("compound", "No")),
+                "compound": compound,
                 "router": router,
             }
         )
@@ -410,13 +445,27 @@ def splice_region(router_text: str, region: str) -> str:
             f"sentinel markers not found in {ROUTER_FILE.relative_to(ROOT)}; "
             f"add\n  {MARKER_BEGIN}\n  {MARKER_END}\naround the '### Intel' ... last registry row."
         )
+    # `\n.*?\n` demanded at least one line BETWEEN the markers, so a file whose
+    # markers sit on adjacent lines -- which is what you get after clearing the
+    # region for the generator to refill, or after adding the markers exactly as
+    # the error above instructs -- matched zero times and raised "expected
+    # exactly one marker region, found 0". One pair of markers was present; the
+    # message sent the reader hunting for duplicates that did not exist, and
+    # both --write and --check exited 2 with no way back.
     pattern = re.compile(
-        re.escape(MARKER_BEGIN) + r"\n.*?\n" + re.escape(MARKER_END), re.DOTALL
+        re.escape(MARKER_BEGIN) + r"\n?.*?\n?" + re.escape(MARKER_END), re.DOTALL
     )
     replacement = MARKER_BEGIN + "\n" + region + "\n" + MARKER_END
     new_text, n = pattern.subn(lambda _m: replacement, router_text)
-    if n != 1:
-        raise ValueError(f"expected exactly one marker region, found {n}")
+    if n == 0:
+        raise ValueError(
+            "both markers are present but no region could be matched between "
+            "them; this should not happen -- report the router file's contents")
+    if n > 1:
+        raise ValueError(
+            f"found {n} marker regions in "
+            f"{ROUTER_FILE.relative_to(ROOT)}; there must be exactly one. "
+            f"Remove the extra {MARKER_BEGIN} / {MARKER_END} pair(s).")
     return new_text
 
 
@@ -448,6 +497,27 @@ def cmd_split_write(rows: list[dict]) -> int:
     # left the always-on index describing frontmatter the detail files did not.
     wrote_any = False
     CATEGORY_FILE_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Orphans are REMOVED, not merely reported. `cmd_split_check` calls any
+    # *.md here that no current category backs an ORPHAN and counts it as
+    # drift, then tells the operator to run this command -- which only ever
+    # wrote the seven expected files and deleted nothing. So one stray file (a
+    # renamed category committed earlier, a leftover from a reverted branch, a
+    # hand-written note) made `--check` fail forever, with CI and pre-commit
+    # unresolvable by the documented path and an undocumented `rm` as the only
+    # way out. Reproduced 2026-08-25.
+    #
+    # Every removal is named. This directory is generated in full by this
+    # function, so deleting what does not belong is within its remit -- but a
+    # tool that deletes a file the operator wrote must say which one.
+    for stray in sorted(CATEGORY_FILE_DIR.glob("*.md")):
+        if stray.name in {f"{category_slug(c)}.md" for c in CATEGORY_ORDER}:
+            continue
+        print(f"{YELLOW}removed orphan{RESET}: "
+              f"{stray.relative_to(ROOT)} (no category backs it)")
+        stray.unlink()
+        wrote_any = True
+
     for category in CATEGORY_ORDER:
         path = CATEGORY_FILE_DIR / f"{category_slug(category)}.md"
         content = render_category_file(category, rows)

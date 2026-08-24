@@ -8,6 +8,8 @@ LLM calls ship in Phase 3, but the full cost tracker was originally
 planned for Phase 4, creating a 3-day window where budget could burn
 unmonitored.  This stub closes that gap with minimal complexity.
 
+Tests: tests/test_a_day_that_could_not_be_read_and_was_called_quiet.py, tests/inbox_pulse/test_cost_stub.py
+
 Public API
 ----------
 record_call(model, input_tokens, output_tokens)
@@ -21,8 +23,10 @@ returns True (e.g., skip the LLM call, raise an exception, alert).
 
 State file
 ----------
-``state/email-triage/cost-tracker.json`` under ``INBOX_PULSE_STATE_DIR``
-if that env var is set, else under the workspace root.  Written
+``state/email-triage/cost-tracker.json``, resolved by
+``scripts.inbox_pulse.paths.get_state_dir()``: ``INBOX_PULSE_STATE_DIR``
+when that env var is set, else under the DATA root (never the engine
+tree -- runtime state is DATA).  Written
 atomically (write-to-tmp + os.replace) so a crash mid-write never
 corrupts the file.
 
@@ -54,6 +58,7 @@ import os
 import tempfile
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from scripts.inbox_pulse.paths import get_state_dir
 from scripts.utils.workspace import get_default_tz, get_default_tz_name
 
 __all__ = [
@@ -79,24 +84,24 @@ OPUS_OUTPUT_USD_PER_MTOK: float = 75.00
 
 DAILY_CAP_USD: float = 5.0
 
-# local timezone offset (+4:00 UTC, no DST)
-
 
 # ---------------------------------------------------------------------------
-# Path resolution (mirrors observability_safe._debug_trace_path pattern)
+# Path resolution
 # ---------------------------------------------------------------------------
-
-def _workspace_root() -> Path:
-    return Path(__file__).resolve().parent.parent.parent
-
 
 def _state_path() -> Path:
-    state_dir = os.environ.get("INBOX_PULSE_STATE_DIR")
-    if state_dir:
-        base = Path(state_dir)
-    else:
-        base = _workspace_root() / "state" / "email-triage"
-    return base / "cost-tracker.json"
+    """The cost-tracker file, beside the daemon's other state.
+
+    Delegates to `paths.get_state_dir()` rather than deriving a root here. It
+    used to fall back to the ENGINE workspace root when INBOX_PULSE_STATE_DIR
+    was unset, while every other daemon file resolved
+    `<data_root>/state/email-triage`. On this workspace the two trees are
+    separate, so the spend ledger landed in the code repository and the daemon's
+    own logs, cursor and heartbeat landed in the data overlay: a budget cap
+    reading a file nobody else writes. The env override still wins, and still
+    does so inside get_state_dir().
+    """
+    return get_state_dir() / "cost-tracker.json"
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +109,14 @@ def _state_path() -> Path:
 # ---------------------------------------------------------------------------
 
 def _today_str() -> str:
-    """Return today's date as YYYY-MM-DD in local timezone (the configured timezone, UTC+4)."""
+    """Today's date as YYYY-MM-DD in the CONFIGURED timezone.
+
+    Not UTC+4. This docstring said "the configured timezone, UTC+4" and a
+    comment above said "+4:00 UTC, no DST", while the code has always called
+    get_default_tz(), which reads HEADING_OS_TZ and is UTC when that is unset.
+    On any other setting the daily cap rolls over at a wall-clock time the
+    comments denied, and the reader trusts the comment.
+    """
     return datetime.now(tz=get_default_tz()).strftime("%Y-%m-%d")
 
 

@@ -18,10 +18,19 @@ Usage:
 Exit codes:
   0  success — intermediate.json written (may be degraded=true; e.g. Kimi
      unavailable degrades to corpus-without-analysis for the skill to handle)
-  2  bad arguments (argparse usage error: bad --depth, or --domains together
-     with --exclude-domains). The RuntimeError catch in main() is a safety net.
+  2  bad arguments (argparse usage error: --domains together with
+     --exclude-domains, or a non-integer --depth). An out-of-RANGE --depth is
+     NOT an error: it is clamped to 1..MAX_DEPTH, which this line used to
+     describe as an exit-2 usage error, so a wrapper checking the code learned
+     nothing about a --depth 99 that had quietly become 8.
+  4  a RuntimeError escaped run() (a proxy or transport failure, not the
+     operator's typing). It exited 2 alongside argparse, so a caller could not
+     tell "you typed it wrong" from "the proxy is down" -- and only one of
+     those is worth retrying.
   3  unrecoverable acquisition failure: no corpus at all (every Perplexity call
      failed, including the case of a missing PERPLEXITY_API_KEY).
+
+Tests: tests/test_a_retry_that_promised_a_longer_timeout.py
 """
 from __future__ import annotations
 
@@ -75,6 +84,8 @@ def _reason_model_for(catalog):
 
 DEFAULT_DEPTH = 4
 MAX_DEPTH = 8
+# Per-attempt reasoning timeouts, indexed by attempt number.
+REASON_TIMEOUTS_S = (180.0, 360.0)
 
 
 def slugify(text: str) -> str:
@@ -200,9 +211,17 @@ def run(question: str, depth: int = DEFAULT_DEPTH, critical: bool = False,
     last_err = None
     for attempt in range(2):
         try:
+            # The longer timeout the comment above promises. Both attempts
+            # passed a flat 180.0, so the retry was a plain retry: the stated
+            # cause is "cloud latency on a large reasoning prompt", which is
+            # exactly the case where a consistently slow prompt hits the same
+            # ceiling twice. The second request burned a full call to fail
+            # identically, and the run degraded to corpus-without-analysis with
+            # a mitigation that existed only on paper.
             raw = kimi_reason(reason_prompt, model=reason_model,
                               reasoning_effort=reason_effort,
-                              max_tokens=8192, timeout=180.0)
+                              max_tokens=8192,
+                              timeout=REASON_TIMEOUTS_S[attempt])
             result["kimi_analysis"] = extract_json(raw)
             last_err = None
             break
@@ -256,7 +275,7 @@ def main(argv=None) -> int:
             recency=args.recency)
     except RuntimeError as e:
         print(f"{RED}Error:{RESET} {e}", file=sys.stderr)
-        return 2
+        return 4
     return 0
 
 

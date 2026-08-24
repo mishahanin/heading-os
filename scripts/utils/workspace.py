@@ -27,6 +27,7 @@ from scripts.utils.paths import (  # noqa: F401
     check_schema_compatible,
     data_dir,
     data_root_is_demo,
+    env_data_root,
     get_data_root,
     get_workspace_root,
     home,
@@ -210,16 +211,16 @@ def get_exec_data_root() -> Path:
     """Resolve an exec workspace's private-data root (the sibling data repo).
 
     First hit wins:
-      1. ``HEADING_OS_DATA`` env override (when it points at a real dir).
+      1. ``HEADING_OS_DATA`` env override, when it points at a real dir.
+         Set-but-missing is IGNORED with a warning, never silently (see
+         ``env_data_root``).
       2. Slug-named sibling ``../.heading-os-data-{slug}`` (provision_exec.py default).
       3. Generic resolver ``get_data_root()`` -- handles a sibling cloned as plain
          ``../.heading-os-data`` and the read-only demo fallback (with its warning).
     """
-    env = os.environ.get("HEADING_OS_DATA")
-    if env:
-        cand = Path(env).expanduser()
-        if cand.is_dir():
-            return cand.resolve()
+    env_root = env_data_root()
+    if env_root is not None:
+        return env_root
     sibling = get_workspace_root().parent / f".heading-os-data-{get_exec_slug()}"
     if sibling.is_dir():
         return sibling.resolve()

@@ -14,6 +14,8 @@ hook files, and 6 PostToolUse hooks from a single plugin, each running a bash
 script out of that cache. Files of that surface scanned by any layer: zero.
 `superpowers` moved 5.1.0 to 6.1.1 on 2026-07-14 and nobody read the diff.
 
+Tests: tests/test_an_edit_that_deleted_the_addresses_it_promised_to_keep.py, tests/test_harness_audit.py, tests/test_harness_audit_contract.py
+
     python scripts/harness-audit.py                    # report, exit 1 on findings
     python scripts/harness-audit.py --json
     python scripts/harness-audit.py --update-manifest  # accept, after reading
@@ -298,19 +300,45 @@ def _walk_surface(root: Path):
 
     Vendored dependency trees are pruned; see PRUNED_DIRS for the reasoning and
     the condition that would make the pruning wrong.
+
+    The walk is `os.walk(followlinks=False)` and not `Path.rglob`, because
+    rglob handled only symlinked FILES and the promise above is about content.
+    On Python 3.11 (this workspace's floor) rglob descends THROUGH a symlinked
+    directory, and the children it yields are not themselves symlinks, so
+    `is_symlink()` never fired: a `docs-link -> /tmp/payload` inside the plugin
+    cache had its contents hashed into the baseline and scanned as ordinary
+    vouched surface. A symlinked directory also carries no surface suffix, so
+    the suffix filter discarded the link itself before it could be reported.
+    Followed on one interpreter, invisible on another, and never a finding on
+    either. Directory links are now recorded before any suffix test and never
+    descended.
     """
     if not root.is_dir():
         return [], []
     files, links = [], []
-    for path in root.rglob("*"):
-        if any(part in PRUNED_DIRS for part in path.parts):
-            continue
-        if path.suffix.lower() not in SURFACE_SUFFIXES:
-            continue
-        if path.is_symlink():
-            links.append(path)
-        elif path.is_file():
-            files.append(path)
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        here = Path(dirpath)
+        keep = []
+        for name in dirnames:
+            if name in PRUNED_DIRS:
+                continue
+            child = here / name
+            if child.is_symlink():
+                # Reported by name, never resolved and never descended. No
+                # suffix test: a directory has none, and dropping it here is
+                # the silent hole this replaces.
+                links.append(child)
+                continue
+            keep.append(name)
+        dirnames[:] = keep
+        for name in filenames:
+            child = here / name
+            if child.suffix.lower() not in SURFACE_SUFFIXES:
+                continue
+            if child.is_symlink():
+                links.append(child)
+            elif child.is_file():
+                files.append(child)
     return sorted(files), sorted(links)
 
 
@@ -411,8 +439,12 @@ def _digest(path: Path) -> str:
 def build_surface_index(root: Path):
     """`{path relative to the plugin root: sha256}` plus anything unreadable.
 
-    Relative, never absolute: the manifest is committed to a PUBLIC repository
-    and an absolute path would carry the operator's home directory into it.
+    Relative, never absolute: the manifest is version-controlled, and an
+    absolute path would carry the operator's home directory into it. That
+    reason used to read "committed to a PUBLIC repository", which describes a
+    design `default_manifest_path` explicitly reverted -- the baseline lives in
+    the PRIVATE overlay now, and did before this sentence was written. The
+    choice survives the correction; the stated reason did not.
     """
     index, unreadable = {}, []
     for path in _surface_files(root):

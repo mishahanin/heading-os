@@ -37,7 +37,15 @@ Sources harvested from the DATA overlay:
                                  a handful of real colleagues, so it costs six
                                  tokens, unlike the CRM slug decomposition below
 * ``config/*.json|*.yaml``    -- e-mails (regex), Telegram-ID-shaped ints, and
-                                 fireside roster handles (member-dict keys)
+                                 the cycle speakers named in
+                                 ``fireside-schedule.json`` (plain strings under
+                                 ``weeks[].mon`` / ``weeks[].wed``)
+* ``datastore/operations/tribe/fireside-state/tribe-roster.json``
+                              -- Tribe handles, full names and Telegram user ids.
+                                 The membership source of truth. Added 2026-08-25
+                                 after the block above was found reading the
+                                 wrong shape, leaving every Tribe-only member
+                                 unguarded
 * ``config/content-denylist.yaml`` -- CURATED non-person tokens (companies,
                                  events, codenames, competitors); CEO-maintained
 
@@ -58,6 +66,8 @@ disabled, which is worse than the hole it closes. Thread titles were considered
 as a second source and rejected for the same reason: they are free prose, so
 harvesting them reintroduces the ordinary-word problem the structured field
 avoids.
+
+Tests: tests/test_a_roster_the_leak_gate_never_opened.py, tests/test_content_guard.py
 """
 from __future__ import annotations
 
@@ -88,6 +98,12 @@ ALLOW_IDENTITY = {
     # it. Everything else in the tree was moved to Bond-universe placeholders
     # the same day. Do not add a second name here without asking.
     "mahmoud maatuq",  # content-guard: ok the allowlist entry naming itself
+    # The two GitHub handles credited in CHANGELOG.md, docs/PLUGINS.md and
+    # pyproject.toml. Both are also keys in the private fireside roster, so the
+    # roster harvest below would read the repo's own published attribution as a
+    # leak: measured 2026-08-25, the first matches 61 tracked files and the
+    # second 3, and every one of them is a deliberate credit or a repo URL.
+    "mishahanin", "mmaatuq",
 }
 
 # Fictional / illustrative names that legitimately appear in rule, skill, and test
@@ -359,21 +375,69 @@ def _harvest_config(data_root: Path, tokens: dict[str, str], strict: bool) -> No
         if "fireside" in f.name or "roster" in f.name:
             for num in _ID_RE.findall(raw):
                 tokens[num] = "telegram-id"  # ids bypass _add length/alpha gate
-    # fireside roster handles: member-dict keys (value is a dict with name/id).
+    # Cycle speakers: `fireside-schedule.json` is {"weeks": [{"mon": [name, ...],
+    # "wed": [...]}]} -- the speakers are PLAIN STRINGS in two lists, not member
+    # dicts. `_iter_member_dicts` was pointed here and yielded nothing at all, so
+    # the `handle` / `handle-name` categories were empty on the live overlay and
+    # this whole block was a no-op that read as coverage. The member dicts it was
+    # written for live in the fireside STATE roster, harvested separately below.
     fs = cfg / "fireside-schedule.json"
     if fs.is_file():
         try:
             data = json.loads(fs.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             data = None
-        for handle, member in _iter_member_dicts(data):
-            _add(tokens, handle, "handle")
-            nm = member.get("name") if isinstance(member, dict) else None
-            if nm:
-                _add(tokens, str(nm), "handle-name")
-                if strict:
-                    for word in str(nm).replace("-", " ").split():
-                        _add(tokens, word, "handle-name")
+        for week in (data or {}).get("weeks", []) if isinstance(data, dict) else []:
+            if not isinstance(week, dict):
+                continue
+            for day in ("mon", "wed"):
+                for speaker in (week.get(day) or []):
+                    if not isinstance(speaker, str):
+                        continue
+                    _add(tokens, speaker, "schedule-speaker")
+                    if strict:
+                        for word in speaker.replace("-", " ").split():
+                            _add(tokens, word, "schedule-speaker")
+
+
+def _harvest_fireside_roster(data_root: Path, tokens: dict[str, str],
+                             strict: bool) -> None:
+    """Tribe identities from the fireside state roster: handle, name, Telegram id.
+
+    The membership source of truth, and until 2026-08-25 no layer read it. The
+    six structural layers check WHERE a file routes; the content gate checked
+    WHAT is inside it but harvested people only from `crm/contacts/` and
+    `admin/executives.json`. A Tribe member who is neither a CRM contact nor an
+    executive was therefore unguarded, and the block that was supposed to cover
+    them read the wrong file (see `_harvest_config`). Measured that day: the
+    `handle`, `handle-name` and `telegram-id` categories held ZERO tokens against
+    a live 58-member roster, and two real handles plus a real full name sat in a
+    tracked engine test while the gate reported the surface clean.
+
+    Bare name-words stay behind `strict`, matching the `handle-name` policy this
+    replaces: 58 members is far more than the six-name exec roster promoted into
+    the default gate, and their given names are ordinary enough to collide.
+    """
+    p = (data_root / "datastore" / "operations" / "tribe" / "fireside-state"
+         / "tribe-roster.json")
+    if not p.is_file():
+        return          # a public clone has no overlay; absence is normal
+    try:
+        roster = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    for handle, member in _iter_member_dicts(roster):
+        _add(tokens, handle, "handle")
+        name = member.get("name") if isinstance(member, dict) else None
+        if name:
+            _add(tokens, str(name), "handle-name")
+            if strict:
+                for word in str(name).replace("-", " ").split():
+                    _add(tokens, word, "handle-name")
+        uid = member.get("telegram_user_id") if isinstance(member, dict) else None
+        # ids bypass the _add length/alpha gate, exactly as _harvest_config does.
+        if isinstance(uid, int) and not isinstance(uid, bool):
+            tokens[str(uid)] = "telegram-id"
 
 
 def _iter_member_dicts(data):
@@ -438,6 +502,7 @@ def build_denylist(data_root: Path | None, curated_path: Path | None = None,
         _harvest_contact_frontmatter(data_root, dl.tokens)
         _harvest_executives(data_root, dl.tokens)
         _harvest_config(data_root, dl.tokens, strict)
+        _harvest_fireside_roster(data_root, dl.tokens, strict)
         _harvest_curated(data_root, dl.tokens, curated_path)
     except Exception:
         # Fail-open on a harvest error (the gate degrades, never wedges the push);

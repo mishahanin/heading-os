@@ -2,6 +2,8 @@
 """
 Generate a professional DOCX version of the ODUN.ONE Conceptual Design Template.
 Uses python-docx to create a formatted Word document with images, tables, and styling.
+
+Tests: tests/test_a_data_root_override_that_was_silently_ignored.py, tests/test_docx_helpers.py
 """
 
 import os
@@ -13,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
-from scripts.utils.docx_helpers import load_docx, set_cell_shading
+from scripts.utils.docx_helpers import load_docx, save_docx, set_cell_shading
 from scripts.utils.workspace import get_outputs_dir
 
 # ============================================================
@@ -21,6 +23,18 @@ from scripts.utils.workspace import get_outputs_dir
 # ============================================================
 IMAGES_DIR = str(get_outputs_dir() / 'images' / 'client')
 OUTPUT_PATH = str(get_outputs_dir() / 'documents' / 'ODUN-ONE-Conceptual-Design-Template.docx')
+
+# The appendices this builder actually emits, in document order. The contents
+# page and the body headings both read this, so the two cannot drift apart
+# again. The A/D lettering is the existing document's and is preserved on
+# purpose: renumbering the appendices of a partner-facing template is a content
+# decision, not a defect fix. Adding a Glossary or a Compliance & Certification
+# Matrix is the same kind of decision -- write the section, add it here, and the
+# contents page follows.
+APPENDICES = (
+    ('A', 'Technical Specifications'),
+    ('D', 'Competitive Advantage Summary'),
+)
 
 # docx names + brand colours are bound lazily (F-2.1: import stays pure).
 Document = Inches = Pt = Cm = RGBColor = Emu = None
@@ -179,6 +193,19 @@ def add_placeholder(doc, text):
     run.italic = True
     p.paragraph_format.space_after = Pt(6)
     return p
+
+
+def appendix_heading(letter):
+    """The heading text for one appendix, from the single APPENDICES list.
+
+    A body heading typed by hand is how the contents page and the document
+    came to disagree; reading both from one tuple makes that impossible.
+    An unknown letter raises rather than rendering a half-built heading.
+    """
+    for known, title in APPENDICES:
+        if known == letter:
+            return f'Appendix {known}: {title}'
+    raise KeyError(f"no appendix {letter!r} in APPENDICES")
 
 
 def add_separator(doc):
@@ -353,6 +380,12 @@ def build_document():
     add_heading_styled(doc, 'Table of Contents', level=1)
     add_separator(doc)
 
+    # Built from APPENDICES, never re-typed. The list below used to name four
+    # appendices while `build_document` emitted two: there is no Glossary and no
+    # Compliance & Certification Matrix anywhere in this builder, and a partner
+    # sending the template on shipped a contents page pointing at sections that
+    # do not exist -- under a note telling them to update the page numbers, which
+    # reads as confirmation the sections are real.
     toc_items = [
         '1.  Executive Summary',
         '2.  Customer Requirements & Objectives',
@@ -365,10 +398,7 @@ def build_document():
         '9.  Security & Data Sovereignty',
         '10. Implementation Approach',
         '11. Support & Operations Model',
-        'Appendix A: Technical Specifications',
-        'Appendix B: Glossary',
-        'Appendix C: Compliance & Certification Matrix',
-        'Appendix D: Competitive Advantage Summary',
+        *(f'Appendix {letter}: {title}' for letter, title in APPENDICES),
     ]
     for item in toc_items:
         p = doc.add_paragraph()
@@ -1041,7 +1071,7 @@ def build_document():
     # APPENDIX A: TECHNICAL SPECIFICATIONS
     # ══════════════════════════════════════════════
 
-    add_heading_styled(doc, 'Appendix A: Technical Specifications', level=1)
+    add_heading_styled(doc, appendix_heading('A'), level=1)
     add_separator(doc)
 
     add_heading_styled(doc, 'Performance Specifications', level=2)
@@ -1090,7 +1120,7 @@ def build_document():
     # APPENDIX D: COMPETITIVE ADVANTAGE
     # ══════════════════════════════════════════════
 
-    add_heading_styled(doc, 'Appendix D: Competitive Advantage Summary', level=1)
+    add_heading_styled(doc, appendix_heading('D'), level=1)
     add_separator(doc)
 
     add_heading_styled(doc, 'Architecture & Deployment', level=2)
@@ -1154,7 +1184,7 @@ def build_document():
     run.font.color.rgb = MEDIUM_GRAY
 
     # ── Save ──
-    doc.save(OUTPUT_PATH)
+    save_docx(doc, OUTPUT_PATH)
     print(f'[OK] Document saved: {OUTPUT_PATH}')
     print(f'[INFO] File size: {os.path.getsize(OUTPUT_PATH) / 1024:.0f} KB')
 

@@ -5,7 +5,7 @@ Phase 1.14: substring match (case-insensitive). Searches:
 - Tribe contact names + roles
 - Tasks descriptions
 - Library note titles + keywords
-- Studio file paths
+- Studio file paths (every in-flight file in the window, not the page's 50)
 - Day calendar event subjects + locations
 - Capabilities skill names + descriptions
 - Pipeline deals (Phase 1.37: company, country, owner, next_action)
@@ -14,6 +14,8 @@ Phase 1.14: substring match (case-insensitive). Searches:
 Returns categorized results. No fancy ranking - results within a category
 preserve the source's native sort order, capped at per_category_limit.
 Phase 2 will add fuzzy match + cross-category ranking.
+
+Tests: tests/bridge/test_a_link_the_listing_followed_and_a_search_that_saw_fifty.py
 """
 import logging
 from datetime import datetime, timezone
@@ -155,7 +157,12 @@ def search(data_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LIMIT,
 
     # --- Studio ---
     try:
-        studio = recent_inflight_items(data_root)
+        # cap=None: the /studio PAGE shows the 50 newest, but a search that
+        # only matches those reports "no results" for a file that exists and
+        # is in scope. This module's own rule is that a plausible wrong answer
+        # is worse than an empty one; a complete-looking partial one is worse
+        # than both.
+        studio = recent_inflight_items(data_root, cap=None)
         hits = [it for it in studio["items"] if _match(query, it.get("name"), it.get("path"), it.get("category"))]
         if hits:
             categories["studio"] = [

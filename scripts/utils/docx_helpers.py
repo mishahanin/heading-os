@@ -1,5 +1,9 @@
-"""Shared DOCX generation utilities."""
+"""Shared DOCX generation utilities.
+
+Tests: tests/test_a_data_root_override_that_was_silently_ignored.py, tests/test_docx_helpers.py
+"""
 from functools import lru_cache
+from pathlib import Path
 from types import SimpleNamespace
 
 
@@ -41,6 +45,32 @@ def load_docx() -> SimpleNamespace:
         parse_xml=parse_xml,
         OxmlElement=OxmlElement,
     )
+
+
+def save_docx(doc, path) -> Path:
+    """Write `doc` to `path`, creating the directories it needs first.
+
+    `python-docx`'s `Document.save()` does not create missing parents, and
+    seven generators under scripts/ called it on a path assembled from
+    `get_outputs_dir()` with no `mkdir` anywhere. On a workspace where
+    `outputs/documents/` happened to exist that is invisible; on a fresh
+    clone, a new data overlay, or a leaf nobody has written yet, each one
+    did the whole render and then died on its last line with
+    `FileNotFoundError`, having produced nothing and having printed nothing
+    about what it had built.
+
+    It was invisible in the suite too, because `tests/test_docx_helpers.py`
+    pre-created the leaves in its sandbox to match the assumption. That
+    scaffolding is gone now: the generators create their own output
+    directory, so the golden run proves the behaviour instead of standing
+    in for it.
+
+    Returns the resolved path so a caller can report what it wrote.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    doc.save(str(target))
+    return target
 
 
 def set_cell_shading(cell, color_hex: str) -> None:

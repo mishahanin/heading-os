@@ -12,16 +12,20 @@ Subcommands:
 
 PID file:  .fireside/daemon.pid
 Log file:  .fireside/daemon.log  (rotated by RotatingFileHandler, 1 MB, keep 3)
+
+Tests: tests/test_a_cache_key_that_forgot_what_was_asked_for.py
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
 import importlib.util
+import json
 import logging
 import os
 import signal
 import sys
+import tempfile
 import time
 from argparse import Namespace
 from logging.handlers import RotatingFileHandler
@@ -50,6 +54,10 @@ PID_FILE = RUNTIME_DIR / "daemon.pid"
 LOG_FILE = RUNTIME_DIR / "daemon.log"
 STARTED_AT_FILE = RUNTIME_DIR / "started_at"
 STOP_SENTINEL = RUNTIME_DIR / "stop"  # touch to request clean shutdown on Windows
+# What the LIVE daemon actually registered, written at start. `status` is a
+# separate process with no access to the scheduler, so without this file it can
+# only recite JOB_SPECS - which lists `poll`, the one job webhook mode skips.
+REGISTERED_JOBS_FILE = RUNTIME_DIR / "registered_jobs.json"
 
 JOB_SPECS: dict[str, dict] = {
     # Note: IntervalTrigger does NOT fire immediately on daemon start — the
@@ -137,6 +145,31 @@ def _load_fireside_bot():
 # ============================================================
 # PID file management
 # ============================================================
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Write `text` to `path` atomically, via a scratch name unique to us.
+
+    The two writes here used to use ONE fixed scratch name each
+    (`daemon.pid.tmp`, `started_at.tmp`), which is not atomic between writers
+    even though the `os.replace` is: two daemons racing to start both wrote the
+    same scratch path, and one `replace` moved the other's file into place. The
+    winner then ran with a PID file naming the loser, and `_remove_own_pid_file`
+    correctly refused to clean a file that was not its own - so the stale PID
+    outlived the process and the next `status` reported RUNNING over nothing.
+
+    Same defect the eval-draft and benchmark writers carried, same fix.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
 
 def live_daemon_pid() -> int | None:
     """The running daemon's PID, or None. ONE read, then one liveness check.
@@ -295,7 +328,7 @@ def _remove_own_pid_file(logger: logging.Logger) -> None:
         logger.warning("PID file names %d, not this process (%d); leaving it alone",
                        owner, os.getpid())
         return
-    for path in (PID_FILE, STARTED_AT_FILE):
+    for path in (PID_FILE, STARTED_AT_FILE, REGISTERED_JOBS_FILE):
         try:
             path.unlink(missing_ok=True)
         except OSError as exc:
@@ -333,10 +366,12 @@ async def _run_daemon(logger: logging.Logger) -> None:
 
     scheduler = AsyncIOScheduler(timezone=get_default_tz(),
                                  job_defaults=JOB_DEFAULTS)
+    registered: list[str] = []
     for name, spec in JOB_SPECS.items():
         if name == "poll" and webhook_enabled:
             logger.info("webhook mode: skipping poll cron job")
             continue
+        registered.append(name)
         trig = spec["trigger"]
         if trig["kind"] == "interval":
             interval_kwargs = {k: v for k, v in trig.items() if k != "kind"}
@@ -355,22 +390,28 @@ async def _run_daemon(logger: logging.Logger) -> None:
         except OSError:
             pass
 
-    # M-3: Atomic PID and start-time writes (write-to-tmp + os.replace).
+    # M-3: Atomic PID and start-time writes (write-to-tmp + os.replace), each
+    # through a scratch name unique to this writer - see `_atomic_write`.
     # I-3: Store wall-clock epoch seconds so cmd_status can compute uptime.
-    tmp_pid = PID_FILE.with_suffix(".pid.tmp")
-    tmp_pid.write_text(str(os.getpid()))
-    os.replace(tmp_pid, PID_FILE)
-
-    tmp_started = STARTED_AT_FILE.with_suffix(".tmp")
-    tmp_started.write_text(str(int(time.time())))
-    os.replace(tmp_started, STARTED_AT_FILE)
+    _atomic_write(PID_FILE, str(os.getpid()))
+    _atomic_write(STARTED_AT_FILE, str(int(time.time())))
+    # What this daemon REGISTERED, so `status` reports the live set instead of
+    # reciting JOB_SPECS. In webhook mode `poll` is skipped, and the recital
+    # named it anyway.
+    _atomic_write(REGISTERED_JOBS_FILE,
+                  json.dumps({"pid": os.getpid(), "webhook_mode": webhook_enabled,
+                              "jobs": registered}))
 
     # Self-heal: regenerate any missing fireside-state files before any job
     # runs. Rebuilds tribe-roster.json from the xlsx if the file is gone;
     # without it every DM is rejected as outsider. Idempotent.
     fb.ensure_state_dir()
 
-    logger.info("daemon-start pid=%d jobs=%d", os.getpid(), len(JOB_SPECS))
+    # The REGISTERED count, not len(JOB_SPECS). In webhook mode `poll` is
+    # skipped, so the spec count claimed one more job than the scheduler held -
+    # and webhook mode is how this daemon runs in production.
+    logger.info("daemon-start pid=%d jobs=%d webhook=%s",
+                os.getpid(), len(registered), webhook_enabled)
     scheduler.start()
 
     # Webhook server: runs uvicorn as a task in the same asyncio loop as
@@ -523,7 +564,34 @@ def cmd_status(args) -> None:
         except (ValueError, OSError):
             pass
     print(f"fireside-daemon: RUNNING pid={pid} uptime={uptime_str}")
-    print(f"jobs registered: {', '.join(JOB_SPECS.keys())}")
+
+    # The LIVE set, read from the file the daemon wrote when it registered them.
+    # This line used to recite JOB_SPECS, which lists `poll` - the one job
+    # webhook mode deliberately skips. The docstring at the top of this file
+    # already says `status` cannot know next-run times because it is a separate
+    # process with no access to the scheduler; the job list is the same claim,
+    # and it was being made anyway.
+    info = None
+    try:
+        loaded = json.loads(REGISTERED_JOBS_FILE.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict) and isinstance(loaded.get("jobs"), list):
+            info = loaded
+    except (OSError, json.JSONDecodeError):
+        info = None
+
+    if info is None:
+        # Fail toward over-reporting, and NAME the gap rather than let the spec
+        # list pass for the live one.
+        print(f"jobs registered: unknown - {REGISTERED_JOBS_FILE.name} is missing "
+              f"or unreadable, so this is the CONFIGURED set, not the live one")
+        print(f"jobs configured: {', '.join(JOB_SPECS.keys())}")
+        return
+    if info.get("pid") != pid:
+        print(f"jobs registered: unknown - {REGISTERED_JOBS_FILE.name} was written "
+              f"by pid {info.get('pid')}, not the running pid {pid}")
+        return
+    mode = " (webhook mode: poll not registered)" if info.get("webhook_mode") else ""
+    print(f"jobs registered: {', '.join(info['jobs'])}{mode}")
 
 
 # ============================================================

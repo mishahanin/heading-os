@@ -9,6 +9,8 @@ contains both config/ and scripts/, so it resolves correctly whether the code
 runs on the laptop checkout or on the always-on service host - no host-specific
 path literal is embedded.
 
+Tests: tests/test_a_day_that_could_not_be_read_and_was_called_quiet.py
+
 Resolution order for get_state_dir():
   1. INBOX_PULSE_STATE_DIR env var (test/dev override)
   2. <data_root>/state/email-triage/   (runtime state is DATA, never engine)
@@ -44,6 +46,12 @@ _THIS_FILE = Path(__file__).resolve()
 
 _workspace_root_cache: Path | None = None
 _state_dir_cache: Path | None = None
+# The env value the cached state dir was resolved FROM. The cache used to key
+# on nothing, so the first call in a process fixed the answer for its lifetime
+# and INBOX_PULSE_STATE_DIR -- documented one line below as a "test/dev
+# override" -- stopped overriding anything once any other caller had resolved
+# first. A cache that ignores its own input is not a cache of that input.
+_state_dir_cache_key: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -87,13 +95,15 @@ def get_state_dir() -> Path:
       2. <data_root>/state/email-triage/   (runtime state is DATA, never engine)
 
     Auto-creates the directory (parents=True, exist_ok=True) so callers
-    never have to. Cached after the first call.
+    never have to. Cached against the env value it was resolved from, so a
+    changed override re-resolves instead of returning the previous answer.
     """
-    global _state_dir_cache
-    if _state_dir_cache is not None:
-        return _state_dir_cache
+    global _state_dir_cache, _state_dir_cache_key
 
     env_override = os.environ.get("INBOX_PULSE_STATE_DIR", "").strip()
+    if _state_dir_cache is not None and _state_dir_cache_key == env_override:
+        return _state_dir_cache
+
     if env_override:
         path = Path(env_override)
     else:
@@ -101,4 +111,5 @@ def get_state_dir() -> Path:
 
     path.mkdir(parents=True, exist_ok=True)
     _state_dir_cache = path
+    _state_dir_cache_key = env_override
     return _state_dir_cache

@@ -37,6 +37,8 @@ or, when WORKSPACE_ROOT may already be set::
 See ``scripts/install-bridge-service.sh`` for the systemd install-time
 templating pattern (it resolves the root from its own location and bakes it
 into ``WorkingDirectory=`` and ``ExecStart=`` so the unit is self-contained).
+
+Tests: tests/test_a_data_root_override_that_was_silently_ignored.py, tests/test_data_root_intree_warning.py
 """
 
 import logging
@@ -106,13 +108,72 @@ DATA_SCHEMA_VERSION = 1
 
 
 class DataRootError(RuntimeError):
-    """Raised when a write is attempted with no real data root (demo mode)."""
+    """Raised when the data root cannot be honoured.
+
+    Two cases: a write attempted with no real data root (demo mode), and a
+    `HEADING_OS_DATA` that names a path which is not a directory.
+
+    A `RuntimeError` on purpose. Callers wrap filesystem work in
+    `except OSError`, and an `OSError` subclass here would be swallowed by a
+    handler written for a missing file, restoring the silence this replaced.
+    """
+
+
+def env_data_root() -> Path | None:
+    """The HEADING_OS_DATA override, or None when it cannot be honoured.
+
+    Set-but-missing is the dangerous case and it used to be SILENT. Both
+    resolvers read the variable, checked `is_dir()`, and on a miss simply fell
+    through to the next candidate -- which on this machine is the operator's
+    real private overlay. So a caller that set the variable precisely to keep
+    a write away from live data got the live data instead, with nothing said.
+
+    Measured on 2026-08-24: `tests/test_docx_helpers.py` built its sandbox as
+    `tmp_path / "data"` and, for cases with no seed files and no brand
+    template, never created it. Three generators then wrote into
+    `.heading-os-data/outputs/` for real, overwriting three tracked exec-meeting
+    documents. The sandbox had only ever worked because an unrelated
+    `mkdir` of the output leaves happened to create the root as a side effect.
+
+    The first fix kept the fallback and added a warning, on the reasoning that
+    an `.env` naming a path that has since moved should not brick every
+    session. The operator overruled that on 2026-08-25, and the reason is
+    sound: setting this variable is a deliberate act, nobody sets it by
+    accident, and "I told you where the data is" followed by a write somewhere
+    else is not a recoverable state. A warning is one line inside a hundred,
+    and in a daemon or a scheduled run nobody reads it at all.
+
+    So a set-but-missing value now RAISES. Unset is untouched and still returns
+    None, which is the ordinary path for every caller that does not use the
+    override.
+
+    `DataRootError`, not `NotADirectoryError`: several callers wrap filesystem
+    work in `except OSError`, and this must not be swallowed by a handler
+    written for a missing file.
+    """
+    env = os.environ.get("HEADING_OS_DATA")
+    if not env:
+        return None
+    cand = Path(env).expanduser()
+    if cand.is_dir():
+        return cand.resolve()
+    raise DataRootError(
+        f"HEADING_OS_DATA is set to {env!r}, which is not an existing "
+        f"directory. Refusing to fall back: the fallback on an operator "
+        f"machine is the live private overlay, so continuing would write real "
+        f"data to a path you did not ask for. Create the directory, or unset "
+        f"HEADING_OS_DATA."
+    )
 
 
 def get_data_root() -> Path:
     """Resolve the private-data root. First hit wins:
 
-      1. HEADING_OS_DATA env override (when it points at a real dir).
+      1. HEADING_OS_DATA env override, when it points at a real dir. A value
+         naming a path that does not exist RAISES ``DataRootError`` (see
+         ``env_data_root``); it is never ignored and never falls through to the
+         rules below, because on an operator machine the next rule to match is
+         the live private overlay.
       2. Legacy in-tree: the workspace root itself, when private data already
          lives there (transitional ceo-main). A workspace carrying its own data
          is authoritative for itself -- so creating the ../.heading-os-data
@@ -128,11 +189,9 @@ def get_data_root() -> Path:
     its own data until cutover. The env override still wins, so verification can
     point the engine clone at the real sibling explicitly.
     """
-    env = os.environ.get("HEADING_OS_DATA")
-    if env:
-        cand = Path(env).expanduser()
-        if cand.is_dir():
-            return cand.resolve()
+    env_root = env_data_root()
+    if env_root is not None:
+        return env_root
     root = get_workspace_root()
     if (root / "crm" / "contacts").is_dir() or (root / "knowledge").is_dir():
         _log.warning(

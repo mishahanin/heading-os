@@ -12,6 +12,8 @@ State files (under the caller's STATE_DIR, the existing fireside-state dir):
   topic-ideas.jsonl            append-only, one idea per line
   topic-collection-state.json  {"last_digest_idea_id": str|None,
                                 "pending_cycle_invite": dict|None}
+
+Tests: tests/test_a_sweep_that_reported_the_letters_it_never_read.py
 """
 from __future__ import annotations
 
@@ -150,6 +152,13 @@ def load_ideas(state_dir: Path, cycle: Optional[int] = None,
     cycle    -- if set, only ideas with that cycle number.
     since_id -- if set, only ideas appearing strictly AFTER the matching id
                 (unknown id => all ideas, matching new_ideas_since semantics).
+
+    The cursor is resolved against the WHOLE file, then the cycle filter is
+    applied. Filtering first meant the cursor was looked for in a list it was
+    usually absent from -- the digest cursor is global, so after a rollover it
+    names an idea in the newest cycle -- and "not found" falls back to returning
+    everything. `topic-ideas --cycle 2 --new` therefore listed every cycle-2
+    idea, all of them submitted BEFORE the cursor, as new.
     """
     path = _ideas_path(state_dir)
     if not path.exists():
@@ -164,13 +173,13 @@ def load_ideas(state_dir: Path, cycle: Optional[int] = None,
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if cycle is not None and rec.get("cycle") != cycle:
-                continue
             out.append(rec)
     if since_id is not None:
         idx = next((n for n, r in enumerate(out) if r.get("idea_id") == since_id), None)
         if idx is not None:
             out = out[idx + 1:]
+    if cycle is not None:
+        out = [r for r in out if r.get("cycle") == cycle]
     return out
 
 

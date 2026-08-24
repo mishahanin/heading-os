@@ -47,6 +47,8 @@ transient failure is reclassified ``permanent`` (the daemon writes it to the
 DLQ on a permanent result) - bounded, no unbounded retry loop.
 
 Usage: python scripts/action-queue-execute.py
+
+Tests: tests/test_a_queue_that_read_corrupt_as_empty.py
 """
 import json
 import subprocess
@@ -144,14 +146,24 @@ def send_card(engine_root: Path, card: dict, now: datetime | None = None) -> dic
 def main() -> int:
     root = get_workspace_root()
     queue_path = get_outputs_dir() / "operations/action-queue/queue.json"
+    # Absent and unreadable are different facts and must not share an answer --
+    # the principle `load_fleet_registry` in `aggregate-crm.py` states in its
+    # own docstring, and the one broken here. A queue file with one stray comma
+    # printed `[]` and exited 0, and the documented caller contract is "capture
+    # this stdout and apply the status changes". So the caller applied nothing,
+    # reported success, and every approved send card was dropped from the run
+    # with no diagnostic anywhere. An empty queue is a fact; an unreadable one
+    # is a failure, and a send queue is the worst place to confuse them.
     if not queue_path.exists():
         print("[]")
         return 0
     try:
         data = json.loads(queue_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"action-queue-execute: cannot read {queue_path}: {exc}",
+              file=sys.stderr)
         print("[]")
-        return 0
+        return 1
 
     now = datetime.now(timezone.utc)
     results: list[dict] = []

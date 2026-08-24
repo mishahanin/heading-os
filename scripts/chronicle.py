@@ -6,6 +6,8 @@ short, dated "what this was about" entry per non-trivial conversation. Entries
 are a distinct, low-priority RECORD CLASS - never a belief, never the brain.
 A business/personal flag routes each entry:
 
+Tests: tests/test_a_topic_list_shredded_into_single_letters.py
+
   chronicle/business/  -> indexed, recallable via /recall, ranked BELOW the brain
   chronicle/personal/  -> tagged "Личное", air-gapped by the `personal` segment
 
@@ -28,6 +30,7 @@ contract (created/updated/confidence) so the `chronicle` collection ranks it.
 """
 
 import argparse
+import http.client
 import json
 import subprocess
 import sys
@@ -265,6 +268,40 @@ def read_marker() -> str | None:
     return val or None
 
 
+def skipped_path() -> Path:
+    return chronicle_root() / ".skipped-sessions"
+
+
+def read_skipped() -> set[str]:
+    """Session ids the model already judged substance-free.
+
+    A `{"skip": true}` verdict used to leave NO trace on disk. Resumability
+    rests on `already_chronicled` (an entry exists) plus the date marker, and
+    `capped_marker` deliberately refuses to raise the marker past a session
+    that failed. So one transcript that reliably breaks the model pins the
+    cutoff at its date, and from that night on every skipped session newer than
+    it is re-selected and put through the full prefill again -- every night,
+    the set growing as empty sessions accrue, each run still exiting 0 with the
+    repeats counted as routine. This file is the missing trace.
+
+    Trivial-by-length skips are NOT recorded: they are decided before any model
+    call, so re-deciding them costs nothing and recording them would grow this
+    file for every empty session forever.
+    """
+    p = skipped_path()
+    if not p.is_file():
+        return set()
+    return {ln.strip() for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()}
+
+
+def record_skipped(session_id: str) -> None:
+    """Append one id, atomically, without re-reading a growing file each time."""
+    p = skipped_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as fh:
+        fh.write(session_id + "\n")
+
+
 def already_chronicled(session_id: str) -> bool:
     """True if either a business or personal entry already exists for this id.
 
@@ -302,9 +339,10 @@ def select_sessions(sessions_dir: Path, since: str | None, backfill: bool, limit
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
+    known_skipped = read_skipped()
     selected = []
     for f in files:
-        if already_chronicled(f.stem):
+        if already_chronicled(f.stem) or f.stem in known_skipped:
             continue
         if cutoff is not None:
             # UTC, because the MARKER is UTC. `capped_marker` writes a date that
@@ -577,10 +615,23 @@ def summarize(body: str, timeout: int = 300) -> dict | None:
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 - hardcoded localhost ollama URL
-            reply = json.loads(r.read().decode()).get("response", "")
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            parsed = json.loads(r.read().decode())
+    except (OSError, http.client.HTTPException, ValueError) as exc:
+        # OSError covers urllib.error.URLError (a subclass), TimeoutError, and
+        # ConnectionResetError; HTTPException covers RemoteDisconnected and
+        # IncompleteRead; ValueError covers JSONDecodeError and a body that is
+        # not decodable text. The old tuple named URLError, TimeoutError and
+        # JSONDecodeError, and a server that drops the connection mid-response
+        # raises none of them -- which is what a Windows-side ollama does when
+        # asked to prefill 120,000 characters. The traceback escaped summarize,
+        # escaped cmd_build's loop, and killed an unattended nightly run whose
+        # entire design is to fail soft, one session at a time. The docstring
+        # above promised None on a hard failure; this is what makes that true.
         print(f"{RED}  model call failed: {exc}{RESET}", file=sys.stderr)
         return None
+    # A reply that is valid JSON but not an object has no "response" to read,
+    # and .get on a list raises AttributeError past every guard above.
+    reply = parsed.get("response", "") if isinstance(parsed, dict) else ""
 
     obj = _extract_json(reply)
     if not obj:
@@ -591,7 +642,7 @@ def summarize(body: str, timeout: int = 300) -> dict | None:
         return None
 
     gist = str(obj["gist"]).strip()
-    topics = [str(t).strip() for t in obj.get("topics", []) if str(t).strip()][:6]
+    topics = _string_list(obj.get("topics"), 6)
     model_class = str(obj.get("class", "")).strip().lower()
     # personal wins on: keyword hit, explicit personal, or an unknown/blank class.
     personal = (
@@ -604,11 +655,34 @@ def summarize(body: str, timeout: int = 300) -> dict | None:
     # An entry is never withheld for missing reasoning -- a bare gist beats no
     # record of the session at all.
     reasoning = str(obj.get("reasoning", "") or "").strip()
-    considered = [str(x).strip() for x in obj.get("considered", []) or [] if str(x).strip()][:8]
-    still_open = [str(x).strip() for x in obj.get("open", []) or [] if str(x).strip()][:6]
+    considered = _string_list(obj.get("considered"), 8)
+    still_open = _string_list(obj.get("open"), 6)
 
     return {"gist": gist, "topics": topics, "personal": personal,
             "reasoning": reasoning, "considered": considered, "open": still_open}
+
+
+def _string_list(value, limit: int) -> list[str]:
+    """A capped list of non-empty strings, from whatever the model returned.
+
+    The model is a 4B local one and its JSON shape is a request, not a
+    contract. These fields were read with a bare comprehension over
+    `obj.get(...)`, so a reply of `"topics": "crm sync, memory index"` -- an
+    ordinary deviation, not a malformed reply -- iterated the STRING and
+    produced `['c', 'r', 'm', ' ', 's', 'y']`. That went into the entry's
+    frontmatter and its heading, and chronicle entries are immutable: once
+    written, `already_chronicled` stops the session ever being redone. A dict
+    would have yielded its keys the same way. `or []` guarded None and nothing
+    else.
+
+    A bare string is wrapped rather than dropped, because a model that answers
+    with a comma-joined line has still answered.
+    """
+    if isinstance(value, str):
+        value = value.split(",") if value.strip() else []
+    elif not isinstance(value, (list, tuple)):
+        return []
+    return [str(v).strip() for v in value if str(v).strip()][:limit]
 
 
 # ============================================================
@@ -763,7 +837,11 @@ def cmd_build(args: argparse.Namespace) -> int:
     print(f"{BOLD}chronicle build{RESET} ({mode}): {CYAN}{len(selected)}{RESET} session(s) to process"
           + (f" {GRAY}[dry-run]{RESET}" if args.dry_run else ""))
 
-    written = skipped = failed = 0
+    # `planned` is separate from `written` because the summary line used to
+    # say '3 written ... (dry-run, nothing saved)' in one breath, and a
+    # reader skimming a log -- or a wrapper parsing 'N written' -- was told
+    # entries existed on disk that did not.
+    written = planned = skipped = failed = 0
     newest_processed: str | None = None
     failed_dates: list[str] = []
     for i, path in enumerate(selected, 1):
@@ -787,6 +865,8 @@ def cmd_build(args: argparse.Namespace) -> int:
             continue
         if summary.get("skip"):
             print(f"  {GRAY}{label}  skip (no substantive content){RESET}")
+            if not args.dry_run:
+                record_skipped(path.stem)
             skipped += 1
             newest_processed = max(newest_processed or sdate, sdate)
             continue
@@ -796,10 +876,11 @@ def cmd_build(args: argparse.Namespace) -> int:
         if args.dry_run:
             print(f"  {label}  {tag}  -> {GRAY}{dest.name}{RESET}")
             print(f"      {summary['gist'][:110]}")
+            planned += 1
         else:
             write_entry(dest, render_entry(path.stem, sdate, str(path), summary))
             print(f"  {label}  {tag}  -> {dest.name}")
-        written += 1
+            written += 1
         newest_processed = max(newest_processed or sdate, sdate)
 
     if not args.dry_run and newest_processed:
@@ -823,9 +904,12 @@ def cmd_build(args: argparse.Namespace) -> int:
         if prev is None or newest_processed > prev:
             write_marker(newest_processed)
 
-    print(f"{BOLD}done:{RESET} {GREEN}{written} written{RESET}, "
-          f"{skipped} trivial, {failed} failed"
-          + (" (dry-run, nothing saved)" if args.dry_run else ""))
+    if args.dry_run:
+        print(f"{BOLD}done:{RESET} {GREEN}{planned} would be written{RESET}, "
+              f"{skipped} trivial, {failed} failed (dry-run, nothing saved)")
+    else:
+        print(f"{BOLD}done:{RESET} {GREEN}{written} written{RESET}, "
+              f"{skipped} trivial, {failed} failed")
     return 0
 
 

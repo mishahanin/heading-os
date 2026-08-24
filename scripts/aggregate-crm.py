@@ -23,6 +23,8 @@ Usage:
     python aggregate-crm.py --skip-clone               # don't auto-clone missing repos
     python aggregate-crm.py --workspace-root /path     # override workspace (for tests)
     python aggregate-crm.py --json                     # output stats as JSON
+
+Tests: tests/test_a_queue_that_read_corrupt_as_empty.py
 """
 
 import argparse
@@ -44,6 +46,7 @@ from scripts.utils.workspace import (
 from scripts.utils.operator_identity import operator_slug, operator_org
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
 from scripts.utils.markdown import parse_frontmatter_str as _parse_frontmatter
+from scripts.utils.crm import contact_identity_key, is_contact_file, normalize_name
 
 TODAY = datetime.now(get_default_tz()).date()
 
@@ -106,7 +109,18 @@ def parse_config(config_path: Path) -> dict:
             elif not line.strip():
                 break
 
-    return defaults if defaults else DEFAULT_CADENCE.copy()
+    # A table is an OVERRIDE layered over the defaults, not a replacement. It
+    # already behaved that way in two of three cases -- an absent file and an
+    # unparseable table both return the full DEFAULT_CADENCE -- and only a
+    # PARTIAL table broke the pattern: every type the table omitted fell
+    # through `get_thresholds` to a hardcoded 14/10/14, which is not that
+    # type's default. A config listing only `partner` therefore pushed `media`
+    # from a 60-day cadence to 14 and painted it red on the company radar. The
+    # false-red failure `get_thresholds` warns about in its own comment, caused
+    # by the config file meant to prevent it.
+    merged = DEFAULT_CADENCE.copy()
+    merged.update(defaults)
+    return merged
 
 
 # ============================================================
@@ -179,6 +193,11 @@ def get_thresholds(fm: dict, config: dict) -> dict:
     if rel_type in config:
         return config[rel_type].copy()
 
+    # Reached only by a type in NEITHER the config table nor DEFAULT_CADENCE --
+    # a typo, or a type someone invented. `parse_config` merges the table over
+    # the defaults, so a partial table no longer lands here. 14/10/14 is the
+    # deliberate choice for a genuinely unknown type: an unrecognised label
+    # should surface on the radar rather than quietly sleep for 60 days.
     return {"cadence": 14, "yellow": 10, "red": 14}
 
 
@@ -227,7 +246,7 @@ def scan_all_contacts(workspace_root: Path, exec_slugs: list, config: dict,
     ceo_dir = get_crm_contacts_dir()
     if ceo_dir.exists():
         for file_path in sorted(ceo_dir.glob("*.md")):
-            if file_path.name.lower() == "readme.md":
+            if not is_contact_file(file_path):
                 continue
             ctx = _read_contact_file(file_path, admin_slug, config, errors)
             if ctx:
@@ -292,7 +311,7 @@ def scan_all_contacts(workspace_root: Path, exec_slugs: list, config: dict,
             return slug_contacts, slug_errors
 
         for file_path in sorted(contacts_dir.glob("*.md")):
-            if file_path.name.lower() == "readme.md":
+            if not is_contact_file(file_path):
                 continue
             ctx = _read_contact_file(file_path, slug, config, slug_errors)
             if ctx:
@@ -398,11 +417,6 @@ def load_fleet_registry(data_root: Path) -> dict:
 # Shared contact detection
 # ---------------------------------------------------------------------------
 
-def normalize_name(name: str) -> str:
-    """Normalize a name for comparison."""
-    return " ".join(name.lower().strip().split())
-
-
 def _legacy_fuzzy_key(rec: dict) -> str:
     """Synthesise a grouping key for unmigrated records (no entity_ref).
 
@@ -419,8 +433,7 @@ def _legacy_fuzzy_key(rec: dict) -> str:
     None of the current 7 require it, so it is omitted here; the key stays
     name-only for full backward compatibility.
     """
-    name = normalize_name(rec.get("name") or "")
-    return f"legacy::name::{name}"
+    return contact_identity_key({"name": rec.get("name") or ""})
 
 
 def group_by_entity(all_records: list) -> dict:
@@ -825,6 +838,13 @@ def main():
 
     if not contacts:
         print(f"{YELLOW}No contacts found.{RESET}", file=sys.stderr)
+        # `--json` promises a JSON document on stdout. On an empty fleet this
+        # wrote nothing at all and exited 0, so a consumer piping stdout into a
+        # parser got EOF while the exit code said success. `admin-health.py`
+        # already prints a well-formed empty document in the same situation;
+        # two fleet tools cannot disagree about what `--json` means.
+        if args.json:
+            print_json_stats([], 0, [], errors)
         sys.exit(0)
 
     exec_count = len(set(c["owner_slug"] for c in contacts))

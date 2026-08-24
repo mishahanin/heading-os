@@ -25,6 +25,8 @@ scripts/templates/systemd/council-models-check.service (daily timer). Also
 runnable by hand:
     python3 scripts/council-models-notify.py            # send only on a changed finding
     python3 scripts/council-models-notify.py --force     # send even if unchanged (test)
+
+Tests: tests/test_a_closing_fence_that_only_half_read_crlf.py
 """
 
 from __future__ import annotations
@@ -118,7 +120,24 @@ def main() -> int:
     ap.add_argument("--force", action="store_true",
                     help="Send even when the finding set is unchanged (delivery test).")
     args = ap.parse_args()
+    # The one boundary that makes the module docstring's promise true. Only
+    # `assess()` was wrapped, and everything after it was not: `nudge_line`
+    # runs unguarded, `_signature` indexes `f['provider']` and `f['status']` on
+    # whatever assess returned, and `telegram_notify.notify` reaches the
+    # network, where raising is ordinary rather than exceptional. Any of those
+    # propagated out, the process exited non-zero, and the Type=oneshot unit
+    # was left `failed` -- which is the exact outcome the docstring says cannot
+    # happen. Argparse stays OUTSIDE, so `--help` and a bad flag still behave
+    # like a CLI. A missed nudge is non-critical: `/prime` is the backstop, and
+    # it is named as such three times in this file.
+    try:
+        return _run(args)
+    except Exception as exc:  # noqa: BLE001 - boundary; see above
+        _log(f"nudge run failed ({type(exc).__name__}: {exc}); exiting 0")
+        return 0
 
+
+def _run(args: argparse.Namespace) -> int:
     root = get_workspace_root()
     load_env(root)  # make .env (API keys + *_TELEGRAM_TARGET) visible under systemd
 

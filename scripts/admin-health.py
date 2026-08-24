@@ -18,6 +18,8 @@ therefore read `DEAD / never / unknown`. Regression cover:
 
 Usage:
     python admin-health.py [--json]
+
+Tests: tests/test_a_queue_that_read_corrupt_as_empty.py
 """
 
 import argparse
@@ -35,6 +37,8 @@ from scripts.utils.workspace import (
     get_per_exec_contacts_dir,
 )
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
+from scripts.utils.crm import contact_identity_key, is_contact_file
+from scripts.utils.markdown import parse_frontmatter_str
 
 GITHUB_ORG = load_github_org()
 
@@ -130,10 +134,13 @@ def collect_exec_state(exec_repos: list) -> list:
 
         contact_count = 0
         if contacts_dir.exists():
-            contact_count = sum(
-                1 for f in contacts_dir.iterdir()
-                if f.is_file() and f.suffix == ".md" and f.name != "README.md"
-            )
+            # `is_contact_file` rather than a local rule. This excluded exactly
+            # `README.md`, while `aggregate-crm.py` excluded `readme.md`
+            # case-insensitively, so an overlay holding a lowercase readme was
+            # counted by this dashboard and not by the aggregator -- two fleet
+            # tools reporting different totals for one directory.
+            contact_count = sum(1 for f in contacts_dir.iterdir()
+                                if is_contact_file(f))
 
         records.append({
             "slug": slug,
@@ -180,7 +187,12 @@ def calculate_status(record: dict) -> tuple:
     if delta < -SKEW_TOLERANCE:
         return "STALE", f"{YELLOW}STALE{RESET}", "ahead of this clock"
 
-    # Format time ago
+    # Format time ago. `delta` is floored at 0 because the guard above returns
+    # only for skew BEYOND tolerance: a commit 2 minutes ahead of this clock
+    # (ordinary NTP jitter) fell through and rendered "-120 sec ago" beside an
+    # OK row. A negative age is not a freshness claim anyone can act on, and
+    # this dashboard exists to be trusted.
+    delta = max(delta, 0.0)
     if delta < 60:
         time_ago = f"{int(delta)} sec ago"
     elif delta < 3600:
@@ -236,8 +248,20 @@ def find_shared_contacts(exec_repos: list) -> int:
         if not contacts_dir.exists():
             continue
         for f in contacts_dir.iterdir():
-            if f.is_file() and f.suffix == ".md" and f.name != "README.md":
-                contact_owners.setdefault(f.name, []).append(slug)
+            if not is_contact_file(f):
+                continue
+            # Keyed on IDENTITY, not filename. Grouping by `f.name` meant a
+            # person saved as `jordan-kim.md` by one exec and `kim-jordan.md`
+            # by another counted as two people here and one in
+            # `aggregate-crm.py`, so this dashboard and `shared-contacts.md`
+            # disagreed about a number they both print.
+            try:
+                fm, _body = parse_frontmatter_str(f.read_text(encoding="utf-8"))
+            except OSError as exc:
+                print(f"  {YELLOW}[warn]{RESET} unreadable contact {f}: {exc}",
+                      file=sys.stderr)
+                continue
+            contact_owners.setdefault(contact_identity_key(fm), []).append(slug)
 
     return sum(1 for owners in contact_owners.values() if len(owners) > 1)
 

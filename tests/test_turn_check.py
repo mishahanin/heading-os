@@ -51,8 +51,17 @@ def test_stem_match_does_not_drag_in_unrelated_neighbours():
     Without the underscore, a change to `crm.py` would pull in every
     `test_crm_*.py` AND anything starting with the letters `crm`, which turns a
     seconds-long check into a suite run and teaches people to skip it.
+
+    Declared tests are subtracted first. `matching_tests` is the union of the
+    stem rule and the module's own `Tests:` line, and this test is about the
+    stem rule alone. It asserted over the union and passed only while
+    `crm.py` happened to carry no declaration; the day one was added, a
+    correct declaration failed a test about something else.
     """
-    picked = {p.name for p in tc.matching_tests([ROOT / "scripts" / "utils" / "crm.py"])}
+    target = ROOT / "scripts" / "utils" / "crm.py"
+    declared = {p.name for p in tc.declared_tests(target)}
+    assert declared, "this test needs a declaring module to be the union it claims"
+    picked = {p.name for p in tc.matching_tests([target])} - declared
     for name in picked:
         body = name[len("test_"): -len(".py")]
         assert body == "crm" or body.startswith("crm_"), name

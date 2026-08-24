@@ -25,6 +25,8 @@ Checks performed:
  10. Founder-blog slop phrases (throat-clearing, emphasis crutches, meta-commentary)
  11. False agency (inanimate subject taking a human verb)
 
+Tests: tests/test_a_budget_that_was_declared_and_never_spent.py, tests/test_humanization_slop_patterns.py
+
 Exit codes:
   0 - clean (or strict-mode pass)
   1 - findings present (errors or, in strict mode, warnings)
@@ -69,7 +71,12 @@ BANNED_VOCAB = [
     "reimagine", "reimagines", "reimagining", "reimagined",
     "unleash", "unleashes", "unleashing", "unleashed",
     "garner", "garners", "garnering", "garnered",
-    "cultivating", "cultivated",
+    # "cultivating" / "cultivated" are NOT here. They live in BANNED_FIGURATIVE,
+    # and listing them in both lists made the context gate unreachable: this
+    # blanket pass runs first and flags every occurrence, so "cultivating the
+    # vineyard rows" was a hard error and "cultivating community" was reported
+    # twice. One of the two entries had to go, and the figurative one is the
+    # one that reads the sentence.
     "boasts", "boasting",
     "enhance", "enhances", "enhancing", "enhanced",
     # Adjectives
@@ -122,7 +129,10 @@ BANNED_FIGURATIVE = {
     "pave the way": [r"\bpave\s+(the\s+)?way\b"],
     "rich": [r"\brich\s+(tapestry|heritage|history|tradition|culture|cultural|legacy|narrative|fabric|landscape)\b"],
     "ecosystem": [r"\b(rich|vibrant|thriving|complex|the|an)\s+ecosystem\b"],
+    # Both inflections, because dropping them from BANNED_VOCAB would otherwise
+    # leave "cultivated" checked by nothing at all.
     "cultivating": [r"\bcultivating\s+(community|relationships|connections|trust|engagement|talent)\b"],
+    "cultivated": [r"\bcultivated\s+(a\s+|an\s+|the\s+)?(community|relationships|connections|trust|engagement|talent)\b"],
     "to bridge": [r"\bto\s+bridge\s+(the\s+)?(gap|divide|difference|distance)\b"],
     "align with": [r"\balign\s+with\s+(your|our|their|the|a|an)\b"],
     "resonate with": [r"\bresonate\s+with\s+(your|our|their|the|a|an)\b"],
@@ -656,8 +666,15 @@ def check_ing_tail_phrases(text):
 def check_sentence_start_additionally(text):
     """Flag sentences starting with 'Additionally' (PDF: critical rule)."""
     findings = []
-    # After period/!/? + space (or paragraph start)
-    pattern = re.compile(r"(^|[.!?]\s+)(Additionally|Moreover|Furthermore|Subsequently)\b")
+    # After period/!/? + space, or a line start. re.MULTILINE is what makes the
+    # second half of that sentence true: without it `^` anchors at position 0
+    # of the whole document, so the ONLY paragraph opener this could ever catch
+    # was the document's very first word. Every other "Additionally," sits
+    # after a blank line, which is neither position 0 nor sentence punctuation,
+    # and the check quietly saw almost none of what its comment promised.
+    pattern = re.compile(
+        r"(^|[.!?]\s+)(Additionally|Moreover|Furthermore|Subsequently)\b",
+        re.MULTILINE)
     for m in pattern.finditer(text):
         findings.append({
             "type": "transition_at_sentence_start",
@@ -727,7 +744,13 @@ def check_burstiness(text):
     paras = get_paragraphs(text)
     monotone_paras = 0
     total_qualifying = 0
-    total_words = word_count(text)
+    # Counted on the STRIPPED text, like the paragraphs it gates. On the raw
+    # text, a fenced code block, a YAML header or a table counted toward the
+    # ">200 words = outbound prose" test, so a 150-word note carrying a large
+    # code block crossed the gate and earned a blocking systemic error from a
+    # size threshold its prose never reached. `check_over_fragmentation` counts
+    # `word_count(prose)`; this was the outlier.
+    total_words = word_count(strip_markdown_noise(text))
 
     for i, para in enumerate(paras):
         sentences = get_sentences(para)
@@ -976,8 +999,15 @@ def audit(text, strict=False):
 
     Prose-level checks run on markdown-stripped text so inline-code spans
     (used to quote banned words) and code fences don't trigger false positives.
-    Title-case-heading check uses the original text (headings live outside
-    code blocks).
+
+    The title-case check runs on the stripped text too. It used to take the
+    original, justified by "headings live outside code blocks" -- which is
+    false for exactly the files this tool is pointed at. A rule or skill file
+    demonstrating markdown puts `# Some Example Widget Heading` inside a fence,
+    and the check warned on quoted example material, then failed --strict on
+    documentation whose only crime was showing what a heading looks like.
+    Stripping removes fences and audit-skip blocks and leaves real heading
+    lines untouched, which is the property the check actually needs.
     """
     prose = strip_markdown_noise(text)
     findings = []
@@ -994,7 +1024,7 @@ def audit(text, strict=False):
     findings += check_specificity(text)  # already strips internally
     findings += check_transition_openers(text)  # already strips internally
     findings += check_hedge_density(prose)
-    findings += check_title_case_headings(text)
+    findings += check_title_case_headings(prose)
 
     errors = [f for f in findings if f.get("severity") == "error"]
     warnings = [f for f in findings if f.get("severity") == "warning"]

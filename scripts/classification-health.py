@@ -14,6 +14,8 @@ Usage:
     python scripts/classification-health.py --corporate-only # list corporate files
     python scripts/classification-health.py --outputs-drift  # flag outputs/ subdirs >5 files
                                                               # without explicit config entries
+
+Tests: tests/test_a_topic_list_shredded_into_single_letters.py
 """
 
 import argparse
@@ -245,8 +247,15 @@ def print_outputs_drift(findings: list[dict], threshold: int = 5) -> None:
     for f in findings:
         print(f"  {YELLOW}{f['path']}{RESET}  ({f['file_count']} files, inheriting from outputs/ default)")
     print()
-    print(f"{CYAN}To pin: add `\"{findings[0]['path']}\": private` (or corporate/engine) to the rules{RESET}")
-    print(f"{CYAN}in config/routing-map.yaml. Leave in place if inheritance is intended.{RESET}")
+    # Every path, not findings[0]. The instruction interpolated the first
+    # finding for all of them, so an operator with three drifted subtrees
+    # followed it literally, pinned one, saw the count drop, and left two
+    # unpinned that no printed line had ever named.
+    print(f"{CYAN}To pin, add these to `rules:` in config/routing-map.yaml "
+          f"(private, or corporate/engine):{RESET}")
+    for f in findings:
+        print(f'{CYAN}  "{f["path"]}": private{RESET}')
+    print(f"{CYAN}Leave in place if inheritance is intended.{RESET}")
 
 
 def main():

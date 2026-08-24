@@ -29,6 +29,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Iterator
 
+from scripts.bridge_daemon._shapes import entry_ts
 from scripts.utils.workspace import get_default_tz
 
 PAGE_VIEW = "page_view"
@@ -161,13 +162,23 @@ def summarize(workspace_root: Path, days: int = 14, today: date | None = None) -
     per_day_first_event_kind: dict[date, str] = {}
 
     for rec in records:
-        local_date = _local_date(rec["ts"])
+        # `entry_ts`, not `rec["ts"]`. `_iter_records` checks that the KEY is
+        # present and never that its value is a string, and
+        # `datetime.fromisoformat(None)` raises TypeError, which is not the
+        # ValueError `_local_date` catches. So one hand-edited or torn line
+        # holding `"ts": null` propagated out of `summarize` and took the whole
+        # 14-day report down -- the exact outcome `_iter_records`' own docstring
+        # says it exists to prevent, and the exact case `_shapes.entry_ts` was
+        # written for after the same defect in `sources/critical.py`. That guard
+        # was never applied here.
+        ts = entry_ts(rec)
+        local_date = _local_date(ts)
         if local_date is None:
             continue
         if local_date < window_start or local_date > today:
             continue
         evt = rec.get("event")
-        local_dt = _local_dt(rec["ts"])
+        local_dt = _local_dt(ts)
         if local_dt and (local_date not in per_day_first_event or local_dt < per_day_first_event[local_date]):
             per_day_first_event[local_date] = local_dt
             per_day_first_event_kind[local_date] = evt or ""

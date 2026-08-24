@@ -28,6 +28,8 @@ Usage:
     python scripts/action-queue.py deposit --file <cards.json>
 
 Exit codes: 0 ok, 1 request/usage error.
+
+Tests: tests/test_a_queue_that_read_corrupt_as_empty.py
 """
 import argparse
 import importlib.util
@@ -127,12 +129,26 @@ def approve_and_send(engine_root: Path, data_root: Path, id_or_prefix: str) -> d
         # to prevent.
         #
         # What this does NOT do, stated rather than implied: there is no
-        # claiming transition. The card stays `approved` for the up-to-120s
-        # life of the send, so a concurrent batch executor could still select
-        # it. Nothing schedules that executor today (the bridge daemon is
-        # stopped by decision), and adding a `sending` status touches the
+        # claiming transition. The card keeps its PRE-approval status for the
+        # up-to-120s life of the send, and only `apply_status` below moves it
+        # to `sent`.
+        #
+        # That is not the race this comment used to describe. It said the card
+        # "stays `approved` during the send, so a concurrent batch executor
+        # could still select it" -- and both halves are false.
+        # `SENDABLE_STATUSES` excludes `approved`, so the guard immediately
+        # below returns `blocked` for an `approved` card and this path never
+        # sends one; and `action-queue-execute.py` selects ONLY cards whose
+        # status IS `approved`, so it can never select a card this path is
+        # sending. A reader trusting the old wording would audit a gate that
+        # does not exist.
+        #
+        # The race that IS open: two concurrent `approve` calls on the same
+        # pending card both read the status, both pass this guard, and both
+        # send. Closing it needs a claiming transition, which touches the
         # shared ACTIVE_STATUSES the daemon UI and sweep both read -- a change
-        # to the send gate, which is the operator's to approve.
+        # to the send gate, which is the operator's to approve. In practice
+        # the CEO is the single writer typing one command at a time.
         if card.get("status") not in SENDABLE_STATUSES:
             return {"result": "blocked", "action_id": aid,
                     "error": (f"card is {card.get('status')!r}; approve only sends a "

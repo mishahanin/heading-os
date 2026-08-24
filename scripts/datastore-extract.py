@@ -13,6 +13,8 @@ Usage:
 
 Prerequisites:
     pip install openpyxl python-pptx
+
+Tests: tests/test_a_rollback_that_deleted_what_it_never_backed_up.py
 """
 
 import argparse
@@ -183,6 +185,30 @@ def _companion_for(filepath, ambiguous: set):
     return base.with_name(f"{filepath.stem}-{suffix}-extract.md")
 
 
+def orphaned_companions(ambiguous: set) -> list:
+    """Unsuffixed companions left behind when a same-stem sibling ARRIVES.
+
+    The rename above is scoped to currently-ambiguous stems on the stated
+    assumption that "every companion on disk today belongs to a file with no
+    same-stem sibling". That is true on the day it was written and stops being
+    true the moment somebody drops `pitch.xlsx` beside an already-extracted
+    `pitch.pptx`: both sources now resolve to suffixed companions, and the old
+    `pitch-extract.md` -- which describes only the deck -- sits between them,
+    unreferenced, for the next reader to take as the companion for either. The
+    stem was printed in the ambiguity warning; the stale FILE never was.
+
+    Reported, never deleted. It is extracted content, the operator may have
+    edited it, and which of the two files it describes is a question this
+    script can answer only by guessing.
+    """
+    orphans = []
+    for parent, stem in sorted(ambiguous):
+        stale = parent / f"{stem}-extract.md"
+        if stale.is_file():
+            orphans.append(stale)
+    return orphans
+
+
 def scan_and_extract(target_dir=None, force=False):
     """Scan for binary files and create companion extracts."""
     scan_dir = Path(target_dir) if target_dir else DATASTORE_DIR
@@ -191,9 +217,16 @@ def scan_and_extract(target_dir=None, force=False):
         print(f"{RED}Directory not found: {scan_dir}{RESET}")
         return []
 
-    # Find XLSX and PPTX files
-    binary_files = [p for suffix in EXTRACTABLE_SUFFIXES
-                    for p in scan_dir.rglob(f"*{suffix}")]
+    # Find XLSX and PPTX files, case-insensitively. `rglob("*.xlsx")` is
+    # case-SENSITIVE on Linux, so `Q3.XLSX` was neither extracted nor
+    # mentioned and the run printed its summary as though the datastore were
+    # fully processed. On macOS and Windows the same pattern happened to match,
+    # so the tool behaved differently depending on the filesystem underneath
+    # it. One walk, one suffix test on the lowercased suffix.
+    binary_files = sorted(
+        p for p in scan_dir.rglob("*")
+        if p.is_file() and p.suffix.lower() in EXTRACTABLE_SUFFIXES
+    )
 
     if not binary_files:
         print(f"{YELLOW}No XLSX or PPTX files found in {scan_dir}{RESET}")
@@ -207,6 +240,12 @@ def scan_and_extract(target_dir=None, force=False):
               f"an .xlsx; those companions carry the source suffix:{RESET}")
         for parent, stem in sorted(ambiguous):
             print(f"  {YELLOW}{parent.name}/{stem}{RESET}")
+        orphans = orphaned_companions(ambiguous)
+        if orphans:
+            print(f"{YELLOW}{len(orphans)} unsuffixed companion(s) now describe "
+                  f"only one of a pair. Read and delete or rename by hand:{RESET}")
+            for stale in orphans:
+                print(f"  {YELLOW}{stale}{RESET}")
 
     extracted = []
     failures: list[tuple[Path, str]] = []

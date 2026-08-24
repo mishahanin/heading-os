@@ -10,6 +10,8 @@ Usage:
     python scripts/generate-dashboard.py                     # HTML only
     python scripts/generate-dashboard.py --pdf               # HTML + PDF
     python scripts/generate-dashboard.py --output-dir DIR    # custom output dir
+
+Tests: tests/test_a_morning_calendar_shifted_by_its_own_timezone.py, tests/test_a_table_that_lost_a_deal_and_a_revert_that_froze_the_source.py
 """
 
 import argparse
@@ -19,7 +21,7 @@ import json
 import re
 import subprocess
 import sys
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -80,10 +82,24 @@ def load_font_b64(path):
 TODAY = datetime.now(get_default_tz()).date()
 NOW = datetime.now(get_default_tz())
 
-# Calendar times from Exchange are stored in UTC. collect_calendar() converts
-# them with get_default_tz(), the same seam the rest of this file uses.
-# CALENDAR_UTC_OFFSET_HOURS = 4 used to live here and was applied instead: a
-# constant offset beside a comment asserting it equalled the configured zone.
+# Calendar times from Exchange are written to upcoming.md ALREADY LOCAL, by
+# sync-exchange's `_event_time_str`. This comment used to assert they were
+# stored in UTC, and `collect_calendar` converted them on that basis; see the
+# note there for what that cost. `CALENDAR_UTC_OFFSET_HOURS = 4` lived here
+# first -- a constant offset beside a comment claiming it equalled the
+# configured zone -- and both it and the tz-aware conversion that replaced it
+# were corrections to a problem that never existed.
+
+
+def _zone_suffix():
+    """" (ZONE)" for the page furniture, or "" when the zone has no name.
+
+    The two headers below printed the literal words "the configured timezone"
+    on a page marked "Internal - CEO Eyes Only". `NOW` is built with
+    `get_default_tz()`, so the abbreviation was available the whole time.
+    """
+    zone = NOW.tzname()
+    return f" ({esc(zone)})" if zone else ""
 
 
 # ============================================================
@@ -142,29 +158,41 @@ def collect_crm_health():
     to crm-health.py and re-parsed its JSON output.
     """
     result = {"contacts": [], "red": [], "yellow": [], "green": [], "gray": [],
-              "commitments_due": [], "total": 0}
+              "commitments_due": [], "total": 0, "failed": ""}
     try:
         config = _crm_parse_config(_get_crm_config_path())
         raw_contacts, _tribe_warnings, _dangling_refs, _stages, _aliases = _crm_scan_contacts(config, today=TODAY)
 
         # Normalise to the previous JSON-derived shape: due dates as ISO strings.
+        #
+        # `.get`, and one try per CONTACT. Every field here was a bare index, so
+        # a single contact dict missing a single key raised before ANY bucket was
+        # filled; the broad `except` below then returned the empty skeleton and
+        # the Urgent Items panel showed "All Clear". `health_bucket` was hardened
+        # against exactly that failure shape and the normaliser above it was not,
+        # so the same outcome stayed reachable through a different trigger. A bad
+        # contact is now dropped alone, and named.
         contacts = []
         for c in raw_contacts:
-            commits = []
-            for cm in c.get("commitments", []):
-                due_iso = cm["due"].strftime("%Y-%m-%d") if cm.get("due") else None
-                commits.append({"text": cm["text"], "due": due_iso})
-            contacts.append({
-                "name": c["name"],
-                "company": c["company"],
-                "type": c["type"],
-                "last_touch": c["last_touch"],
-                "cadence": c["cadence"],
-                "health": c["health"],
-                "days_since": c["days_since"],
-                "commitments": commits,
-                "file": c["file"],
-            })
+            try:
+                commits = []
+                for cm in c.get("commitments", []):
+                    due_iso = cm["due"].strftime("%Y-%m-%d") if cm.get("due") else None
+                    commits.append({"text": cm["text"], "due": due_iso})
+                contacts.append({
+                    "name": c.get("name", "(unnamed)"),
+                    "company": c.get("company", ""),
+                    "type": c.get("type", ""),
+                    "last_touch": c.get("last_touch"),
+                    "cadence": c.get("cadence"),
+                    "health": c.get("health"),
+                    "days_since": c.get("days_since"),
+                    "commitments": commits,
+                    "file": c.get("file", ""),
+                })
+            except (KeyError, AttributeError, TypeError, ValueError) as e:
+                print(f"[generate-dashboard] skipping malformed contact "
+                      f"{c.get('name', '?')!r}: {e}", file=sys.stderr)
 
         result["contacts"] = contacts
         result["total"] = len(contacts)
@@ -193,6 +221,10 @@ def collect_crm_health():
                         pass
     except Exception as e:
         print(f"Warning: CRM health collection failed: {e}", file=sys.stderr)
+        # Recorded, not just printed. stderr scrolls past; the PAGE is what the
+        # CEO reads, and until this flag existed the page could not tell a
+        # failed scan from a quiet morning. `build_urgent` reads it.
+        result["failed"] = f"{type(e).__name__}: {e}"
     return result
 
 
@@ -324,6 +356,68 @@ def _as_int_or_count(value):
     return None
 
 
+def _parse_clock(raw_time):
+    """A wall clock from a Time cell, or None when there isn't one.
+
+    `time.fromisoformat` wants `HH:MM` zero-padded, and the guard in front of
+    it admitted `\\d{1,2}:\\d{2}`. So "9:30" passed the regex, failed the parse,
+    and hit a bare `continue` -- the meeting left the CEO's day with nothing
+    said. "9:30 AM" did the same, because slicing five characters off it gives
+    "9:30 ". Both shapes are accepted here.
+    """
+    if not raw_time:
+        return None
+    m = re.match(r"\s*(\d{1,2}):(\d{2})\s*([APap][Mm])?", raw_time)
+    if not m:
+        return None
+    hour, minute = int(m.group(1)), int(m.group(2))
+    meridiem = (m.group(3) or "").lower()
+    if meridiem == "pm" and hour != 12:
+        hour += 12
+    elif meridiem == "am" and hour == 12:
+        hour = 0
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return time(hour, minute)
+
+
+def _as_percent(value):
+    """A 0-100 completion percentage from an unvalidated producer field.
+
+    `completion_rate` arrives from the viraid `state.json`, where only
+    JSONDecodeError and OSError were ever caught -- the VALUE's type was never
+    looked at, and it reached an f-string as `{rate:.0f}%` in the build phase.
+    Two ways that went wrong, and the second is worse than the first:
+
+    * a string ("75") raised at format time and took the whole dashboard down
+      after every collector had already succeeded;
+    * a fraction (0.87) rendered as "1%" -- a wrong number, on the CEO's
+      dashboard, with nothing anywhere saying it was wrong.
+
+    A value in 0..1 is read as a fraction and scaled. That is a JUDGEMENT, not
+    a fact the producer states, so it is made once, here, where it can be seen
+    and argued with, rather than implied by a format string. 1.0 is ambiguous
+    between "1%" and "100%" and is read as 100%, because a completion rate of
+    exactly 1% is the less likely of the two by a wide margin.
+    """
+    if isinstance(value, bool) or value is None:
+        return 0.0
+    if isinstance(value, str):
+        try:
+            value = float(value.strip().rstrip("%"))
+        except ValueError:
+            print(f"[generate-dashboard] viraid completion_rate {value!r} is not "
+                  f"a number; showing 0%", file=sys.stderr)
+            return 0.0
+    if not isinstance(value, (int, float)):
+        print(f"[generate-dashboard] viraid completion_rate has type "
+              f"{type(value).__name__}; showing 0%", file=sys.stderr)
+        return 0.0
+    if 0 < value <= 1:
+        value *= 100
+    return float(max(0.0, min(100.0, value)))
+
+
 def collect_calendar():
     """Parse upcoming.md for today's meetings."""
     content = read_file(CALENDAR_FILE)
@@ -337,44 +431,52 @@ def collect_calendar():
     if sync_match:
         result["sync_time"] = sync_match.group(1).strip()
 
-    # Every UTC-dated section, converted, then filtered by LOCAL date.
+    # NO conversion. `upcoming.md` is already local, in both of its fields.
     #
-    # This used to find the one section whose header equalled the LOCAL today,
-    # then add a hardcoded four hours. Two things were wrong. The offset was a
-    # constant while the rest of the file derives its timezone from
-    # get_default_tz(), so a different configured zone, or any zone that
-    # observes DST, made every calendar time wrong and nothing else. And the
-    # section was chosen BEFORE conversion, so a 22:30 UTC meeting was shown as
-    # 02:30 under today's heading when it belongs to tomorrow, while tomorrow's
-    # early meetings never appeared at all.
-    tz = get_default_tz()
+    # `sync-exchange.sync_calendar` groups events by `_to_local(...).date()` and
+    # writes each Time cell through `_event_time_str`, which is
+    # `event.start.astimezone(local_tz).strftime("%H:%M")`. It has done both
+    # since the engine's initial import; the file has never held UTC.
+    #
+    # This function believed otherwise from that same initial import. It began
+    # by adding a constant `CALENDAR_UTC_OFFSET_HOURS` under the comment
+    # "Convert meeting times from UTC to the configured local timezone" --
+    # converting data that was already converted. On 2026-08-23 an earlier night
+    # of this audit replaced the constant with a tz-aware `astimezone` and added
+    # a filter on the converted date. That removed the hardcoding and kept the
+    # false premise, which made the symptom worse rather than better: on
+    # Asia/Dubai a 09:00 meeting rendered as 13:00 (as it always had), and a
+    # 21:00 meeting now became 01:00 tomorrow and DISAPPEARED from the day
+    # entirely. Measured, both of them, on the fixture in
+    # tests/test_a_morning_calendar_shifted_by_its_own_timezone.py.
+    #
+    # The section header is a local date and the clock is a local clock, so
+    # today's meetings are the rows under today's header, shown as written.
     meetings = []
     for sec in re.finditer(r"##\s*(\d{4}-\d{2}-\d{2})", content):
         try:
             section_date = date.fromisoformat(sec.group(1))
         except ValueError:
             continue
+        if section_date != TODAY:
+            continue
         rest = content[sec.start():]
         nxt = re.search(r"\n##\s*\d{4}-\d{2}-\d{2}", rest[3:])
         section = rest[:nxt.start() + 3] if nxt else rest
         for m in parse_md_table(section, source=str(CALENDAR_FILE)):
             raw_time = m.get("Time", "").strip()
-            if not re.match(r"\d{1,2}:\d{2}", raw_time):
+            clock = _parse_clock(raw_time)
+            if clock is None:
+                # Kept and flagged, never dropped in silence. This is the one
+                # panel where an absent row is the worst outcome: a meeting the
+                # CEO does not know about costs more than a row that reads
+                # oddly. The unparsed text stays in the cell so it is visible.
+                if raw_time:
+                    print(f"[generate-dashboard] calendar row kept with an "
+                          f"unparsed Time {raw_time!r}", file=sys.stderr)
+                    meetings.append(m)
                 continue
-            try:
-                # `time.fromisoformat`, not `datetime.strptime(...).time()`.
-                # Only the clock is wanted here — the zone is applied one line
-                # below — and building a naive datetime to throw it away put a
-                # tz-less datetime on the page for a linter to flag and for the
-                # next reader to wonder about.
-                clock = time.fromisoformat(raw_time[:5])
-            except ValueError:
-                continue
-            local = datetime.combine(section_date, clock,
-                                     tzinfo=timezone.utc).astimezone(tz)
-            if local.date() != TODAY:
-                continue
-            m["Time"] = local.strftime("%H:%M")
+            m["Time"] = clock.strftime("%H:%M")
             meetings.append(m)
 
     meetings.sort(key=lambda m: m.get("Time", ""))
@@ -633,7 +735,7 @@ def collect_viraid():
         try:
             state = json.loads(VIRAID_STATE_FILE.read_text(encoding="utf-8"))
             stats = state.get("stats", {})
-            result["completion_rate"] = stats.get("completion_rate", 0.0)
+            result["completion_rate"] = _as_percent(stats.get("completion_rate"))
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -663,7 +765,14 @@ def collect_capture_payoff():
             if not val:
                 continue
             try:
-                return datetime.fromisoformat(str(val)[:10]).date() >= cutoff
+                # `if ... return True`, not `return ... >= cutoff`. The loop
+                # reads as a fallback chain and behaved as a first-hit-wins
+                # verdict: an old `date` returned False and `ingested` was
+                # never consulted, so a note captured THIS WEEK from an old
+                # source was missing from "Signals Captured (7d)" -- the one
+                # number the panel exists to report.
+                if datetime.fromisoformat(str(val)[:10]).date() >= cutoff:
+                    return True
             except ValueError:
                 continue
         return False
@@ -691,7 +800,13 @@ def collect_capture_payoff():
             # only on the days when there WERE clusters to promote.
             promote_ready = _as_int_or_count(data.get("reflect_clusters"))
             last_collect = data.get("last_collect")
-            days_since = data.get("days_since")
+            # Through the same guard as `reflect_clusters` one line above.
+            # Both come verbatim from `odin-cadence.py --json`, whose shape
+            # `_as_int_or_count` documents as never promised -- and this one
+            # reaches `days_since >= 7` in the BUILD phase, after every
+            # collector has succeeded, so a string here killed the whole
+            # dashboard with all of its data already in hand.
+            days_since = _as_int_or_count(data.get("days_since"))
         except (subprocess.SubprocessError, json.JSONDecodeError, OSError, ValueError) as e:
             # Best-effort Odin cadence block; degrade to None but surface why.
             print(f"[generate-dashboard] odin cadence collect failed: {e}", file=sys.stderr)
@@ -750,6 +865,7 @@ def build_cover(white_logo_b64):
     """
     date_long = NOW.strftime("%A, %B %d, %Y")
     time_str = NOW.strftime("%H:%M")
+    zone_suffix = _zone_suffix()
     logo_html = (
         f'<img class="cover-logo" src="{white_logo_b64}" alt="31 Concept"/>'
         if white_logo_b64 else ''
@@ -763,7 +879,7 @@ def build_cover(white_logo_b64):
     <div class="cover-eyebrow">CEO Morning Dashboard</div>
     <div class="cover-title">Heading<span class="one-blue">.</span>State<span class="one-blue">.</span>Drift<span class="one-blue">.</span></div>
     <div class="cover-date">{esc(date_long)}</div>
-    <div class="cover-meta">Generated {esc(time_str)} &middot; the configured timezone &middot; Internal &mdash; CEO Eyes Only</div>
+    <div class="cover-meta">Generated {esc(time_str)}{zone_suffix} &middot; Internal &mdash; CEO Eyes Only</div>
   </div>
   <div class="cover-footer">
     <div class="cover-footer-marks"><span class="sq blue"></span><span class="sq orange"></span></div>
@@ -776,6 +892,7 @@ def build_cover(white_logo_b64):
 def build_header(logo_b64):
     date_long = NOW.strftime("%A, %B %d, %Y")
     time_str = NOW.strftime("%H:%M")
+    zone_suffix = _zone_suffix()
     return f"""
 <div class="topbar">
   <div class="topbar-left">
@@ -787,7 +904,7 @@ def build_header(logo_b64):
 </div>
 <div class="datebar">
   <div class="datebar-date">{esc(date_long)}</div>
-  <div class="datebar-meta">Generated {esc(time_str)} (the configured timezone)</div>
+  <div class="datebar-meta">Generated {esc(time_str)}{zone_suffix}</div>
 </div>
 """
 
@@ -825,7 +942,20 @@ def build_urgent(crm):
   <div class="alert-sub">{esc(c['text'])} &bull; Due: {esc(c['due'])}</div>
 </div>""")
 
-    if not items_html:
+    if crm.get("failed"):
+        # "All Clear" must be unreachable from an error path. `collect_crm_health`
+        # returns its empty skeleton when the scan raises, and an empty skeleton
+        # is indistinguishable here from a genuinely quiet morning -- so a single
+        # malformed contact file used to render the CEO a green card while
+        # overdue commitments sat unread. An empty result that came from a
+        # FAILURE says so, and says it in the alarming direction.
+        items_html.append(f"""
+<div class="alert-card">
+  <div class="alert-label">CRM Data Unavailable</div>
+  <div class="alert-text">The CRM scan failed, so this panel is EMPTY, not clear.</div>
+  <div class="alert-sub">{esc(crm.get("failed"))}</div>
+</div>""")
+    elif not items_html:
         items_html.append("""
 <div class="alert-card ok">
   <div class="alert-label">All Clear</div>

@@ -3,6 +3,11 @@
 The network path is not exercised here. What is exercised is the decision that
 precedes a send: which draft, and whether the answer is unambiguous. Sending
 the wrong draft is unrecoverable, so ambiguity must raise rather than resolve.
+
+The subject cases pass `complete=True` because DRAFTS below IS the whole list.
+Saying so is the contract, not ceremony: `select_draft` refuses to call a match
+unique over a set whose completeness nobody established, and these tests are
+where that set is established.
 """
 
 import importlib.util
@@ -46,18 +51,18 @@ def test_unknown_id_raises():
 
 
 def test_subject_substring_is_case_insensitive():
-    assert select_draft(DRAFTS, match_subject="private INFORMATION") == "r1"
+    assert select_draft(DRAFTS, match_subject="private INFORMATION", complete=True) == "r1"
 
 
 def test_subject_with_no_match_raises():
     with pytest.raises(DraftSelectionError, match="no draft whose subject"):
-        select_draft(DRAFTS, match_subject="invoice")
+        select_draft(DRAFTS, match_subject="invoice", complete=True)
 
 
 def test_ambiguous_subject_raises_and_names_the_candidates():
     drafts = DRAFTS + [{"id": "r4", "to": "x@y.z", "subject": "Private information, part two"}]
     with pytest.raises(DraftSelectionError) as exc:
-        select_draft(drafts, match_subject="private information")
+        select_draft(drafts, match_subject="private information", complete=True)
     message = str(exc.value)
     assert "r1" in message and "r4" in message
     assert "--draft-id" in message
@@ -75,4 +80,4 @@ def test_both_selectors_raise():
 
 def test_draft_with_empty_subject_never_matches_a_substring():
     """An untitled draft must not be swept up by a subject search."""
-    assert select_draft(DRAFTS, match_subject="removal") == "r1"
+    assert select_draft(DRAFTS, match_subject="removal", complete=True) == "r1"

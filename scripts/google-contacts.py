@@ -26,6 +26,8 @@ Usage:
     python scripts/google-contacts.py list --limit 50
     python scripts/google-contacts.py delete people/c1234567890
 
+Tests: tests/test_an_edit_that_deleted_the_addresses_it_promised_to_keep.py, tests/test_google_contacts_edit_merge.py
+
 Environment:
     GOOGLE_CONTACTS_CREDENTIALS_PATH  Path to credentials.json (optional)
                                        Default: .sessions/google/credentials.json
@@ -83,28 +85,37 @@ PERSON_FIELDS = "names,emailAddresses,phoneNumbers,organizations,biographies,add
 def _check_dependencies():
     missing = []
     try:
-        from google.oauth2.credentials import Credentials  # noqa: F401
+        from googleapiclient.discovery import build  # noqa: F401
     except ImportError:
+        # `build` is the one import that comes from google-api-python-client,
+        # and until 2026-08-25 no check imported it. The check that CLAIMED to
+        # cover that package imported `google.oauth2.credentials`, which ships
+        # in google-auth. So an environment with google-auth and
+        # google-auth-oauthlib but no google-api-python-client passed all three
+        # checks and then died inside authenticate() with a bare
+        # ModuleNotFoundError -- the exact diagnosis this function exists to
+        # replace.
         missing.append("google-api-python-client")
     try:
         from google_auth_oauthlib.flow import InstalledAppFlow  # noqa: F401
     except ImportError:
         missing.append("google-auth-oauthlib")
     try:
+        from google.oauth2.credentials import Credentials  # noqa: F401
         from google.auth.transport.requests import Request  # noqa: F401
     except ImportError:
-        # google.auth.transport.requests is provided by google-auth (and
-        # needs `requests`), NOT by google-auth-httplib2. Naming the wrong
-        # package sent the operator to install something that cannot fix it.
-        if "google-api-python-client" not in missing:
+        # Both of these are provided by google-auth (and the transport needs
+        # `requests`), NOT by google-auth-httplib2 and NOT by
+        # google-api-python-client. Naming the wrong package sent the operator
+        # to install something that cannot fix it.
+        if "google-auth" not in missing:
             missing.append("google-auth")
     if missing:
         print(f"{RED}[ERROR] Missing packages: {', '.join(missing)}{RESET}", file=sys.stderr)
-        print(
-            "        Run: pip install google-api-python-client google-auth-httplib2 "
-            "google-auth-oauthlib python-dotenv",
-            file=sys.stderr,
-        )
+        # The remedy names what is actually missing. A fixed line listing the
+        # whole set tells an operator who is missing one package to install
+        # four, and hides which of the three checks above failed.
+        print(f"        Run: pip install {' '.join(missing)}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -429,6 +440,12 @@ def cmd_get(service, resource_name, as_json=False):
     return result
 
 
+# The People API does not key every repeated field the same way. Emails,
+# phones and URLs carry their content under "value"; an Address carries it
+# under "formattedValue" and has no "value" member at all.
+_VALUE_KEYS = ("value", "formattedValue")
+
+
 def _replace_first(current: dict, field: str, entry: dict) -> list:
     """`entry` as the FIRST value of `field`, with the contact's others kept.
 
@@ -436,9 +453,23 @@ def _replace_first(current: dict, field: str, entry: dict) -> list:
     carries, so sending `[{"value": phone}]` deleted every other number the
     contact had. Editing one phone is not a request to forget the other two.
     The edited value goes first, which is what the People API treats as primary.
+
+    The de-duplication key comes from `entry`, never hardcoded. It WAS
+    hardcoded to "value", which for addresses compared `None != None` on both
+    sides: false for every element, so the tail emptied and `--address` sent a
+    one-element list. A contact with a home and an office address kept the one
+    just typed and silently lost the other. The docstring above was right and
+    the code was wrong, for the one field whose shape differs.
+
+    An entry carrying neither key is not understood well enough to de-duplicate
+    against, so nothing is dropped. Keeping a duplicate is recoverable; the
+    defect this replaces was not.
     """
     existing = [e for e in (current.get(field) or []) if isinstance(e, dict)]
-    tail = [e for e in existing[1:] if e.get("value") != entry.get("value")]
+    key = next((k for k in _VALUE_KEYS if k in entry), None)
+    if key is None:
+        return [entry] + existing[1:]
+    tail = [e for e in existing[1:] if e.get(key) != entry[key]]
     return [entry] + tail
 
 

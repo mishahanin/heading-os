@@ -188,11 +188,20 @@ def test_notify_auto_apply_then_undo_records_event(client, root):
     card = _card_in_store(root, aid)
     assert card["prev_value"] == {"stage": "Qualified"}
     # One-click undo restores prev_value and logs an undo event.
+    #
+    # This asserted `card["restored_value"] == {"stage": "Qualified"}`, which
+    # was the DEFECT written down as a contract: `undo_card` popped
+    # `prev_value`, renamed it, and wrote nothing back, so `stage` kept its
+    # post-edit value while the result said a revert had happened. The
+    # producer contract two lines up is the mapping shape, so a restore means
+    # writing each of its keys onto the card. Fixed 2026-08-25.
     r = aq.undo_card(root, aid)
     assert r["ok"] and r["noop"] is False
+    assert r["restored"] is True
     card = _card_in_store(root, aid)
     assert "prev_value" not in card
-    assert card["restored_value"] == {"stage": "Qualified"}
+    assert card["stage"] == "Qualified", "the field itself must be back"
+    assert "restored_value" not in card, "the relabel is for the unrestorable case"
     assert any(e.get("event") == "undo" and e.get("action_id") == aid
                for e in _disposition_events(root))
 

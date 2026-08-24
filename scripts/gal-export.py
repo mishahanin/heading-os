@@ -9,6 +9,8 @@ Usage:
     python scripts/gal-export.py
     python scripts/gal-export.py --domain example.com \\
         --out outputs/_sync/gal-example.com.json
+
+Tests: tests/test_a_sweep_that_reported_the_letters_it_never_read.py
 """
 
 from __future__ import annotations
@@ -119,9 +121,18 @@ def extract_record(item, contact=None) -> dict:
     return rec
 
 
-def sweep_gal(account: Account, domain: str) -> list[dict]:
-    """Sweep the GAL with a-z + 0-9 prefixes, dedupe by email, filter by domain."""
+def sweep_gal(account: Account, domain: str) -> tuple[list[dict], list[str]]:
+    """Sweep the GAL with a-z + 0-9 prefixes, dedupe by email, filter by domain.
+
+    Returns (records, failed_queries). The failures are RETURNED, not just
+    printed: a prefix that raised contributes no addresses, and the caller's
+    closing "[OK] N unique entries" line read as a completed sweep whether one
+    query had failed or thirty. The per-query WARN scrolls off the top of a
+    36-line sweep, and the JSON it writes is what downstream tooling then treats
+    as the address book.
+    """
     seen: dict[str, dict] = {}
+    failed: list[str] = []
     queries = list(string.ascii_lowercase) + list(string.digits)
     # Prefixes that surface admin and shared mailboxes the a-z sweep can miss.
     # Two were the tenant's own name and `@<tenant domain>`, written in as
@@ -143,6 +154,7 @@ def sweep_gal(account: Account, domain: str) -> list[dict]:
             )
         except Exception as e:
             print(f"  [WARN] query={q!r}: {e}")
+            failed.append(str(q))
             continue
 
         if not results:
@@ -179,7 +191,7 @@ def sweep_gal(account: Account, domain: str) -> list[dict]:
 
         print(f"  query={q!r:>14}: {len(results):3d} results | total_unique={len(seen)}")
 
-    return list(seen.values())
+    return list(seen.values()), failed
 
 
 def main():
@@ -211,17 +223,27 @@ def main():
     account = connect(cfg)
     print(f"[OK] Connected as {cfg['EXCHANGE_EMAIL']}")
 
-    records = sweep_gal(account, args.domain)
+    records, failed = sweep_gal(account, args.domain)
     records.sort(key=lambda r: (r.get("display_name") or r.get("name") or "").lower())
 
     with out_path.open("w", encoding="utf-8") as f:
         json.dump(records, f, indent=2, ensure_ascii=False, default=str)
 
-    print(f"\n[OK] {len(records)} unique @{args.domain} entries -> {out_path}")
+    # The verdict says which sweep produced this file. A partial sweep and a
+    # complete one had identical closing lines, so an export missing whole
+    # letters of the alphabet was indistinguishable from a full one.
+    verdict = "[OK]" if not failed else "[PARTIAL]"
+    print(f"\n{verdict} {len(records)} unique @{args.domain} entries -> {out_path}")
+    if failed:
+        print(f"     {len(failed)} of the prefix queries FAILED and contributed "
+              f"nothing: {', '.join(repr(q) for q in failed)}")
+        print(f"     This export is incomplete. Re-run before treating it as the "
+              f"address book.")
     # Quick summary
     with_title = sum(1 for r in records if r.get("job_title"))
     print(f"     {with_title}/{len(records)} have job_title populated")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

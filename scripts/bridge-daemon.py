@@ -439,7 +439,12 @@ def _pick_port(start: int) -> tuple[int, socket.socket]:
             return p, _bind_listener(p)
         except OSError:
             continue
-    raise RuntimeError(f"no free port in range {start}..{start + 50}")
+    # `start + 49`, the last port the loop actually probes. The message said
+    # `start + 50`, which `range(start, start + 50)` never reaches, so an
+    # operator freeing "the last port in the range" freed one that was never
+    # tried. The docstring's half-open `[start, start+50)` was right all along.
+    raise RuntimeError(
+        f"no free port in range {start}..{start + 49} (50 ports probed)")
 
 
 def _live_daemon_port(timeout: float = 2.0) -> int | None:
@@ -469,8 +474,62 @@ def _live_daemon_port(timeout: float = 2.0) -> int | None:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/health",
                                     timeout=timeout):
             return port
+    except urllib.error.HTTPError:
+        # A 500 IS an answer, and this function's job is "is something bound
+        # and serving on that port?". HTTPError subclasses URLError, so the
+        # handler below swallowed every non-2xx and reported the daemon absent
+        # -- which made `start_daemon` launch a SECOND one. The singleton guard
+        # failed open in the degraded state where a duplicate hurts most:
+        # two schedulers, two critique sweeps, two sets of alerts.
+        return port
     except (urllib.error.URLError, OSError):
         return None
+
+
+def _acquire_start_lock():
+    """An exclusive lock held for this process's whole life, or None.
+
+    `_live_daemon_port()` alone is check-then-act with a long gap. It reads
+    `.daemon-state/port`, which is not written until well after the check, and
+    `_pick_port` holds each probed socket open -- so two `--start` processes
+    launched together do not even collide on a port. They bind DIFFERENT ones,
+    both write the shared port file (last one wins), and both run schedulers:
+    the action-queue sweep, the watchdog and the critique sweep each run twice,
+    which is duplicate alerts and duplicate model spend. `--health` only ever
+    sees one of them. Scripted or service launches make the overlap ordinary;
+    two hand-typed commands rarely hit it, which is why it survived.
+
+    The lock closes the gap because it is taken and held, not sampled. The file
+    is never unlinked: removing a flocked path lets the next process lock a
+    different inode with the same name, which is the same race wearing the
+    lock's clothes.
+
+    Returns the open file object -- the caller must keep the reference, since
+    closing it releases the lock. None means someone else holds it.
+    """
+    try:
+        import fcntl
+    except ImportError:                       # pragma: no cover - Windows
+        # No flock here. The `_live_daemon_port` check below still runs, so
+        # this is exactly the pre-lock behaviour, not a new hole -- but say so
+        # rather than let a Windows operator read the lock as protection.
+        print("note: no fcntl on this platform, so a concurrent --start is "
+              "guarded only by the liveness probe.", file=sys.stderr)
+        return _NO_LOCK
+    lock_path = WORKSPACE_ROOT / ".daemon-state" / "start.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
+# A truthy sentinel for the platform with no flock, so the caller's "did I get
+# the lock?" test does not have to know why.
+_NO_LOCK = object()
 
 
 def _verify_port_free(port: int) -> tuple[int, socket.socket]:
@@ -546,6 +605,23 @@ def start_daemon(explicit_port: int | None = None):
     # took over the shared port file, and on exit deleted it out from under the
     # daemon that was still serving. Checked before logging is configured so the
     # refusal is one line on the operator's terminal, not a log entry.
+    # The lock comes FIRST and is kept in a local for the life of this call, so
+    # a concurrent --start is refused during the whole boot, not just at this
+    # instant. The liveness probe stays behind it: it produces the useful
+    # message, and it still catches a daemon started before the lock existed.
+    start_lock = _acquire_start_lock()          # noqa: F841 - held, not used
+    if start_lock is None:
+        running = _live_daemon_port()
+        where = (f" It is serving on 127.0.0.1:{running}."
+                 if running is not None else
+                 " Another --start is mid-boot.")
+        print("bridge daemon start is already in progress or running."
+              f"{where} Refusing to start a second one: the two share "
+              ".daemon-state/port and heartbeat.json, both run schedulers, "
+              "and whichever exits first would leave the survivor "
+              "unreachable to --health.", file=sys.stderr)
+        raise SystemExit(1)
+
     already = _live_daemon_port()
     if already is not None:
         print(f"bridge daemon is already running on 127.0.0.1:{already}. "
@@ -876,7 +952,16 @@ def check_health():
         with urllib.request.urlopen(f"http://127.0.0.1:{port_str}/health", timeout=2) as r:
             print(json.dumps(json.loads(r.read()), indent=2))
             return
-    except (urllib.error.URLError, ConnectionRefusedError, OSError) as e:
+    except (urllib.error.URLError, ConnectionRefusedError, OSError,
+            ValueError) as e:
+        # ValueError covers the two ways a 200 can still be unreadable, and
+        # neither was caught: `json.JSONDecodeError` subclasses it, and so does
+        # the `UnicodeDecodeError` from decoding a non-UTF-8 body. The stale-port
+        # case this function otherwise handles carefully produces exactly that
+        # input -- the port file survives, a DIFFERENT process now holds the
+        # port and answers 200 with its own content -- and `--health` died with
+        # a traceback instead of the 0/1/2 its docstring promises, skipping the
+        # heartbeat fallback that would have shown when the real daemon died.
         # Fall back to the on-disk heartbeat.
         hb = _read_heartbeat_fallback()
         if hb is not None:

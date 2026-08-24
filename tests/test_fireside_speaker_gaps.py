@@ -5,12 +5,20 @@ from Telegram + xlsx by `bootstrap`, while the weeks a cycle actually runs are
 hand-authored in config/fireside-schedule.json. Nothing joined the two in the
 forgotten direction. Departed speakers were caught (they surface as "names in
 the schedule with no roster match"), but a member who joined mid-cycle simply
-never appeared anywhere: no slot, no warning, and every job green. Vladimir
-Krasnov joined on 2026-08-11 and would have sat out cycle 3 in silence if the
-CEO had not asked for him by name.
+never appeared anywhere: no slot, no warning, and every job green. One member
+joined on 2026-08-11 and would have sat out cycle 3 in silence if the CEO had
+not asked for them by name.
 
 These tests pin the inverse check: an active, non-excluded member who holds no
 slot in the schedule is reported.
+
+Every person here is a placeholder. Until 2026-08-25 this file carried three
+real Tribe members' full names and two of their Telegram handles, in a repo that
+is public, and the content gate reported the tree clean the whole time: it
+harvested people from `crm/contacts/` and `admin/executives.json` only, and the
+block meant to cover the Tribe read `config/fireside-schedule.json` looking for
+member dicts that file has never contained. See
+`scripts/utils/content_denylist.py`.
 """
 from __future__ import annotations
 
@@ -47,19 +55,19 @@ def _schedule(*names):
 
 
 def test_member_with_no_slot_is_reported(fb):
-    roster = _roster(("nabegaem", "Vladimir Krasnov"), ("naimson", "Naim Shafiev"))
-    gaps = fb.speaker_gaps(roster, _schedule("Naim Shafiev"))
-    assert gaps == ["Vladimir Krasnov (@nabegaem)"]
+    roster = _roster(("vlynd", "Vesper Lynd"), ("fleiter", "Felix Leiter"))
+    gaps = fb.speaker_gaps(roster, _schedule("Felix Leiter"))
+    assert gaps == ["Vesper Lynd (@vlynd)"]
 
 
 def test_no_gaps_when_everyone_holds_a_slot(fb):
-    roster = _roster(("nabegaem", "Vladimir Krasnov"), ("naimson", "Naim Shafiev"))
-    assert fb.speaker_gaps(roster, _schedule("Naim Shafiev", "Vladimir Krasnov")) == []
+    roster = _roster(("vlynd", "Vesper Lynd"), ("fleiter", "Felix Leiter"))
+    assert fb.speaker_gaps(roster, _schedule("Felix Leiter", "Vesper Lynd")) == []
 
 
 def test_excluded_member_is_not_a_gap(fb):
-    """Konstantin Ananyev sits out the rotation by the CEO's choice, not by drift."""
-    roster = _roster(("kananiev", "Konstantin Ananyev",
+    """Rene Mathis sits out the rotation by the CEO's choice, not by drift."""
+    roster = _roster(("rmathis", "Rene Mathis",
                       {"active": False, "excluded_from_fireside": True}))
     assert fb.speaker_gaps(roster, _schedule("Someone Else")) == []
 
@@ -108,20 +116,20 @@ def _fake_state(fb, monkeypatch, roster, schedule):
 
 def test_cli_exits_1_when_someone_holds_no_slot(fb, monkeypatch, capsys):
     _fake_state(fb, monkeypatch,
-                _roster(("nabegaem", "Vladimir Krasnov")), _schedule("Naim Shafiev"))
+                _roster(("vlynd", "Vesper Lynd")), _schedule("Felix Leiter"))
     assert fb.cmd_speaker_gaps(object()) == 1
-    assert "Vladimir Krasnov (@nabegaem)" in capsys.readouterr().out
+    assert "Vesper Lynd (@vlynd)" in capsys.readouterr().out
 
 
 def test_cli_exits_0_when_everyone_holds_a_slot(fb, monkeypatch, capsys):
     _fake_state(fb, monkeypatch,
-                _roster(("naimson", "Naim Shafiev")), _schedule("Naim Shafiev"))
+                _roster(("fleiter", "Felix Leiter")), _schedule("Felix Leiter"))
     assert fb.cmd_speaker_gaps(object()) == 0
     assert "none" in capsys.readouterr().out
 
 
 def test_cli_exits_1_on_an_empty_schedule_rather_than_reporting_all_clear(fb, monkeypatch, capsys):
     """No schedule means the check could not run - that must not read as a pass."""
-    _fake_state(fb, monkeypatch, _roster(("naimson", "Naim Shafiev")), [])
+    _fake_state(fb, monkeypatch, _roster(("fleiter", "Felix Leiter")), [])
     assert fb.cmd_speaker_gaps(object()) == 1
     assert "empty" in capsys.readouterr().out

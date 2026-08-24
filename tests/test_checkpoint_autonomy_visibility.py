@@ -136,7 +136,12 @@ def test_the_bar_reads_the_end_of_a_stretch_out_of_the_state_file(
     session = "ended-0000-0000-0000-000000000000"
     state = project / ".claude" / "state" / f"checkpoint-{session[:32]}.json"
     env = dict(os.environ)
-    env["HEADING_OS_DATA"] = str(tmp_path / "data")
+    # Created, not just named. `env_data_root()` ignores an override pointing at
+    # a path that does not exist and falls back to the live overlay, so a bare
+    # `str(tmp_path / "data")` is an isolation claim the seam never honoured.
+    data_root = tmp_path / "data"
+    data_root.mkdir(parents=True, exist_ok=True)
+    env["HEADING_OS_DATA"] = str(data_root)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env.pop("CLAUDE_HANDOFF_UNATTENDED", None)
     payload = json.dumps({

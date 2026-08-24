@@ -7,6 +7,8 @@ Negotiation -> Proposal -> Demo/POC -> Qualified -> Lead).
 The CEO uses this for sales pipeline visibility. Phase 1.28 was read-only;
 Phase 1.55 adds per-deal touch tracking so the CEO can suppress
 stalled-signal noise without editing pipeline.md by hand.
+
+Tests: tests/bridge/test_a_summary_that_read_the_wrong_end_of_the_file.py
 """
 import re
 import threading
@@ -100,14 +102,33 @@ def _company_key(company: str) -> str:
     return base.lower()
 
 
+def _text(value) -> str:
+    """A log field as a string, "" when the line holds something else.
+
+    `entry.get("date", "")` returns the VALUE whenever the key is present, so a
+    hand-edited or restored line carrying `"date": null` came back as None and
+    `entry["date"][:10]` in `list_pipeline` raised
+    `TypeError: 'NoneType' object is not subscriptable` - which the `except
+    ValueError` there does not catch, so one malformed line 500'd the whole
+    /pipeline surface. This function is the single producer of that dict, so
+    the coercion belongs here rather than as a second guard at the consumer.
+    """
+    return value if isinstance(value, str) else ""
+
+
 def read_touch_log(workspace_root: Path) -> dict:
     """Read _touch-log.jsonl. Returns {company_key: {date, ts, note, company}}.
 
     `company` is the display name; this line listed only three of the four keys
     until 2026-08-24, and the display name is the one a caller reaches for.
 
+    Every value is a string. "Corrupt lines are skipped silently" used to cover
+    only JSON-parse corruption; a line that parses but carries the wrong TYPE
+    reached the callers untouched. It now covers both: a non-string field
+    becomes "", which the callers already handle (`date.fromisoformat("")`
+    raises ValueError, which `list_pipeline` catches).
+
     Last entry per company key wins (so re-marking overwrites the prior ts).
-    Corrupt lines are skipped silently.
     """
     log_path = workspace_root / TOUCH_LOG_FILE
     entries, _truncated = read_jsonl_capped(log_path, TOUCH_LOG_MAX_BYTES)
@@ -117,10 +138,10 @@ def read_touch_log(workspace_root: Path) -> dict:
         if not isinstance(key, str) or not key:
             continue
         out[key] = {
-            "date": entry.get("date", ""),
-            "ts": entry.get("ts", ""),
-            "note": entry.get("note", ""),
-            "company": entry.get("company", ""),
+            "date": _text(entry.get("date")),
+            "ts": _text(entry.get("ts")),
+            "note": _text(entry.get("note")),
+            "company": _text(entry.get("company")),
         }
     return out
 
@@ -180,15 +201,20 @@ def list_pipeline(workspace_root: Path, today: date | None = None) -> dict:
             "deals": [
                 {
                     "company": str,
+                    "company_key": str (normalised join key; see _company_key),
                     "country": str,
                     "stage": str,
                     "value_usd": int or None,
                     "value_display": str,
+                    "stage_date": str (verbatim cell, not parsed),
                     "owner": str,
                     "next_action": str,
                     "due_date": ISO YYYY-MM-DD or None,
                     "days_until_due": int or None,
                     "is_overdue": bool,
+                    "touched_date": str or None (from the touch log),
+                    "touched_note": str ("" when never touched),
+                    "days_since_touched": int or None,
                 },
                 ...
             ] sorted by (stage_rank DESC, days_until_due ASC None-last, company ASC),
@@ -196,9 +222,24 @@ def list_pipeline(workspace_root: Path, today: date | None = None) -> dict:
             "overdue_count": int,
             "total_value_usd": int (sum of priced deals),
             "tbd_count": int,
-            "touched_total": int (deals touched inside the touch-log window),
+            "touched_total": int (deals with ANY touch entry, at any age),
             "data_time": ISO mtime of pipeline.md or None,
         }
+
+    The five join fields (``company_key``, ``stage_date``, ``touched_date``,
+    ``touched_note``, ``days_since_touched``) were returned but undocumented
+    until 2026-08-25. ``days_since_touched`` is the field ``pulse.signals()``
+    reads for touch suppression, so a consumer written against the old block
+    could not see the one key it most needed.
+
+    ``touched_total`` said "deals touched inside the touch-log window", which
+    no code implements: there is no recency predicate here, the 1 MB cap in
+    ``read_jsonl_capped`` is a size bound and not a time window, and
+    ``SIGNALS_TOUCH_SUPPRESS_DAYS`` lives in pulse.py and is not applied here.
+    The count is monotonic - a deal touched a year ago still counts. The
+    sentence now describes the code. Whether it SHOULD carry a window is an
+    open question for the Phase 1.55 owner, not something to change quietly:
+    the two readings hand the operator different numbers.
     """
     pipeline_path = workspace_root / PIPELINE_FILE
     if not pipeline_path.exists():

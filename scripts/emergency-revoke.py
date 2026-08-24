@@ -1,11 +1,27 @@
 #!/usr/bin/env python3
-"""Emergency access revocation for a 31C executive.
+"""DISABLED. Emergency access revocation for a 31C executive.
 
-Immediately revokes all GitHub access, audits recent commits for suspicious
-activity, updates registry status, and logs the security event.
+**This script revokes nothing.** `main()` prints the manual checklist and exits
+2, because the legacy 31c-crm-central path it automates was retired and nothing
+below it has been re-pointed at the per-exec model. Tracking: scrutinize H4.
+
+The header used to say it "immediately revokes all GitHub access", which was the
+contract BEFORE the disable and is the worst possible thing for a file header to
+say during an incident: the argparse description and epilog were corrected and
+this was not, so anyone reading the source, or generated docs, got the old
+promise. `--reason` is accepted and unused.
+
+The revocation functions below are kept for a re-enable and are NOT dead by
+accident. Two of their defects must be fixed before that happens, and both are
+flagged in place: `revoke_all_github_access` only removes DIRECT collaborators
+(an exec whose access comes from an org team is untouched), and nothing here
+calls the org-membership or team endpoints at all.
 
 Usage:
     python emergency-revoke.py --exec "marlow-carter" --reason "laptop stolen"
+    -> prints the manual checklist, exits 2, revokes nothing
+
+Tests: tests/test_a_revocation_that_reported_clear_for_the_dangerous_case.py
 """
 
 import argparse
@@ -42,8 +58,24 @@ def get_exec_info(slug: str) -> dict | None:
 
 
 def revoke_all_github_access(slug: str, exec_info: dict) -> None:
-    """Immediately revoke GitHub access from ALL repos."""
-    print(f"\n{BOLD}{RED}Step 1: REVOKING ALL GITHUB ACCESS{RESET}")
+    """Remove the exec as a DIRECT COLLABORATOR from the listed repos.
+
+    NOT "all GitHub access", which is what the heading and the old name claimed.
+    `DELETE /repos/{repo}/collaborators/{user}` removes a direct or outside
+    collaborator and nothing else. Access granted through an ORGANIZATION TEAM
+    leaves no per-repo collaborator record, so that endpoint answers 404 for such
+    a member -- and this printed "[no access]" for a 404, reporting a person with
+    full push rights as already clear. No call here touches
+    `DELETE /orgs/{org}/memberships/{user}` or any team endpoint.
+
+    The 404 wording is corrected below. Adding the org-level call is NOT done
+    here: whether 31C grants exec access by direct invite or by team is the
+    operator's knowledge, and guessing wrong in a revocation tool is how the
+    wrong thing gets deleted during an incident. Raise it before re-enabling.
+    """
+    print(f"\n{BOLD}{RED}Step 1: REMOVING DIRECT COLLABORATOR ACCESS{RESET}")
+    print(f"{YELLOW}  Org-team access is NOT touched by this step. Verify it by "
+          f"hand.{RESET}")
 
     repos = [
         f"{GITHUB_ORG}/heading-os-corporate",
@@ -51,7 +83,18 @@ def revoke_all_github_access(slug: str, exec_info: dict) -> None:
         f"{GITHUB_ORG}/31c-workspace-{slug}",
     ]
 
-    github_username = exec_info.get("github_username", slug) if exec_info else slug
+    # Fail closed. `.get("github_username", slug)` fell back to the exec SLUG,
+    # which is generally not a GitHub username, so every request 404'd and every
+    # repo printed "[no access]" -- a full green report for a revocation that
+    # addressed nobody.
+    github_username = (exec_info or {}).get("github_username")
+    if not github_username:
+        print(f"  {RED}[STOP]{RESET} the registry carries no github_username for "
+              f"{slug!r}. Refusing to guess it from the slug: every request would "
+              f"404 and read as 'no access'.")
+        print(f"    {RED}MANUAL ACTION REQUIRED: revoke this exec via the GitHub "
+              f"UI, at the org level as well as per repo.{RESET}")
+        return
 
     for repo in repos:
         try:
@@ -63,7 +106,12 @@ def revoke_all_github_access(slug: str, exec_info: dict) -> None:
             if result.returncode == 0:
                 print(f"  {GREEN}[REVOKED]{RESET} {repo}")
             elif "404" in (result.stderr or ""):
-                print(f"  {YELLOW}[no access]{RESET} {repo}")
+                # NOT "[no access]". A 404 here establishes only that the user is
+                # not a DIRECT collaborator on this repo. Org-team access
+                # produces exactly this response, so the old wording turned the
+                # most dangerous case into the reassuring one.
+                print(f"  {YELLOW}[not a direct collaborator]{RESET} {repo}"
+                      f" - org/team access NOT checked; verify by hand")
             else:
                 print(f"  {RED}[FAILED]{RESET} {repo}: {result.stderr}")
                 print(f"    {RED}MANUAL ACTION REQUIRED: Revoke access manually via GitHub UI{RESET}")
@@ -91,7 +139,7 @@ def audit_recent_commits(slug: str) -> list:
     try:
         result = run_cmd([
             "git", "log", "--since=48 hours ago",
-            "--format=%H|%an|%ae|%s|%ci",
+            "--format=%H%x1f%an%x1f%ae%x1f%s%x1f%ci",
         ], cwd=str(crm_central))
 
         if result.stdout.strip():
@@ -99,7 +147,7 @@ def audit_recent_commits(slug: str) -> list:
             print(f"  Reviewing {len(commits)} commits from last 48 hours...")
 
             for line in commits:
-                parts = line.split("|", 4)
+                parts = line.split("\x1f", 4)
                 if len(parts) >= 5:
                     commit_hash, author, email, subject, date = parts
                     # Flag commits from the revoked exec
@@ -127,12 +175,12 @@ def audit_recent_commits(slug: str) -> list:
             run_cmd(["git", "pull"], cwd=str(corp_repo), check=False)
             result = run_cmd([
                 "git", "log", "--since=48 hours ago",
-                "--format=%H|%an|%ae|%s|%ci",
+                "--format=%H%x1f%an%x1f%ae%x1f%s%x1f%ci",
             ], cwd=str(corp_repo))
 
             if result.stdout.strip():
                 for line in result.stdout.strip().split("\n"):
-                    parts = line.split("|", 4)
+                    parts = line.split("\x1f", 4)
                     if len(parts) >= 5:
                         commit_hash, author, email, subject, date = parts
                         if slug in author.lower() or slug in email.lower():
@@ -163,11 +211,26 @@ def update_registry_status(slug: str) -> None:
         return
 
     registry = json.loads(registry_file.read_text(encoding="utf-8"))
+    matched = False
     for e in registry.get("executives", []):
         if e.get("slug") == slug:
             e["status"] = "revoked"
             e["revoked_at"] = datetime.now(timezone.utc).isoformat()
+            matched = True
             break
+
+    # A slug that matched nothing used to fall straight through: the file was
+    # rewritten unchanged, a commit reading "EMERGENCY: Revoke access for {slug}"
+    # was created and pushed, and the operator was told "Status set to
+    # 'revoked'". During an incident a typo'd slug bought a confident green line
+    # and a paper trail for a revocation that never happened.
+    if not matched:
+        known = sorted(str(e.get("slug")) for e in registry.get("executives", [])
+                       if e.get("slug"))
+        print(f"  {RED}[STOP]{RESET} no executive with slug {slug!r} in "
+              f"{registry_file.name}; NOTHING was written or committed.")
+        print(f"    Known slugs: {', '.join(known) or '(none)'}")
+        return
 
     registry_file.write_text(json.dumps(registry, indent=2), encoding="utf-8")
     print(f"  {GREEN}[ok]{RESET} Status set to 'revoked'")

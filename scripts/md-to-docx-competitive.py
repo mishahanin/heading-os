@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
-from scripts.utils.docx_helpers import load_docx, set_cell_shading
+from scripts.utils.docx_helpers import load_docx, save_docx, set_cell_shading
 from scripts.utils.workspace import get_outputs_dir
 
 import os
@@ -346,7 +346,7 @@ def build_docx():
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     add_formatted_text(p, "Example Company - Confidential", italic=True, color=MED_GRAY, size=8)
 
-    doc.save(OUTPUT)
+    save_docx(doc, OUTPUT)
     print(f"DOCX saved to: {OUTPUT}")
     print(f"File size: {os.path.getsize(OUTPUT) / 1024:.0f} KB")
 

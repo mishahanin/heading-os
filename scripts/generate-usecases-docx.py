@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
-from scripts.utils.docx_helpers import load_docx
+from scripts.utils.docx_helpers import load_docx, save_docx
 from scripts.utils.workspace import get_datastore_dir, get_outputs_dir
 
 # ============================================================
@@ -589,7 +589,7 @@ def build():
 
     # Save
     os.makedirs(os.path.dirname(OUTPUT), exist_ok=True)
-    doc.save(OUTPUT)
+    save_docx(doc, OUTPUT)
     print(f"Saved: {OUTPUT}")
 
 

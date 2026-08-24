@@ -400,9 +400,30 @@ def test_the_viraid_active_section_ends_at_any_heading():
 
 
 def test_the_calendar_no_longer_carries_a_fixed_utc_offset():
+    """CORRECTED 2026-08-24. This test pinned the wrong fix in place.
+
+    It was written on 2026-08-23 and asserted TWO things: that the hardcoded
+    `CALENDAR_UTC_OFFSET_HOURS` was gone, and that `astimezone(tz)` had
+    replaced it. The first half is still right. The second half encoded a
+    false premise as a requirement.
+
+    `upcoming.md` holds LOCAL times and LOCAL section dates -- written by
+    `sync-exchange._event_time_str`, which is
+    `event.start.astimezone(local_tz)`, and grouped by `_to_local(...).date()`,
+    both since the engine's initial import. There was never a UTC value to
+    convert. Replacing a constant offset with a tz-aware conversion removed
+    the hardcoding and kept the error, and the added date filter then made it
+    worse: on Asia/Dubai a 09:00 meeting still rendered as 13:00, and a 21:00
+    meeting became 01:00 tomorrow and vanished from the CEO's day entirely.
+
+    So the assertion is inverted, not deleted. The conversion must NOT come
+    back in any form. Behaviour is pinned in
+    `tests/test_a_morning_calendar_shifted_by_its_own_timezone.py`, which
+    renders both meetings from a fixture and checks the clock face.
+    """
     code = _code("generate-dashboard.py")
     assert "CALENDAR_UTC_OFFSET_HOURS" not in code
-    assert "astimezone(tz)" in code
+    assert "astimezone(tz)" not in code
 
 
 def test_the_cadence_value_is_escaped_like_everything_beside_it():

@@ -9,6 +9,8 @@ source plus its image variants. `list_artifacts` / `read_artifact` /
 The older `recent_inflight_items` / `read_inflight` functions below scan
 the in-flight output directories; `recent_inflight_items` is retained
 because the unified search (sources/search.py) still consumes it.
+
+Tests: tests/bridge/test_a_link_the_listing_followed_and_a_search_that_saw_fifty.py
 """
 import logging
 import os
@@ -95,13 +97,21 @@ def _scan_inflight_tree(data_root: Path, window_days: int) -> list[dict]:
     return items
 
 
-def recent_inflight_items(data_root: Path, window_days: int = IN_FLIGHT_WINDOW_DAYS) -> dict:
+def recent_inflight_items(data_root: Path, window_days: int = IN_FLIGHT_WINDOW_DAYS,
+                          cap: int | None = STUDIO_ROW_CAP) -> dict:
     """Scan in-flight dirs for files modified within the window.
+
+    ``cap`` bounds the returned ``items`` list; pass None for every match.
+    The /studio page wants the default (a display list), the unified search
+    wants None: it was matching a query against the 50 newest files only, so a
+    file the operator had edited six days ago was unfindable while the result
+    set looked complete.
 
     Returns:
         {
-            "items": [...] sorted by mtime DESC, capped at STUDIO_ROW_CAP,
-            "categories": {"linkedin": 5, "intel": 3, ...} (post-cap counts),
+            "items": [...] sorted by mtime DESC, capped at ``cap``,
+            "categories": {"linkedin": 5, "intel": 3, ...} - counted over the
+                RETURNED items, so they follow ``cap``,
             "data_time": ISO 8601 UTC of the most-recent item (None if empty),
             "total_count": int - TRUE count across all in-flight dirs
                 (pre-cap; what pulse.kpi.in_flight reports).
@@ -117,7 +127,7 @@ def recent_inflight_items(data_root: Path, window_days: int = IN_FLIGHT_WINDOW_D
     all_items = _scan_inflight_tree(data_root, window_days)
     all_items.sort(key=lambda r: r["mtime"], reverse=True)
     total_count = len(all_items)
-    items = all_items[:STUDIO_ROW_CAP]
+    items = all_items if cap is None else all_items[:cap]
 
     categories: dict[str, int] = {}
     for r in items:
@@ -233,8 +243,9 @@ _FM_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 _FM_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$")
 
 
-def _artifact_md_is_readable(md: Path) -> bool:
-    """False for a symlink or an over-cap markdown source.
+def _artifact_md_is_readable(base: Path, md: Path) -> bool:
+    """False when any component from `base` down to `md` is a symlink, or the
+    source is over the byte cap.
 
     Both guards lived only in `read_artifact`, the DETAIL view.
     `list_artifacts` walks the same tree on every /studio poll and called
@@ -242,9 +253,19 @@ def _artifact_md_is_readable(md: Path) -> bool:
     expensive one had already refused: a symlink out of the artifact tree, and
     an unbounded read into the daemon's memory. A guard on one of two readers
     of the same files is a guard on neither.
+
+    The symlink half then under-delivered on that. It was `md.is_symlink()`,
+    which only ever asks about the LEAF, while `folder.is_dir()` in the caller
+    FOLLOWS links - so an artifact folder that was itself a symlink to a
+    directory outside the archive passed every test: it resolved as a
+    directory, its name matched the slug pattern, the markdown inside was a
+    real file, and that file's prose was read straight into the /studio
+    summary. `contains_symlink` asks the question the docstring already
+    claimed, of every component, unresolved.
     """
     try:
-        return not md.is_symlink() and md.stat().st_size <= ARTIFACT_MD_MAX_BYTES
+        return (not contains_symlink(base, md)
+                and md.stat().st_size <= ARTIFACT_MD_MAX_BYTES)
     except OSError:
         return False
 
@@ -341,9 +362,10 @@ def list_artifacts(data_root: Path) -> dict:
                 if not mds:
                     continue
                 md = mds[0]
-            if not _artifact_md_is_readable(md):
-                logger.warning("skipping artifact %s: source is a symlink or "
-                               "over the %d byte cap", md, ARTIFACT_MD_MAX_BYTES)
+            if not _artifact_md_is_readable(base, md):
+                logger.warning("skipping artifact %s: a path component is a "
+                               "symlink, or the source is over the %d byte cap",
+                               md, ARTIFACT_MD_MAX_BYTES)
                 continue
             try:
                 text = md.read_text(encoding="utf-8")
@@ -384,11 +406,20 @@ def _artifact_folder(data_root: Path, kind: str, slug: str) -> Path | None:
     subdir = {"post": "posts", "article": "articles"}.get(kind)
     if subdir is None or not slug or not _ARTIFACT_SLUG_RE.match(slug):
         return None
-    base = (data_root / ARTIFACT_ROOT / subdir).resolve()
-    folder = (data_root / ARTIFACT_ROOT / subdir / slug).resolve()
+    base_raw = data_root / ARTIFACT_ROOT / subdir
+    folder_raw = base_raw / slug
+    base = base_raw.resolve()
+    folder = folder_raw.resolve()
     try:
         folder.relative_to(base)
     except ValueError:
+        return None
+    # Containment alone lets a link that points back INSIDE the archive
+    # through, and the workspace bans symlinks outright. The listing refuses
+    # them (see `_artifact_md_is_readable`); a detail view that still served
+    # one would leave the pair disagreeing about the same folder, which is the
+    # asymmetry this module already learned once.
+    if contains_symlink(base_raw, folder_raw):
         return None
     return folder if folder.is_dir() else None
 
@@ -409,7 +440,9 @@ def read_artifact(data_root: Path, kind: str, slug: str) -> dict:
             return {"ok": False, "error": "no markdown source"}
         md = mds[0]
     try:
-        if not _artifact_md_is_readable(md):
+        # `folder` came back from `_artifact_folder`, which now refuses a
+        # linked component itself, so the remaining question here is the leaf.
+        if not _artifact_md_is_readable(folder, md):
             return {"ok": False, "error": "source unreadable"}
         text = md.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as e:

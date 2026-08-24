@@ -147,9 +147,17 @@ def mark_sent(workspace_root: Path, rel_path: str, note: str = "") -> dict:
         "note": safe_note,
     }
     log_path = workspace_root / SENT_LOG_FILE
-    log_path.parent.mkdir(parents=True, exist_ok=True)
     with _SENT_LOG_LOCK:
         try:
+            # `mkdir` INSIDE the try. It sat above it, so a read-only mount, a
+            # missing parent, or `outputs/operations/bridge` existing as a plain
+            # file raised OSError straight out of a function whose contract is
+            # "{ok, path, ts}" or "{ok: False, error}" -- and the endpoint 500'd
+            # instead of surfacing a handled error. `heartbeat.py` fixed this
+            # exact shape on 2026-08-24, in words this file could have used:
+            # "mkdir sat above the try ... raised OSError straight out of a
+            # function whose docstring promises the opposite".
+            log_path.parent.mkdir(parents=True, exist_ok=True)
             append_jsonl(log_path, entry)
         except OSError as e:
             return {"ok": False, "error": f"write failed: {e}"}
@@ -165,9 +173,17 @@ def undo_sent(workspace_root: Path, rel_path: str) -> dict:
     now = datetime.now(timezone.utc)
     entry = {"path": rel_path, "undo": True, "ts": now.isoformat()}
     log_path = workspace_root / SENT_LOG_FILE
-    log_path.parent.mkdir(parents=True, exist_ok=True)
     with _SENT_LOG_LOCK:
         try:
+            # `mkdir` INSIDE the try. It sat above it, so a read-only mount, a
+            # missing parent, or `outputs/operations/bridge` existing as a plain
+            # file raised OSError straight out of a function whose contract is
+            # "{ok, path, ts}" or "{ok: False, error}" -- and the endpoint 500'd
+            # instead of surfacing a handled error. `heartbeat.py` fixed this
+            # exact shape on 2026-08-24, in words this file could have used:
+            # "mkdir sat above the try ... raised OSError straight out of a
+            # function whose docstring promises the opposite".
+            log_path.parent.mkdir(parents=True, exist_ok=True)
             append_jsonl(log_path, entry)
         except OSError as e:
             return {"ok": False, "error": f"write failed: {e}"}

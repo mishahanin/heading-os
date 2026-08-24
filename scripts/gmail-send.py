@@ -17,6 +17,8 @@ Authentication is not re-invented here. It reuses the same authorized token
 `scripts/gmail-reader.py` uses, via `scripts/utils/gmail_auth.py`. The
 `gmail.modify` scope already covers `drafts.send`.
 
+Tests: tests/test_an_edit_that_deleted_the_addresses_it_promised_to_keep.py, tests/test_gmail_send.py
+
 Usage:
     python scripts/gmail-send.py list
     python scripts/gmail-send.py send --draft-id r123456789
@@ -46,13 +48,30 @@ class DraftSelectionError(Exception):
     """No draft matched, or more than one did."""
 
 
-def select_draft(drafts, draft_id=None, match_subject=None):
+def select_draft(drafts, draft_id=None, match_subject=None,
+                 complete=False, searched=None):
     """Pick exactly one draft id from `drafts`.
 
     `drafts` is a list of {"id": str, "to": str, "subject": str} dicts. Exactly
     one selector must be given. A subject match is case-insensitive substring.
     Ambiguity raises rather than resolving to the first hit, because the caller
     is about to send mail on the operator's behalf.
+
+    `complete` is the caller's report of whether `drafts` is the whole mailbox
+    or a bounded prefix of it. Over a prefix, neither "no draft matched" nor
+    "exactly one draft matched" is a statement this function can make: the next
+    unlooked-at page can hold the missing draft or a second one with the same
+    subject. So a truncated walk refuses instead of answering, and names the
+    horizon it did search. Sending the wrong draft is not recoverable.
+
+    It defaults to FALSE, which reads backwards until you ask what a caller who
+    omitted it actually knows. Nothing: a list arrived from somewhere and its
+    completeness was never established. Defaulting to True would let that
+    caller assert uniqueness over an unknown subset, which is the exact defect
+    this parameter was added to close, re-openable by forgetting one keyword.
+    Unknown therefore means friction, in line with every other unclassified
+    input in this workspace. Only `--draft-id` is unaffected: an id either
+    exists in the list or it does not, and no unread page changes that.
     """
     if bool(draft_id) == bool(match_subject):
         raise DraftSelectionError("give exactly one of --draft-id or --match-subject")
@@ -65,13 +84,22 @@ def select_draft(drafts, draft_id=None, match_subject=None):
 
     needle = match_subject.lower()
     hits = [d for d in drafts if needle in (d.get("subject") or "").lower()]
-    if not hits:
-        raise DraftSelectionError(f"no draft whose subject contains {match_subject!r}")
     if len(hits) > 1:
         listed = ", ".join(f"{d['id']} ({d.get('subject','')[:40]})" for d in hits)
         raise DraftSelectionError(
             f"{len(hits)} drafts match {match_subject!r}: {listed}. Use --draft-id."
         )
+    if not complete:
+        horizon = searched if searched is not None else len(drafts)
+        found = (f"1 matched within it ({hits[0]['id']})" if hits
+                 else "none matched within it")
+        raise DraftSelectionError(
+            f"only the first {horizon} draft(s) were searched and {found}; "
+            f"more drafts remain unread, so this match is not known to be "
+            f"unique. Raise --limit, or pass --draft-id."
+        )
+    if not hits:
+        raise DraftSelectionError(f"no draft whose subject contains {match_subject!r}")
     return hits[0]["id"]
 
 
@@ -79,14 +107,58 @@ def _headers(payload):
     return {h["name"]: h["value"] for h in payload.get("headers", [])}
 
 
-def fetch_drafts(service, limit=25):
-    listed = service.users().drafts().list(userId="me", maxResults=limit).execute()
+PAGE_SIZE = 100             # drafts.list caps maxResults at 500; 100 is its default
+MAX_LIST_PAGES = 50         # 5,000 drafts, then stop and say so
+SEARCH_LIMIT = 500          # how far --match-subject looks before it refuses
+
+
+def fetch_drafts(service, limit=25, max_pages=MAX_LIST_PAGES):
+    """Up to `limit` drafts, following nextPageToken. Returns (rows, complete).
+
+    A single `drafts.list` call is not "the first `limit` drafts": the API is
+    documented to return fewer than maxResults and still hand back a page
+    token. Following it is also what makes `--match-subject` mean anything.
+    Unpaged, that flag searched one page and then claimed a UNIQUE match over
+    it, so a draft on page two produced "no draft whose subject contains ...",
+    and two drafts sharing a subject across the page boundary looked
+    unambiguous. The module docstring promises "an ambiguous match is an error,
+    not a guess"; a guess is exactly what an unstated horizon produces.
+
+    `complete` is False when either bound below stopped the walk, and the
+    caller says so rather than asserting uniqueness over a subset.
+    """
+    # Bounded twice, and not hypothetically: on 2026-08-24 a mutation run in
+    # this repo disabled the equivalent token line in gmail-reader.py, the stub
+    # replied with the same page forever, and the process reached 47 GB before
+    # the OOM-killer took the whole session. A loop whose termination depends
+    # entirely on a remote party is a loop that can consume all memory.
     out = []
-    for d in listed.get("drafts", []):
-        meta = service.users().drafts().get(userId="me", id=d["id"], format="metadata").execute()
-        hdrs = _headers(meta["message"].get("payload", {}))
-        out.append({"id": d["id"], "to": hdrs.get("To", ""), "subject": hdrs.get("Subject", "")})
-    return out
+    token = None
+    seen_tokens = set()
+    for _ in range(max_pages):
+        kwargs = {"userId": "me", "maxResults": min(PAGE_SIZE, limit - len(out))}
+        if token:
+            kwargs["pageToken"] = token
+        listed = service.users().drafts().list(**kwargs).execute()
+        for d in listed.get("drafts", []):
+            meta = service.users().drafts().get(
+                userId="me", id=d["id"], format="metadata").execute()
+            hdrs = _headers(meta["message"].get("payload", {}))
+            out.append({"id": d["id"], "to": hdrs.get("To", ""),
+                        "subject": hdrs.get("Subject", "")})
+        token = listed.get("nextPageToken")
+        if not token:
+            return out, True
+        if len(out) >= limit:
+            return out, False
+        if token in seen_tokens:
+            print(f"warning: the server repeated page token {token!r}; "
+                  f"stopping after {len(out)} draft(s)", file=sys.stderr)
+            return out, False
+        seen_tokens.add(token)
+    print(f"warning: stopped at the {max_pages}-page cap with {len(out)} "
+          f"draft(s); more remain", file=sys.stderr)
+    return out, False
 
 
 def cmd_list(args):
@@ -94,8 +166,9 @@ def cmd_list(args):
 
     service = get_service()
     account = service.users().getProfile(userId="me").execute().get("emailAddress", "?")
-    drafts = fetch_drafts(service, args.limit)
-    print(f"{BOLD}{account}{RESET}: {len(drafts)} draft(s)")
+    drafts, complete = fetch_drafts(service, args.limit)
+    tail = "" if complete else f" {GRAY}(more remain; raise --limit){RESET}"
+    print(f"{BOLD}{account}{RESET}: {len(drafts)} draft(s){tail}")
     for d in drafts:
         subject = d["subject"] or f"{GRAY}(no subject){RESET}"
         print(f"  {d['id']}  {GRAY}->{RESET} {d['to'] or '(no recipient)'}  |  {subject}")
@@ -132,8 +205,9 @@ def cmd_send(args):
             # problem that was not there.
             chosen = _resolve_draft_id(service, args.draft_id)
         else:
-            drafts = fetch_drafts(service, args.limit)
-            chosen = select_draft(drafts, args.draft_id, args.match_subject)
+            drafts, complete = fetch_drafts(service, args.limit)
+            chosen = select_draft(drafts, args.draft_id, args.match_subject,
+                                  complete=complete, searched=len(drafts))
     except DraftSelectionError as exc:
         print(f"{YELLOW}{exc}{RESET}", file=sys.stderr)
         return 2
@@ -160,7 +234,13 @@ def main():
     p_send = sub.add_parser("send", help="Send one existing draft")
     p_send.add_argument("--draft-id", help="Exact draft id (from `list`)")
     p_send.add_argument("--match-subject", help="Case-insensitive substring; must match exactly one draft")
-    p_send.add_argument("--limit", type=int, default=25)
+    # How far --match-subject looks, not how much it shows. It defaulted to 25
+    # alongside `list`, which made a uniqueness claim over one page. Every
+    # draft inside the horizon costs one metadata fetch, so this trades a
+    # slower search for an answer the script is entitled to give.
+    p_send.add_argument("--limit", type=int, default=SEARCH_LIMIT,
+                        help=f"How many drafts --match-subject searches "
+                             f"(default {SEARCH_LIMIT})")
 
     args = parser.parse_args()
     if args.command == "list":

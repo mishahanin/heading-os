@@ -14,12 +14,17 @@ avoid duplicating the per-conversation reader.
 Phase 1.88 is read-only. Future phases may add the v8 right-column
 context panel (Pipeline / CRM / Outputs / Audit) once the dashboard
 has a stable join between conversation_id and pipeline + outputs.
+
+Tests: tests/bridge/test_two_layers_that_disagreed_about_the_same_file.py
 """
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
 from scripts.bridge_daemon._shapes import as_mapping
+
+logger = logging.getLogger(__name__)
 
 LATEST_FETCH_FILE = "outputs/operations/email-intelligence/_latest-fetch.json"  # leak-guard: ok (relative suffix rooted by caller)
 CONVERSATIONS_ROW_CAP = 100  # safety cap, but typical fetch is ~30
@@ -124,14 +129,26 @@ def list_conversations(workspace_root: Path) -> dict:
                 "by_direction": {direction: N},
             },
             "total": int,
+            "truncated": bool,
             "data_time": ISO 8601 UTC of fetch file mtime (None if missing),
         }
+
+    ``total`` and the three count maps describe the RETURNED rows, so they
+    always agree with ``len(conversations)`` and with each other. They used to
+    be measured over the raw fetch instead: ``total`` was ``len(raw)``, which
+    counted non-dict entries the loop skips AND everything past
+    ``CONVERSATIONS_ROW_CAP``, and the counts were accumulated before the cap.
+    A dashboard rendering ``total`` beside the rows therefore showed a number
+    the rows could never reach, and the sibling endpoint ``contacts.py``
+    defines ``total`` the other way round, so the two disagreed on the word.
+    ``truncated`` (and a warning line) is what says rows were dropped; the cap
+    is no longer silent.
     """
     fetch_path = workspace_root / LATEST_FETCH_FILE
     if not fetch_path.exists():
         return {
             "conversations": [], "counts": {"by_priority": {}, "by_category": {}, "by_direction": {}},
-            "total": 0, "data_time": None,
+            "total": 0, "truncated": False, "data_time": None,
         }
     try:
         text = fetch_path.read_text(encoding="utf-8")
@@ -139,22 +156,19 @@ def list_conversations(workspace_root: Path) -> dict:
     except OSError:
         return {
             "conversations": [], "counts": {"by_priority": {}, "by_category": {}, "by_direction": {}},
-            "total": 0, "data_time": None,
+            "total": 0, "truncated": False, "data_time": None,
         }
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
         return {
             "conversations": [], "counts": {"by_priority": {}, "by_category": {}, "by_direction": {}},
-            "total": 0, "data_time": None,
+            "total": 0, "truncated": False, "data_time": None,
         }
     raw = as_mapping(data).get("conversations", [])
     if not isinstance(raw, list):
         raw = []
 
-    by_priority: dict = {}
-    by_category: dict = {}
-    by_direction: dict = {}
     out: list[dict] = []
     for c in raw:
         if not isinstance(c, dict):
@@ -184,19 +198,30 @@ def list_conversations(workspace_root: Path) -> dict:
             "contact_company": _as_text(crm.get("company")) or None,
             "is_internal": bool(c.get("is_internal")),
         })
-        if priority:
-            by_priority[priority] = by_priority.get(priority, 0) + 1
-        if category:
-            by_category[category] = by_category.get(category, 0) + 1
-        if direction:
-            by_direction[direction] = by_direction.get(direction, 0) + 1
 
     # Sort by latest_datetime DESC (empty/None to end).
     def sort_key(c):
         ts = c["latest_datetime"]
         return (0 if ts else 1, -1 * _parse_ts(ts))
     out.sort(key=sort_key)
+    truncated = len(out) > CONVERSATIONS_ROW_CAP
+    if truncated:
+        logger.warning("conversations: %d rows over the cap of %d were dropped "
+                       "from this response", len(out) - CONVERSATIONS_ROW_CAP,
+                       CONVERSATIONS_ROW_CAP)
     out = out[:CONVERSATIONS_ROW_CAP]
+
+    # Counted AFTER the cap, over exactly the rows being returned.
+    by_priority: dict = {}
+    by_category: dict = {}
+    by_direction: dict = {}
+    for row in out:
+        if row["priority"]:
+            by_priority[row["priority"]] = by_priority.get(row["priority"], 0) + 1
+        if row["category"]:
+            by_category[row["category"]] = by_category.get(row["category"], 0) + 1
+        if row["direction"]:
+            by_direction[row["direction"]] = by_direction.get(row["direction"], 0) + 1
 
     data_time = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
     return {
@@ -206,7 +231,8 @@ def list_conversations(workspace_root: Path) -> dict:
             "by_category": by_category,
             "by_direction": by_direction,
         },
-        "total": len(raw),
+        "total": len(out),
+        "truncated": truncated,
         "data_time": data_time,
     }
 

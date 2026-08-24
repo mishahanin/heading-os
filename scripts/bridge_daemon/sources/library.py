@@ -2,14 +2,23 @@
 
 Walks knowledge/, skipping dotfiles, the `SKIP_DIRS` subtrees and the
 `SKIP_NAMES` filenames at any depth. Parses YAML frontmatter, returns 50
-most-recently-updated notes sorted DESC by the 'updated' field (falling
-back to file mtime if absent).
+notes sorted DESC by the 'updated' field, with every UNDATED note ranked
+below every dated one and mtime breaking ties inside each group.
+
+That last clause used to read "falling back to file mtime if absent", which
+describes a different sort: it implies an undated note takes its place among
+the dated ones by mtime. It does not, and the 50-row cap is applied after -
+so a note edited on disk today with no `updated:` field can be pushed out of
+the page entirely by 50 older dated notes. `list_library`'s own docstring
+("None last") always described the code correctly; this line did not.
 
 This line named only INDEX.md and dotfiles until 2026-08-24, and never
 mentioned README.md or the three skipped subtrees.
 
 Phase 1.12 is browse-only. Phase 2 will add full-text search + a click
 handler that drills into the note detail.
+
+Tests: tests/bridge/test_a_summary_that_read_the_wrong_end_of_the_file.py
 """
 import re
 from datetime import date, datetime, timezone
@@ -81,6 +90,12 @@ def list_library(data_root: Path) -> dict:
                 ...
             ] sorted by updated DESC (None last) then mtime DESC, capped at LIBRARY_ROW_CAP,
             "counts": {"principle": N, "position": N, "source": N, ...},
+            "type_order": list[str] - the Phase 1.66 locked section order
+                          (LIBRARY_TYPE_ORDER filtered to the types present,
+                          then any unknown types alphabetically). Returned but
+                          undocumented until 2026-08-25, so a consumer written
+                          against this block re-derived or ignored the very
+                          ordering the module went out of its way to lock.
             "total": int (full count, NOT capped),
             "data_time": ISO 8601 UTC of most-recent file mtime,
         }
@@ -94,7 +109,13 @@ def list_library(data_root: Path) -> dict:
     """
     root = data_root / KNOWLEDGE_ROOT
     if not root.exists():
-        return {"notes": [], "counts": {}, "total": 0, "data_time": None}
+        # `type_order` belongs here too. It was added to the parsed return in
+        # Phase 1.66 and never to this one, so on a clone with no knowledge/
+        # a consumer reading payload["type_order"] got a KeyError instead of
+        # an empty page - the same defect `_empty_pipeline` in pipeline.py was
+        # written to end.
+        return {"notes": [], "counts": {}, "type_order": [],
+                "total": 0, "data_time": None}
 
     notes_collected = []
     type_counts: dict = {}
@@ -153,10 +174,18 @@ def list_library(data_root: Path) -> dict:
     total = len(notes_collected)
 
     # Sort by updated DESC (None last), tiebreak by mtime DESC.
+    #
+    # Two elements, not three. A leading `0 if d is None else 1` sat in front
+    # of the ordinal until 2026-08-25 and could never change an outcome:
+    # `date.toordinal()` is 1 or greater for every representable date and an
+    # undated note contributes 0, so the ordinal alone already puts every
+    # undated note last. A mutation replacing that element with a constant
+    # changed no result, which is what proved it inert. It read like the rule
+    # that enforces None-last, so removing it puts the reader in front of the
+    # line that actually does.
     def sort_key(n):
         d = n["_updated_date"]
         return (
-            0 if d is None else 1,
             d.toordinal() if d else 0,
             n["_mtime_ts"],
         )

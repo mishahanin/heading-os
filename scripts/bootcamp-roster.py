@@ -91,6 +91,18 @@ def recommend_tracks(email_local: str, function: str, title: str) -> tuple[str, 
     if email_local in _LEADER_EMAILS:
         return "Y", "Y", "Leadership with technical authority — attend both passes"
 
+    # InfoSec sits between - attend both.
+    #
+    # This ran LAST, after the two substring rules below, and was therefore
+    # unreachable for every combined label. `technical_functions` contains
+    # "engineering" and `ops_functions` contains "operations", so "InfoSec
+    # Engineering" returned Tech-only and "TrustONE Operations" returned
+    # Ops-only -- each contradicting this comment, for exactly the population
+    # the branch was written for. The specific rule goes before the generic
+    # ones; that is the whole fix.
+    if "infosec" in f or "trustone" in f:
+        return "Y", "Y", "InfoSec/TrustONE — both passes (technical + governance)"
+
     # Pure technical chain (Engineering, AI Lab researchers, DevOps, QA)
     technical_functions = (
         "engineering", "ai lab", "devops", "qa", "core engine",
@@ -125,21 +137,86 @@ def recommend_tracks(email_local: str, function: str, title: str) -> tuple[str, 
 # ============================================================
 # Preliminary list parser
 # ============================================================
+# Headers that mark the column holding attendee names. Matched case-folded and
+# whitespace-stripped, against the first cell in the sheet that matches.
+_NAME_HEADERS = ("name", "names", "full name", "attendee", "attendees",
+                 "participant", "participants")
+
+
+class PrelimUnavailable(RuntimeError):
+    """The preliminary list could not be read at all."""
+
+
+def _prelim_column(ws) -> tuple[int, int] | None:
+    """(column index, header row index) of the name column, or None.
+
+    Zero-indexed, both. None means no recognised header anywhere in the sheet.
+    """
+    for r, row in enumerate(ws.iter_rows(values_only=True)):
+        for c, cell in enumerate(row):
+            if isinstance(cell, str) and cell.strip().lower() in _NAME_HEADERS:
+                return c, r
+    return None
+
+
 def load_prelim() -> set[str]:
-    """Return set of first-name strings (lowercased) from prelim Excel."""
+    """Return the set of attendee-name strings (lowercased) from the prelim Excel.
+
+    One column, not the whole workbook. This read EVERY non-empty string cell in
+    the sheet and excluded only the literal header `"name"`, so job titles,
+    departments, locations, emails and free-text notes all landed in the set
+    `in_prelim` matches first names, last names and initials against. Any
+    employee whose first or last name equalled any word standing alone in any
+    cell -- a city in a travel column, a surname in a catering note -- was
+    reported `In Prelim List? = Y` without being on the list. The docstring
+    described the intended behaviour correctly the whole time; the loop did not.
+
+    When no recognised header is found, the whole-sheet read is kept and said
+    out loud, because refusing would break a run over a sheet shape nobody has
+    described here, and silently returning nothing would mark every attendee
+    absent.
+
+    Raises PrelimUnavailable when the file cannot be opened or parsed. It used
+    to return an empty set, which is indistinguishable from "the list is empty":
+    the run then completed, exited 0, and wrote a roster whose entire `In Prelim
+    List?` column read `N` behind a single WARN line.
+    """
+    if openpyxl is None:                      # pragma: no cover - CLI calls the guard
+        raise PrelimUnavailable(
+            "openpyxl is not bound; call _ensure_openpyxl() before build_roster()")
     try:
         wb = openpyxl.load_workbook(PRELIM_XLSX, data_only=True)
-        ws = wb.active
-        names = set()
-        for row in ws.iter_rows(values_only=True):
-            for cell in row:
-                if isinstance(cell, str) and cell and cell.lower() not in ("name",):
-                    # First-name match, normalize
-                    names.add(cell.strip().lower())
-        return names
-    except Exception as e:
-        print(f"[WARN] Could not parse prelim list: {e}")
-        return set()
+    except Exception as e:                    # noqa: BLE001 - re-raised, see below
+        # Broad on purpose, and RE-RAISED, never swallowed. A .xlsx is a zip
+        # container, so a truncated download surfaces as `zipfile.BadZipFile`,
+        # which derives from Exception and not from OSError; a wrong extension
+        # is openpyxl's own `InvalidFileException`; a damaged sheet can be a
+        # KeyError from deep inside the reader. Enumerating that list means
+        # missing the next member of it, and the one thing this must never do
+        # again is turn an unreadable file into an empty attendee set.
+        raise PrelimUnavailable(f"cannot read {PRELIM_XLSX}: {e}") from e
+    ws = wb.active
+
+    found = _prelim_column(ws)
+    if found is None:
+        print(f"[WARN] no name column found in {PRELIM_XLSX} "
+              f"(looked for {', '.join(_NAME_HEADERS)}). Falling back to every "
+              f"cell in the sheet, which over-reports: any cell equal to "
+              f"someone's name marks them present.")
+        return {cell.strip().lower()
+                for row in ws.iter_rows(values_only=True)
+                for cell in row
+                if isinstance(cell, str) and cell.strip()}
+
+    col, header_row = found
+    names = set()
+    for r, row in enumerate(ws.iter_rows(values_only=True)):
+        if r <= header_row or col >= len(row):
+            continue
+        cell = row[col]
+        if isinstance(cell, str) and cell.strip():
+            names.add(cell.strip().lower())
+    return names
 
 
 def in_prelim(display_name: str, email_local: str, prelim: set[str]) -> bool:
@@ -372,11 +449,22 @@ def write_excel(rows: list[dict], excluded: dict):
     print(f"     Tribe roster: {len(rows)} | Tech: {tech_count} | Ops/Exec: {ops_count} | Both: {both_count} | Unknown: {unknown_count}")
 
 
-def main():
+def main() -> int:
     _ensure_openpyxl()
-    rows, excluded = build_roster()
+    try:
+        rows, excluded = build_roster()
+    except PrelimUnavailable as e:
+        # Refuse the artifact rather than ship a wrong one. Without the prelim
+        # list every row's `In Prelim List?` reads `N`, which is a plausible,
+        # readable, entirely false attendance column -- and the run exited 0
+        # behind one WARN line, so nothing downstream could tell.
+        print(f"[ERROR] {e}", file=sys.stderr)
+        print("        The roster would mark every attendee as NOT on the "
+              "preliminary list. Refusing to write it.", file=sys.stderr)
+        return 1
     write_excel(rows, excluded)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

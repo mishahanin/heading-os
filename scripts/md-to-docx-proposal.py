@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
-from scripts.utils.docx_helpers import load_docx, set_cell_shading
+from scripts.utils.docx_helpers import load_docx, save_docx, set_cell_shading
 from scripts.utils.workspace import get_outputs_dir
 
 INPUT_PATH = str(get_outputs_dir() / 'proposals' / '31C-National-Programme-DPI-Proposal-v1.md')
@@ -404,7 +404,7 @@ def build_document():
     run.font.color.rgb = BRAND_ACCENT
     run.font.italic = True
 
-    doc.save(OUTPUT_PATH)
+    save_docx(doc, OUTPUT_PATH)
     print(f"Word document saved to: {OUTPUT_PATH}")
 
 

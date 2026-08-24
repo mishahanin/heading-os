@@ -50,6 +50,20 @@ ACTION_TYPES = ("email_send", "note", "pipeline_update", "alert")
 ACTIVE_STATUSES = ("pending", "approved", "send_failed")
 PRIORITY_ORDER = {"P1": 0, "P2": 1, "P3": 2}
 
+# Fields `undo_card` will not write, whatever a card's `prev_field` names.
+#
+# `prev_field` is producer-supplied data that decides which key gets written, so
+# without this list a card stamped `prev_field: "status"` would let an undo set
+# a card's status - and `annotate_card` two functions below drops `status` from
+# its fields for exactly that reason ("an advisory layer can annotate, never
+# approve/dismiss/send"). An undo is not an advisory layer, but it is not a
+# state transition either: `apply_status` is the only writer of `status`, and
+# `tier` / `action_type` are what `tool_risk.tier_for` bands a card by, so a
+# rewrite of either moves a card between the gated and non-gated lanes.
+_UNDO_PROTECTED = frozenset({
+    "id", "status", "tier", "action_type", "created_at", "trace_id",
+})
+
 # Single in-process lock. Both the deposit endpoint (uvicorn threadpool) and the
 # daemon-scheduled Cold-Sweep job run in the daemon process, so one lock
 # serialises every write to queue.json.
@@ -358,15 +372,31 @@ def dismiss_card(workspace_root: Path, action_id: str, reason: str = "") -> dict
 def undo_card(workspace_root: Path, action_id: str) -> dict:
     """Revert a ``notify``-tier auto-apply by restoring the card's ``prev_value``.
 
-    The notify producer (R4, future) stamps ``prev_value`` - the pre-edit state -
-    on the card *before* it auto-applies. Undo restores that state and logs an
-    ``undo`` event.
+    The notify producer stamps ``prev_value`` - a MAPPING of field to pre-edit
+    value - on the card *before* it auto-applies:
+    ``apply_status(..., prev_value={"stage": "Qualified"},
+    applied_value={"stage": "Negotiation"})``. Undo writes each of those keys
+    back onto the card and logs an ``undo`` event.
+
+    **Until 2026-08-25 it wrote nothing back.** It popped ``prev_value``, parked
+    it under a new key ``restored_value``, and returned
+    ``{ok: True, noop: False}`` - so every field the auto-apply had changed kept
+    its post-edit value while the caller was told a revert had happened. Both
+    this docstring and `.claude/rules/tiered-risk.md` describe the notify tier
+    as "auto-applied with a one-click undo", and the undo was a rename. What was
+    wrong was the promise, on the one control that makes an auto-apply
+    acceptable at all.
+
+    The relabel survives for a ``prev_value`` this cannot act on - a scalar, or
+    a mapping naming only protected fields. The value stays recoverable by hand
+    under ``restored_value`` and the result says ``restored: False`` rather than
+    implying a rollback. A caller must read that field, never ``noop``.
 
     No-op-safe (scrutiny M2): if ``prev_value`` is absent (the card was never a
     reversible notify apply, or a malformed producer never stamped it), this
     NEVER raises and NEVER corrupts state. It logs an ``undo_noop`` event and
-    returns ``{ok: True, noop: True, card}``. Returns ``{ok: False, error}`` only
-    when the card id is missing or not found.
+    returns ``{ok: True, noop: True, restored: False, card}``. Returns
+    ``{ok: False, error}`` only when the card id is missing or not found.
     """
     if not action_id:
         return {"ok": False, "error": "action_id required"}
@@ -378,13 +408,30 @@ def undo_card(workspace_root: Path, action_id: str) -> dict:
         if "prev_value" not in card:
             # Nothing to revert. Record the attempt; do not mutate the card.
             _log_event(workspace_root, {"event": "undo_noop", "action_id": action_id})
-            return {"ok": True, "noop": True, "card": card}
+            return {"ok": True, "noop": True, "restored": False, "card": card}
         prev = card.pop("prev_value")
-        card["restored_value"] = prev
+        # A MAPPING of field -> pre-edit value. That is the shape the producer
+        # side already uses: `apply_status(..., prev_value={"stage": "Qualified"},
+        # applied_value={"stage": "Negotiation"})`. Writing each key back is the
+        # restore the docstring has always described.
+        restored_fields = {}
+        if isinstance(prev, dict):
+            restored_fields = {k: v for k, v in prev.items()
+                               if k not in _UNDO_PROTECTED}
+            card.update(restored_fields)
+        if not restored_fields:
+            # A scalar, or a mapping naming nothing this may write. There is
+            # nowhere to put it back, so keep it reachable by hand and say
+            # plainly that no rollback occurred.
+            card["restored_value"] = prev
+        restored = bool(restored_fields)
         card["undone_at"] = _now_iso()
         _write_queue(workspace_root, data)
-        _log_event(workspace_root, {"event": "undo", "action_id": action_id})
-    return {"ok": True, "noop": False, "card": card}
+        _log_event(workspace_root, {
+            "event": "undo" if restored else "undo_unrestorable",
+            "action_id": action_id,
+            "fields": sorted(restored_fields) or None})
+    return {"ok": True, "noop": False, "restored": restored, "card": card}
 
 
 # ============================================================

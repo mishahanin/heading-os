@@ -31,6 +31,8 @@ Cache:
   Results cached at outputs/browser/firecrawl-cache/ to avoid re-spending credits.
   Default TTLs: scrape 24h, crawl 48h, extract 72h, search 6h, map 168h.
   Use --no-cache to bypass, --clear-cache to wipe.
+
+Tests: tests/test_a_cache_key_that_forgot_what_was_asked_for.py
 """
 
 import argparse
@@ -176,6 +178,39 @@ def get_cache_key(identifier, command):
     """Generate SHA256 cache key from identifier and command."""
     raw = f"{command}:{identifier}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def scrape_formats(output_format, screenshot=False):
+    """The formats list a scrape request actually asks Firecrawl for.
+
+    One function, used by both the request and the cache key, because those two
+    must never disagree. `--format json` and `--format markdown` request the
+    same thing and legitimately share a cache entry; `--format html` and
+    `--screenshot` do not.
+    """
+    formats = ["markdown", "html"] if output_format == "html" else ["markdown"]
+    if screenshot:
+        formats.append("screenshot")
+    return formats
+
+
+def scrape_cache_key(url, formats):
+    """Cache key for one scraped URL, keyed on WHAT WAS ASKED FOR.
+
+    The key was `get_cache_key(url, "scrape")` - the URL and nothing else. So a
+    plain `scrape URL` cached a markdown-only document, and a later
+    `scrape URL --screenshot` served that entry back: the screenshot was never
+    fetched, `format_output` found markdown and printed it, and nothing said the
+    screenshot was missing. The same hole swallowed `--format html`, which fell
+    back to the cached markdown.
+
+    Every other command already keys on its variable inputs - crawl on
+    limit/include/exclude, search on limit, extract on prompt/schema. Scrape and
+    batch were the two that did not.
+
+    Sorted, so a formats list built in a different order still hits.
+    """
+    return get_cache_key(f"{url}|formats={','.join(sorted(formats))}", "scrape")
 
 
 def check_cache(key, ttl_hours):
@@ -352,7 +387,8 @@ def cmd_scrape(args):
     """Scrape a single URL."""
     url = args.target
     ttl = args.cache_ttl if args.cache_ttl is not None else DEFAULT_TTLS["scrape"]
-    cache_key = get_cache_key(url, "scrape")
+    formats_list = scrape_formats(args.format, args.screenshot)
+    cache_key = scrape_cache_key(url, formats_list)
 
     if not args.no_cache:
         cached = check_cache(cache_key, ttl)
@@ -362,17 +398,7 @@ def cmd_scrape(args):
 
     client = get_client(args.timeout)
 
-    formats_list = []
-    if args.format == "html":
-        formats_list = ["markdown", "html"]
-    elif args.format == "json":
-        formats_list = ["markdown"]
-    else:
-        formats_list = ["markdown"]
-
     kwargs = {"formats": formats_list}
-    if args.screenshot:
-        kwargs["formats"].append("screenshot")
 
     @_retry()
     def _do_scrape():
@@ -409,12 +435,17 @@ def cmd_batch(args):
         sys.exit(1)
 
     ttl = args.cache_ttl if args.cache_ttl is not None else DEFAULT_TTLS["batch"]
+    # The SAME key function scrape uses, over the same formats list, so a batch
+    # entry and a single scrape of the same URL still share when they asked for
+    # the same thing - and stop sharing when they did not. batch has no
+    # --screenshot flag.
+    formats_list = scrape_formats(args.format)
 
     # Check cache for each URL
     results = {}
     urls_to_fetch = []
     for url in urls:
-        cache_key = get_cache_key(url, "scrape")
+        cache_key = scrape_cache_key(url, formats_list)
         if not args.no_cache:
             cached = check_cache(cache_key, ttl)
             if cached is not None:
@@ -424,9 +455,6 @@ def cmd_batch(args):
 
     if urls_to_fetch:
         client = get_client(args.timeout)
-        formats_list = ["markdown"]
-        if args.format == "html":
-            formats_list = ["markdown", "html"]
 
         @_retry()
         def _do_batch():
@@ -454,8 +482,8 @@ def cmd_batch(args):
             url = doc_dict.get("metadata", {}).get("source_url") or doc_dict.get("metadata", {}).get("url") or (urls_to_fetch[i] if i < len(urls_to_fetch) else f"url_{i}")
             results[url] = doc_dict
             if not args.no_cache:
-                ck = get_cache_key(url, "scrape")
-                write_cache(ck, doc_dict, "scrape", url, 1, ttl)
+                write_cache(scrape_cache_key(url, formats_list), doc_dict,
+                            "scrape", url, 1, ttl)
 
     # Output all results
     output_parts = []
@@ -692,10 +720,17 @@ def cmd_extract(args):
     else:
         extract_data = {"data": str(result)}
 
-    print(f"[credits used] Extracted structured data from {url}", file=sys.stderr)
+    # The extract API does not report its cost here, and the docstring at the
+    # top of this file says "credits vary". The cache entry recorded `0` for it
+    # and the console printed a `[credits used]` label with no number beside it,
+    # so the one command whose spend is variable was the one command that
+    # reported spending nothing. An unmeasured cost is stated as unknown; a
+    # guessed figure inside a spend record is worse than a stated gap.
+    print(f"[credits: unknown - the extract API does not report them] "
+          f"Extracted structured data from {url}", file=sys.stderr)
 
     if not args.no_cache:
-        write_cache(cache_key, extract_data, "extract", url, 0, ttl)
+        write_cache(cache_key, extract_data, "extract", url, None, ttl)
 
     output = json.dumps(extract_data, indent=2, ensure_ascii=False)
     return write_output(output, args.output)

@@ -31,8 +31,16 @@ Usage:
     python scripts/census-submodel-bench.py speed
     python scripts/census-submodel-bench.py all
 
-Exit codes: 0 ok, 2 setup error (no documents, degenerate width, sensitive
-session), 3 every enabled runner was unreachable.
+Exit codes: 0 ok, 2 setup error (no documents, sensitive session, or - under
+--dry-run ONLY - a degenerate width), 3 every enabled runner was unreachable.
+
+"degenerate width" used to be listed unscoped, and a real run does not exit 2
+for one: it tags the cell [ВЫРОЖДЕН], records `degenerate: true` in the
+report, and exits 0. That is deliberate. A degenerate cell must never read as a
+measurement, and it does not - but throwing away a run whose other widths ARE
+measurements would trade one honest report for none.
+
+Tests: tests/test_a_guard_that_stopped_one_level_short.py
 """
 from __future__ import annotations
 

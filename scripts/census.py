@@ -56,6 +56,8 @@ answer of None, which the scorer counts as a refusal rather than a wrong
 answer. That is deliberate: the attempt happened and the acceptance file is a
 record of attempts. A run that never started, because the corpus fits the
 context window (exit 4), returns before the record is written.
+
+Tests: tests/test_a_guard_that_stopped_one_level_short.py
 """
 from __future__ import annotations
 
@@ -153,6 +155,14 @@ def resolve_corpus(names: list[str]) -> tuple[list[Path], dict[Path, str], str |
                 return [], {}, (f"unknown corpus scope {name!r}; known scopes are "
                                 f"{', '.join(sorted(scopes))}, or pass an existing path")
             path = candidate
+        if path in mounts:
+            # `--corpus threads --corpus threads` put one directory in the list
+            # twice and `corpus_bytes` summed it twice, so a corpus that really
+            # fits the window could measure at double its size and sail past the
+            # exit-4 refusal this primitive exists to make. `mounts` is keyed by
+            # Path and always collapsed to one entry, so the mount table and the
+            # byte count disagreed with each other.
+            continue
         resolved.append(path)
         mounts[path] = _mount_name_for(path, name)
     return resolved, mounts, None
@@ -223,7 +233,15 @@ def corpus_bytes(paths: list[Path]) -> int:
     for path in paths:
         try:
             if path.is_file():
-                total += path.stat().st_size
+                # The suffix filter applies to a file scope too. Without it the
+                # `is_file` branch counted any named file whole, so a 300 KB
+                # `.docx` measured nonzero while holding nothing this traversal
+                # can read - and `refuse_if_corpus_fits_window`, whose docstring
+                # states that `corpus_bytes` counts only CORPUS_SUFFIXES, could
+                # never reach its "0 bytes of readable content, check the scope"
+                # branch for exactly the case that branch describes.
+                if path.suffix.lower() in CORPUS_SUFFIXES:
+                    total += path.stat().st_size
                 continue
         except OSError:
             skipped += 1
@@ -399,6 +417,23 @@ def append_answer(path: Path, record: dict, question_id: str,
                 f"the existing answers file {path} is valid JSON of the wrong "
                 "shape (no 'answers' list); refusing to overwrite it, move it "
                 "aside or repair it")
+        # The ELEMENTS, for the same reason and by the same rule. The guard
+        # above validated the container and stopped, so a list of non-dicts
+        # reached `a.get(...)` as an AttributeError and a dict written by an
+        # older schema reached `a["question_id"]` as a KeyError. Neither is
+        # RuntimeError or OSError, so `_emit_record`'s handler let both
+        # through - traceback, exit 1, record lost after a traversal that may
+        # have run for 180 seconds. That is verbatim the failure the comment
+        # above claims to have ended; it just stopped one level short.
+        bad = [i for i, a in enumerate(payload["answers"])
+               if not isinstance(a, dict)
+               or not isinstance(a.get("question_id"), str)
+               or not a["question_id"]]
+        if bad:
+            raise RuntimeError(
+                f"the existing answers file {path} has records without a usable "
+                f"'question_id' at positions {bad}; refusing to overwrite it, "
+                "move it aside or repair it")
     else:
         payload = {"schema_version": 1, "run_state": state, "answers": []}
     entry = dict(record)

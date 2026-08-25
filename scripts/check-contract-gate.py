@@ -31,6 +31,8 @@ Statuses:
 Usage:
     python scripts/check-contract-gate.py --plan plans/2026-06-28-foo.md
     python scripts/check-contract-gate.py --plan plans/2026-06-28-foo.md --json
+
+Tests: tests/test_a_guard_that_stopped_one_level_short.py
 """
 
 import argparse
@@ -61,6 +63,26 @@ def derive_slug(plan_path: str) -> str:
         if all(c.isdigit() or c == "-" for c in date_part):
             return stem[11:] or "untitled"
     return stem or "untitled"
+
+
+def _slug_is_the_fallback(plan_path: str) -> bool:
+    """True when `derive_slug` returned its "untitled" FALLBACK, not a real slug.
+
+    `derive_slug` collapses "this path has no stem to decode" and "this plan is
+    named untitled.md" into the same string, and the gate then read the second
+    as the first: a real `plans/2026-06-28-untitled.md` was reported SKIPPED
+    with "plan path has no decodable slug", which is false, and its contract
+    directory could never report FOUND. The check always exits 0, so the one
+    plan named that way looked permanently like a description-based run.
+
+    The distinction is drawn here rather than in `derive_slug`, which must stay
+    byte-identical to its twin in implement-trajectory-log.py - a parity
+    tests/test_check_contract_gate.py locks.
+    """
+    stem = Path(plan_path).stem
+    dated = (len(stem) >= 11 and stem[4] == "-" and stem[7] == "-"
+             and stem[10] == "-" and all(c.isdigit() or c == "-" for c in stem[:10]))
+    return not stem[11:] if dated else not stem
 
 
 def _artifact_date(path: Path) -> date | None:
@@ -98,7 +120,7 @@ def check_gate(plan_path, contract_dir=None, today=None, stale_days=STALE_DAYS_D
         return "SKIPPED", "no plan path supplied (description-based run)"
 
     slug = derive_slug(str(plan_path))
-    if not slug or slug == "untitled":
+    if _slug_is_the_fallback(str(plan_path)):
         return "SKIPPED", "plan path has no decodable slug"
 
     # The ENGINE tree, deliberately, and no longer `get_plans_dir()`. A contract is

@@ -43,6 +43,8 @@ cheap; leave the sleepers out.
 Tests: tests/test_checkpoint_state_lock.py, tests/test_unattended_state_machine.py
 Tests: tests/test_session_compaction_threshold.py, tests/test_checkpoint_write_path.py
 Tests: tests/test_checkpoint_operator_surface.py, tests/test_checkpoint_stamp_timezone.py
+
+Tests: tests/test_a_heading_match_that_was_never_anchored.py
 """
 
 import argparse
@@ -507,7 +509,9 @@ def main(argv=None) -> int:
     ap.add_argument(
         "--kind",
         choices=("manual", "auto"),
-        default="manual",
+        # No default here, so `main` can tell "the operator typed --kind" from
+        # "nobody said". The dump still defaults to manual; see `collect` below.
+        default=None,
         help="archive kind segment: manual for an operator-typed /checkpoint, "
              "auto for a save the Stop hook asked for",
     )
@@ -537,13 +541,21 @@ def main(argv=None) -> int:
         if args.json:
             print("--json describes the paths dump and does not apply to an "
                   "action flag; ignoring it.", file=sys.stderr)
+        if args.kind is not None:
+            # The same warning, for the same reason. `--kind` is read only by
+            # the paths dump, which an action flag makes unreachable, so
+            # `--auto on --kind auto` applied the switch and dropped the kind
+            # without a word - while `--json` in the identical position was
+            # warned about two lines up. Two flags, one situation, one rule.
+            print("--kind describes the paths dump and does not apply to an "
+                  "action flag; ignoring it.", file=sys.stderr)
         # The first refusal is the exit code, and the rest still run: a rejected
         # threshold must not silently cancel a switch the operator also asked
         # for, which is the same swallowing in a different direction.
         codes = [run() for run in requested]
         return next((c for c in codes if c != 0), 0)
 
-    paths = collect(args.kind)
+    paths = collect(args.kind or "manual")
     if args.json:
         print(json.dumps(paths, indent=2))
     else:

@@ -57,6 +57,8 @@ outcome everywhere it appears, never an error.
 Until 2026-08-24 this table named only the two --baseline outcomes and gave
 them as the whole meaning of 1, so a wrapper reading exit codes labelled a
 NOT-COMPARABLE acceptance run, or a falsified ceiling, as FIX-RECALL.
+
+Tests: tests/test_a_typo_that_was_filed_as_a_falsified_benchmark.py
 """
 from __future__ import annotations
 
@@ -748,7 +750,26 @@ def score_answers(answers_path: str, today: date | None = None) -> dict:
     if malformed:
         raise ValueError(f"записи ответов должны быть объектами; не объекты "
                          f"на позициях {malformed}")
-    answers = {a.get("question_id"): a for a in records}
+    # A dict comprehension keeps the LAST record per id, so an answers file
+    # assembled by merging two runs silently discarded one of them and the
+    # verdict turned on file order. This module's own principle is that a
+    # dropped measurement is named, never silent, and it applies that rule to
+    # `not_scored` rows and to operator input elsewhere. The graded denominator
+    # comes from the question list, so nothing downstream would ever have
+    # noticed. A record with no usable id is the same defect wearing a
+    # different hat: it lands under the key None, matches no question, and is
+    # scored as absent.
+    ids = [a.get("question_id") for a in records]
+    unusable = sorted(i for i, qid in enumerate(ids)
+                      if not isinstance(qid, str) or not qid)
+    if unusable:
+        raise ValueError(f"у записей ответов нет question_id "
+                         f"на позициях {unusable}")
+    duplicated = sorted({qid for qid in ids if ids.count(qid) > 1})
+    if duplicated:
+        raise ValueError(f"question_id повторяется: {', '.join(duplicated)}; "
+                         f"один вопрос - одна запись")
+    answers = {a["question_id"]: a for a in records}
 
     stated = payload.get("run_state") or {}
     if not isinstance(stated, dict):
@@ -1122,7 +1143,26 @@ def mode_recall_crosscheck(questions: list[dict], corpus: CorpusPaths,
               f"ответьте по ТОЙ выдаче, затем подайте ответы.{RESET}", file=sys.stderr)
         return 2
     record = json.loads(shown_path.read_text(encoding="utf-8"))
-    shown = record.get("shown") or {}
+    # `json.loads` accepts any JSON value, and `score_answers` says exactly this
+    # when it justifies its own shape checks. This file is the one the docstring
+    # calls THE MEASUREMENT and it sits on disk overnight between the two
+    # passes, so a truncated re-save as `[]` is a live case: `record.get` on a
+    # list is an AttributeError nothing catches, and exit 1 is the code this
+    # mode documents as "the ceiling was contradicted". A corrupt input would
+    # have been filed as a falsified benchmark.
+    if not isinstance(record, dict):
+        print(f"{RED}показанная выдача повреждена: ожидался объект, получено "
+              f"{type(record).__name__}: {shown_path}{RESET}", file=sys.stderr)
+        return 2
+    shown = record.get("shown")
+    if shown is None:
+        # Absent is INCOMPLETE, not corrupt: fall through to the coverage check
+        # below, whose message names the pass to re-run.
+        shown = {}
+    if not isinstance(shown, dict):
+        print(f"{RED}поле shown должно быть объектом, получено "
+              f"{type(shown).__name__}: {shown_path}{RESET}", file=sys.stderr)
+        return 2
     missing = [q for q in CROSSCHECK_QUESTIONS if q not in shown]
     if missing:
         print(f"{RED}показанная выдача не покрывает {', '.join(missing)}. "
@@ -1159,6 +1199,23 @@ def mode_recall_crosscheck(questions: list[dict], corpus: CorpusPaths,
     if wrong_shape:
         print(f"{RED}ответы должны быть объектами; не объекты для: "
               f"{', '.join(wrong_shape)}{RESET}", file=sys.stderr)
+        return 2
+    # The VALUE inside the container, checked for the same reason. The grading
+    # branch does `set(answer.get("paths", []))`, and the default only applies
+    # when the key is ABSENT - so `"paths": null` reached `set(None)`, a
+    # TypeError that `main`'s except chain does not list, and the run exited 1
+    # on a traceback with no report. Exit 1 in this mode means "the ceiling's
+    # meaning as an upper bound was contradicted", so a typo in a hand-written
+    # file was recorded by any exit-code-reading harness as a falsified
+    # benchmark. Refused rather than coerced to []: coercion would grade the
+    # question "wrong" and manufacture a measurement out of the typo.
+    bad_paths = sorted(qid for qid in CROSSCHECK_QUESTIONS
+                       if isinstance(given.get(qid), dict)
+                       and "paths" in given[qid]
+                       and not isinstance(given[qid]["paths"], list))
+    if bad_paths:
+        print(f"{RED}поле paths должно быть списком; не список для: "
+              f"{', '.join(bad_paths)}{RESET}", file=sys.stderr)
         return 2
     rows = []
     for qid in CROSSCHECK_QUESTIONS:

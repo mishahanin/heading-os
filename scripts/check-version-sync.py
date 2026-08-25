@@ -16,6 +16,8 @@ can never re-appear.
 
 Usage:
     python scripts/check-version-sync.py [--quiet]
+
+Tests: tests/test_a_heading_match_that_was_never_anchored.py
 """
 from __future__ import annotations
 
@@ -39,7 +41,19 @@ def _pyproject_version(root: Path) -> str:
 
 def _readme_status_version(root: Path) -> str | None:
     text = (root / "README.md").read_text(encoding="utf-8")
-    m = re.search(r"##\s+Status\b(.*?)(?:\n##\s|\Z)", text, re.DOTALL)
+    # Anchored to line start, like `_changelog_latest_version` below. Without
+    # `^` and MULTILINE, `re.search` matched the substring "## Status" INSIDE a
+    # deeper heading - `### Status` contains it from its second `#` - and
+    # inside prose that merely names the section. The first such match won, so
+    # the guard could compare pyproject against a subsection's stale token and
+    # report drift on a correct README, or pass while the real `## Status`
+    # heading had drifted. The docstring always scoped this to the `## Status`
+    # HEADING; the regex did not.
+    # The terminator needs no `^`: it already consumes the newline, and a
+    # position just past `\n` IS a line start under MULTILINE, so the anchor
+    # there could never change a match. Only the LEADING one does work.
+    m = re.search(r"^##\s+Status\b(.*?)(?:\n##\s|\Z)", text,
+                  re.DOTALL | re.MULTILINE)
     if not m:
         return None
     v = re.search(rf"`v({_SEMVER})`", m.group(1))

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 """calibrate.py - Parse the active Claude Code session JSONL transcript into a clean envelope.
 
 Used by the /calibrate skill to surface user corrections, preferences, repeated
@@ -13,10 +14,15 @@ Output: JSON envelope to stdout with session_id, session_path, started_at_utc,
 ended_at_utc, event_count, truncated, user_turns, assistant_turns, tool_errors,
 system_reminders, and (unless --no-workspace) workspace block with skills/rules/ceo_only_paths.
 
-Exit codes: 0 ok, 2 no session found, 3 session unreadable, 1 other parser crash.
+Exit codes: 0 ok, 2 no session found, 3 session unreadable, 1 caller error
+(an unparseable --since-utc, reported cleanly) or other parser crash. That last
+line said only "other parser crash" until 2026-08-25, so an operator alerting on
+exit 1 as an engine bug was paged by a typo'd timestamp.
 
 CEO-EYES-ONLY USAGE: emitted envelope may contain session content. Do not pipe
 to external services. Consumed only by the local /calibrate skill.
+
+Tests: tests/test_a_comment_that_named_the_defect_as_the_model.py
 """
 from __future__ import annotations
 
@@ -136,6 +142,22 @@ def _turn_text(content) -> str:
     return "\n".join(parts)
 
 
+def _message_content(ev: dict):
+    """`ev["message"]["content"]`, or "" when `message` is not a mapping.
+
+    The read used to be `(ev.get("message") or {}).get(...)`, and `or` only
+    substitutes for a FALSY value: a line carrying `"message": "hello"` came
+    through as the string, and the next `.get` raised AttributeError - out of
+    `build_envelope`, out of `main`, and the run died on one odd line.
+    `parse_jsonl`'s docstring calls that "the opposite of the tolerance this
+    docstring promises", and the `tool_use` branch below carried a comment
+    pointing AT those two lines as "the correct idiom". They were the same
+    defect it was written to fix.
+    """
+    message = ev.get("message")
+    return message.get("content", "") if isinstance(message, dict) else ""
+
+
 def build_envelope(session_path: Path, events: list) -> dict:
     """Filter and shape events into the envelope schema."""
     user_turns = []
@@ -147,19 +169,21 @@ def build_envelope(session_path: Path, events: list) -> dict:
         ev_type = ev.get("type")
         ts = ev.get("timestamp", "")
         if ev_type == "user":
-            text = _turn_text((ev.get("message") or {}).get("content", ""))
+            text = _turn_text(_message_content(ev))
             if text:
                 user_turns.append({"ts": ts, "text": text})
         elif ev_type == "assistant":
-            text = _turn_text((ev.get("message") or {}).get("content", ""))
+            text = _turn_text(_message_content(ev))
             if text:
                 assistant_turns.append({"ts": ts, "text": text})
         elif ev_type == "tool_use":
             tool = ev.get("tool", "")
             # `.get("input", {})` only defaults when the KEY IS ABSENT, so an
             # explicit `"input": null` (or a string) went straight to
-            # AttributeError. The correct idiom is four lines above this one,
-            # on `message` — an inconsistent guard, not a design choice.
+            # AttributeError. This isinstance check was the only correct one in
+            # the loop; the comment here used to call the `message` reads above
+            # "the correct idiom", and they carried the very defect it names.
+            # Both now route through `_message_content`.
             raw_input = ev.get("input")
             cmd = raw_input.get("command", "") if isinstance(raw_input, dict) else ""
             if tool:

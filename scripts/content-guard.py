@@ -17,7 +17,16 @@ Usage:
   python scripts/content-guard.py --files a.py b.md      # scan specific files
   python scripts/content-guard.py --stdin               # newline-delimited paths on stdin
 
-Exit: 0 clean, 1 leak(s) found, 2 internal error.
+Exit: 0 clean, 1 leak(s) found OR a file that could not be scanned,
+2 internal error.
+
+An unreadable engine-routed file used to be warned about on stderr and then
+exit 0. The exit code is the contract CI consumes, so "clean" shipped over a
+file nobody had looked at - which is the one outcome this gate exists to
+prevent. Not-scanned now fails the same way a leak does: unverified is not
+clean.
+
+Tests: tests/test_a_gate_that_shipped_what_it_never_read.py
 """
 from __future__ import annotations
 
@@ -39,6 +48,12 @@ _BINARY_SUFFIXES = {
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".pptx", ".docx", ".xlsx",
     ".woff", ".woff2", ".ttf", ".otf", ".ico", ".zip", ".gz", ".db", ".sqlite",
     ".pyc", ".lock",
+    # `.bin` was missing, and `tests/integration/fixtures/unsupported.bin` is a
+    # committed binary fixture, so every `--all` sweep tried to decode it as
+    # UTF-8 and fell into the unreadable branch. That branch used to warn and
+    # exit 0, which is exactly why nobody noticed: the gate had been skipping a
+    # tracked engine file on every run and calling the result clean.
+    ".bin",
 }
 
 
@@ -141,11 +156,19 @@ def main() -> int:
               f"annotate the line with `content-guard: ok <reason>`.{RESET}")
         return 1
 
+    if unscanned:
+        # Refused, not merely reported. See the module docstring: the exit code
+        # is what a gate is, and one that prints a warning and returns 0 has
+        # told CI the surface is clean.
+        print(f"{RED}content-guard: REFUSED{RESET} {GRAY}({len(unscanned)} "
+              f"engine-routed file(s) could not be scanned; fix or exclude "
+              f"them, do not ship unverified){RESET}", file=sys.stderr)
+        return 1
+
     if not args.quiet:
         scope = "engine surface" if args.all else f"{len(files)} file(s)"
-        skipped = f", {len(unscanned)} unreadable and NOT scanned" if unscanned else ""
         print(f"{GREEN}content-guard: clean{RESET} {GRAY}({scope}; "
-              f"{len(dl.tokens)} denylist tokens{skipped}){RESET}")
+              f"{len(dl.tokens)} denylist tokens){RESET}")
     return 0
 
 

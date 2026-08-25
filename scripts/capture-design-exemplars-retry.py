@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Retry the 3 failed targets from capture-design-exemplars.py with tuned settings."""
+"""Retry the 3 failed targets from capture-design-exemplars.py with tuned settings.
+
+Tests: tests/test_a_comment_that_named_the_defect_as_the_model.py
+"""
 
 from __future__ import annotations
 
@@ -85,6 +88,24 @@ def _load_manifest():
         print(f"{YELLOW}Existing manifest has an unexpected shape; leaving it in "
               f"place.{RESET}", file=sys.stderr)
         return None
+    # The check above validated the CONTAINER and stopped there, so a row
+    # lacking `slug` reached the merge and raised KeyError - after all three
+    # captures had run, and with a manifest on disk, so the fallback write
+    # never fired either. The outcome was the exact "capture everything,
+    # record nothing" the fallback exists to prevent. A row the merge cannot
+    # key is dropped here and named, so the two comprehensions downstream only
+    # ever see rows that have a slug.
+    rows, dropped = [], 0
+    for row in manifest["results"]:
+        if isinstance(row, dict) and isinstance(row.get("slug"), str) and row["slug"]:
+            rows.append(row)
+        else:
+            dropped += 1
+    if dropped:
+        print(f"{YELLOW}Dropped {dropped} manifest row(s) with no usable slug; "
+              f"they cannot be merged and will not be carried forward.{RESET}",
+              file=sys.stderr)
+    manifest["results"] = rows
     return manifest
 
 

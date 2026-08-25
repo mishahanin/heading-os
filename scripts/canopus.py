@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 """Canopus: the three thin commands the standard's steps 3 and 7 need.
 
     python scripts/canopus.py probe tests/contract/     # step 3, is it vacuous
@@ -63,6 +64,8 @@ locked the contract's bytes and re-checked them from a manifest under
 a commit carrying the plan and the red contract, and `git diff` against its sha
 answers whether the contract moved. `scripts/canopus_check.py` asks that
 question directly, from the repository, and CI runs it.
+
+Tests: tests/test_a_comment_that_named_the_defect_as_the_model.py
 """
 from __future__ import annotations
 
@@ -132,14 +135,36 @@ def _under_root(raw: str, root: Path) -> Path:
 # go red, and that is the instrument working. A reader who arrives expecting a
 # mostly-green run reads a correct measurement as a broken tool, and the first
 # thing they do about it is stop running the tool.
+# Built FROM `CANDIDATES`, not restated beside it. The names on the page were
+# already derived; the prose hardcoded "three" and then enumerated exactly those
+# three wrongnesses. A fourth candidate would have printed four names next to
+# the word "three" and a sentence that described a set the run no longer used -
+# a claim the run cannot back, which is the one thing this page must never
+# make. A candidate with no entry here raises at import rather than going
+# undescribed.
+_CANDIDATE_WRONGNESS = {
+    "none": "one that returns nothing from every call",
+    "echo": "one that hands back its own first argument",
+    "greedy": "one that answers with every string the test file itself wrote",
+}
+_missing = [c for c in CANDIDATES if c not in _CANDIDATE_WRONGNESS]
+if _missing:
+    raise RuntimeError(
+        f"canopus: no wrongness description for candidate(s) {_missing}. "
+        f"Add one to _CANDIDATE_WRONGNESS in {__file__} so the page can say "
+        f"what the run actually did."
+    )
+
+_WRONGNESSES = [_CANDIDATE_WRONGNESS[c] for c in CANDIDATES]
 _AFTER_BUILD_MEANING = (
     "What a name below means. That test stayed GREEN while the modules on the "
-    "`replaced` line above were replaced by three implementations that are "
-    "wrong in three different ways: one that returns nothing from every call, "
-    "one that hands back its own first argument, and one that answers with "
-    "every string the test file itself wrote. The claim is exactly that and no "
+    f"`replaced` line above were replaced by {len(CANDIDATES)} implementations "
+    f"that are wrong in {len(CANDIDATES)} different ways: "
+    + ", ".join(_WRONGNESSES[:-1]) + ", and " + _WRONGNESSES[-1] + ". "
+    "The claim is exactly that and no "
     "more, so read it exactly: the test did not distinguish right from wrong "
-    "under those three wrongnesses. It is NOT a bad test. It may be a perfectly "
+    f"under those {len(CANDIDATES)} wrongnesses. It is NOT a bad test. It may "
+    "be a perfectly "
     "good test of something these candidates cannot express, such as a file on "
     "disk, a document's prose, or a value the subject never returns."
 )
@@ -296,7 +321,7 @@ def _after_build(paths, root, expected) -> int:
               f"({sum(1 for case_rel, _n in population if case_rel == rel)} "
               f"in this reading)")
     print(f"  candidates  {', '.join(CANDIDATES)}   "
-          f"(three implementations that EXIST and are wrong)")
+          f"({len(CANDIDATES)} implementations that EXIST and are wrong)")
     # On the PAGE, not only on stderr. The reading below is evidence about these
     # modules and no others, and a reader who cannot see the list cannot tell
     # whether the subject they came here about is in it.

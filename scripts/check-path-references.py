@@ -15,11 +15,16 @@ path routing `private` or `corporate` is skipped, because the overlay is absent
 on a public clone and its absence is not evidence. It also says nothing about
 paths named in Python, YAML or JSON; those have their own callers and tests.
 
-Extraction is a regex over prose, so it is heuristic in one direction only: it
-can MISS a path (an unusual spelling), and it can capture a fragment that was
-never a path (`action_queue.append(` truncates to `action_queue.appen`). Both
-classes live in BASELINE with a stated reason rather than being silently
-filtered, so the list of what this tool ignores is readable.
+Extraction is a regex over prose, so it is heuristic in BOTH directions: it can
+MISS a path (an unusual spelling), and it can capture a fragment that was never
+a path (`action_queue.append(` truncates to `action_queue.appen`). Both classes
+live in BASELINE with a stated reason rather than being silently filtered, so
+the list of what this tool ignores is readable.
+
+That sentence read "in one direction only" until 2026-08-25 and then listed two
+directions in the same breath. BASELINE carries four over-match entries, so the
+over-reporting half is not hypothetical, and a reader who took the claim at its
+word would conclude this scanner cannot over-report.
 
 One class is filtered instead of listed: a path `.gitignore` covers. Runtime
 state such as `.claude/scheduled_tasks.json` is present on the operator's
@@ -35,6 +40,8 @@ Usage:
   python scripts/check-path-references.py           # list every dangling reference
   python scripts/check-path-references.py --check   # exit 1 on any NEW one
   python scripts/check-path-references.py --json    # machine-readable
+
+Tests: tests/test_a_heading_match_that_was_never_anchored.py
 """
 import argparse
 import json
@@ -212,7 +219,13 @@ def code_files(root: Path) -> tuple[list[str], int]:
     is RETURNED rather than swallowed, because a narrowed check that prints like a
     complete one is the defect `.claude/rules/scope-claims.md` exists to stop.
     """
-    every = [str(p.relative_to(root)) for p in root.glob(_CODE_GLOB)
+    # `.as_posix()`, not `str()`. The keys these are compared against come from
+    # the prose regex, whose character class admits `/` and not `\`, so on a
+    # Windows checkout every native-separator path failed the `f not in named`
+    # test and the report claimed 100% of engine code was undocumented. The
+    # sibling `checkpoint-paths.py` already uses `.as_posix()` for repo-relative
+    # strings for this reason.
+    every = [p.relative_to(root).as_posix() for p in root.glob(_CODE_GLOB)
              if "__pycache__" not in p.parts]
     keep = sorted(f for f in every if not f.endswith("__init__.py"))
     return keep, len(every) - len(keep)
@@ -264,6 +277,14 @@ def main() -> int:
     ap.add_argument("--coverage", action="store_true",
                     help="report engine code that no non-archive prose names (advisory)")
     args = ap.parse_args()
+    if args.coverage and args.check:
+        # Refused, not ignored. The coverage branch returns before `scan()` ever
+        # runs, so `--coverage --check` exited 0 while no dangling-path check
+        # had happened - a green result standing in for a check nobody made.
+        # The two flags answer different questions and neither subsumes the
+        # other, so the caller picks one.
+        ap.error("--coverage and --check answer different questions; "
+                 "run them separately")
 
     root = get_workspace_root()
 

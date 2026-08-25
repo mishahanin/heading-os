@@ -452,12 +452,21 @@ def test_an_unreadable_file_is_reported_by_the_gate(tmp_path):
         bad.unlink(missing_ok=True)
 
 
-def test_the_clean_line_admits_what_it_skipped():
+def test_the_gate_refuses_rather_than_admitting_what_it_skipped():
+    """Superseded 2026-08-25, in the same direction, one step further.
+
+    This test used to require the CLEAN line to name its unscanned files -
+    the first fix for "printing `clean` while files went unread is the
+    coverage claim .claude/rules/scope-claims.md forbids". Naming them was an
+    improvement over silence and still exited 0, and the exit code is the only
+    thing CI reads: the gate went on shipping a surface it had not scanned.
+    There is now no clean-with-skips line to inspect, because that state
+    refuses. Asserting the old sentence would pin the weaker contract.
+    """
     src = (ROOT / "scripts" / "content-guard.py").read_text(encoding="utf-8")
-    assert "unreadable and NOT scanned" in src, (
-        "printing `clean` while files went unread is the coverage claim "
-        ".claude/rules/scope-claims.md forbids"
-    )
+    assert "unreadable and NOT scanned" not in src
+    assert "content-guard: REFUSED" in src
+    assert "unscanned.append" in src, "it must still RECORD what it could not read"
 
 
 def test_the_documented_exit_2_exists():
@@ -467,7 +476,11 @@ def test_the_documented_exit_2_exists():
         "crash exited 1, indistinguishable from `leak found` to any CI step "
         "keying on the contract"
     )
-    assert "Exit: 0 clean, 1 leak(s) found, 2 internal error." in src
+    # The literal moved when exit 1 widened to cover an unscannable file; the
+    # claim being pinned is that the docstring states a contract and that
+    # `SystemExit(2)` exists to keep the third code distinguishable.
+    assert "2 internal error." in src
+    assert "Exit: 0 clean, 1 leak(s) found OR a file that could not be scanned" in src
 
 
 def test_the_gate_still_exits_0_on_a_clean_file():

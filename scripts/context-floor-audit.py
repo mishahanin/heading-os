@@ -27,6 +27,8 @@ Usage:
     python scripts/context-floor-audit.py --json
     python scripts/context-floor-audit.py --write-baseline
     python scripts/context-floor-audit.py --baseline          # exit 1 on growth
+
+Tests: tests/test_a_gate_that_shipped_what_it_never_read.py
 """
 
 import argparse
@@ -49,7 +51,16 @@ BYTES_PER_TOKEN = 4
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 # `description:` runs until the next top-level key. Skill descriptions are often
 # folded scalars spanning many lines, so a single-line match undercounts badly.
-DESCRIPTION_RE = re.compile(r"^description:\s*(.*?)(?=^[A-Za-z_][\w-]*:)", re.S | re.M)
+# `|\Z` in the lookahead. Without it the pattern required a FOLLOWING top-level
+# key, so a `description:` that is the last key in a frontmatter block matched
+# nothing at all: that skill was counted at description_bytes 0, its whole
+# frontmatter was attributed to `skill_other_frontmatter`, and both of the two
+# totals this script exists to separate moved the wrong way. YAML key order is
+# free, so description-last is an ordinary layout. The header says this script
+# was written because that exact conflation once set an unreachable reduction
+# target.
+DESCRIPTION_RE = re.compile(r"^description:\s*(.*?)(?=^[A-Za-z_][\w-]*:|\Z)",
+                            re.S | re.M)
 
 BASELINE_PATH = "config/context-floor-baseline.json"
 GROWTH_TOLERANCE = 0.05

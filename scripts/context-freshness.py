@@ -9,6 +9,8 @@ Usage:
     python scripts/context-freshness.py stamp context/pipeline.md    # update timestamp to today
     python scripts/context-freshness.py touch context/people.md      # mark as reviewed (update date only)
     python scripts/context-freshness.py stamp-all                    # stamp all context files with today's date
+
+Tests: tests/test_a_gate_that_shipped_what_it_never_read.py
 """
 
 import re
@@ -26,13 +28,29 @@ CONTEXT_DIR = get_context_dir()
 
 
 def get_freshness(filepath):
-    """Read the freshness marker from a file. Returns (date_str, age_days) or (None, None)."""
+    """Read the freshness marker from a file.
+
+    Returns:
+        (date_str, age_days)  a usable marker
+        (date_str, None)      a marker shaped like a date that is not one
+        (None, None)          no marker at all
+    """
     content = filepath.read_text(encoding="utf-8")
     first_line = content.split("\n")[0] if content else ""
     match = re.match(r">\s*Last verified:\s*(\d{4}-\d{2}-\d{2})", first_line)
     if match:
         date_str = match.group(1)
-        verified = date.fromisoformat(date_str)
+        try:
+            verified = date.fromisoformat(date_str)
+        except ValueError:
+            # The regex checks the SHAPE; only fromisoformat checks the value,
+            # and `2026-13-40` matches the shape. These markers are hand-edited
+            # headers, so a wrong month or day is an ordinary typo - and it used
+            # to raise out of `get_freshness`, abort the `check` listing partway
+            # through, and make every OTHER file's freshness unreportable. The
+            # file is reported as carrying an unusable marker, which is true and
+            # is what the operator needs to see.
+            return date_str, None
         age_days = (datetime.now(get_default_tz()).date() - verified).days
         return date_str, age_days
     return None, None
@@ -69,7 +87,14 @@ def check_all():
 
     for f in context_files:
         date_str, age_days = get_freshness(f)
-        if date_str:
+        if date_str and age_days is None:
+            # A marker that is shaped like a date and is not one. Named on its
+            # own line rather than crashing the listing, and rather than being
+            # folded into "No marker": there IS a marker, and the operator has
+            # to go and fix it.
+            print(f"  {RED}{'Bad':6s}{RESET}  {f.name:30s}  "
+                  f"Unusable marker: {date_str}")
+        elif date_str:
             if age_days <= 7:
                 color = GREEN
                 status = "Fresh"

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Check corporate build number and compare across all exec workspaces."""
+"""Check corporate build number and compare across all exec workspaces.
+
+Tests: tests/test_a_guard_that_stopped_one_level_short.py
+"""
 
 import json
 import sys
@@ -52,6 +55,19 @@ def format_age(timestamp_str: str) -> str:
         return f"{minutes}m ago"
     except (ValueError, TypeError):
         return ""
+
+
+def _build_detail(exec_data: dict) -> str:
+    """What the malformed-build row prints: absent reads differently to wrong.
+
+    Split out of `main` so it can be exercised directly. Kept as a function
+    rather than an inline conditional because an inline one can only be tested
+    by re-deriving it in the test, and a test that re-implements the thing it
+    checks asserts only that it agrees with itself.
+    """
+    if "build" not in exec_data:
+        return "no 'build' key"
+    return repr(exec_data["build"])
 
 
 def _build_number(value) -> int | None:
@@ -148,10 +164,17 @@ def main():
         # One malformed exec file is that ROW's problem, never the table's. The
         # execs listed after it were fine and their status is the reason anyone
         # runs this.
-        ex_build = _build_number(exec_data.get("build", 0))
+        # `.get("build", 0)` defeated the branch below it: a BUILD.json with no
+        # `build` key at all took the default 0, which IS a valid int, so the
+        # row printed build 0 and `build_status` then reported "N builds
+        # behind" with the warning marker - a drift measurement invented for a
+        # file that says nothing. The corporate side of this same script was
+        # hardened to treat a missing key as an error; the per-exec row was not.
+        raw_build = exec_data.get("build")
+        ex_build = _build_number(raw_build)
         if ex_build is None:
             print(f"  {name:<{max_name}}   -       malformed build "
-                  f"{exec_data.get('build')!r}")
+                  f"{_build_detail(exec_data)}")
             continue
         ex_version = exec_data.get("version", "?")
         status, marker = build_status(corp_build, ex_build)

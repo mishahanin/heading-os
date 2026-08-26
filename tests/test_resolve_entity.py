@@ -13,6 +13,8 @@ compute_resolution_status.
 """
 from __future__ import annotations
 
+import email.message
+import gzip
 import io
 import json
 from unittest.mock import MagicMock, patch
@@ -195,11 +197,24 @@ def test_detect_mode_technology_fallback(tmp_path, monkeypatch):
 # ---------- search backend tests (mocked HTTP) ----------
 
 
-def _mock_response(payload: dict) -> MagicMock:
-    """Build a context-manager mock for urlopen returning a JSON body."""
+def _mock_response(payload: dict, content_encoding: str | None = None) -> MagicMock:
+    """Build a context-manager mock for urlopen returning a JSON body.
+
+    `headers` is a real `email.message.Message`, not a bare MagicMock. A
+    MagicMock answers `headers.get("Content-Encoding")` with another MagicMock,
+    which is truthy and is not any encoding name, so the reader could not tell
+    an uncompressed reply from one it must refuse. Widened 2026-08-26 alongside
+    the fix for `brave_search` asking for gzip and the reader never
+    decompressing it.
+    """
     body = json.dumps(payload).encode("utf-8")
+    if content_encoding == "gzip":
+        body = gzip.compress(body)
+    headers = email.message.Message()
+    if content_encoding:
+        headers["Content-Encoding"] = content_encoding
     cm = MagicMock()
-    cm.__enter__ = MagicMock(return_value=MagicMock(read=lambda: body))
+    cm.__enter__ = MagicMock(return_value=MagicMock(read=lambda: body, headers=headers))
     cm.__exit__ = MagicMock(return_value=False)
     return cm
 

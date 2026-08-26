@@ -57,8 +57,8 @@ the bridge spec, section 4) when called with `--gate`.
   the fleet picked it up
 - The dashboard feels stale and you don't know if the daemon is dead or
   just slow
-- Before deciding whether to scale from Phase 1 (CEO only) to Phase 2 (full
-  CEO coverage) or Phase 3 (exec pilot) — `--gate` shows the gate verdict
+- Before deciding whether to scale: Phase 1 (CEO only) to Phase 2 (full CEO
+  coverage), or Phase 3 (exec pilot). `--gate` shows the gate verdict
 
 ## When NOT to use
 
@@ -111,7 +111,7 @@ the bridge spec, section 4) when called with `--gate`.
      bearer token.
    - Pretty-print the four metrics (tab time, actions per day, browser-
      first weekday mornings, return-to-browser rate) with PASS/BELOW
-     labels against the spec thresholds, and the overall `ALL PASS` /
+     labels against the spec thresholds. Print the overall `ALL PASS` /
      `NOT YET` verdict.
 
 4. End with a brief one-line verdict:

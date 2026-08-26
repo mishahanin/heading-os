@@ -135,6 +135,16 @@ def main() -> int:
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
+    if bool(args.native) != bool(args.canonical):
+        # Half a CLI invocation used to fall through to HOOK mode: the directory
+        # the operator named was discarded without a word, stdin was read (empty
+        # during a cutover, so `{}`), and the two LIVE stores were reconciled
+        # instead. `--quiet` then suppressed the summary, so nothing at all was
+        # printed about what had been touched. The docstring advertises CLI mode
+        # for "one-off cutover seeding and tests" - the two situations where
+        # operating on the live stores is most damaging.
+        ap.error("--native and --canonical must be given together")
+
     if args.native and args.canonical:
         native = Path(args.native).expanduser()
         canonical = Path(args.canonical).expanduser()
@@ -153,7 +163,21 @@ def main() -> int:
             data = {}
         native = _native_from_hook(data)
         try:
+            from scripts.utils.paths import data_root_is_demo
             from scripts.utils.workspace import get_data_root
+            if data_root_is_demo():
+                # `get_data_root()` falls through to `<workspace_root>/examples`
+                # when there is no overlay - a fresh PUBLIC engine clone. That
+                # directory is git-TRACKED, so reconciling into it copies the
+                # harness's private memory store into the working tree of a repo
+                # whose whole premise is code only, one `git add -A` from being
+                # committed. Every other writer refuses this root by name;
+                # `scripts/migrate-data.py` prints "Refusing to migrate a demo
+                # (read-only examples) overlay". This hook took the value bare.
+                print("[memory-reconcile] data root is the bundled read-only "
+                      "examples overlay; refusing to write private memory into "
+                      "the tracked engine tree.", file=sys.stderr)
+                return 0
             canonical = get_data_root() / "auto-memory"
         except Exception as e:  # never break the session over a memory sync
             print(f"[memory-reconcile] data-root resolve failed: {e}", file=sys.stderr)

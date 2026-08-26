@@ -11,7 +11,9 @@ Usage:
     python scripts/inbox-pulse-report.py --days 3 --no-open
     python scripts/inbox-pulse-report.py --days 1 --no-open
 
-Tests: tests/test_a_day_that_could_not_be_read_and_was_called_quiet.py, tests/test_inbox_pulse_unreachable.py
+Tests: tests/test_a_day_that_could_not_be_read_and_was_called_quiet.py,
+       tests/test_inbox_pulse_unreachable.py,
+       tests/test_a_catch_all_rule_the_report_could_not_see.py
 
 Options:
     --days N     Number of calendar days to include (default 1 - today only).
@@ -203,23 +205,51 @@ def _domain_in_yaml(domain: str, yaml_overrides: dict[str, set[str]]) -> bool:
 
 
 def _pattern_matches_domain(pattern: str, domain: str) -> bool:
-    """Match a YAML pattern (e.g. '*@noreply.com', 'alice@example.com') against a domain."""
+    """Whether a YAML sender pattern covers EVERY sender at `domain`.
+
+    The daemon matches full addresses with `fnmatch` (`RulesEngine.match_sender`),
+    so the right side of a pattern is a glob, not a literal. This used to read
+    it as a literal and answer with `==` / `endswith`, which made the two
+    components disagree about the same YAML file:
+
+      - `*@*` returned False here and matched every address there. A catch-all
+        rule therefore left every domain listed under "Unknown domains" with an
+        "Add to `always_normal`" suggestion beside it -- for traffic the daemon
+        was already classifying under that very rule. The function even carried
+        an explicit `if pattern == "*@*": return True`, unreachable behind the
+        `startswith("*@")` branch above it, so the intent was never in doubt.
+      - `*@*.com` was the same defect one step narrower.
+
+    A pattern whose LEFT side is not `*` covers one sender, never a domain:
+    `alice@example.com` says nothing about the other people at example.com, and
+    `newsletter@*` covers one local part across every domain. Both stay False,
+    which is deliberate (see `_domain_matches_any`).
+
+    KNOWN DIVERGENCE, left as it was: `*@example.com` is treated as covering
+    `mail.example.com` here, and the daemon's `fnmatch` does not. That predates
+    this fix and is unchanged by it, so a subdomain sender can still be
+    suppressed from the unknown-domains section by a rule that will not fire
+    on it.
+    """
+    from fnmatch import fnmatch
+
     pattern = pattern.lower()
     domain = domain.lower()
-    # Bare domain or email-style match
+    # Bare domain, or an exact pattern that IS the domain.
     if pattern == domain:
         return True
-    # "*@domain.com" style
-    if pattern.startswith("*@"):
-        pat_domain = pattern[2:]
-        return domain == pat_domain or domain.endswith("." + pat_domain)
-    # "noreply@*" style - the whole right side is wildcard, match on left prefix
-    if pattern.endswith("@*"):
-        return False  # left-side only; domain doesn't carry username info
-    # "*@*" or exact
-    if pattern == "*@*":
-        return True
-    return False
+    # Split at the FIRST `@`, because that is where `_domain_of` in the daemon
+    # splits an address (`addr.split("@", 1)[1]`). Splitting at the last one
+    # instead disagrees with it about any address carrying two, which is what
+    # `sender_domain` in the log would then hold.
+    #
+    # `local != "*"` also rejects a pattern with no `@` at all: `rpartition`
+    # leaves the local part empty in that case, so a separate emptiness test
+    # for the separator was unreachable.
+    local, _, pat_domain = pattern.partition("@")
+    if local != "*" or not pat_domain:
+        return False
+    return fnmatch(domain, pat_domain) or fnmatch(domain, f"*.{pat_domain}")
 
 
 # ===========================================================================
@@ -778,16 +808,25 @@ def main() -> int:
         all_entries.extend(day_entries)
         print(f"{GREEN}{len(day_entries)} entries{RESET}")
 
-    # Also load up to 7 extra days for 7-day avg (if days < 7)
-    if days < 7:
-        for i in range(days, 7):
-            target = today - timedelta(days=i)
-            if target not in all_entries_by_date:
-                day_entries = fetch_jsonl_for_date(target)
-                if day_entries is None:
-                    unreachable_avg_only.append(target)
-                    day_entries = []
-                all_entries_by_date[target] = day_entries
+    # Fetch whatever the 7-day average still needs. `_compute_daily_distribution`
+    # averages today-1 through today-7 inclusive, so the range ends at 8, not 7.
+    # It ended at 7, so today-7 was never fetched: the lookup returned `[]` and
+    # the non-empty filter dropped it without a word. The column labelled
+    # "7-day avg" was a 6-day average, and `--days 7` did not rescue it -- the
+    # old `if days < 7` guard skipped this loop entirely at exactly that value.
+    # The range is empty once `--days` already covers the whole span.
+    for i in range(days, 8):
+        target = today - timedelta(days=i)
+        # Dead as written -- this range begins exactly where the window loop
+        # ended, so it can never revisit a fetched day. Left in place (it
+        # predates this fix) rather than removed, and named so the next reader
+        # does not mistake it for a live guard.
+        if target not in all_entries_by_date:
+            day_entries = fetch_jsonl_for_date(target)
+            if day_entries is None:
+                unreachable_avg_only.append(target)
+                day_entries = []
+            all_entries_by_date[target] = day_entries
 
     # Fetch state.json
     print(f"  {GRAY}SSH cat state.json ...{RESET}", end=" ", flush=True)

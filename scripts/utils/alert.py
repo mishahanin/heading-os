@@ -111,6 +111,15 @@ def _post_card(workspace_root: Path, severity: str, summary: str, detail: str,
         "citations": [],
     }
     if _aq_append_fn is None:
+        # This used to return False in silence, while the sibling failure below
+        # logs. `alert.init` is called from exactly one process (the bridge
+        # daemon), so in every other caller -- scripts/daemon-watchdog.py among
+        # them -- the card channel documented in the routing table above was
+        # never wired, and nothing in the log told the reader whether the card
+        # was missing because the channel failed or because it was never there.
+        logger.warning(
+            "alert: no Action Queue channel (alert.init was never called in this "
+            "process); %s alert is log-only", severity)
         return False
     try:
         res = _aq_append_fn(workspace_root, [card])

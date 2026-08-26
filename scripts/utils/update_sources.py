@@ -25,6 +25,17 @@ def _get_json(url: str) -> dict[str, Any]:
         raise SourceError(f"network error for {url}: {exc.reason}") from exc
     except json.JSONDecodeError as exc:
         raise SourceError(f"bad JSON from {url}: {exc}") from exc
+    except (TimeoutError, OSError) as exc:
+        # A read timeout is NOT a URLError. Since Python 3.10 `socket.timeout`
+        # IS `TimeoutError`, an OSError sibling, so `urlopen(..., timeout=20)`
+        # raises it straight past both clauses above. Measured 2026-08-26
+        # against a loopback socket that accepts the connection and then never
+        # answers: "UNHANDLED TimeoutError: timed out", with no SourceError. The
+        # update manager catches SourceError to mark a component unresolved; an
+        # unwrapped TimeoutError takes down the whole check instead of one row.
+        # OSError last, and only here, so the two specific clauses above keep
+        # their own messages.
+        raise SourceError(f"network error for {url}: {exc}") from exc
 
 
 def _strip_v(tag: str) -> str:

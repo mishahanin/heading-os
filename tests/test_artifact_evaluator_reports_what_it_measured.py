@@ -146,10 +146,19 @@ def test_detect_type_agrees_from_any_working_directory(tmp_path):
 
 
 def test_the_cli_evaluates_a_relative_skill_path_from_another_directory(tmp_path):
-    """The end-to-end symptom: exit 1, 'Cannot detect artifact type'."""
+    """The end-to-end symptom: exit 1, 'Cannot detect artifact type'.
+
+    The absent-string check alone could not tell a fixed run from a run that
+    failed some OTHER way, or from one that timed out: none of those prints the
+    message either. It now has to finish cleanly and show it identified the
+    artifact, which is the behaviour the fix restored.
+    """
     p = subprocess.run(
         [sys.executable, str(SCRIPT), "--path", ".claude/skills/dream"],
         cwd=str(tmp_path), capture_output=True, text=True, timeout=300)
-    assert "Cannot detect artifact type" not in (p.stdout + p.stderr), (
-        (p.stdout + p.stderr)[-400:]
-    )
+    combined = p.stdout + p.stderr
+
+    assert "Cannot detect artifact type" not in combined, combined[-400:]
+    assert p.returncode == 0, combined[-1500:]
+    assert "Type: skill" in p.stdout, (
+        f"the evaluator never named the artifact it evaluated: {p.stdout[:800]}")

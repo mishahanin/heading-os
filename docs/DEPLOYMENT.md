@@ -271,7 +271,7 @@ Two more guides cover the rest:
 - **[INTEGRATIONS-SETUP.md](INTEGRATIONS-SETUP.html)** — connect Exchange email,
   your Telegram, Google contacts, and the OSINT / web-research APIs (where to get
   each key, how to authenticate, how to verify).
-- **[MAKE-IT-YOURS.md](MAKE-IT-YOURS.html)** — personalize the clone: run
+- **[MAKE-IT-YOURS.md](MAKE-IT-YOURS.html)** — personalize the clone. Run
   `/setup-wizard` to generate your voice, business, and personal docs, set your
   identity, and adapt the house terminology to your own.
 
@@ -301,7 +301,7 @@ and GenAI stack, observability, research scraping.
   `uv sync --extra documents`, and so on. Any script that needs a dormant extra
   prints the exact `uv sync --extra <name>` command to run.
 - **Operator / full fleet:** `uv sync --all-extras` installs the entire
-  integration surface at once - this is what the CEO instance, CI, and the
+  integration surface at once. This is what the CEO instance, CI, and the
   provisioning path use, so their environment is unchanged by the split.
 
 The extras and their marker modules: `email`, `telegram`, `browser`, `documents`,

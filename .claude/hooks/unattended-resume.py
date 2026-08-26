@@ -14,9 +14,13 @@ It is also the more accurate event: the window belongs to the operator's turn,
 and the turn begins when he presses Enter, not when the assistant stops.
 
 Cheap by construction. The common case - no pause marker - is one JSON read and
-an exit; nothing is written, nothing is printed, and the hook is silent on every
-path including failure. A prompt that cannot resume a stretch must never cost
-the operator a visible error.
+an exit; nothing is written and nothing is printed. The rule is that this hook
+never writes to STDOUT and never blocks, because a UserPromptSubmit hook's stdout
+is injected into the prompt and a prompt that cannot resume a stretch must not
+cost the operator a visible error. It is not silent on stderr, and never was:
+`CP.project_root` and `CP.read_json` both report there from inside the same try
+block, and a failed clear now says so too - the pause marker surviving is what
+keeps the status bar showing "unattended paused" for a stretch already resumed.
 
 The Stop hook keeps its own `prompt_id` comparison. That is not redundancy to
 delete: this hook is not registered in every clone, and a stretch that could
@@ -36,7 +40,18 @@ sys.path.insert(0, str(WORKSPACE))
 # speaking: treating it as a new instruction would reset the continuation
 # counter on every compaction and retire the ceiling that bounds a night.
 # `_queue_pending` in checkpoint-offer.py excludes it for the same reason.
-COMPACT_COMMAND = "/compact"
+#
+# Imported from the one owner rather than copied. This was a local literal while
+# every other consumer - checkpoint-offer.py's exclusion, scripts/compact-now.py
+# - bound to the shared constant, so a change to the submitted command (a
+# `--kind` argument is already under consideration) would have left this hook
+# comparing against a bare `/compact`, failing to match, and treating each driven
+# compaction as the operator speaking. The literal survives only as the fallback
+# for a clone where the import is unavailable, and a test pins the two equal.
+try:
+    from scripts.utils.herdr_agent import COMPACT_COMMAND
+except Exception:  # noqa: BLE001 - a bundled clone may not carry the module
+    COMPACT_COMMAND = "/compact"
 
 
 def main() -> int:
@@ -68,7 +83,17 @@ def main() -> int:
             return 0
         with CP.locked_state(path) as fresh:
             CP.clear_unattended_window(fresh)
-    except Exception:  # noqa: BLE001 - see the module docstring
+    except Exception as exc:  # noqa: BLE001 - see the module docstring
+        # Stderr, not stdout. The docstring's reason for swallowing covers
+        # stdout, which for a UserPromptSubmit hook is injected into the prompt;
+        # it never covered the record. If `write_json_atomic` fails inside
+        # `locked_state` (a read-only mount, ENOSPC, a permission change under
+        # `.claude/state/`), the pause marker survives and the status bar keeps
+        # rendering "unattended paused" for a stretch the operator has already
+        # resumed - the exact defect this hook was written to fix - with nothing
+        # anywhere recording that the clear failed.
+        print(f"unattended-resume: could not clear the pause window: "
+              f"{type(exc).__name__}: {exc}", file=sys.stderr)
         return 0
     return 0
 

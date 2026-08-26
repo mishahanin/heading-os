@@ -34,7 +34,17 @@ Usage:
 ``detail`` (free-form object the executor consumes). ``id``, ``tier``, and
 ``status`` are assigned here.
 
-Exit codes: 0 ok, 1 usage/validation error, 2 state file missing for a mutate.
+Exit codes:
+  0  ok
+  1  usage error, or a payload/state file this command refuses
+  2  the sweep file for that date is missing or unreadable, OR --date is not an
+     exact YYYY-MM-DD
+
+That last line used to read "2 state file missing for a mutate", which named
+one of the three conditions and assigned the date check to exit 1. A wrapper
+reading "exit 2 => run propose first" mis-handled both of the others.
+
+Tests: tests/test_a_probe_that_counted_survivors.py
 """
 import argparse
 import json
@@ -203,12 +213,27 @@ def _save(root: Path, date: str, data: dict) -> None:
 
 def cmd_propose(root: Path, args) -> int:
     payload_path = Path(args.file)
+    # The note `_save`'s comment points at, which did not exist until
+    # 2026-08-25 -- and this is the spot where its absence mattered.
+    #
+    # `_save` takes a lock around the WRITE, so two writers cannot tear one
+    # file. It does not cover the read-modify-write as a whole: this command
+    # loads the day's sweep, merges the proposed actions into it, and saves,
+    # and an `approve` running between that load and that save is overwritten.
+    # The window is small and the operator is one person at one terminal, so
+    # the race is accepted rather than fixed; what was missing was anyone being
+    # able to find that out. Making it transactional means holding the lock
+    # across the model call that produces the payload, which is minutes.
     if not payload_path.exists():
         print(f"{RED}payload not found: {payload_path}{RESET}", file=sys.stderr)
         return 1
     try:
         proposed = json.loads(payload_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
+    except (OSError, json.JSONDecodeError) as e:
+        # OSError too. `exists()` passed a moment earlier, and the file can
+        # still be unreadable - permissions, a dangling symlink, a race with
+        # whatever wrote it - which left a raw traceback out of a command whose
+        # every other refusal is a printed line and exit 1.
         print(f"{RED}payload is not valid JSON: {e}{RESET}", file=sys.stderr)
         return 1
     if not isinstance(proposed, list):
@@ -366,6 +391,12 @@ def _mutate_ids(root: Path, date: str, ids: list[int], target_status: str,
               f"before mutating it.{RESET}", file=sys.stderr)
         return 1
     by_id = {a["id"]: a for a in data["actions"]}
+    # Deduped, and ORDER-PRESERVING so the confirmation reads in the order the
+    # operator typed. `approve 1 1` mutated action #1 once, counted it twice
+    # and printed "approved 2 action(s): #1, #1" - the one line anybody reads
+    # to check an approval batch, overstating what happened. The second pass
+    # was harmless (the transition is idempotent); the report was not.
+    ids = list(dict.fromkeys(ids))
     changed = 0
     for i in ids:
         a = by_id.get(i)
@@ -391,7 +422,8 @@ def _mutate_ids(root: Path, date: str, ids: list[int], target_status: str,
         a["updated_at"] = datetime.now(timezone.utc).isoformat()
         changed += 1
     _save(root, date, data)
-    print(f"{GREEN}{target_status}{RESET} {changed} action(s): {', '.join(f'#{i}' for i in ids)}")
+    print(f"{GREEN}{target_status}{RESET} {changed} action(s): "
+          f"{', '.join(f'#{i}' for i in ids)}")
     return 0
 
 

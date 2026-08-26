@@ -13,6 +13,18 @@ byte-clean -- zero data dirs, zero symlinks, nothing to leak -- while the agent
 still reads and writes data transparently using ordinary cwd-relative paths
 (exactly what every SKILL.md already does).
 
+That "zero data dirs" premise is load-bearing and was FALSE on the operator's
+clone until 2026-08-25: `outputs/` and `plans/` survived the cutover with 27
+files (2 outputs, 25 archived plans), gitignored but populated. Classification
+runs on the first path segment alone and never asks whether the file exists at
+cwd, so every relative reference to one of those engine-local files was rewritten
+to a data-root path where it was not -- a spurious "file does not exist" on a
+Read, and on a Write a second copy created in the overlay while the engine file
+sat untouched and unsaid. The 27 files were moved into the data overlay rather
+than the redirect being softened, because the redirect IS the seam;
+`tests/test_data_path_redirect.py` pins `outputs` and `plans` as always
+redirected, and a test now fails if any DATA_DIRS name reappears here.
+
 No-op when `get_data_root() == get_workspace_root()` (ceo-main pre-cutover, data
 still in-tree): the relative path already resolves correctly, so nothing is
 rewritten and the hook exits silently.

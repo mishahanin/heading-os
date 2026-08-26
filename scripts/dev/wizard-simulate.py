@@ -12,6 +12,8 @@ canned.yaml format:
     skipped: [calendar_policy]
 
 Refuses to run against workspaces tagged type: "ceo-master" - no override.
+
+Tests: tests/test_a_guard_that_was_green_over_an_absent_tree.py
 """
 from __future__ import annotations
 import argparse
@@ -43,6 +45,18 @@ def main(argv=None):
     if identity.exists():
         try:
             data = json.loads(identity.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                # The same shape check this file already applies three times to
+                # the canned-answers file, applied to the SAFETY-CRITICAL one.
+                # `json.loads` answers with any JSON value, so `[]` reached
+                # `.get` as an AttributeError past the JSONDecodeError handler.
+                # The refusal happened to hold - by crashing - but a merely
+                # corrupt non-master workspace could not be run at all, and the
+                # clean refusal path was unreachable.
+                print(f"ERROR: {identity} is valid JSON but not an object; "
+                      f"cannot tell whether this is a ceo-master workspace.",
+                      file=sys.stderr)
+                return 2
             if data.get("type") == "ceo-master":
                 print(
                     f"REFUSED: --workspace {args.workspace} is a CEO master workspace. "

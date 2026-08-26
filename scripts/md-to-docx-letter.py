@@ -30,6 +30,11 @@ def _ensure_docx():
     WD_ALIGN_PARAGRAPH, qn = d.WD_ALIGN_PARAGRAPH, d.qn
 
 
+# Sentinel for `block_index` once the header block has ended, so no later line
+# can drift back into address formatting.
+_HEADER_OVER = 99
+
+
 def create_letter_docx(md_path, docx_path):
     _ensure_docx()
     doc = Document()
@@ -56,6 +61,14 @@ def create_letter_docx(md_path, docx_path):
     lines = content.strip().split('\n')
 
     i = 0
+    # Counts NON-BLANK lines only. The header block used to be selected by raw
+    # index (`i in [1, 2, 3, 4]`), and a blank line -- ordinary markdown --
+    # advanced `i` while emitting nothing, so the window drifted: the last
+    # address line fell past 4 and rendered as a justified 12pt body paragraph
+    # instead of the left-aligned 11pt address block. A SHORT sender block
+    # drifted the other way and swallowed the `Date:` line into address format,
+    # losing its 18pt space-before, which is why the guard below excludes it.
+    block_index = 0
     while i < len(lines):
         line = lines[i].strip()
 
@@ -64,7 +77,7 @@ def create_letter_docx(md_path, docx_path):
             continue
 
         # Sender header block (first few lines before the date line)
-        if i == 0:
+        if block_index == 0:
             # MISHA HANIN - sender name
             p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.LEFT
@@ -73,22 +86,27 @@ def create_letter_docx(md_path, docx_path):
             run.bold = True
             run.font.size = Pt(14)
             run.font.name = 'Times New Roman'
+            block_index += 1
             i += 1
             continue
 
-        # Address lines (lines 1-4 of content)
-        if i in [1, 2, 3, 4]:
+        # Address lines: the next four non-blank lines, never the date line.
+        if 1 <= block_index <= 4 and not line.startswith('Date:'):
             p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.LEFT
             text = line.replace('**', '')
             run = p.add_run(text)
             run.font.size = Pt(11)
             run.font.name = 'Times New Roman'
+            block_index += 1
             i += 1
             continue
 
-        # Date line
+        # Date line. It ends the header block, so nothing after it can fall
+        # back into address formatting -- without this the counter froze here
+        # and the NEXT line (the recipient block) was formatted as an address.
         if line.startswith('Date:'):
+            block_index = _HEADER_OVER
             p = doc.add_paragraph()
             p.paragraph_format.space_before = Pt(18)
             p.alignment = WD_ALIGN_PARAGRAPH.LEFT

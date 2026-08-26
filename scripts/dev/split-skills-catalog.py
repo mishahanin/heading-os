@@ -23,6 +23,8 @@ source of truth). It refuses to run once the monolith has already been split (no
 Usage:
     python scripts/dev/split-skills-catalog.py --dry-run   # report the split, write nothing
     python scripts/dev/split-skills-catalog.py             # write the 8 pages + rebuilt index
+
+Tests: tests/test_a_guard_that_was_green_over_an_absent_tree.py
 """
 from __future__ import annotations
 
@@ -79,25 +81,55 @@ PAGE_FOOTER = (
 PAGE_CLOSE = "</main>\n</div>\n<script src=\"assets/search.js\" defer></script>\n</body>\n</html>\n"
 
 
+class MarkerMissing(Exception):
+    """A structural marker the monolith no longer carries."""
+
+
+def _find(text: str, marker: str, start: int = 0) -> int:
+    """`text.index`, as a named refusal rather than a raw ValueError.
+
+    `main` refuses cleanly when REF_START is absent and aborts with a
+    diagnostic when the category dividers do not match, and then located the
+    other four markers with a bare `index`. Dropping `<h2>MCP servers</h2>`
+    from the monolith killed the tool on `ValueError: substring not found`,
+    against its own stated behaviour of refusing to run on unexpected input.
+    """
+    i = text.find(marker, start)
+    if i == -1:
+        raise MarkerMissing(marker)
+    return i
+
+
 def _slice(text: str, start_marker: str, end_marker: str) -> str:
-    i = text.index(start_marker)
-    j = text.index(end_marker, i)
+    i = _find(text, start_marker)
+    j = _find(text, end_marker, i)
     return text[i:j]
 
 
 def build_category_page(head_prefix: str, page_title: str, page_file: str, cards_html: str) -> str:
     """Assemble one category page from the shared head + this category's cards."""
+    # Verified, not assumed. Both of the transforms below are exact-literal or
+    # regex matches against the monolith's head, and both silently no-op if its
+    # wording or attribute order drifts - shipping all eight category pages with
+    # the monolith's title and meta description, and reporting success. This
+    # file already guards the `_stale` replacement and the divider identities
+    # for exactly this reason; these two had no equivalent.
+    monolith_title = "<title>Skills, MCP &amp; plugins — HEADING OS</title>"
+    if monolith_title not in head_prefix:
+        raise MarkerMissing(monolith_title)
     head = head_prefix.replace(
-        "<title>Skills, MCP &amp; plugins — HEADING OS</title>",
+        monolith_title,
         f"<title>{page_title} — HEADING OS</title>",
     )
-    head = re.sub(
+    head, meta_subs = re.subn(
         r'<meta name="description" content="[^"]*">',
         f'<meta name="description" content="{re.sub(r"&amp;", "and", page_title)} in HEADING OS: '
         f'what each skill is, what it does, how to invoke it, and what you can customize.">',
         head,
         count=1,
     )
+    if not meta_subs:
+        raise MarkerMissing('<meta name="description" content="...">')
     meta = (
         '  <p class="page-meta"><a href="skills-mcp-plugins.html">Back to the full skill '
         'catalog</a>. Each entry states what the skill is, what it does under the hood, how to '
@@ -147,13 +179,27 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Report the split, write nothing")
     args = parser.parse_args()
 
+    try:
+        return _run(args)
+    except MarkerMissing as exc:
+        # The clean abort the rest of this tool already provides. Writes happen
+        # after every slice, so nothing is half-written; what was missing was
+        # the diagnostic naming WHICH marker the monolith no longer carries.
+        print(f"{YELLOW}skills-mcp-plugins.html no longer carries the marker "
+              f"{exc.args[0]!r}; refusing to split against a shape this tool "
+              f"does not recognise.{RESET}", file=sys.stderr)
+        return 1
+
+
+def _run(args) -> int:
+
     text = SRC.read_text(encoding="utf-8")
     if REF_START not in text:
         print(f"{YELLOW}skills-mcp-plugins.html has no '{REF_START.strip()}' marker; "
               f"it looks already split. Nothing to do.{RESET}")
         return 0
 
-    head_prefix = text[: text.index(MAIN_OPEN) + len(MAIN_OPEN)] + "\n"
+    head_prefix = text[: _find(text, MAIN_OPEN) + len(MAIN_OPEN)] + "\n"
     h1_block = _slice(text, MAIN_OPEN, INTRO_START)[len(MAIN_OPEN):].lstrip("\n")
     h1_block = "  " + h1_block if not h1_block.startswith("  ") else h1_block
     intro = _slice(text, INTRO_START, REF_START)

@@ -65,3 +65,13 @@ def test_no_module_shadows_the_standard_library(path):
         f"Give it a name of its own (operator -> operator_identity, "
         f"html -> html_text, trace -> tracing, venv -> venv_guard)."
     )
+
+
+def test_the_scan_still_finds_the_modules():
+    """An empty parametrize is one silent skip, not a failure, so this gate
+    would report green over zero modules. Every tree it reads is engine-only,
+    so an empty result means the glob or the layout moved. 388 on 2026-08-26.
+    """
+    found = _module_files()
+
+    assert len(found) >= 250, f"only {len(found)} modules reached the shadowing gate"

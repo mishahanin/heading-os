@@ -17,6 +17,15 @@ from scripts.utils.modem_core import parse_at_imei
 from scripts.utils.modem_ssh import shquote
 
 
+class ModemReadError(RuntimeError):
+    """The device could not be read at all.
+
+    Distinct from "read successfully, nothing to report". `_ubus` used to return
+    `{}` on a failed or unparseable reply, and the two outcomes then rendered
+    identically at the CLI - a clean exit over a modem nobody reached.
+    """
+
+
 class ModemDriver:
     device_id = ""
 
@@ -89,12 +98,34 @@ class E5800Driver(ModemDriver):
 
     # -- ubus helpers --
     def _ubus(self, service: str, method: str, args: dict = None) -> dict:
+        """One ubus call. RAISES when the reply cannot be read.
+
+        It returned `{}` and said nothing, so `read_status()` handed back a
+        well-formed `{'device': 'e5800', 'model': '', 'imeis': [], 'sims': []}`
+        that claims the device WAS read. `scripts/modem-tune.py::cmd_status`
+        then iterates an empty `imeis` (prints no line) and finds `"sims" in st`
+        True (so the XE300 fallback is skipped too): the command printed
+        "Reading modem state (e5800)..." and exited 0. A total transport failure
+        was indistinguishable from a healthy modem with nothing to report.
+        Reproduced 2026-08-25 with the string a failed call really returns,
+        "Command failed: Not found".
+        """
         payload = json.dumps(args or {})
         raw = self._ssh(f"ubus call {service} {method} {shquote(payload)}", 15)
         try:
-            return json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            return {}
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise ModemReadError(
+                f"ubus call {service} {method} did not return JSON "
+                f"({type(exc).__name__}); the reply was: "
+                f"{str(raw).strip()[:200] or '(empty)'}"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise ModemReadError(
+                f"ubus call {service} {method} returned a "
+                f"{type(parsed).__name__}, not an object"
+            )
+        return parsed
 
     def _modem_info(self) -> dict:
         """Return the single-modem info dict, handling both ubus reply shapes.

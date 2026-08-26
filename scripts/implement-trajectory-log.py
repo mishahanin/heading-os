@@ -52,12 +52,17 @@ Four subcommands:
       run (before any commit / git pull) and degrades to a no-op when git_head
       is "unknown" or git is unavailable. Plus a validation-gate check
       (advisory): a completed run with zero validation_check events is flagged so
-      Phase 3 gates are logged as structured events, not only prose. Plus three
+      Phase 3 gates are logged as structured events, not only prose. Plus two
       plan-derived advisories (silent when the plan cannot be located): a file
       listed under a plan step's "Files affected" that appears in no step's
-      files_affected; a plan whose Implementation Notes declare more deviations
-      than the trajectory carries as events; a deviation emitted before its own
-      step's step_start. Prints defects and exits 1 on any
+      files_affected; and a plan whose Implementation Notes declare more
+      deviations than the trajectory carries as events. Plus one ordering
+      advisory computed purely from the JSONL, which therefore fires whether or
+      not the plan can be located: a deviation emitted before its own step's
+      step_start. Until 2026-08-25 that third check was listed among the
+      plan-derived ones and described as silent without a plan, which sent a
+      reader looking for its evidence in a file it never opens, and promised a
+      suppression the code does not perform. Prints defects and exits 1 on any
       defect, 0 when clean. Read-only; never mutates the audit record.
       /implement calls this in Phase 5 after run_end (advisory).
 
@@ -100,6 +105,9 @@ Exit codes:
   4  JSON parse error on supplied data
   5  sequencing violation (step_start opened while another step is open
      outside a parallel wave, or step_end for an unopened step)
+
+Tests: tests/test_implement_trajectory_log.py,
+       tests/test_an_import_that_died_on_the_skip_it_promised.py
 """
 from __future__ import annotations
 
@@ -471,6 +479,23 @@ def _read_events(path: Path) -> list[dict]:
     return events
 
 
+def _step_sort_key(step: Any) -> tuple:
+    """A total ordering over step numbers of ANY type.
+
+    Step numbers reach this set straight off an event payload, and a
+    `--data-*` payload is only checked for being a JSON object -- so a string
+    or a null step lands here beside the ints. `sorted()` on that mixture
+    raises TypeError, which it did inside the branch whose only job is to
+    print a clean rejection and exit 5.
+
+    Ints keep their numeric order (10 after 2, which sorting by `repr` alone
+    would not give); anything else sorts after them, by `repr`.
+    """
+    if isinstance(step, int):
+        return (0, step, "")
+    return (1, 0, repr(step))
+
+
 def _open_state(events: list[dict]) -> tuple[set, bool]:
     """Reduce a trajectory's events to (open_step_numbers, in_open_parallel_wave).
 
@@ -507,8 +532,14 @@ def cmd_new(args: argparse.Namespace) -> int:
     if not args.plan:
         print(f"{RED}ERROR: --new requires --plan <plan-path>{RESET}", file=sys.stderr)
         return 2
-    run_id = mint_unique_run_id(args.plan)
+    # Minting is INSIDE the try. It creates the trajectory directory and the
+    # reserved file, so it is where a read-only outputs tree, a full disk or a
+    # quota is met first -- and every one of those escaped as a traceback with
+    # interpreter exit 1, while this file's own "Exit codes" section promises 3
+    # for a filesystem error. So did the FileExistsError raised after the
+    # collision attempts run out.
     try:
+        run_id = mint_unique_run_id(args.plan)
         path = write_run_start(run_id, args.plan)
     except FileExistsError as exc:
         print(f"{RED}ERROR: {exc}{RESET}", file=sys.stderr)
@@ -581,7 +612,8 @@ def cmd_event(args: argparse.Namespace) -> int:
             open_steps, parallel_open = _open_state(_read_events(path))
             if args.type == "step_start" and open_steps and not parallel_open:
                 print(f"{RED}ERROR: sequencing violation: cannot open step "
-                      f"{step_number} while step(s) {sorted(open_steps)} are still "
+                      f"{step_number} while step(s) "
+                      f"{sorted(open_steps, key=_step_sort_key)} are still "
                       f"open. Emit their step_end first, or open a parallel "
                       f"wave_start for legitimate interleaving.{RESET}",
                       file=sys.stderr)
@@ -784,10 +816,13 @@ def verify_trajectory(run_id: str) -> list[str]:
     the step-0 plan-load marker) sits outside every wave bracket; every
     files_affected entry is a literal path (no glob/shorthand/count token).
 
-    Plus three advisory checks that report without asserting a violation:
+    Plus four advisory checks that report without asserting a violation:
     a wave_start whose payload omits step_count/parallel; a timestamp that
-    goes backwards (clock or emission skew, not a sequencing fault); and the
-    validation-gate check below.
+    goes backwards (clock or emission skew, not a sequencing fault); a
+    deviation for step N emitted before that step's step_start (wave-scoped
+    deviations exempt, since a deferred wave never opens a step at all); and
+    the validation-gate check below. All four read the JSONL only, so none of
+    them depends on the plan file being locatable.
 
     Plus a run-level files reconciliation (advisory): the current engine
     working tree is diffed against run_start.git_head, and any changed engine
@@ -1010,7 +1045,17 @@ def verify_trajectory(run_id: str) -> list[str]:
                 if e.get("event_type") == "step_end":
                     for entry in (e.get("payload") or {}).get("files_affected") or []:
                         recorded.add(str(entry))
-            for path_str in sorted(changed - recorded):
+            # `_covers`, not a raw set difference. git prints repo-relative
+            # POSIX paths; a recorded path may legitimately spell the same file
+            # with a tree prefix ("engine/scripts/foo.py", an absolute root),
+            # which `_repo_relative` exists to strip. Comparing the two sides
+            # verbatim flagged correctly-recorded files as unrecorded, and the
+            # plan reconciliation ten lines away already normalised both sides
+            # -- two reconciliations in one function matching the same data by
+            # different rules.
+            for path_str in sorted(changed):
+                if any(_covers(r, path_str) for r in recorded):
+                    continue
                 defects.append(
                     f"(advisory) {path_str} was modified in this run but "
                     f"appears in no step's files_affected")

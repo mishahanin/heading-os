@@ -150,10 +150,26 @@ def main() -> int:
     body = "\n\n".join(sections)
     closing = AUTO_CLOSING if auto else MANUAL_CLOSING
 
+    # "saved by this session" is only true when the session HAS an id. With
+    # neither a payload `session_id` nor `CLAUDE_CODE_SESSION_ID` - the hook's
+    # own documented degraded path - `CP.session_id` returns the shared sentinel
+    # and `.latest/session/` becomes a cross-session bucket, so session A's
+    # handoff would be injected into session B under an authorship claim the
+    # method never established. That is the sentence the 2026-08-16 change
+    # removed, reappearing one slug down.
+    if CP.session_id_is_known(payload):
+        provenance = (f"A handoff saved by this session ({slug}) was found in the "
+                      f"handoff archive.")
+    else:
+        provenance = (f"A handoff was found under the shared pointer slug "
+                      f"'{slug}'. This session reported no id, so that bucket "
+                      f"holds every id-less session's handoff and this one may "
+                      f"belong to a DIFFERENT session.")
+
     print(
         f"""# Auto-injected handoff
 
-A handoff saved by this session ({slug}) was found in the handoff archive. Check
+{provenance} Check
 its Generated timestamp before trusting it over the repository.
 
 {body}

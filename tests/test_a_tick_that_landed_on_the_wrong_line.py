@@ -277,6 +277,121 @@ def test_apply_gates_the_fcntl_import_on_posix():
     )
 
 
+def test_the_guard_can_actually_run_because_os_is_imported():
+    """The test above is a STRING MATCH, and a string match cannot see a missing
+    import. On 2026-08-24 commit 76c63fd added `if os.name == "posix":` with no
+    `import os` in the module; this file's assertion passed, the whole suite
+    passed, and the update-manager systemd timer failed at 07:00 the next
+    morning with `NameError: name 'os' is not defined`, taking the auto-apply
+    tier down for a full cycle.
+
+    Asked of the MODULE OBJECT, not of its text, so the name has to exist.
+    """
+    assert hasattr(um, "os"), (
+        "scripts/update-manager.py references os.name but never imports os, so "
+        "every `apply` raises NameError before it reaches the lock"
+    )
+    assert um.os.name in ("posix", "nt")
+
+
+def test_a_platform_without_fcntl_degrades_instead_of_raising(tmp_path, monkeypatch, capsys):
+    """The comment promised a named warning and the code delivered an
+    AttributeError: `except BlockingIOError` does not catch `None.flock`, so on
+    a non-posix host the command was lost with a traceback - the exact outcome
+    the lazy import exists to prevent. It was unreachable only because the
+    NameError above fired first, so fixing that one made this one live.
+    """
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"components": {}}), encoding="utf-8")
+    monkeypatch.setattr(um, "state_path", lambda: state)
+    monkeypatch.setattr(um, "_import_fcntl", lambda: None)
+    monkeypatch.setattr(um, "load_registry", lambda path: [])
+    monkeypatch.setattr(um, "registry_path", lambda: tmp_path / "registry.yaml")
+
+    applied = {}
+
+    def _fake_apply(args, registry, path):
+        applied["ran"] = True
+        return 0
+
+    import scripts.utils.update_apply as ua
+    monkeypatch.setattr(ua, "cmd_apply", _fake_apply)
+
+    assert um.main(["apply", "--auto"]) == 0
+    assert applied.get("ran") is True, "the command was lost instead of degrading"
+    assert "no advisory lock on this platform" in capsys.readouterr().out
+
+
+def test_the_helper_returns_a_real_module_or_nothing_at_all():
+    """`None` is the sentinel the branch below tests, so a truthy stand-in is
+    worse than useless: `if fcntl is None` would be False and `fcntl.flock`
+    would then raise AttributeError on whatever was returned - the traceback
+    the degraded path exists to prevent, one step later.
+
+    The non-posix arm cannot be exercised here (patching `os.name` makes
+    pathlib build a WindowsPath and the interpreter refuses), so it is read
+    from the source. The posix arm is exercised for real.
+    """
+    import ast
+    src = (ROOT / "scripts" / "update-manager.py").read_text(encoding="utf-8")
+    fn = next(n for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.FunctionDef) and n.name == "_import_fcntl")
+    returns = [n.value for n in ast.walk(fn) if isinstance(n, ast.Return)]
+    constants = [r for r in returns if isinstance(r, ast.Constant)]
+    assert constants, "the no-lock arm no longer returns a constant"
+    assert all(c.value is None for c in constants), (
+        "the no-lock arm returns something truthy, so the None check below "
+        "stops firing")
+
+    got = um._import_fcntl()
+    assert got is None or hasattr(got, "flock")
+
+
+def test_a_busy_lock_is_skipped_not_crashed(tmp_path, monkeypatch, capsys):
+    """`flock` raises BlockingIOError when another apply holds the lock, and
+    that is a SKIP, not an error: two interleaved applies would snapshot and
+    swap the same component. Catching a different exception class turns the
+    skip back into a traceback."""
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"components": {}}), encoding="utf-8")
+    monkeypatch.setattr(um, "state_path", lambda: state)
+    monkeypatch.setattr(um, "load_registry", lambda path: [])
+    monkeypatch.setattr(um, "registry_path", lambda: tmp_path / "registry.yaml")
+
+    class _Busy:
+        LOCK_EX = 2
+        LOCK_NB = 4
+
+        @staticmethod
+        def flock(fh, flags):
+            raise BlockingIOError(11, "Resource temporarily unavailable")
+
+    monkeypatch.setattr(um, "_import_fcntl", lambda: _Busy)
+
+    import scripts.utils.update_apply as ua
+    monkeypatch.setattr(ua, "cmd_apply", lambda *a, **k: pytest.fail(
+        "a second apply ran while the lock was held"))
+
+    assert um.main(["apply", "--auto"]) == 0
+    assert "another apply is in progress" in capsys.readouterr().out
+
+
+def test_the_lock_is_still_taken_on_this_platform(tmp_path, monkeypatch, capsys):
+    """The degradation must not have become the normal path."""
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"components": {}}), encoding="utf-8")
+    monkeypatch.setattr(um, "state_path", lambda: state)
+    monkeypatch.setattr(um, "load_registry", lambda path: [])
+    monkeypatch.setattr(um, "registry_path", lambda: tmp_path / "registry.yaml")
+
+    import scripts.utils.update_apply as ua
+    monkeypatch.setattr(ua, "cmd_apply", lambda args, registry, path: 0)
+
+    assert um.main(["apply", "--auto"]) == 0
+    assert "no advisory lock" not in capsys.readouterr().out
+    assert um._import_fcntl() is not None, "posix must still get a real lock"
+
+
 # ============================================================
 # sync-exchange -- the delete cap, and the blank query
 # ============================================================

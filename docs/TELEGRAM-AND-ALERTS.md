@@ -181,8 +181,9 @@ push-notifies, because Telegram treats a bot message like a message from any oth
 contact.
 
 1. In Telegram, open a chat with **@BotFather** (the official bot-maker).
-2. Send `/newbot`. Answer its two questions: a display name (for example `HEADING OS`),
-   then a username that must end in `bot` (for example `headingos_bot`).
+2. Send `/newbot`. Answer its two questions. First a display name (for example
+   `HEADING OS`). Then a username that must end in `bot` (for example
+   `headingos_bot`).
 3. @BotFather replies with a **token**, a line like `123456789:AAE...`. Treat it like a
    password.
 4. Put the token in `.env`:
@@ -191,9 +192,9 @@ contact.
    TELEGRAM_NOTIFY_BOT_TOKEN=123456789:AAE-your-token-here
    ```
 
-5. **Add the bot to your alerts channel** (the same one from section 5/6 - no new channel
-   needed) as an administrator, or it cannot post there. Open the channel, Administrators,
-   Add admin, search your bot's username, add it.
+5. **Add the bot to your alerts channel** as an administrator, or it cannot post
+   there. Use the same channel from section 5/6; you need no new channel. Open the
+   channel, Administrators, Add admin, search your bot's username, add it.
 
    *Direct-message alternative:* instead of a channel you can have the bot message you
    privately. Open the bot's chat and press **Start** once. A bot cannot DM you until you
@@ -254,7 +255,7 @@ capture channel. Three examples: "follow up with Alex on the ISO cert", "book th
 dentist", "read that DPI paper". Later you run `/viraid` in a Claude Code session and it:
 
 1. reads the new messages from the channel,
-2. sorts each one into a type (a task, a calendar item, a CRM note, a research item, or a
+2. sorts each one into a type (task, calendar item, CRM note, research item, or
    plain note),
 3. adds workspace context (who Alex is, whether you are free at that time),
 4. proposes what to do with each,

@@ -34,6 +34,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import yaml
+
 # ============================================================
 # Severity + thresholds
 # ============================================================
@@ -84,37 +86,59 @@ OLLAMA_HOST = "http://localhost:11434"
 # Tier-B: backup (git, both repos)
 # ============================================================
 
-def classify_backup(uncommitted: int, oldest_age_hours: float, ahead: int) -> dict:
+def classify_backup(uncommitted: int, oldest_age_hours: float | None, ahead: int,
+                    unreadable: int = 0) -> dict:
     """Pure: turn measured git primitives into the backup signal dict.
 
     due when uncommitted work has sat >= BACKUP_UNCOMMITTED_HOURS, OR any commit
     is unpushed (ahead > 0). Severity escalates with the age of the oldest
     uncommitted change; >= BACKUP_CRITICAL_HOURS is the crunch-piercing floor.
+
+    Two arguments carry "I could not measure this", and both escalate rather
+    than reassure:
+
+    `oldest_age_hours=None` means dirty paths exist and NONE of them could be
+    stat'd. That is the ordinary case for deletions: `git status --porcelain`
+    lists " D f1.txt" and the file is gone, so the old code skipped every entry,
+    left `oldest_mtime` at None and reported 0.0 hours. Three files deleted a
+    week ago read as "3 uncommitted (0h old)" and not due, because due needs an
+    age >= BACKUP_UNCOMMITTED_HOURS. Measured 2026-08-26.
+
+    `unreadable` counts repos whose `git status` itself failed. That returned
+    (0, 0.0) and summed into a clean total, so a repo git could not read at all
+    reported as a repo with nothing to back up.
     """
-    due = (uncommitted > 0 and oldest_age_hours >= BACKUP_UNCOMMITTED_HOURS) or ahead > 0
-    if uncommitted > 0 and oldest_age_hours >= BACKUP_CRITICAL_HOURS:
+    age_known = oldest_age_hours is not None
+    age = oldest_age_hours if age_known else 0.0
+    stale = uncommitted > 0 and (not age_known or age >= BACKUP_UNCOMMITTED_HOURS)
+    due = stale or ahead > 0 or unreadable > 0
+    if uncommitted > 0 and age_known and age >= BACKUP_CRITICAL_HOURS:
         severity = "critical"
-    elif uncommitted > 0 and oldest_age_hours >= BACKUP_HIGH_HOURS:
+    elif (unreadable > 0
+          or (uncommitted > 0 and not age_known)
+          or (uncommitted > 0 and age >= BACKUP_HIGH_HOURS)):
         severity = "high"
     elif due:
         severity = "warn"
     else:
         severity = "ok"
+    age_text = f"{age:.0f}h old" if age_known else "age unknown"
+    summary = (f"backup: {uncommitted} uncommitted ({age_text}), {ahead} unpushed")
+    if unreadable:
+        summary += f", {unreadable} repo(s) git could not read"
     return {
         "key": "backup",
         "value": {
             "uncommitted": uncommitted,
-            "oldest_age_hours": round(oldest_age_hours, 1),
+            "oldest_age_hours": round(age, 1) if age_known else None,
             "ahead": ahead,
+            "unreadable": unreadable,
         },
         "threshold": BACKUP_UNCOMMITTED_HOURS,
         "due": due,
         "severity": severity,
         "tier": "B",
-        "summary": (
-            f"backup: {uncommitted} uncommitted "
-            f"({oldest_age_hours:.0f}h old), {ahead} unpushed"
-        ),
+        "summary": summary,
     }
 
 
@@ -133,14 +157,27 @@ def _run_git(repo: Path, args: list[str]) -> tuple[int, str]:
     return proc.returncode, proc.stdout
 
 
-def _repo_uncommitted(repo: Path) -> tuple[int, float]:
+def _repo_uncommitted(repo: Path) -> tuple[int | None, float | None]:
     """Return (uncommitted_count, oldest_age_hours) for one git repo.
 
+    Two None values, and each means something different from zero:
+
+    - count None: `git status` itself failed, so nothing was measured. This used
+      to be folded in with "clean" and returned (0, 0.0), which is how a repo
+      with an unreachable gitdir reported "0 uncommitted". Reproduced 2026-08-26
+      with a `.git` file pointing at a directory that does not exist: git exits
+      128 and prints nothing on stdout.
+    - age None: dirty paths exist and none of them could be stat'd. Deletions
+      are the common case, and reporting 0.0 hours for them says "just now",
+      which is the reading that keeps the signal quiet.
+
     oldest_age_hours = now minus the OLDEST mtime among the dirty paths (how long
-    work has been sitting). Paths that cannot be stat'd (deletions) are skipped.
+    work has been sitting).
     """
     rc, out = _run_git(repo, ["status", "--porcelain"])
-    if rc != 0 or not out.strip():
+    if rc != 0:
+        return None, None
+    if not out.strip():
         return 0, 0.0
     entries = [ln for ln in out.splitlines() if ln.strip()]
     now = time.time()
@@ -157,7 +194,7 @@ def _repo_uncommitted(repo: Path) -> tuple[int, float]:
             continue
         if oldest_mtime is None or mt < oldest_mtime:
             oldest_mtime = mt
-    age_hours = (now - oldest_mtime) / 3600.0 if oldest_mtime is not None else 0.0
+    age_hours = (now - oldest_mtime) / 3600.0 if oldest_mtime is not None else None
     return len(entries), age_hours
 
 
@@ -184,16 +221,26 @@ def backup_state(engine_root: Path, data_root: Path) -> dict:
     if data_root.resolve() != engine_root.resolve():
         repos.append(data_root)
     total_uncommitted = 0
-    oldest_age = 0.0
+    oldest_age: float | None = 0.0
     total_ahead = 0
+    unreadable = 0
     for repo in repos:
         if not (repo / ".git").exists():
             continue
         n, age = _repo_uncommitted(repo)
+        if n is None:
+            # git could not read this repo at all. Counted and reported; the old
+            # code summed its (0, 0.0) into the totals and said nothing.
+            unreadable += 1
+            total_ahead += _repo_ahead(repo)
+            continue
         total_uncommitted += n
-        oldest_age = max(oldest_age, age)
+        if age is None:
+            oldest_age = None  # unknown wins: it can only be older, never newer
+        elif oldest_age is not None:
+            oldest_age = max(oldest_age, age)
         total_ahead += _repo_ahead(repo)
-    return classify_backup(total_uncommitted, oldest_age, total_ahead)
+    return classify_backup(total_uncommitted, oldest_age, total_ahead, unreadable)
 
 
 # ============================================================
@@ -421,14 +468,27 @@ def queue_state(data_root: Path) -> dict:
     ready = failed = 0
     try:
         data = json.loads(qpath.read_text(encoding="utf-8"))
-        for c in data.get("actions", []):
-            status = c.get("status")
-            if status == "send_failed":
-                failed += 1
-            elif status in ("pending", "approved") and c.get("draft_status") == "ready_for_review":
-                ready += 1
     except (OSError, json.JSONDecodeError):
-        pass
+        return classify_queue(ready, failed)
+
+    # Valid JSON of the WRONG SHAPE was not handled, and only OSError and
+    # JSONDecodeError were caught. Five payloads written to the real queue path
+    # each took the signal down with an uncaught exception: `[]`, `null` and
+    # `"str"` raised AttributeError on `.get`; `{"actions": ["oops"]}` raised
+    # AttributeError on a string card; `{"actions": null}` raised TypeError on
+    # iteration. Measured 2026-08-26. This runs inside the ops radar, so one
+    # malformed queue file took out every other signal beside it.
+    actions = data.get("actions") if isinstance(data, dict) else None
+    if not isinstance(actions, list):
+        return classify_queue(ready, failed)
+    for c in actions:
+        if not isinstance(c, dict):
+            continue
+        status = c.get("status")
+        if status == "send_failed":
+            failed += 1
+        elif status in ("pending", "approved") and c.get("draft_status") == "ready_for_review":
+            ready += 1
     return classify_queue(ready, failed)
 
 
@@ -446,7 +506,11 @@ def odin_cadence_state(engine_root: Path) -> dict:
                 timeout=60,
             )
             if proc.returncode == 0 and proc.stdout.strip():
-                cadence = json.loads(proc.stdout)
+                parsed = json.loads(proc.stdout)
+                # A helper that prints `null`, a list or a number is valid JSON
+                # and is not a cadence report. Without this, `classify_odin`
+                # raised AttributeError on `.get` and took the radar with it.
+                cadence = parsed if isinstance(parsed, dict) else {}
         except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
             cadence = {}
     return classify_odin(cadence)
@@ -718,19 +782,88 @@ def classify_index(build_age_days: int | None, sources_newer: bool) -> dict:
     }
 
 
-# Source dirs whose *.md mtime indicates "content changed since last build".
-# Relative to the DATA root (content store) and ENGINE root (code store).
-_DATA_SOURCE_DIRS = ("knowledge", "threads", "context")
-_ENGINE_SOURCE_DIRS = (".claude/skills", ".claude/rules")
+# Fallback source dirs, used ONLY when the indexer's own config cannot be read.
+#
+# These three were the whole watch list, hand-written beside an indexer that
+# ingests fourteen layers. Everything else it indexes went unwatched: a new CRM
+# contact, a new auto-memory, a new deliverable under outputs/, a new reference
+# file, a new plan, a new linkedin archive entry, a new datastore extract, a new
+# chronicle entry, a new skill or rule. Each was indexed and none of them could
+# ever make this signal say the index was stale. Measured 2026-08-26 against a
+# synthetic data root: four files written after the build (crm/contacts/,
+# auto-memory/, outputs/research/, reference/) left `sources_newer` False and
+# `severity` ok; one file under knowledge/ flipped it. The watch list is now
+# DERIVED from the same config the builder reads, so a layer added there is
+# watched here without anyone remembering to.
+_FALLBACK_DATA_DIRS = ("knowledge", "threads", "context")
+_FALLBACK_ENGINE_DIRS = (".claude/skills", ".claude/rules")
+
+_INDEX_CONFIG_REL = "config/memory-index.yaml"
 
 
-def _newest_mtime(base: Path, rel_dirs: tuple[str, ...]) -> float | None:
+def _expand_braces(pattern: str) -> list[str]:
+    """Expand one `{a,b}` group at a time. pathlib globbing has no braces."""
+    start = pattern.find("{")
+    if start == -1:
+        return [pattern]
+    end = pattern.find("}", start)
+    if end == -1:
+        return [pattern]
+    pre, body, post = pattern[:start], pattern[start + 1:end], pattern[end + 1:]
+    out = []
+    for option in body.split(","):
+        out.extend(_expand_braces(pre + option.strip() + post))
+    return out
+
+
+def _index_source_globs(engine_root: Path) -> list[str] | None:
+    """Every `glob:` the indexer's layer config declares, braces expanded.
+
+    None when the config cannot be read or declares no globs - the callers below
+    then fall back to the hand-written dirs AND say they narrowed, rather than
+    reporting a full sweep they did not run.
+    """
+    path = Path(engine_root) / _INDEX_CONFIG_REL
+    try:
+        cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+    patterns: list[str] = []
+    for layer in cfg.get("layers", []) or []:
+        # A commit corpus layer carries `source: git-log` and no glob; the
+        # builder reads git, so there is no file mtime to compare against.
+        glob = (layer or {}).get("glob")
+        if isinstance(glob, str) and glob:
+            patterns.extend(_expand_braces(glob))
+    return patterns or None
+
+
+def _newest_mtime(base: Path, rel_dirs) -> float | None:
     newest = None
     for rel in rel_dirs:
         d = base / rel
         if not d.is_dir():
             continue
         for p in d.rglob("*.md"):
+            try:
+                mt = p.stat().st_mtime
+            except OSError:
+                continue
+            if newest is None or mt > newest:
+                newest = mt
+    return newest
+
+
+def _newest_by_glob(base: Path, patterns) -> float | None:
+    """Newest mtime among the files the indexer would actually ingest."""
+    newest = None
+    base = Path(base)
+    for pattern in patterns:
+        try:
+            matches = base.glob(pattern)
+        except (OSError, ValueError):
+            continue
+        for p in matches:
             try:
                 mt = p.stat().st_mtime
             except OSError:
@@ -754,8 +887,21 @@ def index_freshness_state(engine_root: Path, data_root: Path, now: float | None 
     except OSError:
         return classify_index(None, False)
     build_age_days = int((now - build_mtime) // 86400)
-    newest_data = _newest_mtime(data_root, _DATA_SOURCE_DIRS)
-    newest_engine = _newest_mtime(engine_root, _ENGINE_SOURCE_DIRS)
+    patterns = _index_source_globs(engine_root)
+    if patterns is None:
+        # Say what was NOT swept. A narrowed check that prints like a complete
+        # one is the defect this whole function was rewritten for.
+        print(f"[ops_signals] {_INDEX_CONFIG_REL} unreadable; the staleness check "
+              f"covers only {', '.join(_FALLBACK_DATA_DIRS + _FALLBACK_ENGINE_DIRS)}",
+              file=sys.stderr)
+        newest_data = _newest_mtime(data_root, _FALLBACK_DATA_DIRS)
+        newest_engine = _newest_mtime(engine_root, _FALLBACK_ENGINE_DIRS)
+    else:
+        # Each glob is tried against BOTH roots: the config does not say which
+        # store a layer lives in, and a pattern that matches nothing under one
+        # root simply yields nothing.
+        newest_data = _newest_by_glob(data_root, patterns)
+        newest_engine = _newest_by_glob(engine_root, patterns)
     newest_source = max((m for m in (newest_data, newest_engine) if m is not None), default=None)
     sources_newer = newest_source is not None and newest_source > build_mtime
     return classify_index(build_age_days, sources_newer)
@@ -854,7 +1000,14 @@ def classify_router_accuracy(latest: dict | None, baseline: dict | None) -> dict
 
 
 def _read_trend_records(trend_path: Path, limit: int) -> list[dict]:
-    """Return up to the last `limit` parsed JSONL records; [] if absent/unreadable."""
+    """Return up to the last `limit` parsed JSONL OBJECTS; [] if absent/unreadable.
+
+    Non-object lines are dropped. `123` and `"abc"` are valid JSON, so they used
+    to survive the JSONDecodeError filter and reach every `.get` downstream:
+    `router_accuracy_state` raised AttributeError on an int. Measured
+    2026-08-26. A trend file is appended to by a nightly job, and a truncated or
+    interleaved write is exactly how a stray scalar line gets there.
+    """
     try:
         lines = trend_path.read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -865,9 +1018,11 @@ def _read_trend_records(trend_path: Path, limit: int) -> list[dict]:
         if not line:
             continue
         try:
-            records.append(json.loads(line))
+            parsed = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if isinstance(parsed, dict):
+            records.append(parsed)
     return records
 
 

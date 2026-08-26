@@ -215,7 +215,7 @@ After Phase 2 the skill EXITS. No Phase 3 gate.
 Whatever the user replies next is normal-posture conversation:
 
 - Point numbers (e.g., `address 1, 3`, `fix point 2`, `fold the BLOCKERs
-  into the current draft`) -> handle as a normal request using the
+  into the current draft`) -> handle as a normal request. Use the
   critique context still in conversation history.
 - Unrelated new request -> respond to the new request normally.
 - `force N` (the honesty-floor escape hatch) -> produce the additional

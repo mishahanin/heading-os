@@ -29,10 +29,14 @@ Environment:
 
 Cache:
   Results cached at outputs/browser/firecrawl-cache/ to avoid re-spending credits.
-  Default TTLs: scrape 24h, crawl 48h, extract 72h, search 6h, map 168h.
+  Default TTLs: scrape 24h, batch 24h, crawl 48h, extract 72h, search 6h,
+  map 168h. All six, matching DEFAULT_TTLS; the list reads as exhaustive and
+  used to name five, leaving an operator tuning cache behaviour from this
+  header with no documented TTL for batch.
   Use --no-cache to bypass, --clear-cache to wipe.
 
 Tests: tests/test_a_cache_key_that_forgot_what_was_asked_for.py
+       tests/test_a_bundle_that_never_said_the_keys_were_live.py
 """
 
 import argparse
@@ -331,13 +335,24 @@ def format_output(content, output_format="markdown"):
 # TTL, and anything parsing the output broke depending on cache state.
 
 def render_crawl(crawl_data, output_format):
+    """Render a crawl wrapper in the format that was ASKED FOR.
+
+    `output_format` was read for "json" and ignored otherwise, so `--format
+    html` preferred markdown on every page. `cmd_crawl` does request html from
+    Firecrawl for that flag, so the html was fetched, paid for, and thrown away
+    here. `format_output` - which the scrape and batch paths use - has honoured
+    "html" all along; this renderer was the odd one out.
+    """
     if output_format == "json":
         return json.dumps(crawl_data, indent=2, ensure_ascii=False)
     parts = []
     for doc in crawl_data.get("documents", []):
         meta = doc.get("metadata") or {}
         page_url = meta.get("source_url") or meta.get("url") or "unknown"
-        content = doc.get("markdown") or doc.get("html") or ""
+        if output_format == "html":
+            content = doc.get("html") or doc.get("markdown") or ""
+        else:
+            content = doc.get("markdown") or doc.get("html") or ""
         parts.append(f"--- {page_url} ---\n{content}")
     return "\n\n".join(parts)
 
@@ -463,23 +478,53 @@ def cmd_batch(args):
 
         # batch_scrape returns a BatchScrapeJob with .data list
         docs = []
+        shape_ok = True
         if hasattr(batch_result, "data"):
             docs = batch_result.data
         elif isinstance(batch_result, list):
             docs = batch_result
         else:
             # Same defect as the crawl path: an unrecognised shape printed
-            # `--- <url> ---\n{}` for every requested URL and exited 0.
+            # `--- <url> ---\n{}` for every requested URL and exited 0. The
+            # stderr line below was the whole of that "fix" - stdout still
+            # carried the garbage the comment called the defect, and the
+            # success credit line below still claimed N URLs were scraped.
+            shape_ok = False
             print(f"[error] batch_scrape returned an unexpected shape "
                   f"({type(batch_result).__name__} with no .data); "
                   f"{len(urls_to_fetch)} URL(s) produced nothing", file=sys.stderr)
 
-        credits = len(urls_to_fetch)
-        print(f"[{credits} credits] Batch scraped {len(urls_to_fetch)} URLs", file=sys.stderr)
+        if shape_ok:
+            credits = len(urls_to_fetch)
+            print(f"[{credits} credits] Batch scraped {len(urls_to_fetch)} URLs",
+                  file=sys.stderr)
 
+        # Firecrawl answers a batch in request order, so POSITION is the mapping
+        # from a document back to the URL the operator asked for. Keying on the
+        # document's own `metadata.source_url` broke every redirecting host:
+        # `https://example.com` came back as `https://www.example.com/`, the
+        # output loop below looked up the REQUESTED url, found nothing, and
+        # printed the literal `{}` for a page that had been fetched and paid
+        # for. The cache write inherited the same wrong key, so a later `scrape`
+        # of the requested URL missed too.
+        aligned = len(docs) == len(urls_to_fetch)
+        if docs and not aligned:
+            print(f"[warn] batch returned {len(docs)} document(s) for "
+                  f"{len(urls_to_fetch)} requested URL(s); position cannot be "
+                  f"trusted, falling back to the URL each document reports",
+                  file=sys.stderr)
         for i, doc in enumerate(docs):
             doc_dict = document_to_dict(doc)
-            url = doc_dict.get("metadata", {}).get("source_url") or doc_dict.get("metadata", {}).get("url") or (urls_to_fetch[i] if i < len(urls_to_fetch) else f"url_{i}")
+            if aligned:
+                url = urls_to_fetch[i]
+            else:
+                # `.get("metadata", {})` substitutes only when the KEY IS
+                # ABSENT. `document_to_dict` passes a raw dict through
+                # untouched, so a `"metadata": null` reached `None.get(...)`
+                # and killed the whole batch after the credits were spent.
+                # Every other renderer in this file already uses `or {}`.
+                meta = doc_dict.get("metadata") or {}
+                url = meta.get("source_url") or meta.get("url") or f"url_{i}"
             results[url] = doc_dict
             if not args.no_cache:
                 write_cache(scrape_cache_key(url, formats_list), doc_dict,
@@ -487,12 +532,24 @@ def cmd_batch(args):
 
     # Output all results
     output_parts = []
+    missing = []
     for url in urls:
-        doc = results.get(url, {})
-        content = format_output(doc, args.format)
+        doc = results.get(url)
+        if doc is None:
+            # NOT `{}`. `format_output({})` renders the literal two characters
+            # "{}", which reads downstream as a document rather than as an
+            # absence.
+            missing.append(url)
+            content = "(no document was returned for this URL)"
+        else:
+            content = format_output(doc, args.format)
         output_parts.append(f"--- {url} ---\n{content}")
 
-    return write_output("\n\n".join(output_parts), args.output)
+    write_output("\n\n".join(output_parts), args.output)
+    if missing:
+        print(f"[error] {len(missing)} of {len(urls)} URL(s) produced no document: "
+              f"{', '.join(missing)}", file=sys.stderr)
+        sys.exit(1)
 
 
 # ============================================================
@@ -503,7 +560,15 @@ def cmd_crawl(args):
     url = args.target
     limit = args.limit if args.limit is not None else 25
     ttl = args.cache_ttl if args.cache_ttl is not None else DEFAULT_TTLS["crawl"]
-    cache_key = get_cache_key(f"{url}|limit={limit}|inc={args.include}|exc={args.exclude}", "crawl")
+    # The formats list is built BEFORE the key, and is part of it. `--format
+    # html` changes `scrape_options.formats`, so it changes what comes back -
+    # and the key did not carry it. A plain `crawl URL` cached markdown-only
+    # documents and a `crawl URL --format html` for the next 48 hours was served
+    # that entry, printed `[cache hit]`, and never fetched any html.
+    formats_list = ["markdown", "html"] if args.format == "html" else ["markdown"]
+    cache_key = get_cache_key(
+        f"{url}|limit={limit}|inc={args.include}|exc={args.exclude}"
+        f"|formats={','.join(sorted(formats_list))}", "crawl")
 
     if not args.no_cache:
         cached = check_cache(cache_key, ttl)
@@ -518,9 +583,6 @@ def cmd_crawl(args):
     if args.exclude:
         kwargs["exclude_paths"] = args.exclude.split("|")
 
-    formats_list = ["markdown"]
-    if args.format == "html":
-        formats_list = ["markdown", "html"]
     kwargs["scrape_options"] = {"formats": formats_list}
 
     @_retry()
@@ -565,7 +627,12 @@ def cmd_map(args):
     """Discover all URLs on a site."""
     url = args.target
     ttl = args.cache_ttl if args.cache_ttl is not None else DEFAULT_TTLS["map"]
-    cache_key = get_cache_key(url, "map")
+    # Keyed on the limit as well as the URL. `--limit` is passed to the API and
+    # changes how many links come back, and the key was the URL alone: `map URL
+    # --limit 5` cached five links, and `map URL --limit 500` was served those
+    # five for the next SEVEN days. The 168h TTL makes map the worst place in
+    # this file to lose a key component.
+    cache_key = get_cache_key(f"{url}|limit={args.limit}", "map")
 
     if not args.no_cache:
         cached = check_cache(cache_key, ttl)
@@ -585,7 +652,16 @@ def cmd_map(args):
 
     # MapData has .links (list of SearchResult with url, title, description)
     links = []
-    if hasattr(result, "links"):
+    # The same guard cmd_crawl carries, for the same reason and with a worse
+    # blast radius: an SDK that renames `.links` leaves this list empty, and the
+    # empty payload used to be cached for 168 hours under "[1 credit] Mapped 0
+    # URLs". One release note would have made this command answer "0 URLs" for a
+    # week while charging for it.
+    shape_ok = hasattr(result, "links")
+    if not shape_ok:
+        print(f"[error] map returned an unexpected shape ({type(result).__name__} "
+              f"with no .links); not caching this result", file=sys.stderr)
+    if shape_ok:
         for link in result.links:
             if hasattr(link, "url"):
                 links.append({"url": link.url, "title": getattr(link, "title", None), "description": getattr(link, "description", None)})
@@ -601,7 +677,7 @@ def cmd_map(args):
     map_data = {"url": url, "links_found": len(links), "links": links}
     print(f"[1 credit] Mapped {len(links)} URLs from {url}", file=sys.stderr)
 
-    if not args.no_cache:
+    if not args.no_cache and shape_ok:
         write_cache(cache_key, map_data, "map", url, 1, ttl)
 
     return write_output(render_map(map_data, args.format), args.output)
@@ -631,7 +707,15 @@ def cmd_search(args):
 
     # SearchData has .web (list of SearchResultWeb or Document)
     results_list = []
-    if hasattr(result, "web") and result.web:
+    # Shape-guarded like crawl and map. An empty `.web` is a legitimate
+    # zero-result search and still caches; a MISSING `.web` is the SDK having
+    # moved, and that answer was being cached for six hours as though the web
+    # held nothing on the query.
+    shape_ok = hasattr(result, "web")
+    if not shape_ok:
+        print(f"[error] search returned an unexpected shape ({type(result).__name__} "
+              f"with no .web); not caching this result", file=sys.stderr)
+    elif result.web:
         for item in result.web:
             results_list.append(document_to_dict(item))
 
@@ -670,7 +754,7 @@ def cmd_search(args):
 
     print(f"[{credits} credits] Search returned {len(results_list)} results", file=sys.stderr)
 
-    if not args.no_cache:
+    if not args.no_cache and shape_ok:
         write_cache(cache_key, search_data, "search", query, credits, ttl)
 
     return write_output(render_search(search_data, args.format), args.output)

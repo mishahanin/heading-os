@@ -27,6 +27,13 @@ Exit codes:
     8 auto-commit failed
     9 git command timed out (30s)
    10 archive root directory missing
+   11 the tracked-check could not be answered (git failed and named no pathspec)
+
+`--commit` commits ONLY the two paths this run touched: the source `.md` (staged
+as a deletion by `git mv`) and the destination folder. It used to be a bare
+`git commit -m`, which sweeps in everything else the operator had staged.
+
+Tests: tests/test_a_commit_that_swept_up_the_bystanders.py
 """
 from __future__ import annotations
 
@@ -88,8 +95,22 @@ def find_latest(source_dir: Path, slug: str | None = None) -> Path | None:
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
+class GitProbeError(RuntimeError):
+    """`git ls-files` failed for a reason this module cannot interpret."""
+
+
 def find_untracked(paths: list[Path], ws: Path) -> list[Path]:
-    """Return paths that are NOT tracked by git. Single batched git invocation."""
+    """Return paths that are NOT tracked by git. Single batched git invocation.
+
+    Raises `GitProbeError` when git fails and its stderr names no pathspec.
+
+    It used to return `[]` there, which reads as "everything is tracked" -- so
+    `fatal: not a git repository`, a corrupt index, or the outside-repository
+    error the call site's own comment describes all made the tracked-check pass
+    silently. The run then walked into `git mv` and died with exit 4 ("git mv
+    failed"), pointing the operator at the wrong cause. An unreadable answer is
+    not a clean one.
+    """
     if not paths:
         return []
     result = _run_git(
@@ -104,6 +125,11 @@ def find_untracked(paths: list[Path], ws: Path) -> list[Path]:
         m = re.search(r"pathspec '([^']+)'", line)
         if m:
             flagged.add(m.group(1))
+    if not flagged:
+        raise GitProbeError(
+            f"git ls-files exited {result.returncode} and named no pathspec, so "
+            f"whether these files are tracked is unknown: "
+            f"{result.stderr.strip() or '(no stderr)'}")
     untracked = []
     for p in paths:
         s = str(p)
@@ -179,7 +205,11 @@ def main(argv: list[str] | None = None) -> int:
     # so they need not be tracked and must NOT be passed here: an out-of-repo image path
     # makes `git ls-files` fail with "outside repository", which the parser cannot read
     # and which would mask a genuinely untracked .md (turning exit 7 into a confusing 4).
-    untracked = find_untracked([md], data_root)
+    try:
+        untracked = find_untracked([md], data_root)
+    except GitProbeError as exc:
+        print(f"\nABORT: {exc}", file=sys.stderr)
+        return 11
     if untracked:
         print(
             f"\nABORT: {len(untracked)} source file(s) untracked - run `git add` first:",
@@ -223,7 +253,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.commit:
         msg = f"chore(linkedin-archive): {slug} -> {type_dir}/"
-        result = _run_git(["git", "commit", "-m", msg], data_root)
+        # PATHSPEC, not a bare commit. `git commit -m msg` with no paths commits
+        # everything currently staged in the repo, so any unrelated work the
+        # operator had staged before running this was silently folded into a
+        # commit labelled as a LinkedIn archive move. The two paths below are
+        # exactly what this run touched: the source `.md` (staged as a deletion
+        # by `git mv`) and the destination folder (the moved `.md` plus every
+        # `git add`-ed image).
+        result = _run_git(
+            ["git", "commit", "-m", msg, "--", str(md), str(dest_folder)],
+            data_root)
         if result.returncode != 0:
             print(f"WARN: auto-commit failed: {result.stderr.strip()}", file=sys.stderr)
             return 8

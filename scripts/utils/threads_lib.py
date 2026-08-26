@@ -320,6 +320,23 @@ def read_thread_hook(memory_md: Path, *, path: str) -> str:
     return QUIET_PREFIX_RE.sub("", m.group(1)).strip()
 
 
+def read_thread_quiet_marker(memory_md: Path, *, path: str) -> str | None:
+    """The `quiet until` date carried on the index line, or None if absent.
+
+    `read_thread_hook` deliberately strips the marker, because its callers
+    compare hook TEXT. That made a dropped marker invisible to `thread.py
+    reindex`, the one tool whose job is repairing index drift: the stripped
+    read always matched the composed hook, which never carries a marker, so a
+    reopened quiet thread stayed silently un-marked in the always-loaded index.
+    """
+    _, block, _ = _index_block(memory_md)
+    m = re.search(rf"- \[[^\]]+\]\({re.escape(path)}\) - ([^\n]*)", block, re.MULTILINE)
+    if not m:
+        raise ValueError(f"no thread line found for path '{path}'")
+    marker = re.match(r"\[quiet until (\d{4}-\d{2}-\d{2})\]", m.group(1).strip())
+    return marker.group(1) if marker else None
+
+
 def remove_thread_from_index(memory_md: Path, *, path: str) -> None:
     """Drop the line whose link target matches `path`."""
     before, block, after = _index_block(memory_md)

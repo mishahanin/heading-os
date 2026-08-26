@@ -28,8 +28,9 @@ Exit codes:
   4  corporate repo missing at ../heading-os-corporate/
   5  (retired) was: classification config missing — now resolved via routing-map; never emitted
   6  copy failed (filesystem error)
-  7  post-copy verify failed (one or more files do not match)
+  7  verify failed (a file differs, or is absent from the corporate repo)
   8  corporate .gitattributes lacks '* text=auto'
+  9  refused: untracked corporate-classified files in the source working tree
 """
 from __future__ import annotations
 
@@ -286,7 +287,11 @@ def mode_copy() -> int:
               file=sys.stderr)
         for p in untracked_corp[:10]:
             print(f"  ?? {p}", file=sys.stderr)
-        return 6
+        # 9, not 6. This is a working-tree hygiene REFUSAL: nothing was copied
+        # and nothing failed. Sharing 6 with the filesystem-error path meant the
+        # documented meaning ("copy failed") was false half the time it fired,
+        # and a caller could not tell "fix your tree" from "the disk broke".
+        return 9
 
     corporate_files = [p for p in tracked if get_routing_destination(p) == "corporate"]
     new_files, modified, _, missing = diff_corporate(corporate_files)
@@ -322,14 +327,22 @@ def mode_copy() -> int:
 def mode_verify() -> int:
     tracked = list_tracked_files()
     corporate_files = [p for p in tracked if get_routing_destination(p) == "corporate"]
-    _, modified, _, missing = diff_corporate(corporate_files)
-    if modified:
-        print(f"{RED}VERIFY FAILED: {len(modified)} file(s) differ between ceo-main "
-              f"and corporate.{RESET}", file=sys.stderr)
-        for p in modified[:20]:
-            print(f"  {p}", file=sys.stderr)
-        if len(modified) > 20:
-            print(f"  ... and {len(modified) - 20} more", file=sys.stderr)
+    new_files, modified, unchanged, missing = diff_corporate(corporate_files)
+    # `new_files` means "classified corporate, present in the source, ABSENT
+    # from the corporate repo" -- a file that never reached a single exec. It
+    # used to be discarded into `_`, so this gate, which /push-updates Phase 3
+    # runs immediately before the corporate commit, printed VERIFY OK over a
+    # file that was simply not there. Absent is a worse failure than differing,
+    # so it fails the same way.
+    failures = [(p, "differs") for p in modified] + \
+               [(p, "absent from corporate") for p in new_files]
+    if failures:
+        print(f"{RED}VERIFY FAILED: {len(failures)} file(s) do not match between "
+              f"ceo-main and corporate.{RESET}", file=sys.stderr)
+        for p, why in failures[:20]:
+            print(f"  {p} ({why})", file=sys.stderr)
+        if len(failures) > 20:
+            print(f"  ... and {len(failures) - 20} more", file=sys.stderr)
         return 7
     if missing:
         print(f"{YELLOW}VERIFY WARNING: {len(missing)} file(s) classified corporate "
@@ -338,13 +351,24 @@ def mode_verify() -> int:
         for p in missing:
             print(f"  {p}", file=sys.stderr)
         # Orphans are a warning, not a hard failure - return 0
-    print(f"{GREEN}VERIFY OK: all {len(corporate_files)} corporate-classified files "
-          f"match between ceo-main and corporate.{RESET}")
+    # `len(unchanged)`, not `len(corporate_files)`. Files in `missing` are
+    # `continue`d inside diff_corporate and never compared to anything, yet the
+    # old sentence counted them among the files it called matching -- it warned
+    # about three files and then reported those same three as verified in the
+    # next line.
+    print(f"{GREEN}VERIFY OK: {len(unchanged)} corporate-classified file(s) compared "
+          f"and identical.{RESET}")
+    # Say what was NOT looked at. The file set is enumerated from the SOURCE
+    # index alone (`git ls-files` in the data root); CORPORATE_ROOT is never
+    # walked, so a file that exists only in the corporate repo cannot appear in
+    # any count above, including the orphan warning.
+    print(f"{GRAY}Source-side enumeration only: a file present ONLY in the corporate "
+          f"repo is not visible to this check.{RESET}")
     return 0
 
 
 def bump_build(summary: str = "Workspace update", structural: bool = False,
-               files_changed: int = 0) -> int:
+               files_changed: int | None = None) -> int:
     """Increment BUILD.json in the corporate repo: which build each exec holds.
 
     Opt-in (`--bump-build`); a plain publish does not touch it. PATCH bump by
@@ -382,8 +406,20 @@ def bump_build(summary: str = "Workspace update", structural: bool = False,
         "timestamp": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
         "publisher": operator_slug(),
         "summary": summary,
-        "files_changed": files_changed,
     }
+    # `files_changed` is written ONLY when the caller counted something.
+    #
+    # `--bump-build` is its own invocation, mutually exclusive with `--copy`, so
+    # a bump never sees a copy's result. `main` therefore never passed this
+    # argument and the default 0 was stamped into every BUILD.json the CLI ever
+    # wrote: a hard number, in a published audit file, that no method computed.
+    # Omitting the key is the honest state, and the pop is required because
+    # `dict(cur)` above would otherwise carry the PREVIOUS build's count forward
+    # under the new build number, which is worse than a zero.
+    if files_changed is None:
+        payload.pop("files_changed", None)
+    else:
+        payload["files_changed"] = files_changed
     # An old BUILD.json may still carry a `history` array from when the
     # since-removed promotion gate wrote force-promote records here. `dict(cur)`
     # above carries it (and anything else) forward, so no bump deletes an old
@@ -413,6 +449,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="Summary line written into BUILD.json on --bump-build.")
     parser.add_argument("--structural", action="store_true",
                         help="With --bump-build: MINOR version bump instead of PATCH.")
+    parser.add_argument("--files-changed", type=int, default=None,
+                        help="With --bump-build: the count `--copy` reported, written "
+                             "into BUILD.json. Omitted from the file when not given, "
+                             "rather than recorded as 0.")
     args = parser.parse_args(argv)
 
     verify_admin_identity()
@@ -425,7 +465,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.verify:
         return mode_verify()
     if args.bump_build:
-        return bump_build(summary=args.summary, structural=args.structural)
+        return bump_build(summary=args.summary, structural=args.structural,
+                          files_changed=args.files_changed)
     # Unreachable: the mode group is `required=True`, so argparse exits 2 itself
     # before any of the four branches is missed. Kept as an assertion rather than
     # a `return 2` the docstring documents as an argument error this path cannot

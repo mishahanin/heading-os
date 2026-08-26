@@ -53,8 +53,22 @@ def test_pick_port_holds_the_port_it_returns(entry_module):
 
 
 def test_pick_port_releases_the_port_when_the_socket_is_closed(entry_module):
+    """Held while open, free once closed. BOTH halves, in that order.
+
+    The close-then-bind half alone asserted nothing about `_pick_port`: an
+    unbound port is trivially bindable, so the test stayed green even with the
+    `_bind_listener` call replaced by a bare unbound socket. The hold has to be
+    observed first, or the release below is a statement about the OS rather
+    than about this function.
+    """
     p, sock = entry_module._pick_port(40200)
-    sock.close()
+    try:
+        with (socket.socket(socket.AF_INET, socket.SOCK_STREAM) as thief,
+              pytest.raises(OSError)):
+            thief.bind(("127.0.0.1", p))
+    finally:
+        sock.close()
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as after:
         after.bind(("127.0.0.1", p))  # must not raise
 

@@ -323,9 +323,56 @@ def load_signature():
     return SIGNATURE_PATH.read_text(encoding="utf-8")
 
 
+# The tags a body actually uses. Kept explicit because the decision this list
+# drives is "escape or do not escape", and the cost of the two mistakes is not
+# symmetric: escaping real HTML shows the operator their own markup, while
+# NOT escaping prose deletes words from what the recipient reads.
+_HTML_TAGS = frozenset({
+    "a", "b", "blockquote", "body", "br", "code", "div", "em", "font", "h1",
+    "h2", "h3", "h4", "h5", "h6", "head", "hr", "html", "i", "img", "li",
+    "ol", "p", "pre", "s", "small", "span", "strong", "style", "sub", "sup",
+    "table", "tbody", "td", "tfoot", "th", "thead", "tr", "u", "ul",
+})
+_TAG_NAMES = "|".join(sorted(_HTML_TAGS))
+# Two shapes, and an attribute must carry `=`.
+#
+#   1. a bare tag:            <p>  </p>  <br>  <br/>  <br />
+#   2. a tag with attributes: <a href="...">  <div style='...'>
+#
+# The `=` is what separates `<a href="x">` from the prose `<b and y>`, which is
+# syntactically a `<b>` start tag carrying two boolean attributes and cannot be
+# told from one by shape alone. Requiring `=` calls it prose. The cost is a
+# BOOLEAN attribute (`<td nowrap>`) reading as prose and being escaped;
+# measured 2026-08-26 across every .html this workspace sends or templates,
+# there are none.
+_HTML_TAG_RE = re.compile(
+    rf"</?(?:{_TAG_NAMES})\s*/?>"
+    rf"|<(?:{_TAG_NAMES})\s+[^>]*=[^>]*>",
+    re.IGNORECASE)
+
+
 def is_html(text):
-    """Check if text contains HTML tags."""
-    return bool(re.search(r'<[a-zA-Z/][^>]*>', text))
+    """True when the body is HTML, so `_build_full_html` must not escape it.
+
+    Matched against a list of real tag names. The old test was
+    `<[a-zA-Z/][^>]*>` - any `<`, a letter, and a later `>` - which fires on
+    ordinary prose. Measured 2026-08-26:
+
+        "if x<b and y>z then ship it"   -> classified HTML
+        "the range is 3<n and n>7"      -> classified HTML
+        "use <Ctrl> to cancel"          -> classified HTML
+
+    Such a body is inserted into the message VERBATIM, and a mail client reads
+    `<b and y>` as a `<b>` start tag: the words "and y" are swallowed and never
+    reach the recipient. Silent deletion from an outbound message is the worst
+    shape this file can produce, and the operator sees a sent mail with no
+    error anywhere.
+
+    The wrong direction is the safe one. A body using a tag outside this list
+    is escaped and arrives readable as its own source, which the sender can see
+    and fix; the old behaviour lost text with no signal at all.
+    """
+    return bool(_HTML_TAG_RE.search(text))
 
 
 _SIGNOFF_KEYWORDS = r"(?:Best|Thanks|Regards|Cheers|Sincerely|Kind\s+regards|Warmly|BR|Br)"
@@ -342,9 +389,16 @@ _SIGNOFF_PATTERNS = [
         rf"<p[^>]*>\s*{_SIGNOFF_KEYWORDS}[,.]?\s*</p>\s*<p[^>]*>\s*{_NAME_TOKEN}\s*</p>\s*$",
         re.IGNORECASE,
     ),
-    # Plain text: "Best,\nMisha" at end
+    # Plain text: "Best,\nMisha" at end.
+    # `(?:\A|\n)` and not a bare `\n`: `\n` is a literal, never an anchor, so
+    # the older pattern could not match a body that BEGINS with the sign-off.
+    # The two HTML patterns above have no such constraint, so until 2026-08-25
+    # "<p>Best,<br>Misha</p>" was stripped and "Best,\nMisha" was not, which
+    # the docstring's "Handles plain text plus the two common HTML shapes"
+    # claimed was one behaviour. The loop breaks on the first pattern that
+    # changes the string, so a plain-text body gets no second chance.
     re.compile(
-        rf"\n\s*{_SIGNOFF_KEYWORDS}[,.]?\s*\n\s*{_NAME_TOKEN}\s*\n*\Z",
+        rf"(?:\A|\n)\s*{_SIGNOFF_KEYWORDS}[,.]?\s*\n\s*{_NAME_TOKEN}\s*\n*\Z",
         re.IGNORECASE,
     ),
 ]
@@ -372,24 +426,71 @@ def strip_trailing_signoff(body: str) -> str:
 # Message Building
 # ============================================================
 
+class AttachmentError(RuntimeError):
+    """One attachment path could not be turned into a FileAttachment.
+
+    Raised instead of exiting. Until 2026-08-25 `build_file_attachments` called
+    ``sys.exit(1)`` on a bad path, which contradicted `_send_email_core`'s own
+    documented contract ("Does NOT call sys.exit on failure") and killed a whole
+    batch: SystemExit derives from BaseException, so neither `except Exception`
+    inside the core caught it, and it is raised before either of them anyway.
+    A five-message batch with a typo in message three died after two sends with
+    no per-message result and no `[BATCH]` summary.
+    """
+
+
 def build_file_attachments(paths):
     """Create non-inline FileAttachment objects from filesystem paths.
     MIME type is guessed from the file extension; falls back to
-    application/octet-stream when unknown."""
+    application/octet-stream when unknown.
+
+    ``paths`` may be a list of paths or a single path string. The string form is
+    accepted because the batch JSON is hand-written and `_normalize_addrs` sets
+    the same precedent for to/cc/bcc: without it, ``"attach": "/tmp/f.pdf"``
+    iterated the string CHARACTER BY CHARACTER, and the first character of an
+    absolute path is ``/``, which exists and is a directory, so the operator got
+    an uncaught ``IsADirectoryError`` naming a path they never typed.
+
+    Raises :class:`AttachmentError` on a missing or unreadable path. Callers
+    return a per-message failure dict; they never abort the run.
+    """
     import mimetypes
     file_attachments = []
     if not paths:
         return file_attachments
+    if isinstance(paths, str):
+        paths = [paths]
+    # `attach` is the one field `send_batch` reads that nothing validated, and
+    # the batch JSON is hand-written. A non-iterable (`"attach": 7`, `true`)
+    # reached `for raw in paths` and a list holding a non-string
+    # (`["/tmp/a.pdf", 5]`) reached `Path(raw)`; both raise TypeError, which is
+    # NOT an AttachmentError, so it escaped the per-message handler and aborted
+    # the whole batch - AFTER the earlier messages had already gone out. A
+    # partial send with a traceback is the worst outcome this file has, because
+    # the operator cannot tell from it which messages left. Raise the error the
+    # caller already turns into a per-message failure.
+    if not isinstance(paths, (list, tuple)):
+        raise AttachmentError(
+            f"`attach` must be a path or a list of paths, not a "
+            f"{type(paths).__name__}")
+    bad = [raw for raw in paths if not isinstance(raw, (str, Path))]
+    if bad:
+        raise AttachmentError(
+            f"`attach` holds {len(bad)} entry/entries that are not paths: "
+            f"{', '.join(f'{type(b).__name__} {b!r}' for b in bad[:3])}")
     _ensure_exchangelib()
     for raw in paths:
         p = Path(raw)
-        if not p.exists():
-            print(f"[ERROR] Attachment not found: {p}")
-            sys.exit(1)
+        if not p.is_file():
+            raise AttachmentError(f"attachment not found: {p}")
         mime, _ = mimetypes.guess_type(p.name)
+        try:
+            content = p.read_bytes()
+        except OSError as e:
+            raise AttachmentError(f"attachment unreadable: {p} ({e})") from e
         file_attachments.append(FileAttachment(
             name=p.name,
-            content=p.read_bytes(),
+            content=content,
             is_inline=False,
             content_type=mime or "application/octet-stream",
         ))
@@ -407,8 +508,22 @@ def _build_full_html(body: str, signature: str) -> str:
     import html
     body = strip_trailing_signoff(body)
     if not is_html(body):
-        paragraphs = body.split("\n\n")
-        body_html = "".join(f"<p>{html.escape(p)}</p>" for p in paragraphs if p.strip())
+        # Normalise line endings first so a CRLF body cannot leave a stray \r
+        # sitting in front of the <br> below.
+        paragraphs = body.replace("\r\n", "\n").replace("\r", "\n").split("\n\n")
+        chunks = []
+        for para in paragraphs:
+            if not para.strip():
+                continue
+            # Escape FIRST, then turn the SURVIVING single newlines into <br>.
+            # Splitting on blank lines alone only ever produced paragraph
+            # breaks. HTML collapses a bare newline inside a <p> to one space,
+            # so until 2026-08-25 a plain-text body written as separate lines
+            # (an address block, a numbered list, a signature the operator
+            # typed) arrived at the recipient as one run-on line. The wrapper
+            # carries no `white-space` rule, so nothing else preserved them.
+            chunks.append("<p>" + html.escape(para).replace("\n", "<br>") + "</p>")
+        body_html = "".join(chunks)
     else:
         body_html = body
     wrapped_body = (
@@ -440,8 +555,21 @@ def _send_email_core(account, to, subject, body, cc=None, bcc=None, attach=None,
                      signature=None):
     """Inner core: build and send one message on an established account.
 
-    Returns ``{"to": [...], "status": "sent"|"failed", "error": str|None}``.
+    Returns ``{"to": [...], "status": "sent"|"failed", "stage": str,
+    "error": str|None}``.
     Does NOT call ``sys.exit`` on failure - callers decide how to handle.
+
+    ``stage`` names how far the message got, and exists so a caller can tell the
+    operator something true about the draft and the wire. The four failing
+    values are ``attachments`` (nothing was built, nothing saved),
+    ``save_draft`` (nothing was SENT; whether a draft exists is unknown, because
+    this stage is stamped on a read timeout as well as on a refusal, and a
+    timeout answers the reply rather than the write), ``attach`` (a draft EXISTS
+    and was not sent), and ``send`` (a draft exists AND the request may have
+    reached the server). Until 2026-08-25 `send_email` printed "The draft was saved but NOT
+    sent" over all four, which on the ``send`` stage flatly contradicted the
+    `_UNSURE_NOTE` printed one line above it and told the operator to resend a
+    message that may already be out.
 
     ``signature`` can be pre-loaded by the caller (batch mode) so the signature
     HTML is not re-read per message.
@@ -458,7 +586,11 @@ def _send_email_core(account, to, subject, body, cc=None, bcc=None, attach=None,
     _ensure_exchangelib()
     if signature is None:
         signature = load_signature()
-    file_attachments = build_file_attachments(attach)
+    try:
+        file_attachments = build_file_attachments(attach)
+    except AttachmentError as e:
+        return {"to": list(to), "status": "failed", "stage": "attachments",
+                "error": f"{e}; nothing was saved and nothing was sent"}
 
     # SEC-001: plain-text bodies are HTML-escaped inside _build_full_html.
     full_html = _build_full_html(body, signature)
@@ -481,7 +613,8 @@ def _send_email_core(account, to, subject, body, cc=None, bcc=None, attach=None,
     try:
         msg.save()
     except Exception as e:
-        return {"to": list(to), "status": "failed", "error": f"save draft failed: {e}"}
+        return {"to": list(to), "status": "failed", "stage": "save_draft",
+                "error": f"save draft failed: {e}"}
 
     # Attach inline signature images (rebuild per-message - FileAttachment
     # objects are bound to a Message after .attach()).
@@ -496,7 +629,7 @@ def _send_email_core(account, to, subject, body, cc=None, bcc=None, attach=None,
         for att in file_attachments:
             msg.attach(att)
     except Exception as e:
-        return {"to": list(to), "status": "failed",
+        return {"to": list(to), "status": "failed", "stage": "attach",
                 "error": f"attach failed ({e}); the draft was saved but NOT sent"}
 
     # Send with retry. See `_is_safe_to_resend`: only a failure that proves the
@@ -517,7 +650,7 @@ def _send_email_core(account, to, subject, body, cc=None, bcc=None, attach=None,
             # the matched relationship record. Strict email match against the address
             # book. Silent no-op on no match. CC/BCC are intentionally NOT auto-logged.
             _autolog_to(to, subject, body)
-            return {"to": list(to), "status": "sent", "error": None}
+            return {"to": list(to), "status": "sent", "stage": "sent", "error": None}
         except Exception as e:
             last_error = e
             if not _is_safe_to_resend(e):
@@ -526,6 +659,7 @@ def _send_email_core(account, to, subject, body, cc=None, bcc=None, attach=None,
                 return {
                     "to": list(to),
                     "status": "failed",
+                    "stage": "send",
                     "error": f"send failed ({e}). {_UNSURE_NOTE}",
                 }
             if attempt < 3:
@@ -536,16 +670,45 @@ def _send_email_core(account, to, subject, body, cc=None, bcc=None, attach=None,
     return {
         "to": list(to),
         "status": "failed",
+        "stage": "send",
         "error": f"send failed after 3 attempts: {last_error}",
     }
 
 
-def _resolve_folder(account, folder_name):
-    """Map a folder name to the account folder. Inbox (default) or Sent."""
+# The only two folders this script can search, and every spelling accepted for
+# each. An unlisted name is refused, never mapped to a default: see
+# `folder_key`.
+_FOLDER_ALIASES = {
+    "inbox": "inbox",
+    "sent": "sent",
+    "sent items": "sent",
+    "sentitems": "sent",
+}
+
+
+def folder_key(folder_name):
+    """Canonical folder key for a --match-folder value, or raise ValueError.
+
+    Refusing is the point. Until 2026-08-25 an unrecognised name fell through
+    to the Inbox, so `--match-folder Drafts` (or a typo, `Snet`) searched the
+    Inbox, replied into whatever thread it found there, and then reported "No
+    message found in Drafts" on a miss - naming the folder it never opened.
+    Both halves had to be fixed together: fixing only the fall-through would
+    have left that message correct by accident.
+    """
     name = (folder_name or "Inbox").strip().lower()
-    if name in ("sent", "sent items", "sentitems"):
-        return account.sent
-    return account.inbox
+    if name not in _FOLDER_ALIASES:
+        valid = ", ".join(sorted(set(_FOLDER_ALIASES.values())))
+        raise ValueError(f"unknown folder {folder_name!r}; valid folders are: {valid}")
+    return _FOLDER_ALIASES[name]
+
+
+def _resolve_folder(account, folder_name):
+    """Map a folder name to the account folder. Inbox (default) or Sent.
+
+    Raises ValueError on any other name.
+    """
+    return account.sent if folder_key(folder_name) == "sent" else account.inbox
 
 
 def find_message(account, match_id=None, match_from=None, match_subject=None,
@@ -561,11 +724,21 @@ def find_message(account, match_id=None, match_from=None, match_subject=None,
     if match_id:
         try:
             return folder.get(id=match_id)
-        except Exception:
-            # Fall back to a cross-folder lookup by id via the account root.
+        except Exception as first_error:
+            # Second chance ONLY when a different folder was searched. The old
+            # comment called this "a cross-folder lookup by id via the account
+            # root", and it was neither: `account.root` is not referenced
+            # anywhere in this file, and under the default --match-folder Inbox
+            # `folder` IS `account.inbox`, so this repeated the identical query
+            # that had just failed and called the repeat a fallback.
+            if folder is account.inbox:
+                print(f"[WARN] Item id lookup in Inbox failed: {first_error}")
+                return None
             try:
                 return account.inbox.get(id=match_id)
-            except Exception:
+            except Exception as second_error:
+                print(f"[WARN] Item id lookup failed in {folder_name} "
+                      f"({first_error}) and in Inbox ({second_error})")
                 return None
 
     qs = folder.all()
@@ -584,13 +757,37 @@ def find_message(account, match_id=None, match_from=None, match_subject=None,
     return None
 
 
+def _reply_target(original):
+    """The mailbox a reply is actually ADDRESSED to: `author`, then `sender`.
+
+    EWS carries two addresses and they are not the same thing. `author` is the
+    From header; `sender` is `message:Sender`, the mailbox that submitted the
+    item - a delegate or an assistant sending on someone's behalf. exchangelib
+    addresses a reply to `self.author` (`Message.create_reply`, and
+    `create_reply_all` adds `self.author` to the recipient set), while this
+    file read `sender` for the CRM auto-log and for the line printed back to
+    the operator.
+
+    For an ordinary message the two agree and nothing showed. For a
+    delegate-sent one they differ, and the reply went to the author while the
+    CRM recorded a conversation with the delegate - a wrong fact written into
+    the relationship record, which is worse than a missing one because nothing
+    later contradicts it. Read 2026-08-26 out of exchangelib's own source.
+    """
+    for attr in ("author", "sender"):
+        mailbox = getattr(original, attr, None)
+        if mailbox and getattr(mailbox, "email_address", None):
+            return mailbox
+    return None
+
+
 def _replyall_recipients(account, original):
     """All addresses a reply-all touches (sender + To + CC), minus self.
     Used only to drive the CRM auto-log; exchangelib builds the real envelope."""
     emails = set()
-    snd = getattr(original, "sender", None)
-    if snd and getattr(snd, "email_address", None):
-        emails.add(snd.email_address)
+    target = _reply_target(original)
+    if target is not None:
+        emails.add(target.email_address)
     for grp_name in ("to_recipients", "cc_recipients"):
         for mb in (getattr(original, grp_name, None) or []):
             if getattr(mb, "email_address", None):
@@ -609,12 +806,20 @@ def _send_threaded_core(account, mode, original, body, to=None, cc=None, bcc=Non
     can be attached before send - the same two-step pattern the new-message
     path uses. forward carries the original's attachments automatically.
 
-    Returns {"to": [...], "status": "sent"|"failed", "error": str|None}.
+    Returns {"to": [...], "status": "sent"|"failed", "stage": str,
+    "error": str|None}. ``stage`` carries the same four failing values
+    `_send_email_core` documents, and for the same reason: main's threaded
+    branch has to tell the operator whether a draft exists and whether the
+    request reached the server, and an error string cannot say.
     """
     _ensure_exchangelib()
     if signature is None:
         signature = load_signature()
-    file_attachments = build_file_attachments(attach)
+    try:
+        file_attachments = build_file_attachments(attach)
+    except AttachmentError as e:
+        return {"to": to or [], "status": "failed", "stage": "attachments",
+                "error": f"{e}; nothing was saved and nothing was sent"}
     full_html = _build_full_html(body, signature)
     derived_subject = _derive_subject(mode, getattr(original, "subject", "") or "", subject)
     to_mb = [Mailbox(email_address=a.strip()) for a in to] if to else None
@@ -628,21 +833,24 @@ def _send_threaded_core(account, mode, original, body, to=None, cc=None, bcc=Non
             draft_ref = original.create_reply_all(derived_subject, HTMLBody(full_html))
         elif mode == "forward":
             if not to_mb:
-                return {"to": [], "status": "failed",
+                return {"to": [], "status": "failed", "stage": "attachments",
                         "error": "forward requires --to (recipients to forward to)"}
             draft_ref = original.create_forward(derived_subject, HTMLBody(full_html),
                                                 to_recipients=to_mb)
         else:
-            return {"to": to or [], "status": "failed", "error": f"unknown mode: {mode}"}
+            return {"to": to or [], "status": "failed", "stage": "attachments",
+                    "error": f"unknown mode: {mode}"}
         save_result = draft_ref.save(account.drafts)
     except Exception as e:
-        return {"to": to or [], "status": "failed", "error": f"create/save {mode} failed: {e}"}
+        return {"to": to or [], "status": "failed", "stage": "save_draft",
+                "error": f"create/save {mode} failed: {e}"}
 
     # Re-fetch the persisted draft so we can attach + send.
     try:
         draft = account.drafts.get(id=save_result.id, changekey=save_result.changekey)
     except Exception as e:
-        return {"to": to or [], "status": "failed", "error": f"fetch saved draft failed: {e}"}
+        return {"to": to or [], "status": "failed", "stage": "attach",
+                "error": f"fetch saved draft failed: {e}"}
 
     fresh_sig_attachments = build_signature_attachments()
     try:
@@ -651,7 +859,7 @@ def _send_threaded_core(account, mode, original, body, to=None, cc=None, bcc=Non
         for att in file_attachments:
             draft.attach(att)
     except Exception as e:
-        return {"to": to or [], "status": "failed",
+        return {"to": to or [], "status": "failed", "stage": "attach",
                 "error": f"attach failed ({e}); the draft was saved but NOT sent"}
 
     last_error = None
@@ -663,9 +871,11 @@ def _send_threaded_core(account, mode, original, body, to=None, cc=None, bcc=Non
                 actual_to = _replyall_recipients(account, original)
             elif to:
                 actual_to = list(to)
-            else:  # reply with no explicit --to: goes to the original sender
-                snd = getattr(original, "sender", None)
-                actual_to = [snd.email_address] if (snd and getattr(snd, "email_address", None)) else []
+            else:
+                # reply with no explicit --to: exchangelib addresses it to the
+                # original's AUTHOR, not its sender. See `_reply_target`.
+                target = _reply_target(original)
+                actual_to = [target.email_address] if target is not None else []
             label = {"reply": "Reply", "reply_all": "Reply-all", "forward": "Forward"}[mode]
             print(f"[OK] {label} sent — {', '.join(actual_to) if actual_to else '(envelope built by Exchange)'}")
             print(f"     Subject: {derived_subject}")
@@ -674,21 +884,54 @@ def _send_threaded_core(account, mode, original, body, to=None, cc=None, bcc=Non
                 names = ", ".join(a.name for a in file_attachments)
                 print(f"     Attachments: {len(file_attachments)} file(s) - {names}")
             _autolog_to(actual_to, derived_subject, body)
-            return {"to": actual_to, "status": "sent", "error": None}
+            return {"to": actual_to, "status": "sent", "stage": "sent", "error": None}
         except Exception as e:
             last_error = e
             if not _is_safe_to_resend(e):
                 print(f"[ERROR] {mode} send failed: {e}")
                 print(f"[ERROR] {_UNSURE_NOTE}")
-                return {"to": to or [], "status": "failed",
+                return {"to": to or [], "status": "failed", "stage": "send",
                         "error": f"{mode} send failed ({e}). {_UNSURE_NOTE}"}
             if attempt < 3:
                 import time
                 wait = 2 ** attempt
                 print(f"[WARN] Send attempt {attempt}/3 failed: {e}. Retrying in {wait}s...")
                 time.sleep(wait)
-    return {"to": to or [], "status": "failed",
+    return {"to": to or [], "status": "failed", "stage": "send",
             "error": f"{mode} send failed after 3 attempts: {last_error}"}
+
+
+# What the operator should do next, per failing stage. Keyed by the ``stage``
+# `_send_email_core` returns, because the caller cannot know from an error
+# STRING whether a draft exists or whether the request reached the server.
+#
+# The ``send`` line is the one this table was written for. Until 2026-08-25 all
+# four stages printed "The draft was saved but NOT sent. Check Exchange drafts
+# folder.", so on a ReadTimeout the operator's LAST line of output contradicted
+# the `_UNSURE_NOTE` printed immediately above it: the note says the message may
+# already be out, and the next line told them it was not. Acting on the last
+# line sends a second copy of an irreversible message, which is precisely the
+# duplicate the `_SAFE_TO_RESEND` design exists to prevent.
+_STAGE_GUIDANCE = {
+    "attachments": "         Nothing was saved and nothing was sent. Fix the path and run it again.",
+    # NOT "no draft was saved". That stage is stamped on every exception out of
+    # `msg.save()`, and a read timeout on the CreateItem call establishes only
+    # that the ANSWER did not come back - the item may well exist on the server.
+    # Telling the operator nothing was created is the same over-claim
+    # `.claude/rules/scope-claims.md` names: a sentence asserting more than the
+    # method measured. Nothing was SENT either way, which is the part that is
+    # actually established, so say that and point at Drafts.
+    "save_draft": ("         Nothing was sent. Whether a draft exists on the "
+                   "server is UNKNOWN (a timeout answers the reply, not the "
+                   "write): check Drafts before running it again."),
+    "attach": "         The draft was saved but NOT sent. Check Exchange drafts folder.",
+    "send": "         Check Sent Items BEFORE running this again - see the note above.",
+}
+# An unstamped result predates the stage key or came from somewhere new. Say
+# that the state is unknown rather than guessing one of the four.
+_STAGE_GUIDANCE_UNKNOWN = (
+    "         The send failed at an unrecorded stage, so whether a draft exists "
+    "and whether the message left is UNKNOWN. Check Sent Items and Drafts.")
 
 
 def send_email(account, to, subject, body, cc=None, bcc=None, attach=None):
@@ -703,8 +946,20 @@ def send_email(account, to, subject, body, cc=None, bcc=None, attach=None):
     )
     if result["status"] != "sent":
         print(f"[ERROR] {result['error']}")
-        print("         The draft was saved but NOT sent. Check Exchange drafts folder.")
+        print(_STAGE_GUIDANCE.get(result.get("stage"), _STAGE_GUIDANCE_UNKNOWN))
         sys.exit(1)
+
+
+def _require_str(value, field):
+    """Return ``value`` when it is a string; raise TypeError naming the field.
+
+    The batch JSON is hand-written, and a bare `"body": 123` used to travel all
+    the way to `re.sub` inside `_build_full_html` before raising, outside every
+    try in the send path.
+    """
+    if not isinstance(value, str):
+        raise TypeError(f"'{field}' must be a string, got {type(value).__name__}")
+    return value
 
 
 def _normalize_addrs(value):
@@ -734,23 +989,45 @@ def send_batch(account, messages):
     # FileAttachment objects must be rebuilt per message because each one
     # is bound to its Message after .attach()).
     signature = load_signature()
-    # Presence check only: this proves the signature images are readable BEFORE
-    # the batch starts, so a missing asset fails once rather than N times.
+    # This call catches an asset that EXISTS and cannot be read (a permissions
+    # error, or an unpulled Git-LFS pointer) before message 1, because
+    # `read_bytes()` raises OSError straight out of here. That is the whole of
+    # what it establishes, and the return value is deliberately discarded: the
+    # FileAttachment objects cannot be reused, since each binds to its Message
+    # on `.attach()`.
+    #
+    # It does NOT catch a MISSING asset. Those two branches only print a WARN
+    # and fall through, and `_send_email_core` calls this again per message, so
+    # a missing logo warns N+1 times and every message still sends without it.
+    # The comment here claimed the opposite until 2026-08-25 ("a missing asset
+    # fails once rather than N times"), which is the one case it does not cover.
     build_signature_attachments()
 
     results = []
     for idx, m in enumerate(messages, start=1):
+        # Everything a malformed message dict can raise belongs INSIDE this
+        # try. Until 2026-08-25 it held only to/subject/body and caught only
+        # (KeyError, ValueError), so four shapes aborted the whole batch with a
+        # traceback and no per-message result: a non-dict entry (`m["to"]`
+        # raises TypeError), a bad cc/bcc (normalised two lines BELOW the try),
+        # a null `to` (normalises to None, then TypeError deep inside the core),
+        # and a non-string subject or body (passes this try untouched, then
+        # TypeError out of re.sub inside `_build_full_html`). The batch contract
+        # is one status dict per message; a bad message must cost that message.
         try:
             to = _normalize_addrs(m["to"])
-            subject = m["subject"]
-            body = m["body"]
-        except (KeyError, ValueError) as e:
+            if not to:
+                raise ValueError("'to' is empty")
+            subject = _require_str(m["subject"], "subject")
+            body = _require_str(m["body"], "body")
+            cc = _normalize_addrs(m.get("cc"))
+            bcc = _normalize_addrs(m.get("bcc"))
+            attach = m.get("attach")
+        except (KeyError, TypeError, ValueError) as e:
             print(f"[ERROR] Message #{idx} malformed: {e}")
-            results.append({"to": [], "status": "failed", "error": f"malformed: {e}"})
+            results.append({"to": [], "status": "failed", "stage": "malformed",
+                            "error": f"malformed: {e}"})
             continue
-        cc = _normalize_addrs(m.get("cc"))
-        bcc = _normalize_addrs(m.get("bcc"))
-        attach = m.get("attach")
         print(f"\n--- Batch message {idx}/{len(messages)} ---")
         result = _send_email_core(
             account=account, to=to, subject=subject, body=body,
@@ -851,10 +1128,54 @@ def main():
         if not args.body:
             parser.error("--body-stdin was given but stdin was empty")
 
-    # --dry-run stops HERE: after every argparse check and after the body has
-    # been resolved, and before load_config() reads a credential or connect()
-    # opens a session. Placed at the last point where nothing has left the
-    # machine, so the whole argument contract is testable and no send happens.
+    # Which mode this invocation selects. Resolved BEFORE the --dry-run guard
+    # because the checks below have to run under it.
+    threaded_mode = "reply" if args.reply else ("reply_all" if args.reply_all else ("forward" if args.forward else None))
+
+    # Every argument-contract check lives ABOVE the --dry-run guard, and this is
+    # the reason the flag exists. Until 2026-08-25 they all sat below it, so
+    # `--dry-run --reply --body x` with no --match-* argument printed the
+    # DRY-RUN block and exited 0, while the same command without --dry-run
+    # exited 2. The flag's own help text says it was added because "checking
+    # that a flag parses meant sending a real message" - and in the three modes
+    # that matter it still could not check that. The --cc refusal below is the
+    # sharpest case: it exists because cc/bcc were once silently DISCARDED on an
+    # irreversible send, and it was the one refusal a dry run could not see.
+    if threaded_mode:
+        if not args.body:
+            parser.error(f"--{threaded_mode.replace('_', '-')} requires --body")
+        if not (args.match_id or args.match_from or args.match_subject):
+            parser.error("threaded mode requires one of --match-id, --match-from, --match-subject")
+        if args.cc or args.bcc:
+            # REFUSED, not dropped. `_send_threaded_core` accepts cc/bcc and
+            # never passes them to create_reply / create_reply_all /
+            # create_forward, so an operator running `--forward --to X --cc Y`
+            # believed Y was copied and the mail went out without them: silent
+            # loss on an irreversible outbound action. Wiring them onto the
+            # saved draft is the other repair, and it belongs to a change that
+            # can be exercised against a live Exchange account -- which this one
+            # deliberately is not.
+            parser.error(
+                f"--cc/--bcc are not supported with --{threaded_mode.replace('_', '-')}; "
+                f"they were silently discarded before. Send a new message with "
+                f"--to/--cc, or reply and copy the address into --to.")
+        if threaded_mode == "forward" and not args.to:
+            parser.error("--forward requires --to (the recipients to forward to)")
+        try:
+            folder_key(args.match_folder)
+        except ValueError as e:
+            parser.error(str(e))
+    elif not args.batch and not (args.to and args.subject and args.body):
+        parser.error("either --batch or all of --to, --subject, --body are required")
+
+    # --dry-run stops HERE: after every argparse check above, after the mode
+    # checks, and after the body has been resolved; before load_config() reads a
+    # credential or connect() opens a session. It is the last point at which
+    # nothing has left the machine.
+    #
+    # The batch file's own checks (exists, parses as JSON, is an array) stay
+    # BELOW: they read the filesystem rather than the argument vector, and this
+    # guard's promise is about the argument contract only.
     if args.dry_run:
         body = args.body or ""
         print("[DRY-RUN] nothing was sent.")
@@ -899,28 +1220,9 @@ def main():
         return
 
     # Threaded mode: reply / reply-all / forward an existing message.
-    threaded_mode = "reply" if args.reply else ("reply_all" if args.reply_all else ("forward" if args.forward else None))
+    # Every check for this mode ran above the --dry-run guard; nothing is
+    # re-checked here, or the two copies would drift.
     if threaded_mode:
-        if not args.body:
-            parser.error(f"--{threaded_mode.replace('_', '-')} requires --body")
-        if not (args.match_id or args.match_from or args.match_subject):
-            parser.error("threaded mode requires one of --match-id, --match-from, --match-subject")
-        if args.cc or args.bcc:
-            # REFUSED, not dropped. `_send_threaded_core` accepts cc/bcc and
-            # never passes them to create_reply / create_reply_all /
-            # create_forward, so an operator running `--forward --to X --cc Y`
-            # believed Y was copied and the mail went out without them: silent
-            # loss on an irreversible outbound action. Wiring them onto the
-            # saved draft is the other repair, and it belongs to a change that
-            # can be exercised against a live Exchange account -- which this one
-            # deliberately is not.
-            parser.error(
-                f"--cc/--bcc are not supported with --{threaded_mode.replace('_', '-')}; "
-                f"they were silently discarded before. Send a new message with "
-                f"--to/--cc, or reply and copy the address into --to.")
-        if threaded_mode == "forward" and not args.to:
-            parser.error("--forward requires --to (the recipients to forward to)")
-
         config = load_config()
         account = connect(config)
         original = find_message(
@@ -936,7 +1238,11 @@ def main():
                 f"from~{args.match_from}" if args.match_from else "",
                 f"subject~{args.match_subject}" if args.match_subject else "",
             ]))
-            print(f"[ERROR] No message found in {args.match_folder} matching: {crit}")
+            # `folder_key` and not `args.match_folder`: this line reports what
+            # was SEARCHED. An unknown name is now refused above, so the two
+            # can no longer diverge, and this says so from the same source.
+            print(f"[ERROR] No message found in {folder_key(args.match_folder)} "
+                  f"matching: {crit}")
             sys.exit(1)
         print(f"[FOUND] {getattr(original, 'subject', '(no subject)')} "
               f"from {getattr(getattr(original, 'sender', None), 'email_address', '?')}")
@@ -947,14 +1253,12 @@ def main():
         )
         if result["status"] != "sent":
             print(f"[ERROR] {result['error']}")
-            print("         The draft may have been saved but NOT sent. Check Exchange drafts.")
+            print(_STAGE_GUIDANCE.get(result.get("stage"), _STAGE_GUIDANCE_UNKNOWN))
             sys.exit(1)
         return
 
-    # Single-message mode: original CLI contract.
-    if not (args.to and args.subject and args.body):
-        parser.error("either --batch or all of --to, --subject, --body are required")
-
+    # Single-message mode: original CLI contract. Its required-argument check
+    # also ran above the --dry-run guard.
     config = load_config()
     account = connect(config)
     send_email(

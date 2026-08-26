@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.utils.colors import RESET, YELLOW
 from scripts.utils.markdown import parse_frontmatter as _parse_frontmatter_text
 from scripts.utils.workspace import get_default_tz, get_knowledge_dir
 
@@ -65,6 +66,55 @@ def _date_key(value) -> str:
         return value.isoformat()
     text = str(value or "").strip()
     return text if text[:4].isdigit() else ""
+
+
+def _as_date(value):
+    """A `datetime.date` from a frontmatter date of any shape.
+
+    `date.fromisoformat(str(value))` was the old form and it cannot read its own
+    input: `yaml.safe_load` turns `created: 2026-01-01 09:30:00` into a
+    `datetime.datetime`, whose `str()` is `"2026-01-01 09:30:00"`, which
+    `date.fromisoformat` rejects on this repo's Python 3.11. The sibling
+    `_date_key` above already branches on the type before stringifying; this
+    does the same, so the two agree on what a date is.
+
+    Raises ValueError/TypeError on anything genuinely unreadable, which the
+    caller reports.
+    """
+    import datetime as _dt
+    if isinstance(value, _dt.datetime):
+        return value.date()
+    if isinstance(value, _dt.date):
+        return value
+    return date.fromisoformat(str(value).strip())
+
+
+def _recent_rows(files, subdir, date_fields, limit, label):
+    """The `limit` most recent notes of one type, chosen BY DATE.
+
+    `collect_brain_files` orders each subdir by FILENAME descending. For a
+    slug-named note that is reverse-alphabetical and carries no time
+    information at all. The INDEX.md "Recent" section used to slice that order
+    first and sort by date SECOND, so a note the slice had already dropped
+    could never come back.
+
+    Measured on the live brain 2026-08-25: two of the three positions printed
+    under "Recent" were created 3 and 4 months earlier, and the actual newest
+    position was not shown. 63 of 67 positions are slug-named, so this was the
+    normal case, not an edge one.
+
+    `date_fields` is tried in order and the first field carrying a VALUE wins;
+    a note with none sorts to the bottom via `_date_key` rather than raising.
+    """
+    rows = []
+    for f in files[subdir]:
+        fm = parse_frontmatter(f)
+        if not fm:
+            continue
+        value = next((fm[k] for k in date_fields if fm.get(k)), "unknown")
+        rows.append((value, label(fm, f)))
+    rows.sort(key=lambda x: _date_key(x[0]), reverse=True)
+    return rows[:limit]
 
 
 def parse_frontmatter(filepath):
@@ -301,7 +351,7 @@ def find_stale_seeds(files, stale_days=7):
             if fm.get("status") != "seed" or not fm.get("created"):
                 continue
             try:
-                created = date.fromisoformat(str(fm["created"]))
+                created = _as_date(fm["created"])
                 age = (today - created).days
                 if age > stale_days:
                     stale.append({
@@ -310,8 +360,17 @@ def find_stale_seeds(files, stale_days=7):
                         "created": fm["created"],
                         "age_days": age,
                     })
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as exc:
+                # Reported, THEN skipped. `pass` alone made this hole invisible
+                # from the tool's own output: a seed whose `created` could not
+                # be parsed was dropped from the count, and the report then
+                # asserted a smaller number of stale seeds with nothing said
+                # about what it could not read. The workspace policy is
+                # explicit -- an exception handler logs or re-raises, never
+                # both-silent.
+                print(f"{YELLOW}warn:{RESET} {subdir}/{f.name} has an unreadable "
+                      f"`created:` value ({fm['created']!r}: {exc}); not aged.",
+                      file=sys.stderr)
     return stale
 
 
@@ -331,7 +390,25 @@ def collect_all_keywords(files):
 
 
 def find_stale_positions(files):
-    """Find positions whose revisit_when condition might be met."""
+    """Collect positions that CARRY a `revisit_when` condition. Nothing is evaluated here.
+
+    The docstring used to say "positions whose revisit_when condition might be
+    met", which is a relevance claim this function never makes: it tests the
+    field for truthiness and stops. Measured on the live brain 2026-08-25, 67 of
+    67 positions carry a non-empty free-text condition, so the result is the
+    whole position corpus, every time.
+
+    That is by design, not a bug in the pipeline: evaluating a free-text
+    condition is the /odin skill's step (`.claude/skills/odin/references/
+    compile-pipeline.md`, which greps `context/` for the condition's terms). The
+    defect was the wording -- here, and in the human-facing report label that
+    `memory-hygiene.py` prints, which called all 67 "stale".
+
+    The JSON key stays `stale_positions`: it is the documented contract with
+    that skill, and the skill's own reference describes it correctly as
+    "conditions to evaluate". Renaming it would break a consumer to fix a
+    sentence.
+    """
     stale = []
     for f in files["positions"]:
         fm = parse_frontmatter(f)
@@ -424,28 +501,19 @@ def generate_index(files):
     lines.append("## Recent")
     lines.append("")
 
+    # Principles are deliberately absent from this section, as they always have
+    # been. Naming it because "Recent" reads as "everything recent": 294
+    # principles never appear here, and that gap is not this fix.
     recent = []
-    for f in files["sources"][:5]:
-        fm = parse_frontmatter(f)
-        if fm:
-            date = fm.get("ingested", fm.get("created", "unknown"))
-            recent.append((date, f"Learned: {fm.get('title', f.stem)}"))
-    for f in files["positions"][:3]:
-        fm = parse_frontmatter(f)
-        if fm:
-            date = fm.get("created", "unknown")
-            recent.append((date, f"Position formed: {fm.get('title', f.stem)}"))
-    for f in files["episodes"][:5]:
-        fm = parse_frontmatter(f)
-        if fm:
-            date = fm.get("date", fm.get("created", "unknown"))
-            recent.append((date, f"Logged: {fm.get('title', f.stem)}"))
-    for f in files["conflicts"][:3]:
-        fm = parse_frontmatter(f)
-        if fm:
-            date = fm.get("created", "unknown")
-            status = fm.get("status", "open")
-            recent.append((date, f"Conflict {status}: {fm.get('title', f.stem)}"))
+    recent += _recent_rows(files, "sources", ("ingested", "created"), 5,
+                           lambda fm, f: f"Learned: {fm.get('title', f.stem)}")
+    recent += _recent_rows(files, "positions", ("created",), 3,
+                           lambda fm, f: f"Position formed: {fm.get('title', f.stem)}")
+    recent += _recent_rows(files, "episodes", ("date", "created"), 5,
+                           lambda fm, f: f"Logged: {fm.get('title', f.stem)}")
+    recent += _recent_rows(
+        files, "conflicts", ("created",), 3,
+        lambda fm, f: f"Conflict {fm.get('status', 'open')}: {fm.get('title', f.stem)}")
 
     # A COMPARABLE key. `yaml.safe_load` turns `ingested: 2026-08-20` into a
     # datetime.date and a missing field into the string "unknown", and Python 3

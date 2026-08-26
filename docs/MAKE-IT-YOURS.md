@@ -263,7 +263,7 @@ Two clean ways to work so this never hurts:
    `config/skill-custom/*.user.toml` override (section 4.3). For your facts and voice, edit
    the data-overlay documents (section 3.2), not engine rules. These live outside the
    tracked engine, so there is nothing to collide.
-2. **When you must edit a tracked file, keep the edit as a small local commit** and expect
+2. **When you must edit a tracked file, keep the edit as a small local commit**. Expect
    to re-apply it occasionally. The three brand rules (`terminology.md`, `voice.md`,
    `humanization.md`) are meant to be personalized this way. If a `git pull` reports a
    conflict on one of them, the maintainer touched the same file. Reconcile the two

@@ -120,9 +120,18 @@ def narrow(paths, transcript: Path | str | None) -> tuple[list, int]:
     With no usable transcript every path is kept and the drop count is 0, so a
     caller degrades to its pre-scope behaviour instead of going quiet.
     """
+    # Materialise ONCE. `paths` was walked twice: the comprehension below
+    # consumed it, and `len(list(paths))` then measured the exhausted remainder.
+    # Given a generator the drop count came back NEGATIVE (measured 2026-08-26:
+    # a list argument answered `([a.py], 1)` and the identical contents as a
+    # generator answered `([a.py], -1)`). The only caller today,
+    # `scripts/turn-check.py`, passes a real list, so this was not reachable in
+    # the tree; the signature says `paths`, not `list[Path]`, and the drop count
+    # is what a caller prints to say what it did NOT check.
+    items = list(paths)
     mine = files_written(transcript)
     if mine is None:
-        return list(paths), 0
+        return items, 0
     resolved = {p.resolve() for p in mine}
-    kept = [p for p in paths if Path(p).resolve() in resolved]
-    return kept, len(list(paths)) - len(kept)
+    kept = [p for p in items if Path(p).resolve() in resolved]
+    return kept, len(items) - len(kept)

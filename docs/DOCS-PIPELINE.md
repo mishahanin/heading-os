@@ -88,14 +88,15 @@ pre-commit hook set keep the published pages honest:
 
 1. **Docs HTML in sync (F-8.1):** `regenerate-docs-html.py --all` then
    `git diff --exit-code docs/`. The `--all` mode regenerates every md-sourced page.
-   It also nav-syncs and search-injects the hand-authored pages, then rebuilds the
-   search index, all in one pass. Three things fail it. An md-sourced `.html` that
-   was not regenerated from its `.md`. A stale nav injection or a missing search box
+   It also nav-syncs and search-injects the hand-authored pages. It rebuilds the
+   search index too. All of that happens in one pass. Three things fail it. An
+   md-sourced `.html` that was not regenerated from its `.md`. A stale nav
+   injection or a missing search box
    on a hand-authored page. A stale `search-index.json`. Hand-authored page bodies
-   are the source of truth, so a body edit that is committed as-is is correct and
+   are the source of truth. A body edit that is committed as-is is correct and
    does not trip the guard.
 2. **README numbers in sync (F-8.3):** `scripts/dev/check-readme-numbers.py`
-   re-derives the security-test count and guard-layer count and fails if the
+   re-derives the security-test count and guard-layer count. It fails if the
    README or `docs/index.html` "By the numbers" block disagrees.
 
 The matching pre-commit hook (`docs-html-drift`) runs the same regenerate and
@@ -146,9 +147,9 @@ syncs with plain git:
 
 - **Code down:** `git pull --ff-only` on the engine clone (the exec's
   `.heading-os`). Engine code ships by cloning the engine repo, not by copying.
-- **Corporate content down:** the corporate-consumption seam —
+- **Corporate content down:** the corporate-consumption seam.
   `python scripts/sync-corporate.py` clones/pulls `heading-os-corporate` into the
-  gitignored `.corporate-repo/`, read in place via `get_corporate_root()`, and
+  gitignored `.corporate-repo/`, read in place via `get_corporate_root()`.
   `/sync` refreshes it (deferral lifted 2026-06-26 — CEO cutover complete).
 - **Data up / backup:** `python scripts/push-all.py` pushes the exec's own data
   repo (`heading-os-data-{slug}`), which carries `crm/contacts/`. CEO aggregation

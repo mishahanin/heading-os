@@ -175,7 +175,21 @@ line-length = 120
 # S = flake8-bandit (security), B = flake8-bugbear, A = flake8-builtins
 # C4 = flake8-comprehensions, DTZ = flake8-datetimez, T10 = flake8-debugger
 # PIE = flake8-pie, SIM = flake8-simplify, ERA = eradicate (commented code)
-select = ["S", "B", "A", "C4", "DTZ", "T10", "PIE", "SIM", "ERA"]
+# F821 = pyflakes undefined-name. Added 2026-08-25 after a NameError shipped.
+#
+# `select` REPLACES ruff's default `E4,E7,E9,F`, so pyflakes was off repo-wide
+# and nothing here answered "does this name exist?". On 2026-08-24 commit
+# 76c63fd added `if os.name == "posix":` to scripts/update-manager.py without an
+# `import os`; ruff passed, the suite passed, and the update-manager systemd
+# timer then failed at 07:00 the next morning with
+# `NameError: name 'os' is not defined`, taking the auto-apply tier down for a
+# full cycle before anyone looked.
+#
+# Only F821 is enabled, not all of F. The rest of pyflakes is 415 findings here,
+# nearly all F401 unused-import, which is a cleanup with its own judgement calls
+# and belongs to a separate decision. F821 is different in kind: it is not
+# style. Every hit is a line that raises the moment it executes.
+select = ["S", "B", "A", "C4", "DTZ", "T10", "PIE", "SIM", "ERA", "F821"]
 ignore = [
     "S101",    # assert used (we use assert in tests)
     "S603",    # subprocess call - check for untrusted input (too noisy for our use)

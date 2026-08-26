@@ -105,8 +105,8 @@ In short:
    > 2. **Browser cookies:** For the authenticated path, close the cookie-source
    >    browser (Brave by default) before proceeding. Chromium-family browsers
    >    lock their cookie SQLite DB on Windows while running, blocking yt-dlp
-   >    from reading the ClaudeCode profile's YouTube session. Not fatal -- the
-   >    skill falls back to unauthenticated yt-dlp when locked -- but closing
+   >    from reading the ClaudeCode profile's YouTube session. Not fatal: the
+   >    skill falls back to unauthenticated yt-dlp when locked. But closing
    >    it briefly enables the authenticated path and reduces bot-detection.
 
    Options:
@@ -128,7 +128,7 @@ returned `IP_BLOCKED`.
 2. Set defaults: timeframe = 72h, depth = full
 3. Create the output directory. The brief and its intermediates are DATA artifacts -- they must land
    in the DATA overlay, never the engine tree. `pulse.py` and `pw.py` write their `--output` and `-o`
-   paths literally relative to cwd, which is the engine root after the `cd`. So resolve an absolute
+   paths literally relative to cwd. That cwd is the engine root after the `cd`. So resolve an absolute
    path under the data outputs dir, and reuse `$PULSE_DIR` everywhere below:
    ```bash
    cd "$(git rev-parse --show-toplevel)"

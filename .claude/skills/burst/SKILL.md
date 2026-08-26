@@ -111,9 +111,9 @@ the `/burst` invocation. Rules:
 - Skip prior /devil outputs (1-line framing + N severity-tagged points).
 - Skip prior /calibrate outputs (grouped numbered patch list).
 - Skip pure status/acknowledgment turns.
-- Accept the first prior assistant turn that contains substantive
-  content - a draft, an analysis, a recommendation, a rewritten passage,
-  a decision summary, a code block, a translated passage. The full
+- Accept the first prior assistant turn that contains substantive content.
+  Substantive content: a draft, an analysis, a recommendation, a rewritten
+  passage, a decision summary, a code block, a translated passage. The full
   assistant turn IS the target; the skill varies it as a single artifact.
 
 If nothing actionable in the last 10 assistant turns, abort with:
@@ -245,9 +245,9 @@ After Phase 2 the skill EXITS. No Phase 3 gate.
 
 The convergence pattern works free under Q1's walk-back rules:
 
-- User replies `use variant N` (or `take variant N`, `go with N`, `use 2`)
-  -> assistant uses variant N as the new draft in a normal turn (e.g.,
-  "Using variant 2 as the new draft: <variant 2 text>"). The next
+- User replies `use variant N` (or `take variant N`, `go with N`, `use 2`).
+  The assistant uses variant N as the new draft in a normal turn. Example:
+  "Using variant 2 as the new draft: <variant 2 text>". The next
   `/burst` invocation walks back to that turn and varies variant 2.
 - Unrelated new request -> respond normally; variants sit in conversation
   history but do not constrain future behaviour.
@@ -276,7 +276,7 @@ posture.
 7. Never enter persistent / always-on mode. Single-shot per invocation.
 8. Never invent a statistic, price, date, or source to make a variant land.
    A data-led axis with no figure to hand emits a named placeholder plus a
-   `[NEEDS FIGURE: ...]` line, and says so in the pick. `voice.md` forbids
+   `[NEEDS FIGURE: ...]` line. It says so in the pick. `voice.md` forbids
    fabricated facts, statistics, names, and sources; a variant is prose the
    operator may ship. Until 2026-08-23 `references/examples.md` modelled the
    opposite. It invented "73% of national telco DPI deployments". The pick line

@@ -10,10 +10,18 @@ Usage:
     python scripts/run-integration-tests.py --quiet      # suppress verbose output
     python scripts/run-integration-tests.py --no-cov     # skip coverage measurement
 
-Exit codes:
+Exit codes. pytest's own code is returned VERBATIM, so this list is pytest's,
+not a shorter one of our own. It used to stop at 2, which said that 3, 4, 5 and
+6 could not occur; they can, they reach the caller unchanged, and every one of
+them means the suite did not complete:
     0 - all tests passed
     1 - one or more tests failed
-    2 - pytest collection error or infrastructure issue
+    2 - interrupted: a collection error, Ctrl-C, or --maxfail reached.
+        Also returned by this script when pytest itself is not installed.
+    3 - pytest internal error
+    4 - pytest usage error (an unrecognised option, or a missing path)
+    5 - no tests were collected: nothing was measured
+    6 - max warnings exceeded
 """
 from __future__ import annotations
 
@@ -29,6 +37,18 @@ from scripts.utils.workspace import get_workspace_root
 from scripts.utils.colors import BOLD, GREEN, GRAY, RED, RESET, YELLOW
 
 WORKSPACE_ROOT = get_workspace_root()
+
+# pytest's codes above 1, in words. A bare "[WARN] pytest exited with code 5"
+# left the reader to look the number up, and called the loudest outcome in the
+# set -- nothing was measured at all -- a warning, in yellow. That is the same
+# misdirection the pytest-not-installed probe below was written to end.
+PYTEST_EXIT_MEANING = {
+    2: "interrupted - a collection error, Ctrl-C, or --maxfail reached",
+    3: "pytest internal error",
+    4: "pytest usage error - an unrecognised option, or a missing path",
+    5: "no tests were collected",
+    6: "max warnings exceeded",
+}
 
 
 def run_tests(quiet: bool = False, with_coverage: bool = True) -> int:
@@ -69,7 +89,13 @@ def run_tests(quiet: bool = False, with_coverage: bool = True) -> int:
     elif result.returncode == 1:
         print(f"{RED}{BOLD}[FAIL] One or more tests failed.{RESET}")
     else:
-        print(f"{YELLOW}{BOLD}[WARN] pytest exited with code {result.returncode}{RESET}")
+        meaning = PYTEST_EXIT_MEANING.get(result.returncode,
+                                          "unrecognised pytest exit code")
+        print(f"{RED}{BOLD}[ERROR] pytest exited {result.returncode}: "
+              f"{meaning}.{RESET}")
+        print(f"{YELLOW}The suite did not complete. No pass/fail result was "
+              f"measured - treat this as an environment problem, not a test "
+              f"failure.{RESET}")
 
     return result.returncode
 

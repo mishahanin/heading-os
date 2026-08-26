@@ -22,11 +22,13 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import sys
 from pathlib import Path
 
 import requests
 
+from scripts.utils.atomic import atomic_write_text
 from scripts.utils.workspace import get_workspace_root
 
 API_BASE = "https://healthchecks.io/api/v3"
@@ -84,9 +86,18 @@ def write_env(updates: dict) -> None:
             if not content.endswith("\n"):
                 content += "\n"
             content += f"{key}={val}\n"
-    tmp = _ENV_FILE.with_suffix(_ENV_FILE.suffix + ".tmp")
-    tmp.write_text(content, encoding="utf-8")
-    os.replace(tmp, _ENV_FILE)
+    # Preserve the file's own mode instead of letting the umask decide it. A
+    # fresh tempfile is 0644, and `os.replace` carries the tempfile's mode onto
+    # the target - so writing one ping URL back silently widened a 0600 `.env`,
+    # the file holding every credential this workspace loads, to world-readable.
+    # `atomic.atomic_write_text` also unlinks its tempfile on any error, which
+    # the two-line version did not: a failure mid-write left `.env.tmp`, a full
+    # copy of the secrets, beside the real file.
+    try:
+        mode = stat.S_IMODE(_ENV_FILE.stat().st_mode)
+    except OSError:
+        mode = 0o600
+    atomic_write_text(_ENV_FILE, content, mode=mode)
 
 
 def run_setup(checks: list, dry_run: bool) -> None:

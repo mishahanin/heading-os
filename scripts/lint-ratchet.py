@@ -79,7 +79,14 @@ def _current() -> Counter:
         raise SystemExit(f"lint-ratchet: could not parse ruff JSON output: {exc}") from exc
     counts: Counter = Counter()
     for it in items:
-        rel = Path(it["filename"]).resolve().relative_to(root).as_posix()
+        # Anchored to `root`, not to this process's cwd. ruff runs with
+        # `cwd=root` and today emits ABSOLUTE paths, so `Path(...).resolve()`
+        # happened to be right -- verified by running the gate from /tmp, which
+        # is why the audit finding claiming a crash there is refuted. But the
+        # correctness rested on a ruff output detail nothing here pins. Joining
+        # to `root` first is a no-op for an absolute path and correct for a
+        # relative one, so the gate no longer depends on which shape ruff picks.
+        rel = (root / it["filename"]).resolve().relative_to(root).as_posix()
         counts[f"{rel}::{it['code']}"] += 1
     return counts
 

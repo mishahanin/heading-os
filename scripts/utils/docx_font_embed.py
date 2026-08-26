@@ -115,9 +115,17 @@ def _build_font_rels(embed_plan: list, existing_xml: str | None) -> str:
             '</Relationships>'
         )
 
-    # Strip prior font Relationships so we do not double-register
+    # Strip prior font Relationships so we do not double-register.
+    #
+    # `[^/>]*` cannot cross a slash, and every font Relationship this module
+    # writes carries `Target="fonts/<name>"` - a slash. So the strip matched
+    # nothing it had ever produced, and re-embedding fonts into an
+    # already-embedded .docx left the old Relationship in place beside the new
+    # one, growing the part by one duplicate per font on every run. `[^>]*`
+    # still cannot leave the element, because a well-formed attribute value
+    # carries `&gt;` rather than a bare `>`.
     cleaned = re.sub(
-        r'<Relationship\s+[^/>]*Type="' + re.escape(FONT_REL_TYPE) + r'"\s*[^/>]*/>',
+        r'<Relationship\b[^>]*Type="' + re.escape(FONT_REL_TYPE) + r'"[^>]*/>',
         "",
         existing_xml,
     )

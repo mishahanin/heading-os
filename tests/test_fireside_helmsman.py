@@ -124,11 +124,30 @@ def test_nudge_failure_never_costs_the_briefing(fb, monkeypatch):
 
 
 def test_nudge_silent_when_every_near_week_is_assigned(fb, monkeypatch):
+    """No gap, no DM. Measured by RECORDING the send, not by raising inside it.
+
+    The stub here used to raise AssertionError, and the function wraps its send
+    in `except Exception` on purpose, which the sibling test above exists to
+    pin. So the trap was caught, logged and discarded: this test stayed green
+    with the "no near-term gap, stay silent" early return deleted.
+    """
     monkeypatch.setenv("MISHA_TELEGRAM_USER_ID", "12345")
-    monkeypatch.setattr(fb, "get_bot", lambda: (_ for _ in ()).throw(
-        AssertionError("must not send when there is no gap")))
+    sent: list[str] = []
+    errors: list[tuple] = []
+
+    class _Bot:
+        def send_message(self, uid, text, parse_mode=""):
+            sent.append(text)
+
+    monkeypatch.setattr(fb, "get_bot", lambda: _Bot())
+    monkeypatch.setattr(fb, "_log_event", lambda *a, **k: None)
+    monkeypatch.setattr(fb, "log_error", lambda *a, **k: errors.append(a))
+
     sched = _schedule(["2026-07-20"])
     fb._nudge_ceo_on_helmsman_gaps(sched, {"2026-07-20": {"name": "A"}}, date(2026, 7, 20))
+
+    assert sent == [], "there is no gap, so nothing may be sent"
+    assert errors == [], "and nothing may fail quietly on the way there"
 
 
 def test_nudge_ignores_weeks_beyond_the_lookahead(fb, monkeypatch):

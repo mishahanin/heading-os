@@ -11,8 +11,14 @@ a daemon with no controlling terminal cannot do, so the flag is gone and
 the has-session check carries the idempotency.
 
 Linux uses the same tmux pattern as macOS, then a detected terminal
-emulator (gnome-terminal / konsole / xterm / x-terminal-emulator /
-alacritty / kitty) to open a GUI window attached to the session.
+emulator to open a GUI window attached to the session. `find_linux_terminal`
+returns the FIRST match in `_LINUX_TERMINAL_CANDIDATES`, so that tuple's order
+is the precedence, and this line now repeats it: x-terminal-emulator (the
+Debian alternatives wrapper, i.e. the user's own default) / gnome-terminal /
+konsole / alacritty / kitty / xterm. It used to list the same six in a
+different order, putting xterm third and the wrapper fourth - the inverse of
+the deliberate choice the tuple's own comment explains, and exactly the kind of
+line a maintainer reorders the CODE to match.
 On headless Linux (no DISPLAY/WAYLAND_DISPLAY), the tmux session is
 spawned but no GUI attach is attempted - the caller can attach later
 via `tmux attach -t 31c-<slug>`.
@@ -23,6 +29,8 @@ origin-gated prompt knows the session was launched from the dashboard
 string when the /launch caller supplies a context dict - skills like
 /email-respond use this to pre-populate (conv_id, subject, etc.)
 instead of asking the user to retype them.
+
+Tests: tests/test_an_allowlist_that_admitted_a_flag.py
 """
 import base64
 import json
@@ -38,7 +46,16 @@ from pathlib import Path
 # that still accepts every legitimate value. Defense-in-depth: validation here
 # protects every code path that builds wt.exe / tmux commands, including the
 # registry fallback in Task 14's /launch endpoint and any future internal caller.
-_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+# The FIRST character must be alphanumeric. `{session_id}` is interpolated bare
+# straight after `claude --resume`, and a session id never begins with `-`, so
+# the old pattern was not "the most-restrictive that still accepts every
+# legitimate value" the comment above promises: `--dangerously-skip-permissions`
+# is 30 characters of `[A-Za-z0-9_-]`, passed validation, and arrived on the
+# command line as a FLAG TO CLAUDE rather than as a resume target. Every other
+# token in those command strings is prefixed, env-assignment-bound, base64 or
+# metacharacter-stripped; this was the one uncontrolled argument-position value,
+# and the dashboard's /launch path supplies it.
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _USER_SLUG_RE = re.compile(r"^[a-z0-9-]{1,32}$")
 _ACTION_RE = re.compile(r"^[a-z0-9-]{1,40}$")
 
@@ -252,7 +269,13 @@ def _encode_context(context: dict | None) -> str | None:
         ctx = json.loads(base64.b64decode(os.environ.get('BRIDGE_CONTEXT', '')) or '{}')
 
     Returns None when context is None or empty (caller skips the env var).
-    Caps payload at 8 KB to prevent the cmd.exe line length explosion."""
+
+    Caps the ENCODED string at 8 KB, which is what lands on the command line and
+    so what the cmd.exe length limit actually sees. Base64 inflates by 4/3, so
+    the usable payload is about 6 KB. This line said "caps payload at 8 KB",
+    which sizes the caller's dict against a limit the code does not apply: a
+    7 KB context was silently dropped and the skill lost its pre-population with
+    no error anywhere."""
     if not context:
         return None
     try:

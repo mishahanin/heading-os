@@ -57,9 +57,17 @@ def header(title):
 
 
 def check_reference_validation():
-    """Check that all paths in CLAUDE.md Reference Resources table exist."""
+    """Check that all paths in CLAUDE.md Reference Resources table exist.
+
+    Reports how many paths it actually examined. The engine CLAUDE.md has
+    carried no "Reference Resources" heading for some time, so the loop below
+    never ran and the section printed an unconditional green -- "All reference
+    paths resolve to existing files" over zero paths, which is the vacuous-pass
+    shape `.claude/rules/scope-claims.md` names.
+    """
     header("Reference Validation")
     issues = 0
+    checked = 0
 
     if not CLAUDE_MD.exists():
         action("CLAUDE.md not found!")
@@ -71,15 +79,18 @@ def check_reference_validation():
     path_pattern = re.compile(r"`([^`]+\.[a-z]+)`")
     # Look for the Reference Resources section
     in_ref_section = False
+    section_seen = False
     for line in content.split("\n"):
         if "Reference Resources" in line:
             in_ref_section = True
+            section_seen = True
             continue
         if in_ref_section and line.startswith("## "):
             break
         if in_ref_section and "|" in line:
             matches = path_pattern.findall(line)
             for path_str in matches:
+                checked += 1
                 full_path = WORKSPACE / path_str
                 if full_path.exists():
                     ok(f"{path_str}")
@@ -87,8 +98,21 @@ def check_reference_validation():
                     action(f"Missing: {path_str}")
                     issues += 1
 
-    if issues == 0:
-        ok("All reference paths resolve to existing files")
+    if checked == 0:
+        # `checked` counts backticked paths, not sections, so it cannot tell
+        # "no section" from "a section whose paths are not in backticks". The
+        # loop already tracks section presence; it simply was not read here, and
+        # the operator was handed the wrong remediation whenever the section
+        # existed. Say which of the two it is.
+        if section_seen:
+            warn("CLAUDE.md has a 'Reference Resources' section but no "
+                 "backtick-wrapped paths in it; 0 paths checked "
+                 "(this section verified nothing)")
+        else:
+            warn("CLAUDE.md has no 'Reference Resources' section; 0 paths checked "
+                 "(this section verified nothing)")
+    elif issues == 0:
+        ok(f"All {checked} reference path(s) resolve to existing files")
     return issues
 
 
@@ -177,16 +201,36 @@ def check_pipeline_health():
 
     content = pipeline_file.read_text(encoding="utf-8")
 
-    # Check for TBD, placeholder, and empty fields
+    # The comment here used to promise TBD, placeholder AND empty fields.
+    # `placeholder_count` was assigned and never read, nothing anywhere looked
+    # at empty cells, and the TBD number was a whole-file substring count
+    # printed as "N TBD fields". Same class the sibling
+    # `check_people_completeness` already carries a fix-comment for: say what
+    # the method counted, and count the things the comment promises.
     tbd_count = content.lower().count("tbd")
-    placeholder_count = content.count("[")
     next_action_missing = content.lower().count("[next action]")
 
+    # Table cells, so "placeholder" and "empty" mean something. A row is
+    # `| a | b | c |`; the cells are what sits between the pipes.
+    table_lines = [ln for ln in content.split("\n")
+                   if ln.strip().startswith("|") and "---" not in ln]
+    cells = [c.strip() for ln in table_lines for c in ln.strip().strip("|").split("|")]
+    placeholder_cells = [c for c in cells if re.fullmatch(r"\[[^\]]*\]", c)]
+    empty_cells = [c for c in cells if c == ""]
+
     if tbd_count > 0:
-        warn(f"{tbd_count} TBD fields found in pipeline.md")
+        warn(f"{tbd_count} 'TBD' occurrence(s) anywhere in pipeline.md "
+             f"(a whole-file substring count, not a field count)")
         issues += 1
     if next_action_missing > 0:
         warn(f"{next_action_missing} missing next actions in pipeline.md")
+        issues += 1
+    if placeholder_cells:
+        warn(f"{len(placeholder_cells)} table cell(s) hold only a "
+             f"[placeholder] in pipeline.md")
+        issues += 1
+    if empty_cells:
+        warn(f"{len(empty_cells)} empty table cell(s) in pipeline.md")
         issues += 1
 
     # Check file size (thin pipeline is a signal)
@@ -222,10 +266,14 @@ def check_people_completeness():
         warn(f"{len(add_patterns)} placeholder fields ([Add ...]) in people.md")
         issues += 1
 
-    # Check for missing emails
-    tbd_emails = content.lower().count("tbd") + content.lower().count("[email]")
-    if tbd_emails > 0:
-        warn(f"{tbd_emails} missing email/contact entries")
+    # Say what this counts. It is a whole-file substring count with no column or
+    # field context, so a "TBD" in a role, a company or a next-step column lands
+    # here too -- calling every hit a missing EMAIL was a claim the method never
+    # established.
+    placeholders = content.lower().count("tbd") + content.lower().count("[email]")
+    if placeholders > 0:
+        warn(f"{placeholders} 'TBD' or '[email]' placeholder(s) anywhere in "
+             f"people.md (not necessarily in an email column)")
         issues += 1
 
     size = people_file.stat().st_size
@@ -243,8 +291,12 @@ def check_outputs_inventory():
         action("outputs/ directory not found!")  # leak-guard: ok (string in a message/log, not a path)
         return 1
 
-    files = list(OUTPUTS_DIR.glob("*"))
-    files = [f for f in files if f.is_file()]
+    # `glob("*")` walked the TOP LEVEL only, while the labels said "Total".
+    # On the operator convention of one subdirectory per deliverable that meant
+    # 1 file / 0.0 MB reported over a tree holding thousands. Two numbers now,
+    # each labelled with the scope its method actually covers.
+    files = [f for f in OUTPUTS_DIR.rglob("*") if f.is_file()]
+    loose = [f for f in OUTPUTS_DIR.glob("*") if f.is_file()]
 
     # Categorize by extension
     by_ext = {}
@@ -252,17 +304,31 @@ def check_outputs_inventory():
     for f in files:
         ext = f.suffix.lower() or "(no ext)"
         by_ext.setdefault(ext, []).append(f)
-        total_size += f.stat().st_size
+        try:
+            total_size += f.stat().st_size
+        except OSError:
+            # A dangling symlink or a file removed mid-walk. Counting it and
+            # skipping its bytes beats aborting the whole section.
+            continue
 
-    ok(f"Total files: {len(files)}")
+    ok(f"Total files (recursive): {len(files)}")
     ok(f"Total size: {total_size / (1024*1024):.1f} MB")
 
     for ext, ext_files in sorted(by_ext.items()):
-        ext_size = sum(f.stat().st_size for f in ext_files)
+        ext_size = 0
+        for f in ext_files:
+            try:
+                ext_size += f.stat().st_size
+            except OSError:
+                continue
         print(f"       {ext}: {len(ext_files)} files ({ext_size / 1024:.0f} KB)")
 
-    if len(files) > 30:
-        warn(f"outputs/ has {len(files)} files - consider organizing into subdirectories")  # leak-guard: ok (string in a message/log, not a path)
+    # The nag is about loose files at the top level, which is what "organize
+    # into subdirectories" asks you to fix. Firing it on the recursive count
+    # would scold an already-organized tree forever.
+    if len(loose) > 30:
+        warn(f"outputs/ has {len(loose)} loose files at the top level - "  # leak-guard: ok (string in a message/log, not a path)
+             f"consider organizing into subdirectories")
         issues += 1
 
     return issues
@@ -289,9 +355,14 @@ def check_datastore():
     for d in expected_dirs:
         dir_path = DATASTORE_DIR / d
         if dir_path.exists():
-            file_count = len(list(dir_path.glob("*")))
+            # `glob("*")` counted DIRECTORIES as files, so `brand/` reported
+            # "5 file(s)" for five subfolders holding 192 documents -- a number
+            # that was neither the file count at that level (0) nor the document
+            # count in the subtree. A subdir holding only empty folders also
+            # escaped the "awaiting documents" warning.
+            file_count = sum(1 for p in dir_path.rglob("*") if p.is_file())
             if file_count > 0:
-                ok(f"{d}/: {file_count} file(s)")
+                ok(f"{d}/: {file_count} document(s)")
             else:
                 warn(f"{d}/: empty - awaiting documents")
         else:
@@ -344,6 +415,15 @@ def check_docs_sync() -> int:
         "EMERGENCY-PROCEDURES.md", "EMERGENCY-PROCEDURES.html",
     ]
     templates_dir = get_templates_dir()
+    if not templates_dir.is_dir():
+        # Same state its sibling `check_doc_versions` already treats as
+        # legitimate 60 lines below. Without this, a bare public engine clone
+        # emitted six ACTIONs (one per file "missing from templates/"),
+        # `workspace-health.py` exited 1, and the check that stands in front of
+        # `/push-updates` failed on every clone without the private overlay. A
+        # missing overlay is not a missing file.
+        warn("templates/ is not present (no data overlay); 0 file pairs compared")
+        return 0
     for name in synced_files:
         tpl = templates_dir / name
         doc = _docs_path(name)
@@ -362,7 +442,12 @@ def check_docs_sync() -> int:
             else:
                 ok(f"{name}: synced")
         except OSError as e:
-            warn(f"{name}: read failed ({e})")
+            # An unreadable copy is not a synced copy. This was a WARN that did
+            # not count, so a run where every comparison failed to read still
+            # returned 0 and the summary said "All checks passed." -- the guard
+            # reporting clean exactly when it could verify nothing.
+            action(f"{name}: read failed ({e}); sync NOT verified")
+            issues += 1
     return issues
 
 
@@ -375,6 +460,11 @@ def check_skill_router_coverage() -> int:
     - Be a plugin-namespaced skill (documented in the plugin doctrine section)
 
     A skill in .claude/skills/ without any mention in the router is silently orphaned.
+
+    The match is boundary-anchored. A bare `f"/{name}" in router_text` reported
+    `osint` as covered on the strength of the `/osint-advanced` row alone, and
+    `queue` on `/queue-draft`; both pairs are live in this repo, so for those
+    names the check could not detect the very class it advertises.
     """
     header("Skill Router Coverage")
     issues = 0
@@ -389,9 +479,10 @@ def check_skill_router_coverage() -> int:
     router_text = router_file.read_text(encoding="utf-8")
     skill_dirs = [d.name for d in sorted(skills_dir.iterdir()) if d.is_dir() and not d.name.startswith(".")]
     for name in skill_dirs:
-        needle = f"/{name}"
-        if needle in router_text or f"`{needle}`" in router_text:
-            ok(f"{name}: in router")
+        # A skill name may not run straight into another name character, so
+        # `/osint` no longer matches inside `/osint-advanced`.
+        if re.search(rf"/{re.escape(name)}(?![\w-])", router_text):
+            ok(f"{name}: mentioned in skill-router.md")
         else:
             action(f"{name}: not mentioned in skill-router.md")
             issues += 1
@@ -399,18 +490,30 @@ def check_skill_router_coverage() -> int:
 
 
 def check_doc_versions(max_age_days: int = 90) -> int:
-    """Verify shared docs carry `version:` + `last-updated:` markers and are fresh.
+    """Verify four shared templates carry `version:` + `last-updated:` markers.
 
-    Every file in `templates/` and `docs/` from the sync set must have a version
-    marker on line 1 (for .md/.template files) or near the top for .html files.
-    Dates older than max_age_days on a widely-distributed doc are a signal to
-    refresh content before next push.
+    Scope, stated because the old docstring overstated it: this opens exactly
+    the four `.md`/`.template` files listed in `tracked` below. It opens nothing
+    under `docs/` and no `.html` file. `check_docs_sync` byte-compares the six
+    synced files, so a drifted marker in a docs/ copy is caught there instead.
+
+    A missing file (with templates/ present) counts as an issue. A stale date
+    does not: staleness is a refresh signal, and blocking a push on it was never
+    the contract in `.claude/rules/documentation.md`. The stale count is printed
+    so it is not silent either.
     """
     header(f"Shared Doc Version Markers (freshness threshold: {max_age_days} days)")
     issues = 0
+    stale = 0
     version_pattern = re.compile(r"<!--\s*version:\s*(\S+?)\s*\|\s*last-updated:\s*(\d{4}-\d{2}-\d{2})\s*-->")
     today = datetime.now(get_default_tz()).date()
     templates_dir = get_templates_dir()
+    if not templates_dir.is_dir():
+        # A bare public engine clone has no data overlay, so there is no
+        # templates/ tree to version-check. That is a legitimate state, unlike
+        # a file missing from a templates/ that DOES exist.
+        warn("templates/ is not present (no data overlay); 0 docs version-checked")
+        return 0
     tracked = [
         templates_dir / "GETTING-STARTED.md",
         templates_dir / "CEO-ADMIN-GUIDE.md",
@@ -420,7 +523,12 @@ def check_doc_versions(max_age_days: int = 90) -> int:
     for f in tracked:
         label = f"templates/{f.name}"  # f is under the data root now; relative_to(WORKSPACE) would raise
         if not f.exists():
-            warn(f"{label}: missing")
+            # templates/ exists but this member of the sync set does not: the
+            # set is incomplete, which is a defect, not a note. It used to WARN
+            # and `continue`, so an entirely missing template set still returned
+            # 0 and the run printed "All checks passed."
+            action(f"{label}: missing from templates/")
+            issues += 1
             continue
         first_lines = f.read_text(encoding="utf-8").splitlines()[:3]
         first_block = "\n".join(first_lines)
@@ -438,9 +546,13 @@ def check_doc_versions(max_age_days: int = 90) -> int:
             continue
         age = (today - doc_date).days
         if age > max_age_days:
+            stale += 1
             warn(f"{label}: v{version}, last-updated {date_str} ({age} days old - consider refresh)")
         else:
             ok(f"{label}: v{version}, last-updated {date_str} ({age} days)")
+    if stale:
+        warn(f"{stale} of {len(tracked)} shared doc(s) past the {max_age_days}-day "
+             f"threshold (reported, not counted as an issue)")
     return issues
 
 
@@ -470,8 +582,20 @@ def check_build_sync() -> int:
     import json
     try:
         data = json.loads(build_json.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
+    except (OSError, ValueError) as e:
+        # `ValueError`, not `json.JSONDecodeError`. A BUILD.json with invalid
+        # UTF-8 raises UnicodeDecodeError out of `read_text`, which is a
+        # ValueError and not an OSError, so it escaped this handler.
         action(f"BUILD.json parse failed: {e}")
+        return 1
+    if not isinstance(data, dict):
+        # Valid JSON of the wrong shape. A list, string, number or null parsed
+        # cleanly, so the handler above never fired and `.get` raised
+        # AttributeError on the next line. `main` runs these checks in an
+        # unguarded loop, so the WHOLE health run died there: the remaining
+        # sections never ran, no summary printed, and the operator got a
+        # traceback instead of a verdict in front of `/push-updates`.
+        action(f"BUILD.json is a {type(data).__name__}, expected an object")
         return 1
     build_no = data.get("build", "?")
     # `timestamp` is the key `publish-corporate.bump_build` writes. This read
@@ -494,20 +618,35 @@ def check_daemon_token_perms() -> int:
     import stat as _stat
     header("Daemon token permissions")
     token_file = WORKSPACE / ".daemon-state" / "token"
-    if not token_file.exists():
-        ok("daemon token absent (daemon never started); skipping perms check")
-        return 0
+    state_dir = token_file.parent
     issues = 0
+
+    # The world-writable test used to sit AFTER the early return below, so a
+    # world-writable .daemon-state/ went unflagged whenever the token happened
+    # to be absent -- which is the state this workspace is in, the bridge daemon
+    # being deliberately stopped.
+    if state_dir.is_dir():
+        parent_mode = _stat.S_IMODE(state_dir.stat().st_mode)
+        if parent_mode & 0o002:
+            action(f".daemon-state/ is world-writable (mode {oct(parent_mode)})")
+            issues += 1
+
+    if not token_file.exists():
+        # Absence establishes that the file is not there, and nothing more. The
+        # old line attributed a cause -- "(daemon never started)" -- that no
+        # input to this function could support; deleted, moved, or restored
+        # without it all look identical. It also used the OK marker for a check
+        # that did not run.
+        warn("daemon token file absent; permissions NOT checked "
+             "(never started, or removed - this check cannot tell which)")
+        return issues
+
     mode = _stat.S_IMODE(token_file.stat().st_mode)
     if mode != 0o600:
         action(f".daemon-state/token has mode {oct(mode)}, expected 0o600 (run: chmod 600 {token_file})")
         issues += 1
     else:
         ok(".daemon-state/token is 0600")
-    parent_mode = _stat.S_IMODE(token_file.parent.stat().st_mode)
-    if parent_mode & 0o002:
-        action(f".daemon-state/ is world-writable (mode {oct(parent_mode)})")
-        issues += 1
     return issues
 
 
@@ -593,15 +732,26 @@ def main():
     }
 
     if args.section:
+        ran = [args.section]
         total_issues = checks[args.section]()
     else:
+        ran = list(checks)
         for name, check_fn in checks.items():
             total_issues += check_fn()
 
-    # Summary
+    # Summary. "All checks passed." was printed after `--section extras` too --
+    # one section, and one whose own docstring says it is informational and
+    # always returns 0. The summary now names the coverage it had.
     header("Summary")
-    if total_issues == 0:
-        print(f"  {GREEN}{BOLD}All checks passed.{RESET}")
+    skipped = len(checks) - len(ran)
+    if total_issues == 0 and skipped:
+        print(f"  {GREEN}{BOLD}Section '{ran[0]}' passed.{RESET} "
+              f"{YELLOW}The other {skipped} section(s) did not run.{RESET}")
+    elif total_issues == 0:
+        print(f"  {GREEN}{BOLD}All {len(ran)} checks passed.{RESET}")
+    elif skipped:
+        print(f"  {YELLOW}{BOLD}{total_issues} issue(s) found in section "
+              f"'{ran[0]}'; the other {skipped} section(s) did not run.{RESET}")
     else:
         print(f"  {YELLOW}{BOLD}{total_issues} issue(s) found.{RESET}")
 

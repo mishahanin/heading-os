@@ -12,7 +12,9 @@ Usage:
   python scripts/humanization-check.py --json <file>       # JSON output for CI/programmatic use
   python scripts/humanization-check.py --text "string"     # Inline text audit
 
-Checks performed:
+Checks performed (every one that `audit()` runs; the list stopped at 11 while
+three more were running, two of them error-severity, so a document could fail
+this gate for a reason its own documentation did not mention):
   1. Banned vocabulary (delve, tapestry, leverage, robust, etc.)
   2. Banned phrases (it's important to note, in today's world, etc.)
   3. Banned structures ("It's not just X - it's Y", "challenges pivot")
@@ -24,8 +26,14 @@ Checks performed:
   9. Hedge density
  10. Founder-blog slop phrases (throat-clearing, emphasis crutches, meta-commentary)
  11. False agency (inanimate subject taking a human verb)
+ 12. Over-fragmentation (many short sentences, no long-clause sentence)
+ 13. `-ing` tail phrases (", highlighting its importance." at a clause end)
+ 14. Sentences opening Additionally / Moreover / Furthermore / Subsequently
 
-Tests: tests/test_a_budget_that_was_declared_and_never_spent.py, tests/test_humanization_slop_patterns.py
+Overlapping lexical hits are collapsed: one occurrence caught by two lists is
+reported once, as the longest match. See `_dedupe_lexical_overlaps`.
+
+Tests: tests/test_a_budget_that_was_declared_and_never_spent.py, tests/test_humanization_slop_patterns.py, tests/test_a_gate_a_curly_apostrophe_walked_past.py
 
 Exit codes:
   0 - clean (or strict-mode pass)
@@ -433,11 +441,32 @@ MONTH_RE = re.compile(r"\b(January|February|March|April|May|June|July|August|Sep
 # ============================================================
 
 def strip_markdown_noise(text):
-    """Remove markdown noise that would skew prose-level checks."""
+    """Remove markdown noise that would skew prose-level checks.
+
+    Also folds curly apostrophes to ASCII. `check_slop_phrases` did that for
+    itself and no other check did, so whether a banned phrase was found at all
+    depended on which apostrophe the model happened to emit: "It's important to
+    note" with U+2019 matched nothing in BANNED_PHRASES, nothing in
+    HEDGE_PHRASES, and failed the `it'?s` structure regexes -- while the same
+    sentence with a straight apostrophe was a hard error. LLM output is full of
+    U+2019, so this was not an edge case; it was a hole through the middle of
+    the gate.
+
+    U+2019 and U+2018 are ONE character each and so is `'`, so every match
+    offset still points at the same place in the text and `_snippet` stays
+    accurate. That property is why this is a substitution and not a strip.
+    Nothing is written back: the file on disk keeps its curly characters, which
+    `.claude/rules/humanization.md` requires.
+    """
+    text = text.replace("’", "'").replace("‘", "'")
     # Strip explicit audit-skip blocks (for documentation files that list banned items)
     text = re.sub(r"<!--\s*audit-skip-start\s*-->[\s\S]*?<!--\s*audit-skip-end\s*-->", "", text, flags=re.IGNORECASE)
-    # Strip YAML frontmatter
-    text = re.sub(r"^---\n.*?\n---\n", "", text, count=1, flags=re.DOTALL)
+    # Strip YAML frontmatter. `(?:\n|$)`, because requiring a newline AFTER the
+    # closing fence left the frontmatter in place for any file that ends on it
+    # with no trailing newline -- and the YAML was then audited as prose, so a
+    # `title: leveraging robust systems` line produced two banned-vocab errors
+    # from metadata this function's own name says it removes.
+    text = re.sub(r"^---\n.*?\n---(?:\n|$)", "", text, count=1, flags=re.DOTALL)
     # Strip code fences (```...```)
     text = re.sub(r"```[\s\S]*?```", "", text)
     # Strip inline code (`...`)
@@ -457,11 +486,22 @@ def strip_markdown_noise(text):
 
 
 def get_paragraphs(text):
-    """Split prose into paragraphs."""
+    """Split prose into paragraphs, with heading LINES removed.
+
+    The filter used to discard any block that STARTED with a heading, and a
+    heading with its paragraph directly under it -- no blank line between, which
+    is how most of this workspace is written -- is one block after the paragraph
+    split. So the prose went out with the heading. A document whose every
+    paragraph sits under its own heading reported "Paragraphs: 0" and drew no
+    burstiness, specificity or transition finding at all, whatever it said.
+    """
     text = strip_markdown_noise(text)
-    paras = [p.strip() for p in PARAGRAPH_BOUNDARY.split(text) if p.strip()]
-    # Filter out lines that are only headings (start with # after stripping)
-    paras = [p for p in paras if not re.match(r"^#{1,6}\s", p)]
+    paras = []
+    for block in PARAGRAPH_BOUNDARY.split(text):
+        lines = [ln for ln in block.splitlines() if not re.match(r"^\s*#{1,6}\s", ln)]
+        body = "\n".join(lines).strip()
+        if body:
+            paras.append(body)
     return paras
 
 
@@ -493,6 +533,7 @@ def check_banned_vocab(text):
                 "severity": "error",
                 "word": m.group(),
                 "position": m.start(),
+                "end": m.end(),
                 "context": _snippet(text, m.start(), m.end()),
             })
     # Figurative-use checks
@@ -504,6 +545,7 @@ def check_banned_vocab(text):
                     "severity": "error",
                     "word": word,
                     "position": m.start(),
+                    "end": m.end(),
                     "context": _snippet(text, m.start(), m.end()),
                 })
     return findings
@@ -519,6 +561,7 @@ def check_banned_phrases(text):
                 "severity": "error",
                 "phrase": phrase,
                 "position": m.start(),
+                "end": m.end(),
                 "context": _snippet(text, m.start(), m.end()),
             })
     return findings
@@ -635,6 +678,7 @@ def check_ing_tail_phrases(text):
                 "severity": "error",
                 "phrase": phrase,
                 "position": m.start(),
+                "end": m.end(),
                 "context": _snippet(text, m.start(), m.end()),
             })
     # Generic regex: comma + verb-ing + the/its + abstract noun + sentence end
@@ -658,6 +702,7 @@ def check_ing_tail_phrases(text):
                 "severity": "warning",
                 "phrase": m.group(1) + " " + m.group(2) + " " + m.group(3),
                 "position": m.start(),
+                "end": m.end(),
                 "context": _snippet(text, m.start(), m.end()),
             })
     return findings
@@ -722,10 +767,15 @@ def check_burstiness(text):
 
     Two-track rule:
     - Track A (longer prose, mean sentence length > 12): require both a sub-7-word
-      sentence AND a 25+-word sentence in any paragraph of 3+ sentences. This is the
-      classic Provost/GPTZero burstiness signal for substantive prose.
-    - Track B (punchy prose, mean sentence length <= 12): require coefficient of
-      variation > 30%. Misha's LinkedIn voice achieves variance through extreme
+      sentence AND a sentence of MORE THAN 25 words in any paragraph of 3+
+      sentences. This is the classic Provost/GPTZero burstiness signal for
+      substantive prose. The line read "a 25+-word sentence" against code that
+      tests `l > 25`, so a paragraph whose longest sentence was exactly 25 words
+      was documented as passing and failed.
+    - Track B (punchy prose, mean sentence length <= 12): require a coefficient of
+      variation of 30% OR MORE -- the code tests `cv < 30` for failure, so exactly
+      30% passes, where "> 30%" said it did not. Misha's LinkedIn voice achieves
+      variance through extreme
       shortness (1-3 word sentences mixed with 15-word) - that IS bursty, just on a
       different range. CV catches this; the fixed-threshold rule does not.
 
@@ -896,6 +946,7 @@ def check_slop_phrases(text):
                     "category": category,
                     "phrase": phrase,
                     "position": m.start(),
+                    "end": m.end(),
                     "context": _snippet(text, m.start(), m.end()),
                 })
     seen = {(f["position"], f["phrase"]) for f in findings}
@@ -909,6 +960,7 @@ def check_slop_phrases(text):
                 "category": category,
                 "phrase": label,
                 "position": m.start(),
+                "end": m.end(),
                 "context": _snippet(text, m.start(), m.end()),
             })
     return findings
@@ -994,6 +1046,66 @@ def _snippet(text, start, end, before=20, after=30):
 # Aggregation and reporting
 # ============================================================
 
+# Checks that report the SAME lexical hit: one stretch of text that matched a
+# word list, a phrase list or a fixed pattern. Only these are de-duplicated
+# against each other. A `structural_pattern` spanning forty characters makes a
+# DIFFERENT claim about the same text and must not be allowed to swallow a
+# banned word sitting inside it.
+_LEXICAL_TYPES = frozenset({
+    "banned_vocab", "banned_vocab_figurative", "banned_phrase",
+    "ing_tail_phrase", "slop_phrase",
+})
+
+_SEVERITY_RANK = {"error": 2, "warning": 1}
+
+
+def _dedupe_lexical_overlaps(findings):
+    """Drop a lexical finding whose matched span sits inside another's.
+
+    One occurrence is one thing to fix, and it was being reported up to three
+    times. "a rich tapestry" produced a `banned_phrase` for "rich tapestry", a
+    `banned_vocab` for "tapestry" and a `banned_vocab_figurative` for "rich";
+    "shaping the future" produced a `banned_phrase` and an `ing_tail_phrase`.
+    Each check de-duplicated inside itself and nothing de-duplicated across
+    them, so the error count and `by_type` were both inflated by the overlap
+    between the word lists rather than by anything in the prose.
+
+    Deleting the overlapping ENTRIES was the other option and is what the
+    `cultivating` fix did, but measured across the whole configuration the
+    overlap is structural, not a slip: fourteen BANNED_PHRASES contain a
+    BANNED_VOCAB word, six ING_TAIL_PHRASES do, and four HEDGE_PHRASES are
+    verbatim BANNED_PHRASES. Removing them would cost the longer, more useful
+    report -- "plays a pivotal role" tells an author about a construction;
+    "pivotal" tells them about a word -- so the longest match is what survives
+    here, and the shorter ones inside it are dropped.
+
+    Two guards. A finding is only dropped by one at least as SEVERE, so a
+    generic `-ing`-tail warning cannot silently retire a banned-vocab error
+    that happens to fall inside its span. And an exact span tie keeps whichever
+    check reported first, so the pass is deterministic rather than dependent on
+    dictionary order.
+    """
+    spans = []
+    for i, f in enumerate(findings):
+        if (f.get("type") in _LEXICAL_TYPES
+                and isinstance(f.get("position"), int)
+                and isinstance(f.get("end"), int)):
+            spans.append((i, f["position"], f["end"],
+                          _SEVERITY_RANK.get(f.get("severity"), 0)))
+
+    drop = set()
+    for i, start_i, end_i, rank_i in spans:
+        for j, start_j, end_j, rank_j in spans:
+            if i == j or rank_j < rank_i:
+                continue
+            if start_j <= start_i and end_i <= end_j:
+                wider = (end_j - start_j) > (end_i - start_i)
+                if wider or (start_j == start_i and end_j == end_i and j < i):
+                    drop.add(i)
+                    break
+    return [f for i, f in enumerate(findings) if i not in drop]
+
+
 def audit(text, strict=False):
     """Run all checks; return a structured findings list and summary.
 
@@ -1025,6 +1137,7 @@ def audit(text, strict=False):
     findings += check_transition_openers(text)  # already strips internally
     findings += check_hedge_density(prose)
     findings += check_title_case_headings(prose)
+    findings = _dedupe_lexical_overlaps(findings)
 
     errors = [f for f in findings if f.get("severity") == "error"]
     warnings = [f for f in findings if f.get("severity") == "warning"]
@@ -1033,7 +1146,12 @@ def audit(text, strict=False):
         "total_findings": len(findings),
         "errors": len(errors),
         "warnings": len(warnings),
-        "word_count": word_count(text),
+        # Stripped, like every check above and like `paragraph_count` beside it.
+        # Counting the raw text put code fences, YAML, tables and URLs into the
+        # number printed as this document's length -- the same inflation
+        # `check_burstiness` documents as a defect when it gated behaviour, left
+        # in place where the operator reads it.
+        "word_count": word_count(prose),
         "paragraph_count": len(get_paragraphs(text)),
         "by_type": dict(Counter(f["type"] for f in findings)),
     }
@@ -1100,6 +1218,13 @@ def print_report(result, source):
                 print(f"    {YELLOW}title-case{RESET}: '{w['heading']}'")
             elif t == "false_agency":
                 print(f"    {YELLOW}false-agency{RESET}: {w['description']} - {w.get('context','')}")
+            elif t == "ing_tail_phrase":
+                # The generic `-ing`-tail path emits a WARNING and carries no
+                # `description`, and this branch had no case for it, so the
+                # `else` below printed `w.get('description', w)` -- the whole
+                # finding dict, repr and all, into the human report. The errors
+                # branch above has had its case since the check was written.
+                print(f"    {YELLOW}ing-tail{RESET}: '{w['phrase']}' - {w.get('context','')}")
             else:
                 print(f"    {YELLOW}{t}{RESET}: {w.get('description', w)}")
         if len(warnings) > 15:

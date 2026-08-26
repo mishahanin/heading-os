@@ -203,8 +203,13 @@ CLOSER = r"[)\]\"'’”*_]"
 SENTENCE_SPLIT_RE = re.compile(
     r"(?<![A-Z0-9])"
     rf"(?:(?<=[.!?])|(?<=[.!?]{CLOSER})|(?<=[.!?]{CLOSER}{CLOSER}))"
-    r"\s+(?=[A-Z(\[\"'`*_])"
+    r"\s+(?=[A-Z(\[\"'`*_/])"
 )
+# `/` is in the opener class because this corpus starts sentences with a slash
+# command more often than most prose does: "... typical transients. /calibrate's
+# auto-commit will include them." merged into one 22-word sentence and had to be
+# reworded around the tool. The leading `(?<![A-Z0-9])` guard already stops a
+# version number or an abbreviation from splitting before a path.
 
 
 # ============================================================
@@ -314,6 +319,7 @@ def parse_units(text):
     """
     units = []
     para_lines, para_start = [], 0
+    open_item = None
 
     def flush():
         nonlocal para_lines, para_start
@@ -339,18 +345,30 @@ def parse_units(text):
 
         if not stripped or HEADING_RE.match(line) or stripped.startswith("|"):
             flush()
+            open_item = None
             continue
 
         m = NUMBERED_ITEM_RE.match(line)
         if m:
             flush()
-            units.append({"kind": "step", "text": m.group(1).strip(), "line": idx})
+            open_item = {"kind": "step", "text": m.group(1).strip(), "line": idx}
+            units.append(open_item)
             continue
 
         m = BULLET_ITEM_RE.match(line)
         if m:
             flush()
-            units.append({"kind": "prose", "text": m.group(1).strip(), "line": idx})
+            open_item = {"kind": "prose", "text": m.group(1).strip(), "line": idx}
+            units.append(open_item)
+            continue
+
+        # A wrapped continuation belongs to the item above it, the way markdown
+        # reads it. It used to start a paragraph of its own, so a step's sentence
+        # was measured in halves and never against the 20-word step limit:
+        # identical prose passed or failed purely on whether the author hard
+        # wrapped it, and the gate then called the file clean.
+        if open_item is not None and not para_lines:
+            open_item["text"] = f"{open_item['text']} {stripped}".strip()
             continue
 
         if not para_lines:

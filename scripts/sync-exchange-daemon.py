@@ -8,7 +8,9 @@ duplication is intentional — one daemon per concern.
 Subcommands:
     daemon  : run forever (the scheduler). Default for /prime auto-start.
     run J   : execute job J once, out-of-band (smoke test or backfill).
-    status  : print PID, uptime, next scheduled run for each job.
+    status  : print PID, uptime, and the names of the registered jobs. It reads
+              the PID file from a separate process, so it cannot see the running
+              scheduler and cannot report a next fire time.
     stop    : signal a running daemon to shut down cleanly.
 
 PID file:  .sync-exchange/daemon.pid

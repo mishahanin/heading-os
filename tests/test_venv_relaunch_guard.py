@@ -135,9 +135,24 @@ def test_a_vanished_untracked_file_is_dropped_but_a_tracked_one_is_not():
     # No other test may write this path, or the two will delete each other's
     # scratch file under xdist. That is exactly how this test broke the lane
     # test on 2026-08-23.
-    owners = [p.name for p in sorted(TESTS.rglob("test_*.py"))
-              if p.name != Path(__file__).name
-              and ghost.name in p.read_text(encoding="utf-8", errors="replace")]
+    # This scan needs the SAME mid-scan tolerance the test exists to verify,
+    # and until 2026-08-25 it did not have it. `errors="replace"` covers a
+    # decode failure, never a missing file, so this loop walked the live tests
+    # directory with a bare read while the lane test wrote and deleted
+    # `tests/test_turn_check_slow_fixture.py` beside it. It lost that race in a
+    # full-suite run and failed with FileNotFoundError - the very race
+    # documented at length two functions above. A path that vanishes mid-scan
+    # was never checked in, so it cannot own the ghost name.
+    owners = []
+    for candidate in sorted(TESTS.rglob("test_*.py")):
+        if candidate.name == Path(__file__).name:
+            continue
+        try:
+            body = candidate.read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            continue
+        if ghost.name in body:
+            owners.append(candidate.name)
     assert owners == [], f"{ghost.name} is also written by {owners}"
 
     monkeypatch = pytest.MonkeyPatch()
@@ -274,6 +289,11 @@ def test_a_venv_symlinked_to_the_invoking_interpreter_still_re_execs(
     monkeypatch.setattr(_venv, "venv_python", lambda: link)
     monkeypatch.setattr(_venv.os, "execv", lambda path, argv: calls.append(path))
     monkeypatch.delenv(_venv._SENTINEL, raising=False)
+    # The module remembers whether it ever saw the sentinel, because it now
+    # POPS the variable so a relaunch cannot disable the guard for every
+    # descendant process. Clearing the env alone is no longer enough inside
+    # one pytest process, where conftest sets it at import.
+    monkeypatch.setattr(_venv, "_SENTINEL_SEEN", False)
     monkeypatch.setattr(sys, "executable", str(base))
 
     _venv.ensure_venv()
@@ -301,6 +321,11 @@ def test_the_invoking_interpreter_itself_does_not_re_exec(tmp_path, monkeypatch)
     monkeypatch.setattr(_venv, "venv_python", lambda: link)
     monkeypatch.setattr(_venv.os, "execv", lambda path, argv: calls.append(path))
     monkeypatch.delenv(_venv._SENTINEL, raising=False)
+    # The module remembers whether it ever saw the sentinel, because it now
+    # POPS the variable so a relaunch cannot disable the guard for every
+    # descendant process. Clearing the env alone is no longer enough inside
+    # one pytest process, where conftest sets it at import.
+    monkeypatch.setattr(_venv, "_SENTINEL_SEEN", False)
     monkeypatch.setattr(sys, "executable", str(link))
 
     _venv.ensure_venv()

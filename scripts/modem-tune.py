@@ -51,7 +51,7 @@ from scripts.utils.workspace import get_default_tz, get_outputs_dir, resolve_con
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
 from scripts.utils import modem_core as mc
 from scripts.utils.modem_ssh import ssh
-from scripts.utils.modem_drivers import driver_for
+from scripts.utils.modem_drivers import ModemReadError, driver_for
 
 LEDGER_PATH = get_outputs_dir() / "operations/reference/modem-imei-ledger.json"
 
@@ -168,7 +168,15 @@ def cmd_detect(args) -> int:
 def cmd_status(args) -> int:
     device, _host, drv, led = _device_ctx(args)
     print(f"{CYAN}Reading modem state ({device})...{RESET}")
-    st = drv.read_status()
+    try:
+        st = drv.read_status()
+    except ModemReadError as exc:
+        # A device that could not be read is not a device with nothing to
+        # report. This printed the "Reading modem state" line, then nothing at
+        # all, and exited 0 - because the driver's empty dict rendered exactly
+        # like a healthy modem holding no IMEIs and no SIMs.
+        print(f"{RED}Could not read the modem:{RESET} {exc}", file=sys.stderr)
+        return 2
     for entry in st.get("imeis", []):
         imei = entry.get("imei", "")
         badge = f"{GREEN}valid{RESET}" if mc.luhn_valid(imei) else f"{RED}INVALID{RESET}"
@@ -253,7 +261,19 @@ def cmd_revert(args) -> int:
 def cmd_reset(args) -> int:
     device, host, drv, _ = _device_ctx(args)
     print(f"{YELLOW}Full router reboot ({device}); modem-ready can take 2-3 min...{RESET}")
-    _ssh_for(host)("reboot", timeout=15)
+    # The reboot is sent over the session it kills. A dropped session is NOT an
+    # exception here -- `modem_ssh.ssh` runs `subprocess.run` without
+    # `check=True`, so ssh's exit 255 comes back as a plain string. What does
+    # raise is `subprocess.TimeoutExpired`, when the router drops TCP without a
+    # FIN and ssh blocks past the 15s bound. That escaped uncaught and skipped
+    # the wait below, so the command failed on the one router that rebooted
+    # hardest. The reboot was very likely delivered either way, so report and
+    # go on to wait for it.
+    try:
+        _ssh_for(host)("reboot", timeout=15)
+    except Exception as exc:
+        print(f"modem-tune: the reboot command did not return cleanly ({exc}); "
+              f"waiting for the router anyway.", file=sys.stderr)
     back = _wait_for_router(drv, settle=240)
     print(f"{GREEN if back else YELLOW}Router "
           f"{'back online' if back else 'reboot issued (modem not yet readable)'}.{RESET}")
@@ -264,13 +284,30 @@ def cmd_verify(args) -> int:
     device, _host, drv, led = _device_ctx(args)
     expect, live = args.expect, ""
     for _ in range(30):
-        live = drv.read_imei()
+        # Same guard as `_wait_for_router`, and for the same reason: this loop
+        # runs in the post-reset window, when the AT bridge comes and goes. A
+        # refused connection returns a string and retries fine, but a session
+        # that hangs past the transport's `timeout` raises TimeoutExpired --
+        # which escaped this loop as a traceback on attempt 1 of 30, throwing
+        # away the other 29 and the ledger update they exist to reach.
+        try:
+            live = drv.read_imei()
+        except Exception as exc:
+            print(f"modem-tune: IMEI read attempt failed: {exc}", file=sys.stderr)
+            live = ""
         if live == expect:
             break
         time.sleep(5)
     dled = mc.device_ledger(led, device, "")
     if live == expect:
-        if dled.get("current", {}).get("imei") == expect:
+        # `or {}`, not `get(k, {})`. `device_ledger` initialises a new device as
+        # `{"tac": ..., "current": None, "history": []}`, so the key EXISTS with
+        # the value None and the default is never used -- `.get("imei")` on it
+        # raised AttributeError immediately after a SUCCESSFUL verify, on any
+        # device with no applied IMEI yet. `_apply_imei` three lines up already
+        # writes it the right way. Not in the audit report; found by the test
+        # below.
+        if (dled.get("current") or {}).get("imei") == expect:
             dled["current"]["verified"] = True
             mc.save_ledger(LEDGER_PATH, led)
         print(f"{GREEN}Verified: live IMEI is {live}.{RESET}")
@@ -284,8 +321,15 @@ def _wait_for_router(drv, settle: int) -> bool:
     """Block until the modem AT bridge answers again (after a full reboot).
 
     Returns True once a live IMEI is readable, False if `settle` seconds elapse
-    first. SSH is refused while the router is still booting; that raises and is
-    swallowed so the poll keeps retrying.
+    first.
+
+    What the guard below actually catches, corrected 2026-08-25: a REFUSED
+    connection does not raise. `modem_ssh.ssh` runs `subprocess.run` without
+    `check=True`, so a booting router's exit-255 stderr comes back as an
+    ordinary string and `read_imei` yields "". The raising cases are a session
+    that hangs past the transport's `timeout` (`subprocess.TimeoutExpired`) and
+    whatever a driver's own parsing raises on a half-formed AT response. Both
+    are swallowed so the poll keeps retrying.
     """
     deadline = time.time() + settle
     time.sleep(35)

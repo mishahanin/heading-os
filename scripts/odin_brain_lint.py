@@ -68,7 +68,9 @@ def _namespace_rels():
     root) so no hardcoded data-path literal lives in engine code (leak-guard).
     They stay *relative* on purpose: _external_entities globs them against a
     root derived from the passed brain_root, which keeps the lint hermetic
-    under a temp brain in tests.
+    under a temp brain in tests. A seam whose env override points OUTSIDE that
+    root cannot be expressed relatively and comes back absolute instead; see
+    `rel` below and `_glob_dirs`.
 
     Thread refs resolve against the active business subtree AND its archive.
     Closing a thread archives it rather than deleting it, so an episode that
@@ -80,10 +82,24 @@ def _namespace_rels():
     base = get_personal_root()
 
     def rel(p):
+        """Data-root-relative when it can be, ABSOLUTE when it cannot.
+
+        The fallback used to return `Path(p.name)` -- the last component alone.
+        That then globbed against the data root, matched nothing, and set the
+        namespace to None; and `_external_entities` documents None as "the tree
+        is absent on this machine". So a THREADS_ROOT pointing at a real
+        directory outside the personal root was reported as a tree that does not
+        exist, and every namespaced link into it silently stopped being checked.
+        Absent and unreachable are not the same answer.
+
+        Only `THREADS_ROOT` has an env override, so only the thread namespace
+        can reach this branch; `get_crm_contacts_dir` and `get_plans_dir` are
+        unconditionally children of `get_personal_root()`.
+        """
         try:
             return p.relative_to(base)
-        except ValueError:  # e.g. THREADS_ROOT override points outside base
-            return Path(p.name)
+        except ValueError:
+            return p
 
     threads = rel(get_threads_dir())
     return {
@@ -236,9 +252,24 @@ def _external_entities(brain_root):
     for ns, patterns in _namespace_rels().items():
         # A wildcard-free pattern globs to itself when it exists, so one code
         # path covers both the plain subtrees and the archive fan-out.
-        dirs = [d for pat in patterns for d in data_root.glob(str(pat)) if d.is_dir()]
+        dirs = [d for pat in patterns for d in _glob_dirs(data_root, Path(pat))]
         out[ns] = {p.stem for d in dirs for p in d.rglob("*.md")} if dirs else None
     return out
+
+
+def _glob_dirs(root: Path, pattern: Path) -> list:
+    """Directories matching `pattern`, relative to `root` or absolute.
+
+    An absolute pattern reaches here only from a seam whose env override points
+    outside the personal root (`THREADS_ROOT` today). Globbing it against the
+    data root would silently match nothing, which the caller would then report
+    as an absent tree.
+    """
+    if pattern.is_absolute():
+        anchor = Path(pattern.anchor)
+        return [d for d in anchor.glob(str(pattern.relative_to(anchor)))
+                if d.is_dir()]
+    return [d for d in root.glob(str(pattern)) if d.is_dir()]
 
 
 def check_dangling_wikilinks(files_by_subdir, brain_root):

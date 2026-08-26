@@ -175,15 +175,25 @@ def _snapshot_db(src: Path) -> Path:
     os.close(tmp_fd)
     tmp_path = Path(tmp_path_str)
 
-    src_conn = sqlite3.connect(read_only_uri(src), uri=True, timeout=5)
+    # The tmp file is removed on ANY failure, including KeyboardInterrupt. The
+    # caller only unlinks on the path where this RETURNS, so every raise - a
+    # profile file that is not a database, a locked profile, an interrupt - used
+    # to strand a snapshot of the cookie store in the system temp directory,
+    # where it outlives the process. Same shape as the one fixed in
+    # `scripts/utils/chromium_cookies.py`.
     try:
-        dst_conn = sqlite3.connect(tmp_path)
+        src_conn = sqlite3.connect(read_only_uri(src), uri=True, timeout=5)
         try:
-            src_conn.backup(dst_conn)
+            dst_conn = sqlite3.connect(tmp_path)
+            try:
+                src_conn.backup(dst_conn)
+            finally:
+                dst_conn.close()
         finally:
-            dst_conn.close()
-    finally:
-        src_conn.close()
+            src_conn.close()
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
     return tmp_path
 
 

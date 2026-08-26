@@ -15,7 +15,8 @@ This module does NOT log email content. It accepts addresses and subjects
 as arguments and returns classification labels only. No caller-supplied
 string is written to logs inside this module.
 
-Tests: tests/test_a_day_that_could_not_be_read_and_was_called_quiet.py
+Tests: tests/test_a_day_that_could_not_be_read_and_was_called_quiet.py,
+       tests/test_a_catch_all_rule_the_report_could_not_see.py
 """
 
 from __future__ import annotations
@@ -81,17 +82,31 @@ class RulesEngine:
 
         On parse error or missing file the engine keeps its prior config and
         logs a warning -- it never raises. The bad-load warning is throttled by
-        mtime, for the reason given on `_bad_load_warned_mtime`.
+        mtime, for the reason given on `_bad_load_warned_mtime`; the
+        missing-file warning is throttled by `_missing_warned`, shared with
+        `reload_if_changed` and cleared the moment the file is readable again.
         """
         try:
             mtime = self.yaml_path.stat().st_mtime
         except OSError:
-            if self._config:
-                # Had config before; keep it. Warn once.
-                log.warning("email-triage-rules.yaml not found at %s; keeping prior config", self.yaml_path)
-            else:
-                log.warning("email-triage-rules.yaml not found at %s; running with empty rules", self.yaml_path)
+            # "Warn once" was a comment with nothing behind it: no flag was set,
+            # so every call warned again. `_missing_warned` already existed for
+            # exactly this, used by `reload_if_changed`, which returns before it
+            # ever reaches here -- so the throttle the comment promised lived in
+            # the one path that could not use it. Sharing the flag gives it one
+            # meaning: the operator has already been told the file is gone.
+            if not self._missing_warned:
+                if self._config:
+                    log.warning("email-triage-rules.yaml not found at %s; keeping prior config",
+                                self.yaml_path)
+                else:
+                    log.warning("email-triage-rules.yaml not found at %s; running with empty rules",
+                                self.yaml_path)
+                self._missing_warned = True
             return False
+
+        # The file is readable again, so a future disappearance warns afresh.
+        self._missing_warned = False
 
         try:
             raw = self.yaml_path.read_text(encoding="utf-8")

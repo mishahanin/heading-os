@@ -146,8 +146,18 @@ def _push_delta_files(repo: Path) -> set[str]:
     have_base = run(
         ["git", "rev-parse", "--verify", "-q", "origin/main"], repo, check=False
     ).returncode == 0
+    # `origin/main..HEAD` needs BOTH ends to resolve, and `have_base` proves only
+    # the left one. On an unborn HEAD git exits 128, `run` defaults to
+    # check=True, and the resulting CalledProcessError is not one of the two
+    # things `_attempt` absorbs -- so the whole backup died with a traceback and
+    # NEITHER repo was pushed. `engine_content_scan` calls this at step 0, before
+    # the commit, which is where a fresh clone with a remote but no commits of
+    # its own meets it on an ordinary run.
+    have_head = run(
+        ["git", "rev-parse", "--verify", "-q", "HEAD"], repo, check=False
+    ).returncode == 0
     files: set[str] = set()
-    if have_base:
+    if have_base and have_head:
         for args in (
             ["git", "diff", "-z", "--name-only", "--diff-filter=ACM", "origin/main..HEAD"],
             ["git", "diff", "-z", "--cached", "--name-only", "--diff-filter=ACM"],
@@ -155,6 +165,9 @@ def _push_delta_files(repo: Path) -> set[str]:
         ):
             files.update(run(args, repo).stdout.split("\0"))
     else:
+        # No base, or no HEAD: the index IS the whole delta. `git ls-files`
+        # works against an unborn HEAD and lists everything staged, so this
+        # branch loses no coverage in either case.
         files.update(run(["git", "ls-files", "-z"], repo).stdout.split("\0"))
     files.update(
         run(["git", "ls-files", "-z", "--others", "--exclude-standard"],
@@ -357,7 +370,17 @@ def push_repo(name: str, repo: Path, message: str, do_commit: bool, dry_run: boo
             engine_content_scan(repo, data_root)
 
     # 1. pre-push secret scan over tracked files
-    tracked = run(["git", "ls-files"], repo).stdout.splitlines()
+    #
+    # `-z`, for the reason `_push_delta_files` records four hundred lines up and
+    # this call site was left out of. Without it git C-quotes any path holding a
+    # non-ASCII byte and wraps it in double quotes, and the DATA clone carries
+    # such paths today. The trailing quote defeats every `$`-anchored branch of
+    # SECRET_TRACKED, so a tracked `.env`, `*.session` or `cookies.json` under a
+    # Cyrillic-named directory was not refused; the leading quote defeats the
+    # `.memory-index/` prefix test in step 2 outright. content_scan() is no
+    # backstop -- it scans the push DELTA, and this step exists precisely for a
+    # credential tracked long before the push.
+    tracked = [f for f in run(["git", "ls-files", "-z"], repo).stdout.split("\0") if f]
     leaks = [
         f for f in tracked
         if SECRET_TRACKED.search(f) and not f.endswith((".example", ".sample", ".template"))

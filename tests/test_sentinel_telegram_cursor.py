@@ -81,9 +81,21 @@ class FakeClient:
 
         return _gen()
 
-    async def get_messages(self, entity, limit=None, min_id=0):
-        self.calls.append({"entity": entity, "limit": limit, "min_id": min_id})
-        return [m for m in self._messages if m.id > min_id][:limit]
+    async def get_messages(self, entity, limit=None, min_id=0, max_id=0):
+        """Telethon's contract, including the half the reader now depends on.
+
+        `max_id=0` means "no upper bound". With one set, only messages BELOW it
+        are returned. And the result is newest-first, capped at `limit` - which
+        is the whole reason `_fetch_since` has to page: a single call returns
+        the newest N and silently omits everything older.
+        """
+        self.calls.append({"entity": entity, "limit": limit,
+                           "min_id": min_id, "max_id": max_id})
+        window = [m for m in self._messages if m.id > min_id]
+        if max_id:
+            window = [m for m in window if m.id < max_id]
+        window.sort(key=lambda m: m.id, reverse=True)
+        return window[:limit]
 
 
 def _user(user_id: int = 7, first_name: str = "James", bot: bool = False):

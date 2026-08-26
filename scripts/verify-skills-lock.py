@@ -81,7 +81,11 @@ def _tree_hash(tree_dir: Path) -> str:
 def _vendored_dir(root: Path, entry: dict) -> Path | None:
     """Resolve the on-disk vendored tree for a lock entry, or None."""
     skill_path = entry.get("skillPath")
-    if not skill_path:
+    if not isinstance(skill_path, str) or not skill_path:
+        # `isinstance`, not truthiness. Every other wrong shape in this file is
+        # converted into a clean FAIL line; a number, list or object here still
+        # reached `Path()` and raised TypeError, killing the verifier with an
+        # uncontrolled exit code.
         return None
     rel_parent = Path(skill_path).parent
     if Path(skill_path).is_absolute() or rel_parent in (Path("."), Path("")):
@@ -91,7 +95,19 @@ def _vendored_dir(root: Path, entry: dict) -> Path | None:
         # adversary needed; the footgun is the entry itself.
         return None
     tree = (root / rel_parent).resolve()
-    if tree != root.resolve() and root.resolve() not in tree.parents:
+    root_r = root.resolve()
+    # One condition, and it must stay one. The old form was
+    # `tree != root_r and root_r not in tree.parents`, which made tree == root
+    # an ACCEPTED result: the first conjunct went False and short-circuited the
+    # whole test. Any `skillPath` with a `..` that resolves back up -- say
+    # `x/../SKILL.md` -- therefore returned the workspace root, which is exactly
+    # the footgun the comment above says was closed; the parent-less guard only
+    # catches the literal spelling of it.
+    #
+    # `root_r not in tree.parents` alone covers both cases, because a path is
+    # never a member of its own `.parents`. Re-adding an explicit `tree ==
+    # root_r` test would be dead weight, not defence.
+    if root_r not in tree.parents:
         return None
     return tree
 
@@ -122,6 +138,7 @@ def verify(relock: bool, quiet: bool) -> int:
 
     issues = 0
     changed = False
+    hashed = 0
     skills = lock.get("skills", {})
     if not isinstance(skills, dict):
         print(f"{RED}FAIL{RESET}  lock 'skills' is a "
@@ -145,6 +162,7 @@ def verify(relock: bool, quiet: bool) -> int:
             issues += 1
             continue
         actual = _tree_hash(tree_dir)
+        hashed += 1
         expected = entry.get("computedHash")
         if relock:
             if actual != expected:
@@ -178,8 +196,20 @@ def verify(relock: bool, quiet: bool) -> int:
         print(f"\n{RED}{BOLD}{issues} vendored-skill integrity issue(s).{RESET} "
               f"If the change is intentional, re-lock with --relock.")
         return 1
+    if not hashed:
+        # Nothing counted the trees actually hashed, so a lock whose `skills`
+        # map was absent, empty, or every entry `vendored: false` produced zero
+        # comparisons, zero issues, the green line and exit 0 - in CI and at
+        # pre-push, the two places this gate is trusted. Deleting the one real
+        # entry disarmed the gate while it kept reporting a pass. The sibling
+        # `scripts/validate-crm-schema.py` closed this same class explicitly.
+        print(f"\n{RED}{BOLD}No vendored skill was hashed.{RESET} The lock lists "
+              f"nothing to verify, so a pass here would assert an integrity "
+              f"check that never ran.")
+        return 1
     if not quiet:
-        print(f"\n{GREEN}{BOLD}Vendored skills verified.{RESET}")
+        print(f"\n{GREEN}{BOLD}Vendored skills verified.{RESET} "
+              f"({hashed} tree(s) hashed)")
     return 0
 
 

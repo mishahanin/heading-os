@@ -182,6 +182,21 @@ def check_crm_health(project_dir):
                 print(f"[session-start] crm-health cache write failed: {e}", file=sys.stderr)
             if red_lines:
                 return red_lines
+        else:
+            # `subprocess.run` does not raise on a non-zero exit, so the outer
+            # handler never fired and this branch did not exist: a crm-health
+            # run that failed produced no alert and no line on any stream. The
+            # operator reads an absent CRM alert as "nothing is overdue" while
+            # the red debt keeps growing. Every other failure path in this file
+            # reports to stderr; this one is now one of them, and the operator
+            # also gets an alert, because "the check did not run" is exactly the
+            # thing a silent alarm must not hide.
+            tail = (result.stderr or result.stdout or "").strip().splitlines()
+            detail = tail[-1] if tail else "no output"
+            print(f"[session-start] crm-health exited {result.returncode}: {detail}",
+                  file=sys.stderr)
+            return [f"CRM HEALTH CHECK DID NOT RUN (exit {result.returncode}: "
+                    f"{detail}). Overdue contacts are UNKNOWN, not zero."]
     except Exception as e:
         print(f"[session-start] check_crm-health failed: {e}", file=sys.stderr)
     return None
@@ -270,14 +285,28 @@ def check_stale_files(project_dir, identity=None):
             sys.path.insert(0, project_dir)
             from scripts.utils.workspace import get_data_root
             context_dir = str(get_data_root() / "context")
-        except Exception:  # noqa: BLE001 -- alerts are best-effort, never block start
+        except Exception as e:  # noqa: BLE001 -- best-effort, never blocks start
+            # The ONE handler in this file that logged nothing. `get_data_root`
+            # raises DataRootError by design when HEADING_OS_DATA names a path
+            # that has moved, and this caught it, silently pointed at
+            # `<engine>/context` - which does not exist, because context/ is
+            # DATA-routed - and returned an empty list. The file's own comment
+            # elsewhere names the standard: a freshness alarm that fails toward
+            # silence is the worst way for it to fail.
+            print(f"[session-start] data-root resolve failed, staleness falls "
+                  f"back to the engine tree: {e}", file=sys.stderr)
             context_dir = os.path.join(project_dir, "context")
     stale = []
     warn_threshold = datetime.now().astimezone() - timedelta(days=14)
     crit_threshold = datetime.now().astimezone() - timedelta(days=30)
 
     if not os.path.isdir(context_dir):
-        return stale
+        # "nothing to check" and "could not look" are different answers, and the
+        # second one was indistinguishable from the first.
+        print(f"[session-start] no context directory at {context_dir}; staleness "
+              f"was NOT checked.", file=sys.stderr)
+        return [f"CONTEXT STALENESS NOT CHECKED: no context directory at "
+                f"{context_dir}."]
 
     for fname in os.listdir(context_dir):
         if not fname.endswith(".md"):
@@ -400,10 +429,25 @@ def main():
                 print(f"[session-start] workspace update notification failed: {e}", file=sys.stderr)
 
     if alerts:
-        context = "Session alerts:\n" + "\n".join(f"- {a}" for a in alerts)
-        json.dump({
-            "additionalContext": context
-        }, sys.stdout)
+        # PLAIN TEXT on stdout, which is what SessionStart injects.
+        #
+        # This wrote `{"additionalContext": ...}` as JSON, a key the SessionStart
+        # schema does not define, onto the SAME stream that already carries the
+        # setup banner printed at the top of this file. Whichever way the harness
+        # reads that stream, the pair is wrong: as raw context the operator gets a
+        # literal JSON blob, and as a single JSON document the banner breaks the
+        # parse and NEITHER is delivered. The whole alert pipeline - sync failure,
+        # corporate update, dependency marker, CRM red debt, stale context - then
+        # exits 0 reporting success either way.
+        #
+        # Plain text is what the evidence supports: `checkpoint-inject.py` is a
+        # registered SessionStart hook in this same directory, it prints raw
+        # text, and its output demonstrably reaches the session. The one hook
+        # here that uses the `hookSpecificOutput` wrapper, `memory-inject.py`, is
+        # disabled and registered nowhere, so it is not evidence of a live path.
+        print("Session alerts:")
+        for alert in alerts:
+            print(f"- {alert}")
 
     sys.exit(0)
 

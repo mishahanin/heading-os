@@ -155,9 +155,21 @@ SECRET_PATTERNS = [
 #   needle ABSENT   200,000 chars 0.00015s   1,000,000 chars 0.00068s
 #   needle PRESENT  400,000 chars 0.03477s   (bounded; unbounded did not finish)
 #
-# The other fifteen patterns open with a literal, so the engine already anchors
-# them and none needs an entry. Adding one that is not logically exact would
-# silently disable a pattern, so entries are added only with a measurement.
+# The other SIXTEEN patterns open with fixed text, so the engine already anchors
+# them and none needs an entry. Counted 2026-08-26: 17 patterns, 1 entry here,
+# 16 others. The comment said fifteen, which is the kind of number the next
+# author reads instead of re-counting, and this file is the one place where a
+# wrong claim about coverage costs a credential.
+#
+# "Fixed text" rather than "a literal", also counted rather than assumed:
+# fourteen of the sixteen open with a bare literal prefix (`sk-ant-`, `AKIA`,
+# `xoxb-`, `-----BEGIN `, and so on). The remaining two open with fixed text
+# that is not a bare literal - the markdown-password pattern with the escaped
+# `**Password:**`, and the env-var pattern with an alternation of fixed variable
+# names - so both still give the engine something to anchor on.
+#
+# Adding an entry that is not logically exact would silently disable a pattern,
+# so entries are added only with a measurement.
 REQUIRED_SUBSTRING = {
     "connection string with inline credentials": "://",
 }

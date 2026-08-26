@@ -481,8 +481,12 @@ def _run_audit(root, *, strict, deep, profile, use_baseline, include_internal):
     """
     files = list(_iter_files(root, include_internal))
     deep_map = {}
+    deep_note = ""
     if deep:
-        deep_map, _ = _collect_deep(root, profile)
+        # The note is returned, not discarded. Callers decide the verdict, and a
+        # verdict that names the deep engine while only the regex engine ran is
+        # the defect `.claude/rules/scope-claims.md` is about.
+        deep_map, deep_note = _collect_deep(root, profile)
 
     # Collect every finding from both engines first, stamped with its file, then
     # apply the baseline ONCE to the whole set, then group for reporting.
@@ -493,6 +497,12 @@ def _run_audit(root, *, strict, deep, profile, use_baseline, include_internal):
     # frozen `side-tab` hits in docs/assets/docs.css failed a check that had just
     # recorded them. One filter over one list cannot drift that way.
     collected = []
+    # Every file the walk actually audited, whatever it found. `_empty` markers
+    # alone under-counted: a file whose findings were ALL absorbed by the
+    # baseline contributed neither a surviving finding nor an `_empty`, so it
+    # vanished from the report and from the "N file(s) scanned" line -- a
+    # fully-baselined file looked exactly like one that was never visited.
+    visited = []
     any_fail = False
     for f in files:
         key = impeccable_engine.relative_path(f)
@@ -507,10 +517,9 @@ def _run_audit(root, *, strict, deep, profile, use_baseline, include_internal):
             print(f"  {RED}error{RESET}: {exc}", file=sys.stderr)
             any_fail = True
             continue
+        visited.append(key)
         for finding in res["findings"]:
             collected.append(dict(finding, file=finding.get("file") or key))
-        if not res["findings"]:
-            collected.append({"_empty": key})
 
     # Deep findings on files the regex walk never visits. Reporting them is the
     # honest option: dropping them would silently narrow the gate to the
@@ -519,15 +528,14 @@ def _run_audit(root, *, strict, deep, profile, use_baseline, include_internal):
         for finding in extra:
             collected.append(dict(finding, file=finding.get("file") or key))
 
-    real = [f for f in collected if "_empty" not in f]
-    empties = [f["_empty"] for f in collected if "_empty" in f]
+    real = list(collected)
     if use_baseline:
         real = impeccable_engine.apply_baseline(real, impeccable_engine.load_baseline())
 
     grouped = {}
     for finding in real:
         grouped.setdefault(finding["file"], []).append(finding)
-    for key in empties:
+    for key in visited:
         grouped.setdefault(key, [])
 
     results = []
@@ -537,7 +545,7 @@ def _run_audit(root, *, strict, deep, profile, use_baseline, include_internal):
         if not res["passed"]:
             any_fail = True
 
-    return results, any_fail
+    return results, any_fail, deep_note
 
 
 def _cmd_baseline(args):
@@ -565,7 +573,7 @@ def _cmd_baseline(args):
         # Freeze what BOTH engines see, so the recorded line matches what a
         # later `check` will compare against. A record that captured only one
         # engine would leave the other's pre-existing debt failing forever.
-        results, _ = _run_audit(
+        results, _, _ = _run_audit(
             root, strict=args.strict, deep=True, profile=args.profile,
             use_baseline=False, include_internal=args.include_internal,
         )
@@ -580,16 +588,40 @@ def _cmd_baseline(args):
         print(f"  {GRAY}These are frozen, not fixed. The gate now fires only above them.{RESET}")
         return 0
 
-    results, any_fail = _run_audit(
+    results, any_fail, deep_note = _run_audit(
         root, strict=args.strict, deep=True, profile=args.profile,
         use_baseline=True, include_internal=args.include_internal,
     )
+    # `record` above refuses when the deep CLI is unresolvable. `check` had no
+    # such guard, so a degraded deep engine printed the green verdict "No
+    # findings above the baseline." and exited 0 over a gate where only the
+    # regex engine ran. The advisory stderr note is not a verdict; the exit code
+    # is, and it asserted coverage that did not happen.
+    if deep_note:
+        print(f"  {RED}refusing a baseline check from a degraded run{RESET} "
+              f"(the deep engine did not run: {deep_note}). Only the regex "
+              f"engine ran, so a pass here would assert coverage nothing "
+              f"measured.", file=sys.stderr)
+        return 2
     above = sum(r["summary"]["total_findings"] for r in results)
     if any_fail:
         for res in results:
             print_report(res)
         print(f"\n  {RED}{above} finding(s) above the baseline.{RESET}")
         return 1
+    if above:
+        # `above` was computed and then consulted only on the failure path, so a
+        # non-strict run with warning-severity findings above the baseline
+        # printed "No findings above the baseline" over a non-zero count and
+        # printed none of them. The exit code stays 0, because non-strict means
+        # warnings do not gate; the SENTENCE has to stop contradicting the
+        # number sitting beside it.
+        for res in results:
+            print_report(res)
+        print(f"  {YELLOW}{above} finding(s) above the baseline, all below the "
+              f"failure threshold.{RESET} "
+              f"{GRAY}Pass --strict to gate on them.{RESET}")
+        return 0
     print(f"  {GREEN}No findings above the baseline.{RESET}")
     return 0
 
@@ -641,7 +673,7 @@ def main():
         print(f"  {GRAY}No HTML/SVG/PPTX artifacts found under {root}.{RESET}")
         sys.exit(0)
 
-    results, any_fail = _run_audit(
+    results, any_fail, deep_note = _run_audit(
         root, strict=args.strict, deep=args.deep, profile=args.profile,
         use_baseline=not args.no_baseline, include_internal=args.include_internal,
     )
@@ -653,7 +685,15 @@ def main():
         total_w = sum(r["summary"]["warnings"] for r in results)
         for res in results:
             print_report(res)
-        engines = "regex + deep" if args.deep else "regex"
+        # Name the engines that PRODUCED the numbers on this line, not the ones
+        # the flags asked for. With `--deep` and a degraded engine this used to
+        # read "regex + deep" over a regex-only scan.
+        if args.deep and deep_note:
+            engines = "regex only -- the deep engine did not run"
+        elif args.deep:
+            engines = "regex + deep"
+        else:
+            engines = "regex"
         print(f"\n  {BOLD}{len(results)} file(s) scanned ({engines}): "
               f"{total_e} error(s), {total_w} warning(s).{RESET}")
 

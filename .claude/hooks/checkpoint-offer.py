@@ -598,6 +598,7 @@ def _queue_pending(path: Path, session: str) -> bool:
     except OSError:
         return True
     pending = 0
+    owed = 0  # our own /compact enqueues whose consuming record is still to come
     with handle:
         for line in handle:
             if '"queue-operation"' not in line:
@@ -610,6 +611,7 @@ def _queue_pending(path: Path, session: str) -> bool:
                 continue
             if session and entry.get("sessionId") not in (None, session):
                 continue
+            operation = entry.get("operation")
             if entry.get("content") == HA.COMPACT_COMMAND:
                 # OUR OWN submission. `_request_compaction` sends this literal
                 # through HERDR, and the harness records the queueing as an
@@ -620,14 +622,35 @@ def _queue_pending(path: Path, session: str) -> bool:
                 # miscount is permanent. Observed live 2026-08-20: two such
                 # enqueues, no matching remove, and `_queue_pending` true from
                 # then on.
+                #
+                # Skipping it on the +1 side alone was not symmetric. Measured
+                # against this session's transcript on 2026-08-25: `enqueue`
+                # (327) and `remove` (258) ALWAYS carry `content`, `dequeue`
+                # (68) NEVER does. So the record that CONSUMES our own submission
+                # is a contentless `dequeue`, it could not match this filter, and
+                # every driven compaction cost the count one unit it never
+                # gained. `owed` carries the debt forward so the consuming
+                # decrement is cancelled instead of charged to the operator.
+                if operation == "enqueue":
+                    owed += 1
                 continue
-            operation = entry.get("operation")
             if operation == "enqueue":
                 pending += 1
             elif operation == "popAll":
                 pending = 0
+                owed = 0
             elif operation in ("remove", "dequeue"):
-                pending -= 1
+                if "content" not in entry and owed > 0:
+                    owed -= 1
+                else:
+                    pending -= 1
+            # A floor, not an accounting nicety. Any unmatched decrement - a
+            # record shape this parser has not met, a transcript that begins
+            # mid-queue - pushes the count below zero, and a negative count is
+            # DEAF: the operator's next real message only brings it back to 0,
+            # `_queue_pending` answers False, and the hook talks over an
+            # instruction he has already sent.
+            pending = max(pending, 0)
     return pending > 0
 
 
@@ -1017,6 +1040,33 @@ def _pause_unattended(state: dict, state_path: Path, reason: str) -> int:
     return 0
 
 
+def _new_unattended_window(fresh: dict) -> dict:
+    """Clear the stretch counters for a turn the operator has just started.
+
+    An UNCONSUMED done marker is carried across: it was written during the turn
+    now ending and this hook has not acted on it yet, which `unattended_paused_at`
+    is what distinguishes.
+
+    Module level, and shared, because it has two call sites. It was a closure
+    inside `unattended_turn` while the auto-save branch in `main()` - which runs
+    EARLIER on the same Stop - wrote `unattended_turn_id=turn` for its own
+    purpose. Once it had fired, every later Stop in that operator turn saw the id
+    already matching, skipped the reset entirely, and carried the previous
+    stretch's `unattended_continuations` into the new instruction: a fresh
+    request that had 100 continuations got the 40 left over, then paused saying
+    it had "reached the ceiling of 100", which the previous instruction had spent.
+    `unattended-resume.py` does not cover it either - that hook returns early
+    unless a done or pause marker is set, and a stretch still running has neither.
+    """
+    carry = None
+    if fresh.get("unattended_done_at") and not fresh.get("unattended_paused_at"):
+        carry = (fresh["unattended_done_at"], fresh.get("unattended_done_note"))
+    CP.clear_unattended_window(fresh)
+    if carry:
+        fresh["unattended_done_at"], fresh["unattended_done_note"] = carry
+    return fresh
+
+
 def unattended_turn(
     payload: dict,
     state: dict,
@@ -1087,16 +1137,7 @@ def unattended_turn(
     # at the prompt boundary where staleness is knowable directly: that hook is the
     # primary path, this is the backstop for a session where it never ran.
     if turn and state.get("unattended_turn_id") != turn:
-        def _new_window(fresh: dict) -> dict:
-            carry = None
-            if fresh.get("unattended_done_at") and not fresh.get("unattended_paused_at"):
-                carry = (fresh["unattended_done_at"], fresh.get("unattended_done_note"))
-            CP.clear_unattended_window(fresh)
-            if carry:
-                fresh["unattended_done_at"], fresh["unattended_done_note"] = carry
-            return fresh
-
-        _persist(state_path, _mutate=_new_window)
+        _persist(state_path, _mutate=_new_unattended_window)
         state = CP.read_json(state_path)
 
     done = int(state.get("unattended_continuations") or 0)
@@ -1167,7 +1208,17 @@ def unattended_turn(
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - an unreadable payload must not break the turn
+        # Every other swallow in this file writes to stderr and carries its
+        # reason; this one logged nothing and returned 0. In unattended mode
+        # that is the stretch simply stopping: no block decision, no
+        # `unattended_paused_at`, no `unattended_stop_reason`, no stall notice,
+        # and nothing for `--unattended status` to report - while the status
+        # line still renders `unattended` because the switch is untouched. This
+        # file's own note calls that outcome out by name: "a session that halts
+        # in silence having been told in writing that it would carry on".
+        print(f"checkpoint-offer: unreadable Stop payload, this turn ends "
+              f"unmanaged: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 0
 
     # A payload that is valid JSON but not an object still reaches `.get`.
@@ -1334,6 +1385,13 @@ def main() -> int:
                 bucket = int(
                     state.get("offer_bucket") or state.get("current_bucket") or 0
                 )
+                # Reset the window BEFORE claiming the turn below. Claiming it
+                # first is what disarmed the reset in `unattended_turn`, which
+                # runs later on this same Stop and keys on exactly this id; see
+                # `_new_unattended_window`.
+                if turn and state.get("unattended_turn_id") != turn:
+                    _persist(state_path, _mutate=_new_unattended_window)
+                    state = CP.read_json(state_path)
                 _persist(
                     state_path,
                     needs_compact_offer=False,

@@ -217,7 +217,10 @@ def test_a_frozen_contract_is_matched_then_skipped():
     if contract is None:
         pytest.skip("no frozen contract in the tree to check the skip against")
     assert tc.is_contract(contract), contract
-    failures, ran, skipped, _ = tc.lane_tests([contract], timeout=30)
+    # Five values since 2026-08-26: the fifth is how many matched files
+    # collected NO tests, which pytest answers with exit 5 and the lane used
+    # to read as a failure.
+    failures, ran, skipped, _, _empty = tc.lane_tests([contract], timeout=30)
     assert failures == [], failures
     assert ran == 0, "a contract file was handed to pytest"
     assert skipped == 1, "the skip was not counted"
@@ -373,7 +376,8 @@ def test_the_test_lane_deselects_slow_marked_tests():
     fixture = ROOT / "tests" / "test_turn_check_slow_fixture.py"
     fixture.write_text(SLOW_FIXTURE, encoding="utf-8")
     try:
-        failures, ran, skipped, deselected = tc.lane_tests([fixture], timeout=60)
+        failures, ran, skipped, deselected, _empty = tc.lane_tests(
+            [fixture], timeout=60)
     finally:
         fixture.unlink(missing_ok=True)
     assert failures == [], failures

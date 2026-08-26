@@ -11,6 +11,8 @@ Usage:
     python scripts/marp_render.py watch stop
     python scripts/marp_render.py watch status
     python scripts/marp_render.py --self-test
+
+Tests: tests/test_a_commit_that_swept_up_the_bystanders.py
 """
 
 import argparse
@@ -28,7 +30,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.utils.workspace import get_default_tz, get_outputs_dir, get_workspace_root
+from scripts.utils.paths import DataRootError
+from scripts.utils.workspace import (
+    get_data_root,
+    get_default_tz,
+    get_outputs_dir,
+    get_workspace_root,
+)
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
 from scripts.utils.markdown import parse_frontmatter as _parse_frontmatter_text
 
@@ -139,9 +147,12 @@ def probe_browser() -> str | None:
         # Linux: check PATH using shutil.which (avoids subprocess for portability).
         # Marp uses Puppeteer under the hood, which requires a Chromium-family
         # browser (Chrome DevTools Protocol). Firefox does NOT work here.
-        # Candidate order: distro-named binaries first (apt/dnf), then snap
-        # paths (chromium snap), then brave-browser (now standard on the CEO
-        # machine and other Chromium-derivatives).
+        # Candidate order: Google's own packages first, then the distro
+        # chromium package names, then brave and edge. All of them are looked
+        # up on PATH by `shutil.which`; no snap-specific path is probed, and a
+        # snap only shows up here if its wrapper is on PATH under one of these
+        # names. The comment used to claim distro-first and snap paths, and was
+        # wrong about both the order and the mechanism.
         for name in [
             "google-chrome",
             "google-chrome-stable",
@@ -162,6 +173,25 @@ def probe_browser() -> str | None:
         if candidate.exists():
             return str(candidate)
     return None
+
+
+MARP_TIMEOUT_S = 120
+
+
+def _run_marp(cmd: list):
+    """Run one marp-cli invocation. Returns the CompletedProcess, or None on timeout.
+
+    Every other failure in `render` becomes a structured `{"ok": False, ...}`
+    result, but `subprocess.run(..., timeout=120)` RAISES on a hang, and that
+    exception walked straight out of `render` and killed the CLI with a
+    traceback. The hang is not hypothetical: this file's own PDF error branch
+    exists because the first run downloads ~150 MB of Chromium.
+    """
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=MARP_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return None
 
 
 def prepare_theme() -> Path:
@@ -211,13 +241,18 @@ def run_sanitizer(text: str) -> tuple[str, int]:
         "\u202d": "LEFT-TO-RIGHT OVERRIDE",
         "\u202e": "RIGHT-TO-LEFT OVERRIDE",
     }
+    # A NO-BREAK SPACE is a SPACE. Deleting it joined the words around it, so
+    # `10 pages` came out `10pages` -- silently, in rendered deck text, from a
+    # character Option+Space types on macOS. Every other entry above is
+    # zero-width and correctly disappears.
+    replacements = {"\u00a0": " "}
     count = 0
     clean = text
     for char in hidden_chars:
         found = clean.count(char)
         if found > 0:
             count += found
-            clean = clean.replace(char, "")
+            clean = clean.replace(char, replacements.get(char, ""))
     return clean, count
 
 
@@ -277,7 +312,12 @@ def inject_frontmatter(source_text: str, title: str = "", mode: str = "dark",
         if isinstance(value, bool):
             lines.append(f"{key}: {str(value).lower()}")
         elif isinstance(value, str) and (" " in value or ":" in value):
-            lines.append(f'{key}: "{value}"')
+            # json.dumps, not an f-string. A double-quoted YAML scalar uses the
+            # same escaping as JSON, so this handles an embedded `"` or newline
+            # -- which the bare interpolation did not: a title of Says "hello"
+            # emitted `title: "Says "hello""`, and marp then failed to parse the
+            # frontmatter or rendered garbled metadata.
+            lines.append(f"{key}: {json.dumps(value, ensure_ascii=False)}")
         else:
             lines.append(f"{key}: {value}")
     lines.append("---")
@@ -293,23 +333,73 @@ def strip_wiki_links(text: str) -> str:
     return text
 
 
+_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+
+
+def fence_mask(lines: list) -> list:
+    """One bool per line: True when that line sits INSIDE a fenced code block.
+
+    The fence delimiters themselves count as inside, so nothing is ever
+    inserted next to one.
+
+    Every splitter and scanner in this file used to be blind to fences, and a
+    deck ABOUT markdown is the ordinary case here. A `## Example` inside a
+    ```markdown fence got a `---` slide break pushed in front of it, splitting
+    the fence across two slides; a literal `---` inside a fence made
+    `auto_slide_breaks` decide manual breaks already existed and do nothing at
+    all, and made `check_overflow` and `paginate_heavy` count one slide as two.
+    """
+    mask = []
+    fence = None
+    for line in lines:
+        m = _FENCE_RE.match(line)
+        if fence is None and m:
+            fence = m.group(1)[0]
+            mask.append(True)
+            continue
+        if fence is not None:
+            mask.append(True)
+            if m and m.group(1)[0] == fence:
+                fence = None
+            continue
+        mask.append(False)
+    return mask
+
+
+def split_slides(body: str) -> list:
+    """Split on standalone `---` lines that are NOT inside a code fence."""
+    lines = body.split("\n")
+    mask = fence_mask(lines)
+    slides, current = [], []
+    for line, inside in zip(lines, mask, strict=True):
+        if not inside and line.strip() == "---":
+            slides.append("\n".join(current))
+            current = []
+            continue
+        current.append(line)
+    slides.append("\n".join(current))
+    return slides
+
+
 def auto_slide_breaks(body: str, break_at: str = "h2") -> str:
     """Insert slide breaks at heading level if no manual breaks exist.
     If the body already contains standalone '---' lines (slide breaks),
-    respect them and return unchanged."""
+    respect them and return unchanged. A `---` inside a code fence is content,
+    not a break, and does not count as a manual one."""
     lines = body.split("\n")
+    mask = fence_mask(lines)
 
     # Check for existing manual slide breaks (standalone --- lines)
-    for line in lines:
-        if line.strip() == "---":
+    for line, inside in zip(lines, mask, strict=True):
+        if not inside and line.strip() == "---":
             return body
 
     heading_pattern = {"h2": r"^## ", "h3": r"^### "}
     pattern = heading_pattern.get(break_at, r"^## ")
 
     result = []
-    for i, line in enumerate(lines):
-        if i > 0 and re.match(pattern, line):
+    for i, (line, inside) in enumerate(zip(lines, mask, strict=True)):
+        if i > 0 and not inside and re.match(pattern, line):
             result.append("")
             result.append("---")
             result.append("")
@@ -322,12 +412,45 @@ def auto_slide_breaks(body: str, break_at: str = "h2") -> str:
 # ============================================================
 
 
+def workspace_relative(source_path: Path) -> str:
+    """The path as this workspace names it, resolved against EITHER root.
+
+    Four of the five prefixes in `WORKSPACE_DEFAULTS` -- `context/`,
+    `knowledge/`, `outputs/intel/`, `outputs/operations/` -- exist only in the
+    private DATA overlay on the two-part topology, never in the engine clone.
+    Resolving against `WORKSPACE_ROOT` alone therefore made the whole table
+    dead: `relative_to` raised, `rel` became an absolute path, no prefix could
+    match it, and every real `/marp from` fell through to "mixed" with the bare
+    filename as its subtitle. Measured 2026-08-26 on this workspace, where the
+    engine clone holds none of the four.
+
+    `reference/` is the one key present in both, and it is read from whichever
+    root the caller's own file is under -- the first match wins, engine first.
+    """
+    resolved = source_path.resolve()
+    roots = [WORKSPACE_ROOT]
+    try:
+        data_root = get_data_root()
+    except DataRootError as exc:
+        # Named, never swallowed: a misconfigured overlay silently halving the
+        # lookup is the failure this function exists to end.
+        print(f"marp: cannot resolve the data root ({exc}); "
+              f"workspace defaults will only match the engine tree", file=sys.stderr)
+    else:
+        if data_root != WORKSPACE_ROOT:
+            roots.append(data_root)
+
+    for root in roots:
+        try:
+            return resolved.relative_to(root).as_posix()
+        except ValueError:
+            continue
+    return str(source_path)
+
+
 def get_workspace_defaults(source_path: Path) -> dict:
     """Determine mode and subtitle defaults based on source directory."""
-    try:
-        rel = source_path.resolve().relative_to(WORKSPACE_ROOT).as_posix()
-    except ValueError:
-        rel = str(source_path)
+    rel = workspace_relative(source_path)
 
     for prefix, defaults in WORKSPACE_DEFAULTS.items():
         if rel.startswith(prefix):
@@ -351,7 +474,7 @@ def generate_slug(topic: str) -> str:
 def check_overflow(source_text: str) -> list[dict]:
     """Check for slides exceeding word threshold. Returns list of warnings."""
     _, body = parse_frontmatter(source_text)
-    slides = re.split(r"\n---\n", body)
+    slides = split_slides(body)
     warnings = []
     for i, slide in enumerate(slides):
         words = len(slide.split())
@@ -363,7 +486,7 @@ def check_overflow(source_text: str) -> list[dict]:
 def paginate_heavy(source_text: str) -> str:
     """Sub-break heavy slides on paragraph boundaries."""
     fm, body = parse_frontmatter(source_text)
-    slides = re.split(r"\n---\n", body)
+    slides = split_slides(body)
     new_slides = []
     for slide in slides:
         words = len(slide.split())
@@ -395,7 +518,8 @@ def paginate_heavy(source_text: str) -> str:
             if isinstance(value, bool):
                 fm_lines.append(f"{key}: {str(value).lower()}")
             elif isinstance(value, str) and (" " in value or ":" in value):
-                fm_lines.append(f'{key}: "{value}"')
+                # Same escaping as inject_frontmatter; see the note there.
+                fm_lines.append(f"{key}: {json.dumps(value, ensure_ascii=False)}")
             else:
                 fm_lines.append(f"{key}: {value}")
         fm_lines.append("---")
@@ -495,8 +619,13 @@ def render(source: Path, output_dir: Path = None, pdf_only: bool = False,
             cmd = base_cmd + ["--pdf", "-o", str(pdf_out)]
             if verbose:
                 print(f"{GRAY}Running: {' '.join(cmd)}{RESET}")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-            if result.returncode == 0 and pdf_out.exists():
+            result = _run_marp(cmd)
+            if result is None:
+                errors.append({"type": "pdf", "error": "timeout",
+                               "message": f"marp-cli did not finish within "
+                                          f"{MARP_TIMEOUT_S}s. The first PDF downloads "
+                                          f"Chromium (~150MB); re-run once it completes."})
+            elif result.returncode == 0 and pdf_out.exists():
                 outputs.append({"type": "pdf", "path": str(pdf_out), "size": pdf_out.stat().st_size})
             else:
                 err_msg = result.stderr.strip() if result.stderr else "Unknown error"
@@ -517,8 +646,11 @@ def render(source: Path, output_dir: Path = None, pdf_only: bool = False,
             cmd = base_cmd + ["-o", str(html_out)]
             if verbose:
                 print(f"{GRAY}Running: {' '.join(cmd)}{RESET}")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-            if result.returncode == 0 and html_out.exists():
+            result = _run_marp(cmd)
+            if result is None:
+                errors.append({"type": "html", "error": "timeout",
+                               "message": f"marp-cli did not finish within {MARP_TIMEOUT_S}s."})
+            elif result.returncode == 0 and html_out.exists():
                 outputs.append({"type": "html", "path": str(html_out), "size": html_out.stat().st_size})
                 # Deep design verdict on the deck we just rendered. Slides are
                 # read on a screen, so the screen profile applies. Reports only:
@@ -539,12 +671,27 @@ def render(source: Path, output_dir: Path = None, pdf_only: bool = False,
             cmd = base_cmd + ["--images", "png", "-o", str(out_dir / f"{stem}.png")]
             if verbose:
                 print(f"{GRAY}Running: {' '.join(cmd)}{RESET}")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-            if result.returncode == 0:
+            result = _run_marp(cmd)
+            if result is None:
+                errors.append({"type": "png", "error": "timeout",
+                               "message": "marp-cli did not finish within 120s."})
+            elif result.returncode == 0:
                 # Count generated PNGs
                 pngs = list(out_dir.glob(f"{stem}.*.png"))
                 for png in pngs:
                     outputs.append({"type": "png", "path": str(png), "size": png.stat().st_size})
+                # A zero exit with no files is still a failure. The PDF and HTML
+                # paths both record their failures; this one recorded none, so
+                # "Render successful" printed with the requested PNGs simply
+                # absent and `ok` stayed True.
+                if not pngs:
+                    errors.append({"type": "png", "error": "no-output",
+                                   "message": f"marp-cli exited 0 but wrote no "
+                                              f"{stem}.*.png in {out_dir}."})
+            else:
+                err_msg = result.stderr.strip() if result.stderr else "Unknown error"
+                errors.append({"type": "png", "error": "render-failed",
+                               "message": f"Render failed. marp-cli output:\n{err_msg}"})
 
         # Check overflow
         overflow_warnings = check_overflow(source_text)
@@ -658,8 +805,15 @@ def transform_workspace_md(source: Path, break_at: str = "h2", mode: str = None,
         full_source = paginate_heavy(full_source)
 
     # Write to temp file and render
+    # `dir=source.parent`, for the reason `render` states about its own temp
+    # copy: relative image paths resolve from the directory of the file being
+    # rendered. This one landed in the system temp dir, `render` then put ITS
+    # copy beside it, and every `![x](assets/a.png)` in a workspace document
+    # rendered as a missing image -- the exact failure the comment in `render`
+    # says must not happen.
     tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".md", prefix="marp-from-",
+        mode="w", suffix=".md", prefix=f".{source.stem}.marp-from-",
+        dir=str(source.parent),
         delete=False, encoding="utf-8"
     )
     tmp.write(full_source)
@@ -781,7 +935,15 @@ def watch_stop() -> dict:
     pid = state.get("pid")
     theme_path = state.get("theme_path")
 
-    if pid:
+    # Liveness is checked BEFORE signalling. The recorded PID belongs to a marp
+    # process that may have died long ago, and PIDs are reused: signalling one
+    # blind meant sending SIGTERM to whatever unrelated process now holds that
+    # number. `_is_process_running` is not proof of identity -- only that the
+    # number is live -- so a stale state file whose process is gone now cleans
+    # up and says so instead of firing into the dark.
+    signalled = False
+    if pid and _is_process_running(pid):
+        signalled = True
         if platform.system() == "Windows":
             subprocess.run(["taskkill", "/PID", str(pid), "/F"],
                            capture_output=True, timeout=10)
@@ -789,7 +951,7 @@ def watch_stop() -> dict:
             try:
                 os.kill(pid, signal.SIGTERM)
             except ProcessLookupError:
-                pass
+                signalled = False
 
     # Clean up theme temp file
     if theme_path:
@@ -797,7 +959,10 @@ def watch_stop() -> dict:
 
     WATCH_STATE_FILE.unlink(missing_ok=True)
 
-    return {"ok": True, "message": f"Watch stopped (PID {pid})."}
+    if not signalled:
+        return {"ok": True, "signalled": False,
+                "message": f"No live process for PID {pid}; stale watch state removed."}
+    return {"ok": True, "signalled": True, "message": f"Watch stopped (PID {pid})."}
 
 
 def watch_status() -> dict:
@@ -830,13 +995,22 @@ def watch_status() -> dict:
 
 
 def _is_process_running(pid: int) -> bool:
-    """Check if a process is still running."""
+    """Check if a process is still running.
+
+    On Windows the PID is read out of `tasklist`'s CSV, field by field. It used
+    to be `str(pid) in result.stdout` -- a substring search over the whole
+    output, so PID 808 also matched 8080 and 18080. A dead watch then reported
+    as running and `watch_start` refused to start with "watch-active".
+    """
     if platform.system() == "Windows":
         result = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}"],
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
             capture_output=True, text=True, timeout=10
         )
-        return str(pid) in result.stdout
+        import csv
+        import io
+        return any(len(row) >= 2 and row[1].strip() == str(pid)
+                   for row in csv.reader(io.StringIO(result.stdout)))
     else:
         try:
             os.kill(pid, 0)

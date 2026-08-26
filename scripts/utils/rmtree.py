@@ -30,25 +30,67 @@ _HAS_ONEXC = sys.version_info >= (3, 12)
 
 
 def _clear_readonly(func, path, _exc_or_info):
-    """Windows leaves the read-only bit set; clear it and retry once.
+    """Clear what is blocking the removal and retry once.
 
     The third parameter differs between the two hooks (`onerror` passes an
     exc_info triple, `onexc` passes the exception), and neither copy of this
     handler ever read it, so one signature serves both.
+
+    Two things were wrong with the three-line original, and both showed on the
+    same run (Linux, Python 3.11, a directory at mode 000 holding one file;
+    measured 2026-08-26):
+
+    1. `os.chmod(path, stat.S_IWRITE)` REPLACES the mode with 0o200. On POSIX a
+       directory also needs read and execute to be listed or entered, so the
+       chmod that was meant to unblock the removal left the directory less
+       usable than it found it: the measured mode afterwards was 0o200. The
+       mode bits are now ADDED to what is already there.
+    2. `func(path)` assumes `func` takes exactly one argument. `shutil.rmtree`
+       also passes `os.open`, `os.scandir` and `os.listdir` here, and retrying
+       `os.open(path)` raises `TypeError: open() missing required argument
+       'flags'`. TypeError is not caught by either caller
+       (`scripts/pull-service-state.py`, `scripts/publish-service.py`), so the
+       tree was left in place and the exception escaped. After the chmod the
+       directory IS traversable, so the retry restarts the walk instead.
     """
-    os.chmod(path, stat.S_IWRITE)
-    func(path)
+    target = Path(path)
+    try:
+        mode = os.lstat(target).st_mode
+    except OSError:
+        return  # already gone; nothing to unblock
+    extra = stat.S_IWRITE
+    if stat.S_ISDIR(mode):
+        extra |= stat.S_IRUSR | stat.S_IXUSR
+    try:
+        os.chmod(target, stat.S_IMODE(mode) | extra)
+    except OSError:
+        raise  # cannot unblock it; the caller must see the real failure
+    try:
+        func(path)
+    except TypeError:
+        # `func` was a directory reader, not a remover. Redo the walk now that
+        # the directory can be entered; each pass strictly relaxes permissions,
+        # so this cannot loop forever.
+        if target.is_dir() and not target.is_symlink():
+            _rmtree(target)
+        else:
+            os.unlink(target)
+
+
+def _rmtree(target: Path) -> None:
+    """One `shutil.rmtree` with whichever error hook this Python supports."""
+    if _HAS_ONEXC:
+        shutil.rmtree(target, onexc=_clear_readonly)
+    else:
+        shutil.rmtree(target, onerror=_clear_readonly)
 
 
 def rmtree_force(path: Path | str, *, missing_ok: bool = True) -> None:
-    """Remove a tree, retrying once past a read-only file.
+    """Remove a tree, retrying once past a read-only file or directory.
 
     `missing_ok` mirrors `Path.unlink`: an absent path is not an error.
     """
     target = Path(path)
     if missing_ok and not target.exists():
         return
-    if _HAS_ONEXC:
-        shutil.rmtree(target, onexc=_clear_readonly)
-    else:
-        shutil.rmtree(target, onerror=_clear_readonly)
+    _rmtree(target)

@@ -61,8 +61,26 @@ BODY_FIELD = "body"
 # prose. The alternatives, in order: a POSIX absolute path token, a
 # home-relative path, a Windows drive path (`\b` so "http://" is not read as
 # one), a parent-directory escape, and the DATA overlay's directory name.
+#
+# The POSIX alternative used to read `(?:^|\s)/\S`, which required whitespace or
+# start-of-string before the slash -- so it did NOT fire on the way this
+# repository actually writes a path in prose: inside backticks, in parentheses,
+# after a colon, or as a markdown link target. Every one of those forms passed
+# validation and would have been committed into this PUBLIC repository, while
+# the three other alternatives matched anywhere as the comment above says. It is
+# now anchored on what must NOT precede the slash instead:
+#
+#   `[\w]`  - so "3/4", "and/or" and "a/b test" stay prose, not paths.
+#   `/`     - so the second slash of "http://" is not read as a fresh path.
+#
+# and the tail requires the slash to be followed by a real path shape: a segment
+# then another separator, or a segment with a file extension. A bare `:` is NOT
+# excluded, because "path:/home/x/plan.md" is exactly the leak this guard is
+# for; "http://example.com" is stopped by the tail instead (its first slash is
+# followed by another slash, which no path segment can start with).
 _LEAK = re.compile(
-    r"(?:^|\s)/\S|~/|\b[A-Za-z]:[\\/]|\.\./|" + re.escape(DATA_OVERLAY_DIR)
+    r"(?<![\w/])/[\w.-]+(?:/|\.[A-Za-z0-9]{1,8}\b)"
+    r"|~/|\b[A-Za-z]:[\\/]|\.\./|" + re.escape(DATA_OVERLAY_DIR)
 )
 # Abbreviated refs are accepted, and this pattern IS the repository's
 # convention for a sha written into a file: a full 40-character sha reads to
@@ -96,6 +114,19 @@ def note_paths(root: Path) -> list[Path]:
 
 def _validate(slug: str, fields: dict, body: str) -> None:
     """Raise NoteError unless *fields* satisfies the schema (see module docstring)."""
+    # A slug is one filename, not a path. `write_note(root, "sub/hidden", ...)`
+    # wrote records/slices/sub/hidden.md and returned it, but `note_paths` globs
+    # `*.md` non-recursively, so the note was invisible to the only enumerator:
+    # `scripts/canopus_check.py` takes note_paths() as its ENTIRE population and
+    # would print "N clause(s) over M note(s); 0 report(s)" and exit 0 over a
+    # note it never opened. Refusing the shape is cheaper than making every
+    # reader recursive.
+    if "/" in slug or "\\" in slug or slug in ("", ".", ".."):
+        raise NoteError(
+            f"note slug {slug!r} is not a single file name. A slug with a path "
+            "separator writes a note that note_paths() does not enumerate, so no "
+            "clause would ever check it."
+        )
     unknown = sorted(set(fields) - set(REQUIRED_FIELDS) - set(OPTIONAL_FIELDS))
     if unknown:
         raise NoteError(f"note {slug!r} carries unknown field(s): {', '.join(unknown)}")

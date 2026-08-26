@@ -56,20 +56,23 @@ _POINTER = (b"version https://git-lfs.github.com/spec/v1\n"
 
 
 def test_a_pointer_file_is_found(lfs, tmp_path):
+    # `scan` grew a third bucket on 2026-08-25 for files deleted between the
+    # listing and the read.
     (tmp_path / "fixture.docx").write_bytes(_POINTER)
-    pointers, unreadable = lfs.scan(tmp_path)
+    pointers, unreadable, vanished = lfs.scan(tmp_path)
     assert [p.name for p in pointers] == ["fixture.docx"]
     assert unreadable == []
+    assert vanished == []
 
 
 def test_a_real_blob_is_not_a_pointer(lfs, tmp_path):
     (tmp_path / "fixture.docx").write_bytes(b"PK\x03\x04" + b"x" * 4000)
-    assert lfs.scan(tmp_path) == ([], [])
+    assert lfs.scan(tmp_path) == ([], [], [])
 
 
 def test_a_small_file_that_is_not_a_pointer_is_left_alone(lfs, tmp_path):
     (tmp_path / "notes.txt").write_bytes(b"just text")
-    assert lfs.scan(tmp_path) == ([], [])
+    assert lfs.scan(tmp_path) == ([], [], [])
 
 
 def test_an_unreadable_file_is_reported_not_counted_as_clean(lfs, tmp_path,
@@ -84,9 +87,10 @@ def test_an_unreadable_file_is_reported_not_counted_as_clean(lfs, tmp_path,
         return real_open(self, *a, **k)
 
     monkeypatch.setattr(Path, "open", _deny)
-    pointers, unreadable = lfs.scan(tmp_path)
+    pointers, unreadable, vanished = lfs.scan(tmp_path)
     assert pointers == []
     assert [p.name for p, _ in unreadable] == ["fixture.docx"]
+    assert vanished == [], "a file that is present but denied is not a deleted one"
 
 
 def test_is_pointer_no_longer_swallows_the_error(lfs, tmp_path, monkeypatch):
@@ -107,7 +111,7 @@ def test_the_main_report_names_what_it_could_not_read(lfs, tmp_path,
     (tmp_path / "fixture.docx").write_bytes(_POINTER)
     monkeypatch.setattr(lfs, "SCANNED", tmp_path)
     monkeypatch.setattr(lfs, "scan",
-                        lambda base: ([], [(tmp_path / "fixture.docx", "denied")]))
+                        lambda base: ([], [(tmp_path / "fixture.docx", "denied")], []))
     assert lfs.main() == 1, "an unfinished check must not exit 0"
     err = capsys.readouterr().err
     assert "UNKNOWN" in err and "not complete" in err

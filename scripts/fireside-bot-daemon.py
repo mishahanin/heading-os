@@ -14,6 +14,8 @@ PID file:  .fireside/daemon.pid
 Log file:  .fireside/daemon.log  (rotated by RotatingFileHandler, 1 MB, keep 3)
 
 Tests: tests/test_a_cache_key_that_forgot_what_was_asked_for.py
+
+Tests: tests/test_a_bundle_that_never_said_the_keys_were_live.py
 """
 from __future__ import annotations
 
@@ -496,23 +498,36 @@ async def _run_daemon(logger: logging.Logger) -> None:
     try:
         await stop_event.wait()
     finally:
-        if webhook_server is not None:
-            webhook_server.should_exit = True
-            if webhook_task is not None:
-                try:
-                    await asyncio.wait_for(webhook_task, timeout=5)
-                except asyncio.TimeoutError:
-                    logger.warning("webhook-server did not shut down within 5s; cancelling")
-                    webhook_task.cancel()
-                except Exception as exc:  # noqa: BLE001 - reported, and cleanup still runs
-                    # `wait_for` RE-RAISES whatever killed the task. Only
-                    # TimeoutError was caught, so a webhook that died of a bad
-                    # certificate took `scheduler.shutdown()`, the PID and
-                    # start-time cleanup, and the `daemon-stop` line with it —
-                    # the process exited on a traceback leaving a stale PID
-                    # file that makes the next `status` report RUNNING.
-                    logger.error("webhook-server ended with %r; continuing shutdown", exc)
-        _shutdown_and_clean(scheduler, logger)
+        # `_shutdown_and_clean` is in its OWN finally, not a trailing statement.
+        # As a trailing statement it ran only for what the handlers below
+        # caught, and `asyncio.CancelledError` has subclassed BaseException
+        # since Python 3.8 — so a cancelled webhook task (a state
+        # `make_webhook_death_handler` already anticipates) came back out of
+        # `wait_for`, sailed past `except Exception`, and took
+        # `scheduler.shutdown()`, the PID and start-time cleanup, and the
+        # `daemon-stop` line with it. The comment on that handler promised
+        # "cleanup still runs" and, for that one exception type, it did not.
+        # Nested this way the cleanup runs for CancelledError, KeyboardInterrupt
+        # and SystemExit too, and the exception still propagates afterwards —
+        # cancellation is not swallowed, only survived.
+        try:
+            if webhook_server is not None:
+                webhook_server.should_exit = True
+                if webhook_task is not None:
+                    try:
+                        await asyncio.wait_for(webhook_task, timeout=5)
+                    except asyncio.TimeoutError:
+                        logger.warning("webhook-server did not shut down within 5s; cancelling")
+                        webhook_task.cancel()
+                    except Exception as exc:  # noqa: BLE001 - reported, and cleanup still runs
+                        # `wait_for` RE-RAISES whatever killed the task. Only
+                        # TimeoutError was caught, so a webhook that died of a
+                        # bad certificate took the whole cleanup with it and the
+                        # process exited on a traceback, leaving a stale PID
+                        # file that makes the next `status` report RUNNING.
+                        logger.error("webhook-server ended with %r; continuing shutdown", exc)
+        finally:
+            _shutdown_and_clean(scheduler, logger)
 
 
 def cmd_daemon(args) -> None:

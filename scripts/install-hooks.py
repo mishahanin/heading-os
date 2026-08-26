@@ -15,11 +15,13 @@ exists. Use `pre-commit install` instead.
 Usage:
   python3 scripts/install-hooks.py          # refuses if framework config present
   python3 scripts/install-hooks.py --check  # report which mechanism manages hooks
+
+Tests: tests/test_a_scanner_that_sat_below_an_exit.py
 """
 
-import sys
-import os
+import re
 import stat
+import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -28,32 +30,67 @@ from scripts.utils.colors import GREEN, YELLOW, RED, BOLD, RESET
 
 HOOK_MARKER = "# 31C-SECRET-SCANNER"
 
-PRE_COMMIT_HOOK = f"""#!/bin/sh
-{HOOK_MARKER}
+# The scanner, with NO unconditional `exit` on the clean path. That matters
+# only when it is merged into somebody else's hook: an early `exit 0` there
+# would skip whatever the original hook does (git-lfs, most often). The
+# standalone hook below adds its own terminating exit.
+SCANNER_BLOCK = f"""{HOOK_MARKER}
 # Pre-commit hook: scan staged files for secrets
 # Coexists with existing Git LFS hooks
 
 STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
-[ -z "$STAGED" ] && exit 0
+if [ -n "$STAGED" ]; then
+    # Run scanner - if python3 fails, warn but don't block
+    echo "$STAGED" | python3 scripts/secret-scanner.py --stdin
+    EXIT_CODE=$?
 
-# Run scanner - if python3 fails, warn but don't block
-echo "$STAGED" | python3 scripts/secret-scanner.py --stdin
-EXIT_CODE=$?
+    if [ $EXIT_CODE -eq 1 ]; then
+        echo ""
+        echo "COMMIT BLOCKED: Secrets detected in staged files."
+        echo "Remove the secrets, then try again."
+        echo "To bypass (DANGEROUS): git commit --no-verify"
+        exit 1
+    fi
 
-if [ $EXIT_CODE -eq 1 ]; then
-    echo ""
-    echo "COMMIT BLOCKED: Secrets detected in staged files."
-    echo "Remove the secrets, then try again."
-    echo "To bypass (DANGEROUS): git commit --no-verify"
-    exit 1
+    if [ $EXIT_CODE -gt 1 ]; then
+        echo "WARNING: Secret scanner encountered an error. Commit proceeding."
+    fi
 fi
+"""
 
-if [ $EXIT_CODE -gt 1 ]; then
-    echo "WARNING: Secret scanner encountered an error. Commit proceeding."
-fi
-
+PRE_COMMIT_HOOK = f"""#!/bin/sh
+{SCANNER_BLOCK}
 exit 0
 """
+
+# An `exit` at column 0 is unconditional: nothing after it in the file runs.
+_TOP_LEVEL_EXIT = re.compile(r"^exit\b")
+
+
+def scanner_reachability(content: str) -> "tuple[bool, str]":
+    """Can the scanner block in `content` actually run? Plus what was checked.
+
+    Until 2026-08-25 the merge path APPENDED the scanner to the end of an
+    existing hook, and the check path then looked only for the marker. A hook
+    ending in `exit 0` -- the ordinary shape, and what git-lfs writes -- made
+    every appended line dead, while `--check` printed "pre-commit: installed".
+    A security control switched off, reporting healthy.
+
+    This is not a shell parser and does not pretend to be one. It answers one
+    question: does an UNINDENTED `exit` sit above the marker? An exit nested in
+    an `if`, a function, or a `case` arm is not counted and not detected, so a
+    False from here is conclusive and a True means "nothing of that shape was
+    found", never "proved reachable". The returned sentence says which.
+    """
+    lines = content.splitlines()
+    marker_at = next((i for i, ln in enumerate(lines) if HOOK_MARKER in ln), None)
+    if marker_at is None:
+        return False, "the scanner marker is not in this hook"
+    for i, line in enumerate(lines[:marker_at]):
+        if _TOP_LEVEL_EXIT.match(line):
+            return False, (f"an unconditional `exit` at line {i + 1} runs before the "
+                           f"scanner at line {marker_at + 1}, so the scanner never does")
+    return True, "no unconditional exit above the scanner block; nested exits not checked"
 
 
 def install_pre_commit(hooks_dir: Path, check_only: bool = False) -> bool:
@@ -63,8 +100,12 @@ def install_pre_commit(hooks_dir: Path, check_only: bool = False) -> bool:
     if hook_path.exists():
         content = hook_path.read_text(encoding="utf-8", errors="replace")
         if HOOK_MARKER in content:
+            reachable, why = scanner_reachability(content)
+            if not reachable:
+                print(f"  {RED}pre-commit: scanner present but DEAD -- {why}{RESET}")
+                return False
             if check_only:
-                print(f"  {GREEN}pre-commit: installed{RESET}")
+                print(f"  {GREEN}pre-commit: installed{RESET} ({why})")
             else:
                 print(f"  {GREEN}pre-commit: already installed (skipping){RESET}")
             return True
@@ -73,15 +114,19 @@ def install_pre_commit(hooks_dir: Path, check_only: bool = False) -> bool:
             print(f"  {YELLOW}pre-commit: exists but missing secret scanner{RESET}")
             return False
 
-        # Existing hook without our marker - append
-        print(f"  {YELLOW}pre-commit: appending secret scanner to existing hook{RESET}")
-        # removeprefix, NOT lstrip. str.lstrip takes a SET of characters, so
-        # "#!/bin/sh\n" strips every leading #, !, /, b, i, n, s, h and newline
-        # -- which ate the "# " opening the marker line, leaving a bare word the
-        # shell reads as a missing command AND leaving the marker unfindable, so
-        # the guard above missed and every run appended another copy.
-        with open(hook_path, "a", encoding="utf-8") as f:
-            f.write("\n\n" + PRE_COMMIT_HOOK.removeprefix("#!/bin/sh\n"))
+        # Existing hook without our marker - merge the scanner in FIRST.
+        #
+        # This used to append. An existing hook that ends in `exit 0` -- the
+        # ordinary shape -- left every appended line unreachable, and the marker
+        # was in the file all the same, so `--check` certified a scanner that
+        # could not run. Going first is also why SCANNER_BLOCK carries no `exit`
+        # on the clean path: it must fall through into whatever was already here.
+        print(f"  {YELLOW}pre-commit: merging secret scanner into existing hook{RESET}")
+        if content.startswith("#!"):
+            shebang, _, rest = content.partition("\n")
+        else:
+            shebang, rest = "#!/bin/sh", content
+        hook_path.write_text(f"{shebang}\n\n{SCANNER_BLOCK}\n{rest}", encoding="utf-8")
     else:
         if check_only:
             print(f"  {RED}pre-commit: not installed{RESET}")

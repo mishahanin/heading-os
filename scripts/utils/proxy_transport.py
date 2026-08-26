@@ -91,10 +91,11 @@ def call_model(model, prompt, *, temperature=0.7, max_tokens=8192, timeout=DEFAU
     the socket ceiling grown to match, before raising an accurate truncation
     error that names how much was lost — never a safety-block claim.
 
-    `timeout` is the ceiling for ONE call. A retry makes a second one at up to
-    `RETRY_TIMEOUT_GROWTH_CAP` times that, so budget for `timeout * 3` in the
-    worst case. Passing a `max_tokens` and `timeout` large enough to finish on
-    the first call is cheaper than relying on the retry.
+    `timeout` is the ceiling for ONE call. Up to two retries can follow (an
+    empty `stop`, then a `length`), each at up to `RETRY_TIMEOUT_GROWTH_CAP`
+    times that, so budget for `timeout * 5` in the worst case. Passing a
+    `max_tokens` and `timeout` large enough to finish on the first call is
+    cheaper than relying on the retry.
 
     `reasoning_effort` (low/high/max) is optional and honored by thinking models
     (e.g. k3); when set it rides `extra_body={"reasoning_effort": ...}`. Omit it
@@ -211,6 +212,36 @@ def call_model(model, prompt, *, temperature=0.7, max_tokens=8192, timeout=DEFAU
     if _is_complete(content, finish_reason):
         return content
 
+    # The `stop`-with-no-content retry runs HERE, above the dispatch, so its
+    # outcome is classified like any other. It used to sit at the bottom, after
+    # every branch had been skipped, and whatever the retry came back with fell
+    # into the final "returned an empty answer" raise. Measured 2026-08-26: an
+    # empty `stop` followed by a 38-character `length` reported
+    # "returned an empty answer (finish_reason=length)" - the answer was not
+    # empty, and nothing named the truncation this function's docstring promises
+    # to name. The retry's rationale is unchanged and recorded below.
+    #
+    # `stop` with no content is a NORMAL termination that produced nothing, and
+    # until 2026-08-19 it raised on the first occurrence with zero retries. On
+    # that day the Kimi voice returned it twice during one `/scrutinize`, the
+    # skill noted the drop and carried on as designed, and the refutation layer
+    # ran at half its roster - a quiet degradation of a review, which is the
+    # worst place to have one.
+    #
+    # The CAUSE is unreproduced and this retry does not claim to fix it. Prompt
+    # size was ruled out afterwards (k3 answered a 361 864-character prompt), and
+    # the proxy was updated from 7.2.129 to 7.2.136 in the same pass, so the
+    # original conditions no longer exist to test against. What is defensible
+    # without a diagnosis is that one empty completion should not be terminal:
+    # `length` already earns a retry, and this case is strictly less informative
+    # than that one. If the emptiness is deterministic for a given prompt, the
+    # second call returns empty too and the error is raised exactly as before,
+    # one call later.
+    if finish_reason == "stop":
+        content, finish_reason = _call(max_tokens, timeout)
+        if _is_complete(content, finish_reason):
+            return content
+
     if finish_reason == "length":
         ceiling = max(max_tokens * 2, RETRY_CEILING)
         if ceiling > max_tokens:
@@ -239,27 +270,18 @@ def call_model(model, prompt, *, temperature=0.7, max_tokens=8192, timeout=DEFAU
             f"{model} returned empty: blocked by safety filters (content_filter)."
         )
 
-    # `stop` with no content is a NORMAL termination that produced nothing, and
-    # until 2026-08-19 it raised on the first occurrence with zero retries. On
-    # that day the Kimi voice returned it twice during one `/scrutinize`, the
-    # skill noted the drop and carried on as designed, and the refutation layer
-    # ran at half its roster - a quiet degradation of a review, which is the
-    # worst place to have one.
+    # Reaching here means `content` is empty, and the word "empty" is accurate.
+    # `_is_complete` rejects exactly two things: no visible text, or
+    # finish_reason == "length". Every `length` path raises inside the branch
+    # above, so anything that arrives here failed the first test. A partial
+    # answer under some other finish_reason was returned as the answer long
+    # before this line.
     #
-    # The CAUSE is unreproduced and this retry does not claim to fix it. Prompt
-    # size was ruled out afterwards (k3 answered a 361 864-character prompt), and
-    # the proxy was updated from 7.2.129 to 7.2.136 in the same pass, so the
-    # original conditions no longer exist to test against. What is defensible
-    # without a diagnosis is that one empty completion should not be terminal:
-    # `length` already earns a retry, and this case is strictly less informative
-    # than that one. If the emptiness is deterministic for a given prompt, the
-    # second call returns empty too and the error is raised exactly as before,
-    # one call later.
-    if finish_reason == "stop":
-        content, finish_reason = _call(max_tokens, timeout)
-        if _is_complete(content, finish_reason):
-            return content
-
+    # A guard for a non-empty fragment was written here on 2026-08-26 and then
+    # removed: a mutation that set its length to zero could not be caught by any
+    # test, because the branch is unreachable by construction. The defect it was
+    # aimed at is real and is fixed above, by classifying the `stop` retry's
+    # outcome instead of letting it fall past every branch to this line.
     raise RuntimeError(
         f"{model} returned an empty answer (finish_reason={finish_reason})."
     )

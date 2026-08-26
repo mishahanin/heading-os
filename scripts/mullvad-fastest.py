@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import http.client
 import json
 import platform
 import re
@@ -65,6 +66,21 @@ def fetch_relays(timeout: int = 15) -> list[dict]:
         raise RuntimeError(f"Mullvad API returned HTTP {exc.code}: {exc.reason}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"Could not reach Mullvad API: {exc.reason}") from exc
+    except OSError as exc:
+        # `socket.timeout` IS `TimeoutError`, an OSError SIBLING of URLError,
+        # not a subclass of it -- so neither handler above sees it. urllib only
+        # converts OSError to URLError around `h.request(...)`; `getresponse()`
+        # and `resp.read()` sit outside that conversion, so a server that
+        # accepts the connection and then stalls raises a bare TimeoutError
+        # straight out of `urlopen`. It escaped `main`, which catches
+        # RuntimeError, as a raw traceback.
+        raise RuntimeError(f"Could not read from the Mullvad API: {exc}") from exc
+    except http.client.HTTPException as exc:
+        # A truncated body raises IncompleteRead, which is not an OSError at
+        # all, so widening the handler above would still have missed it.
+        raise RuntimeError(
+            f"the relay list was cut short ({exc}); the connection dropped "
+            f"mid-response") from exc
     try:
         data = json.loads(raw.decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:

@@ -296,8 +296,14 @@ def test_status_prints_on_corrupt_state(tmp_state_dir, capsys):
     state_file.write_text("{ not valid json")
 
     with patch("scripts.sentinel.PID_FILE", pid_file), patch("scripts.sentinel.STATE_FILE", state_file):
-        # Also patch _is_pid_alive so the "RUNNING" branch is taken
-        with patch("scripts.sentinel._is_pid_alive", return_value=True):
+        # Both guards, not just liveness. Since 2026-08-25 `check_status` also
+        # asks whether the live PID is THIS daemon before saying it is running,
+        # because `os.kill(pid, 0)` proves only that some process holds that
+        # number. Without this second patch the pytest process itself answers
+        # "alive but not sentinel", check_status returns early, and the state
+        # file this test is about is never read at all.
+        with patch("scripts.sentinel._is_pid_alive", return_value=True), \
+             patch("scripts.sentinel._pid_is_sentinel", return_value=True):
             from scripts.sentinel import check_status
             check_status()  # must not raise
 

@@ -47,8 +47,25 @@ def _fail(msg: str) -> None:
 
 
 def _run(cmd, check: bool = False) -> subprocess.CompletedProcess:
-    """Run a subprocess command. Always captures output, never raises."""
-    return subprocess.run(cmd, check=check, capture_output=True, text=True)
+    """Run a subprocess command. Always captures output, never raises.
+
+    "Never raises" was the docstring's claim and not the code's behaviour: a
+    command that is not on PATH raises FileNotFoundError out of `subprocess.run`
+    before any return value exists. On this WSL2 host `_run(["schtasks",
+    "/query"])` raised, and `install_sentinel_schedule(..., target_platform=
+    "windows")` printed its notice, wrote the .bat, then raised instead of
+    returning the bool its signature promises. Measured 2026-08-26. Callers all
+    read `.returncode`, so the missing binary is reported the way an ordinary
+    failure is: exit 127, the shell's own code for "command not found".
+    """
+    try:
+        return subprocess.run(cmd, check=check, capture_output=True, text=True)
+    except (OSError, IndexError) as exc:
+        # IndexError is what an empty command list produces inside subprocess,
+        # and the docstring's promise has to cover that too.
+        return subprocess.CompletedProcess(
+            cmd, 127, stdout="",
+            stderr=f"{cmd[0] if cmd else '(empty command)'}: {exc}")
 
 
 def _resolve_python() -> str | None:
@@ -382,9 +399,18 @@ def _install_systemd_user_timer(
 
     verify = _run(["systemctl", "--user", "is-active", f"{unit_name}.timer"])
     if verify.returncode != 0:
-        _warn(f"timer enabled but is-active reports: {verify.stdout.strip()}")
+        # The success line below used to print anyway, one line under this
+        # warning, so an install that verified INACTIVE still ended in a green
+        # "enabled" and returned True. `enable --now` is meant to leave the
+        # timer running; if it is not running, nothing fires until the next
+        # boot, and the installer's own check is what said so. Reproduced
+        # 2026-08-26 with is-active stubbed to report "inactive".
+        _fail(f"timer enabled but is-active reports: "
+              f"{verify.stdout.strip() or verify.stderr.strip() or 'no output'}; "
+              f"it will not fire until this is resolved")
+        return False
 
-    _ok(f"systemd user timer: {unit_name}.timer (every {cadence_min}m) — enabled")
+    _ok(f"systemd user timer: {unit_name}.timer (every {cadence_min}m) — enabled and active")
     _ok("Run `loginctl enable-linger $USER` once to keep timers running after logout")
     return True
 

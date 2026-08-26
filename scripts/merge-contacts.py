@@ -59,6 +59,70 @@ class _BlockList(list):
         self.indent = indent
 
 
+class _Raw(str):
+    """A frontmatter line this parser does not interpret, kept VERBATIM.
+
+    Comments, blank lines and anything else without a colon used to hit
+    `if ":" not in line: continue` and vanish, because the serializer rebuilds
+    the block from the dict alone. A merge asked to change one field silently
+    deleted every colon-free comment in the record.
+
+    A comment WITH a colon was worse in the other direction: `# reviewed: 2026-01`
+    parsed as the key `"# reviewed"`, so `merge_frontmatter`'s union could inject
+    one record's comment into another. Both directions are gone: a line whose
+    first non-space character is `#` never becomes a key.
+    """
+
+
+class _Block(_Raw):
+    """A key whose value is an indented block, kept VERBATIM as its own lines.
+
+    A nested mapping (`address:` with indented `street:` / `city:` under it) had
+    no branch at all: the block-list scan broke on the first non-`- ` line and
+    the children fell through to the outer loop, where each parsed as a
+    TOP-LEVEL key. The record came back with `address:` emptied and its children
+    hoisted -- and `merge_frontmatter`'s union then carried the hoisted keys into
+    the target on the first merge.
+
+    This parser is deliberately naive (see `parse_frontmatter`), so it does not
+    try to understand the nesting. It holds the lines and writes them back
+    byte-for-byte, which is all a merge of a DIFFERENT field needs.
+    """
+
+    def __new__(cls, lines):
+        obj = super().__new__(cls, "")
+        obj.lines = list(lines)
+        return obj
+
+
+class _Empty(str):
+    """A key with no value, remembering the exact text after its colon.
+
+    Measured 2026-08-25 over the live 334-record corpus: 132 records write
+    `timezone: ` WITH a trailing space, and the rest write it without one. No
+    single template is right for both, so the style is carried -- exactly as
+    `_Quoted` carries quote style and `_BlockList` carries item indent.
+    Normalising in either direction rewrites a third of the corpus on a merge
+    that was asked to change one field.
+
+    Compares equal to "" like any other empty value, so nothing downstream has
+    to know it exists.
+    """
+
+    raw = ""
+
+    def __new__(cls, raw_value: str):
+        obj = super().__new__(cls, "")
+        obj.raw = raw_value
+        return obj
+
+
+# Synthetic key prefix for `_Raw` lines. NUL cannot appear in a YAML key, so
+# these can never collide with a real field, and `merge_frontmatter` skips them
+# by this prefix.
+RAW_KEY = "\x00raw"
+
+
 class _Quoted(str):
     """A scalar that was written in quotes, and goes back in the same quotes.
 
@@ -171,11 +235,18 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
     while i < len(lines):
         line = lines[i]
         i += 1
-        if ":" not in line:
+        stripped_line = line.strip()
+        # A comment, a blank line, or anything else this parser cannot read as a
+        # field is kept VERBATIM in place rather than dropped. The comment test
+        # comes FIRST, so `# reviewed: 2026-01` stays a comment instead of
+        # becoming the key `"# reviewed"`. See `_Raw`.
+        if stripped_line.startswith("#") or not stripped_line or ":" not in line:
+            fm[f"{RAW_KEY}{len(fm)}"] = _Raw(line)
             continue
-        key, _, value = line.partition(":")
+        key_indent = len(line) - len(line.lstrip())
+        key, _, raw_value = line.partition(":")
         key = key.strip()
-        value = value.strip()
+        value = raw_value.strip()
         if value.startswith("[") and value.endswith("]"):
             # A flow list on one line: "tags: [a, b]".
             value = [_scalar(v) for v in _split_flow(value[1:-1]) if v]
@@ -197,6 +268,21 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
                 i += 1
             if items:
                 value = _BlockList(items, indent)
+            else:
+                # Not a block list. It may still own an indented block -- a
+                # nested mapping. Consume those lines verbatim (see `_Block`);
+                # anything at or left of the key's own column belongs to the
+                # parent level and is left for the outer loop.
+                block = []
+                while i < len(lines):
+                    nxt = lines[i]
+                    if not nxt.strip():
+                        break
+                    if len(nxt) - len(nxt.lstrip()) <= key_indent:
+                        break
+                    block.append(nxt)
+                    i += 1
+                value = _Block(block) if block else _Empty(raw_value)
         else:
             value = _scalar(value)
         fm[key] = value
@@ -213,11 +299,18 @@ def serialize_frontmatter(fm: dict) -> str:
     """
     lines = ["---"]
     for key, value in fm.items():
-        if isinstance(value, _BlockList):
+        if isinstance(value, _Block):
+            lines.append(f"{key}:")
+            lines.extend(value.lines)
+        elif isinstance(value, _Raw):
+            lines.append(str(value))       # a comment or blank line, in place
+        elif isinstance(value, _BlockList):
             lines.append(f"{key}:")
             lines.extend(f"{value.indent}- {_emit(v)}" for v in value)
         elif isinstance(value, list):
             lines.append(f"{key}: [{', '.join(_emit(v) for v in value)}]")
+        elif isinstance(value, _Empty):
+            lines.append(f"{key}:{value.raw}")
         else:
             lines.append(f"{key}: {_emit(value)}")
     lines.append("---")
@@ -228,9 +321,22 @@ def extract_interaction_log(body: str) -> tuple[str, list[str], str]:
     """Split body into (pre_log, log_entries, post_log).
 
     Each log entry starts with ``### YYYY-MM-DD``.
+
+    The log ENDS at the next level-2 header. ``## Interaction Log`` is itself
+    level 2, so a later ``## Follow-ups`` is a sibling section, not part of the
+    entry above it. Without that bound the last entry ran to the end of the
+    file and swallowed every section after it -- and because `merge_notes`
+    sorts entries by their date, that swallowed section was then RELOCATED by
+    the date of the entry it was stuck to. A `## Follow-ups` block could move
+    above an older entry from the other record, silently reordering a part of
+    the file the merge was never asked to touch.
+
+    A `###` entry header is not matched by the level-2 pattern: `### ` is three
+    hashes, so `^## ` cannot align with it.
     """
     log_header_re = re.compile(r"^(## Interaction Log\s*)$", re.MULTILINE)
     entry_re = re.compile(r"^### \d{4}-\d{2}-\d{2}", re.MULTILINE)
+    section_re = re.compile(r"^## ", re.MULTILINE)
 
     header_match = log_header_re.search(body)
     if not header_match:
@@ -239,17 +345,18 @@ def extract_interaction_log(body: str) -> tuple[str, list[str], str]:
     pre_log = body[:header_match.start()]
     rest = body[header_match.end():]
 
-    # Split rest into entries
-    positions = [m.start() for m in entry_re.finditer(rest)]
+    next_section = section_re.search(rest)
+    log_end = next_section.start() if next_section else len(rest)
+
+    # Split the log region into entries; everything from the next level-2
+    # header on is post_log, as this function's name has always promised.
+    positions = [m.start() for m in entry_re.finditer(rest) if m.start() < log_end]
     entries: list[str] = []
     for i, pos in enumerate(positions):
-        end = positions[i + 1] if i + 1 < len(positions) else len(rest)
+        end = positions[i + 1] if i + 1 < len(positions) else log_end
         entries.append(rest[pos:end].rstrip("\n") + "\n")
 
-    # Anything after the last entry (rare) is post_log
-    post_log = ""
-    if not positions:
-        post_log = rest
+    post_log = rest if not positions else rest[log_end:]
 
     return pre_log, entries, post_log
 
@@ -284,18 +391,32 @@ def merge_frontmatter(fm_from: dict, fm_into: dict, from_slug: str, into_slug: s
     """Merge two frontmatter dicts with the defined strategy."""
     merged = dict(fm_into)  # start with target as base
 
-    # Union: add any keys present in source but missing in target
+    # Union: add any keys present in source but missing in target.
+    # Comments and blank lines are NOT unioned: a comment describes the record
+    # it was written in, and importing the source's would drop it into the
+    # target at an arbitrary position under a synthetic key.
     for key, value in fm_from.items():
+        if key.startswith(RAW_KEY):
+            continue
         if key not in merged:
             merged[key] = value
 
-    # Special merge rules
-    merged["last_touch"] = pick_more_recent(
+    # Special merge rules. Assigned only when a value exists: both helpers
+    # return None when NEITHER record carries the field, and the serializer's
+    # `str(value)` turned that into the literal text `last_touch: None` in the
+    # merged file. `cadence: None` then re-parsed as the string "none", which
+    # `CADENCE_RANK` scores as a genuine cadence label (rank 8) rather than
+    # unknown, so the invented value survived and outranked a real one.
+    last_touch = pick_more_recent(
         fm_from.get("last_touch"), fm_into.get("last_touch")
     )
-    merged["cadence"] = pick_higher_cadence(
+    if last_touch is not None:
+        merged["last_touch"] = last_touch
+    cadence = pick_higher_cadence(
         fm_from.get("cadence"), fm_into.get("cadence")
     )
+    if cadence is not None:
+        merged["cadence"] = cadence
 
     # Owner is the target
     merged["owner"] = into_slug

@@ -56,8 +56,8 @@ operations.
    `get_corporate_root()`. It self-no-ops on the CEO workspace, so it runs
    unconditionally in the pull sequence (no skill-level branch).
 2. **Backup (push)** - `python scripts/push-all.py` commits and pushes BOTH repos
-   to their private `origin/main` with the pre-push secret scan and `[0 0]`
-   ahead/behind verification.
+   to their private `origin/main`. That push runs the pre-push secret scan and
+   the `[0 0]` ahead/behind verification.
 
 > First-run record recovery after a clean deploy is a separate one-shot:
 > `python scripts/import-legacy-records.py --from <old-records-path>` (local,
@@ -85,8 +85,8 @@ operations.
      (`git -C <root> status`) before syncing; /sync will not force or merge."
    - push-all secret-scan refusal: "A tracked file looks like it holds a secret -
      move it to `.env` and retry; never pass `--no-verify`."
-   - push-all exit `3`: NOT a failure - at least one repository was skipped (a branch
-     that is not `main`, an unarmed engine test gate) and every skipped repo is still
+   - push-all exit `3`: NOT a failure. At least one repository was skipped (a branch
+     that is not `main`, an unarmed engine test gate). Every skipped repo is still
      committed locally. Read its headline: `Partial: N of M` means the rest pushed and
      verified; `NOTHING PUSHED: all M` means no new off-machine copy exists. Report
      the shape, name the repo, quote the reason. Full guidance: `/backup` SKILL.md.

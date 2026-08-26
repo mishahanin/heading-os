@@ -162,8 +162,9 @@ Recognised shapes - try in order:
    - `N - skip` / `N skip` / `N pass` - use the recommendation for N
    - `N` alone -> ambiguous, surface in 3.2
 
-3. Prose answer ("I'd say a for the first, c for the second, skip the
-   third, custom on four - use Postgres, a for five") - best-effort parse.
+3. Prose answer - best-effort parse.
+   - Example: "I'd say a for the first, c for the second, skip the
+     third, custom on four - use Postgres, a for five"
 
 For each question 1..N: cleanly parsed -> record the chosen letter or
 custom text. Unparseable / missing -> mark as `ambiguous`.
@@ -243,7 +244,8 @@ Fulfils the Phase 3 awaiting-approval contract of `prompt-refinement.md`.
 7. Never auto-route from natural language. Slash-only.
 8. Never write to memory, settings, skills, or rules. /align is read-only.
 9. Never run silently on unparseable input. Phase 3.2 surfaces parse
-   ambiguities once, then aborts with restart instructions if still ambiguous.
+   ambiguities once. It aborts with restart instructions if they are still
+   ambiguous.
 
 ## Voice rules
 

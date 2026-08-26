@@ -210,14 +210,21 @@ def last_reproduction(run_id: str, finding_id: str) -> dict | None:
 # ============================================================
 # Validate - the part that has to fail on silence
 # ============================================================
-def _judged_count(report_text: str) -> int:
-    """BLOCKER + HIGH + MEDIUM from the report's Findings line - what 2.5 covers."""
-    line = ""
+def _judged_count(report_text: str) -> int | None:
+    """BLOCKER + HIGH + MEDIUM from the report's Findings line - what 2.5 covers.
+
+    None means the line is ABSENT, which is not the same as zero and used to be
+    reported as zero. With no `Findings:` line the sum was 0, `len(verdict_rows)
+    < 0` is false for every possible row count, and `validate()` returned clean
+    over a report claiming a complete refutation pass backed by no verdict rows
+    at all. Reproduced 2026-08-26 with the counts written under a `Summary:`
+    label instead. This module's own section header calls itself "the part that
+    has to fail on silence", and a missing count is silence.
+    """
     for candidate in report_text.splitlines():
         if candidate.startswith("Findings:"):
-            line = candidate
-            break
-    return sum(int(m.group("n")) for m in _JUDGED_RE.finditer(line))
+            return sum(int(m.group("n")) for m in _JUDGED_RE.finditer(candidate))
+    return None
 
 
 def validate(*, run_id: str, report_path: Path) -> list[str]:
@@ -258,7 +265,13 @@ def validate(*, run_id: str, report_path: Path) -> list[str]:
                 f"degraded row naming the cause")
     else:
         judged = _judged_count(text)
-        if len(verdict_rows) < judged:
+        if judged is None:
+            defects.append(
+                f"'Refutation: {claim}' claims a completed pass but the report "
+                f"carries no 'Findings:' line, so the judged count cannot be "
+                f"established and the {len(verdict_rows)} verdict row(s) cannot "
+                f"be reconciled against anything")
+        elif len(verdict_rows) < judged:
             defects.append(
                 f"'Refutation: {claim}' claims a pass over {judged} judged finding(s) "
                 f"but the run holds {len(verdict_rows)} verdict row(s)")

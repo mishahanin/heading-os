@@ -227,11 +227,19 @@ def test_a_return_that_is_not_json_is_refused(tmp_path):
 
 @needs_bwrap
 def test_an_oversized_return_hard_stops_and_is_marked_discarded(tmp_path):
-    """A partial answer handed back as whole is worse than no answer."""
+    """A partial answer handed back as whole is worse than no answer.
+
+    The list is 100 entries, not the 5,000 it was until 2026-08-25. The schema
+    now caps a structured list at `census_schema.MAX_ENTRIES` (200) and
+    `MAX_STRUCTURED_CHARS` (8,000), so 5,000 paths were refused as an invalid
+    SHAPE before the return budget could refuse them as too large, and this test
+    stopped measuring the thing it names. 100 entries sits inside both schema
+    caps and still overruns a 1,000-character budget.
+    """
     code, record = run(tmp_path, '''
         import json, pathlib
         pathlib.Path("/out/answer.json").write_text(json.dumps({
-            "kind": "paths", "paths": [f"threads/{i}.md" for i in range(5000)],
+            "kind": "paths", "paths": [f"threads/{i}.md" for i in range(100)],
             "sources": ["threads"]}))
     ''', return_budget=1000)
     assert code == census.EXIT_RETURN_BUDGET

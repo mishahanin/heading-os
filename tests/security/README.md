@@ -22,7 +22,10 @@ Each test file corresponds to a finding in `docs/security/findings-registry.md`.
 | `test_SEC_014_sentinel_chat_timeout.py` | SEC-014 | Per-chat timeout in _check_monitored_chats |
 | `test_SEC_015_sentinel_state_finally.py` | SEC-015 | run_cycle uses try/finally with state.save() |
 | `test_SEC_016_sentinel_pid_lock.py` | SEC-016 | PID file creation uses file locking |
-| `test_regression.py` | All | Permanent regression suite importing all SEC tests |
+| `test_SEC_017_dispatch_check_branches.py` | SEC-017 | Each of the eight PreToolUse dispatcher checks exercised directly |
+| `test_SEC_018_gate_behaviour.py` | SEC-018 | The blocking gate observed as a gate, not as a pattern list |
+| `test_SEC_019_commit_air_gap.py` | SEC-019 | A private commit subject never reaches a memory-index store |
+| `test_regression.py` | All SEC | Only-grows floor of SEC ids: fails if a regression file is deleted, renamed out of pytest's pattern, or emptied |
 
 ## Running Tests
 
@@ -35,4 +38,13 @@ pytest tests/security/ -v
 - Security tests are NEVER deleted
 - Each finding gets its own test file
 - Tests must fail against the vulnerable code and pass against the fixed code
-- All tests are imported into `test_regression.py` for permanent enforcement
+- Permanent enforcement is the CI `security-tests` job running this directory,
+  which collects every file here by name. `test_regression.py` used to re-import
+  them all instead; that ran each test twice (721 nodes for 398 distinct tests)
+  and published the inflated figure as the repository's security-test count.
+- What replaced it is `KNOWN_SEC_IDS` in `test_regression.py`: an only-grows
+  floor of SEC ids. A deleted file, one renamed out of `test_*.py`, or one with
+  no test function left fails the suite. Add a new SEC id there in the same
+  change that adds the file.
+- The engine's SEC numbering does NOT match the private findings registry past
+  SEC-016. See the docstring in `test_regression.py`.

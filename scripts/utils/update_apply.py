@@ -17,6 +17,19 @@ from scripts.utils.update_registry import Component  # noqa: E402
 from scripts.utils.update_common import resolve_current, write_state  # noqa: E402
 
 
+class RollbackFailed(Exception):
+    """The restore command itself failed, so the prior version is NOT back.
+
+    Distinct from "rolled back": the module docstring's invariant is that an
+    auto update never leaves a component broken, and a rollback that exits
+    non-zero breaks it. `_build_rollback` ran its command with `check=False` and
+    discarded the exit status, so a rollback exiting 7 and restoring nothing
+    produced the same "rolled-back" verdict as a rollback that worked. Measured
+    2026-08-26 with apply={'cmd': 'true', 'rollback_cmd': 'exit 7'} and a
+    failing health gate.
+    """
+
+
 def run_health(comp: Component) -> bool:
     if not comp.health:
         return True
@@ -46,7 +59,11 @@ def apply_one(comp: Component, *, applier: Callable[[], None],
         # prior version. For script applies the closure is a no-op -- the script
         # self-rolls-back before exiting non-zero, so the exception already means
         # "restored".
-        rollback()
+        try:
+            rollback()
+        except RollbackFailed as exc:
+            print(exc, file=sys.stderr)
+            return "rollback-failed"
         return "rolled-back"
     # A `script` apply is its own gate: it self-verified health and self-rolled-back
     # before exiting non-zero, so reaching here (exit 0) means healthy. Re-probing
@@ -57,7 +74,11 @@ def apply_one(comp: Component, *, applier: Callable[[], None],
         return "applied"
     if run_health(comp):
         return "applied"
-    rollback()
+    try:
+        rollback()
+    except RollbackFailed as exc:
+        print(exc, file=sys.stderr)
+        return "rollback-failed"
     return "rolled-back"
 
 
@@ -85,7 +106,17 @@ def _build_rollback(comp: Component, prev: str) -> Callable[[], None]:
     cmd = rb.replace("{prev}", prev)
 
     def _run() -> None:
-        subprocess.run(["bash", "-c", cmd], check=False, timeout=600)
+        try:
+            res = subprocess.run(["bash", "-c", cmd], check=False, timeout=600,
+                                 capture_output=True, text=True)
+        except (subprocess.SubprocessError, OSError) as exc:
+            raise RollbackFailed(f"{comp.name}: rollback could not run: {exc}") from exc
+        if res.returncode != 0:
+            tail = (res.stderr or res.stdout or "").strip().splitlines()[-1:] or [""]
+            raise RollbackFailed(
+                f"{comp.name}: rollback exited {res.returncode}; the prior "
+                f"version was NOT restored: {tail[0][:200]}")
+
     return _run
 
 
@@ -135,7 +166,8 @@ def cmd_apply(args, components: list[Component], state_path: Path) -> int:
             prev = resolve_current(comp)            # captured before the swap
             rollback = _build_rollback(comp, prev)
             # apply_one owns both failure paths: an apply-command failure/timeout
-            # and a health-gate failure both invoke `rollback` -> "rolled-back".
+            # and a health-gate failure both invoke `rollback` -> "rolled-back",
+            # or "rollback-failed" when the restore command itself did not work.
             result = apply_one(comp, applier=_default_applier(comp), rollback=rollback)
             print(f"{comp.name}: {result}")
         except Exception as exc:  # noqa: BLE001 - boundary; one component's failure is contained
@@ -143,11 +175,18 @@ def cmd_apply(args, components: list[Component], state_path: Path) -> int:
             print(f"{comp.name}: error ({type(exc).__name__}: {exc})")
         results[comp.name] = result
     _mark_state(state_path, results)
-    return 1 if any(r == "rolled-back" for r in results.values()) else 0
+    return 1 if any(r in FAILED_RESULTS for r in results.values()) else 0
+
+
+# Every outcome that must set status=failed and raise the exit code. Named once
+# so a new outcome cannot be added to `apply_one` and then be invisible to BOTH
+# the state file and the exit code, which is what a bare
+# `result == "rolled-back"` in two places invites.
+FAILED_RESULTS = frozenset({"rolled-back", "rollback-failed"})
 
 
 def _mark_state(state_path: Path, results: dict[str, str]) -> None:
-    """Persist rolled-back components as status=failed so /prime surfaces them.
+    """Persist failed components as status=failed so /prime surfaces them.
     Applied components will read back as `current` on the next `check`.
     """
     if not state_path.exists():
@@ -159,7 +198,7 @@ def _mark_state(state_path: Path, results: dict[str, str]) -> None:
     changed = False
     for name, result in results.items():
         entry = state.get("components", {}).get(name)
-        if result == "rolled-back" and entry is not None:
+        if result in FAILED_RESULTS and entry is not None:
             entry["status"] = "failed"
             entry["fail_count"] = entry.get("fail_count", 0) + 1
             changed = True

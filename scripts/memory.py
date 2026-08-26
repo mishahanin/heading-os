@@ -133,7 +133,48 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def leading_flag_error(argv: list[str]) -> str | None:
+    """Refuse `recall --flag VALUE "text"`, or None when the argv is safe.
+
+    `parse_known_args` does not put an unknown optional's operand back in
+    `extras`: it binds that operand to the positional. Measured on CPython
+    3.11.15:
+
+        recall --top-k 3 "sovereign deep packet"
+          -> text='3', extras=['--top-k', 'sovereign deep packet']
+
+    so `cmd_recall` handed the backing script `query 3 --top-k "sovereign deep
+    packet"` -- the flag's value searched as the query, and the query passed as
+    the flag's value. With an int-typed flag the child dies at exit 2 and the
+    operator at least learns something is wrong. With a string-typed one it is
+    silent: `recall --layer odin "my query"` becomes `query odin --layer "my
+    query"`, which parses cleanly and searches for the literal word "odin"
+    inside a layer named after the query.
+
+    Reordering for the operator would mean guessing which unknown flags take a
+    value, which this facade cannot know -- it does not own the backing
+    script's parser. So it refuses and says what to type. The documented order
+    (module docstring) has always been text first.
+    """
+    if len(argv) < 2 or argv[0] != "recall":
+        return None
+    first = argv[1]
+    if not first.startswith("-") or first in ("-h", "--help"):
+        return None
+    return (
+        f"memory.py recall: put the query text FIRST, before {first}.\n"
+        f"  wrong: memory.py recall {first} ... \"your query\"\n"
+        f"  right: memory.py recall \"your query\" {first} ...\n"
+        "A leading flag binds its own value to the query, silently."
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    problem = leading_flag_error(argv)
+    if problem:
+        print(problem, file=sys.stderr)
+        return 2
     # parse_known_args so passthrough flags (recall --top-k, promote --note,
     # hygiene --json) reach the backing script instead of erroring on a leading
     # unknown optional (argparse REMAINDER does not capture a leading flag).

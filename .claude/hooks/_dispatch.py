@@ -8,17 +8,24 @@ output. (The `_secure/` vault and its `protect-secure` check were removed in
 Plan 5 — vault removal; sensitivity is now the fail-closed `SENSITIVE_MODE`
 flag in `scripts/utils/sensitive.py`.)
 
-The original three scripts remain as thin shims that delegate here, so
-exec workspaces whose settings.local.json was provisioned with the
-original filenames keep working without re-provisioning.
+There are NO delegating shims. `prevent-secrets.py`, `protect-corporate.py`,
+`protect-docs.py` and `protect-personal-threads.py` were all deleted in commit
+ba1affd; this docstring claimed until 2026-08-25 that they "remain as thin shims
+that delegate here, so exec workspaces provisioned with the original filenames
+keep working without re-provisioning". They do not exist, so a workspace whose
+settings.local.json still names one of them runs with that wall entirely absent
+and MUST be re-provisioned.
 
-Bash matcher scope: this dispatcher is registered for both Write|Edit|...
-and Bash tool calls in settings.local.json. The Bash registration intentionally
-omits `protect-corporate.py` and `protect-docs.py` — those two hooks operate
-ONLY on file_path attributes, which Bash payloads do not carry. Both scripts
-exit cleanly on empty file_path, so registering them for Bash would be a
-zero-effect no-op subprocess cost. The path-scoped hooks remain registered
-only for Write|Edit family tools where they have a target to inspect.
+Matcher scope: settings.local.json registers this dispatcher under three
+matchers — `Write|Edit|MultiEdit|NotebookEdit`, `Bash`, and `Read`. All three
+payload shapes reach every check, so a new check has to answer what it does with
+each of them rather than inherit a two-matcher assumption. Read carries a
+`file_path` but no content, which is why `check_protect_corporate` and
+`check_protect_docs` exclude it by name: `check_protect_docs` reaching a path
+test on a Read payload is what policy-denied an ordinary operator Read at
+2026-08-11T21:44:19, recorded in the denial log. The path-scoped checks return
+None on a Bash payload for the plainer reason that it carries no `file_path` at
+all.
 """
 from __future__ import annotations
 import hashlib
@@ -229,7 +236,7 @@ def _secrets_path_allowed(file_path: str) -> bool:
             return True
     return False
 
-def _scan_for_secrets(text: str) -> Tuple[bool, Optional[str]]:
+def _scan_for_secrets(text: str) -> tuple[bool, str | None]:
     if not text:
         return False, None
     for pattern, desc in SECRET_PATTERNS:
@@ -240,7 +247,7 @@ def _scan_for_secrets(text: str) -> Tuple[bool, Optional[str]]:
             return True, desc
     return False, None
 
-def check_prevent_secrets(payload: dict) -> Optional[dict]:
+def check_prevent_secrets(payload: dict) -> dict | None:
     tool_name = payload.get("tool_name", "")
     tool_input = payload.get("tool_input", {}) or {}
     if tool_name == "Bash":
@@ -342,7 +349,7 @@ ALLOWED_DOC_PATH_RE = re.compile(
     r")",
 )
 
-def check_protect_personal_threads(payload: dict) -> Optional[dict]:
+def check_protect_personal_threads(payload: dict) -> dict | None:
     """Block leaks of threads/personal/ content. Each block carries the
     `_policy_deny: True` flag — the dispatcher's main loop renders these as a
     PreToolUse permission deny (hookSpecificOutput / exit 0), so the CLI shows
@@ -417,11 +424,36 @@ def check_protect_personal_threads(payload: dict) -> Optional[dict]:
 # check_protect_corporate — exec-only block on corporate/ writes
 # ============================================================
 # Folded in from .claude/hooks/protect-corporate.py during Phase 2.3 of the
-# 2026-05-12 perf v2 sprint. The standalone script remains in place as a
-# backward-compat shim for any exec workspace whose settings.local.json
-# was provisioned before this fold-in.
+# 2026-05-12 perf v2 sprint. That standalone script was deleted in ba1affd,
+# together with protect-docs.py, protect-personal-threads.py and
+# prevent-secrets.py, so there is no backward-compat shim: a workspace whose
+# settings.local.json still names one of those files has NO PreToolUse wall at
+# all and must be re-provisioned.
 
-def check_protect_corporate(payload: dict) -> Optional[dict]:
+_IDENTITY_FILE = ".workspace-identity.json"
+
+
+def _identity_root(cwd: str) -> Path | None:
+    """The nearest directory at or above `cwd` that carries the identity file.
+
+    Falls back to the workspace root, then answers None. `cwd` is the live shell
+    directory, so it is a starting point and never an answer on its own.
+    """
+    if cwd:
+        try:
+            start = Path(cwd).resolve()
+        except (OSError, ValueError):
+            start = None
+        if start is not None:
+            for directory in (start, *start.parents):
+                if (directory / _IDENTITY_FILE).is_file():
+                    return directory
+    if (WORKSPACE / _IDENTITY_FILE).is_file():
+        return WORKSPACE
+    return None
+
+
+def check_protect_corporate(payload: dict) -> dict | None:
     """Block writes to corporate/ in exec workspaces.
 
     Only fires when the workspace identity is exec-workspace. The CEO
@@ -439,10 +471,22 @@ def check_protect_corporate(payload: dict) -> Optional[dict]:
     if tool_name in ("Bash", "Read"):
         return None
 
-    project_dir = payload.get("cwd") or str(WORKSPACE)
-    identity_file = Path(project_dir) / ".workspace-identity.json"
-    if not identity_file.is_file():
+    # `payload["cwd"]` is the LIVE shell cwd and it drifts - check_cwd_anchor one
+    # screen down is built entirely on that fact, and the denial log holds 14
+    # refusals whose cwd was a subdirectory. Reading the identity file only at
+    # that exact directory therefore meant: exec workspace, shell cd'd anywhere
+    # below root, file absent, return None - allow. The wall switched off for the
+    # whole session on the first `cd`, and the executive's corporate/ edit was
+    # then silently overwritten on the next sync, which is the outcome the block
+    # message describes preventing. Walk up instead, the way the hook launcher in
+    # settings.local.json already locates this very file.
+    project_dir = _identity_root(payload.get("cwd") or "")
+    if project_dir is None:
+        # No identity file anywhere above the cwd or at the workspace root. That
+        # is an ordinary CEO or public clone, which has no corporate/ layer to
+        # protect - a correct no-op now rather than an accidental one.
         return None
+    identity_file = project_dir / ".workspace-identity.json"
     try:
         identity = json.loads(identity_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -456,7 +500,7 @@ def check_protect_corporate(payload: dict) -> Optional[dict]:
         return None
 
     file_path_norm = os.path.normpath(file_path)
-    corporate_dir = os.path.normpath(os.path.join(project_dir, "corporate"))
+    corporate_dir = os.path.normpath(os.path.join(str(project_dir), "corporate"))
     if file_path_norm.startswith(corporate_dir + os.sep) or file_path_norm == corporate_dir:
         return {
             "decision": "block",
@@ -487,7 +531,7 @@ SYNCED_FILES = {
 }
 
 
-def check_protect_docs(payload: dict) -> Optional[dict]:
+def check_protect_docs(payload: dict) -> dict | None:
     """Block direct Write/Edit to auto-synced docs/ files.
 
     The 6 shared documentation files in SYNCED_FILES are auto-synced from
@@ -548,15 +592,26 @@ def check_protect_docs(payload: dict) -> Optional[dict]:
 # payload, which reflects real drift) is a subdirectory of the workspace root,
 # (b) the command runs a root-relative workspace .py path, and (c) that path
 # resolves from root but NOT from the current cwd. Condition (c) is a filesystem
-# check, so the block fires only when the command is genuinely about to fail —
-# no false positives, and no change to the permission posture (it blocks with the
-# anchored command to run instead, rather than force-allowing a rewrite).
+# check on the exact token the shell will resolve, so the block fires only on a
+# path that really is unreachable from that cwd, and no permission posture
+# changes (it blocks with the anchored command to run instead, rather than
+# force-allowing a rewrite).
+#
+# The left anchor is load-bearing and was missing until 2026-08-25. Without it
+# the pattern matched the `scripts/...py` TAIL inside a fully-qualified absolute
+# path, so `.venv/bin/python /home/.../heading-os/scripts/run-tests.py` extracted
+# `scripts/run-tests.py`, found it under root and not under the drifted cwd, and
+# refused a command that would have run perfectly - while telling the operator it
+# "would fail with ENOENT", a cause the code had not established, since an
+# absolute path resolves from any directory. `.logs/denials/denials.jsonl` records
+# a real refusal of this shape at ts 1785739896.95. The lookbehind admits only a
+# separator, so a match can no longer begin in the middle of a path.
 
 WORKSPACE_REL_SCRIPT_RE = re.compile(
-    r"""["']?((?:\.claude/(?:skills|hooks)|scripts)/[^\s"';|&)]+\.py)"""
+    r"""(?:^|(?<=[\s"'=(|&;]))["']?((?:\./)?(?:\.claude/(?:skills|hooks)|scripts)/[^\s"';|&)]+\.py)"""
 )
 
-def check_cwd_anchor(payload: dict) -> Optional[dict]:
+def check_cwd_anchor(payload: dict) -> dict | None:
     if payload.get("tool_name") != "Bash":
         return None
     command = (payload.get("tool_input", {}) or {}).get("command", "") or ""
@@ -572,14 +627,25 @@ def check_cwd_anchor(payload: dict) -> Optional[dict]:
     except (OSError, ValueError):
         return None
     if not norm_cwd or norm_cwd == norm_root:
+        # `norm_cwd == norm_root` changes no verdict and is kept for cost: when
+        # the shell IS at root, condition (c) below resolves the path from the
+        # same directory twice and always answers "reachable", so the outcome is
+        # this same None after a regex scan of the whole command. This hook runs
+        # on every Bash call, so the scan is worth skipping. Noted because a
+        # mutation sweep will keep surfacing the line as untested - it is
+        # untestable through behaviour, being an equivalent short-circuit.
         return None  # at root (or cwd unknown) — nothing to anchor
     if not norm_cwd.startswith(norm_root + os.sep):
         return None  # shell is outside the workspace — do not interfere
 
     for match in WORKSPACE_REL_SCRIPT_RE.finditer(command):
         rel = match.group(1)
-        if os.path.isabs(rel):
-            continue
+        # There was an `if os.path.isabs(rel): continue` here. It never fired and
+        # never could: the group can only begin at `.claude/`, `./` or `scripts`,
+        # so `rel` is relative by construction. It read as the guard against the
+        # absolute-path false positive while doing nothing about it — the left
+        # anchor above is what actually enforces this now, and the test named
+        # below fails if that anchor is loosened.
         # Only act when the path resolves from root but is unreachable from cwd —
         # i.e. the command is about to fail purely because of shell drift.
         if os.path.exists(os.path.join(norm_root, rel)) and not os.path.exists(
@@ -721,7 +787,7 @@ Short sleeps are untouched — under {threshold} s with no polling loop passes. 
 For a deliberate blocking wait, append `# {escape}` and it goes through."""
 
 
-def _pytest_argv(command: str) -> Optional[list]:
+def _pytest_argv(command: str) -> list | None:
     """The argv of a pytest invocation in `command`, or None if there is none.
 
     Judged positionally: `pytest` must be the first word of a shell segment, or
@@ -754,12 +820,28 @@ def _pytest_argv(command: str) -> Optional[list]:
     return None
 
 
+# Flags whose NEXT argv word is a value, not a test target. Without this, the
+# value was read as a named target: `pytest --rootdir /a/b` counted `/a/b` as a
+# narrow run and the whole suite went through serially, having named no target
+# at all. The attached spelling (`--rootdir=/a/b`) was already handled, because
+# it starts with `-`.
+_PYTEST_VALUE_FLAGS = ("--rootdir", "-p", "-k", "-o", "--basetemp",
+                       "-c", "--override-ini", "--junitxml", "-W")
+
+
 def _is_serial_full_suite(argv: list) -> bool:
+    skip_next = False
     for index, token in enumerate(argv):
+        if skip_next:
+            skip_next = False
+            continue
         if token.startswith(_PYTEST_PARALLEL_FLAGS):
             return False  # -n, -n8, -nauto, --numprocesses=auto
         if token in _PYTEST_NARROWING_FLAGS or token.startswith("--collect-only"):
             return False
+        if token in _PYTEST_VALUE_FLAGS:
+            skip_next = True
+            continue
         if index == 0:
             continue
         # A named target — a file, a directory below tests/, a node id — is a
@@ -783,13 +865,29 @@ def _is_subdirectory_target(token: str) -> bool:
     outcome a habit guard must never produce.
 
     The distinction that matters is depth, not existence: `tests/` IS the full
-    suite and must stay blocked, while `tests/security` is a fast subset. So
-    count meaningful path segments rather than touching the filesystem, which
-    keeps this cheap and keeps `./tests/` from reading as narrow.
+    suite and must stay blocked, while `tests/security` is a fast subset.
+
+    Depth is measured AFTER stripping the workspace root, because counting raw
+    segments made the spelling decide the verdict:
+    `pytest /home/.../heading-os/tests` has six segments and read as narrow,
+    so the identical 6000-test serial run passed by absolute path while
+    `pytest tests/` was blocked. Agent threads reset cwd between calls and this
+    workspace instructs absolute paths, so that was the likely spelling, not an
+    exotic one. Stripping the root is string work; the filesystem is still not
+    touched.
     """
     if token.startswith("-"):
         return False  # `--rootdir=/x` is a flag, not a target
-    segments = [s for s in token.split("/") if s not in ("", ".")]
+    candidate = token
+    root = str(WORKSPACE)
+    if os.path.isabs(candidate):
+        normalized = os.path.normpath(candidate)
+        if normalized == root or normalized.startswith(root + os.sep):
+            candidate = normalized[len(root):]
+        else:
+            # Outside this workspace entirely; not the suite this guard bounds.
+            return True
+    segments = [s for s in candidate.split("/") if s not in ("", ".")]
     return len(segments) > 1
 
 
@@ -816,7 +914,7 @@ def _blocking_wait(command: str) -> bool:
     return False
 
 
-def check_slow_shell(payload: dict) -> Optional[dict]:
+def check_slow_shell(payload: dict) -> dict | None:
     if payload.get("tool_name") != "Bash":
         return None
     tool_input = payload.get("tool_input", {}) or {}
@@ -890,23 +988,37 @@ def _load_rate_state() -> dict:
         return {"date": "", "count": 0, "recent": []}
     try:
         return json.loads(RATE_LIMIT_STATE_FILE.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as e:  # noqa: BLE001 - a hook must not break the tool call
+        # Say it. This reset the daily write cap, the runaway-loop window AND
+        # check_tool_budget's rolling history to empty, and printed nothing at
+        # all, so the one event these counters exist to catch would arrive
+        # looking like a fresh day. `_save_rate_state` has always reported its
+        # own failure; this side did not.
+        print(f"[_dispatch:rate_limit] state unreadable, counters reset to zero: {e}",
+              file=sys.stderr)
         return {"date": "", "count": 0, "recent": []}
 
 
 def _save_rate_state(state: dict) -> None:
     # Atomic write (tmp + os.replace) per the global atomic-state-write rule: a torn
     # write would silently reset the runaway-loop counter. Added 2026-06-09 audit.
+    #
+    # The staging name carries the pid. `os.replace` is atomic for ONE writer;
+    # the fixed `.json.tmp` was shared, so two hook processes - which this file's
+    # own comments say do race - each opened the same staging path with mode "w"
+    # and interleaved their writes, and whichever replaced second promoted torn
+    # JSON to the live file. Per-process staging makes the atomicity claim above
+    # true for the concurrency that actually happens here.
     try:
         RATE_LIMIT_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = RATE_LIMIT_STATE_FILE.with_suffix(".json.tmp")
+        tmp = RATE_LIMIT_STATE_FILE.with_suffix(f".json.{os.getpid()}.tmp")
         tmp.write_text(json.dumps(state), encoding="utf-8")
         os.replace(tmp, RATE_LIMIT_STATE_FILE)
     except Exception as e:
         print(f"[_dispatch:rate_limit] state save failed: {e}", file=sys.stderr)
 
 
-def check_rate_limit(payload: dict) -> Optional[dict]:
+def check_rate_limit(payload: dict) -> dict | None:
     """Daily Write/Edit cap + runaway-loop detection.
 
     Soft limit emits advisory. Hard limit blocks. Loop detection (same tool + same
@@ -928,7 +1040,13 @@ def check_rate_limit(payload: dict) -> Optional[dict]:
     state = _load_rate_state()
     today = datetime.now().astimezone().strftime("%Y-%m-%d")
     if state.get("date") != today:
-        state = {"date": today, "count": 0, "recent": []}
+        # Reset only the keys THIS check owns. Rebinding `state` to a fresh
+        # three-key literal also dropped `tool_history`, which check_tool_budget
+        # owns and which is a rolling 30-minute window, not a daily one. The
+        # first write after local midnight therefore emptied that window, so a
+        # runaway loop straddling midnight restarted its count at 1 and neither
+        # the soft nor the hard tool cap could fire on the calls already made.
+        state.update({"date": today, "count": 0, "recent": []})
 
     state["count"] = int(state.get("count", 0)) + 1
     state["recent"] = (state.get("recent", []) + [[tool_name, file_path, int(time.time())]])[-RATE_LIMIT_LOOP_WINDOW:]
@@ -1023,7 +1141,7 @@ def _stable_args_signature(tool_name: str, tool_input: dict) -> str:
     return f"{tool_name}:{digest}"
 
 
-def check_tool_budget(payload: dict) -> Optional[dict]:
+def check_tool_budget(payload: dict) -> dict | None:
     """Total-tool-call cap in 30-min rolling window + same-args repeat detection.
 
     Counts every tool invocation (not just writes). Soft cap warns; hard cap blocks.

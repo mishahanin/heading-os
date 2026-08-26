@@ -102,6 +102,30 @@ def main() -> int:
 
     body = "\n".join(result.get("failures") or []) or "(no detail reported)"
     reason = REASON.format(lane=result.get("lane", "unknown"), body=body)
+
+    # Name what the check left out. `scripts/turn-check.py` reports three
+    # exclusion counts and prints all three in its own human renderer, "because
+    # silence here is how a narrowed check starts reading as a complete one".
+    # This hook read only `lane` and `failures` and then asserted the run covered
+    # "the uncommitted Python edits in this turn" - the one message the operator
+    # actually reads, with every exclusion dropped. Fixing the named failure then
+    # looked like a green turn over a set that was never checked.
+    exclusions = []
+    foreign = result.get("skipped_foreign") or 0
+    if foreign:
+        exclusions.append(f"{foreign} changed file(s) written by another session, "
+                          f"not checked")
+    contract = result.get("skipped_contract") or 0
+    if contract:
+        exclusions.append(f"{contract} frozen-contract file(s) not run: red by "
+                          f"design until the slice implements them")
+    slow = result.get("deselected_slow") or 0
+    if slow:
+        exclusions.append(f"{slow} slow test(s) not run here: run "
+                          f"`python scripts/run-tests.py` for those")
+    if exclusions:
+        reason += ("\n\nNot covered by this check: " + "; ".join(exclusions) + ".")
+
     print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
     return 0
 

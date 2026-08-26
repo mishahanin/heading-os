@@ -227,31 +227,72 @@ def test_a_working_cli_still_produces_a_normal_score(tmp_path: Path):
 # 3. The import trap found while reproducing the above
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize(
-    "script",
-    ["run_eval.py", "run_loop.py", "package_skill.py", "improve_description.py"],
-)
-def test_the_intra_skill_importers_run_from_a_plain_path(script: str):
+# Each script, with the exit code it gives when run with NO arguments.
+#
+# No arguments, not `--help`. Two reasons, both measured 2026-08-26. First,
+# `package_skill.py` has no argparse at all: it reads `sys.argv[1]` as a path,
+# so `--help` was taken as a skill folder named `--help`, printed "Skill folder
+# not found", and the test still passed because the only thing it looked for was
+# the ABSENCE of an import error. Second, absence proves nothing on its own - a
+# script that dies of a SyntaxError, or one that silently does nothing, carries
+# no "ModuleNotFoundError" either. Every one of these four prints a usage line
+# when called bare, which is a POSITIVE signal that the import chain resolved
+# and the script reached its own argument handling.
+_BARE_EXIT = {
+    "run_eval": 2,             # argparse: missing required arguments
+    "run_loop": 2,             # argparse
+    "package_skill": 1,        # hand-rolled sys.argv check
+    "improve_description": 2,  # argparse
+}
+
+
+@pytest.mark.parametrize("name,expected_exit", sorted(_BARE_EXIT.items()))
+def test_the_intra_skill_importers_run_from_a_plain_path(name: str, expected_exit: int):
     """`python scripts/<name>.py` must not resolve `scripts.*` to the repo root."""
     proc = subprocess.run(
-        [sys.executable, f"scripts/{script}", "--help"],
+        [sys.executable, f"scripts/{name}.py"],
         cwd=SKILL_CREATOR, capture_output=True, text=True, timeout=60,
     )
     combined = proc.stdout + proc.stderr
+
     assert "ModuleNotFoundError" not in combined, combined[-1500:]
     assert "ImportError" not in combined, combined[-1500:]
+    assert "Traceback" not in combined, combined[-1500:]
+    assert proc.returncode == expected_exit, combined[-1500:]
+    assert "usage" in combined.lower(), (
+        f"scripts/{name}.py printed no usage line, so nothing here shows it "
+        f"reached its own argument handling: {combined[-1500:]}")
 
 
-@pytest.mark.parametrize(
-    "module",
-    ["scripts.run_eval", "scripts.run_loop", "scripts.package_skill",
-     "scripts.improve_description"],
-)
-def test_the_documented_module_form_still_works(module: str):
+def test_the_bare_usage_line_names_where_the_script_actually_lives():
+    """It said `python utils/package_skill.py` while the file has always sat in
+    `scripts/`. There is no `utils/` directory in this skill, so an operator who
+    copied the line got "No such file or directory". Six occurrences, three of
+    them in the module docstring. The old absence-only assertions could not see
+    it, because a wrong path is not an ImportError.
+    """
     proc = subprocess.run(
-        [sys.executable, "-m", module, "--help"],
+        [sys.executable, "scripts/package_skill.py"],
         cwd=SKILL_CREATOR, capture_output=True, text=True, timeout=60,
     )
     combined = proc.stdout + proc.stderr
+
+    assert "scripts/package_skill.py" in combined, combined[-1500:]
+    assert "utils/package_skill.py" not in combined, combined[-1500:]
+    named = SKILL_CREATOR / "scripts" / "package_skill.py"
+    assert named.is_file(), f"the usage line names {named}, which does not exist"
+
+
+@pytest.mark.parametrize("name,expected_exit", sorted(_BARE_EXIT.items()))
+def test_the_documented_module_form_still_works(name: str, expected_exit: int):
+    proc = subprocess.run(
+        [sys.executable, "-m", f"scripts.{name}"],
+        cwd=SKILL_CREATOR, capture_output=True, text=True, timeout=60,
+    )
+    combined = proc.stdout + proc.stderr
+
     assert "ModuleNotFoundError" not in combined, combined[-1500:]
     assert "ImportError" not in combined, combined[-1500:]
+    assert "Traceback" not in combined, combined[-1500:]
+    assert proc.returncode == expected_exit, combined[-1500:]
+    assert "usage" in combined.lower(), combined[-1500:]

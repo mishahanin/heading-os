@@ -73,7 +73,7 @@ def _ensure_exchangelib():
 
 
 from scripts.utils.html_text import strip_html  # noqa: E402
-from scripts.utils.workspace import get_data_root, get_default_tz, get_default_tz_name, get_outputs_dir, get_workspace_root, load_env  # noqa: E402
+from scripts.utils.workspace import get_data_root, get_default_tz, get_default_tz_name, get_outputs_dir, get_personal_root, get_workspace_root, load_env  # noqa: E402
 
 # ============================================================
 # Configuration
@@ -84,6 +84,27 @@ WORKSPACE_ROOT = get_workspace_root()
 ENV_FILE = WORKSPACE_ROOT / ".env"
 CALENDAR_DIR = get_outputs_dir() / "_sync" / "calendar"
 EMAIL_DIR = get_outputs_dir() / "_sync" / "emails"
+
+
+def _display_path(path):
+    """A short path for a log line, and never an exception.
+
+    These directories come from `get_outputs_dir()`, which on an exec workspace
+    resolves under `../.heading-os-data-{slug}` while `get_data_root()` resolves
+    under `../.heading-os-data`. Those are different trees, so the old
+    `relative_to(get_data_root())` raised ValueError right after upcoming.md was
+    written: the per-day files were never written, the stale-file prune never
+    ran, and a sync that had SUCCEEDED was reported as FAILED with exit 1.
+
+    A cosmetic path in a success message must not be able to abort the caller,
+    so an unrelatable path degrades to its absolute form.
+    """
+    for base in (get_personal_root(), get_data_root(), get_workspace_root()):
+        try:
+            return str(path.relative_to(base))
+        except ValueError:
+            continue
+    return str(path)
 
 
 def load_config():
@@ -200,15 +221,27 @@ def sync_calendar(account, days=7, timezone_str=None):
     env resolution as a side effect and any later config change was ignored for
     the life of the process.
     """
+    # The lazy names this function reads are module globals bound by
+    # `_ensure_exchangelib`, and nothing here bound them. It worked only because
+    # `main()` calls `connect()` first; a caller that reaches this function any
+    # other way got `AttributeError: 'NoneType' object has no attribute
+    # 'from_timezone'` instead of the clean "install the email extra" refusal
+    # the lazy-import contract promises. Reproduced 2026-08-26, from a test that
+    # passed or failed depending on which xdist worker ran it.
+    _ensure_exchangelib()
+
     if timezone_str is None:
         timezone_str = get_default_tz_name()
     CALENDAR_DIR.mkdir(parents=True, exist_ok=True)
 
-    tz = EWSTimeZone.from_timezone(
-        ZoneInfo(timezone_str)
-    )
+    local_tz = ZoneInfo(timezone_str)
+    tz = EWSTimeZone.from_timezone(local_tz)
 
-    now = datetime.now(get_default_tz())
+    # "Today" in the zone the window is expressed in. It used to be read from
+    # `get_default_tz()` and then stamped with the Exchange zone, so whenever an
+    # operator set EXCHANGE_TIMEZONE apart from HEADING_OS_TZ the window could
+    # start on the wrong calendar day.
+    now = datetime.now(local_tz)
     start = EWSDateTime(now.year, now.month, now.day, 0, 0, 0, tzinfo=tz)
     end = start + timedelta(days=days)
 
@@ -221,7 +254,6 @@ def sync_calendar(account, days=7, timezone_str=None):
         print("[INFO] No calendar events found in this range.")
 
     # Group by date (in local timezone)
-    local_tz = ZoneInfo(timezone_str)
     by_date = {}
     for event in event_list:
         local = _to_local(event.start, local_tz)
@@ -239,7 +271,10 @@ def sync_calendar(account, days=7, timezone_str=None):
     lines = []
     lines.append(f"# Calendar - Next {days} Days")
     lines.append(f"")
-    lines.append(f"> Synced: {datetime.now(get_default_tz()).strftime('%Y-%m-%d %H:%M')} ({timezone_str})")
+    # The clock comes from the zone the label names. It used to be read from
+    # `get_default_tz()` and labelled `timezone_str`, so a workspace with the
+    # two set apart wrote a timestamp that asserted the zone it was not in.
+    lines.append(f"> Synced: {datetime.now(local_tz).strftime('%Y-%m-%d %H:%M')} ({timezone_str})")
     lines.append(f"> Range: {start.date()} to {end.date()}")
     lines.append("")
 
@@ -278,7 +313,13 @@ def sync_calendar(account, days=7, timezone_str=None):
         for event in day_events:
             has_details = (event.body and str(event.body).strip()) or event.required_attendees or event.optional_attendees
             if has_details:
-                lines.append(f"### {str(event.start)[11:16]} - {event.subject or '(No subject)'}")
+                # `_event_time_str`, like the table above. Slicing str(event.start)
+                # gave the UTC wall clock, so a 09:00 UTC meeting in Asia/Dubai
+                # was listed at 13:00 in the table and titled 09:00 in the
+                # detail section right below - the section carrying the agenda
+                # and the attendees.
+                detail_time = _event_time_str(event.start, local_tz)
+                lines.append(f"### {detail_time} - {event.subject or '(No subject)'}")
                 lines.append("")
 
                 if event.required_attendees:
@@ -302,14 +343,15 @@ def sync_calendar(account, days=7, timezone_str=None):
                     lines.append("")
 
     atomic_write_text(output_file, "\n".join(lines))
-    print(f"[OK] Calendar: {total} events saved to {output_file.relative_to(get_data_root())}")
+    print(f"[OK] Calendar: {total} events saved to {_display_path(output_file)}")
 
     # Also write per-day files
     written_days = set()
     for date_str, day_events in by_date.items():
         day_file = CALENDAR_DIR / f"{date_str}.md"
         written_days.add(day_file.name)
-        day_lines = [f"# Calendar - {date_str}", "", f"> Synced: {datetime.now(get_default_tz()).strftime('%Y-%m-%d %H:%M')}", ""]
+        day_lines = [f"# Calendar - {date_str}", "",
+                     f"> Synced: {datetime.now(local_tz).strftime('%Y-%m-%d %H:%M')} ({timezone_str})", ""]
         day_lines.append("| Time | Subject | Location |")
         day_lines.append("|------|---------|----------|")
         for event in day_events:
@@ -483,7 +525,7 @@ def sync_emails(account, count=30, unread_only=False, folder_name="Inbox"):
             print(f"[WARN] crm_autolog.bump_inbound failed: {_e}", file=sys.stderr)
 
     atomic_write_text(output_file, "\n".join(lines))
-    print(f"[OK] Emails: {len(email_list)} saved to {output_file.relative_to(get_data_root())}")
+    print(f"[OK] Emails: {len(email_list)} saved to {_display_path(output_file)}")
 
     return len(email_list)
 
@@ -582,6 +624,11 @@ def create_meeting(account, subject, start_time, duration_minutes=30, location=N
     is emailed to the attendees. Otherwise the item is saved as a private HOLD
     with no invitation sent.
     """
+    # Same binding gap as `sync_calendar`: the two `from exchangelib import`
+    # lines below are local names, and `CalendarItem`, `EWSDateTime` and
+    # `EWSTimeZone` are module globals that only `_ensure_exchangelib` sets.
+    _ensure_exchangelib()
+
     from exchangelib import Mailbox, Attendee
     from exchangelib.items import SEND_ONLY_TO_ALL, SEND_TO_NONE
 

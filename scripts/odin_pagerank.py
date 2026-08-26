@@ -116,11 +116,17 @@ def parse_frontmatter(text: str) -> dict:
     Measured 2026-08-20 before the swap: the shared util returns the identical
     dict on all 526 knowledge notes (521 graph nodes, 2474 edges), and
     ``build_graph`` produces a byte-identical node/adjacency/resolver dump. Two
-    residual edge cases the corpus does not exercise: on YAML that fails to
-    parse the shared util falls back to its regex parser (partial dict) where
-    this returned ``{}``, and it also accepts a closing ``---`` fence at EOF
-    with no trailing newline, which ``FRONTMATTER_RE`` below (still the body
-    stripper) does not.
+    residual edge case the corpus does not exercise: on YAML that fails to parse
+    the shared util falls back to its regex parser (partial dict) where this
+    returned ``{}``.
+
+    A second one used to be listed here -- that ``FRONTMATTER_RE`` below
+    rejected a closing ``---`` fence at EOF with no trailing newline. It was
+    repaired in 76c63fd on 2026-08-24, four days after the measurement this
+    paragraph is dated to, and the sentence stayed. Verified 2026-08-25:
+    ``FRONTMATTER_RE.sub('', '---\\nid: x\\n---', count=1)`` strips the whole
+    block. A false statement about the PAST is worse than no statement: it
+    sends the next audit looking for a defect that is already fixed.
 
     The ``except Exception`` is the pre-swap catch-all, kept because the shared
     util narrows to ``yaml.YAMLError`` only: verified 2026-08-20 that a single
@@ -220,7 +226,18 @@ def build_graph(brain_root: Path, workspace_root: Path | None = None) -> BrainGr
         # Body links (strip the frontmatter region so frontmatter refs are ignored).
         body = FRONTMATTER_RE.sub("", text, count=1)
         raw_links[key] = parse_wikilinks(body)
-        # Register resolver tokens (most specific first).
+        # Register resolver tokens. There is NO precedence among the four: they
+        # sit in a set (unordered, and hash-randomised per process), and within
+        # one note all four map to the same `key`, so the order genuinely cannot
+        # matter. The comment here used to say "most specific first", which
+        # advertised a mechanism that does not exist -- and swapping the set for
+        # an ordered tuple, the obvious "fix", would change nothing at all.
+        #
+        # The precedence that IS real runs ACROSS notes: `setdefault` means the
+        # first NOTE to claim a token owns it, decided by the sorted file walk
+        # above. So if note B's `node_id` equals note A's title-slug, B's own id
+        # resolves to A. That is undocumented anywhere else, and it is the rule
+        # a reader of this loop actually needs.
         for token in {node_id, stem, _slug(stem), _slug(title)}:
             if token:
                 g._resolver.setdefault(token, key)

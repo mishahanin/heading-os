@@ -46,21 +46,23 @@ _BOOT_TS = time.time()
 
 
 def _active_session_count(workspace_root: Path) -> int:
-    """Read .daemon-state/active-sessions.json (written by bridge-hook.py
-    session-start) and return the entry count. Returns 0 on any error
-    so a broken sessions file doesn't take down the heartbeat."""
-    path = workspace_root / ".daemon-state" / "active-sessions.json"
-    if not path.exists():
-        return 0
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return 0
-    if isinstance(data, dict):
-        return len(data)
-    if isinstance(data, list):
-        return len(data)
-    return 0
+    """Count the sessions registered by `.claude/hooks/bridge-hook.py`.
+
+    The path is asked of `sessions.registry_path()`, not spelled here. This
+    function used to read `<workspace_root>/.daemon-state/active-sessions.json`
+    while crediting bridge-hook.py as its writer; the hook writes
+    `~/.claude/state/active-sessions.json` and nothing in this repository has
+    ever written the `.daemon-state` name. So the file never existed, the
+    early return fired on every beat, and `sessions=0` was printed by
+    `scripts/bridge-daemon.py` and `scripts/daemon-fleet-health.py` for a daemon
+    serving live sessions.
+
+    `workspace_root` is kept in the signature for the caller's sake; the
+    registry is per-user, not per-workspace. Returns 0 on any error so a broken
+    registry does not take down the heartbeat.
+    """
+    from .sessions import read_registry, registry_path
+    return len(read_registry(registry_path()))
 
 
 def write_heartbeat(workspace_root: Path, config_version: str | None = None) -> None:

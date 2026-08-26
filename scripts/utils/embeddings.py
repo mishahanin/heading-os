@@ -284,10 +284,30 @@ def model_digest(*, model: str, host: str, timeout: int = 10) -> str | None:
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError,
             OSError, ValueError):
         return None
-    want = model.split(":")[0]
+    # Match the TAG, not the family. `model.split(":")[0]` compared bare names, so
+    # asking for `bge-m3:567m` on a host that also holds `bge-m3:latest` returned
+    # whichever entry the server listed first - `:latest`'s digest under the
+    # `:567m` name. `scripts/memory-index.py` stamps this into `meta.model_digest`
+    # and prints "WEIGHTS CHANGED" when it moves, so the one thing the digest
+    # exists to detect - a re-pulled tag with different weights - was being read
+    # off a different model entirely.
+    #
+    # Ollama resolves a bare name to `:latest`, so that is the normalisation. The
+    # unique-prefix fallback keeps a host that pulled only one specific tag
+    # working; two or more candidates return None, because an unproven digest is
+    # better than a confidently wrong one.
+    want = model if ":" in model else f"{model}:latest"
+    family = want.split(":")[0]
+    prefix_hits = []
     for entry in body.get("models") or []:
-        if str(entry.get("name", "")).split(":")[0] == want:
+        name = str(entry.get("name", ""))
+        full = name if ":" in name else f"{name}:latest"
+        if full == want:
             return entry.get("digest") or None
+        if full.split(":")[0] == family:
+            prefix_hits.append(entry.get("digest") or None)
+    if len(prefix_hits) == 1:
+        return prefix_hits[0]
     return None
 
 

@@ -18,6 +18,8 @@ Usage:
     python scripts/email-intelligence.py --unread      # Analyze the Inbox unread set (bridge feed)
     python scripts/email-intelligence.py --mark-read ID    # Mark a conversation read in Exchange
     python scripts/email-intelligence.py --mark-unread ID  # Mark a conversation unread (undo)
+
+Tests: tests/test_a_probe_that_counted_survivors.py
 """
 
 import argparse
@@ -331,8 +333,21 @@ def commit_state(state: "StateManager", payload: dict) -> None:
 
     stats = state.data["stats"]
     stats["total_runs"] = stats.get("total_runs", 0) + 1
-    stats["total_conversations"] = stats.get("total_conversations", 0) + len(payload.get("conversations", []))
-    stats["total_filtered"] = stats.get("total_filtered", 0) + payload.get("noise_filtered", 0)
+    # `convs`, the list validated above, not a second raw read of the payload.
+    # `.get("conversations", [])` substitutes its default only when the KEY IS
+    # ABSENT, so a hand-edited `"conversations": null` came back as None and
+    # `len(None)` raised TypeError - which `main`'s
+    # `except (ValueError, OSError, json.JSONDecodeError)` does not list, so the
+    # deferred commit path this function is hardened for died on a traceback
+    # instead of the clean "Commit failed" exit it promises. A wrong TYPE was
+    # caught; only `null` slipped through the gap between the two reads.
+    stats["total_conversations"] = stats.get("total_conversations", 0) + len(convs)
+    filtered = payload.get("noise_filtered", 0)
+    if not isinstance(filtered, int) or isinstance(filtered, bool):
+        # `0 + "12"` is the same TypeError one field over.
+        raise ValueError(
+            f"noise_filtered is a {type(filtered).__name__}, not an int")
+    stats["total_filtered"] = stats.get("total_filtered", 0) + filtered
 
 
 def commit_state_from_file(path: Path, state: "StateManager | None" = None) -> dict:
@@ -502,7 +517,15 @@ def fetch_emails(account, folder_name: str, cutoff: datetime | None,
         )
 
     results = []
+    # Counted separately from `results`, because the probe fetches `limit + 1`
+    # ROWS and the id-less skip below removes some of them. `truncated` was
+    # `len(results) > limit`, so one dropped row inside the probe window made
+    # the count exactly `limit`, the flag False, and the run reported
+    # "complete" over messages it had never fetched - the silent loss this flag
+    # exists to end.
+    fetched = 0
     for item in items:
+        fetched += 1
         msg_id = str(item.message_id or item.id or "")
         if not msg_id:
             continue
@@ -553,7 +576,7 @@ def fetch_emails(account, folder_name: str, cutoff: datetime | None,
             "direction": "sent" if folder_name == "sent" else "incoming",
         })
 
-    truncated = len(results) > limit
+    truncated = fetched > limit
     if truncated:
         del results[limit:]
         print(
@@ -1183,7 +1206,20 @@ def run_unread_mode(verbose: bool = False) -> None:
     design. A reader trusting them would have "restored" the bug.
     """
     fetch_path = STATE_FILE.parent / "_latest-fetch.json"
-    state = StateManager()  # read-only here - used only for learned-ignore senders
+    # Passed to `filter_noise` below, which is this mode's only use of it.
+    #
+    # The comment here read "read-only here - used only for learned-ignore
+    # senders", and it was wrong on both halves. Construction is not read-only:
+    # `StateManager.__init__` quarantines a corrupt state file with
+    # `os.replace`, so this mode can RENAME state.json while claiming only to
+    # read it. And the learned-ignore list is not what it feeds: this call
+    # passes `mirror=True`, which skips layers 2-4, and layer 4 IS that list -
+    # so `filter_noise` builds `learned` from this state and never consults it.
+    #
+    # Left constructed rather than stubbed: quarantining a corrupt state file
+    # is the right thing to do wherever it is noticed, and `filter_noise`'s
+    # signature takes a StateManager. What was wrong was the description.
+    state = StateManager()
     ignore_patterns = _load_ignore_patterns()
 
     try:

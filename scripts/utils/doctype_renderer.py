@@ -21,6 +21,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import sys
 from pathlib import Path
 
 
@@ -81,15 +82,50 @@ TEMPLATE_REGISTRY = {
 }
 
 
+def _under_datastore(rel_path: str) -> Path | None:
+    """Map a `datastore/...` relative path onto the resolved datastore root.
+
+    None when `rel_path` is not under `datastore/`, or when the seam cannot be
+    resolved at all - a public clone with no overlay, for instance. The failure
+    is printed rather than swallowed, because a silent None here reappears
+    downstream as a bare "template not found" that names the wrong cause.
+    """
+    prefix = "datastore/"
+    if not rel_path.startswith(prefix):
+        return None
+    try:
+        from scripts.utils.workspace import get_datastore_dir
+        return get_datastore_dir() / rel_path[len(prefix):]
+    except Exception as exc:  # noqa: BLE001 - reported, never hidden
+        print(f"doctype_renderer: cannot resolve the datastore root "
+              f"({type(exc).__name__}: {exc}); falling back to the workspace tree.",
+              file=sys.stderr)
+        return None
+
+
 def _resolve_under_corporate(workspace_root: Path, rel_path: str) -> Path:
     """Resolve a path that lives at workspace root on CEO master and under
-    corporate/ on exec workspaces (where shared content is sync-mirrored)."""
+    corporate/ on exec workspaces (where shared content is sync-mirrored).
+
+    The third candidate is the data-root seam, and it is the one that works in
+    production. `scripts/render-doctype.py` passes `get_workspace_root()`, the
+    ENGINE clone, while `datastore/brand/` lives in the private DATA overlay - so
+    every real call resolved to `<engine>/datastore/brand/...`, which does not
+    exist, and all five locked doctypes (`/corporate-letter`, `/proposal`,
+    `/partnership-doc`, `/official-doc`, `/xpager`) died with FileNotFoundError.
+
+    The explicit-root candidates stay FIRST so a caller that hands over a real
+    tree still gets that tree, which is what the fixtures rely on.
+    """
     direct = workspace_root / rel_path
     if direct.exists():
         return direct
     under_corporate = workspace_root / "corporate" / rel_path
     if under_corporate.exists():
         return under_corporate
+    seam = _under_datastore(rel_path)
+    if seam is not None and seam.exists():
+        return seam
     return direct
 
 

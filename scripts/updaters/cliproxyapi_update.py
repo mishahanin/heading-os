@@ -34,6 +34,10 @@ from scripts.utils import update_sources  # noqa: E402
 
 CPX_DIR = Path.home() / "cliproxyapi"
 BIN = CPX_DIR / "cli-proxy-api"
+# The operator's own wrapper, installed outside this repo. Nothing here creates
+# it, so a host can run the updater without it -- see `_health_ok` and the
+# pre-flight in `main`.
+HEALTH_PROBE = Path.home() / ".local" / "bin" / "cliproxy"
 REPO = "router-for-me/CLIProxyAPI"
 SERVICE = "cliproxyapi.service"
 HEALTH_TIMEOUT_S = 30.0
@@ -108,7 +112,11 @@ def _health_ok() -> bool:
     # No shell: the path was interpolated unquoted into `bash -c`, so a home
     # directory with a space broke the probe and every update ended in a
     # spurious rollback.
-    res = subprocess.run([str(Path.home() / ".local" / "bin" / "cliproxy"), "health"],
+    # Raises FileNotFoundError (an OSError) when the wrapper is absent. Both
+    # callers sit AFTER the swap, so that exception must never escape to main's
+    # pre-swap handler: `main` pre-flights the probe, and the tail below catches
+    # what a mid-run deletion could still raise.
+    res = subprocess.run([str(HEALTH_PROBE), "health"],
                          capture_output=True, text=True, check=False)
     if res.returncode != 0:
         return False
@@ -157,8 +165,20 @@ def _version_tuple(v: str) -> tuple:
 def _current_version() -> str:
     # No shell, and no grep -P (GNU-only): the path was interpolated unquoted
     # into `bash -c`, so a home directory with a space broke this too.
-    res = subprocess.run([str(BIN), "-version"],
-                         capture_output=True, text=True, check=False)
+    try:
+        res = subprocess.run([str(BIN), "-version"],
+                             capture_output=True, text=True, check=False)
+    except OSError as exc:
+        # A fresh machine, a renamed binary, or a broken prior run raises
+        # FileNotFoundError here. This call sits ABOVE `main`'s try block, so it
+        # died with a traceback and exit 1 - the code this module's docstring
+        # defines as "the swap or the health gate failed and a rollback was
+        # attempted". Neither happened. The empty string sends `main` down the
+        # ordinary unknown-version path, and the `shutil.copy2` guard below,
+        # which already documents this exact scenario and returns 2, is finally
+        # reachable.
+        print(f"could not run {BIN} -version: {exc}")
+        return ""
     for line in ((res.stdout or "") + (res.stderr or "")).splitlines():
         m = re.search(r"Version:\s*([0-9][0-9.]*)", line)
         if m:
@@ -188,6 +208,19 @@ def main() -> int:
         print("no linux_amd64 asset found")
         return 2
     checksums_url = asset.rsplit("/", 1)[0] + "/checksums.txt"
+
+    # Pre-flight the health probe, for the same reason the backup copy is
+    # pre-flighted below: the gate that decides whether to keep the new binary
+    # must exist BEFORE the old one is replaced. Without this the missing probe
+    # surfaced as FileNotFoundError from `_wait_healthy`, was caught by the
+    # handler under this block, and printed "update aborted before any swap"
+    # with exit 2 -- the code the docstring above defines as "NOTHING was
+    # swapped" -- while the swap had in fact completed and no health gate had
+    # run. Refusing here is the only exit 2 that tells the truth.
+    if not os.access(HEALTH_PROBE, os.X_OK):
+        print(f"health probe {HEALTH_PROBE} is missing or not executable; "
+              f"refusing to swap a binary whose health cannot be checked")
+        return 2
 
     try:
         return _fetch_verify_and_swap(asset, checksums_url, latest, current_n)
@@ -248,11 +281,28 @@ def _fetch_verify_and_swap(asset: str, checksums_url: str, latest: str,
                   f"restore point")
             return 2
 
-        def _restore() -> None:
+        def _restore() -> bool:
+            """Put the backup back. False when it could not be done.
+
+            It returns rather than raises because every caller is already
+            handling a failure: an exception from here escaped to `main`'s
+            pre-swap handler and was printed as "update aborted before any
+            swap", which is the opposite of what had happened. The two ways it
+            fails -- a read-only filesystem and a deleted backup -- both leave
+            the service on whatever binary is in place, so the caller must be
+            able to say that out loud.
+            """
             subprocess.run(["systemctl", "--user", "stop", SERVICE], check=False)
-            shutil.copy2(backup, BIN)
-            BIN.chmod(0o755)
+            try:
+                shutil.copy2(backup, BIN)
+                BIN.chmod(0o755)
+            except OSError as exc:
+                print(f"ROLLBACK FAILED ({type(exc).__name__}: {exc}); {BIN} is "
+                      f"NOT the known-good binary -- investigate now")
+                subprocess.run(["systemctl", "--user", "start", SERVICE], check=False)
+                return False
             subprocess.run(["systemctl", "--user", "start", SERVICE], check=False)
+            return True
 
         # The stop -> swap -> start window is where the service could be left
         # without a binary. Any failure here restores the backup, not just a
@@ -275,21 +325,33 @@ def _fetch_verify_and_swap(asset: str, checksums_url: str, latest: str,
             _restore()
             return 1
 
-        if _wait_healthy():
-            print(f"cliproxyapi updated -> {latest}")
-            return 0
+        # Everything from here runs AFTER the binary was replaced, so no
+        # exception may escape to the pre-swap handler in `main`, which would
+        # print "update aborted before any swap" with exit 2 over a completed
+        # swap. `_restore` now reports its own failure instead of raising; this
+        # catch is for the health probe, which can be deleted between the
+        # pre-flight and this line.
+        try:
+            if _wait_healthy():
+                print(f"cliproxyapi updated -> {latest}")
+                return 0
 
-        _restore()
-        if _wait_healthy():
-            print("health failed; rolled back to the previous binary, "
-                  "which is now healthy")
-        else:
-            # The rollback runs check=False throughout, so "rolled back" was
-            # printed whether or not the old binary came back up. If the cause
-            # was environmental -- a port conflict, a bad config -- the service
-            # is still down and the log used to say otherwise.
-            print("health failed; rolled back to the previous binary AND IT IS "
-                  "STILL NOT HEALTHY -- the service is down, investigate now")
+            if not _restore():
+                return 1
+            if _wait_healthy():
+                print("health failed; rolled back to the previous binary, "
+                      "which is now healthy")
+            else:
+                # The rollback runs check=False throughout, so "rolled back" was
+                # printed whether or not the old binary came back up. If the cause
+                # was environmental -- a port conflict, a bad config -- the service
+                # is still down and the log used to say otherwise.
+                print("health failed; rolled back to the previous binary AND IT IS "
+                      "STILL NOT HEALTHY -- the service is down, investigate now")
+        except OSError as exc:
+            print(f"the health gate or the rollback failed after the swap "
+                  f"({type(exc).__name__}: {exc}) -- {BIN} was ALREADY replaced "
+                  f"and its state is now unknown; investigate now")
         return 1
 
 

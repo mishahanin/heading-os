@@ -23,6 +23,7 @@ from __future__ import annotations
 import io
 import re
 import sys
+import unicodedata
 from collections import Counter
 from pathlib import Path
 from typing import Tuple
@@ -85,6 +86,48 @@ CHAR_NAMES = {
     " ": "Non-breaking space",
 }
 
+# The Trojan Source isolates, keyed by codepoint rather than typed literally so
+# the entry cannot be lost to an editor that normalises invisible characters.
+CHAR_NAMES.update({
+    chr(0x2066): "Left-to-right isolate (Trojan Source)",
+    chr(0x2067): "Right-to-left isolate (Trojan Source)",
+    chr(0x2068): "First strong isolate (Trojan Source)",
+    chr(0x2069): "Pop directional isolate (Trojan Source)",
+})
+
+# What `scan` looks for. Derived from what `sanitize` acts on, not hand-listed.
+#
+# `scan` used to iterate CHAR_NAMES while `sanitize` acts on INVISIBLE_CHARS.
+# Both tables are maintained by hand, and they drifted: the four isolates above
+# were added to INVISIBLE_CHARS and never to CHAR_NAMES. For each of them
+# `sanitize()` stripped the character while `scan()` printed
+# "Clean - no hidden characters found." Measured 2026-08-26.
+#
+# That is the worst direction for this defect to point. `.claude/rules/
+# hidden-chars.md` makes this scan the validation line carried on every
+# deliverable, and these four are the Trojan Source family: they reorder what a
+# reviewer SEES on a line without changing what the parser reads. A tool whose
+# only job is to say "nothing is hidden here" was saying it over the one class
+# of character built to hide. The names above close today's gap; this set closes
+# tomorrow's, because a character added to INVISIBLE_CHARS is now scanned
+# whether or not anyone remembers to name it.
+SCANNED_CHARS = frozenset(INVISIBLE_CHARS) | frozenset(REPLACE_MAP)
+
+
+def _name_for(char: str) -> str:
+    """A name for a scanned character, including one nobody has named yet.
+
+    Falling back to the Unicode database keeps an unnamed character REPORTED
+    instead of silently dropped, which is the failure this section exists for.
+    The name is diagnostic text; the finding is what matters.
+    """
+    if char in CHAR_NAMES:
+        return CHAR_NAMES[char]
+    try:
+        return unicodedata.name(char).title()
+    except ValueError:
+        return f"Unnamed invisible character U+{ord(char):04X}"
+
 
 # ============================================================
 # Core functions
@@ -109,12 +152,14 @@ def scan(text: str, filename: str = "stdin", out=None) -> int:
 
     findings = []
     for i, char in enumerate(text):
-        if char in CHAR_NAMES:
+        # SCANNED_CHARS, not CHAR_NAMES: what the scan reports is now tied to
+        # what the sanitizer acts on, so the two cannot drift apart again.
+        if char in SCANNED_CHARS:
             line_num = text[:i].count("\n") + 1
             col = i - text[:i].rfind("\n")
             findings.append({
                 "char": char,
-                "name": CHAR_NAMES[char],
+                "name": _name_for(char),
                 "unicode": f"U+{ord(char):04X}",
                 "line": line_num,
                 "col": col,

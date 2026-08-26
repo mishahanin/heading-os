@@ -109,7 +109,12 @@ def run_hidden_char_scan(file_path):
             capture_output=True, text=True, timeout=15
         )
         clean = result.returncode == 0
-        detail = "Clean" if clean else result.stdout.strip()[:200]
+        # stderr too. The scanner reports an unreadable path there, and until
+        # 2026-08-25 that path exited 0 and was reported here as "Clean"; now
+        # that it exits 2, reading stdout alone would report a failure with an
+        # empty reason.
+        detail = "Clean" if clean else (
+            result.stdout.strip() or result.stderr.strip())[:200]
         return check("hidden_chars", clean, detail)
     except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
         return check("hidden_chars", False, f"Scanner error: {exc}")

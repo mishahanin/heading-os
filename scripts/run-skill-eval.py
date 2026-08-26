@@ -65,6 +65,14 @@ SKILLS_DIR = ROOT / ".claude" / "skills"
 # Case loading
 # ---------------------------------------------------------------------------
 
+class CaseFileError(Exception):
+    """An eval case file that cannot be read or is the wrong shape.
+
+    A SETUP error, which `main` reports as exit 2 - never as exit 1, which the
+    exit-code table reserves for "one or more checks failed".
+    """
+
+
 def load_cases(skill_dir: Path, case_filter: str | None = None) -> list[dict]:
     """Return a list of case dicts from skill's evals/cases/ directory."""
     cases_dir = skill_dir / "evals" / "cases"
@@ -72,9 +80,31 @@ def load_cases(skill_dir: Path, case_filter: str | None = None) -> list[dict]:
         return []
     cases = []
     for path in sorted(cases_dir.glob("*.json")):
-        with path.open("r", encoding="utf-8") as fh:
-            case = json.load(fh)
-        case["_path"] = str(path.relative_to(ROOT))
+        # A corrupt or wrong-shaped case file is a SETUP error, and the module
+        # docstring reserves exit 2 for that. Unguarded, a truncated file raised
+        # JSONDecodeError and an array-shaped one raised TypeError on the
+        # `case["_path"]` assignment; both escaped `main`, killed the process
+        # with a traceback, and left exit status 1 - the code that means "one or
+        # more checks FAILED". A CI step reads that as a regression in the skill
+        # rather than a broken fixture, and the whole `--all` run stops at the
+        # first bad file. Measured 2026-08-26 with both shapes.
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                case = json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CaseFileError(f"{path}: cannot be read as JSON ({exc})") from exc
+        if not isinstance(case, dict):
+            raise CaseFileError(
+                f"{path}: a case file must be a JSON object, not a "
+                f"{type(case).__name__}")
+        # `_path` is a LABEL for the report, so a path outside the repo degrades
+        # to the absolute form rather than raising. `relative_to` raises
+        # ValueError for any path that is not under ROOT, which turned an
+        # out-of-tree skills directory into a crash in the middle of the loader.
+        try:
+            case["_path"] = str(path.relative_to(ROOT))
+        except ValueError:
+            case["_path"] = str(path)
         if case_filter and case.get("id") != case_filter:
             continue
         cases.append(case)
@@ -233,8 +263,17 @@ def call_skill(system_prompt: str, user_input: str, model: str) -> tuple[str, di
     usage = {
         "input_tokens": response.usage.input_tokens,
         "output_tokens": response.usage.output_tokens,
-        "cache_creation_input_tokens": getattr(response.usage, "cache_creation_input_tokens", 0),
-        "cache_read_input_tokens": getattr(response.usage, "cache_read_input_tokens", 0),
+        # `or 0`, not just the getattr default. Both fields EXIST on
+        # `anthropic.types.Usage` and are typed `Optional[int]` with
+        # `default=None` (checked against the installed anthropic 0.120.0), so
+        # the getattr fallback never fires and None was stored. The
+        # `usage["cache_read_input_tokens"] > 0` comparison in the runner then
+        # raised `TypeError: '>' not supported between 'NoneType' and 'int'`,
+        # AFTER the API call had already been paid for and outside the
+        # per-case try, so one uncached response aborted the whole run.
+        # Measured 2026-08-26 against a live-shaped Usage object.
+        "cache_creation_input_tokens": getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
+        "cache_read_input_tokens": getattr(response.usage, "cache_read_input_tokens", 0) or 0,
     }
     return output, usage, elapsed
 
@@ -265,8 +304,16 @@ def resolve_model(frontmatter: dict, override: str | None) -> str:
 # The harness that exists to notice silent degradation degraded silently.
 # Found 2026-08-23. Exit codes 2 and 3 were in the docstring from the start and
 # nothing ever emitted them.
+#
+# `skipped` was later SPLIT. It meant two opposite things: "no case matched
+# here" and "cases matched and --dry-run graded none of them". `main`'s --case
+# guard could only see a zero check count, so `--dry-run --case <valid-id>`
+# printed "matched no case" over a case whose id it had just resolved, and
+# exited 2. Naming the one thing that DID happen as the thing that did not is
+# the shape `.claude/rules/scope-claims.md` forbids.
 OUTCOME_OK = "ok"
-OUTCOME_SKIPPED = "skipped"       # no cases, or --dry-run: not an error
+OUTCOME_SKIPPED = "skipped"       # cases matched; --dry-run graded none
+OUTCOME_NO_CASES = "no-cases"     # nothing matched here: empty dir, or a --case miss
 OUTCOME_NOT_FOUND = "not-found"   # setup error -> exit 2
 OUTCOME_API_ERROR = "api-error"   # exit 3
 
@@ -278,7 +325,9 @@ def run_one_skill(skill_name: str, case_filter: str | None, model_override: str 
     Returns (passed_count, total_count, outcome), where outcome is one of the
     OUTCOME_* constants above. The counts alone cannot distinguish a clean skip
     from a failed API call, and treating them as if they could is what let a
-    missing API key report success.
+    missing API key report success. They equally cannot distinguish "no case
+    matched" from "a case matched and was not graded", which is why
+    OUTCOME_NO_CASES and OUTCOME_SKIPPED are separate values.
     """
     skill_dir = SKILLS_DIR / skill_name
     if not (skill_dir / "SKILL.md").exists():
@@ -291,7 +340,7 @@ def run_one_skill(skill_name: str, case_filter: str | None, model_override: str 
         if case_filter:
             msg += f" matching id={case_filter!r}"
         print(f"{YELLOW}skip{RESET}: {skill_name} - {msg}")
-        return (0, 0, OUTCOME_SKIPPED)
+        return (0, 0, OUTCOME_NO_CASES)
 
     system_prompt, frontmatter = load_skill_system_prompt(skill_dir)
     model = resolve_model(frontmatter, model_override)
@@ -397,7 +446,17 @@ def run_one_skill(skill_name: str, case_filter: str | None, model_override: str 
 
 
 def list_skills_with_evals() -> list[str]:
-    """Return sorted list of skill names that have an evals/cases/ directory."""
+    """Return sorted list of skill names that have an evals/cases/ directory.
+
+    An ABSENT skills tree returns the empty list, so `main` reaches its exit-2
+    setup-error path. `Path.iterdir()` raises FileNotFoundError on the first
+    iteration rather than yielding nothing, so the unguarded loop turned a
+    missing tree into a traceback - the one setup error escaping the exit-code
+    contract this file's own 2026-08-23 audit established. SKILLS_DIR is fixed
+    at import time, so no flag or env var could steer around it.
+    """
+    if not SKILLS_DIR.is_dir():
+        return []
     out = []
     for child in SKILLS_DIR.iterdir():
         if child.is_dir() and (child / "evals" / "cases").exists():
@@ -421,16 +480,30 @@ def main() -> int:
 
     skills = [args.skill] if args.skill else list_skills_with_evals()
     if not skills:
-        print(f"{YELLOW}No skills with evals/ directory found{RESET}")
+        # Two different setup errors under one exit code, and they need
+        # different triage: a tree that is there and carries no evals is a
+        # coverage gap, a tree that is not there at all is a wrong workspace.
+        if not SKILLS_DIR.is_dir():
+            print(f"{RED}skills directory not found: {SKILLS_DIR}{RESET}",
+                  file=sys.stderr)
+        else:
+            print(f"{YELLOW}No skills with evals/ directory found{RESET}")
         return 2
 
     overall_passed = 0
     overall_total = 0
     outcomes = []
     for name in skills:
-        p, t, outcome = run_one_skill(
-            name, args.case, args.model, args.dry_run,
-            write_benchmark=not args.no_write)
+        try:
+            p, t, outcome = run_one_skill(
+                name, args.case, args.model, args.dry_run,
+                write_benchmark=not args.no_write)
+        except CaseFileError as exc:
+            # Exit 2, the code the table above reserves for a setup error. A
+            # broken fixture is not a failed check, and reporting it as one
+            # sends the reader to the skill instead of to the file.
+            print(f"{RED}case file error: {exc}{RESET}", file=sys.stderr)
+            return 2
         overall_passed += p
         overall_total += t
         outcomes.append(outcome)
@@ -451,10 +524,24 @@ def main() -> int:
     # run must never do. Judged over the whole run: under --all a named case
     # lives in exactly one skill, so "skipped here" is the ordinary state of
     # every other skill and only "ran nowhere" is the error.
-    if args.case and overall_total == 0:
+    #
+    # Judged on the OUTCOMES, not on the check count. A zero count arrives from
+    # three unrelated places - no match, a dry run, and a case whose `checks`
+    # block is empty - and this sentence is only true of the first. Gating it on
+    # the count instead made `--dry-run --case <valid-id>` print that a case it
+    # had just resolved matched nothing, and exit 2.
+    if args.case and all(o == OUTCOME_NO_CASES for o in outcomes):
         scope = "any skill" if args.all else repr(skills[0])
         print(f"{RED}--case {args.case!r} matched no case in {scope}{RESET}",
               file=sys.stderr)
+        return 2
+    # The third source of a zero count, and the one no message named. A case
+    # with an empty `checks` block calls the API, is graded on nothing, and
+    # returns (0, 0, OUTCOME_OK): a run that spent money and measured nothing,
+    # reported below as "No checks run" in yellow and exit 0.
+    if OUTCOME_OK in outcomes and overall_total == 0:
+        print(f"{RED}case(s) ran but defined no checks - nothing was measured"
+              f"{RESET}", file=sys.stderr)
         return 2
     if overall_total == 0:
         print(f"{YELLOW}No checks run{RESET}")

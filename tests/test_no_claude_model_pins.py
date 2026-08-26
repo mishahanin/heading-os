@@ -119,3 +119,13 @@ def test_the_baseline_floor_names_a_real_family_for_each_key():
     assert set(BASELINE) == set(FAMILIES)
     for family, model in BASELINE.items():
         assert model.startswith(f"claude-{family}-"), (family, model)
+
+
+def test_the_scan_still_finds_the_sources():
+    """An empty parametrize is one silent skip, not a failure. Every tree read
+    here ships with the engine, so an empty result means the glob or the layout
+    moved. 380 on 2026-08-26.
+    """
+    found = _guarded_sources()
+
+    assert len(found) >= 250, f"only {len(found)} sources reached the model-pin gate"

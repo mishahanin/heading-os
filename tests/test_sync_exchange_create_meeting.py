@@ -42,6 +42,15 @@ def _patch_exchange_globals(monkeypatch):
         def save(self, send_meeting_invitations=None):
             self.saved_with = send_meeting_invitations
 
+    # `Account` first, and it is not decoration. `create_meeting` calls
+    # `_ensure_exchangelib()` since 2026-08-26, because it read `CalendarItem`,
+    # `EWSDateTime` and `EWSTimeZone` without ever binding them and only worked
+    # when `main()` had connected first. That binder returns early on
+    # `Account is not None`, so a fake that leaves `Account` as None sends it
+    # off to import the real exchangelib, which overwrites all three fakes below
+    # and then rejects this test's stand-in account. Setting `Account` is how
+    # this fixture says "the module's exchangelib names are already resolved".
+    monkeypatch.setattr(sync_exchange, "Account", object)
     monkeypatch.setattr(sync_exchange, "CalendarItem", FakeCalendarItem)
     monkeypatch.setattr(
         sync_exchange, "EWSTimeZone",

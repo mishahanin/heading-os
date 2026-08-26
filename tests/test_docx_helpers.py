@@ -37,6 +37,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.utils.docx_helpers import brand_master_template
 from scripts.utils.workspace import get_datastore_dir
 
 REPO = Path(__file__).resolve().parent.parent
@@ -53,18 +54,23 @@ TEMPLATE_DIR = ("datastore", "brand", "templates")
 # Golden case registry
 # --------------------------------------------------------------------------
 # name -> (script, argv, seed files as {sandbox-relative dest: fixture input},
-#          brand templates the script needs by filename)
+#          brand template SUFFIXES the script needs)
+#
+# Suffixes, not filenames. Each entry used to name the master template in full,
+# version and all, and the usecases row said v1.00 after the master became
+# v1.01: the copy found nothing, this case SKIPPED, and nobody learned that
+# `generate-usecases-docx.py` had been dying on its own dead literal since the
+# bump. `brand_master_template` resolves the newest, which is the same function
+# the generators now call, so a bump can no longer split the two apart.
 CASES = {
     "generate-odunone-docx": (
-        "scripts/generate-odunone-docx.py", [], {},
-        ["31C - Master Template (New Identity 2026 v1.01).docx"],
+        "scripts/generate-odunone-docx.py", [], {}, [".docx"],
     ),
     "generate-client-docx": (
         "scripts/generate-client-docx.py", [], {}, [],
     ),
     "generate-usecases-docx": (
-        "scripts/generate-usecases-docx.py", [], {},
-        ["31C - Master Template (New Identity 2026 v1.00).dotx"],
+        "scripts/generate-usecases-docx.py", [], {}, [".dotx"],
     ),
     "md-to-docx-proposal": (
         "scripts/md-to-docx-proposal.py", [],
@@ -113,11 +119,12 @@ def _sandbox(tmp_path: Path, seeds: dict[str, str], templates: list[str]) -> Pat
     if templates:
         dest = data_root.joinpath(*TEMPLATE_DIR)
         dest.mkdir(parents=True, exist_ok=True)
-        for name in templates:
-            src = real_templates / name
-            if not src.is_file():
-                pytest.skip(f"brand template not in this clone: {name}")
-            shutil.copy2(src, dest / name)
+        for suffix in templates:
+            try:
+                src = brand_master_template(suffix, templates_dir=real_templates)
+            except FileNotFoundError as exc:
+                pytest.skip(f"brand template not in this clone: {exc}")
+            shutil.copy2(src, dest / src.name)
     for rel, fixture in seeds.items():
         target = data_root / rel
         target.parent.mkdir(parents=True, exist_ok=True)

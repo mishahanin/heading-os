@@ -973,8 +973,8 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
         # justifies the registry existing in Phase 1.
         resolved_sid = body.session_id
         if not resolved_sid and body_cwd:
-            registry_path = Path.home() / ".claude" / "state" / "active-sessions.json"
-            resolved_sid = session_for_cwd(registry_path, body_cwd)
+            from .sessions import registry_path
+            resolved_sid = session_for_cwd(registry_path(), body_cwd)
         try:
             result = terminal_mod.spawn_or_focus(
                 user_slug=user_slug, title=body.title, cwd=cwd,

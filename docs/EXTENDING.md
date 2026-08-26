@@ -70,8 +70,8 @@ Rules of the road:
 - **Phased structure.** Phase 0 loads context, Phase 1 executes, Phase 2 synthesizes,
   Phase 3 outputs. Include a `NEVER` section listing prohibitions.
 - **Routing-sensitive skills ship `triggers.json`** (6 to 10 positive and negative
-  cases) and an entry in the skill router, so a new skill cannot silently hijack
-  another's queries.
+  cases) and an entry in the skill router. That way a new skill cannot silently
+  hijack another's queries.
 - **Invocation control.** Add `disable-model-invocation: true` for high-blast-radius
   skills that should fire only on an explicit slash command.
 

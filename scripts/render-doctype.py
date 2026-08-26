@@ -49,6 +49,46 @@ def slugify(text: str, max_len: int = 40) -> str:
     return text[:max_len]
 
 
+_MONTHS = {name: number for number, name in enumerate(
+    ("january", "february", "march", "april", "may", "june", "july",
+     "august", "september", "october", "november", "december"), start=1)}
+
+
+def iso_from_prose(date: str) -> str | None:
+    """'21 April 2026' -> '2026-04-21'; 'December 2026' -> '2026-12'. None if
+    the month or the year is missing.
+
+    The doctype skills author DATE from prose, which the old fallback then ran
+    through `slugify(date, 10)`. Ten characters cuts mid-token: the very example
+    named in the comment above, "21 April 2026", became "21-april-2", and any
+    month of seven or more letters lost the year outright -- "December 2026"
+    became "december-2". A corporate document then shipped with a filename
+    carrying a wrong date, or no year at all, under a naming convention whose
+    date prefix exists to make the directory sort.
+
+    Three-letter abbreviations are accepted because "21 Apr 2026" is the same
+    date written shorter, and refusing it would drop straight back to the
+    truncating fallback.
+    """
+    month = day = year = None
+    for token in re.findall(r"[a-z]+|\d+", date.lower()):
+        if token.isdigit():
+            if len(token) == 4:
+                year = int(token)
+            elif day is None and 1 <= int(token) <= 31:
+                day = int(token)
+            continue
+        for name, number in _MONTHS.items():
+            if token == name or (len(token) == 3 and name.startswith(token)):
+                month = number
+                break
+    if month is None or year is None:
+        return None
+    if day is None:
+        return f"{year:04d}-{month:02d}"
+    return f"{year:04d}-{month:02d}-{day:02d}"
+
+
 def build_filename(data: dict, doctype: str, ext: str) -> str:
     date = (data.get("DATE") or data.get("EFFECTIVE_DATE") or "").strip() or "undated"
     # Date may be in "21 April 2026" or "2026-04-21"; normalise to ISO-ish for filename.
@@ -56,7 +96,10 @@ def build_filename(data: dict, doctype: str, ext: str) -> str:
     if iso_match:
         date_part = iso_match.group(0)
     else:
-        date_part = slugify(date, 10)
+        # Full slug, never a 10-character cut. An unparseable date is at least
+        # reproduced whole, so the operator can see what was supplied instead of
+        # reading a plausible fragment of it.
+        date_part = iso_from_prose(date) or slugify(date)
 
     if doctype == "letter":
         recipient_slug = slugify(f"{data.get('RECIPIENT_ORG', 'recipient')}")

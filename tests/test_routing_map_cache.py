@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils import workspace, yamlio  # noqa: E402
@@ -160,15 +161,17 @@ def test_yamlio_matches_pyyaml_safe_load():
 
 
 def test_yamlio_strictness_divergence_fails_closed(fake_root):
-    """The C loader is not byte-identical to yaml.safe_load — it is STRICTER, and that
-    direction is the safe one.
+    """An unsupported MINOR %YAML version: CSafeLoader rejects, pure-Python accepts.
 
-    Measured 2026-08-20 across a 14-case malformed corpus: the two loaders agreed on
-    13. The one divergence is an unsupported ``%YAML`` version directive, which the
-    pure-Python SafeLoader accepts and CSafeLoader rejects. Pinned here because the
-    whole fail-closed contract rests on the rejection arriving as a yaml.YAMLError:
-    anything else escapes the ``except (OSError, yaml.YAMLError)`` handler and turns a
-    malformed routing map into a traceback instead of an all-private classification.
+    Pinned because the fail-closed contract rests on the rejection arriving as a
+    yaml.YAMLError: anything else escapes the ``except (OSError, yaml.YAMLError)``
+    handler and turns a malformed routing map into a traceback instead of an
+    all-private classification.
+
+    The docstring here used to say this was "the one divergence" and that the
+    divergence direction was always STRICTER. Both halves were false, and the
+    14-case corpus behind the claim contained no tab. The two looser cases are
+    pinned below.
     """
     path = fake_root / "config" / "routing-map.yaml"
     time.sleep(0.01)
@@ -176,3 +179,58 @@ def test_yamlio_strictness_divergence_fails_closed(fake_root):
 
     assert workspace.load_routing_map() == {"default": "private", "rules": {}}
     assert workspace.get_routing_destination("scripts/anything.py") == "private"
+
+
+def test_an_unsupported_major_version_is_rejected_by_both_loaders():
+    """The narrowing. `%YAML 2.0` is NOT a divergence; only a minor bump is."""
+    for directive in ("%YAML 2.0", "%YAML 9.9"):
+        src = f"{directive}\n---\ndefault: engine\n"
+        with pytest.raises(yaml.YAMLError):
+            yaml.safe_load(src)
+        with pytest.raises(yaml.YAMLError):
+            yamlio.safe_load(src)
+
+
+@pytest.mark.parametrize("src,expected", [
+    ("default: engine\nrules:\n  crm/:\tprivate\n",
+     {"default": "engine", "rules": {"crm/": "private"}}),
+    ("default: engine\nrules:\n  crm/: pri\tvate\n",
+     {"default": "engine", "rules": {"crm/": "pri\tvate"}}),
+])
+def test_the_tab_divergence_runs_the_other_way(src, expected):
+    """The second and third divergences, and they are LOOSER, not stricter.
+
+    A tab between a key and its value is a ScannerError under the pure-Python
+    SafeLoader that `yaml.safe_load` binds, and parses fine under CSafeLoader.
+    The module docstring promised the only divergence was in the stricter
+    direction, so a future fail-closed handler could have been built on that
+    promise.
+    """
+    with pytest.raises(yaml.YAMLError):
+        yaml.safe_load(src)
+
+    assert yamlio.safe_load(src) == expected
+
+
+def test_a_tab_cannot_widen_what_is_shareable(fake_root):
+    """The consequence that matters, held down.
+
+    The classifier's safety comes from validating the DESTINATION, not from the
+    parser refusing the file. A tab-borne value that is not a legal destination
+    still fails closed to private; a legal one is the destination the file's
+    author wrote.
+    """
+    path = fake_root / "config" / "routing-map.yaml"
+    time.sleep(0.01)
+    path.write_text("default: engine\nrules:\n  crm/: pri\tvate\n", encoding="utf-8")
+
+    assert workspace.get_routing_destination("crm/contacts/a.md") == "private"
+
+
+def test_a_tab_between_key_and_value_yields_the_written_destination(fake_root):
+    path = fake_root / "config" / "routing-map.yaml"
+    time.sleep(0.01)
+    path.write_text("default: engine\nrules:\n  crm/:\tprivate\n", encoding="utf-8")
+
+    assert workspace.get_routing_destination("crm/contacts/a.md") == "private"
+    assert workspace.get_routing_destination("scripts/x.py") == "engine"

@@ -192,15 +192,45 @@ def _fm_scalar(block: str, key: str) -> str:
 
 
 def _fm_list(block: str, key: str):
-    """Parse an inline-list frontmatter field: `key: [a, b, c]`."""
+    """Parse a frontmatter list field in EITHER YAML form.
+
+    Inline, `key: [a, b, c]`, or a block list::
+
+        key:
+          - a
+          - b
+
+    Only the inline form was matched. `odin-brain-health.py` reads both (it goes
+    through `yaml.safe_load` and its docstring says so), so the two tools
+    disagreed about the same file: a block-form episode came back with an EMPTY
+    tag set, joined no cluster, and was still counted as scanned -- `compute()`
+    appends nothing to its `skipped` list for this case, so the JSON asserted a
+    complete pass it had not made.
+
+    Latent for episodes today (90 of 90 use the inline form), not hypothetical
+    for the brain: block-list frontmatter is already on disk under `sources/`.
+    """
     m = re.search(rf"^{re.escape(key)}:\s*\[(.*)\]\s*$", block, re.MULTILINE)
-    if not m:
-        return []
-    inner = m.group(1).strip()
-    if not inner:
-        return []
+    if m:
+        inner = m.group(1).strip()
+        parts = inner.split(",") if inner else []
+    else:
+        lines = block.splitlines()
+        key_re = re.compile(rf"^{re.escape(key)}:[ \t]*$")
+        parts = None
+        for idx, line in enumerate(lines):
+            if key_re.match(line):
+                parts = []
+                for nxt in lines[idx + 1:]:
+                    stripped = nxt.lstrip()
+                    if not stripped.startswith("- "):
+                        break
+                    parts.append(stripped[2:])
+                break
+        if parts is None:
+            return []
     out = []
-    for part in inner.split(","):
+    for part in parts:
         v = part.strip().strip('"').strip("'").strip()
         if v:
             out.append(v.lower())

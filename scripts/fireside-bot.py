@@ -30,6 +30,8 @@ Usage:
   python scripts/fireside-bot.py --help
 
 Tests: tests/test_a_sweep_that_reported_the_letters_it_never_read.py
+
+Tests: tests/test_a_promise_that_misha_would_help.py
 """
 
 import io
@@ -200,6 +202,27 @@ def state_path(filename: str) -> Path:
     return STATE_DIR / filename
 
 
+def _unreadable_sheet_errors() -> tuple:
+    """Every exception a file that is not a readable workbook can raise.
+
+    openpyxl is a heavy local import everywhere else in this file, and it is
+    optional on a host that never touches the sheet, so the concrete classes are
+    resolved lazily and the tuple degrades to the two the reader itself raises.
+    """
+    import zipfile
+    errors: list = [ValueError, zipfile.BadZipFile]
+    try:
+        from openpyxl.utils.exceptions import InvalidFileException
+    except ImportError:
+        pass
+    else:
+        errors.append(InvalidFileException)
+    return tuple(errors)
+
+
+_UNREADABLE_SHEET = _unreadable_sheet_errors()
+
+
 def ensure_state_dir() -> None:
     """Create state directory and initialise empty state files if missing.
 
@@ -245,13 +268,25 @@ def ensure_state_dir() -> None:
                   f"was not found. Every DM will be refused as an outsider until "
                   f"`bootstrap` runs.{RESET}", file=sys.stderr)
             save_state(TRIBE_ROSTER, {})
-        except ValueError as exc:
-            # `load_tribe_metadata` raises this ONLY for a sheet the operator has
-            # to fix -- a Telegram handle claimed by two members, or a missing
-            # column. Swallowing it wrote `{}` in silence, and an empty roster is
-            # precisely the state this self-heal exists to prevent: the bot then
-            # refuses every DM as an outsider, exactly as it would with no file at
-            # all, while `init-state` printed OK and listed the file's size.
+        except _UNREADABLE_SHEET as exc:
+            # `load_tribe_metadata` raises ValueError ONLY for a sheet the
+            # operator has to fix -- a Telegram handle claimed by two members, or
+            # a missing column. Swallowing it wrote `{}` in silence, and an empty
+            # roster is precisely the state this self-heal exists to prevent: the
+            # bot then refuses every DM as an outsider, exactly as it would with
+            # no file at all, while `init-state` printed OK and listed the file's
+            # size.
+            #
+            # The tuple also names what OPENPYXL raises from under it. The
+            # handler list had been written from what `load_tribe_metadata`
+            # raises deliberately, and a file that is not a workbook never
+            # reaches that code: `zipfile.BadZipFile` for a truncated or 0-byte
+            # sync, `InvalidFileException` for an HTML error page saved over the
+            # sheet. Both are plain `Exception` subclasses, NOT OSError and NOT
+            # ValueError, so they have to be named. Each one crashed
+            # `init-state` with a traceback instead of writing the placeholder
+            # and the warning below -- during exactly the VM rebuild or state
+            # loss this self-heal exists for.
             log_error(f"self-heal wrote an EMPTY tribe-roster.json: {exc}")
             print(f"{RED}init-state: tribe-roster.json is EMPTY because the Tribe "
                   f"sheet could not be read: {exc}{RESET}", file=sys.stderr)
@@ -890,12 +925,37 @@ def build_roster_by_name(roster: dict) -> dict:
     bound to one of them and DM'd the wrong person. Refusing to guess leaves
     the slot unbound, which the discrepancy report already surfaces; picking one
     is a wrong answer that looks like a right one.
+
+    An EXCLUDED or DEPARTED member maps to nothing either, for the same reason
+    and by the same convention `speaker_gaps` uses (`active` defaults True when
+    the key is absent). The index was built over the whole roster, while
+    `cross_reference` deliberately KEEPS excluded members in it with
+    `active=False, excluded_from_fireside=True` and `_handle_chat_member` marks
+    leavers `active=False`. Both `bootstrap` and `cycle-rollover` feed that
+    roster to `build_schedule`, so a config naming an excluded or departed
+    person bound their slot: they were DM'd the 2wk, 3day and day-of reminders
+    (no DM loop checks `active`), and `speaker_gaps` stayed silent because it
+    skips them as gap candidates AND counts their handle as scheduled. Nothing
+    anywhere said the cycle config names someone who has gone.
+
+    Leaving the slot unbound puts the name into `build_schedule`'s
+    `missing_speakers`, which the discrepancy report and the rollover heads-up
+    already print, and the reason is logged here so it is not read as a typo.
     """
     by_name: dict = {}
     ambiguous: dict[str, list[str]] = {}
     for username, data in roster.items():
         full_name = data.get("name", "").strip()
         if not full_name:
+            continue
+        if not data.get("active", True) or data.get("excluded_from_fireside"):
+            reason = ("excluded from fireside" if data.get("excluded_from_fireside")
+                      else "no longer active in the group")
+            log_error(
+                f"roster name {full_name!r} (@{username}) is {reason}; leaving any "
+                f"schedule row naming them UNBOUND rather than scheduling and "
+                f"DM-ing someone who has gone"
+            )
             continue
         if full_name in by_name:
             ambiguous.setdefault(full_name, [by_name[full_name]["telegram_username"]])
@@ -945,6 +1005,45 @@ def print_discrepancy_report(discrepancy: dict, missing_in_schedule: list) -> No
         for n in sorted(set(missing_in_schedule)):
             print(f"  {n}")
         print(f"      (Verify name spelling in xlsx 'Name' column matches the schedule)")
+
+
+def seed_opt_ins(reactions: dict, roster: dict) -> tuple[dict, list[str]]:
+    """Turn launch-announcement reactions into opt-ins.json, through the roster.
+
+    The SAME guard the live handler uses. `_handle_message_reaction` resolves a
+    reactor's user_id to a canonical roster key and drops the opt-in when it
+    cannot; bootstrap copied `r["username"]` straight off the reaction. Two ways
+    that went wrong, both of which the roster already names:
+
+      - A group member who is not in the xlsx - the `in_tg_not_xlsx` discrepancy
+        class exists precisely because this happens - was seeded, and then
+        appeared on the wildcard roster DM'd to every Helmsman.
+      - A reactor with no Telegram handle was seeded as `username: None` and
+        rendered by `cmd_helmsman_brief` as the literal `  - @None`.
+
+    Resolution is by user_id against the roster passed in, not by re-reading
+    state per reactor, and not by handle: a reclaimed handle would otherwise
+    resolve to the previous owner's rows.
+
+    Returns (opt_ins, dropped) where `dropped` names every reaction refused, so
+    the refusal is reported rather than silent.
+    """
+    by_user_id = {v.get("telegram_user_id"): k for k, v in roster.items()
+                  if v.get("telegram_user_id")}
+    dropped: list[str] = []
+
+    def _seed(bucket: str) -> list:
+        out = []
+        for r in reactions.get(bucket, []):
+            canonical = by_user_id.get(r.get("user_id"))
+            if canonical is None:
+                dropped.append(f"{bucket}:@{r.get('username') or '(no handle)'} "
+                               f"(id={r.get('user_id')})")
+                continue
+            out.append({"username": canonical, "user_id": r["user_id"]})
+        return out
+
+    return {"helmsman": _seed("helmsman"), "wildcard": _seed("wildcard")}, dropped
 
 
 def cmd_bootstrap(args) -> None:
@@ -1009,18 +1108,14 @@ def cmd_bootstrap(args) -> None:
         print(f"     helmsmen.json already populated; not overwriting")
 
     print(f"{CYAN}6. Writing opt-ins.json from launch-announcement reactions...{RESET}")
-    opt_ins = {
-        "helmsman": [
-            {"username": r["username"], "user_id": r["user_id"]}
-            for r in reactions["helmsman"]
-        ],
-        "wildcard": [
-            {"username": r["username"], "user_id": r["user_id"]}
-            for r in reactions["wildcard"]
-        ],
-    }
+    opt_ins, dropped = seed_opt_ins(reactions, roster)
     save_state(OPT_INS, opt_ins)
     print(f"     {len(opt_ins['helmsman'])} helmsman opt-ins, {len(opt_ins['wildcard'])} wildcard opt-ins")
+    if dropped:
+        print(f"     {YELLOW}{len(dropped)} reaction(s) NOT seeded - reactor is not "
+              f"a bound roster member:{RESET}")
+        for d in sorted(dropped):
+            print(f"       - {d}")
 
     print_discrepancy_report(discrepancy, missing_in_schedule)
 
@@ -1334,9 +1429,19 @@ def _resolve_speaker_user_id(roster: dict, speaker_username: Optional[str]) -> O
 
 
 def _dm_already_sent(dm_log_path: Path, speaker_username: str, dm_type: str,
-                     session_date: str) -> bool:
+                     session_date: str, on_date: Optional[str] = None) -> bool:
     """Check dm-log.jsonl to see if a specific DM type has already been sent
-    for a specific speaker + session."""
+    for a specific speaker + session.
+
+    `on_date` (an ISO `YYYY-MM-DD`) narrows the question to "already sent TODAY"
+    rather than "already sent at all". `email-backup` needs the narrow form: it
+    mails on BOTH Sundays inside a session's 1..14 day window on purpose,
+    mirroring the two DM nudges, so the whole-window form would silence the
+    second Sunday. Without either form, a rerun or a cron double-fire on one
+    Sunday sent every addressee a second identical email, and the
+    `_log_dm("email-backup", ...)` rows that exist to prevent it were written
+    and never read.
+    """
     if not dm_log_path.exists():
         return False
     with open(dm_log_path, "r", encoding="utf-8") as f:
@@ -1352,6 +1457,8 @@ def _dm_already_sent(dm_log_path: Path, speaker_username: str, dm_type: str,
                     and entry.get("speaker_username") == speaker_username
                     and entry.get("session_date") == session_date
                     and entry.get("delivered")):
+                if on_date is not None and str(entry.get("ts", ""))[:10] != on_date:
+                    continue
                 return True
     return False
 
@@ -1720,6 +1827,21 @@ def _maybe_forward_outsider(bot: "TelegramBot", user_id: int,
 import secrets as _secrets  # noqa: E402  (module-level import already present elsewhere)
 
 
+def _tell(bot: TelegramBot, user_id, text: str) -> None:
+    """Best-effort DM: no recipient, or a Telegram failure, is not a hard error.
+
+    The `if user_id:` + `try/except TelegramAPIError: pass` pair this replaces
+    is written out about twenty times in the swap handlers. The new notification
+    paths use this instead of a twenty-first copy, and `contextlib.suppress`
+    rather than a bare `pass` because ruff reads the latter as a smell and the
+    lint ratchet counts it.
+    """
+    if not user_id:
+        return
+    with contextlib.suppress(TelegramAPIError):
+        bot.send_message(int(user_id), text, parse_mode="")
+
+
 def _new_request_id() -> str:
     """Return an 8-char hex request id, collision risk negligible per session."""
     return _secrets.token_hex(4)
@@ -1776,7 +1898,13 @@ def find_swap_candidates(schedule: list, current_username: str, today,
 
     Logic:
       - Horizon: sessions where session_date in [today, today+horizon_weeks*7].
-      - Exclude A's own current week (no point swapping into your own session).
+      - Exclude A's own session DATES - every date A already speaks on, not
+        A's whole week. The line here read "A's own current week", which the
+        code has never done: if A speaks Monday of week 3, Wednesday of week 3
+        is offered, and a Mon->Wed move inside one week is a real thing to
+        want. The docstring was the liar, so it is the thing corrected. If
+        week-level exclusion is wanted instead, that is a behaviour change to
+        the live /swap flow and the operator's call, not a docstring fix.
       - Vacancies first (sessions with <3 filled slots OR entries with null speaker),
         ordered by date proximity.
       - Then counterparties (other speakers in future sessions, one per session,
@@ -2093,7 +2221,12 @@ def _sweep_expired_swap_requests(bot: TelegramBot) -> None:
             if a_user_id:
                 bot.send_message(
                     int(a_user_id),
-                    f"Your swap request to @{b_username} expired (no response in 24h). "
+                    # The constant, not a literal "24h". The proposal message to
+                    # B interpolates SWAP_B_RESPONSE_TTL_HOURS and these two did
+                    # not, so changing the window would leave both expiry
+                    # messages stating a deadline the code no longer uses.
+                    f"Your swap request to @{b_username} expired (no response in "
+                    f"{SWAP_B_RESPONSE_TTL_HOURS}h). "
                     f"I'll let Misha know - he'll arrange another date with you.",
                     parse_mode="",
                 )
@@ -2105,7 +2238,8 @@ def _sweep_expired_swap_requests(bot: TelegramBot) -> None:
                 bot.send_message(
                     misha_id,
                     f"Swap request expired: @{a_username} -> @{b_username} "
-                    f"(no response in 24h). A will need manual help.",
+                    f"(no response in {SWAP_B_RESPONSE_TTL_HOURS}h). "
+                    f"A will need manual help.",
                     parse_mode="",
                 )
             except TelegramAPIError:
@@ -2532,6 +2666,18 @@ def _handle_a_tap(bot: TelegramBot, cq_id: str, rid: str, choice: str,
             bot.answer_callback_query(cq_id, text="Could not reach the other speaker. Misha will help.")
         except TelegramAPIError:
             pass
+        # Misha is actually told, as the b_unreachable branch above already
+        # does. This path promised A that "Misha will help" and then wrote one
+        # errors.log line nobody is alerted to - the most likely cause is B
+        # having blocked the bot, which no other surface reports.
+        _tell(bot, misha_user_id(),
+              f"/swap stuck: @{a_username} wants to swap with @{b_username} "
+              f"({chosen['date']} #{chosen['slot']}) but the DM to B failed "
+              f"({e}). Most likely B blocked the bot. Reach out manually.")
+        # No event is appended and the message is NOT edited, deliberately: the
+        # status stays where it was, so A's buttons remain live and A can retap.
+        # Appending here would make this the last event and therefore the
+        # status, ending a request that is still recoverable.
         return
 
     _append_swap_event({
@@ -2647,6 +2793,31 @@ def _handle_b_tap(bot: TelegramBot, cq_id: str, rid: str, choice: str,
         except TelegramAPIError:
             pass
         _append_swap_event({"rid": rid, "event": "apply_failed"})
+        # A and Misha are told, like every other terminal outcome of this flow.
+        # They were not: B saw "Misha will help" and the only other effect was
+        # this event. A's last message was "Request sent... I'll let you know",
+        # so A waited forever; Misha never heard that a swap he was promised to
+        # fix had failed; and `apply_failed` is terminal, so the expiry sweep -
+        # which only looks at `proposed_to_b` - never reached it either. Three
+        # silent paths out of the one branch that says a human will step in.
+        #
+        # The request is NOT re-opened. It failed because the schedule rows it
+        # named are gone, so a fresh 24h window would re-propose a swap against
+        # entries that no longer exist.
+        _tell(bot, a_user_id,
+              f"@{b_username} accepted, but the swap could not be applied: "
+              f"the schedule changed since you asked. Your slot stays at "
+              f"{a_current_date} #{a_current_slot}. Misha has been told and "
+              f"will sort it out with you.")
+        _tell(bot, misha_user_id(),
+              f"/swap FAILED to apply: @{b_username} accepted @{a_username}'s "
+              f"request ({a_current_date} #{a_current_slot} <-> {target_date} "
+              f"#{target_slot}) but the schedule rows no longer match. Both were "
+              f"told you would help. Nothing was changed.")
+        _log_event("swap_failed", rid=rid, outcome="apply_failed",
+                   a_username=a_username, b_username=b_username,
+                   from_date=a_current_date, from_slot=a_current_slot,
+                   to_date=target_date, to_slot=target_slot)
         return
 
     _append_swap_event({
@@ -2932,7 +3103,16 @@ def cmd_speaker_dms(args) -> None:
         d = _date.fromisoformat(session_date)
         days_until = (d - today).days
         user_id = _resolve_speaker_user_id(roster, username)
-        name = entry["speaker_name"].split()[0]  # first name
+        # Guarded exactly as `cmd_email_backup` guards its own greeting, and for
+        # the reason that file already records: a missing key raised KeyError
+        # and a blank one raised IndexError out of the MIDDLE of a send loop.
+        # Speakers already reached kept their DM, everyone later in the schedule
+        # got nothing, no summary printed, and `hc_ping` never fired - so the
+        # healthcheck went red-by-silence at best and the partial send was
+        # invisible. A handle is a worse greeting than a first name and a much
+        # better one than a dead job.
+        raw_name = str(entry.get("speaker_name") or "").strip()
+        name = raw_name.split()[0] if raw_name else f"@{username}"
         session_day = d.strftime("%a")
         theme = entry["theme"]
 
@@ -3205,7 +3385,12 @@ def cmd_cycle_rollover(args) -> None:
     schedule = load_state(SCHEDULE) or []
     try:
         start_monday, weeks = _load_fireside_config_fresh()
-    except (OSError, ValueError, KeyError) as e:
+    # TypeError too, matching the import-time guard over the same loader. A
+    # config that is valid JSON but the wrong SHAPE - a top-level list, or
+    # `weeks` as a dict - raises TypeError on `cfg["cycle_1_start_monday"]`,
+    # which escaped this branch and surfaced through the main() wrapper as an
+    # "uncaught exception" instead of the line naming the file to fix.
+    except (OSError, ValueError, KeyError, TypeError) as e:
         print(f"{RED}cycle-rollover: cannot read cycle config: {e}{RESET}", file=sys.stderr)
         return
 
@@ -3329,7 +3514,12 @@ def cmd_dayof_reminders(args) -> None:
                     error="no telegram_user_id")
             failed += 1
             continue
-        name = entry["speaker_name"].split()[0]
+        # Guarded like the other two send loops in this file: a blank
+        # speaker_name raised IndexError mid-loop, and this is the day-of DM
+        # carrying the Zoom link, so the speakers after the blank row lost the
+        # only message that tells them where to be.
+        raw_name = str(entry.get("speaker_name") or "").strip()
+        name = raw_name.split()[0] if raw_name else f"@{username}"
         text = SPEAKER_DM_DAYOF.format(name=name, zoom_link=zoom, helmsman_name=helmsman_name)
         try:
             bot.send_dm(user_id, text)
@@ -3803,9 +3993,19 @@ def cmd_email_backup(args) -> None:
     # Scanning the wrong file meant `responded_user_ids` was ALWAYS empty, so a
     # member who had answered the bot was never recognised as responsive and
     # stayed on the backup-email list.
+    #
+    # All four engagement events, not two. `idea_submitted` and
+    # `opt_in_changed` are written by `_log_event` with a `user_id` and each is
+    # unambiguous proof the member is alive and using the bot, and both were
+    # missing from this set. A member pre-bound by `bootstrap` (so never needing
+    # `/start`) who sent an `/idea` last week was still classed unresponsive and
+    # mailed "I've sent you a few Telegram DMs... but haven't seen a response" -
+    # false, and false to exactly the members who are engaged.
+    ENGAGEMENT_EVENTS = ("start_received", "swap_requested", "idea_submitted",
+                         "opt_in_changed")
     responded_user_ids: set[int] = set()
     for e in _read_jsonl_rows(state_path(SESSIONS_LOG)):
-        if e.get("event_type") in ("start_received", "swap_requested") and e.get("user_id"):
+        if e.get("event_type") in ENGAGEMENT_EVENTS and e.get("user_id"):
             try:
                 responded_user_ids.add(int(e["user_id"]))
             except (TypeError, ValueError):
@@ -3813,6 +4013,7 @@ def cmd_email_backup(args) -> None:
 
     sent = 0
     skipped = 0
+    already = 0
     # Two silent drops used to leave no trace at all. The summary line reported
     # `sent` and `skipped`, where `skipped` counts ONLY the members who had
     # already engaged with the bot -- so a speaker with no e-mail in the sheet,
@@ -3841,6 +4042,13 @@ def cmd_email_backup(args) -> None:
         if user_id and user_id in responded_user_ids:
             skipped += 1
             continue  # they've engaged via bot, no need for email
+        # Already mailed TODAY, not already mailed at all: the two-Sundays
+        # behaviour below is deliberate. A rerun on the same Sunday, or a cron
+        # double-fire, used to send real people a second identical email.
+        if _dm_already_sent(state_path(DM_LOG), username, "email-backup",
+                            entry["session_date"], on_date=today.isoformat()):
+            already += 1
+            continue
 
         # Silence is the trigger, not a failed DM. Until 2026-08-24 this line
         # also required a dm-log row with `dm_type in ("2wk", "3day")` and
@@ -3896,6 +4104,8 @@ def cmd_email_backup(args) -> None:
         if ok:
             sent += 1
     line = f"{GREEN}email-backup{RESET}: sent={sent} skipped={skipped}"
+    if already:
+        line += f" {GRAY}already-mailed-today={already}{RESET}"
     if no_email:
         line += (f" {YELLOW}no-email={len(no_email)}{RESET} ("
                  + ", ".join("@" + u for u in sorted(set(no_email))) + ")")
@@ -4032,7 +4242,13 @@ def cmd_stats(args) -> None:
 # ============================================================
 
 def cmd_health_check(args) -> None:
-    """Alert Misha if no liveness tick (poll-tick or heartbeat-tick) in 30 min. Cron: every 30 min."""
+    """Alert Misha if no liveness tick (poll-tick or heartbeat-tick) in 30 min.
+
+    A tick means "a process reached Telegram", nothing more. In webhook mode
+    that is a DIFFERENT process from the one handling updates, so this command
+    reports the webhook's pending count and last error alongside the tick age
+    rather than implying it has checked the handler. Cron: every 30 min.
+    """
     from datetime import timedelta
 
     dm_log_path = state_path(DM_LOG)
@@ -4041,16 +4257,21 @@ def cmd_health_check(args) -> None:
         return
 
     last_tick_ts = None
+    last_tick: dict = {}
     for line in dm_log_path.read_text(encoding="utf-8").splitlines():
         try:
             e = json.loads(line.strip())
         except (json.JSONDecodeError, ValueError):
             continue
-        # Either tick type counts as proof of life. poll-tick comes from
-        # cmd_poll (polling mode); heartbeat-tick from cmd_heartbeat (webhook
-        # mode). Looking at the latest of either is enough.
+        # Either tick type counts as proof of life, and since 2026-08-25 the two
+        # certify the same thing: poll-tick is written after a successful
+        # getUpdates, heartbeat-tick after a successful getWebhookInfo. Both mean
+        # "the process that stamped this reached Telegram". heartbeat-tick used
+        # to mean only "cron fired and a file append worked", so this comment's
+        # "either is enough" contradicted poll-tick's own definition.
         if e.get("dm_type") in ("poll-tick", "heartbeat-tick"):
             last_tick_ts = e.get("ts")
+            last_tick = e
 
     now = local_now()
     last_dt = None
@@ -4080,7 +4301,22 @@ def cmd_health_check(args) -> None:
                    f"(threshold 30 min). Check daemon: "
                    f"`systemctl status <fireside-unit>` on the service host.")
         else:
-            print(f"{GREEN}health-check{RESET}: last tick {int(age.total_seconds())}s ago, healthy")
+            # What a fresh tick establishes, and no more: a process reached
+            # Telegram. In webhook mode it does NOT establish that the webhook
+            # HANDLER is consuming updates - that is a separate process, and the
+            # heartbeat cron can be perfectly healthy above a dead one. The two
+            # fields below are the evidence available from here, so they are
+            # printed rather than hidden. They raise no alert: the pending count
+            # at which "the handler is dead" beats "a session is busy" is a
+            # threshold the operator owns.
+            print(f"{GREEN}health-check{RESET}: last tick "
+                  f"{int(age.total_seconds())}s ago, reached Telegram")
+            print(f"  webhook: pending_update_count="
+                  f"{last_tick.get('pending_update_count', 'n/a')} "
+                  f"last_error={last_tick.get('webhook_last_error') or 'none'}")
+            print(f"{GRAY}  a fresh tick does not prove the webhook handler is "
+                  f"alive; a climbing pending count is the signal to check it"
+                  f"{RESET}")
             return
 
     misha_id = misha_user_id()
@@ -4100,7 +4336,16 @@ def cmd_health_check(args) -> None:
 # ============================================================
 
 def cmd_unpin_weekly(args) -> None:
-    """Unpin the Sunday preview message. Cron: Wed 16:00 local (after Wed session)."""
+    """Unpin the Sunday preview message. Runs AFTER the Wednesday session.
+
+    The docstring used to add "Cron: Wed 16:00 local (after Wed session)", and
+    the module header repeated it. Sessions are at 18:30, so 16:00 is two and a
+    half hours BEFORE the Wednesday session, not after it - and the pinned
+    message is the one carrying that day's Zoom link. The two halves of that
+    sentence cannot both be true. The real cron lives outside this file, so this
+    docstring no longer states a time it cannot verify; it states the intent,
+    and the operator's schedule is the thing to check against it.
+    """
     last = load_state(LAST_PINNED) or {}
     msg_id = last.get("message_id")
     if not msg_id:
@@ -4113,7 +4358,25 @@ def cmd_unpin_weekly(args) -> None:
         save_state(LAST_PINNED, {"message_id": None})
         print(f"{GREEN}unpin-weekly{RESET}: unpinned message_id={msg_id}")
     except TelegramAPIError as e:
-        print(f"{YELLOW}unpin-weekly: {e}{RESET}", file=sys.stderr)
+        # A 4xx means Telegram has considered the request and refused it: the
+        # message was unpinned by hand, or deleted, or was never pinned because
+        # the pin failed after posting (a case `cmd_sunday_preview` now
+        # survives). Nothing about that recovers on a retry, and the recorded id
+        # used to be kept, so the job printed this same warning every Wednesday
+        # forever with no way out short of hand-editing last-pinned.json.
+        #
+        # A 5xx or a transport failure (status_code None) IS transient, and the
+        # id is kept for the next run: dropping it there would leave a real
+        # pinned message pinned for good.
+        status = getattr(e, "status_code", None)
+        if status is not None and 400 <= status < 500:
+            save_state(LAST_PINNED, {"message_id": None})
+            print(f"{YELLOW}unpin-weekly: Telegram refused message_id={msg_id} "
+                  f"({e}); clearing the recorded id - it is already unpinned or "
+                  f"gone{RESET}", file=sys.stderr)
+            return
+        print(f"{YELLOW}unpin-weekly: {e}; keeping message_id={msg_id} for the "
+              f"next run{RESET}", file=sys.stderr)
 
 
 # ============================================================
@@ -4199,13 +4462,41 @@ def cmd_heartbeat(args) -> None:
     side effects vanish: nothing pings FIRESIDE_HC_POLL (healthchecks.io flags
     DOWN), and nothing appends poll-tick to dm-log (cmd_health_check DMs Misha
     about stale polls). This heartbeat reinstates both signals from a 1-min
-    cron job. Cheap: one HTTP ping + one JSONL append.
+    cron job.
+
+    It CALLS TELEGRAM before it stamps anything. It used to ping and append
+    unconditionally, which proved only that cron fired and a JSONL append
+    worked, while `poll-tick` - the marker `cmd_health_check` treats as
+    equivalent - is written only after a successful `getUpdates`. So the two
+    tick types certified different things under one name, and this one
+    certified almost nothing: with Telegram unreachable from the host, the
+    heartbeat kept stamping fresh ticks and health-check kept printing
+    "healthy".
+
+    `getWebhookInfo` rather than `getMe`, because it costs the same round trip
+    and carries the only evidence a non-handler process has about the handler:
+    `pending_update_count` (updates Telegram is holding because nothing consumed
+    them) and `last_error_message`. Both are recorded on the tick row and
+    reported by health-check. They do NOT raise an alert on their own: the
+    threshold at which a pending count means "the handler is dead" rather than
+    "a session is busy" is the operator's call, and inventing one here would
+    trade a blind monitor for a noisy one. See the note in `cmd_health_check`.
     """
+    row: dict = {"ts": local_now().isoformat(), "dm_type": "heartbeat-tick"}
+    try:
+        info = get_bot().get_webhook_info() or {}
+    except TelegramAPIError as e:
+        # No tick and no ping. This host could not reach Telegram, which is
+        # exactly what the monitor exists to notice; stamping anyway would
+        # report the outage as health.
+        log_error(f"heartbeat: Telegram unreachable, no tick stamped: {e}")
+        print(f"{RED}heartbeat: Telegram unreachable ({e}); no liveness tick "
+              f"recorded{RESET}", file=sys.stderr)
+        return
+    row["pending_update_count"] = info.get("pending_update_count")
+    row["webhook_last_error"] = info.get("last_error_message")
     hc_ping("FIRESIDE_HC_POLL")
-    append_jsonl(DM_LOG, {
-        "ts": local_now().isoformat(),
-        "dm_type": "heartbeat-tick",
-    })
+    append_jsonl(DM_LOG, row)
 
 
 def cmd_set_webhook(args) -> None:

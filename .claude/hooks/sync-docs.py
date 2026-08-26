@@ -168,7 +168,16 @@ def main():
     if not isinstance(input_data, dict):
         sys.exit(0)
 
-    tool_input = input_data.get("tool_input", {})
+    # `.get("tool_input", {})` returns the STORED value when the key is present,
+    # so `null`, a list or a string reached `.get` and raised an uncaught
+    # AttributeError one line below the guard that had just handled the same
+    # shape at the top level. `_dispatch.py` and `data-path-redirect.py` both
+    # already guard the nested value.
+    tool_input = input_data.get("tool_input") or {}
+    if not isinstance(tool_input, dict):
+        print(f"[sync-docs] tool_input was {type(tool_input).__name__}, "
+              "not an object", file=sys.stderr)
+        sys.exit(0)
     file_path_str = tool_input.get("file_path", "")
 
     if not file_path_str:
@@ -182,9 +191,10 @@ def main():
     if not is_real_template(file_path):
         sys.exit(0)
 
-    # Determine project directory (for the HTML renderer, which lives in the
-    # engine clone) and the docs/ target.
-    project_dir = Path(input_data.get("cwd") or Path.cwd())
+    # The payload cwd is read by nothing here any more: the renderer resolves
+    # from ENGINE_ROOT and the targets from the template's own tree, so no path
+    # in this hook depends on where the shell happens to be parked.
+    #
     # templates/ and docs/ are siblings under one root; for a CEO-only guide that
     # root is the DATA overlay, even though the edit is made from the engine cwd.
     # Resolving from cwd wrote the data-overlay guide's docs copy into the engine
@@ -225,7 +235,15 @@ def main():
     # Non-blocking: regen failure produces a warning but never aborts.
     regen_msg = ""
     if file_path.suffix.lower() == ".md":
-        regen_script = project_dir / "scripts" / "regenerate-docs-html.py"
+        # ENGINE_ROOT, not the payload cwd. The comment above already said the
+        # renderer "lives in the engine clone" while the code looked for it under
+        # the session's cwd, so a session started in any engine subdirectory - or
+        # in the data overlay, the case ENGINE_ROOT was introduced for - found no
+        # script, skipped regeneration, and still returned "Auto-synced ... ->
+        # N docs/ copy(ies)". The `.html` twin is itself in SYNC_FILES and is
+        # distributed, so it drifted silently, which is the exact staleness the
+        # note at the top of this file records happening once already.
+        regen_script = ENGINE_ROOT / "scripts" / "regenerate-docs-html.py"
         if regen_script.exists():
             try:
                 # The result used to be discarded, so a renderer exiting 1
@@ -238,7 +256,7 @@ def main():
                 for md_target in [file_path, *targets]:
                     proc = subprocess.run(
                         [sys.executable, str(regen_script), "--quiet", str(md_target)],
-                        cwd=project_dir,
+                        cwd=ENGINE_ROOT,
                         timeout=30,
                         capture_output=True,
                         text=True,
@@ -258,6 +276,15 @@ def main():
             except Exception as e:
                 print(f"[sync-docs] HTML regen warning for {file_path.name}: {e}", file=sys.stderr)
                 regen_msg = f" (HTML regen warning: {e})"
+        else:
+            # The missing-script branch had no `else` at all: nothing on stderr,
+            # nothing in the message, and a success line claiming a complete
+            # sync. A renderer that is not there is the same "the HTML is STALE"
+            # outcome as one that exits non-zero, so it is reported the same way.
+            print(f"[sync-docs] HTML NOT regenerated: no renderer at "
+                  f"{regen_script}", file=sys.stderr)
+            regen_msg = (f" (HTML NOT regenerated: no renderer at "
+                         f"{regen_script}. The HTML is STALE.)")
 
     json.dump({
         "additionalContext": sync_msg + regen_msg

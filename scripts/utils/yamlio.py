@@ -14,15 +14,32 @@ NOT weaken the ``yaml.load()``-without-SafeLoader ban in the security policy
 subset, parsed in C. Where libyaml is absent (a wheel built without it), the
 fallback is the pure-Python ``SafeLoader``, so behaviour is unchanged, only slower.
 
-Equivalence, as measured rather than assumed (2026-08-20): both loaders returned
-the same value for all 26 YAML files in this repo, and raised/accepted alike on 13
-of a 14-case malformed corpus. The one divergence is an unsupported ``%YAML``
-version directive, which the pure-Python loader accepts and ``CSafeLoader``
-rejects with a ``yaml.YAMLError``. That direction is STRICTER, so every
-fail-closed handler built on ``except yaml.YAMLError`` (``load_routing_map`` is
-the one today) fails toward the safe answer, never away from it. Do not describe
-this as byte-for-byte identical to ``yaml.safe_load``; it is the same safe tag
-set, marginally stricter on malformed input. Pinned by
+Equivalence, as measured rather than assumed (2026-08-20, corrected 2026-08-26):
+both loaders returned the same value for all 26 YAML files in this repo. On
+malformed input they diverge in THREE known ways, and they do NOT all run in the
+same direction. The 2026-08-20 sentence said "the one divergence ... is STRICTER
+... never away from it", which was a claim the 14-case corpus behind it could not
+support: the corpus contained no tab.
+
+  1. ``%YAML 1.3`` (an unsupported MINOR version): pure-Python accepts,
+     ``CSafeLoader`` raises. STRICTER. Note the narrowing: ``%YAML 2.0`` and
+     ``%YAML 9.9`` are rejected by BOTH, so this is not "any unsupported
+     version" as the old sentence had it.
+  2. A tab between a key and its value (``crm/:\tprivate``): pure-Python raises
+     a ScannerError, ``CSafeLoader`` parses it. LOOSER.
+  3. A tab inside a scalar value (``crm/: pri\tvate``): same split, and the tab
+     survives into the parsed string. LOOSER.
+
+Cases 2 and 3 mean a fail-closed handler built on ``except yaml.YAMLError``
+CANNOT rely on this loader's strictness for its safety. ``load_routing_map`` is
+the one such handler today and it does not: it validates every destination
+against ``{"engine", "private", "corporate"}`` and coerces anything else to
+``private``, so case 3's ``pri\tvate`` fails closed on the VALUE check rather
+than on the parse, and case 2 yields exactly the destination the file's author
+wrote. Neither widens what is shareable. A new fail-closed handler must carry
+its own value check for the same reason; do not add one that leans on the parse.
+
+Do not describe this as byte-for-byte identical to ``yaml.safe_load``. Pinned by
 ``tests/test_routing_map_cache.py::test_yamlio_strictness_divergence_fails_closed``.
 """
 

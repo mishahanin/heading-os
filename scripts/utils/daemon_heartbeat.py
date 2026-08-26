@@ -15,7 +15,13 @@ can call it without pulling in the bridge stack.
 Fields written:
 - ``daemon``: the daemon name (also the filename stem)
 - ``pid``: process id
-- ``version``: caller-supplied build version, or "unversioned"
+- ``version``: a COPY of ``config_loaded_version``, not a build version. There is
+  no build-version parameter on ``beat`` and never has been, so the two fields are
+  identical by construction. The field is kept because the rich bridge heartbeat
+  shape carries a ``version`` and readers expect the key to be present. Do not
+  treat a difference between two daemons' ``version`` values as a code skew:
+  ``scripts/daemon-fleet-health.py`` reads ``version`` only on the RICH bridge
+  records, and ``_classify_beat`` deliberately ignores it on these beats.
 - ``config_loaded_version``: version of the merged config in memory, or "unversioned"
 - ``uptime_s``: seconds since this process imported the module (per-process boot ts)
 - ``last_heartbeat``: ISO-8601 UTC of this write
@@ -83,7 +89,9 @@ def beat(daemon_name: str, *, config_version: str | None = None) -> None:
         daemon_name: the daemon's name; also the filename stem
             (``.daemon-state/heartbeats/<daemon_name>.json``).
         config_version: version of the merged config currently in memory, if
-            the caller tracks one. Defaults to "unversioned".
+            the caller tracks one. Defaults to "unversioned". It is written to
+            BOTH ``config_loaded_version`` and ``version``; see the module
+            docstring for why ``version`` is not a build version.
     """
     try:
         path = get_workspace_root() / ".daemon-state" / HEARTBEATS_DIR / f"{daemon_name}.json"

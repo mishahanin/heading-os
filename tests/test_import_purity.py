@@ -51,24 +51,16 @@ BLOCKED = {
 # imports pure, so any regression fails this test hard (no grandfathering left).
 BASELINE: frozenset[str] = frozenset()
 
-# Not import-testable in the workspace context - excluded with reason (NOT an
-# F-2.1 heavy-dep issue). The skill-creator helper scripts import from a
-# self-referential top-level `scripts` package (their own
-# .claude/skills/skill-creator/scripts/ with an __init__.py), which collides
-# with the workspace `scripts/` package when loaded outside the plugin's own
-# sys.path. Their only heavy dependency is `anthropic`, a core dep. When run by
-# the skill-creator plugin the path is set up correctly; this harness cannot
-# reproduce that context, so testing them here would be a false negative.
-SKIP = {
-    ".claude/skills/skill-creator/scripts/improve_description.py":
-        "self-referential `scripts` package collides with workspace scripts/ outside the plugin",
-    ".claude/skills/skill-creator/scripts/package_skill.py":
-        "self-referential `scripts` package collides with workspace scripts/ outside the plugin",
-    ".claude/skills/skill-creator/scripts/run_eval.py":
-        "self-referential `scripts` package collides with workspace scripts/ outside the plugin",
-    ".claude/skills/skill-creator/scripts/run_loop.py":
-        "self-referential `scripts` package collides with workspace scripts/ outside the plugin",
-}
+# Nothing is excluded. The four skill-creator helper scripts used to be, because
+# they import a self-referential top-level `scripts` package (their own
+# .claude/skills/skill-creator/scripts/, which has an __init__.py) that collided
+# with the workspace `scripts/` package pinned by the editable install. That was
+# true when the exclusion was written and stopped being true on 2026-08-23, when
+# each of the four gained `sys.path.insert(0, <skill root>)` above its import for
+# exactly this reason. The exclusion outlived its cause by three days and hid
+# four scripts from the gate; re-measured 2026-08-26, all four import clean under
+# this harness. An exclusion that is never re-measured is coverage deleted in
+# advance, so if one is ever needed again, it needs a re-check with it.
 
 
 def _params():
@@ -81,9 +73,7 @@ def _params():
     for p in scripts:
         rel = str(p.relative_to(ROOT))
         marks = ()
-        if rel in SKIP:
-            marks = (pytest.mark.skip(reason=SKIP[rel]),)
-        elif rel in BASELINE:
+        if rel in BASELINE:
             marks = (pytest.mark.xfail(reason="pre-existing F-2.1 debt (BASELINE)", strict=False),)
         out.append(pytest.param(p, id=rel, marks=marks))
     return out
@@ -134,3 +124,15 @@ def test_import_is_pure(script: Path):
         f"sys.exit() runs at import time). Make the heavy import lazy.\n"
         f"--- stderr tail ---\n{r.stderr[-1200:]}"
     )
+
+
+def test_the_scan_still_finds_the_scripts():
+    """A parametrize over an EMPTY list is not a failure to pytest: with the
+    default `empty_parameter_set_mark` it becomes one silent skip, and this
+    whole gate reports green over zero files. Both globs read engine-only trees
+    (`scripts/` and `.claude/skills/*/scripts/`), so an empty result always
+    means the glob or the layout moved, never a thin clone. 217 on 2026-08-26.
+    """
+    found = _params()
+
+    assert len(found) >= 150, f"only {len(found)} scripts reached the purity gate"

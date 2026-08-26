@@ -106,6 +106,7 @@ def aggregate(traces: list) -> dict:
         "by_vendor": defaultdict(int),
         "fallback_count": 0,
         "downgrade_candidates": 0,
+        "flag_eligible": 0,
         "with_tool_use": 0,
         "output_tokens": [],
     })
@@ -122,6 +123,13 @@ def aggregate(traces: list) -> dict:
             b["fallback_count"] += 1
         sig = info["signals"]
         if isinstance(sig, dict):
+            # A trace can only be FLAGGED if it carries signals at all. Gemini
+            # and Grok-served traces have `signals is None`, so they can never
+            # increment the numerator -- and the rate used to divide by
+            # `total`, which counts them. Any skill with fallback traffic had
+            # its downgrade rate silently understated, and the column header
+            # presents it as the rate for that skill.
+            b["flag_eligible"] += 1
             if sig.get("downgrade_candidate"):
                 b["downgrade_candidates"] += 1
             if sig.get("has_tool_use"):
@@ -137,7 +145,10 @@ def aggregate(traces: list) -> dict:
             "by_vendor": dict(b["by_vendor"]),
             "fallback_count": b["fallback_count"],
             "downgrade_candidates": b["downgrade_candidates"],
-            "downgrade_pct": (b["downgrade_candidates"] / b["total"] * 100) if b["total"] else 0.0,
+            "flag_eligible": b["flag_eligible"],
+            "downgrade_pct": (
+                b["downgrade_candidates"] / b["flag_eligible"] * 100
+            ) if b["flag_eligible"] else 0.0,
             "with_tool_use": b["with_tool_use"],
             "median_output_tokens": (
                 int(statistics.median(b["output_tokens"])) if b["output_tokens"] else None
@@ -179,7 +190,7 @@ def render_markdown(agg: dict, window_days: int, run_iso: str, total_traces: int
 
     lines.append("## Per-skill summary")
     lines.append("")
-    lines.append("| Skill / trace | Total | Anthropic | Fallback | Downgrade flag % | Median out tok | P90 out tok | Tool use |")
+    lines.append("| Skill / trace | Total | Anthropic | Fallback | Downgrade flag % (of flag-eligible) | Median out tok | P90 out tok | Tool use |")
     lines.append("|---|---:|---:|---:|---:|---:|---:|---:|")
 
     sorted_buckets = sorted(agg.items(), key=lambda kv: kv[1]["total"], reverse=True)
@@ -204,7 +215,7 @@ def render_markdown(agg: dict, window_days: int, run_iso: str, total_traces: int
         candidates.sort(key=lambda kv: kv[1]["downgrade_pct"], reverse=True)
         for name, b in candidates:
             lines.append(
-                f"- **{name}**: {b['downgrade_candidates']}/{b['total']} flagged "
+                f"- **{name}**: {b['downgrade_candidates']}/{b['flag_eligible']} flagged "
                 f"({b['downgrade_pct']:.1f}%). Median {b['median_output_tokens']} output "
                 f"tokens. If this skill is on Sonnet/Opus, a Haiku swap is worth "
                 f"manual A/B-testing before formalising the route."

@@ -157,8 +157,8 @@ anything under <code>docs/</code>.</p>
 <li><strong>Phased structure.</strong> Phase 0 loads context, Phase 1 executes, Phase 2 synthesizes,
   Phase 3 outputs. Include a <code>NEVER</code> section listing prohibitions.</li>
 <li><strong>Routing-sensitive skills ship <code>triggers.json</code></strong> (6 to 10 positive and negative
-  cases) and an entry in the skill router, so a new skill cannot silently hijack
-  another&rsquo;s queries.</li>
+  cases) and an entry in the skill router. That way a new skill cannot silently
+  hijack another&rsquo;s queries.</li>
 <li><strong>Invocation control.</strong> Add <code>disable-model-invocation: true</code> for high-blast-radius
   skills that should fire only on an explicit slash command.</li>
 </ul>

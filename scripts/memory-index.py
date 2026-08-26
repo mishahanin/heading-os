@@ -444,11 +444,21 @@ def parse_note(text: str) -> dict:
                 status = str(meta.get("status", "") or "")
                 # access_count/last_accessed (Gap #2): auto-memory's real
                 # frontmatter nests these under `metadata:` (confirmed against
-                # a real auto-memory file), so a top-level key wins if present,
-                # falling back to the nested `metadata.*` form.
+                # a real auto-memory file), so a top-level key wins when it
+                # carries a VALUE, falling back to the nested `metadata.*` form.
+                #
+                # "Carries a value" is the load-bearing word. `dict.get(k, d)`
+                # falls back only when the key is ABSENT, so a bare
+                # `access_count:` (YAML null, an ordinary way to write "no value
+                # here") beat a real `metadata.access_count: 5` and the note
+                # ranked as never-cited. The two lines below now agree: a null
+                # top-level key defers to the nested one, and an explicit
+                # top-level `0` still wins, because 0 is a value.
                 nested = meta.get("metadata")
                 nested = nested if isinstance(nested, dict) else {}
-                raw_access_count = meta.get("access_count", nested.get("access_count", 0))
+                raw_access_count = meta.get("access_count")
+                if raw_access_count is None:
+                    raw_access_count = nested.get("access_count", 0)
                 try:
                     access_count = int(raw_access_count or 0)
                 except (TypeError, ValueError):
@@ -695,6 +705,44 @@ def record_provenance(conn, *, model: str, host: str, digest: str | None = None)
         )
 
 
+MIXED_PROVENANCE_KEY = "mixed_provenance"
+
+
+def _embedder_id(model: str, host: str, digest: str | None) -> str:
+    return f"{model} @ {host}" + (f" ({digest[:12]})" if digest else "")
+
+
+def record_mixed_provenance(conn, *, model: str, host: str, digest: str | None = None) -> None:
+    """Flag the store as holding vectors from more than one embedder.
+
+    Sticky, and binary: it names the first embedder mixed in, and is not a log.
+
+    `record_provenance` used to run unconditionally at the end of every build,
+    two dozen lines below a warning that says the unchanged rows keep their old
+    vectors. So an incremental build on a second embedder re-embedded the changed
+    files, stamped ITS identity over the meta row, and from the next run onward
+    `provenance_mismatch` compared the new stamp against the same embedder and
+    returned None. The store was mixed and the only on-disk evidence of the mix
+    had been erased by the code that printed the warning. Nothing clears this but
+    a whole-store `build --force`.
+    """
+    row = conn.execute(
+        "SELECT val FROM meta WHERE key=?", (MIXED_PROVENANCE_KEY,)
+    ).fetchone()
+    if row and row[0]:
+        return                          # already flagged; the flag is binary
+    conn.execute(
+        "INSERT INTO meta (key, val) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET val=excluded.val",
+        (MIXED_PROVENANCE_KEY, _embedder_id(model, host, digest)),
+    )
+
+
+def clear_mixed_provenance(conn) -> None:
+    """Drop the mixed flag. Only a build that re-embedded EVERY row may call this."""
+    conn.execute("DELETE FROM meta WHERE key=?", (MIXED_PROVENANCE_KEY,))
+
+
 def provenance_mismatch(conn, *, model: str, host: str, digest: str | None = None) -> str | None:
     """One line naming the drift, or None. Never raises, never blocks.
 
@@ -714,6 +762,11 @@ def provenance_mismatch(conn, *, model: str, host: str, digest: str | None = Non
     A missing stored digest is silence, not a match -- a store built before this
     field existed cannot be judged, and saying "same" would be a claim the data
     does not carry.
+
+    A fourth field, `mixed_provenance`, is not a comparison at all: it is a
+    sticky record that a past build already wrote rows on a second embedder. It
+    reports on every run regardless of what the current embedder is, because the
+    mix is a property of the stored vectors and no live comparison can see it.
     """
     try:
         meta = dict(conn.execute("SELECT key, val FROM meta"))
@@ -722,6 +775,12 @@ def provenance_mismatch(conn, *, model: str, host: str, digest: str | None = Non
     if not meta.get("model") and not meta.get("embed_host"):
         return None                      # store predates this field
     drift = []
+    if meta.get(MIXED_PROVENANCE_KEY):
+        drift.append(
+            f"MIXED: rows embedded by {meta[MIXED_PROVENANCE_KEY]} were added to a "
+            f"store stamped {meta.get('model', '?')} @ {meta.get('embed_host', '?')} "
+            f"-- only `build --force` clears this"
+        )
     if meta.get("model") and meta["model"] != model:
         drift.append(f"model {meta['model']} -> {model}")
     if meta.get("embed_host") and meta["embed_host"] != host:
@@ -1021,7 +1080,34 @@ def _build_store(cfg, root, store_rel, layers, force) -> int:
     # incremental, prune, and pre-hybrid-migration cases in one cheap pass).
     resync_fts(conn)
 
-    record_provenance(conn, model=cfg["model"], host=cfg["host"], digest=digest)
+    # Provenance is stamped only by a build that can honestly speak for the WHOLE
+    # store. `record_provenance` used to run here unconditionally, which is what
+    # erased the drift the warning at the top of this function had just printed:
+    # see `record_mixed_provenance`.
+    #
+    # `whole_store` is the honest test for "every row in this store was written
+    # by this pass". `force` alone is not: a build restricted to a subset of the
+    # store's layers re-embeds only those, and rows in a layer this pass never
+    # walked keep their old vectors.
+    stored_layers = {lyr for (lyr,) in conn.execute("SELECT DISTINCT layer FROM notes")}
+    whole_store = stored_layers <= set(layers)
+    if force and whole_store:
+        clear_mixed_provenance(conn)
+        record_provenance(conn, model=cfg["model"], host=cfg["host"], digest=digest)
+    elif drift:
+        if pending:
+            record_mixed_provenance(
+                conn, model=cfg["model"], host=cfg["host"], digest=digest)
+            sys.stderr.write(
+                f"{YELLOW}Flagged {root / store_rel} as mixed provenance; every "
+                f"BUILD reports it until `build --force`. `stats` and `query` do "
+                f"not read this flag.{RESET}\n"
+            )
+        # Nothing embedded: the store still holds exactly the vectors it held, so
+        # the old stamp is still true and must stay, or the drift stops being
+        # reportable on the next run.
+    else:
+        record_provenance(conn, model=cfg["model"], host=cfg["host"], digest=digest)
     conn.commit()
     total = conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
     conn.close()
@@ -1517,7 +1603,19 @@ def cmd_query(args) -> int:
     try:
         qvec = embed([qtext], model=cfg["model"], host=cfg["host"])[0]
     except EmbeddingError as e:
-        sys.stderr.write(f"{RED}Embedding failed:{RESET} {e}\n")
+        # `--json` must emit JSON on EVERY exit -- the same contract the
+        # empty-index branch below states, and the same consumer:
+        # `.claude/hooks/recall-inject.py` logs "unparseable JSON" and stays
+        # silent. This path printed to stderr only, so an embed failure AFTER a
+        # successful host resolution (model not pulled on the pinned host, or
+        # ollama killed between resolve and embed) left stdout empty and the hook
+        # degraded blind on every prompt until the host recovered. That is
+        # precisely the case `embed_unavailable_payload` was written for, and the
+        # host-down branch above already routes through it.
+        if want_json:
+            print(json.dumps(embed_unavailable_payload(str(e)), ensure_ascii=False))
+        else:
+            sys.stderr.write(f"{RED}Embedding failed:{RESET} {e}\n")
         return 1
 
     # Per-store hybrid retrieval, then pool. Each store runs its own dense + BM25
@@ -1529,6 +1627,16 @@ def cmd_query(args) -> int:
     all_dense, all_sparse, all_path, all_near = [], [], [], []
     best = None
     for s_root, s_rel in stores:
+        # A read path must not materialize a store. `open_store` mkdirs the
+        # parent and lets sqlite3.connect create the file, then runs the schema
+        # DDL -- so a query against a never-built collection CREATED it, and
+        # after that `stats` could no longer tell "never built" from "built and
+        # empty". `_stats_one_store` and `_mirror_access_counts` both guard on
+        # existence for this reason; this loop did not. An absent store
+        # contributes zero candidates, which lands in the empty-index branch
+        # below.
+        if not (s_root / s_rel).is_file():
+            continue
         conn = open_store(s_root, s_rel)
         res = _query_store(conn, qvec, args.text,
                            threshold=threshold, layer=layer, allowed=allowed,

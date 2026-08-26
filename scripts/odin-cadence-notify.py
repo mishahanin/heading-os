@@ -210,13 +210,25 @@ def _run_headless_propose(root: Path) -> Optional[Path]:
     # proposal file touched since THIS call started is, by construction, the one
     # this run produced (single weekly timer, no concurrent writer). The 2s
     # grace absorbs coarse mtime resolution on 9P/FAT mounts.
-    fresh = sorted(
-        (p for p in proposals_dir.glob("*_odin-reflect-proposal.md")
-         if p.stat().st_mtime >= started - 2),
-        key=lambda p: p.stat().st_mtime,
-    )
+    #
+    # Each candidate is stat'd ONCE, inside a guard. The old form called
+    # `p.stat()` twice per file -- in the filter and again in the sort key --
+    # both unguarded, so a proposal removed between the glob and either call
+    # raised FileNotFoundError out of a function whose contract above says
+    # "NEVER raises", out of `main`, and out of the oneshot unit. In normal mode
+    # that also threw away the counts nudge, which had already been computed and
+    # had nothing to do with proposals. The identical race was fixed in
+    # `_brain_snapshot` in this same file; this block had been left behind.
+    fresh = []
+    for p in proposals_dir.glob("*_odin-reflect-proposal.md"):
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            continue
+        if mtime >= started - 2:
+            fresh.append((mtime, p))
     if fresh:
-        return fresh[-1]
+        return max(fresh, key=lambda t: t[0])[1]
 
     _log("headless propose call succeeded but no proposal file found (exact-date or fresh)")
     return None

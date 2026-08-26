@@ -20,6 +20,15 @@ idempotent (a second run imports 0 files). Copies go through a UNIQUE temp file
 in the destination directory and land via `os.link`, which the filesystem refuses
 if the destination appeared in the meantime.
 
+"Already exists" means the NAME is taken, which is what a copy actually collides
+with: a dangling symlink counts, even though `Path.exists()` follows the link and
+reports False for one. And the refusal `os.link` raises when a destination appears
+between the check and the link is the same skip, not a reason to abandon the run.
+Both were aborts with a traceback until 2026-08-25 -- the second reachable without
+any race, since a dangling symlink made `os.link` fail every single time -- so a
+policy this file documents as skip-and-continue killed the import and left every
+remaining file and subtree unprocessed.
+
 Usage:
     # dry-run first -- shows exactly what WOULD be copied, writes nothing
     python scripts/import-legacy-records.py --from /path/to/old-workspace --dry-run
@@ -32,6 +41,9 @@ Usage:
 
     # best-effort: scan sibling dirs for a plausible old root, then re-run with --from
     python scripts/import-legacy-records.py --auto-detect
+
+Tests: tests/test_import_legacy_records.py,
+       tests/test_an_import_that_died_on_the_skip_it_promised.py
 """
 
 import argparse
@@ -156,7 +168,9 @@ def _import_subtree(
 
     Returns (imported, skipped_existing, skipped_unsafe).
     - imported: file copied (or, in dry-run, would be copied)
-    - skipped_existing: destination already exists -> never overwritten
+    - skipped_existing: the destination NAME is taken -> never overwritten.
+      Counted whether the name was taken before the walk reached it or by
+      another writer during the copy itself.
     - skipped_unsafe: destination escaped dest_dir (traversal) -> refused
     """
     imported = skipped_existing = skipped_unsafe = 0
@@ -181,12 +195,23 @@ def _import_subtree(
             print(f"    {RED}unsafe{RESET} {rel} (escapes destination)")
             continue
 
-        if dest_file.exists():
+        # `lexists`, not `exists`: a DANGLING symlink is a directory entry whose
+        # name is taken, but `exists()` follows the link and answers False for
+        # it. Such a name then passed this check and `os.link` refused it with
+        # EEXIST on every single attempt -- no race required.
+        if os.path.lexists(dest_file):
             skipped_existing += 1
             continue
 
         if not dry_run:
-            _atomic_copy(src_file, dest_file)
+            try:
+                _atomic_copy(src_file, dest_file)
+            except FileExistsError:
+                # The check-then-link race the copy exists to catch: another
+                # writer took the name in between. That is this importer's
+                # documented skip, so count it and keep walking.
+                skipped_existing += 1
+                continue
         imported += 1
 
     return imported, skipped_existing, skipped_unsafe

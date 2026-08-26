@@ -235,7 +235,13 @@ def main(argv: list[str] | None = None) -> int:
     root = args.root or get_workspace_root()
     try:
         sig = gather(root, max(1, args.limit))
-    except FileNotFoundError as e:
+    except OSError as e:
+        # Not just FileNotFoundError. On CPython 3.11 `Path.rglob` suppresses
+        # PermissionError only (3.13 widened it to all OSError), so a directory
+        # that vanishes mid-walk, a symlink loop, or an I/O error still comes
+        # out of `gather` -- and this handler used to let all three past as a
+        # traceback. The message is the exception's own, so a vanished path
+        # reads as itself rather than as "outputs/ not found".
         print(f"next-signal: {e}", file=sys.stderr)
         return 1
 

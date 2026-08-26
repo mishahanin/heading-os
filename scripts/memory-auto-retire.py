@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.utils.colors import GRAY, GREEN, RESET, YELLOW
+from scripts.utils.colors import GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.memory_expiry import find_expired, strip_index_pointers
 from scripts.utils.memory_stores import retire_memory
 from scripts.utils.workspace import get_auto_memory_dir, get_default_tz
@@ -69,20 +69,35 @@ def main() -> int:
             print(f"  {name} (expired {exp.isoformat()})")
         return 0
 
-    names = [name for name, _ in expired]
+    # The index pointer is stripped only for a name that came off EVERY store.
+    # A file left behind by a failed unlink and stripped from the index anyway is
+    # an orphan, and the newest-wins reconcile copies it back into the stores it
+    # was deleted from - so the memory returns with nothing pointing at it.
+    names = []
     for name, exp in expired:
-        removed = retire_memory(name)
+        removed, failed = retire_memory(name)
+        if failed:
+            print(f"{RED}NOT retired{RESET} {name} (expired {exp.isoformat()}): "
+                  f"{len(removed)} store(s) cleared, {len(failed)} refused; the "
+                  f"index pointer is left in place")
+            for path, why in failed:
+                print(f"    {path}: {why}")
+            _log_line(f"retire FAILED {name} expired={exp.isoformat()} "
+                      f"removed={len(removed)} failed={len(failed)}")
+            continue
+        names.append(name)
         print(f"{GREEN}retired{RESET} {name} (expired {exp.isoformat()}): {len(removed)} store(s)")
         _log_line(f"retired {name} expired={exp.isoformat()} stores={len(removed)}")
 
     # Strip pointers from MEMORY.md in one rewrite.
     index = memory_dir / INDEX_NAME
-    if index.exists():
+    if names and index.exists():
         before = index.read_text(encoding="utf-8")
         after = strip_index_pointers(before, names)
         if after != before:
             index.write_text(after, encoding="utf-8")
-            print(f"{GREEN}updated{RESET} {INDEX_NAME} (removed {before.count(chr(10)) - after.count(chr(10))} pointer line(s))")
+            print(f"{GREEN}updated{RESET} {INDEX_NAME} "
+                  f"(removed {len(names)} pointer(s))")
 
     return 0
 

@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -237,9 +238,17 @@ def test_stamp_refuses_a_non_markdown_file(tmp_path):
     `> Last verified: ...` on line 1, which broke every later `ruff` run until
     it was restored by hand. A test that can damage the tree when it fails is a
     worse instrument than the defect it measures.
+
+    The scratch must live INSIDE the workspace, because the guard under test is
+    the one that refuses a path outside it, so `tmp_path` cannot be the target.
+    It must not live under `tests/`, which is what the second version did:
+    `scripts/dev/check-lfs-fixtures.py` walks that tree, and a parallel worker
+    running this test made the walk list a file and then delete it mid-scan.
+    `.tmp/` is gitignored and no guard walks it, and the per-worker suffix keeps
+    two workers off each other's directory.
     """
-    scratch_dir = ROOT / "tests" / "_freshness_probe"
-    scratch_dir.mkdir(exist_ok=True)
+    scratch_dir = ROOT / ".tmp" / f"freshness-probe-{tmp_path.name}"
+    scratch_dir.mkdir(parents=True, exist_ok=True)
     target = scratch_dir / "not-markdown.toml"
     target.write_text("key = 1\n", encoding="utf-8")
     try:
@@ -251,8 +260,10 @@ def test_stamp_refuses_a_non_markdown_file(tmp_path):
         assert "not a .md file" in proc.stdout + proc.stderr
         assert target.read_text(encoding="utf-8") == "key = 1\n"
     finally:
-        target.unlink(missing_ok=True)
-        scratch_dir.rmdir()
+        # rmtree, not rmdir: when the guard under test regresses the stamp lands
+        # on the target and rmdir raises on the non-empty directory, replacing
+        # the assertion that names the regression with a cleanup error.
+        shutil.rmtree(scratch_dir, ignore_errors=True)
 
 
 def test_a_traversal_path_is_refused():

@@ -56,9 +56,20 @@ def parse_partnerships(content: str) -> list[dict]:
         if in_table and line.strip().startswith("|"):
             cells = [c.strip() for c in line.strip().strip("|").split("|")]
             if not seen_sep:
-                if cells and cells[0].startswith("---"):
+                # A GitHub-flavoured separator row may carry alignment colons:
+                # `|:---|---:|:---:|`. `startswith("---")` matched none of
+                # those, so `seen_sep` never flipped, every data row was skipped
+                # and `main` exited 2 with "no Partnership Discussions rows
+                # found" over a table that was right there. The live
+                # `context/pipeline.md` uses the plain form today, so this is
+                # latent until somebody aligns a column.
+                if cells and re.fullmatch(r":?-{3,}:?", cells[0]):
                     seen_sep = True
                 elif cells and cells[0].lower() == "partner":
+                    # DEAD, and pre-existing: both arms fall to the same
+                    # `continue` below, so this branch changes nothing. Named
+                    # rather than deleted -- it documents which row is the
+                    # header.
                     pass
                 continue
             if len(cells) < 5:

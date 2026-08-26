@@ -43,12 +43,13 @@ human click.
 | Private/corporate content leaves in the public engine repo | Engine/data segregation + push-time content scan + leak guard | `pytest tests/test_engine_tree_clean.py tests/test_data_root_no_bypass.py tests/security/test_leak_path_matrix.py`; CI guard `Leak guard`, `Engine tree clean` |
 | A data directory is joined onto an engine root (path bypass) | Data-root seam refuses engine-root joins | `pytest tests/test_data_root_no_bypass.py`; CI guard `HEADING OS data-root guard` |
 | Read of CEO-only personal thread files by a subagent | PreToolUse dispatch read-guard blocks the read | `pytest tests/security/test_dispatch_read_guard.py` |
+| A private commit subject reaches a searchable memory-index store | Commit air gap: private paths never enter the index | SEC-019 `pytest tests/security/test_SEC_019_commit_air_gap.py` |
 
 ## 4. Secret exfiltration
 
 | Threat / attack class | Control | Test / guard |
 |---|---|---|
-| A credential is committed | detect-secrets + workspace secret-scanner + push content scan | CI guard `detect-secrets baseline drift (F-9.4)`; SEC-004 `pytest tests/security/test_SEC_004_credential_patterns.py` |
+| A credential is committed | detect-secrets + workspace secret-scanner + push content scan | CI guard `detect-secrets baseline drift (F-9.4)`; SEC-004 `pytest tests/security/test_SEC_004_credential_patterns.py`; SEC-018 `pytest tests/security/test_SEC_018_gate_behaviour.py` |
 | A sensitive path is not gitignored | `.gitignore` coverage assertion | SEC-003 `pytest tests/security/test_SEC_003_gitignore_coverage.py` |
 | Session/OAuth files world-readable | `.sessions/` permission enforcement (0700/0600) | SEC-006 `pytest tests/security/test_SEC_006_oauth_dir_permissions.py` |
 
@@ -84,7 +85,8 @@ human click.
 |---|---|---|
 | The Security Constitution goes missing | Existence regression | `pytest tests/security/test_security_constitution_exists.py` |
 | An open security finding ships unresolved | Findings registry well-formed and zero-open (acceptance) | `pytest tests/security/test_findings_registry.py` |
-| General security regressions creep back | Permanent regression suite | `pytest tests/security/test_regression.py` |
+| General security regressions creep back | Permanent regression suite, run as a directory by the CI `security-tests` job | `pytest tests/security/` |
+| A security regression test is quietly deleted, renamed out of collection, or emptied | Only-grows floor of SEC ids | `pytest tests/security/test_regression.py` |
 
 ---
 

@@ -698,7 +698,7 @@ def _restore_mermaid(html: str, blocks: list[str]) -> str:
 _LOCAL_MD_HREF = re.compile(r'(href=")(?!https?://|mailto:|#)([^"]+?\.md)((?:#[^"]*)?")')
 
 
-def _point_md_links_at_the_rendered_page(html: str, site_dir: Path) -> str:
+def _point_md_links_at_the_rendered_page(html: str, link_base: Path) -> tuple[str, list[str]]:
     """Rewrite `X.md` links to `X.html` when the rendered sibling exists.
 
     A markdown source links to its neighbours as `.md`, which is right in the
@@ -707,22 +707,38 @@ def _point_md_links_at_the_rendered_page(html: str, site_dir: Path) -> str:
     them climbing out of `docs/` to `../.devcontainer/README.md`, a file the site
     does not publish at all.
 
-    A link whose rendered sibling does NOT exist is left alone and reported by
-    the caller, because silently pointing it at a second missing page would just
-    move the 404.
+    `link_base` is the directory of the page being rendered, NOT the site
+    directory. It used to be the module-level SITE_DIR for every page, while
+    `TRACKED_DIRS` also renders `templates/` and the DATA overlay's `docs/` and
+    `templates/`: a relative link in one of those was resolved against a
+    directory it has nothing to do with. The dangerous half is not the link left
+    unrewritten, it is the coincidence -- a `templates/X.md` link where
+    `docs/X.html` happens to exist rewrote to a confident, wrong href.
+
+    Returns the rewritten HTML AND the targets that resolved to nothing. A link
+    whose rendered sibling does not exist is left alone, because silently
+    pointing it at a second missing page would just move the 404 -- and the
+    caller now actually receives the list this docstring used to say it did.
+    Before that, `str` was the whole return type, so no caller COULD learn which
+    targets missed, and every wrong-directory resolution was invisible at
+    generation time.
     """
+    unresolved: list[str] = []
+
     def _sub(m):
-        target = site_dir / m.group(2)
+        target = link_base / m.group(2)
         if target.with_suffix(".html").is_file():
             return f"{m.group(1)}{m.group(2)[:-3]}.html{m.group(3)}"
+        unresolved.append(m.group(2))
         return m.group(0)
 
-    return _LOCAL_MD_HREF.sub(_sub, html)
+    return _LOCAL_MD_HREF.sub(_sub, html), unresolved
 
 
-def md_to_html(md_text: str) -> str:
+def md_to_html(md_text: str, link_base: Path | None = None) -> tuple[str, list[str]]:
     md = markdown.Markdown(extensions=MD_EXTENSIONS, extension_configs=MD_EXT_CONFIGS)
-    return _point_md_links_at_the_rendered_page(md.convert(md_text), SITE_DIR)
+    return _point_md_links_at_the_rendered_page(md.convert(md_text),
+                                                link_base or SITE_DIR)
 
 
 def regenerate(md_path: Path, quiet: bool = False) -> bool:
@@ -735,7 +751,7 @@ def regenerate(md_path: Path, quiet: bool = False) -> bool:
     display_title, subtitle = extract_title(md_text, fallback=md_path.stem)
     body_md = strip_first_h1(md_text)
     body_md, mermaid_blocks = _extract_mermaid(body_md)
-    body_html = md_to_html(body_md)
+    body_html, unresolved_links = md_to_html(body_md, md_path.parent)
     body_html = _restore_mermaid(body_html, mermaid_blocks)
 
     if md_path.parent == SITE_DIR:
@@ -768,6 +784,14 @@ def regenerate(md_path: Path, quiet: bool = False) -> bool:
     atomic_write_text(html_path, full_html)
     if not quiet:
         print(f"  {_display_path(md_path)} -> {_display_path(html_path)}")
+    # Named on STDERR whether or not --quiet was passed. A markdown link that
+    # resolves to no rendered page is a 404 the reader finds and the generator
+    # already knew about; staying silent is the "looks like coverage" failure
+    # `.claude/rules/scope-claims.md` is about. It is not a hard error: some of
+    # these point at repository files the site deliberately does not publish.
+    for target in unresolved_links:
+        print(f"  [unresolved] {_display_path(md_path)} -> {target} "
+              f"(no rendered page beside it; link left as .md)", file=sys.stderr)
     return True
 
 

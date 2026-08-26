@@ -61,6 +61,8 @@ import functools
 import json
 import logging
 import os
+import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -178,18 +180,37 @@ def _extract_metadata(
 # Debug trace writer
 # ---------------------------------------------------------------------------
 
-def _workspace_root() -> Path:
-    from scripts.utils.workspace import get_workspace_root
-    return get_workspace_root()
+# `_workspace_root()` lived here and had exactly one caller, `_debug_trace_path`,
+# which used it to put raw e-mail bodies in the ENGINE tree. Removed with that
+# call rather than left as a convenience the next writer would reach for.
 
 
 def _debug_trace_path() -> Path:
+    """Where the full debug payload lands. The DATA overlay, never the engine.
+
+    This file holds RAW args, kwargs and return values - e-mail bodies, subjects
+    and sender addresses. The fallback used to be the ENGINE workspace root, and
+    `state/` is neither gitignored nor routed private: `get_routing_destination
+    ("state/email-triage/debug-trace.jsonl")` answers `engine`, the PUBLIC repo.
+    Measured 2026-08-25 with `INBOX_PULSE_STATE_DIR` unset.
+
+    This is the same defect already found and fixed in
+    `scripts/inbox_pulse/cost.py`, whose own note records the spend ledger
+    landing in the code repository for exactly this reason. So the resolver is
+    ASKED FOR rather than reimplemented a third time; the module falls back to
+    its own root only when the seam cannot be reached at all, and says so.
+    """
     state_dir = os.environ.get("INBOX_PULSE_STATE_DIR")
     if state_dir:
-        base = Path(state_dir)
-    else:
-        base = _workspace_root() / "state" / "email-triage"
-    return base / "debug-trace.jsonl"
+        return Path(state_dir) / "debug-trace.jsonl"
+    try:
+        from scripts.inbox_pulse.paths import get_state_dir
+        return get_state_dir() / "debug-trace.jsonl"
+    except Exception as exc:  # noqa: BLE001 - tracing must not break the caller
+        print(f"[observability_safe] state dir unresolved ({type(exc).__name__}: "
+              f"{exc}); the debug trace would land in the engine tree, so it is "
+              f"written to a private temp file instead.", file=sys.stderr)
+        return Path(tempfile.gettempdir()) / "heading-os-debug-trace.jsonl"
 
 
 def _write_debug_trace(

@@ -67,7 +67,7 @@ Before building this week's review, check for a prior review.
    Use evidence from `context/current-data.md`, `context/pipeline.md`, CRM activity,
    and any other observable signals.
 4. For each course correction, assess: executed, in progress, or not started.
-5. Summarize the continuity status as a short block to include at the top of the
+5. Summarize the continuity status as a short block. Put it at the top of the
    new review (see output template below).
 
 If no previous review exists, note "First review -- no prior baseline" and proceed.

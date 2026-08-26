@@ -129,7 +129,16 @@ def probe(host: str, timeout: float = DEFAULT_PROBE_TIMEOUT) -> bool:
             payload = json.loads(response.read().decode())
     except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
         return False
-    return "version" in payload
+    # `isinstance`, not `in`. A 200 carrying a JSON SCALAR - `null`, a number, a
+    # bool - parses fine and then `"version" in payload` raises TypeError, which
+    # the clause above does not catch. The caller got a bare TypeError out of a
+    # function whose entire contract is to answer True or False, so
+    # `resolve_ollama_host` could not fall back to the local daemon and
+    # `resolve_pinned_host` could not raise `OllamaHostUnavailable` naming what
+    # it tried. Reproduced 2026-08-25 against a loopback server returning
+    # `null`. `auto:<port>` invites exactly this: the WSL gateway address with
+    # some other service on that port.
+    return isinstance(payload, dict) and "version" in payload
 
 
 def candidate_url(preferred: str | None) -> str | None:

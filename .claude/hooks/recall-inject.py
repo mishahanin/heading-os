@@ -165,7 +165,13 @@ def main() -> None:
     # operator must see rather than mistake for an empty memory.
     try:
         result = json.loads(proc.stdout or "{}")
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - the hook must not break the turn
+        # Log it WHERE it happens. The exception was discarded, and the message
+        # further down then named "unparseable JSON" for three states this code
+        # never distinguishes: stdout that truly failed to parse, stdout that was
+        # empty (the `or "{}"` default parses fine), and stdout that parsed to a
+        # valid but empty object. Only the first matched the sentence.
+        _log("recall stdout did not parse as JSON", exc)
         result = {}
 
     down = result.get("embed_unavailable") or {}
@@ -184,7 +190,9 @@ def main() -> None:
         _log(f"recall exited {proc.returncode}: {(proc.stderr or '').strip()[:200]}")
         _emit("")
     if not result:
-        _log("recall emitted unparseable JSON")
+        # State what was observed, not a cause this branch never established.
+        _log(f"recall returned no usable payload "
+             f"({len(proc.stdout or '')} bytes on stdout)")
         _emit("")
 
     # The backend prints its red banner on stderr, which this hook captures and

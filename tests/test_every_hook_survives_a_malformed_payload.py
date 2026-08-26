@@ -65,6 +65,25 @@ def _argv_for(hook: Path) -> list[str]:
     return []
 
 
+def _assert_no_crash(hook: Path, proc, what: str) -> None:
+    """Every way the run can be a crash, not only the one that prints a traceback.
+
+    "Traceback" alone was the whole check, and it cannot see two real failures:
+    a hook killed by a signal writes nothing to stderr, and an interpreter that
+    cannot open the file at all prints `can't open file` with no traceback under
+    it. Both leave the negative assertion satisfied. A hook exiting non-zero is
+    NOT checked here on purpose - a blocking hook returns 2 by design, so a
+    return-code equality would fail the well-behaved ones.
+    """
+    tail = proc.stderr[-1500:]
+    assert proc.returncode >= 0, (
+        f"{hook.name} was killed by signal {-proc.returncode} on {what}: {tail}")
+    assert "can't open file" not in proc.stderr, (
+        f"{hook.name} never started on {what}: {tail}")
+    assert "Traceback" not in proc.stderr, (
+        f"{hook.name} crashed on {what}:\n{tail}")
+
+
 @pytest.mark.parametrize("hook", _stdin_hooks(), ids=lambda p: p.name)
 @pytest.mark.parametrize("payload", MALFORMED)
 def test_a_non_object_payload_does_not_crash_the_hook(hook, payload):
@@ -72,9 +91,7 @@ def test_a_non_object_payload_does_not_crash_the_hook(hook, payload):
         [sys.executable, str(hook), *_argv_for(hook)],
         input=payload, capture_output=True, text=True, timeout=120,
     )
-    assert "Traceback" not in proc.stderr, (
-        f"{hook.name} crashed on the payload {payload}:\n{proc.stderr[-1500:]}"
-    )
+    _assert_no_crash(hook, proc, f"the payload {payload}")
 
 
 @pytest.mark.parametrize("hook", _stdin_hooks(), ids=lambda p: p.name)
@@ -84,9 +101,7 @@ def test_an_empty_payload_does_not_crash_the_hook(hook):
         [sys.executable, str(hook), *_argv_for(hook)],
         input="", capture_output=True, text=True, timeout=120,
     )
-    assert "Traceback" not in proc.stderr, (
-        f"{hook.name} crashed on an empty payload:\n{proc.stderr[-1500:]}"
-    )
+    _assert_no_crash(hook, proc, "an empty payload")
 
 
 def test_the_sweep_actually_found_the_hooks():

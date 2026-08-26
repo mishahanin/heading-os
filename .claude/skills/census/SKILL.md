@@ -113,7 +113,7 @@ tmpfs overlay. It is therefore ABSENT inside the box, not merely forbidden.
    data-root-relative layout: `/data/threads/business/*.md`,
    `/data/crm/contacts/*.md`. Write results to `/out/answer.json`.
 3. **Read the printed program before you run it.** The engine prints the program
-   by default, then runs it. It does NOT wait for you, and `--no-print-program`
+   by default. It then runs the program. It does NOT wait for you, and `--no-print-program`
    removes the print. So reading is your discipline, not a gate the engine
    enforces. What makes the eval/exec carve-out legitimate is the four sandbox
    controls in `.claude/rules/generated-code-execution.md`, not this step.

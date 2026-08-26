@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """Keep the README / docs front-door "By the numbers" block honest (F-8.3).
 
-The README and docs/index.html each carry a "By the numbers" block whose figures
-must come from CI, not from a hand-typed guess. This guard re-derives the one
-figure that actually drifts (the security-test count) and asserts the two front
-doors agree with it and with each other; it also cross-checks the enforcement-layer
-count between the two pages against the architectural constant.
+README.md, docs/index.html and ROADMAP.md each carry a "By the numbers" block
+whose figures must come from CI, not from a hand-typed guess. This guard
+re-derives the one figure that actually drifts (the security-test count) and
+asserts all three front doors agree with it and with each other; it also
+cross-checks the enforcement-layer count across them against the architectural
+constant.
+
+These two paragraphs said "two front doors" and named only README and
+docs/index.html. ROADMAP.md was added to `FRONT_DOORS` after it drifted to 554
+against a real 563, and the guard has failed the run on it ever since. A reader
+of the old text would conclude ROADMAP was unchecked and "fix" a failing guard
+by reverting ROADMAP's number instead of believing the failure.
 
 Derived vs asserted:
   * security-test count -- DERIVED by collecting ``tests/security`` (the exact suite
@@ -13,15 +20,17 @@ Derived vs asserted:
     a stale README is caught here.
   * enforcement-layer count -- a fixed architectural constant (the six engine/data
     layers enumerated in docs/SECURITY-MODEL.md). Not re-derivable from a fluctuating
-    source, so this guard instead asserts README and docs/index.html agree with each
-    other and with the constant, catching an accidental divergence between the two
-    front doors.
+    source, so this guard instead asserts every page in `FRONT_DOORS` agrees with
+    the constant and with the others, catching an accidental divergence between
+    the front doors.
 
 Exit 0 when every figure matches; exit 1 (with a diff) on any mismatch.
 
 Usage:
     python scripts/dev/check-readme-numbers.py            # check, exit non-zero on mismatch
     python scripts/dev/check-readme-numbers.py --quiet    # only print on mismatch
+
+Tests: tests/test_a_guard_that_was_green_over_an_absent_tree.py
 """
 from __future__ import annotations
 

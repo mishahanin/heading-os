@@ -92,6 +92,14 @@ NON_SCOPE_CLAIMS = {
     ".claude/hooks/checkpoint-save.py":
         "'the work this session was doing' appears in a handoff the hook writes FOR "
         "the session whose transcript it was handed; the subject is its own caller",
+    "scripts/scrutinize-dispatch.py":
+        "'the Claude judge IS this session' is the REASON --verdict is required "
+        "for --family claude, printed when it is missing. It is an architectural "
+        "statement about where that judge runs, not a claim about what this run "
+        "checked: the dispatcher covers no set of files with it, and the sentence "
+        "is true by construction because there is no Claude endpoint for this "
+        "process to call. The module docstring has said the same since the file "
+        "was written; only the runtime message is new, and it says less, not more",
     ".claude/hooks/recall-inject.py":
         "'in this session' instructs the model about what NOT to conclude while the "
         "pinned embedder is down; it claims no coverage over a set of files, and "

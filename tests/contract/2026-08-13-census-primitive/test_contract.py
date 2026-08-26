@@ -258,14 +258,24 @@ def test_the_scorer_reports_per_class_and_counts_fabrication(tmp_path):
 
 
 def test_the_cli_exposes_score_as_a_working_mode():
-    """`--score` must stop printing the step-1 deferral notice."""
+    """`--score` must stop printing the step-1 deferral notice.
+
+    The absence of the notice was the whole check, and absence proves nothing on
+    its own: a script that dies on import, or one that never reaches `--score`,
+    prints no notice either. So the run also has to show it got INTO the mode -
+    it reached the answers file, could not find it, and said which one.
+    """
     proc = subprocess.run(  # nosec B603 - fixed argv, no shell
         [sys.executable, str(ROOT / "scripts" / "census-bench.py"), "--score",
          "/nonexistent-answers.json"],
         capture_output=True, text=True, timeout=120)
     combined = proc.stdout + proc.stderr
+
     assert "реализуется в шаге 2" not in combined, (
         "--score is still the deferral stub")
+    assert proc.returncode == 2, combined[-1500:]
+    assert "/nonexistent-answers.json" in combined, (
+        f"--score never reached the answers file it was given: {combined[-1500:]}")
 
 
 # ============================================================

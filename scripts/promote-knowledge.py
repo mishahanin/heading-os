@@ -31,6 +31,14 @@ FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
 VALID_TYPES = list(KNOWLEDGE_TYPES)
 
+# Matches a promotion marker block appended by an EARLIER run, on any date and
+# for any type. The date is what the old guard compared, which is why the guard
+# was not idempotent: see strip_promotion_markers.
+PROMOTION_MARKER_RE = re.compile(
+    r"\n*---\n+> \*\*Promoted to corporate\*\* on \d{4}-\d{2}-\d{2} "
+    r"-- shared/[^\n]*\n?"
+)
+
 
 def parse_frontmatter_raw(text: str) -> tuple[str | None, str]:
     """Return (frontmatter_raw_string, body). frontmatter_raw is None if missing.
@@ -72,6 +80,24 @@ def inject_frontmatter_fields(fm_raw: str | None, fields: dict) -> str:
             lines.append(f"{key}: {value}")
 
     return "\n".join(lines)
+
+
+def strip_promotion_markers(text: str) -> str:
+    """Remove every promotion marker block a previous run appended.
+
+    The old guard was ``if promotion_note.strip() not in original_text``, and
+    ``promotion_note`` carries today's date. That deduplicates a SAME-DAY re-run
+    and nothing else: a recovery re-run on the next calendar day compared
+    against a marker dated yesterday, found no match, and appended a second
+    block. Two "Promoted to corporate" footers then disagreed about when the
+    note was shared, in the file that IS the audit trail for the promotion.
+
+    Removing first and appending after keeps exactly one marker carrying the
+    latest promotion date, which is the state the surrounding comment already
+    claimed. Non-marker horizontal rules are untouched: the pattern requires the
+    marker sentence immediately after the rule.
+    """
+    return PROMOTION_MARKER_RE.sub("", text)
 
 
 def rebuild_file(fm_raw: str, body: str) -> str:
@@ -183,15 +209,17 @@ def main() -> None:
     # is a visible, self-correcting state -- the marker points at a shared note
     # the operator can see is missing, and a re-run completes it. The old order
     # produced the opposite: a promoted note in the corporate repo with no trace
-    # in the source, which nothing surfaces. The marker is idempotent, so a
-    # re-run does not stack a second one.
+    # in the source, which nothing surfaces. The marker is rewritten rather than
+    # stacked -- any earlier block, on any date, is removed first -- so a re-run
+    # leaves exactly one, carrying the latest promotion date.
     promotion_note = (
         f"\n\n---\n\n> **Promoted to corporate** on {today} "
         f"-- shared/{args.type}/{source.name}\n"
     )
     original_text = source.read_text(encoding="utf-8")
-    if promotion_note.strip() not in original_text:
-        atomic_write_text(source, original_text.rstrip("\n") + promotion_note)
+    marked_text = strip_promotion_markers(original_text).rstrip("\n") + promotion_note
+    if marked_text != original_text:
+        atomic_write_text(source, marked_text)
     print(f"{CYAN}Original marked:{RESET}       {source}")
 
     atomic_write_text(target_path, promoted_text)
@@ -208,8 +236,13 @@ def main() -> None:
         print(f"{RED}ERROR:{RESET} git commit/push failed; the note did NOT reach "
               f"the corporate repo.")
         print(f"  {detail}")
-        print(f"{GRAY}The local files were written; re-run after resolving, or "
-              f"commit and push {corp_repo} by hand.{RESET}")
+        # Name the flag. The target file was already written above, so a plain
+        # re-run of the same command hits the "Target already exists" refusal
+        # and never reaches the push -- telling the operator to "re-run" without
+        # that is advice that cannot work.
+        print(f"{GRAY}The local files were written; the target now exists, so a "
+              f"re-run needs --overwrite. Or commit and push {corp_repo} by "
+              f"hand.{RESET}")
         # Non-zero, and no completion banner. Printing "Promotion complete" here
         # is what let a note be marked "Promoted to corporate" in the source
         # while it never left the laptop.

@@ -218,10 +218,29 @@ def run_supervised(
             size = last_size
         cpu = _tree_cpu_ticks(proc.pid)
 
-        if size > last_size or cpu > last_cpu:
+        # Compare with the PREVIOUS sample, not with a running maximum.
+        #
+        # `_tree_cpu_ticks` sums the ticks of the processes that are alive RIGHT
+        # NOW, so the total is not monotonic: when a child exits, its ticks leave
+        # the sum and the total DROPS. Under `max()` that drop set a high-water
+        # mark, and every later sample had to climb past the departed child's
+        # lifetime total before `cpu > last_cpu` could be true again.
+        #
+        # Measured 2026-08-26: a command whose first phase burned about 7s of CPU
+        # in a child that then exited, followed by a second phase busy-looping
+        # for 30s with no output, was killed at 12.8s elapsed with
+        # "no output and no CPU progress for 5s ... appears deadlocked". The
+        # process was saturating a core at that moment. A supervisor that kills
+        # healthy work is worse than no supervisor: it is the same wrong answer,
+        # delivered with authority, and the caller sees a "hung" verdict.
+        #
+        # Any CHANGE is progress. A drop means a process exited, which is an
+        # event, not a stall. A log that shrinks (truncated or rotated) is the
+        # same. Only a total that sits still for the whole window is silence.
+        if size != last_size or cpu != last_cpu:
             last_progress = now
-        last_size = max(size, last_size)
-        last_cpu = max(cpu, last_cpu)
+        last_size = size
+        last_cpu = cpu
 
         elapsed = now - start
         stalled = now - last_progress

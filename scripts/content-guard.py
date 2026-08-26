@@ -103,8 +103,19 @@ def main() -> int:
 
     dl = build_denylist(data_root, strict=args.strict)
     if dl.degraded or not dl.tokens:
+        # Name the state, not a guessed cause. This printed "no DATA overlay"
+        # for BOTH the absent overlay and a harvest that failed part-way -- so a
+        # malformed config on the operator's own machine switched the content
+        # layer off while blaming a condition that was not true. The overlay
+        # directory is right there to check.
+        if not data_root.is_dir():
+            why = "no DATA overlay at this path"
+        elif dl.degraded:
+            why = "the denylist harvest failed; see the stderr line above"
+        else:
+            why = "the overlay holds no entities to guard"
         if not args.quiet:
-            print(f"{GRAY}content-guard: denylist unavailable (no DATA overlay); skipped.{RESET}")
+            print(f"{GRAY}content-guard: denylist unavailable ({why}); skipped.{RESET}")
         return 0
 
     if args.all:

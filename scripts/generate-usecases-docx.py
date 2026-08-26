@@ -9,8 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
-from scripts.utils.docx_helpers import load_docx, save_docx
-from scripts.utils.workspace import get_datastore_dir, get_outputs_dir
+from scripts.utils.docx_helpers import brand_master_template, load_docx, save_docx
+from scripts.utils.workspace import get_outputs_dir
 
 # ============================================================
 # Configuration
@@ -37,8 +37,10 @@ def _ensure_docx():
     DARK_GRAY = RGBColor(0x33, 0x33, 0x33)
     MED_GRAY = RGBColor(0x66, 0x66, 0x66)
 
-TMPL = str(get_datastore_dir() / "brand" / "templates"
-           / "31C - Master Template (New Identity 2026 v1.00).dotx")
+# Resolved at call time, never at import: the lookup touches the datastore and
+# raises when nothing matches, and this module must import pure (F-2.1). The
+# version used to be a literal here, and it said v1.00 after the master became
+# v1.01, so every run of this script died on the first `copy2` below.
 OUTPUT = str(get_outputs_dir() / "documents"
              / "ODUN.ONE - AI Monetization Use Cases for Telco Operators v2.docx")
 
@@ -59,7 +61,7 @@ def load_template():
     tmpdir = tempfile.mkdtemp(prefix="usecases-tpl-")
     tmp = str(Path(tmpdir) / "template.docx")
     try:
-        shutil.copy2(TMPL, tmp)
+        shutil.copy2(brand_master_template(".dotx"), tmp)
         with zipfile.ZipFile(tmp, "r") as zin:
             ct = zin.read("[Content_Types].xml").decode("utf-8")
             ct = ct.replace("template.main+xml", "document.main+xml")

@@ -73,15 +73,34 @@ def test_the_deleted_shim_is_not_exempted_again(hook):
     )
 
 
-def test_the_exemption_set_is_not_empty(hook):
-    """An empty set makes the test above vacuous."""
-    assert len(hook.ALLOW_BASENAMES) >= 3, (
-        f"only {hook.ALLOW_BASENAMES} left; if the exemptions were genuinely "
-        "removed, delete this test rather than letting it pass on nothing"
+def test_the_exemption_set_is_empty(hook):
+    """The set was emptied on 2026-08-25, and the two tests here changed with it.
+
+    `test_the_exemption_set_is_not_empty` required at least three entries, and
+    said in its own message: "if the exemptions were genuinely removed, delete
+    this test rather than letting it pass on nothing." They were. Follow the
+    three through: `prompt-guard.py`, `secret-scanner.py` and
+    `SECURITY-CONSTITUTION.md` live in `.claude/hooks/`, `scripts/` and
+    `docs/security/`, and none of those is an ingest path - so none of them could
+    ever have been scanned, and the exemption's only reachable effect was to let
+    a NEW file created under an ingest path skip the scan by choosing one of
+    three names.
+
+    `test_the_guard_still_exempts_itself` went with it: its premise was that this
+    hook "carries the injection vocabulary it scans for", and the vocabulary
+    moved to `scripts/utils/injection_patterns.py`.
+    """
+    assert not hook.ALLOW_BASENAMES, (
+        f"{sorted(hook.ALLOW_BASENAMES)} exempt a BASENAME at any depth. An "
+        "exemption is keyed on the repo-relative path, so that it names one "
+        "file rather than every file that copies its name."
     )
 
 
-def test_the_guard_still_exempts_itself(hook):
-    """prompt-guard.py carries the injection vocabulary it scans for. Losing its
-    own exemption makes every edit to it fire the guard."""
-    assert "prompt-guard.py" in hook.ALLOW_BASENAMES
+def test_the_exemption_is_tested_after_the_ingest_check(hook):
+    """Order is what made a basename-wide allowance reachable at all."""
+    source = HOOK.read_text(encoding="utf-8")
+    body = source[source.index("def main("):]
+    assert body.index("is_ingest_path(") < body.index("in ALLOW_BASENAMES"), (
+        "a file leaves on its name before anything asks where it is"
+    )

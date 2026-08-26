@@ -49,9 +49,9 @@ Save a manual session checkpoint without running `/compact` or clearing context.
 ## What this does
 
 - Writes ONE combined handoff file to `outputs/operations/handoff-archive/`
-- Updates FOUR pointer files: this session's pair under
+- Updates FOUR pointer files. This session's pair sits under
   `.latest/{session-slug}/{summary.md,prompt.md}`, which the SessionStart inject
-  hook reads, and the shared pair at `.latest/{summary.md,prompt.md}`, which
+  hook reads. The shared pair sits at `.latest/{summary.md,prompt.md}`, which
   `/next` reads as "the newest handoff in this workspace"
 - Does NOT run `/compact`
 - Does NOT clear the session

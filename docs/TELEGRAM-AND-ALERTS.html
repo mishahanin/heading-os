@@ -258,8 +258,9 @@ push-notifies, because Telegram treats a bot message like a message from any oth
 contact.</p>
 <ol>
 <li>In Telegram, open a chat with <strong>@BotFather</strong> (the official bot-maker).</li>
-<li>Send <code>/newbot</code>. Answer its two questions: a display name (for example <code>HEADING OS</code>),
-   then a username that must end in <code>bot</code> (for example <code>headingos_bot</code>).</li>
+<li>Send <code>/newbot</code>. Answer its two questions. First a display name (for example
+   <code>HEADING OS</code>). Then a username that must end in <code>bot</code> (for example
+   <code>headingos_bot</code>).</li>
 <li>@BotFather replies with a <strong>token</strong>, a line like <code>123456789:AAE...</code>. Treat it like a
    password.</li>
 <li>Put the token in <code>.env</code>:</li>
@@ -267,9 +268,9 @@ contact.</p>
 <div class="highlight"><pre><span></span><code><span class="nv">TELEGRAM_NOTIFY_BOT_TOKEN</span><span class="o">=</span><span class="m">123456789</span>:AAE-your-token-here
 </code></pre></div>
 <ol start="5">
-<li><strong>Add the bot to your alerts channel</strong> (the same one from section 5/6 - no new channel
-   needed) as an administrator, or it cannot post there. Open the channel, Administrators,
-   Add admin, search your bot&rsquo;s username, add it.</li>
+<li><strong>Add the bot to your alerts channel</strong> as an administrator, or it cannot post
+   there. Use the same channel from section 5/6; you need no new channel. Open the
+   channel, Administrators, Add admin, search your bot&rsquo;s username, add it.</li>
 </ol>
 <p><em>Direct-message alternative:</em> instead of a channel you can have the bot message you
    privately. Open the bot&rsquo;s chat and press <strong>Start</strong> once. A bot cannot DM you until you
@@ -317,7 +318,7 @@ capture channel. Three examples: &ldquo;follow up with Alex on the ISO cert&rdqu
 dentist&rdquo;, &ldquo;read that DPI paper&rdquo;. Later you run <code>/viraid</code> in a Claude Code session and it:</p>
 <ol>
 <li>reads the new messages from the channel,</li>
-<li>sorts each one into a type (a task, a calendar item, a CRM note, a research item, or a
+<li>sorts each one into a type (task, calendar item, CRM note, research item, or
    plain note),</li>
 <li>adds workspace context (who Alex is, whether you are free at that time),</li>
 <li>proposes what to do with each,</li>

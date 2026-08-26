@@ -86,7 +86,7 @@ The skill checks for `APIFY_TOKEN` in `.env`. If missing:
 1. Parse user options. Default: `--window 72h`, all buckets, `--max-per-account 30`.
 2. Compute the output directory. The brief is a DATA artifact -- it must land in the DATA overlay,
    never the engine tree. `pulse.py` writes `--output-dir` literally relative to cwd (the engine root
-   after the `cd`), so resolve an absolute path under the data outputs dir:
+   after the `cd`). Resolve an absolute path under the data outputs dir:
    ```bash
    cd "$(git rev-parse --show-toplevel)"
    OUTPUTS_DIR="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import get_outputs_dir; print(get_outputs_dir())")"

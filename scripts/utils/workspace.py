@@ -16,6 +16,7 @@ too for callers that already import from this module.
 import functools
 import json
 import os
+import sys
 from pathlib import Path
 
 # Re-export the canonical root resolver and helpers from paths.py.
@@ -460,6 +461,38 @@ def load_admin_config() -> dict:
     return {}
 
 
+def _read_registry_or_empty(path: Path, what: str) -> dict:
+    """Read a registry JSON file, or return an empty one AND say why.
+
+    An ABSENT file is an empty registry and that is not an error: a data-less
+    engine clone has no fleet and no org chart. A file that EXISTS and cannot be
+    parsed is a different thing entirely, and both loaders used to answer it
+    with the same silent `{"executives": []}`. Measured 2026-08-26 against a
+    truncated `admin/executives.json` and a broken `config/exec-registry.json`:
+    `load_exec_registry`, `get_all_active_exec_slugs`, `load_business_registry`
+    and `load_fleet` all reported a fleet of zero, nothing was printed and
+    nothing raised.
+
+    That is the exact failure `load_exec_registry`'s own docstring records from
+    2026-08-23 - "the exists() guard turned the miss into an empty registry
+    rather than an error. Every caller silently saw a fleet of zero" - and the
+    corrupt-file path still did it. Callers act on the roster: offboarding,
+    CRM aggregation and admin-health all read "nobody" as a real answer.
+    Returning empty keeps them running; the stderr line is what stops empty from
+    reading as measured.
+    """
+    if not path.exists():
+        return {"version": "1.0", "executives": []}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"[workspace] {what} at {path} exists but could not be read "
+              f"({type(exc).__name__}: {exc}); reporting an EMPTY registry - "
+              f"treat every 'no executives' answer this run as unmeasured",
+              file=sys.stderr)
+        return {"version": "1.0", "executives": []}
+
+
 def load_exec_registry() -> dict:
     """Load the HEADING OS fleet roster from `<data-root>/admin/executives.json`.
 
@@ -484,12 +517,7 @@ def load_exec_registry() -> dict:
     no fleet, and that is not an error.
     """
     registry_path = get_data_root() / "admin" / "executives.json"
-    if registry_path.exists():
-        try:
-            return json.loads(registry_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            pass
-    return {"version": "1.0", "executives": []}
+    return _read_registry_or_empty(registry_path, "the HEADING OS fleet roster")
 
 
 def load_business_registry() -> dict:
@@ -507,12 +535,7 @@ def load_business_registry() -> dict:
     engine clone has no org chart either.
     """
     path = get_data_config_dir() / "exec-registry.json"
-    if path.exists():
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            pass
-    return {"version": "1.0", "executives": []}
+    return _read_registry_or_empty(path, "the 31C org chart")
 
 
 # Which registry owns which fact. Split on 2026-08-23; the reasoning, and the
@@ -622,13 +645,49 @@ def _load_routing_map_cached(path: str, mtime_ns: int, size: int) -> dict:
             data = yamlio.safe_load(fh) or {}
     except (OSError, yaml.YAMLError):
         return {"default": "private", "rules": {}}
+    # Valid YAML of the WRONG SHAPE is a parse error by any reading the
+    # docstring above supports, and it used to raise instead. A `rules:` block
+    # written as a list (a stray `-`, the commonest YAML slip) reached
+    # `rules.items()` and threw AttributeError out of a resolver that every
+    # classification call sits on. Found 2026-08-26 while testing the coercion
+    # below; the crash predates it. Fail closed, like every other bad read here.
+    if not isinstance(data, dict):
+        return {"default": "private", "rules": {}}
     default = data.get("default", "private")
-    rules = data.get("rules", {}) or {}
+    rules = data.get("rules") or {}
+    if not isinstance(rules, dict):
+        print(f"[workspace] routing-map `rules:` is a {type(rules).__name__}, "
+              f"not a mapping; failing closed to 'private' for every path",
+              file=sys.stderr)
+        return {"default": "private", "rules": {}}
     legal = {"engine", "private", "corporate"}
     if default not in legal:
         default = "private"
-    rules = {k: v for k, v in rules.items() if v in legal}
-    return {"default": default, "rules": rules}
+
+    # An illegal destination on a RULE now fails CLOSED to 'private'. It used to
+    # be dropped from the map entirely, and a dropped rule is not a neutral act:
+    # the path it governed falls through to `default`, and this workspace's real
+    # `config/routing-map.yaml` reads `default: engine` — the PUBLIC repository.
+    #
+    # Reproduced 2026-08-26 against a scratch map holding `default: engine` and
+    # rules {"outputs/": "privat", "crm/": "private"}, one character wrong on the
+    # first: `load_routing_map()` returned only the crm rule,
+    # `get_routing_destination("outputs/secret.md")` answered 'engine', and
+    # nothing was printed. So a typo in one value silently reclassified a whole
+    # CEO-data subtree as shareable, and the loader's own docstring promises the
+    # opposite: "any read/parse error yields default 'private'". A misspelled
+    # value is a parse-level defect and this is the direction it must fail in.
+    coerced = {}
+    for key, value in rules.items():
+        if value in legal:
+            coerced[key] = value
+            continue
+        print(f"[workspace] routing-map rule {key!r} has destination {value!r}, "
+              f"which is not one of {sorted(legal)}; treating it as 'private' "
+              f"rather than letting {key!r} fall through to the '{default}' "
+              f"default", file=sys.stderr)
+        coerced[key] = "private"
+    return {"default": default, "rules": coerced}
 
 
 def load_routing_map() -> dict:

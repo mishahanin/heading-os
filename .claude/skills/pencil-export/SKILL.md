@@ -207,7 +207,7 @@ How it works and what to know:
   never round-trips through LibreOffice, which would drift the layout; it edits
   the OPC package directly.
 - **Locked-look flat deck is opt-in.** For a byte-frozen, portable, needs-no-fonts
-  version, add `pptx-flat` (alias `pptx-image`); it writes `<stem> (ready to be
+  version, add `pptx-flat` (alias `pptx-image`). It writes `<stem> (ready to be
   shared with the world).pptx`, an image-per-slide deck (like the PDF, not editable).
   Editable `<stem>.pptx` and flat `<stem> (ready...).pptx` are siblings.
 - **Verify** by opening the .pptx with python-pptx (validates the package) and, when

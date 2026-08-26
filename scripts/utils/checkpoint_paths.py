@@ -166,7 +166,24 @@ def session_id(payload: dict | None = None) -> str:
     for candidate in (payload.get("session_id"), os.environ.get("CLAUDE_CODE_SESSION_ID")):
         if candidate and str(candidate).strip():
             return str(candidate).strip()
-    return "session"
+    return FALLBACK_SESSION_ID
+
+
+# The value `session_id` returns when neither the payload nor the environment
+# names one. Every id-less session shares it, so `.latest/session/` is a
+# CROSS-SESSION bucket, not one session's. Anything printing a sentence about
+# whose handoff it found has to ask `session_id_is_known` first.
+FALLBACK_SESSION_ID = "session"
+
+
+def session_id_is_known(payload: dict | None = None) -> bool:
+    """False when `session_id` fell back to the shared sentinel."""
+    payload = payload or {}
+    return any(
+        candidate and str(candidate).strip()
+        for candidate in (payload.get("session_id"),
+                          os.environ.get("CLAUDE_CODE_SESSION_ID"))
+    )
 
 
 def safe_slug(value: str, max_len: int = 32) -> str:
@@ -190,12 +207,25 @@ def raise_unattended(state: dict) -> dict:
 
     Mutates and returns `state`; the caller writes it.
     """
+    already = "unattended_raised_auto" in state
     state["session_unattended"] = True
     state["session_unattended_at"] = utc_now().isoformat()
-    state["unattended_raised_auto"] = state.get("session_auto") is not True
-    # `None` is a real, distinct prior value: an absent `session_auto` defers to
-    # CLAUDE_HANDOFF_AUTO, which is not the same as a `session_auto` of False.
-    state["unattended_prior_auto"] = state.get("session_auto")
+    if not already:
+        # Only the FIRST raise records the prior. A second raise on an
+        # already-raised session read the `session_auto = True` that the first
+        # raise had just written and recorded it as an operator-held prior, so
+        # the following `lower_unattended` restored True: `--unattended off`
+        # printed "A pause waits for you again" while auto stayed on for the
+        # rest of the session, and the docstring's claim to undo "exactly what
+        # raise_unattended did" stopped holding. `scripts/checkpoint-paths.py`
+        # calls raise on every `--unattended on` with no already-on guard, and
+        # an accepted `--compact-at N` raises it too, so two raises is the
+        # ordinary path, not an edge case.
+        state["unattended_raised_auto"] = state.get("session_auto") is not True
+        # `None` is a real, distinct prior value: an absent `session_auto`
+        # defers to CLAUDE_HANDOFF_AUTO, which is not the same as a
+        # `session_auto` of False.
+        state["unattended_prior_auto"] = state.get("session_auto")
     state["session_auto"] = True
     # A fresh run starts its counters from zero, or last night's numbers would
     # stop tonight's work before it began.
@@ -963,4 +993,28 @@ def prune_state_dir(state_dir: Path, keep_name: str) -> None:
             entries.append((child.stat().st_mtime, child))
         except OSError:
             continue
+
     _prune(entries, lambda path: path.unlink())
+
+    # Then every `.lock` whose state file is gone.
+    #
+    # `locked_state` creates `<name>.json.lock` beside each state file, and the
+    # glob above cannot see it: fnmatch wants a whole-name match, and
+    # `checkpoint-x.json.lock` does not end in `.json`. So the JSON half pruned
+    # at KEEP_MAX while the lock half grew forever, in the very directory this
+    # function exists to bound. Measured here: 25 state files, the cap, beside
+    # 22 orphan locks.
+    #
+    # Keying on "its state file is gone" rather than deleting each lock beside
+    # its file does BOTH jobs with one rule: the sessions pruned a line above,
+    # and every session pruned before this existed. It also cannot touch the
+    # live session's lock, since the live session's state file is right there -
+    # and that lock is the one `locked_state` is holding.
+    for lock in base.glob("checkpoint-*.json.lock"):
+        if not lock.is_file():
+            continue
+        if not lock.with_name(lock.name[:-len(".lock")]).exists():
+            try:
+                lock.unlink()
+            except OSError:
+                continue

@@ -23,6 +23,9 @@ Signal handling
 ---------------
 SIGTERM and SIGINT both set _shutdown_event, which the main loop and the
 heartbeat thread both respect. Clean exit occurs within one tick (<=60s).
+The handlers are installed by `install_signal_handlers()` from `main()`, never
+at import: importing this module must not change the host process's signal
+disposition, and `signal.signal` cannot run off the main thread at all.
 
 Cursor management
 -----------------
@@ -32,7 +35,8 @@ any historical email. Each successful poll advances the cursor to the
 datetime_received of the most-recent item processed, so daemon restarts
 resume exactly where they left off.
 
-Tests: tests/test_a_day_that_could_not_be_read_and_was_called_quiet.py
+Tests: tests/test_a_day_that_could_not_be_read_and_was_called_quiet.py,
+       tests/test_a_catch_all_rule_the_report_could_not_see.py
 """
 
 from __future__ import annotations
@@ -66,6 +70,7 @@ __all__ = [
     "_heartbeat_loop",
     "_domain_of",
     "_handle_signal",
+    "install_signal_handlers",
     "_shutdown_event",
 ]
 
@@ -90,8 +95,19 @@ def _handle_signal(signum: int, frame: object) -> None:
     _shutdown_event.set()
 
 
-signal.signal(signal.SIGTERM, _handle_signal)
-signal.signal(signal.SIGINT, _handle_signal)
+def install_signal_handlers() -> None:
+    """Route SIGTERM and SIGINT to `_handle_signal`. Called from `main()`.
+
+    These two calls sat at module level until 2026-08-25, so merely IMPORTING
+    this module -- which the test suite and any tooling does -- replaced the
+    host process's Ctrl-C handling as a side effect, before `main()` had run
+    or any daemon existed to shut down. `signal.signal` also raises ValueError
+    off the main thread, so the import itself died inside a worker thread.
+    Installing a process-wide handler is an entrypoint's decision, not an
+    import's.
+    """
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
 
 # ---------------------------------------------------------------------------
 # Polling interval
@@ -382,6 +398,7 @@ def main() -> int:
         help="One-shot health probe. Exits 0 on success, 1 on failure.",
     )
     args = parser.parse_args()
+    install_signal_handlers()
 
     if args.check:
         return health_check()

@@ -135,10 +135,15 @@ def revoke_github_access(slug: str, exec_info: dict) -> tuple[bool, list[str]]:
     who reaches these repos through an org membership or a team is not a
     collaborator at all: the DELETE answered 404 and the old code printed
     "skip", which reads as "already clear" for the one case that is dangerous.
-    The verification pass below closes that. Whatever it still finds is handed
-    to `remove_residual_access`, which now removes it rather than writing it on
-    a checklist -- offboarding means the exec no longer reaches the data, and a
-    checklist item is not a revocation.
+    The verification pass below closes that.
+
+    The second element is REPORTING ONLY. This docstring used to say it "is
+    handed to `remove_residual_access`", and the call site said the same thing
+    in its own words. Neither was true: `main` binds it to `_first_pass` and
+    never reads it again, and `remove_residual_access(slug, exec_info)` takes no
+    repo list at all -- it re-derives the teams and the org membership itself.
+    Two independent sentences describing plumbing that does not exist, either of
+    which would survive a fix aimed at the other.
     """
     print(f"\n{BOLD}Step 1: Removing direct collaborator grants{RESET}")
 
@@ -215,6 +220,17 @@ def check_residual_access(slug: str, exec_info: dict) -> list[str]:
                     check=False)
                 if got.returncode == 0:
                     residual.append(f"team membership in {GITHUB_ORG}/{team}")
+                elif "404" not in (got.stderr or ""):
+                    # Only a 404 means "not a member". A 403 (token without
+                    # `read:org`), a 429 or a 5xx used to read the same way, so
+                    # the run printed "No org or team access found" about a
+                    # team it never managed to query -- and Step 1d's re-check
+                    # is literally this function, so the re-verification was
+                    # blind in exactly the same place and the verdict went
+                    # green.
+                    residual.append(
+                        f"team membership in {GITHUB_ORG}/{team} COULD NOT BE "
+                        f"CHECKED: {(got.stderr or '').strip()}")
         else:
             residual.append(
                 f"team memberships COULD NOT BE CHECKED: {(teams.stderr or '').strip()}")
@@ -262,6 +278,12 @@ def remove_residual_access(slug: str, exec_info: dict) -> list[str]:
                      f"orgs/{GITHUB_ORG}/teams/{team}/memberships/{github_username}"],
                     check=False)
                 if got.returncode != 0:
+                    if "404" not in (got.stderr or ""):
+                        # Not "they are not on this team" -- "I could not ask".
+                        # Skipping silently meant the DELETE was never even
+                        # attempted on a team that may still grant access.
+                        print(f"  {RED}[error]{RESET} Could not check membership "
+                              f"of {GITHUB_ORG}/{team}: {(got.stderr or '').strip()}")
                     continue
                 gone = run_cmd(
                     ["gh", "api",
@@ -298,65 +320,153 @@ def remove_residual_access(slug: str, exec_info: dict) -> list[str]:
     return check_residual_access(slug, exec_info)
 
 
-def archive_workspace_repo(slug: str) -> None:
-    """Archive the exec's workspace GitHub repo."""
-    print(f"\n{BOLD}Step 2: Archiving workspace repo{RESET}")
-    repo = f"{GITHUB_ORG}/31c-workspace-{slug}"
+def _archive_repo(repo: str) -> bool | None:
+    """Archive one repo. True archived, None absent (404), False failed.
+
+    None and False are kept apart on purpose. A name this exec never used
+    answers 404 and is not a failure; anything else is.
+    """
     try:
-        result = run_cmd([
-            "gh", "repo", "archive", repo, "--yes",
-        ], check=False)
-        if result.returncode == 0:
-            print(f"  {GREEN}[ok]{RESET} Archived {repo}")
-        else:
-            print(f"  {RED}[error]{RESET} Failed to archive: {result.stderr}")
+        result = run_cmd(["gh", "repo", "archive", repo, "--yes"], check=False)
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        print(f"  {RED}[error]{RESET} {e}")
+        print(f"  {RED}[error]{RESET} {repo}: {e}")
+        return False
+    if result.returncode == 0:
+        print(f"  {GREEN}[ok]{RESET} Archived {repo}")
+        return True
+    if "404" in (result.stderr or ""):
+        print(f"  {YELLOW}[skip]{RESET} {repo} not found (already archived or "
+              f"deleted, or a name this exec never used)")
+        return None
+    print(f"  {RED}[error]{RESET} Could not archive {repo}: "
+          f"{(result.stderr or '').strip()}")
+    return False
 
 
-def archive_per_exec_crm_repo(slug: str) -> None:
-    """Archive the per-exec CRM repo."""
-    print(f"\n{BOLD}Step 2b: Archiving per-exec CRM repo{RESET}")
-    repo = f"{GITHUB_ORG}/31c-crm-{slug}"
-    try:
-        result = run_cmd([
-            "gh", "repo", "archive", repo, "--yes",
-        ], check=False)
-        if result.returncode == 0:
-            print(f"  {GREEN}[ok]{RESET} Archived {repo}")
-        elif "404" in (result.stderr or ""):
-            print(f"  {YELLOW}[skip]{RESET} {repo} not found (may already be archived or deleted)")
+def archive_workspace_repo(slug: str) -> bool:
+    """Archive the exec's data-overlay repo, CURRENT name and retired name.
+
+    Returns False when a repo that exists could not be archived; the caller
+    feeds that to `offboard_verdict`.
+
+    Two defects lived here. It archived `31c-workspace-{slug}` alone -- the
+    pre-cutover name -- so a current-model exec's real data overlay,
+    `repo_name_for(slug)`, was never archived at all. `exec_repos` was corrected
+    for exactly this on 2026-08-25 and this function was left behind, while the
+    module docstring above went on asserting the repair. And its result was
+    thrown away at the call site, so a failed archive could not stop the run
+    printing "Offboarding complete".
+
+    It also had no 404 branch, unlike its CRM sibling, so on every current-model
+    exec it printed a red `[error]` about a repo that legitimately does not
+    exist -- a permanent false alarm, which trains the operator to ignore the
+    line that would matter.
+
+    BOTH names are tried, for the same reason `exec_repos` keeps both: a 404 on
+    a retired name costs one request; missing a repo the exec still holds costs
+    their continued access to it.
+
+    Neither name existing is a WARNING, not a failure: an already-deleted repo
+    is a legitimate re-run state, and failing there would make a second
+    offboard run permanently red.
+    """
+    print(f"\n{BOLD}Step 2: Archiving the exec's data-overlay repo{RESET}")
+    results = [
+        _archive_repo(f"{GITHUB_ORG}/{name}")
+        for name in (repo_name_for(slug), f"31c-workspace-{slug}")
+    ]
+    if all(r is None for r in results):
+        print(f"  {YELLOW}[warn]{RESET} Neither name exists on GitHub; "
+              f"nothing was archived.")
+    return False not in results
+
+
+def archive_per_exec_crm_repo(slug: str) -> bool:
+    """Archive the per-exec CRM repo. Retired model only, deliberately.
+
+    The current model keeps an exec's contacts INSIDE their data overlay at
+    `crm/contacts`, so there is no separate CRM repo to archive; that case
+    answers 404 and skips. Returns False only on a real failure.
+    """
+    print(f"\n{BOLD}Step 2b: Archiving per-exec CRM repo (retired model){RESET}")
+    return _archive_repo(f"{GITHUB_ORG}/31c-crm-{slug}") is not False
+
+
+# Where an exec's contacts live, newest model first. `(repo, subpath)`.
+#
+# The current model keeps them INSIDE the data overlay at `crm/contacts` --
+# the same path `scripts/aggregate-crm.py` clones and reads, which is the other
+# fleet tool that touches exec contacts. `31c-crm-{slug}` with a top-level
+# `contacts/` is the pre-cutover model, kept because an exec provisioned before
+# the cutover still has one.
+#
+# Both levels matter: the retired REPO name and the retired SUBDIRECTORY are
+# different retirements, and swapping only the repo name still finds nothing.
+def _contacts_candidates(slug: str):
+    # The literal below is a subpath INSIDE a cloned remote repo belonging to
+    # another operator, not a path in this machine's data overlay. The
+    # `get_*_dir()` seam resolves against THIS workspace's data root, so it
+    # cannot name where a different exec keeps their contacts.
+    return ((repo_name_for(slug), "crm/contacts"),  # leak-guard: ok (subpath in a cloned exec repo)
+            (f"31c-crm-{slug}", "contacts"))
+
+
+def _find_exec_contacts(slug: str) -> tuple[Path | None, bool]:
+    """Locate the exec's contacts directory, cloning the repo if needed.
+
+    Returns `(directory_or_None, looked_everywhere)`. `looked_everywhere` is
+    False when a repo could not be reached at all -- "there are no contacts"
+    and "I could not check" are different answers, and only the first one may
+    be reported as a success.
+    """
+    workspace_root = get_workspace_root()
+    reachable = False
+    for repo_name, subpath in _contacts_candidates(slug):
+        local = workspace_root.parent / repo_name
+        if not local.exists():
+            try:
+                run_cmd(["gh", "repo", "clone", f"{GITHUB_ORG}/{repo_name}", str(local)])
+            except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+                # FileNotFoundError = no `gh` on PATH. Catching only
+                # CalledProcessError let that crash the run partway through an
+                # offboard, leaving contacts unpreserved and the registry
+                # untouched with no rollback.
+                print(f"  {YELLOW}[skip]{RESET} Could not clone {repo_name}: {exc}")
+                continue
         else:
-            print(f"  {YELLOW}[warn]{RESET} Could not archive {repo}: {result.stderr}")
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        print(f"  {RED}[error]{RESET} {e}")
+            run_cmd(["git", "pull"], cwd=str(local), check=False)
+        reachable = True
+        src = local / subpath
+        if src.is_dir():
+            print(f"  {GREEN}[ok]{RESET} Found contacts in {repo_name}/{subpath}")
+            return src, True
+    return None, reachable
 
 
 def preserve_crm_contacts(slug: str) -> bool:
-    """Snapshot contacts from per-exec CRM repo to CEO-local backup."""
+    """Snapshot the exec's contacts to a CEO-local backup before archiving.
+
+    Looked only in the RETIRED `31c-crm-{slug}` repo, at a top-level
+    `contacts/`. On the current model an exec's contacts sit in their data
+    overlay at `crm/contacts`, which this never touched -- so on a
+    current-model exec the step either failed loudly on the 404 or, with a
+    stale local clone lying around, reported "no contacts directory found" and
+    returned True. Zero contacts preserved, fed to the verdict as a success,
+    immediately before the archive step made the repo read-only.
+    """
     print(f"\n{BOLD}Step 3: Preserving CRM contacts{RESET}")
 
     workspace_root = get_workspace_root()
-    per_exec_repo = workspace_root.parent / f"31c-crm-{slug}"
-
-    # Auto-clone if not present
-    if not per_exec_repo.exists():
-        try:
-            run_cmd(["gh", "repo", "clone", f"{GITHUB_ORG}/31c-crm-{slug}", str(per_exec_repo)])
-        except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-            # FileNotFoundError = no `gh` on PATH. Catching only CalledProcessError
-            # let that crash the run partway through an offboard, leaving contacts
-            # unpreserved and the registry untouched with no rollback.
-            print(f"  {RED}[error]{RESET} Could not clone 31c-crm-{slug}: {exc}")
-            return False
-    else:
-        run_cmd(["git", "pull"], cwd=str(per_exec_repo), check=False)
-
-    src = per_exec_repo / "contacts"
+    src, looked_everywhere = _find_exec_contacts(slug)
     dst = get_outputs_dir() / "operations" / "offboarding" / f"{slug}-crm-final"
 
-    if not src.exists():
-        print(f"  {YELLOW}[warn]{RESET} No contacts directory found in 31c-crm-{slug}")
+    if src is None:
+        if not looked_everywhere:
+            print(f"  {RED}[error]{RESET} No contacts repo could be reached for "
+                  f"{slug}; nothing was preserved and nothing was checked.")
+            return False
+        print(f"  {YELLOW}[warn]{RESET} No contacts directory in any known "
+              f"location for {slug}; there is nothing to preserve.")
         return True
 
     dst.mkdir(parents=True, exist_ok=True)
@@ -379,15 +489,23 @@ def preserve_crm_contacts(slug: str) -> bool:
 
 
 def reassign_contacts(slug: str, reassign_to: str) -> None:
-    """Copy contacts to CEO-local CRM with transfer notes."""
+    """Copy contacts to CEO-local CRM with transfer notes.
+
+    Same location resolution as `preserve_crm_contacts`, and for the same
+    reason: this looked only in the retired repo at the retired subdirectory,
+    so on a current-model exec it reported "No contacts to reassign" and the
+    operator's explicit `--reassign-to` did nothing at all.
+    """
     print(f"\n{BOLD}Step 4: Reassigning contacts to {reassign_to}{RESET}")
-    workspace_root = get_workspace_root()
-    per_exec_repo = workspace_root.parent / f"31c-crm-{slug}"
-    src = per_exec_repo / "contacts"
+    src, looked_everywhere = _find_exec_contacts(slug)
     dst = get_crm_contacts_dir()
 
-    if not src.exists():
-        print(f"  {YELLOW}[warn]{RESET} No contacts to reassign")
+    if src is None:
+        if not looked_everywhere:
+            print(f"  {RED}[error]{RESET} No contacts repo could be reached; "
+                  f"nothing was reassigned and nothing was checked.")
+        else:
+            print(f"  {YELLOW}[warn]{RESET} No contacts to reassign")
         return
 
     dst.mkdir(parents=True, exist_ok=True)
@@ -508,7 +626,8 @@ def log_offboarding(slug: str, exec_info: dict, reassign_to: str | None) -> None
 
 def offboard_verdict(revoke_ok: bool, preserved: bool,
                      residual: list[str],
-                     repos_reachable: list[str] | None = None) -> tuple[bool, list[str]]:
+                     repos_reachable: list[str] | None = None,
+                     archived: bool = True) -> tuple[bool, list[str]]:
     """Decide whether this run may claim the offboard is complete.
 
     Pure, so it is testable without touching GitHub. The script used to print
@@ -519,12 +638,19 @@ def offboard_verdict(revoke_ok: bool, preserved: bool,
     AFTER every removal ran. It is the only one of these signals that measures
     the thing the operator actually cares about, so it is named separately and
     never folded into `residual`.
+
+    `archived` defaults True so the existing call shape in the tests keeps
+    working; the production call passes the real result. It carries a repo that
+    EXISTS and could not be archived -- a name that simply does not exist is a
+    skip, not a failure.
     """
     reasons: list[str] = []
     if not revoke_ok:
         reasons.append("at least one collaborator removal failed")
     if not preserved:
         reasons.append("CRM contacts were not preserved")
+    if not archived:
+        reasons.append("a repo that exists could not be archived")
     for item in residual:
         reasons.append(f"access remains: {item} (remove it by hand)")
     for repo in (repos_reachable or []):
@@ -605,13 +731,16 @@ def main():
     # preserve/reassign, so the irreversible step happened first and any
     # preserve failure left the contacts sitting in an archived repo. Recovery
     # steps now run first; archiving is last.
+    # `_first_pass` is REPORTING ONLY and deliberately unused: the comment here
+    # used to say "the first pass tells the removal step what to work on", which
+    # was never true -- `remove_residual_access` takes no repo list and
+    # re-derives everything itself.
     revoke_ok, _first_pass = revoke_github_access(slug, exec_info or {})
     residual = check_residual_access(slug, exec_info or {})
     if residual:
         residual = remove_residual_access(slug, exec_info or {})
-    # Verified LAST, after every removal has run. The first pass tells the
-    # removal step what to work on; only this one answers "can they still get
-    # in?", which is the question the offboard exists to close.
+    # Verified LAST, after every removal has run. Only this pass answers "can
+    # they still get in?", which is the question the offboard exists to close.
     github_username = (exec_info or {}).get("github_user") or slug
     repos_reachable = [
         repo for repo in exec_repos(slug)
@@ -622,8 +751,11 @@ def main():
     if args.reassign_to:
         reassign_contacts(slug, args.reassign_to)
 
-    archive_workspace_repo(slug)
-    archive_per_exec_crm_repo(slug)
+    # Both results reach the verdict. They used to be discarded, so a failure
+    # to archive the exec's data overlay could not stop the run printing
+    # "Offboarding complete".
+    archived = archive_workspace_repo(slug)
+    archived = archive_per_exec_crm_repo(slug) and archived
 
     # Best-effort removal of scheduled tasks on the admin machine if the
     # exec's local workspace lived alongside the CEO workspace. Remote exec
@@ -648,7 +780,7 @@ def main():
     print_manual_checklist(slug, exec_info)
 
     complete, reasons = offboard_verdict(revoke_ok, preserved, residual,
-                                         repos_reachable)
+                                         repos_reachable, archived)
     print(f"\n{'=' * 50}")
     if complete:
         print(f"{BOLD}{GREEN}Offboarding complete for {slug}.{RESET}")

@@ -212,7 +212,26 @@ class CheapClassifier:
 
                 if in_to:
                     relationship = self._lookup_relationship_type(sender_email)
-                    is_tl = bool(relationship and "tribe-leadership" in relationship.lower())
+                    # PREFIX, not a free substring. `"tribe-leadership" in ...`
+                    # also fired on `ex-tribe-leadership` and
+                    # `former-tribe-leadership`, promoting a past leader to
+                    # HIGH_LIKELY weight 99 -- the opposite of what the
+                    # 2026-05-29 directive in this block says a non-leadership
+                    # internal sender must get.
+                    #
+                    # Not an equality test either: subtypes are deliberate.
+                    # `tests/inbox_pulse/test_rules.py` pins
+                    # `tribe-leadership-active` as firing, so an exact compare
+                    # would drop a real leader.
+                    #
+                    # KNOWN GAP: a NEGATING SUFFIX still passes, so
+                    # `tribe-leadership-alumni` is treated as current. Nothing
+                    # in the repo defines the subtype vocabulary, and guessing a
+                    # denylist would be inventing a taxonomy. Named here rather
+                    # than silently half-fixed.
+                    is_tl = bool(relationship
+                                 and relationship.strip().lower()
+                                 .startswith("tribe-leadership"))
                     if is_tl:
                         return _short_circuit("HIGH_LIKELY", 99, "tl_to_important")
                     else:
@@ -461,6 +480,11 @@ class CheapClassifier:
 # ---------------------------------------------------------------------------
 
 
+# A frontmatter closing fence: a line holding exactly `---`, trailing blanks and
+# a CR allowed. Anchored per line, so it never matches `----` or `--- text`.
+_CLOSING_FENCE = re.compile(r"^---[ \t\r]*$", re.MULTILINE)
+
+
 def _extract_frontmatter(md_file: Path) -> Optional[dict]:
     """Parse YAML frontmatter from a markdown file.
 
@@ -475,10 +499,18 @@ def _extract_frontmatter(md_file: Path) -> Optional[dict]:
     if not text.startswith("---"):
         return None
 
-    # Find the closing ---
-    end = text.find("\n---", 3)
-    if end == -1:
+    # Find the closing fence: a line that is EXACTLY `---`.
+    #
+    # `text.find("\n---", 3)` accepted any line merely BEGINNING with three
+    # dashes, so a markdown horizontal rule (`----`) or a `--- draft ---` line
+    # ended the frontmatter early. Worse, a file whose closing fence was missing
+    # altogether was still accepted, because the first rule anywhere in the body
+    # stood in for it and whatever sat above parsed as YAML. A wrong value is
+    # returned silently; nothing downstream can tell.
+    match = _CLOSING_FENCE.search(text, 3)
+    if match is None:
         return None
+    end = match.start()
 
     raw_frontmatter = text[3:end].strip()
     try:

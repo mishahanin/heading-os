@@ -17,30 +17,67 @@ def test_writes_heartbeat_json(workspace_root):
     assert "last_heartbeat" in data
 
 
-def test_active_sessions_count_zero_when_no_sessions_file(workspace_root):
+# These three seeded `<workspace_root>/.daemon-state/active-sessions.json`, a
+# path nothing in this repository writes. `.claude/hooks/bridge-hook.py` writes
+# `~/.claude/state/active-sessions.json`, so the counter always took its
+# file-absent branch and reported 0, and two of these tests asserted exactly
+# that 0 as correct. The third asserted 3 and passed only because it was reading
+# the OPERATOR's live registry, which happened to hold three sessions. They now
+# seed the registry where the hook puts it. Rewritten 2026-08-25 with the fix.
+
+def _seed_registry(home, payload):
+    reg = home / ".claude" / "state" / "active-sessions.json"
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    reg.write_text(payload if isinstance(payload, str) else json.dumps(payload),
+                   encoding="utf-8")
+    return reg
+
+
+def _sessions_reported(workspace_root):
     write_heartbeat(workspace_root)
     hb = workspace_root / ".daemon-state" / "heartbeat.json"
-    data = json.loads(hb.read_text())
-    assert data["active_sessions"] == 0
+    return json.loads(hb.read_text())["active_sessions"]
 
 
-def test_active_sessions_count_from_sessions_file(workspace_root):
-    sessions = workspace_root / ".daemon-state" / "active-sessions.json"
-    sessions.write_text(json.dumps({"sess-a": {}, "sess-b": {}, "sess-c": {}}))
-    write_heartbeat(workspace_root)
-    hb = workspace_root / ".daemon-state" / "heartbeat.json"
-    data = json.loads(hb.read_text())
-    assert data["active_sessions"] == 3
+def test_active_sessions_count_zero_when_no_sessions_file(workspace_root, tmp_path,
+                                                          monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    assert _sessions_reported(workspace_root) == 0
 
 
-def test_active_sessions_count_resilient_to_malformed_file(workspace_root):
-    sessions = workspace_root / ".daemon-state" / "active-sessions.json"
-    sessions.write_text("{not valid json at all")
-    write_heartbeat(workspace_root)
-    hb = workspace_root / ".daemon-state" / "heartbeat.json"
-    data = json.loads(hb.read_text())
-    # Malformed sessions file -> 0, NOT an exception that breaks heartbeat.
-    assert data["active_sessions"] == 0
+def test_active_sessions_count_from_sessions_file(workspace_root, tmp_path,
+                                                  monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    _seed_registry(tmp_path, {"sess-a": {}, "sess-b": {}, "sess-c": {}})
+    assert _sessions_reported(workspace_root) == 3
+
+
+def test_active_sessions_count_resilient_to_malformed_file(workspace_root, tmp_path,
+                                                           monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    _seed_registry(tmp_path, "{not valid json at all")
+    # Malformed registry -> 0, NOT an exception that breaks the heartbeat.
+    assert _sessions_reported(workspace_root) == 0
+
+
+def test_the_counter_reads_the_registry_the_hook_writes(tmp_path, monkeypatch):
+    """The path is the finding; pin it against the hook's own constant."""
+    import importlib.util
+    from pathlib import Path as _Path
+
+    from scripts.bridge_daemon.sessions import registry_path
+
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    root = _Path(__file__).resolve().parent.parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "bridge_hook_under_test", root / ".claude" / "hooks" / "bridge-hook.py")
+    hook = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hook)
+
+    assert registry_path().parts[-3:] == hook.REGISTRY.parts[-3:]
 
 
 def test_atomic_overwrite(workspace_root):

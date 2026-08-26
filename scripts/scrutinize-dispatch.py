@@ -95,6 +95,15 @@ REPRODUCTION_TIMEOUT_S = 300
 # which is exactly the value `REPRODUCED` reads as proof. Refuse the command
 # instead of recording the artifact.
 SHELL_OPERATORS = frozenset({"|", "||", "&&", ";", "&", ">", ">>", "<", "<<"})
+# Punctuation `shlex` splits out as its own token when it is UNQUOTED, beyond
+# the operators above: `(` and `)` are how a command substitution shows up, and
+# a backtick is the older spelling of the same thing. A fixed argv expands
+# neither, so an unquoted one means the command would not do what it reads as.
+# See `shell_operators_in_source`.
+_SHELL_PUNCT = frozenset({"(", ")", "`", "$"})
+# What `shlex` is told to treat as punctuation: its own default set plus the
+# backtick, which it does not carry.
+_SHELL_PUNCTUATION = "();<>|&`"
 
 # Exit codes that report the command never got as far as its check.
 EXIT_NOT_EXECUTABLE = 126
@@ -115,6 +124,64 @@ EXIT_NOT_FOUND = 127
 # 2026-08-13 audit, so a test module with a broken import was written into the
 # run record as a reproduced finding for a check that never executed.
 PYTEST_DID_NOT_RUN = frozenset({2, 3, 4, 5})
+
+# Which argv IS a pytest invocation. `any("pytest" in tok for tok in cmd)` was
+# an unanchored substring over EVERY token, and it was wrong in both directions.
+#
+# False positive: a data-file argument like `--log /tmp/pytest-run.log` made an
+# ordinary script's exit 2 read as "no test ran", costing a real reproduction.
+#
+# False negative, and this is the dangerous one: a WRAPPER hides the token.
+# `scripts/run-tests.py` is this workspace's own standard test command, it
+# returns pytest's exit code verbatim, and no token of its argv holds "pytest" -
+# so a test module with a broken import exited 2 and was written into the run
+# record as a REPRODUCED finding for a check that never executed. That is
+# precisely the defect the 2026-08-13 audit fixed, still reachable through a
+# different invocation shape.
+PYTEST_BINARIES = frozenset({"pytest", "py.test", "pytest.exe"})
+
+# What pytest says when it did not run, for the wrapper case argv cannot settle.
+# Matched only ALONGSIDE a PYTEST_DID_NOT_RUN code, and it can only ever REFUSE
+# to record evidence, so a false match costs a re-run while a miss writes a
+# fabricated proof.
+PYTEST_DID_NOT_RUN_MARKERS = (
+    "error during collection",
+    "errors during collection",
+    "error collecting",
+    "no tests ran",
+    "no tests collected",
+    "(pytest exit ",          # scripts/run-tests.py's own failure banner
+)
+
+
+def _is_pytest_command(cmd: list[str]) -> bool:
+    """True when argv is UNAMBIGUOUSLY pytest. Three shapes, and only three.
+
+    The executable itself (`pytest tests/`), the module form
+    (`python -m pytest tests/`), and a PATH to the binary anywhere in argv
+    (`env VAR=1 .venv/bin/pytest tests/`).
+
+    A bare word `pytest` elsewhere in argv does NOT count: `tox -e pytest` and
+    `make pytest` are wrappers, not invocations, and treating their exit codes as
+    pytest's is the substring guess this replaced. When a wrapper really does hide
+    pytest, `_says_pytest_did_not_run` settles it from the output instead.
+    """
+    if not cmd:
+        return False
+    if Path(cmd[0]).name in PYTEST_BINARIES:
+        return True
+    for index, arg in enumerate(cmd):
+        if arg == "-m" and index + 1 < len(cmd) and cmd[index + 1] == "pytest":
+            return True
+        if ("/" in arg or "\\" in arg) and Path(arg).name in PYTEST_BINARIES:
+            return True
+    return False
+
+
+def _says_pytest_did_not_run(*streams: str) -> bool:
+    """True when the output carries pytest's own words for 'nothing ran'."""
+    blob = "\n".join(s or "" for s in streams).lower()
+    return any(marker in blob for marker in PYTEST_DID_NOT_RUN_MARKERS)
 
 OUTPUT_TAIL_CHARS = 800
 
@@ -269,6 +336,23 @@ def judge(
     proxy call - the Claude judge IS this session. `family="kimi"` makes the call.
     """
     if family == "claude":
+        # An omitted `--verdict` wrote a kind="verdict" row carrying None and
+        # returned 0. `scrutinize_record.validate()` counts verdict rows by kind
+        # alone, so the empty row SATISFIED --validate - and this module's own
+        # docstring names --validate as the one mechanism that makes the
+        # Claude-side omission visible. The backstop for the single omission the
+        # design admits was defeated by the row this branch wrote. Record the
+        # degradation instead, and return the exit code the table already
+        # reserves for "no judge verdict was produced".
+        if not (verdict or "").strip():
+            append_row(run_id=run_id, kind="degraded", target=target,
+                       finding_id=finding_id,
+                       degraded="claude judge dispatched without --verdict; the "
+                                "running session produced no verdict to record")
+            print(f"{RED}--verdict is required for --family claude: the Claude "
+                  f"judge IS this session, so its verdict is supplied, never "
+                  f"inferred{RESET}", file=sys.stderr)
+            return 1
         append_row(run_id=run_id, kind="verdict", target=target,
                    finding_id=finding_id, pass_=pass_, judge_family="claude",
                    verdict=verdict)
@@ -294,8 +378,33 @@ def judge(
         return 1
 
     text = response if isinstance(response, str) else str(response)
+    found = _verdict_in(text)
+    if found is None:
+        # The SAME defect the claude branch above documents and refuses, on the
+        # branch nobody fixed. `_verdict_in` returns None when the answer carries
+        # no recognisable verdict token: a refusal, a truncated reply, a
+        # reformatted one. That None went into a `kind="verdict"` row and this
+        # function returned 0, and `scrutinize_record.validate()` counts verdict
+        # rows BY KIND, so the empty row satisfied the reconciliation. A k3 side
+        # that decided nothing reported as a completed refutation pass.
+        # Reproduced 2026-08-26 with a stubbed proxy answering
+        # "I considered the finding at length but cannot decide.": row written
+        # with `"verdict": null`, exit 0, `validate()` defects `[]`.
+        #
+        # Print the answer first: the operator needs to read what came back in
+        # order to decide whether to re-ask or to judge it themselves.
+        print(text)
+        append_row(run_id=run_id, kind="degraded", target=target,
+                   finding_id=finding_id,
+                   degraded="k3 judge answered without a recognisable verdict "
+                            "token; no verdict was recorded")
+        print(f"{RED}k3 answered but named no verdict, so nothing was recorded "
+              f"for {finding_id}: re-ask, or judge it in-session with "
+              f"--family claude --verdict{RESET}", file=sys.stderr)
+        return 1
+
     append_row(run_id=run_id, kind="verdict", target=target, finding_id=finding_id,
-               pass_=pass_, judge_family="kimi", verdict=_verdict_in(text))
+               pass_=pass_, judge_family="kimi", verdict=found)
     print(text)
     return 0
 
@@ -460,9 +569,55 @@ def _tail(text: str) -> str:
     return text if len(text) <= OUTPUT_TAIL_CHARS else "..." + text[-OUTPUT_TAIL_CHARS:]
 
 
+def shell_operators_in_source(raw: str) -> list[str]:
+    """The shell operators an operator typed UNQUOTED in a `--cmd` string.
+
+    This is the check that has to see the RAW text, because `shlex.split`
+    destroys the one piece of information that decides the question: quoting.
+
+    `shlex.split` does not treat `|`, `>` or `&` as delimiters, so an UNSPACED
+    pipeline survives as one ordinary-looking argument. `/bin/ls /nope|wc -l`
+    splits to `['/bin/ls', '/nope|wc', '-l']`, and `'/nope|wc'` equals no member
+    of SHELL_OPERATORS, so `_reject_shell_syntax` passed it. Measured 2026-08-26
+    with the same pipeline written both ways: spaced, refused with exit 4;
+    unspaced, run as a fixed argv, the child failed on the mangled path, and the
+    non-zero exit was recorded as `verdict: "REPRODUCED"` with the stderr tail
+    `cannot access '/definitely-not-here|wc'` sitting in the record as its own
+    disproof. That is verbatim the defect this module's docstring says was
+    closed on 2026-08-13.
+
+    Scanning the SPLIT tokens for stray metacharacters was tried first and is
+    wrong: it refused `python3 -c "import sys; sys.exit(3)"`, where the `;`
+    belongs to Python and was quoted on purpose. After the split, a quoted `;`
+    and a bare one are the same characters. `shlex` with `punctuation_chars`
+    keeps them apart - an unquoted operator becomes its OWN token, a quoted one
+    stays inside its argument - so the guard refuses shell syntax without
+    refusing an inline snippet.
+    """
+    try:
+        # The default punctuation set is `();<>|&`. The backtick is added
+        # because it is the older spelling of a command substitution and a fixed
+        # argv expands it no better than `$(`.
+        lexer = shlex.shlex(raw, posix=True, punctuation_chars=_SHELL_PUNCTUATION)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        # Unbalanced quotes. `shlex.split` below raises the same way and `main`
+        # reports it; this guard has nothing to add, so it stays silent.
+        return []
+    return sorted({t for t in tokens if t in SHELL_OPERATORS or t in _SHELL_PUNCT})
+
+
 def _reject_shell_syntax(cmd: list[str]) -> str | None:
-    """The operator's shell operators, which this harness will not honour."""
-    found = [tok for tok in cmd if tok in SHELL_OPERATORS]
+    """The operator's shell operators, which this harness will not honour.
+
+    Whole-token comparison, on purpose. This takes an argv LIST, and a list is
+    already argv: an in-process caller that passes `["python3", "-c", "a; b"]`
+    built those three arguments deliberately and no shell was ever going to see
+    them. The quoting question belongs to `shell_operators_in_source`, which
+    reads the raw `--cmd` string before it is split.
+    """
+    found = sorted({tok for tok in cmd if tok in SHELL_OPERATORS})
     if not found:
         return None
     return (f"the command carries shell syntax ({' '.join(sorted(set(found)))}) "
@@ -470,10 +625,24 @@ def _reject_shell_syntax(cmd: list[str]) -> str | None:
             "reads as; rewrite it as a single command or wrap it in a script")
 
 
-def _run(cmd: list[str]) -> CommandRun:
-    """Run a reproduction command and report whether its exit code is evidence."""
+def _run(cmd: list[str], source: str | None = None) -> CommandRun:
+    """Run a reproduction command and report whether its exit code is evidence.
+
+    `source` is the RAW `--cmd` string when there is one. It is checked before
+    the argv, because quoting is the thing that decides whether a `;` belongs to
+    the shell or to a `-c` payload, and `shlex.split` has already thrown it away
+    by the time `cmd` exists. Refusing HERE and not at the CLI is deliberate:
+    this path already returns an unusable CommandRun, and the callers turn that
+    into a `degraded` row - which is what `--validate` reads.
+    """
     if not cmd:
         return CommandRun(None, unusable="empty command")
+    typed = shell_operators_in_source(source) if source else []
+    if typed:
+        return CommandRun(None, unusable=(
+            f"the command carries shell syntax ({' '.join(typed)}) but runs as "
+            "a fixed argv with no shell, so it would not do what it reads as; "
+            "rewrite it as a single command or wrap it in a script"))
     rejected = _reject_shell_syntax(cmd)
     if rejected:
         return CommandRun(None, unusable=rejected)
@@ -497,9 +666,11 @@ def _run(cmd: list[str]) -> CommandRun:
     if code in (EXIT_NOT_EXECUTABLE, EXIT_NOT_FOUND):
         return CommandRun(code, out, err,
                           unusable=f"exit {code}: the command was never executed")
-    if any("pytest" in tok for tok in cmd) and code in PYTEST_DID_NOT_RUN:
+    if code in PYTEST_DID_NOT_RUN and (
+            _is_pytest_command(cmd) or _says_pytest_did_not_run(out, err)):
+        via = "" if _is_pytest_command(cmd) else " (reported through a wrapper)"
         return CommandRun(code, out, err,
-                          unusable=f"pytest exit {code}: no test ran (collection "
+                          unusable=f"pytest exit {code}{via}: no test ran (collection "
                                    "error, internal error, usage error or nothing "
                                    "collected), so nothing was checked")
     return CommandRun(code, out, err)
@@ -512,9 +683,15 @@ def _refuse_unusable(run: CommandRun) -> None:
         print(run.stderr_tail, file=sys.stderr)
 
 
-def reproduce(*, run_id: str, target: str, finding_id: str, cmd: list[str]) -> int:
-    """Run the proposed command and record the pre-fix exit code."""
-    run = _run(cmd)
+def reproduce(*, run_id: str, target: str, finding_id: str, cmd: list[str],
+              source: str | None = None) -> int:
+    """Run the proposed command and record the pre-fix exit code.
+
+    `source` is the raw `--cmd` string when the CLI supplied one, so the
+    shell-syntax guard can read quoting that `shlex.split` has erased.
+    An in-process caller passing a ready argv list omits it.
+    """
+    run = _run(cmd, source=source)
     if run.unusable:
         # Recorded, not merely printed. The module docstring promises every
         # result lands in the run record, and `judge()` already writes a
@@ -543,14 +720,20 @@ def reproduce(*, run_id: str, target: str, finding_id: str, cmd: list[str]) -> i
     return 0
 
 
-def promote(*, run_id: str, target: str, finding_id: str, cmd: list[str]) -> int:
-    """Join a stored pre-fix exit to a freshly observed post-fix one."""
+def promote(*, run_id: str, target: str, finding_id: str, cmd: list[str],
+            source: str | None = None) -> int:
+    """Join a stored pre-fix exit to a freshly observed post-fix one.
+
+    `source` is the raw `--cmd` string when the CLI supplied one, so the
+    shell-syntax guard can read quoting that `shlex.split` has erased.
+    An in-process caller passing a ready argv list omits it.
+    """
     prior = last_reproduction(run_id, finding_id)
     if not prior or not (prior.get("reproduction") or {}).get("exit_before"):
         print(f"{RED}no prior reproduction for {finding_id}: nothing to promote{RESET}",
               file=sys.stderr)
         return 3
-    run = _run(cmd)
+    run = _run(cmd, source=source)
     if run.unusable:
         append_row(run_id=run_id, kind="degraded", target=target,
                    finding_id=finding_id,
@@ -613,7 +796,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         fn = reproduce if args.reproduce else promote
         return fn(run_id=args.run_id, target=args.target, finding_id=args.finding,
-                  cmd=shlex.split(args.cmd))
+                  cmd=shlex.split(args.cmd), source=args.cmd)
 
     # --judge
     if not (args.finding and args.pass_):

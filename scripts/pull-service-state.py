@@ -36,11 +36,34 @@ from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
 # clone (vm_engine_root) and the data overlay (vm_data_root) — each overridable
 # per-instance via .env (SERVICE_VM_ENGINE_ROOT / SERVICE_VM_DATA_ROOT). The host
 # ADDRESS is always SERVICE_VM_HOST in .env.
-_SVC = json.loads(
-    resolve_config_with_example(
-        "service-host.json", Path(__file__).resolve().parent / "service-host.example.json"
-    ).read_text(encoding="utf-8")
-)
+def _load_service_config() -> tuple[dict, str | None]:
+    """Read service-host.json. Returns (config, error); NEVER raises.
+
+    This load runs at IMPORT, where no handler is in scope: an unparseable
+    config raised json.JSONDecodeError and a top-level JSON list raised
+    AttributeError from the `.get` below, both killing the run with a raw
+    traceback before `main` -- and its named, actionable message -- existed.
+    Carrying the error as a value lets `state_dirs` raise the ValueError that
+    `main` already catches and prints properly.
+    """
+    try:
+        path = resolve_config_with_example(
+            "service-host.json",
+            Path(__file__).resolve().parent / "service-host.example.json",
+        )
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return {}, f"could not be read: {exc}"
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return {}, f"is not valid JSON ({path}): {exc}"
+    if not isinstance(data, dict):
+        return {}, f"must hold a JSON object, not a {type(data).__name__} ({path})"
+    return data, None
+
+
+_SVC, _SVC_ERROR = _load_service_config()
 MIRROR_REL = _SVC.get("mirror_dir", "datastore/operations/service-mirror")
 # scp over a slow or half-open link hung the run indefinitely; this is a
 # per-directory ceiling, not a whole-run one.
@@ -86,9 +109,25 @@ def _vm_path(entry, roots: dict) -> tuple[str, str]:
 
 
 def state_dirs() -> list:
-    """(local mirror name, VM absolute path) pairs. Call AFTER load_env()."""
+    """(local mirror name, VM absolute path) pairs. Call AFTER load_env().
+
+    Every other key in this file is read with `.get` and a default; `state_dirs`
+    was the one subscript, so a config missing it raised KeyError -- which is not
+    a ValueError, so `main`'s handler could not catch it and the run ended in a
+    traceback instead of the one-line reason.
+    """
+    if _SVC_ERROR:
+        raise ValueError(_SVC_ERROR)
+    entries = _SVC.get("state_dirs")
+    if entries is None:
+        raise ValueError(
+            "no 'state_dirs' key, so there is nothing to pull; copy the list "
+            "from scripts/service-host.example.json")
+    if not isinstance(entries, list):
+        raise ValueError(
+            f"'state_dirs' must be a list of entries, not a {type(entries).__name__}")
     roots = vm_roots()
-    return [_vm_path(e, roots) for e in _SVC["state_dirs"]]
+    return [_vm_path(e, roots) for e in entries]
 
 
 

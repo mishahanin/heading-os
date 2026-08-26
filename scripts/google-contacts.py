@@ -26,7 +26,7 @@ Usage:
     python scripts/google-contacts.py list --limit 50
     python scripts/google-contacts.py delete people/c1234567890
 
-Tests: tests/test_an_edit_that_deleted_the_addresses_it_promised_to_keep.py, tests/test_google_contacts_edit_merge.py
+Tests: tests/test_an_edit_that_deleted_the_addresses_it_promised_to_keep.py, tests/test_google_contacts_edit_merge.py, tests/test_a_page_the_server_repeated_and_a_body_never_read.py
 
 Environment:
     GOOGLE_CONTACTS_CREDENTIALS_PATH  Path to credentials.json (optional)
@@ -77,6 +77,14 @@ DIM = "\033[2m"
 # ---------------------------------------------------------------------------
 SCOPES = ["https://www.googleapis.com/auth/contacts"]
 PERSON_FIELDS = "names,emailAddresses,phoneNumbers,organizations,biographies,addresses,urls,birthdays,events,metadata"
+
+# Paging bounds. MAX_PAGES caps both walks below; neither had one, and
+# `cmd_list` had no exit at all for a page that returns nothing while handing
+# back the same token, which is an unbounded call loop against a remote party.
+SEARCH_PAGE_SIZE = 30          # People API searchContacts maximum
+SEARCH_DEFAULT_LIMIT = 30      # what one page used to return, kept as the default
+LIST_PAGE_SIZE = 1000
+MAX_PAGES = 200
 
 
 # ===========================================================================
@@ -342,17 +350,51 @@ def _print_detail(person):
 # ===========================================================================
 # Commands
 # ===========================================================================
-def cmd_search(service, query, as_json=False):
-    """Search contacts by name, email, phone, etc."""
+def cmd_search(service, query, as_json=False, limit=SEARCH_DEFAULT_LIMIT):
+    """Search contacts by name, email, phone, etc.
+
+    Paged. One 30-result call used to be the whole answer: `nextPageToken` was
+    never followed and nothing said the list had been cut, so a query matching
+    31 contacts printed 30 and presented that as the result set. The operator
+    had no flag to ask for more and no sign that more existed. A truncated walk
+    now says so on stderr rather than passing a prefix off as the total.
+    """
     _warmup_search(service)
 
-    results = service.people().searchContacts(
-        query=query,
-        readMask=PERSON_FIELDS,
-        pageSize=30,
-    ).execute()
+    people = []
+    token = None
+    seen_tokens = set()
+    truncated = False
+    for _ in range(MAX_PAGES):
+        kwargs = {"query": query, "readMask": PERSON_FIELDS,
+                  "pageSize": min(SEARCH_PAGE_SIZE, limit - len(people))}
+        if token:
+            kwargs["pageToken"] = token
+        results = service.people().searchContacts(**kwargs).execute()
+        people.extend(r.get("person", {}) for r in results.get("results", []))
+        token = results.get("nextPageToken")
+        if not token:
+            break
+        if len(people) >= limit:
+            truncated = True
+            break
+        if token in seen_tokens:
+            # Same two bounds as the Gmail pagers, for the same reason: a loop
+            # whose termination depends entirely on a remote party is a loop
+            # that can consume all memory.
+            print(f"{YELLOW}[WARN] the server repeated a search page token; "
+                  f"stopping after {len(people)} result(s){RESET}", file=sys.stderr)
+            truncated = True
+            break
+        seen_tokens.add(token)
+    else:
+        truncated = True
+        print(f"{YELLOW}[WARN] stopped at the {MAX_PAGES}-page cap with "
+              f"{len(people)} result(s){RESET}", file=sys.stderr)
 
-    people = [r.get("person", {}) for r in results.get("results", [])]
+    if truncated:
+        print(f"{YELLOW}[WARN] more matches remain beyond the {len(people)} "
+              f"shown; raise --limit{RESET}", file=sys.stderr)
 
     if as_json:
         print(json.dumps(people, indent=2, ensure_ascii=False))
@@ -462,8 +504,11 @@ def _replace_first(current: dict, field: str, entry: dict) -> list:
     the code was wrong, for the one field whose shape differs.
 
     An entry carrying neither key is not understood well enough to de-duplicate
-    against, so nothing is dropped. Keeping a duplicate is recoverable; the
-    defect this replaces was not.
+    against, so no TAIL entry is dropped. The first is still replaced -- that is
+    what this function is for, on every path. The sentence used to read "nothing
+    is dropped", which is false about `existing[0]` and would describe an append,
+    not a replace. Keeping a duplicate in the tail is recoverable; the defect
+    this replaces was not.
     """
     existing = [e for e in (current.get(field) or []) if isinstance(e, dict)]
     key = next((k for k in _VALUE_KEYS if k in entry), None)
@@ -545,12 +590,23 @@ def cmd_edit(service, resource_name, name=None, email=None, phone=None,
 
 
 def cmd_list(service, limit=100, as_json=False):
-    """List contacts sorted by last modified."""
+    """List contacts sorted by last modified.
+
+    Bounded three ways, because it was bounded by nothing the caller controls.
+    The only exits were "no next token", "enough contacts" and "page size <= 0",
+    all of which need the SERVER to cooperate: a response carrying an empty
+    `connections` list and the same non-empty `nextPageToken` moved neither
+    counter, and the loop called the API forever. The Gmail pagers in this
+    workspace already carry a page cap and a repeated-token refusal for exactly
+    this; the People walk carried neither, and additionally had nothing to say
+    about a page that returns nothing at all.
+    """
     all_contacts = []
     page_token = None
+    seen_tokens = set()
 
-    while True:
-        page_size = min(limit - len(all_contacts), 1000)
+    for _ in range(MAX_PAGES):
+        page_size = min(limit - len(all_contacts), LIST_PAGE_SIZE)
         if page_size <= 0:
             break
 
@@ -568,6 +624,20 @@ def cmd_list(service, limit=100, as_json=False):
         page_token = results.get("nextPageToken")
         if not page_token or len(all_contacts) >= limit:
             break
+        if not connections:
+            print(f"{YELLOW}[WARN] the server returned an empty page but asked "
+                  f"for another; stopping after {len(all_contacts)} "
+                  f"contact(s){RESET}", file=sys.stderr)
+            break
+        if page_token in seen_tokens:
+            print(f"{YELLOW}[WARN] the server repeated a page token; stopping "
+                  f"after {len(all_contacts)} contact(s){RESET}", file=sys.stderr)
+            break
+        seen_tokens.add(page_token)
+    else:
+        print(f"{YELLOW}[WARN] stopped at the {MAX_PAGES}-page cap with "
+              f"{len(all_contacts)} contact(s); more remain{RESET}",
+              file=sys.stderr)
 
     if as_json:
         print(json.dumps(all_contacts, indent=2, ensure_ascii=False))
@@ -614,6 +684,10 @@ def main():
     # search
     p_search = sub.add_parser("search", help="Search contacts by name, email, phone")
     p_search.add_argument("query", help="Search query (prefix matching)")
+    p_search.add_argument("--limit", "-l", type=int, default=SEARCH_DEFAULT_LIMIT,
+                          help=f"Max results (default: {SEARCH_DEFAULT_LIMIT}). "
+                               f"Without this flag the search stops at one page "
+                               f"and says so.")
     p_search.add_argument("--json", action="store_true", help="Output as JSON")
 
     # add
@@ -671,7 +745,7 @@ def main():
     # Dispatch
     try:
         if args.command == "search":
-            cmd_search(service, args.query, as_json=args.json)
+            cmd_search(service, args.query, as_json=args.json, limit=args.limit)
         elif args.command == "add":
             cmd_add(service, args.name, email=args.email, phone=args.phone,
                     company=args.company, title=args.title, notes=args.notes,

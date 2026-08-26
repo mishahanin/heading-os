@@ -18,6 +18,8 @@ Exit codes: 0 always on a clean run (advisory only, no gate); 2 script error.
 Consumed by:
   - scripts/prime-health-parallel.py (dream_shadow check)
   - .claude/skills/dream/SKILL.md (Phase 1A additional signal)
+
+Tests: tests/test_a_stall_after_the_headers_arrived.py
 """
 from __future__ import annotations
 
@@ -262,13 +264,24 @@ def main() -> int:
         print(f"ERROR: dream-shadow failed: {exc}", file=sys.stderr)
         return 2
 
-    now = datetime.now(get_default_tz())
-    generated_iso = now.isoformat(timespec="seconds")
-    report_text = render_report(result, generated_iso)
+    # Inside a guard too. Only `gather()` was wrapped, and the docstring
+    # promises "0 always on a clean run; 2 script error" - so an OSError from
+    # writing into a read-only or full outputs volume, or any failure in
+    # rendering, escaped as a traceback with exit 1: neither of the two codes
+    # this script's consumers (`prime-health-parallel.py`, the /dream skill)
+    # are told to expect, from a tool advertised as advisory with no gate.
+    try:
+        now = datetime.now(get_default_tz())
+        generated_iso = now.isoformat(timespec="seconds")
+        report_text = render_report(result, generated_iso)
 
-    report_path = None
-    if not args.no_report:
-        report_path = write_report(report_text, now)
+        report_path = None
+        if not args.no_report:
+            report_path = write_report(report_text, now)
+    except Exception as exc:  # noqa: BLE001 - degrade clearly, never silently swallow
+        print(f"ERROR: dream-shadow could not write its report: {exc}",
+              file=sys.stderr)
+        return 2
 
     dormant_n = len(result["dormant"])
     merge_ok = result["merge"]["ok"]

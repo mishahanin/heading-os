@@ -220,7 +220,15 @@ def build_status_line(
     parts: list[str] = []
 
     workspace = _mapping(payload.get("workspace"))
-    cwd_str = workspace.get("current_dir") or payload.get("cwd") or str(project)
+    # `isinstance`, not truthiness. The 2026-08-20 hardening shape-checked the
+    # three top-level sub-objects and stopped there, so a non-string INSIDE one
+    # of them - `{"cwd": 5}`, `{"workspace": {"current_dir": ["/tmp"]}}` - flowed
+    # into `Path()` and raised TypeError, exit 1, no status line at all: the
+    # blank bar the docstring says cannot happen. `CP.project_root` had already
+    # rejected the same value and said so on stderr one call earlier, so the
+    # process knew it was bad and used it anyway.
+    raw_cwd = workspace.get("current_dir") or payload.get("cwd")
+    cwd_str = raw_cwd if isinstance(raw_cwd, str) and raw_cwd else str(project)
     dir_name = Path(cwd_str).name or str(project)
     parts.append(f"{C_CYAN_B}{dir_name}{C_RESET}")
 

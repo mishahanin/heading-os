@@ -181,6 +181,8 @@ def gather() -> dict:
     gate = {
         "temporal_errors": temporal.get("errors", []),
         "memory_orphans": mem.get("orphans", []),
+        "memory_index_readable": mem.get("index_readable", True),
+        "memory_index_problem": mem.get("index_problem", ""),
         "over_budget": bool(mem.get("over_budget")),
         "memory_md_lines": mem.get("memory_md_lines", 0),
     }
@@ -254,6 +256,13 @@ def render_report(result: dict, generated_iso: str) -> str:
 
     mo = gate["memory_orphans"]
     lines.append(f"### Orphan memory files (not linked from MEMORY.md): {len(mo)}")
+    # Name the state of the index the count was taken against. When MEMORY.md is
+    # absent or unreadable every fact file is unreferenced, and the count is
+    # right for a reason the reader has to be told, or "3 orphans" reads as three
+    # forgotten memories rather than a missing index.
+    if not gate.get("memory_index_readable", True):
+        lines.append(f"- MEMORY.md was NOT read ({gate.get('memory_index_problem')}), "
+                     f"so every fact file counts as unreferenced.")
     if mo:
         for name in mo:
             lines.append(f"- {name}")
@@ -281,7 +290,13 @@ def render_report(result: dict, generated_iso: str) -> str:
     for key, label in (
         ("temporal_warnings", "Odin temporal-validity warnings"),
         ("stale_seeds", "Odin stale seeds"),
-        ("stale_positions", "Odin stale positions"),
+        # NOT "stale positions". Nothing in this pipeline evaluates a
+        # `revisit_when` condition -- `odin-brain-health.find_stale_positions`
+        # tests the field for truthiness, and 67 of 67 live positions carry one.
+        # This report printed "Odin stale positions: 67" to a human, asserting a
+        # staleness it never measured. Evaluating the condition is the /odin
+        # skill's step, and this report is not that skill.
+        ("stale_positions", "Odin positions carrying a revisit condition (not evaluated)"),
         ("orphan_principles", "Odin orphan principles"),
     ):
         items = adv[key]
@@ -399,7 +414,10 @@ def write_report(text: str, generated_dt: datetime) -> Path:
 
 def main() -> int:
     load_env()
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[1] if __doc__ else "")
+    # `[0]`, not `[1]`. The docstring opens on the same line as its quotes, so
+    # line 0 is the summary and line 1 is the blank line under it -- `--help`
+    # printed an empty description.
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else "")
     parser.add_argument("--json", action="store_true", help="Emit the structured result as JSON")
     parser.add_argument("--quiet", action="store_true", help="Print only the one-line summary")
     parser.add_argument("--no-report", action="store_true", help="Do not write the report file (stdout only)")

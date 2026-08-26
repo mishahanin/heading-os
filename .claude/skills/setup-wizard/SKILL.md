@@ -137,10 +137,15 @@ Verify this key works now? (y/N)
 If `y`:
 
 ```bash
-python scripts/wizard-verify-key.py --provider anthropic --key "<key>"
+WIZARD_VERIFY_KEY="<key>" python scripts/wizard-verify-key.py --provider anthropic
 ```
 
+Pass the key in the environment, never as `--key`: argv is readable by any
+local process through `/proc/<pid>/cmdline` and lands in shell history.
+
 Interpret exit code: `0` validated, `1` invalid (loop back), `2` rate-limited (proceed with note), `3` unknown (proceed with note).
+
+Exit code `4` means the invocation itself was wrong. Correct the command and run it again. Do NOT proceed.
 
 3. On approval, invoke apply with `{"value":"<key>"}`. Confirm with masked value. Advance.
 

@@ -117,9 +117,9 @@ Parse the JSON. It is one object:
      supports. If two sources disagree, surface the disagreement rather than
      silently picking one.
   3. **If the read files do not actually contain the answer** (a near-miss
-     retrieval), say that honestly — "the closest sources touch the topic but
-     don't answer it directly" — and name what they do cover. Never invent the
-     missing fact.
+     retrieval), say that honestly. For example: "the closest sources touch
+     the topic but don't answer it directly". Then name what they do cover.
+     Never invent the missing fact.
   4. **Reinforce cited auto-memory hits.** This covers auto-memory facts only.
      Every other layer is left untouched: `odin`, `thread`, `crm`, `context`,
      `reference`, `plans`, `outputs`, `knowledge`, `datastore-extract`,
@@ -212,7 +212,7 @@ Sources:
 - **Never claim freshness you don't have.** If ollama was down and the index
   wasn't refreshed, say so.
 - **Never treat a chronicle hit as current fact or a decision.** It is a dated
-  historical record of a past conversation; surface it tagged with its date,
+  historical record of a past conversation. Surface it tagged with its date,
   below the brain, and flag that it may be stale.
 - **The reinforcement touch step never modifies content.** `scripts/memory-touch.py`
   only bumps `access_count`/`last_accessed` in frontmatter, scoped to `memory`-layer

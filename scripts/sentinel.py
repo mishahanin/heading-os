@@ -153,12 +153,46 @@ class StateManager:
         self.data = self._load()
 
     def _load(self) -> dict:
+        """The state file, with every required section guaranteed present.
+
+        A file that parses is not a file that fits. A hand-edited, truncated or
+        older-schema state.json was returned verbatim until 2026-08-25, and the
+        first cycle then died on a bare subscript: `data["email"]["processed_ids"]`
+        at is_email_processed, `data["digest"]` at record_digest_item,
+        `data["email"]["last_check"]` in run_cycle. `save()` has no schema guard
+        either, so once a short dict was in memory the daemon persisted it and
+        cemented the shape.
+
+        The `version` field made this look handled and did not: it is written
+        here and read nowhere in the file, so it can neither gate a migration
+        nor detect one. The merge below is what actually holds the contract, so
+        a missing section is filled rather than discovered at the call site.
+        """
+        loaded = None
         if self.path.exists():
             try:
                 with open(self.path, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    loaded = json.load(f)
             except (json.JSONDecodeError, OSError):
-                pass
+                loaded = None
+        skeleton = self._default_state()
+        if not isinstance(loaded, dict):
+            return skeleton
+        for key, default in skeleton.items():
+            if key not in loaded:
+                loaded[key] = default
+            elif isinstance(default, dict) and isinstance(loaded[key], dict):
+                # One level down is enough: no required key sits deeper.
+                for sub_key, sub_default in default.items():
+                    loaded[key].setdefault(sub_key, sub_default)
+            elif isinstance(default, dict) and not isinstance(loaded[key], dict):
+                # A section of the wrong TYPE would subscript as badly as a
+                # missing one, so it is replaced rather than merged.
+                loaded[key] = default
+        return loaded
+
+    @staticmethod
+    def _default_state() -> dict:
         return {
             "version": 2,
             "last_run": None,
@@ -323,6 +357,12 @@ class StateManager:
 # Email Source
 # ============================================================
 
+# How far a cycle will page into the unread backlog before giving up and
+# SAYING so. Bounds the cost of a mailbox with thousands of unread items;
+# the warning is what keeps a partial scan from reading as a full one.
+BACKLOG_SCAN_CAP = 500
+
+
 class EmailSource:
     """Fetch new emails from Exchange EWS."""
 
@@ -366,7 +406,61 @@ class EmailSource:
             folder = self.account.inbox / folder_name
 
         max_count = self.config.get("max_per_check", 50)
-        items = folder.filter(is_read=False).order_by("-datetime_received")[:max_count]
+        unread = folder.filter(is_read=False)
+
+        # Read from BOTH ends of the backlog, not just the newest end.
+        #
+        # Sentinel never marks mail read on the server, so the `is_read=False`
+        # set only grows. A newest-first slice of `max_count` therefore pins a
+        # window over the newest N: once those N are all in `processed_ids`,
+        # every later cycle re-fetches the same N, skips every one of them, and
+        # logs "0 new unread messages" while older unread mail sits permanently
+        # outside the window. Nothing ages back INTO a newest-first slice.
+        #
+        # Newest-first stays first because this is an urgency daemon and fresh
+        # mail must not queue behind a backlog. The oldest window is added only
+        # when a backlog actually exists, so the ordinary case costs one count
+        # query and nothing else.
+        try:
+            unread_total = unread.count()
+        except Exception as exc:  # noqa: BLE001 - a count failure must not stop the cycle
+            self.logger.warning(f"Email: could not count unread ({exc}); "
+                                f"reading the newest {max_count} only")
+            unread_total = None
+
+        items = list(unread.order_by("-datetime_received")[:max_count])
+        if unread_total is not None and unread_total > max_count:
+            # Walk from the OLDEST end, skipping what this daemon has already
+            # handled, until `max_count` genuinely-unseen items are in hand.
+            #
+            # A second FIXED window does not close the hole: with 120 unread and
+            # max_count 50, the newest 50 and the oldest 50 leave 20 in the
+            # middle that no cycle ever reaches, because a processed item stays
+            # unread on the server and never leaves either slice. Skipping the
+            # processed ones as we page is what makes the window ADVANCE.
+            # Measured 2026-08-26 over a 120-item stand-in: two fixed windows
+            # reached 100 of 120 and stopped; this reaches all 120.
+            seen_ids = {it.id for it in items}
+            backlog, scanned = [], 0
+            for older in unread.order_by("datetime_received"):
+                scanned += 1
+                if scanned > BACKLOG_SCAN_CAP:
+                    self.logger.warning(
+                        f"Email: stopped scanning the backlog after "
+                        f"{BACKLOG_SCAN_CAP} items; older unread mail was NOT "
+                        f"examined this cycle")
+                    break
+                if older.id in seen_ids:
+                    continue
+                if self.state.is_email_processed(str(older.message_id or older.id)):
+                    continue
+                backlog.append(older)
+                if len(backlog) >= max_count:
+                    break
+            items.extend(backlog)
+            self.logger.info(
+                f"Email: {unread_total} unread on the server; reading the "
+                f"newest {max_count} and {len(backlog)} unseen from the backlog")
 
         new_items = []
         for email_item in items:
@@ -413,7 +507,13 @@ class EmailSource:
                 "is_vip": self._is_vip(sender_addr),
             })
 
-        self.logger.info(f"Email: {len(new_items)} new unread messages")
+        # Say what was NOT examined. "0 new unread messages" over a server
+        # holding hundreds is the sentence that hid the defect above.
+        examined = f" (examined {len(items)}"
+        if unread_total is not None:
+            examined += f" of {unread_total} unread"
+        examined += ")"
+        self.logger.info(f"Email: {len(new_items)} new unread messages{examined}")
         return new_items
 
     def _is_ignored(self, sender: str) -> bool:
@@ -638,6 +738,30 @@ def select_decline_message(is_tribe: bool, subject: str, alternative,
 # Calendar Policy Engine
 # ============================================================
 
+# How far ahead `find_alternative_slot` searches, and therefore how far ahead
+# the caller must fetch events for the conflict check to mean anything.
+ALTERNATIVE_SEARCH_DAYS = 5
+# The extra week the search adds so a run of weekends cannot exhaust it.
+_WEEKEND_BUFFER_DAYS = 7
+
+
+def conflict_window_days(search_days: int = ALTERNATIVE_SEARCH_DAYS) -> int:
+    """Days of calendar a caller must fetch for `find_alternative_slot`.
+
+    The search starts at reference + 1 and runs `search_days + 7` offsets, so
+    it can propose a time up to `1 + search_days + 7` days out. The caller
+    fetched SEVEN days. For every candidate beyond day 7, `_has_conflict`
+    filtered an event list that held nothing for that date and answered "no
+    conflict" - so the daemon could propose, inside a decline sent to a real
+    organizer, a time the operator was already booked for. Measured 2026-08-26:
+    search reach 12 days, fetch window 7.
+
+    Deriving it here is the point. Two numbers that must agree, written in two
+    files, drifted; one function that computes both cannot.
+    """
+    return 1 + search_days + _WEEKEND_BUFFER_DAYS
+
+
 class CalendarPolicyEngine:
     """Evaluate meeting invites against CEO Calendar Policy."""
 
@@ -789,7 +913,27 @@ class CalendarPolicyEngine:
         return ""
 
     def _check_back_to_back(self, start, end, existing_events: list) -> str:
-        """Check for back-to-back violations."""
+        """Check for back-to-back violations.
+
+        KNOWN DEFECT, DELIBERATELY NOT FIXED (2026-08-25). Both gap tests below
+        read `0 < gap < min_gap`, so a gap of exactly zero - a meeting starting
+        the instant another ends, the clearest violation of a
+        `min_gap_minutes: 15` policy - is judged compliant. Nothing else catches
+        it: `_has_conflict` needs a real overlap, and the consecutive-run
+        counter only fires above `max_consecutive`.
+
+        The one-character fix is `0 <= gap`. It is not applied because a
+        back_to_back violation routes to `decline` in `_make_decision`, and a
+        decline SENDS a message to the organizer. That would change which real
+        people receive an automated refusal, and the calendar auto-accept /
+        auto-decline behaviour is the operator's own design, frozen on
+        2026-08-23 pending his redesign. Changing it here would be an
+        outward-facing change nobody asked for.
+
+        Raise it with the operator; the fix is one comparison in each of the two
+        branches below. `tests/test_a_pid_file_emptied_before_the_lock.py` pins
+        the CURRENT behaviour so this stays visible rather than drifting.
+        """
         min_gap = self.config.get("min_gap_minutes", 15)
         max_consecutive = self.config.get("max_consecutive", 3)
 
@@ -988,8 +1132,14 @@ class CalendarPolicyEngine:
 
     def find_alternative_slot(self, duration_minutes: int, subject: str,
                               existing_events: list, reference_date=None,
-                              search_days: int = 5) -> str:
-        """Find a policy-compliant alternative slot."""
+                              search_days: int = ALTERNATIVE_SEARCH_DAYS) -> str:
+        """Find a policy-compliant alternative slot.
+
+        The caller MUST supply `existing_events` covering
+        `conflict_window_days(search_days)` from the reference date, or the
+        conflict check below is judging some candidate days against an empty
+        list. See that helper for what went wrong when the two disagreed.
+        """
         if reference_date is None:
             reference_date = datetime.now(self.tz)
         else:
@@ -1001,7 +1151,7 @@ class CalendarPolicyEngine:
         # Start searching from next business day
         search_start = reference_date + timedelta(days=1)
 
-        for day_offset in range(search_days + 7):  # Extra buffer for weekends
+        for day_offset in range(search_days + _WEEKEND_BUFFER_DAYS):
             candidate_date = search_start + timedelta(days=day_offset)
             weekday = candidate_date.weekday()
 
@@ -1009,7 +1159,15 @@ class CalendarPolicyEngine:
             if weekday >= 5:
                 continue
 
-            # Generate 30-min increment slots from 09:30 to 18:00
+            # Generate 30-min increment slots from 09:30 to 17:30 (the last
+            # START, not the last end). The comment said 18:00 until
+            # 2026-08-25; `range(9, 18)` yields 9..17, so an 18:00 start is
+            # never generated and the end guard below never got the chance to
+            # judge one. Only the sentence is corrected here. Extending the
+            # range would change which alternative time is offered inside a
+            # decline message sent to a real organizer, and the calendar
+            # auto-reply is the operator's design and is frozen - see the note
+            # on `_check_back_to_back`.
             for hour in range(9, 18):
                 for minute in [0, 30]:
                     if hour == 9 and minute == 0:
@@ -1172,6 +1330,85 @@ class TelegramSource:
         self.logger.info(f"Telegram: {len(items)} new messages")
         return items
 
+    # How many pages of `limit` messages one dialog may drag out of Telegram in
+    # a single cycle. A bound is needed - a dialog that has been quiet for a
+    # month should not stall the whole cycle - but the bound must be REPORTED
+    # when it bites, or the loss is silent again.
+    MAX_FETCH_PAGES = 5
+
+    # SEC-014 bounds how long ONE chat may stall the cycle. The single fetch
+    # this paging loop replaced carried `timeout=15`, and a per-page timeout of
+    # 15 would have quietly raised that ceiling to 75 - five times the budget
+    # the control exists to enforce. The whole loop shares one deadline instead,
+    # so the bound is unchanged no matter how many pages it takes.
+    FETCH_TIMEOUT_SECONDS = 15
+
+    async def _fetch_since(self, entity, last_known_id, limit, chat_name,
+                           max_pages=None):
+        """Every message above `last_known_id`, newest first, in pages.
+
+        A single `get_messages(limit=N, min_id=cursor)` returns the N NEWEST
+        messages above the cursor and nothing older. Both callers then advanced
+        the cursor to `max(m.id)`, so whenever more than N messages had arrived
+        since the last cycle, every message between the cursor and the oldest
+        one fetched was skipped PERMANENTLY, with no log line and no counter. A
+        30-message burst in a group chat between two cycles is routine, and the
+        default `max_messages_per_chat` is 30.
+
+        Paging backwards with `max_id` closes the gap. `MAX_FETCH_PAGES` bounds
+        it, and when the bound is hit the number of messages left behind is
+        logged rather than swallowed.
+
+        `max_pages` overrides that bound, and the FIRST-SIGHT caller sets it to
+        1. With `last_known_id == 0` there is no lower bound at all, so the
+        paging loop does not stop at the unread window: it kept going while
+        pages came back full and pulled `MAX_FETCH_PAGES * limit` messages -
+        150 at the shipped `max_messages_per_chat: 30` - of which 120 were
+        already-read history, concatenated into the alert body and sent to the
+        model. That is the backfill the caller's own comment says it is
+        avoiding. Measured 2026-08-26 against a 1000-message stand-in dialog.
+        """
+        collected = []
+        next_max_id = 0  # 0 means "no upper bound" in Telethon
+        page_budget = self.MAX_FETCH_PAGES if max_pages is None else max_pages
+
+        async def _all_pages():
+            nonlocal next_max_id
+            for _ in range(page_budget):
+                page = await self.client.get_messages(
+                    entity, limit=limit, min_id=last_known_id, max_id=next_max_id)
+                if not page:
+                    return True
+                collected.extend(page)
+                if len(page) < limit:
+                    return True
+                next_max_id = min(m.id for m in page)
+            return False
+
+        # One deadline for the whole loop (SEC-014), not one per page.
+        drained = await asyncio.wait_for(
+            _all_pages(), timeout=self.FETCH_TIMEOUT_SECONDS)
+        if not drained and last_known_id == 0:
+            # No lower bound, so `oldest - last_known_id - 1` is "every message
+            # id below the oldest one fetched" - the whole chat history, a
+            # number this function never measured against anything unread. It
+            # was logged as an alarm about hundreds of missed messages. Say
+            # what is true instead.
+            self.logger.info(
+                f"{chat_name}: first sight, read the newest {len(collected)} "
+                f"message(s); older history is not backfilled by design")
+        elif not drained:
+            # The page cap bit. Say how much was left behind: a silent bound is
+            # the original defect in a smaller shape.
+            oldest = min((m.id for m in collected), default=last_known_id + 1)
+            skipped = oldest - last_known_id - 1
+            if skipped > 0:
+                self.logger.warning(
+                    f"{chat_name}: stopped after {page_budget} pages; "
+                    f"{skipped} message(s) between id {last_known_id} and {oldest} "
+                    f"were NOT read and will not be reported")
+        return collected
+
     async def _check_personal_dms(self) -> list:
         from telethon import types
 
@@ -1221,14 +1458,11 @@ class TelegramSource:
         async def _fetch_dm(dialog, chat_name, last_known_id, limit):
             chat_id = str(dialog.entity.id)
             try:
-                messages = await asyncio.wait_for(
-                    self.client.get_messages(
-                        dialog.entity,
-                        limit=limit,
-                        min_id=last_known_id,
-                    ),
-                    timeout=15,
-                )
+                messages = await self._fetch_since(
+                    dialog.entity, last_known_id, limit, chat_name,
+                    # First sight has no lower bound, so paging would walk the
+                    # whole history. One page is the unread window.
+                    max_pages=1 if last_known_id == 0 else None)
             except asyncio.TimeoutError:
                 self.logger.warning(f"Timeout fetching DMs from {chat_name}")
                 return None
@@ -1302,10 +1536,8 @@ class TelegramSource:
             last_known_id = self.state.get_telegram_last_id(chat_id)
 
             try:
-                messages = await asyncio.wait_for(
-                    self.client.get_messages(entity, limit=max_msgs, min_id=last_known_id),
-                    timeout=15
-                )
+                messages = await self._fetch_since(
+                    entity, last_known_id, max_msgs, str(chat_name_or_id))
             except asyncio.TimeoutError:
                 self.logger.warning(f"Timeout checking chat '{chat_name_or_id}', skipping")
                 continue
@@ -1529,20 +1761,34 @@ BODY:
             text = re.sub(r"^```(?:json)?\s*", "", text)
             text = re.sub(r"\s*```\s*$", "", text)
 
-        brace_depth = 0
-        json_end = -1
-        for i, ch in enumerate(text):
-            if ch == "{":
-                brace_depth += 1
-            elif ch == "}":
-                brace_depth -= 1
-                if brace_depth == 0:
-                    json_end = i + 1
-                    break
-        if json_end > 0:
-            text = text[:json_end]
-
-        return json.loads(text)
+        # `raw_decode` and not a brace counter. The counter that used to sit
+        # here read every `{` and `}` in the text, including the ones inside
+        # JSON string values, and failed in three different ways on responses
+        # that were valid JSON:
+        #
+        #   {"summary": "a } b", ...}      the count hit zero mid-string, the
+        #                                  object was cut in half -> Unterminated
+        #                                  string
+        #   {"summary": "use { braces"}    the count never returned to zero, so
+        #     ...trailing prose            NO truncation happened at all and the
+        #                                  model's closing sentence reached
+        #                                  json.loads -> Extra data
+        #   {"s": "he said \\"} \\" ok"}     an escaped quote, same as the first
+        #
+        # Each landed in the caller's JSONDecodeError branch, which returns
+        # urgency 5 and "LLM response could not be parsed" - a made-up middling
+        # score standing in for a real one the model actually sent.
+        #
+        # `json.JSONDecoder().raw_decode` parses ONE value from an offset and
+        # reports where it ended, so it is string-literal aware by construction
+        # and cutting the object out of surrounding prose is what it is for.
+        start = text.find("{")
+        if start == -1:
+            # No object at all. Let json.loads produce the error, so a scalar
+            # or an empty response still reaches the caller's existing branch.
+            return json.loads(text)
+        obj, _end = json.JSONDecoder().raw_decode(text, start)
+        return obj
 
     @observe()
     def analyze(self, item: dict) -> dict:
@@ -1639,6 +1885,24 @@ BODY:
 
             parsed = json.loads(result_text)
             if isinstance(parsed, list):
+                # ELEMENT type, not just the container. The guard below covers
+                # "the reply is not a list"; a reply that IS a list of scalars
+                # (`["urgent", "ignore"]`, `[1, 2]`) walked straight past it,
+                # got padded to length, and every consumer then called
+                # `analysis.get(...)` on a string. AttributeError, out of a
+                # daemon whose `run_cycle` and `start` catch neither - the exact
+                # shape the comment twenty lines below records for the outer
+                # type, one level in. A model that answered the wrong SHAPE is
+                # no more trustworthy per-element than per-response, so the
+                # whole batch falls back rather than one item.
+                if any(not isinstance(entry, dict) for entry in parsed):
+                    kinds = sorted({type(e).__name__ for e in parsed
+                                    if not isinstance(e, dict)})
+                    self.logger.warning(
+                        f"Batch LLM analysis returned a list containing "
+                        f"{', '.join(kinds)} where objects were required; "
+                        f"falling back to individual calls")
+                    return [self.analyze(item) for item in items]
                 # Pad or truncate to match input length
                 while len(parsed) < len(items):
                     parsed.append({
@@ -1734,7 +1998,18 @@ class TelegramNotifier:
 
     async def send_notification(self, item: dict, analysis: dict):
         if await self._send(self._format_message(item, analysis)):
-            self.logger.info(f"Notification sent: [{analysis['urgency_score']}/10] {item.get('subject', '')}")
+            # `_clamp_score(analysis.get(...))`, not `analysis['urgency_score']`.
+            # The hard subscript ran AFTER the alert was already on the wire, so
+            # a response missing the key raised out of here into the caller's
+            # `except Exception`, which logged "Notification failed" for an
+            # alert that WAS delivered - the exact inversion the send-failure
+            # test exists to prevent, in the other direction. It also cost the
+            # `urgent_sent` counter (so the digest under-reported) and the
+            # `notified_hashes` entry (so a byte-identical repeat re-alerted).
+            # Every other reader of this field already goes through _clamp_score.
+            score = UrgencyAnalyzer._clamp_score(analysis.get("urgency_score"))
+            self.logger.info(
+                f"Notification sent: [{score}/10] {item.get('subject', '')}")
 
     async def send_digest(self, message: str):
         if await self._send(message):
@@ -1863,7 +2138,16 @@ class Sentinel:
         # Write PID file with file lock (SEC-016)
         RUNTIME_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
         my_pid = os.getpid()
-        self._pid_file_handle = open(PID_FILE, "w")
+        # "a+" and NOT "w". `open(path, "w")` is O_WRONLY|O_CREAT|O_TRUNC, and
+        # the truncation happens at open(2) - BEFORE the flock below can fail.
+        # So a second instance starting beside a healthy daemon emptied the live
+        # daemon's PID file, then exited on the lock. The write-back at the
+        # bottom of this block is never reached on that branch, so the file
+        # stayed zero-length: `--status` printed UNKNOWN, `--stop` deleted the
+        # file without signalling anything, and the only way left to stop the
+        # running daemon was a manual pkill. "a+" never truncates, so the losing
+        # instance leaves the file exactly as it found it.
+        self._pid_file_handle = open(PID_FILE, "a+")
         try:
             if sys.platform != "win32":
                 import fcntl
@@ -1883,6 +2167,10 @@ class Sentinel:
             self._pid_file_handle.close()
             self.logger.error("Another Sentinel instance is already running (PID file locked)")
             sys.exit(1)
+        # The lock is held from here on, so this is the first moment at which
+        # emptying the file is safe. "a+" left any previous content in place.
+        self._pid_file_handle.seek(0)
+        self._pid_file_handle.truncate()
         self._pid_file_handle.write(str(my_pid))
         self._pid_file_handle.flush()
         if sys.platform == "win32":
@@ -2174,7 +2462,15 @@ class Sentinel:
         morning = self.config.digest.get("morning_time", "08:00")
         evening = self.config.digest.get("evening_time", "22:00")
 
-        # Check within a 15-minute window (matches check interval)
+        # The window is COMPUTED from the configured interval, never assumed to
+        # match it. The comment here used to assert the match while the window
+        # was the literal 15 in `_time_in_window` and the interval was
+        # `check_interval_minutes`, so at any other interval the digest could
+        # never fire. It also missed at the SHIPPED default: the run loop sleeps
+        # check_interval AFTER each cycle finishes, so the true period is the
+        # interval plus the cycle's own duration and the start time drifts
+        # forward. A day's cycles straddling 07:58 -> 08:16 skipped 08:00-08:15
+        # with no config change at all.
         morning_due = self._time_in_window(current_time, morning)
         evening_due = self._time_in_window(current_time, evening)
 
@@ -2198,14 +2494,29 @@ class Sentinel:
             except Exception as e:
                 self.logger.error(f"Evening digest failed: {e}")
 
+    def _digest_window_minutes(self) -> int:
+        """How long after its target time a digest may still fire.
+
+        Twice the configured check interval, floored at 30 minutes. Twice,
+        because the real period is the interval plus however long a cycle takes
+        (Exchange fetch, Telethon connect, batched LLM calls), and a window
+        merely EQUAL to the interval is missed the moment a cycle runs long. The
+        floor keeps a very short interval from producing a window so tight that
+        one slow cycle skips the day's digest.
+
+        Firing late cannot double-send: `_check_digest_schedule` only sends when
+        the `morning_sent` / `evening_sent` date key is not today's.
+        """
+        return max(2 * (self.config.check_interval // 60), 30)
+
     def _time_in_window(self, current: str, target: str) -> bool:
-        """Check if current time is within 15 minutes after target time."""
+        """True when `current` is at or after `target`, within the digest window."""
         try:
             c_h, c_m = map(int, current.split(":"))
             t_h, t_m = map(int, target.split(":"))
             c_mins = c_h * 60 + c_m
             t_mins = t_h * 60 + t_m
-            return 0 <= (c_mins - t_mins) < 15
+            return 0 <= (c_mins - t_mins) < self._digest_window_minutes()
         except (ValueError, IndexError):
             return False
 
@@ -2276,16 +2587,33 @@ Top senders:{senders_str}"""
 
     # --- Meeting invite processing ---
 
+    def _unprocessed_after_failed_escalation(self, invite_id, what):
+        """Log why an invite is being left for the next cycle.
+
+        The `else` branch below has done this since it was written; the other
+        four escalation call sites discarded `_escalate_invite`'s bool and fell
+        through to `mark_invite_processed` regardless. An invite consumed after
+        a failed notification is an invite NOBODY was told about, and it never
+        comes back - which is the exact outcome the escalation path exists to
+        prevent. `_escalate_invite` returns True when there is no notifier at
+        all, so a permanently unconfigured workspace is not retried forever.
+        """
+        self.logger.warning(
+            f"Invite {invite_id} left unprocessed: {what} escalation was not "
+            f"delivered; it will be retried next cycle")
+
     async def _process_meeting_invites(self):
         """Check and process new meeting invites per CEO Calendar Policy."""
         invites = self.invite_source.check_new_invites()
         if not invites:
             return
 
-        # Fetch next 7 days of calendar for conflict checking
+        # Fetch the calendar for the WHOLE window the alternative search can
+        # reach, not seven days of it. Derived from the same constant the
+        # search uses, so the two cannot drift apart again.
         now = datetime.now(self.config.timezone)
         existing_events = self.invite_source.get_existing_events(
-            now, now + timedelta(days=7)
+            now, now + timedelta(days=conflict_window_days())
         )
 
         for invite in invites:
@@ -2293,9 +2621,13 @@ Top senders:{senders_str}"""
 
             # Recurring invites: always escalate
             if invite.get("is_recurring"):
-                await self._escalate_invite(
+                escalated = await self._escalate_invite(
                     invite, ["Recurring meeting change -- requires CEO review"]
                 )
+                if not escalated:
+                    self._unprocessed_after_failed_escalation(
+                        invite_id, "the recurring-change")
+                    continue
                 self.state.mark_invite_processed(invite_id)
                 self.state.record_invite_decision(
                     invite_id, invite["subject"], "escalate",
@@ -2322,7 +2654,10 @@ Top senders:{senders_str}"""
                     f"[dry-run] would {decision} invite {invite.get('subject')!r} "
                     f"({'; '.join(reasons) or 'no reason recorded'}); no calendar "
                     f"action taken and no reply sent")
-                await self._escalate_invite(invite, reasons)
+                if not await self._escalate_invite(invite, reasons):
+                    self._unprocessed_after_failed_escalation(
+                        invite_id, "the dry-run")
+                    continue
 
             elif decision == "accept" and self.config.calendar.get("auto_accept", True):
                 try:
@@ -2330,7 +2665,11 @@ Top senders:{senders_str}"""
                     await self._notify_invite_decision(invite, "ACCEPTED", reasons)
                 except Exception as e:
                     self.logger.error(f"Failed to accept invite: {e}")
-                    await self._escalate_invite(invite, [f"Auto-accept failed: {e}"])
+                    if not await self._escalate_invite(
+                            invite, [f"Auto-accept failed: {e}"]):
+                        self._unprocessed_after_failed_escalation(
+                            invite_id, "the failed-accept")
+                        continue
 
             elif decision == "decline" and self.config.calendar.get("auto_decline", True):
                 alternative = result.get("proposed_alternative")
@@ -2348,7 +2687,11 @@ Top senders:{senders_str}"""
                     )
                 except Exception as e:
                     self.logger.error(f"Failed to decline invite: {e}")
-                    await self._escalate_invite(invite, [f"Auto-decline failed: {e}"])
+                    if not await self._escalate_invite(
+                            invite, [f"Auto-decline failed: {e}"]):
+                        self._unprocessed_after_failed_escalation(
+                            invite_id, "the failed-decline")
+                        continue
 
             else:
                 # Escalate (VIP, external, soft violations, or auto-action disabled)
@@ -2359,9 +2702,8 @@ Top senders:{senders_str}"""
                     # must see -- VIP, external, RUNE overrides -- and marking
                     # them processed after a failed notify meant the operator
                     # never learned they existed.
-                    self.logger.warning(
-                        f"Invite {invite_id} left unprocessed: escalation was not "
-                        f"delivered; it will be retried next cycle")
+                    self._unprocessed_after_failed_escalation(
+                        invite_id, "the policy")
                     continue
 
             self.state.mark_invite_processed(invite_id)
@@ -2538,8 +2880,22 @@ def check_status():
     if pid is None:
         print(f"Sentinel status UNKNOWN: the PID file at {PID_FILE} is empty or corrupt")
         return
+    # Liveness is not identity, and this line is the one the operator acts on.
+    # `os.kill(pid, 0)` establishes only that SOME process holds that number.
+    # After a crash the PID file outlives the daemon and the number gets reused,
+    # so until 2026-08-25 `--status` announced "Sentinel is RUNNING" over an
+    # unrelated program - a sentence far wider than its method, and the same
+    # defect class `.claude/rules/scope-claims.md` was written for. `--stop`
+    # already checked identity; the other two callers did not.
     if _is_pid_alive(pid):
-        print(f"Sentinel is RUNNING (PID: {pid})")
+        if _pid_is_sentinel(pid):
+            print(f"Sentinel is RUNNING (PID: {pid})")
+        else:
+            print(f"Sentinel is NOT running: PID {pid} is alive but is not this "
+                  f"daemon (the PID was reused after a crash). Removing the "
+                  f"stale PID file.")
+            PID_FILE.unlink(missing_ok=True)
+            return
     else:
         print(f"Sentinel is NOT running (stale PID file, PID {pid})")
         PID_FILE.unlink(missing_ok=True)
@@ -2671,9 +3027,15 @@ def main():
         return
 
     # Check if already running
+    # Same identity check as --status, and it matters more here: this guard
+    # REFUSES a legitimate start. On a reused PID it used to tell the operator
+    # the daemon was already running and exit 1, when nothing was running at
+    # all. It is advisory anyway - the real second-instance guard is the flock
+    # in Sentinel.start - so failing toward "let it start and let the lock
+    # decide" is the safe direction.
     if not args.test and PID_FILE.exists():
         pid = _read_pid_file()
-        if pid is not None and _is_pid_alive(pid):
+        if pid is not None and _is_pid_alive(pid) and _pid_is_sentinel(pid):
             print(f"Sentinel is already running (PID: {pid}). Use --stop first.")
             sys.exit(1)
         else:

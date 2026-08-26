@@ -167,9 +167,16 @@ def critique_draft(subject, body, recipient=None, *, model=None) -> dict | None:
             "at": datetime.now(timezone.utc).isoformat(),
             "trace_id": tracing.get() or "-",
         }
-    except Exception:
-        # Advisory only: a critique failure must never propagate. Skip silently;
-        # the card stays uncritiqued and is retried on the next sweep tick.
+    except Exception as exc:  # noqa: BLE001 - advisory layer, must not propagate
+        # Advisory only: a critique failure must never propagate, and the card
+        # stays uncritiqued for the next sweep tick. It is no longer SILENT.
+        # A blanket swallow with no record meant a broken proxy, a retired model
+        # pin or a changed response shape produced exactly the same output as a
+        # clean run in which nothing was worth flagging: every draft simply
+        # arrived uncritiqued. The operator reads an absent critique as "no
+        # concerns", so the failure has to say it happened.
+        print(f"draft_critique: critique skipped ({type(exc).__name__}: {exc}); "
+              f"the draft is UNCRITIQUED, not cleared.", file=sys.stderr)
         return None
 
 

@@ -157,9 +157,10 @@ def build_docx():
 
         # Skip the metadata block at top (>, ---)
         if i < 10 and (line.startswith('>') or line == '---' or line == ''):
-            # But capture the metadata for a small info box
-            if line.startswith('>') and not line.startswith('> **'):
-                pass
+            # DISCARDED, deliberately. The comment here used to say the
+            # metadata was captured "for a small info box" and the body was
+            # `pass` -- nothing was captured and no info box exists anywhere in
+            # the output. The promise concealed the absence.
             i += 1
             continue
 
@@ -285,6 +286,22 @@ def build_docx():
             i += 1
             continue
 
+        # Italic-only lines (recommendations). MUST stay above the bullet
+        # branch: `- *text*` also matches the bullet regex, and the bullet
+        # branch `continue`s, so this whole block sat below it as dead code.
+        # Every recommendation line rendered as an ordinary 10pt bullet with an
+        # accent-blue marker; the indented 9pt grey italic style it exists for
+        # never appeared in any output.
+        if line.strip().startswith('- *') and line.strip().endswith('*'):
+            text = line.strip()[2:].strip()
+            p = doc.add_paragraph()
+            p.paragraph_format.left_indent = Cm(1.2)
+            p.paragraph_format.space_before = Pt(1)
+            p.paragraph_format.space_after = Pt(3)
+            parse_inline(p, text, default_color=MED_GRAY, default_size=9)
+            i += 1
+            continue
+
         # Bullet points
         if re.match(r'^(\s*)[-*]\s', line):
             match = re.match(r'^(\s*)[-*]\s(.*)', line)
@@ -319,17 +336,6 @@ def build_docx():
             add_formatted_text(p, f"{num}. ", bold=True, color=ACCENT_BLUE, size=10)
             parse_inline(p, text, default_color=DARK_GRAY, default_size=10)
 
-            i += 1
-            continue
-
-        # Italic-only lines (recommendations)
-        if line.strip().startswith('- *') and line.strip().endswith('*'):
-            text = line.strip()[2:].strip()
-            p = doc.add_paragraph()
-            p.paragraph_format.left_indent = Cm(1.2)
-            p.paragraph_format.space_before = Pt(1)
-            p.paragraph_format.space_after = Pt(3)
-            parse_inline(p, text, default_color=MED_GRAY, default_size=9)
             i += 1
             continue
 

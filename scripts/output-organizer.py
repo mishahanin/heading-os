@@ -142,7 +142,17 @@ def archive(days, execute=False):
         return
 
     cutoff = datetime.now(get_default_tz()) - timedelta(days=days)
-    files = [f for f in OUTPUTS_DIR.rglob("*") if f.is_file() and "archive" not in f.parts]
+    # `relative_to(OUTPUTS_DIR).parts`, never `f.parts`. `rglob` yields ABSOLUTE
+    # paths, so `f.parts` is the whole filesystem path from `/` -- and one
+    # directory called `archive` anywhere in the workspace's ancestry excluded
+    # every file in the tree. The command then printed, in green, "No files
+    # older than N days found.", which reads as a clean result while the archive
+    # silently did nothing. It enumerated a filtered set and reported on the
+    # outputs tree.
+    files = [
+        f for f in OUTPUTS_DIR.rglob("*")
+        if f.is_file() and "archive" not in f.relative_to(OUTPUTS_DIR).parts
+    ]
     old_files = []
 
     for f in files:

@@ -197,7 +197,18 @@ def gate_message(msg: dict, vocab: dict, since: str):
     if disp not in ("task", "crm"):
         return False, f"disposition={disp or 'none'}", {"external": [], "tribe": []}
     date = (msg.get("date") or "")[:10]
-    if date and date < since:
+    # An ABSENT date used to skip the window check and admit. The docstring one
+    # screen up says "Admit iff ... date >= since", and a message with no date
+    # satisfies no such thing: `date and date < since` is False for "", so every
+    # undated message passed. Measured 2026-08-26 with since='2026-01-01': no
+    # `date` key admitted, `date: ""` admitted, only `date: '2020-01-01'`
+    # dropped. Consequence: `/odin collect` re-harvests the same undated VIRAID
+    # messages as fresh episodes on every run, for as long as they sit there.
+    # A missing date is now its own drop reason rather than a silent pass, so
+    # the CLI's per-message reason column says which of the two happened.
+    if not date:
+        return False, "date missing", {"external": [], "tribe": []}
+    if date < since:
         return False, f"date<{since}", {"external": [], "tribe": []}
     text = (msg.get("text") or "") + " " + (msg.get("action_summary") or "")
     r = resolve(text, vocab)

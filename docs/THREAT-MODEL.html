@@ -173,6 +173,11 @@ human click.</p>
 <td>PreToolUse dispatch read-guard blocks the read</td>
 <td><code>pytest tests/security/test_dispatch_read_guard.py</code></td>
 </tr>
+<tr>
+<td>A private commit subject reaches a searchable memory-index store</td>
+<td>Commit air gap: private paths never enter the index</td>
+<td>SEC-019 <code>pytest tests/security/test_SEC_019_commit_air_gap.py</code></td>
+</tr>
 </tbody>
 </table>
 <h2 id="4-secret-exfiltration">4. Secret exfiltration</h2>
@@ -188,7 +193,7 @@ human click.</p>
 <tr>
 <td>A credential is committed</td>
 <td>detect-secrets + workspace secret-scanner + push content scan</td>
-<td>CI guard <code>detect-secrets baseline drift (F-9.4)</code>; SEC-004 <code>pytest tests/security/test_SEC_004_credential_patterns.py</code></td>
+<td>CI guard <code>detect-secrets baseline drift (F-9.4)</code>; SEC-004 <code>pytest tests/security/test_SEC_004_credential_patterns.py</code>; SEC-018 <code>pytest tests/security/test_SEC_018_gate_behaviour.py</code></td>
 </tr>
 <tr>
 <td>A sensitive path is not gitignored</td>
@@ -315,7 +320,12 @@ human click.</p>
 </tr>
 <tr>
 <td>General security regressions creep back</td>
-<td>Permanent regression suite</td>
+<td>Permanent regression suite, run as a directory by the CI <code>security-tests</code> job</td>
+<td><code>pytest tests/security/</code></td>
+</tr>
+<tr>
+<td>A security regression test is quietly deleted, renamed out of collection, or emptied</td>
+<td>Only-grows floor of SEC ids</td>
 <td><code>pytest tests/security/test_regression.py</code></td>
 </tr>
 </tbody>

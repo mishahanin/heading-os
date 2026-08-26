@@ -515,13 +515,30 @@ def _hook_command(name: str) -> str:
 
     The plain `python3 .claude/hooks/<name>.py` form this replaced only worked
     while the process happened to sit at the workspace root.
+
+    `python3` is deliberate on every platform, including Windows. The engine's
+    own `.claude/settings.local.windows.json` uses `python3` nineteen times and
+    is the shipped, working configuration, because these hooks run under the
+    bash-flavoured shell Claude Code spawns there rather than under cmd.exe.
+    Emitting `python` on Windows would diverge from the file this generator is
+    modelled on.
+
+    A MISSING script says so on stderr rather than exiting quietly. The old
+    `p and runpy.run_path(...)` form evaluated to None and returned 0 when no
+    script was found, so an exec whose `.claude/hooks/` never arrived ran with
+    the whole guard set absent and nothing anywhere said a word. Per
+    `.claude/rules/scope-claims.md` this fails toward over-reporting: it does
+    not block the tool call, it just refuses to be silent about a security
+    guard that did not run.
     """
     return (
-        "python3 -c \"import runpy;from pathlib import Path;"
+        "python3 -c \"import runpy,sys;from pathlib import Path;"
         f"p=next((str(d/'.claude'/'hooks'/'{name}') "
         "for d in [Path.cwd(),*Path.cwd().parents] "
         f"if (d/'.claude'/'hooks'/'{name}').is_file()),None);"
-        "p and runpy.run_path(p,run_name='__main__')\""
+        "runpy.run_path(p,run_name='__main__') if p else "
+        f"sys.stderr.write('[hook] {name} not found under any parent of the cwd; "
+        "guard did not run\\n')\""
     )
 
 
@@ -621,9 +638,24 @@ def create_settings_local_json(state: dict, args, workspace_dir: Path) -> bool:
 
     settings_dir = workspace_dir / ".claude"
     settings_dir.mkdir(parents=True, exist_ok=True)
+    blob = json.dumps(settings, indent=2)
     settings_file = settings_dir / "settings.local.json"
-    settings_file.write_text(json.dumps(settings, indent=2), encoding="utf-8")
-    print(f"  {GREEN}[ok]{RESET} settings.local.json generated ({target_platform})")
+    settings_file.write_text(blob, encoding="utf-8")
+
+    # And the TRACKED platform template beside it, or none of the above reaches
+    # the exec. `init_git` writes `.claude/settings.local.json` into .gitignore,
+    # and `main` tells the exec to obtain the workspace by `git clone`, so the
+    # active file never left the admin machine: every provisioned exec started
+    # with no permissions and no hooks at all, the whole guard set
+    # `_dispatch_command` promises included. The template name is not ignored,
+    # ships with the clone, and `scripts/setup-platform.sh` copies it onto the
+    # active name on the exec's own machine. Darwin takes the linux template,
+    # matching that script's own Darwin branch.
+    template_name = ("settings.local.windows.json" if target_platform == "windows"
+                     else "settings.local.linux.json")
+    (settings_dir / template_name).write_text(blob, encoding="utf-8")
+    print(f"  {GREEN}[ok]{RESET} settings.local.json + {template_name} "
+          f"generated ({target_platform})")
 
     mark_step_done(workspace_dir, state, "create_settings_local_json")
     return True
@@ -910,6 +942,7 @@ def create_crm_repo(state: dict, args, workspace_dir: Path, slug: str) -> bool:
     print(f"  {GREEN}[ok]{RESET} {github_user} added as collaborator")
 
     # 3. Seed initial commit (clone, add README + contacts/, push)
+    seed_failed: list[str] = []
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         clone_dir = tmp / repo_name
@@ -931,14 +964,41 @@ def create_crm_repo(state: dict, args, workspace_dir: Path, slug: str) -> bool:
             f"Pushed via `scripts/push-all.py` from the exec machine.\n",
             encoding="utf-8",
         )
+        # The temp clone carries NO git identity. `init_git` sets user.name and
+        # user.email on the workspace repo only, and `git commit` refuses
+        # outright when neither a local nor a global identity is configured, so
+        # on any admin machine without a global identity the seed died here --
+        # and the loop below only warned.
+        for setting, value in (("user.name", args.name), ("user.email", args.email)):
+            subprocess.run(["git", "config", setting, value],
+                           cwd=str(clone_dir), capture_output=True, text=True)
         for cmd in [
             ["git", "add", "-A"],
             ["git", "commit", "-m", "Initial commit: seed contacts/ + README"],
             ["git", "push", "origin", "main"],
         ]:
             result = subprocess.run(cmd, cwd=str(clone_dir), capture_output=True, text=True)
-            if result.returncode != 0 and "nothing to commit" not in (result.stdout + result.stderr):
-                print(f"  {YELLOW}[warn]{RESET} Seed step {cmd[1]} failed: {result.stderr}")
+            if result.returncode == 0:
+                continue
+            # "nothing to commit" is a COMMIT outcome and nothing else. Applying
+            # that whitelist to `git add` and `git push` as well meant any
+            # failure whose text happened to carry the phrase was read as
+            # success.
+            if cmd[1] == "commit" and "nothing to commit" in (result.stdout + result.stderr):
+                continue
+            seed_failed.append(cmd[1])
+            print(f"  {YELLOW}[warn]{RESET} Seed step {cmd[1]} failed: {result.stderr}")
+
+    # Warn-then-mark-done is what left an exec with a permanently empty CRM
+    # repo: the step was recorded complete, so the idempotent re-run this script
+    # is built around skipped the only step that could have fixed it. Same shape
+    # as the clone-failure branch above -- return True so provisioning carries
+    # on, but leave the step open.
+    if seed_failed:
+        print(f"  {YELLOW}[warn]{RESET} CRM repo NOT seeded for {slug} "
+              f"({', '.join(seed_failed)} failed).")
+        print(f"  {YELLOW}[warn]{RESET} Step left open; re-run provisioning to retry.")
+        return True
 
     print(f"  {GREEN}[ok]{RESET} Per-exec CRM repo seeded for {slug}")
     mark_step_done(workspace_dir, state, "create_crm_repo")
@@ -1005,7 +1065,11 @@ def register_in_exec_registry(state: dict, args, workspace_dir: Path, slug: str)
         if status.stdout.strip():
             run_cmd(["git", "commit", "-m", f"Register exec: {args.name} ({slug})"], cwd=cwd)
             run_cmd(["git", "push"], cwd=cwd)
-            print(f"  {GREEN}[ok]{RESET} Pushed registry update to corporate repo")
+            # The DATA overlay, not the corporate repo. `get_data_config_dir()`
+            # is `get_personal_root() / "config"`, and the registry classifies
+            # `private` precisely so it never syncs to an executive; saying
+            # "corporate repo" here described a push that would be a leak.
+            print(f"  {GREEN}[ok]{RESET} Pushed registry update to the data repo")
     except subprocess.CalledProcessError:
         print(f"  {YELLOW}[warn]{RESET} Could not push registry update (commit locally)")
 
@@ -1232,10 +1296,14 @@ def main():
         print(f"  0. {args.name} must accept the GitHub repo invite")
     print(f"  1. Clone: git clone https://github.com/{GITHUB_ORG}/31c-workspace-{slug}.git")
     print(f"  2. cd 31c-workspace-{slug}")
-    print(f"  3. Edit .env to add API keys")
-    print(f"  4. Edit personal/context/personal-info.md")
-    print(f"  5. Run: claude")
-    print(f"  6. In Claude, run: /prime")
+    # Not optional. `.claude/settings.local.json` is gitignored, so the clone
+    # carries only the platform TEMPLATE; without this step the workspace starts
+    # with no permissions and none of the PreToolUse guards.
+    print(f"  3. Run: bash scripts/setup-platform.sh   (installs .claude/settings.local.json)")
+    print(f"  4. Edit .env to add API keys")
+    print(f"  5. Edit personal/context/personal-info.md")
+    print(f"  6. Run: claude")
+    print(f"  7. In Claude, run: /prime")
     print(f"\n  Read GETTING-STARTED.md for full onboarding guide.")
 
 

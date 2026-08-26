@@ -50,6 +50,11 @@ KILLED = "killed"
 SURVIVED = "survived"
 INVALID = "invalid"
 
+# The control the module's own docstring promises and did not run. See
+# `run_mutations`: without it a suite that was ALREADY red reported every
+# mutation as `killed`, and `Result.trustworthy` answered True.
+BASELINE_RED = "baseline-red"
+
 # A control returns None when the mutation is what it claims, or a one-line
 # reason why it is not. It receives the MUTATED source of every edited file,
 # keyed by the path as given.
@@ -78,7 +83,11 @@ class Result:
 
     @property
     def trustworthy(self) -> bool:
-        """A verdict a reader may act on. `invalid` is not one."""
+        """A verdict a reader may act on. `invalid` is not one.
+
+        Neither is `baseline-red`: a `killed` taken from a suite that was already
+        failing says nothing about the mutation.
+        """
         return self.verdict in (KILLED, SURVIVED)
 
 
@@ -97,6 +106,36 @@ def run_mutations(mutations: Iterable[Mutation], command: Sequence[str],
     root = Path(root)
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     results = []
+
+    # THE CONTROL. Run `command` on the UNMUTATED tree first, and refuse a
+    # verdict if it does not pass.
+    #
+    # Without it a suite that was already red reported every mutation as
+    # `killed`, because the verdict was read off a non-zero exit code alone and
+    # a red suite exits non-zero whatever you do to the source. Reproduced
+    # 2026-08-25: a scratch tree with a deliberately failing assertion, one
+    # mutation, output `killed`, `Result.trustworthy` True. That is the exact
+    # shape this module's opening line calls out - "refuse a verdict without a
+    # control ... the verdict a reader most wants to trust is the one this makes
+    # impossible to fake" - and the `control` predicate could not catch it,
+    # because it only ever inspects the MUTATED sources. The sibling
+    # `scripts/utils/mutation_harness.py` has run this baseline all along; the
+    # asymmetry was the whole defect.
+    mutations = list(mutations)
+    try:
+        baseline = subprocess.run(command, cwd=str(root), env=env,
+                                  capture_output=True, text=True, timeout=timeout)
+        baseline_detail = "" if baseline.returncode == 0 else (
+            f"exit {baseline.returncode}: "
+            f"{(baseline.stderr or baseline.stdout or '').strip().splitlines()[-1:]}")
+    except (OSError, subprocess.SubprocessError) as exc:
+        baseline_detail = f"the control run could not start: {exc}"
+    if baseline_detail:
+        return [Result(m.label, BASELINE_RED,
+                       f"the command does not pass on the unmutated tree "
+                       f"({baseline_detail}); every verdict below would be "
+                       f"read off a failure that was already there")
+                for m in mutations]
 
     for mutation in mutations:
         saved = {}
@@ -143,7 +182,11 @@ def run_mutations(mutations: Iterable[Mutation], command: Sequence[str],
 
 
 def render(results: Sequence[Result]) -> str:
-    """A table for the gate artifact. `invalid` is shouted, not tucked away."""
+    """A table for the gate artifact. `invalid` is shouted, not tucked away.
+
+    So is `baseline-red`, and more loudly: it means no verdict in the table was
+    measured against anything.
+    """
     width = max((len(r.label) for r in results), default=0)
     lines = []
     for r in results:

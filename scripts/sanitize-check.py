@@ -16,7 +16,15 @@ to the fleet would be a compliance incident, not just awkward:
 - Personal mail addresses (@gmail.com), which are the operator's, not the org's
   (there is NO mobile-number or postal-address pattern here; adding one is a
   change to SUBSTRING_CRITICAL, not a claim this docstring may make for it)
-- CEO-only file paths (`crm/contacts/`, `knowledge/odin-brain/`, `_secure/`)
+- CEO-only file paths (`knowledge/odin-brain/`, `_secure/`) — and NOT
+  `crm/contacts/`, which this line claimed for years while no such term has ever
+  been in SUBSTRING_CRITICAL. The same audit that wrote the parenthesis above
+  ruled that adding a term is a change to SUBSTRING_CRITICAL and never a claim
+  this docstring may make for it; `--list-terms` prints the four terms that
+  actually exist. Adding `crm/contacts/` is an open question for the operator,
+  not something to slip in behind a docstring: the path appears legitimately in
+  `.claude/rules/classification.md` and in this file, so the term would refuse
+  publishes over documentation that names it.
 
 The `_secure/` path marker is retained as a defensive scan term even though the
 vault was removed in Plan 5: if a `_secure/`-prefixed path ever reappears in
@@ -34,7 +42,10 @@ Usage:
 Exit codes:
     0 - no findings, safe to publish
     1 - one or more files contain critical terms; fix before publishing
-    2 - invocation error (bad arguments, file missing, etc.)
+    2 - invocation error (bad arguments, file missing), git unavailable, or a
+        file that exists and could not be read. The last one is UNKNOWN
+        coverage, never a pass: a gate that cannot read a file has not cleared
+        it.
 """
 import argparse
 import subprocess
@@ -86,16 +97,51 @@ TEXT_EXTENSIONS = {
 }
 
 
+# Read this much to decide text-versus-binary. A NUL byte in the first block is
+# the same test `git diff` uses, and no text file this gate cares about carries
+# one.
+SNIFF_BYTES = 8192
+
+
 def is_text_file(path: Path) -> bool:
+    """True when the file should be opened and scanned.
+
+    The suffix allowlist is a FAST PATH, no longer the whole test. On its own it
+    skipped 116 of 1802 tracked files while the PASS line still counted them as
+    scanned: 15 `*.tmpl` prose and CSS templates that ship to the fleet, 18
+    `.xml`, 19 `.service`, 14 `.timer`, 5 `.jsonl`, 2 `.csv`, and 16 files with
+    no extension at all (`.githooks/pre-push`, `.secrets.baseline`, `LICENSE`).
+    Every one of them is text a critical term can sit in, and a leak gate that
+    reports a file as scanned without opening it is the exact miss this gate
+    exists to prevent.
+
+    Anything outside the allowlist is SNIFFED instead of assumed binary, so the
+    genuinely binary members of that set (`.woff2`, `.png`, `.webp`, `.pptx`,
+    `.docx`) still fall out on their own bytes rather than on a list someone has
+    to remember to extend. An unreadable file is NOT text and NOT clean: it is
+    reported by the caller, never skipped silently.
+    """
     if path.suffix.lower() in TEXT_EXTENSIONS:
         return True
     if path.name in {".env.example", "Makefile"}:
         return True
-    return False
+    with path.open("rb") as fh:
+        return b"\0" not in fh.read(SNIFF_BYTES)
 
 
 class GitUnavailable(RuntimeError):
     """git could not report the staged set. NOT the same as an empty staged set."""
+
+
+class UnreadableFile(RuntimeError):
+    """The file exists and could not be read. UNKNOWN, never clean.
+
+    Named after the identical class in `scripts/secret-scanner.py`, whose
+    comment already settled the question for this workspace: "An unreadable file
+    is UNKNOWN, not clean." This gate's bare `except OSError: return []` was the
+    surviving twin of that fail-open, and it failed open exactly when the
+    filesystem misbehaved.
+    """
 
 
 def staged_files() -> list[Path]:
@@ -111,9 +157,16 @@ def staged_files() -> list[Path]:
     command reported whatever repo the caller's directory happened to sit in,
     and those paths then failed to exist under the engine root -- another silent
     pass.
+
+    `-z` is not optional. Without it git C-quotes any path holding a non-ASCII
+    byte and wraps the whole thing in double quotes, so `Path('"докум/a.md"')`
+    opens nothing, `scan_file` returned [] for it, and the file was counted in
+    the PASS line as scanned. `scripts/push-all.py` fixed this exact defect on
+    2026-08-23 and wrote the reason down; the fix was never carried here, and
+    this branch has no missing-file check to catch the fall-through.
     """
     result = subprocess.run(
-        ["git", "diff", "--cached", "--name-only", "--diff-filter=AM"],
+        ["git", "diff", "--cached", "--name-only", "-z", "--diff-filter=AM"],
         capture_output=True,
         text=True,
         check=False,
@@ -121,21 +174,32 @@ def staged_files() -> list[Path]:
     )
     if result.returncode != 0:
         raise GitUnavailable((result.stderr or "git failed").strip())
-    return [Path(line) for line in result.stdout.splitlines() if line]
+    return [Path(name) for name in result.stdout.split("\0") if name]
 
 
 def scan_file(
     path: Path,
     substring_terms: set[str],
     boundary_terms: set[str],
-) -> list[tuple[str, int, str, str]]:
-    """Scan one file. Returns findings list (empty on clean file or binary)."""
-    if not path.exists() or not is_text_file(path):
-        return []
+) -> list[tuple[str, int, str, str]] | None:
+    """Scan one file.
+
+    Returns the findings list on a scanned file (empty when clean), and None
+    when the file was NOT scanned because it is binary or absent. Raises
+    UnreadableFile when it exists and could not be read.
+
+    The three outcomes used to collapse into one empty list, which is what let
+    `main` count a skipped, a missing and a permission-denied file among the
+    "N files scanned" of its PASS line.
+    """
+    if not path.exists():
+        return None
     try:
+        if not is_text_file(path):
+            return None
         content = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
+    except OSError as exc:
+        raise UnreadableFile(f"{path}: {exc}") from exc
     return scan_for_terms(content, substring_terms, word_boundary_terms=boundary_terms)
 
 
@@ -198,17 +262,44 @@ def main() -> int:
         return 2
 
     file_findings: dict[Path, list] = {}
+    scanned = 0
+    not_scanned: list[Path] = []
+    unreadable: list[str] = []
     for f in files:
         abs_path = f if f.is_absolute() else workspace_root / f
-        findings = scan_file(abs_path, substring_terms, boundary_terms)
+        try:
+            findings = scan_file(abs_path, substring_terms, boundary_terms)
+        except UnreadableFile as exc:
+            unreadable.append(str(exc))
+            continue
+        if findings is None:
+            not_scanned.append(f)
+            continue
+        scanned += 1
         if findings:
             file_findings[f] = findings
 
+    # A file the gate never opened is not a file the gate cleared. The PASS line
+    # said "N files scanned" over `len(files)`, which included every binary skip,
+    # every path that failed to exist, and every permission-denied read -- the
+    # coverage over-claim `.claude/rules/scope-claims.md` forbids.
+    if unreadable:
+        print(f"{RED}[ERROR]{RESET} {len(unreadable)} file(s) exist and could not "
+              f"be read, so they were NOT scanned:", file=sys.stderr)
+        for item in unreadable:
+            print(f"  {item}", file=sys.stderr)
+        return 2
+
     if not file_findings:
-        print(f"{GREEN}[PASS]{RESET} {len(files)} files scanned. No critical terms found.")
+        print(f"{GREEN}[PASS]{RESET} {scanned} file(s) scanned. No critical terms found.")
+        if not_scanned:
+            print(f"{GRAY}{len(not_scanned)} file(s) not scanned (binary, or gone "
+                  f"between the diff and the scan): "
+                  f"{', '.join(str(p) for p in not_scanned[:5])}"
+                  f"{' ...' if len(not_scanned) > 5 else ''}{RESET}")
         return 0
 
-    print(f"{RED}[FAIL]{RESET} {len(file_findings)} of {len(files)} files contain critical terms:")
+    print(f"{RED}[FAIL]{RESET} {len(file_findings)} of {scanned} scanned file(s) contain critical terms:")
     print_findings(file_findings)
     print(f"\n{YELLOW}Fix these before publishing to corporate.{RESET} Edit the source files to remove the terms.")
     return 1

@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -58,7 +59,22 @@ def get_service():
     token = token_path()
     creds = None
     if os.path.exists(token):
-        creds = Credentials.from_authorized_user_file(token, SCOPES)
+        try:
+            creds = Credentials.from_authorized_user_file(token, SCOPES)
+        except (ValueError, json.JSONDecodeError) as exc:
+            # A token file that exists but cannot be read is the normal outcome of
+            # an interrupted write, a revoked grant, or a hand edit: the library
+            # raises JSONDecodeError on a truncated file and ValueError on valid
+            # JSON missing `refresh_token`. Neither was caught, so `get_service`
+            # raised out of a helper whose only caller-side handler
+            # (`scripts/gmail-reader.py`) catches FileNotFoundError - the operator
+            # got a traceback instead of a re-authorisation.
+            #
+            # A None here is not a silent default: it falls through to the same
+            # consent flow a first run takes, and the reason is stated first.
+            print(f"gmail_auth: the saved token at {token} is unusable "
+                  f"({type(exc).__name__}: {exc}); re-authorising.", file=sys.stderr)
+            creds = None
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())

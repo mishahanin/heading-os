@@ -22,13 +22,17 @@ Also updates TWO pointer surfaces, because they answer different questions:
     the result was a shared summary.md naming session B's archive beside a shared
     prompt.md naming session A's - a mixed state neither writer produced. The
     per-session dirs stayed correct throughout, which is the 2026-08-16 fix
-    doing its job. Left unlocked deliberately: the only shared file with a reader
-    is summary.md (grepped - scripts/next-signal.py reads it, nothing in the
-    engine reads .latest/prompt.md), and that file's single write IS atomic, so
-    the torn pair has no consumer today. A lock here would add a failure mode to
-    a hook whose one rule is that it must never lose a handoff. If a reader of
-    the shared prompt.md is ever added, this becomes a real defect and the pair
-    needs writing under one lock or collapsing into one file.
+    doing its job. The pair IS written under one lock, `.latest/.pointers.lock`,
+    which is bounded and degrades to an unlocked write on expiry (`CP.file_lock`),
+    and `tests/test_checkpoint_state_lock.py::test_the_shared_pointer_pair_cannot_be_torn`
+    holds it.
+
+    This paragraph argued the opposite until 2026-08-25 - that the pair was "left
+    unlocked deliberately" and that "a lock here would add a failure mode" - while
+    the code three hundred lines down already took the lock. A maintainer reading
+    the module docstring first, which is what anyone opening this file does, would
+    have concluded the race was live and unfixed, or removed the lock as the
+    unjustified failure mode this text warned against.
 
 Resets hysteresis state in .claude/state/checkpoint-<session-slug>.json so the
 post-compact session starts fresh, and prunes the per-session artifacts of
@@ -198,10 +202,27 @@ def main() -> int:
               "object; continuing with defaults", file=sys.stderr)
         payload = {}
 
-    raw_session_id = payload.get("session_id", "session")
-    raw_trigger = payload.get("trigger", "unknown")
-    raw_transcript_path = payload.get("transcript_path", "")
-    compact_summary = (payload.get("compact_summary") or "").strip()
+    # Coerce the FIELDS, the way the payload itself is coerced two lines above.
+    # `.strip()` on `payload.get("compact_summary")` sits outside every try block
+    # in this file, so `{"compact_summary": {"a": 1}}` exited 1 with an
+    # AttributeError before anything was written: no archive, no quarantine, no
+    # `.latest` pointer update (so the next session silently resumed from the
+    # PREVIOUS compact's pointer), and no systemMessage - only a traceback on a
+    # stream this file itself notes is read by no one. The hook's one rule is
+    # that a handoff must never be lost.
+    def _text(key: str, default: str = "") -> str:
+        value = payload.get(key, default)
+        if isinstance(value, str):
+            return value
+        if value is not None:
+            print(f"checkpoint-save: {key} arrived as {type(value).__name__}, "
+                  f"not a string; using {default!r}", file=sys.stderr)
+        return default
+
+    raw_session_id = _text("session_id", "session")
+    raw_trigger = _text("trigger", "unknown")
+    raw_transcript_path = _text("transcript_path", "")
+    compact_summary = _text("compact_summary").strip()
 
     # Two clocks, on purpose, per the workspace's datetime split.
     #
@@ -413,10 +434,25 @@ Repository state is authoritative; this file is supporting context.
             #
             # So the memory is preserved OUTSIDE the tracked tree and the wall
             # is left unarmed. What lands at the normal pointer path is a
-            # POINTER carrying no summary text at all, so the SessionStart
-            # inject still tells the next session where to look and the tracked
-            # tree stays clean. This is an alarm state, not the permanent hiding
-            # that gitignoring the whole archive would have been.
+            # POINTER carrying no summary text at all, and the tracked tree
+            # stays clean. This is an alarm state, not the permanent hiding that
+            # gitignoring the whole archive would have been.
+            #
+            # The SessionStart inject does NOT reach the next session on this
+            # branch, and the sentence above claimed it did until 2026-08-25.
+            # The artifact slug here is the literal "unredacted", so the
+            # per-session pointer pair lands at `.latest/unredacted/`, while
+            # `checkpoint-inject.py` reads only `.latest/<session_slug(payload)>/`
+            # - the slug of the RAW id. The two can never match.
+            #
+            # That is left as it is, deliberately. Pointing the pair at the raw
+            # slug would build a TRACKED directory name out of an id that failed
+            # redaction, which is the one thing this branch exists to prevent;
+            # the state file at line ~636 can use the raw slug precisely because
+            # `.claude/state/` is gitignored, and `.latest/` is not. So the alarm
+            # reaches the operator through the systemMessage and the shared
+            # `.latest/summary.md`, which is what the note 165 lines below has
+            # said all along, and through nothing else.
             write_text_atomic(quarantine_path, archive_md)
     except Exception as exc:  # noqa: BLE001 - the pointers must still be told
         # The MESSAGE stays on stderr for the same reason it does above: it can

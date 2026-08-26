@@ -169,14 +169,15 @@ pre-commit hook set keep the published pages honest:</p>
 <ol>
 <li><strong>Docs HTML in sync (F-8.1):</strong> <code>regenerate-docs-html.py --all</code> then
    <code>git diff --exit-code docs/</code>. The <code>--all</code> mode regenerates every md-sourced page.
-   It also nav-syncs and search-injects the hand-authored pages, then rebuilds the
-   search index, all in one pass. Three things fail it. An md-sourced <code>.html</code> that
-   was not regenerated from its <code>.md</code>. A stale nav injection or a missing search box
+   It also nav-syncs and search-injects the hand-authored pages. It rebuilds the
+   search index too. All of that happens in one pass. Three things fail it. An
+   md-sourced <code>.html</code> that was not regenerated from its <code>.md</code>. A stale nav
+   injection or a missing search box
    on a hand-authored page. A stale <code>search-index.json</code>. Hand-authored page bodies
-   are the source of truth, so a body edit that is committed as-is is correct and
+   are the source of truth. A body edit that is committed as-is is correct and
    does not trip the guard.</li>
 <li><strong>README numbers in sync (F-8.3):</strong> <code>scripts/dev/check-readme-numbers.py</code>
-   re-derives the security-test count and guard-layer count and fails if the
+   re-derives the security-test count and guard-layer count. It fails if the
    README or <code>docs/index.html</code> &ldquo;By the numbers&rdquo; block disagrees.</li>
 </ol>
 <p>The matching pre-commit hook (<code>docs-html-drift</code>) runs the same regenerate and
@@ -218,9 +219,9 @@ syncs with plain git:</p>
 <ul>
 <li><strong>Code down:</strong> <code>git pull --ff-only</code> on the engine clone (the exec&rsquo;s
   <code>.heading-os</code>). Engine code ships by cloning the engine repo, not by copying.</li>
-<li><strong>Corporate content down:</strong> the corporate-consumption seam —
+<li><strong>Corporate content down:</strong> the corporate-consumption seam.
   <code>python scripts/sync-corporate.py</code> clones/pulls <code>heading-os-corporate</code> into the
-  gitignored <code>.corporate-repo/</code>, read in place via <code>get_corporate_root()</code>, and
+  gitignored <code>.corporate-repo/</code>, read in place via <code>get_corporate_root()</code>.
   <code>/sync</code> refreshes it (deferral lifted 2026-06-26 — CEO cutover complete).</li>
 <li><strong>Data up / backup:</strong> <code>python scripts/push-all.py</code> pushes the exec&rsquo;s own data
   repo (<code>heading-os-data-{slug}</code>), which carries <code>crm/contacts/</code>. CEO aggregation

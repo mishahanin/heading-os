@@ -336,8 +336,17 @@ def test_a_session_registry_holding_a_list_reads_as_empty(tmp_path):
 
 
 def test_a_valid_session_registry_still_reads(tmp_path):
+    """Seeded in the shape the hook writes: keyed by session_id, cwd as a field.
+
+    This carried the pre-2026-08-23 cwd-keyed shape, which the hook can no longer
+    produce, so it held `session_for_cwd` to a lookup that could never hit in
+    production.
+    """
     reg = tmp_path / "active-sessions.json"
-    reg.write_text(json.dumps({"/w": {"session_id": "s1"}}), encoding="utf-8")
+    reg.write_text(json.dumps({
+        "s1": {"session_id": "s1", "cwd": "/w",
+               "started_at": "2026-08-25T00:00:00+00:00"},
+    }), encoding="utf-8")
     assert sessions.session_for_cwd(reg, "/w") == "s1"
 
 

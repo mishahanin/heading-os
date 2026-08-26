@@ -250,8 +250,14 @@ def run_skill(client, model: str, router_rules: str, skill_name: str) -> dict:
     skill_dir = SKILLS_DIR / skill_name
     cases = load_triggers(skill_dir)
     if not cases:
+        # Say which of the two it is. One message covered both, and "no
+        # triggers.json" was a false statement of what was measured for the
+        # skill whose triggers.json is present and empty.
+        reason = ("triggers.json holds no cases"
+                  if (skill_dir / "triggers.json").exists()
+                  else "no triggers.json")
         return {"skill": skill_name, "cases": 0, "passed": 0, "errored": 0,
-                "results": [], "skipped": True}
+                "results": [], "skipped": True, "skip_reason": reason}
 
     system = build_system(router_rules, skill_name, load_skill_description(skill_dir))
     results = []
@@ -279,12 +285,13 @@ def run_skill(client, model: str, router_rules: str, skill_name: str) -> dict:
             "reason": verdict.get("reason", ""),
         })
     return {"skill": skill_name, "cases": judged, "passed": passed, "errored": errored,
-            "results": results, "skipped": False}
+            "results": results, "skipped": False, "skip_reason": ""}
 
 
 def print_skill_report(r: dict, threshold: float) -> None:
     if r["skipped"]:
-        print(f"{YELLOW}skip{RESET}: {r['skill']} - no triggers.json")
+        print(f"{YELLOW}skip{RESET}: {r['skill']} - "
+              f"{r.get('skip_reason', 'no triggers.json')}; nothing was measured")
         return
     rate = r["passed"] / r["cases"] if r["cases"] else 0.0
     errored = r.get("errored", 0)
@@ -326,6 +333,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.skill:
+        if not (SKILLS_DIR / args.skill).is_dir():
+            # A typo used to print one skip line and return 0, including under
+            # --strict. There is no such skill to measure, which is a setup
+            # error (exit 2), not a passing routing check.
+            print(f"{RED}ERROR{RESET}: no skill directory "
+                  f"{SKILLS_DIR / args.skill}", file=sys.stderr)
+            return 2
         skills = [args.skill]
     elif args.changed:
         skills = changed_routing_skills(args.base)
@@ -367,7 +381,10 @@ def main(argv: list[str] | None = None) -> int:
     # `breached` would report a dead judge as a routing regression, which is the
     # confusion this whole split exists to end.
     breached = [r for r in active if r["cases"] and (r["passed"] / r["cases"]) < args.threshold]
-    unmeasured = [r for r in active if not r["cases"]]
+    # Over `reports`, not `active`. A skipped skill measured nothing either, and
+    # dropping it here is what let `--skill osnit-typo --strict` and an empty
+    # triggers.json both exit 0 - a clean routing check that judged nothing.
+    unmeasured = [r for r in reports if r["skipped"] or not r["cases"]]
 
     if args.json:
         print(json.dumps({
@@ -394,7 +411,7 @@ def main(argv: list[str] | None = None) -> int:
         if breached:
             print(f"{YELLOW}Below {args.threshold:.0%}: {', '.join(r['skill'] for r in breached)}{RESET}")
         if unmeasured:
-            print(f"{YELLOW}Unmeasured (judge never answered): "
+            print(f"{YELLOW}Unmeasured (no cases to judge, or no judge verdict): "
                   f"{', '.join(r['skill'] for r in unmeasured)}{RESET}")
         if not args.strict:
             print(f"{GRAY}advisory run (pass --strict to gate on the threshold){RESET}")

@@ -90,9 +90,9 @@ carries the five contract-writing rules, each earned by a measured failure, and
 how to read `probe`'s table. Read it before writing a contract.
 
 1. **Criteria derived from a partition of the input domain.** One row per value
-   class, edges included, and the contract is real test files at
-   `tests/contract/{YYYY-MM-DD}-{slug}/` importing the code under test INSIDE each
-   test body. It is the only generator of a strong contract we have, and a contract
+   class, edges included. The contract is real test files at
+   `tests/contract/{YYYY-MM-DD}-{slug}/`, importing the code under test INSIDE each
+   test body. It is the only generator of a strong contract we have. A contract
    born too weak is the dominant measured defect.
 2. **A byte budget on the plan itself: warn at 16,384 bytes, hard at 24,576.**
    Measured across 99 real plans, median 23,704. The warn mirrors the SKILL.md
@@ -104,12 +104,12 @@ how to read `probe`'s table. Read it before writing a contract.
    nothing warns, and nothing refuses a commit. It is a proposal with operator
    override. It earns its keep by forcing the writer to discard what does not
    matter. Without one, the plan grows until nobody reads the part that decides.
-3. **The plan does not decide what the implementer can decide from its own context**,
-   and it names the files to read first. Re-specifying what the code already says
+3. **The plan does not decide what the implementer can decide from its own context.**
+   It names the files to read first. Re-specifying what the code already says
    wastes the implementer's attention on agreement.
-4. **Vacuity is measured, not assumed.** `.venv/bin/python scripts/canopus.py
-   probe tests/contract/{date}-{slug}/` null-stubs the missing modules and runs
-   the contract twice, each stub carrying different values. A test that never
+4. **Vacuity is measured, not assumed.** The command `.venv/bin/python
+   scripts/canopus.py probe tests/contract/{date}-{slug}/` null-stubs the missing
+   modules. It runs the contract twice, each stub carrying different values. A test that never
    FAILS under either run is vacuous: an outcome invariant to the stub proves
    nothing. Passing, skipping and erroring all leave a test unproved. Only a
    failure shows that it read the value. The probe also runs three wrong

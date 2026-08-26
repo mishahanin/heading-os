@@ -130,19 +130,70 @@ def load_cadence(workspace_root: Path) -> dict[str, tuple[int, int]]:
         from scripts.bridge_daemon.config import load_config
 
         cfg = load_config(workspace_root) or {}
-    except Exception:  # noqa: BLE001 - config read is best-effort; defaults below
+    except Exception as exc:  # noqa: BLE001 - config read is best-effort; defaults below
+        # Its two siblings in this file both log here; this one bound nothing
+        # and said nothing. A daemon configured with a long cadence then silently
+        # reverted to the 60s/120s defaults, was classified `silent`, and fired a
+        # critical alert with no line anywhere explaining that the config was
+        # never read.
+        logger.debug("watchdog: cadence config read failed: %s", exc)
         cfg = {}
-    raw = (
-        cfg.get("daemon", {}).get("watchdog", {}).get("cadence", {})
-        if isinstance(cfg.get("daemon"), dict)
-        else {}
-    )
+    # Every level, not just `daemon`. The chain sat outside the try above, so
+    # `watchdog: off` -- one YAML typo turning a mapping into a scalar -- called
+    # `.get` on a str, raised AttributeError out of here and out of
+    # `check_once`, and landed in the bridge daemon's per-tick handler, which
+    # logs and carries on. The 2-minute tick then did nothing forever while the
+    # daemon reported itself healthy. That is exactly the failure `_seconds`
+    # below was written to prevent, fixed for malformed VALUES and left open for
+    # malformed CONTAINERS. The watchdog is the thing that notices silence; it
+    # must not be the thing that goes silent.
+    raw: dict = {}
+    node = cfg
+    for key in ("daemon", "watchdog", "cadence"):
+        if node is None:
+            break
+        if not isinstance(node, dict):
+            logger.warning(
+                "watchdog: config path daemon.watchdog.cadence is malformed at "
+                "%r (%s, expected a mapping); using default cadence for every "
+                "daemon", key, type(node).__name__)
+            node = None
+            break
+        node = node.get(key)
+    if isinstance(node, dict):
+        raw = node
+    elif node is not None:
+        logger.warning(
+            "watchdog: daemon.watchdog.cadence is a %s, not a mapping; using "
+            "default cadence for every daemon", type(node).__name__)
+    def _seconds(entry: dict, key: str, default: int, name: str) -> int:
+        """One cadence number, or the default.
+
+        The docstring above promises "config read is best-effort", but a
+        MALFORMED value broke that promise: `cadence.<name>.expected: ~` reached
+        `int(None)` as a TypeError and a non-numeric string as a ValueError,
+        neither caught. That raised out of `load_cadence`, out of `check_once`,
+        and into the bridge daemon's per-tick handler, which logs and carries on
+        -- so one typo in the config disabled the watchdog on every tick while
+        the daemon kept reporting itself healthy. The watchdog is the thing that
+        notices silence; it must not be the thing that goes silent.
+        """
+        try:
+            return int(entry[key])
+        except KeyError:
+            return default
+        except (TypeError, ValueError):
+            logger.warning(
+                "watchdog: cadence.%s.%s is %r, not a number; using %ds",
+                name, key, entry.get(key), default)
+            return default
+
     out: dict[str, tuple[int, int]] = {}
     for name in expected:
         entry = raw.get(name) if isinstance(raw, dict) else None
         if isinstance(entry, dict):
-            expected_s = int(entry.get("expected", DEFAULT_EXPECTED_S))
-            grace = int(entry.get("grace", DEFAULT_GRACE_S))
+            expected_s = _seconds(entry, "expected", DEFAULT_EXPECTED_S, name)
+            grace = _seconds(entry, "grace", DEFAULT_GRACE_S, name)
         else:
             expected_s, grace = DEFAULT_EXPECTED_S, DEFAULT_GRACE_S
         out[name] = (expected_s, grace)
@@ -175,13 +226,29 @@ def _read_beat(workspace_root: Path, name: str) -> dict | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+    if not isinstance(data, dict):
+        # Valid JSON, wrong shape. A beat file holding an array, a string or a
+        # number reached `.get` in `_age_seconds` as an AttributeError, which
+        # escaped `check_once` into the daemon's blanket per-tick handler and
+        # took the WHOLE fleet's liveness classification down every tick, not
+        # just this one daemon's. `classify`'s docstring already says a file
+        # with no parseable timestamp is `missing`; this makes that true.
+        logger.warning("watchdog: %s holds a %s, not an object; treating the "
+                       "beat as missing", path, type(data).__name__)
+        return None
+    return data
 
 
 def _age_seconds(record: dict | None, now: datetime) -> float | None:
-    if not record:
+    # `isinstance`, not truthiness. `classify` promises `missing` for "a file
+    # with no parseable timestamp", and a non-empty non-dict has none; the old
+    # falsy test let `[]` and `{}` through correctly and passed `[1, 2]` and
+    # `"x"` straight into `.get`. `_read_beat` now filters those too, so this is
+    # the second line of defence for a caller that builds a record itself.
+    if not isinstance(record, dict) or not record:
         return None
     dt = parse_iso(record.get("last_heartbeat"))
     if dt is None:

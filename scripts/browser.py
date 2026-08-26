@@ -41,6 +41,8 @@ CLI:
     python scripts/browser.py launch --url https://zoom.us/signin
     python scripts/browser.py status
     python scripts/browser.py stop
+
+Tests: tests/test_an_allowlist_that_admitted_a_flag.py
 """
 
 from __future__ import annotations
@@ -714,7 +716,15 @@ def cmd_status(args: argparse.Namespace) -> int:
     _log(f"CDP endpoint reachable: {cdp}")
     lock = _active_lock_file()
     if lock is not None:
-        _log(f"Lock file ({lock.name}): {lock.read_text().strip()}")
+        # Guarded like `_lock_state` and `stop_comet` already guard the same
+        # read. `_active_lock_file()` checks existence and this reads a moment
+        # later, so a lock removed in between - or one this user cannot read -
+        # crashed a health command with a traceback instead of reporting.
+        try:
+            body = lock.read_text().strip()
+        except OSError as exc:
+            body = f"<unreadable: {exc}>"
+        _log(f"Lock file ({lock.name}): {body}")
     return 0 if cdp else 2
 
 

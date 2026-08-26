@@ -24,14 +24,45 @@ def read_registry(path: Path) -> dict:
         return {}
     return data if isinstance(data, dict) else {}
 
-def session_for_cwd(registry_path: Path, cwd: str) -> str | None:
-    # `isinstance`, not truthiness. `read_registry` guarantees the REGISTRY is
-    # a dict and says nothing about its values, so a truthy non-dict entry --
-    # a bare session-id string from an older hook, or a hand edit -- reached
-    # `.get` and 500'd /launch. That is the same shape this module's docstring
-    # records fixing one level up; the fix stopped at the top level.
-    entry = read_registry(registry_path).get(cwd)
-    return entry.get("session_id") if isinstance(entry, dict) else None
+def registry_path() -> Path:
+    """The one registry `.claude/hooks/bridge-hook.py` actually writes.
+
+    Named here so a second reader cannot invent its own path, which is what
+    `heartbeat._active_session_count` did: it read
+    `<workspace>/.daemon-state/active-sessions.json`, a file nothing in this
+    repository writes, and reported `active_sessions: 0` for a daemon serving
+    live sessions - while its docstring credited bridge-hook.py as the writer.
+    """
+    return Path.home() / ".claude" / "state" / "active-sessions.json"
+
+
+def session_for_cwd(registry_path_: Path, cwd: str) -> str | None:
+    """The session id registered for `cwd`, or None.
+
+    Scans the VALUES. The registry was rekeyed from cwd to session_id on
+    2026-08-23, and this lookup kept indexing by KEY, so against any registry
+    the current hook produces it could never hit: `/launch` with a cwd and no
+    session_id - the fallback that justifies the registry existing - always
+    resolved None and spawned a fresh terminal beside the live session. The
+    regression stayed invisible because the endpoint test seeded the registry by
+    hand in the OLD cwd-keyed shape, which the hook can no longer write.
+
+    `isinstance`, not truthiness: `read_registry` guarantees the registry is a
+    dict and says nothing about its values, so a bare session-id string from an
+    older hook, or a hand edit, must not reach `.get`.
+    """
+    newest_sid: str | None = None
+    newest_started = ""
+    for key, entry in read_registry(registry_path_).items():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("cwd") != cwd:
+            continue
+        started = str(entry.get("started_at") or "")
+        if newest_sid is None or started > newest_started:
+            newest_sid = str(entry.get("session_id") or key)
+            newest_started = started
+    return newest_sid
 
 def active_count(registry_path: Path) -> int:
     return len(read_registry(registry_path))

@@ -423,9 +423,47 @@ def test_stage_with_keywords_warns_that_it_does_nothing():
 
 
 def test_keywords_alone_warns_about_nothing():
+    """The silent half of the pair above.
+
+    Silence alone is not evidence: a script that crashed prints no warning
+    either. So the run must also show it completed and produced its `--json`
+    output, which is what proves the quiet came from the branch and not from a
+    dead process.
+    """
+    import json
     import subprocess
     proc = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "odin-principles.py"),
          "--keywords", "acme,bob", "--json"],
         capture_output=True, text=True, cwd=str(ROOT), timeout=60)
+
     assert "has no effect" not in proc.stderr, proc.stderr
+    assert proc.returncode == 0, proc.stderr[-1500:]
+    assert isinstance(json.loads(proc.stdout), list), proc.stdout[:500]
+
+
+def test_a_workspace_without_the_brain_degrades_cleanly(tmp_path):
+    """The console-first degrade for an exec workspace, which this machine can
+    never reach on its own: the Odin brain IS present here, so the branch stays
+    dark in every other test. Found while re-aiming a mutation that landed on
+    it and survived.
+
+    A caller parsing `--json` must still get a list, and the exit must stay 0 -
+    an absent brain is a missing capability, not a failure.
+    """
+    import json
+    import os
+    import subprocess
+    (tmp_path / "knowledge").mkdir()
+
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "odin-principles.py"),
+         "--keywords", "acme", "--json"],
+        capture_output=True, text=True, cwd=str(ROOT), timeout=60,
+        env=dict(os.environ, HEADING_OS_DATA=str(tmp_path)))
+
+    assert proc.returncode == 0, proc.stderr[-1500:]
+    assert json.loads(proc.stdout) == [], proc.stdout[:500]
+    assert "Odin brain not present" in proc.stderr, (
+        f"the degrade was silent, so a caller cannot tell an empty result from "
+        f"an absent brain: {proc.stderr[-500:]}")

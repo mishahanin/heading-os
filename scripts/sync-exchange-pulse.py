@@ -67,11 +67,22 @@ def _resolve_pythonw() -> Path | None:
     return exe if exe.exists() else None
 
 
+# How long to give a freshly spawned daemon to fall over before calling it
+# started. Only paid on the path where the daemon was down, so a healthy pulse
+# never waits.
+STARTUP_SETTLE_SECONDS = 2.0
+
+
 def _spawn_detached_daemon() -> int | None:
     """Spawn the sync-exchange daemon in a fully detached process. Returns sentinel.
 
     Returns -1 on Windows (success — daemon PID lands in .sync-exchange/daemon.pid),
-    actual PID on POSIX, None on spawn failure.
+    actual PID on POSIX, None on spawn failure OR on a POSIX child that exited
+    within `STARTUP_SETTLE_SECONDS`.
+
+    The survival check covers POSIX only. On Windows the Popen is the `cmd`
+    shell, not the daemon, so its exit says nothing about the daemon; that lane
+    still reports on the spawn alone.
     """
     py = _resolve_pythonw()
     daemon = WORKSPACE / "scripts" / "sync-exchange-daemon.py"
@@ -104,7 +115,18 @@ def _spawn_detached_daemon() -> int | None:
             close_fds=True,
             start_new_session=True,
         )
-        return proc.pid
+        # Popen hands back a pid the instant the fork lands, which says nothing
+        # about survival. A daemon that dies on startup (apscheduler missing
+        # from the interpreter it was spawned with, an import error, or its own
+        # "another instance is starting" exit 1 when two health checks race)
+        # still yielded a pid, so the pulse printed "started pid N" and returned
+        # 0 forever. Wait a moment: if `wait` RETURNS, the child is already
+        # dead, and only a timeout means it is still running.
+        try:
+            proc.wait(timeout=STARTUP_SETTLE_SECONDS)
+        except subprocess.TimeoutExpired:
+            return proc.pid
+        return None
     except Exception:
         return None
 
@@ -160,7 +182,8 @@ def main():
         new_pid = _spawn_detached_daemon()
         if new_pid is None:
             print(
-                "🔄 Sync-Exchange: ❌ daemon NOT RUNNING and auto-start failed. "
+                "🔄 Sync-Exchange: ❌ daemon NOT RUNNING and auto-start failed "
+                "(it did not spawn, or it exited straight after starting). "
                 "Run manually: python scripts/sync-exchange-daemon.py daemon"
             )
             # Non-zero. This is the liveness check /prime's health helper calls,

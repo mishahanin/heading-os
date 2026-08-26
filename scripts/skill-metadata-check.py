@@ -230,6 +230,38 @@ def parse_frontmatter(skill_md: Path) -> tuple[dict, str]:
     return data, ""
 
 
+def _classify_corpus(result: dict, skill_dir: Path, frontmatter: dict | None,
+                     baseline: frozenset) -> None:
+    """Fill the F-6.1 coverage fields on ``result``, in place.
+
+    ``frontmatter=None`` means the SKILL.md could not be read or parsed, so
+    routability is genuinely unknown. The corpus file is independent of the
+    frontmatter and is still measured, but the status stays ``UNKNOWN`` and
+    ``main`` treats UNKNOWN as a gate failure. Before this ran on the error
+    paths, a skill with a malformed SKILL.md kept ``triggers_status`` at its
+    initial UNKNOWN with an EMPTY ``corpus_issues`` -- its triggers.json was
+    never opened -- and the "UNCONDITIONAL" coverage gate read that as clean.
+    """
+    corpus = skill_dir / "triggers.json"
+    if corpus.exists():
+        result["corpus_issues"] = corpus_issues(corpus)
+    result["has_valid_corpus"] = corpus.exists() and not result["corpus_issues"]
+
+    if frontmatter is None:
+        result["triggers_status"] = "UNKNOWN"
+        return
+
+    result["is_auto_routable"] = is_auto_routable(frontmatter)
+    if result["has_valid_corpus"]:
+        result["triggers_status"] = "COVERED"
+    elif not result["is_auto_routable"]:
+        result["triggers_status"] = "EXEMPT"
+    elif skill_dir.name in baseline:
+        result["triggers_status"] = "GRANDFATHERED"
+    else:
+        result["triggers_status"] = "MISSING"
+
+
 def check_skill(skill_dir: Path, baseline: frozenset = frozenset()) -> dict:
     """Check a single skill directory's SKILL.md for required frontmatter.
 
@@ -258,6 +290,7 @@ def check_skill(skill_dir: Path, baseline: frozenset = frozenset()) -> dict:
     if not skill_md.exists():
         result["error"] = "SKILL.md not found"
         result["status"] = "ERROR"
+        _classify_corpus(result, skill_dir, None, baseline)
         return result
 
     # Size budget: measured independently of frontmatter status so a HARD size
@@ -265,17 +298,22 @@ def check_skill(skill_dir: Path, baseline: frozenset = frozenset()) -> dict:
     try:
         raw = skill_md.read_text(encoding="utf-8")
         result["size_bytes"] = len(raw.encode("utf-8"))
-        result["size_lines"] = raw.count("\n")
+        # splitlines(), not count("\n"): the latter counts line TERMINATORS, so a
+        # file whose last line has no trailing newline was reported one line
+        # short and a 501-line SKILL.md passed the 500-line hard cap.
+        result["size_lines"] = len(raw.splitlines())
         result["size_status"] = classify_size(result["size_lines"], result["size_bytes"])
     except OSError as e:
         result["error"] = f"read failed: {e}"
         result["status"] = "ERROR"
+        _classify_corpus(result, skill_dir, None, baseline)
         return result
 
     frontmatter, err = parse_frontmatter(skill_md)
     if err:
         result["error"] = err
         result["status"] = "ERROR"
+        _classify_corpus(result, skill_dir, None, baseline)
         return result
 
     for field in REQUIRED_TOP_FIELDS:
@@ -330,20 +368,7 @@ def check_skill(skill_dir: Path, baseline: frozenset = frozenset()) -> dict:
 
     # Trigger-coverage classification (F-6.1). Independent of the frontmatter status
     # above so a coverage gap is visible even on a skill that also fails other checks.
-    result["is_auto_routable"] = is_auto_routable(frontmatter)
-    corpus = skill_dir / "triggers.json"
-    if corpus.exists():
-        result["corpus_issues"] = corpus_issues(corpus)
-    result["has_valid_corpus"] = corpus.exists() and not result["corpus_issues"]
-
-    if result["has_valid_corpus"]:
-        result["triggers_status"] = "COVERED"
-    elif not result["is_auto_routable"]:
-        result["triggers_status"] = "EXEMPT"
-    elif skill_dir.name in baseline:
-        result["triggers_status"] = "GRANDFATHERED"
-    else:
-        result["triggers_status"] = "MISSING"
+    _classify_corpus(result, skill_dir, frontmatter, baseline)
 
     return result
 
@@ -398,12 +423,16 @@ def print_report(results: list[dict], summary_only: bool = False,
 
     # Trigger-coverage gate (F-6.1). Always printed (like size), so the pre-commit hook
     # and flagless CI both surface every MISSING / thin corpus / stale-baseline entry.
-    cov = {"COVERED": 0, "GRANDFATHERED": 0, "EXEMPT": 0, "MISSING": 0}
+    # UNKNOWN is counted and printed. It used to be dropped on the floor, so a
+    # one-skill tree whose only skill was unreadable printed four zeros - a
+    # tally that accounted for none of the skills it had just walked.
+    cov = {"COVERED": 0, "GRANDFATHERED": 0, "EXEMPT": 0, "MISSING": 0, "UNKNOWN": 0}
     for r in results:
         ts = r.get("triggers_status", "UNKNOWN")
         if ts in cov:
             cov[ts] += 1
     missing = [r for r in results if r.get("triggers_status") == "MISSING"]
+    unknown = [r for r in results if r.get("triggers_status") == "UNKNOWN"]
     thin = [r for r in results if r.get("corpus_issues")]
     stale = [r for r in results if r["name"] in baseline and r.get("has_valid_corpus")]
     print(f"\n{BOLD}triggers.json coverage{RESET} "
@@ -412,7 +441,11 @@ def print_report(results: list[dict], summary_only: bool = False,
     print(f"  {GREEN}COVERED:{RESET} {cov['COVERED']}  "
           f"{GRAY}GRANDFATHERED:{RESET} {cov['GRANDFATHERED']}  "
           f"{GRAY}EXEMPT:{RESET} {cov['EXEMPT']}  "
-          f"{RED}MISSING:{RESET} {cov['MISSING']}")
+          f"{RED}MISSING:{RESET} {cov['MISSING']}  "
+          f"{RED}UNKNOWN:{RESET} {cov['UNKNOWN']}")
+    for r in unknown:
+        print(f"  {RED}UNKNOWN{RESET} {BOLD}{r['name']}{RESET}: SKILL.md unreadable, "
+              f"so routability was never established  ({r['path']})")
     for r in missing:
         print(f"  {RED}MISSING{RESET} {BOLD}{r['name']}{RESET}: auto-routable, no valid "
               f"triggers.json, not grandfathered  ({r['path']})")
@@ -498,8 +531,11 @@ def main() -> int:
     # not grandfathered), a thin/malformed present corpus, or a stale baseline entry
     # (baselined but now covered) exits 1 regardless of flags, so the flagless CI
     # invocation enforces coverage with no workflow-file change.
+    # UNKNOWN is a failure, not a pass: it means the SKILL.md could not be read
+    # or parsed, so nothing about this skill's routing was established. Leaving
+    # it out is what let a broken SKILL.md plus a 1-case corpus exit 0.
     coverage_fail = (
-        any(r.get("triggers_status") == "MISSING" for r in results)
+        any(r.get("triggers_status") in ("MISSING", "UNKNOWN") for r in results)
         or any(r.get("corpus_issues") for r in results)
         or any(r["name"] in baseline and r.get("has_valid_corpus") for r in results)
     )

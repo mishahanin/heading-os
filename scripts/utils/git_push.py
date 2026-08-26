@@ -82,25 +82,46 @@ _GITHUB_HOST_ALIASES = {
 _VIS_CACHE: dict[tuple[str, bool], Optional[str]] = {}
 
 
-def _is_split_engine(repo: Path) -> bool:
-    """True iff ``repo`` is the split-topology ENGINE clone (data lives in a sibling).
+# The one file that only the engine clone carries. `CLAUDE.md` and `.claude/` are
+# not enough: the data overlay has `.claude/` too.
+_ENGINE_MARKER = Path("scripts") / "utils" / "engine_guard.py"
 
-    Only the engine must stay code-only. The DATA overlay and the corporate/CRM repos
-    legitimately carry private/corporate content, so they are exempt. Detected from the
-    data-root seam: engine == workspace root AND data root resolves elsewhere. On a
-    pre-cutover single repo (data root == workspace root) nothing is walled here.
+
+def _is_split_engine(repo: Path) -> bool:
+    """True iff ``repo`` is the ENGINE clone and must therefore stay code-only.
+
+    Only the engine is walled. The DATA overlay and the corporate/CRM repos
+    legitimately carry private/corporate content, so they are exempt, and they are
+    identified by not being the workspace root.
+
+    The second test used to be "the data root resolves somewhere else", exempting a
+    repository whose data root collapsed onto itself. That is an inversion, because
+    of HOW the collapse happens: `get_data_root()` rule 2 returns the workspace root
+    when it finds `crm/contacts/` or `knowledge/` INSIDE it. Private data appearing
+    in the engine clone is the single condition this wall exists to catch, and it
+    was the condition that switched the wall off. Reproduced on 2026-08-25 against a
+    scratch engine clone holding `knowledge/note.md` and `outputs/deal.md`:
+    `_is_split_engine` answered False, `_roots_unreadable` answered None, the wall
+    never ran, and `scan_engine_repo` - had it been called - flagged all four
+    artifacts. `get_data_root` logs a warning there, to a logger no one is reading
+    at push time.
+
+    So a collapsed data root no longer exempts anything. The engine marker decides
+    instead, and the wall then REFUSES only if the scan actually finds something -
+    the same direction `_roots_unreadable` already takes for an unreadable
+    environment. A clean engine clone still pushes.
     """
     try:
         engine = get_workspace_root().resolve()
         data = get_data_root().resolve()
     except Exception:
         return False
-    return data != engine and repo.resolve() == engine
-
-
-# The one file that only the engine clone carries. `CLAUDE.md` and `.claude/` are
-# not enough: the data overlay has `.claude/` too.
-_ENGINE_MARKER = Path("scripts") / "utils" / "engine_guard.py"
+    resolved = repo.resolve()
+    if resolved != engine:
+        return False
+    if data != engine:
+        return True
+    return (resolved / _ENGINE_MARKER).is_file()
 
 
 def _roots_unreadable(repo: Path) -> str | None:

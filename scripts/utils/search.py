@@ -17,11 +17,13 @@ Result shape (normalised across backends):
     [{"title": str, "url": str, "content": str, "score": float}, ...]
 """
 
+import gzip
 import json
 import time
 import urllib.parse
 import urllib.request
 import urllib.error
+import zlib
 
 from .api import load_api_key
 
@@ -58,13 +60,41 @@ def _post_json(url: str, payload: dict, headers: dict, timeout: int = DEFAULT_TI
             raise SearchBackendError(f"Connection error: {e.reason}")
 
 
+def _decode_body(resp) -> str:
+    """Return the response text, honouring the encoding the server applied.
+
+    `brave_search` sends `Accept-Encoding: gzip` and this reader decoded the
+    bytes as UTF-8 regardless, so a compressed reply raised
+
+        UnicodeDecodeError: 'utf-8' codec can't decode byte 0x8b in position 1
+
+    UnicodeDecodeError is not a `SearchBackendError`, so it escaped past
+    `search_with_fallback`'s except clause: a compressing Brave endpoint took
+    down the whole search call instead of falling back. Reproduced 2026-08-26
+    against a loopback server that honours the header. An encoding nobody asked
+    for is reported as a backend error rather than guessed at.
+    """
+    body = resp.read()
+    encoding = (resp.headers.get("Content-Encoding") or "").strip().lower()
+    if encoding in ("gzip", "x-gzip"):
+        body = gzip.decompress(body)
+    elif encoding == "deflate":
+        try:
+            body = zlib.decompress(body)
+        except zlib.error:  # raw deflate, no zlib wrapper
+            body = zlib.decompress(body, -zlib.MAX_WBITS)
+    elif encoding and encoding != "identity":
+        raise SearchBackendError(f"unsupported Content-Encoding: {encoding}")
+    return body.decode("utf-8")
+
+
 def _get_json(url: str, headers: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
     """GET JSON, return parsed response. Retry once on 429/5xx with 2s backoff."""
     for attempt in (1, 2):
         req = urllib.request.Request(url, headers={"Accept": "application/json", **headers})
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
-                return json.loads(resp.read().decode("utf-8"))
+                return json.loads(_decode_body(resp))
         except urllib.error.HTTPError as e:
             if e.code in (429, 500, 502, 503, 504) and attempt == 1:
                 time.sleep(2)
@@ -72,6 +102,13 @@ def _get_json(url: str, headers: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
             raise SearchBackendError(f"HTTP {e.code}: {e.read().decode('utf-8', errors='replace')[:200]}")
         except urllib.error.URLError as e:
             raise SearchBackendError(f"Connection error: {e.reason}")
+        except (UnicodeDecodeError, json.JSONDecodeError, zlib.error, OSError) as e:
+            # A body this reader cannot turn into JSON is a backend failure and
+            # must be raised as one, or `search_with_fallback` cannot fall back.
+            # OSError is last on purpose: it is the parent of both URLError and
+            # gzip.BadGzipFile, so it must not shadow the two clauses above.
+            raise SearchBackendError(
+                f"unreadable response body: {type(e).__name__}: {e}") from e
 
 
 def tavily_search(query: str, max_results: int = 5) -> list[dict]:

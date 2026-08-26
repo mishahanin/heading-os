@@ -311,6 +311,27 @@ def collect_facts(payload: dict) -> dict[str, str]:
     return {key: value for key, value in facts.items() if value}
 
 
+# The order blocks are DROPPED in when the output overflows, which is not the
+# order they are shown in. `status` and `log` are one git command away, and
+# `written` is the tree itself; the handoff pointer and the plan are the two a
+# resumed session cannot re-derive, so they are the last to go.
+DROP_ORDER = ("status", "written", "log", "branch", "plan", "handoff")
+
+# Headroom reserved for the note that names what was dropped. It is a bound, not
+# the exact length: the note grows with the number of labels it lists, and the
+# caller re-checks the total before returning.
+_NOTE_BUDGET = 320
+
+
+def _assemble(blocks_by_key: dict[str, str]) -> str:
+    """The fixed keep-set, plus whichever fact blocks are still in play."""
+    ordered = [blocks_by_key[key] for key, _label in FACT_LABELS
+               if key in blocks_by_key]
+    if not ordered:
+        return KEEP_SET
+    return f"{KEEP_SET}\n\n{FACTS_HEADER}\n\n" + "\n\n".join(ordered)
+
+
 def render(facts: dict[str, str] | None) -> str:
     """The text that becomes the compaction's custom instructions.
 
@@ -318,19 +339,22 @@ def render(facts: dict[str, str] | None) -> str:
     credential into a fragment the pattern no longer matches, which reads as a
     clean output and is not one.
     """
-    blocks = []
+    blocks_by_key = {}
     for key, label in FACT_LABELS:
         value = (facts or {}).get(key)
         if value and value.strip():
-            blocks.append(f"{label}:\n{value.strip()}")
-    body = KEEP_SET
-    if blocks:
-        body = f"{KEEP_SET}\n\n{FACTS_HEADER}\n\n" + "\n\n".join(blocks)
+            blocks_by_key[key] = f"{label}:\n{value.strip()}"
 
+    # Redact PER BLOCK, before anything is assembled or dropped.
+    #
+    # The rule is unchanged - redact, then bound - but the bounding step now
+    # re-assembles from these blocks, so redacting the concatenated body once
+    # would have left the re-assembled text unredacted. Doing it here means
+    # every string that can reach the output has already been through it.
     try:
         from scripts.utils.secret_patterns import redact
 
-        body = redact(body)
+        blocks_by_key = {key: redact(value) for key, value in blocks_by_key.items()}
     except Exception as exc:  # noqa: BLE001
         # The fixed block carries nothing secret; the facts might. Losing the
         # redactor means shipping the block without them rather than shipping
@@ -343,15 +367,49 @@ def render(facts: dict[str, str] | None) -> str:
         # way; narrowing it here would have turned a broken module into a lost
         # keep-set.
         print(f"checkpoint-precompact: redactor unavailable: {exc}", file=sys.stderr)
-        body = KEEP_SET
+        return KEEP_SET
 
+    body = _assemble(blocks_by_key)
     if len(body) <= MAX_OUTPUT:
         return body
+
+    # Drop WHOLE blocks, and name the ones dropped.
+    #
+    # This used to slice the concatenated body by CHARACTER and append a note
+    # saying the tree carries "the plan file named above". Measured on this
+    # repository 2026-08-25: the output reached exactly 4001 characters, the
+    # last two blocks (the handoff pointer and the plan) were cut out entirely,
+    # and the note then named a plan that appeared nowhere in the text - inside
+    # a block whose opening instruction is "Preserve the following VERBATIM".
+    # The cut also landed mid-path, ending the written-files list at
+    # `.claude/ski`, which is the dangling pointer `_written()` goes to
+    # deliberate lengths to avoid ("A pointer that resolves to nothing is worse
+    # than no pointer") handed straight back under a verbatim instruction.
+    #
+    # DROP_ORDER is not the display order. `status` and `log` are one git
+    # command away and `written` is the tree itself; the handoff pointer and the
+    # plan are what a resumed session cannot re-derive, so they go last.
+    dropped: list[str] = []
+    kept = dict(blocks_by_key)
+    for key in DROP_ORDER:
+        if len(_assemble(kept)) <= MAX_OUTPUT - _NOTE_BUDGET:
+            break
+        if key in kept:
+            dropped.append(dict(FACT_LABELS)[key])
+            del kept[key]
+
+    body = _assemble(kept)
     note = (
-        f"\n\n[Cut at {MAX_OUTPUT} characters. The tree carries the rest: "
-        "git status, git log, and the plan file named above.]"
+        f"\n\n[Cut to fit {MAX_OUTPUT} characters. Omitted whole: "
+        + (", ".join(dropped) if dropped else "nothing")
+        + ". Read them from the tree with `git status`, `git log`, and "
+        "`python scripts/checkpoint-paths.py`.]"
     )
-    return body[: MAX_OUTPUT - len(note)].rstrip() + note
+    if len(body) + len(note) > MAX_OUTPUT:
+        # Even the fixed block plus the note overflows. Keep the block; a
+        # truncated INSTRUCTION is worse than a missing note.
+        return KEEP_SET
+    return body + note
 
 
 def main() -> int:

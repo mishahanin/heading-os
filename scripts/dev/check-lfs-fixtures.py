@@ -15,7 +15,15 @@ noticing.
 
 Scope: `tests/`, because that is the tree whose green result is a claim. Run it
 with no arguments; exit 0 when every fixture is a real blob, exit 1 with the list
-of pointers otherwise.
+of pointers otherwise -- and exit 1 when the tree itself is absent, which is the
+same claim with nothing behind it at all. That case printed a note and exited 0
+until 2026-08-25.
+
+A file that DISAPPEARS between the listing and the read is reported and does not
+refuse: it is not in the tree, so it holds no unresolved fixture. Only a file
+that is present and cannot be read leaves this check incomplete.
+
+Tests: tests/test_a_guard_that_was_green_over_an_absent_tree.py
 """
 from __future__ import annotations
 
@@ -49,19 +57,37 @@ def is_pointer(path: Path) -> bool:
         return fh.read(len(_POINTER_MAGIC)) == _POINTER_MAGIC
 
 
-def scan(base: Path) -> tuple[list[Path], list[tuple[Path, str]]]:
-    """(pointer files, files that could not be read) under `base`."""
+def scan(base: Path) -> tuple[list[Path], list[tuple[Path, str]], list[Path]]:
+    """(pointer files, files that could not be read, files that vanished).
+
+    The three outcomes are distinct and only the middle one is a hole in the
+    check. A file that no longer EXISTS carries no fixture: there is nothing
+    unresolved behind it, and nothing for a later test to measure. Folding it
+    into `unreadable` made this guard fail whenever anything wrote to `tests/`
+    while it ran - which the test suite itself does, so the guard was flaky
+    against its own repository rather than wrong about it.
+
+    It is still reported. `.claude/rules/scope-claims.md` asks for the drop
+    count, not silence: the sentence says the file is gone, which is what the
+    method established, and never that it was checked.
+    """
     pointers: list[Path] = []
     unreadable: list[tuple[Path, str]] = []
+    vanished: list[Path] = []
     for path in sorted(base.rglob("*")):
         if not path.is_file():
             continue
         try:
             if is_pointer(path):
                 pointers.append(path)
+        except FileNotFoundError:
+            # Listed by rglob, gone by the time it was opened. A dangling
+            # symlink cannot reach here: `is_file()` follows the link and
+            # answers False, so this is only ever a genuine concurrent delete.
+            vanished.append(path)
         except OSError as exc:
             unreadable.append((path, str(exc)))
-    return pointers, unreadable
+    return pointers, unreadable, vanished
 
 
 def _rel(path: Path) -> str:
@@ -73,10 +99,24 @@ def _rel(path: Path) -> str:
 
 def main() -> int:
     if not SCANNED.is_dir():
-        print(f"nothing to check: {SCANNED} does not exist", file=sys.stderr)
-        return 0
+        # Exit 1, not 0. An absent tests/ tree is the MAXIMAL version of the
+        # failure this guard exists to catch: every fixture blob is missing.
+        # Reporting green there is the same "skipped everything, proved
+        # nothing" the docstring above says the guard is the answer to, and a
+        # sparse checkout or a tree move produces it silently.
+        print(f"REFUSED: {SCANNED} does not exist, so no fixture could be "
+              f"checked. A green result here would claim a check that did not "
+              f"happen.", file=sys.stderr)
+        return 1
 
-    pointers, unreadable = scan(SCANNED)
+    pointers, unreadable, vanished = scan(SCANNED)
+    if vanished:
+        print(f"note: {len(vanished)} file(s) under tests/ were listed and then "
+              f"deleted before this guard read them, so they were not checked. "
+              f"They are not in the tree now, so they carry no fixture:",
+              file=sys.stderr)
+        for p in vanished:
+            print(f"  {_rel(p)}", file=sys.stderr)
     if not pointers and not unreadable:
         print("LFS fixtures resolved: no pointer files under tests/.")
         return 0

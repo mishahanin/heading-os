@@ -36,10 +36,12 @@ Sources harvested from the DATA overlay:
                                  bare form is in the DEFAULT gate: the roster is
                                  a handful of real colleagues, so it costs six
                                  tokens, unlike the CRM slug decomposition below
-* ``config/*.json|*.yaml``    -- e-mails (regex), Telegram-ID-shaped ints, and
-                                 the cycle speakers named in
-                                 ``fireside-schedule.json`` (plain strings under
-                                 ``weeks[].mon`` / ``weeks[].wed``)
+* ``config/*.json|*.yaml``    -- e-mails (regex) from every one of them;
+                                 Telegram-ID-shaped ints from the files whose
+                                 NAME carries ``fireside`` or ``roster``, not
+                                 from all of them; and the cycle speakers named
+                                 in ``fireside-schedule.json`` (plain strings
+                                 under ``weeks[].mon`` / ``weeks[].wed``)
 * ``datastore/operations/tribe/fireside-state/tribe-roster.json``
                               -- Tribe handles, full names and Telegram user ids.
                                  The membership source of truth. Added 2026-08-25
@@ -73,6 +75,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -227,7 +230,15 @@ def _add(tokens: dict[str, str], value: str, category: str) -> None:
         return
     # bare single word: length + stopword gate (multi-word/email/slug exempt)
     if " " not in v and "@" not in v and "-" not in v and "." not in v:
-        if len(v) < _MIN_WORD or not v.isalpha():
+        # `not v.isalpha()` dropped every handle carrying an underscore or a
+        # digit -- 19 of 58 on the live roster -- so the content gate could not
+        # detect them in an engine-routed file, which is the leak class the
+        # roster harvest exists to close. The gate is meant to refuse numeric
+        # noise and bare years, not identifiers, so what it needs is "long
+        # enough, and contains a letter". An explicit `v.isdigit()` test stood
+        # beside this one and was proven redundant by mutation: a pure-digit
+        # string has no letter either.
+        if len(v) < _MIN_WORD or not any(c.isalpha() for c in v):
             return
     tokens[v] = category
 
@@ -364,7 +375,10 @@ def _harvest_config(data_root: Path, tokens: dict[str, str], strict: bool) -> No
     cfg = data_root / "config"
     if not cfg.is_dir():
         return
-    # e-mails + Telegram-ID-shaped ints from the raw text of every data-config.
+    # E-mails from the raw text of every data-config; Telegram-ID-shaped ints
+    # from the fireside/roster ones ONLY, which is what the `if` below says
+    # and what this comment used to contradict. An id sitting in some other
+    # data-config is not a denylist token.
     for f in list(cfg.glob("*.json")) + list(cfg.glob("*.yaml")) + list(cfg.glob("*.yml")):
         try:
             raw = f.read_text(encoding="utf-8")
@@ -481,8 +495,12 @@ def build_denylist(data_root: Path | None, curated_path: Path | None = None,
                    strict: bool = False) -> Denylist:
     """Build the real-entity denylist from the private DATA overlay.
 
-    Returns a degraded (empty) Denylist when the overlay is absent or unreadable,
-    so the gate no-ops on a public clone instead of failing.
+    Returns an EMPTY degraded Denylist when the overlay is absent, so the gate
+    no-ops on a public clone instead of failing. A harvest that FAILS part-way
+    is also degraded but keeps what it collected: `degraded` is the signal, not
+    the token count, and `egress_proof` refuses on it either way. The line
+    "degraded (empty) ... when the overlay is absent or unreadable" used to
+    cover both cases and described only the first.
 
     strict=False (default, used by the hard push/commit gate): high-precision
     tokens only -- full slugs, full names, organisation names from CRM
@@ -504,9 +522,24 @@ def build_denylist(data_root: Path | None, curated_path: Path | None = None,
         _harvest_config(data_root, dl.tokens, strict)
         _harvest_fireside_roster(data_root, dl.tokens, strict)
         _harvest_curated(data_root, dl.tokens, curated_path)
-    except Exception:
-        # Fail-open on a harvest error (the gate degrades, never wedges the push);
-        # the structural layers still hold. Surfaced via degraded=True.
+    except Exception as exc:  # noqa: BLE001 - the gate degrades, never wedges a push
+        # Fail-open on a harvest error; the structural layers still hold. But SAY
+        # SO. This was a bare `except Exception` that bound nothing and logged
+        # nothing, and the caller reads `degraded` as one specific cause:
+        # `scripts/content-guard.py` prints "denylist unavailable (no DATA
+        # overlay); skipped." and exits 0. So a malformed
+        # `config/content-denylist.yaml` on the operator's own machine switched
+        # off the only content-leak layer while blaming an absent overlay.
+        print(f"content-denylist: harvest failed ({type(exc).__name__}: {exc}); "
+              f"the denylist is INCOMPLETE and the content gate will skip.",
+              file=sys.stderr)
+        # The tokens harvested BEFORE the failure are kept on purpose. Clearing
+        # them was tried and reverted: `egress_proof` already refuses on
+        # `degraded` whatever the token count, and
+        # `tests/test_egress_proof.py::test_a_partially_harvested_denylist_is_
+        # unverifiable_despite_holding_tokens` pins that state deliberately.
+        # A partial list matches more real entities than an empty one, so
+        # emptying it would only make the gate weaker.
         dl.degraded = True
     dl._compile()
     return dl

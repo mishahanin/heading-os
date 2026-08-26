@@ -81,6 +81,23 @@ def load_registry(path: Path) -> list[Component]:
                 f"component {name!r}: a `cmd` apply must define `rollback_cmd` "
                 "(never-broken invariant)"
             )
+        # ... and a `health` block, for the same reason. `run_health` returns
+        # True when `comp.health` is absent, and for a `cmd` apply that health
+        # gate is the ONLY verification between "the command exited 0" and
+        # "applied". So a `cmd` entry with no health block reports applied with
+        # nothing checked, which is the half of the invariant `rollback_cmd`
+        # does not cover: the rollback exists but nothing ever decides to call
+        # it. Every entry in `config/update-registry.yaml` already carries one
+        # (checked 2026-08-26: 4 components, the 2 with an apply block both have
+        # health), so this closes a trap for the next entry rather than changing
+        # today's behaviour. A `script` apply is exempt for the same reason it is
+        # exempt from `rollback_cmd`: it self-verifies and self-restores.
+        if isinstance(apply_block, dict) and "cmd" in apply_block \
+                and not isinstance(body.get("health"), dict):
+            raise RegistryError(
+                f"component {name!r}: a `cmd` apply must define a `health:` "
+                "block (it is the only gate before reporting 'applied')"
+            )
         for required in ("current", "latest"):
             if not isinstance(body.get(required), dict):
                 raise RegistryError(f"component {name!r}: missing `{required}:` block")

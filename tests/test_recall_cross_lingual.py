@@ -28,8 +28,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.utils.embeddings import EmbeddingError, embed  # noqa: E402
-from scripts.utils.ollama_host import resolve_ollama_host  # noqa: E402
+from scripts.utils.embeddings import EmbeddingError, embed, index_embed_target  # noqa: E402
 
 pytestmark = pytest.mark.requires_ollama
 
@@ -55,10 +54,6 @@ CASES = [
 ]
 
 
-def _host() -> str:
-    return resolve_ollama_host("auto:11436", env_var="HEADING_OS_OLLAMA_EMBED_HOST")
-
-
 def _cos(a, b) -> float:
     import math
     na = math.sqrt(sum(x * x for x in a))
@@ -67,18 +62,43 @@ def _cos(a, b) -> float:
 
 
 @pytest.fixture(scope="module")
-def vectors():
+def host() -> str:
+    """The embedder this workspace ACTUALLY uses, resolved the one way it is.
+
+    This used to be `resolve_ollama_host("auto:11436", ...)`: a literal port,
+    and the DEGRADING resolver, which falls back to `http://localhost:11434`.
+    Neither matches how anything else here embeds. `config/ollama-hosts.yaml`
+    lists `auto:11434` first on this machine and the Windows daemon answers
+    there, so the pin was live, the hardcoded 11436 probe failed, the resolver
+    degraded to a WSL daemon that does not exist, and all four tests in this
+    file SKIPPED. Measured 2026-08-26: the claim these tests exist to falsify
+    had never once been measured on the only machine that can measure it.
+
+    `index_embed_target` is the single reader the builder and every other embed
+    caller already share, added on 2026-08-22 to end exactly this class of
+    private-copy drift. This file was the caller that got missed.
+    """
+    try:
+        target, _model = index_embed_target()
+    except EmbeddingError as exc:
+        pytest.skip(f"no embedder reachable, so the model claim cannot be tested: {exc}")
+    return target
+
+
+@pytest.fixture(scope="module")
+def vectors(host):
     """Embed the corpus once, or skip the module when no embedder answers."""
     try:
-        return embed(CORPUS, model=MODEL, host=_host())
+        return embed(CORPUS, model=MODEL, host=host)
     except EmbeddingError as exc:
         pytest.skip(f"no embedder reachable, so the model claim cannot be tested: {exc}")
 
 
 @pytest.mark.parametrize("question,target", CASES)
-def test_a_russian_question_ranks_the_right_english_commit_first(question, target, vectors):
+def test_a_russian_question_ranks_the_right_english_commit_first(question, target, host,
+                                                                 vectors):
     """The justification for bge-m3, stated as a comparison the model must win."""
-    qv = embed([question], model=MODEL, host=_host())[0]
+    qv = embed([question], model=MODEL, host=host)[0]
     scores = [_cos(qv, v) for v in vectors]
     best = max(range(len(scores)), key=scores.__getitem__)
     assert best == target, (
@@ -88,13 +108,13 @@ def test_a_russian_question_ranks_the_right_english_commit_first(question, targe
     )
 
 
-def test_the_same_question_in_english_agrees_with_the_russian_one(vectors):
+def test_the_same_question_in_english_agrees_with_the_russian_one(host, vectors):
     """Guards the interesting failure: a model that is merely CONSISTENTLY wrong.
 
     If the Russian and English forms of one question disagree, the win above was
     luck rather than cross-lingual alignment.
     """
-    ru = embed(["почему коммиты стали искаться по смыслу"], model=MODEL, host=_host())[0]
-    en = embed(["why did commits become searchable by meaning"], model=MODEL, host=_host())[0]
+    ru = embed(["почему коммиты стали искаться по смыслу"], model=MODEL, host=host)[0]
+    en = embed(["why did commits become searchable by meaning"], model=MODEL, host=host)[0]
     pick = lambda v: max(range(len(vectors)), key=lambda i: _cos(v, vectors[i]))  # noqa: E731
     assert pick(ru) == pick(en) == 3

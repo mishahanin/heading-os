@@ -16,8 +16,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
-from scripts.utils.docx_helpers import load_docx, save_docx, set_cell_shading
-from scripts.utils.workspace import get_datastore_dir, get_outputs_dir
+from scripts.utils.docx_helpers import (
+    brand_master_template,
+    load_docx,
+    save_docx,
+    set_cell_shading,
+)
+from scripts.utils.workspace import get_outputs_dir
 
 from copy import deepcopy
 import re
@@ -25,8 +30,10 @@ import re
 # ============================================================
 # Configuration / Paths
 # ============================================================
-TEMPLATE = str(get_datastore_dir() / "brand" / "templates" /
-               "31C - Master Template (New Identity 2026 v1.01).docx")
+# The template is resolved at call time (see `main`), never here: the lookup
+# touches the datastore and raises when nothing matches, and this module must
+# import pure (F-2.1). It was a version literal, which is how its sibling
+# generator ended up pinned to a v1.00 that no longer exists.
 OUTPUT = str(get_outputs_dir() / "deliverables" / "documents" /
              "ODUN.ONE - AI-Powered Sovereign Intelligence Platform - Complete Capability Document.docx")
 
@@ -358,8 +365,9 @@ def report_placeholders(doc):
 def build_document():
     """Build the complete DOCX from the 31C template."""
     _ensure_docx()
-    print(f"Loading template: {TEMPLATE}")
-    doc = Document(TEMPLATE)
+    template = brand_master_template(".docx")
+    print(f"Loading template: {template}")
+    doc = Document(str(template))
 
     # Clear all template placeholder content
     clear_body(doc)

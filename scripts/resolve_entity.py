@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-"""resolve-entity.py - Entity-resolution helper for /osint Phase 0.5.
+"""resolve_entity.py - Entity-resolution helper for /osint Phase 0.5.
 
 Takes a target string + mode, runs 2-3 targeted web searches via
 scripts/utils/search.py (Tavily primary, Brave fallback), and uses
 an Anthropic Haiku/Sonnet tool-use call to extract a structured plan
 to stdout as JSON.
 
-Usage:
-    python scripts/resolve-entity.py "ExampleTelco" --mode auto
-    python scripts/resolve-entity.py "Peter Steinberger" --mode person --depth quick
-    python scripts/resolve-entity.py "GCC telecom" --mode market --output pretty
-    python scripts/resolve-entity.py "Deep Packet Inspection" --mode technology --model sonnet
+Usage (the file is `resolve_entity.py`, with an UNDERSCORE - every line here
+named a hyphenated file that has never existed, so each documented invocation
+failed with "can't open file"):
+    python scripts/resolve_entity.py "ExampleTelco" --mode auto
+    python scripts/resolve_entity.py "Peter Steinberger" --mode person --depth quick
+    python scripts/resolve_entity.py "GCC telecom" --mode market --output pretty
+    python scripts/resolve_entity.py "Deep Packet Inspection" --mode technology --model sonnet
 
 Output: JSON object with canonical, social, people/competitors/etc fields per mode,
-plus resolution_status (deterministic from canonical fill rate), backend_used,
-field_sources map, and search_queries_used.
+plus resolution_status (deterministic from canonical fill rate), field_sources map,
+and search_queries_used. Search provenance is three fields: `backends_used` (every
+backend that served, in first-use order), `backend_used` (the PRIMARY, i.e. the
+first of that list), and a `backend` key on each entry of `sources`.
 
 Errors: emits structured error JSON, exits non-zero.
 """
@@ -407,13 +411,24 @@ def main() -> int:
         "target": args.target,
         "mode": mode,
         "mode_detection": mode_reason if args.mode == "auto" else "explicit",
-        "backend_used": backends_used[-1] if backends_used else "",
+        # The PRIMARY backend: the first one that served. `[-1]` named the last
+        # one instead, which is not a property of the run at all but of how many
+        # queries the mode happened to build - a consumer reading "brave" could
+        # not tell a configured primary from a mid-run fallback. `[0]` is stable:
+        # it is whichever backend answered before any fallback occurred. The
+        # single-value key stays for the /osint skill, derived not overwritten.
+        "backend_used": backends_used[0] if backends_used else "",
         "backends_used": backends_used,
         "resolution_status": resolution_status,
         "model_used": model_used,
         **plan,
         "search_queries_used": queries,
-        "sources": [{"url": r.get("url", ""), "title": r.get("title", "")} for r in deduped],
+        # `backend` per source. It was already set on every result above and then
+        # dropped here, so the one field that maps a source to the backend that
+        # returned it never left the process: a fallback run emitted two backend
+        # names and no way to tell which source came from which.
+        "sources": [{"url": r.get("url", ""), "title": r.get("title", ""),
+                     "backend": r.get("backend", "")} for r in deduped],
     }
 
     print(json.dumps(output, indent=2 if args.output == "pretty" else None))

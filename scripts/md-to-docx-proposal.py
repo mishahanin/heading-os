@@ -119,7 +119,25 @@ def format_table(table):
 
     # Set borders
     tbl = table._tbl
-    tblPr = tbl.tblPr if tbl.tblPr is not None else parse_xml(f'<w:tblPr {nsdecls("w")}/>')
+    # `find`, not the `tblPr` property. python-docx declares `tblPr` as
+    # OneAndOnlyOne, so on a table that has none the property RAISES
+    # InvalidXmlError -- it never returns None. The old line read
+    # `tbl.tblPr if tbl.tblPr is not None else parse_xml(...)`, which therefore
+    # could not take its own fallback: the condition raised first. And had it
+    # been reachable, the fallback element was never attached to the table, so
+    # `tblPr.append(borders)` decorated a detached node and the table came out
+    # with no borders and no error.
+    #
+    # UNREACHABLE, and more deeply than the audit that found it said: the
+    # `table.alignment` assignment at the top of this function also writes into
+    # `tblPr` and raises first. So no caller can reach the branch below through
+    # `format_table`. It is kept rather than deleted because it is now correct
+    # if the shape ever changes, and named here so nobody mistakes it for a
+    # live guard or writes a test that cannot pass.
+    tblPr = tbl.find(qn('w:tblPr'))
+    if tblPr is None:
+        tblPr = parse_xml(f'<w:tblPr {nsdecls("w")}/>')
+        tbl.insert(0, tblPr)
     borders = parse_xml(
         f'<w:tblBorders {nsdecls("w")}>'
         '  <w:top w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>'
@@ -233,6 +251,14 @@ def parse_markdown(md_text):
             continue
 
         # Headings
+        if line.startswith('# '):
+            # Without this branch an H1 fell through to the paragraph handler
+            # and rendered as 10.5pt body text WITH ITS `# ` STILL ATTACHED --
+            # no heading style, no navigation-pane entry, no TOC. The cover
+            # page's own H1 is skipped above, so only other H1s reach here.
+            blocks.append(('h1', line[2:].strip()))
+            i += 1
+            continue
         if line.startswith('## '):
             blocks.append(('h2', line[3:].strip()))
             i += 1
@@ -255,9 +281,15 @@ def parse_markdown(md_text):
             # Parse table
             rows = []
             for tl in table_lines:
-                if '---' in tl:
-                    continue
                 cells = [c.strip() for c in tl.split('|')[1:-1]]
+                # A separator row is one whose EVERY cell is dashes and colons.
+                # The test used to be `'---' in tl` against the whole raw line,
+                # so a data row holding an em dash written as `---`, or a value
+                # like `rehost --- replatform`, was dropped from the proposal
+                # without a word. This matches what md-to-docx-competitive.py
+                # already does.
+                if cells and all(re.match(r'^[-:]+$', c) for c in cells):
+                    continue
                 if cells:
                     rows.append(cells)
             if rows:
@@ -267,8 +299,21 @@ def parse_markdown(md_text):
         # Bullet points
         if line.strip().startswith('- **') or line.strip().startswith('- '):
             bullet_lines = []
-            while i < len(lines) and (lines[i].strip().startswith('- ') or lines[i].strip().startswith('  ')):
-                bullet_lines.append(lines[i].strip())
+            # RAW lines, not stripped. `build_document` decides sub-bullet vs
+            # top-level by leading spaces, and every line was handed to it
+            # already stripped -- so `List Bullet 2` was unreachable and every
+            # nested bullet in a client-facing proposal rendered flat.
+            #
+            # The second half of the condition tests the RAW line too. It used
+            # to be `lines[i].strip().startswith('  ')`, which no stripped
+            # string can ever satisfy, so an indented continuation line of a
+            # wrapped bullet was never collected: it fell out to the main loop
+            # and came back as a standalone body paragraph in the middle of the
+            # list.
+            while i < len(lines) and (
+                    lines[i].lstrip().startswith('- ')
+                    or (lines[i].startswith('  ') and lines[i].strip())):
+                bullet_lines.append(lines[i].rstrip())
                 i += 1
             blocks.append(('bullets', bullet_lines))
             continue
@@ -341,7 +386,11 @@ def build_document():
     blocks = parse_markdown(md_text)
 
     for block_type, content in blocks:
-        if block_type == 'h2':
+        if block_type == 'h1':
+            clean = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', content)
+            doc.add_heading(clean, level=1)
+
+        elif block_type == 'h2':
             # Clean any anchor links
             clean = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', content)
             doc.add_heading(clean, level=1)
@@ -376,26 +425,37 @@ def build_document():
             doc.add_paragraph()  # Space after table
 
         elif block_type == 'bullets':
+            last_p = None
             for bullet in content:
-                # Handle sub-bullets
-                if bullet.startswith('  - ') or bullet.startswith('   - '):
-                    text = bullet.strip().lstrip('- ')
-                    p = doc.add_paragraph(style='List Bullet 2')
-                    add_rich_text(p, text)
-                elif bullet.startswith('- '):
-                    text = bullet[2:]
-                    p = doc.add_paragraph(style='List Bullet')
-                    add_rich_text(p, text)
-                # Handle continuation lines
-                elif not bullet.startswith('- '):
-                    # Append to previous paragraph if possible
-                    pass
+                stripped = bullet.strip()
+                # Sub-bullet: indented, and still a bullet. `parse_markdown`
+                # now hands these over with their indentation intact, which is
+                # what makes this branch reachable at all.
+                if bullet.startswith(' ') and stripped.startswith('- '):
+                    # `stripped[2:]`, not `.lstrip('- ')`. lstrip takes a SET of
+                    # characters, so a child item reading `-5% margin` came out
+                    # as `5% margin`.
+                    last_p = doc.add_paragraph(style='List Bullet 2')
+                    add_rich_text(last_p, stripped[2:])
+                elif stripped.startswith('- '):
+                    last_p = doc.add_paragraph(style='List Bullet')
+                    add_rich_text(last_p, stripped[2:])
+                elif last_p is not None and stripped:
+                    # A wrapped bullet's continuation line. This was `pass`, and
+                    # unreachable besides, so such a line escaped the list
+                    # entirely and came back as a body paragraph mid-list.
+                    add_rich_text(last_p, ' ' + stripped)
 
         elif block_type == 'para':
             p = doc.add_paragraph()
             add_rich_text(p, content)
 
-    # Footer
+    # Closing line, NOT a page footer. These are ordinary body paragraphs, so
+    # the line appears once, wherever the content happens to end, and not on
+    # every page. The comment used to say "Footer", which is what
+    # md-to-docx-competitive.py actually does via `section.footer`. Whether
+    # this document should switch to a real repeating footer is a formatting
+    # decision for the operator, not a silent change here.
     doc.add_paragraph()
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER

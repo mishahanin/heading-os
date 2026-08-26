@@ -384,7 +384,17 @@ def test_launch_falls_back_to_registry_when_session_id_missing(workspace_root, t
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     reg = tmp_path / ".claude" / "state" / "active-sessions.json"
     reg.parent.mkdir(parents=True)
-    reg.write_text(json.dumps({str(workspace_root): {"session_id": "registry-sid-xyz"}}))
+    # Seeded in the shape `.claude/hooks/bridge-hook.py` actually writes: keyed
+    # by session_id, with cwd as a field. The old cwd-keyed seed here is what let
+    # `session_for_cwd` keep indexing by key after the 2026-08-23 rekey, so this
+    # test stayed green over a fallback that could never hit in production.
+    reg.write_text(json.dumps({
+        "registry-sid-xyz": {
+            "session_id": "registry-sid-xyz",
+            "cwd": str(workspace_root),
+            "started_at": "2026-08-25T00:00:00+00:00",
+        }
+    }))
     client, _ = _make_client(workspace_root, token="t1")
     with patch("scripts.bridge_daemon.terminal._tmux_has_session", return_value=False), \
          patch("scripts.bridge_daemon.terminal.subprocess.Popen", **_TMUX_OK) as mock_popen, \

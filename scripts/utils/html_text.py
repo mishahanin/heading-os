@@ -15,12 +15,47 @@ import re
 from html.parser import HTMLParser
 
 
+# Tags that end a line of text. Anything not listed is inline and its text runs
+# on, which is what `<b>` and `<a>` should do.
+_BLOCK_TAGS = frozenset({
+    "address", "article", "aside", "blockquote", "br", "dd", "div", "dl", "dt",
+    "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3",
+    "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre",
+    "section", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul",
+})
+
+
 class _HTMLStripper(HTMLParser):
-    """Accumulate text from HTML while dropping tags."""
+    """Accumulate text from HTML while dropping tags.
+
+    A newline is emitted at every block boundary. Without it the parser simply
+    concatenated the data between tags, so `<div>Hello</div><div>World</div>`
+    became `HelloWorld` and `Line one<br>Line two` became `Line oneLine two`.
+    Exchange bodies routinely carry no source newline between block tags, so the
+    plaintext handed to sync-exchange, sentinel and email-intelligence was a
+    run-on with FUSED words - and `strip_html`'s own promise to collapse runs of
+    newlines presumed a line structure this parser never produced.
+    """
 
     def __init__(self):
         super().__init__()
         self._parts: list[str] = []
+
+    def _break(self) -> None:
+        if self._parts and not self._parts[-1].endswith("\n"):
+            self._parts.append("\n")
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag.lower() in _BLOCK_TAGS:
+            self._break()
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        if tag.lower() in _BLOCK_TAGS:
+            self._break()
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() in _BLOCK_TAGS:
+            self._break()
 
     def handle_data(self, data: str) -> None:
         self._parts.append(data)

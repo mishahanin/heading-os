@@ -40,7 +40,25 @@ def _crm_root(workspace_root: Optional[Path] = None) -> Path:
 
 
 def _address_book_dir(workspace_root: Optional[Path] = None) -> Path:
-    ws = _crm_root(workspace_root)
+    """Resolve the address book, through the data-root seam when no root is given.
+
+    `_crm_root(None)` is `get_workspace_root()` - the ENGINE clone - and the CRM
+    tree lives in the private DATA overlay, so every production call resolved to
+    `<engine>/crm/address-book`, a directory that does not exist. `resolve_recipient`
+    returns None for a missing directory exactly as it does for an unknown address,
+    so 19 290 auto-log calls between 2026-06-14 and 2026-08-25 were recorded as
+    `"matched": false` - "no such contact" - while the real reason was that nothing
+    had been looked at. Not one of them matched.
+
+    `scripts/utils/crm.py` already carries the correct resolution, so this delegates
+    rather than restating it: a second copy of a seam is the copy that stops being
+    fixed. An explicit `workspace_root` still means "this exact tree", which is what
+    the test fixtures pass.
+    """
+    if workspace_root is None:
+        from scripts.utils.crm import _address_book_dir as _seam
+        return _seam()
+    ws = Path(workspace_root)
     # CEO workspace: crm/address-book/. Exec: corporate/crm/address-book/ (read-only).
     candidates = [
         ws / "crm" / "address-book",
@@ -53,7 +71,11 @@ def _address_book_dir(workspace_root: Optional[Path] = None) -> Path:
 
 
 def _contacts_dir(workspace_root: Optional[Path] = None) -> Path:
-    ws = _crm_root(workspace_root)
+    """Resolve the contacts tree; see `_address_book_dir` for the seam it shares."""
+    if workspace_root is None:
+        from scripts.utils.workspace import get_crm_contacts_dir
+        return get_crm_contacts_dir()
+    ws = Path(workspace_root)
     candidates = [
         ws / "crm" / "contacts",
         ws / "personal" / "crm" / "contacts",
@@ -65,8 +87,24 @@ def _contacts_dir(workspace_root: Optional[Path] = None) -> Path:
 
 
 def _logs_dir(workspace_root: Optional[Path] = None) -> Path:
-    ws = _crm_root(workspace_root)
-    d = ws / ".sync" / "logs"
+    """Where the audit trail is written; the DATA overlay when no root is given.
+
+    Every entry carries an e-mail address, so the trail is private data and
+    belongs in the private repository, not in the clone of the PUBLIC engine.
+    `_crm_root(None)` put 71 days of it under `<engine>/.sync/logs/`. Nothing
+    leaked - `.sync/` is gitignored on both sides - but the routing rule is about
+    where a record LIVES, not only about what git happens to carry, and the next
+    person to un-ignore that directory would have shipped it.
+
+    `.sync/` is gitignored in the data repository too, so the move changes the
+    repository, not the backup status: the trail is still local-only.
+    """
+    if workspace_root is None:
+        from scripts.utils.workspace import get_data_root
+        base = get_data_root()
+    else:
+        base = Path(workspace_root)
+    d = base / ".sync" / "logs"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -139,9 +177,14 @@ def resolve_recipient(email: str, workspace_root: Optional[Path] = None) -> Opti
 
     Strict match: lowercase exact comparison against the address book's
     canonical_email + other_emails union. Returns None on no match OR
-    on ambiguous multi-match (two entities claim the same email). Logs
-    multi-match conflicts to .sync/logs/crm-autolog-conflicts-{date}.jsonl
-    so the CEO can surface and fix data-quality issues.
+    on ambiguous multi-match (two entities claim the same email).
+
+    A multi-match is recorded as a `"kind": "conflict"` entry in the ordinary
+    daily audit log, `.sync/logs/crm-autolog-{date}.jsonl`. This used to name a
+    separate `crm-autolog-conflicts-{date}.jsonl`, which nothing writes and
+    nothing reads: an operator following the docstring would have looked for a
+    file that has never existed, found none, and concluded there were no
+    conflicts. `_audit_log` has only ever had one destination.
     """
     if not email:
         return None
@@ -212,16 +255,27 @@ def plain_snippet(body: str, limit: int = 200) -> str:
 
 
 def bump_last_touch_in_text(text: str, new_date: str) -> str:
-    """Replace `last_touch: YYYY-MM-DD` in YAML frontmatter, or insert if missing."""
+    """Replace `last_touch: YYYY-MM-DD` in YAML frontmatter, or insert if missing.
+
+    The insert lands inside the frontmatter block or nowhere. `text.find("---", 3)`
+    matched any three hyphens from index 3 onward, so a record with no frontmatter
+    at all - and a markdown horizontal rule anywhere in its prose - had
+    `last_touch: <date>` written into the body, where nothing reads it and a human
+    reader meets a stray key mid-sentence. A `---` sitting inside a frontmatter
+    VALUE moved the insertion point the same way. Both cases now leave the text
+    untouched rather than write into the wrong place.
+    """
     pattern = re.compile(r"^last_touch:\s*.*$", re.MULTILINE)
     if pattern.search(text):
         return pattern.sub(f"last_touch: {new_date}", text, count=1)
-    # Insert before the closing --- of frontmatter
-    fm_end = text.find("---", 3)
-    if fm_end == -1:
+    first_line, _, _ = text.partition("\n")
+    if first_line.strip() != "---":
         return text
-    insert_at = text.rfind("\n", 0, fm_end)
-    return text[:insert_at] + f"\nlast_touch: {new_date}" + text[insert_at:]
+    closing = re.compile(r"^---[ \t]*$", re.MULTILINE)
+    match = closing.search(text, len(first_line))
+    if match is None:
+        return text
+    return text[:match.start()] + f"last_touch: {new_date}\n" + text[match.start():]
 
 
 def append_log_entry(text: str, date: str, kind: str, subject: str, body: str) -> str:

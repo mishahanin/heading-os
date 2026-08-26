@@ -208,19 +208,28 @@ def test_check_crm_health_end_to_end_counts_three(hook, tmp_path, monkeypatch):
         )
     monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path))
 
-    # The function caches into <project_dir>/.sessions/. Move the live cache
-    # aside so the run is a genuine miss and the operator's cache is untouched.
+    # The function caches into <project_dir>/.sessions/, and project_dir also
+    # locates the real `scripts/crm-health.py` and sets cwd, so the live root is
+    # the only value that works here. Move the cache aside rather than reading
+    # it into memory and deleting it: a rename is atomic, the operator's bytes
+    # are never held only in this process, and a kill mid-test leaves the
+    # sidecar on disk beside the original instead of nothing at all.
+    #
+    # The sidecar carries this process's pid, because the operator runs parallel
+    # sessions and a fixed name would have two of them fighting over one file.
     cache = ROOT / ".sessions" / "crm-health-cache.json"
-    saved = cache.read_bytes() if cache.is_file() else None
-    if saved is not None:
-        cache.unlink()
+    sidecar = cache.with_name(f"{cache.name}.testbak-{os.getpid()}")
+    moved = False
+    if cache.is_file():
+        os.replace(cache, sidecar)
+        moved = True
     try:
         result = hook.check_crm_health(str(ROOT))
         assert result is not None, "three overdue contacts produced no alert"
         assert len(result) == 3, f"alert counted {len(result)}: {result}"
     finally:
-        if saved is not None:
-            cache.write_bytes(saved)
+        if moved:
+            os.replace(sidecar, cache)
             os.chmod(cache, 0o600)
         elif cache.is_file():
             cache.unlink()

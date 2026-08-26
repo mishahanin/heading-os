@@ -353,7 +353,7 @@ Gemini, Grok, and Kimi are **third-party clouds outside the 31C data boundary**.
 Treat all three as one privacy tier. The question text and any context you pass them
 leave your machine.
 
-- Never send private or internal data to a cloud voice: CRM contacts, pipeline data,
+- Never send private or internal data to a cloud voice. CRM contacts, pipeline data,
   Odin brain content, mail, message history, partner names, or pricing do not belong
   in a council question or in `--domains`.
 - `/council` can carry business context by design and runs under your judgement;

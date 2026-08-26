@@ -118,7 +118,9 @@ Before Phase 1 fans out, run the deterministic resolver to convert the target st
 RESOLUTION=$(timeout 60 python scripts/resolve_entity.py "$TARGET" --mode "$MODE" --output json 2>/dev/null)
 ```
 
-The helper takes 30-60s. It calls Tavily Search (primary) with Brave fallback for 2-3 targeted queries. It then runs an Anthropic Haiku 4.5 tool-use call to extract the structured plan. Output is JSON. It carries `canonical`, `social`, and one mode-specific block. A company gets people, competitors and regulators. A person gets affiliations. A market gets key_players and regulators. A technology gets vendors and communities. It also carries `field_sources`, a `{field_path: source_index}` map. Last come `resolution_status` (`high`, `partial` or `low`), `backend_used`, `model_used`, `search_queries_used` and `sources`.
+The helper takes 30-60s. It calls Tavily Search (primary) with Brave fallback for 2-3 targeted queries. It then runs an Anthropic Haiku 4.5 tool-use call to extract the structured plan. Output is JSON. It carries `canonical`, `social`, and one mode-specific block. A company gets people, competitors and regulators. A person gets affiliations. A market gets key_players and regulators. A technology gets vendors and communities. It also carries `field_sources`, a `{field_path: source_index}` map. Last come `resolution_status` (`high`, `partial` or `low`), `model_used`, `search_queries_used` and `sources`.
+
+Search provenance is three fields, because one backend name cannot describe a run that fell back mid-way. `backends_used` lists every backend that served, in first-use order. `backend_used` is the PRIMARY, the first of that list. Each entry of `sources` carries its own `backend`, so a source can be traced to the backend that returned it.
 
 **Use the resolved plan in Phase 1.** When a Phase 1 stream calls for `[company]` or `[person]` or `[target]`, substitute the canonical name AND aliases AND known handles. For example, if `canonical.aliases = ["e&", "Etihad ExampleTelco"]` and `social.x_handle = "@exampletelco"`, the Stream 1 query becomes `WebSearch: "ExampleTelco OR e& OR @exampletelco founded headquarters ownership"`.
 

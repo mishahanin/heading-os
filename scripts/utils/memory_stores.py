@@ -28,16 +28,28 @@ def all_memory_stores():
     return [get_auto_memory_dir(), *iter_native_memory_stores()]
 
 
-def retire_memory(name: str, *, stores=None) -> list:
+def retire_memory(name: str, *, stores=None) -> tuple[list, list]:
     """Remove a top-level memory file from ALL stores. Idempotent; missing-safe.
-    Returns the list of paths actually removed."""
-    removed = []
+
+    Returns ``(removed, failed)``: the paths actually deleted, and the ones that
+    are still there with the reason.
+
+    The failures used to be swallowed by a bare `continue`. A read-only store,
+    a permission change, a file held open - any of them left the memory ON DISK
+    while the caller printed "retired <name>", wrote that word to its audit log,
+    and stripped the pointer from MEMORY.md. The result was the opposite of the
+    intent: an orphan file that this module's own docstring says the newest-wins
+    reconcile will copy back into every other store. "The only delete that
+    sticks" is only true if a delete that did not stick is reported.
+    """
+    removed, failed = [], []
     for store in (stores if stores is not None else all_memory_stores()):
         f = Path(store) / name
         try:
             if f.exists():
                 f.unlink()
                 removed.append(str(f))
-        except OSError:
-            continue
-    return removed
+        except OSError as exc:
+            print(f"[memory_stores] could not retire {f}: {exc}", file=sys.stderr)
+            failed.append((str(f), str(exc)))
+    return removed, failed

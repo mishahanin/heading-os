@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """Scrape a LinkedIn profile's recent activity feed authenticated via Floorp cookies.
 
-Launches Playwright Chromium through the Decodo residential proxy, injects the
-li_at + JSESSIONID cookies from the Floorp ClaudeCode profile, navigates to
+Launches Playwright Firefox DIRECTLY, with no proxy, injects the li_at +
+JSESSIONID cookies from the Floorp ClaudeCode profile, navigates to
 /in/<slug>/recent-activity/all/, scrolls to load the requested number of posts,
 then extracts structured post data from the rendered DOM.
+
+Chromium (`--engine chromium`) and the Decodo residential proxy (`--proxy-slot
+1..3`) are both opt-in. Until 2026-08-25 this paragraph announced them as the
+defaults, which is a claim about which IP the traffic leaves from -- in a tool
+whose own `--proxy-slot` help warns that an authenticated LinkedIn session
+typically fails through a proxy, and that IP travel invalidates it.
 
 Usage:
   python scripts/linkedin-activity.py --slug mishahanin --limit 3

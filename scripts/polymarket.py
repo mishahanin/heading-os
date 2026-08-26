@@ -90,8 +90,14 @@ def _term_in(term: str, text: str) -> bool:
     matched together; "modi" matched modified. Every one of those issues a
     pointless 500-market fetch and injects irrelevant market prose into a
     brief -- precisely the noise the whitelist exists to prevent.
+
+    Lookarounds, not ``\\b``. Every WHITELIST term begins and ends with a letter,
+    where the two are identical; a caller-supplied ``--keywords`` value need not.
+    ``\\b$aapl\\b`` asserts a word character immediately before the ``$``, so the
+    term could never match at all, and the keyword silently excluded every
+    market instead of narrowing them.
     """
-    return re.search(rf"\b{re.escape(term)}\b", text) is not None
+    return re.search(rf"(?<!\w){re.escape(term)}(?!\w)", text) is not None
 
 
 def match_whitelist(topic: str) -> tuple[str | None, bool, list[str]]:
@@ -114,10 +120,21 @@ def match_whitelist(topic: str) -> tuple[str | None, bool, list[str]]:
     matched_terms: list[str] = []
     for category, terms in WHITELIST_POSITIVE.items():
         hits = [t for t in terms if _term_in(t, topic_lower)]
-        if hits:
+        if not hits:
+            continue
+        # EVERY category's hits are collected, not only the first one's. The
+        # loop used to `break`, so a cross-domain topic lost half its terms: on
+        # "Trump AI policy" the ai_big_tech category matched first and
+        # `matched_terms` came back as ["ai"] alone, which is then all
+        # `filter_markets` looks for -- every Trump election market was dropped
+        # from a brief the topic named. The docstring already promised "the
+        # terms that actually fired", and "trump" did fire.
+        #
+        # `whitelist_match` still reports the FIRST matching category, because
+        # it is a single-valued field two SKILL.md files read.
+        if positive_match is None:
             positive_match = category
-            matched_terms = hits
-            break
+        matched_terms.extend(hits)
 
     has_negative = any(_term_in(neg, topic_lower) for neg in WHITELIST_NEGATIVE)
     return positive_match, has_negative, matched_terms
@@ -194,7 +211,8 @@ def filter_markets(
     use cases returned `no_matches` while relevant markets existed.
 
     Keywords (P4) further narrow the match - a market must contain at least one
-    keyword if any are provided. P5: drop markets below the volume threshold.
+    keyword, as a WHOLE word, if any are provided. P5: drop markets below the
+    volume threshold.
     """
     topic_lower = topic.lower()
     needles = [t.lower() for t in (match_terms or []) if t.strip()] or [topic_lower]
@@ -204,7 +222,14 @@ def filter_markets(
         question = (m.get("question") or "").lower()
         if not any(_term_in(n, question) for n in needles):
             continue
-        if keyword_set and not any(kw in question for kw in keyword_set):
+        # `_term_in`, not `kw in question`. This file already recorded the
+        # lesson six lines up in `_term_in`'s own docstring -- a plain substring
+        # test fires on short entries inside unrelated words -- and then kept
+        # the substring test for the keyword narrowing. `--keywords "stock"`
+        # matched Woodstock, and `--keywords "ai"` matched Bahrain, so the
+        # disambiguator the caller passed to NARROW an ambiguous topic let
+        # through the exact markets it was there to exclude.
+        if keyword_set and not any(_term_in(kw, question) for kw in keyword_set):
             continue
         try:
             volume = float(m.get("volume") or 0)

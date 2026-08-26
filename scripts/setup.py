@@ -7,9 +7,9 @@ content, register with CRM central, and install scheduled sync.
 
 Self-contained at import: the module top level uses only the Python 3.11+
 standard library (plus local ANSI color constants), so it loads cleanly on a
-fresh clone before sys.path is configured. Workspace utilities
-(scripts/utils/workspace, scripts/utils/schedule) are imported lazily inside the
-functions that need them, after the workspace root is placed on sys.path.
+fresh clone before sys.path is configured. The one workspace utility it needs
+(scripts/utils/schedule) is imported lazily inside the function that needs it,
+which calls `_ensure_workspace_importable()` first.
 Idempotent: safe to re-run -- completed steps are skipped.
 Cross-platform: Windows, macOS, Linux.
 
@@ -118,6 +118,25 @@ def step_header(num: int, title: str):
     print(f"\n{BOLD}Step {num}: {title}{RESET}")
 
 
+def _ensure_workspace_importable():
+    """Put the workspace ROOT on sys.path, for the lazy `scripts.*` imports.
+
+    Called from inside the functions that import a workspace module, never at
+    module import time: the docstring promises a stdlib-only import surface on
+    a fresh clone, and an import-time seam call is what was removed above.
+
+    Without it the documented launch `python scripts/setup.py` puts only
+    `<repo>/scripts` on sys.path, so `import scripts` has no anchor and step 11
+    died with an unhandled ModuleNotFoundError. It passed review because this
+    repo's own .venv carries an editable .pth that makes the root importable --
+    and that venv is exactly what a fresh exec clone does not have, since step
+    10 is what creates it.
+    """
+    root = str(WORKSPACE_ROOT)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+
+
 def run_cmd(cmd: list, cwd: str = None, check: bool = True, capture: bool = True) -> subprocess.CompletedProcess:
     """Run a subprocess command."""
     return subprocess.run(
@@ -135,13 +154,33 @@ def run_cmd(cmd: list, cwd: str = None, check: bool = True, capture: bool = True
 # ---------------------------------------------------------------------------
 
 def load_state() -> dict:
-    """Load setup state for idempotency."""
+    """Load setup state for idempotency, with both required keys guaranteed.
+
+    A file that PARSES is not a file that fits, and this one is operator-visible
+    at `.sync/setup-state.json`. Until 2026-08-25 whatever `json.loads` returned
+    was handed straight back, and the very next line of `main` is
+    `state["started_at"]`: `{}` raised KeyError, a JSON list raised TypeError,
+    and either killed the wizard on the run whose whole point is to resume an
+    interrupted one. The `is_done` / `mark_done` pair made it worse by being
+    inconsistent - `is_done` uses `.get`, so a file with no `completed_steps`
+    survived the early checks and died later, inside the first `mark_done`,
+    after the identity and prerequisite steps had already taken effect.
+    """
+    loaded = None
     if STATE_FILE.exists():
         try:
-            return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+            loaded = json.loads(STATE_FILE.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            pass
-    return {"completed_steps": [], "started_at": None}
+            loaded = None
+    state = {"completed_steps": [], "started_at": None}
+    if isinstance(loaded, dict):
+        for key, default in state.items():
+            loaded.setdefault(key, default)
+        if not isinstance(loaded["completed_steps"], list):
+            # A wrong TYPE subscripts and appends as badly as a missing key.
+            loaded["completed_steps"] = []
+        return loaded
+    return state
 
 
 def save_state(state: dict):
@@ -531,7 +570,7 @@ def step_crm_central_dir(state: dict, identity: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 def step_install_python_deps(state: dict) -> bool:
-    """Install Python dependencies (layered: corporate/requirements.txt + root requirements.txt).
+    """Install Python dependencies (layered: .corporate-repo/requirements.txt + root requirements.txt).
 
     Required because scheduled scripts (Sentinel) and the daemons depend on
     third-party packages (exchangelib, weasyprint, playwright, etc.).
@@ -607,7 +646,12 @@ def step_install_python_deps(state: dict) -> bool:
         print(f"  Layer 2: {root_req.relative_to(WORKSPACE_ROOT)} not present (skipping)")
 
     if not files_installed:
-        warn("Neither corporate/requirements.txt nor requirements.txt found - skipping pip install.")
+        # Every other message in this block renders `corp_req.relative_to(...)`
+        # and prints `.corporate-repo/requirements.txt`; this one alone held a
+        # literal `corporate/`, so a single run named the same file two
+        # different ways and one of the two named nothing on disk.
+        warn(f"Neither {corp_req.relative_to(WORKSPACE_ROOT)} nor "
+             f"{root_req.relative_to(WORKSPACE_ROOT)} found - skipping pip install.")
         warn("Some scheduled scripts may fail until dependencies are installed.")
     else:
         ok(f"Installed: {', '.join(files_installed)}")
@@ -631,7 +675,19 @@ def step_install_sync(state: dict, identity: dict, reinstall: bool = False, inst
     scripts/utils/schedule.py for all platform-specific install/verify/logging.
     Honors `--reinstall-schedule` so operators can force a re-install.
     """
-    from scripts.utils.schedule import install_sentinel_schedule
+    _ensure_workspace_importable()
+    try:
+        from scripts.utils.schedule import install_sentinel_schedule
+    except ImportError as exc:
+        # Say it and keep going. This step used to raise straight out of main(),
+        # which only catches KeyboardInterrupt, so steps 12 (verify) and 13
+        # (summary) never ran and the operator was left with a traceback after
+        # ten steps had already taken effect.
+        step_header(11, "Installing scheduled tasks")
+        fail(f"Could not load the schedule helper: {exc}")
+        warn("Install the Sentinel schedule later with: "
+             "python scripts/setup.py --reinstall-schedule")
+        return False
 
     if is_done(state, "install_sync") and not reinstall:
         step_header(11, "Scheduled tasks")
@@ -670,10 +726,17 @@ def step_verify(state: dict) -> bool:
     # operator to ignore a permanent "Checks passed: 3/4".
     biz_info = WORKSPACE_ROOT / ".corporate-repo" / "context" / "business-info.md"
     if biz_info.exists():
-        ok("corporate/context/business-info.md exists")
+        # The path PROBED, not a path that no longer exists. The comment above
+        # records that `corporate/` was retired and the check was repointed at
+        # `.corporate-repo/`, and then both messages went on naming the dead
+        # tree. A passing line asserting a file at a location the method never
+        # opened is the `.claude/rules/scope-claims.md` defect, and it is the
+        # worse of the two: the operator has no reason to doubt a green check.
+        ok(f"{biz_info.relative_to(WORKSPACE_ROOT)} exists")
         checks_passed += 1
     else:
-        warn("corporate/context/business-info.md not found (corporate repo may be empty)")
+        warn(f"{biz_info.relative_to(WORKSPACE_ROOT)} not found "
+             f"(corporate repo may be empty)")
 
     # Check skills
     checks_total += 1

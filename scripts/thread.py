@@ -16,6 +16,7 @@ from scripts.utils.threads_lib import (  # noqa: E402
     ensure_active_threads_section, add_thread_to_index,
     parse_thread_file, update_thread_hook, remove_thread_from_index,
     scan_for_archive, is_quiet, compose_thread_hook, read_thread_hook,
+    read_thread_quiet_marker,
 )
 
 
@@ -255,11 +256,26 @@ def cmd_log(args: argparse.Namespace) -> int:
         update_thread_hook(memory_md, path=rel_path, hook=hook,
                            quiet_until=thread.quiet_until)
     except ValueError:
-        # Section missing or hand-edited: repair and re-add the index line.
-        ensure_active_threads_section(memory_md)
-        add_thread_to_index(memory_md, type_=thread.type, title=thread.title,
-                            path=rel_path, hook=hook,
-                            quiet_until=thread.quiet_until)
+        # Section missing or hand-edited: repair and re-add the index line -
+        # but ONLY for a thread that belongs in `## Active Threads`.
+        #
+        # `close` and `hold` deliberately REMOVE the line, so on a closed thread
+        # `update_thread_hook` raises for the ordinary reason that the line is
+        # gone, and this handler read that as damage and put it back. A single
+        # `thread.py log` on a closed thread silently resurrected it in the
+        # index, with no `reopen` and no way to tell from the file. The
+        # regrowth was already visible: `scripts/memory-hygiene.py`'s
+        # `scan_live_state_rows` names this writer as the cause and reports it
+        # advisorily rather than gating, because a gate would have fired on the
+        # next legitimate write instead of on the mistake.
+        if thread.status == "active":
+            ensure_active_threads_section(memory_md)
+            add_thread_to_index(memory_md, type_=thread.type, title=thread.title,
+                                path=rel_path, hook=hook,
+                                quiet_until=thread.quiet_until)
+        else:
+            print(f"note: {thread.status} thread, so it stays out of the "
+                  f"active-threads index; run `reopen` to bring it back")
     print(f"logged to {path}")
     return 0
 
@@ -308,9 +324,17 @@ def _set_status(thread_id: str, new_status: str, index_action: str,
             pass
     elif index_action == "add":
         ensure_active_threads_section(memory_md)
+        # `quiet_until=` is what every other writer in this file passes. Without
+        # it a reopened thread came back into the always-loaded index as a plain
+        # active line, and the quiet marker is the ONLY thing an index reader has
+        # to know the thread must not be surfaced. That is the fail-open
+        # direction, and `reindex` could not see it: `read_thread_hook` strips
+        # the marker before comparing, so the drift was invisible to the one
+        # tool written to repair it.
         add_thread_to_index(memory_md, type_=thread.type, title=thread.title,
                             path=rel_path,
-                            hook=compose_thread_hook(thread.status, thread.last_touched))
+                            hook=compose_thread_hook(thread.status, thread.last_touched),
+                            quiet_until=thread.quiet_until)
     print(f"{thread_id}: status={new_status}")
     return 0
 
@@ -392,16 +416,26 @@ def cmd_reindex(args: argparse.Namespace) -> int:
     if not memory_md.exists():
         print(f"MEMORY.md does not exist at {memory_md}", file=sys.stderr)
         return 1
-    changed = missing = 0
+    changed = missing = missing_active = 0
     for t in _all_threads(_threads_root()):
         rel_path = f"threads/{t.type}/{t.path.name}"  # leak-guard: ok (relative reference string, not a filesystem path)
         hook = compose_thread_hook(t.status, t.last_touched)
         try:
             before = read_thread_hook(memory_md, path=rel_path)
+            before_quiet = read_thread_quiet_marker(memory_md, path=rel_path)
         except (ValueError, FileNotFoundError):
             missing += 1
+            # `t.status` is in hand, so read it instead of asserting a cause.
+            # The old summary said "expected for closed/on-hold" over every
+            # miss, so a MEMORY.md whose whole index section had been removed
+            # by a hand edit or a bad merge produced a clean bill of health
+            # from the command that exists to repair exactly that.
+            if t.status == "active":
+                missing_active += 1
             continue
-        if before == hook:
+        # The quiet marker is compared too. `read_thread_hook` strips it, so
+        # comparing hook text alone could never see a dropped one.
+        if before == hook and before_quiet == (t.quiet_until or None):
             continue
         if args.dry_run:
             print(f"would rewrite {t.id}\n  - {before}\n  + {hook}")
@@ -410,8 +444,15 @@ def cmd_reindex(args: argparse.Namespace) -> int:
                                quiet_until=t.quiet_until)
         changed += 1
     verb = "would rewrite" if args.dry_run else "rewrote"
-    print(f"{verb} {changed} hook(s); {missing} thread(s) not in the index (expected for closed/on-hold)")
-    return 0
+    tail = f"{missing} thread(s) not in the index"
+    if missing_active:
+        tail += (f", {missing_active} of them ACTIVE and therefore missing from "
+                 f"an index that should carry them")
+    elif missing:
+        tail += " (all closed or on-hold, which is expected)"
+    print(f"{verb} {changed} hook(s); {tail}")
+    # An active thread absent from the index is index loss, not a clean run.
+    return 1 if missing_active else 0
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -455,9 +496,14 @@ def cmd_archive_scan(args: argparse.Namespace) -> int:
             year = today.strftime("%Y")
             type_ = c.path.parent.name
             dest_dir = _threads_root() / "archive" / year / type_
-            dest_dir.mkdir(parents=True, exist_ok=True)
             dest = dest_dir / c.path.name
             if args.apply:
+                # The mkdir lives INSIDE the apply branch. It used to sit above
+                # this `if`, so a plain `archive-scan` with no --apply printed
+                # "would archive:" and created `threads/archive/<year>/<type>/`
+                # on disk anyway - a filesystem side effect from a command whose
+                # whole contract is that it previews and changes nothing.
+                dest_dir.mkdir(parents=True, exist_ok=True)
                 # Defensive: ensure no orphan MEMORY.md link survives the move.
                 # /thread close should have already removed the line, but a hand-
                 # edit or stale state could leave it. Catch ValueError silently.

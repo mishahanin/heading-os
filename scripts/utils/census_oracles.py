@@ -47,6 +47,23 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Callable
 
+import yaml
+
+# The exception types a corpus file can raise on the way in.
+#
+# `yaml.YAMLError` is here because `threads_lib.parse_thread_file` calls
+# `yaml.safe_load`, and YAMLError subclasses neither OSError nor ValueError: a
+# stray `.md` with malformed frontmatter escaped the handler below as a raw
+# `yaml.scanner.ScannerError` and aborted all fifteen oracles with a traceback
+# naming neither the benchmark nor the fix -- the exact failure the refusal in
+# `_threads` says it repaired.
+#
+# `_contacts` reads through `crm.parse_frontmatter`, which is a hand-rolled line
+# parser and does not raise YAMLError today. It shares this tuple anyway: the two
+# readers make the same promise to the same caller, and a tuple that is right for
+# one of them is the kind of asymmetry this whole finding came from.
+_UNREADABLE = (OSError, ValueError, yaml.YAMLError)
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from scripts.utils.crm import (
@@ -244,7 +261,7 @@ def _threads(corpus: CorpusPaths) -> list:
     for p in sorted(corpus.threads.glob("*.md")):
         try:
             threads.append(parse_thread_file(p))
-        except (OSError, ValueError) as exc:
+        except _UNREADABLE as exc:
             unreadable.append(f"{p.name}: {exc}")
     if unreadable:
         raise UnreadableCorpus(
@@ -266,7 +283,7 @@ def _contacts(corpus: CorpusPaths) -> list[tuple[Path, dict]]:
     for p in sorted(corpus.crm.glob("*.md")):
         try:
             frontmatter = parse_frontmatter(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
+        except _UNREADABLE as exc:
             unreadable.append(f"{p.name}: {exc}")
             continue
         if not frontmatter:
@@ -461,7 +478,15 @@ def oracle_agg_03(corpus: CorpusPaths, today: date) -> OracleAnswer:
     section = _PEOPLE_SECTION_RE.search(people_file.read_text(encoding="utf-8"))
     names = _PEOPLE_BULLET_RE.findall(section.group(1) if section else "")
     known = _contact_names(corpus)
-    missing = sorted(n.strip() for n in names if n.strip().lower() not in known)
+    # Containment, not equality -- the same rule `_counterparty_resolves` already
+    # applies to the other free-prose name field in this module. The bullet
+    # pattern is deliberately loose (see the comment above `_PEOPLE_BULLET_RE`)
+    # precisely because the live corpus carries a bullet of the form
+    # `Name Surname / "Nick" (COO)`, and comparing that whole capture to a card
+    # name for EQUALITY reported the one person this question has ground truth
+    # for as having no card. The question became "which people are named" rather
+    # than "which people have no card".
+    missing = sorted(n.strip() for n in names if not _counterparty_resolves(n, known))
     return OracleAnswer(
         kind="count",
         paths={corpus.rel(people_file)},

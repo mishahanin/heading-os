@@ -8,10 +8,15 @@ here - the ops-radar ``router_accuracy`` signal producer reads the trend and
 surfaces a Tier-B alert on its own cadence, so the flag rides the existing
 ops-radar -> Telegram path with no new channel.
 
-Sensitivity-aware (mirrors ``eval-drift-daemon``): refuses to run when the session
-is sensitive (``is_sensitive()`` - the fail-closed ``SENSITIVE_MODE`` default) since
-the LLM-judge traffic traverses Anthropic. Fails closed on a demo/unmigrated data
-overlay via ``require_writable_data_root()``.
+Sensitivity-aware, and deliberately NOT a blanket refusal. A DECLARED
+``SENSITIVE_MODE`` (``sensitivity_is_declared()``) refuses outright; an UNSET one
+is the machine's default and is governed instead by a per-payload egress proof
+(``egress_state()``), so an unset variable now RUNS. ``is_sensitive()`` is not
+consulted and not imported: its fail-closed unset default refused every night
+from the day this runner was written, over a payload that is tracked engine
+content in a public repository. The full reasoning lives on ``run()``.
+
+Fails closed on a demo/unmigrated data overlay via ``require_writable_data_root()``.
 
 Usage:
   python scripts/router-accuracy-nightly.py            # run the harness + persist

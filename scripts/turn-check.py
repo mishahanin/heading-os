@@ -381,7 +381,7 @@ def lane_tests(paths: list[Path], timeout: int) -> tuple[list[str], int, int, in
     targets = [t for t in picked if not is_contract(t)]
     skipped = len(picked) - len(targets)
     if not targets:
-        return [], 0, skipped, 0
+        return [], 0, skipped, 0, 0
     args = [
         sys.executable, "-m", "pytest", "-q", "-p", "no:randomly",
         "-m", "not slow", "--no-header", "-x", *[str(t) for t in targets],
@@ -394,22 +394,27 @@ def lane_tests(paths: list[Path], timeout: int) -> tuple[list[str], int, int, in
         return [
             f"the matched tests did not finish in {timeout}s "
             f"({len(targets)} file(s)); run them yourself or raise --timeout"
-        ], len(targets), skipped, 0
+        ], len(targets), skipped, 0, 0
     except OSError as e:
-        return [f"pytest could not run: {e}"], len(targets), skipped, 0
+        return [f"pytest could not run: {e}"], len(targets), skipped, 0, 0
     body = (out.stdout or "") + (out.stderr or "")
     dropped = _deselected(body)
-    # Exit 5 is "no tests collected". With a marker expression that is the
-    # ordinary outcome for a file whose tests are ALL slow, not a failure - and
-    # reporting it as one would block the turn over the very tests this lane
-    # deliberately declines to run.
-    if out.returncode == NO_TESTS_COLLECTED and dropped:
-        return [], len(targets), skipped, dropped
+    # Exit 5 is "no tests collected", and in NO form of it did a test fail.
+    # Two causes reach it: the marker expression deselected everything (the
+    # ordinary outcome for an all-slow file), or a matched file collected
+    # nothing at all - a test file created empty at the start of a TDD slice,
+    # or one holding only helpers. Requiring `dropped` conflated the two and
+    # blocked the turn on the second, which is the exact false block this lane
+    # exists to avoid. The second case is reported instead, because a matched
+    # file that ran nothing is an exclusion, and a silent exclusion reads as
+    # coverage.
+    if out.returncode == NO_TESTS_COLLECTED:
+        return [], len(targets), skipped, dropped, (0 if dropped else len(targets))
     if out.returncode != 0:
         tail = [ln for ln in body.strip().splitlines() if ln.strip()][-12:]
         return (["\n".join(tail) or f"pytest exited {out.returncode}"],
-                len(targets), skipped, dropped)
-    return [], len(targets), skipped, dropped
+                len(targets), skipped, dropped, 0)
+    return [], len(targets), skipped, dropped, 0
 
 
 def run(timeout: int, use_cache: bool, transcript=None) -> dict:
@@ -438,10 +443,10 @@ def run(timeout: int, use_cache: bool, transcript=None) -> dict:
     tests_run = 0
     skipped_contract = 0
     deselected_slow = 0
+    collected_nothing = 0
     if not failures:
-        failures, tests_run, skipped_contract, deselected_slow = lane_tests(
-            paths, timeout
-        )
+        (failures, tests_run, skipped_contract, deselected_slow,
+         collected_nothing) = lane_tests(paths, timeout)
         lane = "tests"
 
     if failures:
@@ -449,12 +454,14 @@ def run(timeout: int, use_cache: bool, transcript=None) -> dict:
                 "files": len(paths), "tests_run": tests_run,
                 "skipped_foreign": foreign,
                 "skipped_contract": skipped_contract,
-                "deselected_slow": deselected_slow}
+                "deselected_slow": deselected_slow,
+                "collected_nothing": collected_nothing}
 
     write_state({"last_pass": fp, "files": len(paths), "tests_run": tests_run})
     return {"status": "pass", "files": len(paths), "tests_run": tests_run,
             "skipped_foreign": foreign, "skipped_contract": skipped_contract,
-            "deselected_slow": deselected_slow}
+            "deselected_slow": deselected_slow,
+            "collected_nothing": collected_nothing}
 
 
 def _foreign_note(result: dict) -> str:
@@ -488,8 +495,23 @@ def _slow_note(result: dict) -> str:
             f"run `python scripts/run-tests.py` for those]{RESET}")
 
 
+def _empty_note(result: dict) -> str:
+    """The matched files that collected no test at all.
+
+    Same reason as the three notes above, and one more: pytest answers exit 5
+    for this, which the lane used to read as a failure and block the turn on.
+    Not failing it must not mean saying nothing about it, or a `test_*.py` that
+    holds no test reads as a passing lane."""
+    count = result.get("collected_nothing") or 0
+    if not count:
+        return ""
+    return (f" {GRAY}[{count} matched file(s) collected no tests: "
+            f"nothing ran, and nothing failed]{RESET}")
+
+
 def _notes(result: dict) -> str:
-    return _foreign_note(result) + _contract_note(result) + _slow_note(result)
+    return (_foreign_note(result) + _contract_note(result) + _slow_note(result)
+            + _empty_note(result))
 
 
 def render(result: dict) -> str:

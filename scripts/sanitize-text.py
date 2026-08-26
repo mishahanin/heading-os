@@ -52,6 +52,20 @@ def main():
     if not args.text and not args.file:
         parser.error("either a file or --text is required")
 
+    # `-o` is only ever consulted on the write-a-file path below. Given with
+    # --text or with `-`, it was accepted, silently ignored, and the output went
+    # to stdout: the operator names a destination, sees no error, and finds no
+    # file. Refusing beats writing to a path the branch never reaches.
+    # --scan belongs in this list and was missing from it. The scan branch below
+    # returns before `output_path = args.output or args.file` is ever reached,
+    # so it is a THIRD path where `-o` is dead, and the guard enumerated two of
+    # three. Measured 2026-08-26: `sanitize-text.py README.md --scan -o out.md`
+    # printed a clean report, exited 0, and wrote no file at the named path -
+    # which is the exact failure this guard exists to refuse.
+    if args.output and (args.text or args.file == "-" or args.scan):
+        parser.error("-o/--output writes the sanitized FILE back; it does nothing "
+                     "for --scan, --text or stdin, which only print")
+
     if args.text:
         text = args.text
         source = "inline text"
@@ -98,4 +112,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # `sys.exit(main())`, not a bare `main()`. The bare call DISCARDED the
+    # return value, so the `return 2` for an unreadable file left the process
+    # exiting 0 - and this script's exit code is what four callers read as the
+    # verdict: artifact-evaluator prints "Clean" on 0, render-doctype prints
+    # "[CLEAN] Hidden-character scan passed.", inbox-pulse-report prints
+    # "Hidden char scan: clean", and crm_migrate_to_entity_model carries on with
+    # the apply. A path that was never opened was reported as scanned and clean.
+    sys.exit(main())

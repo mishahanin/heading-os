@@ -105,6 +105,24 @@ def main() -> None:
     # the wrong repo.
     admin_slugs = set(get_admin_slugs())
 
+    # Both slugs are checked against the ROSTER before anything is moved.
+    # Neither helper below validates: `get_per_exec_repo_path` rejects only path
+    # shapes (`/`, `\`, `..`), so any other string produced a directory name.
+    # A typo in `--to` therefore created `../.heading-os-data-<typo>/crm/contacts/`,
+    # wrote the contact there, failed the git commit into a warning because that
+    # phantom tree is not a repo, then SUCCEEDED at committing the source
+    # deletion in the real repo, printed "Transfer complete:", and exited 0.
+    # The contact was gone from where it belonged and present nowhere anyone
+    # would look. `get_all_active_exec_slugs` was already imported here and
+    # never called.
+    known = set(get_all_active_exec_slugs()) | admin_slugs
+    for label, slug in (("--from", args.from_exec), ("--to", args.to)):
+        if slug not in known:
+            print(f"{RED}ERROR:{RESET} {label} {slug!r} is not an active exec "
+                  f"or admin slug.")
+            print(f"  Known slugs: {', '.join(sorted(known)) or '(none resolved)'}")
+            sys.exit(1)
+
     def _contacts_dir(exec_slug: str) -> Path:
         if exec_slug in admin_slugs:
             return get_crm_contacts_dir()

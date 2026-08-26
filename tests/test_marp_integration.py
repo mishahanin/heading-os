@@ -20,6 +20,31 @@ from scripts.marp_render import (
     SAMPLE_DECK,
     WORKSPACE_ROOT,
 )
+from scripts.utils.paths import DataRootError
+from scripts.utils.workspace import get_data_root
+
+
+def _workspace_dir(rel: str):
+    """The first root that actually holds `rel`, or None.
+
+    Both source dirs these tests need (`context/`, `outputs/intel/`) live in the
+    private DATA overlay, never in the engine clone. Looking only under
+    `WORKSPACE_ROOT` made both tests skip on the operator's own machine, which
+    is the only machine where the workspace-aware defaults they cover can be
+    exercised at all.
+    """
+    roots = [WORKSPACE_ROOT]
+    try:
+        data_root = get_data_root()
+    except DataRootError:
+        data_root = None
+    if data_root is not None and data_root != WORKSPACE_ROOT:
+        roots.append(data_root)
+    for root in roots:
+        candidate = root / rel
+        if candidate.is_dir():
+            return candidate
+    return None
 
 # Skip all tests if marp-cli is not installed
 marp_installed, _ = check_marp_installed()
@@ -118,9 +143,9 @@ class TestWorkspaceTransform:
     def test_marp_from_context_fixture_applies_light_mode(self):
         """Context files should render with light mode default."""
         # Create a temp fixture simulating a context file
-        context_dir = WORKSPACE_ROOT / "context"
-        if not context_dir.exists():
-            pytest.skip("No context/ directory")
+        context_dir = _workspace_dir("context")
+        if context_dir is None:
+            pytest.skip("No context/ directory in either root")
 
         # Find any .md in context/
         context_files = list(context_dir.glob("*.md"))
@@ -139,9 +164,9 @@ class TestWorkspaceTransform:
 
     def test_marp_from_intel_fixture_applies_dark_mode(self):
         """Intel files should render with dark mode default."""
-        intel_dir = WORKSPACE_ROOT / "outputs" / "intel"
-        if not intel_dir.exists():
-            pytest.skip("No outputs/intel/ directory")
+        intel_dir = _workspace_dir("outputs/intel")
+        if intel_dir is None:
+            pytest.skip("No outputs/intel/ directory in either root")
 
         intel_files = list(intel_dir.rglob("*.md"))
         if not intel_files:

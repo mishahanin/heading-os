@@ -15,11 +15,19 @@ standard sys.path bootstrap and before the heavy third-party imports:
     from scripts.utils.venv_guard import ensure_venv  # noqa: E402
     ensure_venv()
 
-os.execv replaces the whole process image, so it is correct even if some heavy
-modules were already imported under the system interpreter before the call --
-the fresh run re-imports them from .venv. ensure_venv() is a no-op when already
-under .venv, when .venv is absent, or after one relaunch (an env sentinel guards
-against an exec loop).
+os.execv replaces the whole process image and RESTARTS the script from line 1,
+so anything above the call runs a second time. For pure imports that is
+harmless: the fresh run re-imports them from .venv. For a SIDE EFFECT it is not.
+Output written before the call is emitted twice on an unbuffered or
+line-buffered stream (a terminal, PYTHONUNBUFFERED, `python -u`) and is lost
+outright on a block-buffered one (a pipe, which is how hooks and daemons capture
+a script), because the buffer dies with the process image. Put no work above the
+guard: not a print, not a file write, not a lock.
+
+ensure_venv() is a no-op when already under .venv, when .venv is absent, or when
+the env sentinel is present (which guards against an exec loop). The sentinel is
+REMOVED from the environment as it is read, so a relaunch does not disable this
+guard for every descendant process; see `_SENTINEL_SEEN` below.
 """
 import os
 import sys
@@ -29,6 +37,19 @@ from pathlib import Path
 # loop. Path comparison alone would also stop the loop, but the sentinel is
 # belt-and-braces against symlink/realpath edge cases.
 _SENTINEL = "HEADING_OS_VENV_RELAUNCHED"
+
+# Whether THIS process saw the sentinel. `ensure_venv` removes the variable from
+# the environment as it reads it, and remembers the answer here instead.
+#
+# `os.environ[...] = ` is putenv, so before this the flag was inherited by the
+# WHOLE process tree below a relaunch rather than consumed by it: any child a
+# relaunched script spawned with a non-venv interpreter (a `python3 ...`
+# subprocess, a `bash scripts/install-*.sh` that resolves `command -v python3`, a
+# systemd unit inheriting the env) had this guard silently disabled and ran
+# against system site-packages instead of the pinned set. The module state keeps
+# the deliberate in-process opt-out that `tests/conftest.py` relies on, including
+# across repeated calls, while stopping it leaking downward.
+_SENTINEL_SEEN = False
 
 
 def venv_python() -> Path:
@@ -82,12 +103,20 @@ def ensure_venv() -> None:
     configuration is worse than no guard, because the promise above is what the
     next reader relies on.
     """
+    global _SENTINEL_SEEN
+    # Read and REMOVE, before anything can return early. Popping it here is what
+    # keeps a relaunch from disabling this guard for every descendant process;
+    # `_SENTINEL_SEEN` keeps the answer for the rest of this process, so a
+    # deliberate opt-out still holds across repeated calls.
+    if os.environ.pop(_SENTINEL, None) == "1":
+        _SENTINEL_SEEN = True
+
     target = venv_python()
     if not target.exists():
         return
     if interpreter_identity(Path(sys.executable)) == interpreter_identity(target):
         return
-    if os.environ.get(_SENTINEL) == "1":
+    if _SENTINEL_SEEN:
         return
     os.environ[_SENTINEL] = "1"
     script = str(Path(sys.argv[0]).resolve())

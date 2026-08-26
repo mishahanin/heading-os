@@ -138,8 +138,16 @@ def load_all() -> dict:
 def set_model(provider: str, model: str) -> None:
     """Set one provider's pin in config/council-models.json (atomic write).
 
-    Preserves any other keys already in the file. Raises ValueError on an
-    unknown provider or an empty model string.
+    Preserves any other keys already in the file, and REFUSES rather than
+    rewrite when it cannot read them. `_load_config()` returns `{}` for a
+    malformed file, which is right for a reader falling back to the baseline and
+    wrong for a writer: bumping one pin against a hand-broken config rebuilt the
+    file from that `{}` and erased every other operator-chosen pin, silently
+    reverting them to fallbacks. The read-side warning went to stderr and the
+    write still happened.
+
+    Raises ValueError on an unknown provider or an empty model string, and
+    RuntimeError when the existing config is present but unreadable.
     """
     if provider not in FALLBACKS:
         raise ValueError(
@@ -149,7 +157,25 @@ def set_model(provider: str, model: str) -> None:
         raise ValueError("Model id must be a non-empty string.")
 
     path = config_path()
-    data = _load_config()
+    if path.exists():
+        # Read it here rather than through `_load_config`, whose `{}` cannot be
+        # told apart from an empty file. A writer needs that difference.
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            raise RuntimeError(
+                f"refusing to rewrite {path}: it exists but cannot be read "
+                f"({e}). Writing would drop every pin already in it. Fix or "
+                f"delete the file, then set the pin again."
+            ) from e
+        if not isinstance(data, dict):
+            raise RuntimeError(
+                f"refusing to rewrite {path}: it holds a "
+                f"{type(data).__name__}, not an object of pins."
+            )
+    else:
+        data = {}
     data[provider] = model.strip()
 
     path.parent.mkdir(parents=True, exist_ok=True)

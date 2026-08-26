@@ -51,9 +51,25 @@ def _get(url: str, headers: dict | None = None, timeout: float = 5) -> tuple[int
 
 @pytest.mark.skipif(
     sys.platform != "win32",
-    reason="Phase 1 daemon launcher is Windows-only (wt.exe). macOS path lands in Phase 2.",
+    reason=(
+        "boots a REAL daemon in the live workspace and wipes .daemon-state/ "
+        "around it; enabling that off Windows is the operator's call, not this "
+        "file's"
+    ),
 )
 def test_smoke_boot_and_endpoints():
+    # The gate above used to say "Phase 1 daemon launcher is Windows-only
+    # (wt.exe)". That is not true and has not been for a long time: `--start`
+    # in scripts/bridge-daemon.py is pure Python with no shell and no `wt.exe`
+    # anywhere in the file, and the canonical installer for this workspace is
+    # the WSL2 systemd-user unit. Checked 2026-08-26.
+    #
+    # The gate stays anyway, with the real reason written above it, because the
+    # cost is not portability. This test boots a live daemon in the workspace
+    # root, deletes `.daemon-state/` before it starts and again in `finally`,
+    # and the operator deliberately stopped and disabled that daemon. A
+    # platform check standing in for a policy decision is what made the reason
+    # drift in the first place, so the reason now names the policy.
     """End-to-end smoke. Uses the real workspace .daemon-state/ but cleans
     up artifacts in finally so subsequent runs don't see stale state."""
     state_dir = WORKSPACE / ".daemon-state"

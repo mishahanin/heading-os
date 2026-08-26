@@ -115,3 +115,13 @@ def test_the_operator_overview_pins_no_model_where_it_describes_scrutinize():
         "the operator overview pins a model version while describing /scrutinize. "
         "The judge roster is the running session's Claude, never pinned, and the "
         "Kimi pin resolved through council-models.json.\n" + "\n".join(hits))
+
+
+def test_the_scan_still_finds_the_skill_files():
+    """An empty parametrize is one silent skip, not a failure. The skill tree
+    ships with the engine, so an empty result means the directory moved.
+    16 on 2026-08-26.
+    """
+    found = _skill_files()
+
+    assert len(found) >= 10, f"only {len(found)} skill files reached the pin gate"

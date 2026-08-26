@@ -167,6 +167,10 @@ def run_memory_health(workspace_root: Path) -> dict[str, Any]:
     issues = []
     if stale:
         issues.append(f"{len(stale)} memory files >45 days old (review recommended)")
+    # The index state comes first, because it explains the orphan count rather
+    # than adding to it: an absent MEMORY.md makes every fact file unreferenced.
+    if not data.get("index_readable", True):
+        issues.append(f"MEMORY.md was NOT read ({data.get('index_problem')})")
     if orphans:
         issues.append(f"{len(orphans)} orphan file(s) not linked from MEMORY.md")
 
@@ -371,8 +375,27 @@ def run_odin_cadence(workspace_root: Path) -> dict[str, Any]:
         text=True,
         timeout=CHECK_TIMEOUT,
     )
+    if proc.returncode != 0:
+        # A non-zero child exit with EMPTY stdout used to vanish completely.
+        # `render_text` honours `omit_if_empty` BEFORE it ever consults
+        # `status`, so the banner, the failure and the captured stderr were all
+        # dropped, and session boot rendered a clean brief over a check that had
+        # crashed. odin-cadence.py only ever `return 0`s, so a non-zero exit is
+        # an uncaught exception: the traceback goes to stderr and stdout is
+        # empty, which is exactly the shape that disappeared.
+        #
+        # The repo's own precedent is a non-empty `output` plus
+        # `omit_if_empty: False` on the error path (run_dream_shadow,
+        # run_reminders_due, run_updates); the same shape is already pinned for
+        # dream_shadow by tests/test_a_scan_that_never_ran_reported_nothing_to_do.py.
+        return {
+            "status": "error",
+            "output": f"odin-cadence.py exited {proc.returncode}",
+            "stderr": proc.stderr.strip(),
+            "omit_if_empty": False,
+        }
     return {
-        "status": "ok" if proc.returncode == 0 else "error",
+        "status": "ok",
         "output": proc.stdout.strip(),
         "stderr": proc.stderr.strip(),
         "omit_if_empty": True,
@@ -399,12 +422,31 @@ def run_ops_radar(workspace_root: Path) -> dict[str, Any]:
         text=True,
         timeout=CHECK_TIMEOUT,
     )
+    if proc.returncode != 0:
+        # Same shape as run_odin_cadence above, for the same reason: a crashed
+        # child writes its traceback to stderr and leaves stdout empty, and
+        # `omit_if_empty` then erased the whole section before `render_text`
+        # looked at the status.
+        return {
+            "status": "error",
+            "output": f"ops-radar.py exited {proc.returncode}",
+            "stderr": proc.stderr.strip(),
+            "omit_if_empty": False,
+        }
     out = proc.stdout.strip()
     # "all clear" -> omit the panel; only surface when something is actually due.
-    if "all clear" in out:
+    #
+    # Tested on the FIRST LINE, not anywhere in the output. `"all clear" in out`
+    # searched every line of the detailed view, so a single due item whose
+    # summary carried that phrase blanked the entire panel -- the brief then said
+    # nothing at all while something was in fact due. render_detailed emits the
+    # all-clear sentence as the whole output, and any other run opens with
+    # "ops-radar: N item(s) due".
+    first_line = out.splitlines()[0] if out else ""
+    if first_line.endswith("all clear - nothing due."):
         out = ""
     return {
-        "status": "ok" if proc.returncode == 0 else "error",
+        "status": "ok",
         "output": out,
         "stderr": proc.stderr.strip(),
         "omit_if_empty": True,
@@ -632,7 +674,15 @@ def render_text(results: dict[str, dict[str, Any]]) -> str:
         body = res.get("output", "").rstrip()
         # Optional sections (e.g. odin_cadence) render nothing when empty -- no
         # banner, no "(no output)" line. Keeps an up-to-date / exec workspace clean.
-        if not body and res.get("omit_if_empty"):
+        #
+        # A FAILING check is never omitted, whatever it asks for. `omit_if_empty`
+        # is a quiet-when-healthy switch, and read on its own it also silenced
+        # two checks whose child had crashed with empty stdout. Both are fixed at
+        # their source above; this second gate is what stops the next check added
+        # here from reintroducing the same disappearance. It changes nothing for
+        # a check that already reports its failure in `output`.
+        if not body and res.get("omit_if_empty") \
+                and res.get("status") in NON_FAILURE_STATUSES:
             continue
         lines.append(banner)
         if not body:

@@ -195,14 +195,48 @@ def test_a_naive_approval_stamp_does_not_kill_the_whole_watch_source(tmp_path, m
 
 # --- telemetry ---------------------------------------------------------------
 
+def _self_referential() -> dict:
+    """A value `default=str` cannot rescue: json refuses a cycle outright."""
+    d: dict = {}
+    d["self"] = d
+    return d
+
+
 def test_a_non_serialisable_event_field_does_not_reach_the_caller(tmp_path):
     """The module's own hardening promise: a failed telemetry write is never a
-    500. `json.dumps` used to sit ABOVE the try, and it raises TypeError."""
+    500. `json.dumps` used to sit ABOVE the try, and it raises TypeError.
+
+    Split in two on purpose. The call is `json.dumps(rec, default=str)`, and
+    `default=str` rescues a timedelta, a Path and a set, so a test built only
+    on those three raises nothing at all: it survived deleting the whole
+    except clause AND survived hoisting the dumps back above the try, which is
+    the exact regression it was written to hold down. The rescued values are
+    now asserted to land ON DISK, and two values json refuses outright carry
+    the guard itself, one per member of the except clause.
+    """
     from scripts.bridge_daemon.telemetry import Telemetry
     t = Telemetry(tmp_path)
+    log = tmp_path / ".daemon-state" / "usage.jsonl"
+
     t.event("page_view", page="pulse", duration=timedelta(seconds=3))   # must not raise
     t.event("page_view", page="pulse", where=tmp_path / "x")
     t.event("page_view", page="pulse", tags={"a", "b"})
+
+    rows = [json.loads(ln) for ln
+            in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert len(rows) == 3, "default=str rescues these three; they belong on disk"
+    assert rows[0]["duration"] == "0:00:03", "rescued, not dropped"
+    assert rows[1]["where"].endswith("x")
+    assert isinstance(rows[2]["tags"], str)
+
+    # Refused by json whatever `default` says: a non-string dict key raises
+    # TypeError, a cycle raises ValueError. Both come out of `json.dumps`, so
+    # both die if the serialise moves back above the try.
+    t.event("page_view", page="pulse", nested={(1, 2): "tuple key"})    # must not raise
+    t.event("page_view", page="pulse", loop=_self_referential())        # must not raise
+
+    after = [ln for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert len(after) == 3, "a row json refused must not reach the file either"
 
 
 def test_an_ordinary_event_is_still_written(tmp_path):

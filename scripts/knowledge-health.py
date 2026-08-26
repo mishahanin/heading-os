@@ -247,11 +247,17 @@ def format_terminal_report(notes):
     issues_notes = [n for n in notes if n["issues"]]
     if issues_notes:
         lines.append(f"{RED}{BOLD}Schema Issues:{RESET}")
+        # Filter per ISSUE, not per note. The outer test used to be
+        # `if not n["is_stale"]`, which dropped the whole note -- so a note that
+        # was both stale AND missing a required field had the missing field
+        # reported nowhere on the terminal, while `--json` listed it. Two
+        # consumers of one scan, two different health pictures. The inner filter
+        # below is what the "already reported above" comment was written for:
+        # the stale-seed line alone is the duplicate.
         for n in issues_notes:
-            if not n["is_stale"]:  # Already reported above
-                for issue in n["issues"]:
-                    if "stale seed" not in issue:
-                        lines.append(f"  {RED}{n['title']}{RESET}: {issue}")
+            for issue in n["issues"]:
+                if "stale seed" not in issue:
+                    lines.append(f"  {RED}{n['title']}{RESET}: {issue}")
         lines.append("")
 
     # Tag cloud (top 15)

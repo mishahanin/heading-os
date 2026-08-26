@@ -48,11 +48,27 @@ def is_actionable(finding):
 
 
 def nudge_line(findings):
-    """One-line Telegram nudge from broken pins; '' when all present/ok."""
+    """One-line nudge; '' ONLY when every pin was checked and every one is ok.
+
+    A run that could not probe at all -- the proxy down, or `CLIPROXY_API_KEY`
+    unset -- returns `unknown` findings, not `broken` ones, so `is_actionable`
+    counted none and this returned `''`. Both callers read `''` as good news and
+    print it: `scripts/council-models-notify.py` logs "all council pins current"
+    and the daily unit exits 0, and `scripts/council-models.py` prints "All
+    council pins are current". Neither run had established anything about a pin.
+
+    An unknown is not a nudge about a MODEL, so it does not read like one; it
+    says the check did not happen, which is what the operator needs to know.
+    """
     actionable = [f for f in findings if is_actionable(f)]
-    if not actionable:
-        return ""
-    return "Council models: " + "; ".join(f["detail"] for f in actionable) + "."
+    if actionable:
+        return "Council models: " + "; ".join(f["detail"] for f in actionable) + "."
+    unknown = [f for f in findings if f["status"] == "unknown"]
+    if unknown:
+        reasons = sorted({f["detail"] for f in unknown})
+        return ("Council pins NOT checked (" + "; ".join(reasons)
+                + "); freshness is unknown, not confirmed.")
+    return ""
 
 
 def _http_json(url, headers=None, timeout=HTTP_TIMEOUT):

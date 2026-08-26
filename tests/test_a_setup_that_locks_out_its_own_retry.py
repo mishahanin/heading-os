@@ -103,6 +103,164 @@ def test_the_state_write_goes_through_a_temp_file():
     assert "STATE_FILE.write_text(" not in body, body
 
 
+# ============================================================
+# 3b - the state file that parsed but did not fit (2026-08-25)
+# ============================================================
+#
+# The atomic write above stopped the file being TRUNCATED. It never made a
+# well-formed file COMPLETE. `load_state` returned whatever `json.loads` gave
+# back, and `main`'s very next line is `state["started_at"]`, so a hand-edited
+# or older-schema file killed the wizard on the run whose whole purpose is to
+# resume an interrupted one - the same failure this shard was opened for,
+# reached through a different door.
+
+
+def _load_state_with(tmp_path, monkeypatch, payload):
+    setup = _load("setup_p13a", "scripts/setup.py")
+    state_file = tmp_path / "setup-state.json"
+    if payload is not None:
+        state_file.write_text(payload, encoding="utf-8")
+    monkeypatch.setattr(setup, "STATE_FILE", state_file)
+    return setup, setup.load_state()
+
+
+@pytest.mark.parametrize("payload,why", [
+    ("{}", "an empty object: KeyError on started_at"),
+    ('{"started_at": null}', "no completed_steps: dies later, inside mark_done"),
+    ('{"completed_steps": ["a"]}', "no started_at: KeyError immediately"),
+    ('{"last_updated": "2026-01-01"}', "an older schema"),
+])
+def test_a_short_state_file_still_carries_both_required_keys(
+        tmp_path, monkeypatch, payload, why):
+    _, state = _load_state_with(tmp_path, monkeypatch, payload)
+    assert "started_at" in state, why
+    assert isinstance(state["completed_steps"], list), why
+
+
+def test_real_progress_is_never_discarded_by_the_fill(tmp_path, monkeypatch):
+    """Filling a gap must not cost the record the file exists to keep."""
+    _, state = _load_state_with(
+        tmp_path, monkeypatch,
+        '{"completed_steps": ["identity", "prereqs"], "started_at": "2026-01-01"}')
+    assert state["completed_steps"] == ["identity", "prereqs"]
+    assert state["started_at"] == "2026-01-01"
+
+
+@pytest.mark.parametrize("payload", ['["a", "list"]', '"a string"', "42", "null"])
+def test_a_wrong_shaped_payload_falls_back_to_the_skeleton(
+        tmp_path, monkeypatch, payload):
+    """Valid JSON, wrong type. A list raises TypeError rather than KeyError, so
+    a fix that caught only KeyError would have left this open."""
+    _, state = _load_state_with(tmp_path, monkeypatch, payload)
+    assert state == {"completed_steps": [], "started_at": None}
+
+
+def test_a_wrong_typed_completed_steps_is_replaced(tmp_path, monkeypatch):
+    """`mark_done` appends to it and `is_done` searches it; a string would do
+    both without raising and mean nothing."""
+    _, state = _load_state_with(
+        tmp_path, monkeypatch, '{"completed_steps": "identity", "started_at": null}')
+    assert state["completed_steps"] == []
+
+
+def test_a_corrupt_file_still_gives_a_usable_state(tmp_path, monkeypatch):
+    _, state = _load_state_with(tmp_path, monkeypatch, "{ not json")
+    assert state == {"completed_steps": [], "started_at": None}
+
+
+def test_a_missing_file_still_gives_a_usable_state(tmp_path, monkeypatch):
+    _, state = _load_state_with(tmp_path, monkeypatch, None)
+    assert state == {"completed_steps": [], "started_at": None}
+
+
+def test_the_loaded_state_survives_mark_done_and_is_done(tmp_path, monkeypatch):
+    """The asymmetry that hid the defect: `is_done` uses `.get` and `mark_done`
+    subscripts, so a short file passed the early checks and died mid-run."""
+    setup, state = _load_state_with(tmp_path, monkeypatch, '{"started_at": null}')
+    assert setup.is_done(state, "identity") is False
+    setup.mark_done(state, "identity")
+    assert setup.is_done(state, "identity") is True
+
+
+# ============================================================
+# 3c - two checks that named a tree the workspace retired (2026-08-25)
+# ============================================================
+#
+# `corporate/` was an in-tree copy of the corporate repo. It is gone; content is
+# read in place from `.corporate-repo/`. The verify step and the dependency
+# installer were repointed at the live path and kept PRINTING the dead one, so a
+# single run named the same file two different ways and one of the two named
+# nothing on disk. The verify case is the worse of the two: a PASSING check that
+# asserts a file exists at a location it never opened is exactly the
+# `.claude/rules/scope-claims.md` defect, and a green line gives the operator no
+# reason to look.
+
+
+def test_the_verify_step_names_the_path_it_actually_probed():
+    src = (ROOT / "scripts" / "setup.py").read_text(encoding="utf-8")
+    body = src.split("def step_verify(state", 1)[1].split("\ndef ", 1)[0]
+    assert '"corporate/context/business-info.md exists"' not in body, body
+    assert "biz_info.relative_to(WORKSPACE_ROOT)" in body
+
+
+def test_the_verify_step_still_probes_the_live_corporate_path():
+    """The fix must not have repointed the message at a wrong probe."""
+    src = (ROOT / "scripts" / "setup.py").read_text(encoding="utf-8")
+    body = src.split("def step_verify(state", 1)[1].split("\ndef ", 1)[0]
+    assert 'WORKSPACE_ROOT / ".corporate-repo" / "context" / "business-info.md"' in body
+
+
+@pytest.mark.parametrize("present,expect_ok", [(True, True), (False, False)])
+def test_the_verify_check_reports_what_it_found(tmp_path, monkeypatch, capsys,
+                                                present, expect_ok):
+    """Behavioural, not just textual: the line has to follow the FILE.
+
+    A check that passes whatever is on disk is worse than one that always
+    fails - the operator has no reason to doubt a green line, which is what
+    made the wrong path name dangerous rather than untidy.
+    """
+    setup = _load("setup_p13a_verify", "scripts/setup.py")
+    monkeypatch.setattr(setup, "WORKSPACE_ROOT", tmp_path)
+    biz = tmp_path / ".corporate-repo" / "context" / "business-info.md"
+    if present:
+        biz.parent.mkdir(parents=True)
+        biz.write_text("# business\n", encoding="utf-8")
+    setup.step_verify({})
+    out = capsys.readouterr().out
+    line = next(ln for ln in out.splitlines() if "business-info.md" in ln)
+    assert (" exists" in line) is expect_ok, line
+    assert ("not found" in line) is (not expect_ok), line
+
+
+def test_the_verify_check_names_the_probed_path_in_both_outcomes(
+        tmp_path, monkeypatch, capsys):
+    """Whichever way it goes, the path printed is the path opened."""
+    setup = _load("setup_p13a_verify2", "scripts/setup.py")
+    monkeypatch.setattr(setup, "WORKSPACE_ROOT", tmp_path)
+    setup.step_verify({})
+    out = capsys.readouterr().out
+    line = next(ln for ln in out.splitlines() if "business-info.md" in ln)
+    assert ".corporate-repo/context/business-info.md" in line, line
+
+
+def test_no_operator_facing_string_in_setup_names_the_retired_tree():
+    """A sweep, not a spot check: the same literal was in three places and two
+    audits fixed one each. Fix records ARE allowed to name it, since their whole
+    job is to say what changed - they are comments, not output."""
+    src = (ROOT / "scripts" / "setup.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        text = node.value
+        cleaned = text.replace(".corporate-repo/", "")
+        if "corporate/requirements.txt" in cleaned or \
+                "corporate/context/business-info.md" in cleaned:
+            offenders.append(text[:80])
+    assert offenders == [], offenders
+
+
 def test_setup_keeps_its_stdlib_only_import_surface():
     """The atomic write is inlined deliberately: importing scripts.utils.atomic
     would reinstate the sys.path mutation this shard removed, against the

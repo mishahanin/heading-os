@@ -67,13 +67,23 @@ def _clear_pycache(root: Path) -> None:
 
 
 def run_tests(root: Path, tests, *, timeout: int, memory_limit_bytes: int,
-              python: str | None = None):
+              python: str | None = None, clear_cache: bool = True):
     """Run the tests once. Returns "pass" | "fail" | "timeout".
 
     `python` defaults to the repo venv, which is what the workspace runs; a
     caller passes it explicitly only to test this module itself.
+
+    The child ALWAYS runs with `PYTHONDONTWRITEBYTECODE`, so no run of this
+    function can leave a `.pyc` behind for a later run to read. Combined with
+    `run_mutations` wiping once before it starts, that means no cached bytecode
+    exists at any point in a mutation loop -- which is a stronger guarantee
+    than the old wipe-before-every-run, and about a third faster, since the
+    wipe walked the whole repo and forced a full recompile each time.
+
+    `clear_cache=False` skips the walk for a caller that has already done it.
     """
-    _clear_pycache(root)
+    if clear_cache:
+        _clear_pycache(root)
     test_args = [tests] if isinstance(tests, str) else list(tests)
     kwargs = {}
     if os.name == "posix" and memory_limit_bytes:
@@ -83,6 +93,7 @@ def run_tests(root: Path, tests, *, timeout: int, memory_limit_bytes: int,
             [python or str(root / ".venv/bin/python"), "-m", "pytest", *test_args,
              "-q", "-x", "--no-header"],
             cwd=str(root), capture_output=True, text=True, timeout=timeout,
+            env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"),
             **kwargs)
     except subprocess.TimeoutExpired:
         return "timeout"
@@ -95,8 +106,9 @@ def run_mutations(root, tests, mutations, *, timeout: int = DEFAULT_TIMEOUT_S,
     """Apply each mutation, run the tests, restore. Returns a process exit code.
 
     `mutations` is a sequence of ``(tag, relative_path, old, new)``. `old` must
-    appear in the file; a missing anchor is reported and counted as a survivor,
-    because a mutation that never applied proved nothing.
+    appear in the file EXACTLY ONCE; a missing or ambiguous anchor is reported
+    and counted as a survivor, because a mutation that never applied, or applied
+    somewhere other than where its author aimed it, proved nothing.
 
     Restoration happens in a ``finally``, and the backup is written before the
     edit, so a kill between the two still leaves the backup on disk beside the
@@ -109,8 +121,13 @@ def run_mutations(root, tests, mutations, *, timeout: int = DEFAULT_TIMEOUT_S,
         print("note: no address-space limit on this platform; the wall clock "
               f"({timeout}s) is the only bound", file=sys.stderr)
 
+    # ONE wipe, here, before anything runs. Nothing in the loop below writes
+    # bytecode (see `run_tests`), so after this line no `.pyc` exists for any
+    # run to read -- the guarantee the per-run wipe was reaching for, made once
+    # instead of once per mutation.
+    _clear_pycache(root)
     baseline = run_tests(root, tests, timeout=timeout, memory_limit_bytes=limit,
-                         python=python)
+                         python=python, clear_cache=False)
     if baseline != "pass":
         print(f"BASELINE {baseline.upper()}")
         return 2
@@ -123,13 +140,29 @@ def run_mutations(root, tests, mutations, *, timeout: int = DEFAULT_TIMEOUT_S,
         shutil.copy2(target, backup)
         try:
             text = target.read_text(encoding="utf-8")
-            if old not in text:
+            occurrences = text.count(old)
+            if occurrences == 0:
                 print(f"{tag:5} {rel:42} ANCHOR MISSING", flush=True)
                 survivors.append((tag, "anchor missing"))
                 continue
+            if occurrences > 1:
+                # `replace(old, new, 1)` patches the FIRST match, which for an
+                # anchor that is not unique is whichever function happens to
+                # come first in the file. Measured 2026-08-26: three mutations
+                # aimed at `_install_systemd_user_timer` and `_get_json` landed
+                # in `_install_windows_task` and `_post_json` instead, so the
+                # target code was never mutated and all three were reported as
+                # SURVIVED. That reads as a test gap in code that is in fact
+                # untested by the mutation, which is the worse of the two
+                # errors: it sends the reader to weaken a guard that was fine.
+                print(f"{tag:5} {rel:42} ANCHOR AMBIGUOUS ({occurrences}x)",
+                      flush=True)
+                survivors.append((tag, f"anchor matches {occurrences} places"))
+                continue
             target.write_text(text.replace(old, new, 1), encoding="utf-8")
             outcome = run_tests(root, tests, timeout=timeout,
-                                memory_limit_bytes=limit, python=python)
+                                memory_limit_bytes=limit, python=python,
+                                clear_cache=False)
             label = {"fail": "caught", "timeout": "caught (timeout)",
                      "pass": "SURVIVED"}[outcome]
             print(f"{tag:5} {rel:42} {label}", flush=True)

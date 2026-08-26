@@ -71,6 +71,26 @@ def _contained(base: Path, rel: str) -> Path:
     return joined
 
 
+def downstream_dest(workspace: Path, downstream_repo: str) -> Path:
+    """The sibling clone named by the manifest, refused unless it IS a sibling.
+
+    `_contained` exists in this file because manifest values are hand-maintained
+    and were trusted; `downstream_repo` comes from the same manifest, in the same
+    run, and was joined onto `workspace.parent` with nothing checking it at all.
+    `Path('/a/b').parent / '/etc/x'` is `/etc/x`, and `.. / ..` walks out just as
+    freely, so a typo'd or mis-templated manifest pointed the whole publish at an
+    arbitrary directory that `copy_includes` then rmtree's and overwrites.
+
+    Defence in depth, not an attacker boundary: the manifest is the operator's
+    own private config data. The asymmetry is what makes it worth closing.
+    """
+    if downstream_repo != Path(downstream_repo).name or downstream_repo in ("", ".", ".."):
+        raise ValueError(
+            f"manifest downstream_repo {downstream_repo!r} must be a plain "
+            f"directory name (a sibling of {workspace}), not a path")
+    return _contained(workspace.parent, downstream_repo)
+
+
 def copy_includes(workspace: Path, dest: Path, includes: list[str], exclude_names: list[str]) -> None:
     ignore = shutil.ignore_patterns(*STATIC_IGNORE_PATTERNS, *exclude_names)
     for rel in includes:
@@ -191,7 +211,11 @@ def main() -> int:
 
     workspace = get_workspace_root()
     includes, exclude_names, downstream_repo = load_manifest(workspace)
-    dest = workspace.parent / downstream_repo
+    try:
+        dest = downstream_dest(workspace, downstream_repo)
+    except ValueError as exc:
+        print(f"{RED}{exc}{RESET}")
+        return 1
     if not (dest / ".git").exists():
         print(f"{RED}Downstream service-host repo clone not found at {dest}{RESET}")
         print(f"{GRAY}Create the GitHub repo and clone it there (as a sibling dir) first.{RESET}")

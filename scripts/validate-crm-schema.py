@@ -17,7 +17,7 @@ Dispatches to one of three schemas based on the record shape detected in the fro
 Usage:
     python scripts/validate-crm-schema.py                      # all contacts
     python scripts/validate-crm-schema.py --contact leo-marsh
-    python scripts/validate-crm-schema.py --quiet              # exit code only
+    python scripts/validate-crm-schema.py --quiet              # failures only, no summary
     python scripts/validate-crm-schema.py --json               # JSON report
 
 Exit codes: 0 all valid, 1 one or more invalid, 2 setup error.
@@ -194,7 +194,9 @@ def validate_one(path: Path, validator, schema_name: str = "contact", fm: dict |
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else "")
     parser.add_argument("--contact", help="Validate only the named contact (slug, no .md)")
-    parser.add_argument("--quiet", action="store_true", help="Emit only the failure summary")
+    parser.add_argument("--quiet", action="store_true",
+                        help="Drop the per-record OK lines and the final summary. "
+                             "Every FAIL line and every schema error still prints.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     parser.add_argument("--dir", default=None,
                         help="Override base directory for validation (used for staged migration files). "
@@ -253,9 +255,14 @@ def main() -> int:
                   f"(letters, digits, hyphen, underscore); got {args.contact!r}",
                   file=sys.stderr)
             return 2
-        # Single-contact mode: search contacts dir only
-        searched = [CONTACTS_DIR]
-        paths = [CONTACTS_DIR / f"{args.contact}.md"]
+        # Single-contact mode: search the contacts dir only. `--dir` is honoured
+        # HERE TOO. It used to be read only in the `else` branch, so
+        # `--dir staged --contact x` validated the LIVE tree: either exiting 2
+        # against a path the caller never named, or, when a same-named record
+        # existed live, reporting a pass over a corpus that was never opened.
+        base_contacts = (Path(args.dir) / "contacts") if args.dir else CONTACTS_DIR
+        searched = [base_contacts]
+        paths = [base_contacts / f"{args.contact}.md"]
         if not paths[0].exists():
             print(f"{RED}ERROR{RESET}: {paths[0]} not found", file=sys.stderr)
             return 2

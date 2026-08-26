@@ -204,7 +204,12 @@ def test_both_backends_are_reported_when_the_search_falls_back():
     assert "backends_used" in src
     assert '"backends_used": backends_used,' in src
     # The single-value key stays for existing consumers, derived not overwritten.
-    assert '"backend_used": backends_used[-1] if backends_used else "",' in src
+    # It names the PRIMARY -- `[0]`, the backend that served before any fallback.
+    # Shard 12-p1 moved it off `[-1]`: the LAST backend is a property of how many
+    # queries the mode built, not of the run, so "brave" could not be told apart
+    # from a configured primary. The per-source `backend` this pairs with is
+    # pinned in tests/test_a_dry_run_that_said_the_case_did_not_exist.py.
+    assert '"backend_used": backends_used[0] if backends_used else "",' in src
 
 
 # ============================================================

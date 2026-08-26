@@ -21,8 +21,12 @@ def test_retire_removes_from_all_stores(tmp_path):
         _seed(s, "feedback_foo.md")
     _seed(native2, "keep.md")
 
-    removed = memory_stores.retire_memory("feedback_foo.md",
-                                          stores=[canonical, native1, native2])
+    # `retire_memory` returns (removed, failed) since 2026-08-25: a failed
+    # unlink was swallowed, so a memory still on disk was reported as retired
+    # and its index pointer stripped anyway.
+    removed, failed = memory_stores.retire_memory(
+        "feedback_foo.md", stores=[canonical, native1, native2])
+    assert failed == []
     assert len(removed) == 3
     assert not (canonical / "feedback_foo.md").exists()
     assert not (native1 / "feedback_foo.md").exists()
@@ -33,10 +37,11 @@ def test_retire_removes_from_all_stores(tmp_path):
 def test_retire_is_idempotent_and_missing_safe(tmp_path):
     canonical = tmp_path / "canonical"
     canonical.mkdir()
-    assert memory_stores.retire_memory("nope.md", stores=[canonical]) == []
+    assert memory_stores.retire_memory("nope.md", stores=[canonical]) == ([], [])
     _seed(canonical, "a.md")
-    assert memory_stores.retire_memory("a.md", stores=[canonical]) == [str(canonical / "a.md")]
-    assert memory_stores.retire_memory("a.md", stores=[canonical]) == []
+    assert memory_stores.retire_memory("a.md", stores=[canonical]) == (
+        [str(canonical / "a.md")], [])
+    assert memory_stores.retire_memory("a.md", stores=[canonical]) == ([], [])
 
 
 def test_retire_cli_runs_on_missing_name():

@@ -17,7 +17,7 @@ Authentication is not re-invented here. It reuses the same authorized token
 `scripts/gmail-reader.py` uses, via `scripts/utils/gmail_auth.py`. The
 `gmail.modify` scope already covers `drafts.send`.
 
-Tests: tests/test_an_edit_that_deleted_the_addresses_it_promised_to_keep.py, tests/test_gmail_send.py
+Tests: tests/test_an_edit_that_deleted_the_addresses_it_promised_to_keep.py, tests/test_gmail_send.py, tests/test_a_page_the_server_repeated_and_a_body_never_read.py
 
 Usage:
     python scripts/gmail-send.py list
@@ -70,17 +70,32 @@ def select_draft(drafts, draft_id=None, match_subject=None,
     caller assert uniqueness over an unknown subset, which is the exact defect
     this parameter was added to close, re-openable by forgetting one keyword.
     Unknown therefore means friction, in line with every other unclassified
-    input in this workspace. Only `--draft-id` is unaffected: an id either
-    exists in the list or it does not, and no unread page changes that.
+    input in this workspace. `--draft-id` is only half-unaffected: FINDING an
+    id inside the prefix is conclusive, because an id present is present. NOT
+    finding one is not. This used to read "Only `--draft-id` is unaffected: an
+    id either exists in the list or it does not, and no unread page changes
+    that" -- which is exactly backwards for the miss, since the unread page is
+    where the missing draft would be. The old message then said "no draft with
+    id X", asserting over the whole mailbox what had been established over 25
+    drafts. `cmd_send` reaches ids through `_resolve_draft_id` and never takes
+    this path, so the false sentence was a trap for the next caller rather than
+    a live bug.
     """
     if bool(draft_id) == bool(match_subject):
         raise DraftSelectionError("give exactly one of --draft-id or --match-subject")
 
     if draft_id:
         hits = [d for d in drafts if d["id"] == draft_id]
-        if not hits:
-            raise DraftSelectionError(f"no draft with id {draft_id}")
-        return hits[0]["id"]
+        if hits:
+            return hits[0]["id"]
+        if not complete:
+            horizon = searched if searched is not None else len(drafts)
+            raise DraftSelectionError(
+                f"no draft with id {draft_id} among the {horizon} draft(s) "
+                f"searched, and that walk was truncated -- the draft may exist "
+                f"beyond it. Raise --limit."
+            )
+        raise DraftSelectionError(f"no draft with id {draft_id}")
 
     needle = match_subject.lower()
     hits = [d for d in drafts if needle in (d.get("subject") or "").lower()]
@@ -135,12 +150,25 @@ def fetch_drafts(service, limit=25, max_pages=MAX_LIST_PAGES):
     out = []
     token = None
     seen_tokens = set()
+    seen_ids = set()
     for _ in range(max_pages):
         kwargs = {"userId": "me", "maxResults": min(PAGE_SIZE, limit - len(out))}
         if token:
             kwargs["pageToken"] = token
         listed = service.users().drafts().list(**kwargs).execute()
         for d in listed.get("drafts", []):
+            # Skipped before the metadata GET, not after. The repeated-token
+            # guard below only fires once the offending page is already in
+            # `out`, so a server repeating one page made `list` print the same
+            # draft twice with an inflated count -- and made `--match-subject`
+            # see TWO hits for one draft and refuse to send as ambiguous, which
+            # is the failure this file's own "an ambiguous match is an error,
+            # not a guess" line exists to keep meaningful. It also spent a
+            # round trip per duplicate.
+            did = d.get("id")
+            if did in seen_ids:
+                continue
+            seen_ids.add(did)
             meta = service.users().drafts().get(
                 userId="me", id=d["id"], format="metadata").execute()
             hdrs = _headers(meta["message"].get("payload", {}))
@@ -189,13 +217,22 @@ def _resolve_draft_id(service, draft_id):
 
 
 def cmd_send(args):
+    # Before authentication and before the first API call. Giving neither
+    # selector used to fall through to the `else` branch, which authenticates,
+    # calls getProfile, then lists and expands up to --limit drafts -- one
+    # metadata round trip each -- and only then reported that a selector was
+    # required. An expired token or a Gmail outage answered a local argument
+    # error with a network error, which is the wrong diagnosis to hand someone.
+    if bool(args.draft_id) == bool(args.match_subject):
+        print(f"{YELLOW}give exactly one of --draft-id or --match-subject{RESET}",
+              file=sys.stderr)
+        return 2
+
     from scripts.utils.gmail_auth import get_service
 
     service = get_service()
     account = service.users().getProfile(userId="me").execute().get("emailAddress", "?")
     try:
-        if args.draft_id and args.match_subject:
-            raise DraftSelectionError("give exactly one of --draft-id or --match-subject")
         if args.draft_id:
             # Straight to the id. This used to search inside the first
             # --limit (25) drafts, so an operator pasting the id that

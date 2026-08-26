@@ -299,6 +299,19 @@ def run_sandboxed(*, program: Path, corpus_paths: list[Path], out_dir: Path,
             return SandboxResult(None, refused=(
                 f"output directory {out_dir} lies inside the corpus path {path}; "
                 "the writable mount would re-bind read-only corpus as writable"))
+        # The other direction, and it was missing. An `out_dir` that CONTAINS a
+        # corpus path is mounted read-write at `/out`, and the corpus then sits
+        # under it as a writable subtree. A traversal writing `/out/<name>/x.md`
+        # reaches the host corpus through the writable mount without ever
+        # touching the read-only one. Measured 2026-08-26 with bwrap 0.9.0: the
+        # box reported exit 0, and afterwards the host file `corpus/note.md` had
+        # been overwritten and `corpus/planted.md` created. The refusal above
+        # was written for exactly this hazard and covered one nesting order out
+        # of two, which reads as a closed control while half of it is open.
+        if resolved_out in corpus.parents:
+            return SandboxResult(None, refused=(
+                f"output directory {out_dir} contains the corpus path {path}; "
+                "the writable mount would expose read-only corpus for writing"))
 
     # Host readiness comes LAST, after every judgement about what the caller
     # asked for. Both orderings refuse, and no process starts either way, so on

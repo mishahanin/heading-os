@@ -16,6 +16,8 @@ Usage:
 
 Exit codes: 0 critique produced, 1 usage error or no critique produced
 (model unavailable / missing API key / empty body), 2 daemon not reachable.
+
+Tests: tests/test_a_stall_after_the_headers_arrived.py
 """
 import argparse
 import json
@@ -73,6 +75,18 @@ def _fetch_card(root: Path, prefix: str) -> dict:
         # docstring promises.
         print(f"{RED}the daemon answered 200 with a body that is not JSON "
               f"({e}).{RESET}", file=sys.stderr)
+        sys.exit(1)
+    except OSError as e:
+        # AFTER `URLError`, which is itself an OSError subclass, so the
+        # unreachable-daemon path keeps its own exit. `urlopen`'s timeout
+        # covers the connect and the headers; a stall during `r.read()` raises
+        # TimeoutError, and urllib does NOT wrap a body-read failure in
+        # URLError - so it matched none of the handlers above and left through
+        # a docstring that promises three exit codes. A daemon (or a proxy on
+        # the port) that accepts, sends 200 headers and then hangs is the
+        # reachable case.
+        print(f"{RED}the daemon accepted the request and then stalled "
+              f"({type(e).__name__}: {e}).{RESET}", file=sys.stderr)
         sys.exit(1)
     # Shape-checked. The ValueError handler above covers a body that is not JSON
     # at all; a body that IS valid JSON of the wrong shape (a bare array, a

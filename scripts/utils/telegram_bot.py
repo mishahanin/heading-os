@@ -11,6 +11,8 @@ TelegramAPIError so callers can inspect status_code. Error reporting is
 generalized via an injectable on_error callback: pass one to route errors
 into a caller-specific log (Fireside's own errors.log); omit it to fall back
 to the standard logging module.
+
+Tests: tests/test_a_promise_that_misha_would_help.py
 """
 from __future__ import annotations
 
@@ -99,6 +101,20 @@ class TelegramBot:
             self._log_error(msg)
             raise TelegramAPIError(msg, status_code=status) from None
 
+        # JSON of the wrong SHAPE was not handled. The Bot API always answers
+        # with an object, but a proxy, a captive portal or a truncated write can
+        # put `[]` or `null` on the wire with a 200, and `data.get("ok")` then
+        # raised a bare AttributeError. Six timer-driven scripts call this and
+        # catch `TelegramAPIError`; an AttributeError walks past all of them.
+        # Measured 2026-08-26 with `json()` returning `[]` and `None`.
+        if not isinstance(data, dict):
+            msg = self._redact(
+                f"Telegram {method} returned JSON that is not an object "
+                f"(HTTP {status}, {type(data).__name__}): {str(data)[:200]!r}"
+            )
+            self._log_error(msg)
+            raise TelegramAPIError(msg, status_code=status) from None
+
         if not r.ok or not data.get("ok"):
             description = data.get("description", "<no description>")
             telegram_code = data.get("error_code")
@@ -143,6 +159,17 @@ class TelegramBot:
     def get_me(self) -> dict:
         """Return the bot's own user record. Quick auth check."""
         return self._call("getMe")
+
+    def get_webhook_info(self) -> dict:
+        """Return Telegram's view of the registered webhook.
+
+        The two fields worth reading are `pending_update_count` (updates
+        Telegram is holding because nothing consumed them) and
+        `last_error_message` (why its last delivery attempt failed). In webhook
+        mode those are the only evidence available to a process that is not
+        itself the handler.
+        """
+        return self._call("getWebhookInfo")
 
     def send_message(self, chat_id, text: str, parse_mode: str = "Markdown",
                      disable_web_page_preview: bool = True,

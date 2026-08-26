@@ -79,6 +79,18 @@ def main() -> int:
         _log(f"radar check failed to run ({type(exc).__name__}: {exc}); exiting 0")
         return 0
 
+    # An exit code is not the same fact as an empty stdout. A radar that CRASHED
+    # (module-level ImportError, a bad state file) exits nonzero with a
+    # traceback on stderr and nothing on stdout, and this read that as "nothing
+    # due" and exited 0 -- so the daily unattended timer reported health it
+    # never measured, for as long as the crash lasted. `prime-health-parallel`
+    # already checks `proc.returncode` on this exact subprocess, which is why an
+    # interactive /prime surfaced it and the timer did not.
+    if proc.returncode != 0:
+        _log(f"radar exited {proc.returncode}; NOT a quiet radar: "
+             f"{(proc.stderr or '').strip()[:300]}")
+        return 1
+
     line = proc.stdout.strip()
     if not line:
         _log("nothing due -- no nudge to send")

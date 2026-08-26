@@ -50,3 +50,13 @@ def test_a_rule_declaring_paths_starts_with_its_frontmatter(path):
         f"Code never parses the declaration and the rule loads in EVERY session "
         f"({len(text)} bytes) instead of only when its paths match. Move any "
         f"leading HTML comment below the closing `---` of the frontmatter.")
+
+
+def test_the_scan_still_finds_the_rules():
+    """An empty parametrize is one silent skip, not a failure. `.claude/rules/`
+    ships with the engine, so an empty result means the directory moved, never
+    a thin clone. 26 on 2026-08-26.
+    """
+    found = _rule_files()
+
+    assert len(found) >= 15, f"only {len(found)} rules reached the frontmatter gate"

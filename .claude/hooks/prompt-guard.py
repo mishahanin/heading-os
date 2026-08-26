@@ -51,36 +51,83 @@ INGEST_PATHS = [
 #
 # Each surviving entry names a file that exists; `tests/test_prompt_guard.py`
 # holds that, so the next deletion cannot leave a ghost behind.
-ALLOW_BASENAMES = {
-    "prompt-guard.py",
-    "secret-scanner.py",
-    "SECURITY-CONSTITUTION.md",
-}
+# Emptied on 2026-08-25, and the set is kept only so the tests that pin its
+# emptiness have something to read.
+#
+# It was tested BEFORE `is_ingest_path` and matched the bare basename at any
+# depth. Follow that through: the three entries lived in `.claude/hooks/`,
+# `scripts/` and `docs/security/`, none of which is an ingest path, so not one of
+# them could ever have been scanned. The exemption's only REACHABLE effect was to
+# let a NEW file created under an ingest path skip the scan by choosing one of
+# three names - exactly the hazard the note above describes.
+#
+# Its stated reason was stale too: the self-exemption existed because this hook
+# "carries the injection vocabulary it scans for", and since that vocabulary
+# moved to `scripts/utils/injection_patterns.py` it carries none.
+#
+# A real false positive INSIDE an ingest directory is exempted by repo-relative
+# path, never by basename.
+ALLOW_BASENAMES: set = set()
+
+def _relative_under(normalized, root):
+    """`normalized` expressed relative to `root`, or None when it is not inside."""
+    if not root:
+        return None
+    prefix = str(root).replace("\\", "/").rstrip("/") + "/"
+    if normalized.startswith(prefix):
+        return normalized[len(prefix):]
+    return None
+
+
+def _data_root():
+    """The private overlay root, or None when it cannot be resolved.
+
+    Resolved lazily: only an absolute path that is NOT under the session tree
+    can need it, so the ordinary write pays nothing for this import.
+    """
+    try:
+        from scripts.utils.workspace import get_data_root
+        return str(get_data_root())
+    except Exception as exc:  # noqa: BLE001 - advisory hook, reported not raised
+        print(f"[prompt-guard] data root unresolvable, so only the session tree "
+              f"was considered: {exc}", file=sys.stderr)
+        return None
+
 
 def is_ingest_path(file_path, project_dir):
-    """Check if the file is in a monitored ingest directory."""
+    """Check if the file is in a monitored ingest directory, in EITHER repository.
+
+    All four INGEST_PATHS are DATA directories, and on the two-part topology they
+    physically live in the private overlay beside the engine clone, not under the
+    session cwd. Until 2026-08-25 an absolute path there was rejected as
+    "somewhere else entirely" and skipped, so this guard was inert for the real
+    storage location of every directory its own docstring names. The relative
+    spelling still worked, which is what hid it - and the PreToolUse hook
+    `data-path-redirect.py` rewrites the relative form into exactly the absolute
+    data-root form BEFORE the tool runs, so the production path was the blind one.
+    Reproduced by running the hook: `<data>/knowledge/evil.md` carrying "ignore
+    all previous instructions" produced no warning; `knowledge/evil.md` did.
+    """
     normalized = file_path.replace("\\", "/")
     project_normalized = project_dir.replace("\\", "/").rstrip("/") + "/"
 
-    if normalized.startswith(project_normalized):
-        rel_path = normalized[len(project_normalized):]
-    elif os.path.isabs(normalized):
-        # Absolute, but somewhere else entirely. Not ours to scan.
-        return False
+    if os.path.isabs(normalized):
+        rel_path = _relative_under(normalized, project_dir)
+        if rel_path is None:
+            rel_path = _relative_under(normalized, _data_root())
+        if rel_path is None:
+            # Genuinely outside both repositories. Not ours to scan.
+            return False
     else:
         # A relative file_path names the same file as its absolute form. It is
         # resolved against the payload's own cwd and re-checked for containment,
         # so `../elsewhere/knowledge/x.md` still does not qualify.
         resolved = os.path.normpath(os.path.join(project_normalized, normalized))
-        resolved = resolved.replace("\\", "/")
-        if not resolved.startswith(project_normalized):
+        rel_path = _relative_under(resolved.replace("\\", "/"), project_dir)
+        if rel_path is None:
             return False
-        rel_path = resolved[len(project_normalized):]
 
-    for ingest_dir in INGEST_PATHS:
-        if rel_path.startswith(ingest_dir):
-            return True
-    return False
+    return any(rel_path.startswith(ingest_dir) for ingest_dir in INGEST_PATHS)
 
 
 def main():
@@ -104,14 +151,15 @@ def main():
     if not file_path:
         sys.exit(0)
 
-    # Check allow-list by basename
-    basename = os.path.basename(file_path)
-    if basename in ALLOW_BASENAMES:
-        sys.exit(0)
-
-    # Check if file is in an ingest path
+    # Ingest first, exemption second. The order used to be reversed, which is
+    # what made a basename-wide allowance reachable at all: a file named
+    # `secret-scanner.py` created under `knowledge/` left before anything asked
+    # where it was. `ALLOW_BASENAMES` is empty now (see its note), so this loop
+    # exempts nothing; it stays as the seam a repo-relative exemption would use.
     project_dir = input_data.get("cwd", os.getcwd())
     if not is_ingest_path(file_path, project_dir):
+        sys.exit(0)
+    if os.path.basename(file_path) in ALLOW_BASENAMES:
         sys.exit(0)
 
     # Collect content to scan across all four edit tools:

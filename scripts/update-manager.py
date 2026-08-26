@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -37,7 +38,13 @@ def state_path() -> Path:
 def resolve_latest(comp: Component) -> str:
     try:
         return update_sources.latest_version(comp.latest)
-    except update_sources.SourceError:
+    except update_sources.SourceError as exc:
+        # Say it. Swallowed with no message, a total upstream outage was
+        # indistinguishable from "everything is up to date": `build_state`
+        # recorded status "unknown" per component and `check` printed
+        # "checked N components; 0 waiting" either way.
+        print(f"[update-manager] {comp.name}: could not resolve latest version "
+              f"({exc})", file=sys.stderr)
         return ""
 
 
@@ -99,7 +106,21 @@ def cmd_check(_args) -> int:
     state["generated"] = _stamp_now()
     write_state(state, state_path())
     waiting = [n for n, e in state["components"].items() if e["status"] == "waiting"]
-    print(f"checked {len(comps)} components; {len(waiting)} waiting")
+    unknown = [n for n, e in state["components"].items() if e["status"] == "unknown"]
+    line = f"checked {len(comps)} components; {len(waiting)} waiting"
+    if unknown:
+        # Name them. "0 waiting" over a set nothing resolved asserts a state the
+        # run never established, which is what `.claude/rules/scope-claims.md`
+        # forbids.
+        line += f"; {len(unknown)} upstream(s) NOT reached: {', '.join(unknown)}"
+    print(line)
+    # Nothing resolved means nothing was checked, whatever the first clause of
+    # that sentence says. Degrade non-zero, per the console-first rule, so the
+    # timer's `check && apply --auto` stops and the unit shows the failure.
+    if comps and len(unknown) == len(comps):
+        print("no upstream resolved; the version data is unchanged from the "
+              "previous run", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -122,6 +143,20 @@ def cmd_status(_args) -> int:
     return 0
 
 
+def _import_fcntl():
+    """The advisory-lock module, or None on a platform without it.
+
+    A named seam rather than an inline `if` so the no-lock path can be
+    exercised. Patching `os.name` in a test is not an option: `pathlib` picks
+    WindowsPath from it and the interpreter then refuses to build a Path at all.
+    That is why the degraded branch below went untested and shipped broken.
+    """
+    if os.name == "posix":
+        import fcntl  # noqa: PLC0415
+        return fcntl
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Workspace update manager")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -141,13 +176,23 @@ def main(argv: list[str] | None = None) -> int:
         # tier a ModuleNotFoundError traceback on the Windows host. The lock is
         # advisory anyway: without it two concurrent applies can interleave, so
         # Windows degrades with a named warning rather than losing the command.
-        fcntl = None
-        if os.name == "posix":
-            import fcntl  # noqa: PLC0415
+        fcntl = _import_fcntl()
         from scripts.utils.update_apply import cmd_apply  # noqa: PLC0415
         lock_path = state_path().parent / ".apply.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with open(lock_path, "w") as lock_fh:
+            if fcntl is None:
+                # The degradation the comment above promises, written down. It
+                # was described and never implemented: on a non-posix host
+                # `fcntl` stayed None and line below raised
+                # `AttributeError: 'NoneType' object has no attribute 'flock'`,
+                # which `except BlockingIOError` does not catch. The command was
+                # lost with a traceback, which is exactly what the lazy import
+                # was added to prevent. Unreachable until 2026-08-25 only
+                # because the NameError two lines up fired first.
+                print("no advisory lock on this platform; "
+                      "do not run two applies at once")
+                return cmd_apply(args, load_registry(registry_path()), state_path())
             try:
                 fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:

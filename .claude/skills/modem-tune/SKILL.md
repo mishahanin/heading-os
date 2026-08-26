@@ -153,15 +153,15 @@ hidden characters, plain prose.
   reset or reboot without the Phase 4 confirmation.
 - NEVER run `revert` (factory IMEI) or any IMEI rollback unless the CEO explicitly
   asks for it in that turn. Do not offer it as an automatic recovery step.
-- NEVER reuse an IMEI -- the engine enforces this via the shared ledger `used[]`; do
+- NEVER reuse an IMEI. The engine enforces this via the shared ledger `used[]`. Do
   not hand-pick a value that bypasses it (except the deliberate factory `revert`).
 - NEVER change the slot-2 IMEI (out of scope / unvalidated on this firmware) -- act
   on the primary (slot 1) only, on either device.
 - NEVER write the SSH password into any tracked file, commit message, or output. It
   lives only in `.env`.
 - NEVER document this skill, the routers, IMEI values, or credentials in corporate or
-  executive-facing files (`reference/workspace-overview.md`, `templates/`, corporate repo),
-  nor anywhere under `docs/`, the published documentation site.
+  executive-facing files (`reference/workspace-overview.md`, `templates/`, corporate repo).
+  The same ban covers anywhere under `docs/`, the published documentation site.
   The 2026-08-23 audit found a full card for this skill on
   `docs/skills-operations-infra.html`. It named the router model and the three
   `MODEM_*` credential variables. That card existed because this line listed three

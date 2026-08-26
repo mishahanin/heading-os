@@ -245,9 +245,9 @@ After saving, run `python scripts/scrutinize-record.py --validate --run-id <id> 
 - Never emit a finding without evidence (quote or reference)
 - Never emit a finding without a confidence score
 - Never grade `PASS` if any `BLOCKER` or `HIGH` exists in the above-threshold set
-- Never write private data into the engine clone (the vault `_secure/` it used
+- Never write private data into the engine clone. The vault `_secure/` it used
   to name was removed in Plan 5; `SENSITIVE_MODE` and the routing map are the
-  live controls)
+  live controls.
 - Never dispatch more than 5 parallel agents per concurrency cap
 - Never auto-commit after apply - the user decides whether to commit
 - Never invoke `/scrutinize` recursively

@@ -195,8 +195,23 @@ def test_state_prune_ignores_files_it_does_not_own(tmp_path):
     assert also.is_file()
 
 
-def test_state_prune_is_silent_when_the_dir_is_absent(tmp_path):
-    CP.prune_state_dir(tmp_path / "nope", keep_name="x")
+def test_state_prune_is_silent_when_the_dir_is_absent(tmp_path, capsys):
+    """Silent AND creates nothing, which is the half a caller depends on.
+
+    Unlike its pointer-dir twin, this function cannot raise on a missing
+    directory with or without its `is_dir()` early return: everything below
+    that line is `base.glob(...)`, and `Path.glob` swallows the
+    missing-directory error and yields nothing (measured on 3.11.15, and on a
+    path that is a FILE too). So "it did not raise" pins nothing here. What a
+    caller does depend on is that a hook run after the operator deleted the
+    state dir does not quietly put it back.
+    """
+    missing = tmp_path / "nope"
+
+    CP.prune_state_dir(missing, keep_name="x")
+
+    assert not missing.exists(), "pruning must not resurrect the directory"
+    assert capsys.readouterr() == ("", "")
 
 
 # ------------------------------------------------------------ bound_summary

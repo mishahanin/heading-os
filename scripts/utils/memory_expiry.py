@@ -17,6 +17,7 @@ Consumed by:
 from __future__ import annotations
 
 import datetime
+import re
 import sys
 from pathlib import Path
 from typing import Iterable
@@ -79,17 +80,55 @@ def find_expired(memory_dir: Path, today: datetime.date) -> list[tuple[str, date
     return out
 
 
+# One pointer in the index: `[title](name.md)` plus any trailing note, up to the
+# next `·` separator or the end of the line. The title is non-greedy and forbids
+# `]`, so two pointers on one line can never be read as one.
+_POINTER_RE = re.compile(r"\[[^\]]*?\]\((?P<target>[^)]+)\)[^·\n]*")
+
+
 def strip_index_pointers(index_text: str, names: Iterable[str]) -> str:
-    """Remove MEMORY.md pointer lines for the given bare filenames.
+    """Remove the MEMORY.md POINTERS for the given bare filenames.
+
+    Pointers, not lines. This removed the whole line a match sat on, and the
+    index groups related memories onto one line by design - 37 lines of the live
+    index carry more than one pointer. So retiring one dated memory deleted the
+    index entry of every memory grouped beside it, leaving them as orphans that
+    `memory_health.compute_memory_defects` would then report and nothing would
+    explain. Reproduced 2026-08-25: a three-pointer line, one name passed in, the
+    whole line gone. The operator's standing rule is that nothing leaves this
+    index without him saying so, and this could remove two facts for every one
+    he had dated.
+
+    A line is deleted only when every pointer on it matched, so a single-pointer
+    line still disappears whole rather than leaving a bare group label.
 
     Matches the exact ``](<name>)`` link target, so a managed thread pointer like
     ``](threads/business/drop.md)`` is never hit by a bare ``drop.md``. Lines that
     match no name pass through unchanged, preserving the managed ## Active Threads
-    section."""
-    targets = {f"]({name})" for name in names}
-    kept = [
-        line
-        for line in index_text.splitlines(keepends=True)
-        if not any(t in line for t in targets)
-    ]
-    return "".join(kept)
+    section.
+    """
+    wanted = set(names)
+    out = []
+    for line in index_text.splitlines(keepends=True):
+        pointers = list(_POINTER_RE.finditer(line))
+        matched = [m for m in pointers if m.group("target") in wanted]
+        if not matched:
+            out.append(line)
+            continue
+        if len(matched) == len(pointers):
+            continue  # nothing of substance would survive; drop the line
+        body, newline = (line[:-1], line[-1]) if line.endswith("\n") else (line, "")
+        for match in reversed(matched):
+            body = body[:match.start()] + body[match.end():]
+        # Repair the separators the removal left behind: a doubled ` · `, and a
+        # leading or trailing one where the first or last pointer was the one
+        # taken out.
+        body = re.sub(r"\s*·\s*(?=·)", "", body)
+        body = re.sub(r"·\s*$", "", body).rstrip()
+        body = re.sub(r"(?<=: )·\s*", "", body)
+        # One space either side of every surviving separator. The pointer pattern
+        # eats the space that preceded a `·`, so removing a middle pointer would
+        # otherwise leave `[a](a.md)· [c](c.md)`.
+        body = re.sub(r"\s*·\s*", " · ", body)
+        out.append(body + newline)
+    return "".join(out)

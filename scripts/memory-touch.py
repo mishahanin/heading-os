@@ -45,8 +45,21 @@ def main() -> int:
     for raw_path in args.paths:
         try:
             access_count, resolved = touch_file(raw_path, auto_memory_dir, today)
-        except TouchError as exc:
-            sys.stderr.write(f"{RED}refused:{RESET} {exc}\n")
+        except Exception as exc:  # noqa: BLE001 - see below; reported, never raised
+            # Total per file, so one bad path cannot end the batch. Only
+            # `TouchError` was caught, which left everything else `touch_file`
+            # can raise to escape `main` as a traceback: `read_text` on a file
+            # that is not valid UTF-8 raises UnicodeDecodeError, and an
+            # unreadable file or a failed atomic replace raises OSError. Earlier
+            # paths in the same invocation were already written, so the abort
+            # left a partial, unreported state and never touched the rest.
+            #
+            # Enumerating the types is what failed the first time: the sibling
+            # loop in `memory-index.py::_touch_memory_hits` named TouchError and
+            # OSError explicitly and still lost recall to a UnicodeDecodeError.
+            # Nothing here is silent -- every refusal prints, and the exit code
+            # is 1.
+            sys.stderr.write(f"{RED}refused:{RESET} {raw_path}: {exc}\n")
             exit_code = 1
             continue
         print(

@@ -13,6 +13,8 @@ Usage:
     python scripts/export-antigravity-config.py --no-mask      # don't mask (dangerous)
 
 Supports Windows, macOS, Linux Antigravity installs.
+
+Tests: tests/test_a_bundle_that_never_said_the_keys_were_live.py
 """
 
 import argparse
@@ -223,9 +225,27 @@ def _drop_trailing_commas(text: str) -> str:
     return "".join(out)
 
 
-def build_readme(date_str: str, masked_count: int, settings_state: str = "shipped") -> str:
+def build_readme(date_str: str, masked_count: int, settings_state: str = "shipped",
+                 masking_enabled: bool = True) -> str:
+    """The README that travels inside the bundle.
+
+    `masking_enabled` is separate from `masked_count` because zero is what BOTH
+    "the masker ran and matched nothing" and "the masker never ran" look like
+    from a count. Only the first is safe, and the bundle used to describe both
+    the same way: with `--no-mask` the README said nothing at all about
+    settings.json, so a recipient (or a sender re-forwarding the zip weeks
+    later) had no in-artifact sign that the file carries live credentials.
+    """
     mask_note = ""
-    if masked_count:
+    if not masking_enabled and settings_state == "shipped":
+        mask_note = (
+            "\n## WARNING: this bundle contains UNMASKED credentials\n\n"
+            "It was exported with `--no-mask`, so settings.json is the "
+            "sender's file verbatim. Every API key, token and password in it "
+            "is live. Do not forward this zip, do not attach it to a ticket, "
+            "and delete it once you have imported it.\n"
+        )
+    elif masked_count:
         mask_note = (
             f"\n{masked_count} sensitive-looking keys in settings.json were "
             f"auto-masked to `***MASKED***`. Set your own values via the "
@@ -328,27 +348,44 @@ def main():
 
     with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as zf:
         if settings_src.exists():
-            # utf-8-sig, because a BOM is an ordinary state for an
-            # editor-written file and `json.loads("﻿{...}")` raises. The
-            # BOM alone used to send this straight down the fail-open branch.
-            raw = settings_src.read_text(encoding="utf-8-sig")
             out_text = None
+            raw = None
             try:
+                # utf-8-sig, because a BOM is an ordinary state for an
+                # editor-written file and `json.loads("\ufeff{...}")` raises. The
+                # BOM alone used to send this straight down the fail-open branch.
+                #
+                # The read sits INSIDE the try. It used to sit above it, so the
+                # fail-closed design covered only a decode that got as far as
+                # JSON: a UTF-16 settings.json (Notepad's "Unicode" save) raised
+                # UnicodeDecodeError before the try was entered, killed the
+                # process inside the `with zipfile.ZipFile(...)`, and left a
+                # zip on disk holding nothing at all - settings.json is the
+                # first entry, so snippets and extensions never ran.
+                raw = settings_src.read_text(encoding="utf-8-sig")
                 data = json.loads(strip_jsonc(raw))
                 if not args.no_mask:
                     data, masked_keys = mask_sensitive(data)
                 out_text = json.dumps(data, indent=2)
-            except json.JSONDecodeError as e:
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
                 # FAIL CLOSED. This branch used to print a warning and then
                 # write the RAW file into the zip — so the one input the
                 # masker could not read was the one input that shipped
                 # unmasked, and the README still said "0 keys masked".
-                print(f"  {RED}[error]{RESET} settings.json would not parse as JSON after "
-                      f"JSONC strip ({e}).")
+                print(f"  {RED}[error]{RESET} settings.json could not be read as JSON "
+                      f"({type(e).__name__}: {e}).")
                 print(f"  {RED}       {RESET} EXCLUDED from the export rather than shipped "
                       f"unmasked. Fix the file, or re-run with --no-mask if you have "
                       f"checked it by hand.")
                 if args.no_mask:
+                    # `raw` is None unless the READ succeeded and the PARSE is
+                    # what failed, and None is exactly the value the
+                    # `out_text is not None` test below reads as "nothing to
+                    # ship". So a file this process could not decode is
+                    # excluded here even with --no-mask, and that rests on the
+                    # initialiser above staying None: an empty-string default
+                    # would put an empty settings.json in the bundle under a
+                    # green line.
                     out_text = raw  # the operator asked for the raw file explicitly
             if out_text is not None:
                 settings_state = "shipped"
@@ -398,7 +435,9 @@ def main():
         else:
             print(f"  {YELLOW}[warn]{RESET} Antigravity CLI not found - extensions.txt skipped")
 
-        zf.writestr("README.md", build_readme(date_str, len(masked_keys), settings_state))
+        zf.writestr("README.md", build_readme(date_str, len(masked_keys),
+                                              settings_state,
+                                              masking_enabled=not args.no_mask))
         print(f"  {GREEN}[ok]{RESET} README.md (install instructions)")
 
     size_mb = out_zip.stat().st_size / (1024 * 1024)
@@ -414,15 +453,27 @@ def main():
     if settings_state == "shipped":
         print()
         print(f"{YELLOW}Review before sending:{RESET}")
-        if masked_keys:
-            print(f"  The auto-masker replaced values for keys whose names contained one of:")
+        if args.no_mask:
+            # A run with --no-mask used to print "Nothing was masked. The scan
+            # matches KEY NAMES only, against: ..." - which asserts that a
+            # name-based scan RAN and matched nothing. No scan ran at all:
+            # `mask_sensitive` is never called on this path, so the zip carries
+            # every credential verbatim. The most dangerous state this tool can
+            # ship was described in the words of its safest one.
+            print(f"  {BOLD}{RED}Nothing was scanned.{RESET} --no-mask skips the masker "
+                  f"entirely, so")
+            print(f"  {RED}settings.json is in the zip verbatim, credentials and all.{RESET}")
+            print(f"  Read it in full before this bundle leaves your machine.")
         else:
-            print(f"  {BOLD}Nothing was masked.{RESET} The scan matches KEY NAMES only, against:")
-        print(f"  {', '.join(SENSITIVE_KEY_PATTERNS)}.")
-        print(f"  Extract the zip and eyeball settings.json for anything else that looks")
-        print(f"  like a credential (long hex strings, tokens starting with sk-/ghp_/xoxb-,")
-        print(f"  etc.) before sharing. Extension-written values with innocent key names")
-        print(f"  will not be caught by the automatic scan.")
+            if masked_keys:
+                print(f"  The auto-masker replaced values for keys whose names contained one of:")
+            else:
+                print(f"  {BOLD}Nothing was masked.{RESET} The scan matches KEY NAMES only, against:")
+            print(f"  {', '.join(SENSITIVE_KEY_PATTERNS)}.")
+            print(f"  Extract the zip and eyeball settings.json for anything else that looks")
+            print(f"  like a credential (long hex strings, tokens starting with sk-/ghp_/xoxb-,")
+            print(f"  etc.) before sharing. Extension-written values with innocent key names")
+            print(f"  will not be caught by the automatic scan.")
 
 
 if __name__ == "__main__":

@@ -10,7 +10,12 @@ Usage:
 Exit codes:
   0 = clean (no secrets found)
   1 = secrets detected
-  2 = scanner error
+  2 = scanner error, which includes a file that exists and could not be read
+      (UNKNOWN coverage, never a pass)
+
+  When both occur in one run, the exit is 1. A detected secret is a certainty
+  and must never be reported as a tool malfunction; the unreadable list is
+  printed to stderr either way, so nothing is hidden by the precedence.
 
 Used by:
   - .git/hooks/pre-commit (git pre-commit hook)
@@ -28,9 +33,16 @@ from scripts.utils.denial_log import log_denial
 from scripts.utils.secret_patterns import ALLOWLIST_TOKEN, iter_patterns
 from scripts.utils.paths import get_workspace_root
 
-# Binary/non-text extensions to skip
+# Binary/non-text extensions to skip.
+#
+# `.svg` is NOT here, and that is the point. SVG is text XML, so it was the one
+# member of this set a secret could actually sit in - in a comment, an XML
+# metadata block, a `data:` URI, or an inline `<script>` - and the skip runs
+# before the read in every mode, so explicit files, `--stdin` (the git
+# pre-commit path) and `--scan-dir` were all blind to it. `docs/assets/demo.svg`
+# is tracked, so the hole was reachable here today.
 SKIP_EXTENSIONS = {
-    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp",
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp",
     ".pdf", ".zip", ".tar", ".gz", ".7z", ".rar", ".exe", ".dll", ".so",
     ".woff", ".woff2", ".ttf", ".eot", ".otf",
     ".mp3", ".mp4", ".wav", ".avi", ".mov", ".mkv", ".webm",
@@ -227,7 +239,6 @@ def main():
                   f"be read and were NOT scanned:{RESET}", file=sys.stderr)
             for item in unreadable:
                 print(f"  {item}", file=sys.stderr)
-            sys.exit(2)
         # Count the refusal, one record per refused file. The reason names the
         # pattern description only; log_denial redacts, but the finding tuples
         # never carried the matched text in the first place. When the push wall
@@ -241,7 +252,16 @@ def main():
             descriptions = sorted({desc for _line, desc in findings})
             log_denial(mechanism="secret-scanner", action=action,
                        path=filepath, reason="; ".join(descriptions))
-        sys.exit(1 if results else 0)
+        # A DETECTED secret outranks an unreadable file. The `sys.exit(2)` that
+        # used to stand above the loop cost two things in a mixed run: every
+        # detected refusal was printed and never written to the denial log, and
+        # `scripts/publish-service.py` - which branches on 1-vs-2 - printed
+        # "secret-scanner error" over a real leak. Both blocks still print, so
+        # nothing is hidden; only the code changed, to the one true statement
+        # about what was found.
+        if results:
+            sys.exit(1)
+        sys.exit(2 if unreadable else 0)
     except Exception as e:
         print(f"{RED}Scanner error: {e}{RESET}", file=sys.stderr)
         sys.exit(2)

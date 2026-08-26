@@ -265,11 +265,20 @@ def cmd_ack(args, state_dir: Path, engine_root: Path, data_root: Path) -> int:
     signals = gather_live_signals(engine_root, data_root)
     cur = next((s for s in signals if s["key"] == key), None)
     band = cur["severity"] if cur else "ok"
-    ack = load_json(state_dir / ACK_FILE)
     ttl = parse_ttl(args.ttl, key)
     now = time.time()
-    ack[key] = {"acked_at": now, "ttl_seconds": ttl, "acked_band": band}
-    save_json_atomic(state_dir / ACK_FILE, ack)
+    # Locked for the whole read-modify-write, the same as `run_autoheal` -- and
+    # for a wider window than that one. `save_json_atomic` makes each WRITE
+    # atomic and says nothing about the gap between the load and the save, and
+    # `gather_live_signals` above sits inside that gap, network probes to the
+    # ollama hosts included. Two overlapping manual acks each loaded the file
+    # before the other saved, so one ack was silently lost and its signal kept
+    # firing.
+    state_dir.mkdir(parents=True, exist_ok=True)
+    with file_lock(state_dir / (ACK_FILE + ".lock"), label="ops-radar-ack"):
+        ack = load_json(state_dir / ACK_FILE)
+        ack[key] = {"acked_at": now, "ttl_seconds": ttl, "acked_band": band}
+        save_json_atomic(state_dir / ACK_FILE, ack)
     hrs = ttl / 3600
     print(f"ops-radar: ack {key} for {hrs:.0f}h (band={band}); re-surfaces on worsening or expiry.")
     return 0

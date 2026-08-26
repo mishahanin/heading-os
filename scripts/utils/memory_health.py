@@ -260,17 +260,33 @@ def compute_memory_defects(memory_dir: Path) -> dict:
             stale.append((p.name, age))
 
     # Orphans: fact files whose name is not referenced anywhere in MEMORY.md.
+    #
+    # An ABSENT or unreadable index is the state where EVERY fact file is
+    # unreferenced, and the check simply skipped it: the caller received
+    # `orphans: []` under `status: "ok"` and `/memory-hygiene` printed
+    # "0 orphans / none" over an index it had never read. `status` answers a
+    # different question (the DIRECTORY exists), so it could not carry this, and
+    # nothing else in the returned dict did either. `index_readable` is that
+    # missing fact, and the orphan list now names the real state.
     orphans: list[str] = []
-    if memory_file.exists():
+    index_readable = True
+    index_problem = ""
+    content = ""
+    if not memory_file.exists():
+        index_readable = False
+        index_problem = f"{memory_file} does not exist"
+    else:
         try:
             content = memory_file.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            content = ""
-        for p in files:
-            if p.name == "MEMORY.md":
-                continue
-            if p.name not in content:
-                orphans.append(p.name)
+        except OSError as exc:
+            index_readable = False
+            index_problem = f"{memory_file} could not be read: {exc}"
+
+    for p in files:
+        if p.name == "MEMORY.md":
+            continue
+        if p.name not in content:
+            orphans.append(p.name)
 
     return {
         "status": "ok",
@@ -280,6 +296,8 @@ def compute_memory_defects(memory_dir: Path) -> dict:
         "over_budget": lines > MEMORY_BUDGET_LINES,
         "stale": stale,
         "orphans": orphans,
+        "index_readable": index_readable,
+        "index_problem": index_problem,
     }
 
 

@@ -51,8 +51,17 @@ _FORMAT = f"%H{_FS}%at{_FS}%s{_FS}%b{_RS}"
 
 
 def _run(repo: Path, args: list[str]) -> str:
+    # `core.quotePath` defaults ON, so git wraps any path holding a non-ASCII
+    # byte in double quotes and C-escapes it: `"_secure/x/\321\204.md"`. That
+    # leading quote defeats `air_gap.is_denied`, which matches deny PREFIXES
+    # with `startswith` -- so the hard-coded vault prefix, and every prefix a
+    # caller passes from config, silently stopped applying to exactly those
+    # paths, and the commit was indexed message and all. Turning the quoting off
+    # is one flag and removes the class, rather than teaching one call site to
+    # un-escape.
     proc = subprocess.run(
-        ["git", *args], cwd=repo, capture_output=True, text=True
+        ["git", "-c", "core.quotePath=false", *args],
+        cwd=repo, capture_output=True, text=True
     )
     if proc.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")

@@ -2,8 +2,8 @@
 """Render a Pencil deck to PNG / PDF / PPTX / self-contained HTML.
 
 The Pencil MCP `export_nodes` tool (native PNG/PDF) is broken on WSL: its bundled
-path translator prepends `\\wsl.localhost\<distro>\` inconsistently, so it cannot
-write per-slide images from a WSL-resident or C:\ .pen. `export_html` in the same
+path translator prepends `\\\\wsl.localhost\\<distro>\\` inconsistently, so it cannot
+write per-slide images from a WSL-resident or C:\\ .pen. `export_html` in the same
 MCP resolves paths correctly, so the reliable pipeline is:
 
     1. (agent, MCP)  export_html(filePath=<active .pen>, outputPath=<deck>/pencil/deck.html,
@@ -45,6 +45,7 @@ import argparse
 import base64
 import glob
 import mimetypes
+import os
 import re
 import sys
 from pathlib import Path
@@ -63,21 +64,39 @@ DECOR_DEFAULT = ("Footer", "Logo", "OrangeCorner", "Watermark", "WatermarkDark",
                  "Icon", "Check", "CheckX", "NumBadge", "LogoMark", "LogoBy")
 
 # Runs in the browser over the Pencil export HTML. For every slide frame it
-# collects each leaf content-text node's box + style (in css px, relative to the
+# collects each content-text BLOCK's box + style (in css px, relative to the
 # frame) and marks it data-ov so the background pass can hide it. Decorative text
 # (closest to a --keep-in-bg name) and icon-font glyphs are skipped.
+#
+# "Block", not "leaf". The rule used to be `childElementCount > 0 -> skip`, so a
+# paragraph carrying ANY inline markup was skipped: `<p>Our <strong>2026</strong>
+# plan</p>` has one element child, so the `<p>` was never extracted, never marked
+# `data-ov`, and never hidden -- its text stayed baked into a background the tool
+# calls "text-less", while `<strong>` alone became a floating text box. The words
+# around the bold ran silently missing from the editable deck.
+#
+# An element qualifies when it holds text and every text-bearing descendant of it
+# is INLINE, i.e. it is one visual paragraph. Its descendants are then marked
+# covered so nothing is extracted twice; hiding the parent hides them anyway.
 EXTRACT_JS = r"""
 (decor) => {
   const skipSel = decor.map(n => `[data-pencil-name="${n}"]`).join(',');
   const slides = [...document.querySelectorAll("[data-pencil-name^='Slide-']")];
   const out = [];
+  const isInline = (e) => {
+    const d = getComputedStyle(e).display;
+    return d === 'inline' || d === 'inline-block' || d === 'contents';
+  };
+  const hasBlockText = (el) => [...el.querySelectorAll('*')].some(
+    (d) => d.textContent && d.textContent.trim() && !isInline(d));
   for (const s of slides) {
     const sr = s.getBoundingClientRect();
     const items = [];
     for (const el of s.querySelectorAll('*')) {
-      if (el.childElementCount > 0) continue;                 // leaf nodes only
+      if (el.hasAttribute('data-ov-in')) continue;            // inside a box already taken
       const txt = el.textContent;
       if (!txt || !txt.trim()) continue;
+      if (hasBlockText(el)) continue;                         // a container, not a paragraph
       if (skipSel && el.closest(skipSel)) continue;           // decorative -> stays in bg
       const cs = getComputedStyle(el);
       const fs = parseFloat(cs.fontSize);
@@ -91,11 +110,28 @@ EXTRACT_JS = r"""
       items.push({text: txt, x: r.left - sr.left, y: r.top - sr.top,
                   w: r.width, h: r.height, fs: fs, fam: fam,
                   italic: /italic|oblique/i.test(cs.fontStyle),
-                  color: cs.color, align: cs.textAlign, lhr: lhr});
+                  color: cs.color, align: cs.textAlign, lhr: lhr,
+                  ws: cs.whiteSpace});
       el.setAttribute('data-ov', '1');
+      for (const d of el.querySelectorAll('*')) d.setAttribute('data-ov-in', '1');
+    }
+    // What is STILL baked in: a text node covered by no extracted box and not
+    // decorative. Counted rather than assumed away -- the caller used to print
+    // "text-less backgrounds", which is a claim about the whole frame that this
+    // pass never established.
+    let leftover = 0;
+    const w = document.createTreeWalker(s, NodeFilter.SHOW_TEXT);
+    while (w.nextNode()) {
+      const n = w.currentNode;
+      if (!n.nodeValue || !n.nodeValue.trim()) continue;
+      const p = n.parentElement;
+      if (!p || p.closest('[data-ov]')) continue;
+      if (skipSel && p.closest(skipSel)) continue;
+      leftover++;
     }
     out.push({name: s.getAttribute('data-pencil-name'),
-              id: s.getAttribute('data-pencil-id'), items: items});
+              id: s.getAttribute('data-pencil-id'), items: items,
+              leftover: leftover});
   }
   return out;
 }
@@ -386,10 +422,32 @@ def render_editable(work_html: Path, bg_dir: Path, width, height, scale,
             else:
                 fr.screenshot(path=str(out))
         browser.close()
-    if verbose:
-        nb = sum(len(d["items"]) for d in data)
-        print(f"{GRAY}  {len(data)} text-less backgrounds, {nb} content text boxes{RESET}")
+    message, incomplete = extraction_summary(data)
+    if incomplete:
+        print(message, file=sys.stderr)
+    elif verbose:
+        print(message)
     return data
+
+
+def extraction_summary(data) -> tuple[str, bool]:
+    """One line describing what the extraction ESTABLISHED, plus whether it was
+    incomplete.
+
+    The old line read "N text-less backgrounds", which is a claim about the
+    whole frame. The method only hides the boxes it managed to extract, so a
+    paragraph it skipped stayed visible in the image and that sentence covered
+    for it -- exactly the silent partial extraction the leaf-node rule caused.
+    `leftover` is the measurement that makes the difference sayable.
+    """
+    nb = sum(len(d["items"]) for d in data)
+    left = sum(d.get("leftover", 0) for d in data)
+    if left:
+        return (f"{YELLOW}  {len(data)} backgrounds, {nb} content text boxes; "
+                f"{left} text node(s) could NOT be extracted and stay baked "
+                f"into the background (decorative text excluded).{RESET}", True)
+    return (f"{GRAY}  {len(data)} backgrounds with no content text left in "
+            f"them, {nb} content text boxes{RESET}", False)
 
 
 def _rgb(s: str):
@@ -442,16 +500,29 @@ def build_editable_pptx(bg_dir: Path, data, pptx_path: Path, width, height,
                 tf.auto_size = MSO_AUTO_SIZE.NONE
             tf.margin_left = tf.margin_right = tf.margin_top = tf.margin_bottom = 0
             tf.vertical_anchor = MSO_ANCHOR.TOP
-            para = tf.paragraphs[0]
-            para.alignment = align_map.get(it["align"], PP_ALIGN.LEFT)
-            if not single and it["lhr"]:
-                para.line_spacing = round(it["lhr"], 3)
-            run = para.add_run()
-            run.text = " ".join(it["text"].split())
-            run.font.size = Pt(it["fs"] * emu_px / 12700)
-            run.font.name = it["fam"]
-            run.font.italic = it["italic"]
-            run.font.color.rgb = _rgb(it["color"])
+            # Whitespace is collapsed only where the BROWSER collapses it.
+            # `" ".join(text.split())` ran unconditionally, which is right under
+            # `white-space: normal` (there a source newline renders as a space)
+            # and lossy under `pre`, `pre-line` and `pre-wrap`, where the author
+            # put the break in on purpose. The extractor never captured
+            # `whiteSpace`, so the consumer could not tell the two apart; now it
+            # does, and an authored break becomes a real paragraph.
+            if str(it.get("ws", "normal")).startswith("pre"):
+                lines = [ln.strip() for ln in it["text"].split("\n")]
+                lines = [ln for ln in lines if ln] or [""]
+            else:
+                lines = [" ".join(it["text"].split())]
+            for idx, line in enumerate(lines):
+                para = tf.paragraphs[0] if idx == 0 else tf.add_paragraph()
+                para.alignment = align_map.get(it["align"], PP_ALIGN.LEFT)
+                if not single and it["lhr"]:
+                    para.line_spacing = round(it["lhr"], 3)
+                run = para.add_run()
+                run.text = line
+                run.font.size = Pt(it["fs"] * emu_px / 12700)
+                run.font.name = it["fam"]
+                run.font.italic = it["italic"]
+                run.font.color.rgb = _rgb(it["color"])
     prs.save(str(pptx_path))
     n_fonts = embed_fonts(pptx_path, fam_italic, font_dirs, verbose=verbose) if font_dirs else 0
     return len(data), n_fonts
@@ -587,10 +658,24 @@ def embed_fonts(pptx_path: Path, fam_italic: dict, font_dirs, verbose=False):
     members["ppt/presentation.xml"] = etree.tostring(
         ptree, xml_declaration=True, encoding="UTF-8", standalone=True)
 
-    # 4. rewrite the package
-    with zipfile.ZipFile(pptx_path, "w", zipfile.ZIP_DEFLATED) as z:
-        for n, b in members.items():
-            z.writestr(n, b)
+    # 4. rewrite the package, atomically.
+    #
+    # `ZipFile(pptx_path, "w")` TRUNCATES on open, and the path is the deck
+    # `prs.save` wrote seconds earlier. Any failure inside the write loop -- a
+    # full disk, an unreadable font file, an interrupt -- left a truncated
+    # .pptx and no copy of the original, so the whole chromium render pass had
+    # to run again. (The background PNGs survive under `editable-bg/`; the deck
+    # does not.) `scripts/utils/atomic` is this repo's convention for exactly
+    # this, and `partner-scorecard.py` already routes its rewrite through it.
+    tmp = pptx_path.with_name(pptx_path.name + ".tmp")
+    try:
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+            for n, b in members.items():
+                z.writestr(n, b)
+        os.replace(tmp, pptx_path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     if verbose:
         print(f"{GRAY}  embedded {len(slots)} font file(s): {', '.join(sorted(by_fam))}{RESET}")
     return len(slots)

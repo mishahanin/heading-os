@@ -12,6 +12,9 @@ Usage::
     for event in conn.poll_inbox(since=last_cursor):
         print(event)
     conn.disconnect()
+
+Tests: tests/inbox_pulse/test_exchange.py,
+       tests/test_a_catch_all_rule_the_report_could_not_see.py
 """
 
 from __future__ import annotations
@@ -219,7 +222,20 @@ class EWSConnection:
     # ------------------------------------------------------------------
 
     def disconnect(self) -> None:
-        """Close the connection and release the account. Idempotent."""
+        """Release the account reference. Idempotent. Closes NOTHING.
+
+        The docstring said "close the connection" until 2026-08-25 and this
+        method has only ever dropped a reference. The sockets go when
+        exchangelib's session pool is collected, not when this returns.
+
+        Closing is deliberately not done here rather than merely unimplemented.
+        `exchangelib.protocol.Protocol` has a `close()`, but its metaclass
+        `CachingProtocol` hands the SAME instance to every Account built on the
+        same endpoint and credentials, precisely so they share one thread and
+        connection pool. Closing it from one wrapper's `disconnect()` would tear
+        that pool out from under every other Account in the process. A wrapper
+        that does not own the pool must not close it.
+        """
         self._account = None
 
     # ------------------------------------------------------------------

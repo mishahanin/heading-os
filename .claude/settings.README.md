@@ -2,7 +2,7 @@
 
 This file is **corporate-classified** (see `config/routing-map.yaml`).
 
-It is published to every executive workspace via the corporate content repo (`heading-os-corporate`); execs pick it up on their next `git pull`. (The hourly `workspace-sync.py` push was retired -- see `plans/2026-06-26-retire-workspace-sync-disk-import.md`.)
+It is published to every executive workspace via the corporate content repo (`heading-os-corporate`); execs pick it up on their next `git pull`. (The hourly `workspace-sync.py` push was retired on 2026-06-26; the plan behind that decision is archived in the operator's private data overlay and is not part of this repository.)
 
 (As of 2026-04-25, AIOS-for-the-CEO is an independent OSS repo and is no longer fed from this file.)
 

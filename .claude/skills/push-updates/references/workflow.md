@@ -161,9 +161,8 @@ Last Updated: 2026-08-20
    This regenerates the company-wide radar, ownership map, shared contacts, and by-company views.
 
 5. Executive workspaces:
-   - Central CEO-driven exec sync is **retired** (the destructive `workspace-sync.py`
-     and the `sync-all-execs.py` driver are gone — see
-     `plans/2026-06-26-retire-workspace-sync-disk-import.md`). The no-op stub that
+   - Central CEO-driven exec sync is **retired** as of 2026-06-26 (the destructive
+     `workspace-sync.py` and the `sync-all-execs.py` driver are gone). The no-op stub that
      stood in for `sync-all-execs.py` was deleted on 2026-08-20; four of its five
      flags were already documented as ignored, and a file that exists only to do
      nothing is a file someone will eventually call.

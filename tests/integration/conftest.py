@@ -1,8 +1,14 @@
 """Shared fixtures for sentinel integration tests.
 
 Design notes:
-- Full mocks for Exchange/Telethon/Anthropic (see plan 2026-04-19-sentinel-integration-tests.md).
-- Synthetic fixtures only; no real data per CEO decision 2026-04-19.
+- One shared Exchange account mock, built here from `fixtures/sample_emails.json`.
+  Telethon and Anthropic are mocked INSIDE the tests that need them, per test,
+  because each one wants a different failure injected. Until 2026-08-27 this file
+  also carried `mock_telegram_client` and `mock_anthropic_client`; no test had
+  ever requested either, and neither had the meeting-invite corpus behind them.
+  Unread scaffolding reads as active protection, so it came out.
+- Synthetic fixtures only; no real data. Operator decision 2026-04-19, and since
+  the engine went public it is the engine/data separation as well.
 - File I/O redirected to tmp_path (pytest built-in) to avoid touching real state.
 """
 from __future__ import annotations
@@ -11,7 +17,7 @@ import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -20,10 +26,12 @@ import sys
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(WORKSPACE_ROOT))
 
-# sentinel.py has module-level side effects on Windows:
-# lines 80-82 replace sys.stdout/stderr with TextIOWrapper, which destroys
-# pytest's capture layer. Work around by pretending to be non-Windows at
-# import time (skipping the branch), then restoring platform.
+# sentinel.py has module-level side effects on Windows: the top-level
+# `if sys.platform == "win32":` guard replaces sys.stdout/stderr with a
+# TextIOWrapper, which destroys pytest's capture layer. Work around by
+# pretending to be non-Windows at import time (skipping the branch), then
+# restoring platform. No line numbers here on purpose - this comment said
+# "lines 80-82" until 2026-08-27, by which time the guard had moved to 97-99.
 # Subsequent imports get the cached module without re-running top-level code.
 _orig_platform = sys.platform
 sys.platform = "linux"
@@ -72,31 +80,6 @@ def fixture_emails() -> list[SimpleNamespace]:
     return [SimpleNamespace(**item) for item in raw]
 
 
-@pytest.fixture
-def fixture_tg_messages() -> list[SimpleNamespace]:
-    """Synthetic Telegram messages (5 items)."""
-    raw = _load_fixture("sample_tg_messages.json")
-    return [SimpleNamespace(**item) for item in raw]
-
-
-@pytest.fixture
-def fixture_meeting_invites() -> list[SimpleNamespace]:
-    """Synthetic meeting invites (3 items, including one with bad datetime)."""
-    raw = _load_fixture("sample_meeting_invites.json")
-    return [SimpleNamespace(**item) for item in raw]
-
-
-@pytest.fixture
-def fixture_analyzer_responses() -> list[MagicMock]:
-    """Synthetic Anthropic Message-shaped responses."""
-    raw = _load_fixture("sample_analyzer_responses.json")
-    responses = []
-    for item in raw:
-        msg = MagicMock()
-        msg.content = [MagicMock(text=item["text"], type="text")]
-        msg.stop_reason = item.get("stop_reason", "end_turn")
-        responses.append(msg)
-    return responses
 
 
 # ---------------------------------------------------------------------------
@@ -140,12 +123,6 @@ def mock_config() -> SimpleNamespace:
 # External service mocks
 # ---------------------------------------------------------------------------
 
-async def _async_gen(items):
-    """Yield items as an async generator (for Telethon iter_messages)."""
-    for item in items:
-        yield item
-
-
 @pytest.fixture
 def mock_exchange_account(fixture_emails):
     """MagicMock of exchangelib.Account with inbox returning fixture emails."""
@@ -156,31 +133,6 @@ def mock_exchange_account(fixture_emails):
     account.inbox.filter.return_value = inbox_filter
     account.inbox.all.return_value = fixture_emails
     return account
-
-
-@pytest.fixture
-def mock_telegram_client(fixture_tg_messages):
-    """AsyncMock of telethon.TelegramClient with iter_messages as async gen."""
-    client = AsyncMock()
-    client.iter_messages = lambda *a, **kw: _async_gen(fixture_tg_messages)
-    client.is_connected = MagicMock(return_value=True)
-    client.disconnect = AsyncMock()
-    client.connect = AsyncMock()
-    client.get_me = AsyncMock(return_value=SimpleNamespace(
-        first_name="TestUser", username="testuser"
-    ))
-    # session.save is called in sentinel; provide a dummy
-    client.session = MagicMock()
-    client.session._conn = MagicMock()
-    return client
-
-
-@pytest.fixture
-def mock_anthropic_client(fixture_analyzer_responses):
-    """MagicMock of anthropic.Anthropic client."""
-    client = MagicMock()
-    client.messages.create.side_effect = fixture_analyzer_responses
-    return client
 
 
 # ---------------------------------------------------------------------------

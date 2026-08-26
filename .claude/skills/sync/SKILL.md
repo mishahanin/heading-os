@@ -40,8 +40,7 @@ x-heading-routing:
 # Workspace Sync
 
 Manually sync the workspace using plain git. This replaced the retired
-`workspace-sync.py` mechanism (see
-`plans/2026-06-26-retire-workspace-sync-disk-import.md`). There is no longer a
+`workspace-sync.py` mechanism on 2026-06-26. There is no longer a
 copy-and-orphan-delete engine, no scheduled sync task, and no risk of the old
 "delete the engine tree" failure. Sync is now two simple, non-destructive
 operations.

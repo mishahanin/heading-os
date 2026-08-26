@@ -63,7 +63,7 @@ Monday messages to the 31C Tribe. Crunch Mode updates. Personnel announcements. 
 CEO-to-CEO communications with PartnerCo, DistributorCo, AllianceCo, government contacts. Banking compliance. Executive outreach. Pull from `context/business-info.md` and `context/current-data.md`.
 
 ### LinkedIn & Thought Leadership
-Story-driven posts in Misha's authentic voice. Category creation narrative (DPI to Deep Packet Intelligence). Intrigue around launches and milestones. No negative messaging. No corporate filler. Reference `datastore/content/linkedin-archive/goal-is-a-cage.md` for voice.
+Story-driven posts in Misha's authentic voice. Category creation narrative (DPI to Deep Packet Intelligence). Intrigue around launches and milestones. No negative messaging. No corporate filler. Read the operator's own published posts in the private data overlay's LinkedIn archive for voice; the engine ships no sample post.
 
 ### Official Documents
 Board resolutions, contracts, certificates, partnership agreements, pricing models, Data Room materials. Formal but authentic - adjust formality, not personality.

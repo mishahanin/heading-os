@@ -29,6 +29,7 @@ import importlib.util
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -261,10 +262,30 @@ def test_the_filesystem_error_is_reported_on_stderr_not_stdout(tmp_path, monkeyp
 
 
 def test_running_out_of_collision_attempts_returns_three(traj_dir, tmp_path, monkeypatch, capsys):
-    """Every suffix collides, so minting exhausts its attempts and gives up."""
+    """Every suffix collides, so minting exhausts its attempts and gives up.
+
+    The clock is pinned as well as the uuid, and both for the same reason. The
+    run_id base is `mint_run_id`'s `%Y-%m-%d_%H%M%S`, which changes every
+    second, so the three calls below only collide while they land inside ONE
+    second. On an unloaded machine they always did; under a 16-worker xdist run
+    on 2026-08-27 one of them crossed a second boundary, the base changed, the
+    third mint found nothing to collide with and returned 0 instead of 3.
+
+    That is a false failure on correct code, and it would have been a false PASS
+    the day the exit-3 path actually broke. Pinning the clock makes the
+    collision the test's premise rather than the machine's timing.
+    """
     class _Fixed:
         hex = "abcdef"
 
+    frozen = datetime(2026, 8, 27, 1, 2, 3, tzinfo=timezone.utc)
+
+    class _Clock:
+        @staticmethod
+        def now(tz=None):
+            return frozen
+
+    monkeypatch.setattr(itl, "datetime", _Clock)
     monkeypatch.setattr(itl.uuid, "uuid4", lambda: _Fixed())
     plan = tmp_path / "plan.md"
     plan.write_text("# plan\n", encoding="utf-8")

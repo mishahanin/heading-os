@@ -83,6 +83,27 @@ def traj(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture
+def frozen_second(monkeypatch):
+    """Stop the clock inside `mint_run_id`, which reads it at second resolution.
+
+    A test whose premise is "these calls happen in the same second" cannot
+    inherit that from the machine. Under a 16-worker run on 2026-08-27 a
+    sibling test in `test_an_import_that_died_on_the_skip_it_promised.py`
+    crossed a second boundary and failed on code that was right.
+    """
+    from datetime import datetime, timezone
+
+    frozen = datetime(2026, 8, 24, 3, 4, 5, tzinfo=timezone.utc)
+
+    class _Clock:
+        @staticmethod
+        def now(tz=None):
+            return frozen
+
+    monkeypatch.setattr(itl, "datetime", _Clock)
+
+
 def _ev(event_type: str, sn=0, **payload) -> str:
     return json.dumps({"timestamp": "2026-08-24T00:00:00Z", "event_type": event_type,
                        "step_number": sn, "payload": payload})
@@ -204,10 +225,21 @@ def test_the_windows_unlock_seeks_back_before_unlocking():
 # 9 - a run_id no other run holds
 # ============================================================
 
-def test_three_runs_in_one_second_get_three_ids(traj):
+def test_three_runs_in_one_second_get_three_ids(traj, frozen_second):
     """One-second resolution is not unique: the second run died on
-    FileExistsError, and two concurrent ones both passed `exists()`."""
+    FileExistsError, and two concurrent ones both passed `exists()`.
+
+    `frozen_second` is what makes the name true. Without it the three mints are
+    only in the same second when the machine happens to be fast enough, and on a
+    slow one they get three DIFFERENT bases - so the assertion below still
+    passes while the collision path it exists for never runs. A test that is
+    green whether or not its premise held measures nothing.
+    """
+    base = itl.mint_run_id("plans/2026-08-24-demo.md")
     ids = [itl.mint_unique_run_id("plans/2026-08-24-demo.md") for _ in range(3)]
+    assert all(i.startswith(base) for i in ids), (
+        f"the three mints did not share one second: {ids} against {base}"
+    )
     assert len(set(ids)) == 3, ids
     for run_id in ids:
         assert (traj / f"{run_id}.jsonl").exists(), "the id was not reserved on disk"

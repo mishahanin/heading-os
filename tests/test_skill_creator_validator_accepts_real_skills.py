@@ -64,12 +64,21 @@ def test_every_shipped_skill_passes_the_validator(skill_dir: Path):
 def test_every_frontmatter_key_in_use_is_either_allowed_or_namespaced():
     """The direct claim, independent of validate_skill's other rules."""
     unknown: dict[str, set[str]] = {}
+    checked = 0
     for skill_dir in SKILLS:
         for key in _frontmatter(skill_dir):
+            checked += 1
             if key in ALLOWED_PROPERTIES or key.startswith(NAMESPACE_PREFIX):
                 continue
             unknown.setdefault(key, set()).add(skill_dir.name)
     assert unknown == {}, f"keys the validator would reject: {unknown}"
+    # An empty offender dict proves nothing unless keys actually reached the
+    # guard. Measured 860 keys on 2026-08-26 across the shipped skills; the
+    # floor sits well under that so retiring a skill cannot fail this test.
+    # If `_frontmatter` stopped yielding keys (its frontmatter split drifting,
+    # or the SKILLS glob resolving to nothing), the body never runs, `unknown`
+    # would stay empty, and this assertion is the only thing that would notice.
+    assert checked >= 550, f"only {checked} frontmatter keys inspected"
 
 
 def test_a_genuinely_unknown_key_is_still_rejected(tmp_path: Path):

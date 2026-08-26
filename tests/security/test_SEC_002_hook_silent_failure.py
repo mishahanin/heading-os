@@ -38,16 +38,24 @@ def test_no_bare_except_pass(session_start_path):
     tree = ast.parse(content)
 
     violations = []
+    inspected = 0
     for node in ast.walk(tree):
         if isinstance(node, ast.ExceptHandler):
             if not _is_broad_exception(node):
                 continue  # Specific typed exceptions are fine
+            inspected += 1
             # Check if body is just 'pass' or 'continue'
             if len(node.body) == 1 and isinstance(node.body[0], (ast.Pass, ast.Continue)):
                 line = node.lineno
                 violations.append(
                     f"Line {line}: bare exception handler with pass/continue"
                 )
+
+    # Measured 10 broad handlers in session-start.py on 2026-08-26; floor at 6 so
+    # retiring a handler does not fail this test. If _is_broad_exception drifted to
+    # return False for everything, the continue above would skip every handler and
+    # the empty violations list would report PASS while nothing was checked.
+    assert inspected >= 6, f"only {inspected} broad exception handler(s) inspected"
 
     assert not violations, (
         f"Found {len(violations)} bare exception handler(s) that silently swallow errors:\n"
@@ -60,10 +68,12 @@ def test_exception_handlers_log_to_stderr(session_start_path):
     content = read_file_content(session_start_path)
     tree = ast.parse(content)
 
+    inspected = 0
     for node in ast.walk(tree):
         if isinstance(node, ast.ExceptHandler):
             if not _is_broad_exception(node):
                 continue  # Specific typed exceptions are fine
+            inspected += 1
             handler_lines = content.split("\n")[node.lineno - 1:node.end_lineno]
             handler_text = "\n".join(handler_lines)
 
@@ -84,3 +94,9 @@ def test_exception_handlers_log_to_stderr(session_start_path):
                     f"Line {node.lineno}: exception handler swallows error "
                     f"without logging to stderr"
                 )
+
+    # Measured 10 broad handlers in session-start.py on 2026-08-26; floor at 6 so
+    # retiring a handler does not fail this test. If _is_broad_exception drifted to
+    # return False for everything, the continue above would skip every handler and
+    # this test would assert nothing at all.
+    assert inspected >= 6, f"only {inspected} broad exception handler(s) inspected"

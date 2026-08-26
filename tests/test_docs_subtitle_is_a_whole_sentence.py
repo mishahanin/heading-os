@@ -113,6 +113,7 @@ def test_the_search_index_carries_the_same_whole_sentences():
         if not rec.get("a"):            # page-level record opens with the subtitle
             by_url.setdefault(rec["u"], rec)
     bad = []
+    inspected = 0
     for _md, html in _pairs():
         rec = by_url.get(html.name)
         if rec is None:
@@ -120,8 +121,15 @@ def test_the_search_index_carries_the_same_whole_sentences():
         subtitle = _meta_description(html).strip()
         if not subtitle:
             continue
+        inspected += 1
         if subtitle not in rec.get("t", ""):
             bad.append(f'{html.name}: index text does not carry the page subtitle')
+    # 23 md-sourced pages reached the comparison on 2026-08-26; floored well
+    # below that so retiring a page is not this test's failure. If the page-level
+    # record predicate (`not rec.get("a")`) stopped matching, `by_url` would be
+    # empty, every page would take the `rec is None` continue, and `bad` would be
+    # empty for the wrong reason.
+    assert inspected >= 14, f"only {inspected} pages reached the index comparison"
     assert not bad, (
         "the search index disagrees with the page it was built from:\n"
         + "\n".join(bad)

@@ -142,14 +142,22 @@ def test_plugins_page_does_not_present_a_placeholder_as_installable():
     placeholders = _declared_bundles() - _shipped_bundles()
     text = (DOCS / "PLUGINS.md").read_text(encoding="utf-8")
     bad = []
+    inspected = 0
     for name in sorted(placeholders):
         for n, line in enumerate(text.splitlines(), 1):
             if f"`{name}`" not in line:
                 continue
+            inspected += 1
             # Naming it is fine; naming it without saying it is not shipped is not.
             if not re.search(r"no (?:crm )?bundle|reserved|not built|skips it|placeholder",
                              line, re.I):
                 bad.append(f"PLUGINS.md:{n}: names `{name}` as if it shipped")
+    # Measured 1 on 2026-08-26 (one PLUGINS.md line naming a placeholder bundle),
+    # so the floor is 1. If the backtick containment test at the top of the loop
+    # stopped matching (a rename of the bundle, a change in how PLUGINS.md quotes
+    # it, or the page dropping the mention), every line would be skipped, `bad`
+    # would be empty, and this guard would pass while reading nothing.
+    assert inspected >= 1, f"no PLUGINS.md line named a placeholder bundle: {inspected}"
     assert not bad, (
         "the plugins page names a bundle the build skips:\n" + "\n".join(bad)
         + f"\n(placeholders in config/plugin-bundles.yaml: {sorted(placeholders)})"
@@ -176,12 +184,20 @@ def test_the_marker_guard_has_markers_to_check():
 
 def test_a_block_level_audit_skip_marker_is_alone_on_its_line():
     bad = []
+    inspected = 0
     for path in _markdown_files():
         for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if not _MARKER.match(line.lstrip()):
                 continue                      # inline pair mid-paragraph: allowed
+            inspected += 1
             if _MARKER.sub("", line).strip():
                 bad.append(f"{path.relative_to(ROOT)}:{n}: {line.strip()[:90]}")
+    # Measured 16 block-level marker lines on 2026-08-26, floored at 10 so
+    # retiring an audit-skip region does not fail this test. If the
+    # `_MARKER.match(line.lstrip())` predicate stopped matching (a rotted
+    # pattern, a marker syntax change), every line would be skipped, `bad`
+    # would stay empty, and the guard would pass having read nothing.
+    assert inspected >= 10, f"only {inspected} block-level marker lines inspected"
     assert not bad, (
         "prose shares a line with a block-level audit-skip marker. Under "
         "CommonMark the comment block runs to the end of that line, so the "

@@ -142,16 +142,27 @@ def test_every_live_crm_record_round_trips_byte_for_byte(mc):
         pytest.skip("no CRM records on disk")
 
     damaged = []
+    inspected = 0
     for f in records:
         text = f.read_text(encoding="utf-8")
         fm, body = mc.parse_frontmatter(text)
         if not fm:
             continue
+        inspected += 1
         # Mirrors the production join exactly (merge-contacts.py, "Merge"
         # block). A test that reassembles differently from the writer measures
         # its own arithmetic, not the tool's.
         if mc.serialize_frontmatter(fm) + body != text:
             damaged.append(f.name)
+
+    # Measured 2026-08-26: 334 records reached the round-trip check. The floor
+    # sits well under that so retiring a handful of contacts never fails this
+    # test. It exists because `if not fm` is the only guard here: were
+    # `parse_frontmatter` to start returning an empty mapping for every record
+    # (a regex that stops matching the opening fence, say), every file would be
+    # skipped, `damaged` would be empty, and the assertion below would pass
+    # while nothing at all had been round-tripped.
+    assert inspected >= 200, f"only {inspected} of {len(records)} records were round-tripped"
 
     assert not damaged, f"{len(damaged)} of {len(records)} rewritten: {damaged[:8]}"
 

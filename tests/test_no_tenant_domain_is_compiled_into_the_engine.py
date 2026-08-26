@@ -89,10 +89,12 @@ def test_the_sweep_has_something_to_read():
 
 def test_no_watched_script_hardcodes_a_tenant_domain():
     bad = []
+    inspected = 0
     for rel in WATCHED:
         for n, line in enumerate((ROOT / rel).read_text(encoding="utf-8").splitlines(), 1):
             if line.lstrip().startswith("#"):
                 continue                     # prose may name the old default
+            inspected += 1
             for hit in _DOMAINISH.findall(line):
                 # `gal-example.com` is the placeholder wearing a filename
                 # prefix; `gal-31c.io` is the defect. Strip a leading
@@ -100,6 +102,12 @@ def test_no_watched_script_hardcodes_a_tenant_domain():
                 core = hit.rsplit("-", 1)[-1]
                 if core not in _ALLOWED and hit not in _ALLOWED:
                     bad.append(f"{rel}:{n}: {hit!r}")
+    # 627 code lines survived the comment skip on 2026-08-26; floor well under
+    # that so retiring a chunk of either script does not fail this test. If the
+    # `line.lstrip().startswith("#")` guard ever drifts true for every line
+    # (or WATCHED empties), nothing is scanned, `bad` is empty, and the domain
+    # assertion below passes while guarding nothing.
+    assert inspected >= 400, f"only {inspected} code lines scanned"
     assert not bad, (
         "a tenant domain is compiled into engine code; it belongs in "
         "operator.yaml or the instance config:\n  " + "\n  ".join(bad)

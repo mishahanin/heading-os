@@ -75,13 +75,24 @@ def test_every_cleanup_step_is_guarded():
     body = _finally_body()
     tree = ast.parse(body)
     unguarded = []
+    guarded = 0
     for node in tree.body:
         if isinstance(node, ast.Try):
+            guarded += 1
             continue
         # An `if x is not None:` wrapper counts only when its own body is a Try.
         if isinstance(node, ast.If) and all(isinstance(s, ast.Try) for s in node.body):
+            guarded += 1
             continue
         unguarded.append(ast.unparse(node).splitlines()[0])
+    # An empty offender list proves nothing on its own: both `continue` arms
+    # above drop an item, and the passing state is "everything was dropped".
+    # So count what the guards positively recognised. Measured 4 on 2026-08-26
+    # (3 `if x is not None:` wrappers plus 1 bare try), floored at 2 so
+    # retiring one cleanup step does not fail this test. If the `ast.If` arm's
+    # predicate stops matching (or `_finally_body` starts returning a shrunken
+    # clause), this count collapses and the guard is watching nothing.
+    assert guarded >= 2, f"only {guarded} cleanup statements were inspected"
     assert not unguarded, (
         "these cleanup statements can raise out of the finally clause and "
         "replace the exception that caused the shutdown:\n  "

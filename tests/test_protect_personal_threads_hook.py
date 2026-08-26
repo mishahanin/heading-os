@@ -100,6 +100,7 @@ def test_hook_blocks_write_outside_personal_with_personal_path_in_content() -> N
 
 def test_hook_allows_documentation_write_referencing_personal_path() -> None:
     """H4 regression: spec/plan/audit files legitimately mention threads/personal/."""
+    inspected = 0
     for target in (
         "docs/superpowers/specs/2026-04-29-threads-registry-design.md",
         "docs/superpowers/plans/2026-04-29-threads-registry.md",
@@ -122,7 +123,13 @@ def test_hook_allows_documentation_write_referencing_personal_path() -> None:
             # from a different check in the same chain. This test asserts what
             # the personal-threads guard does, not what the whole chain does.
             continue
+        inspected += 1
         assert not _blocked(rc, out), f"hook wrongly blocked legitimate write to {target}"
+    # Survivor floor: 7 doc targets reached the assertion when measured on 2026-08-26.
+    # If the "canopus" substring check above drifted true for every hook response
+    # (a workspace-wide Canopus freeze, or a chain that started echoing that word),
+    # every target would be skipped and this test would pass while checking nothing.
+    assert inspected >= 4, f"only {inspected} doc targets reached the allow assertion"
 
 
 def test_hook_allows_legitimate_write_inside_personal() -> None:

@@ -98,6 +98,7 @@ def _offending_nodes(tree: ast.AST) -> list[tuple[int, str]]:
 def test_only_the_single_source_names_an_embedding_model():
     """A fourth copy fails here, with the file and the line that added it."""
     offenders: dict[str, list[tuple[int, str]]] = {}
+    inspected = 0
     for path in sorted(ROOT.glob("scripts/**/*.py")):
         rel = _rel(path)
         if rel in ALLOWED:
@@ -110,9 +111,17 @@ def test_only_the_single_source_names_an_embedding_model():
                 tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
         except SyntaxError:  # not ours to judge here; py_compile owns that
             continue
+        inspected += 1
         hits = _offending_nodes(tree)
         if hits:
             offenders[rel] = hits
+    # 370 script files reached the detector on 2026-08-26. A floor on the glob
+    # alone would prove only that scripts/ is non-empty: if `rel in ALLOWED`
+    # drifted true for every file (an entry widened to a prefix, or `_rel`
+    # returning something every path matches), zero trees would be walked, the
+    # offender dict would be empty, and this guard would pass having checked
+    # nothing.
+    assert inspected >= 240, f"only {inspected} script files reached the detector"
     assert not offenders, (
         "these name an embedding model instead of asking "
         "scripts/utils/embeddings.index_embed_target():\n"

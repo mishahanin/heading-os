@@ -182,15 +182,24 @@ def test_no_writer_calls_the_atomic_writer_on_a_state_path_directly():
     The unit tests above prove the lock works; this proves the writers use it.
     """
     offenders = []
+    inspected = 0
     for rel in WRITERS:
         path = ROOT / rel
         text = path.read_text(encoding="utf-8")
         for lineno, line in enumerate(text.splitlines(), 1):
             if "write_json_atomic(" not in line or line.lstrip().startswith("#"):
                 continue
+            inspected += 1
             # The call is only a problem when its target is the state file.
             if "state_path" in line or "state_path" in line or ", state)" in line:
                 offenders.append(f"{rel}:{lineno} {line.strip()}")
+    # Measured 2026-08-26: 1 line across the four writers reaches the offender
+    # check, so the floor is 1. If the `"write_json_atomic(" not in line`
+    # predicate drifted to true for every line (the primitive renamed, or the
+    # writers switched to another helper), nothing would be inspected, the
+    # offender list would be empty, and this guard would pass while checking
+    # no writer at all.
+    assert inspected >= 1, f"no writer line was inspected (measured {inspected})"
     assert not offenders, (
         "these writers bypass CP.locked_state and can lose a concurrent "
         "write:\n  " + "\n  ".join(offenders)

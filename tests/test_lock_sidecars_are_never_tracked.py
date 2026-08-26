@@ -72,9 +72,11 @@ TRACKED_BY_DESIGN = {"uv.lock"}
 def test_no_lock_sidecar_is_tracked_in_either_repository():
     """The broad half. A second lock added anywhere, under any name, fails here
     the moment it is committed - the specific test above cannot see it."""
+    inspected = 0
     for repo in (ROOT, Path(get_data_root())):
         if not (repo / ".git").exists():
             continue
+        inspected += 1
         listed = subprocess.run(
             ["git", "ls-files", "-z", "*.lock"],
             cwd=repo, capture_output=True, text=True, check=True,
@@ -85,6 +87,14 @@ def test_no_lock_sidecar_is_tracked_in_either_repository():
             f"{repo.name} tracks {len(tracked)} lock file(s): {tracked[:5]}. "
             f"Add the path to that repo's .gitignore with the reason."
         )
+    # Measured 2 repositories inspected on 2026-08-26 (engine plus the data
+    # overlay); floored at 1 because a CI runner has no overlay and legitimately
+    # sees only the engine. Names the drift it catches: if
+    # `not (repo / ".git").exists()` becomes true for every repo (a relocation,
+    # a worktree whose `.git` is a file, a data root that resolves nowhere),
+    # both are skipped, `tracked` is never built, and the assertion above passes
+    # having read no repository at all.
+    assert inspected >= 1, f"no repository was inspected (measured {inspected})"
 
 
 def test_the_state_lock_is_ignored_by_the_engine():

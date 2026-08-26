@@ -250,14 +250,22 @@ def test_no_operator_facing_string_in_setup_names_the_retired_tree():
     src = (ROOT / "scripts" / "setup.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
     offenders = []
+    inspected = 0
     for node in ast.walk(tree):
         if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
             continue
         text = node.value
+        inspected += 1
         cleaned = text.replace(".corporate-repo/", "")
         if "corporate/requirements.txt" in cleaned or \
                 "corporate/context/business-info.md" in cleaned:
             offenders.append(text[:80])
+    # Floor on the SURVIVORS, not the tree: 334 string constants reached the
+    # match on 2026-08-26. If the isinstance filter above ever drifts (say the
+    # ast.Constant test stops holding for the nodes setup.py actually contains),
+    # every node would be skipped, offenders would be empty, and this sweep
+    # would pass while reading nothing.
+    assert inspected >= 200, f"only {inspected} string constants inspected"
     assert offenders == [], offenders
 
 

@@ -1,8 +1,9 @@
 """The shell timezone resolver must work when invoked the way installers invoke it.
 
-`scripts/utils/paths.py tz` is how twelve timer installers learn the operator's
-zone before rendering `{{TZ}}` into a unit. It was shipped on 2026-08-03 invoked
-as a FILE:
+`scripts/utils/paths.py tz` is how the timer installers learn the operator's
+zone before rendering `{{TZ}}` into a unit (14 of them on 2026-08-26; the
+docstring said twelve until that count was measured). It was shipped on
+2026-08-03 invoked as a FILE:
 
     "$PYTHON" "$WORKSPACE/scripts/utils/paths.py" tz || echo UTC
 
@@ -31,6 +32,24 @@ import pytest
 
 _ROOT = Path(__file__).resolve().parents[1]
 _INSTALLERS = sorted(_ROOT.glob("scripts/install-*-timer.sh"))
+
+
+def test_there_are_installers_to_check():
+    """Both guards below are green over an empty glob, and in two ways at once.
+
+    `test_no_installer_invokes_a_utils_file_by_path` is parametrized over this
+    list: an empty parametrize is ONE SKIP to pytest, not a failure. Its partner
+    builds a `missing` list and asserts it empty, which an empty corpus satisfies
+    by construction. So a renamed prefix (`install-*-timer.sh` to anything else)
+    or a moved directory would switch off the guard that keeps the shadowing fix
+    in place, and nothing in this file would say so.
+
+    Measured 2026-08-26: 14 installers match. The floor is set below that on
+    purpose, so retiring a timer does not fail an unrelated test.
+    """
+    assert len(_INSTALLERS) >= 9, (
+        f"the scan collapsed to {len(_INSTALLERS)} installers"
+    )
 
 
 def test_the_resolver_answers_when_run_as_a_module(tmp_path):

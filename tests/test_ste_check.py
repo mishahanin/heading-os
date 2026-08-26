@@ -613,16 +613,23 @@ def test_no_skill_corpus_finding_lands_in_its_own_frontmatter(ste):
     import re
 
     misplaced = []
+    inspected = 0
     for path in ste.resolve_skill_scope():
         text = path.read_text(encoding="utf-8")
         match = re.match(r"^---\n.*?\n---\n", text, re.DOTALL)
         if not match:
             continue
+        inspected += 1
         height = match.group(0).count("\n")
         total = len(text.splitlines())
         for finding in ste.audit(text)["findings"]:
             if finding["line"] <= height or finding["line"] > total:
                 misplaced.append((path.name, finding["line"], height))
+    # Measured 94 skill bodies on 2026-08-26. Floored well below that so
+    # retiring a skill cannot fail this test. If the frontmatter regex stops
+    # matching (a corpus-wide format change, or a widened pattern), every file
+    # takes the `continue` and the misplaced list is empty over nothing.
+    assert inspected >= 60, f"only {inspected} skill bodies reached the check"
     assert not misplaced, (
         f"{len(misplaced)} finding(s) report a line inside the frontmatter or past "
         f"the end of file: {misplaced[:5]}"

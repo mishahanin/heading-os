@@ -159,12 +159,22 @@ def test_the_canary_concept_is_gone_from_both_registries():
     in three months. A stray flag left behind would be a fact nothing reads."""
     import json
     from scripts.utils.workspace import get_data_config_dir, get_data_root
+    if not (get_data_config_dir().is_dir() or (get_data_root() / "admin").is_dir()):
+        pytest.skip("no data overlay on this clone")
+    inspected = 0
     for path in (get_data_config_dir() / "exec-registry.json",
                  get_data_root() / "admin" / "executives.json"):
         if not path.exists():
             continue
         rows = json.loads(path.read_text(encoding="utf-8")).get("executives", [])
         assert not [r["slug"] for r in rows if "canary" in r], path
+        inspected += 1
+    # Both registry paths can be absent, and then the loop asserts nothing while
+    # still reporting green. Measured 2 registries read on 2026-08-26, floored at
+    # 1 so retiring one of the two files does not fail this test. If
+    # `path.exists()` drifted to false for both (a renamed file, a moved admin
+    # directory) while the overlay is still present, this is the line that fails.
+    assert inspected >= 1, f"read {inspected} registries, so nothing was checked"
 
 
 def test_the_join_is_sorted_and_stable(fleet):

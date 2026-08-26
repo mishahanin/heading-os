@@ -53,13 +53,20 @@ def test_no_module_rebuilds_the_whole_log_to_add_one_line():
     copied, so a guard on the copy that was reported would let the next one
     through."""
     offenders = []
+    inspected = 0
     for path in sorted(SOURCES.rglob("*.py")):
         if path.name == "_jsonl.py":
             continue                      # its docstring quotes the old shape
         src = path.read_text(encoding="utf-8")
+        inspected += 1
         for n, line in enumerate(src.splitlines(), 1):
             if re.search(r"new_content\s*\+?=", line):
                 offenders.append(f"{path.relative_to(ROOT)}:{n}")
+    # 44 daemon modules reached the regex on 2026-08-26; floor well under that so
+    # retiring a module does not fail this test. If the `path.name == "_jsonl.py"`
+    # skip ever widened to match every file, the offender list would be empty and
+    # the scan below would pass while reading nothing.
+    assert inspected >= 28, f"only {inspected} modules reached the scan"
     assert not offenders, (
         "a read-modify-rewrite is back in an append-only log; use "
         "_jsonl.append_jsonl:\n  " + "\n  ".join(offenders)

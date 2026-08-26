@@ -91,14 +91,20 @@ def test_a_relative_path_is_made_absolute():
 
 def test_no_caller_pastes_a_path_into_a_file_uri():
     offenders = []
+    inspected = 0
     for base in _SCAN_DIRS:
         for path in base.rglob("*.py"):
             if any(part in _SKIP for part in path.parts):
                 continue
+            inspected += 1
             text = path.read_text(encoding="utf-8", errors="ignore")
             for lineno, line in enumerate(text.splitlines(), 1):
                 if _PASTE.search(line) and "sqlite_uri" not in str(path):
                     offenders.append(f"{path.relative_to(ROOT)}:{lineno}")
+    # 388 files reached the read on 2026-08-26. If the `_SKIP` part-match drifted
+    # true for every path (a directory name every file sits under lands in the
+    # set), no file would be read and `offenders` would be empty for free.
+    assert inspected >= 250, f"only inspected {inspected} files"
     assert offenders == [], (
         f"these build a SQLite file: URI by pasting an unquoted path: "
         f"{offenders}. Use scripts.utils.sqlite_uri.read_only_uri()."

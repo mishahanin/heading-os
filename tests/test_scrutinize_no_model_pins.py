@@ -105,12 +105,19 @@ def test_the_operator_overview_pins_no_model_where_it_describes_scrutinize():
         pytest.skip("no operator overview (data overlay absent, e.g. a public clone)")
 
     hits = []
+    inspected = 0
     for lineno, line in enumerate(overview.read_text(encoding="utf-8").splitlines(), 1):
         if "scrutinize" not in line.lower():
             continue
+        inspected += 1
         match = _VERSIONED_MODEL.search(line)
         if match:
             hits.append(f"workspace-overview.md:{lineno}: {match.group(0)!r}")
+    # 14 overview lines mentioned scrutinize on 2026-08-26. If the substring test
+    # on the line ("scrutinize" not in line.lower()) drifts, by a rename of the
+    # skill or a reformat that moves those mentions, every line is skipped and the
+    # offender list is empty over nothing checked.
+    assert inspected >= 8, f"only {inspected} overview lines reached the pin gate"
     assert not hits, (
         "the operator overview pins a model version while describing /scrutinize. "
         "The judge roster is the running session's Claude, never pinned, and the "

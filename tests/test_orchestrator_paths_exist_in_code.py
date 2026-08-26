@@ -135,13 +135,26 @@ _RETIRED = "ceo-main"
 
 def test_no_orchestrator_surface_dispatches_a_write_to_the_retired_workspace():
     bad = []
+    inspected = 0
     for path in (PATTERNS, ORCHESTRATOR_RULE):
         for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if _RETIRED not in line:
                 continue
+            inspected += 1
             if re.search(r"retired|legacy|do not write|until 2026-08-23", line, re.I):
                 continue                       # naming it to forbid it is the point
             bad.append(f"{path.relative_to(ROOT)}:{n}: {line.strip()[:110]}")
+    # Measured 1 inspected line on 2026-08-26 (the single surviving mention of
+    # the retired workspace, which is the retirement note itself), so the floor
+    # sits at 1. If `_RETIRED not in line` drifts true for every line, because
+    # the constant is renamed or both surfaces stop naming the retired
+    # workspace at all, nothing is classified and the offender list is empty
+    # for the wrong reason.
+    assert inspected >= 1, (
+        f"only {inspected} line(s) in the orchestrator surfaces were checked "
+        f"against the {_RETIRED!r} guard; the corpus or the constant drifted "
+        "and this test is no longer reading anything"
+    )
     assert not bad, (
         f"an orchestrator surface still names {_RETIRED!r} as a live target. That "
         "workspace was retired at the 2026-06-15 cutover; pushes go through "

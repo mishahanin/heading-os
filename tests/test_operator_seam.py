@@ -162,9 +162,11 @@ def test_no_personal_identity_literal_in_engine():
     these files is a regression. Category-c prose (single-line docstrings,
     argparse/usage examples, trailing inline comments) is still allowed."""
     offenders = []
+    inspected = 0
     for rel in FIXED_FILES:
         text = (ROOT / rel).read_text(encoding="utf-8")
         for lineno, line in _code_lines(text):
+            inspected += 1
             if not _PERSONAL_RE.search(line):
                 continue
             # Allowlisted category-c prose that lives on a code line: single-line
@@ -176,6 +178,11 @@ def test_no_personal_identity_literal_in_engine():
             if not _PERSONAL_RE.search(code):
                 continue
             offenders.append(f"{rel}:{lineno}: {line.strip()}")
+    # Corpus floor: 3339 code lines reached the regex on 2026-08-26, so 2000 is a
+    # safe floor that survives retiring a file or two. Without it, a drift in
+    # _code_lines (say the triple-quote fence tracking never leaves in_block)
+    # would yield zero lines, leave offenders empty, and pass while checking nothing.
+    assert inspected >= 2000, f"only {inspected} engine code lines inspected"
     assert not offenders, (
         "personal operator-identity literal in engine code (identity must resolve "
         "through scripts/utils/operator_identity.py):\n" + "\n".join(offenders)

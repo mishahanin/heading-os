@@ -196,14 +196,22 @@ def test_no_unit_template_names_an_operating_location():
     surely as a config value does.
     """
     offenders = []
+    inspected = 0
     for template in _timer_templates() + _service_templates():
         for number, line in enumerate(template.read_text(encoding="utf-8").splitlines(), 1):
             if "{{TZ}}" in line:
                 continue
+            inspected += 1
             found = _GEO.search(line)
             if found:
                 offenders.append(f"{template.name}:{number} names {found.group(0)!r}")
 
+    # An empty offender list is what an empty scan produces, so the count of
+    # lines that actually reached `_GEO` is floored before the list is read.
+    # Two things would empty it in silence: both template globs going stale, and
+    # the `{{TZ}}` guard widening to drop every line. Measured 2026-08-26: 32
+    # templates, 568 lines reaching the search.
+    assert inspected >= 350, f"the scan reached only {inspected} template lines"
     assert not offenders, "geographic literal in a public engine template:\n" + "\n".join(offenders)
 
 
@@ -470,6 +478,27 @@ def _unit_driven_scripts() -> list[Path]:
     return sorted(out)
 
 
+def test_there_are_unit_driven_entrypoints_to_walk():
+    """SC-3's static net is parametrized over this list, and an empty
+    parametrize is ONE SKIP to pytest rather than a failure.
+
+    This floor is here because the reasoning that said it was unnecessary was
+    wrong, and a mutation said so. `_timer_driven_scripts()` is floored by
+    `test_the_probe_plan_covers_every_timer_entrypoint`, which asserts both
+    directions against a static plan. That does NOT extend to this collector:
+    the timer walk finds its `.service` sibling with `Path.exists()`, not
+    through `_service_templates()`, so changing the `*.service` glob empties
+    THIS list and leaves the timer list whole. Measured 2026-08-26: the
+    mutation `*.service` to `*.serviceX` survived the whole file.
+
+    Measured 2026-08-26: 18 service templates, 17 distinct entrypoints.
+    """
+    scripts = _unit_driven_scripts()
+    assert len(scripts) >= 10, (
+        f"the walk collapsed to {len(scripts)} entrypoints"
+    )
+
+
 def _dotted(node) -> str | None:
     """The full dotted name of a call target: `f`, `x.f`, or `a.b.c.f`."""
     import ast
@@ -664,6 +693,33 @@ def test_no_unit_entrypoint_reads_the_zone_before_loading_the_env(script):
         f"{script.name}: main() reaches a zone read while .env is still unloaded, "
         f"so its dates are UTC while its unit fires on local time.\n"
         f"  path: " + " <- ".join(reversed(trail))
+    )
+
+
+def test_the_static_net_reaches_the_ordering_check_on_most_entrypoints():
+    """The floor the parametrized test above cannot carry itself.
+
+    That test opens with two early exits: `pytest.skip` when a script has no
+    module-level `main`, and a bare `return` when `_READS_LOCAL_TIME` finds no
+    zone read. Both are correct per item. Neither is visible in the aggregate:
+    if the regex stops matching, or `_load_module` stops finding `main`, every
+    one of the parametrized cases returns before the ordering check and all of
+    them report PASS with nothing asserted.
+
+    So the survivors are counted here instead. Measured 2026-08-26: 17
+    unit-driven entrypoints, 17 with a `main`, 12 reaching the ordering check.
+    """
+    reaching = []
+    for script in _unit_driven_scripts():
+        cache: dict = {}
+        src, funcs, _imports = _load_module(script, cache)
+        if funcs.get("main") is None:
+            continue
+        if _READS_LOCAL_TIME.search(src):
+            reaching.append(script.name)
+
+    assert len(reaching) >= 7, (
+        f"only {len(reaching)} entrypoints reach the ordering check: {reaching}"
     )
 
 

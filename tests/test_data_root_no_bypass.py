@@ -157,6 +157,7 @@ def _scan_files(base: Path, root: Path):
 def test_no_data_dir_joined_to_engine_root():
     root = get_workspace_root()
     violations: list[str] = []
+    inspected = 0
     for base in _scan_roots():
         if not base.exists():
             continue
@@ -167,10 +168,17 @@ def test_no_data_dir_joined_to_engine_root():
                 text = py.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
+            inspected += 1
             for i, line in enumerate(text.splitlines(), 1):
                 if (_BYPASS.search(line) or _BYPASS_JOIN.search(line)
                         or _BYPASS_JOINPATH.search(line) or _BYPASS_FSTRING.search(line)):
                     violations.append(f"{rel}:{i}: {line.strip()}")
+    # Survivor floor: an empty offender list only means "clean" if files actually
+    # reached the line scan. Measured 427 files on 2026-08-26; floored well below
+    # so retiring a script does not fail this test. If _scan_roots() stops
+    # resolving, or _is_exempt() drifts to true for everything, the count collapses
+    # and this fires instead of reporting a silent all-clear.
+    assert inspected >= 256, f"only {inspected} files reached the bypass scan"
     assert not violations, (
         "Data directory joined directly to an engine root (bypasses the data-root "
         "seam -> misroutes private data into the engine clone). Use the matching "
@@ -186,6 +194,7 @@ def test_no_engine_root_alias_joined_to_data_dir():
     """
     root = get_workspace_root()
     violations: list[str] = []
+    inspected = 0
     for base in _scan_roots():
         if not base.exists():
             continue
@@ -199,6 +208,7 @@ def test_no_engine_root_alias_joined_to_data_dir():
             engine_vars = set(_ENGINE_BIND_RE.findall(text))
             engine_vars.discard("")  # safety
             for v in engine_vars:
+                inspected += 1
                 # \)? after the var name catches the `Path(BASE) / "outputs"`
                 # wrapper form, not just the bare `BASE / "outputs"`.
                 op = re.compile(r"\b" + re.escape(v) + r"\b\)?\s*(?:/|\+)\s*[\"']" + _DATA_DIRS + r"\b")
@@ -213,6 +223,12 @@ def test_no_engine_root_alias_joined_to_data_dir():
                 for i, line in enumerate(text.splitlines(), 1):
                     if op.search(line) or join.search(line) or jp.search(line) or fs.search(line):
                         violations.append(f"{rel}:{i}: ({v} is engine-root-bound) {line.strip()}")
+    # Survivor floor: counts engine-bound vars that actually reached the per-line
+    # regex checks. Measured 258 on 2026-08-26; floored well below so retiring a
+    # script does not fail this test. If _is_exempt() drifts to true for every file,
+    # or _ENGINE_BIND_RE stops matching any binding, the count collapses to zero and
+    # this fires instead of reporting a silent all-clear.
+    assert inspected >= 154, f"only {inspected} engine-bound vars were checked"
     assert not violations, (
         "Engine-root variable joined to a data dir (cross-line seam bypass). Bind the "
         "data path from the matching get_*_dir() helper instead:\n  " + "\n  ".join(violations)

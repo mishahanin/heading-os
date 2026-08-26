@@ -93,9 +93,21 @@ def workspace(th, tmp_path, monkeypatch):
     return threads, memory
 
 
-def _open(th, title="Acme pilot review", type_="business"):
+def _open(th, threads=None, title="Acme pilot review", type_="business"):
+    """Open a thread and return the id `cmd_open` actually gave it.
+
+    The id carries the day the thread was opened, so the six tests below spelled
+    it as a literal and passed only on the day they were written. They went red
+    at midnight on 2026-08-27 with `thread not found in business/ or personal/`,
+    which reads like a broken lookup and is not one. Read the id off disk.
+    """
     import argparse
     th.cmd_open(argparse.Namespace(type=type_, title=title))
+    if threads is None:
+        return None
+    made = sorted((threads / type_).glob("*.md"))
+    assert len(made) == 1, f"expected exactly one thread on disk, found {made}"
+    return made[0].stem
 
 
 def _index_line(memory: Path) -> str:
@@ -115,32 +127,32 @@ def _cycle(th, thread_id, quiet="2026-09-10"):
 
 def test_a_reopened_quiet_thread_keeps_its_marker(th, workspace, capsys):
     """The finding. Without it the index reads as an ordinary active thread."""
-    _threads, memory = workspace
-    _open(th)
+    threads, memory = workspace
+    thread_id = _open(th, threads)
     capsys.readouterr()
 
-    _cycle(th, "2026-08-26-acme-pilot-review")
+    _cycle(th, thread_id)
 
     assert "[quiet until 2026-09-10]" in _index_line(memory)
 
 
 def test_a_reopened_thread_with_no_quiet_gains_no_marker(th, workspace, capsys):
     """The guard must not stamp a marker onto a thread that has none."""
-    _threads, memory = workspace
-    _open(th)
+    threads, memory = workspace
+    thread_id = _open(th, threads)
     capsys.readouterr()
 
-    _cycle(th, "2026-08-26-acme-pilot-review", quiet=None)
+    _cycle(th, thread_id, quiet=None)
 
     assert "[quiet until" not in _index_line(memory)
 
 
 def test_the_reopened_line_still_carries_status_and_date(th, workspace, capsys):
-    _threads, memory = workspace
-    _open(th)
+    threads, memory = workspace
+    thread_id = _open(th, threads)
     capsys.readouterr()
 
-    _cycle(th, "2026-08-26-acme-pilot-review")
+    _cycle(th, thread_id)
 
     assert "active, last " in _index_line(memory)
 
@@ -194,9 +206,9 @@ def test_an_absent_line_still_raises(tmp_path):
 def test_reindex_repairs_a_stripped_marker(th, workspace, capsys):
     """It reported `rewrote 0 hook(s)` over exactly this."""
     import argparse
-    _threads, memory = workspace
-    _open(th)
-    th.cmd_quiet(argparse.Namespace(thread_id="2026-08-26-acme-pilot-review",
+    threads, memory = workspace
+    thread_id = _open(th, threads)
+    th.cmd_quiet(argparse.Namespace(thread_id=thread_id,
                                     until="2026-09-10", clear=False,
                                     indefinite=False))
     memory.write_text(memory.read_text(encoding="utf-8")
@@ -213,9 +225,9 @@ def test_reindex_repairs_a_stripped_marker(th, workspace, capsys):
 def test_reindex_leaves_a_correct_index_alone(th, workspace, capsys):
     """A repair tool that rewrites every line every run is noise."""
     import argparse
-    _threads, _memory = workspace
-    _open(th)
-    th.cmd_quiet(argparse.Namespace(thread_id="2026-08-26-acme-pilot-review",
+    threads, _memory = workspace
+    thread_id = _open(th, threads)
+    th.cmd_quiet(argparse.Namespace(thread_id=thread_id,
                                     until="2026-09-10", clear=False,
                                     indefinite=False))
     capsys.readouterr()
@@ -250,9 +262,9 @@ def test_a_closed_thread_missing_from_the_index_is_expected(th, workspace,
                                                             capsys):
     """The ordinary case must stay quiet and stay green."""
     import argparse
-    _threads, _memory = workspace
-    _open(th)
-    th.cmd_close(argparse.Namespace(thread_id="2026-08-26-acme-pilot-review",
+    threads, _memory = workspace
+    thread_id = _open(th, threads)
+    th.cmd_close(argparse.Namespace(thread_id=thread_id,
                                     reason="finished"))
     capsys.readouterr()
 

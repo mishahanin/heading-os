@@ -76,7 +76,12 @@ def test_the_comment_stripper_keeps_the_code():
 
 
 def _load(name: str, filename: str):
-    """Import a kebab-case script by path. Both create OUTPUT_DIR at import."""
+    """Import a kebab-case script by path.
+
+    Both used to create OUTPUT_DIR at import. That module-level `mkdir` wrote
+    into the engine clone on any checkout with no private data overlay, and both
+    scripts now do it from `main()` via `prepare_output_dir()` instead.
+    """
     spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / filename)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -315,11 +320,23 @@ def test_the_main_manifest_is_written_atomically():
 # capture-design-exemplars-retry.py
 # ---------------------------------------------------------------------------
 
-def test_the_retry_script_creates_its_output_directory(retry_mod):
-    """Importing it is enough: the mkdir is module level, like the sibling's."""
-    assert "OUTPUT_DIR.mkdir(parents=True, exist_ok=True)" in RETRY_CODE, (
-        "on a fresh checkout every screenshot failed with a directory-not-found "
-        "error, swallowed into result['error'], and the script exited 0"
+def test_the_retry_script_creates_its_output_directory(retry_mod, tmp_path,
+                                                       monkeypatch):
+    """The directory still gets made, just not at import.
+
+    This read the source text for `OUTPUT_DIR.mkdir(...)` until 2026-08-27,
+    which passed whether or not anything ever called it. It now runs the
+    function, because the reason for the directory is unchanged: without it
+    every screenshot failed with a directory-not-found error, the error was
+    swallowed into result['error'], and the script exited 0.
+    """
+    target = tmp_path / "exemplars"
+    monkeypatch.setattr(retry_mod, "OUTPUT_DIR", target)
+    retry_mod.prepare_output_dir()
+    assert target.is_dir(), (
+        "prepare_output_dir() did not create the capture directory; on a fresh "
+        "checkout every screenshot then fails with directory-not-found, the "
+        "error is swallowed into result['error'], and the script exits 0"
     )
 
 

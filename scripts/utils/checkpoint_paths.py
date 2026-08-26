@@ -16,10 +16,11 @@ Two roots, deliberately not the same thing:
     contains `scripts/utils/`. In the monorepo that is the engine; inside a
     built plugin bundle it is the bundle. It decides which layout applies.
 
-The archive follows the engine's data seam when this IS a HEADING OS tree
-(`config/routing-map.yaml` present, so the operator has a data overlay) and
-falls back to project-local `.claude/handoff/` when it is not, which is the
-case for any repository that installs the plugin bundle.
+The archive follows the engine's data seam when this is a HEADING OS tree AND a
+private overlay actually backs it. Without the overlay it goes to gitignored
+`.claude/state/handoff/`, and outside a HEADING OS tree to project-local
+`.claude/handoff/`, which is the case for any repository that installs the
+plugin bundle. See `handoff_dir()` for why the two questions are separate.
 
 Stdlib only, and it stays that way: `checkpoint-save.py` runs after the session
 context has been discarded, so an import this module cannot satisfy costs a
@@ -87,8 +88,13 @@ def is_engine_tree(root: Path) -> bool:
     """True for the HEADING OS monorepo, false for a built plugin bundle.
 
     `config/routing-map.yaml` is the engine's routing input and is not bundled,
-    so its presence separates "this operator has a data overlay" from "this is
-    somebody's repository with our plugin installed" without guessing.
+    so its presence separates "this is a HEADING OS tree" from "this is somebody
+    else's repository with our plugin installed" without guessing.
+
+    It says NOTHING about whether a private data overlay is mounted. This
+    docstring claimed it did until 2026-08-26, and `handoff_dir()` believed it:
+    a public clone answers True here and has no overlay, so handoffs were written
+    into the engine repository. Ask `data_overlay_present()` for that question.
     """
     return (root / "config" / "routing-map.yaml").is_file()
 
@@ -130,14 +136,38 @@ def handoff_dir(project: Path, root: Path | None = None) -> Path:
     the ENGINE's copy of this file and was told it was in an engine tree. It
     then wrote a stranger's handoff into the operator's data root. Measured
     2026-08-16. The hook already knows which tree it is in; it says so here.
+
+    TWO questions, not one, and conflating them leaked. `is_engine_tree()` was
+    documented as separating "this operator has a data overlay" from "somebody
+    else's repository with our plugin installed", and that belief was refuted on
+    2026-08-26: a PUBLIC clone of the engine carries `config/routing-map.yaml`
+    and no overlay at all. It took the engine branch, `get_outputs_dir()` fell to
+    its documented last resort `<workspace_root>/examples`, and whole session
+    handoffs landed in the repository that gets pushed. Measured in a worktree
+    with no sibling overlay: one suite run wrote six handoff files into
+    `examples/outputs/operations/handoff-archive/`.
+
+    So the layout question is asked first and the overlay question second. With
+    no overlay the archive goes under `.claude/state/`, which is gitignored, so a
+    handoff can never be committed by accident. `data_overlay_present()` rather
+    than `not data_root_is_demo()` on purpose: the in-tree transitional layout
+    answers the data root as the workspace root itself, which is still inside the
+    clone, and only the wider predicate refuses both.
+
+    A hook must not raise here. `checkpoint-save.py` runs after the session
+    context is gone, so a refusal that propagates costs a handoff nobody can
+    regenerate. This one redirects instead.
     """
     root = root or engine_root()
     if is_engine_tree(root):
         if str(root) not in sys.path:
             sys.path.insert(0, str(root))
+        from scripts.utils.paths import data_overlay_present
         from scripts.utils.workspace import get_outputs_dir
 
-        return get_outputs_dir() / "operations" / "handoff-archive"
+        if data_overlay_present():
+            return get_outputs_dir() / "operations" / "handoff-archive"
+        return project / ".claude" / "state" / "handoff"
     return project / ".claude" / "handoff"
 
 

@@ -63,7 +63,10 @@ for _candidate in [_BOOT.parent, *_BOOT.parents]:
         break
 sys.path.insert(0, str(WORKSPACE))
 from scripts.utils import checkpoint_paths as CP  # noqa: E402
-from scripts.utils.workspace import get_data_root, get_outputs_dir  # noqa: E402
+from scripts.utils.workspace import (  # noqa: E402
+    data_overlay_present,
+    get_data_root,
+)
 
 # Guarded, and the guard is not defensive habit. This plan's own constraint says
 # a lost handoff is worse than an unredacted one, because the hook runs after the
@@ -97,11 +100,15 @@ except Exception as _exc:  # noqa: BLE001 - never lose the handoff
 # engine-relative: archive_path lives under the data sibling, so relative_to(WORKSPACE)
 # would raise ValueError. The data-path-redirect hook resolves the outputs/... ref.
 _ENGINE_TREE = CP.is_engine_tree(WORKSPACE)
-HANDOFF_DIR = (
-    get_outputs_dir() / "operations" / "handoff-archive"
-    if _ENGINE_TREE
-    else CP.handoff_dir(CP.project_root(), WORKSPACE)
-)
+# ONE call, not a second copy of the branch. This read
+# `get_outputs_dir() / "operations" / "handoff-archive" if _ENGINE_TREE else
+# CP.handoff_dir(...)` until 2026-08-27, which is `handoff_dir()`'s own engine
+# branch written out again -- and that is exactly what made a fix to
+# `handoff_dir()` invisible here. With no private overlay `get_outputs_dir()`
+# falls to `<workspace_root>/examples`, so this line wrote whole session
+# handoffs into the public engine clone. Measured on a worktree with no sibling
+# overlay: five of them, after `handoff_dir()` had already been fixed.
+HANDOFF_DIR = CP.handoff_dir(CP.project_root(), WORKSPACE)
 LATEST_DIR = HANDOFF_DIR / ".latest"
 QUARANTINE_DIR = HANDOFF_DIR / ".quarantine"
 
@@ -317,11 +324,12 @@ def main() -> int:
     # stranger's handoff into the plugin cache, or worse, into whatever data
     # root the environment happened to carry. Measured on 2026-08-16 against the
     # first built bundle, which wrote into the operator's own live archive.
-    hdir, latest_dir, quarantine_dir = HANDOFF_DIR, LATEST_DIR, QUARANTINE_DIR
-    if not _ENGINE_TREE:
-        hdir = CP.handoff_dir(CP.project_root(payload), WORKSPACE)
-        latest_dir = hdir / ".latest"
-        quarantine_dir = hdir / ".quarantine"
+    # Unconditional since 2026-08-27. With a real overlay `handoff_dir()` ignores
+    # the project and answers the data seam, so recomputing costs nothing there;
+    # without one the project IS the base and the payload names it.
+    hdir = CP.handoff_dir(CP.project_root(payload), WORKSPACE)
+    latest_dir = hdir / ".latest"
+    quarantine_dir = hdir / ".quarantine"
 
     archive_path = hdir / archive_name
     quarantine_path = quarantine_dir / archive_name
@@ -335,7 +343,12 @@ def main() -> int:
     # and the absolute path is what a human recovering the file can paste into a
     # shell that knows nothing about the data root. Two spellings of one written
     # file, stated as such rather than left to be inferred.
-    data_root = get_data_root() if _ENGINE_TREE else CP.project_root(payload)
+    # The refs are relative to whatever root the archive ACTUALLY landed under.
+    # `get_data_root()` is right only when the archive followed the data seam; on
+    # an engine clone with no overlay the archive is project-local and this would
+    # send every ref down `_ref`'s absolute fallback.
+    data_root = (get_data_root() if _ENGINE_TREE and data_overlay_present()
+                 else CP.project_root(payload))
 
     def _ref(path: Path) -> str:
         """Data-root-relative when it can be, absolute when it cannot. Total.

@@ -19,7 +19,11 @@ from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 ensure_venv()
 from scripts.utils.atomic import atomic_write_text  # noqa: E402
 from scripts.utils.colors import CYAN, GREEN, RED, RESET, YELLOW  # noqa: E402
-from scripts.utils.workspace import display_path, get_outputs_dir  # noqa: E402
+from scripts.utils.workspace import (  # noqa: E402
+    display_path,
+    get_outputs_dir,
+    require_outside_engine_clone,
+)
 
 # playwright is bound lazily (F-2.1: import stays pure).
 async_playwright = None
@@ -36,11 +40,6 @@ def _ensure_playwright():
 
 OUTPUT_DIR = get_outputs_dir() / "research" / "_drafts" / "exemplars"
 MANIFEST_PATH = OUTPUT_DIR / "manifest.json"
-# The sibling script creates this at import; this one did not. On a fresh
-# checkout, or after outputs were cleaned, every `page.screenshot(path=...)`
-# failed with a directory-not-found error, that error was swallowed into
-# `result["error"]`, all three retries printed ERR, and the script exited 0.
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 # Where retry results go when there is no manifest to merge into. Without this
 # the script captured everything and then wrote NOTHING: no manifest, no
 # fallback, no summary, exit 0 — a completely silent successful no-op.
@@ -206,8 +205,27 @@ def _replaces(new: dict, old: dict | None) -> bool:
     return bool(new.get("full_page")) or not old.get("full_page")
 
 
+def prepare_output_dir() -> Path:
+    """Create the capture directory, at RUN time rather than at import.
+
+    The `mkdir` was added here because the sibling script did it at import and
+    this one did not: on a fresh checkout every `page.screenshot(path=...)`
+    failed with a directory-not-found error, the error was swallowed into
+    `result["error"]`, all three retries printed ERR, and the script exited 0.
+    The directory is still needed for exactly that reason; what changed on
+    2026-08-26 is WHEN and WHETHER. With no private overlay the path resolves
+    inside the public engine clone, so importing either script wrote there. Both
+    now create it from `main()`, and both refuse when the data root is the demo
+    tree.
+    """
+    require_outside_engine_clone(OUTPUT_DIR, "the design-exemplar capture directory")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    return OUTPUT_DIR
+
+
 async def main():
     _ensure_playwright()
+    prepare_output_dir()
     print(f"{CYAN}Retrying {len(RETRIES)} targets with tuned settings{RESET}\n")
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)

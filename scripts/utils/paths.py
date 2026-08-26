@@ -286,6 +286,39 @@ def require_writable_data_root() -> Path:
     return get_data_root()
 
 
+def require_outside_engine_clone(path: Path, what: str) -> Path:
+    """Return ``path``, or raise DataRootError when it sits inside the engine.
+
+    Operator law, 2026-08-26: no data from the DATA repository may ever sit in
+    the engine. The mechanism that broke it is a write path: with no private
+    overlay ``get_data_root()`` falls to its documented last resort
+    ``<workspace_root>/examples``, so a tool that writes to the data root writes
+    into the repository that gets pushed.
+
+    Asks about the PATH, not about the environment, and the difference is the
+    whole point. The first version of this guard asked
+    ``data_overlay_present()``, which is a fact about the machine rather than
+    about the write, and it refused fifty writes that were already safe: the
+    fireside and capture suites redirect their module-level directory constant
+    to a ``tmp_path`` before calling anything, so nothing could reach the clone
+    and the guard stopped them anyway. Measured on a worktree with no overlay:
+    13 failures became 63. A guard that fires on safe work gets deleted by the
+    next person who hits it, and the law goes with it.
+
+    ``what`` names the caller in the message, because the refusal is read by
+    somebody who ran one script and needs to know which write was refused.
+    """
+    resolved = Path(path).resolve()
+    root = get_workspace_root().resolve()
+    if resolved == root or root in resolved.parents:
+        raise DataRootError(
+            f"{what} resolved to {resolved}, inside the engine clone at {root}. "
+            "The engine is code only. Point HEADING_OS_DATA at a private data "
+            "overlay, or run `python scripts/init-data.py` to create one."
+        )
+    return resolved
+
+
 # ============================================================
 # Home + data/state/log dir helpers
 # ============================================================

@@ -202,6 +202,40 @@ def state_path(filename: str) -> Path:
     return STATE_DIR / filename
 
 
+def require_writable_state_dir() -> Path:
+    """STATE_DIR, but only when a private data overlay actually backs it.
+
+    Operator law, 2026-08-26: no data from the DATA repository may ever sit in
+    the engine. `STATE_DIR` is resolved at import through `get_datastore_dir()`,
+    and with no overlay `get_data_root()` falls to its documented last resort
+    `<workspace_root>/examples`. So on a public clone every writer below resolved
+    to `examples/datastore/operations/tribe/fireside-state/` inside the clone and
+    its `mkdir(parents=True)` created the tree. Measured that day on a worktree
+    with no sibling overlay: one suite run left `errors.log` there, inside the
+    repository that gets pushed.
+
+    One funnel for the five writers, on purpose. Four of them had their own
+    `path.parent.mkdir(parents=True, exist_ok=True)` line, and a guard added to
+    some of them is a guard the next writer will not have.
+
+    Reads `STATE_DIR` fresh on every call rather than closing over the import-time
+    value, so a caller that redirects the constant is honoured. The whole fireside
+    suite does exactly that, and an earlier version of this guard asked whether an
+    overlay existed instead of where the write was going: it refused fifty writes
+    aimed at a `tmp_path` and never near the clone.
+
+    Raises rather than redirects: fireside state is the bot's memory of who is in
+    the Tribe and which session ran, so a write that silently lands somewhere
+    else is worse than one that fails loudly. `log_error` is the single exception
+    and says why at its own site.
+    """
+    from scripts.utils.paths import require_outside_engine_clone
+
+    require_outside_engine_clone(STATE_DIR, "the fireside state directory")
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    return STATE_DIR
+
+
 def _unreadable_sheet_errors() -> tuple:
     """Every exception a file that is not a readable workbook can raise.
 
@@ -234,7 +268,7 @@ def ensure_state_dir() -> None:
       - JSONL files as empty text files
       - errors.log as empty text file
     """
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    require_writable_state_dir()
 
     # Self-heal tribe-roster.json from xlsx (the source of truth for membership).
     # load_tribe_metadata already returns entries shaped like roster records
@@ -337,8 +371,8 @@ def save_state(filename: str, data: Any) -> None:
     Prevents corruption on crash mid-write. The temp file lives in the same
     directory as the target so os.replace is atomic on Windows + POSIX.
     """
+    require_writable_state_dir()
     path = state_path(filename)
-    path.parent.mkdir(parents=True, exist_ok=True)
     tmp_fd, tmp_path = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent, suffix=".tmp")
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
@@ -356,8 +390,8 @@ def save_state(filename: str, data: Any) -> None:
 
 def append_jsonl(filename: str, event: dict) -> None:
     """Append one JSON event as a single line to a JSONL file."""
+    require_writable_state_dir()
     path = state_path(filename)
-    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
@@ -387,8 +421,8 @@ def locked_state(filename: str, default):
     """
     from scripts.utils.checkpoint_paths import file_lock
 
+    require_writable_state_dir()
     path = state_path(filename)
-    path.parent.mkdir(parents=True, exist_ok=True)
     with file_lock(path.with_name(path.name + ".lock"), label="fireside"):
         value = load_state(filename)
         if value is None:
@@ -443,15 +477,27 @@ def _read_jsonl_rows(path: Path) -> list[dict]:
 
 
 def log_error(message: str, exception: Optional[BaseException] = None) -> None:
-    """Append an error line to errors.log with ISO-8601 local timestamp."""
-    path = state_path(ERRORS_LOG)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Append an error line to errors.log with ISO-8601 local timestamp.
+
+    The one writer that must not raise. `main()` is wrapped so an uncaught
+    exception lands here, so a refusal thrown from this function replaces the
+    error being reported with a second error and the first one is lost. It goes
+    to stderr instead, where a systemd unit still captures it.
+    """
+    from scripts.utils.paths import DataRootError
+
     ts = local_now().isoformat()
     if exception is not None:
         line = f"[{ts}] ERROR: {message} [{type(exception).__name__}: {exception}]\n"
     else:
         line = f"[{ts}] ERROR: {message}\n"
-    with open(path, "a", encoding="utf-8") as f:
+    try:
+        require_writable_state_dir()
+    except DataRootError as exc:
+        print(f"fireside: {exc}; error not persisted", file=sys.stderr)
+        print(line, end="", file=sys.stderr)
+        return
+    with open(state_path(ERRORS_LOG), "a", encoding="utf-8") as f:
         f.write(line)
 
 

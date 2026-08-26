@@ -27,6 +27,7 @@ from scripts.utils.paths import (  # noqa: F401
     DataRootError,
     check_schema_compatible,
     data_dir,
+    data_overlay_present,
     data_root_is_demo,
     env_data_root,
     get_data_root,
@@ -35,6 +36,7 @@ from scripts.utils.paths import (  # noqa: F401
     load_env,
     log_dir,
     read_data_schema_version,
+    require_outside_engine_clone,
     require_writable_data_root,
     state_dir,
 )

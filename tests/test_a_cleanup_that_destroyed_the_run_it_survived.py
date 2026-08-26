@@ -52,7 +52,11 @@ from scripts import canopus_check as cc  # noqa: E402
 
 
 def _load(name: str, filename: str):
-    """Import a kebab-case script by path. Both create OUTPUT_DIR at import."""
+    """Import a kebab-case script by path.
+
+    Both used to create OUTPUT_DIR at import, which wrote into the engine clone
+    on a checkout with no private data overlay. They now do it from `main()`.
+    """
     spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / filename)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

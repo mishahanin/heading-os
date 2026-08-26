@@ -21,7 +21,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.atomic import atomic_write_text  # noqa: E402
 from scripts.utils.colors import CYAN, GREEN, RED, RESET  # noqa: E402
-from scripts.utils.workspace import display_path, get_outputs_dir  # noqa: E402
+from scripts.utils.workspace import (  # noqa: E402
+    display_path,
+    get_outputs_dir,
+    require_outside_engine_clone,
+)
 
 # playwright is bound lazily (F-2.1: import stays pure).
 async_playwright = None
@@ -37,7 +41,32 @@ def _ensure_playwright():
 
 
 OUTPUT_DIR = get_outputs_dir() / "research" / "_drafts" / "exemplars"
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def prepare_output_dir() -> Path:
+    """Create the capture directory, but only where it is allowed to exist.
+
+    The `mkdir` used to sit beside the constant above, at module level, so
+    IMPORTING this script created the tree. That is the worst shape this defect
+    takes: no call, no flag, no CLI run needed. Operator law, 2026-08-26: no data
+    from the DATA repository may ever sit in the engine, and with no private
+    overlay `get_data_root()` falls to `<workspace_root>/examples`, inside the
+    public clone. Measured that day on a worktree with no sibling overlay: the
+    suite collected this module and left `examples/outputs/research/_drafts/`
+    behind, untracked and invisible to every gate until the demo tree became a
+    closed manifest.
+
+    Import stays pure, which is the same rule F-2.1 already applies to the
+    playwright binding two functions up. `main()` calls this.
+
+    The refusal asks where the write is going, not whether the machine has an
+    overlay. The capture suites redirect `OUTPUT_DIR` to a `tmp_path` before
+    calling anything, and an environment-shaped guard refused those runs too.
+    """
+    require_outside_engine_clone(OUTPUT_DIR, "the design-exemplar capture directory")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    return OUTPUT_DIR
+
 
 # (slug, url, category, settle_ms)
 TARGETS = [
@@ -189,6 +218,7 @@ def _crashed(target, exc):
 
 async def main():
     _ensure_playwright()
+    prepare_output_dir()
     print(f"{CYAN}Capturing {len(TARGETS)} targets at {VIEWPORT['width']}x{VIEWPORT['height']}, concurrency={CONCURRENCY}{RESET}")
     print(f"Output dir: {OUTPUT_DIR}\n")
 

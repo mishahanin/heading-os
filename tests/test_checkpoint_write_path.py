@@ -247,6 +247,84 @@ def test_an_empty_trigger_names_the_file_unknown(tmp_path, monkeypatch):
     data, project = _roots(tmp_path, monkeypatch)
     assert mod_safe_slug_is_never_empty(), "safe_slug no longer returns a default"
 
+
+# ---------------------------------------------------------------------------
+# 5. A HEADING OS tree is not the same fact as a mounted data overlay
+# ---------------------------------------------------------------------------
+#
+# Operator law, 2026-08-26: no data from the DATA repository may ever sit in the
+# engine. `handoff_dir()` conflated the two questions and wrote through the gap.
+# A PUBLIC clone carries `config/routing-map.yaml`, so `is_engine_tree()` said
+# yes, and with no overlay `get_outputs_dir()` falls to its documented last
+# resort `<workspace_root>/examples`. Measured that day in a worktree with no
+# sibling overlay: one suite run left six session handoffs in
+# `examples/outputs/operations/handoff-archive/`, inside the repo that gets
+# pushed. A handoff carries the session summary, so this is operator data by
+# construction, not an incidental temp file.
+
+
+def test_with_no_overlay_the_archive_leaves_the_engine_clone(tmp_path, monkeypatch):
+    """The refusal, stated as the thing that actually matters: not "which path"
+    but "not inside the tree git carries"."""
+    import scripts.utils.paths as paths_mod
+    from scripts.utils import checkpoint_paths as CP
+
+    monkeypatch.setattr(paths_mod, "data_overlay_present", lambda: False)
+    project = tmp_path / "project"
+    project.mkdir()
+
+    got = CP.handoff_dir(project, root=ENGINE)
+    assert ENGINE not in got.parents and got != ENGINE, (
+        f"with no overlay the handoff archive resolved to {got}, which is inside "
+        "the engine clone"
+    )
+    assert got == project / ".claude" / "state" / "handoff", (
+        f"expected the gitignored project-local archive, got {got}"
+    )
+
+
+def test_the_no_overlay_archive_is_a_path_git_refuses_to_carry(tmp_path, monkeypatch):
+    """The other jaw. Redirecting to a project-local directory is only a fix if
+    git ignores it; `.claude/handoff/` (the plugin-bundle fallback) is NOT
+    ignored, so naming the right parent is load-bearing and is asserted against
+    the real `.gitignore` rather than against a remembered rule."""
+    import scripts.utils.paths as paths_mod
+    from scripts.utils import checkpoint_paths as CP
+
+    monkeypatch.setattr(paths_mod, "data_overlay_present", lambda: False)
+    got = CP.handoff_dir(ENGINE, root=ENGINE)
+    assert got.is_relative_to(ENGINE), (
+        f"with the project set to the engine tree the archive resolved to {got}, "
+        "outside it, so there is no gitignore rule to check and the redirect this "
+        "test exists to prove did not happen"
+    )
+    rel = got.relative_to(ENGINE)
+
+    proc = subprocess.run(  # nosec B603 B607 - fixed argv, no shell
+        ["git", "check-ignore", "-q", str(rel / "probe.md")],
+        cwd=str(ENGINE), capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, (
+        f"git would carry {rel}/probe.md; the no-overlay handoff archive must "
+        "sit under a gitignored path or the redirect only moves the leak"
+    )
+
+
+def test_with_an_overlay_the_archive_still_follows_the_data_seam(tmp_path, monkeypatch):
+    """The fix must not cost the operator their archive. Without this, making the
+    refusal unconditional would pass every leak test and silently strand every
+    handoff the operator has."""
+    import scripts.utils.paths as paths_mod
+    from scripts.utils import checkpoint_paths as CP
+
+    data, project = _roots(tmp_path, monkeypatch)
+    monkeypatch.setattr(paths_mod, "data_overlay_present", lambda: True)
+
+    got = CP.handoff_dir(project, root=ENGINE)
+    assert got == data / "outputs" / "operations" / "handoff-archive", (
+        f"with a real overlay the archive moved to {got}"
+    )
+
     mod = _load(SAVE_HOOK, "cksave_trigger_fallback")
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({
         "session_id": SESSION,
@@ -270,3 +348,49 @@ def mod_safe_slug_is_never_empty() -> bool:
     from scripts.utils.checkpoint_paths import safe_slug
 
     return safe_slug("") == "session" and safe_slug("---") == "session"
+
+
+def test_the_save_hook_asks_the_resolver_instead_of_spelling_the_path(monkeypatch):
+    """A second copy of the branch is a fix the resolver cannot deliver.
+
+    `checkpoint-save.py` carried `get_outputs_dir() / "operations" /
+    "handoff-archive" if _ENGINE_TREE else CP.handoff_dir(...)`, which is
+    `handoff_dir()`'s own engine branch written out again. So `handoff_dir()`
+    was fixed, the hook kept the defect, and a worktree with no sibling overlay
+    still collected five session handoffs under `examples/`. Import-time
+    resolution is why the patch goes in before `_load`.
+    """
+    import scripts.utils.paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "data_overlay_present", lambda: False)
+    mod = _load(SAVE_HOOK, "cksave_no_overlay")
+    got = mod.HANDOFF_DIR
+
+    assert not got.is_relative_to(ENGINE / "examples"), (
+        f"with no overlay the hook resolved its archive to {got}, inside the "
+        "shipped demo tree and therefore inside the repository git carries"
+    )
+    if got.is_relative_to(ENGINE):
+        rel = got.relative_to(ENGINE)
+        proc = subprocess.run(  # nosec B603 B607 - fixed argv, no shell
+            ["git", "check-ignore", "-q", str(rel / "probe.md")],
+            cwd=str(ENGINE), capture_output=True, text=True,
+        )
+        assert proc.returncode == 0, (
+            f"git would carry {rel}/probe.md; a project-local archive is only a "
+            "fix while git ignores it"
+        )
+
+
+def test_the_save_hook_still_uses_the_data_seam_when_there_is_one(tmp_path, monkeypatch):
+    """The other jaw, at the hook rather than at the resolver."""
+    import scripts.utils.paths as paths_mod
+
+    data, _project = _roots(tmp_path, monkeypatch)
+    monkeypatch.setattr(paths_mod, "data_overlay_present", lambda: True)
+    mod = _load(SAVE_HOOK, "cksave_overlay")
+
+    got = mod.HANDOFF_DIR
+    assert got == data / "outputs" / "operations" / "handoff-archive", (
+        f"with a real overlay the hook resolved its archive to {got}"
+    )

@@ -42,8 +42,11 @@ Disable triggers (same as ``observability.py``)
 Debug mode
 ----------
 Set ``INBOX_PULSE_DEBUG_TRACE=true`` to write the FULL payload (input args
-+ return value) to ``state/email-triage/debug-trace.jsonl``.  State dir is
-``INBOX_PULSE_STATE_DIR`` if set, else workspace root / ``state/email-triage/``.
++ return value) to ``<state_dir>/debug-trace.jsonl``.  State dir is
+``INBOX_PULSE_STATE_DIR`` if set, else the DATA overlay's
+``state/email-triage/``.  With no overlay the resolver answers a path inside the
+public engine clone, so the trace is refused and diverted to a private temp
+file instead; see ``_debug_trace_path``.
 OFF by default.  Never enable in production - it will capture sovereign data.
 
 Usage::
@@ -185,6 +188,22 @@ def _extract_metadata(
 # call rather than left as a convenience the next writer would reach for.
 
 
+def _private_temp_trace_path(reason: str) -> Path:
+    """The refusal path: a private temp file, plus one line saying why.
+
+    A reporting helper must not raise. `require_writable_data_root()` is the
+    right shape for an archiver, whose only honest answer is to stop; here the
+    caller is a decorator wrapped around live e-mail handling, so raising would
+    take the traced call down with the trace. Refusing the LOCATION and saying
+    so on stderr keeps both properties: nothing lands in the engine, and the
+    daemon keeps running.
+    """
+    print(f"[observability_safe] {reason}; the debug trace would land in the "
+          f"engine tree, so it is written to a private temp file instead.",
+          file=sys.stderr)
+    return Path(tempfile.gettempdir()) / "heading-os-debug-trace.jsonl"
+
+
 def _debug_trace_path() -> Path:
     """Where the full debug payload lands. The DATA overlay, never the engine.
 
@@ -199,18 +218,40 @@ def _debug_trace_path() -> Path:
     landing in the code repository for exactly this reason. So the resolver is
     ASKED FOR rather than reimplemented a third time; the module falls back to
     its own root only when the seam cannot be reached at all, and says so.
+
+    Asking the resolver is necessary and was not sufficient. `get_state_dir()`
+    builds on `get_data_root()`, whose documented last resort is
+    `<workspace_root>/examples` - INSIDE the engine clone. So on any clone with
+    no private overlay (CI, and every public checkout) the canonical resolver
+    answered `<engine>/examples/state/email-triage/debug-trace.jsonl`, and
+    `get_state_dir()` created that directory on the way. Measured 2026-08-26 in
+    a sibling-less worktree; it is why this file's own guard has been red since
+    2026-08-22.
+
+    `data_overlay_present()`, not `data_root_is_demo()`, is the question asked:
+    the demo root is one of two roots that sit inside the clone, the other being
+    the transitional in-tree layout where the data root IS the workspace root.
+    Both must refuse, and only the wider predicate answers False for both.
     """
     state_dir = os.environ.get("INBOX_PULSE_STATE_DIR")
     if state_dir:
         return Path(state_dir) / "debug-trace.jsonl"
     try:
         from scripts.inbox_pulse.paths import get_state_dir
-        return get_state_dir() / "debug-trace.jsonl"
+        from scripts.utils.paths import data_overlay_present
     except Exception as exc:  # noqa: BLE001 - tracing must not break the caller
-        print(f"[observability_safe] state dir unresolved ({type(exc).__name__}: "
-              f"{exc}); the debug trace would land in the engine tree, so it is "
-              f"written to a private temp file instead.", file=sys.stderr)
-        return Path(tempfile.gettempdir()) / "heading-os-debug-trace.jsonl"
+        return _private_temp_trace_path(
+            f"state dir unresolved ({type(exc).__name__}: {exc})")
+    try:
+        overlay = data_overlay_present()
+    except Exception as exc:  # noqa: BLE001 - a set-but-missing HEADING_OS_DATA
+        return _private_temp_trace_path(
+            f"the data root could not be resolved ({type(exc).__name__}: {exc})")
+    if not overlay:
+        return _private_temp_trace_path(
+            "no private data overlay backs this workspace, so the canonical "
+            "state dir resolves inside the engine clone")
+    return get_state_dir() / "debug-trace.jsonl"
 
 
 def _write_debug_trace(

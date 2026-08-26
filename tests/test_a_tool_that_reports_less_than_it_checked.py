@@ -60,7 +60,12 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-PY = str(ROOT / ".venv" / "bin" / "python")
+# The interpreter running pytest, not a hardcoded `<root>/.venv/bin/python`.
+# A clone that installed its dependencies anywhere else (CI, any public clone
+# with no `.venv` beside the tree) has no such file, and every subprocess test
+# below died on FileNotFoundError before the script under test ever ran. Locally
+# `sys.executable` IS `.venv/bin/python`, so the command is unchanged there.
+PY = sys.executable
 
 
 def _load(name: str, filename: str):

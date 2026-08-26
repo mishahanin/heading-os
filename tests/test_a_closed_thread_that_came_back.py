@@ -291,9 +291,27 @@ def test_an_admin_slug_is_accepted_even_though_it_is_not_on_the_roster():
     """`get_all_active_exec_slugs()` returns EXECS. The operator running this is
     an admin and is not among them, so a roster-only check would refuse the CEO
     his own transfers. Proven by getting PAST the slug gate: the run reaches
-    "Source contact not found", which is the next check."""
+    "Source contact not found", which is the next check.
+
+    The admin slug is RESOLVED, exactly as the roster is read in the test below,
+    and for a second reason on top of the leak one. `get_admin_slugs()` answers
+    from `admin.json` in the DATA overlay, and falls back to the operator seam
+    when no overlay is mounted, so the two workspaces disagree on the string. A
+    slug typed in here therefore only resolved on the machine that wrote the
+    test: on a clone with no overlay it is not an admin slug, the gate refused
+    it, and this test failed for a reason that has nothing to do with the
+    carve-out it exists to pin.
+    """
+    from scripts.utils.workspace import (
+        get_admin_slugs, get_all_active_exec_slugs)
+    admins = sorted(get_admin_slugs())
+    assert admins, "no admin slug resolves in this workspace"
+    admin = admins[0]
+    assert admin not in get_all_active_exec_slugs(), (
+        f"{admin!r} is on the exec roster, so accepting it proves nothing "
+        f"about the admin carve-out")
     proc = _transfer(["--contact", "definitely-not-a-real-contact",
-                      "--from", "misha-hanin", "--to", "misha-hanin"])
+                      "--from", admin, "--to", admin])
     assert "not an active exec or admin slug" not in proc.stdout, proc.stdout
     assert "Source contact not found" in proc.stdout
 

@@ -36,6 +36,37 @@ from scripts.utils.workspace import get_routing_destination
 # Routing destinations that must NEVER appear in the engine clone.
 DATA_DESTINATIONS = frozenset({"private", "corporate"})
 
+# The bundled demo tree is a CLOSED MANIFEST, not a directory anything may write
+# into. Operator law, 2026-08-26: no data from the DATA repository may ever sit in
+# the engine, and everything under `examples/` must be invented.
+#
+# Why a manifest rather than a routing rule. `config/routing-map.yaml` carries no
+# entry for `examples/`, so every path under it falls through to the `engine`
+# default. Measured 2026-08-26, all of these PASSED the wall:
+# `examples/crm/contacts/real-person.md`, `examples/outputs/operations/x.md`,
+# `examples/knowledge/secret.md`, a private-thread path under `examples/`, and
+# `examples/state/mail-bodies.json`. Adding per-path routing rules cannot fix it,
+# because the shipped demo files live at those very prefixes and would be flagged
+# alongside the leaks.
+#
+# The route in is not hypothetical. With no overlay `get_data_root()` answers
+# `<workspace_root>/examples`, so any tool that writes to the data root writes
+# INSIDE the engine clone. A worktree run on 2026-08-26 produced
+# `examples/datastore/` and `examples/outputs/operations/` this way, untracked and
+# invisible to every gate.
+#
+# Adding a demo file is therefore a deliberate act: put it here, and it gets read.
+DEMO_ROOT = "examples/"
+DEMO_MANIFEST = frozenset({
+    "examples/.schema-version",
+    "examples/README.md",
+    "examples/context/EXAMPLE-people.md",
+    "examples/crm/contacts/EXAMPLE-contact.md",
+    "examples/knowledge/EXAMPLE-note.md",
+    "examples/outputs/.gitkeep",
+    "examples/threads/business/EXAMPLE-thread.md",
+})
+
 
 def find_data_artifacts(rel_paths, routing_fn=get_routing_destination) -> list[str]:
     """Pure core: given workspace-relative paths, return every one whose routing
@@ -47,13 +78,23 @@ def find_data_artifacts(rel_paths, routing_fn=get_routing_destination) -> list[s
     legitimately share a top-level name with data dirs and must NOT be flagged,
     while a private-routed file under an otherwise-engine top level (the
     ``docs/superpowers/`` leak: top-level ``docs``, route ``private``) MUST be.
-    A fixed allowlist gets this wrong in both directions; the destination check
-    alone is the complete invariant.
+    A fixed allowlist gets this wrong in both directions.
+
+    TWO rules, not one. This docstring said "the destination check alone is the
+    complete invariant" until 2026-08-26, when a measurement refuted it: the
+    routing map has no entry for ``examples/``, so everything under the bundled
+    demo tree falls to the ``engine`` default and passed, including a contacts
+    file and a captured-mail-bodies file. The demo tree is therefore checked
+    against ``DEMO_MANIFEST`` as well, and anything under it that is not on the
+    manifest is a data artifact whatever its route says.
     """
     flagged = []
     for rel in rel_paths:
         norm = rel.replace("\\", "/").lstrip("/")
         if not norm:
+            continue
+        if norm.startswith(DEMO_ROOT) and norm not in DEMO_MANIFEST:
+            flagged.append(norm)
             continue
         if routing_fn(norm) in DATA_DESTINATIONS:
             flagged.append(norm)

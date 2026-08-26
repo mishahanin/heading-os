@@ -47,10 +47,28 @@ from scripts.bridge_daemon.config import (
     revert_config_to,
     snapshot_config,
 )
+from scripts.utils.html_templates import templates_dir
 from scripts.utils.markdown import parse_md_table, split_table_row
 
 ROOT = Path(__file__).resolve().parent.parent
 _ISO_SHAPE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# `generate_newsletter` inlines the stylesheet, and the stylesheet is a BRAND
+# ASSET that ships in the private DATA overlay, not in the engine. On a clone
+# without the overlay the file is simply not on disk, and `load_template`
+# refuses to render an unstyled document. That refusal is the designed
+# behaviour, so the whole-page tests below are gated on the asset itself rather
+# than on which data root resolved: an operator who has the overlay but has
+# deleted the file should still see these fail.
+_NEWSLETTER_CSS = templates_dir() / "newsletter.css"
+needs_newsletter_css = pytest.mark.skipif(
+    not _NEWSLETTER_CSS.is_file(),
+    reason=(
+        f"brand stylesheet {_NEWSLETTER_CSS} is not on disk, so whole-page assembly "
+        "(div balance, bar sanitising, region aliasing, a numeric date field) is "
+        "NOT measured on this runner"
+    ),
+)
 
 
 def _load(name: str):
@@ -486,16 +504,19 @@ def test_the_masthead_closes_every_div_it_opens(nl):
     assert html_out.count("<div") == html_out.count("</div>")
 
 
+@needs_newsletter_css
 def test_the_whole_page_closes_every_div_it_opens(nl):
     out = nl.generate_newsletter({"date": "2026-08-24", "issue_number": 7})
     assert out.count("<div") == out.count("</div>")
 
 
+@needs_newsletter_css
 def test_a_heading_section_without_a_body_does_not_crash(nl):
     out = nl.generate_newsletter({"date": "2026-08-24", "the_heading": {"kicker": "x"}})
     assert isinstance(out, str) and out
 
 
+@needs_newsletter_css
 @pytest.mark.parametrize("bars,expected", [
     ([50, 70], 2),
     (["50", 70], 2),
@@ -508,12 +529,14 @@ def test_a_bar_chart_takes_numbers_and_refuses_the_rest(nl, bars, expected, caps
     assert "position:fixed" not in out
 
 
+@needs_newsletter_css
 def test_a_bar_percentage_is_clamped(nl):
     out = nl.generate_newsletter({"date": "2026-08-24",
                                   "market_depth": {"bars": [500, -20]}})
     assert "height:100%" in out and "height:0%" in out
 
 
+@needs_newsletter_css
 def test_a_region_carried_under_both_aliases_renders_once(nl):
     out = nl.generate_newsletter({"date": "2026-08-24",
                                   "navigation_chart": {"afr": "A", "africa": "B"}})
@@ -535,6 +558,7 @@ def test_a_missing_date_falls_back_to_today(nl):
     assert _ISO_SHAPE.match(nl.safe_date_segment(None))
 
 
+@needs_newsletter_css
 def test_a_numeric_date_field_does_not_crash_the_render(nl):
     """`date.fromisoformat` got an int and raised TypeError, uncaught.
 

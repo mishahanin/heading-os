@@ -197,11 +197,59 @@ def test_empty_source_is_not_an_error(tree):
 
 
 def test_the_archive_lands_in_the_data_overlay_never_the_engine():
-    """Transcripts carry everything, including personal threads. DATA only."""
-    from scripts.utils.workspace import get_data_root, get_workspace_root
+    """Transcripts carry everything, including personal threads. DATA only.
+
+    Skipped where there is no overlay, because there the archiver REFUSES and
+    the test below is what proves it. Until 2026-08-26 this test asserted
+    unconditionally and failed every CI run from 2026-08-22 onward: the runner
+    has no overlay, `get_data_root()` fell back to `<engine>/examples`, and the
+    guard fired correctly on a real defect nobody had read the log for.
+    """
+    from scripts.utils.workspace import (
+        data_root_is_demo,
+        get_data_root,
+        get_workspace_root,
+    )
+
+    if data_root_is_demo():
+        pytest.skip("no private overlay: the archiver refuses, see the test below")
 
     root = arch.archive_root()
     assert str(root).startswith(str(get_data_root()))
     assert not str(root).startswith(str(get_workspace_root()) + "/"), (
         "an archived transcript must never land in the engine tree"
     )
+
+
+def test_the_archiver_refuses_when_there_is_no_private_overlay(monkeypatch):
+    """The other half, and the one that runs everywhere.
+
+    `get_data_root()`'s documented last resort is `<workspace_root>/examples`,
+    inside the engine clone, and the engine repository is public. An archiver
+    that followed it would copy whole session transcripts into the tree that
+    gets pushed. So the refusal is the behaviour, not an accident of the
+    environment, and it is asserted rather than skipped.
+    """
+    from scripts.utils import paths as _paths
+    from scripts.utils.workspace import DataRootError
+
+    monkeypatch.setattr(_paths, "data_root_is_demo", lambda: True)
+
+    with pytest.raises(DataRootError) as refused:
+        arch.archive_root()
+    assert "examples" in str(refused.value).lower() or "data folder" in str(refused.value).lower()
+
+
+def test_the_cli_says_why_it_refused_instead_of_raising(monkeypatch, capsys):
+    """A timer reads the exit code, never the traceback."""
+    from scripts.utils.workspace import DataRootError
+
+    def _refuse():
+        raise DataRootError("No private data folder found - running on read-only examples.")
+
+    monkeypatch.setattr(arch, "archive_root", _refuse)
+
+    assert arch.main([]) == 2
+    err = capsys.readouterr().err
+    assert "archive-transcripts:" in err
+    assert "read-only examples" in err

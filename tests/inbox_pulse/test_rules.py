@@ -1043,15 +1043,18 @@ def test_classify_multiple_internal_domains(make_workspace, tmp_path):
     yaml_path = _make_rules_yaml_with_domains(tmp_path, ["31c.io", "31concept.com"])
     engine = RulesEngine(yaml_path=yaml_path)
 
+    # Fictional persona, per the engine's placeholder set. The slug carried a real
+    # given name until 2026-08-26, which the content gate reads as a leak because
+    # it matches a live CRM contact. The slug and the address did not even agree.
     _write_crm_contact(
         make_workspace / "crm" / "contacts",
-        slug="andrey-31concept",
-        email="alex@31concept.com",
+        slug="marlow-31concept",
+        email="marlow@31concept.com",
         relationship_type="tribe-leadership",
     )
     clf = CheapClassifier(rules=engine, workspace_root=make_workspace, account=None, my_email="ceo@31c.io")
     result = clf.classify(
-        sender_email="alex@31concept.com",
+        sender_email="marlow@31concept.com",
         subject="Board update",
         now=_fixed_now(),
         recipients_to=["ceo@31c.io"],

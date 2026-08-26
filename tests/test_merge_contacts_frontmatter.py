@@ -131,7 +131,16 @@ def test_every_live_crm_record_round_trips_byte_for_byte(mc):
     it, because `merge-contacts` rewrites the whole file, not the one field it
     was asked to merge. Measured 2026-08-20: 182 of 326 records failed this
     before the repair, 0 after."""
-    from scripts.utils.workspace import get_data_root
+    from scripts.utils.workspace import data_root_is_demo, get_data_root
+
+    # `not crm.exists()` is not enough, and the floor below is why. With no
+    # overlay `get_data_root()` answers `<engine>/examples`, which DOES carry a
+    # `crm/` tree: one bundled record, `EXAMPLE-contact.md`. So the two guards
+    # below both pass, one record is round-tripped, and a floor written against
+    # the operator's corpus fails on a public clone. Measured 2026-08-26 in a
+    # worktree with no sibling overlay: 1 record, floor 200, red.
+    if data_root_is_demo():
+        pytest.skip("bundled examples, not the operator corpus this floor measures")
 
     crm = Path(get_data_root()) / "crm"
     if not crm.exists():

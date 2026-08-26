@@ -64,7 +64,17 @@ def analyzer(sn, monkeypatch):
         obj.logger = logging.getLogger("probe")
         obj.model = "not-a-live-model"
         obj.max_tokens = 100
-        obj.client = None
+        # A stub, never None. `analyze_batch` calls `_get_client()` OUTSIDE its
+        # try block, and with `client is None` that constructs a live
+        # anthropic.Anthropic from ANTHROPIC_API_KEY, raising ValueError when
+        # the key is absent. That is correct daemon behaviour (a missing key is
+        # a hard config error, not something to swallow), but it is nothing
+        # these tests measure: the reply itself arrives through the patched
+        # `call_anthropic_with_fallback` below, which never touches the client.
+        # Leaving it None made the whole batch-parsing shard depend on a
+        # credential in .env, so it passed only on a machine that had one and
+        # failed on every clone without it.
+        obj.client = object()
         obj.business_context = ""
         obj.operator_name = "Operator"
         calls = {"individual": 0}

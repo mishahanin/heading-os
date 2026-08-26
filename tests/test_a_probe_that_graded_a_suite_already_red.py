@@ -137,6 +137,25 @@ def test_the_debug_trace_does_not_land_in_the_engine_clone(monkeypatch):
 
 
 def test_the_debug_trace_uses_the_canonical_resolver(monkeypatch):
+    """Only when the resolver's answer is outside the engine, which needs an overlay.
+
+    `get_state_dir()` builds on `get_data_root()`, whose last resort is
+    `<workspace_root>/examples` - inside the clone. On a workspace with no
+    private overlay the module deliberately declines that answer, so equality
+    with the resolver is false BY DESIGN there and this test measures nothing.
+    Worse, calling `get_state_dir()` here would itself mkdir into the demo root,
+    which is a closed manifest. The refusal that replaces this behaviour is
+    covered without an overlay by
+    `test_the_debug_trace_does_not_land_in_the_engine_clone`, which runs
+    everywhere.
+    """
+    from scripts.utils.paths import data_overlay_present
+    if not data_overlay_present():
+        pytest.skip(
+            "no private data overlay: the canonical resolver answers a path "
+            "inside the engine clone, so delegating to it is not the behaviour "
+            "under test here")
+
     monkeypatch.delenv("INBOX_PULSE_STATE_DIR", raising=False)
     from scripts.inbox_pulse.paths import get_state_dir
     from scripts.utils.observability_safe import _debug_trace_path

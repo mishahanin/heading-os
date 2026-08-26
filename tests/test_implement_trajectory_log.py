@@ -12,9 +12,15 @@ engine CI matrix is 3.11/3.12, so it is available.
 """
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from scripts.utils.workspace import data_root_is_demo  # noqa: E402
 
 
 def _load():
@@ -508,6 +514,15 @@ def test_verify_clean_when_every_planned_file_is_recorded(traj_dir, tmp_path):
 
 def test_verify_accepts_a_planned_file_recorded_under_another_prefix(traj_dir, tmp_path):
     """The plan writes repo-relative; a run may record the overlay prefix."""
+    if data_root_is_demo():
+        pytest.skip(
+            "no private data overlay on this clone, so get_data_root() resolves to "
+            "the in-tree examples root and '.heading-os-data' is not one of the "
+            "prefixes _tree_prefixes() names. Not measured here: that a run "
+            "recording a planned file under the overlay prefix reconciles against "
+            "the plan's engine-relative entry. Only the prefix set differs; nothing "
+            "is written anywhere in either mode."
+        )
     plan = _plan_file(tmp_path)
     _write_traj("pf3", _plan_events(
         plan,

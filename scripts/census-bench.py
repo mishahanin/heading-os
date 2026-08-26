@@ -76,7 +76,12 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.atomic import atomic_write_text
-from scripts.utils.census_oracles import CorpusPaths, OracleAnswer, resolve
+from scripts.utils.census_oracles import (
+    CorpusPaths,
+    OracleAnswer,
+    UnreadableCorpus,
+    resolve,
+)
 from scripts.utils.census_state import (
     ORACLE_PINS,
     PINNED_KEYS,  # noqa: F401 - re-exported so tests pin the pin set from one place
@@ -1430,6 +1435,17 @@ def main() -> int:
                                           args.crosscheck_answers,
                                           write=not args.no_write)
         return mode_baseline(questions, corpus, root, today, write=not args.no_write)
+    # `UnreadableCorpus` is a RuntimeError, and RuntimeError was in no branch
+    # below, so the one condition the oracles raise BY DESIGN (a corpus file
+    # whose frontmatter does not parse, refused rather than silently skipped)
+    # left this gate as a traceback and exit 1. It reaches every mode, because
+    # every mode calls `load_truth`: one stray non-thread file under
+    # `threads/` was enough, and a bare clone grading against the bundled
+    # `examples/` corpus hits it on the first question.
+    except UnreadableCorpus as exc:
+        print(f"{RED}Истину по этому корпусу вычислить нельзя:{RESET} {exc}",
+              file=sys.stderr)
+        return 2
     except ValueError as exc:
         print(f"{RED}Прибор отказал:{RESET} {exc}", file=sys.stderr)
         return 2

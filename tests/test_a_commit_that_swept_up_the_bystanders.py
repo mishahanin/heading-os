@@ -225,9 +225,11 @@ def test_ruff_emits_absolute_paths_which_is_why_the_finding_is_refuted():
 
 
 def test_the_gate_produces_a_verdict_from_another_directory(tmp_path):
+    # The interpreter running the suite, not a hardcoded `.venv/bin/python`: a
+    # fresh clone (CI, any public checkout) has no `.venv` yet, and the gate's
+    # own `_interpreter()` picks the venv up on its own when one exists.
     out = subprocess.run(
-        [str(ROOT / ".venv" / "bin" / "python"), str(ROOT / "scripts" / "lint-ratchet.py"),
-         "check"],
+        [sys.executable, str(ROOT / "scripts" / "lint-ratchet.py"), "check"],
         cwd=str(tmp_path), capture_output=True, text=True, timeout=600)
     combined = out.stdout + out.stderr
     assert "lint-ratchet:" in combined, combined

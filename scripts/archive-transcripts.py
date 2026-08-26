@@ -45,7 +45,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import BOLD, GRAY, GREEN, RESET, YELLOW  # noqa: E402
 from scripts.utils import checkpoint_paths as CP  # noqa: E402
-from scripts.utils.workspace import get_data_root, get_workspace_root  # noqa: E402
+from scripts.utils.workspace import (  # noqa: E402
+    DataRootError,
+    get_workspace_root,
+    require_writable_data_root,
+)
 
 # How long a transcript must sit untouched before it counts as finished. A live
 # session is appended to continuously; archiving one mid-conversation stores a
@@ -81,8 +85,22 @@ def archive_root() -> Path:
 
     DATA overlay, never the engine tree: a transcript carries whatever the
     session touched, personal threads included.
+
+    `require_writable_data_root()`, not `get_data_root()`. The plain resolver has
+    a documented last resort: with no env override, no in-tree data and no
+    sibling overlay, it answers `<workspace_root>/examples`, which is INSIDE the
+    engine clone. The engine repository is public. So on a data-less clone the
+    plain call would have this archiver copy whole session transcripts, personal
+    threads included, into the tree that gets pushed. Refusing is the only
+    correct answer there, and this is the line that has to refuse, rather than
+    `main()`, because `dest_for()` and `status()` both build paths from here.
+
+    Measured 2026-08-26: this is why CI has failed on every push to main since
+    2026-08-22. `test_the_archive_lands_in_the_data_overlay_never_the_engine` is
+    the guard that caught it, and it was right; the runner has no overlay, so the
+    demo fallback fired and the archive root landed under the engine root.
     """
-    return get_data_root() / "chronicle" / "transcripts"
+    return require_writable_data_root() / "chronicle" / "transcripts"
 
 
 def _session_date(path: Path) -> str:
@@ -215,7 +233,15 @@ def status() -> dict:
     """What is live, what is archived, and how much the archive holds."""
     source_dir = transcript_dir()
     live = sorted(source_dir.glob("*.jsonl")) if source_dir and source_dir.is_dir() else []
-    archived = sorted(archive_root().rglob("*.jsonl.gz")) if archive_root().is_dir() else []
+    # A DATA function reports facts and does not raise. On a clone with no
+    # private overlay `archive_root()` refuses, and the honest answer here is
+    # "nothing archived", not a traceback out of a reporting call. `main()` is
+    # what turns the refusal into a message and an exit code.
+    try:
+        root = archive_root()
+    except DataRootError:
+        root = None
+    archived = sorted(root.rglob("*.jsonl.gz")) if root and root.is_dir() else []
     return {
         "unresolved": source_dir is None,
         "live_count": len(live),
@@ -241,6 +267,26 @@ def main(argv=None) -> int:
     parser.add_argument("--status", action="store_true",
                         help="print live vs archived counts and exit")
     args = parser.parse_args(argv)
+
+    # Degrade clearly, never silently: on a clone with no private overlay the
+    # archive root resolves inside the public engine tree, and `archive_root()`
+    # refuses. Say so and exit non-zero, rather than letting the traceback reach
+    # a timer that reads only the exit code.
+    #
+    # Order matters, and it is measured rather than guessed. Both refusals hold
+    # at once on a clone with no overlay. The transcript directory is the more
+    # specific one, and it names something the operator can act on, so it is
+    # reported first. Checking the destination first hid it: two tests in
+    # `tests/test_transcript_dir_has_one_owner.py` went red under exactly that
+    # ordering on 2026-08-26.
+    if transcript_dir() is None:
+        print(f"{YELLOW}archive-transcripts: {UNRESOLVED}{RESET}", file=sys.stderr)
+        return 2
+    try:
+        archive_root()
+    except DataRootError as exc:
+        print(f"{YELLOW}archive-transcripts: {exc}{RESET}", file=sys.stderr)
+        return 2
 
     if args.status:
         s = status()

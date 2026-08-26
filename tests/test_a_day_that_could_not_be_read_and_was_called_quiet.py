@@ -21,7 +21,12 @@ formatting its own FAIL message.
 module resolved the DATA overlay, so the spend ledger and the daemon's logs
 lived in different repositories. Fixing that surfaced a second defect one layer
 down: `get_state_dir()` cached without keying on INBOX_PULSE_STATE_DIR, so the
-documented "test/dev override" stopped overriding after any first call.
+documented "test/dev override" stopped overriding after any first call. A third
+sat one layer below that and only shows itself on a clone with no private
+overlay: `get_data_root()` then answers `<workspace_root>/examples`, inside the
+public engine repository, so the ledger was back in the code repo by a different
+route and the directory was created whether or not a call was ever recorded.
+`_state_path()` now requires a writable data root instead of resolving one.
 
 `overrides.reload` logged a full parse warning on every 30-second poll while the
 file stayed broken, next to a docstring explaining why the missing-file warning
@@ -54,6 +59,7 @@ sys.modules["inbox_pulse_report_08p2"] = rpt
 _spec.loader.exec_module(rpt)
 
 from scripts.inbox_pulse import cost, overrides, paths  # noqa: E402
+from scripts.utils.workspace import DataRootError, data_root_is_demo  # noqa: E402
 
 
 class _Result:
@@ -220,8 +226,55 @@ def test_the_cost_file_sits_with_the_rest_of_the_daemon_state(monkeypatch, tmp_p
 
 def test_the_cost_file_is_not_written_into_the_engine_tree(monkeypatch, tmp_path):
     monkeypatch.delenv("INBOX_PULSE_STATE_DIR", raising=False)
+    if data_root_is_demo():
+        # No data overlay backs this clone, so the data root IS
+        # `<engine>/examples` and every path under it is inside the public
+        # repository. There is no safe answer left to resolve, so the only
+        # correct one is a refusal, and that is what is asserted here. The
+        # assertion below covers the case where a real overlay exists.
+        with pytest.raises(DataRootError):
+            cost._state_path()
+        return
     assert ROOT not in cost._state_path().parents, \
         "runtime state was written into the engine repository"
+
+
+def test_a_refused_data_root_records_nothing_anywhere(monkeypatch):
+    """A write that cannot land is a loud failure, never a quiet one."""
+    monkeypatch.delenv("INBOX_PULSE_STATE_DIR", raising=False)
+
+    def _refuse():
+        raise DataRootError("no private data folder found")
+
+    monkeypatch.setattr(cost, "require_writable_data_root", _refuse)
+    with pytest.raises(DataRootError):
+        cost.record_call("claude-haiku-4-5-20251001", 1000, 100)
+
+
+def test_the_cap_answers_instead_of_raising_when_the_root_is_refused(monkeypatch, caplog):
+    """The guard is asked a question; it must return one, and fail closed."""
+    monkeypatch.delenv("INBOX_PULSE_STATE_DIR", raising=False)
+
+    def _refuse():
+        raise DataRootError("no private data folder found")
+
+    monkeypatch.setattr(cost, "require_writable_data_root", _refuse)
+    with caplog.at_level(logging.WARNING):
+        assert cost.check_daily_cap() is True, \
+            "a ledger with nowhere to live read as spend-is-still-fine"
+    assert any("no writable data root" in r.getMessage() for r in caplog.records), \
+        "the refusal was reported to nobody"
+
+
+def test_the_override_still_bypasses_the_data_root_requirement(monkeypatch, tmp_path):
+    """The documented test/dev override is not collateral damage of the fix."""
+    monkeypatch.setenv("INBOX_PULSE_STATE_DIR", str(tmp_path))
+
+    def _refuse():
+        raise DataRootError("no private data folder found")
+
+    monkeypatch.setattr(cost, "require_writable_data_root", _refuse)
+    assert cost._state_path() == tmp_path / "cost-tracker.json"
 
 
 def test_a_changed_override_is_honoured(monkeypatch, tmp_path):

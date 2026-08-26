@@ -171,14 +171,20 @@ def test_an_inline_suppression_still_silences_a_tribe_hit(tmp_path):
 
 
 def test_a_published_contributor_handle_is_never_flagged(tmp_path):
-    """Both are credited in CHANGELOG.md and are keys in the private roster.
+    """Both HANDLES are credited in CHANGELOG.md and are keys in the private roster.
 
     Without the allowlist the roster harvest reads the repo's own published
     attribution as a leak: measured, one matches 61 tracked files.
+
+    The handles are load-bearing, because they are the exact keys the allowlist
+    holds: swap them for invented ones and this test asserts nothing. The human
+    NAMES beside them are not, so the second one is a placeholder here. The
+    operator's law, restated 2026-08-26, is that only his own name and 31C may
+    appear in the engine, and a test fixture is the easiest place to honour it.
     """
     dl = build_denylist(_overlay(tmp_path, roster={
         "mishahanin": {"name": "Misha Hanin", "telegram_user_id": 1, "active": True},
-        "mmaatuq": {"name": "Mahmoud Maatuq", "telegram_user_id": 2, "active": True},
+        "mmaatuq": {"name": "Marlow Carter", "telegram_user_id": 2, "active": True},
     }))
     assert "mishahanin" not in dl.tokens
     assert "mmaatuq" not in dl.tokens

@@ -25,7 +25,14 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.utils.engine_guard import find_data_artifacts, scan_engine_repo  # noqa: E402
+import pytest  # noqa: E402
+
+from scripts.utils.engine_guard import (  # noqa: E402
+    DEMO_MANIFEST,
+    find_data_artifacts,
+    repo_carried_paths,
+    scan_engine_repo,
+)
 from scripts.utils.workspace import get_workspace_root  # noqa: E402
 
 # --- Negative branch: the real engine tree must be clean ---------------------
@@ -73,3 +80,57 @@ def test_filter_flags_corporate_data():
 def test_detector_ignores_non_data_dir():
     # Engine code paths are never candidates.
     assert find_data_artifacts(["scripts/foo.py", "tests/bar.py", ".claude/rules/x.md"]) == []
+
+
+# --- The demo tree is a closed manifest --------------------------------------
+#
+# Operator law, 2026-08-26: no data from the DATA repository may ever sit in the
+# engine, and everything under `examples/` must be invented. The routing map has
+# no entry for `examples/`, so before this section every one of the paths below
+# fell through to the `engine` default and PASSED the wall. The route in is real:
+# with no overlay `get_data_root()` answers `<workspace_root>/examples`, so a tool
+# that writes to the data root writes inside the engine clone.
+
+
+LEAKS_UNDER_THE_DEMO_TREE = [
+    "examples/crm/contacts/real-person.md",
+    "examples/outputs/operations/a-brief.md",
+    "examples/knowledge/a-private-note.md",
+    "examples/datastore/brand/logo.png",
+    "examples/state/captured-mail-bodies.json",
+    "examples/.sync/logs/audit.jsonl",
+]
+
+
+@pytest.mark.parametrize("rel", LEAKS_UNDER_THE_DEMO_TREE)
+def test_a_file_that_is_not_shipped_demo_data_is_flagged_under_examples(rel):
+    """Every one of these passed the wall until 2026-08-26."""
+    assert find_data_artifacts([rel]) == [rel]
+
+
+@pytest.mark.parametrize("rel", sorted(DEMO_MANIFEST))
+def test_every_shipped_demo_file_is_allowed(rel):
+    """The other jaw. A manifest that flagged its own tree would be deleted by the
+    next person who hit it, and the law would go with it."""
+    assert find_data_artifacts([rel]) == []
+
+
+def test_the_manifest_matches_the_tree_git_actually_carries():
+    """A manifest that drifts from disk is a claim that has stopped being true.
+
+    Asserted in BOTH directions on purpose. A file added to `examples/` and not to
+    the manifest is caught by the tree-clean test above, loudly. A file REMOVED
+    from `examples/` and left on the manifest is caught only here, and it matters:
+    a manifest naming files that no longer exist reads as wider coverage than it
+    has.
+    """
+    root = get_workspace_root()
+    on_disk = {
+        p for p in repo_carried_paths(root)
+        if p.startswith("examples/")
+    }
+    assert on_disk == set(DEMO_MANIFEST), (
+        "the shipped demo tree and DEMO_MANIFEST disagree.\n"
+        f"  on disk, not on the manifest: {sorted(on_disk - set(DEMO_MANIFEST))}\n"
+        f"  on the manifest, not on disk: {sorted(set(DEMO_MANIFEST) - on_disk)}"
+    )

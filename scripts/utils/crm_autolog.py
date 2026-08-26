@@ -22,7 +22,7 @@ import stat
 import sys
 from datetime import datetime, timezone
 
-from scripts.utils.workspace import get_default_tz
+from scripts.utils.workspace import DataRootError, get_default_tz
 from pathlib import Path
 from typing import Optional
 
@@ -98,10 +98,19 @@ def _logs_dir(workspace_root: Optional[Path] = None) -> Path:
 
     `.sync/` is gitignored in the data repository too, so the move changes the
     repository, not the backup status: the trail is still local-only.
+
+    On a clone with no private overlay the data root falls back to the bundled
+    `<engine>/examples`, which is INSIDE the public engine clone, so resolving
+    through `get_data_root()` put the trail back where it started and the
+    `mkdir` below created the directory as a side effect of merely asking for
+    the path. `require_writable_data_root()` refuses instead: no overlay means
+    no place a private audit trail may be written, and `_audit_log` reports the
+    refusal on stderr rather than filing e-mail addresses into the public repo.
+    An explicit `workspace_root` still means that exact tree.
     """
     if workspace_root is None:
-        from scripts.utils.workspace import get_data_root
-        base = get_data_root()
+        from scripts.utils.workspace import require_writable_data_root
+        base = require_writable_data_root()
     else:
         base = Path(workspace_root)
     d = base / ".sync" / "logs"
@@ -116,6 +125,12 @@ def _audit_log(event: dict, workspace_root: Optional[Path] = None) -> None:
         log_path = _logs_dir(workspace_root) / f"crm-autolog-{today}.jsonl"
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(_json.dumps({**event, "ts": datetime.now(timezone.utc).isoformat()}) + "\n")
+    except DataRootError as e:
+        # No private overlay on this clone, so there is nowhere the trail may
+        # live. Say so on stderr; the alternative is writing e-mail addresses
+        # into the public engine tree.
+        print(f"[crm_autolog] audit entry not written, no private data root: {e}",
+              file=sys.stderr)
     except OSError as e:
         # Best-effort: never raise into the caller. Surface to stderr so
         # daemon logs capture the failure for operator review.

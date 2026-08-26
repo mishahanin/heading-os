@@ -314,15 +314,40 @@ def test_every_registered_matcher_is_named_in_the_docstring(matcher):
     assert f"`{matcher}`" in doc
 
 
-def test_the_docstring_matches_what_settings_actually_registers():
-    """The enumeration is only worth anything if it tracks the registration."""
-    settings = json.loads((ROOT / ".claude" / "settings.local.json").read_text(encoding="utf-8"))
-    registered = {
+def _registered_matchers(settings: dict) -> set[str]:
+    return {
         entry.get("matcher")
         for entry in settings.get("hooks", {}).get("PreToolUse", [])
         if any("_dispatch.py" in (h.get("command") or "")
                for h in entry.get("hooks", []))
     }
+
+
+def test_the_docstring_matches_what_settings_actually_registers():
+    """The enumeration is only worth anything if it tracks the registration.
+
+    The registration is read from the TRACKED sources: `settings.json` and the
+    three per-OS templates a fresh workspace is built from by
+    `scripts/setup-platform.sh`. The live `settings.local.json` is gitignored
+    machine state, so a clone without one used to die here on FileNotFoundError
+    rather than measure anything. It is still read when this machine has it, so
+    a locally-added matcher that no docstring names is still caught; it just no
+    longer decides whether the test can run. Same reasoning as
+    `tests/test_settings_hook_targets.py`, which reads the templates for
+    exactly this reason.
+    """
+    sources = [
+        ROOT / ".claude" / "settings.json",
+        ROOT / ".claude" / "settings.local.linux.json",
+        ROOT / ".claude" / "settings.local.macos.json",
+        ROOT / ".claude" / "settings.local.windows.json",
+        ROOT / ".claude" / "settings.local.json",
+    ]
+    registered: set[str] = set()
+    for path in sources:
+        if path.is_file():
+            registered |= _registered_matchers(
+                json.loads(path.read_text(encoding="utf-8")))
     assert registered, "the dispatcher is registered under no matcher at all"
     doc = " ".join(_load("dispatch_doc_under_test3").__doc__.split())
     for matcher in registered:

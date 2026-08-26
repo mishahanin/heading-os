@@ -26,7 +26,10 @@ State file
 ``state/email-triage/cost-tracker.json``, resolved by
 ``scripts.inbox_pulse.paths.get_state_dir()``: ``INBOX_PULSE_STATE_DIR``
 when that env var is set, else under the DATA root (never the engine
-tree -- runtime state is DATA).  Written
+tree -- runtime state is DATA).  With no override and no writable data
+root, ``_state_path()`` raises ``DataRootError`` rather than resolving
+into the public engine clone; ``record_call`` propagates that refusal and
+``check_daily_cap`` reports the cap as reached.  Written
 atomically (write-to-tmp + os.replace) so a crash mid-write never
 corrupts the file.
 
@@ -59,7 +62,12 @@ import tempfile
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from scripts.inbox_pulse.paths import get_state_dir
-from scripts.utils.workspace import get_default_tz, get_default_tz_name
+from scripts.utils.workspace import (
+    DataRootError,
+    get_default_tz,
+    get_default_tz_name,
+    require_writable_data_root,
+)
 
 __all__ = [
     "record_call",
@@ -100,7 +108,29 @@ def _state_path() -> Path:
     own logs, cursor and heartbeat landed in the data overlay: a budget cap
     reading a file nobody else writes. The env override still wins, and still
     does so inside get_state_dir().
+
+    With no override, the data root is REQUIRED rather than merely resolved.
+    `get_data_root()` has a documented last resort: with no env override, no
+    in-tree data and no sibling overlay, it answers `<workspace_root>/examples`,
+    which is INSIDE the engine clone, and `get_state_dir()` creates what it
+    resolves. The engine repository is public, so on a data-less clone (a fresh
+    contributor checkout, or CI) the plain call had this stub write a spend
+    ledger (model ids, token counts, dollar amounts, one key per operator day)
+    into the tree that gets pushed, and mkdir the directory for it even when no
+    call was ever recorded. Refusing is the only correct answer there.
+
+    Measured 2026-08-26 on a worktree with no sibling overlay: `_state_path()`
+    answered `<engine>/examples/state/email-triage/cost-tracker.json` and the
+    parent directory had already been created.
+
+    Raises:
+        DataRootError: when no writable data root backs this workspace and no
+            INBOX_PULSE_STATE_DIR override was given.
     """
+    if not os.environ.get("INBOX_PULSE_STATE_DIR", "").strip():
+        # Same override key get_state_dir() reads, checked here so the refusal
+        # happens BEFORE that function mkdirs the directory it resolved.
+        require_writable_data_root()
     return get_state_dir() / "cost-tracker.json"
 
 
@@ -228,9 +258,23 @@ def check_daily_cap() -> bool:
 
     Caller decides what to do when this returns True.  Phase 4 task 4.5 will
     extend this stub with monthly tracking, Telegram alerts, and degraded mode.
+
+    Fails CLOSED when the ledger has nowhere to live: `_state_path()` refuses on
+    a clone with no writable data root, and a guard that answers a question must
+    not raise in place of answering it, so the refusal is logged and reported as
+    "cap reached". Spend that cannot be recorded is spend that must not happen.
+    `record_call()` does the opposite on purpose: it is a WRITE, and a write
+    that cannot land is a loud failure, not a quiet True.
     """
     today = _today_str()
-    path = _state_path()
+    try:
+        path = _state_path()
+    except DataRootError as exc:
+        logger.warning(
+            "cost-tracker: no writable data root (%s); reporting the daily cap "
+            "as reached, because spend cannot be recorded anywhere.", exc,
+        )
+        return True
     state = _load_state(path)
     today_spend = state.get("daily_totals", {}).get(today, {}).get("spend_usd", 0.0)
     return today_spend >= DAILY_CAP_USD

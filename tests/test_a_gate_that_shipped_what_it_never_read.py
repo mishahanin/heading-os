@@ -39,6 +39,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from scripts.utils.workspace import data_root_is_demo  # noqa: E402
+
 
 def _load(name: str, rel: str):
     spec = importlib.util.spec_from_file_location(name, ROOT / rel)
@@ -96,6 +98,16 @@ def test_a_readable_file_is_still_clean(tmp_path):
         ok.unlink()
 
 
+@pytest.mark.skipif(
+    data_root_is_demo(),
+    reason=(
+        "demo data root: get_data_root() falls back to <engine>/examples, so "
+        "build_denylist harvests the shipped fictional CRM contact and the gate "
+        "flags the engine against the demo corpus the engine itself ships. What "
+        "is NOT measured here is the real-entity sweep of the whole engine "
+        "surface; it needs a private overlay to have any real entity in it."
+    ),
+)
 def test_the_whole_engine_surface_passes():
     """The gate must be green on this repository, or the refusal is unusable.
 

@@ -60,7 +60,12 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-PY = str(ROOT / ".venv" / "bin" / "python")
+# The interpreter running this test, not a hardcoded `<root>/.venv/bin/python`.
+# That path is one local convention, and it does not exist on a CI runner or in
+# a git worktree, where the subprocess below died on FileNotFoundError before it
+# could exercise the harness at all. Whatever runs pytest already has the deps
+# the harness imports, so `sys.executable` is both correct and portable.
+PY = sys.executable
 
 
 def _load(name: str, relpath: str):

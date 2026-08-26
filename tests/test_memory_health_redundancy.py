@@ -78,6 +78,24 @@ def test_the_default_embedder_takes_both_host_and_model_from_the_index(tmp_path,
         ollama_host_mod, "resolve_pinned_host",
         lambda preferred=None, **kw: "http://resolver.example:11436",
     )
+    # The pin is supplied here rather than borrowed from the machine. It is a
+    # fact about one laptop, so it lives in the gitignored
+    # `config/ollama-hosts.yaml`; a fresh clone and CI have no such file, and
+    # with nothing pinned `index_embed_target` returns the local daemon without
+    # consulting any resolver at all. That is correct behaviour (covered by
+    # `test_a_missing_config_falls_back_and_does_not_raise`) and it left THIS
+    # test measuring the operator's laptop instead of the code.
+    #
+    # `machine_hosts` is the source patched, being the LOWEST priority of the
+    # three the preference reads, so the test keeps its power to fail: a
+    # regression that read `config["host"]` directly instead of calling
+    # `index_embed_preference()` would still see no pin and still route to
+    # localhost.
+    monkeypatch.delenv("HEADING_OS_OLLAMA_EMBED_HOST", raising=False)
+    monkeypatch.setattr(
+        ollama_host_mod, "machine_hosts",
+        lambda role, **kw: ["http://pinned-by-test.invalid:11436"],
+    )
     seen = {}
 
     def fake_embed(texts, **kwargs):
@@ -106,6 +124,16 @@ def test_the_index_config_is_the_preference_the_resolver_is_handed(monkeypatch):
         return "http://pinned.example:11434"
 
     monkeypatch.setattr(ollama_host_mod, "resolve_pinned_host", fake_resolve)
+    # Same reason as the test above: with nothing pinned there is no resolver
+    # call to capture, and nothing is pinned on any clone that is not this
+    # laptop, because the pin file is gitignored. The test supplies its own pin
+    # through the lowest priority source, so it reads the same on every machine
+    # and still fails if the preference stops flowing through one function.
+    monkeypatch.delenv("HEADING_OS_OLLAMA_EMBED_HOST", raising=False)
+    monkeypatch.setattr(
+        ollama_host_mod, "machine_hosts",
+        lambda role, **kw: ["http://pinned-by-test.invalid:11436"],
+    )
     host, model = index_embed_target()
 
     # `index_embed_preference()`, not `config["host"]`: since 2026-08-23 the

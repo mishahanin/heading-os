@@ -179,6 +179,16 @@ def _guard(file_path) -> subprocess.CompletedProcess:
                                     "outputs/operations"])
 def test_an_absolute_data_root_path_is_scanned(data_root, ingest):
     """Every one of these lives in the overlay; all four were silently skipped."""
+    from scripts.utils.workspace import data_root_is_demo
+
+    if data_root_is_demo():
+        pytest.skip(
+            "demo mode: the data root resolves to <engine>/examples, inside the "
+            f"clone, so this path reads as examples/{ingest}/... relative to the "
+            "engine and is not one of the four ingest prefixes. Not measured "
+            "here: whether an absolute path into a SEPARATE overlay beside the "
+            "clone is recognised as an ingest directory."
+        )
     proc = _guard(data_root / ingest / "evil.md")
     assert "PROMPT INJECTION WARNING" in proc.stdout, f"{ingest} was not scanned"
 

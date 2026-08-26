@@ -45,6 +45,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from scripts.utils.workspace import data_root_is_demo  # noqa: E402
+
 
 def _code_only(path: Path) -> str:
     return "\n".join(
@@ -384,10 +386,26 @@ def test_a_genuine_path_is_not_flagged(traj):
     ("scripts/scrutinize_record.py", "record.py", False),
 ])
 def test_covers_requires_a_known_prefix_not_any_suffix(recorded, planned, same):
+    if recorded.startswith(".heading-os-data/") and data_root_is_demo():
+        pytest.skip(
+            "no private data overlay on this clone, so get_data_root() resolves to "
+            "the in-tree examples root and '.heading-os-data' is not one of the "
+            "prefixes _tree_prefixes() names. Not measured here: that an overlay-"
+            "spelled recording reconciles against its engine-relative plan entry. "
+            "The other five cases, including both defect cases, still run."
+        )
     assert itl._covers(recorded, planned) is same
 
 
 def test_the_prefix_set_is_named_and_finite():
+    if data_root_is_demo():
+        pytest.skip(
+            "no private data overlay on this clone. Both names this asserts on come "
+            "from directories that exist only on an operator machine: the overlay "
+            "sibling '.heading-os-data' and the engine clone '.heading-os'. In demo "
+            "mode the set carries the examples root instead. Not measured here: that "
+            "the prefix set names the engine tree and the overlay tree."
+        )
     prefixes = itl._tree_prefixes()
     assert "engine" in prefixes
     assert any(p.endswith(".heading-os-data") for p in prefixes)

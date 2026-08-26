@@ -57,6 +57,21 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from scripts.utils.workspace import data_root_is_demo  # noqa: E402
+
+# On a clone with no private overlay `get_data_root()` falls back to the
+# engine's own bundled `examples/`, and the oracles refuse that corpus by
+# design: one demo thread carries no YAML frontmatter, so no ground truth can
+# be computed for any question. A grade is then not merely wrong, it does not
+# exist, and any assertion about the SHAPE of a grade is measuring a world that
+# is not there. The refusal itself is still measured, by
+# `test_an_unparseable_corpus_file_is_exit_two_not_a_traceback` below, which
+# runs in both worlds.
+needs_gradable_corpus = pytest.mark.skipif(
+    data_root_is_demo(),
+    reason="the bundled examples/ corpus yields no oracle truth, so the grader "
+           "is never reached and its exit code cannot be read")
+
 
 def _code_only(path: Path) -> str:
     """Source with comment lines removed; every fix quotes what it removed."""
@@ -101,6 +116,7 @@ def _bench(*argv):
 # census-bench 4, 8, 11 - the scoring path answers cleanly
 # ============================================================
 
+@needs_gradable_corpus
 def test_a_null_sources_field_is_graded_not_a_traceback(tmp_path):
     """`answer.get("sources", [])` returns the DEFAULT only when the key is
     absent. `"sources": null` returned None, and `set()` refused it -- on the
@@ -124,6 +140,26 @@ def test_an_answer_that_is_not_an_object_is_graded_not_a_traceback(tmp_path):
 
     proc = _bench("--score", str(answers), "--no-write")
     assert "Traceback" not in proc.stderr, proc.stderr
+
+
+def test_an_unparseable_corpus_file_is_exit_two_not_a_traceback(monkeypatch, tmp_path, capsys):
+    """`UnreadableCorpus` subclasses RuntimeError, and RuntimeError was in no
+    branch of main()'s except chain. The oracles raise it deliberately, so the
+    one refusal they are built to report arrived as a traceback and exit 1, on
+    the acceptance path, in every mode: they all call `load_truth`."""
+    answers = tmp_path / "a.json"
+    answers.write_text(json.dumps({"answers": []}), encoding="utf-8")
+
+    def refuse(questions, corpus, today):
+        raise cb.UnreadableCorpus("EXAMPLE-thread.md: missing YAML frontmatter")
+
+    monkeypatch.setattr(cb, "load_truth", refuse)
+    monkeypatch.setattr(sys, "argv",
+                        ["census-bench.py", "--score", str(answers), "--no-write"])
+    assert cb.main() == 2
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "missing YAML frontmatter" in err, "the refusal was reported without its cause"
 
 
 def test_a_malformed_answers_file_is_exit_two_not_a_traceback(tmp_path):

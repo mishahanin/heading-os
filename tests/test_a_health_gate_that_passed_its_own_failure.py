@@ -39,6 +39,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from scripts.utils.workspace import data_root_is_demo  # noqa: E402
+
 
 def _load(name, rel):
     spec = importlib.util.spec_from_file_location(name, ROOT / rel)
@@ -258,6 +260,14 @@ def test_a_missing_corpus_exits_2_not_0(tmp_path):
     assert "All 0 records pass" not in proc.stdout
 
 
+@pytest.mark.skipif(
+    data_root_is_demo(),
+    reason="no operator CRM corpus: without a private data overlay the data root "
+           "falls back to the bundled examples/ inside the engine clone, whose one "
+           "fictional demo contact is deliberately a minimal stub and carries "
+           "neither `type` nor `last_touch`. This test measures that the "
+           "empty-corpus refusal above did not also break validation of a "
+           "populated corpus, and there is no populated corpus here to measure.")
 def test_a_real_corpus_still_passes():
     proc = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "validate-crm-schema.py")],

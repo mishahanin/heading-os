@@ -412,30 +412,68 @@ def test_the_dead_pagerank_config_key_is_gone():
 # ============================================================
 # 11 - an ignored flag says so
 # ============================================================
-def test_stage_with_keywords_warns_that_it_does_nothing():
-    """Run it: the message string survives disabling the branch it sits in."""
+def _invented_brain(tmp_path):
+    """A data root carrying one invented principle, for `HEADING_OS_DATA`.
+
+    Every name in it is made up. The engine repo is public and holds no record
+    from the private overlay, so a test that needs a brain builds one.
+    """
+    principles = tmp_path / "knowledge" / "odin-brain" / "principles"
+    principles.mkdir(parents=True)
+    (principles / "invented-principle.md").write_text(
+        "---\ntitle: Name the ask before the price\n"
+        "keywords: [acme, bob]\nconfidence: high\n---\n\nbody\n",
+        encoding="utf-8")
+    return tmp_path
+
+
+def test_stage_with_keywords_warns_that_it_does_nothing(tmp_path):
+    """Run it: the message string survives disabling the branch it sits in.
+
+    The warning sits BELOW the brain-presence degrade, so this needs a brain to
+    reach it at all. It used to read whichever brain the machine happened to
+    carry, which made it pass here and fail on any clone without the private
+    overlay, where `get_knowledge_dir()` lands in the bundled examples. The
+    brain content is irrelevant to the assertion, so the test now builds its own
+    invented one under `tmp_path` and points `HEADING_OS_DATA` at it. Same
+    assertion, and now it measures the same thing on every machine.
+    """
+    import os
     import subprocess
+    _invented_brain(tmp_path)
+
     proc = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "odin-principles.py"),
          "--keywords", "acme,bob", "--stage", "Negotiation", "--json"],
-        capture_output=True, text=True, cwd=str(ROOT), timeout=60)
+        capture_output=True, text=True, cwd=str(ROOT), timeout=60,
+        env=dict(os.environ, HEADING_OS_DATA=str(tmp_path)))
     assert "has no effect with --keywords" in proc.stderr, proc.stderr
 
 
-def test_keywords_alone_warns_about_nothing():
+def test_keywords_alone_warns_about_nothing(tmp_path):
     """The silent half of the pair above.
 
     Silence alone is not evidence: a script that crashed prints no warning
     either. So the run must also show it completed and produced its `--json`
     output, which is what proves the quiet came from the branch and not from a
     dead process.
+
+    Nor from an absent brain, which is the same hole one layer up: without the
+    private overlay the script returns at the brain-presence degrade, prints no
+    warning because it never reached the branch, and still exits 0 with `[]` on
+    stdout, so all three assertions held while nothing was measured. It gets the
+    same invented brain as the test above, so the pair now runs against one
+    fixture on every machine.
     """
     import json
+    import os
     import subprocess
+    _invented_brain(tmp_path)
     proc = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "odin-principles.py"),
          "--keywords", "acme,bob", "--json"],
-        capture_output=True, text=True, cwd=str(ROOT), timeout=60)
+        capture_output=True, text=True, cwd=str(ROOT), timeout=60,
+        env=dict(os.environ, HEADING_OS_DATA=str(tmp_path)))
 
     assert "has no effect" not in proc.stderr, proc.stderr
     assert proc.returncode == 0, proc.stderr[-1500:]

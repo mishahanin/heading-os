@@ -57,7 +57,13 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-PY = str(ROOT / ".venv" / "bin" / "python")
+# The interpreter ALREADY running this suite, not a guessed path inside the
+# clone. `ROOT / ".venv" / "bin" / "python"` exists only on a developer machine
+# that ran `uv sync` in place; on a fresh clone and in CI the suite runs from an
+# interpreter somewhere else entirely, so all five subprocess tests below died
+# on FileNotFoundError before reaching the behaviour they measure. A test that
+# cannot start reports nothing about the guard it was written to hold down.
+PY = sys.executable
 
 
 def _load(name: str, filename: str):

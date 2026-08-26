@@ -413,8 +413,13 @@ def test_the_info_box_promise_is_gone():
 # F9 -- a help description that was a blank line
 # ============================================================
 def test_the_help_description_is_the_summary_line():
+    # `sys.executable`, never a hardcoded `<root>/.venv/bin/python`. The
+    # interpreter running this test already has the pinned dependencies, and a
+    # checkout with no `.venv` (a fresh clone, a git worktree, CI) has no such
+    # file at all, so the literal path made the subprocess die with
+    # FileNotFoundError before argparse ever printed a line.
     out = subprocess.run(
-        [str(ROOT / ".venv" / "bin" / "python"),
+        [sys.executable,
          str(ROOT / "scripts" / "memory-hygiene.py"), "--help"],
         capture_output=True, text=True, timeout=300)
     assert "objective-defect detector" in out.stdout, out.stdout + out.stderr

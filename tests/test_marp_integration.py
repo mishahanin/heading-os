@@ -21,7 +21,7 @@ from scripts.marp_render import (
     WORKSPACE_ROOT,
 )
 from scripts.utils.paths import DataRootError
-from scripts.utils.workspace import get_data_root
+from scripts.utils.workspace import data_root_is_demo, get_data_root
 
 
 def _workspace_dir(rel: str):
@@ -146,6 +146,21 @@ class TestWorkspaceTransform:
         context_dir = _workspace_dir("context")
         if context_dir is None:
             pytest.skip("No context/ directory in either root")
+
+        # Without a private overlay the data root resolves to the bundled
+        # <engine>/examples, so the only context/ on disk is
+        # <engine>/examples/context. A file under it names itself
+        # "examples/context/..." relative to the engine root, and that prefix is
+        # deliberately absent from WORKSPACE_DEFAULTS, so the transform falls
+        # through to the "mixed" default. Not measured in demo mode: the
+        # context/ row of the workspace-defaults table, i.e. that a real
+        # context document renders in light mode.
+        if data_root_is_demo() and context_dir == get_data_root() / "context":
+            pytest.skip(
+                "demo data root: the only context/ fixtures live under "
+                "<engine>/examples/context, whose prefix is not in "
+                "WORKSPACE_DEFAULTS, so the light-mode default is unmeasurable"
+            )
 
         # Find any .md in context/
         context_files = list(context_dir.glob("*.md"))

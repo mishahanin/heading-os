@@ -54,13 +54,34 @@ from scripts.utils import dead_letter as dl  # noqa: E402
 from scripts.utils import doctype_renderer as dr  # noqa: E402
 from scripts.utils import docx_font_embed as dfe  # noqa: E402
 from scripts.utils import draft_critique  # noqa: E402
-from scripts.utils.workspace import get_crm_contacts_dir, get_workspace_root  # noqa: E402
+from scripts.utils.workspace import (  # noqa: E402
+    DataRootError,
+    data_root_is_demo,
+    get_crm_contacts_dir,
+    get_workspace_root,
+)
+
+
+# On a clone with no private overlay - CI, any public clone - the data root
+# falls back to the bundled `<engine>/examples`, which is INSIDE the engine
+# clone by design. Every guard below that asks "is this private tree resolving
+# outside the engine clone?" therefore measures the seam only where a real
+# overlay exists; on the demo root the answer is "inside", and that is demo mode
+# being demo mode, not the defect these tests were written for. The behavioural
+# tests around them (the seam delegation, the explicit-root cases, the conflict
+# log, the frontmatter fence) run everywhere and are untouched.
+_DEMO = data_root_is_demo()
 
 
 # ============================================================
 # The CRM tree the engine clone does not hold
 # ============================================================
 
+@pytest.mark.skipif(
+    _DEMO,
+    reason="no private overlay: the data root IS <engine>/examples, so where the "
+           "address book resolves relative to the engine clone is not measured here",
+)
 def test_the_address_book_does_not_resolve_under_the_engine_clone():
     """The engine repo is public and carries no CRM; resolving there is the bug."""
     resolved = ca._address_book_dir()
@@ -69,6 +90,11 @@ def test_the_address_book_does_not_resolve_under_the_engine_clone():
     )
 
 
+@pytest.mark.skipif(
+    _DEMO,
+    reason="no private overlay: the data root IS <engine>/examples, so where the "
+           "contacts tree resolves relative to the engine clone is not measured here",
+)
 def test_the_contacts_tree_does_not_resolve_under_the_engine_clone():
     resolved = ca._contacts_dir()
     assert get_workspace_root() not in resolved.parents, (
@@ -105,6 +131,12 @@ def test_an_explicit_exec_layout_still_resolves(tmp_path):
     assert ca._contacts_dir(tmp_path).parts[-3:] == ("personal", "crm", "contacts")
 
 
+@pytest.mark.skipif(
+    _DEMO,
+    reason="no private overlay: `_logs_dir()` refuses outright rather than "
+           "resolving, so where it would resolve is not measured here; the "
+           "refusal itself is measured by the two tests below",
+)
 def test_the_audit_trail_does_not_live_in_the_engine_clone():
     """Every entry carries an e-mail address, so the trail is private data.
 
@@ -118,9 +150,44 @@ def test_the_audit_trail_does_not_live_in_the_engine_clone():
     )
 
 
+@pytest.mark.skipif(
+    _DEMO,
+    reason="no private overlay: there is no data root a private trail may be "
+           "written under, so this equality is not measured here",
+)
 def test_the_audit_trail_resolves_under_the_data_root():
     from scripts.utils.workspace import get_data_root
     assert ca._logs_dir() == get_data_root() / ".sync" / "logs"
+
+
+def test_a_clone_with_no_overlay_gets_no_trail_at_all(tmp_path, monkeypatch):
+    """The demo data root is `<engine>/examples`, inside the PUBLIC clone.
+
+    Resolving through `get_data_root()` there did not just point at the engine
+    tree, it created the directory: `_logs_dir` mkdirs, so asking for the path
+    was already a write. The next call files e-mail addresses into it. Refusing
+    is the only correct answer when no private overlay exists.
+    """
+    demo_root = tmp_path / "examples"
+    demo_root.mkdir()
+    monkeypatch.setattr("scripts.utils.paths.data_root_is_demo", lambda: True)
+    monkeypatch.setattr("scripts.utils.paths.get_data_root", lambda: demo_root)
+    with pytest.raises(DataRootError):
+        ca._logs_dir()
+    assert not (demo_root / ".sync").exists(), (
+        "asking for the path created it inside the read-only examples tree"
+    )
+
+
+def test_a_refused_trail_is_reported_not_raised_into_the_caller(monkeypatch, capsys):
+    """`_audit_log` promises never to raise into the caller, and a refusal is
+    not silence either: an operator reading "matched: false" counts must be able
+    to see that nothing was recorded at all."""
+    monkeypatch.setattr("scripts.utils.paths.data_root_is_demo", lambda: True)
+    ca._audit_log({"kind": "outbound", "email": "x@example.invalid", "matched": False})
+    err = capsys.readouterr().err
+    assert "audit entry not written" in err
+    assert "no private data root" in err
 
 
 def test_an_explicit_root_still_keeps_the_trail_in_that_tree(tmp_path):
@@ -253,6 +320,20 @@ def test_an_empty_record_is_left_alone():
 # The five locked doctypes that could not find their templates
 # ============================================================
 
+# `datastore/brand/` is private content: it ships in the DATA overlay and never
+# in the public engine clone. With no overlay the seam has nothing to point at,
+# `_resolve_under_corporate` falls back to the explicit root it was handed, and
+# the brand tree is absent from disk entirely. These four measure the seam and
+# the shipped templates, so they need the overlay to mean anything.
+_NO_BRAND_TREE = pytest.mark.skipif(
+    _DEMO,
+    reason="no private overlay: datastore/brand/ ships in the DATA repository, "
+           "so neither the seam it resolves through nor the locked templates "
+           "themselves are on disk to be measured here",
+)
+
+
+@_NO_BRAND_TREE
 def test_the_template_directory_does_not_resolve_under_the_engine_clone():
     resolved = dr._templates_dir(get_workspace_root())
     assert get_workspace_root() not in resolved.parents, (
@@ -260,17 +341,20 @@ def test_the_template_directory_does_not_resolve_under_the_engine_clone():
     )
 
 
+@_NO_BRAND_TREE
 @pytest.mark.parametrize("resolver", [dr._templates_dir, dr._assets_dir, dr._fonts_dir])
 def test_every_brand_directory_exists_on_this_workspace(resolver):
     assert resolver(get_workspace_root()).is_dir()
 
 
+@_NO_BRAND_TREE
 @pytest.mark.parametrize("doctype", sorted(dr.TEMPLATE_REGISTRY))
 def test_every_locked_doctype_has_its_template_on_disk(doctype):
     template = dr.TEMPLATE_REGISTRY[doctype]["template"]
     assert (dr._templates_dir(get_workspace_root()) / template).is_file()
 
 
+@_NO_BRAND_TREE
 def test_a_letter_renders_end_to_end():
     """It raised FileNotFoundError before the seam was fixed."""
     data = dict.fromkeys(dr.TEMPLATE_REGISTRY["letter"]["required"], "PLACEHOLDER")

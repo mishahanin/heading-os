@@ -276,7 +276,9 @@ def check_stale_files(project_dir, identity=None):
     Two-tier alert:
       - WARNING (>14 days): data getting stale, should refresh soon
       - CRITICAL (>30 days): data unreliable, refresh urgently
-    Returns list of (filename, days_old, severity) tuples.
+    Returns list of (filename, days_old, severity) tuples. Severity is
+    WARNING, CRITICAL, or NOT_CHECKED - the last one carrying the reason the
+    scan could not run, with days_old 0.
     """
     # Use workspace-aware path for context directory
     if identity and identity.get("type") == "exec-workspace":
@@ -309,8 +311,15 @@ def check_stale_files(project_dir, identity=None):
         # second one was indistinguishable from the first.
         print(f"[session-start] no context directory at {context_dir}; staleness "
               f"was NOT checked.", file=sys.stderr)
-        return [f"CONTEXT STALENESS NOT CHECKED: no context directory at "
-                f"{context_dir}."]
+        # A TUPLE, in this function's declared shape. It returned a bare string
+        # until 2026-08-27, and the caller unpacks three values per item, so the
+        # string was unpacked CHARACTER BY CHARACTER and `main()` died with
+        # `ValueError: too many values to unpack (expected 3)`. Every session on
+        # a workspace with no context/ directory - which is every fresh public
+        # clone, and every engine-only checkout - printed a traceback at
+        # SessionStart. No test saw it because they all ran against the
+        # operator's own data root, which has a context/ directory.
+        return [(f"no context directory at {context_dir}", 0, "NOT_CHECKED")]
 
     for fname in os.listdir(context_dir):
         if not fname.endswith(".md"):
@@ -396,6 +405,12 @@ def main():
     if stale:
         critical = [f"{f} ({d}d)" for f, d, s in stale if s == "CRITICAL"]
         warning = [f"{f} ({d}d)" for f, d, s in stale if s == "WARNING"]
+        not_checked = [f for f, _d, s in stale if s == "NOT_CHECKED"]
+        if not_checked:
+            # "could not look" is not "nothing is stale", and the alert has to
+            # say which one it is.
+            alerts.append("CONTEXT STALENESS NOT CHECKED: "
+                          + "; ".join(not_checked))
         if critical:
             alerts.append(f"STALE DATA (CRITICAL): {', '.join(critical)} -- data unreliable, update urgently")
         if warning:

@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -63,11 +64,27 @@ def _load(name: str, rel: str):
     return module
 
 
-def _run(hook: str, payload: dict, cwd: Path | None = None):
+def _run(hook: str, payload: dict, cwd: Path | None = None,
+         data_root: Path | None = None):
+    """Run a hook in a child process.
+
+    `data_root` redirects HEADING_OS_DATA, and any hook that WRITES needs it.
+    `cwd` alone does not: `checkpoint-save.py` resolves its archive through
+    `get_data_root()`, which reads the environment, so a child launched with
+    `cwd=tmp_path` and no env override wrote a real handoff into the operator's
+    live overlay every time this file ran. Measured 2026-08-27: 114 archives
+    named `..._handoff_compact-manual_probe-session.md` had accumulated in
+    `outputs/operations/handoff-archive/`, and the shared `.latest/summary.md`
+    and `.latest/prompt.md` - the pair `/next` reads as "the newest handoff in
+    this workspace" - were pointing at one of them.
+    """
+    env = dict(os.environ)
+    if data_root is not None:
+        env["HEADING_OS_DATA"] = str(data_root)
     return subprocess.run(
         [PY, str(HOOKS / hook)], input=json.dumps(payload),
         capture_output=True, text=True, timeout=200, check=False,
-        cwd=str(cwd) if cwd else None)
+        env=env, cwd=str(cwd) if cwd else None)
 
 
 # ============================================================
@@ -117,12 +134,58 @@ def test_a_failed_crm_health_run_becomes_an_alert(tmp_path, monkeypatch):
 
 
 def test_a_missing_context_directory_becomes_an_alert(tmp_path, monkeypatch):
-    """"nothing to check" and "could not look" are different answers."""
+    """"nothing to check" and "could not look" are different answers.
+
+    And the answer has to be in the SHAPE the caller unpacks. This test used to
+    assert `any("NOT CHECKED" in a for a in alerts)` over a list the function
+    filled with a bare string, which read as true and was: the function's own
+    docstring promises `(filename, days_old, severity)` tuples, `main()`
+    unpacks three values per item, and a string of length 61 unpacks
+    character by character. Every session on a workspace with no `context/`
+    directory - every fresh public clone - died with
+    `ValueError: too many values to unpack (expected 3)` at SessionStart.
+
+    A unit test of a function that never checks the contract with its one
+    caller is how that shipped. `test_the_hook_survives_a_missing_context_tree`
+    below is that missing half.
+    """
     hook = _load("session_start_stale_probe", ".claude/hooks/session-start.py")
     monkeypatch.setattr("scripts.utils.workspace.get_data_root",
                         lambda: tmp_path / "no-such-overlay")
     alerts = hook.check_stale_files(str(tmp_path), {"type": "ceo"})
-    assert any("NOT CHECKED" in a for a in alerts)
+    assert len(alerts) == 1, alerts
+    entry = alerts[0]
+    assert isinstance(entry, tuple) and len(entry) == 3, (
+        f"check_stale_files returned {entry!r}, which main() cannot unpack"
+    )
+    name, days, severity = entry
+    assert severity == "NOT_CHECKED"
+    assert days == 0
+    assert "no context directory" in name
+
+
+def test_the_hook_survives_a_missing_context_tree(tmp_path):
+    """The contract, end to end, in the child process the harness runs.
+
+    The unit test above can be satisfied by any three-element tuple. This one
+    runs the real hook against an overlay with no `context/` and refuses a
+    traceback, which is the thing a first-time user actually sees.
+    """
+    overlay = tmp_path / "data"
+    (overlay / "outputs").mkdir(parents=True)
+    proc = _run("session-start.py", {"cwd": str(tmp_path)}, data_root=overlay)
+    assert proc.returncode == 0, proc.stderr
+    assert "Traceback" not in proc.stderr, proc.stderr
+    assert "no context directory" in proc.stderr, (
+        "the hook checked nothing and said nothing about it"
+    )
+    # And on STDOUT, which is the stream SessionStart injects into the session.
+    # stderr goes to the journal; the operator reads stdout. Asserting only the
+    # stderr line let a mutation that deletes the alert survive, because the
+    # two messages come from different places.
+    assert "CONTEXT STALENESS NOT CHECKED" in proc.stdout, (
+        f"the operator is told nothing in-session:\n{proc.stdout!r}"
+    )
 
 
 def test_a_data_root_failure_is_reported(tmp_path, monkeypatch, capsys):
@@ -315,12 +378,26 @@ def test_a_non_string_summary_still_saves_the_handoff(tmp_path):
     """It exited 1 before anything was written: no archive, no pointer, nothing."""
     (tmp_path / ".claude").mkdir()
     (tmp_path / "CLAUDE.md").write_text("# probe\n", encoding="utf-8")
+    overlay = tmp_path / "data"
+    overlay.mkdir()
     proc = _run("checkpoint-save.py",
-                _save_payload(tmp_path, compact_summary={"a": 1}), cwd=tmp_path)
+                _save_payload(tmp_path, compact_summary={"a": 1}),
+                cwd=tmp_path, data_root=overlay)
     assert proc.returncode == 0, proc.stderr
     assert "Traceback" not in proc.stderr
     assert "not a string" in proc.stderr
     assert "Saved handoff" in proc.stdout
+
+    # And it landed in the SCRATCH overlay, not the operator's. Without this
+    # the test passes just as well while writing into the live tree, which is
+    # exactly what it did until 2026-08-27.
+    written = sorted((overlay / "outputs" / "operations" / "handoff-archive")
+                     .glob("*probe-session*.md"))
+    assert len(written) == 1, (
+        f"expected one archive under {overlay}, found {written}. If this is "
+        "empty the hook wrote somewhere else, and 'somewhere else' is the "
+        "operator's own handoff archive."
+    )
 
 
 def test_the_docstring_states_that_the_pair_is_locked():

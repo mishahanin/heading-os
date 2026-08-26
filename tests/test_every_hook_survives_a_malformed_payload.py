@@ -30,6 +30,7 @@ is a real refusal. The line is between deciding and crashing.
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -84,22 +85,44 @@ def _assert_no_crash(hook: Path, proc, what: str) -> None:
         f"{hook.name} crashed on {what}:\n{tail}")
 
 
+def _scratch_env(tmp_path):
+    """Child env with the data root pointed at scratch.
+
+    Every hook here is launched as a child process, and a child resolves where
+    it writes through `get_data_root()`, which reads HEADING_OS_DATA. Without
+    this, `checkpoint-save.py` wrote a REAL handoff into the operator's overlay
+    on every parametrised case: five per run of this file, and 1107 archives
+    named `..._handoff_compact-unknown_session.md` had accumulated there by
+    2026-08-27. The shared `.latest/` pointer pair, which `/next` reads, was
+    pointing at one of them.
+
+    A per-test cleanup was the old answer and it only ever covered one test.
+    Redirecting the root covers every hook in the sweep, including the ones
+    nobody has written yet.
+    """
+    overlay = tmp_path / "data-root"
+    overlay.mkdir(exist_ok=True)
+    return dict(os.environ, HEADING_OS_DATA=str(overlay)), overlay
+
+
 @pytest.mark.parametrize("hook", _stdin_hooks(), ids=lambda p: p.name)
 @pytest.mark.parametrize("payload", MALFORMED)
-def test_a_non_object_payload_does_not_crash_the_hook(hook, payload):
+def test_a_non_object_payload_does_not_crash_the_hook(hook, payload, tmp_path):
+    env, _ = _scratch_env(tmp_path)
     proc = subprocess.run(
         [sys.executable, str(hook), *_argv_for(hook)],
-        input=payload, capture_output=True, text=True, timeout=120,
+        input=payload, capture_output=True, text=True, timeout=120, env=env,
     )
     _assert_no_crash(hook, proc, f"the payload {payload}")
 
 
 @pytest.mark.parametrize("hook", _stdin_hooks(), ids=lambda p: p.name)
-def test_an_empty_payload_does_not_crash_the_hook(hook):
+def test_an_empty_payload_does_not_crash_the_hook(hook, tmp_path):
     """The neighbouring shape: nothing on stdin at all."""
+    env, _ = _scratch_env(tmp_path)
     proc = subprocess.run(
         [sys.executable, str(hook), *_argv_for(hook)],
-        input="", capture_output=True, text=True, timeout=120,
+        input="", capture_output=True, text=True, timeout=120, env=env,
     )
     _assert_no_crash(hook, proc, "an empty payload")
 
@@ -119,29 +142,35 @@ def test_the_sweep_actually_found_the_hooks():
         )
 
 
-def test_checkpoint_save_still_writes_its_handoff_on_a_bad_payload():
+def test_checkpoint_save_still_writes_its_handoff_on_a_bad_payload(tmp_path):
     """Not crashing is not enough for this one. Its entire reason to exist is
     that the handoff reaches disk; degrading to silence would satisfy the sweep
-    above while losing exactly what the file protects."""
+    above while losing exactly what the file protects.
+
+    The write is now checked ON DISK, in a scratch overlay. It used to be
+    checked by looking for the word `systemMessage` in stdout and then deleting
+    whatever file the message named - a cleanup that ran in the operator's real
+    archive, that returned early on two paths without deleting anything, and
+    that said nothing about whether the file existed in the first place.
+    """
+    env, overlay = _scratch_env(tmp_path)
     proc = subprocess.run(
         [sys.executable, str(HOOKS / "checkpoint-save.py")],
-        input="[]", capture_output=True, text=True, timeout=120,
+        input="[]", capture_output=True, text=True, timeout=120, env=env,
     )
     assert "Traceback" not in proc.stderr
     assert "systemMessage" in proc.stdout, (
         "checkpoint-save produced no systemMessage on a malformed payload, so "
         f"the operator has no sign the handoff was saved: {proc.stdout!r}"
     )
-    # Clean up the probe's archive so a test run leaves no handoff behind.
+
     import json as _json
-    try:
-        message = _json.loads(proc.stdout).get("systemMessage", "")
-    except ValueError:
-        return
+    message = _json.loads(proc.stdout).get("systemMessage", "")
     match = re.search(r"(outputs/operations/handoff-archive/\S+\.md)", message)
-    if not match:
-        return
-    from scripts.utils.workspace import get_data_root
-    written = Path(get_data_root()) / match.group(1)
-    if written.is_file():
-        written.unlink()
+    assert match, f"the message names no archive path: {message!r}"
+    written = overlay / match.group(1)
+    assert written.is_file(), (
+        f"the hook announced {match.group(1)} and wrote nothing there. Either "
+        f"the announcement is false, or the file went outside {overlay}."
+    )
+    assert written.read_text(encoding="utf-8").strip(), "the archive is empty"

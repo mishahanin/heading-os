@@ -215,6 +215,20 @@ asyncio_mode = "auto"
 # whole run with "import file mismatch". The convention guarantees the collision;
 # importlib removes the class rather than renaming one file per slice forever.
 addopts = "--strict-markers --import-mode=importlib"
+# An xfail that PASSES is a defect report that has stopped being true, and by
+# default pytest records it as XPASS and moves on. Strict turns it into a
+# failure, so a fixed bug forces someone to delete the marker rather than leave
+# a stale claim in the tree. Measured 2026-08-27 before enabling: the whole
+# suite has one real xfail, in tests/test_import_purity.py, and it declares
+# `strict=False` itself, so this setting cost zero failures.
+xfail_strict = true
+# `@pytest.mark.parametrize` over an EMPTY list is silently skipped by default.
+# That is the "green over an empty corpus" defect with pytest's own name on it:
+# 528 parametrize sites here, many of them over a registry, a glob or a derived
+# set, and any one of them decaying to empty would have reported a pass while
+# running nothing. `fail_at_collect` makes it a collection error instead.
+# Measured the same day: zero failures across 13239 tests with it on.
+empty_parameter_set_mark = "fail_at_collect"
 # A test that RETURNS a value instead of asserting one PASSES. Pytest warns and
 # moves on. Three files here were standalone scripts before they were renamed
 # test_*.py, kept their `ok &= check(...)` / `return ok` shape, and so carried 25

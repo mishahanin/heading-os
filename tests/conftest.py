@@ -187,6 +187,71 @@ def _isolate_runtime_logs():
     yield
 
 
+# ============================================================
+# The operator's handoff archive is not scratch space
+# ============================================================
+#
+# `checkpoint-save.py` resolves where it writes through `get_data_root()`, which
+# reads HEADING_OS_DATA from the environment. A child process launched with
+# `cwd=tmp_path` and no env override therefore writes a REAL handoff into the
+# operator's overlay. Measured 2026-08-27: 114 archives named
+# `..._handoff_compact-manual_probe-session.md` had accumulated in
+# `outputs/operations/handoff-archive/`, and the shared `.latest/summary.md` and
+# `.latest/prompt.md` - the pair `/next` reads as "the newest handoff in this
+# workspace" - were pointing at one of them.
+#
+# One test-level assertion fixes one test. This catches the next one, whoever
+# writes it. Two `listdir` calls per xdist worker, at session start and session
+# finish, and nothing at all when there is no overlay on disk.
+
+_HANDOFF_ARCHIVE = None
+_HANDOFF_BEFORE = None
+
+
+def _handoff_archive_dir():
+    """The live archive, or None when this clone has no private overlay."""
+    try:
+        from scripts.utils.paths import data_overlay_present
+        from scripts.utils.workspace import get_data_root
+    except ImportError:
+        return None
+    if not data_overlay_present():
+        return None
+    directory = get_data_root() / "outputs" / "operations" / "handoff-archive"
+    return directory if directory.is_dir() else None
+
+
+def pytest_sessionstart(session):
+    global _HANDOFF_ARCHIVE, _HANDOFF_BEFORE
+    _HANDOFF_ARCHIVE = _handoff_archive_dir()
+    if _HANDOFF_ARCHIVE is not None:
+        _HANDOFF_BEFORE = {p.name for p in _HANDOFF_ARCHIVE.iterdir()}
+
+
+def pytest_sessionfinish(session, exitstatus):
+    if _HANDOFF_ARCHIVE is None or _HANDOFF_BEFORE is None:
+        return
+    try:
+        after = {p.name for p in _HANDOFF_ARCHIVE.iterdir()}
+    except OSError:
+        return
+    new = sorted(after - _HANDOFF_BEFORE)
+    if not new:
+        return
+    # Reported through the reporter rather than an exception: a raise here is
+    # attributed to no test and reads as a harness crash.
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    message = (
+        f"a test wrote {len(new)} file(s) into the operator's live handoff "
+        f"archive at {_HANDOFF_ARCHIVE}: {new[:5]}. Pass HEADING_OS_DATA "
+        f"pointing at a tmp_path to any hook that writes."
+    )
+    if reporter is not None:
+        reporter.write_line("")
+        reporter.write_line(f"ERROR: {message}", red=True)
+    session.exitstatus = 1
+
+
 def pytest_collection_modifyitems(config, items):
     """Auto-mark tests by top-level directory so the per-push CI filter holds.
 

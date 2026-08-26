@@ -13,9 +13,28 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from scripts.bridge_daemon.sources import ops as ops_source
 from scripts.bridge_daemon.sources.inbox import read_inbox
 from scripts.bridge_daemon.sources.ops import read_telemetry_summary
 from scripts.utils.timeparse import parse_iso
+
+
+@pytest.fixture
+def utc_operator_day(monkeypatch):
+    """Pin the operator's calendar day to UTC for the two counting tests.
+
+    `read_telemetry_summary` defines "today" as `now.astimezone(get_default_tz())
+    .date()`, which is correct: the operator's day, not UTC's. That makes the
+    COUNTS below a function of the machine's timezone, and the two tests asserted
+    them as if they were not. Measured 2026-08-27 with the suite run at UTC-12: a
+    row stamped `2026-08-19T10:00:00` is UTC by the DTZ convention, lands at
+    22:00 on 2026-08-18 local, and stops being "today" - so `result["today"]` came
+    back empty and the tests failed on a machine the code was perfectly right on.
+
+    The parsing behaviour these tests exist for is unchanged and still measured;
+    only the day boundary is now stated instead of inherited.
+    """
+    monkeypatch.setattr(ops_source, "get_default_tz", lambda: timezone.utc)
 
 
 def test_offsetless_timestamp_reads_as_utc():
@@ -58,7 +77,7 @@ def test_every_return_is_aware():
 # ============================================================
 # Regression: the endpoint that 500'd
 # ============================================================
-def test_ops_telemetry_survives_offsetless_ts(tmp_path):
+def test_ops_telemetry_survives_offsetless_ts(tmp_path, utc_operator_day):
     """One offset-less usage.jsonl line must not TypeError the Settings page."""
     usage = tmp_path / ".daemon-state" / "usage.jsonl"
     usage.parent.mkdir(parents=True)
@@ -76,7 +95,7 @@ def test_ops_telemetry_survives_offsetless_ts(tmp_path):
     assert result["last_7d_total"] == 1
 
 
-def test_ops_telemetry_mixes_offsetless_and_aware_rows(tmp_path):
+def test_ops_telemetry_mixes_offsetless_and_aware_rows(tmp_path, utc_operator_day):
     """A file that gained a hand-edited row still aggregates both shapes."""
     usage = tmp_path / ".daemon-state" / "usage.jsonl"
     usage.parent.mkdir(parents=True)

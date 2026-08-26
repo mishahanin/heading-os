@@ -18,6 +18,7 @@ path from an operator following the offer prompt.
 import importlib.util
 import json
 import sys
+from datetime import timezone
 from pathlib import Path
 
 import pytest
@@ -90,6 +91,22 @@ def _write_state(tree, session, **payload):
     (tree["state"] / f"checkpoint-{slug}.json").write_text(
         json.dumps(payload), encoding="utf-8"
     )
+
+
+@pytest.fixture()
+def utc_clock(monkeypatch):
+    """Pin the probe's display zone to UTC, whatever the host is set to.
+
+    The two handoff tests below invent an archive stamp in the same numeric
+    frame as the boundary, which the section comment further down already names
+    as the assumption every early test makes. It is only TRUE when the operator's
+    zone is UTC, and until 2026-08-27 nothing said so: running the suite at
+    UTC-12 turned `2026-08-19-094500` into a stamp four-and-a-bit hours AFTER a
+    boundary it was written to precede, and the test failed on code that was
+    right. Stating the frame is cheaper than converting the fixtures, and it
+    keeps these two tests measuring the ordering rather than the host.
+    """
+    monkeypatch.setattr(probe, "get_default_tz", lambda: timezone.utc)
 
 
 def _archive(tree, session, kind, stamp):
@@ -167,7 +184,7 @@ def test_driven_ignores_a_request_made_after_the_boundary(tree):
 # --assert-handoff-precedes-compaction
 # ============================================================
 
-def test_handoff_passes_with_a_pre_compaction_archive(tree):
+def test_handoff_passes_with_a_pre_compaction_archive(tree, utc_clock):
     _transcript(tree["transcripts"], SESSION, [
         _boundary("2026-08-19T09:50:47.749Z", "manual", 324190, 10929),
     ])
@@ -177,6 +194,14 @@ def test_handoff_passes_with_a_pre_compaction_archive(tree):
 
 def test_handoff_fails_when_only_the_post_compaction_archive_exists(tree):
     """THE other negative case, and the reason the kind filter exists.
+
+    No clock pin here, deliberately. This one is decided by the KIND filter -
+    a `compact-auto` archive is the one the compaction caused, so it never
+    counts as a candidate and the violation stands at every offset on earth.
+    A mutation removing a pin from this test survived at UTC-12, UTC+4 and
+    UTC+14 on 2026-08-27, which is the proof: a fixture that cannot change an
+    outcome measures nothing, and stating that it is unnecessary is worth more
+    than carrying it.
 
     Reproduces session 31cea474: the boundary at 07:31:51.814 had an archive
     named ...-073151_, whose stamp reads earlier than the event it FOLLOWED

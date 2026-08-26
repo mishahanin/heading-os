@@ -47,6 +47,7 @@ from scripts.bridge_daemon.sources.pipeline import (
     read_touch_log,
 )
 from scripts.bridge_daemon.sources.pulse import next_meeting
+from scripts.utils.workspace import get_default_tz
 
 NOW = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
 
@@ -365,7 +366,11 @@ def _library_root(tmp_path: Path) -> Path:
 
 
 def _calendar_root(tmp_path: Path) -> Path:
-    day = NOW.astimezone().strftime("%Y-%m-%d")
+    # The OPERATOR's zone, which is the clock `next_meeting` reads the day on.
+    # `NOW.astimezone()` with no argument uses the SYSTEM zone, so at UTC+14 the
+    # fixture wrote 2026-08-26.md while the source looked for 2026-08-25.md and
+    # found no meeting at all. Measured 2026-08-27.
+    day = NOW.astimezone(get_default_tz()).strftime("%Y-%m-%d")
     p = tmp_path / "outputs" / "_sync" / "calendar" / f"{day}.md"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("| 23:59 | Late sync | - | 15m |\n", encoding="utf-8")

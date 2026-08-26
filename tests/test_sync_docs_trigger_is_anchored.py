@@ -103,9 +103,20 @@ def test_a_synthetic_root_still_syncs(hook, tmp_path):
 # --- end to end, through the hook itself ---------------------------------------
 
 def test_the_hook_does_not_touch_the_published_doc_from_a_scratch_template(tmp_path):
-    """The reproduction from the finding, run for real. Nothing under the engine
-    is written: the scratch file is created inside tmp_path, and only the path
-    SHAPE is what the old trigger keyed on."""
+    """The reproduction from the finding, run for real.
+
+    The probe path is deliberately inside the engine, under `outputs/`, because
+    that is where a real scratch draft lives and the old trigger keyed on the
+    path SHAPE rather than on the tree. A path in the system temp directory
+    would also pass, for the wrong reason: the hook would have refused it as
+    outside the workspace before ever reaching the trigger this test measures.
+
+    Nothing is written. The file is never created, only NAMED in the payload,
+    and the last assertion is that the hook did not create it either. That
+    assertion is the reason this is safe to point at the engine tree; the
+    docstring claimed the file was "created inside tmp_path" until 2026-08-27,
+    which described neither what the code does nor why it is safe.
+    """
     published = ROOT / "docs" / "EMERGENCY-PROCEDURES.md"
     before = published.read_text(encoding="utf-8")
 

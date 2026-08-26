@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -84,11 +85,43 @@ def _run_hook(hook: str, payload: dict) -> subprocess.CompletedProcess:
 
 
 @pytest.fixture
-def scratch():
-    directory = ROOT / ".tmp" / "hook-shard-probe"
+def scratch(request):
+    """A probe directory of this test's own, inside the workspace.
+
+    Inside the workspace on purpose: the guard under test resolves the file
+    against the tree, so a path in the system temp directory would not exercise
+    it. Per test on purpose too. Every test in this file shared ONE
+    `.tmp/hook-shard-probe` until 2026-08-27, and under `-n auto` they run in
+    different worker processes: one worker's `rmtree` at teardown deleted the
+    file another worker had just written, and
+    `test_the_scan_runs_from_any_directory[]` failed with "nothing was reported"
+    over a file that had ceased to exist. It passed on its own, which is the
+    signature of shared state rather than of the behaviour under test.
+    """
+    safe = "".join(c if c.isalnum() else "-" for c in request.node.name)
+    directory = ROOT / ".tmp" / f"hook-shard-probe-{os.getpid()}-{safe}"
     directory.mkdir(parents=True, exist_ok=True)
     yield directory
     shutil.rmtree(directory, ignore_errors=True)
+
+
+def test_the_probe_directory_belongs_to_one_test_only(scratch):
+    """Pins the isolation without depending on a race to expose its absence.
+
+    A shared directory only fails SOMETIMES, and only under `-n auto`, which is
+    how the original survived: every test in this file passed on its own. So the
+    property is asserted directly instead. The name must carry both this test's
+    name and the worker's pid, because xdist splits the file across processes and
+    two workers running the same parametrised case would otherwise collide again.
+    """
+    assert str(os.getpid()) in scratch.name, (
+        f"{scratch.name} does not identify the worker process; two xdist "
+        "workers can share it"
+    )
+    assert "test-the-probe-directory-belongs-to-one-test-only" in scratch.name, (
+        f"{scratch.name} does not identify the test; two tests in one worker "
+        "can share it, and one teardown then deletes the other's file"
+    )
 
 
 # ============================================================

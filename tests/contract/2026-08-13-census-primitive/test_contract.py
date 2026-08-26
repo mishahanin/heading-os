@@ -61,9 +61,23 @@ def _has_populated_overlay() -> bool:
     `load_truth` raises on empty truth and the failure says nothing about the
     engine. Reproduced by the 2026-08-13 audit with `HEADING_OS_DATA` pointed at
     an empty tree.
+
+    A bare clone is not an empty tree, and that is what this missed until
+    2026-08-27. With no overlay the corpus resolves to `<workspace_root>/examples`,
+    which SHIPS one thread, one contact and one context file, so the "any markdown
+    anywhere" question below answered yes to the demo tree and the skip never
+    fired. The failure it was written to prevent is exactly the one a no-overlay
+    run produced: `empty truth for question(s): agg-02 ... ctl-05`, thirteen
+    questions whose oracles find nothing in a three-file corpus.
+
+    So the overlay question is asked first, with the predicate that answers False
+    for BOTH shapes of an in-clone data root, and the content question second.
     """
     try:
         from scripts.utils.census_oracles import CorpusPaths
+        from scripts.utils.paths import data_overlay_present
+        if not data_overlay_present():
+            return False
         corpus = CorpusPaths.from_workspace()
     except Exception:  # noqa: BLE001 - an unresolvable overlay IS an absent one
         return False
@@ -74,6 +88,37 @@ def _has_populated_overlay() -> bool:
 needs_overlay = pytest.mark.skipif(
     not _has_populated_overlay(),
     reason="needs a populated private data overlay (bare public clone)")
+
+
+def test_the_overlay_check_is_not_fooled_by_the_shipped_demo_tree(monkeypatch):
+    """Machine-independent, because the defect is not.
+
+    `_has_populated_overlay()` runs once at import to build the skipif above, so
+    on a workstation with a real overlay it answers True and every mutation of
+    its body survives. The property is therefore asserted directly: with no
+    overlay it must answer False, whatever markdown happens to sit in the
+    resolved corpus. `examples/` ships one thread, one contact and one context
+    file, which is exactly enough to satisfy an "any markdown anywhere" check
+    and was, until 2026-08-27. The skip never fired and a bare clone got
+    `empty truth for question(s): agg-02 ... ctl-05` instead.
+    """
+    import scripts.utils.paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "data_overlay_present", lambda: False)
+    assert _has_populated_overlay() is False, (
+        "the corpus check called a data root with no private overlay populated; "
+        "on a public clone that root is the shipped demo tree inside the engine"
+    )
+
+
+def test_the_overlay_check_still_says_yes_to_a_real_corpus(monkeypatch):
+    """The other jaw. A check hard-wired to False would pass the test above and
+    silently stop grading the benchmark on the operator's own machine."""
+    import scripts.utils.paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "data_overlay_present", lambda: True)
+    if not _has_populated_overlay():
+        pytest.skip("no populated corpus on this machine to measure the yes case")
 
 
 def _load(name: str, filename: str):

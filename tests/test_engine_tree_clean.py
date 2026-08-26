@@ -134,3 +134,27 @@ def test_the_manifest_matches_the_tree_git_actually_carries():
         f"  on disk, not on the manifest: {sorted(on_disk - set(DEMO_MANIFEST))}\n"
         f"  on the manifest, not on disk: {sorted(set(DEMO_MANIFEST) - on_disk)}"
     )
+
+
+def test_every_shipped_demo_thread_parses_as_a_thread():
+    """A demo file the engine's own parser rejects is worse than no demo file.
+
+    `examples/threads/business/EXAMPLE-thread.md` shipped with no YAML
+    frontmatter until 2026-08-27. On a clone with no private data folder the
+    threads root IS that directory, so `python scripts/thread.py list` answered
+    a first-time user with a warning about the one thread the engine itself
+    ships, and the census benchmark refused to compute truth at all
+    ("cannot compute truth over unparseable thread file(s)").
+
+    Floored, because `glob` over a directory that has been renamed returns an
+    empty list and an empty loop asserts nothing.
+    """
+    from scripts.utils.threads_lib import parse_thread_file
+
+    root = get_workspace_root() / "examples" / "threads"
+    files = sorted(root.rglob("*.md"))
+    assert len(files) >= 1, (
+        f"no demo thread found under {root}; this guard measured nothing"
+    )
+    for path in files:
+        parse_thread_file(path)

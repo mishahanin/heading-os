@@ -56,14 +56,21 @@ def test_only_one_module_implements_the_slug_rule():
     Scoped to the two-replacement form; `scripts/census.py` mangles a corpus
     name with a single replacement for a different purpose and is not a copy.
     """
+    paths = sorted(
+        path
+        for pattern in ("scripts/**/*.py", ".claude/**/*.py")
+        for path in ROOT.glob(pattern)
+        if path.name != "checkpoint_paths.py"
+    )
+    # "no offenders" is green over zero files, so a renamed directory or a
+    # changed suffix would switch this guard off without failing anything.
+    # Measured 2026-08-26: 428 files across the two patterns.
+    assert len(paths) >= 260, f"the scan collapsed to {len(paths)} files"
     offenders = []
-    for pattern in ("scripts/**/*.py", ".claude/**/*.py"):
-        for path in ROOT.glob(pattern):
-            if path.name == "checkpoint_paths.py":
-                continue
-            text = path.read_text(encoding="utf-8", errors="ignore")
-            if '.replace("/", "-").replace(".", "-")' in text:
-                offenders.append(str(path.relative_to(ROOT)))
+    for path in paths:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if '.replace("/", "-").replace(".", "-")' in text:
+            offenders.append(str(path.relative_to(ROOT)))
     assert not offenders, (
         "the project-slug rule is duplicated outside its owner "
         "(scripts/utils/checkpoint_paths.py):\n  " + "\n  ".join(offenders)

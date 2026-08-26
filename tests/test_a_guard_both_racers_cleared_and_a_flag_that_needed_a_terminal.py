@@ -295,8 +295,12 @@ def test_a_good_draft_still_reads(tmp_path):
 
 def test_no_module_reads_a_tombstone_by_identity():
     """`"undo": 1` is a tombstone. `is True` said it was an active entry."""
-    hits = [p.name for p in (ROOT / "scripts" / "bridge_daemon").rglob("*.py")
-            if 'entry.get("undo") is True' in _code(p)]
+    modules = sorted((ROOT / "scripts" / "bridge_daemon").rglob("*.py"))
+    # A floor under the corpus. "No module does X" is green over zero modules,
+    # so a renamed package or a changed suffix would turn this guard off and
+    # report a pass. 45 modules on 2026-08-26.
+    assert len(modules) >= 20, f"the daemon package collapsed to {len(modules)} modules"
+    hits = [p.name for p in modules if 'entry.get("undo") is True' in _code(p)]
     assert hits == [], f"identity-tested tombstones came back in {hits}"
 
 

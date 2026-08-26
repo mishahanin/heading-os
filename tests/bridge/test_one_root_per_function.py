@@ -154,8 +154,13 @@ def test_the_two_real_exceptions_each_explain_themselves():
 def test_no_docstring_promises_a_fallback_to_the_engine_root():
     """Twenty of them did, and the code never implemented it: an unsupplied
     `data_root` resolves to the GLOBAL seam, never to the passed root."""
+    paths = sorted(PKG.rglob("*.py"))
+    # An empty offender list is green over zero files, so a renamed package or
+    # a changed suffix would switch this scan off without failing anything.
+    # 45 files matched on 2026-08-26.
+    assert len(paths) >= 28, f"the scan collapsed to {len(paths)} files"
     offenders = []
-    for path in sorted(PKG.rglob("*.py")):
+    for path in paths:
         for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if "falls back to ``workspace_root``" in line and "NOT to" not in line:
                 offenders.append(f"{path.relative_to(ROOT)}:{n}")
@@ -171,7 +176,12 @@ def test_no_function_can_be_handed_the_same_root_twice():
     branch no test covers. One was live in pulse.py and one in search.py."""
     import re
     bad = []
-    for path in sorted(PKG.rglob("*.py")):
+    paths = sorted(PKG.rglob("*.py"))
+    # Same reason as the scan above: no offender is found in a corpus that has
+    # silently become empty, and the test would still report green.
+    # 45 files matched on 2026-08-26.
+    assert len(paths) >= 28, f"the scan collapsed to {len(paths)} files"
+    for path in paths:
         rel = path.relative_to(PKG).as_posix()
         dual = _dual_root_functions().get(rel, [])
         for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):

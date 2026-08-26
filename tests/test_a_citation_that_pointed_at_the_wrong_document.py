@@ -274,7 +274,16 @@ def test_the_screenshot_pass_skips_an_ambiguous_name(capsys, monkeypatch, tmp_pa
             shot_calls.append(a)
             raise AssertionError("an ambiguous citation was screenshotted")
 
-    monkeypatch.setattr(dp, "LiteParse", lambda *a, **k: _Parser(), raising=False)
+    # `cmd_report` does `from liteparse import LiteParse` INSIDE the function
+    # (docparse.py:972), so a module attribute on `dp` is shadowed the moment
+    # the function runs. sys.modules is what that local import reads. This was
+    # `monkeypatch.setattr(dp, "LiteParse", ..., raising=False)`, which bound a
+    # name nothing looks up: `_Parser` was never built, the real LiteParse ran,
+    # and `shot_calls` stayed empty whatever the code did. The assertion below
+    # was true by construction rather than by behaviour.
+    monkeypatch.setitem(
+        sys.modules, "liteparse",
+        type("m", (), {"LiteParse": staticmethod(lambda *a, **k: _Parser())}))
     monkeypatch.setattr(dp.shutil, "which", lambda name: "/usr/bin/liteparse")
 
     args = type("A", (), {
@@ -294,7 +303,7 @@ def _one_item(text):
     return [{"text": text, "x": 0, "y": 0, "width": 100, "height": 10}]
 
 
-@pytest.mark.parametrize("sep", ["\x0c", "\x0b", "", " ", " "])
+@pytest.mark.parametrize("sep", ["\x0c", "\x0b", "", "\u2028", "\u2029"])
 def test_a_quote_spanning_an_exotic_whitespace_still_matches(sep):
     """`\\s` matches all of these; the inline copy tested only four characters."""
     assert dp.find_boxes_for_quote(_one_item(f"total{sep}amount"), "total amount")
@@ -325,7 +334,7 @@ def test_the_inline_walk_and_normalize_text_share_one_pattern():
     assert dp._WS_RUN_RE.pattern == dp._WS_PATTERN + "+"
 
 
-@pytest.mark.parametrize("ch", ["\x0c", "\x0b", "", " ", " "])
+@pytest.mark.parametrize("ch", ["\x0c", "\x0b", "", "\u2028", "\u2029"])
 def test_normalize_text_treats_them_as_whitespace_too(ch):
     assert dp._normalize_text(f"a{ch}b") == "a b"
 

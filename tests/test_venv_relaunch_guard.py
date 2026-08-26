@@ -87,8 +87,15 @@ def test_no_test_module_carries_its_own_copy_of_the_guard():
     before it is dropped. A TRACKED file that vanishes is a real finding and
     still fails.
     """
+    paths = sorted(TESTS.rglob("test_*.py"))
+    # An empty stray list is green over zero files, so a renamed tests
+    # directory or a changed suffix would switch this guard off in silence.
+    # Measured 2026-08-26: 642 test modules under tests/. The floor sits well
+    # below that so ordinary deletion never trips it, and well above zero so a
+    # collapsed scan does.
+    assert len(paths) >= 380, f"the scan collapsed to {len(paths)} files"
     strays = []
-    for path in sorted(TESTS.rglob("test_*.py")):
+    for path in paths:
         rel = path.relative_to(ROOT).as_posix()
         try:
             body = path.read_text(encoding="utf-8")

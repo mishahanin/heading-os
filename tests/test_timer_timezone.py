@@ -213,8 +213,13 @@ def test_no_timer_installer_uses_the_operators_zone_as_its_example():
     example. Any other zone documents the flag equally well, so the engine
     settles on the one its own docstring already uses.
     """
+    installers = sorted(_ROOT.glob("scripts/install-*-timer.sh"))
+    # An empty offender list is green over zero installers, so a renamed script
+    # prefix or a moved directory would switch this check off in silence.
+    # Measured 2026-08-26: 14 installers match the glob.
+    assert len(installers) >= 9, f"the scan collapsed to {len(installers)} files"
     offenders = []
-    for installer in sorted(_ROOT.glob("scripts/install-*-timer.sh")):
+    for installer in installers:
         for number, line in enumerate(installer.read_text(encoding="utf-8").splitlines(), 1):
             found = _GEO.search(line)
             if found and found.group(0) != "America/New_York":

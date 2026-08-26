@@ -37,8 +37,13 @@ def _section(heading: str) -> str:
 
 def test_the_file_is_the_one_place_the_gate_is_stated():
     """A second copy elsewhere would reintroduce the drift by another route."""
+    paths = sorted((ROOT / ".claude" / "skills" / "scrutinize").rglob("*.md"))
+    # "no second copy" is green over zero files, so a renamed skill directory or a
+    # changed suffix would switch this guard off without failing anything.
+    # Measured 2026-08-26: 17 markdown files under .claude/skills/scrutinize/.
+    assert len(paths) >= 10, f"the scan collapsed to {len(paths)} files"
     others = []
-    for path in (ROOT / ".claude" / "skills" / "scrutinize").rglob("*.md"):
+    for path in paths:
         if path == DOC:
             continue
         if "Promotion-eligibility" in path.read_text(encoding="utf-8"):

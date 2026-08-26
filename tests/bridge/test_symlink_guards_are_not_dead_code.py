@@ -149,13 +149,21 @@ def test_no_symlink_check_is_asked_of_a_resolved_path():
 
 def test_every_reader_that_promises_no_symlinks_calls_the_live_guard():
     """The docstring and the code must agree in the same file."""
+    paths = sorted(SOURCES.glob("*.py"))
     missing = []
-    for path in sorted(SOURCES.glob("*.py")):
+    promising = 0
+    for path in paths:
         src = path.read_text(encoding="utf-8")
         if "symlinks not allowed" not in src:
             continue
+        promising += 1
         if "contains_symlink(" not in src:
             missing.append(path.name)
+    # An empty `missing` list is green over zero readers, so a renamed package,
+    # a moved sources/ directory, or a changed suffix would turn this check off
+    # without failing anything. 8 of the 19 files under sources/ carried the
+    # "symlinks not allowed" string on 2026-08-26.
+    assert promising >= 5, f"the scan collapsed to {promising} files"
     assert not missing, (
         "these files still return 'symlinks not allowed' from a check that "
         "cannot reach it: " + ", ".join(missing)

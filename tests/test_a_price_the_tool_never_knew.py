@@ -368,6 +368,9 @@ class _FakePlaywright:
 @pytest.fixture()
 def seen_urls(studio, monkeypatch, tmp_path):
     seen: list[str] = []
+    # raising=False is load-bearing here, not habit: design-studio.py binds
+    # `sync_playwright` inside a `try: ... except ImportError` at module level,
+    # so the name is simply absent on a machine with no playwright installed.
     monkeypatch.setattr(studio, "sync_playwright",
                         lambda: _FakePlaywright(seen), raising=False)
     monkeypatch.setattr(studio, "get_tmp_dir", lambda: tmp_path)

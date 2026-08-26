@@ -60,7 +60,18 @@ rse = _load("run_skill_eval_p10b", "scripts/run-skill-eval.py")
 # ============================================================
 def test_every_page_is_attempted_even_after_a_failure(monkeypatch, capsys):
     """`all(generator)` short-circuits; `all(list)` does not. The first failing
-    page used to silently leave every later one stale."""
+    page used to silently leave every later one stale.
+
+    This drives `main()` with `--all`, which is where the list comprehension
+    lives. It used to patch three module names and then call its own fake in a
+    list comprehension of its own, so what it measured was a property of Python,
+    not of this script: it would have stayed green with the generator back. One
+    of the three names, `tracked_pairs`, did not exist on the module at all, and
+    `raising=False` bound a new attribute nobody reads while the real
+    `find_tracked_pairs` ran untouched. Nothing here passes `raising=False` now,
+    so renaming any of these four functions fails loudly instead of quietly
+    patching a stranger.
+    """
     pairs = [Path(f"docs/p{i}.md") for i in range(5)]
     attempted = []
 
@@ -69,15 +80,19 @@ def test_every_page_is_attempted_even_after_a_failure(monkeypatch, capsys):
         return md.name != "p1.md"
 
     monkeypatch.setattr(rdh, "regenerate", fake_regenerate)
-    monkeypatch.setattr(rdh, "tracked_pairs", lambda: pairs, raising=False)
-    monkeypatch.setattr(rdh, "sync_all_navs", lambda **k: None, raising=False)
-    monkeypatch.setattr(rdh, "build_search_index", lambda **k: None, raising=False)
+    monkeypatch.setattr(rdh, "find_tracked_pairs", lambda: pairs)
+    monkeypatch.setattr(rdh, "sync_all_navs", lambda **k: True)
+    monkeypatch.setattr(rdh, "build_search_index", lambda **k: None)
+    monkeypatch.setattr(sys, "argv",
+                        ["regenerate-docs-html.py", "--all", "--quiet"])
 
-    results = [fake_regenerate(md) for md in pairs]
-    attempted.clear()
-    results = [rdh.regenerate(md, quiet=True) for md in pairs]
-    assert len(attempted) == 5, attempted
-    assert all(results) is False
+    with pytest.raises(SystemExit) as exited:
+        rdh.main()
+
+    assert attempted == pairs, (
+        f"only {len(attempted)} of {len(pairs)} page(s) were attempted after the "
+        f"failure at p1.md: {[p.name for p in attempted]}")
+    assert exited.value.code == 1, "one failed page must still fail the run"
 
 
 def test_the_all_call_is_over_a_materialised_list():

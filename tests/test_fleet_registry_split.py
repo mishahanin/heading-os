@@ -227,8 +227,13 @@ def test_the_live_registries_do_not_contradict_each_other():
 
 def test_no_script_reads_a_removed_business_field():
     """A reader left behind would silently see None forever."""
+    scripts = sorted((ROOT / "scripts").rglob("*.py"))
+    # An empty offenders list is green over zero files, so a renamed directory
+    # or a changed suffix would switch this guard off with no test failing.
+    # Measured 371 files on 2026-08-26; the floor sits well under that.
+    assert len(scripts) >= 230, f"the scan collapsed to {len(scripts)} files"
     offenders = []
-    for script in sorted((ROOT / "scripts").rglob("*.py")):
+    for script in scripts:
         text = script.read_text(encoding="utf-8", errors="replace")
         for n, line in enumerate(text.splitlines(), 1):
             stripped = line.strip()

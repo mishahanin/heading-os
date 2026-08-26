@@ -320,12 +320,20 @@ def test_every_declaration_in_the_tree_points_at_a_real_file():
     """Suite-level, not hook-level, on purpose: a dangling pointer is a real
     defect, but blocking every turn on it teaches the operator to ignore the
     hook - which is the failure mode the frozen-contract skip was written for."""
+    paths = [
+        path
+        for folder in ("scripts", ".claude/hooks")
+        for path in sorted((ROOT / folder).rglob("*.py"))
+    ]
+    # "no declaration dangles" is green over zero files, so a renamed folder or a
+    # changed suffix would switch this guard off and still read as a pass.
+    # Measured 2026-08-26: 371 under scripts plus 17 under .claude/hooks, 388.
+    assert len(paths) >= 240, f"the scan collapsed to {len(paths)} files"
     broken = {}
-    for folder in ("scripts", ".claude/hooks"):
-        for path in sorted((ROOT / folder).rglob("*.py")):
-            missing = tc.dangling_declarations(path)
-            if missing:
-                broken[str(path.relative_to(ROOT))] = missing
+    for path in paths:
+        missing = tc.dangling_declarations(path)
+        if missing:
+            broken[str(path.relative_to(ROOT))] = missing
     assert not broken, f"declarations pointing at files that do not exist: {broken}"
 
 

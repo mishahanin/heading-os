@@ -136,7 +136,11 @@ def test_rmtree_force_tolerates_an_absent_path(tmp_path):
 
 def test_no_script_passes_the_312_only_keyword():
     """The whole point: a 3.12-only keyword must not come back on a 3.11 pin."""
-    offenders = [p for p in (ROOT / "scripts").rglob("*.py")
+    scripts = sorted((ROOT / "scripts").rglob("*.py"))
+    # A floor under the corpus. An emptiness claim over zero files is green and
+    # says nothing. 371 scripts on 2026-08-26.
+    assert len(scripts) >= 250, f"the scan collapsed to {len(scripts)} scripts"
+    offenders = [p for p in scripts
                  if "onexc=" in p.read_text(encoding="utf-8", errors="replace")
                  and p.name != "rmtree.py"]
     assert offenders == [], offenders
@@ -257,14 +261,16 @@ def test_provision_exec_still_refuses_a_real_run():
 # ============================================================
 # 10 - a build bump keeps keys it does not manage
 # ============================================================
-def test_bump_build_preserves_an_unmanaged_key(tmp_path, monkeypatch):
-    pc = _load("publish_corporate_p10a", "scripts/publish-corporate.py")
-    build_file = tmp_path / "BUILD.json"
-    build_file.write_text(json.dumps({
-        "version": "1.2.3", "build": 7, "channel": "beta",
-        "signatures": ["abc"], "history": [{"note": "old"}],
-    }), encoding="utf-8")
-    monkeypatch.setattr(pc, "CORPORATE_BUILD", build_file, raising=False)
+def test_bump_build_preserves_an_unmanaged_key():
+    """This test is TEXTUAL, and it now says so in its own shape.
+
+    It used to open with a tmp BUILD.json and
+    `monkeypatch.setattr(pc, "CORPORATE_BUILD", build_file, raising=False)`,
+    which read as behavioural setup. It was not: `publish-corporate.py` has no
+    name `CORPORATE_BUILD`, so the patch bound a new attribute nobody reads and
+    the temp file was never opened by anything. `raising=False` is what hid it.
+    The module load was dead with them.
+    """
     src = (ROOT / "scripts" / "publish-corporate.py").read_text(encoding="utf-8")
     # Behavioural assertion is not reachable without a corporate repo, so the
     # contract is pinned at the seam that produced the loss: the payload must

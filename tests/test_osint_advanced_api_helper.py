@@ -157,17 +157,26 @@ def test_a_missing_credential_is_reported_not_raised(monkeypatch):
 # --------------------------------------------------- the docs match the tools
 
 def test_no_reference_file_prescribes_an_ungranted_tool():
-    for path in (SKILL / "references").glob("*.md"):
-        text = path.read_text(encoding="utf-8")
-        assert "curl" not in text, f"{path.name} still prescribes curl"
+    paths = sorted((SKILL / "references").glob("*.md"))
+    # "no file prescribes curl" is green over zero files, so a renamed
+    # references/ directory would switch this scan off in silence.
+    # 3 files matched on 2026-08-26.
+    assert len(paths) >= 2, f"the scan collapsed to {len(paths)} files"
+    offenders = [p.name for p in paths if "curl" in p.read_text(encoding="utf-8")]
+    assert offenders == [], f"{offenders} still prescribe curl"
 
 
 def test_no_reference_file_puts_a_credential_on_a_command_line():
-    for path in (SKILL / "references").glob("*.md"):
-        text = path.read_text(encoding="utf-8")
-        assert "load_api_key(" not in text, (
-            f"{path.name} still interpolates a key into a shell command"
-        )
+    paths = sorted((SKILL / "references").glob("*.md"))
+    # Same reason as above: an empty corpus makes this credential check pass
+    # while reading nothing. 3 files matched on 2026-08-26.
+    assert len(paths) >= 2, f"the scan collapsed to {len(paths)} files"
+    offenders = [
+        p.name for p in paths if "load_api_key(" in p.read_text(encoding="utf-8")
+    ]
+    assert offenders == [], (
+        f"{offenders} still interpolate a key into a shell command"
+    )
 
 
 def test_the_sanctions_line_no_longer_claims_webfetch_can_post():

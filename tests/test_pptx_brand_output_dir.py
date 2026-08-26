@@ -21,8 +21,13 @@ BRANDS = ROOT / ".claude" / "skills" / "pptx-generator" / "brands"
 def test_no_brand_config_carries_a_repo_relative_output_path():
     from scripts.utils.workspace import get_routing_destination
 
+    configs = sorted(BRANDS.glob("*/config.json"))
+    # An empty offenders list is also what zero scanned configs produces, so a
+    # renamed brands directory or a moved skill would turn this guard off while
+    # it still reported green. Measured 2 configs on 2026-08-26: 31c, template.
+    assert len(configs) >= 1, f"the scan collapsed to {len(configs)} files"
     offenders = []
-    for cfg in sorted(BRANDS.glob("*/config.json")):
+    for cfg in configs:
         directory = (json.loads(cfg.read_text(encoding="utf-8"))
                      .get("output", {}).get("directory", ""))
         if not directory:
@@ -40,6 +45,11 @@ def test_no_brand_config_carries_a_repo_relative_output_path():
 
 def test_every_brand_declares_an_output_directory():
     """An absent value is not a pass -- it just moves the guess to the caller."""
-    for cfg in sorted(BRANDS.glob("*/config.json")):
+    configs = sorted(BRANDS.glob("*/config.json"))
+    # The assertion below sits inside the loop, so over an empty corpus it never
+    # runs and the test reports a pass precisely when the brands directory has
+    # gone missing. Measured 2 configs on 2026-08-26: 31c, template.
+    assert len(configs) >= 1, f"the scan collapsed to {len(configs)} files"
+    for cfg in configs:
         d = json.loads(cfg.read_text(encoding="utf-8"))
         assert d.get("output", {}).get("directory"), f"{cfg.parent.name} declares none"

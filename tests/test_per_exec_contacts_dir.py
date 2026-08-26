@@ -50,8 +50,13 @@ def test_a_bad_slug_is_refused_by_the_repo_resolver():
 
 def test_no_caller_joins_contacts_onto_the_repo_root():
     """The grep guard. Two of the five offenders wrote to that path."""
+    scripts = sorted((ROOT / "scripts").rglob("*.py"))
+    # An empty offender list is green over zero files, so a renamed scripts/
+    # directory or a changed suffix would switch this guard off in silence.
+    # Measured 371 files on 2026-08-26; the floor only catches a collapse.
+    assert len(scripts) >= 220, f"the scan collapsed to {len(scripts)} files"
     offenders = []
-    for script in sorted((ROOT / "scripts").rglob("*.py")):
+    for script in scripts:
         text = script.read_text(encoding="utf-8", errors="replace")
         for n, line in enumerate(text.splitlines(), 1):
             stripped = line.strip()

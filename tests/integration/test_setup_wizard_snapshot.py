@@ -40,7 +40,9 @@ def test_rendered_tree_matches_golden(tmp_path):
         "context/business-info.md",
     ]
 
-    # Normalize: strip the non-deterministic generated_date and CRLF
+    # Normalise CRLF, and blank EVERY ISO date, not only the generated_date this
+    # was written for. The wider reach is deliberate but it is a real cost: a
+    # date that a template changes on purpose is invisible to this snapshot.
     def _normalize(s: str) -> str:
         s = s.replace("\r\n", "\n")
         return re.sub(r"\d{4}-\d{2}-\d{2}", "YYYY-MM-DD", s)
@@ -48,15 +50,29 @@ def test_rendered_tree_matches_golden(tmp_path):
     update = os.environ.get("UPDATE_GOLDEN") == "1"
 
     drifts = []
+    missing = []
     for rel in expected_files:
         produced_path = dest / rel
         assert produced_path.exists(), f"expected rendered file missing: {rel}"
         produced = _normalize(produced_path.read_text(encoding="utf-8"))
         golden_path = golden_root / rel
 
-        if update or not golden_path.exists():
+        if update:
             golden_path.parent.mkdir(parents=True, exist_ok=True)
             golden_path.write_text(produced, encoding="utf-8")
+            continue
+
+        # An absent golden FAILS. It is not an invitation to write one.
+        #
+        # The branch above read `if update or not golden_path.exists()`, so a
+        # golden that had been deleted, and any file newly added to
+        # `expected_files`, was written from whatever the code produced and the
+        # run went green having compared nothing. That certifies current
+        # behaviour as intended behaviour, which is the one thing a snapshot
+        # test exists to refuse. `tests/test_docx_helpers.py` already fails on a
+        # missing golden and names the same env switch in its message.
+        if not golden_path.exists():
+            missing.append(rel)
             continue
 
         golden = _normalize(golden_path.read_text(encoding="utf-8"))
@@ -65,6 +81,11 @@ def test_rendered_tree_matches_golden(tmp_path):
                           f"EXPECTED (golden):\n{golden}\n"
                           f"ACTUAL (produced):\n{produced}\n")
 
+    assert not missing, (
+        f"no golden fixture for {missing}. If these are new, or were "
+        "regenerated on purpose, re-run with UPDATE_GOLDEN=1 and commit the "
+        "result so a human has seen it."
+    )
     assert not drifts, (
         "Rendered output drifted from golden fixtures. "
         "If the change is intentional, re-run with UPDATE_GOLDEN=1 to refresh the goldens. "

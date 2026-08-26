@@ -616,15 +616,18 @@ def test_the_exec_badge_on_an_empty_registry_is_zero(crm):
 def test_one_broken_exec_does_not_end_the_heartbeat_sweep(crm, monkeypatch, capsys):
     """The try used to wrap the whole loop, so execs after the bad one vanished."""
     import scripts.utils.workspace as ws
+    # No raising=False: both names are ordinary top-level defs in
+    # scripts/utils/workspace.py, so a strict setattr is what turns a rename
+    # into an AttributeError here instead of a patch that binds a stranger.
     monkeypatch.setattr(ws, "get_all_active_exec_slugs",
-                        lambda: ["one", "boom", "three"], raising=False)
+                        lambda: ["one", "boom", "three"])
 
     def _dir(slug):
         if slug == "boom":
             raise KeyError("no repo for boom")
         return Path("/nonexistent") / slug
 
-    monkeypatch.setattr(ws, "get_per_exec_contacts_dir", _dir, raising=False)
+    monkeypatch.setattr(ws, "get_per_exec_contacts_dir", _dir)
     monkeypatch.setattr(crm, "count_files_in_dir", lambda _p: 7)
 
     beats = crm.collect_heartbeat()
@@ -640,7 +643,7 @@ def test_an_unreadable_exec_roster_is_reported_and_empty(crm, monkeypatch, capsy
     def _boom():
         raise OSError("registry unreadable")
 
-    monkeypatch.setattr(ws, "get_all_active_exec_slugs", _boom, raising=False)
+    monkeypatch.setattr(ws, "get_all_active_exec_slugs", _boom)
     assert crm.collect_heartbeat() == {}
     assert "roster unreadable" in capsys.readouterr().err
 

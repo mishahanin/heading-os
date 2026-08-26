@@ -371,8 +371,13 @@ def test_a_string_where_an_analysis_belongs_becomes_a_fallback(monkeypatch):
     class _Client:
         pass
 
-    monkeypatch.setattr(ei, "anthropic", type("m", (), {"Anthropic": lambda **kw: _Client()}),
-                        raising=False)
+    # The `setitem` below is what stubs the client. `email-intelligence.py` does
+    # `import anthropic` inside the function (line 872), so the local import
+    # reads sys.modules and a module attribute on `ei` is shadowed. A
+    # `monkeypatch.setattr(ei, "anthropic", ..., raising=False)` used to sit
+    # here as well; it bound a name nothing looks up, and its `raising=False`
+    # is what kept that quiet. The sibling test below stubs with the setitem
+    # alone and works, which is the proof the setattr was carrying nothing.
     monkeypatch.setitem(sys.modules, "anthropic",
                         type("m", (), {"Anthropic": staticmethod(lambda **kw: _Client())}))
     monkeypatch.setattr(ei, "call_anthropic_with_fallback",

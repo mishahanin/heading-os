@@ -802,6 +802,10 @@ def test_the_systemd_readme_accounts_for_every_template():
     readme = (ROOT / "scripts" / "templates" / "systemd" / "README.md").read_text(encoding="utf-8")
     tpl_dir = ROOT / "scripts" / "templates" / "systemd"
     stems = {p.stem for p in tpl_dir.glob("*.timer")}
+    # A floor under the corpus. "Every template is in the README" is green over
+    # zero templates, so a renamed directory would report a pass. 14 timers on
+    # 2026-08-26.
+    assert len(stems) >= 8, f"the template set collapsed to {len(stems)} timers"
     missing = sorted(s for s in stems if s not in readme)
     assert not missing, f"timers absent from the README: {missing}"
 
@@ -824,12 +828,18 @@ def test_the_systemd_readme_placeholder_list_matches_the_templates():
 def test_every_systemd_unit_that_names_a_timezone_sets_the_tz_environment():
     tpl_dir = ROOT / "scripts" / "templates" / "systemd"
     missing = []
+    scheduled = 0
     for svc in sorted(tpl_dir.glob("*.service")):
         if not (tpl_dir / f"{svc.stem}.timer").exists():
             continue  # a daemon, not a scheduled task
+        scheduled += 1
         text = svc.read_text(encoding="utf-8")
         if "Environment=TZ={{TZ}}" not in text:
             missing.append(svc.name)
+    # The floor counts units that SURVIVED the filter, not units on disk. A glob
+    # that still matches while every unit loses its timer would leave `missing`
+    # empty for the wrong reason. 14 of 18 services are scheduled on 2026-08-26.
+    assert scheduled >= 8, f"only {scheduled} scheduled unit(s) reached the check"
     assert not missing, (
         f"a scheduled unit whose timer names {{{{TZ}}}} but whose service does not "
         f"set it runs its date math on the host libc timezone: {missing}"

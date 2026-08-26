@@ -249,14 +249,23 @@ def test_oracles_never_read_the_clock():
     source = Path(census_oracles.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
     offenders = []
+    scanned = 0
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef) or not node.name.startswith("oracle_"):
             continue
+        scanned += 1
         for inner in ast.walk(node):
             if isinstance(inner, ast.Call):
                 name = ast.unparse(inner.func)
                 if "now" in name or "today" in name.split(".")[-1:]:
                     offenders.append(f"{node.name}: {name}")
+    # The scan keys on a NAME PREFIX, and an empty offenders list is what a
+    # prefix that matches nothing also produces. Rename the oracles, or move
+    # them behind a registry of lambdas, and this guard reports green over zero
+    # functions. The sibling test above pins ORACLES at 15 entries, which is the
+    # registry, not the `oracle_`-prefixed definitions this walk looks for.
+    # 15 prefixed functions on 2026-08-26.
+    assert scanned >= 10, f"the prefix matched {scanned} function(s)"
     assert offenders == [], f"oracle reads the clock: {offenders}"
 
 

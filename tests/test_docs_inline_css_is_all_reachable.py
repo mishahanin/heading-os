@@ -90,7 +90,13 @@ def test_h3_tags_balance(page):
 def test_the_split_leftovers_are_gone_specifically():
     """Names the three dead regions, so a re-paste of the old block is caught by
     a test that says what happened rather than by a generic selector diff."""
-    for page in DOCS.glob("skills-*.html"):
+    pages = sorted(DOCS.glob("skills-*.html"))
+    # Every assert below sits inside the loop, so over zero pages this test
+    # passes without checking anything. A rename of the split output, or a move
+    # of the docs directory, would switch the whole test off in silence. There
+    # were 9 skills-*.html pages on 2026-08-26.
+    assert len(pages) >= 6, f"the scan collapsed to {len(pages)} files"
+    for page in pages:
         text = page.read_text(encoding="utf-8")
         style = "".join(_STYLE.findall(text))
         assert "h3.cat" not in style, f"{page.name} re-grew the h3.cat rules"

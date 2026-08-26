@@ -650,15 +650,14 @@ def test_a_wrapper_exiting_one_is_still_evidence(dispatch, tmp_path):
 # ============================================================
 # 10 - the empty verdict that satisfied its own backstop
 # ============================================================
-@pytest.fixture()
-def record_root(dispatch, tmp_path, monkeypatch):
-    """Point the run record at a temp tree so no real record is written."""
-    from scripts.utils import scrutinize_record
-    monkeypatch.setattr(scrutinize_record, "get_data_root", lambda: tmp_path,
-                        raising=False)
-    monkeypatch.setattr(scrutinize_record, "record_path",
-                        lambda run_id: tmp_path / f"{run_id}.jsonl", raising=False)
-    return tmp_path
+# A `record_root` fixture used to sit here, promising to "point the run record
+# at a temp tree so no real record is written". It was never requested by any
+# test, and both of its patches were wrong: `scrutinize_record` has no
+# `get_data_root` at all, and its `record_path()` takes no arguments while the
+# stand-in took one. `raising=False` is what let both stand. Anyone who had
+# reached for it would have got a fixture that protects nothing, or a TypeError.
+# What actually keeps the live record untouched is the `append_row` patch each
+# test below sets for itself.
 
 
 def test_a_claude_judge_without_a_verdict_is_refused(dispatch, monkeypatch):

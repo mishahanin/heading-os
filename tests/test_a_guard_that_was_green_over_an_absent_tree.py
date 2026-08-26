@@ -330,9 +330,19 @@ def test_the_ceo_master_refusal_still_fires(tmp_path):
 
 
 def test_an_unparseable_identity_file_is_still_handled(tmp_path):
+    """"Handled" means REFUSED, not merely "did not print a traceback".
+
+    Until 2026-08-27 the absence of the word Traceback was this test's only
+    assertion, so a guard that swallowed the JSONDecodeError and ran the wizard
+    against an unreadable identity would have passed it. The sibling above,
+    `test_the_ceo_master_refusal_still_fires`, already asserts the real shape.
+    Measured: exit 2 with `ERROR: malformed .workspace-identity.json`.
+    """
     ws = _workspace(tmp_path, "{not json")
     proc = subprocess.run(
         [sys.executable, str(WIZSIM), "--workspace", str(ws),
          "--answers", str(_answers(tmp_path))],
         capture_output=True, text=True, timeout=120, check=False)
     assert "Traceback" not in proc.stderr
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "malformed .workspace-identity.json" in proc.stderr, proc.stderr

@@ -144,7 +144,11 @@ def test_the_report_always_states_the_window_it_judged_over():
                     now="2026-08-03T00:00:00+00:00")
     assert out["windows"] == {"denials": 1}
     rendered = render(out, now="2026-08-03T00:00:00+00:00")
-    assert "1" in rendered
+    # The sentence, not the digit. `assert "1" in rendered` was the whole check
+    # until 2026-08-27, and the character "1" appears seventeen times in this
+    # report for reasons that have nothing to do with the window - dates, other
+    # counts, the budget line. It could not have failed.
+    assert "observed over 1 day(s) of denial log" in rendered, rendered
 
 
 def test_the_budget_is_the_operators_one_month():

@@ -84,16 +84,18 @@ def test_exception_handlers_log_to_stderr(session_start_path):
                 or "raise" in handler_text
                 or "return" in handler_text
             )
-            is_bare_swallow = (
-                len(node.body) == 1
-                and isinstance(node.body[0], (ast.Pass, ast.Continue))
+            # No `if is_bare_swallow:` gate. It used to be there, and it made
+            # this test unreachable: a bare swallow is a handler whose whole
+            # body is `pass` or `continue`, and `test_no_bare_except_pass` in
+            # this same file already fails the build on those. So the condition
+            # was false for every handler, the assertion never executed, and the
+            # claim in this test's name - handlers log to stderr - was never
+            # checked once. Measured 2026-08-27: 10 broad handlers inspected,
+            # 0 assertions run.
+            assert has_output, (
+                f"Line {node.lineno}: broad exception handler neither logs, "
+                f"returns, nor re-raises. Its failure is invisible."
             )
-
-            if is_bare_swallow:
-                assert has_output, (
-                    f"Line {node.lineno}: exception handler swallows error "
-                    f"without logging to stderr"
-                )
 
     # Measured 10 broad handlers in session-start.py on 2026-08-26; floor at 6 so
     # retiring a handler does not fail this test. If _is_broad_exception drifted to

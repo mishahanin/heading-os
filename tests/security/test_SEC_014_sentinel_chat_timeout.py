@@ -48,17 +48,22 @@ class _NeverAnswers:
 
 
 class _AlwaysFullPage:
-    """Answers instantly, always with a full page, so paging never converges.
+    """Always a full page, so paging never converges.
 
-    This is the shape that turns a per-page timeout into a per-chat budget five
-    times larger than the one SEC-014 sets.
+    `page_cost` is what makes the two designs distinguishable. A page has to
+    take TIME for "one deadline for the whole loop" to differ from "one deadline
+    per page"; with an instant page and a zero budget, `asyncio.wait_for` raises
+    before the coroutine takes a single step and both designs look identical.
     """
 
-    def __init__(self):
+    def __init__(self, page_cost: float = 0.0):
         self.calls = 0
+        self.page_cost = page_cost
 
     async def get_messages(self, entity, limit=None, min_id=0, max_id=0):
         self.calls += 1
+        if self.page_cost:
+            await asyncio.sleep(self.page_cost)
         top = max_id - 1 if max_id else 10_000_000
         return [type("M", (), {"id": top - i, "text": "x", "out": False,
                                "media": None})() for i in range(limit)]
@@ -97,13 +102,30 @@ def test_the_budget_does_not_multiply_by_the_page_count():
     With a per-page deadline this returns normally after MAX_FETCH_PAGES full
     pages, having spent up to five budgets. With one deadline for the whole
     loop it raises, because the pages never converge.
+
+    The budget has to be POSITIVE and a page has to cost something, or the two
+    designs are indistinguishable. This test set `FETCH_TIMEOUT_SECONDS = 0`
+    until 2026-08-27, and `asyncio.wait_for(timeout=0)` raises before the
+    wrapped coroutine executes one step: no page was ever fetched, so nothing
+    here could tell a whole-loop deadline from a per-page one. It was green for
+    a reason unrelated to its own docstring.
+
+    Five pages at 0.05 s is 0.25 s of work against a 0.15 s budget: the loop
+    runs out mid-way. A per-page deadline of 0.15 s would clear every page.
+    `client.calls` is what proves paging actually happened.
     """
-    client = _AlwaysFullPage()
+    client = _AlwaysFullPage(page_cost=0.05)
     source = _source(client)
-    source.FETCH_TIMEOUT_SECONDS = 0
+    source.FETCH_TIMEOUT_SECONDS = 0.15
 
     with pytest.raises(asyncio.TimeoutError):
         asyncio.run(source._fetch_since(object(), 0, 10, "loud-chat"))
+    assert client.calls >= 2, (
+        f"the loop stopped after {client.calls} page(s); with a per-page "
+        "deadline every page would have cleared, so this test only means "
+        "something if several pages actually ran"
+    )
+    assert client.calls <= source.MAX_FETCH_PAGES, client.calls
 
 
 def test_a_responsive_chat_is_not_penalised():

@@ -222,6 +222,135 @@ def test_the_fallback_hint_survives_a_successful_attach(monkeypatch):
     assert out["attach_hint"] == "tmux attach -t 31c-bond"
 
 
+# --- the GUI branch, on purpose rather than by accident ----------------------
+#
+# `terminal = find_linux_terminal() if _is_linux_gui_session() else None` reads
+# DISPLAY and WAYLAND_DISPLAY off the ambient environment. Until 2026-08-27 no
+# test set either, so the True side ran only on a workstation that happened to
+# have a graphical session and never on CI. Branch coverage measured that day:
+# with a display, lines 93-97 and 492 of terminal.py are covered; with
+# `env -u DISPLAY -u WAYLAND_DISPLAY` they are not, and the suite passes both
+# ways. `find_linux_terminal` had no direct caller in any test at all.
+
+def test_this_directory_runs_headless_unless_a_test_says_otherwise():
+    """Pins the autouse fixture in `tests/bridge/conftest.py`.
+
+    Nothing else can. Removing that fixture changes no assertion in this
+    directory - measured 2026-08-27, the mutation survived every test - because
+    the suite passes with a display and without one. What it changes is WHICH
+    LINES RUN: with DISPLAY set, `find_linux_terminal()` and the attach Popen
+    execute on this workstation and never on CI, so two machines were running
+    two different programs and reporting the same green.
+
+    A coverage difference is invisible to assertions, so it needs a test that
+    asks the question directly.
+    """
+    assert not T._is_linux_gui_session(), (
+        "a bridge test is seeing this host's graphical session. The autouse "
+        "`_no_graphical_session` fixture in tests/bridge/conftest.py is gone or "
+        "no longer applies, and the launch path now takes a different branch "
+        "here than it does on CI."
+    )
+
+
+def _linux_gui(monkeypatch, proc, *, terminal="/usr/bin/gnome-terminal"):
+    """A Linux host with a display. `terminal=None` means no emulator installed.
+
+    `tmux` keeps resolving in that case, deliberately: `assert_tmux_available()`
+    runs first and raises `TerminalUnavailable` when `which("tmux")` is None, so
+    a blanket None never reaches the branch this helper exists to reach.
+    """
+    monkeypatch.setattr(T.sys, "platform", "linux")
+    monkeypatch.setattr(
+        T.shutil, "which",
+        lambda name: "/usr/bin/tmux" if name == "tmux" else terminal)
+    monkeypatch.setenv("DISPLAY", ":0")
+    _no_live_session(monkeypatch)
+    monkeypatch.setattr(T.subprocess, "Popen", lambda *a, **kw: proc)
+
+
+def test_a_graphical_session_gets_a_gui_attach(monkeypatch):
+    calls = []
+    proc = _FakeProc(rc=0)
+
+    def _record(argv, *a, **kw):
+        calls.append(list(argv))
+        return proc
+
+    monkeypatch.setattr(T.sys, "platform", "linux")
+    monkeypatch.setattr(T.shutil, "which", lambda name: "/usr/bin/gnome-terminal")
+    monkeypatch.setenv("DISPLAY", ":0")
+    _no_live_session(monkeypatch)
+    monkeypatch.setattr(T.subprocess, "Popen", _record)
+
+    out = T.spawn_or_focus("bond", "t", Path("/tmp"), "osint", None)  # noqa: S108
+    assert out["attach_attempted"] is True
+    assert len(calls) == 2, f"expected tmux create then GUI attach, got {calls}"
+    assert calls[0][:2] == ["tmux", "new-session"], calls[0]
+    assert "attach" in calls[1], calls[1]
+
+
+def test_a_wayland_session_counts_as_graphical(monkeypatch):
+    """DISPLAY is not the only signal, and a Wayland-only desktop has no DISPLAY."""
+    proc = _FakeProc(rc=0)
+    monkeypatch.setattr(T.sys, "platform", "linux")
+    monkeypatch.setattr(T.shutil, "which", lambda name: "/usr/bin/kitty")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    _no_live_session(monkeypatch)
+    monkeypatch.setattr(T.subprocess, "Popen", lambda *a, **kw: proc)
+    assert T.spawn_or_focus("bond", "t", Path("/tmp"), "osint", None)["attach_attempted"] is True  # noqa: S108
+
+
+def test_a_headless_session_gets_no_gui_attach(monkeypatch):
+    """The CI shape. Same code, no display, so no second process."""
+    calls = []
+    proc = _FakeProc(rc=0)
+    monkeypatch.setattr(T.sys, "platform", "linux")
+    monkeypatch.setattr(T.shutil, "which", lambda name: "/usr/bin/gnome-terminal")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    _no_live_session(monkeypatch)
+    monkeypatch.setattr(T.subprocess, "Popen",
+                        lambda argv, *a, **kw: (calls.append(list(argv)), proc)[1])
+
+    out = T.spawn_or_focus("bond", "t", Path("/tmp"), "osint", None)  # noqa: S108
+    assert out["launched"] is True
+    assert out["attach_attempted"] is False
+    assert len(calls) == 1, f"a headless host spawned a GUI attach: {calls}"
+
+
+def test_a_graphical_session_with_no_terminal_installed_does_not_attach(monkeypatch):
+    """A display is not a terminal. `find_linux_terminal` returning None is the
+    other way the attach is skipped, and it was the branch `95->93` that branch
+    coverage reported as never taken."""
+    proc = _FakeProc(rc=0)
+    _linux_gui(monkeypatch, proc, terminal=None)
+    out = T.spawn_or_focus("bond", "t", Path("/tmp"), "osint", None)  # noqa: S108
+    assert out["launched"] is True
+    assert out["attach_attempted"] is False
+
+
+def test_find_linux_terminal_returns_the_first_candidate_present(monkeypatch):
+    """The precedence tuple IS policy, so the lookup that reads it needs a caller."""
+    seen = []
+
+    def _which(name):
+        seen.append(name)
+        return "/usr/bin/xterm" if name == "xterm" else None
+
+    monkeypatch.setattr(T.shutil, "which", _which)
+    assert T.find_linux_terminal() == "/usr/bin/xterm"
+    assert seen == list(T._LINUX_TERMINAL_CANDIDATES), (
+        "the lookup did not walk the candidates in their declared order"
+    )
+
+
+def test_find_linux_terminal_answers_none_when_nothing_is_installed(monkeypatch):
+    monkeypatch.setattr(T.shutil, "which", lambda name: None)
+    assert T.find_linux_terminal() is None
+
+
 def test_no_branch_claims_a_window_appeared():
     """The key is named for what the method establishes: a command was spawned.
     `attached` asserted an outcome nothing observed."""

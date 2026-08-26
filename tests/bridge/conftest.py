@@ -43,6 +43,31 @@ def _pin_the_operator_zone(monkeypatch):
     monkeypatch.setenv("HEADING_OS_TZ", "Etc/GMT-4")
 
 
+@pytest.fixture(autouse=True)
+def _no_graphical_session(monkeypatch):
+    """Every bridge test runs headless unless it says otherwise.
+
+    `scripts/bridge_daemon/terminal.py` decides whether to spawn a GUI attach
+    with `_is_linux_gui_session()`, which reads DISPLAY and WAYLAND_DISPLAY off
+    the ambient environment. This workstation has both; the CI runner has
+    neither. Measured 2026-08-27 with `--cov-branch`: with a display,
+    `find_linux_terminal()` (lines 93-97) and the attach Popen (line 492) are
+    covered; with `env -u DISPLAY -u WAYLAND_DISPLAY` they are not covered at
+    all, and the suite passes either way. So the launch path had two different
+    shapes on two machines and nothing said which one a test was measuring.
+
+    `test_endpoints.py` said it in a comment and got it wrong: "Windows = 1
+    call, macOS/Linux = 2" is true here and false on CI.
+
+    Headless is the deterministic default because it is what CI has. A test
+    that wants the GUI branch sets DISPLAY itself; see
+    `test_a_launcher_must_not_report_a_window_that_never_opened.py`, which now
+    covers both sides on purpose.
+    """
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+
 @pytest.fixture
 def workspace_root(tmp_path):
     """Isolated workspace tree for daemon tests."""

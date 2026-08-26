@@ -116,11 +116,48 @@ def test_hibp_sends_the_required_user_agent(captured):
     assert captured["url"].endswith("/breachedaccount/a%40b.test?truncateResponse=false")
 
 
-@pytest.mark.parametrize("kind", api.HIBP_KINDS)
-def test_every_documented_hibp_kind_is_reachable(captured, kind: str):
+@pytest.mark.parametrize("kind, expected", [
+    ("breachedaccount",
+     "https://haveibeenpwned.com/api/v3/breachedaccount/a%40b.test"
+     "?truncateResponse=false"),
+    ("pasteaccount",
+     "https://haveibeenpwned.com/api/v3/pasteaccount/a%40b.test"),
+    ("breacheddomain",
+     "https://haveibeenpwned.com/api/v3/breacheddomain/a%40b.test"),
+    ("stealerlogsbyemail",
+     "https://haveibeenpwned.com/api/v3/stealerlogsbyemail/a%40b.test"),
+])
+def test_every_documented_hibp_kind_is_reachable(captured, kind: str, expected: str):
+    """The whole URL, written out, not the fragment the builder interpolated.
+
+    This used to parametrize over `api.HIBP_KINDS` and assert
+    `f"/api/v3/{kind}/" in captured["url"]`, which is an identity: `cmd_hibp`
+    builds the URL as `f".../api/v3/{args.kind}/{account}"`, so the assertion
+    holds for every string on earth, including a kind that is not a HIBP
+    endpoint. It also could not see the `?truncateResponse=false` suffix, which
+    `breachedaccount` alone carries and which is the one per-kind difference in
+    the function.
+    """
     api.cmd_hibp(api.build_parser().parse_args(
         ["hibp", "--account", "a@b.test", "--kind", kind]))
-    assert f"/api/v3/{kind}/" in captured["url"]
+    assert captured["url"] == expected
+
+
+def test_the_expected_urls_above_cover_every_kind_the_cli_accepts():
+    """A kind added to HIBP_KINDS without a URL beside it is a silent gap.
+
+    The parametrize list is now literal, which is the point - it is written
+    independently of the builder - but a literal list decays. This is what
+    notices.
+    """
+    # Read the cases straight off the mark so the two lists cannot drift.
+    mark = next(m for m in test_every_documented_hibp_kind_is_reachable.pytestmark
+                if m.name == "parametrize")
+    covered = {row[0] for row in mark.args[1]}
+    assert covered == set(api.HIBP_KINDS), (
+        f"parametrized kinds {sorted(covered)} do not match the CLI's "
+        f"HIBP_KINDS {sorted(api.HIBP_KINDS)}"
+    )
 
 
 # ------------------------------------------ a failed call is reported, not hidden

@@ -23,9 +23,12 @@ Two smaller defects sat in the same function:
 """
 from __future__ import annotations
 
+import ast
 import asyncio
+import inspect
 import logging
 import sys
+import textwrap
 import types
 from pathlib import Path
 
@@ -128,8 +131,8 @@ async def test_the_offset_never_moves_backwards():
 
 
 @pytest.mark.asyncio
-async def test_the_background_task_is_kept_alive():
-    """A task with no strong reference can be collected before it runs."""
+async def test_the_background_task_still_runs_after_the_request_returns():
+    """The behaviour half: the update is processed, not lost with the request."""
     state: dict = {}
     ran = []
 
@@ -139,11 +142,53 @@ async def test_the_background_task_is_kept_alive():
     app = fw.create_app(_fb_module(state, _handler), "s3cret", LOGGER)
     handler = _post_handler(app)
     await handler(_Request({"update_id": 7, "message": {}}), "s3cret")
-
-    import gc
-    gc.collect()                          # the collection that used to lose it
     await _drain(app)
     assert ran == [7]
+
+
+def test_the_background_task_is_held_by_a_strong_reference():
+    """The guard half, and it has to be structural.
+
+    This used to be one test that called `gc.collect()` between the request and
+    the drain, with the comment "the collection that used to lose it". That
+    proves nothing: a running `asyncio.Task` is referenced by the event loop for
+    its whole lifetime, so `gc.collect()` cannot reclaim it under any
+    implementation. The test was green with the `background` set and green
+    without it - the fix it was written to pin was not being measured at all.
+
+    The reference-keeping is a property of the code, so read the code. The
+    three parts have to be there together: create the task, put it in a
+    container that outlives the request, and take it back out when it finishes
+    so the container is not a leak.
+    """
+    src = inspect.getsource(fw.create_app)
+    tree = ast.parse(textwrap.dedent(src))
+
+    created = adds = discards = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        if isinstance(fn, ast.Attribute) and fn.attr == "create_task":
+            created += 1
+        elif isinstance(fn, ast.Attribute) and fn.attr == "add":
+            adds += 1
+        elif isinstance(fn, ast.Attribute) and fn.attr == "add_done_callback":
+            discards += 1
+
+    assert created >= 1, "create_app no longer spawns a background task"
+    assert adds >= 1, (
+        "the task is created and dropped on the floor. A task with no strong "
+        "reference outside the loop can be collected mid-flight and the update "
+        "is lost with no error anywhere."
+    )
+    assert discards >= 1, (
+        "nothing removes the finished task from the container it was added to, "
+        "so the set grows for the life of the process"
+    )
+    assert "background.discard" in src, (
+        "the done-callback does not put the task back; found:\n" + src[-800:]
+    )
 
 
 @pytest.mark.asyncio

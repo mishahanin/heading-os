@@ -261,13 +261,32 @@ def test_source_file_never_mutated_by_shim():
         source_path.unlink(missing_ok=True)
 
 
-def test_collision_refuses_overwrite_without_force():
-    """Verify slug collision detection works."""
-    slug = generate_slug("Test Topic")
-    assert slug == "test-topic"
-    # The actual collision check is in the skill dispatch, not the shim
-    # This test validates slug generation consistency
-    assert generate_slug("Test Topic") == generate_slug("Test Topic")
+def test_the_shim_holds_no_collision_or_force_handling():
+    """Named for what is true, and asserting the boundary rather than nothing.
+
+    This was `test_collision_refuses_overwrite_without_force`, and it exercised
+    no collision and no force. Its last line was
+    `assert generate_slug("Test Topic") == generate_slug("Test Topic")` - a pure
+    function compared to itself, which holds for every input and cannot fail.
+    Its own comment already admitted "the actual collision check is in the skill
+    dispatch, not the shim", so the name promised a contract this module does
+    not have. Slug FORMATTING is covered three times above, at
+    `test_generate_slug_*`.
+
+    What is worth pinning is the boundary itself: if half a collision check
+    lands here, the two places disagree about who refuses an overwrite, and
+    that is the bug this file would then need to catch.
+    """
+    assert generate_slug("Test Topic") == "test-topic"
+
+    src = (Path(__file__).resolve().parent.parent
+           / "scripts" / "marp_render.py").read_text(encoding="utf-8")
+    for token in ("--force", "force=", "exist_ok=False", "overwrite"):
+        assert token not in src, (
+            f"{token!r} appeared in the marp shim. Overwrite policy lives in "
+            "the skill dispatch; two owners for one refusal is how a deck gets "
+            "silently replaced."
+        )
 
 
 # --- Theme Preparation ---

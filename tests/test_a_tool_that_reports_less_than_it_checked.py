@@ -50,6 +50,7 @@ Fixed 2026-08-24.
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -434,25 +435,40 @@ def test_the_output_path_goes_through_the_stripper():
 # content-guard.py — a gate says what it did not scan
 # ---------------------------------------------------------------------------
 
-def test_an_unreadable_file_is_reported_by_the_gate(tmp_path):
-    bad = ROOT / "tests" / "_content_guard_probe.bin"
-    bad.write_bytes(b"\xff\xfe\x00 not utf-8 \xff")
+def test_an_unreadable_file_is_reported_by_the_gate():
+    """The gate must REFUSE a file it could not read, and say which one.
+
+    Two things were wrong here until 2026-08-27, and they compounded.
+
+    The probe was a `.bin`, which content-guard filters out as a non-text path
+    before it ever opens it. Measured: `--files tests/_content_guard_probe.bin`
+    answers `clean (0 file(s))` and exits 0. So the run could not have exercised
+    the unreadable path even in principle.
+
+    And nothing looked at the run. Both assertions read the SOURCE TEXT of
+    content-guard.py; `combined` appeared only inside an f-string failure
+    message. A gate rewritten to print `clean` over an unread file would have
+    passed, as long as the two strings survived somewhere in the file.
+
+    A `.md` probe IS read: measured `REFUSED (1 engine-routed file(s) could not
+    be scanned)` at exit 1. The filename carries the pid so two xdist workers
+    cannot delete each other's probe.
+    """
+    bad = ROOT / "tests" / f"_content_guard_probe-{os.getpid()}.md"
+    bad.write_bytes(b"ok\xff\xfe bad\n")
     try:
         proc = subprocess.run(
             [PY, str(ROOT / "scripts" / "content-guard.py"), "--files",
              bad.relative_to(ROOT).as_posix()],
             cwd=ROOT, capture_output=True, text=True, timeout=120)
         combined = proc.stdout + proc.stderr
-        # The file may be filtered out before the read as a non-text path; what
-        # must never happen is a clean verdict over a file that WAS read and
-        # failed. Assert the reporting path exists and is wired.
-        src = (ROOT / "scripts" / "content-guard.py").read_text(encoding="utf-8")
-        assert "were NOT scanned" in src, (
-            "a bare `continue` let an unreadable engine-routed file pass a gate "
-            f"whose whole purpose is that nothing unscanned ships. Run said: "
-            f"{combined!r}"
+        assert proc.returncode != 0, (
+            "a gate whose whole purpose is that nothing unscanned ships exited "
+            f"0 over a file it could not read:\n{combined}"
         )
-        assert "unscanned.append" in src
+        assert "were NOT scanned" in combined, combined
+        assert bad.name in combined, combined
+        assert "REFUSED" in combined, combined
     finally:
         bad.unlink(missing_ok=True)
 

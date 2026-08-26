@@ -15,17 +15,21 @@ ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
 INDEX = DOCS / "assets" / "search-index.json"
 
-# The 8 category pages the split produced, plus the rebuilt catalog index.
-CATEGORY_PAGES = [
-    "skills-intel.html",
-    "skills-communication.html",
-    "skills-content-design.html",
-    "skills-crm.html",
-    "skills-strategy.html",
-    "skills-operations-daily.html",
-    "skills-operations-quality.html",
-    "skills-operations-infra.html",
-]
+# Derived from disk, not written down. The literal list of eight that used to
+# live here only ever checked the pages that existed the day it was typed: a
+# ninth category page added by the generator would have been indexed or not
+# indexed with nothing to say so. `skills-mcp-plugins.html` is excluded because
+# it is a hand-authored page about plugins, not a generated skill category.
+CATEGORY_PAGES = sorted(
+    p.name for p in DOCS.glob("skills-*.html")
+    if p.name != "skills-mcp-plugins.html"
+)
+# Floor, so a moved docs directory or a renamed prefix reports as a failure
+# rather than as eight silently-skipped assertions.
+assert len(CATEGORY_PAGES) >= 8, (
+    f"only {len(CATEGORY_PAGES)} category page(s) found under {DOCS}; "
+    "the split produced eight"
+)
 
 
 def _records() -> list[dict]:

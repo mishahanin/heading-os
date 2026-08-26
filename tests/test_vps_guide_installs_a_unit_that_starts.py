@@ -153,9 +153,16 @@ def test_the_rendered_unit_passes_systemd(tmp_path):
     result = subprocess.run(["systemd-analyze", "verify", str(staged)],
                             capture_output=True, text=True)
     combined = result.stdout + result.stderr
-    assert "fatal error" not in combined, (
-        f"the substitution the guide prescribes still yields a bad unit: {combined!r}"
+    # The exit code IS the contract the test's name states. `systemd-analyze
+    # verify` rejects a unit with exit 1 for whole classes of defect without
+    # ever printing the words "fatal error", so the substring check alone let a
+    # unit that systemd refuses pass a test called "passes systemd". The
+    # substring stays as the failure message, not as the assertion.
+    assert result.returncode == 0, (
+        f"the substitution the guide prescribes yields a unit systemd refuses "
+        f"(exit {result.returncode}): {combined!r}"
     )
+    assert "fatal error" not in combined, combined
 
 
 # --- the sync timer must not run privileged code from a pulled tree -----------

@@ -42,7 +42,11 @@ def _setup_wizard_banner(workspace_root):
         if result.returncode != 0:
             return
         payload = json.loads(result.stdout)
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError):
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError) as exc:
+        # A half-finished setup that never gets its nudge because the status
+        # probe times out looks identical to a finished one. Say so once.
+        print(f"session-start: setup status unavailable "
+              f"({exc.__class__.__name__}): {exc}", file=sys.stderr)
         return
     pct = payload.get("completion_pct", 100)
     if pct >= 100:

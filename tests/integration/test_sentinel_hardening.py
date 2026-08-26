@@ -85,8 +85,13 @@ def test_meeting_duration_calc_with_incompatible_datetime(
         "meeting duration calc fallback" in msg for msg in debug_messages
     ), f"Expected 'meeting duration calc fallback' in debug logs. Got: {debug_messages}"
 
-    # The method should not crash; returns a list (may be empty or with the invite)
-    assert isinstance(result, list)
+    # And the invite SURVIVES the failed subtraction with the documented
+    # fallback value. `isinstance(result, list)` was the only outcome check
+    # here, and check_new_invites returns a list on every path including the
+    # ones that drop the invite entirely, so a handler changed to `continue`
+    # would have passed.
+    assert len(result) == 1, result
+    assert result[0]["duration_minutes"] == 0, result[0]
 
 
 # ---------------------------------------------------------------------------
@@ -121,9 +126,14 @@ def test_theme_classify_llm_fails_falls_back_to_keywords(
         engine, "_classify_theme_llm",
         side_effect=FakeAPIConnectionError("network dropped"),
     ):
-        # Monday (weekday=0) has theme "Tribe"; subject mentions "Product"
+        # Monday (weekday=0) has theme "Tribe". Four "Technical & Product"
+        # keywords, which is what makes the fallback OBSERVABLE: the keyword
+        # path only speaks when the winning theme scores at least 2 and differs
+        # from the day theme. The old subject, "Product discussion", scored 1,
+        # so the fallback ran and returned "" - and `isinstance(result, str)`
+        # could not tell that apart from the fallback never running at all.
         result = engine._check_theme_alignment(
-            subject="Product discussion",
+            subject="Sprint demo and architecture review",
             body="Lorem ipsum",
             weekday=0,
         )
@@ -134,8 +144,10 @@ def test_theme_classify_llm_fails_falls_back_to_keywords(
         "LLM theme classification fallback" in msg for msg in debug_messages
     ), f"Expected fallback debug log. Got: {debug_messages}"
 
-    # Result is a string (either empty or a mismatch message); no crash.
-    assert isinstance(result, str)
+    # And the keyword matcher reached its verdict, which is the whole point of
+    # falling back rather than giving up.
+    assert "Technical & Product" in result, result
+    assert "Tribe" in result, result
 
 
 # ---------------------------------------------------------------------------
@@ -166,9 +178,11 @@ def test_theme_classify_custom_exception_falls_back(
         engine, "_classify_theme_llm",
         side_effect=ValueError("unexpected shape in LLM response"),
     ):
-        # Should not raise; broad except should catch ValueError just like APIConnectionError
+        # Should not raise; broad except should catch ValueError just like
+        # APIConnectionError. Same observable subject as the sibling above, and
+        # for the same reason.
         result = engine._check_theme_alignment(
-            subject="Product discussion",
+            subject="Sprint demo and architecture review",
             body="Lorem ipsum",
             weekday=0,
         )
@@ -178,7 +192,8 @@ def test_theme_classify_custom_exception_falls_back(
         "LLM theme classification fallback" in msg for msg in debug_messages
     ), f"Expected fallback debug log even for custom exception. Got: {debug_messages}"
 
-    assert isinstance(result, str)
+    assert "Technical & Product" in result, result
+    assert "Tribe" in result, result
 
 
 # ---------------------------------------------------------------------------

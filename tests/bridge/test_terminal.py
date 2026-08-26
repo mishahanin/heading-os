@@ -226,18 +226,36 @@ def test_context_oversize_silently_drops():
     assert "BRIDGE_CONTEXT" not in inner
 
 
-def test_context_unserializable_silently_drops():
-    """Non-JSON-serializable values fall through to no env var, no crash."""
+def test_an_object_json_cannot_encode_is_stringified_not_dropped():
+    """Named for what happens, and asserting it.
+
+    This was `test_context_unserializable_silently_drops`, and its only
+    assertion was `isinstance(inner, str)` on a value that is a string by
+    construction. Worse, the name said the opposite of the behaviour: its own
+    comment admitted "default=str in json.dumps actually handles arbitrary
+    objects, so this WILL serialize", and then asserted neither outcome. A
+    reader took the name for a contract that does not exist, and a change from
+    `default=str` to a real TypeError would not have failed anything here.
+
+    `_encode_context` calls `json.dumps(context, default=str)`, so an arbitrary
+    object becomes its `repr`. The env var IS set. The launch does not fail.
+    That is the contract.
+    """
+    import base64
+    import json as _json
+    import re as _re
+
     class Weird:
         pass
     cmd = build_wt_command("misha", "t", "/synthetic-cwd", "osint", None,
                            context={"obj": Weird()})
     inner = cmd[-1]
-    # default=str in json.dumps actually handles arbitrary objects, so
-    # this WILL serialize. The test docs the safety contract.
-    # If TypeError raised, _encode_context returns None and we'd see no env.
-    # Either outcome is acceptable; just must not raise.
-    assert isinstance(inner, str)
+    m = _re.search(r"set BRIDGE_CONTEXT=([A-Za-z0-9+/=]+)&&", inner)
+    assert m, f"the object was dropped instead of stringified: {inner!r}"
+    decoded = _json.loads(base64.b64decode(m.group(1)).decode("utf-8"))
+    assert set(decoded) == {"obj"}, decoded
+    assert isinstance(decoded["obj"], str), decoded
+    assert "Weird" in decoded["obj"], decoded
 
 
 # Initial-prompt builder: action+context -> ASCII-safe `claude "prompt"`

@@ -132,13 +132,22 @@ def test_a_null_sources_field_is_graded_not_a_traceback(tmp_path):
     assert "Traceback" not in proc.stderr
 
 
+@needs_gradable_corpus
 def test_an_answer_that_is_not_an_object_is_graded_not_a_traceback(tmp_path):
+    """"Graded" is the claim, so the exit code has to say grading happened.
+
+    Without the marker and the returncode assertion this passed on any clone
+    with no private data overlay: the grader refuses at exit 2 before it grades
+    anything, prints no traceback, and the test called that a pass. The sibling
+    directly above already carries both.
+    """
     answers = tmp_path / "a.json"
     answers.write_text(json.dumps({"answers": [
         {"question_id": "agg-01", "answer": "not an object"},
     ]}), encoding="utf-8")
 
     proc = _bench("--score", str(answers), "--no-write")
+    assert proc.returncode in (0, 1), proc.stdout + proc.stderr
     assert "Traceback" not in proc.stderr, proc.stderr
 
 

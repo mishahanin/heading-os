@@ -370,9 +370,12 @@ def test_launch_with_session_id(workspace_root):
     assert r.status_code == 200
     body = r.json()
     assert body["launched"] is True
-    # POSIX spawn_or_focus issues two Popen calls (tmux session create, then GUI
-    # attach); the session_id rides the first. Search across all calls so the
-    # assertion is OS-portable (Windows = 1 call, macOS/Linux = 2).
+    # The session_id rides the tmux session-create call, which is always the
+    # FIRST Popen. How many calls follow it depends on the platform AND on
+    # whether a graphical session exists: macOS always attaches, Linux attaches
+    # only with DISPLAY or WAYLAND_DISPLAY set. This directory now pins headless
+    # (see the autouse fixture in conftest.py), so Linux is one call here and on
+    # CI alike. Searching across all calls stays correct either way.
     all_args = " ".join(a for call in mock_popen.call_args_list for a in call[0][0])
     assert "abc123" in all_args
 
@@ -453,8 +456,18 @@ def test_launch_no_session_no_cwd_omits_resume(workspace_root):
             headers={"Authorization": "Bearer t1"},
             json={"action": "osint"})
     assert r.status_code == 200
-    joined = " ".join(mock_popen.call_args[0][0])
-    assert "--resume" not in joined
+    # The FIRST Popen call, not the last. `call_args` is the last one, and on a
+    # host with a graphical session that is the terminal-attach argv
+    # (`wt.exe -e tmux attach -t 31c-misha`), which can never contain
+    # `--resume` whatever the launch path does. The assertion was true by
+    # construction of an argv the test does not care about. Measured
+    # 2026-08-27: a mutation making the daemon substitute a stale session id
+    # for a missing one left this test, and the whole bridge suite, green.
+    create_call = " ".join(mock_popen.call_args_list[0][0][0])
+    assert "--resume" not in create_call, create_call
+    # And a positive anchor, so `claude --resume None` cannot pass by not
+    # containing the literal `--resume` with a space after it.
+    assert create_call.rstrip().endswith("claude"), create_call
 
 
 def test_return_opens_browser(workspace_root):

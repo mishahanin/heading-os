@@ -89,7 +89,13 @@ def main() -> int:
             command,
             cwd=str(WORKSPACE), capture_output=True, text=True, timeout=BUDGET_SECONDS,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        # One line, then degrade. Returning 0 silently made a checker that
+        # times out on EVERY turn look exactly like a clean tree, which is the
+        # shape SEC-007 exists to refuse: a control whose failure is
+        # indistinguishable from its success.
+        print(f"turn-check: checker unavailable ({exc.__class__.__name__}): {exc}",
+              file=sys.stderr)
         return 0
 
     try:

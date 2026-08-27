@@ -8,7 +8,7 @@ ratios from past compressions (Battle Card: 87%, Executive Summary: 89%).
 
 Usage:
     python scripts/compression-candidates.py                   # default: datastore/, skip _archive/
-    python scripts/compression-candidates.py --path corporate  # scan specific subfolder
+    python scripts/compression-candidates.py --path datastore/corporate  # scan specific subfolder
     python scripts/compression-candidates.py --include-archive # include _archive/ folders
     python scripts/compression-candidates.py --min-mb 5        # only files >= 5MB
     python scripts/compression-candidates.py --format json     # JSON output
@@ -32,7 +32,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.utils.workspace import get_workspace_root
+from scripts.utils.workspace import get_workspace_root, get_datastore_dir
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
 
 # Per-extension size thresholds (MB) and estimated NXPowerLite compression ratio (midpoint).
@@ -46,6 +46,27 @@ PROFILES = {
 }
 
 
+def _resolve_scan_root(rel: str) -> Path:
+    """Resolve a `--path` argument through the engine/data seam.
+
+    `datastore/` lives in the DATA overlay, never in the engine clone. This
+    joined `--path` onto `get_workspace_root()`, the ENGINE root, so the DEFAULT
+    invocation - and every one in this file's own usage block - resolved to
+    `<engine>/datastore`, a directory that does not exist and by design never
+    will. Measured 2026-08-27: `python scripts/compression-candidates.py` with
+    no arguments printed "Path not found" and exited 1. Ten other scripts
+    already reach the same tree through `get_datastore_dir()`; this was the
+    outlier that built the path by hand.
+
+    A path at or under `datastore` resolves through the seam. Anything else
+    stays engine-relative, so `--path docs` still means what it says.
+    """
+    parts = Path(rel).parts
+    if parts and parts[0] == "datastore":
+        return get_datastore_dir().joinpath(*parts[1:])
+    return get_workspace_root() / rel
+
+
 def human_size(bytes_: int) -> str:
     for unit in ("B", "KB", "MB", "GB"):
         if bytes_ < 1024:
@@ -55,28 +76,46 @@ def human_size(bytes_: int) -> str:
 
 
 def scan(root: Path, include_archive: bool, min_mb: float) -> list[dict]:
+    """Rank the compressible documents under `root`.
+
+    ONE walk, matching on the lower-cased suffix. It was four walks of
+    `rglob(f"*{ext}")` with a lower-case pattern, and `rglob` is case-SENSITIVE
+    on Linux - so a document named `REPORT.PDF` or `Deck.PPTX` was invisible to
+    the scan whatever its size, and the report said nothing about having skipped
+    it. Measured on the live datastore 2026-08-27: 376 documents match the four
+    types and one (`TCO_DPI.XLSX`) carries an upper-case suffix. That one is
+    under its threshold anyway, which is exactly why this never surfaced - the
+    walk that would miss a 30 MB `.PDF` from a partner looks identical to a
+    correct one until the day it matters.
+
+    `_archive` is matched against the path RELATIVE to the scan root, so a
+    directory called `_archive` in the tree's ancestry cannot exclude every file
+    under it.
+    """
     candidates = []
-    for ext, profile in PROFILES.items():
+    for f in root.rglob("*"):
+        profile = PROFILES.get(f.suffix.lower())
+        if profile is None:
+            continue
+        if not include_archive and "_archive" in f.relative_to(root).parts:
+            continue
+        if not f.is_file():
+            continue
         threshold_bytes = max(profile["threshold_mb"], min_mb) * 1024 * 1024
-        for f in root.rglob(f"*{ext}"):
-            if not include_archive and "_archive" in f.parts:
-                continue
-            if not f.is_file():
-                continue
-            size = f.stat().st_size
-            if size < threshold_bytes:
-                continue
-            estimated = int(size * profile["retained_ratio"])
-            candidates.append({
-                "path": str(f.relative_to(root.parent)),
-                "folder": str(f.parent.relative_to(root.parent)),
-                "name": f.name,
-                "ext": ext,
-                "size_bytes": size,
-                "est_compressed_bytes": estimated,
-                "est_saving_bytes": size - estimated,
-                "saving_label": profile["saving_label"],
-            })
+        size = f.stat().st_size
+        if size < threshold_bytes:
+            continue
+        estimated = int(size * profile["retained_ratio"])
+        candidates.append({
+            "path": str(f.relative_to(root.parent)),
+            "folder": str(f.parent.relative_to(root.parent)),
+            "name": f.name,
+            "ext": f.suffix.lower(),
+            "size_bytes": size,
+            "est_compressed_bytes": estimated,
+            "est_saving_bytes": size - estimated,
+            "saving_label": profile["saving_label"],
+        })
     candidates.sort(key=lambda c: c["size_bytes"], reverse=True)
     return candidates
 
@@ -183,8 +222,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, help="Write output to file instead of stdout")
     args = parser.parse_args()
 
-    workspace = get_workspace_root()
-    scan_root = workspace / args.path
+    scan_root = _resolve_scan_root(args.path)
     if not scan_root.exists():
         print(f"{RED}Path not found: {scan_root}{RESET}", file=sys.stderr)
         return 1

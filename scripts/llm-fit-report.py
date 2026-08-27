@@ -45,8 +45,21 @@ def _local_today_iso() -> str:
     return datetime.now(ZoneInfo(get_default_tz_name())).strftime("%Y-%m-%d")
 
 
-def fetch_traces(days: int, page_size: int = 100) -> list:
-    """Page through Langfuse traces in the window. Returns a flat list."""
+def fetch_traces(days: int, page_size: int = 100) -> tuple[list, str | None]:
+    """Page through Langfuse traces in the window.
+
+    Returns ``(traces, truncation_reason)``. The reason is None only when the
+    walk reached the end of the window; otherwise it is a sentence naming why it
+    stopped, and the caller must carry it into the report.
+
+    It returned the bare list, and both early exits - a failed page and the
+    50-page cap - printed a WARN to stderr and handed back a PARTIAL set with no
+    signal. The report is a FILE, so stderr is not in it: `render_markdown` then
+    printed "Window: last N days" over a walk that had covered part of it, and
+    every per-skill count and percentile below was computed on the fragment.
+    That is the shape `.claude/rules/scope-claims.md` names - the method
+    enumerated some pages, the sentence asserted a window.
+    """
     from langfuse import get_client
     client = get_client()
     api = client.api
@@ -54,11 +67,14 @@ def fetch_traces(days: int, page_size: int = 100) -> list:
 
     out: list = []
     page = 1
+    truncated: str | None = None
     while True:
         try:
             resp = api.trace.list(from_timestamp=cutoff, page=page, limit=page_size)
         except Exception as e:
-            print(f"{YELLOW}WARN langfuse query failed at page {page}: {e}{RESET}", file=sys.stderr)
+            truncated = (f"the Langfuse query failed at page {page} after "
+                         f"{len(out)} trace(s): {e}")
+            print(f"{YELLOW}WARN {truncated}{RESET}", file=sys.stderr)
             break
         batch = list(resp.data or [])
         if not batch:
@@ -69,9 +85,11 @@ def fetch_traces(days: int, page_size: int = 100) -> list:
         page += 1
         # Safety cap so a runaway query doesn't burn API budget.
         if page > 50:
-            print(f"{YELLOW}WARN fetched 50 pages ({len(out)} traces); stopping{RESET}", file=sys.stderr)
+            truncated = (f"stopped at the 50-page safety cap with {len(out)} "
+                         f"trace(s); more traces exist in this window")
+            print(f"{YELLOW}WARN {truncated}{RESET}", file=sys.stderr)
             break
-    return out
+    return out, truncated
 
 
 def _extract_signals(trace) -> dict | None:
@@ -162,12 +180,22 @@ def aggregate(traces: list) -> dict:
     }
 
 
-def render_markdown(agg: dict, window_days: int, run_iso: str, total_traces: int) -> str:
+def render_markdown(agg: dict, window_days: int, run_iso: str, total_traces: int,
+                    truncated: str | None = None) -> str:
     today = _local_today_iso()
     lines: list[str] = []
     lines.append(f"# LLM-fit report - {today}")
     lines.append("")
-    lines.append(f"Window: last {window_days} days. Run: {run_iso}. "
+    if truncated:
+        # First, above the window sentence, because everything below it -
+        # counts, percentages, medians, the P90 - was computed on the fragment.
+        lines.append(f"> **INCOMPLETE FETCH.** {truncated}. Every number below "
+                     f"covers only the traces that were fetched, not the whole "
+                     f"window. Re-run before acting on it.")
+        lines.append("")
+    scope = "last {} days".format(window_days) if not truncated else (
+        "part of the last {} days (see the notice above)".format(window_days))
+    lines.append(f"Window: {scope}. Run: {run_iso}. "
                  f"Traces with llm_fallback metadata: {sum(b['total'] for b in agg.values())} "
                  f"(of {total_traces} fetched).")
     lines.append("")
@@ -258,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
     run_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     print(f"{CYAN}Fetching Langfuse traces (last {args.days}d)...{RESET}", file=sys.stderr)
-    traces = fetch_traces(args.days)
+    traces, truncated = fetch_traces(args.days)
     print(f"{GRAY}  {len(traces)} traces fetched{RESET}", file=sys.stderr)
 
     agg = aggregate(traces)
@@ -268,11 +296,14 @@ def main(argv: list[str] | None = None) -> int:
             "run_iso": run_iso,
             "window_days": args.days,
             "total_traces_fetched": len(traces),
+            # Present and null on a complete walk, so a consumer that reads this
+            # key gets an answer rather than a KeyError it may treat as "fine".
+            "truncated": truncated,
             "buckets": agg,
         }, indent=2))
         return 0
 
-    md = render_markdown(agg, args.days, run_iso, len(traces))
+    md = render_markdown(agg, args.days, run_iso, len(traces), truncated)
     if args.no_write:
         print(md)
     else:

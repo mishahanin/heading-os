@@ -8,13 +8,15 @@ structurally incapable of mutating anything under .claude/skills/.
 Eligibility is a two-signal deterministic gate (no model classification):
   1. The principle is `type: principle` and has a non-empty `## Application`
      section (the how-to *shape*).
-  2. The principle is *reflection-derived* - its Evidence body carries the
-     "Matured from ... `reflect`" attribution string that every reflect-matured
-     principle gets. This is the discriminator: a high-confidence book/teach
-     principle with an `## Application` section (e.g. ceo-growth-treadmill, which
-     even has episode-id-shaped `sources`) is correctly refused, because the
-     thing that belongs in a 31C skill checklist is a lived, episode-matured
-     how-to, not a book abstraction.
+  2. The principle is *reflection-derived* - a LINE of its Evidence body opens
+     with "Matured from", and the body names `reflect`. This is the
+     discriminator: a high-confidence book/teach principle with an
+     `## Application` section (e.g. ceo-growth-treadmill, which even has
+     episode-id-shaped `sources`) is correctly refused, because the thing that
+     belongs in a 31C skill checklist is a lived, episode-matured how-to, not a
+     book abstraction. The anchor is what makes it a discriminator rather than a
+     word-presence test; see the comment on `_MATURED_LINE_RE` for the corpus
+     measurement behind it.
 
 Public surface:
   build_proposal(principle_path, skill_name, *, workspace_root=None,
@@ -42,8 +44,42 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from scripts.utils.markdown import parse_frontmatter
 from scripts.utils.workspace import get_workspace_root, get_knowledge_dir
 
-# A reflection-derived principle's Evidence body carries this attribution.
-_REFLECTION_RE = re.compile(r"matured from\b.*?\breflect", re.IGNORECASE | re.DOTALL)
+# A reflection-derived principle's Evidence body carries this attribution, and
+# the gate is two anchored signals rather than one unbounded span.
+#
+# It was `re.compile(r"matured from\b.*?\breflect", DOTALL|IGNORECASE)`: any
+# "matured from" plus any word STARTING with "reflect" anywhere after it,
+# whatever sat between. Measured 2026-08-27 on the live corpus of 294
+# principles, that matched `channel-is-structural-in-cybersecurity` across 2,280
+# characters and several sections - its "matured from" is mid-sentence prose
+# ("it now has 31C's own controlled comparison, matured from ...") and its
+# `reflect` sits in a heading three paragraphs earlier. The gate decides whether
+# a principle may be proposed into a 31C skill checklist, so an over-match puts
+# a book abstraction where a lived how-to belongs, which is the one outcome this
+# module's docstring says it "correctly refuses".
+#
+# The first bound tried here was a single line, and the CORPUS refuted it: two
+# genuine principles wrap the attribution over one line break
+# (`proximity-to-the-counterpart-decides-who-acts`,
+# `split-the-irreversible-stage-from-the-replayable-one`), so a same-line rule
+# would have refused two real ones to catch one false one. What separates them
+# is not distance, it is POSITION: a provenance line begins with the words. The
+# 21 principles whose line starts this way are exactly the 21 that also carry
+# the `CEO-confirmed in \`reflect\`` attribution, with no member on either side
+# alone - so the anchor is the discriminator and the word check stays loose
+# rather than pinning a phrase that may be reworded.
+_MATURED_LINE_RE = re.compile(r"^\s*(?:\*\*)?Matured from\b", re.IGNORECASE | re.MULTILINE)
+_REFLECT_WORD_RE = re.compile(r"\breflect\b", re.IGNORECASE)
+
+
+def _is_reflection_derived(body: str) -> bool:
+    """True when the body carries a reflection-derived provenance line.
+
+    Two signals, both required: a line that OPENS with "Matured from" (the
+    provenance claim, which mid-sentence prose cannot impersonate), and the word
+    `reflect` somewhere in the body (the maturation tool that wrote it).
+    """
+    return bool(_MATURED_LINE_RE.search(body) and _REFLECT_WORD_RE.search(body))
 # Headings that make a natural checklist insertion point, most-specific first.
 _SECTION_RE = re.compile(r"^#{2,}\s+.*(checklist|pre-?flight|phase|steps)", re.IGNORECASE)
 _ANY_HEADING_RE = re.compile(r"^#{1,6}\s+")
@@ -128,7 +164,7 @@ def build_proposal(
     if not application:
         return {"ok": False, "error": "not a how-to principle (no Application section)"}
 
-    if not _REFLECTION_RE.search(body):
+    if not _is_reflection_derived(body):
         return {"ok": False,
                 "error": "not reflection-derived (book/abstraction principle, not a lived 31C how-to)"}
 

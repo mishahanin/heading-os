@@ -12,6 +12,9 @@ from typing import List, Dict, Optional
 # same marker means a different URL in every angle. Our source_ids are global.
 # Handing both to the model unremapped is what made it echo local numbers.
 _MARKER = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+# Same marker, plus the whitespace that precedes it, for the unsourced case
+# where the marker is deleted rather than renumbered.
+_UNSOURCED_MARKER = re.compile(r"[ \t]*" + _MARKER.pattern)
 
 
 def _remap_inline_citations(content: str, source_ids: List[int]) -> str:
@@ -19,9 +22,25 @@ def _remap_inline_citations(content: str, source_ids: List[int]) -> str:
 
     A marker outside the angle's source range is not a citation (a footnote, a
     literal array index, a version number in brackets) and is left untouched.
+
+    An angle with NO sources has every marker STRIPPED, not passed through. The
+    early return here used to hand the content back untouched, so an unsourced
+    angle's local `[1]` travelled verbatim into a corpus whose prompt states, in
+    its own words, that "the ids are GLOBAL" and tells the model to cite the id
+    printed in the corpus. The model then read `[1]` as global source 1, which
+    belongs to a different angle entirely - and attributed a claim to a source
+    that never supported it. That is precisely the failure the remap was written
+    to end, surviving in the one branch that returned before doing any work.
+    Reproduced 2026-08-27.
+
+    Stripping rather than remapping is the only honest option: there is no id to
+    map to. What the reader loses is a number that pointed at nothing.
     """
     if not source_ids:
-        return content
+        # The space before the marker goes with it, or "A [1] and B [2]." would
+        # be handed to the model as "A  and B ." - two artefacts a reader (and a
+        # model) reads as damage rather than as a deliberate removal.
+        return _UNSOURCED_MARKER.sub("", content)
 
     def sub(match: re.Match) -> str:
         parts = [p.strip() for p in match.group(1).split(",")]
@@ -68,7 +87,12 @@ def build_reason_prompt(question: str, corpus: List[Dict],
     blocks = []
     for item in corpus:
         sids = item.get("source_ids", [])
-        if url_for:
+        if not sids:
+            # Said in words, because an empty Sources block rendered as a bare
+            # blank line and the model had no way to read it as "unsourced".
+            listing = "  (none - this angle returned no sources; its claims are "
+            listing += "uncited and must not be attributed to any id below)"
+        elif url_for:
             listing = "\n".join(f"  [{i}] {url_for.get(i, '(url unrecorded)')}" for i in sids)
         else:
             listing = "  " + ", ".join(f"[{i}]" for i in sids)

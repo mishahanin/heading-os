@@ -83,6 +83,74 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- **Six checks each admitted the one thing it was written to refuse.** Every one
+  was reproduced by running it before a line changed, which matters because the
+  workflow panel that surfaced them refuted 0 of 16 findings, and a verifier that
+  never refutes is a rubber stamp. Guard:
+  `tests/test_six_guards_that_said_yes_to_what_they_refuse.py` (43 tests).
+  - `scripts/utils/optdeps.py` counted an EMPTY DIRECTORY anywhere on
+    `sys.path` - a PEP-420 namespace package - as an installed dependency.
+    `find_spec` returns a real spec for one and `import_module` returns a real
+    module, so `available()` answered True and `require()` handed its caller an
+    object whose every attribute access raises `AttributeError`: the
+    stack-trace-instead-of-a-message outcome the module exists to prevent, with
+    the operator never told to run `uv sync --extra <group>`. The first fix
+    refused every namespace package and the SUITE refuted it in one run -
+    `google` is legitimately one, which is how `google.auth`, `google.oauth2`
+    and `google.protobuf` ship as separate distributions into one directory, and
+    `gmail_auth.get_service()` calls `require("google", ...)`. Emptiness is the
+    test, not the shape: measured in this venv, `google` has 12 entries and the
+    phantom directory has 0. `available()` also answers False now instead of
+    raising when a parent package is missing, and an unreadable search location
+    is never read as empty.
+  - `scripts/utils/odin_skill_proposal.py`'s reflection gate was
+    `r"matured from\b.*?\breflect"` with `re.DOTALL`, so the two words anywhere
+    in a document satisfied it. On the live corpus of 294 principles it matched
+    one across 2,280 characters and several sections, where "matured from" is
+    mid-sentence prose and `reflect` sits in an earlier heading. The gate decides
+    whether a principle may be proposed into a 31C skill checklist, so an
+    over-match puts a book abstraction where a lived how-to belongs, which is the
+    case the module docstring says it "correctly refuses". Replaced by two
+    anchored signals: a LINE that opens with "Matured from", plus the word
+    `reflect` in the body. A first attempt bounded it to one line and the corpus
+    refuted that - two genuine principles wrap the attribution over a newline -
+    so the anchor, not the distance, is the discriminator. 22 passing before, 21
+    after; the only file dropped is the false positive.
+  - `scripts/utils/docx_font_embed.py`'s `_patch_content_types` replace branch
+    used `[^/>]*`, which cannot cross a slash, and every real ContentType value
+    carries one. The branch was dead, the insert branch ran in its place, and a
+    `[Content_Types].xml` that already declared `ttf` gained a SECOND
+    `<Default Extension="ttf">` - which OPC forbids - with the stale ContentType
+    left underneath. Reproduced: one in, two out, growing by one on every
+    re-embed. The identical defect was fixed in `_build_font_rels` forty lines
+    above and not here.
+  - `scripts/utils/deep_research_prompts.py` returned an unsourced angle's
+    content untouched, so its local `[1]` travelled into a corpus whose own
+    prompt states "the ids are GLOBAL" and tells the model to cite the id
+    printed. The model read it as global source 1, which belongs to a different
+    angle, and attributed a claim to a source that never supported it - exactly
+    what the remap was written to end, surviving in the branch that returned
+    first. Markers are now stripped, and an angle with no sources says so in
+    words instead of rendering a blank Sources line.
+  - `scripts/llm-fit-report.py`'s `fetch_traces` returned a bare list from both
+    early exits, a failed page and the 50-page cap, warning only on stderr. The
+    report is a FILE, so the caveat was not in it: it printed "Window: last N
+    days" over a partial walk and every count, percentage and percentile below
+    was computed on the fragment. It now returns the reason beside the traces and
+    the report leads with an INCOMPLETE FETCH notice.
+  - `scripts/compression-candidates.py` joined `--path` onto the ENGINE root,
+    but `datastore/` lives in the DATA overlay, so the default invocation and
+    every example in the script's own usage block resolved to a directory that
+    by design never exists: "Path not found", exit 1. Ten other scripts already
+    reach that tree through `get_datastore_dir()`. Two further defects in the
+    same `scan()`, fixed because leaving a known one in a file being edited is
+    how a second copy outlives the first: `rglob("*.pdf")` is case-SENSITIVE on
+    Linux, so `REPORT.PDF` was invisible at any size (one such file exists in
+    the live datastore today, under its threshold, which is why it never
+    surfaced); and `"_archive" in f.parts` read the ABSOLUTE path, so one
+    directory named `_archive` in the tree's ancestry would have excluded every
+    file beneath it. The sibling `output-organizer.py` carries a fix-comment for
+    that second one already.
 - **A newline in any router cell split the generated table row in half, and
   both gates ratified it.** `scripts/generate-skill-router.py` type-checked the
   container and each item but never the cell CONTENT, so a trigger written as a

@@ -162,9 +162,23 @@ def _patch_content_types(xml: str) -> str:
         f'<Default Extension="ttf" ContentType="{OBFUSCATED_FONT_CONTENT_TYPE}"/>'
     )
 
-    # Existing default for ttf - replace it
+    # Existing default for ttf - replace it.
+    #
+    # `[^>]*`, not `[^/>]*`, and for the reason spelled out in `_build_font_rels`
+    # forty lines above: a character class excluding `/` cannot cross one, and
+    # EVERY real ContentType value carries a slash
+    # (`application/vnd.openxmlformats-officedocument.obfuscatedFont`). So this
+    # branch could never match anything Word or python-docx writes. It was dead,
+    # the insert branch below ran in its place, and a `[Content_Types].xml` that
+    # already declared `ttf` gained a SECOND `<Default Extension="ttf">` -
+    # duplicate Default extensions, which OPC forbids, plus the old wrong
+    # ContentType left in place beneath the new one. Reproduced 2026-08-27: one
+    # ttf Default in, two out. The fix landed in the sibling function and not in
+    # this one; a second copy of a defect is the copy that stops being fixed.
+    # `[^>]*` still cannot leave the element, because a well-formed attribute
+    # value writes `&gt;` rather than a bare `>`.
     existing_re = re.compile(
-        r'<Default\s+Extension="ttf"[^/>]*/>',
+        r'<Default\s+Extension="ttf"[^>]*/>',
         re.IGNORECASE,
     )
     if existing_re.search(xml):

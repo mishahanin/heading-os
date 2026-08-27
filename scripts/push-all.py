@@ -8,8 +8,12 @@ The two-part topology has two git repos:
 This is the standing "always push both" routine. The DATA overlay goes FIRST: the
 engine's pre-push hook runs the full suite inside the push, and data is the only
 half that cannot be reconstructed. For each repo it:
-  1. runs a pre-push secret scan and refuses to push if a tracked file looks
-     like a credential (.env, .session, cookies.json, .sessions/);
+  0. scans the CONTENT of everything about to be pushed for secrets, and for the
+     engine also runs the routing and real-entity walls. All of this happens
+     BEFORE the commit, so a secret is never written into local history;
+  1. refuses to push if any file this push would CARRY -- tracked or merely
+     untracked-and-not-ignored -- looks like a credential by NAME (.env,
+     .session, cookies.json, .sessions/);
   2. asserts the rebuildable index (.memory-index/) is not tracked;
   3. commits staged changes (git add -A) unless --no-commit;
   4. checks the push PRECONDITIONS: the remote is one this repository may push
@@ -65,7 +69,11 @@ ensure_venv()
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.content_denylist import build_denylist
 from scripts.utils.denial_log import CONTEXT_ENV, log_denial
-from scripts.utils.engine_guard import engine_text_files, scan_engine_repo
+from scripts.utils.engine_guard import (
+    engine_text_files,
+    repo_carried_paths,
+    scan_engine_repo,
+)
 from scripts.utils.git_push import remote_objection, supervised_push
 from scripts.utils.workspace import (
     get_default_tz,
@@ -380,12 +388,41 @@ def push_repo(name: str, repo: Path, message: str, do_commit: bool, dry_run: boo
     # Unbypassable -- runs before the commit, so even a working tree staged with
     # --no-verify cannot push a data-class artifact out of the engine. The DATA
     # repo legitimately carries private files and is exempt.
+    # 0a. secret CONTENT scan, for every repo, BEFORE the commit.
+    #
+    # It used to run at step 3.5, after this function's own `git add -A && git
+    # commit`. Nothing left the machine either way - the push was still refused -
+    # but the secret was in local history by then, so the repair was a history
+    # scrub instead of an edit. The two walls beside it have always run here, and
+    # `_push_delta_files`' own docstring says step 0 is deliberate "so that a tree
+    # staged with --no-verify cannot slip past". `scripts/publish-service.py`
+    # already scans before its `git add -A` for the same reason.
+    #
+    # No coverage is lost by moving it: `_push_delta_files` includes untracked
+    # files, so the set here is the same one the commit is about to create.
+    content_scan(repo)
+
     if is_engine:
         engine_clean_scan(repo)
         if data_root is not None:
             engine_content_scan(repo, data_root)
 
-    # 1. pre-push secret scan over tracked files
+    # 1. pre-push secret scan over every file this push would CARRY
+    #
+    # Tracked AND untracked-not-ignored, not `git ls-files` alone. Step 3 below
+    # runs `git add -A`, which makes untracked files tracked, and this wall never
+    # ran again - so a credential this very run was about to commit was never
+    # tested by it. The gap had no backstop either: `.gitignore` carries
+    # `.sessions/` and one exact `outputs/browser/cookies.json`, not a bare
+    # `*.session` or `cookies.json` rule, and `scripts/secret-scanner.py` lists
+    # `.session` in SKIP_EXTENSIONS - so the content scan returns clean for
+    # precisely this file type. A `telegram.session` dropped at the repo root
+    # walked through all three layers.
+    #
+    # `repo_carried_paths` is the shared resolver the routing wall at step 0
+    # already uses, so the two walls now agree about what "about to be pushed"
+    # means. It runs `-z` for both lists, which is what the paragraph below is
+    # about.
     #
     # `-z`, for the reason `_push_delta_files` records four hundred lines up and
     # this call site was left out of. Without it git C-quotes any path holding a
@@ -396,9 +433,9 @@ def push_repo(name: str, repo: Path, message: str, do_commit: bool, dry_run: boo
     # `.memory-index/` prefix test in step 2 outright. content_scan() is no
     # backstop -- it scans the push DELTA, and this step exists precisely for a
     # credential tracked long before the push.
-    tracked = [f for f in run(["git", "ls-files", "-z"], repo).stdout.split("\0") if f]
+    carried = repo_carried_paths(repo)
     leaks = [
-        f for f in tracked
+        f for f in carried
         if SECRET_TRACKED.search(f) and not f.endswith((".example", ".sample", ".template"))
     ]
     if leaks:
@@ -418,9 +455,15 @@ def push_repo(name: str, repo: Path, message: str, do_commit: bool, dry_run: boo
         print(f"{GRAY}Remove from the index (git rm --cached) and add to .gitignore.{RESET}")
         sys.exit(2)
 
-    # 2. assert the rebuildable index is not tracked
-    if any(f.startswith(".memory-index/") for f in tracked):
-        print(f"{RED}REFUSING TO PUSH — .memory-index/ is tracked (must be gitignored).{RESET}")
+    # 2. assert the rebuildable index is not going to be pushed
+    #
+    # `carried`, the same set as step 1 above. This read `git ls-files` alone,
+    # so an UNTRACKED and not-ignored `.memory-index/` passed here and was made
+    # tracked by `git add -A` three lines down - the same one-step-behind gap the
+    # filename wall had.
+    if any(f.startswith(".memory-index/") for f in carried):
+        print(f"{RED}REFUSING TO PUSH — .memory-index/ would be pushed "
+              f"(it is rebuildable and must be gitignored).{RESET}")
         sys.exit(2)
 
     # 3. commit staged changes
@@ -449,8 +492,6 @@ def push_repo(name: str, repo: Path, message: str, do_commit: bool, dry_run: boo
     else:
         print(f"{GRAY}no local changes to commit{RESET}")
 
-    # 3.5 content secret scan over everything about to be pushed (unbypassable)
-    content_scan(repo)
 
     # 4. per-repository push preconditions.
     #

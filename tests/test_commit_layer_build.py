@@ -18,6 +18,7 @@ Ollama up, and test nothing extra.
 """
 import importlib.util
 import subprocess
+import re
 import sys
 from pathlib import Path
 
@@ -109,7 +110,10 @@ def test_a_second_build_prunes_nothing_and_re_embeds_nothing(tmp_path, monkeypat
     out = capsys.readouterr().out
 
     assert second == first, "a no-op rebuild changed the store"
-    assert "0 files pruned" in out, out
+    # A word boundary, not a bare substring: "0 records pruned" also sits
+    # inside "10 records pruned", so the plain `in` passed a run that
+    # pruned ten.
+    assert re.search(r"\b0 records pruned\b", out), out
 
 
 def test_a_new_commit_is_added_without_re_embedding_the_old_ones(tmp_path, monkeypatch, capsys):
@@ -127,7 +131,10 @@ def test_a_new_commit_is_added_without_re_embedding_the_old_ones(tmp_path, monke
 
     titles = {r[3] for r in _rows(root, ".idx/index.db") if r[2] == "commit-engine"}
     assert titles == {"feat: first", "feat: second"}
-    assert "0 files pruned" in out, out
+    # A word boundary, not a bare substring: "0 records pruned" also sits
+    # inside "10 records pruned", so the plain `in` passed a run that
+    # pruned ten.
+    assert re.search(r"\b0 records pruned\b", out), out
 
 
 def test_a_commit_layer_not_in_this_store_is_not_built(tmp_path, monkeypatch):

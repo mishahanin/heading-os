@@ -119,6 +119,7 @@ def iter_commits(
     include_paths: bool = True,
     deny_prefixes: tuple = (),
     deny_segments: tuple = (),
+    stats: dict | None = None,
 ) -> Iterator[dict]:
     """Yield one dict per indexable commit, newest first.
 
@@ -129,6 +130,11 @@ def iter_commits(
     `include_paths` is the body variant the spec calls for measuring: with the
     changed-path list, "what touched the action queue" is answerable by meaning;
     without it, the vector is not diluted by filenames. Build both, measure both.
+
+    `stats` is how the air gap reports back. The refusal happens in here, so a
+    caller that counts its OWN denials counts zero for this walk and prints it
+    beside the ones it did see. `memory-index.py` printed "0 denied" for a pass
+    that refused commits, which reads as "nothing was withheld".
     """
     repo = Path(repo)
     if not _is_repo(repo):
@@ -160,6 +166,8 @@ def iter_commits(
         # Whole-commit denial. A commit with NO paths (empty or a plain merge)
         # cannot be denied by path, and is kept -- `any()` on [] is False.
         if any(is_denied(p, deny_prefixes, deny_segments) for p in changed):
+            if stats is not None:
+                stats["denied"] = stats.get("denied", 0) + 1
             continue
 
         text = body.strip()

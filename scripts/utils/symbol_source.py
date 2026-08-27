@@ -71,12 +71,17 @@ def iter_symbols(
     *,
     deny_prefixes: tuple = (),
     deny_segments: tuple = (),
+    stats: dict | None = None,
 ) -> Iterator[dict]:
     """Yield one dict per embeddable, readable, non-denied symbol.
 
     `root` is the repository the CodeGraph paths are relative to. Files are read
     once and cached for the whole walk, because a module with 80 functions would
     otherwise be read 80 times.
+
+    `stats` is how the air gap reports back, as in `commit_source.iter_commits`:
+    the refusal happens in here, so a caller counting its own denials counts
+    none of these and prints a total that reads as "nothing was withheld".
     """
     graph_db = Path(graph_db)
     if not graph_db.exists():
@@ -103,6 +108,8 @@ def iter_symbols(
 
     for node_id, kind, name, qname, rel, start, end, signature in rows:
         if is_denied(rel, deny_prefixes, deny_segments):
+            if stats is not None:
+                stats["denied"] = stats.get("denied", 0) + 1
             continue            # NEVER read denied content
 
         if rel not in cache:

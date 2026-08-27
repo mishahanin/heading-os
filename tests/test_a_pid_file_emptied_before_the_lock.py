@@ -193,6 +193,10 @@ class _PagingClient:
     def __init__(self, messages):
         self._messages = list(messages)
         self.calls = []
+        # What each call actually handed back, so a test can assert the paging
+        # contract (page N+1 asks below page N's oldest id) against the pages
+        # themselves rather than against ids copied out of one fixture run.
+        self.returned = []
 
     async def get_messages(self, entity, limit=None, min_id=0, max_id=0):
         self.calls.append({"limit": limit, "min_id": min_id, "max_id": max_id})
@@ -200,7 +204,9 @@ class _PagingClient:
         if max_id:
             window = [m for m in window if m.id < max_id]
         window.sort(key=lambda m: m.id, reverse=True)
-        return window[:limit]
+        page = window[:limit]
+        self.returned.append([m.id for m in page])
+        return page
 
 
 def _source(client, logger=None):
@@ -244,11 +250,29 @@ def test_the_cursor_bound_is_carried_into_every_page():
 
 
 def test_each_page_asks_for_messages_older_than_the_last():
+    """Every call after the first carries the previous page's LOWEST id as its
+    upper bound, which is what makes the walk move backwards and terminate.
+
+    This read `maxes == sorted(maxes, reverse=True)[:len(maxes)] or
+    maxes[1:] == [16, 6]`. The first clause can never hold once there is more
+    than one page - the first call's `max_id` is 0, meaning "no upper bound",
+    so a descending list starting at 0 is impossible - and it is vacuously true
+    for a single call. The only clause that ever decided anything was the
+    hardcoded pair, which pins this fixture rather than the contract.
+    """
     client = _PagingClient(_Msg(i) for i in range(1, 26))
     asyncio.run(_source(client)._fetch_since(object(), 0, 10, "chat"))
     maxes = [c["max_id"] for c in client.calls]
     assert maxes[0] == 0, "the first page must have no upper bound"
-    assert maxes == sorted(maxes, reverse=True)[: len(maxes)] or maxes[1:] == [16, 6]
+    assert len(maxes) >= 3, (
+        f"the fixture must page at least three times or the loop below asserts "
+        f"nothing; it made {len(maxes)} call(s)")
+    for i in range(1, len(maxes)):
+        previous = client.returned[i - 1]
+        assert previous, "a page that returned nothing must end the walk"
+        assert maxes[i] == min(previous), (
+            f"call {i} asked below {maxes[i]}, but page {i - 1} reached down to "
+            f"{min(previous)}; the gap between them is never fetched")
 
 
 def test_no_message_is_returned_twice_across_pages():

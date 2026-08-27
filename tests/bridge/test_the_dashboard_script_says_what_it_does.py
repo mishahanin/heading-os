@@ -327,14 +327,108 @@ def test_unknown_pipeline_stages_sort_the_same_way_twice():
     )
 
 
+def _href_interpolations(source: str) -> list[str]:
+    """Every `href="${ ... }"` expression, by brace matching.
+
+    A regex cannot do this. The previous version of the test below used one, and
+    it required the literal shape `href="${escapeHtml( ... )}"` with at most one
+    nested call level, so a link written without `escapeHtml`, or with two
+    levels of nesting, matched nothing and passed a test whose name says
+    "every".
+    """
+    found = []
+    marker = 'href="${'
+    at = source.find(marker)
+    while at != -1:
+        i = at + len(marker)
+        depth = 1
+        while i < len(source) and depth:
+            if source[i] == "{":
+                depth += 1
+            elif source[i] == "}":
+                depth -= 1
+            i += 1
+        found.append(source[at + len(marker):i - 1])
+        at = source.find(marker, i)
+    return found
+
+
+# Every `href="${...}"` in app.js, and the gate that makes it safe. `escapeHtml`
+# is NOT a gate: it neutralises markup, not a `javascript:` scheme, in a page
+# that holds the bearer token in memory.
+#
+#   "_safeHref"  -- the scheme allow-list at the top of app.js
+#   "scheme-if"  -- the expression is only reached inside a `startsWith('http')`
+#                   conditional, so the value cannot carry another scheme
+#   "client"     -- the value never came from the server: a `#/...` literal, or
+#                   a local table this file owns
+#
+# A new href site fails here until its author classifies it, the way
+# `tests/test_scope_claims.py` makes a new coverage claim fail until answered.
+#
+# The key is the EXPRESSION, so sites that share one share a classification:
+# `escapeHtml(href)` covers three. The companion test below pins what every
+# local named `href` is built from, so that shared key cannot quietly start
+# meaning a server value.
+HREF_GATES = {
+    "escapeHtml(baseRoute)": "client",
+    "escapeHtml(link)": "client",
+    "escapeHtml(item.location)": "scheme-if",
+    "escapeHtml(_safeHref(it.link, '#/pulse'))": "_safeHref",
+    "escapeHtml(href)": "client",
+    "escapeHtml(loc)": "scheme-if",
+    "escapeHtml(_safeHref(_openHref(it), '#/critical'))": "_safeHref",
+    "escapeHtml(e.location)": "scheme-if",
+    "escapeHtml(location)": "scheme-if",
+}
+
+
+def _unclassified_hrefs(source: str) -> list[str]:
+    """Href sites in `source` that HREF_GATES does not name a gate for."""
+    return sorted({s for s in _href_interpolations(source)
+                   if s not in HREF_GATES})
+
+
+def _stale_href_gates(source: str) -> list[str]:
+    """HREF_GATES keys that `source` no longer contains."""
+    sites = set(_href_interpolations(source))
+    return sorted(k for k in HREF_GATES if k not in sites)
+
+
 def test_every_server_supplied_link_passes_a_scheme_gate():
+    """Structural, not behavioural: this reads app.js, it does not run it.
+
+    Measured 2026-08-28 against the file: 11 sites, 9 distinct expressions, and
+    every one of them gated. The defect was that the check could not have seen a
+    twelfth written without `escapeHtml`.
+    """
     assert "function _safeHref" in CODE
-    for m in re.finditer(r'href="\$\{escapeHtml\(([^)]*\([^)]*\)[^)]*|[^)]*)\)\}"', CODE):
-        inner = m.group(1)
-        if "it.link" in inner or "_openHref" in inner:
-            assert "_safeHref" in inner, (
-                f"escapeHtml neutralises markup, not a `javascript:` scheme: {m.group(0)[:90]}"
-            )
+    sites = _href_interpolations(CODE)
+    assert len(sites) >= 9, (
+        f"the href sites moved or the brace matcher broke; found {len(sites)}")
+    assert not _unclassified_hrefs(CODE), (
+        f"new href interpolation(s) with no declared scheme gate. Route the "
+        f"value through _safeHref, or add it to HREF_GATES naming the gate that "
+        f"already protects it: {_unclassified_hrefs(CODE)}")
+    assert not _stale_href_gates(CODE), (
+        f"HREF_GATES still classifies expressions app.js no longer has, so the "
+        f"registry has stopped describing the file: {_stale_href_gates(CODE)}")
+    for site, gate in HREF_GATES.items():
+        if gate == "_safeHref":
+            assert "_safeHref" in site
+
+
+def test_every_local_named_href_is_a_client_built_route():
+    """The shared `escapeHtml(href)` key above is classified `client`. Three
+    sites lean on that one word, so pin what the name is actually assigned."""
+    assigned = re.findall(r"(?m)^\s*const href = (.)", CODE)
+    assert len(assigned) >= 2, "the href locals moved; re-point this test"
+    assert set(assigned) == {"`"}, (
+        "a local named `href` is assigned something other than a template "
+        "literal, so `escapeHtml(href)` may no longer be a client-built route")
+    for literal in re.findall(r"(?m)^\s*const href = `([^`]*)`", CODE):
+        assert literal.startswith("#/"), (
+            f"a local named `href` no longer starts at a hash route: {literal}")
 
 
 def test_only_one_scheme_gate_exists():

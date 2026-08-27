@@ -88,7 +88,14 @@ _VH_MONEY_CTX_RE = re.compile(
 # whole line while the reported target was the FIRST pointer on it, so a price in
 # the fifth hook sent the operator to the first hook's file.
 # `scripts/utils/memory_expiry.py` already solved this shape; this mirrors it.
-_VH_POINTER_RE = re.compile(r"\[[^\]]*?\]\((?P<target>[^)]+)\)[^·\n]*")
+# The tail stops at the next pointer as well as at ` · `. It was `[^·\n]*`,
+# greedy, and `[`, `]`, `(` and `)` are all inside that class: on a line whose
+# pointers are NOT separated by a middle dot, the first match swallowed the rest
+# of the line, `finditer` resumed past the end, and every later pointer went
+# unscanned and unreported. That is the misattribution the paragraph above says
+# was fixed - it was fixed for the separated case only.
+_VH_POINTER_RE = re.compile(
+    r"\[[^\]]*?\]\((?P<target>[^)]+)\)(?:(?!\[[^\]]*?\]\()[^·\n])*")
 _VH_DESC_RE = re.compile(r"^description:\s*(.*)$")
 
 
@@ -151,16 +158,26 @@ def scan_volatile_hooks(memory_dir) -> dict:
         for raw in text.splitlines():
             if not raw.lstrip().startswith("-"):
                 continue  # not an index bullet, so it names no memory to open
-            for index, match in enumerate(_VH_POINTER_RE.finditer(raw)):
+            # A hook runs from the end of the previous one to the end of its own
+            # pointer, so it carries BOTH its leading label and its trailing
+            # note: "- Mortgage EUR 412,000: [bank](x.md)" and
+            # "- Mortgage: [bank](x.md) - EUR 412,000" are the same claim.
+            #
+            # This used to give the leading label to the FIRST pointer only
+            # (`raw[:match.end()] if index == 0 else match.group(0)`). Every
+            # later hook on a grouped line lost the words between the separator
+            # and its own bracket, which is where the label lives, so a value
+            # written "· costing EUR 412,000, see [rate](b.md)" was read by
+            # nobody. Sliding the window makes every hook the same shape.
+            prev_end = 0
+            for match in _VH_POINTER_RE.finditer(raw):
                 target = match.group("target")
+                segment = raw[prev_end:match.end()]
+                prev_end = match.end()
                 if not target.endswith(".md"):
                     continue
                 if target.startswith("threads/"):  # leak-guard: ok (relative prefix match on a MEMORY.md link target, not a path join)
                     continue
-                # The group label sits before the first pointer and belongs to it:
-                # "- Mortgage EUR 412,000: [bank](x.md)" and
-                # "- Mortgage: [bank](x.md) - EUR 412,000" are the same claim.
-                segment = raw[:match.end()] if index == 0 else match.group(0)
                 signals = _volatile_signals(segment)
                 if signals:
                     flagged.append({

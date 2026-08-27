@@ -821,6 +821,9 @@ def _build_store(cfg, root, store_rel, layers, force) -> int:
     skipped_uptodate = 0
     denied_count = 0
     capped = 0
+    # Layers whose source raised, so their rows were KEPT rather than rebuilt.
+    # This pass cannot speak for those vectors, whatever its layer list says.
+    degraded = set()
 
     for layer_cfg in cfg["layers"]:
         layer = layer_cfg["layer"]
@@ -841,11 +844,14 @@ def _build_store(cfg, root, store_rel, layers, force) -> int:
         if layer_cfg.get("source") == "codegraph":
             graph = root / layer_cfg.get("graph_db", ".codegraph/codegraph.db")
             try:
+                walk_stats = {}
                 symbols = list(iter_symbols(
                     graph, root,
                     deny_prefixes=tuple(deny_prefixes),
                     deny_segments=tuple(deny_segments),
+                    stats=walk_stats,
                 ))
+                denied_count += walk_stats.get("denied", 0)
             except (ValueError, sqlite3.Error) as exc:
                 # Same contract as the commit branch: degrade loudly, keep the
                 # corpus. CodeGraph's index is gitignored and rebuildable, so a
@@ -854,6 +860,7 @@ def _build_store(cfg, root, store_rel, layers, force) -> int:
                     f"{RED}symbol layer {layer} unavailable:{RESET} {exc}\n"
                     f"{YELLOW}Its existing rows are kept, not pruned.{RESET}\n"
                 )
+                degraded.add(layer)
                 claimed.update(
                     p for p, in conn.execute(
                         "SELECT DISTINCT path FROM notes WHERE layer=?", (layer,)
@@ -890,19 +897,23 @@ def _build_store(cfg, root, store_rel, layers, force) -> int:
         if layer_cfg.get("source") == "git-log":
             label = layer_cfg.get("repo_label", "engine")
             try:
+                walk_stats = {}
                 commits = list(iter_commits(
                     root,
                     repo_label=label,
                     include_paths=layer_cfg.get("body_paths", True),
                     deny_prefixes=tuple(deny_prefixes),
                     deny_segments=tuple(deny_segments),
+                    stats=walk_stats,
                 ))
+                denied_count += walk_stats.get("denied", 0)
             except (ValueError, RuntimeError) as exc:
                 # Degrade loudly, never silently, and never into a prune.
                 sys.stderr.write(
                     f"{RED}commit layer {layer} unavailable:{RESET} {exc}\n"
                     f"{YELLOW}Its existing rows are kept, not pruned.{RESET}\n"
                 )
+                degraded.add(layer)
                 claimed.update(
                     p for p, in conn.execute(
                         "SELECT DISTINCT path FROM notes WHERE layer=?", (layer,)
@@ -1003,11 +1014,14 @@ def _build_store(cfg, root, store_rel, layers, force) -> int:
     for p in changed_paths:
         conn.execute("DELETE FROM notes WHERE path=?", (p,))
 
+    # "records", not "files". `claimed` holds a file path for a glob layer, a
+    # `<repo>@<sha>` for a commit layer, and a path carrying a line range for a
+    # symbol layer. Only one of the three is a file.
     print(
-        f"{CYAN}build:{RESET} {len(claimed)} files in scope "
+        f"{CYAN}build:{RESET} {len(claimed)} records in scope "
         f"({skipped_uptodate} up-to-date, {len(changed_paths)} changed -> "
         f"{len(pending)} chunks to embed, {denied_count} denied, "
-        f"{len(stale_paths)} files pruned"
+        f"{len(stale_paths)} records pruned"
         + (f", {capped} hit chunk cap" if capped else "") + ")"
     )
 
@@ -1089,8 +1103,16 @@ def _build_store(cfg, root, store_rel, layers, force) -> int:
     # by this pass". `force` alone is not: a build restricted to a subset of the
     # store's layers re-embeds only those, and rows in a layer this pass never
     # walked keep their old vectors.
+    #
+    # Layer NAMES alone are not it either. A layer whose source raised takes the
+    # degrade-and-keep path above: its rows survive with the vectors they already
+    # had, and its name is still in `layers`. So `build --force` against a
+    # CodeGraph index that has been deleted, or a git repo the walk cannot read,
+    # used to CLEAR the mixed-provenance flag and stamp the store as freshly
+    # built by this model, while a whole layer held vectors from whichever model
+    # wrote them last. The stamp is the only thing that would have said so.
     stored_layers = {lyr for (lyr,) in conn.execute("SELECT DISTINCT layer FROM notes")}
-    whole_store = stored_layers <= set(layers)
+    whole_store = stored_layers <= set(layers) and not degraded
     if force and whole_store:
         clear_mixed_provenance(conn)
         record_provenance(conn, model=cfg["model"], host=cfg["host"], digest=digest)

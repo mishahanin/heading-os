@@ -81,6 +81,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   against an empty data root), `test_the_retired_index_helper_is_gone`, and an
   AST check that `threads_lib` writes nothing but the thread file.
 
+### Fixed
+
+- **The volatile-money hook guard read 10 lines of a 216-pointer index.**
+  `scripts/utils/memory_health.py`. `scan_volatile_hooks` matched a hook with a
+  pattern anchored to the bullet, `- [Title](file.md)`, which demands the link
+  immediately after the dash. The index is grouped by subject, so a line reads
+  `- Memory: [a](a.md) · [b](b.md)`, and the label between the bullet and the
+  bracket made the whole line fail. Measured against the live index on
+  2026-08-27: 10 lines matched, against 216 pointers present. The guard reported
+  "0 volatile hook(s)" and that reading was believed, because a scan of 5% of a
+  corpus prints the same words as a scan of all of it. A second defect had the
+  same cause: on a line that did match, the signals were read from the whole row
+  while the reported `target` was the FIRST pointer, so a price in the fifth hook
+  sent the operator to the first hook's file. It now walks the pointers one at a
+  time, the way `scripts/utils/memory_expiry.py` already did, attributes the
+  group label to the first pointer, and reports the hook rather than the row.
+  Guard: `tests/test_a_money_guard_that_read_ten_pointers_of_two_hundred.py`.
+
 ### Security
 
 - **The personal-threads read guard named fifteen utilities and left out `cat`.**

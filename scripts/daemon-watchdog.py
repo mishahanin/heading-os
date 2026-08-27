@@ -42,7 +42,16 @@ def _print_grid(report: dict) -> None:
     verdict = report.get("verdict", "ok")
     vcol = GREEN if verdict == "ok" else RED
     fired = report.get("alerts_fired", 0)
-    print(f"{BOLD}{vcol}watchdog: {verdict}{RESET}  {GRAY}({fired} alert(s) fired){RESET}")
+    # "raised", not "fired". The counter has always counted alerts ATTEMPTED;
+    # `alert()` returns which channels actually took them and the watchdog
+    # discarded that. So "3 alert(s) fired" could mean three that reached
+    # nothing but the log file. The word now matches the method, and the count
+    # that decides whether a human was told gets its own line.
+    line = f"{BOLD}{vcol}watchdog: {verdict}{RESET}  {GRAY}({fired} alert(s) raised){RESET}"
+    undelivered = report.get("alerts_undelivered", 0)
+    if undelivered:
+        line += (f"  {RED}{undelivered} reached no channel but the log{RESET}")
+    print(line)
     print()
     print(f"  {'DAEMON':<16} {'STATUS':<10} {'AGE':<8} {'THRESHOLD':<10}")
     print(f"  {'-' * 16} {'-' * 10} {'-' * 8} {'-' * 10}")

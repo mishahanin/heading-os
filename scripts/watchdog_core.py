@@ -314,6 +314,25 @@ def _default_alert():
     return alert.alert
 
 
+def _delivered(result) -> bool:
+    """True when an alert reached a channel a human reads.
+
+    `alert()` returns `{"telegram": bool, "card": bool, "log": bool}`. `log` is
+    always True and is NOT a channel for this purpose - a log line in a file
+    nobody is watching is what "the watchdog fired and nobody came" looks like.
+
+    An injected `alert_fn` may return anything, including None. An unrecognised
+    return is treated as DELIVERED rather than undelivered, so a test double or
+    a third-party callable cannot inflate the undelivered count into a false
+    alarm about the alerting path itself. The claim this function makes is
+    narrow on purpose: it reports what `alert()` reported, and nothing when
+    `alert()` was not what ran.
+    """
+    if not isinstance(result, dict):
+        return True
+    return any(v for k, v in result.items() if k != "log")
+
+
 def check_once(
     workspace_root: Path,
     *,
@@ -348,7 +367,16 @@ def check_once(
 
     state = _load_state(state_path)
     daemons: list[dict] = []
+    # `alerts_fired` counts alerts RAISED. `alerts_undelivered` counts the ones
+    # that reached no channel beyond the log, which is the number that decides
+    # whether a human learned about a dead daemon. `alert()` has always returned
+    # `{"telegram": bool, "card": bool, "log": bool}` naming what actually
+    # fired, and both call sites below discarded it - so "3 alert(s) fired"
+    # could mean three alerts that reached nobody, and the grid printed the word
+    # "fired" over it. That is the `.claude/rules/scope-claims.md` shape: the
+    # method counted attempts, the sentence asserted delivery.
     alerts_fired = 0
+    alerts_undelivered = 0
 
     for name, (expected, grace) in cadence.items():
         threshold = threshold_override if threshold_override is not None else (expected + grace)
@@ -375,9 +403,12 @@ def check_once(
                     f"expected a liveness beat within {threshold}s; "
                     f"watchdog at {now.isoformat()}"
                 )
-                alert_fn("critical", summary, detail, source="watchdog")
+                delivered = _delivered(
+                    alert_fn("critical", summary, detail, source="watchdog"))
                 fired = True
                 alerts_fired += 1
+                if not delivered:
+                    alerts_undelivered += 1
                 state[name] = {
                     "state": "down",
                     "condition": status,
@@ -392,6 +423,9 @@ def check_once(
                 }
         else:  # ok
             if prev_state == "down":
+                # Recovery is `info`, which `alert()` routes to the log ONLY by
+                # design. It is deliberately not counted as undelivered: a
+                # severity that has no other channel cannot fail to use one.
                 alert_fn(
                     "info",
                     f"daemon {name} heartbeat resumed",
@@ -416,5 +450,6 @@ def check_once(
         "verdict": verdict,
         "checked_at": now.isoformat(),
         "alerts_fired": alerts_fired,
+        "alerts_undelivered": alerts_undelivered,
         "daemons": daemons,
     }

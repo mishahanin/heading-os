@@ -74,6 +74,25 @@ def cmd_apply(dry_run: bool) -> int:
         label = getattr(mod, "__name__", "?").rsplit(".", 1)[-1]
         if dry_run:
             print(f"{YELLOW}[dry-run]{RESET} would apply {label} -> v{version}")
+            # ASK the migration what it would do. `up(data_root, dry_run)` is
+            # the contract `scripts/migrations/0001_baseline.py` states every
+            # migration MUST honor ("describe, change nothing"), and this loop
+            # `continue`d instead - so the only call site passed `dry_run=False`
+            # unconditionally and NOTHING ever reached a dry-run branch.
+            # Reproduced 2026-08-27 with a fake pending migration: `up` was not
+            # called at all. The first real migration would therefore ship a
+            # dry-run branch no code path executes, and the operator's
+            # `--dry-run` would print this one-line guess instead of the
+            # migration's own account of the change.
+            #
+            # A migration that raises here is reported and the run stops: a
+            # dry-run that cannot describe itself is not a dry-run that passed.
+            try:
+                mod.up(data_root, dry_run=True)
+            except Exception as exc:  # noqa: BLE001 - reported, then re-raised
+                print(f"{RED}{label}: dry-run failed: {exc}{RESET}",
+                      file=sys.stderr)
+                return 1
             continue
         print(f"Applying {label} -> v{version} ...")
         mod.up(data_root, dry_run=False)

@@ -83,6 +83,49 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- **Five tools each reported more than their method established, and one of
+  them spent money doing it.** Reproduced by running each before a line changed.
+  Guard: `tests/test_five_reports_that_outran_their_evidence.py` (36 tests).
+  - `scripts/perplexity-research.py` sent an EMPTY question to a billed
+    endpoint. `question` came back `""` from the stdin branch and nothing looked
+    again, so a non-tty stdin carrying nothing - cron, a daemon, any
+    `< /dev/null` - paid for a request that asked nothing. The tty branch
+    refuses correctly; the branch that READS rather than asks had no matching
+    refusal. Reproduced with the transport stubbed, so no request was purchased
+    to prove it.
+  - `scripts/utils/pid_liveness.py`'s Windows branch read another user's process
+    as dead. `OpenProcess` returns NULL with `ERROR_ACCESS_DENIED` when the PID
+    belongs to a different user or a more-privileged process - exactly the case
+    the POSIX branch handles through `PermissionError`, and exactly the defect
+    this module's own docstring records for the two copies it replaced. A daemon
+    under a service account would have read as dead, `stop` would no-op, and the
+    pulse script would start a SECOND daemon beside the first. The branch is now
+    a function that takes its ctypes surface as arguments, because `os.name` is
+    never `"nt"` on WSL2 and no test could otherwise reach it - which is how it
+    kept the defect. It also builds its own `WinDLL(..., use_last_error=True)`:
+    `ctypes.windll` leaves the ctypes error slot at a stale zero, so the check
+    would have silently read access-denied as an unknown failure.
+  - `scripts/watchdog_core.py` counted alerts ATTEMPTED and
+    `scripts/daemon-watchdog.py` printed them as "N alert(s) fired". `alert()`
+    has always returned `{"telegram": bool, "card": bool, "log": bool}` naming
+    what actually went out, and both call sites discarded it - so three alerts
+    that reached nothing but a log file read as three alerts fired. The report
+    now carries `alerts_undelivered` beside `alerts_fired`, the grid says
+    "raised" and names the undelivered count in red, and the bridge daemon logs
+    it at WARNING. Recovery notices stay uncounted: `info` is log-only by
+    design, and a severity with no other channel cannot fail to use one.
+  - `scripts/html-to-pdf.py` printed every one of its four failure paths to
+    STDOUT - the same stream `render-doctype.py` reads the generated PDF path
+    from. A caller cannot tell an error from a result by channel, which is the
+    entire reason two channels exist. Results still go to stdout.
+  - `scripts/migrate-data.py --apply --dry-run` never called
+    `up(..., dry_run=True)`: the dry-run branch printed a one-line guess and
+    `continue`d, so the only call site passed `dry_run=False` unconditionally.
+    The contract `scripts/migrations/0001_baseline.py` states - every migration
+    MUST honor `dry_run` and "describe, change nothing" - was unreachable, so
+    the first real migration would have shipped a branch no code path executes.
+    The runner now asks the migration, and a dry run that raises fails the run
+    rather than exiting 0 over it.
 - **Six checks each admitted the one thing it was written to refuse.** Every one
   was reproduced by running it before a line changed, which matters because the
   workflow panel that surfaced them refuted 0 of 16 findings, and a verifier that

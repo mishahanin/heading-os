@@ -258,8 +258,15 @@ def _watchdog_job(workspace_root: Path) -> None:
         from scripts import watchdog_core
         report = watchdog_core.check_once(workspace_root)
         if report.get("alerts_fired"):
-            logging.info("watchdog: %d alert(s) fired; verdict=%s",
+            logging.info("watchdog: %d alert(s) raised; verdict=%s",
                          report["alerts_fired"], report.get("verdict"))
+        # Separate line, and a WARNING: an alert that reached no channel beyond
+        # the log is the daemon telling this log that nothing else was told.
+        if report.get("alerts_undelivered"):
+            logging.warning(
+                "watchdog: %d of %d alert(s) reached no channel but the log; "
+                "check the Telegram credentials and the action-queue path",
+                report["alerts_undelivered"], report.get("alerts_fired", 0))
     except Exception:
         logging.exception("watchdog job failed (non-fatal)")
 

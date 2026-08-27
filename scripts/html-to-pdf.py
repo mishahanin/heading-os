@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
-"""Convert an HTML file to PDF using Playwright."""
+"""Convert an HTML file to PDF using Playwright.
+
+Every failure goes to STDERR; stdout carries the result and nothing else. All
+four exit-1 paths used to print to stdout, so `render-doctype.py`, which runs
+this as a subprocess and reads its stdout for the generated path, was handed
+`[ERROR] PDF generation failed: ...` on the same stream it reads a filename
+from. A caller cannot tell those apart by channel, which is the whole reason the
+two channels exist.
+"""
 import sys
 from pathlib import Path
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python html-to-pdf.py <input.html> [output.pdf]")
+        print("Usage: python html-to-pdf.py <input.html> [output.pdf]",
+              file=sys.stderr)
         sys.exit(1)
 
     html_path = Path(sys.argv[1]).resolve()
     if not html_path.exists():
-        print(f"[ERROR] Input file not found: {html_path}")
+        print(f"[ERROR] Input file not found: {html_path}", file=sys.stderr)
         sys.exit(1)
 
     if len(sys.argv) >= 3:
@@ -21,7 +30,7 @@ def main():
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as e:
-        print(f"[ERROR] Cannot import playwright.sync_api: {e}")
+        print(f"[ERROR] Cannot import playwright.sync_api: {e}", file=sys.stderr)
         print("[HINT] If 'playwright' itself is missing: pip install playwright && playwright install chromium")
         print("[HINT] If a transitive dep (e.g. 'greenlet') is missing: pip install <name> -- check requirements.txt")
         sys.exit(1)
@@ -47,7 +56,7 @@ def main():
             )
             browser.close()
     except Exception as e:
-        print(f"[ERROR] PDF generation failed: {e}")
+        print(f"[ERROR] PDF generation failed: {e}", file=sys.stderr)
         sys.exit(1)
 
     size = Path(pdf_path).stat().st_size

@@ -89,6 +89,17 @@ def main():
         else:
             parser.error("Provide a research question as argument, --query, or via stdin")
 
+    # Re-checked, because the stdin branch could produce an empty string and
+    # nothing looked again. A non-tty stdin is the ordinary case for cron, for a
+    # daemon, and for any `< /dev/null` invocation - so an EMPTY pipe sent
+    # `query_perplexity("")` to a BILLED endpoint and paid for a request that
+    # asked nothing. The tty branch refuses correctly; this is the same refusal
+    # for the path that reads rather than asks. Reproduced 2026-08-27 with the
+    # transport stubbed, so no request was actually purchased to prove it.
+    if not question:
+        parser.error("stdin was empty; provide a research question as argument, "
+                     "--query, or on stdin (an empty question would still be billed)")
+
     query_perplexity(
         question,
         model=args.model,

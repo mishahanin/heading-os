@@ -599,17 +599,28 @@ def test_an_engine_path_stays_engine_relative():
 def test_every_usage_example_in_the_docstring_names_a_resolvable_path():
     """The defect was documented invocations that could not run.
 
-    Checks the `--path` values the docstring shows, against the resolver rather
-    than against the filesystem, so this stays true on a clone with no overlay.
+    Checked against the RESOLVER, not against a path substring. The first
+    version of this test asserted `"-data" in str(resolved)` and CI refuted it
+    inside one run: with no private overlay the data root falls back to
+    `<engine>/examples`, so the datastore legitimately sits inside the engine
+    clone and carries no such marker. The real claim was never about the
+    spelling of the path - it is that a `datastore` example goes through
+    `get_datastore_dir()` and anything else stays engine-relative, which is true
+    on every machine.
     """
+    from scripts.utils.workspace import get_datastore_dir, get_workspace_root
+
     mod = _compression()
     doc = mod.__doc__ or ""
     shown = re.findall(r"--path\s+(\S+)", doc)
     assert shown, "the usage block no longer shows a --path example"
     for rel in shown:
         resolved = mod._resolve_scan_root(rel)
-        assert "datastore" not in resolved.parts or "-data" in str(resolved), (
-            f"--path {rel} resolves to {resolved}, inside the engine clone")
+        expected_base = (get_datastore_dir()
+                         if pathlib.Path(rel).parts[0] == "datastore"
+                         else get_workspace_root())
+        assert resolved.is_relative_to(expected_base), (
+            f"--path {rel} resolves to {resolved}, outside {expected_base}")
 
 
 @pytest.fixture()
@@ -685,13 +696,22 @@ def test_the_per_type_floor_still_applies(doc_tree):
 
 
 def test_the_cli_runs_to_completion_on_the_real_tree():
-    """End to end, because the exit code was the whole symptom."""
+    """End to end, because the exit code was the whole symptom.
+
+    The skip is keyed on whether the datastore EXISTS, not on the wording of an
+    error message. The first version matched `"-data" in result.stderr` and CI
+    refuted it: with no private overlay the datastore resolves under
+    `<engine>/examples` and never carries that marker, so the skip did not fire
+    and the test failed on an environment it was written to tolerate.
+    """
+    from scripts.utils.workspace import get_datastore_dir
+
+    if not get_datastore_dir().exists():
+        pytest.skip("no populated data overlay here (a bare clone or CI); the "
+                    "resolver itself is asserted directly by the tests above")
     result = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "compression-candidates.py"),
          "--format", "json"],
         cwd=ROOT, capture_output=True, text=True)
-    if "Path not found" in result.stderr and "-data" in result.stderr:
-        pytest.skip("no data overlay on this machine (CI); the resolver is "
-                    "asserted directly by the tests above")
     assert result.returncode == 0, result.stderr[-800:]
     json.loads(result.stdout)

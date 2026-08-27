@@ -150,7 +150,7 @@ def run_memory_health(workspace_root: Path) -> dict[str, Any]:
                 break
     # Objective defect computation is shared with scripts/memory-hygiene.py via
     # scripts/utils/memory_health.compute_memory_defects (dir-parameterized).
-    from scripts.utils.memory_health import compute_memory_defects
+    from scripts.utils.memory_health import MEMORY_BUDGET_LINES, compute_memory_defects
 
     data = compute_memory_defects(memory_dir)
     if data["status"] == "missing":
@@ -165,6 +165,15 @@ def run_memory_health(workspace_root: Path) -> dict[str, Any]:
     orphans = data["orphans"]
 
     issues = []
+    # `compute_memory_defects` has always returned this flag and this panel has
+    # always dropped it, so an index over its own printed budget was reported as
+    # "All healthy" - with the number that refutes the claim sitting in the same
+    # sentence, two words to its left. `scripts/memory-hygiene.py` reads the same
+    # field from the same helper and counts it as a defect in five places; the
+    # panel the operator sees at EVERY session start was the honest tool's silent
+    # twin.
+    if data.get("over_budget"):
+        issues.append(f"MEMORY.md is over its {MEMORY_BUDGET_LINES}-line budget")
     if stale:
         issues.append(f"{len(stale)} memory files >45 days old (review recommended)")
     # The index state comes first, because it explains the orphan count rather
@@ -174,19 +183,19 @@ def run_memory_health(workspace_root: Path) -> dict[str, Any]:
     if orphans:
         issues.append(f"{len(orphans)} orphan file(s) not linked from MEMORY.md")
 
-    if issues:
-        body = (
-            f"Memory: {files_count} files, {lines}/200 lines. Issues: "
-            + "; ".join(issues)
-        )
-    else:
-        body = f"Memory: {files_count} files, {lines}/200 lines. All healthy."
+    # The budget in the printed line is the constant the flag above is computed
+    # from, not a literal beside it. A hardcoded `/200` here would keep printing
+    # 200 after someone moved the budget, which is how the number and the verdict
+    # came apart in the first place.
+    counts = f"Memory: {files_count} files, {lines}/{MEMORY_BUDGET_LINES} lines."
+    body = counts + (" Issues: " + "; ".join(issues) if issues else " All healthy.")
 
     return {
         "status": "ok",
         "output": body,
         "file_count": files_count,
         "memory_md_lines": lines,
+        "over_budget": bool(data.get("over_budget")),
         "stale": stale,
         "orphans": orphans,
     }

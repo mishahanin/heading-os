@@ -610,6 +610,36 @@ def collect_freshness():
     return result
 
 
+def freshness_summary(freshness) -> str:
+    """One line naming every band that is not green.
+
+    `collect_freshness` returns FOUR health values and the summary line used to
+    read one of them: "all current" was printed whenever the RED count was zero.
+    So a file 8 to 14 days old (yellow) reported as current, and so did a file
+    with no `Last verified:` marker at all or an impossible date (gray) - which
+    is the worse of the two, because nothing about that file was ever measured.
+    The HTML panel has always drawn every row with its own dot; only this line,
+    the one an operator reads in the terminal, collapsed three states into one
+    word.
+
+    A function rather than four lines inside `main()` so a test can call the
+    thing that runs, instead of a copy of it that can drift and stay green.
+    """
+    stale = sum(1 for f in freshness if f["health"] == "red")
+    ageing = sum(1 for f in freshness if f["health"] == "yellow")
+    unmarked = sum(1 for f in freshness if f["health"] == "gray")
+    if not (stale or ageing or unmarked):
+        return f"all {len(freshness)} files current"
+    parts = []
+    if stale:
+        parts.append(f"{stale} stale")
+    if ageing:
+        parts.append(f"{ageing} ageing")
+    if unmarked:
+        parts.append(f"{unmarked} with no readable marker")
+    return f"{', '.join(parts)} of {len(freshness)} files"
+
+
 def collect_hiring():
     """Parse hiring-pipeline.md for open roles and urgency."""
     content = read_file(HIRING_FILE)
@@ -1590,8 +1620,7 @@ def main():
     print(f"  Metrics: {metrics['headcount']} headcount, {metrics['modules_live']} modules live")
 
     freshness = collect_freshness()
-    stale = sum(1 for f in freshness if f["health"] == "red")
-    print(f"  Freshness: {stale} stale files" if stale else "  Freshness: all current")
+    print(f"  Freshness: {freshness_summary(freshness)}")
 
     hiring = collect_hiring()
     print(f"  Hiring: {hiring['total']} open roles ({len(hiring['p1'])} P1, {len(hiring['p2'])} P2, {len(hiring['p3'])} P3), {len(hiring['urgent'])} urgent")

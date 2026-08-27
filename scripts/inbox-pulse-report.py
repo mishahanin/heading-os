@@ -565,6 +565,16 @@ def _tier_table_rows(entries: list[dict[str, Any]], max_rows: int = 50) -> str:
         weight = e.get("weight", "-")
         triggers = extract_triggers(e)
         rows.append(f"| {ts} | {domain} | {weight} | {triggers} |")
+    # The cap is fine; the silence was not. The section headings above carry no
+    # count, so a table cut at 50 read as the complete set: on a `--days 7` run,
+    # which this script's own docstring advertises, the rows past the cap simply
+    # were not there and nothing said a word. The note is a table row so it
+    # cannot be lost when the block is pasted somewhere else, and it names the
+    # sort so a reader knows WHICH rows went: the lowest-weighted ones.
+    dropped = len(sorted_entries) - len(rows)
+    if dropped:
+        rows.append(f"| ... | _{dropped} more row(s) below the top {max_rows} "
+                    f"by weight are not shown_ | | |")
     return "\n".join(rows)
 
 

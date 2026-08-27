@@ -474,7 +474,16 @@ def _extract_sections(html_text: str, fallback_title: str) -> tuple[str, list[di
         heading = re.sub(r"\s+", " ", sec["heading"]).strip()
         if not text and not heading:
             continue
-        out.append({"id": sec["id"], "heading": heading, "text": text[:SEARCH_TEXT_CAP]})
+        # `truncated` is decided BEFORE the slice, from the full length. Deciding
+        # it afterwards by `len(stored) == SEARCH_TEXT_CAP` cannot tell a section
+        # that happens to be exactly 1600 characters from one that was cut, and a
+        # count that is sometimes wrong by one is not a count.
+        out.append({
+            "id": sec["id"],
+            "heading": heading,
+            "text": text[:SEARCH_TEXT_CAP],
+            "truncated": len(text) > SEARCH_TEXT_CAP,
+        })
     return title, out
 
 
@@ -483,9 +492,11 @@ def build_search_index(quiet: bool = False) -> int:
     One record per section: {u:file, a:anchor, p:page title, h:heading, t:text}."""
     pages = sorted(SITE_DIR.glob("*.html"))
     records = []
+    truncated = 0
     for html_path in pages:
         title, sections = _extract_sections(html_path.read_text(encoding="utf-8"), html_path.stem)
         for sec in sections:
+            truncated += bool(sec["truncated"])
             records.append({
                 "u": html_path.name,
                 "a": sec["id"] or "",
@@ -505,6 +516,14 @@ def build_search_index(quiet: bool = False) -> int:
         kb = SEARCH_INDEX_PATH.stat().st_size / 1024
         print(f"  search index: {len(records)} sections across {len(pages)} pages "
               f"-> assets/search-index.json ({kb:.0f} KB)")
+        if truncated:
+            # The cap is a deliberate size trade-off; the silence about it was
+            # not. Measured 2026-08-27: 51 of 506 sections were cut, so a tenth
+            # of the site's prose could not be found by searching for a phrase
+            # inside it, and nothing anywhere said so. A docs author who sees
+            # this line can split the section; one who sees nothing cannot.
+            print(f"  search index: {truncated} of {len(records)} sections were cut "
+                  f"at {SEARCH_TEXT_CAP} chars; text past that is NOT searchable")
     return len(records)
 
 

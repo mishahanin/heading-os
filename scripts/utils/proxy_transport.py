@@ -72,6 +72,44 @@ class _TransientServerError(Exception):
     """Internal: a proxy 503 the transport will retry. Never escapes call_model."""
 
 
+def _retry_server_errors(attempt, tok_budget, call_timeout):
+    """Run `attempt`, retrying only the proxy's own transient 503.
+
+    Module level, not a closure inside `call_model`. It WAS a closure, and that
+    is why the "report the FIRST failure alongside the last" branch below was
+    executed by no test in the suite: reaching it needed a live proxy answering
+    with two different 503s in sequence. Lifting it out changes no behaviour and
+    makes the branch reachable with a stub `attempt`.
+    """
+    first: Exception | None = None
+    last: Exception | None = None
+    for attempt_no in range(SERVER_ERROR_ATTEMPTS):
+        try:
+            return attempt(tok_budget, call_timeout)
+        except _TransientServerError as e:
+            first = first if first is not None else e
+            last = e
+            if attempt_no < SERVER_ERROR_ATTEMPTS - 1:
+                time.sleep(SERVER_ERROR_BACKOFF[
+                    min(attempt_no, len(SERVER_ERROR_BACKOFF) - 1)])
+    # Report the FIRST failure alongside the last. When a retry sequence mixes
+    # causes, the last one is the least informative: the proxy parks an auth in
+    # cooldown after the real refusal, so attempt 1 carries the answer ("usage
+    # limit for this billing cycle") and attempts 2-4 carry only its consequence
+    # ("auth_unavailable: no auth available"). Raising `last` alone reported the
+    # consequence as the cause. Measured 2026-08-24: it sent an hour of
+    # diagnosis at a configuration that was correct, while the proxy's own log
+    # had the 403 all along.
+    detail = f"{last}"
+    if first is not None and str(first) != str(last):
+        detail = f"first failure: {first} | last failure: {last}"
+    raise RuntimeError(
+        f"{detail} Still failing after {SERVER_ERROR_ATTEMPTS} attempts over "
+        f"{sum(SERVER_ERROR_BACKOFF):.0f}s of backoff; the provider session "
+        f"behind the proxy is not recovering."
+    ) from last
+
+
 def _make_client(api_key, timeout=DEFAULT_TIMEOUT):
     """Build the OpenAI SDK client pointed at the proxy. Isolated for test patching."""
     from openai import OpenAI
@@ -122,33 +160,7 @@ def call_model(model, prompt, *, temperature=0.7, max_tokens=8192, timeout=DEFAU
 
     def _call(tok_budget, call_timeout):
         """One attempt, retrying only the proxy's own transient 503."""
-        first: Exception | None = None
-        last: Exception | None = None
-        for attempt in range(SERVER_ERROR_ATTEMPTS):
-            try:
-                return _attempt(tok_budget, call_timeout)
-            except _TransientServerError as e:
-                first = first if first is not None else e
-                last = e
-                if attempt < SERVER_ERROR_ATTEMPTS - 1:
-                    time.sleep(SERVER_ERROR_BACKOFF[
-                        min(attempt, len(SERVER_ERROR_BACKOFF) - 1)])
-        # Report the FIRST failure alongside the last. When a retry sequence
-        # mixes causes, the last one is the least informative: the proxy parks
-        # an auth in cooldown after the real refusal, so attempt 1 carries the
-        # answer ("usage limit for this billing cycle") and attempts 2-4 carry
-        # only its consequence ("auth_unavailable: no auth available"). Raising
-        # `last` alone reported the consequence as the cause. Measured
-        # 2026-08-24: it sent an hour of diagnosis at a configuration that was
-        # correct, while the proxy's own log had the 403 all along.
-        detail = f"{last}"
-        if first is not None and str(first) != str(last):
-            detail = f"first failure: {first} | last failure: {last}"
-        raise RuntimeError(
-            f"{detail} Still failing after {SERVER_ERROR_ATTEMPTS} attempts over "
-            f"{sum(SERVER_ERROR_BACKOFF):.0f}s of backoff; the provider session "
-            f"behind the proxy is not recovering."
-        ) from last
+        return _retry_server_errors(_attempt, tok_budget, call_timeout)
 
     def _attempt(tok_budget, call_timeout):
         client = _make_client(api_key, timeout=call_timeout)

@@ -86,8 +86,12 @@ def test_state_manager_save_is_atomic(tmp_state_dir):
     sm.save()
 
     assert state_path.exists()
-    # No leftover tmp artifacts
-    tmp_artifacts = list(tmp_state_dir.glob("state.json.*"))
+    # No leftover tmp artifacts. The glob was `state.json.*` until 2026-08-27
+    # and could never match: `Path("state.json").with_suffix(".tmp")` produces
+    # `state.tmp`, not `state.json.tmp`. Ask what is in the directory instead of
+    # guessing the name, so the writer and the check cannot drift apart again.
+    tmp_artifacts = sorted(p.name for p in tmp_state_dir.iterdir()
+                           if p.name != state_path.name)
     assert tmp_artifacts == [], f"Unexpected tmp artifacts: {tmp_artifacts}"
     # Valid JSON
     data = json.loads(state_path.read_text(encoding="utf-8"))

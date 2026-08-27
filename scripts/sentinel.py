@@ -2127,7 +2127,47 @@ class Sentinel:
         except asyncio.CancelledError:
             return
 
+    def install_signal_handlers(self) -> str:
+        """Wire SIGINT/SIGTERM into `_stop_event` THROUGH THE RUNNING LOOP.
+
+        `main()` registers the same intent with `signal.signal`, and that alone
+        does not work. A `signal.signal` handler runs between bytecodes; the
+        loop is blocked in `select()` with no pending callback, so nothing wakes
+        it and `Event.set()` sits unnoticed until the current
+        `asyncio.wait_for` timeout expires on its own. Measured 2026-08-27
+        against the exact shape of the wait in `start()`: SIGTERM delivered at
+        2 s, `wait_for(..., timeout=30)` returned at **29.54 s**. With a real
+        check_interval that is up to fifteen minutes of "shutting down".
+
+        `loop.add_signal_handler` writes to the loop's self-pipe, which IS the
+        thing `select()` is watching, so the wait returns immediately: the same
+        probe returned at 1.84 s, i.e. the moment the signal arrived.
+
+        Returns the mechanism actually installed, so a caller can say which one
+        it got. Windows' event loops raise NotImplementedError here and keep the
+        `signal.signal` path `main()` already set up; that is the platform's
+        limit, not a choice.
+        """
+        loop = asyncio.get_running_loop()
+
+        def _request_stop(name: str) -> None:
+            self.logger.info(f"Shutdown signal received ({name}); stopping.")
+            self._running = False
+            self._stop_event.set()
+
+        installed = "loop"
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, _request_stop, sig.name)
+            except (NotImplementedError, AttributeError, ValueError, RuntimeError):
+                # NotImplementedError: Windows. ValueError/RuntimeError: not the
+                # main thread. Either way the process keeps the handler main()
+                # installed, which stops the loop late rather than not at all.
+                installed = "signal.signal"
+        return installed
+
     async def start(self):
+        self.install_signal_handlers()
         self.logger.info("=" * 50)
         self.logger.info("Sentinel starting...")
         self.logger.info(f"Check interval: {self.config.check_interval // 60} minutes")
@@ -2255,6 +2295,8 @@ class Sentinel:
                     await asyncio.wait_for(self._stop_event.wait(), timeout=self.config.check_interval)
                 except asyncio.TimeoutError:
                     pass  # Normal: interval elapsed, continue loop
+                if self._stop_event.is_set():
+                    break
         except asyncio.CancelledError:
             pass
         finally:

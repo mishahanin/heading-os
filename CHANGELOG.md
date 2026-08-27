@@ -83,6 +83,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- **Seven readers asked git for paths and got quoted strings back.**
+  `core.quotePath` defaults to on, so `git ls-files` and `git diff --name-only`
+  C-quote any path holding a byte outside printable ASCII: a Cyrillic filename
+  arrives as `"datastore/\320\261.../x.md"`, quotes and octal escapes included.
+  Each caller then split the output and used the quoted string as a path.
+  `scripts/publish-corporate.py` fed it to `get_routing_destination`, where every
+  rule key missed and the map's `engine` default answered. Measured against the
+  live data overlay on 2026-08-27: 8294 tracked files, 66 C-quoted; resolved from
+  their real names, 65 route `private` and one routes `corporate`. That corporate
+  file had never reached an executive, and nothing reported a skip. The `engine`
+  default is what made this an omission rather than a leak, which is luck, not a
+  control. The same shape sat in `scripts/turn-check.py` (which claims to check
+  "the edits made in this turn"), `scripts/skill-trigger-test.py`,
+  `scripts/implement-trajectory-log.py`, and three test guards, two of which
+  split on whitespace and so also broke any path holding a space. All seven now
+  read the NUL-separated form, the way `scripts/push-all.py` already did, and the
+  publisher's two enumerators share one reader instead of carrying a copy each.
+  `tests/test_a_publisher_that_could_not_see_a_non_ascii_path.py` pins the class:
+  it walks the syntax tree of `scripts/`, `tests/` and `.claude/hooks/` and fails
+  on any path-listing git call without `-z`.
 - **The volatile-money hook guard read 10 lines of a 216-pointer index.**
   `scripts/utils/memory_health.py`. `scan_volatile_hooks` matched a hook with a
   pattern anchored to the bullet, `- [Title](file.md)`, which demands the link

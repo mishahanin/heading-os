@@ -778,21 +778,24 @@ def _git_changed_files(git_head: str) -> set[str]:
     """
     import subprocess
 
+    # `-z` on both: `core.quotePath` defaults to on, so git C-quotes any path
+    # with a byte outside printable ASCII, and a quoted name reconciles against
+    # nothing. A file the run really touched would then read as untouched.
     changed: set[str] = set()
     try:
         diff = subprocess.run(
-            ["git", "diff", "--name-only", git_head],
+            ["git", "diff", "--name-only", "-z", git_head],
             cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=10,
         )
         if diff.returncode != 0:
             return set()
-        changed.update(p.strip() for p in diff.stdout.splitlines() if p.strip())
+        changed.update(p for p in diff.stdout.split("\0") if p)
         untracked = subprocess.run(
-            ["git", "ls-files", "--others", "--exclude-standard"],
+            ["git", "ls-files", "-z", "--others", "--exclude-standard"],
             cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=10,
         )
         if untracked.returncode == 0:
-            changed.update(p.strip() for p in untracked.stdout.splitlines() if p.strip())
+            changed.update(p for p in untracked.stdout.split("\0") if p)
     except (OSError, subprocess.SubprocessError):
         return set()
     return changed

@@ -364,8 +364,12 @@ def _documented_calls() -> dict[tuple[str, tuple[str, ...]], set[str]]:
     invocation swallowed the flags of the next paragraph and produced twelve
     false positives on the first run of this scan.
     """
-    tracked = subprocess.run(["git", "ls-files", "*.md", "*.html"],
-                             cwd=ROOT, capture_output=True, text=True).stdout.split()
+    # `-z`, and split on NUL rather than whitespace: `.split()` broke any path
+    # holding a space into pieces, and git C-quotes any non-ASCII path, so both
+    # kinds fell out of this scan silently.
+    tracked = [p for p in subprocess.run(
+        ["git", "ls-files", "-z", "*.md", "*.html"],
+        cwd=ROOT, capture_output=True, text=True).stdout.split("\0") if p]
     calls: dict[tuple[str, tuple[str, ...]], set[str]] = {}
     for rel in tracked:
         try:
@@ -499,8 +503,9 @@ def test_no_script_docstring_documents_a_flag_of_its_own_that_does_not_exist():
     `--import-rater-output` was in prose, and its absence is pinned by the
     explicit test below rather than by this scan.
     """
-    scripts = subprocess.run(["git", "ls-files", "scripts/*.py", "scripts/**/*.py"],
-                             cwd=ROOT, capture_output=True, text=True).stdout.split()
+    scripts = [p for p in subprocess.run(
+        ["git", "ls-files", "-z", "scripts/*.py", "scripts/**/*.py"],
+        cwd=ROOT, capture_output=True, text=True).stdout.split("\0") if p]
     import ast
     cache: dict = {}
     checked, bad = 0, []

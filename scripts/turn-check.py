@@ -119,16 +119,34 @@ def _rel(path: Path) -> str:
 
 
 def _git(args: list[str]) -> list[str]:
-    """Run a git command in the engine tree. Any failure yields no paths."""
+    """Paths from a git command in the engine tree. Any failure yields no paths.
+
+    Every caller passes `-z`, and it is not cosmetic. `core.quotePath` defaults
+    to on, so both `diff --name-only` and `ls-files` C-quote a path holding any
+    byte outside printable ASCII: a Cyrillic filename arrives as
+    `"scripts/\\320\\261.py"`, which `ROOT / r` then resolves to a file that does
+    not exist, and the edit is dropped without a word. This tool says it checks
+    "the edits made in this turn", so a silent drop is a false coverage claim
+    (`.claude/rules/scope-claims.md`). NUL separation also survives a path
+    holding a newline, which `splitlines()` would cut in two.
+
+    The flag is written at each call site rather than injected here, so the
+    repo-wide guard in
+    `tests/test_a_publisher_that_could_not_see_a_non_ascii_path.py` can read it.
+
+    Paths are NOT stripped: with `-z` the bytes between separators are the exact
+    name, and a leading or trailing space is part of it.
+    """
     try:
         out = subprocess.run(
-            ["git", *args], cwd=str(ROOT), capture_output=True, text=True, timeout=20
+            ["git", *args],
+            cwd=str(ROOT), capture_output=True, text=True, timeout=20,
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
     if out.returncode != 0:
         return []
-    return [line.strip() for line in out.stdout.splitlines() if line.strip()]
+    return [path for path in out.stdout.split("\0") if path]
 
 
 def changed_python_files() -> list[Path]:
@@ -137,8 +155,8 @@ def changed_python_files() -> list[Path]:
     Working tree only, never `origin/main..HEAD`: a turn check is about what is
     on disk right now, and committed work has already passed the commit gates.
     """
-    rel = set(_git(["diff", "--name-only", "HEAD"]))
-    rel |= set(_git(["ls-files", "--others", "--exclude-standard"]))
+    rel = set(_git(["diff", "--name-only", "-z", "HEAD"]))
+    rel |= set(_git(["ls-files", "-z", "--others", "--exclude-standard"]))
     out = []
     for r in sorted(rel):
         if not r.endswith(".py") or not r.startswith(WATCHED_PREFIXES):
@@ -160,7 +178,7 @@ def deleted_python_files() -> list[str]:
     broke every importer of `foo` reported `cached`.
     """
     gone = []
-    for r in sorted(set(_git(["diff", "--name-only", "HEAD"]))):
+    for r in sorted(set(_git(["diff", "--name-only", "-z", "HEAD"]))):
         if not r.endswith(".py") or not r.startswith(WATCHED_PREFIXES):
             continue
         if not (ROOT / r).is_file():

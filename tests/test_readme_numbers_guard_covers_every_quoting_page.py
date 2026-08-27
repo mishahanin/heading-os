@@ -43,10 +43,12 @@ def guard():
 
 
 def _tracked_top_level_markdown() -> list[Path]:
-    out = subprocess.run(["git", "ls-files", "*.md"], cwd=ROOT,
+    # `-z`: git C-quotes a non-ASCII path, and a quoted name is not a file this
+    # guard can open, so the page would drop out of the scan without a word.
+    out = subprocess.run(["git", "ls-files", "-z", "*.md"], cwd=ROOT,
                          capture_output=True, text=True, check=True).stdout
-    return [ROOT / line for line in out.splitlines()
-            if line and "/" not in line]
+    return [ROOT / rel for rel in out.split("\0")
+            if rel and "/" not in rel]
 
 
 # --- membership -----------------------------------------------------------------

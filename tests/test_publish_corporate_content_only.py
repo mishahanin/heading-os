@@ -29,11 +29,15 @@ CODE_PREFIXES = (
 
 def _tracked_files() -> list[str]:
     root = get_workspace_root()
+    # `-z`: git C-quotes any path with a byte outside printable ASCII, and a
+    # quoted name matches no routing rule, so it falls to the map default and
+    # this boundary guard never sees it. The publisher had the same defect until
+    # 2026-08-27; a guard blind to the same files is not a guard.
     result = subprocess.run(
-        ["git", "ls-files"], cwd=str(root),
+        ["git", "ls-files", "-z"], cwd=str(root),
         capture_output=True, text=True, check=True,
     )
-    return [ln for ln in result.stdout.splitlines() if ln.strip()]
+    return [rel for rel in result.stdout.split("\0") if rel]
 
 
 def test_corporate_publish_set_has_no_code_paths():

@@ -88,18 +88,41 @@ CORPORATE_ROOT = get_corporate_repo_path()
 # ============================================================
 # File enumeration (git-tracked workspace files)
 # ============================================================
+def _ls_files(*extra: str) -> list[str]:
+    """`git ls-files` in the data overlay, NUL-separated, as real paths.
+
+    The separator is not a style choice. `core.quotePath` defaults to on, so git
+    C-quotes any path holding a byte outside printable ASCII: a Cyrillic
+    filename comes back as `"datastore/\\320\\261.../x.md"`, quotes and octal
+    escapes included. Fed to `get_routing_destination`, that string matches no
+    rule key and falls to the map's `engine` default, so the file is silently
+    never published and nothing reports a skip.
+
+    Measured against the live overlay on 2026-08-27: 8294 tracked files, 66 of
+    them C-quoted; resolved from their real names, 65 route `private` and one
+    routes `corporate`. That corporate file had never reached an executive. The
+    `engine` default is what made this an omission rather than a leak, which is
+    luck, not a control.
+
+    `-z` also suppresses the quoting, and it survives a path holding a newline,
+    which `splitlines()` would cut in two. `scripts/push-all.py` reads the same
+    form.
+    """
+    result = subprocess.run(
+        ["git", "ls-files", "-z", *extra],
+        cwd=str(SOURCE_ROOT),
+        capture_output=True, text=True, check=True,
+    )
+    return [path for path in result.stdout.split("\0") if path]
+
+
 def list_tracked_files() -> list[str]:
     """Every file git knows about in the DATA overlay as a relative POSIX path.
 
     Source is the data root (not the engine root): corporate-classified content
     lives in the data repo post-split, so enumeration must run there.
     """
-    result = subprocess.run(
-        ["git", "ls-files"],
-        cwd=str(SOURCE_ROOT),
-        capture_output=True, text=True, check=True,
-    )
-    return [line for line in result.stdout.splitlines() if line.strip()]
+    return _ls_files()
 
 
 def list_untracked_corporate_files() -> list[str]:
@@ -111,12 +134,7 @@ def list_untracked_corporate_files() -> list[str]:
     that are untracked - they should be either committed or excluded before
     publish.
     """
-    result = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard"],
-        cwd=str(SOURCE_ROOT),
-        capture_output=True, text=True, check=True,
-    )
-    candidates = [line for line in result.stdout.splitlines() if line.strip()]
+    candidates = _ls_files("--others", "--exclude-standard")
     return [p for p in candidates if get_routing_destination(p) == "corporate"]
 
 

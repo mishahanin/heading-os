@@ -103,7 +103,18 @@ def _git_changed_files(base: str = "origin/main") -> set[str]:
     """
     files: set[str] = set()
 
-    def _run(args: list[str]) -> list[str]:
+    def _run(args: list[str], *, paths: bool = False) -> list[str]:
+        """Lines from a git command; with `paths=True`, NUL-separated real paths.
+
+        `core.quotePath` defaults to on, so `diff --name-only` and `ls-files`
+        C-quote any path with a byte outside printable ASCII. A quoted name
+        matches no skill directory, so the routing gate would silently test
+        nothing for that skill. `paths` is opt-in because this helper also runs
+        `rev-parse`, which takes no such flag; the caller writes `-z` itself, so
+        the repo-wide guard in
+        `tests/test_a_publisher_that_could_not_see_a_non_ascii_path.py` can read
+        it in the argv.
+        """
         try:
             out = subprocess.run(
                 ["git", *args], cwd=str(ROOT), capture_output=True, text=True, timeout=30
@@ -112,6 +123,8 @@ def _git_changed_files(base: str = "origin/main") -> set[str]:
             return []
         if out.returncode != 0:
             return []
+        if paths:
+            return [p for p in out.stdout.split("\0") if p]
         return [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
 
     # Through `_run`, not around it. This probe had no timeout and no
@@ -120,11 +133,11 @@ def _git_changed_files(base: str = "origin/main") -> set[str]:
     # "degrades clearly, never an exception" contract `_run` implements.
     base_ok = bool(_run(["rev-parse", "--verify", "--quiet", base]))
     if base_ok:
-        files.update(_run(["diff", "--name-only", f"{base}..HEAD"]))
+        files.update(_run(["diff", "--name-only", "-z", f"{base}..HEAD"], paths=True))
     else:
         print(f"{GRAY}routing-gate: base '{base}' unresolved; using working-tree diff only{RESET}")
-    files.update(_run(["diff", "--name-only", "HEAD"]))
-    files.update(_run(["ls-files", "--others", "--exclude-standard"]))
+    files.update(_run(["diff", "--name-only", "-z", "HEAD"], paths=True))
+    files.update(_run(["ls-files", "-z", "--others", "--exclude-standard"], paths=True))
     return files
 
 

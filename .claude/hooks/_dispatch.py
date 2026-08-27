@@ -1084,8 +1084,9 @@ def check_rate_limit(payload: dict) -> dict | None:
             "reason": (
                 f"BLOCKED: workspace daily write cap ({RATE_LIMIT_HARD}) exceeded "
                 f"({state['count']} writes today). Pause and review what is producing "
-                f"this volume. Override: `export WS_RATE_LIMIT_HARD=2000` if intentional, "
-                f"or delete .claude/state/dispatch-rate.json to reset the counter."
+                f"this volume. Override: `export WS_RATE_LIMIT_HARD={RATE_LIMIT_HARD * 2}` "
+                f"if intentional, or delete .claude/state/dispatch-rate.json to reset "
+                f"the counter."
             ),
         }
 
@@ -1132,7 +1133,16 @@ def check_rate_limit(payload: dict) -> dict | None:
 
 TOOL_BUDGET_WINDOW_MINUTES = 30
 TOOL_BUDGET_SOFT = int(os.environ.get("WS_TOOL_BUDGET_SOFT", "75"))    # advisory at N
-TOOL_BUDGET_HARD = int(os.environ.get("WS_TOOL_BUDGET_HARD", "1200"))  # block at N
+# Raised 1200 -> 4000 on 2026-08-27, on the operator's instruction, after the cap
+# blocked a legitimate run. Workflows are the standing working method here, and a
+# workflow's subagent tool calls all count against this one window: a 66-agent
+# audit workflow made 1849 calls in 29 minutes and tripped a cap set when the main
+# loop was the only caller. The cap exists to catch a runaway loop, and a runaway
+# loop reaches 4000 in a window just as surely as it reaches 1200 - it just no
+# longer catches deliberate fan-out on the way. Cost of the higher number: the
+# rolling history is bounded at cap+100, so the state file this hook rewrites on
+# every tool call grows from about 48 KB to about 152 KB at 37 bytes an entry.
+TOOL_BUDGET_HARD = int(os.environ.get("WS_TOOL_BUDGET_HARD", "4000"))  # block at N
 # Raised 3 -> 4 on 2026-08-20, in the same change that made the signature stable.
 # The detector had never fired, so 3 was never tested against real traffic; a
 # legitimate edit-then-recheck cycle produces three identical calls easily. This
@@ -1209,8 +1219,8 @@ def check_tool_budget(payload: dict) -> dict | None:
                 f"BLOCKED: {count} tool calls in the last {TOOL_BUDGET_WINDOW_MINUTES} "
                 f"minutes exceeded hard cap ({TOOL_BUDGET_HARD}). The agent loop looks "
                 f"runaway. Pause, review what's driving this volume. Override: "
-                f"`export WS_TOOL_BUDGET_HARD=2000` if intentional, or delete "
-                f".claude/state/dispatch-rate.json to reset."
+                f"`export WS_TOOL_BUDGET_HARD={TOOL_BUDGET_HARD * 2}` if intentional, "
+                f"or delete .claude/state/dispatch-rate.json to reset."
             ),
         }
 

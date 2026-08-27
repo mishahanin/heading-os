@@ -116,6 +116,47 @@ def test_the_proxy_owner_still_exists_and_points_at_the_proxy():
     assert "def call_model" in src
 
 
+def test_the_client_constructor_actually_passes_the_proxy_address():
+    """The scans above are text. Text cannot see an OMITTED argument.
+
+    Every check in this file asks whether a forbidden hostname APPEARS. The way
+    a bypass most plausibly arrives is the opposite: `base_url` is simply left
+    off the `OpenAI(...)` call, and the SDK silently falls back to its own
+    default endpoint. No provider hostname is written anywhere, `PROXY_BASE_URL`
+    is still defined, `"127.0.0.1:8317" in src` is still true, and every request
+    leaves the machine. Measured 2026-08-27: the SDK reports
+    `https://api.openai.com/v1/` when the argument is omitted.
+
+    Read from the AST rather than by importing, because this file must keep
+    working on a clone with no `openai` installed. The behavioural counterpart,
+    which asserts the constructed client's address, is
+    tests/test_proxy_transport.py::test_the_client_is_really_built_against_the_loopback_proxy.
+    """
+    import ast
+
+    tree = ast.parse((ROOT / PROXY_OWNER).read_text(encoding="utf-8"))
+    calls = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id in {"OpenAI", "Anthropic"}]
+    assert calls, (
+        f"{PROXY_OWNER} builds no model client at all. Either the seam moved - "
+        f"in which case point this test at it - or the transport is gone."
+    )
+    for call in calls:
+        kwargs = {kw.arg for kw in call.keywords if kw.arg}
+        assert "base_url" in kwargs, (
+            f"{PROXY_OWNER}:{call.lineno} builds a client without base_url, so "
+            f"the SDK uses its own default endpoint and every prompt plus the "
+            f"CLIPROXY subscription key leaves this machine."
+        )
+        addr = [kw.value for kw in call.keywords if kw.arg == "base_url"][0]
+        rendered = ast.unparse(addr)
+        assert rendered == "PROXY_BASE_URL" or "127.0.0.1:8317" in rendered, (
+            f"{PROXY_OWNER}:{call.lineno} points the client at {rendered}, "
+            f"which is neither the module constant nor the loopback proxy."
+        )
+
+
 def test_the_rule_is_written_down_where_a_shell_command_would_be_stopped():
     """The scan cannot see an ad-hoc shell command, which is how the breach
     happened. The memory file is the half that covers it, so its absence is a

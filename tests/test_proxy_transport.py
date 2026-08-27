@@ -25,6 +25,43 @@ def test_base_url_is_the_local_proxy():
     assert pt.PROXY_BASE_URL == "http://127.0.0.1:8317/v1"
 
 
+def test_the_client_is_really_built_against_the_loopback_proxy():
+    """The constant was pinned; the one line that reads it never ran.
+
+    `_make_client` is the sole consumer of PROXY_BASE_URL, and every other test
+    in this file - and in test_a_radar_that_watched_three_of_fourteen_layers.py -
+    replaces it with a double. So until 2026-08-27 nothing in 13,395 tests
+    executed its body, and the workspace's standing "NEVER bypass the proxy"
+    control rested on an unexecuted line.
+
+    The defeating edit is one word: drop `base_url=` from the SDK constructor
+    and keep the rest, the shape of a refactor that moves the base URL behind an
+    env override and fumbles the default. PROXY_BASE_URL stays in the module, so
+    the constant test above and the text scan in
+    test_no_code_reaches_a_model_provider_directly.py both stay green, while
+    every `call_model` in the workspace - /council, /scrutinize, kimi-consult,
+    grok-consult, gemini-consult, deep-research-advance - posts the prompt and
+    the CLIPROXY subscription key to a third-party endpoint instead.
+
+    Measured 2026-08-27: with `base_url` omitted the SDK reports
+    `https://api.openai.com/v1/`. Constructing the client opens no socket; the
+    address is read straight off the object.
+    """
+    client = pt._make_client("cpx-test", timeout=1.0)
+    base = str(client.base_url)
+    assert base.startswith("http://127.0.0.1:8317/"), (
+        f"the model client points at {base}, not the loopback proxy"
+    )
+    assert "openai.com" not in base, base
+
+
+def test_the_client_carries_the_timeout_it_was_given():
+    """The retry raises the socket ceiling, and the raise happens by building a
+    second client. A `_make_client` that dropped the argument would make the
+    growth tests above measure a value nothing acts on."""
+    assert pt._make_client("cpx-test", timeout=7.5).timeout == 7.5
+
+
 def test_returns_content():
     client = mock.MagicMock()
     client.chat.completions.create.return_value = _resp("the answer", "stop")

@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 """One-shot migration (F-5.1): move each skill's router row into its SKILL.md frontmatter.
 
-Parses the seven registry tables in ``.claude/rules/skill-router.md`` and, for every
-``/slash`` row, writes an ``x-heading-routing`` block into the matching
+Parses the seven four-column detail tables under ``reference/skill-router/`` and, for
+every ``/slash`` row, writes an ``x-heading-routing`` block into the matching
 ``.claude/skills/<name>/SKILL.md`` frontmatter (category, triggers[], exclusions[],
 compound, router, and label only when the Skill cell is not the plain ``/name``). This is
 the inverse of ``scripts/generate-skill-router.py``: split on the exact separators the
 generator joins on, so the round-trip reproduces each cell (modulo separator whitespace,
 which folds into the one consciously-approved normalization diff).
+
+It read ``.claude/rules/skill-router.md`` until 2026-08-27, which was correct until
+F-5.2 split the generator's output in two: a TWO-column core index there, and the
+four-column tables in the detail files. Every row then failed the "expected 4 cells"
+check, so on the live tree it parsed 0 of 94 rows, warn-skipped all of them, and both
+exit paths still printed a green success line and returned 0. The category now comes
+from each detail file's NAME rather than from a ``### Heading`` scan, so the parser
+cannot silently read a file whose tables are not the ones it wants.
 
 Kept in-repo for provenance. Idempotent: an
 existing ``x-heading-routing`` block is replaced, not duplicated. The block is appended to
@@ -45,8 +53,11 @@ ROUTING_KEY = _gen.ROUTING_KEY
 
 SKILLS_DIR = ROOT / ".claude" / "skills"
 ROUTER_FILE = ROOT / ".claude" / "rules" / "skill-router.md"
+# The generator's own destination for the four-column tables, so the split here
+# and the join there stay in lockstep the way the imported constants above do.
+CATEGORY_FILE_DIR = _gen.CATEGORY_FILE_DIR
 
-_CATEGORY_RE = re.compile(r"^### (" + "|".join(re.escape(c) for c in CATEGORY_ORDER) + r")\s*$")
+
 _UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
 _NAME_RE = re.compile(r"^/([a-z0-9][a-z0-9-]*)")
 
@@ -60,10 +71,16 @@ class _IndentDumper(yaml.SafeDumper):
 
 
 def _split_cells(row: str) -> list[str]:
-    """Split a markdown table row on unescaped pipes into stripped cell strings."""
+    """Split a markdown table row on unescaped pipes into stripped cell strings.
+
+    Each cell is UNESCAPED afterwards, because the generator escaped it on the
+    way out. Without that step the round trip did not reproduce the cell: the
+    `/canopus` trigger came back carrying `\\|`, and writing that block would
+    have put a backslash into a SKILL.md that never had one.
+    """
     parts = _UNESCAPED_PIPE.split(row)
     # A well-formed row is `| a | b | c | d |` -> ['', ' a ', ' b ', ' c ', ' d ', ''].
-    cells = [p.strip() for p in parts]
+    cells = [_gen.unescape_pipes(p.strip()) for p in parts]
     # Drop the empty leading/trailing cells produced by the outer pipes.
     if cells and cells[0] == "":
         cells = cells[1:]
@@ -73,16 +90,53 @@ def _split_cells(row: str) -> list[str]:
 
 
 def parse_registry() -> tuple[dict[str, dict], list[str]]:
-    """Return ({skill_name: routing_dict}, warnings) parsed from the router tables."""
+    """Return ({skill_name: routing_dict}, warnings) parsed from the detail tables.
+
+    One file per category, named by ``_gen.category_slug``, so the category comes
+    from the filename and a missing file is REPORTED rather than read as a
+    category with no skills.
+    """
     rows: dict[str, dict] = {}
     warnings: list[str] = []
-    category = None
-    for raw in ROUTER_FILE.read_text(encoding="utf-8").splitlines():
-        m = _CATEGORY_RE.match(raw)
-        if m:
-            category = m.group(1)
+    for category in CATEGORY_ORDER:
+        path = CATEGORY_FILE_DIR / f"{_gen.category_slug(category)}.md"
+        if not path.exists():
+            warnings.append(f"{category}: no detail file at {path}")
             continue
-        if category is None or not raw.lstrip().startswith("|"):
+        _parse_category_file(path, category, rows, warnings)
+    return rows, warnings
+
+
+def _warn_on_separator_ambiguity(name: str, routing: dict, warnings: list) -> None:
+    """Report a cell whose split cannot be trusted against its own SKILL.md.
+
+    Compared against the frontmatter the generator reads, so this asks the
+    authoritative file rather than guessing from the rendered text. A skill with
+    no block on disk is skipped: there is nothing to disagree with.
+    """
+    skill_md = SKILLS_DIR / name / "SKILL.md"
+    if not skill_md.exists():
+        return
+    fm, err = _gen.parse_frontmatter(skill_md)
+    if err:
+        return
+    source = (fm.get(ROUTING_KEY) or {}) if isinstance(fm.get(ROUTING_KEY), dict) else {}
+    for field, sep in (("triggers", TRIGGER_SEP), ("exclusions", EXCL_SEP)):
+        original = source.get(field)
+        if not isinstance(original, list):
+            continue
+        if len(routing[field]) != len(original):
+            warnings.append(
+                f"{name}: {field} split into {len(routing[field])} item(s) but "
+                f"the SKILL.md has {len(original)}. An item containing the "
+                f"separator {sep!r} is indistinguishable from two items once "
+                f"rendered; writing this block back would change the file.")
+
+
+def _parse_category_file(path: Path, category: str, rows: dict, warnings: list) -> None:
+    """Parse one reference/skill-router/<slug>.md into `rows`, in place."""
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        if not raw.lstrip().startswith("|"):
             continue
         stripped = raw.strip()
         if stripped.startswith("| Skill ") or set(stripped) <= set("|- "):
@@ -108,6 +162,12 @@ def parse_registry() -> tuple[dict[str, dict], list[str]]:
             routing["label"] = inner
         routing["triggers"] = [t.strip() for t in triggers_cell.split(TRIGGER_SEP)]
         routing["exclusions"] = [e.strip() for e in exclusions_cell.split(EXCL_SEP)]
+        # A rendered cell cannot say whether `a, b` was one item or two, and
+        # this tool WRITES its answer back into the authoritative SKILL.md. When
+        # the split disagrees with the frontmatter it came from, the file would
+        # gain an item its author never wrote. The parser cannot resolve it, so
+        # it reports it rather than choosing silently.
+        _warn_on_separator_ambiguity(name, routing, warnings)
         routing["compound"] = compound_cell
         routing["router"] = "manual" if "NEVER auto-trigger" in triggers_cell else "auto"
         if name in rows:
@@ -118,7 +178,6 @@ def parse_registry() -> tuple[dict[str, dict], list[str]]:
                 f"duplicate router row for {name}: the later one wins and the "
                 f"earlier row's triggers are dropped")
         rows[name] = routing
-    return rows, warnings
 
 
 def _render_block(routing: dict) -> str:
@@ -197,6 +256,20 @@ def main() -> int:
     print(f"{CYAN}Parsed {len(rows)} router rows across {len(CATEGORY_ORDER)} categories.{RESET}")
     for w in warnings:
         print(f"  {YELLOW}warn{RESET}: {w}")
+    # A parser whose whole job is to re-derive every skill's block must not
+    # report success after deriving none. Between F-5.2 and 2026-08-27 it read a
+    # file that no longer held its tables, warn-skipped all 94 rows, and printed
+    # a green line and exit 0 down BOTH paths. The exit code is what a script or
+    # a CI step reads, and a green one said the round trip had been checked.
+    if not rows:
+        # The path is printed WHOLE. `relative_to(ROOT)` raises ValueError when
+        # the directory sits outside the repo, which is precisely the situation
+        # this message is being printed about.
+        print(f"{RED}FAIL{RESET}: parsed no router rows at all. The four-column "
+              f"tables live under {CATEGORY_FILE_DIR}; check that they exist "
+              f"and that the row shape has not changed.",
+              file=sys.stderr)
+        return 1
     if unmatched_rows:
         print(f"  {YELLOW}rows with no matching skill dir{RESET}: {', '.join(unmatched_rows)}")
     if missing_rows:

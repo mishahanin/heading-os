@@ -138,6 +138,56 @@ def parse_frontmatter(skill_md: Path) -> tuple[dict, str]:
 # Row loading
 # ============================================================
 
+# A markdown table row is ONE line. These two characters end it, so a cell
+# holding either produces a half row plus an orphan fragment on the next line -
+# in an always-on rule, and in a detail file where the remaining columns then
+# describe the wrong skill. Deterministic, so `--check` regenerates the same
+# corruption and passes.
+#
+# A tab is deliberately NOT here. It renders as whitespace inside a cell, so
+# refusing it would fail a working SKILL.md over a symptom no reader can see.
+FORBIDDEN_IN_CELL = {"\n": "newline", "\r": "carriage return"}
+
+
+def _as_cell(value, *, field: str) -> str:
+    """One string, safe to place in a markdown table cell.
+
+    `_as_list` below guards the item TYPE and the container TYPE, and `compound`
+    is guarded against the YAML 1.1 boolean. Cell CONTENT was the hole all three
+    left: a trigger written as a folded scalar, which is the house style for
+    `x-heading-capability` in this same frontmatter, arrives with a trailing
+    newline and splits the row.
+
+    `label` reaches this function for a second reason. It was read raw three
+    lines below the `name` check and its explaining comment, so `label: 7`
+    raised an uncaught `TypeError` out of `escape_pipes` instead of the curated
+    `{rel}: {err}` line this gate exists to print, and `label: no` - the YAML
+    boolean False, which is falsy - vanished into the `or f"/{name}"` default
+    with no word to the author who set it.
+    """
+    if not isinstance(value, str):
+        raise ValueError(
+            f"{field} is {value!r} ({type(value).__name__}); it must be a "
+            f"string. An unquoted YAML scalar like `7` or `no` is not.")
+    for char, name in FORBIDDEN_IN_CELL.items():
+        if char in value:
+            raise ValueError(
+                f"{field}: contains a {name}, which ends the markdown table "
+                f"row: {value[:60]!r}. Write the value on one line - a folded "
+                f"scalar (`- >`) adds a trailing newline.")
+    # An empty cell is refused rather than defaulted. `label: ""` renders an
+    # empty code span in the Skill column, which is a broken row; and the
+    # alternative - falling back to `/{name}` - is the same silent-ignore this
+    # function was written to end for `label: no`. The author wrote something,
+    # so they hear about it. Measured on the live corpus 2026-08-27: no
+    # trigger, exclusion, compound or label is empty, so nothing regresses.
+    if not value.strip():
+        raise ValueError(
+            f"{field} is empty (or only whitespace). An empty markdown cell "
+            f"renders as a blank column; write a value or remove the key.")
+    return value
+
+
 def _as_list(value, *, field: str) -> list[str]:
     """Coerce a triggers/exclusions frontmatter value to a list of strings.
 
@@ -180,7 +230,7 @@ def _as_list(value, *, field: str) -> list[str]:
                 f"'colon space' parses as a mapping - quote the whole item, or "
                 f"replace the colon with a dash."
             )
-        out.append(item)
+        out.append(_as_cell(item, field=field))
     return out
 
 
@@ -241,9 +291,15 @@ def load_routing_rows() -> tuple[list[dict], list[str]]:
                 f"{rel}: '{ROUTING_KEY}.category' is {category!r}; must be one of {CATEGORY_ORDER}"
             )
             continue
+        # `label` joins this block rather than staying a raw `.get()` three
+        # lines below: it is a cell value like the others, and the `name` fix
+        # above documents exactly what a raw read of one costs.
+        raw_label = routing.get("label")
         try:
             triggers = _as_list(routing.get("triggers"), field=f"{ROUTING_KEY}.triggers")
             exclusions = _as_list(routing.get("exclusions"), field=f"{ROUTING_KEY}.exclusions")
+            label = (_as_cell(raw_label, field=f"{ROUTING_KEY}.label")
+                     if raw_label is not None else f"/{name}")
         except ValueError as exc:
             errors.append(f"{rel}: {exc}")
             continue
@@ -290,12 +346,11 @@ def load_routing_rows() -> tuple[list[dict], list[str]]:
                 f"YAML 1.1 -- write compound: \"No\" (quoted) or a real "
                 f"description like 'Yes: Meeting Prep'.")
             continue
-        if not isinstance(compound_raw, str):
-            errors.append(
-                f"{rel}: {ROUTING_KEY}.compound is {compound_raw!r} "
-                f"({type(compound_raw).__name__}); it must be a string.")
+        try:
+            compound = _as_cell(compound_raw, field=f"{ROUTING_KEY}.compound")
+        except ValueError as exc:
+            errors.append(f"{rel}: {exc}")
             continue
-        compound = compound_raw
 
         says_never = "never auto-trigger" in " ".join(triggers).lower()
         if (router == "manual") != says_never:
@@ -308,7 +363,7 @@ def load_routing_rows() -> tuple[list[dict], list[str]]:
             {
                 "name": name,
                 "category": category,
-                "label": routing.get("label") or f"/{name}",
+                "label": label,
                 "triggers": triggers,
                 "exclusions": exclusions,
                 "compound": compound,
@@ -338,6 +393,29 @@ def escape_pipes(text: str) -> str:
         return match.group(0) if len(slashes) % 2 else slashes + "\\|"
 
     return re.sub(r"(\\*)\|", _fix, text)
+
+
+def unescape_pipes(text: str) -> str:
+    """The exact inverse of ``escape_pipes``: drop the ONE backslash it added.
+
+    The parser in ``scripts/dev/extract-router-rows.py`` splits a row on
+    unescaped pipes and, until 2026-08-27, handed the cell on with the escape
+    still in it. So `canopus`, whose trigger reads
+    ``/canopus [note | check | probe]``, round-tripped to a trigger containing
+    ``\\|`` - and that string would then have been written back into the
+    authoritative SKILL.md, putting a backslash in a file that never had one.
+    The docstring promising that "the round-trip reproduces each cell" was the
+    only thing saying otherwise.
+
+    Parity-aware for the same reason the forward function is: a pipe is escaped
+    only when the backslash run before it is ODD, so a literal backslash that is
+    DATA keeps its own escape.
+    """
+    def _unfix(match: "re.Match") -> str:
+        slashes = match.group(1)
+        return slashes[:-1] + "|" if len(slashes) % 2 else match.group(0)
+
+    return re.sub(r"(\\*)\|", _unfix, text)
 
 
 def render_row(row: dict) -> str:

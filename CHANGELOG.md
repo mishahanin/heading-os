@@ -83,6 +83,40 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- **A newline in any router cell split the generated table row in half, and
+  both gates ratified it.** `scripts/generate-skill-router.py` type-checked the
+  container and each item but never the cell CONTENT, so a trigger written as a
+  folded scalar (`- >`), which is the house style for `x-heading-capability` in
+  the same frontmatter, arrived carrying a trailing newline and ended its own
+  markdown row - leaving an orphan fragment whose remaining columns describe the
+  wrong skill, inside the always-on `.claude/rules/skill-router.md`. The
+  corruption is deterministic, so `--check` regenerated the same broken output
+  and reported OK. A new `_as_cell()` now guards `triggers`, `exclusions`,
+  `compound` AND `label` against a newline, a carriage return, a non-string, and
+  an empty value, and reports each as the curated `{file}: {error}` line. A tab
+  is deliberately allowed: it renders as whitespace, so refusing it would fail a
+  working `SKILL.md` over a symptom no reader can see. Two smaller defects found
+  while reproducing this: `label` was never type-checked at all, so `label: 7`
+  raised a bare `TypeError` out of `escape_pipes` and `label: no` - the YAML 1.1
+  boolean, which is falsy - vanished into the `or f"/{name}"` default with no
+  word to its author.
+- **The router migration tool parsed 0 of 94 rows and printed a green line over
+  it.** `scripts/dev/extract-router-rows.py` read `.claude/rules/skill-router.md`,
+  which was correct until F-5.2 split the generator's output into a two-column
+  core index there plus four-column detail tables under `reference/skill-router/`.
+  Every row then failed the "expected 4 cells" check and was warn-skipped, and
+  both exit paths still returned 0 - so a script or CI step reading the exit code
+  was told the round trip had been verified. It now derives each file from the
+  category name via `_gen.category_slug`, reports a missing detail file instead
+  of reading it as a category with no skills, and exits non-zero when it parses
+  nothing at all. Two further defects the fix exposed: the parser never removed
+  the escape the generator adds, so the `/canopus` trigger round-tripped carrying
+  a `\|` that would have been written into a `SKILL.md` that never had one
+  (`unescape_pipes`, parity-aware so a data backslash keeps its own escape); and
+  a cell holding the separator `, ` is genuinely ambiguous once rendered, so the
+  tool now warns when its split disagrees with the authoritative frontmatter
+  rather than silently writing an item the author never wrote.
+  Guard: `tests/test_a_router_row_that_broke_in_half_and_a_parser_that_read_nothing.py`.
 - **The DOCX twin of every corporate document fused its lists, tables and
   headings into one line.** `scripts/utils/doctype_renderer.py`'s `build_docx`
   carried a private four-line `strip_html` that converted `<br>` and `</p><p>`

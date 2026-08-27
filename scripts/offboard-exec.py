@@ -593,8 +593,27 @@ def update_exec_registry(slug: str) -> None:
         print(f"  {YELLOW}[warn]{RESET} {slug} not found in registry")
 
 
-def log_offboarding(slug: str, exec_info: dict, reassign_to: str | None) -> None:
-    """Log offboarding event to CEO-local audit log (outputs/operations/offboarding/audit/)."""
+def log_offboarding(slug: str, exec_info: dict, reassign_to: str | None,
+                    complete: bool | None = None,
+                    reasons: list[str] | None = None) -> None:
+    """Log offboarding event to CEO-local audit log (outputs/operations/offboarding/audit/).
+
+    `complete` and `reasons` come from `offboard_verdict`, which is the only
+    thing in this script that MEASURES the outcome. They used to reach stdout
+    and nothing else: this function was called with none of the step results and
+    wrote the fixed line "GitHub access revoked, workspace archived, contacts
+    preserved" whatever had happened. So a run where every collaborator DELETE
+    returned 404 - the exact failure `offboard_verdict`'s own docstring says it
+    was written for - left a durable record claiming the access was revoked,
+    while the only contradiction was a terminal line nobody keeps.
+
+    This file's comment below calls it "the only durable record that the
+    offboard happened at all". A record that states outcomes its run never
+    checked is what `.claude/rules/scope-claims.md` forbids.
+
+    `complete=None` means the caller did not supply a verdict; the entry then
+    says the outcome was not recorded rather than implying success.
+    """
     print(f"\n{BOLD}Step 6: Logging offboarding{RESET}")
     audit_dir = get_outputs_dir() / "operations" / "offboarding" / "audit"
     audit_dir.mkdir(parents=True, exist_ok=True)
@@ -603,11 +622,18 @@ def log_offboarding(slug: str, exec_info: dict, reassign_to: str | None) -> None
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     name = exec_info.get("name", slug) if exec_info else slug
 
+    if complete is None:
+        outcome = "NOT RECORDED - this run supplied no verdict"
+    elif complete:
+        outcome = "COMPLETE - access revoked, workspace archived, contacts preserved"
+    else:
+        outcome = "INCOMPLETE - " + "; ".join(reasons or ["no reason given"])
+
     entry = (
         f"\n## {name} ({slug})\n"
         f"- **Date:** {now}\n"
         f"- **Performed by:** {get_exec_slug()}\n"
-        f"- **Actions:** GitHub access revoked, workspace archived, contacts preserved\n"
+        f"- **Outcome:** {outcome}\n"
     )
     if reassign_to:
         entry += f"- **Contacts reassigned to:** {reassign_to}\n"
@@ -775,12 +801,16 @@ def main():
     print(f"  Check: personal/knowledge/ in the archived workspace repo")
 
     update_exec_registry(slug)
-    log_offboarding(slug, exec_info, args.reassign_to)
 
-    print_manual_checklist(slug, exec_info)
-
+    # The verdict is computed BEFORE the log, not after it. It used to run here
+    # and go only to stdout, so the durable record was written without ever
+    # seeing the outcome it claimed.
     complete, reasons = offboard_verdict(revoke_ok, preserved, residual,
                                          repos_reachable, archived)
+    log_offboarding(slug, exec_info, args.reassign_to,
+                    complete=complete, reasons=reasons)
+
+    print_manual_checklist(slug, exec_info)
     print(f"\n{'=' * 50}")
     if complete:
         print(f"{BOLD}{GREEN}Offboarding complete for {slug}.{RESET}")

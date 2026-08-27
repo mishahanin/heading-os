@@ -52,6 +52,29 @@ from scripts.utils.workspace import (  # noqa: E402
 from scripts.utils.markdown import parse_frontmatter_str as _parse_frontmatter  # noqa: E402
 
 
+def try_commit(commit_fn, repo: Path, files, message: str, label: str) -> bool:
+    """Run `commit_fn(repo, files, message)`; return whether it landed.
+
+    Both contact tools move a record across TWO repositories, and both caught a
+    failed commit into a warning and carried on to the next one. So the source
+    repo could commit the removal while the target's copy stayed untracked, and
+    in a fresh clone the contact existed in neither. Returning a BOOLEAN is what
+    lets the caller stop, and lets the final line say "INCOMPLETE" instead of
+    "complete".
+    """
+    import subprocess
+
+    try:
+        commit_fn(repo, files, message)
+    except subprocess.CalledProcessError as exc:
+        detail = exc.stderr.decode().strip() if getattr(exc, "stderr", None) else exc
+        print(f"Warning: git commit for the {label} repo failed - commit manually.")
+        print(f"  {detail}")
+        return False
+    print(f"Committed to the {label} repo.")
+    return True
+
+
 def stamped_backup_path(source_path: Path, kind: str, today=None) -> Path:
     """A backup name for `source_path` that never overwrites an earlier one.
 

@@ -22,7 +22,7 @@ from scripts.utils.workspace import (
     get_per_exec_repo_path, get_per_exec_contacts_dir, get_all_active_exec_slugs,
     get_crm_contacts_dir,
 )
-from scripts.utils.crm import stamped_backup_path
+from scripts.utils.crm import stamped_backup_path, try_commit
 from scripts.utils.operator_identity import operator_slug
 from scripts.utils.atomic import atomic_write_text
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
@@ -617,25 +617,30 @@ def main() -> None:
     first_paths = [target_path]
     if into_repo == from_repo:
         first_paths += [backup_path, source_path]
-    try:
-        git_commit(into_repo, first_paths, (
-            f"Merge contact {args.contact} from {args.from_exec} into {args.into}"
-        ))
-        print(f"{GREEN}Committed to {args.into} repo.{RESET}")
-    except subprocess.CalledProcessError as exc:
-        print(f"{YELLOW}Warning:{RESET} git commit for target repo failed — commit manually.")
-        print(f"  {exc.stderr.decode().strip() if exc.stderr else exc}")
+    # Same two-repository tear as transfer-contact.py, and the same fix: the
+    # commit of the REMOVAL is conditional on the merge landing. A failed first
+    # commit used to fall through to the second, so the source repo committed
+    # its deletion while the merged file stayed untracked in the target - and a
+    # fresh clone then had the contact in neither.
+    target_committed = try_commit(
+        git_commit, into_repo, first_paths,
+        f"Merge contact {args.contact} from {args.from_exec} into {args.into}",
+        f"target ({args.into})")
+    source_committed = True
     if into_repo != from_repo:
-        try:
+        if target_committed:
             # source_path as well as backup_path: the rename above left the
             # original tracked, and only naming it stages the deletion.
-            git_commit(from_repo, [backup_path, source_path], (
-                f"Backup merged contact {args.contact} (transferred to {args.into})"
-            ))
-            print(f"{GREEN}Committed backup to {args.from_exec} repo.{RESET}")
-        except subprocess.CalledProcessError as exc:
-            print(f"{YELLOW}Warning:{RESET} git commit for source repo failed — commit manually.")
-            print(f"  {exc.stderr.decode().strip() if exc.stderr else exc}")
+            source_committed = try_commit(
+                git_commit, from_repo, [backup_path, source_path],
+                f"Backup merged contact {args.contact} (transferred to {args.into})",
+                f"source ({args.from_exec})")
+        else:
+            source_committed = False
+            print(f"{YELLOW}Skipped the source-repo commit.{RESET} Committing the "
+                  f"removal while the merge is uncommitted would leave the "
+                  f"contact in neither repository.")
+    torn = not (target_committed and source_committed)
 
     # Summary
     entries_from = len(extract_interaction_log(body_from)[1])
@@ -646,7 +651,13 @@ def main() -> None:
     print(f"  Last touch:  {merged_fm.get('last_touch')}")
     print(f"  Cadence:     {merged_fm.get('cadence')}")
     print(f"  Provenance:  {merged_fm.get('previous_owners')}")
+    if torn:
+        print(f"  {RED}MERGE INCOMPLETE: the files are merged on disk but at "
+              f"least one repository did not commit.{RESET}")
+        print(f"  {RED}Commit both by hand before anyone clones either repo.{RESET}")
     print()
+    if torn:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

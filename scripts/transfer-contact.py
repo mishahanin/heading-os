@@ -23,8 +23,9 @@ from scripts.utils.workspace import (
     get_per_exec_repo_path, get_per_exec_contacts_dir, get_all_active_exec_slugs,
     get_crm_contacts_dir,
 )
+from scripts.utils.atomic import atomic_write_text
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
-from scripts.utils.crm import stamped_backup_path
+from scripts.utils.crm import stamped_backup_path, try_commit
 
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -158,7 +159,10 @@ def main() -> None:
     text = append_transfer_note(text, args.from_exec, args.to)
 
     # Write to target
-    target_path.write_text(text, encoding="utf-8")
+    # Atomic, like its twin in merge-contacts.py. A plain write_text on the
+    # TARGET of a move is a partial file if the process dies mid-write, and
+    # the source has already been read but not yet renamed at that point.
+    atomic_write_text(target_path, text)
     print(f"{GREEN}Contact written:{RESET} {target_path}")
 
     # Backup source. Date-stamped and never clobbering: see
@@ -179,35 +183,52 @@ def main() -> None:
     first_paths = [target_path]
     if to_repo == from_repo:
         first_paths += [backup_path, source_path]
-    try:
-        git_commit(to_repo, first_paths, (
-            f"Transfer contact {args.contact} from {args.from_exec} to {args.to}"
-        ))
-        print(f"{GREEN}Committed to {args.to} repo.{RESET}")
-    except subprocess.CalledProcessError as exc:
-        print(f"{YELLOW}Warning:{RESET} git commit for target repo failed — commit manually.")
-        print(f"  {exc.stderr.decode().strip() if exc.stderr else exc}")
+    # A move spans TWO repositories, and a failure of the first commit used to
+    # be downgraded to a warning that fell straight through to the second - so
+    # the source repo committed the removal while the target's copy stayed
+    # untracked. In a fresh clone the contact then existed in NEITHER repo, and
+    # the run printed "Transfer complete:" and exited 0.
+    #
+    # The commit of the REMOVAL is now conditional on the addition landing. The
+    # working tree still holds both halves either way; what changes is that the
+    # loss is no longer made durable, and the exit code says so.
+    target_committed = try_commit(
+        git_commit, to_repo, first_paths,
+        f"Transfer contact {args.contact} from {args.from_exec} to {args.to}",
+        f"target ({args.to})")
+    source_committed = True
     if to_repo != from_repo:
-        try:
+        if target_committed:
             # source_path as well as backup_path: the rename above left the
             # original tracked, and only naming it stages the deletion.
-            git_commit(from_repo, [backup_path, source_path], (
-                f"Backup transferred contact {args.contact} (moved to {args.to})"
-            ))
-            print(f"{GREEN}Committed backup to {args.from_exec} repo.{RESET}")
-        except subprocess.CalledProcessError as exc:
-            print(f"{YELLOW}Warning:{RESET} git commit for source repo failed — commit manually.")
-            print(f"  {exc.stderr.decode().strip() if exc.stderr else exc}")
+            source_committed = try_commit(
+                git_commit, from_repo, [backup_path, source_path],
+                f"Backup transferred contact {args.contact} (moved to {args.to})",
+                f"source ({args.from_exec})")
+        else:
+            source_committed = False
+            print(f"{YELLOW}Skipped the source-repo commit.{RESET} Committing the "
+                  f"removal while the addition is uncommitted would leave the "
+                  f"contact in neither repository.")
 
     # Confirmation
     today = datetime.now(get_default_tz()).strftime("%Y-%m-%d")
-    print(f"\n{BOLD}Transfer complete:{RESET}")
+    torn = not (target_committed and source_committed)
+    header = (f"{BOLD}{RED}Transfer INCOMPLETE:{RESET}" if torn
+              else f"{BOLD}Transfer complete:{RESET}")
+    print(f"\n{header}")
     print(f"  Contact:  {args.contact}")
     print(f"  From:     {args.from_exec}")
     print(f"  To:       {args.to}")
     print(f"  Date:     {today}")
     print(f"  Backup:   {backup_path.name}")
+    if torn:
+        print(f"  {RED}The files are moved on disk but at least one repository "
+              f"did not commit.{RESET}")
+        print(f"  {RED}Commit both by hand before anyone clones either repo.{RESET}")
     print()
+    if torn:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

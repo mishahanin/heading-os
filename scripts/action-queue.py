@@ -39,7 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.utils import tool_risk
+from scripts.utils import dead_letter, tool_risk
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.workspace import get_data_root, get_workspace_root
 from scripts.bridge_daemon.sources.action_queue import (
@@ -98,6 +98,40 @@ def _print_aq_row(c: dict) -> None:
 # ============================================================
 # Core: synchronous approve-and-send (reusable / testable)
 # ============================================================
+
+def _record_unrecorded_send(data_root: Path, card: dict, why: str) -> None:
+    """Make a sent-but-unrecorded message durable somewhere, and say so loudly.
+
+    The queue is the record of what left, and this is the one case where it does
+    not have that record. `dead_letter.record` is the workspace's existing
+    "durable, trace-keyed artifact instead of vanishing" store, it never raises,
+    and its own docstring says an unknown classification coerces to `permanent`,
+    which forces re-approval rather than silent retry. That is the right
+    direction here: a human has to look.
+
+    The `kind` is deliberately NOT a send failure. The message succeeded; the
+    bookkeeping did not, and calling it a failure would send someone looking for
+    an undelivered mail that is already in the recipient's inbox.
+    """
+    path = dead_letter.record(
+        trace_id=card.get("trace_id") or "-",
+        kind="sent_unrecorded",
+        payload=card,
+        classification="permanent",
+        error=why,
+        workspace_root=data_root,
+    )
+    print(f"{RED}{BOLD}WARNING: the message WAS SENT and the queue does not "
+          f"know it.{RESET}")
+    print(f"{GRAY}  The card kept its pre-approval status, so approving it "
+          f"again would send a SECOND copy.{RESET}")
+    print(f"{GRAY}  Reason the write failed: {why or '(unstated)'}{RESET}")
+    if path:
+        print(f"{GRAY}  A durable record is at {path}.{RESET}")
+    else:
+        print(f"{RED}  The durable record could not be written either. This "
+              f"terminal is the only account of the send.{RESET}")
+
 
 def approve_and_send(engine_root: Path, data_root: Path, id_or_prefix: str) -> dict:
     """Approve a card and, for a gated send card, SEND it synchronously.
@@ -158,7 +192,30 @@ def approve_and_send(engine_root: Path, data_root: Path, id_or_prefix: str) -> d
                     "error": "draft not ready_for_review - edit it first"}
         res = send_card(engine_root, card)
         if res.get("result") == "sent":
-            apply_status(data_root, aid, "sent", event="approved")
+            # The mail is GONE from here on. Everything below records that fact,
+            # and the return value of the recorder used to be discarded.
+            #
+            # `apply_status` returns {"ok": False, "error": "not found"} when the
+            # card is no longer in the queue - another process pruned it, or
+            # `_load_queue` quarantined a corrupt queue between the read above
+            # and this write - and in that case it writes NEITHER the status NOR
+            # the disposition-log entry. `_write_queue` can also raise OSError
+            # (full disk, permissions) straight out through here.
+            #
+            # Both paths used to end with "sent ... (delivered now)" and exit 0,
+            # or with a traceback, over an irreversible outbound message that
+            # nothing on disk knew about. The card then keeps its PRE-approval
+            # status, and `SENDABLE_STATUSES` includes `pending`, so the same
+            # mail can be approved and sent a second time - the one failure a
+            # send-gated queue exists to prevent.
+            try:
+                recorded = apply_status(data_root, aid, "sent", event="approved")
+            except OSError as exc:
+                recorded = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            if not recorded.get("ok"):
+                _record_unrecorded_send(data_root, card, recorded.get("error", ""))
+                return {"result": "sent_unrecorded", "action_id": aid,
+                        "error": recorded.get("error", "")}
             return {"result": "sent", "action_id": aid}
         # M2: stamp classification=None -> apply_status writes NO dead-letter entry.
         apply_status(data_root, aid, "send_failed", event="send_failed",
@@ -212,6 +269,13 @@ def cmd_approve(engine_root: Path, data_root: Path, args) -> int:
     if r == "approved":
         print(f"{GREEN}approved{RESET} {aid} (non-send disposition recorded)")
         return 0
+    if r == "sent_unrecorded":
+        # Exit 1 and RED, because a clean exit here is what let an unrecorded
+        # send look like a completed one. The mail is out; the queue is wrong.
+        print(f"{RED}{BOLD}sent, NOT recorded{RESET} {aid}: {res.get('error', '')}\n"
+              f"{GRAY}see the warning above - do NOT approve this card again "
+              f"without checking Sent Items{RESET}", file=sys.stderr)
+        return 1
     if r == "send_failed":
         print(f"{RED}send failed{RESET} {aid}: {res.get('error', '')}\n"
               f"{GRAY}card kept as send_failed - fix and `retry {aid}`{RESET}", file=sys.stderr)

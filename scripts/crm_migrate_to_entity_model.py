@@ -806,11 +806,38 @@ def cmd_apply() -> int:
             print(f"Hidden-char scan FAILED on {staged}. Aborting apply.")
             return 1
 
+    final_ab = crm_root / "address-book"
+    final_ab.mkdir(exist_ok=True)
+
+    # WRITE-AHEAD. The manifest is what makes `--rollback` symmetric, and it used
+    # to be written LAST - after both rename loops and after the legacy unlinks.
+    # So a failure or a Ctrl-C anywhere inside the destructive phase left a
+    # half-migrated tree and NO manifest, and nothing afterwards could tell a
+    # half-applied migration from an un-applied one. Rollback then restored the
+    # legacy files and left every slug-named file apply had already moved in,
+    # which is the both-generations duplication the manifest exists to prevent,
+    # in a state the operator believes is restored.
+    #
+    # An INTENT record is safe in the direction a rollback needs: it names
+    # everything apply is about to create, so rollback removes files that may
+    # never have appeared, which is a no-op. A manifest naming LESS than what
+    # happened is the unsafe direction, and that is exactly what writing it last
+    # produced. `removed_legacy` cannot be known in advance, so it stays empty
+    # here and the completion stamp below fills it in.
+    manifest_path = backup_dir / "applied-manifest.json"
+    intended_ab = sorted(p.name for p in address_book_staging.glob("*.md"))
+    intended_contacts = sorted(created_from)
+    atomic_write_text(manifest_path, json.dumps({
+        "status": "in_progress",
+        "started_at_utc": datetime.now(timezone.utc).isoformat(),
+        "created_contacts": intended_contacts,
+        "created_address_book": intended_ab,
+        "removed_legacy": [],
+    }, indent=2))
+
     # Rename staging -> final using os.replace (atomic on POSIX + Windows).
     # NOT shutil.move + target.unlink() - Windows raises PermissionError on
     # read-only attributes (corporate files may be marked read-only).
-    final_ab = crm_root / "address-book"
-    final_ab.mkdir(exist_ok=True)
     for staged in address_book_staging.glob("*.md"):
         target = final_ab / staged.name
         if target.exists():
@@ -856,19 +883,18 @@ def cmd_apply() -> int:
     # Clean staging
     shutil.rmtree(staging, ignore_errors=True)
 
-    # The manifest is what makes --rollback symmetric. Without it, rollback
-    # restored the legacy files and left every slug-named file apply had
-    # created, so an apply-then-rollback cycle ended with BOTH generations on
-    # disk while printing "Rollback complete" — the same duplication as above,
-    # in a state the operator believes is restored.
+    # The completion stamp. The intent record was written before the first
+    # rename (see above), so `--rollback` has something to work from even when
+    # this line is never reached; this one narrows it to what actually happened
+    # and marks the apply finished.
     manifest = {
+        "status": "complete",
         "applied_at_utc": datetime.now(timezone.utc).isoformat(),
         "created_contacts": sorted(created_from),
         "created_address_book": sorted(p.name for p in final_ab.glob("*.md")),
         "removed_legacy": sorted(removed),
     }
-    atomic_write_text(backup_dir / "applied-manifest.json",
-                      json.dumps(manifest, indent=2) + "\n")
+    atomic_write_text(manifest_path, json.dumps(manifest, indent=2) + "\n")
 
     print(f"Migration applied. Address book at {final_ab} (~{len(list(final_ab.glob('*.md')))} entities).")
     print(f"Removed {len(removed)} legacy contact file(s); all are in the backup.")
@@ -879,6 +905,36 @@ def cmd_apply() -> int:
 # ============================================================
 # Command: --rollback
 # ============================================================
+def _apply_state(backup_dir: Path) -> str:
+    """What the manifest in `backup_dir` says about the apply that wrote it.
+
+    A half-applied migration and a complete one used to look identical from
+    here, because the manifest was written only after the last unlink: an apply
+    interrupted anywhere in the destructive phase left no manifest at all. It is
+    now written BEFORE the first rename, marked `in_progress`, and stamped
+    `complete` at the end - so this can say which one the operator is rolling
+    back, which is the thing they most need to know before answering "yes".
+    """
+    path = backup_dir / "applied-manifest.json"
+    if not path.exists():
+        return ("Apply state: UNKNOWN - no manifest in this backup. It predates "
+                "the manifest, or the apply died before writing one.")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return f"Apply state: UNREADABLE manifest ({exc})."
+    status = data.get("status")
+    if status == "complete":
+        return "Apply state: complete."
+    if status == "in_progress":
+        return ("Apply state: INTERRUPTED. The apply that wrote this backup "
+                "never finished, so the tree is part-migrated. The manifest "
+                "lists what it INTENDED to create; rollback removes whichever "
+                "of those exist.")
+    return (f"Apply state: unrecognised status {status!r}. Treating the "
+            f"manifest's lists as the intent record.")
+
+
 def cmd_rollback() -> int:
     """Restore from the most recent backup directory."""
     ws = get_workspace_root()  # engine root: restore relativity (ws.parent)
@@ -893,6 +949,7 @@ def cmd_rollback() -> int:
         return 1
     latest = dates[-1]
     print(f"Restoring from {latest}...")
+    print(_apply_state(latest))
 
     # Confirm
     resp = input("This will overwrite current crm/contacts/ and remove crm/address-book/. Confirm? [yes/no]: ").strip().lower()

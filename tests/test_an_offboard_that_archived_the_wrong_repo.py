@@ -174,7 +174,9 @@ def main_env(monkeypatch, tmp_path):
         ("reassign_contacts", lambda slug, to: None),
         ("archive_per_exec_crm_repo", lambda slug: True),
         ("update_exec_registry", lambda slug: None),
-        ("log_offboarding", lambda slug, info, to: None),
+        # `**_` since 2026-08-27: the audit log now takes the verdict, because
+        # it used to write "GitHub access revoked" whatever had happened.
+        ("log_offboarding", lambda slug, info, to, **_: None),
         ("print_manual_checklist", lambda slug, info: None),
     ):
         monkeypatch.setattr(ofb, name, value)

@@ -214,13 +214,24 @@ def test_scan_for_archive_proposes_on_hold_for_active_older_than_60_days(tmp_pat
 
 
 def test_new_thread_path_rejects_empty_slug(tmp_path: Path) -> None:
-    """H5 regression: titles that slugify to empty must be rejected loudly."""
+    """H5 regression: titles that slugify to empty must be rejected loudly.
+
+    "Привет мир" used to be listed here as a refusal, and that pinned the defect
+    rather than the intent: the operator writes in Russian daily, so refusing
+    every Russian title was the bug, not the guard. Since 2026-08-27 `slugify`
+    transliterates Cyrillic, so that title opens a thread and the case moved to
+    the positive assertion below. What is still refused is a title with no
+    letters at all, in any script this workspace transliterates.
+    """
     with pytest.raises(ValueError, match="slugifies to empty"):
         new_thread_path(tmp_path, "business", "!!!", "2026-04-30")
     with pytest.raises(ValueError, match="slugifies to empty"):
-        new_thread_path(tmp_path, "business", "Привет мир", "2026-04-30")
+        new_thread_path(tmp_path, "business", "文書", "2026-04-30")
     with pytest.raises(ValueError, match="slugifies to empty"):
         new_thread_path(tmp_path, "business", "    ", "2026-04-30")
+    assert new_thread_path(
+        tmp_path, "business", "Привет мир", "2026-04-30"
+    ).name == "2026-04-30-privet-mir.md"
 
 
 def test_parse_thread_file_rejects_id_filename_mismatch(tmp_path: Path) -> None:

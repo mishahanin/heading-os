@@ -60,18 +60,18 @@ def _scan(memory_dir, index_text: str):
 # ============================================================
 
 def test_a_money_value_on_a_grouped_line_is_found(memory_dir):
-    flagged = _scan(memory_dir, "- Property: [villa](villa.md) - asking EUR 412,000\n")
-    assert [f["target"] for f in flagged] == ["villa.md"]
+    flagged = _scan(memory_dir, "- Logistics: [warehouse](warehouse.md) - asking EUR 412,000\n")
+    assert [f["target"] for f in flagged] == ["warehouse.md"]
 
 
 def test_the_pointer_carrying_the_money_is_the_one_reported(memory_dir):
     """The first pointer on the line used to take the blame for the fifth."""
     flagged = _scan(memory_dir, (
-        "- Property: [survey](survey.md) - done "
-        "· [mortgage](mortgage.md) - EUR 412,000 loan "
-        "· [movers](movers.md) - booked\n"
+        "- Logistics: [permit](permit.md) - done "
+        "· [lease](lease.md) - EUR 412,000 loan "
+        "· [haulier](haulier.md) - booked\n"
     ))
-    assert [f["target"] for f in flagged] == ["mortgage.md"]
+    assert [f["target"] for f in flagged] == ["lease.md"]
 
 
 def test_two_priced_pointers_on_one_line_are_both_reported(memory_dir):
@@ -84,9 +84,9 @@ def test_two_priced_pointers_on_one_line_are_both_reported(memory_dir):
 
 
 def test_the_group_label_belongs_to_the_first_pointer(memory_dir):
-    """`- Mortgage EUR 412,000: [bank](x.md)` is the same claim in another order."""
-    flagged = _scan(memory_dir, "- Mortgage EUR 412,000: [bank](bank.md) - open\n")
-    assert [f["target"] for f in flagged] == ["bank.md"]
+    """`- Lease EUR 412,000: [landlord](x.md)` is the same claim in another order."""
+    flagged = _scan(memory_dir, "- Lease EUR 412,000: [landlord](landlord.md) - open\n")
+    assert [f["target"] for f in flagged] == ["landlord.md"]
 
 
 def test_a_magnitude_needs_its_money_word_on_the_same_pointer(memory_dir):
@@ -125,21 +125,21 @@ def test_a_thread_pointer_is_still_skipped(memory_dir):
 def test_a_thread_pointer_does_not_silence_its_neighbours(memory_dir):
     flagged = _scan(memory_dir, (
         "- Threads: [deal](threads/business/deal.md) - quiet "
-        "· [villa](villa.md) - asking EUR 412,000\n"
+        "· [warehouse](warehouse.md) - asking EUR 412,000\n"
     ))
-    assert [f["target"] for f in flagged] == ["villa.md"]
+    assert [f["target"] for f in flagged] == ["warehouse.md"]
 
 
 def test_a_line_that_is_not_a_bullet_is_ignored(memory_dir):
     """Prose in the index preamble is not a hook and has no target to report."""
-    flagged = _scan(memory_dir, "See [the villa](villa.md), asking EUR 412,000.\n")
+    flagged = _scan(memory_dir, "See [the warehouse](warehouse.md), asking EUR 412,000.\n")
     assert flagged == []
 
 
 def test_a_plain_single_pointer_hook_still_works(memory_dir):
     """The shape the old pattern did match must not regress."""
-    flagged = _scan(memory_dir, "- [villa purchase](villa.md) - asking EUR 412,000\n")
-    assert [f["target"] for f in flagged] == ["villa.md"]
+    flagged = _scan(memory_dir, "- [warehouse purchase](warehouse.md) - asking EUR 412,000\n")
+    assert [f["target"] for f in flagged] == ["warehouse.md"]
 
 
 def test_a_non_markdown_target_is_not_a_memory_hook(memory_dir):
@@ -154,14 +154,14 @@ def test_a_non_markdown_target_is_not_a_memory_hook(memory_dir):
 def test_the_reported_line_is_the_pointer_not_the_whole_row(memory_dir):
     """A 300-character grouped row printed whole tells the operator nothing."""
     flagged = _scan(memory_dir, (
-        "- Property: [survey](survey.md) - done "
-        "· [mortgage](mortgage.md) - EUR 412,000 loan "
-        "· [movers](movers.md) - booked\n"
+        "- Logistics: [permit](permit.md) - done "
+        "· [lease](lease.md) - EUR 412,000 loan "
+        "· [haulier](haulier.md) - booked\n"
     ))
     assert len(flagged) == 1
     line = flagged[0]["line"]
-    assert "mortgage.md" in line
-    assert "movers.md" not in line, f"the whole row was reported: {line!r}"
+    assert "lease.md" in line
+    assert "haulier.md" not in line, f"the whole row was reported: {line!r}"
 
 
 def test_the_note_counts_what_was_flagged(memory_dir):

@@ -39,6 +39,7 @@ from scripts.utils.workspace import (
 )
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
 from scripts.utils.markdown import parse_frontmatter as _parse_frontmatter_text
+from scripts.utils.slugs import stable_suffix, transliterate
 
 # ============================================================
 # Configuration
@@ -463,11 +464,19 @@ def get_workspace_defaults(source_path: Path) -> dict:
 
 
 def generate_slug(topic: str) -> str:
-    """Generate a URL-safe slug from a topic string."""
-    slug = topic.lower()
+    """URL-safe slug from a topic, with a Cyrillic title kept rather than erased.
+
+    Without the transliteration pass this returned '' for any Cyrillic input, so
+    the deck stem `31C-{title}-{date}` collapsed to `31C--27-Aug-2026` and every
+    Russian-titled deck rendered that day shared one name. Measured 2026-08-27:
+    `generate_slug('Стратегия развития') == ''`.
+    """
+    slug = transliterate(topic).lower()
     slug = re.sub(r"[^a-z0-9\s-]", "", slug)
     slug = re.sub(r"[\s]+", "-", slug).strip("-")
     slug = re.sub(r"-+", "-", slug)
+    if not slug and topic.strip():
+        return stable_suffix(topic)
     return slug[:60]
 
 

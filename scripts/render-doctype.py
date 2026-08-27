@@ -31,6 +31,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
+from scripts.utils.slugs import stable_suffix, transliterate
 from scripts.utils.workspace import get_workspace_root
 from scripts.utils import impeccable_engine
 from scripts.utils.doctype_renderer import (
@@ -43,10 +44,22 @@ from scripts.utils.doctype_renderer import (
 
 
 def slugify(text: str, max_len: int = 40) -> str:
-    text = text.lower().strip()
-    text = re.sub(r"[^a-z0-9]+", "-", text)
-    text = text.strip("-")
-    return text[:max_len]
+    """Lowercase kebab-case stem, with a Cyrillic title kept rather than erased.
+
+    Without the transliteration pass this returned '' for any Cyrillic input, so
+    `build_filename` produced `2026-08-27_letter__.pdf` and a second Russian
+    letter the same day overwrote the first, in PDF, DOCX and HTML. Measured
+    2026-08-27: `slugify('Партнёрское предложение') == ''`.
+
+    A title in a script the table does not cover still cleans to nothing, so it
+    falls back to a short digest of the original. That is unreadable, and it is
+    better than two documents sharing one name.
+    """
+    transliterated = transliterate(text).lower().strip()
+    slug = re.sub(r"[^a-z0-9]+", "-", transliterated).strip("-")
+    if not slug and text.strip():
+        return stable_suffix(text)
+    return slug[:max_len]
 
 
 _MONTHS = {name: number for number, name in enumerate(

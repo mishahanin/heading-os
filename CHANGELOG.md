@@ -83,6 +83,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- **Three filename builders erased every Russian title, and one of them
+  overwrote a rendered document.** Each cleans a title down to `[a-z0-9-]` and
+  uses the result as a filename stem, so a Cyrillic title produced the empty
+  string. Verified 2026-08-27: `slugify('Партнёрское предложение') == ''`. In
+  `scripts/render-doctype.py` two letters to two Russian-named recipients on one
+  day both rendered to `2026-08-27_letter__.pdf`, and the second silently
+  replaced the first in PDF, DOCX and HTML. In `scripts/marp_render.py` every
+  Russian-titled deck rendered on one day collapsed to `31C--27-Aug-2026`.
+  `scripts/utils/threads_lib.py` failed safe (`new_thread_path` raises on an
+  empty slug) but still lost information on a mixed title: the live thread
+  a title like "Миграция CRM на новый сервер" carried the id `crm`. The operator
+  writes in Russian daily, so this was not a hypothetical script. New shared
+  module `scripts/utils/slugs.py` adds a Cyrillic transliteration pre-pass and a
+  deterministic short-digest fallback for titles in scripts the table does not
+  cover. It is a PRE-PASS on purpose: each builder keeps its own ASCII rules, so
+  every slug that worked before is byte-identical afterwards, and no existing
+  output or thread id moves. Threads deliberately do not get the digest fallback,
+  because a thread id is read by a person. No new dependency: the table is forty
+  lines. Guard: `tests/test_a_slug_that_erased_every_russian_title.py`. One older
+  test had pinned the defect as intent, listing "Привет мир" among the titles
+  that must be refused; it now asserts that title opens a thread.
 - **Seven readers asked git for paths and got quoted strings back.**
   `core.quotePath` defaults to on, so `git ls-files` and `git diff --name-only`
   C-quote any path holding a byte outside printable ASCII: a Cyrillic filename

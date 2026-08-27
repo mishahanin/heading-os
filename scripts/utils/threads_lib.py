@@ -8,6 +8,7 @@ from datetime import date, datetime
 import re
 import yaml
 from scripts.utils.atomic import atomic_write_text
+from scripts.utils.slugs import transliterate
 from scripts.utils.workspace import get_default_tz
 
 REQUIRED_FIELDS = (
@@ -103,8 +104,14 @@ def slugify(text: str) -> str:
     Dots and whitespace are converted to hyphens (preserves '31c.io' -> '31c-io',
     not destructive '31cio'). Parens, punctuation, and other non-alphanumeric
     chars are stripped. Multiple hyphens collapse to one.
+
+    Cyrillic is transliterated first, so a Russian title keeps its words instead
+    of being erased. A MIXED title was the loss that showed: the live thread
+    "Миграция CRM на новый сервер" would carry the id `crm`, five words
+    in and one word out. `new_thread_path` still RAISES when the result is empty,
+    which is the right answer for an id a person has to read.
     """
-    text = text.lower()
+    text = transliterate(text).lower()
     # Step 1: dots and whitespace -> hyphen
     text = re.sub(r"[.\s]+", "-", text)
     # Step 2: strip everything that isn't alphanumeric or hyphen
@@ -121,7 +128,8 @@ def new_thread_path(threads_root: Path, type_: str, title: str, date: str) -> Pa
     slug = slugify(title)
     if not slug:
         raise ValueError(
-            f"title {title!r} slugifies to empty; provide a title with at least one ASCII alphanumeric character",
+            f"title {title!r} slugifies to empty; provide a title with at least "
+            f"one Latin or Cyrillic letter, or a digit",
         )
     # Belt-and-braces: `slugify` already strips parens, so this can only fire if
     # that changes. A paren in the stem breaks every markdown link that names the

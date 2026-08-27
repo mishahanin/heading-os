@@ -174,19 +174,35 @@ def _repo_uncommitted(repo: Path) -> tuple[int | None, float | None]:
     oldest_age_hours = now minus the OLDEST mtime among the dirty paths (how long
     work has been sitting).
     """
-    rc, out = _run_git(repo, ["status", "--porcelain"])
+    # `-z`, not plain porcelain. Git C-QUOTES any path holding a space, a
+    # non-ASCII byte or a backslash: `?? "caf\303\251.md"`, quotes and octal
+    # escapes included. Those bytes are not the filename, so `stat()` raised
+    # FileNotFoundError and the path was dropped from the oldest-mtime scan
+    # entirely - understating backup debt in exactly the way this function's
+    # docstring says must not happen. `-z` suppresses quoting and separates
+    # records with NUL, so nothing needs decoding.
+    rc, out = _run_git(repo, ["status", "--porcelain", "-z"])
     if rc != 0:
         return None, None
-    if not out.strip():
+    # Under -z a rename is TWO NUL-separated fields for ONE entry: "R  <new>"
+    # then "<old>". Consume the second so it is neither counted as a change nor
+    # stat'd as a path that no longer exists.
+    fields = [f for f in out.split("\0") if f]
+    if not fields:
         return 0, 0.0
-    entries = [ln for ln in out.splitlines() if ln.strip()]
+    entries: list[str] = []
+    i = 0
+    while i < len(fields):
+        record = fields[i]
+        entries.append(record)
+        if record[:1] in ("R", "C"):
+            i += 1  # skip the source path that follows
+        i += 1
     now = time.time()
     oldest_mtime = None
-    for ln in entries:
-        # porcelain line: "XY <path>" (path starts at col 3); rename uses " -> ".
-        path = ln[3:].strip()
-        if " -> " in path:
-            path = path.split(" -> ", 1)[1].strip()
+    for record in entries:
+        # porcelain record: "XY <path>"; the path starts at column 3.
+        path = record[3:].strip()
         fp = repo / path
         try:
             mt = fp.stat().st_mtime
@@ -381,18 +397,28 @@ def classify_publish(pending: int) -> dict:
 
 
 def publish_state(engine_root: Path) -> dict:
-    """Approximate pending-publish count via publish-corporate.py --dry-run.
+    """Pending-publish count via `publish-corporate.py --preview --json`.
 
-    v1 approximation (Open Q 3): parse the dry-run pending count; exact per-file
-    diff is deferred to v2. Degrades to 0 (not due) when the script is absent or
-    the dry-run fails - publish debt is advisory, never an emergency.
+    Degrades to 0 (not due) when the script is absent or the preview fails -
+    publish debt is advisory, never an emergency.
+
+    The argv used to read `--dry-run --json`, and `publish-corporate.py` has
+    never defined either flag: its only options are --preview / --copy /
+    --verify / --bump-build (a required mutually exclusive group), --summary,
+    --structural and --files-changed. Every run exited 2 on the argparse error,
+    so `proc.returncode == 0` was unreachable, `pending` never left 0, and this
+    signal could not fire whatever the fleet owed. Measured 2026-08-27 against a
+    tree with real corporate changes: `due=False`, threshold 1.
+    `tests/test_ops_signals.py` exercises only the pure classifier, which takes
+    an already-computed integer and so cannot notice that the integer is always
+    zero. `--preview --json` now exists, and a test asserts this argv parses.
     """
     script = engine_root / "scripts" / "publish-corporate.py"
     pending = 0
     if script.exists():
         try:
             proc = subprocess.run(
-                [sys.executable, str(script), "--dry-run", "--json"],
+                [sys.executable, str(script), "--preview", "--json"],
                 cwd=str(engine_root),
                 capture_output=True,
                 text=True,

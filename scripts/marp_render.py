@@ -1173,6 +1173,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--self-test", action="store_true", help="Run self-test")
+    # ONE declaration. `render` and `from` each redeclared --verbose on their
+    # own subparser, and a subparser's store_true default of False OVERWRITES
+    # the top-level value in the same namespace, so `marp_render.py --verbose
+    # render deck.md` reported verbose=False - the flag was accepted, echoed in
+    # --help, and discarded. Measured with argparse directly on 2026-08-27.
+    # It is now accepted in EITHER position because the sub-declaration below
+    # inherits this one's value through `default=argparse.SUPPRESS`.
     parser.add_argument("--verbose", action="store_true", help="Verbose output")
     parser.add_argument("--theme-variant", choices=sorted(THEME_VARIANTS),
                         default="31c",
@@ -1190,7 +1197,8 @@ def main():
     render_p.add_argument("--output", type=Path, help="Output directory")
     render_p.add_argument("--auto-sanitize", action="store_true", default=False,
                            help="Render from sanitized copy instead of blocking on hidden chars")
-    render_p.add_argument("--verbose", action="store_true")
+    render_p.add_argument("--verbose", action="store_true",
+                        default=argparse.SUPPRESS)
 
     # from
     from_p = subparsers.add_parser("from", help="Transform workspace markdown into slides")
@@ -1203,7 +1211,8 @@ def main():
     from_p.add_argument("--no-auto-closing", action="store_true")
     from_p.add_argument("--paginate-heavy", action="store_true")
     from_p.add_argument("--output", type=Path)
-    from_p.add_argument("--verbose", action="store_true")
+    from_p.add_argument("--verbose", action="store_true",
+                        default=argparse.SUPPRESS)
 
     # watch
     watch_p = subparsers.add_parser("watch", help="Watch mode")
@@ -1230,7 +1239,7 @@ def main():
             html_only=args.html_only,
             images_png=args.images == "png",
             auto_sanitize=args.auto_sanitize,
-            verbose=args.verbose or getattr(args, "verbose", False),
+            verbose=args.verbose,
         )
         print_result(result)
         sys.exit(0 if result["ok"] else 1)
@@ -1246,7 +1255,7 @@ def main():
             no_auto_closing=args.no_auto_closing,
             do_paginate_heavy=args.paginate_heavy,
             output_dir=args.output,
-            verbose=args.verbose or getattr(args, "verbose", False),
+            verbose=args.verbose,
         )
         print_result(result)
         sys.exit(0 if result["ok"] else 1)

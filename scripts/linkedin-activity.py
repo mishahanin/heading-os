@@ -47,12 +47,18 @@ def parse_proxy(url: str) -> dict:
     }
 
 
-def floorp_cookies_for_playwright() -> list[dict]:
-    """Read Floorp ClaudeCode cookies and reshape for Playwright context.add_cookies()."""
-    raw = get_cookies("linkedin.com", profile_name="ClaudeCode", browser="floorp")
+def floorp_cookies_for_playwright(profile_name: str = "ClaudeCode") -> list[dict]:
+    """Read a Floorp profile's cookies and reshape them for context.add_cookies().
+
+    The profile was hardcoded to "ClaudeCode" while `--profile` was declared,
+    defaulted, and printed back to the operator: `Loaded N cookies from Floorp
+    <profile> profile` named whatever was typed and the run had read a different
+    one. A wrong name silently produced the right-looking failure message.
+    """
+    raw = get_cookies("linkedin.com", profile_name=profile_name, browser="floorp")
     if "li_at" not in raw:
         raise RuntimeError(
-            "li_at cookie missing from Floorp ClaudeCode profile. "
+            f"li_at cookie missing from Floorp {profile_name} profile. "
             "Log in to LinkedIn in that profile first."
         )
     cookies: list[dict] = []
@@ -249,7 +255,7 @@ def main() -> int:
         proxy_cfg = parse_proxy(proxy_url)
 
     try:
-        cookies = floorp_cookies_for_playwright()
+        cookies = floorp_cookies_for_playwright(args.profile)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"{RED}ERROR: {exc}{RESET}", file=sys.stderr)
         return 2

@@ -78,7 +78,7 @@
 <main class="content">
   <h1>Emergency Procedures</h1>
   <p class="page-meta">What to do when the normal sync/push/update chain is broken. For routine operations, see GETTING-STARTED.md (execs) or CEO-ADMIN-GUIDE.md (CEO).</p>
-  <!-- version: 1.2.3 | last-updated: 2026-08-23 -->
+  <!-- version: 1.2.4 | last-updated: 2026-08-27 -->
 
 <blockquote>
 <p>What to do when the normal sync/push/update chain is broken. For routine operations, see <code>GETTING-STARTED.md</code> (execs) or <code>CEO-ADMIN-GUIDE.md</code> (CEO).</p>
@@ -147,7 +147,7 @@
 <p><strong>macOS symptoms:</strong> <code>launchctl list | grep 31c</code> shows the Sentinel agent, but <code>.sync/logs/</code> has no recent entries.</p>
 <p><strong>Recovery:</strong></p>
 <ol>
-<li>Manually run <code>/sentinel</code> (or <code>python scripts/sentinel.py --check</code>) once and confirm it completes end-to-end.</li>
+<li>Manually run <code>/sentinel</code> (or <code>python scripts/sentinel.py --test</code>) once and confirm it completes end-to-end.</li>
 <li>Check the scheduled task command matches the current Python interpreter path:
    - Windows: <code>schtasks /Query /TN "31C-Sentinel-{slug}" /V /FO LIST</code> and look at <code>Task To Run</code>
    - macOS: <code>cat ~/Library/LaunchAgents/io.31c.sentinel.{slug}.plist</code></li>

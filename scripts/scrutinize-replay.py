@@ -14,8 +14,11 @@ across 75 reports the mandated `Refutation:` header appeared in 8 of them, so a
 scrape produced a sample of nothing.
 
 This script calls no model. It only prepares the sample. Cross-family scoring is
-done by feeding the same findings through the judge dispatcher separately, then
-merging into the scoring sheet via --import-rater-output. The roster is Claude
+done by feeding the same findings through the judge dispatcher separately, and
+the second column of the generated sheet is then filled in BY HAND. There is no
+`--import-rater-output`: this line documented one until 2026-08-27, and no
+parser has ever defined it, so a reader following the docstring got exit 2. The
+roster is Claude
 (the running session, never version-pinned) and the Kimi reasoning pin; the
 families this docstring used to name were retired on 2026-07-18 and 2026-07-25.
 

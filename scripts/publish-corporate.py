@@ -235,7 +235,19 @@ def verify_corporate_repo() -> None:
 # ============================================================
 # Modes
 # ============================================================
-def mode_preview() -> int:
+def mode_preview(as_json: bool = False) -> int:
+    """Show what --copy would publish. `as_json` emits a machine-readable summary.
+
+    The JSON form exists for `ops_signals.publish_state`, the /radar signal that
+    reports publish-to-fleet debt. It shelled out to `--dry-run --json`, two
+    flags this parser has never defined, so the subprocess exited 2 on every
+    run, `pending` never left 0, and the radar row was structurally incapable of
+    firing. Measured 2026-08-27: `due=False` against a threshold of 1, with real
+    corporate changes on disk.
+
+    Everything human goes to stderr in JSON mode, so stdout carries one object
+    and nothing else.
+    """
     tracked = list_tracked_files()
     untracked_corp = list_untracked_corporate_files()
     corporate_files = [p for p in tracked if get_routing_destination(p) == "corporate"]
@@ -250,6 +262,17 @@ def mode_preview() -> int:
             print(f"  ... and {len(untracked_corp) - 10} more", file=sys.stderr)
 
     new_files, modified, unchanged, missing = diff_corporate(corporate_files)
+
+    if as_json:
+        print(json.dumps({
+            "pending": len(new_files) + len(modified),
+            "new": len(new_files),
+            "modified": len(modified),
+            "unchanged": len(unchanged),
+            "missing": len(missing),
+            "untracked_corporate": len(untracked_corp),
+        }))
+        return 0
 
     print(f"{CYAN}Preview: {len(corporate_files)} corporate-classified tracked files "
           f"vs ../heading-os-corporate/{RESET}")
@@ -431,7 +454,13 @@ def bump_build(summary: str = "Workspace update", structural: bool = False,
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The argument surface, separated so a test can check an argv against it.
+
+    `verify_admin_identity()` runs inside `main`, so a test that tried to prove
+    a caller's argv is accepted would have had to be an admin. That is why the
+    `--dry-run --json` call in ops_signals went four months unnoticed.
+    """
     parser = argparse.ArgumentParser(
         description="Canonical /push-updates Phase 2 file-copy step.",
     )
@@ -453,13 +482,23 @@ def main(argv: list[str] | None = None) -> int:
                         help="With --bump-build: the count `--copy` reported, written "
                              "into BUILD.json. Omitted from the file when not given, "
                              "rather than recorded as 0.")
+    parser.add_argument("--json", action="store_true",
+                        help="With --preview: emit a machine-readable summary on "
+                             "stdout instead of the human table.")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
+    if args.json and not args.preview:
+        parser.error("--json is only defined with --preview")
 
     verify_admin_identity()
     verify_corporate_repo()
 
     if args.preview:
-        return mode_preview()
+        return mode_preview(as_json=args.json)
     if args.copy:
         return mode_copy()
     if args.verify:

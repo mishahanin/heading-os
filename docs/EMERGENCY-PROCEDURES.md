@@ -1,4 +1,4 @@
-<!-- version: 1.2.3 | last-updated: 2026-08-23 -->
+<!-- version: 1.2.4 | last-updated: 2026-08-27 -->
 
 # Emergency Procedures
 
@@ -87,7 +87,7 @@
 
 **Recovery:**
 
-1. Manually run `/sentinel` (or `python scripts/sentinel.py --check`) once and confirm it completes end-to-end.
+1. Manually run `/sentinel` (or `python scripts/sentinel.py --test`) once and confirm it completes end-to-end.
 2. Check the scheduled task command matches the current Python interpreter path:
    - Windows: `schtasks /Query /TN "31C-Sentinel-{slug}" /V /FO LIST` and look at `Task To Run`
    - macOS: `cat ~/Library/LaunchAgents/io.31c.sentinel.{slug}.plist`

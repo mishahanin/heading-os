@@ -5,7 +5,7 @@ Combines YAML frontmatter, interaction logs, and strategic notes from both
 versions into a single authoritative file under the target exec's directory.
 
 Usage:
-    python merge-contacts.py --contact "priya-anand" --from "misha-hanin" --into "marlow-carter" [--repo PATH]
+    python merge-contacts.py --contact "priya-anand" --from "misha-hanin" --into "marlow-carter"
 """
 
 import argparse

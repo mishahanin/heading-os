@@ -130,8 +130,8 @@ def test_two_of_the_operators_files_for_one_person_refuse_to_merge(
     b = _legacy_file(contacts, "bond-james", "James Bond", "007@example.com",
                      "Return the Aston", "Called from Istanbul")
     monkeypatch.setattr(mig, "scan_all_contacts",
-                        lambda: [_record(a, "James Bond", "007@example.com"),
-                                 _record(b, "James Bond", "007@example.com")])
+                        lambda: ([_record(a, "James Bond", "007@example.com"),
+                                 _record(b, "James Bond", "007@example.com")], []))
 
     rc = mig.cmd_apply()
     out = capsys.readouterr().out
@@ -156,8 +156,8 @@ def test_a_refused_apply_writes_no_relationship_record(workspace, monkeypatch):
     b = _legacy_file(contacts, "bond-j", "James Bond", "007@example.com",
                      "Two", "Second")
     monkeypatch.setattr(mig, "scan_all_contacts",
-                        lambda: [_record(a, "James Bond", "007@example.com"),
-                                 _record(b, "James Bond", "007@example.com")])
+                        lambda: ([_record(a, "James Bond", "007@example.com"),
+                                 _record(b, "James Bond", "007@example.com")], []))
     mig.cmd_apply()
     assert not (contacts / "james-bond.md").exists(), (
         "the slug-named record was written from one of two files and the other "
@@ -174,8 +174,8 @@ def test_two_people_who_are_not_the_same_person_still_apply(workspace,
     b = _legacy_file(contacts, "felix-leiter", "Felix Leiter", "felix@example.com",
                      "Two", "Second")
     monkeypatch.setattr(mig, "scan_all_contacts",
-                        lambda: [_record(a, "James Bond", "007@example.com"),
-                                 _record(b, "Felix Leiter", "felix@example.com")])
+                        lambda: ([_record(a, "James Bond", "007@example.com"),
+                                 _record(b, "Felix Leiter", "felix@example.com")], []))
     assert mig.cmd_apply() == 0
     assert (contacts / "james-bond.md").exists()
     assert (contacts / "felix-leiter.md").exists()
@@ -193,7 +193,7 @@ def applied(workspace, monkeypatch):
                           "007@example.com", "Deliver the briefcase",
                           "Met in Vienna")
     monkeypatch.setattr(mig, "scan_all_contacts",
-                        lambda: [_record(legacy, "James Bond", "007@example.com")])
+                        lambda: ([_record(legacy, "James Bond", "007@example.com")], []))
     rc = mig.cmd_apply()
     return rc, ws, data, contacts, legacy
 

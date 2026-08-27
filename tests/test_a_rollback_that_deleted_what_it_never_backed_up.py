@@ -80,7 +80,10 @@ def _stub_apply_environment(module, monkeypatch, tmp_path):
     engine.mkdir(exist_ok=True)
     monkeypatch.setattr(module, "get_workspace_root", lambda: engine)
     monkeypatch.setattr(module, "get_outputs_dir", lambda: tmp_path / "out")
-    monkeypatch.setattr(module, "scan_all_contacts", list)
+    # `(records, unreadable_slugs)`. It was a bare `list` while the scan
+    # returned one value; the second half is the exec directories it could not
+    # read, which the scan line now has to name.
+    monkeypatch.setattr(module, "scan_all_contacts", lambda: ([], []))
 
     class _Ok:
         returncode = 0

@@ -7,13 +7,20 @@ plus ``disposition-log.jsonl`` (an append-only audit/undo trail).
 
 Design (plan 2026-06-03, Design Decisions 3-5; scrutiny L2):
 
-- **The daemon process is the single writer of ``queue.json``.** Every write
-  goes through ``append_cards`` / ``apply_status`` / ``edit_card`` here, all of
-  which hold the module ``_LOCK`` and write atomically. Two depositors share
-  these helpers: the deposit endpoint (external/manual callers POST), and the
-  daemon-scheduled Cold-Sweep job (calls ``append_cards`` in-process - no
-  self-HTTP). No second process writes the file (the executor only prints
-  stdout; the spawning daemon job applies status here).
+- **These helpers are the only writers of ``queue.json``, and they run in SEVERAL
+  processes.** Every write goes through ``append_cards`` / ``apply_status`` /
+  ``edit_card`` / ``annotate_card`` / ``undo_card`` here, all of which take
+  ``_queue_lock`` and write atomically.
+
+  This paragraph read "the daemon process is the single writer" until
+  2026-08-27, and that stopped being true on 2026-06-27 when the queue went
+  terminal-native. ``scripts/action-queue.py``, ``scripts/cold-sweep.py`` and
+  ``scripts/dead-letter.py`` each import these helpers and run as separate,
+  short-lived processes, and the module lock they relied on was a
+  ``threading.Lock`` - invisible across a process boundary. Two overlapping runs
+  were an ordinary lost update. ``_queue_lock`` now pairs that thread lock with
+  an flock on ``queue.json.lock``, so the read-modify-write is serialised
+  between processes as well.
 - **``append_cards`` is the sole dedup authority.** Callers never pre-dedup. A
   card is skipped when its contact already has a pending/approved card, or was
   dismissed within ``COOLDOWN_DAYS``.
@@ -27,6 +34,7 @@ dismissed_at / sent_at / error``.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import threading
@@ -37,6 +45,7 @@ from pathlib import Path
 from scripts.bridge_daemon._atomic import atomic_write_text
 from scripts.bridge_daemon._jsonl import append_jsonl
 from scripts.utils import dead_letter, tool_risk, tracing
+from scripts.utils.checkpoint_paths import file_lock
 from scripts.utils.timeparse import parse_iso
 
 QUEUE_FILE = "outputs/operations/action-queue/queue.json"  # leak-guard: ok (relative suffix rooted by caller)
@@ -64,16 +73,61 @@ _UNDO_PROTECTED = frozenset({
     "id", "status", "tier", "action_type", "created_at", "trace_id",
 })
 
-# Single in-process lock. Both the deposit endpoint (uvicorn threadpool) and the
-# daemon-scheduled Cold-Sweep job run in the daemon process, so one lock
-# serialises every write to queue.json.
+# In-process lock. It orders the uvicorn threadpool against the daemon-scheduled
+# job, and nothing else: a `threading.Lock` is invisible to another PROCESS.
+#
+# The comment here used to stop at that first sentence, and it was true when the
+# bridge daemon was the only writer. Since the queue went terminal-native on
+# 2026-06-27 it is not: `scripts/action-queue.py`, `scripts/cold-sweep.py` and
+# `scripts/dead-letter.py` each import these helpers and run as SEPARATE,
+# short-lived processes. Two of them overlapping is an ordinary lost update -
+# both load the same queue, both write it back atomically, and the second write
+# erases the first wholesale. The dangerous direction is the one that erases a
+# terminal status: a card stamped `sent` that reverts to `approved` is a card
+# the CEO can approve and send a second time.
+#
+# `_queue_lock` below adds the cross-process half. This lock stays: `file_lock`
+# is a per-open-file-description flock, so it does not order two threads of one
+# process against each other.
 _LOCK = threading.Lock()
+
+# Longer than file_lock's 2 s default. That default is tuned for a Stop hook with
+# a 90-second budget; a queue mutation is interactive and a card mutation that
+# waits ten seconds is far cheaper than one that proceeds unlocked and loses
+# another process's write.
+QUEUE_LOCK_WAIT_SECONDS = 10.0
 
 logger = logging.getLogger(__name__)
 
 
+@contextlib.contextmanager
+def _queue_lock(workspace_root: Path):
+    """Hold BOTH locks for one read-modify-write of queue.json.
+
+    Threads first, then the file lock, in that order everywhere - a mixed order
+    between two call sites is how a deadlock is built.
+
+    `file_lock` is bounded and never blocks forever: when the wait expires it
+    proceeds UNLOCKED and says so on stderr. That is the right trade for a
+    backup hook and the wrong silence for this store, so the degraded case also
+    gets a log line naming the consequence.
+    """
+    with _LOCK:
+        lock_path = workspace_root / (QUEUE_FILE + ".lock")
+        with file_lock(lock_path, wait=QUEUE_LOCK_WAIT_SECONDS,
+                       label="action-queue") as held:
+            if not held:
+                logger.warning(
+                    "queue.json lock was busy for %.0fs; writing UNLOCKED. A "
+                    "concurrent action-queue, cold-sweep or dead-letter process "
+                    "may lose this write or have its own erased.",
+                    QUEUE_LOCK_WAIT_SECONDS,
+                )
+            yield held
+
+
 # ============================================================
-# Store IO (callers hold _LOCK for any read-modify-write)
+# Store IO (callers hold _queue_lock for any read-modify-write)
 # ============================================================
 
 def _now_iso() -> str:
@@ -145,7 +199,7 @@ def _write_queue(workspace_root: Path, data: dict) -> None:
 
 
 def _log_event(workspace_root: Path, event: dict) -> None:
-    """Append one audit event to disposition-log.jsonl. Caller holds _LOCK.
+    """Append one audit event to disposition-log.jsonl. Caller holds _queue_lock.
 
     Through the shared `append_jsonl` (O_APPEND), not a read-whole-file plus
     atomic rewrite. The rewrite was O(file size) PER EVENT, so the lifetime cost
@@ -189,7 +243,7 @@ def append_cards(workspace_root: Path, cards: list[dict]) -> dict:
     now = datetime.now(timezone.utc)
     added_ids: list[str] = []
     skipped = 0
-    with _LOCK:
+    with _queue_lock(workspace_root):
         data = _load_queue(workspace_root)
         actions = data["actions"]
 
@@ -273,7 +327,7 @@ def apply_status(workspace_root: Path, action_id: str, status: str,
     """
     if not action_id:
         return {"ok": False, "error": "action_id required"}
-    with _LOCK:
+    with _queue_lock(workspace_root):
         data = _load_queue(workspace_root)
         card = _find(data["actions"], action_id)
         if card is None:
@@ -313,14 +367,14 @@ def annotate_card(workspace_root: Path, action_id: str, **fields) -> dict:
     and is *structurally incapable* of changing ``status``: a ``status`` key in
     ``fields`` is dropped before the write. This preserves the lethal-trifecta
     control - an advisory layer can annotate, never approve/dismiss/send. Atomic
-    under ``_LOCK`` + logged. Returns {ok, card} or {ok: False, error}.
+    under ``_queue_lock`` + logged. Returns {ok, card} or {ok: False, error}.
     """
     if not action_id:
         return {"ok": False, "error": "action_id required"}
     fields.pop("status", None)  # an annotation can never be a state transition
     if not fields:
         return {"ok": False, "error": "no fields to annotate"}
-    with _LOCK:
+    with _queue_lock(workspace_root):
         data = _load_queue(workspace_root)
         card = _find(data["actions"], action_id)
         if card is None:
@@ -338,7 +392,7 @@ def edit_card(workspace_root: Path, action_id: str, *, subject: str | None = Non
     draft_status). Atomic + logged. Returns {ok, card} or {ok: False, error}."""
     if not action_id:
         return {"ok": False, "error": "action_id required"}
-    with _LOCK:
+    with _queue_lock(workspace_root):
         data = _load_queue(workspace_root)
         card = _find(data["actions"], action_id)
         if card is None:
@@ -400,7 +454,7 @@ def undo_card(workspace_root: Path, action_id: str) -> dict:
     """
     if not action_id:
         return {"ok": False, "error": "action_id required"}
-    with _LOCK:
+    with _queue_lock(workspace_root):
         data = _load_queue(workspace_root)
         card = _find(data["actions"], action_id)
         if card is None:

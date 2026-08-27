@@ -233,16 +233,42 @@ def _record_from(file_path: Path, owner: str, fm: dict) -> dict:
     }
 
 
-def scan_all_contacts() -> list[dict]:
-    """Scan CEO's crm/contacts/ + each per-exec CRM clone at ../31c-crm-{slug}/.
+def _scan_summary(records: list[dict], unreadable: list[str]) -> str:
+    """The scan line, naming the execs it could NOT read.
 
-    Returns flat dicts with: owner (slug), name, email, company, type, file_path.
+    Both callers printed "Scanned N records across all execs" whatever the scan
+    reached. One shared line so the two cannot say different things about the
+    same scan, which is how one of them would be fixed and the other left.
+    """
+    if not unreadable:
+        return f"Scanned {len(records)} records across all execs."
+    return (f"Scanned {len(records)} records, but NOT across all execs: "
+            f"{len(unreadable)} contacts directory(ies) are absent on this "
+            f"machine ({', '.join(sorted(unreadable))}). Records owned by them "
+            f"are missing from this map.")
+
+
+def scan_all_contacts() -> tuple[list[dict], list[str]]:
+    """Scan the CEO's crm/contacts/ plus every active exec's contacts directory.
+
+    Returns ``(records, unreadable_slugs)``. A record is a flat dict with:
+    owner (slug), name, email, company, type, file_path.
+
+    The second half of that tuple is the point. An exec whose data overlay is
+    not cloned on this machine is skipped, which is correct - and both callers
+    then printed "Scanned N records across all execs", which was not. A
+    migration map built from three of five execs, described as covering all
+    five, merges the wrong records and splits people who should have merged.
+    The number of directories that could not be read is reported beside the
+    record count so the operator can tell one run from the other.
 
     Note: 31c-crm-central is DEPRECATED (per scripts/setup.py:351-364). The
-    canonical exec CRM source is the per-exec repos at ../31c-crm-{slug}/
-    (one repo per active exec). This is the same pattern aggregate-crm.py uses.
+    canonical exec source is each exec's own data overlay at
+    ``../.heading-os-data-{slug}/crm/contacts/`` - the path in the code below,
+    not the retired ``../31c-crm-{slug}/`` this docstring named until 2026-08-27.
     """
     records = []
+    unreadable: list[str] = []
 
     # CEO contacts at crm/contacts/
     ceo_dir = get_crm_contacts_dir()
@@ -263,6 +289,7 @@ def scan_all_contacts() -> list[dict]:
     for slug in exec_slugs:
         exec_contacts_dir = get_per_exec_contacts_dir(slug)
         if not exec_contacts_dir.exists():
+            unreadable.append(slug)
             continue
         for f in sorted(exec_contacts_dir.glob("*.md")):
             fm = parse_frontmatter(f.read_text(encoding="utf-8"))
@@ -270,7 +297,7 @@ def scan_all_contacts() -> list[dict]:
                 continue
             records.append(_record_from(f, slug, fm))
 
-    return records
+    return records, unreadable
 
 
 # ============================================================
@@ -351,8 +378,8 @@ def write_review_map(groups: list[dict]) -> Path:
 # ============================================================
 def cmd_propose() -> int:
     """Implement the --propose workflow."""
-    records = scan_all_contacts()
-    print(f"Scanned {len(records)} records across all execs.")
+    records, unreadable = scan_all_contacts()
+    print(_scan_summary(records, unreadable))
     groups = group_records(records)
     groups = assign_slugs(groups)
     out_file = write_review_map(groups)
@@ -670,7 +697,8 @@ def cmd_apply() -> int:
               f"contacts have changed since that map was written.")
 
     # Re-derive the groups by re-running the scan + group (deterministic).
-    records = scan_all_contacts()
+    records, unreadable = scan_all_contacts()
+    print(_scan_summary(records, unreadable))
     groups = group_records(records)
     groups = assign_slugs(groups)
 

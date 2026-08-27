@@ -2069,9 +2069,18 @@ Summary: {analysis.get('summary', 'N/A')}
 class Sentinel:
     """Main orchestrator."""
 
-    def __init__(self, config_path: Path = CONFIG_FILE, dry_run: bool = False):
+    def __init__(self, config_path: Path = CONFIG_FILE, dry_run: bool = False,
+                 once: bool = False):
         self.config = SentinelConfig(config_path)
         self.dry_run = dry_run
+        # `once` is a LIVE single cycle, which is not the same thing as
+        # `dry_run`. `scripts/utils/schedule.py` installs a 15-minute timer for
+        # every provisioned exec, on all three platforms, running
+        # `scripts/sentinel.py --check` - a flag this file never defined, so
+        # argparse exited 2 with "unrecognized arguments" every fifteen minutes
+        # and no cycle ever ran. `--test` could not stand in: it is a true dry
+        # run, so it neither sends a notification nor writes state back.
+        self.once = once
         self.logger = self._setup_logging()
         # A dry run reads the real state but never writes it back.
         self.state = StateManager(read_only=dry_run)
@@ -2272,7 +2281,7 @@ class Sentinel:
                         self.logger.error(f"Telegram reconnect at cycle start failed: {e}")
 
                 await self.run_cycle()
-                if self.dry_run:
+                if self.dry_run or self.once:
                     break
                 # Deadman: a completed work cycle pings the Healthchecks.io
                 # check so a silently-stuck sentinel (hung Telegram/Exchange,
@@ -3050,6 +3059,11 @@ def main():
                         help="Run one cycle as a TRUE dry run: notifications are "
                              "logged not sent, calendar invites are neither accepted "
                              "nor declined, and state is read but never written back")
+    parser.add_argument("--check", action="store_true",
+                        help="Run ONE live cycle and exit: notifications are sent "
+                             "and state is written. This is what the 15-minute "
+                             "scheduled task installed by scripts/utils/schedule.py "
+                             "runs; --test is a dry run and cannot stand in for it")
     parser.add_argument("--status", action="store_true", help="Check if Sentinel is running")
     parser.add_argument("--stop", action="store_true", help="Stop running Sentinel daemon")
     parser.add_argument("--daemon", action="store_true", help="Launch as detached background process (cross-platform; on Linux, prefer systemd user unit)")
@@ -3083,7 +3097,8 @@ def main():
         else:
             PID_FILE.unlink(missing_ok=True)
 
-    sentinel = Sentinel(config_path=Path(args.config), dry_run=args.test)
+    sentinel = Sentinel(config_path=Path(args.config), dry_run=args.test,
+                        once=args.check)
 
     # Handle graceful shutdown (registered AFTER sentinel object created - SEC-011)
     def signal_handler(sig, frame):

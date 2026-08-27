@@ -59,27 +59,42 @@ def test_no_email_content_in_trace_metadata(monkeypatch: pytest.MonkeyPatch) -> 
 
     mock_observe = MagicMock(side_effect=lambda **kw: fake_observe(**kw))
 
-    # --- Mock langfuse_context: capture every update_current_observation call ---
-    mock_ctx = MagicMock()
+    # --- Mock the langfuse 4.x client: capture every update_current_span call ---
+    #
+    # This captured `langfuse.decorators.langfuse_context.update_current_observation`
+    # until 2026-08-27. That is the 3.x API, and `observability_safe.py` says so
+    # in its own docstring: "The old langfuse.decorators.langfuse_context module
+    # does not exist in 4.x and raises ImportError". The code calls
+    # `_get_langfuse_client()` then `client.update_current_span(metadata=meta)`.
+    # So nothing was ever captured, `all_captured_metadata` stayed empty, and the
+    # three leak assertions below were `MARKER not in "[]"` - true forever.
+    #
+    # The file's docstring promises "If this test breaks, it means sovereign data
+    # is leaking into Langfuse". It could not break.
+    mock_client = MagicMock()
 
-    def capture_update(*args, **kwargs):
+    def capture_update_span(*args, **kwargs):
         meta = kwargs.get("metadata", {})
         if args:
-            # In case called positionally
             meta = args[0] if isinstance(args[0], dict) else meta
         all_captured_metadata.append(meta)
 
-    mock_ctx.update_current_observation.side_effect = capture_update
+    mock_client.update_current_span.side_effect = capture_update_span
+
+    mock_langfuse_mod = MagicMock()
+    mock_langfuse_mod.observe = mock_observe
+    mock_langfuse_mod.get_client.return_value = mock_client
 
     with (
-        patch.dict("sys.modules", {
-            "langfuse": MagicMock(observe=mock_observe),
-            "langfuse.decorators": MagicMock(langfuse_context=mock_ctx),
-        }),
+        patch.dict("sys.modules", {"langfuse": mock_langfuse_mod}),
     ):
         import scripts.utils.observability_safe as obs_mod
+        # Only ONE cache exists: the observe decorator. `_get_langfuse_client()`
+        # imports fresh on every call, so there is nothing to reset for it. The
+        # old code cleared `_langfuse_context_cache`, a name the module has
+        # never had - setting a nonexistent module attribute is silent, which is
+        # why nobody noticed the mock was aimed at a dead API.
         obs_mod._langfuse_observe_cache = None
-        obs_mod._langfuse_context_cache = None
 
         @observe_metadata_only("test_classify")
         def classify(email_addr: str, subject: str, body: str) -> dict:
@@ -93,6 +108,15 @@ def test_no_email_content_in_trace_metadata(monkeypatch: pytest.MonkeyPatch) -> 
 
     # Function must still return the correct value
     assert result == {"tier": "CRITICAL"}, f"Unexpected return value: {result!r}"
+
+    # The floor, and it is the whole reason this test can now fail. Every
+    # assertion below is "marker NOT in the blob", which an EMPTY blob satisfies.
+    # The sibling `test_observability_safe.py` has carried this line all along;
+    # this file did not.
+    assert len(all_captured_metadata) >= 1, (
+        "update_current_span was never called, so nothing was inspected and "
+        "these leak assertions measured an empty list"
+    )
 
     # Serialize ALL captured metadata dicts to a single JSON blob
     serialized = json.dumps(all_captured_metadata, default=str)

@@ -83,15 +83,68 @@ def test_check_mode_passes_with_valid_env(monkeypatch, tmp_path):
     monkeypatch.setenv("INBOX_PULSE_STATE_DIR", str(tmp_path))
     _reload_paths(tmp_path, monkeypatch)
 
-    # Patch EWSConnection so no real network call occurs
-    mock_ews = MagicMock()
-    mock_ews.account = MagicMock()  # accessing .account triggers connect
+    # Reload FIRST, then patch. `_import_daemon` calls `importlib.reload`, which
+    # re-executes `from .exchange import EWSConnection` and puts the REAL class
+    # straight back over the mock. Proven 2026-08-27: inside the patch context,
+    # `mod.EWSConnection` is a MagicMock before the reload and
+    # `<class scripts.inbox_pulse.exchange.EWSConnection>` after it. So this test
+    # ran the real connection object and passed anyway, because
+    # `exchangelib.Account(autodiscover=False)` constructs without contacting the
+    # server - which is also the reason `health_check` now touches `.root`.
+    mod = _import_daemon()
 
-    with patch("scripts.inbox_pulse.daemon.EWSConnection", return_value=mock_ews):
-        mod = _import_daemon()
+    mock_ews = MagicMock()
+    mock_ews.account = MagicMock()  # accessing .account.root triggers connect
+
+    with patch.object(mod, "EWSConnection", return_value=mock_ews) as ctor:
         result = mod.health_check()
 
     assert result == 0
+    # And the stub was the thing that answered. Without this the test passes
+    # whether or not the patch survived, which is exactly how it spent its life.
+    assert ctor.call_count == 1, "health_check never constructed an EWSConnection"
+    mock_ews.disconnect.assert_called_once()
+
+
+def test_check_mode_fails_when_the_server_cannot_be_reached(monkeypatch, tmp_path):
+    """The probe must FAIL when the round trip fails, not merely when the
+    object cannot be built.
+
+    This is the test that makes `ews.account.root` measurable. A `MagicMock`
+    answers `.account` and `.account.root` identically, so a mutation between
+    the two is invisible to any test that only asserts success - reverting
+    `.root` survived the harness on 2026-08-27 for exactly that reason. A stub
+    whose `.account` resolves and whose `.account.root` RAISES separates them:
+    with `.root` the probe returns 1, without it 0.
+
+    It also pins the production defect. Measured against
+    `no-such-host.invalid`: `EWSConnection().account` returned an
+    `exchangelib.Account` in 0.25 s with no network, because `_connect` builds
+    it with `autodiscover=False` and that constructor is lazy. The probe printed
+    "OK: env vars present, state dir writable, EWS connectable".
+    """
+    monkeypatch.setenv("EXCHANGE_EMAIL", "ceo@31c.io")
+    monkeypatch.setenv("EXCHANGE_PASSWORD", "secret")  # pragma: allowlist secret
+    monkeypatch.setenv("EXCHANGE_SERVER", "mail.31c.io")
+    monkeypatch.setenv("INBOX_PULSE_STATE_DIR", str(tmp_path))
+    _reload_paths(tmp_path, monkeypatch)
+
+    mod = _import_daemon()
+
+    class _UnreachableAccount:
+        @property
+        def root(self):
+            raise OSError("connection refused")
+
+    mock_ews = MagicMock()
+    mock_ews.account = _UnreachableAccount()
+
+    with patch.object(mod, "EWSConnection", return_value=mock_ews):
+        result = mod.health_check()
+
+    assert result == 1, (
+        "the probe reported healthy while the server refused the round trip"
+    )
 
 
 # ---------------------------------------------------------------------------

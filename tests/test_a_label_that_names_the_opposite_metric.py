@@ -245,13 +245,30 @@ def test_the_union_keeps_its_pinned_name_and_gains_an_honest_sibling(tmp_path):
 
 
 def test_a_cluster_with_nothing_in_common_says_so(tmp_path):
-    """Transitive membership: A-B share one tag, B-C share another, so the
-    cluster's true intersection can be empty while the union is large."""
-    root = _cluster_root(tmp_path, [["a", "x"], ["a", "b", "x"], ["b", "y"]])
+    """Transitive membership: A-B share three tags, B-C share three others, so
+    the cluster's true intersection is EMPTY while its union is large.
+
+    The old inputs were `[a,x]`, `[a,b,x]`, `[b,y]`, which share at most two
+    tags with any neighbour. `CLUSTER_MIN_SHARED` is 3, so no edge formed, no
+    cluster existed, and the whole check sat behind `if out["clusters"]:` and
+    never ran. Measured 2026-08-27: `out["clusters"]` was `[]`.
+    """
+    root = _cluster_root(tmp_path, [
+        ["a", "b", "c", "x"],            # shares a,b,c with the middle note
+        ["a", "b", "c", "d", "e", "y"],  # the bridge
+        ["d", "e", "f", "y", "z"],       # shares d,e,y with the middle note
+    ])
     out = oc.analyze_reflect_clusters(root, datetime.date(2026, 8, 24))
-    if out["clusters"]:
-        cluster = out["clusters"][0]
-        assert len(cluster["common_tags"]) < len(cluster["shared_tags"])
+    assert len(out["clusters"]) == 1, (
+        f"no cluster formed, so the intersection rule was never exercised: "
+        f"{out['clusters']}"
+    )
+    cluster = out["clusters"][0]
+    assert cluster["common_tags"] == [], (
+        f"the three notes share no tag in common; got {cluster['common_tags']}"
+    )
+    assert len(cluster["shared_tags"]) >= 6, cluster["shared_tags"]
+    assert len(cluster["common_tags"]) < len(cluster["shared_tags"])
 
 
 # ============================================================

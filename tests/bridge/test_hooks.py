@@ -191,7 +191,16 @@ def test_stop_without_origin_is_noop(tmp_path, monkeypatch):
     monkeypatch.delenv("BRIDGE_ORIGIN", raising=False)
     r = _invoke("stop", {"session_id": "sid", "cwd": "/ws"})
     assert r.returncode == 0
-    assert "stay or browser" not in r.stderr.lower()
+    # What the hook ACTUALLY prints when the gate opens is
+    # `bridge: [stay (Enter) / browser (b)] - Ns to stay:` on stdout and
+    # `bridge: stay.` on stderr. The old assertion searched for the literal
+    # "stay or browser", a phrase that appears in the hook's DOCSTRING and on no
+    # output path. It could not fail, so a broken origin gate - and the several
+    # seconds of blocking prompt that comes with it - would have passed here.
+    combined = (r.stdout + r.stderr).lower()
+    assert "bridge:" not in combined, (
+        f"the Stop hook spoke with no BRIDGE_ORIGIN set:\n{combined!r}"
+    )
 
 
 def test_stop_with_browser_origin_prompts_and_defaults_stay(tmp_path, monkeypatch):

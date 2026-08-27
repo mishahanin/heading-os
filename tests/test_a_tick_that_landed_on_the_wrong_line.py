@@ -597,6 +597,16 @@ def calendar_sandbox(tmp_path, monkeypatch):
     cal.mkdir()
     monkeypatch.setattr(sx, "CALENDAR_DIR", cal)
     monkeypatch.setattr(sx, "get_data_root", lambda: tmp_path)
+    # `Account` FIRST, and it is not decoration. `sync_calendar`'s first
+    # statement is `_ensure_exchangelib()`, which returns early only on
+    # `Account is not None`. A fixture that leaves `Account` as None sends that
+    # binder off to import the real exchangelib, and the import OVERWRITES both
+    # stubs below - so whether these tests measured the stubs or the real
+    # symbols depended on whether some earlier test in the same xdist worker had
+    # already bound `Account`. The sibling fixture in
+    # `tests/test_sync_exchange_create_meeting.py` carries this same line with
+    # the same reason; this one did not.
+    monkeypatch.setattr(sx, "Account", object)
     monkeypatch.setattr(sx, "EWSDateTime", _dt)
 
     class _TZ:
@@ -607,6 +617,30 @@ def calendar_sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(sx, "EWSTimeZone", _TZ)
     sx._LOCALISE_WARNED.clear()
     return cal, ZoneInfo("UTC"), _dt
+
+
+def test_the_sandbox_stubs_survive_the_lazy_binder(calendar_sandbox):
+    """`sync_calendar` calls `_ensure_exchangelib()` first, and that binder
+    returns early only on `Account is not None`. Without the `Account` line in
+    the fixture it runs the real import, which OVERWRITES `EWSDateTime` and
+    `EWSTimeZone` - so whether these tests measured the stubs or the real
+    symbols depended on whether an earlier test in the same xdist worker had
+    bound `Account`.
+
+    Nothing else can catch that. Every assertion in this section holds with the
+    real exchangelib symbols too, because they behave compatibly for these
+    inputs, so removing the fixture line survives every other test here. This
+    one asks the question directly.
+    """
+    _cal, _utc, dt = calendar_sandbox
+    ev = _FakeEvent(dt.now(_utc), dt.now(_utc), "Probe", "Room")
+    sx.sync_calendar(_FakeCalendarAccount([ev]), days=1, timezone_str="UTC")
+    assert sx.EWSDateTime is dt, (
+        "the lazy binder replaced the stub with the real exchangelib symbol; "
+        "the fixture is missing its `Account` line"
+    )
+    assert getattr(sx.EWSTimeZone, "from_timezone", None) is not None
+    assert sx.EWSTimeZone.__name__ == "_TZ", sx.EWSTimeZone
 
 
 def test_sync_calendar_writes_the_combined_file_and_a_day_file(calendar_sandbox):

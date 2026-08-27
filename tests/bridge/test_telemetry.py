@@ -53,10 +53,46 @@ def test_event_swallows_oserror_and_logs_warning(workspace_root, monkeypatch, ca
         # Must not raise
         t.event("page_view", page="pulse", duration_s=1)
     assert any("telemetry write failed" in r.message for r in caplog.records)
-    # File contents unchanged (write was suppressed)
+
+    # The write was suppressed, and that is asserted rather than guarded.
+    # `if f.exists(): assert f.read_text() == ""` could never run: `_fail_open`
+    # raises for every path ending in `usage.jsonl`, so the file cannot be
+    # created inside this test, and the branch was dead from the day it was
+    # written. The sibling below covers the case where the file DOES exist.
     f = workspace_root / ".daemon-state" / "usage.jsonl"
-    if f.exists():
-        assert f.read_text() == ""
+    assert not f.exists(), "a failed write still created the file"
+
+
+def test_a_failed_write_leaves_an_existing_log_byte_identical(workspace_root,
+                                                              monkeypatch,
+                                                              caplog):
+    """The half the dead branch was reaching for, with the file actually there.
+
+    Seed it BEFORE the patch, because `_fail_open` refuses every later open.
+    """
+    from pathlib import Path as _Path
+    f = workspace_root / ".daemon-state" / "usage.jsonl"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    seeded = '{"event": "already here"}\n'
+    f.write_text(seeded, encoding="utf-8")
+
+    t = Telemetry(workspace_root)
+    real_open = _Path.open
+
+    def _fail_open(self, *a, **kw):
+        if str(self).endswith("usage.jsonl"):
+            raise OSError("No space left on device")
+        return real_open(self, *a, **kw)
+
+    monkeypatch.setattr(_Path, "open", _fail_open)
+    with caplog.at_level("WARNING"):
+        t.event("page_view", page="pulse", duration_s=1)
+
+    monkeypatch.undo()  # restore Path.open so the file can be read back
+    assert f.read_text(encoding="utf-8") == seeded, (
+        "a failed telemetry write truncated or appended to the existing log"
+    )
+    assert any("telemetry write failed" in r.message for r in caplog.records)
 
 
 def test_event_warning_includes_event_name(workspace_root, monkeypatch, caplog):

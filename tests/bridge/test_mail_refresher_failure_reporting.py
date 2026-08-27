@@ -80,26 +80,50 @@ def test_a_successful_fetch_does_advance_the_freshness_clock(monkeypatch, tmp_pa
     assert st.data_time("inbox") != fresh_before
 
 
-def test_a_timeout_is_also_reported_as_not_fresh(monkeypatch, tmp_path, st):
+def test_a_timeout_is_also_reported_as_not_fresh(monkeypatch, tmp_path, st, caplog):
+    """The timeout branch, actually reached.
+
+    This test used to patch `mail.PRODUCER_SCRIPT` and plant its stub at
+    `tmp_path/producer.py`, neither of which `refresh()` looks at: it resolves
+    `producer_script(workspace_root)`, which is
+    `tmp_path/scripts/email-intelligence.py`. So the missing-producer branch ran,
+    `_timeout` was never called, and the assertion held because BOTH branches
+    leave the clock alone. Measured 2026-08-27: this test alone covered 33% of
+    the module and never executed lines 126-154, which include the
+    `except subprocess.TimeoutExpired` handler it is named for. Deleting that
+    handler would not have failed it.
+
+    The log line is the positive signal that the branch ran, so the
+    missing-producer path can no longer satisfy this test.
+    """
     st.bump("inbox")
     fresh_before = st.data_time("inbox")
+    calls = []
 
     def _timeout(*a, **k):
+        calls.append(a)
         raise subprocess.TimeoutExpired(cmd="producer", timeout=300)
 
-    monkeypatch.setattr(mail, "PRODUCER_SCRIPT", tmp_path / "producer.py")
-    (tmp_path / "producer.py").write_text("", encoding="utf-8")
+    script = tmp_path / "scripts" / "email-intelligence.py"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("", encoding="utf-8")
     monkeypatch.setattr(mail.subprocess, "run", _timeout)
-    mail.refresh(tmp_path, st)
+    with caplog.at_level(logging.WARNING):
+        mail.refresh(tmp_path, st)
 
+    assert calls, "the producer was never invoked; the missing-script branch ran"
+    assert "producer timed out after" in caplog.text, caplog.text
     assert st.data_time("inbox") == fresh_before
 
 
-def test_a_missing_producer_script_is_not_fresh_either(tmp_path, st, monkeypatch):
+def test_a_missing_producer_script_is_not_fresh_either(tmp_path, st, caplog):
+    """The absence is real, not patched: tmp_path has no scripts/ directory."""
     st.bump("inbox")
     fresh_before = st.data_time("inbox")
-    monkeypatch.setattr(mail, "PRODUCER_SCRIPT", tmp_path / "absent.py")
-    mail.refresh(tmp_path, st)
+    assert not (tmp_path / "scripts" / "email-intelligence.py").exists()
+    with caplog.at_level(logging.WARNING):
+        mail.refresh(tmp_path, st)
+    assert "producer script missing" in caplog.text, caplog.text
     assert st.data_time("inbox") == fresh_before
 
 

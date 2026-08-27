@@ -290,12 +290,45 @@ def test_the_note_names_exactly_what_it_dropped(precompact):
 
 
 def test_nothing_is_cut_mid_string(precompact):
-    """`.claude/ski` was a real fragment of a real path, shipped verbatim."""
-    out = precompact.render(_facts())
+    """`.claude/ski` was a real fragment of a real path, shipped verbatim.
+
+    The corpus has to SURVIVE for this to measure anything. With the default
+    `_facts()` it does not: 60 written paths are about 2100 characters, the
+    fixed instruction block leaves under 2000 of the 4000 budget, and
+    `DROP_ORDER` puts `written` second, so the whole block is omitted at every
+    filler size. Measured 2026-08-27 at fillers 0, 5, 40, 120 and 400: zero
+    lines starting `.claude/` in the body, so the loop body never ran and the
+    only live assertion was `note.endswith("]")`.
+
+    Three paths fit, which is enough to show a path is either whole or gone.
+    """
+    facts = _facts(filler=0)
+    facts["written"] = "\n".join(
+        f".claude/skills/skill_{i}/SKILL.md" for i in range(3))
+    out = precompact.render(facts)
     body, _, note = out.partition("\n\n[Cut to fit")
-    for line in body.splitlines():
-        if line.startswith(".claude/skills/skill_"):
-            assert line.endswith("/SKILL.md"), f"truncated path: {line!r}"
+
+    kept = [line for line in body.splitlines()
+            if line.startswith(".claude/skills/skill_")]
+    assert len(kept) == 3, (
+        f"the written block did not survive, so nothing was checked for "
+        f"mid-string truncation. Body was:\n{body[-600:]}"
+    )
+    for line in kept:
+        assert line.endswith("/SKILL.md"), f"truncated path: {line!r}"
+
+
+def test_a_dropped_block_is_named_whole_and_never_half_written(precompact):
+    """The other half of the same rule: when the block does NOT fit, it goes
+    entirely, and the note says which fact went. A partial write is what
+    shipped `.claude/ski`."""
+    out = precompact.render(_facts())          # 60 paths: the block is dropped
+    body, _, note = out.partition("\n\n[Cut to fit")
+    assert not [line for line in body.splitlines()
+                if line.startswith(".claude/skills/skill_")], (
+        "a dropped block left fragments behind"
+    )
+    assert "Files this session wrote" in note, note
     assert note.endswith("]")
 
 

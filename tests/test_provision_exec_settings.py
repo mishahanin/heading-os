@@ -74,16 +74,31 @@ def test_pretooluse_points_at_the_dispatcher_on_all_three_matchers(settings):
 
 
 def test_the_hook_command_resolves_itself_from_any_directory(settings):
-    """`python3 .claude/hooks/x.py` only works from the workspace root."""
-    for group in settings["hooks"].values():
-        for entry in group:
-            for hook in entry["hooks"]:
-                cmd = hook["command"]
-                if ".claude/hooks/" in cmd and "Path.cwd()" not in cmd:
-                    assert cmd.startswith((
-                        "python3 .claude/hooks/session-start.py",
-                        "python3 .claude/hooks/post-write-sanitize.py",
-                    )), f"unresolved hook path: {cmd}"
+    """`python3 .claude/hooks/x.py` only works from the workspace root.
+
+    Stated positively, over every command, with a floor. The old shape was
+    `if <defect condition>: assert <two grandfathered prefixes>`, and it had two
+    problems at once. The condition matched NOTHING - measured 2026-08-27, zero
+    of the provisioned commands entered the branch - so the test evaluated no
+    assertion at all. And had one entered, the assertion would have PASSED it,
+    because `session-start.py` and `post-write-sanitize.py` are exactly the
+    cwd-dependent form the test's own name forbids. A guard that whitelists the
+    defect it names is worse than no guard.
+    """
+    commands = [hook["command"]
+                for group in settings["hooks"].values()
+                for entry in group
+                for hook in entry["hooks"]]
+    assert len(commands) >= 5, (
+        f"only {len(commands)} hook command(s) provisioned; the guard measured "
+        "almost nothing"
+    )
+    unresolved = [c for c in commands
+                  if ".claude/hooks/" in c and "Path.cwd()" not in c]
+    assert unresolved == [], (
+        "these hook commands name a relative path and only run from the "
+        f"workspace root: {unresolved}"
+    )
 
 
 def test_a_provisioned_workspace_starts_with_deny_rules(settings):

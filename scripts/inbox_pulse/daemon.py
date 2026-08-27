@@ -187,9 +187,22 @@ def health_check() -> int:
         return 1
 
     # 3. EWS reachable
+    #
+    # `ews.account` alone does NOT prove reachability, and the comment here said
+    # "triggers connect" until 2026-08-27. `EWSConnection._connect` builds an
+    # `exchangelib.Account` with `autodiscover=False`, and that constructor is
+    # lazy: measured against `no-such-host.invalid` it returned an Account in
+    # 0.25 s with no network at all, and this probe printed
+    # "OK: ... EWS connectable". A health check that answers OK without
+    # contacting the server is the coverage claim `.claude/rules/scope-claims.md`
+    # forbids.
+    #
+    # Touching `.root` forces the GetFolder round trip: same host, 0.53 s,
+    # TransportError. That is the cheapest call that establishes what the line
+    # below claims.
     try:
         ews = EWSConnection()
-        _ = ews.account  # triggers connect
+        _ = ews.account.root  # forces a real request, not just object construction
         ews.disconnect()
     except Exception as exc:
         print(f"{RED}FAIL: EWS unreachable: {exc}{RESET}", file=sys.stderr)

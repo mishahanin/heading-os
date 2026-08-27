@@ -94,9 +94,33 @@ def test_the_specific_pages_kept_their_mappings():
 
 
 def test_the_longest_prefix_wins():
-    """`outputs/content/tribe/` must not be shadowed by a shorter entry."""
-    assert classify_path("outputs/content/tribe/x.md") == \
-        classify_path("outputs/content/tribe/nested/deep/x.md")
+    """`outputs/content/tribe/` must not be shadowed by a shorter entry.
+
+    The literal value on both sides, not `f(a) == f(b)`. Comparing the function
+    to itself is an identity: if `classify_path` started returning `()` for
+    everything, both sides would be `()` and the assertion would hold. It said
+    exactly that until 2026-08-27, in a test named for a shadowing rule it never
+    exercised - there is no shorter `outputs/` entry in the shipped map, so the
+    collision it guards against was not even present.
+    """
+    expected = ("inflight", "studio")
+    assert classify_path("outputs/content/tribe/x.md") == expected
+    assert classify_path("outputs/content/tribe/nested/deep/x.md") == expected
+
+
+def test_a_shorter_prefix_does_not_shadow_a_deeper_one(monkeypatch):
+    """The collision itself, constructed. The shipped map has no shorter
+    `outputs/` key, so nothing in the tree can trigger the rule this file names.
+    Add one and check the deeper entry still wins."""
+    import scripts.bridge_daemon.watcher as watcher
+
+    monkeypatch.setattr(watcher, "PATH_TO_COMPONENTS", {
+        "outputs/": ("catch-all",),
+        "outputs/content/tribe/": ("inflight", "studio"),
+    })
+    assert watcher.classify_path("outputs/content/tribe/x.md") == \
+        ("inflight", "studio")
+    assert watcher.classify_path("outputs/elsewhere/x.md") == ("catch-all",)
 
 
 def test_windows_separators_are_normalised():

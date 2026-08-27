@@ -26,6 +26,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from scripts.utils.atomic import atomic_write_text  # noqa: E402
+
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.modify",
@@ -87,7 +89,11 @@ def get_service():
                 )
             creds = InstalledAppFlow.from_client_secrets_file(secrets, SCOPES).run_local_server(port=0)
         os.makedirs(os.path.dirname(token), mode=0o700, exist_ok=True)
-        with open(token, "w") as fh:
-            fh.write(creds.to_json())
-        os.chmod(token, 0o600)
+        # tmp + os.replace, not open("w"). The refresh token is the whole Gmail
+        # path's credential: a plain open truncates in place, so a crash or a
+        # concurrent reader between truncate and write leaves an empty or
+        # half-written token, and every caller then re-runs the browser OAuth
+        # dance on a headless machine. atomic_write_text sets the mode on the
+        # tempfile before the rename, so the file is never briefly world-readable.
+        atomic_write_text(Path(token), creds.to_json(), mode=0o600)
     return build("gmail", "v1", credentials=creds)

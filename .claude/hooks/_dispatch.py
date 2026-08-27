@@ -456,8 +456,10 @@ def _identity_root(cwd: str) -> Path | None:
 def check_protect_corporate(payload: dict) -> dict | None:
     """Block writes to corporate/ in exec workspaces.
 
-    Only fires when the workspace identity is exec-workspace. The CEO
-    workspace never blocks corporate/ writes (it is the source of truth).
+    Fires when the workspace identity reads exec-workspace, and also when an
+    identity file is present but unreadable, because then the type is unknown
+    and "allow" is the wrong default for a wall. The CEO workspace never blocks
+    corporate/ writes (it is the source of truth).
     """
     tool_name = payload.get("tool_name", "")
     # Bash carries no file_path; Read carries one but writes nothing, and this
@@ -487,11 +489,24 @@ def check_protect_corporate(payload: dict) -> dict | None:
         # protect - a correct no-op now rather than an accidental one.
         return None
     identity_file = project_dir / ".workspace-identity.json"
+    unreadable = ""
     try:
         identity = json.loads(identity_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if identity.get("type") != "exec-workspace":
+    except (OSError, json.JSONDecodeError) as exc:
+        identity, unreadable = {}, f"{type(exc).__name__}: {exc}"
+    if not isinstance(identity, dict):
+        identity, unreadable = {}, "the file is not a JSON object"
+    # A PRESENT identity file this hook cannot parse used to return None, which
+    # is "allow" - so one corrupt byte switched the corporate wall off for the
+    # whole session, and the executive's edit was silently overwritten on the
+    # next sync. It cannot be read as a CEO workspace either: `_identity_root`
+    # only answers a directory that HAS the file.
+    #
+    # The refusal is scoped to the WRITE, not to the environment. An unreadable
+    # identity blocks corporate/ and nothing else; every other path in the
+    # workspace keeps working, so a broken file costs one clear message instead
+    # of a dead session.
+    if not unreadable and identity.get("type") != "exec-workspace":
         return None  # CEO workspace -- no restriction
 
     tool_input = payload.get("tool_input", {}) or {}
@@ -502,6 +517,16 @@ def check_protect_corporate(payload: dict) -> dict | None:
     file_path_norm = os.path.normpath(file_path)
     corporate_dir = os.path.normpath(os.path.join(str(project_dir), "corporate"))
     if file_path_norm.startswith(corporate_dir + os.sep) or file_path_norm == corporate_dir:
+        if unreadable:
+            return {
+                "decision": "block",
+                "reason": (
+                    f"BLOCKED: cannot read {identity_file} ({unreadable}), so this "
+                    "workspace's type is unknown and the corporate/ wall cannot be "
+                    "resolved. Repair that file, then retry. Only corporate/ is "
+                    "blocked; the rest of the workspace is unaffected."
+                ),
+            }
         return {
             "decision": "block",
             "reason": (

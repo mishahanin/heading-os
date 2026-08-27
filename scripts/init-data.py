@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.paths import DATA_SCHEMA_VERSION, get_workspace_root
+from scripts.utils.atomic import atomic_write_text
 
 DATA_DIRS = [
     "crm/contacts",
@@ -31,7 +32,11 @@ def init_data(target: Path) -> int:
         return 1
     for d in DATA_DIRS:
         (target / d).mkdir(parents=True, exist_ok=True)
-    (target / ".schema-version").write_text(f"{DATA_SCHEMA_VERSION}\n", encoding="utf-8")
+    # The third writer of this marker. build_data_repo.py and migrate-data.py
+    # both go through atomic_write_text; a half-written marker here makes
+    # paths.read_data_schema_version fall back to "assume current", which
+    # silently skips every migration the overlay still needs.
+    atomic_write_text(target / ".schema-version", f"{DATA_SCHEMA_VERSION}\n")
     print(f"Initialized data folder at {target} (schema v{DATA_SCHEMA_VERSION}).")
     return 0
 

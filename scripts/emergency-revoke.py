@@ -39,6 +39,7 @@ from scripts.utils.workspace import (
     load_github_org
 )
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
+from scripts.utils.atomic import atomic_write_text
 
 GITHUB_ORG = load_github_org()
 
@@ -232,7 +233,11 @@ def update_registry_status(slug: str) -> None:
         print(f"    Known slugs: {', '.join(known) or '(none)'}")
         return
 
-    registry_file.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+    # tmp + os.replace, matching scripts/offboard-exec.py:569, which writes
+    # this very file. A truncated exec-registry.json mid-incident reads as
+    # "no executives" to every consumer, and this path runs while access is
+    # being revoked - the worst moment for the roster to parse as empty.
+    atomic_write_text(registry_file, json.dumps(registry, indent=2))
     print(f"  {GREEN}[ok]{RESET} Status set to 'revoked'")
 
     try:

@@ -28,6 +28,11 @@ STATE_WRITERS = [
     # Found by the 2026-08-23 engine audit, shards scripts-03-p2 / p3.
     ("scripts/browser.py", "LOCK_FILE"),
     ("scripts/build_engine_repo.py", "src_manifest"),
+    # Found by the third defect-class fan-out, 2026-08-27. offboard-exec.py was
+    # already on this list and writes the SAME file; emergency-revoke.py rewrote
+    # it with a plain write_text, and it runs while an executive's access is
+    # being pulled - the worst moment for the roster to parse as empty.
+    ("scripts/emergency-revoke.py", "registry_file"),
 ]
 
 

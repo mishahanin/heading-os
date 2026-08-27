@@ -315,8 +315,8 @@ def _harvest_contact_frontmatter(data_root: Path, tokens: dict[str, str]) -> Non
     for md in contacts.glob("*.md"):
         try:
             text = md.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
+        except FileNotFoundError:
+            continue  # globbed then removed; absence is not a failed harvest
         m = _FRONTMATTER_RE.match(text)
         if not m:
             continue
@@ -340,10 +340,14 @@ def _harvest_executives(data_root: Path, tokens: dict[str, str]) -> None:
     p = data_root / "admin" / "executives.json"
     if not p.is_file():
         return
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return
+    # No local swallow. `p.is_file()` passed one line up, so a failure here is a
+    # PRESENT roster this reader could not use, and returning quietly left
+    # `degraded` False: the content-leak wall then scanned the public engine
+    # tree with the exec names missing from its token set and printed "clean".
+    # Let it reach build_denylist, which prints the cause and sets `degraded`.
+    data = json.loads(p.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{p.name}: expected an object, got {type(data).__name__}")
     for ex in data.get("executives", []):
         for key in ("slug", "name", "github_user", "data_repo"):
             val = ex.get(key)
@@ -382,8 +386,8 @@ def _harvest_config(data_root: Path, tokens: dict[str, str], strict: bool) -> No
     for f in list(cfg.glob("*.json")) + list(cfg.glob("*.yaml")) + list(cfg.glob("*.yml")):
         try:
             raw = f.read_text(encoding="utf-8")
-        except OSError:
-            continue
+        except FileNotFoundError:
+            continue  # globbed then removed; absence is not a failed harvest
         for email in _EMAIL_RE.findall(raw):
             _add(tokens, email, "email")
         if "fireside" in f.name or "roster" in f.name:
@@ -397,10 +401,10 @@ def _harvest_config(data_root: Path, tokens: dict[str, str], strict: bool) -> No
     # written for live in the fireside STATE roster, harvested separately below.
     fs = cfg / "fireside-schedule.json"
     if fs.is_file():
-        try:
-            data = json.loads(fs.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            data = None
+        # Present and unreadable is a failed harvest, not an absent one: see
+        # _harvest_executives. `data = None` here meant a corrupt schedule
+        # removed every speaker name from the wall's token set in silence.
+        data = json.loads(fs.read_text(encoding="utf-8"))
         for week in (data or {}).get("weeks", []) if isinstance(data, dict) else []:
             if not isinstance(week, dict):
                 continue
@@ -436,10 +440,10 @@ def _harvest_fireside_roster(data_root: Path, tokens: dict[str, str],
          / "tribe-roster.json")
     if not p.is_file():
         return          # a public clone has no overlay; absence is normal
-    try:
-        roster = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return
+    # Present and unreadable is a failed harvest, not an absent one: see
+    # _harvest_executives. The Telegram handles and member names of the whole
+    # Tribe come from this one file.
+    roster = json.loads(p.read_text(encoding="utf-8"))
     for handle, member in _iter_member_dicts(roster):
         _add(tokens, handle, "handle")
         name = member.get("name") if isinstance(member, dict) else None

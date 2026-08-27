@@ -58,6 +58,18 @@ def _post_json(url: str, payload: dict, headers: dict, timeout: int = DEFAULT_TI
             raise SearchBackendError(f"HTTP {e.code}: {e.read().decode('utf-8', errors='replace')[:200]}")
         except urllib.error.URLError as e:
             raise SearchBackendError(f"Connection error: {e.reason}")
+        except (UnicodeDecodeError, json.JSONDecodeError, OSError) as e:
+            # Same contract as `_get_json` twenty lines down, and for the same
+            # reason: `tavily_search` documents "Raises SearchBackendError on API
+            # failure", and `search_with_fallback` catches only that plus
+            # NoBackendsConfigured. A Tavily reply this reader cannot turn into
+            # JSON - an HTML error page from a proxy is the ordinary case -
+            # escaped as json.JSONDecodeError past the fallback, so Brave was
+            # never tried and the caller got a decode error instead of results.
+            # OSError last: it is the parent of URLError, so it must not shadow
+            # the clause above.
+            raise SearchBackendError(
+                f"unreadable response body: {type(e).__name__}: {e}") from e
 
 
 def _decode_body(resp) -> str:

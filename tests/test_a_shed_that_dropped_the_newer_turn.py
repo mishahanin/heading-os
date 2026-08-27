@@ -60,11 +60,40 @@ def _code(path: Path) -> str:
 
 BUILD_DATA = ROOT / "scripts" / "build_data_repo.py"
 
+# Every script that WRITES the marker, not just the one this shard started at.
+# `scripts/init-data.py` was the third writer and used a plain `write_text`
+# until 2026-08-27, while a test named for the standard checked two of three.
+# Derived below rather than trusted, so a fourth writer cannot be added silently.
+SCHEMA_MARKER_WRITERS = [
+    "scripts/build_data_repo.py",
+    "scripts/init-data.py",
+    "scripts/migrate-data.py",
+]
 
-def test_the_schema_marker_is_written_atomically():
-    code = _code(BUILD_DATA)
-    assert 'atomic_write_text(target / ".schema-version"' in code
-    assert '(target / ".schema-version").write_text' not in code, (
+
+def _marker_writers_on_disk() -> list[str]:
+    """Every tracked script under scripts/ that writes the marker, by any means."""
+    found = []
+    for path in sorted((ROOT / "scripts").rglob("*.py")):
+        code = path.read_text(encoding="utf-8")
+        if 'atomic_write_text(target / ".schema-version"' in code \
+                or '.schema-version").write_text' in code \
+                or "atomic_write_text(data_root / SCHEMA_FILE" in code:
+            found.append(str(path.relative_to(ROOT)))
+    return found
+
+
+def test_the_writer_list_matches_the_tree():
+    """A hand-kept list of writers decays into a list of the ones we remembered."""
+    assert _marker_writers_on_disk() == sorted(SCHEMA_MARKER_WRITERS)
+
+
+@pytest.mark.parametrize("script", SCHEMA_MARKER_WRITERS)
+def test_the_schema_marker_is_written_atomically(script):
+    code = _code(ROOT / script)
+    assert "atomic_write_text" in code, (
+        f"{script} writes the handshake marker; write it atomically")
+    assert '.schema-version").write_text' not in code, (
         "the marker went back to a plain write; a partial file here is an "
         "unreadable handshake with no second source")
 

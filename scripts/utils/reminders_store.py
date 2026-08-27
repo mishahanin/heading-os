@@ -9,7 +9,6 @@ docs/superpowers/specs/2026-07-14-durable-reminders-design.md.
 from __future__ import annotations
 
 import json
-import os
 import secrets
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -18,6 +17,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from scripts.utils.workspace import get_outputs_dir  # noqa: E402
+from scripts.utils.atomic import atomic_write_text  # noqa: E402
 
 RECURRENCE_RULES = {"first-friday-minus-1"}
 
@@ -46,11 +46,16 @@ def load() -> list[dict]:
 
 
 def save(records: list[dict]) -> None:
-    p = store_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(records, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, p)
+    """Replace the store atomically. A failed write leaves no orphan tempfile.
+
+    The hand-rolled version wrote a fixed `reminders.json.tmp` beside the store
+    and did not remove it when the write raised, so a full disk left a stale
+    sibling that the next successful save silently renamed over the top of.
+    `atomic_write_text` uses a unique tempfile and cleans it up on any error.
+    """
+    atomic_write_text(
+        store_path(), json.dumps(records, indent=2, ensure_ascii=False)
+    )
 
 
 def new_id() -> str:

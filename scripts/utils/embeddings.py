@@ -284,6 +284,12 @@ def model_digest(*, model: str, host: str, timeout: int = 10) -> str | None:
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError,
             OSError, ValueError):
         return None
+    # Inside the None-not-raise contract, because valid JSON is not a valid
+    # reply: a proxy that answers `/api/tags` with a list or a string decodes
+    # fine and then raises AttributeError on `body.get` below, aborting the
+    # build this docstring exists to keep running.
+    if not isinstance(body, dict):
+        return None
     # Match the TAG, not the family. `model.split(":")[0]` compared bare names, so
     # asking for `bge-m3:567m` on a host that also holds `bge-m3:latest` returned
     # whichever entry the server listed first - `:latest`'s digest under the

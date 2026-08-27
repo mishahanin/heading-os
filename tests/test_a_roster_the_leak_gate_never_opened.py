@@ -198,19 +198,33 @@ def test_a_missing_roster_file_degrades_quietly(tmp_path):
     assert "zaltrix" not in dl.tokens
 
 
-def test_an_unreadable_roster_does_not_wedge_the_build(tmp_path):
+def test_an_unreadable_roster_marks_the_denylist_degraded(tmp_path):
+    """Corrected 2026-08-27. This asserted `not dl.degraded` on a stated reason
+    that does not hold: "a degraded list makes the whole gate no-op".
+
+    It is true of ONE consumer and false of the one that matters. The advisory
+    CLI `scripts/content-guard.py` does skip and exit 0 on a degraded list, but
+    it names the cause while doing so. The UNBYPASSABLE push wall,
+    `engine_content_scan` in `scripts/push-all.py`, reads the same flag the
+    opposite way: overlay present AND degraded means REFUSE TO PUSH, exit 2,
+    logged as a denial. `egress_proof.classify` likewise returns
+    EGRESS_UNVERIFIABLE.
+
+    So the old assertion pinned the gate OPEN. A corrupt tribe-roster.json meant
+    the Tribe's handles, names and Telegram IDs silently left the token set, and
+    a push carrying one of them in an engine-routed file passed the wall clean.
+    That is the operator law's exact failure mode, so the harvester now lets the
+    error reach `build_denylist`, which prints the cause and degrades.
+    """
     data = _overlay(tmp_path)
     p = data / "datastore" / "operations" / "tribe" / "fireside-state" / "tribe-roster.json"
     p.write_text("{not json", encoding="utf-8")
     dl = build_denylist(data)
     assert "zaltrix" not in dl.tokens
-    # The cycle config is a separate source and must survive its neighbour.
+    # The cycle config is a separate source and must survive its neighbour:
+    # `degraded` is the signal, never the token count.
     assert "qorvath lune" in dl.tokens
-    # THE assertion. `build_denylist` wraps every harvester in one catch-all that
-    # sets `degraded`, so without the local except the tokens above still look
-    # right -- the config is harvested first -- and only this flag changes. A
-    # degraded list makes the whole gate no-op, which is the real cost.
-    assert not dl.degraded
+    assert dl.degraded
 
 
 def test_a_roster_record_without_a_telegram_id_still_yields_its_handle(tmp_path):

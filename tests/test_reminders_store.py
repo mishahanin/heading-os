@@ -100,7 +100,11 @@ def test_a_future_reminder_is_not_due_today(tmp_path, monkeypatch):
     assert len(rs.due_records(date(2026, 9, 1))) == 1
 
 
-def test_add_load_roundtrip_atomic(tmp_path, monkeypatch):
+def test_add_load_roundtrip(tmp_path, monkeypatch):
+    # Named ..._atomic until 2026-08-27 and asserted only a roundtrip, which
+    # passes against `open(path, "w")` too. The atomicity property now lives in
+    # tests/test_a_write_that_truncated_before_it_wrote.py, where a failing
+    # os.replace proves the existing store survives.
     monkeypatch.setattr(rs, "store_path", lambda: tmp_path / "reminders.json")
     saved = rs.add({"kind": "once", "when": "2026-07-26", "message": "hi"})
     assert saved["id"] and saved["created"]

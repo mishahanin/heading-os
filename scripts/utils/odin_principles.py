@@ -94,11 +94,20 @@ def _load_principles(brain_root: Path | None) -> list[dict]:
     for f in sorted(pdir.glob("*.md")):
         try:
             text = f.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # UnicodeDecodeError is NOT an OSError, and a principle file saved
+            # in cp1251 is the ordinary way to hit it. "Never raises" has to
+            # cover the decode as well as the read.
             continue  # skip an unreadable file; do not fail the whole query
         fm, _body = parse_frontmatter(text)
-        kw = fm.get("keywords", [])
-        if isinstance(kw, str):
+        # `keywords:` with no value after it is valid YAML and parses to None,
+        # so `.get("keywords", [])` returns None, not the default - the key is
+        # present. `[str(k) for k in None]` then raises TypeError out of a
+        # function whose docstring ends "Never raises", taking down every
+        # /odin consult that reads that one principle. A bare scalar
+        # (`keywords: strategy`) is already normalised below; a number was not.
+        kw = fm.get("keywords") or []
+        if not isinstance(kw, (list, tuple, set)):
             kw = [kw]
         out.append({
             "slug": f.stem,

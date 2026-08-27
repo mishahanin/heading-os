@@ -146,6 +146,16 @@ def load_profiles(path: Path | None = None) -> tuple[dict, str | None]:
     except (json.JSONDecodeError, OSError) as exc:
         return dict(_SAFE_PROFILES), f"profile config unreadable ({exc}); falling back to screen (suppresses nothing)"
 
+    # Valid JSON is not a valid config. A file holding a list, a string or a
+    # number parses cleanly and then raises AttributeError on `.get` one line
+    # down, which is the loud crash this docstring promises never to produce -
+    # and worse, it is a crash rather than the noisier-not-quieter fallback.
+    if not isinstance(loaded, dict):
+        return dict(_SAFE_PROFILES), (
+            "profile config is not a JSON object; falling back to screen "
+            "(suppresses nothing)"
+        )
+
     if not isinstance(loaded.get("profiles"), dict) or "screen" not in loaded.get("profiles", {}):
         return dict(_SAFE_PROFILES), "profile config has no `screen` profile; falling back to screen (suppresses nothing)"
 

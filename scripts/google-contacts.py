@@ -70,6 +70,7 @@ load_env(Path(WORKSPACE_ROOT))
 # Shared palette from scripts/utils/colors.py; DIM is not in that module, so it
 # stays local. (2026-06-09 audit #43 — removed the duplicated color block.)
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET  # noqa: E402
+from scripts.utils.atomic import atomic_write_text  # noqa: E402
 DIM = "\033[2m"
 
 # ---------------------------------------------------------------------------
@@ -199,9 +200,10 @@ def authenticate():
             creds = flow.run_local_server(port=0)
             print(f"{GREEN}[OK] Authenticated with Google{RESET}", file=sys.stderr)
 
-        with open(TOKEN_PATH, "w", encoding="utf-8") as f:
-            f.write(creds.to_json())
-        os.chmod(TOKEN_PATH, 0o600)
+        # tmp + os.replace, matching scripts/utils/gmail_auth.py. A plain
+        # open truncates the OAuth token in place, so a crash mid-write leaves
+        # an empty credential and the next run demands a browser login.
+        atomic_write_text(Path(TOKEN_PATH), creds.to_json(), mode=0o600)
 
     return build("people", "v1", credentials=creds)
 

@@ -245,7 +245,15 @@ def list_approvals(workspace_root: Path) -> dict:
     """
     drafts_dir = workspace_root / EMAIL_DRAFTS_DIR
     if not drafts_dir.is_dir():
-        return {"items": [], "total": 0, "sent_count": 0, "data_time": None}
+        # The SAME shape the parsed payload returns. `pipeline.py` learned this
+        # the hard way and pulled its zero payload into one `_empty_pipeline`
+        # writer: a key added to the parsed dict and not to the degraded one is
+        # missing exactly when the drafts directory is absent. Caught here by a
+        # test written for the keys added on 2026-08-28, minutes after they were
+        # added.
+        return {"items": [], "total": 0, "truncated": False,
+                "row_cap": APPROVALS_ROW_CAP, "sent_count": 0,
+                "data_time": None}
     # Phase 1.71: filter out drafts the CEO has marked sent.
     sent_paths = read_sent_log(workspace_root)
     sent_count = 0
@@ -289,6 +297,14 @@ def list_approvals(workspace_root: Path) -> dict:
         if stat.st_mtime > most_recent:
             most_recent = stat.st_mtime
     items.sort(key=lambda x: x.pop("_mtime_ts"), reverse=True)
+    # `total` is measured BEFORE the cap, because it is not a length of this
+    # list: `pulse.py` reads it into the `approvals_total` KPI, which the
+    # dashboard shows as "drafts waiting for approval". Counting the sliced list
+    # made 35 pending drafts read as exactly APPROVALS_ROW_CAP, and the number
+    # stopped moving as the backlog grew - a truncated list reported as a
+    # complete count. `threads.py` measures its own total before the slice; this
+    # is that fix landing in the second of two copies.
+    total = len(items)
     items = items[:APPROVALS_ROW_CAP]
     data_time = (
         datetime.fromtimestamp(most_recent, tz=timezone.utc).isoformat()
@@ -296,7 +312,10 @@ def list_approvals(workspace_root: Path) -> dict:
     )
     return {
         "items": items,
-        "total": len(items),
+        "total": total,
+        # Named so a caller cannot mistake a capped page for the whole set.
+        "truncated": total > len(items),
+        "row_cap": APPROVALS_ROW_CAP,
         "sent_count": sent_count,
         "data_time": data_time,
     }

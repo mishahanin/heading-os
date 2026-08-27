@@ -106,6 +106,37 @@ def _atomic_write(path: Path, content: str, mode: int = 0o600) -> None:
         raise
 
 
+_RESERVE_ATTEMPTS = 1000
+
+
+def _reserve_unique_path(directory: Path, stem: str) -> Path:
+    """Reserve `<stem>.json`, or `<stem>__N.json` when that name is taken.
+
+    The name is claimed with ``O_CREAT | O_EXCL``, which is atomic on POSIX and
+    on Windows, so two processes racing on the same stem get different names
+    rather than one overwriting the other. The reserved file is left EMPTY;
+    `_atomic_write` then replaces it, so the content is still written whole or
+    not at all.
+
+    A plain `path.exists()` probe would have been check-then-act, and the two
+    callers here are short-lived separate processes - exactly the shape that
+    loses the race. After `_RESERVE_ATTEMPTS` the last candidate is returned
+    unreserved rather than looping: at that point something else is wrong, and a
+    dead-letter write that overwrites is still better than one that hangs.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    for attempt in range(1, _RESERVE_ATTEMPTS + 1):
+        suffix = "" if attempt == 1 else f"__{attempt}"
+        candidate = directory / f"{stem}{suffix}.json"
+        try:
+            fd = os.open(str(candidate), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            continue
+        os.close(fd)
+        return candidate
+    return directory / f"{stem}__{_RESERVE_ATTEMPTS}.json"
+
+
 def _serialize(entry: dict) -> str:
     """JSON for one dead-letter entry, keeping the entry when the payload cannot.
 
@@ -139,9 +170,23 @@ def record(
     a finalizer that already failed must not be made worse by a DLQ write that
     throws.
 
-    The entry filename is ``<trace_id>__<kind>.json``. classification is
-    coerced to a known value (unknown -> 'permanent', the safe default that
-    forces re-approval rather than silent retry).
+    The entry filename is ``<trace_id>__<kind>.json``, and a NUMBERED suffix is
+    added when that name is taken: ``<trace_id>__<kind>__2.json`` and so on.
+
+    Without the suffix the second record silently replaced the first. A trace_id
+    identifies a PROCESS TREE, not a card - ``append_cards`` stamps every card
+    it deposits with ``tracing.get()``, so one deposit gives every card the same
+    id - and ``kind`` is the action_type, which repeats by design. Two
+    permanently-failed ``email_send`` cards from one deposit therefore collided
+    on one filename, ``os.replace`` clobbered the first, and ``record`` returned
+    a path either way, so both callers printed "a durable record is at ...". One
+    of the two records did not exist. Both callers reach here holding a failure
+    they cannot otherwise report; losing half of them is the worst direction.
+    Callers passing ``trace_id="-"`` (both do, when a card carries none) made the
+    collision certain rather than likely.
+
+    classification is coerced to a known value (unknown -> 'permanent', the safe
+    default that forces re-approval rather than silent retry).
     """
     if classification not in CLASSIFICATIONS:
         classification = "permanent"
@@ -156,7 +201,7 @@ def record(
         "recorded_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
-        path = dead_letter_dir(workspace_root) / f"{tid}__{knd}.json"
+        path = _reserve_unique_path(dead_letter_dir(workspace_root), f"{tid}__{knd}")
         _atomic_write(path, _serialize(entry), mode=0o600)
         return path
     except (OSError, TypeError, ValueError) as e:

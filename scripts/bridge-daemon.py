@@ -454,8 +454,37 @@ def _pick_port(start: int) -> tuple[int, socket.socket]:
         f"no free port in range {start}..{start + 49} (50 ports probed)")
 
 
+def _is_bridge_health_payload(payload) -> bool:
+    """True when a decoded /health body is THIS daemon's, not merely some JSON.
+
+    `_live_daemon_port` answers a narrower question on purpose: is the port
+    occupied? Any HTTP answer settles that, and for the singleton guard it is
+    the right question - launching a second daemon onto a port somebody else
+    holds fails either way.
+
+    `check_health` asks a different question and printed the first answer as if
+    it were the second: an unrelated local server on the port named in a STALE
+    `.daemon-state/port` had its response printed as this daemon's health, exit
+    0. The /health route returns a known shape, so identity is checkable, and
+    `.claude/rules/scope-claims.md` says a tool states the coverage its method
+    established. This is that method.
+
+    `pid` and `version` together: `ok` alone is too common a key to identify
+    anything, and a bare 200 from a static file server carries neither.
+    """
+    return (isinstance(payload, dict)
+            and payload.get("ok") is True
+            and isinstance(payload.get("pid"), int)
+            and isinstance(payload.get("version"), str))
+
+
 def _live_daemon_port(timeout: float = 2.0) -> int | None:
-    """The port an ALREADY-RUNNING daemon answers on, or None.
+    """The port SOMETHING is bound to and answering HTTP on, or None.
+
+    Deliberately not "the port the bridge daemon answers on": a 500 counts, and
+    so does an unrelated server. That is the right test for the singleton guard
+    in `start_daemon`, which only needs to know the port is taken. A caller that
+    needs to know it is THIS daemon calls `_bridge_answers` as well.
 
     `_pick_port` exists so a boot survives a busy port, which also means a
     second `--start` succeeds on the next one. Both instances then share the
@@ -631,8 +660,12 @@ def start_daemon(explicit_port: int | None = None):
 
     already = _live_daemon_port()
     if already is not None:
-        print(f"bridge daemon is already running on 127.0.0.1:{already}. "
-              f"Refusing to start a second one: the two share "
+        # "something is serving", not "the daemon is running": this probe
+        # accepts any HTTP answer, and the refusal is correct either way,
+        # because the port is taken whoever holds it.
+        print(f"something is already serving on 127.0.0.1:{already}, the port "
+              f"in .daemon-state/port. Run --health to see whether it is this "
+              f"daemon. Refusing to start a second one: the two would share "
               f".daemon-state/port and heartbeat.json, and whichever exits "
               f"first would leave the survivor unreachable to --health.",
               file=sys.stderr)
@@ -957,7 +990,24 @@ def check_health():
         sys.exit(2)
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port_str}/health", timeout=2) as r:
-            print(json.dumps(json.loads(r.read()), indent=2))
+            payload = json.loads(r.read())
+            # A 200 on the port named in the port file proves something is
+            # bound there. It does not prove it is this daemon, and this
+            # function's contract is the daemon's health, so the shape is
+            # checked: `/health` returns ok/pid/version, and until 2026-08-28 an
+            # unrelated local server answering on a STALE port was printed as
+            # the daemon's health with exit 0. The comment ten lines down
+            # already described that exact scenario for the UNREADABLE body; a
+            # readable body from the same wrong process went through.
+            if not _is_bridge_health_payload(payload):
+                print(f"# WARNING: something answers on port {port_str}, but it "
+                      f"is not this daemon (no ok/pid/version in its /health).",
+                      file=sys.stderr)
+                print("# The port file is stale, or another process took the "
+                      "port. Showing what answered:", file=sys.stderr)
+                print(json.dumps(payload, indent=2))
+                sys.exit(1)
+            print(json.dumps(payload, indent=2))
             return
     except (urllib.error.URLError, ConnectionRefusedError, OSError,
             ValueError) as e:

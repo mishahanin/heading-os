@@ -311,13 +311,58 @@ def test_a_non_json_two_hundred_with_no_heartbeat_exits_two(bd, tmp_path,
 def test_a_real_json_health_response_still_prints_and_returns(bd, tmp_path,
                                                               monkeypatch,
                                                               capsys):
-    """The success path must not have been traded away for the fallback."""
+    """The success path must not have been traded away for the fallback.
+
+    The body is the shape `build_app`'s /health route actually returns. It was
+    `{"status": "ok"}` until 2026-08-28, which that route has never produced, so
+    the test modelled a responder that does not exist and could not tell this
+    daemon from any other JSON server on the port.
+    """
+    _port_file(bd, tmp_path, monkeypatch)
+    import urllib.request as _ur
+    real = b'{"pid": 4321, "version": "1.2.3", "uptime_s": 9, "ok": true}'
+    monkeypatch.setattr(_ur, "urlopen", lambda *a, **k: _Body(real))
+    bd.check_health()
+    assert json.loads(capsys.readouterr().out) == json.loads(real)
+
+
+def test_a_stranger_answering_on_the_port_is_not_reported_as_the_daemon(
+        bd, tmp_path, monkeypatch, capsys):
+    """A stale port file plus any other local JSON server used to exit 0.
+
+    The port file survives a crash, another process takes the port, and its
+    perfectly readable 200 was printed as this daemon's health. The comment on
+    the ValueError handler in `check_health` already described that scenario for
+    an UNREADABLE body; a readable one from the same wrong process went through.
+    """
     _port_file(bd, tmp_path, monkeypatch)
     import urllib.request as _ur
     monkeypatch.setattr(_ur, "urlopen",
                         lambda *a, **k: _Body(b'{"status": "ok"}'))
-    bd.check_health()
-    assert json.loads(capsys.readouterr().out) == {"status": "ok"}
+    with pytest.raises(SystemExit) as exc:
+        bd.check_health()
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "not this daemon" in captured.err
+    assert json.loads(captured.out) == {"status": "ok"}, (
+        "what answered is still shown, so the operator can identify it")
+
+
+@pytest.mark.parametrize("body", [
+    b'{"ok": true}',                                   # no pid, no version
+    b'{"ok": true, "pid": 1}',                         # no version
+    b'{"ok": true, "pid": "1", "version": "1.0"}',     # pid not an int
+    b'{"ok": "yes", "pid": 1, "version": "1.0"}',      # ok not the boolean
+    b'[]',                                             # valid JSON, not an object
+])
+def test_a_near_miss_payload_is_still_not_this_daemon(bd, body):
+    """Vacuity guard: the shape test must refuse as well as accept."""
+    assert bd._is_bridge_health_payload(json.loads(body)) is False, body
+
+
+def test_the_real_health_shape_is_accepted(bd):
+    assert bd._is_bridge_health_payload(
+        {"pid": 1, "version": "1.0.0", "uptime_s": 0, "ok": True}) is True
 
 
 # ============================================================

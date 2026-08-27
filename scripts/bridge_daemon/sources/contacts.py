@@ -30,13 +30,12 @@ from scripts.bridge_daemon.sources.tribe import (
 )
 from scripts.utils.paths import get_data_root
 from scripts.utils.workspace import get_all_active_exec_slugs
-from scripts.utils.operator_identity import operator_slug
+from scripts.utils.operator_identity import get_operator, operator_slug
 from scripts.bridge_daemon._safepath import contains_symlink
 
 CRM_CENTRAL_DIRNAME = "31c-crm-central"
 PER_EXEC_REPO_PREFIX = "31c-crm-"
 CEO_OWNER = "ceo"
-CEO_OWNER_LABEL = "Misha Hanin"
 _OWNER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 CONTACT_FILE_MAX_BYTES = 500_000
 
@@ -68,9 +67,19 @@ def _resolve_exec_contacts_dir(workspace_root: Path, owner: str) -> Path | None:
 
 
 def _owner_label(owner: str) -> str:
-    """Human-readable owner name from an owner slug."""
+    """Human-readable owner name from an owner slug.
+
+    The `ceo` slug resolves through the operator seam, the same way
+    `_crm_central_self_dir` three functions up already does. It was the literal
+    string of this instance's operator until 2026-08-28, so a fresh clone of the
+    public engine labelled ITS owner's contacts with somebody else's name, while
+    the identical question one screen above was answered from
+    `operator_identity`. The engine ships generic defaults ("Operator"), and an
+    established instance still reads its own configured name, so nothing changes
+    here for a workspace that has one.
+    """
     if owner == CEO_OWNER:
-        return CEO_OWNER_LABEL
+        return get_operator()["name"]
     return owner.replace("-", " ").title()
 
 

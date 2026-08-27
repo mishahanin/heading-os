@@ -75,8 +75,11 @@ def list_active_threads(data_root: Path) -> dict:
     biz_dir = data_root / THREADS_BUSINESS_DIR
     if not biz_dir.is_dir():
         return {
+            # The SAME shape the parsed payload returns; see the note on the
+            # matching early return in approvals.py.
             "threads": [], "counts": {}, "bucket_order": [],
-            "total": 0, "data_time": None,
+            "total": 0, "truncated": False, "row_cap": THREADS_ROW_CAP,
+            "data_time": None,
         }
     today = datetime.now(get_default_tz()).date()
     raw_threads: list[dict] = []
@@ -126,13 +129,20 @@ def list_active_threads(data_root: Path) -> dict:
         d = t["days_since"]
         return (d is None, d if d is not None else 999_999, t["title"])
     raw_threads.sort(key=key)
-    raw_threads = raw_threads[:THREADS_ROW_CAP]
 
+    # The per-bucket counts are measured BEFORE the cap, for the same reason
+    # `total` above is: they are counts of the active set, not lengths of this
+    # page. Counting the sliced list made `sum(counts.values())` disagree with
+    # `total` the moment there were more than THREADS_ROW_CAP active threads,
+    # and the bucket chips under-reported with nothing saying why. Half of this
+    # function measured before the slice and half after; now both do.
     counts: dict = {}
     for t in raw_threads:
         b = t["bucket"]
         counts[b] = counts.get(b, 0) + 1
     bucket_order = [b for b in THREADS_BUCKET_ORDER if counts.get(b, 0) > 0]
+
+    raw_threads = raw_threads[:THREADS_ROW_CAP]
 
     data_time = (
         datetime.fromtimestamp(most_recent_mtime, tz=timezone.utc).isoformat()
@@ -143,6 +153,8 @@ def list_active_threads(data_root: Path) -> dict:
         "counts": counts,
         "bucket_order": bucket_order,
         "total": total,
+        "truncated": total > len(raw_threads),
+        "row_cap": THREADS_ROW_CAP,
         "data_time": data_time,
     }
 

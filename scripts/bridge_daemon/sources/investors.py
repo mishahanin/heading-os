@@ -8,7 +8,6 @@ Phase 1.31 is read-only. Drill-down via /investors/dossier?slug=...
 Phase 1.36 adds per-firm send tracking: _send-log.jsonl records when
 each first-touch went out so /investors and Pulse can show progress.
 """
-import json
 import re
 import threading
 from datetime import date, datetime, timezone
@@ -17,7 +16,7 @@ from pathlib import Path
 
 from scripts.bridge_daemon._shapes import is_undo
 
-from scripts.bridge_daemon._jsonl import append_jsonl
+from scripts.bridge_daemon._jsonl import append_jsonl, read_jsonl_capped
 from scripts.bridge_daemon._safepath import contains_symlink
 
 PROGRAM_DIR = "outputs/operations/fundraising/2026-05-17_investor-outreach-program"  # leak-guard: ok (relative suffix rooted by caller)
@@ -348,33 +347,25 @@ def _find_message(program_path: Path, firm_num: int, firm_canonical: str) -> str
 def _read_send_log(workspace_root: Path) -> dict:
     """Read _send-log.jsonl. Returns {firm_num: {date, ts, note}} keyed by int.
 
-    Silent degradation: corrupt lines are skipped; missing file returns {}.
+    Corrupt lines are skipped; a missing file returns {}.
     Last entry per firm wins, so re-marking a firm overwrites the earlier ts
     and a tombstone entry ('undo': True) cancels the mark. A subsequent
     real mark restores it again.
+
+    Over SEND_LOG_MAX_BYTES this reads the TAIL, through the same
+    `read_jsonl_capped` primitive the other eight capped logs use, and that
+    function logs the truncation. It used to `return {}` on the whole file, so
+    one byte past the cap made EVERY firm read as never-sent and the program
+    view invited a second first-touch to people who already had one. The write
+    half of this same log was migrated to the shared O_APPEND primitive
+    (`append_jsonl`, sixty lines down) and the read half kept the old shape.
+    A dropped head still loses the firms whose only mark is in it; that is one
+    stale row instead of all of them, and it is now logged rather than silent.
     """
     log_path = workspace_root / PROGRAM_DIR / SEND_LOG_FILE
-    if not log_path.exists():
-        return {}
-    try:
-        size = log_path.stat().st_size
-        if size > SEND_LOG_MAX_BYTES:
-            # Safety cap: file unexpectedly large; refuse to parse.
-            return {}
-        text = log_path.read_text(encoding="utf-8")
-    except OSError:
-        return {}
+    entries, _truncated = read_jsonl_capped(log_path, SEND_LOG_MAX_BYTES)
     out: dict[int, dict] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(entry, dict):
-            continue
+    for entry in entries:
         firm_num = entry.get("firm_num")
         if not isinstance(firm_num, int):
             continue

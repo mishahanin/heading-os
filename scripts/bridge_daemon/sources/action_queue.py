@@ -52,11 +52,25 @@ QUEUE_FILE = "outputs/operations/action-queue/queue.json"  # leak-guard: ok (rel
 DISPOSITION_LOG = "outputs/operations/action-queue/disposition-log.jsonl"  # leak-guard: ok (relative suffix rooted by caller)
 
 COOLDOWN_DAYS = 14            # dismissed contact not re-proposed within this window
-PRUNE_TERMINAL_DAYS = 90     # drop sent/dismissed cards older than this (bound growth)
+PRUNE_TERMINAL_DAYS = 90     # drop terminal cards older than this (bound growth)
 ROW_CAP = 100                # max active cards returned to the UI
 
 ACTION_TYPES = ("email_send", "note", "pipeline_update", "alert")
 ACTIVE_STATUSES = ("pending", "approved", "send_failed")
+
+# A card is either ACTIVE or TERMINAL; there is no third state, and every writer
+# of `status` has to land in one of these two tuples.
+#
+# `applied` was in neither until 2026-08-28. The daemon's own tier sweep
+# (`_sweep_non_gated_cards` in scripts/bridge-daemon.py) stamps it on every
+# auto-applied notify card, so those cards were invisible to `list_action_queue`
+# (which filters on ACTIVE_STATUSES) AND immune to the prune below (which read
+# the literal `("sent", "dismissed")`). They accumulated in the queue file with
+# no surface that could show them and no age at which they were dropped, under a
+# comment promising bound growth. `undo_card` still found them by id, so the
+# reversibility the notify tier is built on survived - the CEO simply had no way
+# to see an id to undo.
+TERMINAL_STATUSES = ("sent", "dismissed", "applied")
 PRIORITY_ORDER = {"P1": 0, "P2": 1, "P3": 2}
 
 # Fields `undo_card` will not write, whatever a card's `prev_field` names.
@@ -265,8 +279,16 @@ def append_cards(workspace_root: Path, cards: list[dict]) -> dict:
             key = _dedup_key(raw)
             if key and key in by_key:
                 existing = by_key[key]
-                # Already queued (pending or approved) -> skip.
-                if any(c.get("status") in ("pending", "approved") for c in existing):
+                # Already live -> skip. Read from ACTIVE_STATUSES, never from a
+                # second copy of it: this was the literal ("pending",
+                # "approved"), which left out `send_failed`. A send_failed card
+                # IS live - every lister shows it, and `SENDABLE_STATUSES` in
+                # scripts/action-queue.py includes it, so the CEO can approve it
+                # - and a re-deposit of the same dedup key therefore created a
+                # SECOND live card for the same contact. Approving both mails
+                # the person twice, which is the one outcome this dedup exists
+                # to stop.
+                if any(c.get("status") in ACTIVE_STATUSES for c in existing):
                     skipped += 1
                     continue
                 # Dismissed within cooldown -> skip (re-propose suppression).
@@ -298,8 +320,9 @@ def append_cards(workspace_root: Path, cards: list[dict]) -> dict:
         cutoff = now
         kept = []
         for c in actions:
-            if c.get("status") in ("sent", "dismissed"):
-                stamp = parse_iso(c.get("sent_at") or c.get("dismissed_at") or c.get("created_at"))
+            if c.get("status") in TERMINAL_STATUSES:
+                stamp = parse_iso(c.get("sent_at") or c.get("dismissed_at")
+                                  or c.get("applied_at") or c.get("created_at"))
                 if stamp and (cutoff - stamp).days > PRUNE_TERMINAL_DAYS:
                     continue
             kept.append(c)
@@ -333,10 +356,15 @@ def apply_status(workspace_root: Path, action_id: str, status: str,
         if card is None:
             return {"ok": False, "error": "not found"}
         card["status"] = status
+        # `applied` joined this map on 2026-08-28. Without a stamp of its own the
+        # prune fell back to `created_at`, so an auto-apply that happened today
+        # on a card deposited four months ago was eligible for pruning the
+        # instant it became terminal. Every terminal status now dates itself.
         stamp_field = {
             "approved": "approved_at",
             "dismissed": "dismissed_at",
             "sent": "sent_at",
+            "applied": "applied_at",
         }.get(status)
         if stamp_field:
             card[stamp_field] = _now_iso()
@@ -520,13 +548,20 @@ def list_action_queue(workspace_root: Path) -> dict:
       - ``fyi``:        autonomous / notify tier (``note`` / ``alert`` /
         ``pipeline_update``) - read-only context. ``fyi_total`` counts these.
 
-    Dismissed and sent cards are summarised as counts.
+    Every TERMINAL status is summarised as a count: sent, dismissed, and
+    applied. `applied` was counted nowhere until 2026-08-28, so a notify card
+    the daemon auto-applied left no trace on any surface the CEO reads.
+    `.claude/rules/tiered-risk.md` describes that tier as "auto-applied by the
+    daemon, with a one-click undo" - and `undo_card` takes an id, which the CEO
+    had no way to see. A count is not the undo affordance, but it is the signal
+    that there is something to undo.
     """
     data = _load_queue(workspace_root)
     actions = data.get("actions", [])
     active = [c for c in actions if c.get("status") in ACTIVE_STATUSES]
     sent_count = sum(1 for c in actions if c.get("status") == "sent")
     dismissed_count = sum(1 for c in actions if c.get("status") == "dismissed")
+    applied_count = sum(1 for c in actions if c.get("status") == "applied")
 
     def _sort_key(c: dict):
         status_rank = 0 if c.get("status") == "pending" else 1
@@ -551,5 +586,6 @@ def list_action_queue(workspace_root: Path) -> dict:
         "fyi_total": len(fyi),
         "sent_count": sent_count,
         "dismissed_count": dismissed_count,
+        "applied_count": applied_count,
         "data_time": data.get("generated_at"),
     }

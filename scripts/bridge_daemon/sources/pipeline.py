@@ -189,6 +189,7 @@ def _empty_pipeline() -> dict:
     return {
         "deals": [], "counts": {}, "overdue_count": 0,
         "total_value_usd": 0, "tbd_count": 0, "touched_total": 0,
+        "total": 0, "truncated": False, "row_cap": PIPELINE_ROW_CAP,
         "data_time": None,
     }
 
@@ -223,6 +224,9 @@ def list_pipeline(workspace_root: Path, today: date | None = None) -> dict:
             "total_value_usd": int (sum of priced deals),
             "tbd_count": int,
             "touched_total": int (deals with ANY touch entry, at any age),
+            "total": int (rows PARSED, which is not len(deals) past the cap),
+            "truncated": bool (True when `total` exceeds `row_cap`),
+            "row_cap": int (PIPELINE_ROW_CAP, the bound on `deals`),
             "data_time": ISO mtime of pipeline.md or None,
         }
 
@@ -297,8 +301,16 @@ def list_pipeline(workspace_root: Path, today: date | None = None) -> dict:
             "days_until_due": days_until,
             "is_overdue": is_overdue,
         })
-        if len(deals) >= PIPELINE_ROW_CAP:
-            break
+        # No `break` at PIPELINE_ROW_CAP. The parse used to STOP there, so every
+        # aggregate below was over the first N rows of the markdown and not over
+        # the pipeline: `total_value_usd`, `counts` and `overdue_count` were
+        # published with no sign of it, and `pulse.py` compares that value
+        # against the file's own summary line - so past the cap the dashboard
+        # raised a `pipeline_summary_drift` warning about a discrepancy it had
+        # created itself. Parsing is a walk over a string already in memory; the
+        # cap is a bound on ROWS RETURNED, which is a UI concern, and it is
+        # applied after the sort below so the page is the top N rather than
+        # whichever N happened to be first in the file.
 
     # Sort: stage_rank DESC (Won first), then due ASC (None last), then company.
     def sort_key(d):
@@ -341,6 +353,9 @@ def list_pipeline(workspace_root: Path, today: date | None = None) -> dict:
             d["days_since_touched"] = None
 
     data_time = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+    # The cap lands here, after the sort and after every aggregate is measured.
+    total_rows = len(deals)
+    deals = deals[:PIPELINE_ROW_CAP]
     return {
         "deals": deals,
         "counts": counts,
@@ -348,5 +363,8 @@ def list_pipeline(workspace_root: Path, today: date | None = None) -> dict:
         "total_value_usd": total_value_usd,
         "tbd_count": tbd_count,
         "touched_total": touched_total,
+        "total": total_rows,
+        "truncated": total_rows > len(deals),
+        "row_cap": PIPELINE_ROW_CAP,
         "data_time": data_time,
     }

@@ -118,7 +118,14 @@ def test_start_refuses_when_a_daemon_is_already_serving(entry, monkeypatch,
         entry.start_daemon()
     assert exc.value.code == 1
     err = capsys.readouterr().err
-    assert "already running" in err and "31415" in err
+    # Not "already running": `_live_daemon_port` accepts ANY HTTP answer, so it
+    # establishes that the port is taken and not who holds it. The refusal is
+    # right either way, and the message now says what was measured
+    # (.claude/rules/scope-claims.md). It pointed at --health for the identity.
+    assert "already serving" in err and "31415" in err
+    assert "already running" not in err, (
+        "the refusal is claiming an identity the probe did not establish")
+    assert "--health" in err
 
 
 def test_the_refusal_comes_before_anything_is_bound_or_written():

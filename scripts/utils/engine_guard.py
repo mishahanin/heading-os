@@ -68,6 +68,47 @@ DEMO_MANIFEST = frozenset({
 })
 
 
+# Suffixes that are never prose or code a content gate can read as text. A file
+# with one of these is skipped deliberately and silently; anything NOT on this
+# list that fails to decode is a gap in coverage the caller must refuse over.
+#
+# `.bin` earns its place: `tests/integration/fixtures/unsupported.bin` is a
+# committed engine fixture, and while the suffix was missing every sweep tried to
+# decode it, fell into the unreadable branch, and called the result clean.
+BINARY_SUFFIXES = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".pptx", ".docx", ".xlsx",
+    ".woff", ".woff2", ".ttf", ".otf", ".ico", ".zip", ".gz", ".db", ".sqlite",
+    ".pyc", ".lock", ".bin",
+})
+
+
+def engine_text_files(root: Path, candidates) -> list[str]:
+    """Of `candidates`, the engine-routed, non-binary files that exist on disk.
+
+    Both content gates select their targets with this one function, and the
+    duplication it replaces is the reason it exists. `content-guard.py` and
+    `push-all.engine_content_scan` each carried their own copy of this filter and
+    their own `except (OSError, UnicodeDecodeError): continue`. The CLI copy was
+    fixed on 2026-08-14 to record and refuse over what it could not read; the
+    copy inside the UNBYPASSABLE push wall was not, and stayed silent for eleven
+    days. The bypassable layer was strictly stronger than the last one.
+
+    Order is preserved, so a caller that wants a stable report sorts its input.
+    """
+    out: list[str] = []
+    for rel in candidates:
+        rel = rel.replace("\\", "/").lstrip("/")
+        if not rel:
+            continue
+        if get_routing_destination(rel) != "engine":
+            continue
+        p = root / rel
+        if not p.is_file() or p.suffix.lower() in BINARY_SUFFIXES:
+            continue
+        out.append(rel)
+    return out
+
+
 def find_data_artifacts(rel_paths, routing_fn=get_routing_destination) -> list[str]:
     """Pure core: given workspace-relative paths, return every one whose routing
     destination is private/corporate -- a data-class artifact that must not sit in

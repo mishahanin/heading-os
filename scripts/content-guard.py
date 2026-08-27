@@ -40,37 +40,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import BOLD, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.content_denylist import build_denylist
 from scripts.utils.denial_log import log_denial
-from scripts.utils.engine_guard import repo_carried_paths
-from scripts.utils.workspace import get_data_root, get_routing_destination, get_workspace_root
-
-# Suffixes that are never prose/code we can scan as text.
-_BINARY_SUFFIXES = {
-    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".pptx", ".docx", ".xlsx",
-    ".woff", ".woff2", ".ttf", ".otf", ".ico", ".zip", ".gz", ".db", ".sqlite",
-    ".pyc", ".lock",
-    # `.bin` was missing, and `tests/integration/fixtures/unsupported.bin` is a
-    # committed binary fixture, so every `--all` sweep tried to decode it as
-    # UTF-8 and fell into the unreadable branch. That branch used to warn and
-    # exit 0, which is exactly why nobody noticed: the gate had been skipping a
-    # tracked engine file on every run and calling the result clean.
-    ".bin",
-}
-
-
-def _engine_text_files(root: Path, candidates) -> list[str]:
-    """Keep only engine-routed, non-binary files that exist."""
-    out = []
-    for rel in candidates:
-        rel = rel.replace("\\", "/").lstrip("/")
-        if not rel:
-            continue
-        if get_routing_destination(rel) != "engine":
-            continue
-        p = root / rel
-        if not p.is_file() or p.suffix.lower() in _BINARY_SUFFIXES:
-            continue
-        out.append(rel)
-    return out
+from scripts.utils.engine_guard import engine_text_files, repo_carried_paths
+from scripts.utils.workspace import get_data_root, get_workspace_root
 
 
 def main() -> int:
@@ -125,7 +96,7 @@ def main() -> int:
     else:
         candidates = args.files or []
 
-    files = _engine_text_files(root, candidates)
+    files = engine_text_files(root, candidates)
 
     findings: list[tuple[str, int, str, str]] = []
     unscanned: list[str] = []

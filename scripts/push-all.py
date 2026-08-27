@@ -65,13 +65,12 @@ ensure_venv()
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.content_denylist import build_denylist
 from scripts.utils.denial_log import CONTEXT_ENV, log_denial
-from scripts.utils.engine_guard import scan_engine_repo
+from scripts.utils.engine_guard import engine_text_files, scan_engine_repo
 from scripts.utils.git_push import remote_objection, supervised_push
 from scripts.utils.workspace import (
     get_default_tz,
     get_data_root,
     get_exec_data_root,
-    get_routing_destination,
     get_workspace_root,
     is_exec_workspace,
     load_env,
@@ -274,15 +273,21 @@ def engine_content_scan(repo: Path, data_root: Path) -> None:
                    path=str(data_root), reason="denylist degraded with an overlay present")
         sys.exit(2)
     findings: list[tuple[str, int, str, str]] = []
-    for rel in sorted(_push_delta_files(repo)):
-        if get_routing_destination(rel) != "engine":
-            continue
-        p = repo / rel
-        if not p.is_file():
-            continue
+    unscanned: list[str] = []
+    for rel in engine_text_files(repo, sorted(_push_delta_files(repo))):
         try:
-            text = p.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+            text = (repo / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            # Recorded, then refused below. A bare `continue` here meant an
+            # engine-routed file whose bytes are not valid UTF-8 -- a note saved
+            # as UTF-16, a stray byte in a patch, a transient read error --
+            # passed the LAST wall with no record at all, and the push was
+            # reported clean over a file nobody had read. The sibling CLI
+            # `content-guard.py` closed exactly this on 2026-08-14; the copy in
+            # here kept the hole, so the bypassable layer was stronger than the
+            # unbypassable one. Genuine binaries never reach this line:
+            # `engine_text_files` drops them by suffix first.
+            unscanned.append(f"{rel}: {exc}")
             continue
         for lineno, matched, category in dl.scan_text(text):
             findings.append((rel, lineno, matched, category))
@@ -297,6 +302,17 @@ def engine_content_scan(repo: Path, data_root: Path) -> None:
             print(f"  {RED}{rel}:{lineno}{RESET}  \"{matched}\"  {GRAY}[{category}]{RESET}")
         print(f"{GRAY}The engine ships no real data. Genericize to a placeholder, move the "
               f"value to the DATA overlay, or annotate the line `content-guard: ok <reason>`.{RESET}")
+        sys.exit(2)
+    if unscanned:
+        for note in unscanned:
+            log_denial(mechanism="push:engine-content-scan", action="push",
+                       path=note.split(":", 1)[0], reason="engine-routed file could not be read")
+        print(f"{RED}REFUSING TO PUSH — engine-routed file(s) the content gate "
+              f"could not read:{RESET}")
+        for note in unscanned:
+            print(f"  {RED}{note}{RESET}")
+        print(f"{GRAY}Unverified is not clean. Re-save the file as UTF-8, fix the read "
+              f"error, or give it a binary suffix so the gate skips it deliberately.{RESET}")
         sys.exit(2)
 
 

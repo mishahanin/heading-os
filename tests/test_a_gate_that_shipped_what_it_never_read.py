@@ -120,10 +120,21 @@ def test_the_whole_engine_surface_passes():
 
 
 def test_the_binary_suffix_list_covers_the_committed_fixture():
-    src = GUARD.read_text(encoding="utf-8")
-    assert '".bin"' in src
+    """Asked of the selector, not of the CLI's source text.
+
+    This grepped `content-guard.py` for the literal `".bin"` until the suffix
+    list moved into `scripts/utils/engine_guard.py`, where both content gates now
+    share it. The grep then failed over a move that changed no behaviour, which
+    is the giveaway: it was measuring where the characters sat, not what the gate
+    does with the file.
+    """
+    from scripts.utils.engine_guard import BINARY_SUFFIXES, engine_text_files
+
+    assert ".bin" in BINARY_SUFFIXES
     fixture = ROOT / "tests" / "integration" / "fixtures" / "unsupported.bin"
     assert fixture.is_file(), "the fixture this covers must still exist"
+    rel = "tests/integration/fixtures/unsupported.bin"
+    assert engine_text_files(ROOT, [rel]) == []
 
 
 def test_the_clean_line_no_longer_carries_an_unscanned_count():

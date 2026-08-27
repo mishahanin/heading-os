@@ -20,10 +20,27 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.utils.workspace import get_workspace_root, load_env
+from scripts.utils.workspace import get_default_tz, get_workspace_root, load_env
 from scripts.utils.colors import GREEN, YELLOW, RED, BOLD, RESET
 from scripts.utils.crm_autolog import resolve_recipient, bump_last_touch_in_text, atomic_write
 from scripts.utils.markdown import parse_frontmatter_str
+
+
+def local_day(dt):
+    """The operator's calendar day for an Exchange timestamp.
+
+    Separate and importable so a test can drive it without a mailbox. Every test
+    in `tests/test_a_backfill_that_walked_the_date_backwards.py` stubs
+    `fetch_sent_items_recent` and feeds ready-made date strings, so the
+    conversion inside that fetch had never been measured at all.
+
+    A naive datetime is read as UTC, because that is what exchangelib hands over
+    when a zone is missing; guessing local instead would invent a shift nothing
+    asked for.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(get_default_tz()).date()
 
 
 def _get_exchange_config() -> dict:
@@ -75,7 +92,15 @@ def fetch_sent_items_recent(days: int) -> list:
             for r in msg.to_recipients:
                 email = getattr(r, "email_address", None) or ""
                 if email:
-                    items.append((email.lower(), msg.datetime_sent.date().isoformat()))
+                    # The OPERATOR's calendar day, not UTC's. `datetime_sent` is
+                    # an exchangelib EWSDateTime and is always UTC-aware, so a
+                    # bare `.date()` files a mail sent at 01:30 local under
+                    # yesterday. That value goes straight into `last_touch:`,
+                    # which the whole CRM staleness stack reads as a local date,
+                    # and is compared as a plain STRING against the stored one -
+                    # so the bump decision itself was made across two clocks.
+                    items.append((email.lower(),
+                                  local_day(msg.datetime_sent).isoformat()))
         return items
     except UnauthorizedError as e:
         print(f"{RED}[ERROR]{RESET} Exchange auth failed (check EXCHANGE_EMAIL / EXCHANGE_PASSWORD in .env): {e}", file=sys.stderr)

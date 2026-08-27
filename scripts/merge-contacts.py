@@ -22,6 +22,7 @@ from scripts.utils.workspace import (
     get_per_exec_repo_path, get_per_exec_contacts_dir, get_all_active_exec_slugs,
     get_crm_contacts_dir,
 )
+from scripts.utils.crm import stamped_backup_path
 from scripts.utils.operator_identity import operator_slug
 from scripts.utils.atomic import atomic_write_text
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
@@ -598,8 +599,12 @@ def main() -> None:
     atomic_write_text(target_path, merged_text)
     print(f"{GREEN}Merged file written:{RESET} {target_path}")
 
-    # Backup source
-    backup_path = source_path.with_suffix(".md.merged")
+    # Backup source. Date-stamped and never clobbering: see
+    # scripts/utils/crm.stamped_backup_path. The fixed `.md.merged` name that
+    # used to sit here silently destroyed the previous backup on a second merge
+    # of the same contact, which is the bug transfer-contact.py had fixed in its
+    # own copy of these four lines and this copy never received.
+    backup_path = stamped_backup_path(source_path, "merged")
     source_path.rename(backup_path)
     print(f"{YELLOW}Source backed up:{RESET}   {backup_path}")
 

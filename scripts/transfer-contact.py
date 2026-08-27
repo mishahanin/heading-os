@@ -24,6 +24,7 @@ from scripts.utils.workspace import (
     get_crm_contacts_dir,
 )
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
+from scripts.utils.crm import stamped_backup_path
 
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -160,16 +161,11 @@ def main() -> None:
     target_path.write_text(text, encoding="utf-8")
     print(f"{GREEN}Contact written:{RESET} {target_path}")
 
-    # Backup source
-    # Date-stamped, and never clobbering: `with_suffix(".md.transferred")` is a
-    # single fixed name, so transferring the same contact a second time renamed
-    # the new file over the previous backup and destroyed it silently.
-    stamp = datetime.now(get_default_tz()).strftime("%Y%m%d")
-    backup_path = source_path.with_name(f"{source_path.stem}.md.transferred-{stamp}")
-    suffix = 2
-    while backup_path.exists():
-        backup_path = source_path.with_name(f"{source_path.stem}.md.transferred-{stamp}-{suffix}")
-        suffix += 1
+    # Backup source. Date-stamped and never clobbering: see
+    # scripts/utils/crm.stamped_backup_path, which is where this logic now lives
+    # so merge-contacts.py cannot drift from it again. It did: the same four
+    # lines were fixed here and left broken there for weeks.
+    backup_path = stamped_backup_path(source_path, "transferred")
     source_path.rename(backup_path)
     print(f"{YELLOW}Source backed up:{RESET} {backup_path}")
 

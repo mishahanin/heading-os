@@ -52,6 +52,35 @@ from scripts.utils.workspace import (  # noqa: E402
 from scripts.utils.markdown import parse_frontmatter_str as _parse_frontmatter  # noqa: E402
 
 
+def stamped_backup_path(source_path: Path, kind: str, today=None) -> Path:
+    """A backup name for `source_path` that never overwrites an earlier one.
+
+    `kind` is the marker in the name: "merged" for `scripts/merge-contacts.py`,
+    "transferred" for `scripts/transfer-contact.py`.
+
+    Both tools move a contact file aside with `Path.rename`, which on POSIX
+    SILENTLY replaces an existing destination. Both used a single fixed name, so
+    running either twice on one contact renamed the new file over the previous
+    backup and destroyed it without a word, while still printing "Source backed
+    up:". `transfer-contact.py` was fixed on its own in July and kept the
+    reasoning in a comment; `merge-contacts.py` carried the same four lines and
+    the same bug until 2026-08-27, because the fix was applied to one copy of
+    duplicated code rather than to a shared helper. This IS that helper.
+
+    The date comes from the configured zone, not UTC: the operator works past
+    midnight local, and a backup filed under yesterday is the small version of
+    the same confusion.
+    """
+    stamp = (today or datetime.now(get_default_tz()).date()).strftime("%Y%m%d")
+    base = f"{source_path.stem}.md.{kind}-{stamp}"
+    backup_path = source_path.with_name(base)
+    suffix = 2
+    while backup_path.exists():
+        backup_path = source_path.with_name(f"{base}-{suffix}")
+        suffix += 1
+    return backup_path
+
+
 # Types excluded from time-based cadence scoring (CEO talks daily)
 NO_CADENCE_TYPES = {"tribe", "tribe-leadership", "inactive"}
 

@@ -731,11 +731,24 @@ def load_crm_contacts() -> dict[str, dict]:
 
 
 def load_pipeline_context() -> str:
-    """Load pipeline summary for LLM context (first 80 lines)."""
+    """The pipeline file, whole.
+
+    This returned `lines[:80]` and called it "pipeline summary for LLM context",
+    but it has TWO consumers and only one of them is the LLM.
+    `enrich_conversation` scans the same string for the contact's company and
+    writes `pipeline_context = None` when no line matches, so a deal whose row
+    sits at line 81 or later was indistinguishable from a company with no deal
+    at all - and the digest the CEO approves then said, by omission, that no
+    live deal was attached to that thread.
+
+    The cap also bought nothing for the consumer it was named after:
+    `analyze_conversations` applies its own bound, `pipeline_text[:1500]`, when
+    it builds the prompt. So the prompt is still bounded and the lookup now sees
+    every row.
+    """
     if not PIPELINE_FILE.exists():
         return ""
-    lines = PIPELINE_FILE.read_text(encoding="utf-8").splitlines()
-    return "\n".join(lines[:80])
+    return PIPELINE_FILE.read_text(encoding="utf-8")
 
 
 def load_viraid_state() -> dict:

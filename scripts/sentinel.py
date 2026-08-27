@@ -133,6 +133,11 @@ class SentinelConfig:
         self.calendar = self._raw.get("calendar", {})
 
 
+# How many medium-priority rows the evening digest prints. A constant so the
+# heading and the slice cannot say different numbers: the heading names it.
+MEDIUM_DIGEST_ROWS = 5
+
+
 def local_stamp(dt) -> str:
     """A timestamp an operator can read: configured zone, and its label.
 
@@ -2646,9 +2651,22 @@ Top items by urgency:{top_items_str}"""
             it for it in items
             if 5 <= it.get("urgency", 0) <= 6
         ]
+        # Sorted, and the drop is named. This list was the first five in ARRIVAL
+        # order under a heading making no top-N claim, so on a busy day the CEO
+        # read five routine morning items as the whole medium band while a 6/10
+        # from a partner at 17:40 was never mentioned and no number hinted it
+        # existed. The morning digest one function up already sorts by urgency
+        # and says "Top 3"; this one did neither.
+        medium_items.sort(key=lambda it: (it.get("urgency", 0), it.get("time", "")),
+                          reverse=True)
+        shown = medium_items[:MEDIUM_DIGEST_ROWS]
         medium_str = ""
-        for it in medium_items[:5]:
+        for it in shown:
             medium_str += f"\n  - [{it.get('urgency')}/10] {it.get('source', '?').upper()}: {it.get('sender', '?')} - {it.get('subject', '')[:50]}"
+
+        dropped = len(medium_items) - len(shown)
+        if dropped:
+            medium_str += f"\n  ... and {dropped} more at 5-6/10, not shown"
 
         if not medium_str:
             medium_str = "\n  None"
@@ -2674,7 +2692,7 @@ Today's stats:
   \U0001f6a8 Urgent alerts sent: {urgent_count}
   \U0001f4cb Total items analyzed: {len(items)}
 
-Medium-priority (worth a glance):{medium_str}
+Medium-priority ({len(medium_items)} at 5-6/10, top {MEDIUM_DIGEST_ROWS} shown):{medium_str}
 
 Top senders:{senders_str}"""
 

@@ -793,11 +793,41 @@ def test_transfer_contact_uses_the_shared_admin_resolver():
     )
 
 
-def test_transfer_contact_backup_is_date_stamped_and_never_clobbers():
-    code = _code_only(ROOT / "scripts" / "transfer-contact.py")
-    assert 'with_suffix(".md.transferred")' not in code
-    assert "while backup_path.exists():" in code
-    assert '.md.transferred-{stamp}' in code
+def test_transfer_contact_backup_is_date_stamped_and_never_clobbers(tmp_path):
+    """Asked of the helper, not of the file's text.
+
+    This grepped `transfer-contact.py` for `while backup_path.exists():` until
+    2026-08-27, when the logic moved into `scripts/utils/crm.stamped_backup_path`
+    so `merge-contacts.py` could share it - it had carried the same four lines
+    with the fixed name and the clobbering bug the whole time. The grep then
+    failed over a move that made the guarantee STRONGER, which is the tell: it
+    was measuring where the characters sat.
+    """
+    from scripts.utils.crm import stamped_backup_path
+
+    source = tmp_path / "quillon-marsh.md"
+    source.write_text("first\n", encoding="utf-8")
+
+    first = stamped_backup_path(source, "transferred")
+    assert ".md.transferred-" in first.name
+    assert first.name != "quillon-marsh.md.transferred"
+
+    first.write_text("first backup\n", encoding="utf-8")
+    second = stamped_backup_path(source, "transferred")
+
+    assert second != first, "a second transfer would overwrite the first backup"
+    assert not second.exists()
+    assert first.read_text(encoding="utf-8") == "first backup\n"
+
+
+def test_both_contact_tools_use_the_shared_backup_helper():
+    """The reason the helper exists. The fix lived in one of two copies for
+    weeks; a copy that comes back puts the clobbering bug back with it."""
+    for name in ("transfer-contact.py", "merge-contacts.py"):
+        code = _code_only(ROOT / "scripts" / name)
+        assert "stamped_backup_path(source_path" in code, name
+        assert "while backup_path.exists():" not in code, name
+        assert 'with_suffix(".md.' not in code, name
 
 
 def test_transfer_contact_docstring_documents_no_phantom_flag():

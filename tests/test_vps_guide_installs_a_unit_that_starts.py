@@ -176,12 +176,77 @@ def test_the_sync_timer_is_not_installed_as_root(guide):
     )
 
 
+def _risk_block(guide: str) -> str:
+    """The blockquote that explains the timer's risk, read where it belongs.
+
+    Scoped to the run of `>` lines immediately preceding the sudo grant, because
+    the claim being made is that the RATIONALE sits beside the recipe. Searching
+    the whole document proves nothing: `reference/vps-deployment-guide.md` is
+    1367 lines, "root" occurs 20 times ("type **root** and press Enter",
+    "/root for the root user", "cat /root/vps-sync.log") and "push" 8 times
+    ("git push  # git asks once"). Deleting the entire risk explanation left
+    every one of those matches in place, and the old assertion green.
+    """
+    lines = guide.splitlines()
+    grant = next((i for i, ln in enumerate(lines) if "NOPASSWD" in ln), None)
+    if grant is None:
+        return ""
+    block, i = [], grant - 1
+    seen_quote = False
+    while i >= 0 and grant - i < 80:
+        stripped = lines[i].strip()
+        if stripped.startswith(">"):
+            block.append(stripped.lstrip("> ").strip())
+            seen_quote = True
+        elif seen_quote and stripped:
+            break
+        i -= 1
+    return "\n".join(reversed(block))
+
+
 def test_the_guide_states_the_risk_it_is_asking_the_reader_to_accept(guide):
     """A silent hardening teaches nothing. The reader has to know why."""
-    assert "push" in guide and "root" in guide
     assert "sudoers" in guide or "NOPASSWD" in guide, (
         "the guide should show the narrow sudo grant that lets an unprivileged "
         "user restart Sentinel, otherwise the reader falls back to root"
+    )
+    block = _risk_block(guide)
+    assert len(block.splitlines()) >= 4, (
+        f"no risk blockquote precedes the sudo grant; found {block!r}. The "
+        f"recipe without the reason teaches the reader to paste, not to choose."
+    )
+    missing = []
+    # The chain the reader has to follow: the timer RUNS pulled code, so PUSH
+    # access is code execution, so ROOT is refused.
+    if not re.search(r"setup-platform|pip install", block):
+        missing.append("that the timer runs code from the tree it just pulled")
+    if "push" not in block:
+        missing.append("that push access to the repository is what grants that")
+    if not re.search(r"own[s]? the whole|becom(e|es) root|not\b.*acceptable as root",
+                     block, re.I | re.S):
+        missing.append("that running it as root hands the server over")
+    assert not missing, (
+        "the risk blockquote no longer states: " + "; ".join(missing)
+        + f"\n--- block ---\n{block}"
+    )
+
+
+def test_the_risk_block_reader_can_come_back_empty(tmp_path):
+    """Anchor. An extractor that returned the whole document, or that never
+    found the grant, would pass the test above on any input at all."""
+    assert _risk_block("no grant line here at all") == ""
+    assert _risk_block("> a warning\n\nNOPASSWD: /bin/systemctl") == "a warning"
+    # A grant with no blockquote above it is the defect shape, and reads empty.
+    assert _risk_block("some prose\nNOPASSWD: /bin/systemctl") == ""
+
+
+def test_the_guide_repeats_the_warning_where_the_reader_would_ignore_it(guide):
+    """The second statement, beside the crontab line, for the reader who skipped
+    the blockquote. Asserted separately so losing one is not hidden by the
+    other."""
+    assert re.search(r"run it as root anyway", guide), (
+        "the guide no longer names the consequence at the point where a reader "
+        "chooses root anyway"
     )
 
 

@@ -219,13 +219,41 @@ def test_the_cap_keeps_the_newest_rows_not_an_arbitrary_hundred(tmp_path):
     assert oldest not in ids
 
 
-def test_a_dropped_row_is_named_in_the_log(tmp_path, caplog):
-    """A silent cap reads as 'this is everything'."""
-    n = CONVERSATIONS_ROW_CAP + 7
+@pytest.mark.parametrize("over", [1, 7, 23])
+def test_a_dropped_row_is_named_in_the_log(tmp_path, caplog, over):
+    """A silent cap reads as 'this is everything'.
+
+    The number has to be the DROPPED count, not the total. With a cap of 100 and
+    107 rows the old assertion was `"7" in message`, and 7 is a substring of 107:
+    replacing `len(out) - CONVERSATIONS_ROW_CAP` with `len(out)` produced
+    "107 rows over the cap of 100 were dropped" - a claim that more rows were
+    dropped than existed - and the test stayed green. Any row id like `c007`
+    interpolated into a future message would satisfy it too.
+
+    The whole sentence is asserted instead, and over three overflow sizes so the
+    number tracks rather than happening to match once.
+    """
+    n = CONVERSATIONS_ROW_CAP + over
     _write_fetch(tmp_path, {"conversations": [_conv(f"c{i:03d}") for i in range(n)]})
     with caplog.at_level(logging.WARNING, logger=conv_src.__name__):
+        got = list_conversations(tmp_path)
+    messages = [r.getMessage() for r in caplog.records]
+    expected = (f"conversations: {over} rows over the cap of "
+                f"{CONVERSATIONS_ROW_CAP} were dropped from this response")
+    assert expected in messages, (expected, messages)
+    assert len(got["conversations"]) == CONVERSATIONS_ROW_CAP, (
+        "the log and the payload disagree about how many rows came back"
+    )
+
+
+def test_a_fetch_under_the_cap_logs_no_drop_at_all(tmp_path, caplog):
+    """Anchor. Every assertion above is satisfied by a warning emitted on every
+    call, which would train the operator to ignore it."""
+    _write_fetch(tmp_path, {"conversations": [
+        _conv(f"c{i:03d}") for i in range(CONVERSATIONS_ROW_CAP - 1)]})
+    with caplog.at_level(logging.WARNING, logger=conv_src.__name__):
         list_conversations(tmp_path)
-    assert any("7" in r.getMessage() for r in caplog.records), caplog.text
+    assert not [r for r in caplog.records if "over the cap" in r.getMessage()], caplog.text
 
 
 def test_a_fetch_at_exactly_the_cap_is_not_reported_truncated(tmp_path):

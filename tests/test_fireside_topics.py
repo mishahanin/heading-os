@@ -52,13 +52,38 @@ def test_render_digest_empty_and_nonempty():
     assert "Alice" in out and "DPI deep dive" in out
 
 
-def test_render_backlog_summary_counts():
+@pytest.mark.parametrize("n", [1, 2, 3, 12])
+def test_render_backlog_summary_counts(n):
+    """The header count, read as a header and not as a loose digit.
+
+    `render_backlog_summary` writes `({len(ideas)} ideas)` and then numbers the
+    body `1.`, `2.`, `3.`... so for ANY list the count also appears as the last
+    enumeration index. The old assertion was `"2" in out` over a two-item list,
+    which the line `2. two` satisfies on its own: deleting `({len(ideas)} ideas)`
+    from the header entirely, or rendering `{len(ideas) - 1}`, left it green.
+    Verified 2026-08-27 by running the module.
+
+    The header is therefore asserted as a whole line, where no body row can
+    stand in for it.
+    """
     ideas = [
-        {"name": "A", "text": "one", "ts": "2026-06-20T10:00:00+04:00"},
-        {"name": "B", "text": "two", "ts": "2026-06-21T10:00:00+04:00"},
+        {"name": f"N{k}", "text": f"idea {k}", "ts": "2026-06-20T10:00:00+04:00"}
+        for k in range(n)
     ]
     out = ft.render_backlog_summary(ideas)
-    assert "2" in out and "one" in out and "two" in out
+    lines = out.splitlines()
+    assert lines[0] == f"*Full topic backlog this cycle* ({n} ideas):", lines[0]
+    body = [ln for ln in lines[1:] if ln.strip()]
+    assert len(body) == n, body
+    assert all(f"idea {k}" in out for k in range(n))
+
+
+def test_render_backlog_summary_says_nothing_when_there_is_nothing():
+    """Anchor for the count: with an empty list the header must not appear at
+    all, so a renderer that always printed a fixed header is caught."""
+    out = ft.render_backlog_summary([])
+    assert "Full topic backlog" not in out
+    assert out == "_No topic ideas were submitted this cycle._"
 
 
 def _seed(state_dir, n, cycle=1):

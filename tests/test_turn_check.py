@@ -10,6 +10,7 @@ are normalised to underscores. That mapping is tested here by name.
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -232,10 +233,50 @@ def test_an_ordinary_test_file_is_not_treated_as_a_contract():
     assert not tc.is_contract(ROOT / "tests" / "security" / "test_anything.py")
 
 
-def test_the_render_names_the_contracts_it_declined_to_judge():
-    text = tc.render({"status": "pass", "files": 1, "tests_run": 0,
-                      "skipped_foreign": 0, "skipped_contract": 2})
-    assert "2" in text and "contract" in text
+def _plain(text: str) -> str:
+    """The render without its colour codes.
+
+    `GREEN` is `\\033[92m` and it opens every passing render, so the literal
+    character `2` is in EVERY pass line whatever the counts say. The old
+    assertion here was `"2" in text`, which was therefore true even with
+    `skipped_contract: 0`, and stayed true when `_contract_note` was mutated to
+    report `count * 3`. Measured 2026-08-27 against the repo module: the render
+    said "6 frozen-contract file(s)" for a count of 2 and the test was green.
+    The operator reads the number; the test now reads the same number.
+    """
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+def test_the_ansi_stripper_actually_removes_the_escapes():
+    """Anchor. A stripper that returned its input unchanged would restore the
+    exact hole this file was fixed for."""
+    assert _plain("\x1b[92mok\x1b[0m") == "ok"
+    assert "2" not in _plain("\x1b[92mclean\x1b[0m")
+
+
+@pytest.mark.parametrize("count", [1, 2, 3, 11])
+def test_the_render_names_the_contracts_it_declined_to_judge(count):
+    text = _plain(tc.render({"status": "pass", "files": 1, "tests_run": 0,
+                             "skipped_foreign": 0, "skipped_contract": count}))
+    assert f"[{count} frozen-contract file(s) not run" in text, text
+    # And no OTHER number is being passed off as the contract count.
+    assert re.search(rf"\[{count} frozen-contract", text), text
+
+
+def test_a_render_with_no_skipped_contracts_says_nothing_about_them():
+    """The other half. Without it, a note printed unconditionally would satisfy
+    every case above."""
+    text = _plain(tc.render({"status": "pass", "files": 1, "tests_run": 0,
+                             "skipped_foreign": 0, "skipped_contract": 0}))
+    assert "frozen-contract" not in text, text
+
+
+def test_the_changed_file_and_test_file_counts_are_the_ones_given():
+    """Same failure shape, same fix: these two numbers sit beside the contract
+    note and were never asserted against a value that could disagree."""
+    text = _plain(tc.render({"status": "pass", "files": 4, "tests_run": 9,
+                             "skipped_foreign": 0, "skipped_contract": 0}))
+    assert "(4 changed file(s), 9 test file(s))" in text, text
 
 
 # ============================================================

@@ -211,6 +211,58 @@ def test_a_missing_command_fails_the_build(tmp_path):
         mod.build_bundle("probe", spec, tmp_path, ROOT)
 
 
+def test_a_missing_source_is_refused_before_the_bundle_is_touched(tmp_path):
+    """The comment above `completeness_gate` promises to fail "before writing
+    anything", and the per-component checks ran AFTER `shutil.rmtree(bundle)`
+    and after `plugin.json` was written. So a typo in the manifest destroyed the
+    previous bundle and left a half-written one.
+
+    Low severity - `dist/marketplace/` is untracked and the next successful
+    build regenerates it - but the promise was not kept.
+    """
+    mod = _load_builder()
+    bundle = tmp_path / "plugins" / "probe"
+    (bundle / "skills" / "old-skill").mkdir(parents=True)
+    (bundle / "skills" / "old-skill" / "SKILL.md").write_text("previous build\n",
+                                                              encoding="utf-8")
+    spec = {"description": "x", "skills": [], "hooks": [], "hook_events": {},
+            "commands": ["no-such-command.md"], "scripts": []}
+
+    with pytest.raises(SystemExit):
+        mod.build_bundle("probe", spec, tmp_path, ROOT)
+
+    assert (bundle / "skills" / "old-skill" / "SKILL.md").read_text(
+        encoding="utf-8") == "previous build\n", "the previous bundle was destroyed"
+    assert not (bundle / ".claude-plugin" / "plugin.json").exists()
+
+
+def test_every_absent_source_is_named_at_once(tmp_path, capsys):
+    """Raising on the first one makes a manifest with three typos take three
+    runs to fix."""
+    mod = _load_builder()
+    spec = {"description": "x", "skills": ["no-such-skill"], "hooks": ["no-such-hook.py"],
+            "hook_events": {}, "commands": ["no-such-command.md"],
+            "scripts": ["no-such-script.py"]}
+
+    absent = mod.manifest_sources("probe", spec, ROOT)
+
+    assert len(absent) == 4
+    assert any("skill not found" in m for m in absent)
+    assert any("command not found" in m for m in absent)
+    assert any("hook not found" in m for m in absent)
+    assert any("script not found" in m for m in absent)
+
+
+def test_a_manifest_whose_sources_all_exist_reports_nothing():
+    """The negative case. A pre-pass that always finds something blocks every
+    build."""
+    mod = _load_builder()
+    spec = {"description": "x", "skills": [], "hooks": [], "hook_events": {},
+            "commands": ["unattended.md"], "scripts": []}
+
+    assert mod.manifest_sources("probe", spec, ROOT) == []
+
+
 def test_command_script_paths_are_rewritten(built):
     """Same rewrite the SKILL.md bodies get: a bare `python scripts/...` resolves
     against the consumer's cwd in a plugin cache, not against the bundle."""

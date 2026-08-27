@@ -105,3 +105,30 @@ def test_the_state_lock_is_ignored_by_the_engine():
     engine = _repo(ROOT)
     state = CP.state_path(CP.project_root(), "guard-slug")
     assert _ignored(engine, state.with_name(state.name + ".lock"))
+
+
+def test_a_lock_sidecar_at_an_unseen_path_is_ignored_by_the_data_overlay():
+    """The two tests above cover the sidecars that already exist. This covers the
+    next one.
+
+    The overlay's rules were written one path at a time, each after a specific
+    sidecar appeared, and on 2026-08-27 that enumeration fell behind: a new
+    `outputs/operations/ops-radar/autoheal.json.lock` matched no rule, `push-all`
+    committed it with `git add -A`, and the broad test above then refused the
+    ENGINE push over a file in the OTHER repository. The fix was one
+    `outputs/**/*.lock` rule; this asks whether that rule is still there, using
+    paths that exist nowhere on disk so no real sidecar can make it pass.
+
+    `git check-ignore` answers about a path, not about a file, so an invented
+    directory is a legitimate question to put to it.
+    """
+    data = _repo(Path(get_data_root()))
+    for invented in (
+        "outputs/operations/a-tool-not-yet-written/state.json.lock",
+        "outputs/never-created/deep/er/still/deeper/x.lock",
+        "outputs/one-level.lock",
+    ):
+        assert _ignored(data, data / invented), (
+            f"{invented} would be committed. The overlay is back to naming lock "
+            f"sidecars one path at a time, which is the arrangement that failed."
+        )

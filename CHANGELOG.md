@@ -83,6 +83,38 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- **The DOCX twin of every corporate document fused its lists, tables and
+  headings into one line.** `scripts/utils/doctype_renderer.py`'s `build_docx`
+  carried a private four-line `strip_html` that converted `<br>` and `</p><p>`
+  to newlines and then deleted every remaining tag with NO separator and no
+  entity decoding. Measured 2026-08-27: `<ul><li>Module A</li><li>Module
+  B</li></ul>` arrived as `Module AModule B`, a table row as `ab`, and `&amp;`
+  as four literal characters. It fed every DOCX body site, so
+  `/corporate-letter`, `/proposal`, `/partnership-doc` and `/official-doc` were
+  all affected; the PDF was correct because the template gets the HTML raw, so
+  nothing the operator saw showed what the counterparty would open in the
+  editable copy. Now routed through the shared `html_text.strip_html`, which
+  `html_text`'s own docstring asks new callers to import rather than copy,
+  followed by `sanitize_text.sanitize` - not optional, because the shared parser
+  decodes `&nbsp;` to U+00A0 and `.claude/rules/hidden-chars.md` bans that
+  character in every generated artifact. A third copy of the same idea, the
+  salutation line stripping `<p>` by name with two `.replace` calls, goes
+  through the same helper. Guard:
+  `tests/test_a_docx_twin_that_fused_every_list_and_a_font_that_never_loaded.py`
+  (24 tests; nothing under `tests/` imported `build_docx` before this).
+- **The Cyrillic fallback fonts were never embedded, so every Russian document
+  rendered in a system font.** `_resolve_brand_assets` built the Inter paths as
+  `_fonts_dir(root) / "Inter"`, and `_fonts_dir` already ends in `GT Standard`.
+  The resulting `datastore/brand/fonts/GT Standard/Inter` has never existed.
+  `_embed_asset` returned `""` for a missing file without a word, so both faces
+  rendered as `src: url("")` and the render exited 0. Measured on the live
+  workspace 2026-08-27: GT Standard 246689 and 248853 bytes, both Inter faces 0.
+  `base.css` lists Inter first in the `[lang="ru"]` stack and GT Standard has no
+  Cyrillic glyphs, so Russian text fell through to Segoe UI or Arial at a heavier
+  weight than the Latin column - verbatim the outcome the comment above those two
+  lines says the embed exists to prevent. Fixed with an `_inter_dir` resolver
+  beside `_fonts_dir`, and a missing brand asset now names itself on stderr
+  instead of resolving to silence.
 - **Three filename builders erased every Russian title, and one of them
   overwrote a rendered document.** Each cleans a title down to `[a-z0-9-]` and
   uses the result as a filename stem, so a Cyrillic title produced the empty

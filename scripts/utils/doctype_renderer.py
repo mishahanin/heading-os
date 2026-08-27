@@ -141,6 +141,19 @@ def _fonts_dir(workspace_root: Path) -> Path:
     return _resolve_under_corporate(workspace_root, "datastore/brand/fonts/GT Standard")
 
 
+def _inter_dir(workspace_root: Path) -> Path:
+    """The Cyrillic fallback family, a sibling of `GT Standard`, not a child.
+
+    `_resolve_brand_assets` used to build this as `_fonts_dir(root) / "Inter"`,
+    and `_fonts_dir` already ends in `GT Standard`. The resulting
+    `.../fonts/GT Standard/Inter` has never existed, so both Inter faces embedded
+    as the empty string and every Russian run fell through to a system font.
+    Resolved through the same seam as its sibling rather than as
+    `_fonts_dir(root).parent`, so the two lookups stay independent.
+    """
+    return _resolve_under_corporate(workspace_root, "datastore/brand/fonts/Inter")
+
+
 def validate_required_fields(doctype: str, data: dict) -> list[str]:
     """Return a list of missing required fields."""
     if doctype not in TEMPLATE_REGISTRY:
@@ -158,9 +171,55 @@ def _encode_file_b64(path: Path) -> str:
     return base64.b64encode(path.read_bytes()).decode("ascii")
 
 
+def _docx_text(html) -> str:
+    """The HTML body of a document, as the plain text its DOCX twin carries.
+
+    `build_docx` used to hold a four-line private stripper that turned `<br>`
+    and `</p><p>` into newlines and then deleted every other tag with NO
+    separator: `<ul><li>A</li><li>B</li></ul>` arrived as `AB`, a table row as
+    `ab`, and `&amp;` as four literal characters. The PDF was correct, because
+    the template gets the HTML raw, so nothing the operator saw showed what the
+    counterparty would open in the editable copy.
+
+    `html_text.strip_html` is the shared parser, was rewritten for this exact
+    fusion, and its docstring asks a new caller to import rather than copy it.
+
+    `sanitize` runs afterwards and is NOT optional: the shared parser decodes
+    entities, `&nbsp;` decodes to U+00A0, and `.claude/rules/hidden-chars.md`
+    bans that character in every generated artifact. Adopting the parser without
+    this line would trade a fused word for a banned one.
+    """
+    from scripts.utils.html_text import strip_html
+    from scripts.utils.sanitize_text import sanitize
+
+    return sanitize(strip_html(html))
+
+
+def _docx_paragraphs(html) -> list[str]:
+    """The same text, split where the block elements were.
+
+    One paragraph per line, empties dropped, so a list becomes one DOCX
+    paragraph per item instead of one paragraph per `</p><p>` boundary. The old
+    `.split("\\n\\n")` could only ever see that one boundary, which is why every
+    other block element fused.
+    """
+    return [line.strip() for line in _docx_text(html).split("\n") if line.strip()]
+
+
 def _embed_asset(path: Path, mime: str) -> str:
-    """Return a data: URI for the asset."""
+    """Return a data: URI for the asset, or "" when the file is not there.
+
+    The miss is REPORTED. Returning "" and saying nothing is how a wrong Inter
+    path survived: the template got `src: url("")`, Chromium fell back to a
+    system font, and the render still exited 0 with `[WROTE]` printed. By the
+    time this runs, `render_html` has already read the locked template out of
+    the same brand tree, so a file missing here is an anomaly rather than a
+    public clone with no overlay. "" is still returned, because a half-branded
+    document beats no document at all when the operator is mid-deadline.
+    """
     if not path.exists():
+        print(f"doctype_renderer: brand asset not found, rendering without it: {path}",
+              file=sys.stderr)
         return ""
     b64 = _encode_file_b64(path)
     return f"data:{mime};base64,{b64}"
@@ -169,6 +228,7 @@ def _embed_asset(path: Path, mime: str) -> str:
 def _resolve_brand_assets(workspace_root: Path) -> dict:
     logos = _assets_dir(workspace_root) / "logos"
     fonts = _fonts_dir(workspace_root)
+    inter = _inter_dir(workspace_root)
     return {
         "LOGO_BLUE": _embed_asset(logos / "31C_Logo_Palantinate_Blue_Color.png", "image/png"),
         "LOGO_WHITE": _embed_asset(logos / "31C_Logo_White_Color.png", "image/png"),
@@ -186,8 +246,8 @@ def _resolve_brand_assets(workspace_root: Path) -> dict:
         # subsets in PDF with hinting preserved; the variable font got
         # converted to Type 3 outlines for Cyrillic runs and the bold-weight
         # interpolation failed to a few characters fell through to Arial.
-        "FONT_INTER_LIGHT": _embed_asset(fonts / "Inter" / "Inter-Light.ttf", "font/ttf"),
-        "FONT_INTER_MEDIUM": _embed_asset(fonts / "Inter" / "Inter-Medium.ttf", "font/ttf"),
+        "FONT_INTER_LIGHT": _embed_asset(inter / "Inter-Light.ttf", "font/ttf"),
+        "FONT_INTER_MEDIUM": _embed_asset(inter / "Inter-Medium.ttf", "font/ttf"),
     }
 
 
@@ -330,12 +390,6 @@ def build_docx(doctype: str, data: dict, out_path: Path, workspace_root: Path) -
         val = p.add_run(value)
         val.font.size = Pt(10)
 
-    def strip_html(html: str) -> str:
-        text = re.sub(r"<br\s*/?>", "\n", html)
-        text = re.sub(r"</p>\s*<p>", "\n\n", text)
-        text = re.sub(r"<[^>]+>", "", text)
-        return text.strip()
-
     # Header block
     add_heading("31 Concept", size=22, color=(0x15, 0x15, 0x15))
     tag = doc.add_paragraph()
@@ -352,8 +406,11 @@ def build_docx(doctype: str, data: dict, out_path: Path, workspace_root: Path) -
         doc.add_paragraph()
         add_heading(data["SUBJECT"], size=14, color=(0x15, 0x15, 0x15))
         doc.add_paragraph()
-        doc.add_paragraph(data.get("SALUTATION", "").replace("<p>", "").replace("</p>", "").strip())
-        for para in strip_html(data["BODY_HTML"]).split("\n\n"):
+        # Through the same helper as the body. This line used to strip `<p>` by
+        # name, which is the private stripper's defect in miniature: any other
+        # tag, and every entity, reached the page verbatim.
+        doc.add_paragraph(_docx_text(data.get("SALUTATION", "")))
+        for para in _docx_paragraphs(data["BODY_HTML"]):
             if para.strip():
                 doc.add_paragraph(para.strip())
         doc.add_paragraph()
@@ -372,23 +429,23 @@ def build_docx(doctype: str, data: dict, out_path: Path, workspace_root: Path) -
         add_label_row("Ref", data["REF_ID"])
         doc.add_paragraph()
         add_heading("Executive Opening", size=14, color=(0x5B, 0x5F, 0xFF))
-        for para in strip_html(data["EXECUTIVE_OPENING_HTML"]).split("\n\n"):
+        for para in _docx_paragraphs(data["EXECUTIVE_OPENING_HTML"]):
             if para.strip():
                 doc.add_paragraph(para.strip())
         add_heading("The Opportunity", size=14, color=(0x5B, 0x5F, 0xFF))
-        for para in strip_html(data["OPPORTUNITY_HTML"]).split("\n\n"):
+        for para in _docx_paragraphs(data["OPPORTUNITY_HTML"]):
             if para.strip():
                 doc.add_paragraph(para.strip())
         add_heading("Solution Structure", size=14, color=(0x5B, 0x5F, 0xFF))
-        for para in strip_html(data["SOLUTION_HTML"]).split("\n\n"):
+        for para in _docx_paragraphs(data["SOLUTION_HTML"]):
             if para.strip():
                 doc.add_paragraph(para.strip())
         add_heading("Why 31C", size=14, color=(0x5B, 0x5F, 0xFF))
-        for para in strip_html(data["PROOF_HTML"]).split("\n\n"):
+        for para in _docx_paragraphs(data["PROOF_HTML"]):
             if para.strip():
                 doc.add_paragraph(para.strip())
         add_heading("Commercial Terms", size=14, color=(0x5B, 0x5F, 0xFF))
-        for para in strip_html(data["COMMERCIAL_INTRO_HTML"]).split("\n\n"):
+        for para in _docx_paragraphs(data["COMMERCIAL_INTRO_HTML"]):
             if para.strip():
                 doc.add_paragraph(para.strip())
         for line in data.get("PRICING_LINES", []):
@@ -396,7 +453,7 @@ def build_docx(doctype: str, data: dict, out_path: Path, workspace_root: Path) -
             p.add_run(f"{line['label']}: ").font.bold = True
             p.add_run(line["value"])
         add_heading("Next Steps", size=14, color=(0x5B, 0x5F, 0xFF))
-        for para in strip_html(data["NEXT_STEPS_HTML"]).split("\n\n"):
+        for para in _docx_paragraphs(data["NEXT_STEPS_HTML"]):
             if para.strip():
                 doc.add_paragraph(para.strip())
         doc.add_paragraph()
@@ -426,14 +483,14 @@ def build_docx(doctype: str, data: dict, out_path: Path, workspace_root: Path) -
             f"(\"{data['PARTY_B_SHORT']}\")."
         )
         add_heading("Purpose", size=12, color=(0x5B, 0x5F, 0xFF))
-        doc.add_paragraph(strip_html(data["PURPOSE_HTML"]))
+        doc.add_paragraph(_docx_text(data["PURPOSE_HTML"]))
         add_heading("Scope of Collaboration", size=12, color=(0x5B, 0x5F, 0xFF))
-        doc.add_paragraph(strip_html(data["SCOPE_HTML"]))
+        doc.add_paragraph(_docx_text(data["SCOPE_HTML"]))
         for clause in data.get("CLAUSES", []):
             add_heading(f"Clause {clause['num']} - {clause['title']}", size=11, color=(0x5B, 0x5F, 0xFF))
-            doc.add_paragraph(strip_html(clause["body"]))
+            doc.add_paragraph(_docx_text(clause["body"]))
         add_heading("Governance and Dispute Resolution", size=12, color=(0x5B, 0x5F, 0xFF))
-        doc.add_paragraph(strip_html(data["GOVERNANCE_HTML"]))
+        doc.add_paragraph(_docx_text(data["GOVERNANCE_HTML"]))
         add_heading("Confidentiality", size=12, color=(0x5B, 0x5F, 0xFF))
         doc.add_paragraph(
             "Each party shall treat all non-public information exchanged under this "
@@ -464,17 +521,17 @@ def build_docx(doctype: str, data: dict, out_path: Path, workspace_root: Path) -
             add_label_row("Subject", data["SUBJECT_LINE"])
         doc.add_paragraph()
         if data.get("PREAMBLE"):
-            doc.add_paragraph(strip_html(data["PREAMBLE"]))
+            doc.add_paragraph(_docx_text(data["PREAMBLE"]))
         for w in data.get("WHEREAS_CLAUSES", []):
             p = doc.add_paragraph()
             p.add_run("Whereas ").font.bold = True
-            p.add_run(strip_html(w))
+            p.add_run(_docx_text(w))
         for r in data.get("RESOLVED_BLOCKS", []):
             p = doc.add_paragraph()
             p.add_run("NOW, THEREFORE, RESOLVED: ").font.bold = True
-            p.add_run(strip_html(r))
+            p.add_run(_docx_text(r))
         if data.get("CLOSING_HTML"):
-            doc.add_paragraph(strip_html(data["CLOSING_HTML"]))
+            doc.add_paragraph(_docx_text(data["CLOSING_HTML"]))
         doc.add_paragraph()
         doc.add_paragraph("Executed on the date first written above.")
         doc.add_paragraph()

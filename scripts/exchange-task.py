@@ -214,7 +214,35 @@ def create_task(account: Account, args: argparse.Namespace, config: dict) -> Non
 # List
 # ============================================================
 
-def list_tasks(account: Account, args: argparse.Namespace) -> None:
+def in_mailbox_zone(dt, tz_name: str):
+    """Move an Exchange datetime onto the mailbox's own clock.
+
+    exchangelib returns `due_date` and `reminder_due_by` as UTC-aware
+    `DateTimeField` values, so rendering them with `strftime` printed the UTC
+    wall clock. The create path in this same file has always done the opposite,
+    labelling its confirmation with `config['EXCHANGE_TIMEZONE']`, and
+    `parse_remind_at` carries a docstring about the silent hour shift being the
+    failure to avoid. So the two commands of one script reported the same
+    reminder on two different clocks, and only the create path said which.
+
+    On a +04 mailbox the listing was four hours early, and for anything set
+    before 04:00 it showed the PREVIOUS day. The output looked exactly like a
+    correct one, which is what made it worth fixing rather than tolerating.
+    """
+    if dt is None:
+        return None
+    try:
+        zone = zoneinfo.ZoneInfo(tz_name)
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError):
+        # A misconfigured EXCHANGE_TIMEZONE must not take the listing down; the
+        # caller still labels whatever zone it asked for, so the operator sees
+        # the name that failed rather than a silently different clock.
+        return dt
+    return dt.astimezone(zone)
+
+
+def list_tasks(account: Account, args: argparse.Namespace, config: dict) -> None:
+    tz_name = config.get("EXCHANGE_TIMEZONE") or "UTC"
     tasks = account.tasks.all().order_by("due_date")
 
     if not args.all_statuses:
@@ -229,10 +257,13 @@ def list_tasks(account: Account, args: argparse.Namespace) -> None:
     label = "all statuses" if args.all_statuses else args.status
     print(f"\n{BOLD}{CYAN}Exchange Tasks ({label}){RESET}\n")
     for t in items:
-        due_str = t.due_date.strftime("%Y-%m-%d") if t.due_date else "no due date"
+        due_local = in_mailbox_zone(t.due_date, tz_name)
+        due_str = due_local.strftime("%Y-%m-%d") if due_local else "no due date"
         reminder_str = ""
         if t.reminder_is_set and t.reminder_due_by:
-            reminder_str = f"  remind {t.reminder_due_by.strftime('%Y-%m-%d %H:%M')}"
+            remind_local = in_mailbox_zone(t.reminder_due_by, tz_name)
+            reminder_str = (f"  remind {remind_local.strftime('%Y-%m-%d %H:%M')} "
+                            f"({tz_name})")
         status_color = YELLOW if t.status != "Completed" else GRAY
         print(f"  {status_color}{t.status:<20}{RESET} {BOLD}{t.subject}{RESET}")
         print(f"  {GRAY}due {due_str}{reminder_str}{RESET}")
@@ -278,7 +309,7 @@ def main() -> None:
     account = connect(config)
 
     if args.list:
-        list_tasks(account, args)
+        list_tasks(account, args, config)
     elif args.complete:
         complete_task(account, args.complete)
     else:

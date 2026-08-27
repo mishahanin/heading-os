@@ -605,36 +605,45 @@ class _Args:
     status = "NotStarted"
 
 
+# `list_tasks` gained a `config` parameter on 2026-08-27: it renders
+# `due_date` and `reminder_due_by` on the mailbox timezone instead of the
+# raw UTC these exchangelib fields carry, and the zone name comes from the
+# config the create path already labels with. These tests are about the
+# BODY column, so the zone is fixed and never asserted on here; the clock
+# itself is covered by tests/test_two_clocks_and_a_default_nothing_read.py.
+_CONFIG = {"EXCHANGE_TIMEZONE": "UTC"}
+
+
 @pytest.mark.parametrize("body", ["\n", "   ", "\t\n ", "\r\n"])
 def test_a_whitespace_only_body_does_not_crash_the_listing(tasks, body, capsys):
     """THE case. A body of "\\n" is TRUTHY and strips to "", whose splitlines()
     is [] - so `[0]` raised IndexError in the MIDDLE of the listing, and the
     operator got a half-printed list plus a traceback with no way to tell where
     the list stopped."""
-    tasks.list_tasks(_FakeAccount([_FakeTask(body)]), _Args())
+    tasks.list_tasks(_FakeAccount([_FakeTask(body)]), _Args(), _CONFIG)
     assert "Follow up" in capsys.readouterr().out
 
 
 def test_a_real_body_first_line_is_still_shown(tasks, capsys):
     """The green path: skipping every body would also stop the crash."""
-    tasks.list_tasks(_FakeAccount([_FakeTask("Check the Vesper Lynd thread\nsecond line")]), _Args())
+    tasks.list_tasks(_FakeAccount([_FakeTask("Check the Vesper Lynd thread\nsecond line")]), _Args(), _CONFIG)
     out = capsys.readouterr().out
     assert "Check the Vesper Lynd thread" in out and "second line" not in out
 
 
 def test_a_long_body_line_is_still_truncated(tasks, capsys):
-    tasks.list_tasks(_FakeAccount([_FakeTask("x" * 300)]), _Args())
+    tasks.list_tasks(_FakeAccount([_FakeTask("x" * 300)]), _Args(), _CONFIG)
     assert "x" * 101 not in capsys.readouterr().out
 
 
 def test_every_task_after_a_broken_one_is_still_listed(tasks, capsys):
     """The real cost of the IndexError: the tasks BELOW it were never printed."""
-    tasks.list_tasks(_FakeAccount([_FakeTask("\n"), _FakeTask("later task body")]), _Args())
+    tasks.list_tasks(_FakeAccount([_FakeTask("\n"), _FakeTask("later task body")]), _Args(), _CONFIG)
     assert "later task body" in capsys.readouterr().out
 
 
 def test_an_empty_body_is_still_skipped(tasks, capsys):
-    tasks.list_tasks(_FakeAccount([_FakeTask("")]), _Args())
+    tasks.list_tasks(_FakeAccount([_FakeTask("")]), _Args(), _CONFIG)
     out = capsys.readouterr().out
     assert "Follow up" in out
 
@@ -647,7 +656,7 @@ def test_a_task_with_no_notes_does_not_print_the_word_none(tasks, capsys):
     STRING case was covered and the None case was not, and None is the one the
     mailbox actually returns.
     """
-    tasks.list_tasks(_FakeAccount([_FakeTask(None)]), _Args())
+    tasks.list_tasks(_FakeAccount([_FakeTask(None)]), _Args(), _CONFIG)
     out = capsys.readouterr().out
     # Nothing else this listing prints contains the substring: the header is
     # "Exchange Tasks (all statuses)", the status is "NotStarted", the subject

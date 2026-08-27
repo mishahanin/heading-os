@@ -133,6 +133,48 @@ class SentinelConfig:
         self.calendar = self._raw.get("calendar", {})
 
 
+def local_stamp(dt) -> str:
+    """A timestamp an operator can read: configured zone, and its label.
+
+    Every item Sentinel raises used to carry a bare UTC wall clock with the
+    offset deleted. The email path did it by slicing (`str(dt)[:19]` cuts
+    `+00:00` off the end) and the two Telegram paths did it explicitly
+    (`datetime.now(timezone.utc).isoformat()[:19]`). That string is then printed
+    straight into the Telegram alert card and fed to the urgency model as
+    `DATE:`, with nothing anywhere naming a zone.
+
+    On this operator's clock that is four hours early, and before 04:00 local it
+    is also the WRONG DAY: a VIP message that arrived at 01:34 was announced as
+    yesterday 21:34. Recency is how a person judges urgency, so the one field an
+    urgency monitor must get right was the field it silently shifted. The daemon
+    that sends the alert already schedules on the configured zone
+    (`datetime.now(self.config.timezone)`), so the alert body was on a different
+    clock from the daemon that sent it.
+
+    The same class was corrected elsewhere in this workspace with the same
+    reasoning: `scripts/utils/checkpoint_paths.py::local_now` records that every
+    artifact written between midnight and 04:00 local landed on yesterday's
+    date, "which is exactly when this operator works".
+
+    A naive datetime is READ AS UTC rather than guessed: every producer here is
+    UTC-aware, so a naive one means something upstream dropped the zone, and
+    treating it as local would silently invent a four-hour correction.
+    """
+    if dt is None:
+        return ""
+    if not hasattr(dt, "astimezone"):
+        # Not a datetime. Every real producer here hands over an aware one, so
+        # this is a shape nobody expects - but a fetch loop that raises on one
+        # odd field drops the whole cycle, and a monitor that goes quiet is the
+        # worst failure it has. Render what arrived and move on. The old
+        # `str(dt)[:19]` swallowed this by accident; it is deliberate now, and
+        # pinned by a test.
+        return str(dt)
+    if getattr(dt, "tzinfo", None) is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(get_default_tz()).strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
 # ============================================================
 # State Manager
 # ============================================================
@@ -493,7 +535,7 @@ class EmailSource:
             if email_item.has_attachments and email_item.attachments:
                 attachments = [a.name for a in email_item.attachments if hasattr(a, "name") and a.name]
 
-            date_str = str(email_item.datetime_received)[:19] if email_item.datetime_received else ""
+            date_str = local_stamp(email_item.datetime_received)
 
             new_items.append({
                 "source": "email",
@@ -1499,7 +1541,7 @@ class TelegramSource:
                 "sender": chat_name,
                 "subject": f"Telegram DM from {chat_name}",
                 "body": full_text,
-                "date": datetime.now(timezone.utc).isoformat()[:19],
+                "date": local_stamp(datetime.now(timezone.utc)),
                 "message_count": len(combined_text),
                 "is_vip": False,
             }
@@ -1566,7 +1608,7 @@ class TelegramSource:
                 "sender": chat_display,
                 "subject": f"Telegram Group: {chat_display}",
                 "body": full_text,
-                "date": datetime.now(timezone.utc).isoformat()[:19],
+                "date": local_stamp(datetime.now(timezone.utc)),
                 "message_count": len(messages),
                 "is_vip": priority == "high",
             })

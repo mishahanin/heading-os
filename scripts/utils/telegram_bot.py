@@ -89,6 +89,40 @@ class TelegramBot:
             self._log_error(msg)
             raise TelegramAPIError(msg, status_code=None) from None
 
+        return self._handle_response(method, r)
+
+    def call_multipart(self, method: str, *, data: dict, files: dict,
+                       _timeout: int = 30) -> Any:
+        """`_call` for the one Bot API method that uploads a file.
+
+        `setWebhook` takes a self-signed certificate, which `_call`'s JSON body
+        cannot carry, so `cmd_set_webhook` in `scripts/fireside-bot.py` built the
+        URL itself and called `requests.post` directly. That URL embeds the bot
+        token, and a transport failure raises a `requests` exception whose
+        message quotes it: a connection reset, an expired TLS chain or a DNS
+        failure printed the credential into the terminal and into whatever log
+        caught the traceback. The docstring above promises the opposite, one
+        method away.
+
+        Same contract as `_call`: every error redacted, every error a
+        TelegramAPIError.
+        """
+        url = f"{self.base}/{method}"
+        try:
+            r = requests.post(url, data=data, files=files, timeout=_timeout)
+        except requests.RequestException as e:
+            msg = self._redact(f"Telegram {method} transport failure: {e}")
+            self._log_error(msg)
+            raise TelegramAPIError(msg, status_code=None) from None
+
+        return self._handle_response(method, r)
+
+    def _handle_response(self, method: str, r: Any) -> Any:
+        """Shared response handling for `_call` and `call_multipart`.
+
+        One copy, on purpose: the redaction is the whole point, and a second
+        transcription of it is the one that stops being fixed.
+        """
         # Capture response details before raising, in redacted form
         status = r.status_code
         try:

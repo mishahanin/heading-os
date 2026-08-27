@@ -236,6 +236,29 @@ def require_writable_state_dir() -> Path:
     return STATE_DIR
 
 
+def require_writable_stats_dir() -> Path:
+    """STATS_DIR, under the same law as the state funnel above.
+
+    `STATS_DIR` resolves through `get_outputs_dir()`, which reaches
+    `get_data_root()` the same way `STATE_DIR` does and falls to
+    `<workspace_root>/examples` when no overlay backs it. `cmd_stats` carried
+    the bare `mkdir(parents=True, exist_ok=True)` that the funnel above exists
+    to replace, so `python scripts/fireside-bot.py stats` on a clone with no
+    overlay created `examples/outputs/operations/tribe-fireside/stats/` inside
+    the repository that gets pushed - and on a host where the overlay backs the
+    state but not the outputs, it wrote real Tribe speaker names into it.
+
+    The docstring above says why this is a second funnel and not a fifth inline
+    guard: "a guard added to some of them is a guard the next writer will not
+    have". `cmd_stats` was the next writer.
+    """
+    from scripts.utils.paths import require_outside_engine_clone
+
+    require_outside_engine_clone(STATS_DIR, "the fireside stats directory")
+    STATS_DIR.mkdir(parents=True, exist_ok=True)
+    return STATS_DIR
+
+
 def _unreadable_sheet_errors() -> tuple:
     """Every exception a file that is not a readable workbook can raise.
 
@@ -2502,17 +2525,28 @@ def _handle_cycle_invite_tap(bot: TelegramBot, cq_id, data: str,
         state["pending_cycle_invite"] = None
         ft.save_topic_state(STATE_DIR, state)
         # Pin is best-effort; a pin failure must not revert the cleared state.
+        # But best-effort is not the same as unreported. The failure was
+        # swallowed by a bare `pass` and the CEO's card was then rewritten to
+        # say "Sent to the Tribe and pinned." whatever happened - a failure
+        # reported as a success, on the one screen the operator reads to decide
+        # whether anything is left to do. `cmd_sunday_preview` handles the
+        # identical post-then-pin shape correctly: it tracks the outcome and
+        # names the failure. The fix landed in one of the two copies.
+        pinned = True
         try:
             bot.pin_chat_message(chat_id, result.get("message_id"), disable_notification=True)
-        except TelegramAPIError:
-            pass
+        except TelegramAPIError as e:
+            pinned = False
+            log_error(f"cycle-end-invite posted but the pin failed: {e}")
         _log_event("cycle_end_invite_sent", cycle=pending.get("cycle"),
-                   message_id=result.get("message_id"))
+                   message_id=result.get("message_id"), pinned=pinned)
+        card = ("✅ Sent to the Tribe and pinned." if pinned else
+                "✅ Sent to the Tribe. ⚠️ The pin FAILED - pin it by hand. "
+                "Do not re-tap: the message is already in the group.")
         try:
             bot.answer_callback_query(cq_id, text="Sent to the Tribe.")
             if msg_chat_id and msg_id:
-                bot.edit_message_text(msg_chat_id, msg_id,
-                                      "✅ Sent to the Tribe and pinned.",
+                bot.edit_message_text(msg_chat_id, msg_id, card,
                                       parse_mode="", reply_markup=None)
         except TelegramAPIError:
             pass
@@ -3062,7 +3096,17 @@ def _handle_message_reaction(event: dict) -> None:
     # so an outsider reacting cannot pollute opt-ins and a reclaimed handle never
     # makes a stored opt-in stale. Removal is keyed by user_id, so a member who
     # later becomes unbound can still remove their own opt-in.
+    #
+    # AUTHORIZED means what `_is_authorized_user` says it means: active AND not
+    # excluded from the fireside. This gated on `_resolve_my_username` alone,
+    # which matches any roster row carrying the user_id and asks neither
+    # question, so a member offboarded by setting `active: false` - who keeps
+    # their telegram_user_id - could still react and be added to the Helmsman
+    # rota, appear in the CEO's candidate list, and be counted in the stats.
+    # The comment claimed the stronger gate; the code used the weaker one.
     my_username = _resolve_my_username(user_id)
+    if my_username is not None and not _is_authorized_user(user_id):
+        my_username = None
 
     new_reactions = event.get("new_reaction", []) or []
     emojis = {r.get("emoji") for r in new_reactions if r.get("type") == "emoji"}
@@ -3550,6 +3594,7 @@ def cmd_dayof_reminders(args) -> None:
 
     sent = 0
     failed = 0
+    skipped = 0
     for entry in sorted(today_entries, key=lambda s: s["slot"]):
         username = entry.get("speaker_username")
         if not username:
@@ -3559,6 +3604,15 @@ def cmd_dayof_reminders(args) -> None:
             _log_dm("dayof", username, today_iso, None, False,
                     error="no telegram_user_id")
             failed += 1
+            continue
+        # Guarded like the other two send loops. This was the only one of the
+        # three with no `_dm_already_sent` check: it WROTE "dayof" rows and read
+        # none of them, so a cron double-fire or a manual rerun on session day
+        # sent every speaker the same Zoom link twice. That is the exact shape
+        # `_dm_already_sent` exists for - the rows to prevent it were already
+        # being written. Keyed on the session date, which for this job is today.
+        if _dm_already_sent(state_path(DM_LOG), username, "dayof", today_iso):
+            skipped += 1
             continue
         # Guarded like the other two send loops in this file: a blank
         # speaker_name raised IndexError mid-loop, and this is the day-of DM
@@ -3574,7 +3628,10 @@ def cmd_dayof_reminders(args) -> None:
         except TelegramAPIError as e:
             _log_dm("dayof", username, today_iso, user_id, False, error=str(e))
             failed += 1
-    print(f"{GREEN}dayof-reminders{RESET}: sent={sent} failed={failed}")
+    line = f"{GREEN}dayof-reminders{RESET}: sent={sent} failed={failed}"
+    if skipped:
+        line += f" {GRAY}already-sent-today={skipped}{RESET}"
+    print(line)
     hc_ping("FIRESIDE_HC_DAYOF_REMINDERS")
 
 
@@ -3680,10 +3737,19 @@ def _nudge_ceo_on_helmsman_gaps(schedule: list, helmsmen: dict, today: Any,
 
     Only weeks inside the lookahead window are nudged, so a freshly rolled-over
     cycle does not dump all ten weeks into one message.
+
+    A week stays nudgeable through its Wednesday session (Monday + 2), matching
+    `helmsman_brief_candidates` above. This passed `on_or_after=today`, which
+    drops a week the moment its Monday is in the past - so the nudge went out on
+    Monday and then fell silent on Tuesday and Wednesday, the last two days when
+    the CEO could still have assigned someone. The Monday + 2 rule was written
+    for exactly this after the 2026-07-13 week, and it landed in one of the two
+    functions that needed it. The Wednesday session then ran with "[Helmsman
+    TBD]" in every speaker DM and in the pinned preview.
     """
     from datetime import date as _date, timedelta
 
-    gaps = helmsman_gaps(schedule, helmsmen, on_or_after=today)
+    gaps = helmsman_gaps(schedule, helmsmen, on_or_after=today - timedelta(days=2))
     near = [g for g in gaps if _date.fromisoformat(g) <= today + timedelta(days=lookahead_days)]
     if not near:
         return
@@ -4068,6 +4134,7 @@ def cmd_email_backup(args) -> None:
     # They are exactly the people this command exists for. Counted and named now.
     no_email: list[str] = []
     not_in_roster: list[str] = []
+    failed: list[str] = []
     for entry in schedule:
         username = entry.get("speaker_username")
         if not username:
@@ -4142,6 +4209,13 @@ def cmd_email_backup(args) -> None:
             ok = (r.returncode == 0)
             if not ok:
                 err = (r.stderr or "")[:200]
+                # A non-zero exit reached dm-log.jsonl and nothing else. The
+                # exception branch below has always called `log_error`; the
+                # ordinary failure - an expired Exchange password, a rejected
+                # recipient - did not, so the one class that happens routinely
+                # was the one that left no line in errors.log.
+                log_error(f"email-backup send failed for {email} "
+                          f"(exit {r.returncode}): {err}")
         except Exception as e:
             log_error(f"email-backup subprocess failed for {email}", e)
             ok = False
@@ -4149,7 +4223,17 @@ def cmd_email_backup(args) -> None:
         _log_dm("email-backup", username, entry["session_date"], user_id, ok, error=err)
         if ok:
             sent += 1
+        else:
+            failed.append(str(username))
+    # `failed` too. The comment above says every drop class is counted and named
+    # now, and it enumerated the two that skip the send. A send that RAN and
+    # failed incremented nothing, so eight bounced emails printed
+    # "sent=0 skipped=0" - byte-identical to the healthy line for a Sunday when
+    # nobody was due. Both sibling send loops in this file print `failed=`.
     line = f"{GREEN}email-backup{RESET}: sent={sent} skipped={skipped}"
+    if failed:
+        line += (f" {RED}failed={len(failed)}{RESET} ("
+                 + ", ".join("@" + u for u in sorted(set(failed))) + ")")
     if already:
         line += f" {GRAY}already-mailed-today={already}{RESET}"
     if no_email:
@@ -4205,7 +4289,15 @@ def cmd_stats(args) -> None:
                     e = json.loads(line.strip())
                 except (json.JSONDecodeError, ValueError):
                     continue
-                if e.get("dm_type") in ("2wk", "3day", "dayof", "helmsman_brief", "email-backup"):
+                # No "helmsman_brief" here: nothing writes a dm-log row with
+                # that type. `cmd_helmsman_brief` records its send through
+                # `_log_event("helmsman_briefed", ...)`, so the filter named
+                # five categories and counted four, and the percentage beneath
+                # spoke for a set it never contained. Either the writer or the
+                # reader had to change; the brief is already covered by the
+                # "briefed" flag rendered under "Helmsman schedule" below, so
+                # the reader is the one that was lying.
+                if e.get("dm_type") in ("2wk", "3day", "dayof", "email-backup"):
                     total += 1
                     if e.get("delivered"):
                         delivered += 1
@@ -4217,8 +4309,18 @@ def cmd_stats(args) -> None:
     # finished cycle reported itself as just starting. None means the cycle is
     # over (or has not begun); the line below says that instead of inventing a
     # week the schedule does not contain.
+    #
+    # The denominator was the literal 9 while the numerator is measured from
+    # the schedule. Cycle length is DATA - the `weeks` array of
+    # fireside-schedule.json, which `cmd_cycle_rollover` re-reads fresh and
+    # rebuilds from - so a cycle configured with ten weeks reported "week 10 of
+    # 9" and one with eight reported "week 8 of 9" as though a week were still
+    # to come. Read it from the same schedule the numerator came from.
     current_week = _current_or_upcoming_week(schedule, today)
-    current_week_label = f"**{current_week}** of 9" if current_week else "**no active week** (cycle complete or not started)"
+    total_weeks = max((s.get("week") or 0) for s in schedule) if schedule else 0
+    current_week_label = (f"**{current_week}** of {total_weeks or '?'}"
+                          if current_week
+                          else "**no active week** (cycle complete or not started)")
 
     # Tribe rotation health
     all_speakers = sorted({s["speaker_name"] for s in schedule})
@@ -4273,8 +4375,7 @@ def cmd_stats(args) -> None:
         lines.append("- No Helmsmen assigned yet")
 
     report = "\n".join(lines) + "\n"
-    STATS_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = STATS_DIR / f"{today.isoformat()}_stats.md"
+    out_path = require_writable_stats_dir() / f"{today.isoformat()}_stats.md"
     out_path.write_text(report, encoding="utf-8")
 
     print(f"{GREEN}stats{RESET}: written to {out_path}")
@@ -4297,14 +4398,23 @@ def cmd_health_check(args) -> None:
     """
     from datetime import timedelta
 
+    # An absent dm-log.jsonl is the STRONGEST case of "no liveness tick": the
+    # daemon has not written a single one since the file was last there. This
+    # printed a line to stdout that only a person watching cron output would
+    # ever see, and returned before the alert path - while the strictly weaker
+    # case, a file that exists and holds no tick, alerted. The monitor went
+    # quiet exactly where the evidence was worst. Fall through with no ticks
+    # instead, and let the `last_tick_ts is None` branch below say so.
     dm_log_path = state_path(DM_LOG)
-    if not dm_log_path.exists():
+    lines_in_log: list[str] = []
+    if dm_log_path.exists():
+        lines_in_log = dm_log_path.read_text(encoding="utf-8").splitlines()
+    else:
         print(f"{YELLOW}health-check: dm-log.jsonl missing{RESET}")
-        return
 
     last_tick_ts = None
     last_tick: dict = {}
-    for line in dm_log_path.read_text(encoding="utf-8").splitlines():
+    for line in lines_in_log:
         try:
             e = json.loads(line.strip())
         except (json.JSONDecodeError, ValueError):
@@ -4450,37 +4560,49 @@ def cmd_log_session(args) -> None:
         print(f"{RED}log-session: --shared required (comma-separated speaker names){RESET}", file=sys.stderr)
         sys.exit(1)
 
-    schedule = load_state(SCHEDULE) or []
     shared_names = [s.strip() for s in args.shared.split(",") if s.strip()]
     no_show_names = [s.strip() for s in (args.no_shows or "").split(",") if s.strip()]
 
-    # Mark schedule entries as completed
+    # Under the lock, like the two swap writers. This was the third
+    # load-modify-save of schedule.json and the only one outside it: between the
+    # read and the write, an accepted /swap took the lock in the webhook daemon,
+    # wrote the swapped schedule, and this save replaced it with the pre-swap
+    # copy. Both members had already been told the swap went through, and
+    # swap-requests.jsonl still records it. `locked_state` is cross-process, so
+    # a lock the daemon holds does nothing for a lock this process never asks
+    # for. The guard test that should have caught this forbade one variable name
+    # rather than the call, and this writer used a different one.
     updated = 0
-    for entry in schedule:
-        if entry["session_date"] != args.date:
-            continue
-        if entry["speaker_name"] in no_show_names:
-            entry["no_show"] = True
-            entry["completed"] = True
-            updated += 1
-        elif entry["speaker_name"] in shared_names:
-            entry["completed"] = True
-            updated += 1
+    with locked_state(SCHEDULE, []) as schedule:
+        # Mark schedule entries as completed
+        for entry in schedule:
+            if entry["session_date"] != args.date:
+                continue
+            if entry["speaker_name"] in no_show_names:
+                entry["no_show"] = True
+                entry["completed"] = True
+                updated += 1
+            elif entry["speaker_name"] in shared_names:
+                entry["completed"] = True
+                updated += 1
 
-    # A date that matched NO schedule entry is a typo, not a session. The event
-    # used to be logged and success printed regardless, so `--date 2026-99-99`
-    # (or a real date off by one) wrote a `session_logged` row into the stats
-    # corpus while the schedule went untouched, and the line beneath said
-    # "schedule entries updated=0" as though that were a normal outcome.
-    if updated == 0:
-        dates = sorted({e["session_date"] for e in schedule})
-        near = [d for d in dates if d[:7] == args.date[:7]] or dates[-5:]
-        print(f"{RED}log-session: no schedule entry matches --date {args.date} "
-              f"and the named speakers; nothing logged. Sessions this month: "
-              f"{', '.join(near) or '(none)'}{RESET}", file=sys.stderr)
-        sys.exit(1)
-
-    save_state(SCHEDULE, schedule)
+        # A date that matched NO schedule entry is a typo, not a session. The
+        # event used to be logged and success printed regardless, so
+        # `--date 2026-99-99` (or a real date off by one) wrote a
+        # `session_logged` row into the stats corpus while the schedule went
+        # untouched, and the line beneath said "schedule entries updated=0" as
+        # though that were a normal outcome.
+        #
+        # Raising leaves the file alone: `locked_state` writes nothing when the
+        # block raises, so the refusal cannot save the half-marked list it was
+        # about to reject.
+        if updated == 0:
+            dates = sorted({e["session_date"] for e in schedule})
+            near = [d for d in dates if d[:7] == args.date[:7]] or dates[-5:]
+            print(f"{RED}log-session: no schedule entry matches --date {args.date} "
+                  f"and the named speakers; nothing logged. Sessions this month: "
+                  f"{', '.join(near) or '(none)'}{RESET}", file=sys.stderr)
+            sys.exit(1)
 
     _log_event(
         "session_logged",
@@ -4564,7 +4686,6 @@ def cmd_set_webhook(args) -> None:
         print(f"{RED}Cert file not found: {cert_path}{RESET}", file=sys.stderr)
         sys.exit(1)
 
-    api_url = f"{TELEGRAM_API_BASE}/bot{bot.token}/setWebhook"
     data = {
         "url": url,
         "secret_token": secret,
@@ -4574,16 +4695,24 @@ def cmd_set_webhook(args) -> None:
         ]),
         "drop_pending_updates": "false",
     }
+    # Through the bot, not around it. This built its own
+    # `.../bot{token}/setWebhook` URL and called `requests.post` on it, which is
+    # the one Telegram call in this file that skips `TelegramBot._call` and the
+    # token redaction its docstring promises. A connection reset, an expired TLS
+    # chain or a DNS failure raises a `requests` exception whose message quotes
+    # the URL, so the bot token landed in the terminal and in the traceback. The
+    # bare `r.json()` had the same shape: a proxy or captive portal answering
+    # with HTML raised JSONDecodeError out of a command whose only error path is
+    # the `ok` check below.
     with open(cert_path, "rb") as f:
         files = {"certificate": (Path(cert_path).name, f, "application/x-pem-file")}
-        r = requests.post(api_url, data=data, files=files, timeout=30)
-
-    result = r.json()
-    if not result.get("ok"):
-        print(f"{RED}setWebhook failed: {result.get('description')}{RESET}", file=sys.stderr)
-        sys.exit(1)
+        try:
+            result = bot.call_multipart("setWebhook", data=data, files=files)
+        except TelegramAPIError as e:
+            print(f"{RED}setWebhook failed: {e}{RESET}", file=sys.stderr)
+            sys.exit(1)
     print(f"{GREEN}OK{RESET}  webhook set to {url}")
-    print(f"     description: {result.get('description', '')}")
+    print(f"     result: {result}")
 
 
 def cmd_delete_webhook(args) -> None:

@@ -296,9 +296,77 @@ def test_locked_state_leaves_a_sidecar_lock_not_a_locked_inode(fb, state):
     assert (state / "probe.json.lock").exists()
 
 
-def test_both_swap_paths_go_through_the_lock():
+def _unlocked_read_modify_writes(state_const: str,
+                                 source: str | None = None) -> list[str]:
+    """Functions that save back a list they loaded from `state_const`, unlocked.
+
+    `source` defaults to fireside-bot.py. It is a parameter so the detector can
+    be pointed at a known offender and shown to report it: a guard that has
+    never refused anything is not known to be a guard.
+
+    Asks the AST, not the text. The check here was
+    `code.count("with locked_state(SCHEDULE, []) as schedule:") == 2` plus
+    `"save_state(SCHEDULE, new_schedule)" not in code`, which forbids ONE
+    variable name: `cmd_log_session` loaded the schedule, marked entries
+    completed and called `save_state(SCHEDULE, schedule)`, and both clauses
+    passed it. A count is also a guard that a third correct caller breaks.
+
+    A full REBUILD is not this shape and is not reported: `cmd_cycle_rollover`
+    saves `entries` from `build_schedule`, an object it never loaded.
+    """
+    import ast
+
+    tree = ast.parse(source if source is not None
+                     else SRC.read_text(encoding="utf-8"))
+    offenders = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        # Names bound from `load_state(<state_const>)`, directly or via `or`.
+        loaded = set()
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+                continue
+            if not isinstance(node.targets[0], ast.Name):
+                continue
+            value = node.value
+            if isinstance(value, ast.BoolOp) and value.values:
+                value = value.values[0]
+            if (isinstance(value, ast.Call)
+                    and isinstance(value.func, ast.Name)
+                    and value.func.id == "load_state"
+                    and value.args
+                    and isinstance(value.args[0], ast.Name)
+                    and value.args[0].id == state_const):
+                loaded.add(node.targets[0].id)
+        if not loaded:
+            continue
+        for node in ast.walk(fn):
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "save_state"
+                    and len(node.args) == 2
+                    and isinstance(node.args[0], ast.Name)
+                    and node.args[0].id == state_const
+                    and isinstance(node.args[1], ast.Name)
+                    and node.args[1].id in loaded):
+                offenders.append(fn.name)
+    return sorted(set(offenders))
+
+
+def test_no_schedule_read_modify_write_escapes_the_lock():
+    assert _unlocked_read_modify_writes("SCHEDULE") == [], (
+        "a load-modify-save of schedule.json outside `locked_state` loses "
+        "whatever the webhook daemon wrote in between, and the daemon's own "
+        "lock cannot protect a process that never asks for it"
+    )
+
+
+def test_both_swap_paths_still_hold_the_lock():
+    """The count stays as a floor, not as an equality: a new correct caller
+    must not break it, and the two swap paths must not quietly lose it."""
     code = _code_only()
-    assert code.count("with locked_state(SCHEDULE, []) as schedule:") == 2
+    assert code.count("with locked_state(SCHEDULE, []) as schedule:") >= 3
     assert "save_state(SCHEDULE, new_schedule)" not in code, (
         "the split body mutates in place; the caller under the lock saves"
     )
@@ -541,8 +609,11 @@ def test_every_helmsmen_mutation_goes_through_the_lock():
     """`helmsman set` and `helmsman-brief` write the same file, and whichever
     saved second erased the other. Both re-read under the lock now."""
     code = _code_only()
-    assert code.count("with locked_state(HELMSMEN, {}) as fresh:") == 2
+    assert code.count("with locked_state(HELMSMEN, {}) as fresh:") >= 2
     assert "save_state(HELMSMEN, helmsmen)" not in code
+    # The same AST question the schedule guard now asks. The literal above
+    # forbids one variable name; this forbids the SHAPE, whatever it is called.
+    assert _unlocked_read_modify_writes("HELMSMEN") == []
 
 
 # ============================================================

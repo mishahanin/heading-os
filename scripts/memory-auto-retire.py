@@ -7,9 +7,10 @@ retire-time. Orphans, redundancy pairs, contradictions, and rewording remain a
 human-gated /dream call - this script never touches them.
 
 Retires both-store (canonical DATA + every native harness store) via
-retire_memory, then strips the record's pointer line from MEMORY.md. The managed
-``## Active Threads`` section is safe: pointers there reference thread PATHS, not
-bare top-level filenames.
+retire_memory, then strips the record's pointer line from MEMORY.md. A pointer
+that names a PATH rather than a bare top-level filename is never matched. That
+rule was written for the ``## Active Threads`` section, retired 2026-08-27, and
+it still holds for any pointer into a subdirectory.
 
 Usage:
     python scripts/memory-auto-retire.py            # act: retire past-due, update index

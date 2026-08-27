@@ -19,6 +19,15 @@ on evidence they never gathered.
   which is in hand two lines above. A MEMORY.md whose whole index section had
   been removed produced a clean bill of health and exit 0.
 
+  SUPERSEDED 2026-08-27. All three findings are about a second copy of the
+  record, and that copy is gone: `## Active Threads` was retired on 2026-08-20
+  on the reader side, and its writer, its readers and `reindex` itself were
+  removed seven days later. The twelve tests that pinned marker-on-the-index
+  behaviour are replaced below by the invariant underneath them, which does
+  survive: a deliberate freeze must outlive a close-and-reopen cycle, and it
+  must be visible on the surface a rollup reads. That surface is now
+  `thread.py list` (see `tests/test_thread_quiet_period.py`).
+
 * `update-manager check` swallowed every `SourceError` with no message and
   printed "checked N components; 0 waiting" whether every upstream resolved or
   none did.
@@ -45,12 +54,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from scripts.utils.threads_lib import (  # noqa: E402
-    add_thread_to_index,
-    ensure_active_threads_section,
-    read_thread_hook,
-    read_thread_quiet_marker,
-)
+from scripts.utils.threads_lib import parse_thread_file  # noqa: E402
 
 
 def _load(rel: str, name: str):
@@ -77,23 +81,28 @@ def tc():
 
 
 # ============================================================
-# The marker a reopen dropped
+# The freeze a reopen dropped
 # ============================================================
 
 @pytest.fixture
 def workspace(th, tmp_path, monkeypatch):
-    """A threads root and a MEMORY.md, both in tmp. Nothing real is opened."""
+    """A threads root in tmp. Nothing real is opened.
+
+    It handed back a MEMORY.md too, and patched `_memory_md` to reach it. Both
+    went with the index on 2026-08-27.
+    """
     threads = tmp_path / "threads"
     (threads / "business").mkdir(parents=True)
-    memory = tmp_path / "MEMORY.md"
-    memory.write_text("# Memory index\n", encoding="utf-8")
-    ensure_active_threads_section(memory)
     monkeypatch.setattr(th, "_threads_root", lambda: threads)
-    monkeypatch.setattr(th, "_memory_md", lambda: memory)
-    return threads, memory
+    # No path here reaches the data root today. Pinned anyway: a mutation
+    # that puts the MEMORY.md writer back must land in tmp, not in the
+    # operator's live overlay. It did, on 2026-08-27.
+    monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path / "data"))
+    (tmp_path / "data").mkdir(exist_ok=True)
+    return threads
 
 
-def _open(th, threads=None, title="Acme pilot review", type_="business"):
+def _open(th, threads, title="Acme pilot review", type_="business"):
     """Open a thread and return the id `cmd_open` actually gave it.
 
     The id carries the day the thread was opened, so the six tests below spelled
@@ -103,17 +112,9 @@ def _open(th, threads=None, title="Acme pilot review", type_="business"):
     """
     import argparse
     th.cmd_open(argparse.Namespace(type=type_, title=title))
-    if threads is None:
-        return None
     made = sorted((threads / type_).glob("*.md"))
     assert len(made) == 1, f"expected exactly one thread on disk, found {made}"
-    return made[0].stem
-
-
-def _index_line(memory: Path) -> str:
-    lines = [ln for ln in memory.read_text(encoding="utf-8").splitlines()
-             if ln.startswith("- [")]
-    return lines[0] if lines else ""
+    return made[0]
 
 
 def _cycle(th, thread_id, quiet="2026-09-10"):
@@ -125,169 +126,87 @@ def _cycle(th, thread_id, quiet="2026-09-10"):
     th.cmd_reopen(argparse.Namespace(thread_id=thread_id))
 
 
-def test_a_reopened_quiet_thread_keeps_its_marker(th, workspace, capsys):
-    """The finding. Without it the index reads as an ordinary active thread."""
-    threads, memory = workspace
-    thread_id = _open(th, threads)
+def test_a_reopened_quiet_thread_keeps_its_freeze(th, workspace, capsys):
+    """The finding, on the surviving surface.
+
+    The freeze used to have to be re-stamped onto a second file, and `reopen`
+    was the one writer that forgot. It is now a frontmatter field that a status
+    change must carry through, so the question is whether the round trip
+    preserves it.
+    """
+    path = _open(th, workspace)
     capsys.readouterr()
 
-    _cycle(th, thread_id)
+    _cycle(th, path.stem)
 
-    assert "[quiet until 2026-09-10]" in _index_line(memory)
+    parsed = parse_thread_file(path)
+    assert parsed.status == "active"
+    assert parsed.quiet_until == "2026-09-10"
 
 
-def test_a_reopened_thread_with_no_quiet_gains_no_marker(th, workspace, capsys):
-    """The guard must not stamp a marker onto a thread that has none."""
-    threads, memory = workspace
-    thread_id = _open(th, threads)
+def test_a_reopened_thread_with_no_quiet_gains_no_freeze(th, workspace, capsys):
+    """The guard must not stamp a freeze onto a thread that has none."""
+    path = _open(th, workspace)
     capsys.readouterr()
 
-    _cycle(th, thread_id, quiet=None)
+    _cycle(th, path.stem, quiet=None)
 
-    assert "[quiet until" not in _index_line(memory)
-
-
-def test_the_reopened_line_still_carries_status_and_date(th, workspace, capsys):
-    threads, memory = workspace
-    thread_id = _open(th, threads)
-    capsys.readouterr()
-
-    _cycle(th, thread_id)
-
-    assert "active, last " in _index_line(memory)
+    parsed = parse_thread_file(path)
+    assert parsed.status == "active"
+    assert parsed.quiet_until is None
+    assert "quiet_until" not in path.read_text(encoding="utf-8")
 
 
-# ============================================================
-# The marker reindex could not see
-# ============================================================
-
-def test_the_marker_can_be_read_back_off_the_index(tmp_path):
-    memory = tmp_path / "MEMORY.md"
-    memory.write_text("# Memory index\n", encoding="utf-8")
-    ensure_active_threads_section(memory)
-    add_thread_to_index(memory, type_="business", title="T",
-                        path="threads/business/t.md", hook="active, last 2026-08-26",
-                        quiet_until="2026-09-10")
-
-    assert read_thread_quiet_marker(memory, path="threads/business/t.md") == "2026-09-10"
-
-
-def test_no_marker_reads_as_none(tmp_path):
-    memory = tmp_path / "MEMORY.md"
-    memory.write_text("# Memory index\n", encoding="utf-8")
-    ensure_active_threads_section(memory)
-    add_thread_to_index(memory, type_="business", title="T",
-                        path="threads/business/t.md", hook="active, last 2026-08-26")
-
-    assert read_thread_quiet_marker(memory, path="threads/business/t.md") is None
-
-
-def test_the_hook_reader_still_strips_the_marker(tmp_path):
-    """The two readers answer different questions on purpose."""
-    memory = tmp_path / "MEMORY.md"
-    memory.write_text("# Memory index\n", encoding="utf-8")
-    ensure_active_threads_section(memory)
-    add_thread_to_index(memory, type_="business", title="T",
-                        path="threads/business/t.md", hook="active, last 2026-08-26",
-                        quiet_until="2026-09-10")
-
-    assert read_thread_hook(memory, path="threads/business/t.md") == "active, last 2026-08-26"
-
-
-def test_an_absent_line_still_raises(tmp_path):
-    memory = tmp_path / "MEMORY.md"
-    memory.write_text("# Memory index\n", encoding="utf-8")
-    ensure_active_threads_section(memory)
-
-    with pytest.raises(ValueError):
-        read_thread_quiet_marker(memory, path="threads/business/nope.md")
-
-
-def test_reindex_repairs_a_stripped_marker(th, workspace, capsys):
-    """It reported `rewrote 0 hook(s)` over exactly this."""
+def test_an_indefinite_freeze_also_survives_the_cycle(th, workspace, capsys):
+    """`do_not_remind` is the dateless form and travels the same path."""
     import argparse
-    threads, memory = workspace
-    thread_id = _open(th, threads)
-    th.cmd_quiet(argparse.Namespace(thread_id=thread_id,
-                                    until="2026-09-10", clear=False,
-                                    indefinite=False))
-    memory.write_text(memory.read_text(encoding="utf-8")
-                      .replace("[quiet until 2026-09-10] ", ""), encoding="utf-8")
+    path = _open(th, workspace)
+    th.cmd_quiet(argparse.Namespace(thread_id=path.stem, until=None,
+                                    clear=False, indefinite=True))
+    th.cmd_close(argparse.Namespace(thread_id=path.stem, reason="pilot finished"))
+    th.cmd_reopen(argparse.Namespace(thread_id=path.stem))
     capsys.readouterr()
 
-    rc = th.cmd_reindex(argparse.Namespace(dry_run=False))
-
-    assert rc == 0
-    assert "[quiet until 2026-09-10]" in _index_line(memory)
-    assert "rewrote 1 hook(s)" in capsys.readouterr().out
+    parsed = parse_thread_file(path)
+    assert parsed.status == "active"
+    assert parsed.do_not_remind is True
 
 
-def test_reindex_leaves_a_correct_index_alone(th, workspace, capsys):
-    """A repair tool that rewrites every line every run is noise."""
+def test_the_reopened_thread_carries_the_reopen_date(th, workspace, capsys):
+    from datetime import datetime
+
+    from scripts.utils.workspace import get_default_tz
+
+    path = _open(th, workspace)
+    capsys.readouterr()
+
+    _cycle(th, path.stem)
+
+    today = datetime.now(get_default_tz()).date().isoformat()
+    assert parse_thread_file(path).last_touched == today
+
+
+def test_every_status_command_round_trips_the_freeze(th, workspace, capsys):
+    """close, hold and reopen all go through one writer, so all three are asked.
+
+    `_set_status` re-reads the file and writes it back. A rebuild that dropped
+    an unmodelled or optional field is the older defect this pins against; the
+    freeze is the field it ate the first time.
+    """
     import argparse
-    threads, _memory = workspace
-    thread_id = _open(th, threads)
-    th.cmd_quiet(argparse.Namespace(thread_id=thread_id,
-                                    until="2026-09-10", clear=False,
-                                    indefinite=False))
+    path = _open(th, workspace)
+    th.cmd_quiet(argparse.Namespace(thread_id=path.stem, until="2026-09-10",
+                                    clear=False, indefinite=False))
     capsys.readouterr()
 
-    th.cmd_reindex(argparse.Namespace(dry_run=False))
-
-    assert "rewrote 0 hook(s)" in capsys.readouterr().out
-
-
-# ============================================================
-# The clean bill of health over a lost index
-# ============================================================
-
-def test_an_active_thread_missing_from_the_index_is_a_failure(th, workspace,
-                                                              capsys):
-    """The whole `## Active Threads` section removed by a hand edit or a bad
-    merge used to print "expected for closed/on-hold" and exit 0."""
-    import argparse
-    _threads, memory = workspace
-    _open(th)
-    memory.write_text("# Memory index\n\nnothing here\n", encoding="utf-8")
-    capsys.readouterr()
-
-    rc = th.cmd_reindex(argparse.Namespace(dry_run=False))
-
-    out = capsys.readouterr().out
-    assert rc == 1
-    assert "1 of them ACTIVE" in out
-
-
-def test_a_closed_thread_missing_from_the_index_is_expected(th, workspace,
-                                                            capsys):
-    """The ordinary case must stay quiet and stay green."""
-    import argparse
-    threads, _memory = workspace
-    thread_id = _open(th, threads)
-    th.cmd_close(argparse.Namespace(thread_id=thread_id,
-                                    reason="finished"))
-    capsys.readouterr()
-
-    rc = th.cmd_reindex(argparse.Namespace(dry_run=False))
-
-    out = capsys.readouterr().out
-    assert rc == 0
-    assert "all closed or on-hold" in out
-    assert "ACTIVE" not in out
-
-
-def test_a_fully_indexed_tree_says_nothing_about_causes(th, workspace, capsys):
-    import argparse
-    _threads, _memory = workspace
-    _open(th)
-    capsys.readouterr()
-
-    rc = th.cmd_reindex(argparse.Namespace(dry_run=False))
-
-    out = capsys.readouterr().out
-    assert rc == 0
-    assert "0 thread(s) not in the index" in out
-    assert "expected" not in out
+    for call in (
+        lambda: th.cmd_hold(argparse.Namespace(thread_id=path.stem, reason="parked")),
+        lambda: th.cmd_reopen(argparse.Namespace(thread_id=path.stem)),
+        lambda: th.cmd_close(argparse.Namespace(thread_id=path.stem, reason="done")),
+        lambda: th.cmd_reopen(argparse.Namespace(thread_id=path.stem)),
+    ):
+        call()
+        assert parse_thread_file(path).quiet_until == "2026-09-10"
 
 
 # ============================================================

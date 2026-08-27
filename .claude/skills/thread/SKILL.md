@@ -11,7 +11,6 @@ x-heading-orchestration:
   parallel_safe: false
   shared_state:
     - "threads/"
-    - "memory/MEMORY.md"
   triggers:
     - "open a thread"
     - "log to the"
@@ -83,7 +82,6 @@ Manages running state of business and personal life situations across sessions. 
 | Lookup by keyword | `find <query>` |
 | Read full thread | `show <id>` |
 | /prime archive scan | `archive-scan --apply` |
-| MEMORY.md index lines look wrong or hand-edited | `reindex` |
 
 ## When NOT to use
 
@@ -97,7 +95,7 @@ Manages running state of business and personal life situations across sessions. 
 
 I never open or log silently. Before invoking the CLI, I ask:
 
-> "This looks like a thread / part of the [Porkbun] thread. Open / log it?"
+> "This looks like a thread, or part of the [Quillon] thread. Open it, or log to it?"
 
 The user approves, modifies, or skips. After several months of trusted use, this gate may be relaxed - deferred to v2.
 
@@ -106,15 +104,14 @@ The user approves, modifies, or skips. After several months of trusted use, this
 ```bash
 python3 scripts/thread.py open <business|personal> "<title>"
 python3 scripts/thread.py log <thread-id> "<event>" [--artifact PATH ...] [--decision TEXT ...] [--follow-up TEXT ...] [--done INDEX]
-python3 scripts/thread.py close <thread-id> --reason "<why it leaves the index>"
-python3 scripts/thread.py hold <thread-id> --reason "<why it leaves the index>"
+python3 scripts/thread.py close <thread-id> --reason "<why it is retired>"
+python3 scripts/thread.py hold <thread-id> --reason "<why it is retired>"
 python3 scripts/thread.py reopen <thread-id>
 python3 scripts/thread.py list [--type business|personal] [--status active|on-hold|closed]
 python3 scripts/thread.py find "<query>"
 python3 scripts/thread.py show <thread-id>
 python3 scripts/thread.py quiet <thread-id> [--until YYYY-MM-DD | --indefinite | --clear]
 python3 scripts/thread.py archive-scan [--apply]
-python3 scripts/thread.py reindex [--dry-run]
 ```
 
 ## Quiet periods
@@ -125,28 +122,27 @@ proactively. It stays out of session-opener rollups, `/next`, `/dashboard`,
 only when the operator raises it themselves.
 
 Two forms. `--until <date>` is a dated pause and it expires on its own.
-`--indefinite` has no end date and lifts only when the operator raises the
-subject. Both forms write the state into the thread's frontmatter. Both also stamp a
-`[quiet until <date>]` marker on the thread's line in the MEMORY.md index. That
-index loads every session, so it tells me the thread is quiet.
+`--indefinite` has no end date. It lifts only when the operator raises the
+subject. Both forms write the state into the thread's frontmatter.
 
-## What the index line says
+`list` marks a quiet thread. A dated pause prints `[quiet until <date>]`. An
+indefinite freeze prints `[quiet indefinitely]`. Read that suffix before you
+raise a thread with the operator.
 
-A thread's line in MEMORY.md carries the title, the path, and a hook. The hook is
-DERIVED state — `active, last 2026-08-15` — plus the `[quiet until …]` marker when
-one applies. It does not retell the newest event.
+## Where the record lives
 
-The index loads every session. A hook that quoted live prose therefore went stale
-into a wrong answer, which `.claude/rules/memory-discipline.md` forbids. Thirty
-such hooks at 120 characters also made the block 8 KB. What happened lives in the
-thread file instead, one `show` away.
+The thread file is the record. There is no second copy.
 
-`reindex` rebuilds every hook from frontmatter, so a drifted or hand-edited index
-is repairable. It rewrites hooks ONLY. It never adds or drops a line, because
-membership is a status decision that belongs to `close`, `hold`, and `reopen`.
+A `## Active Threads` block in `MEMORY.md` used to mirror every active thread.
+`/prime` stopped reading it on 2026-08-20, and `scripts/thread.py` stopped
+writing it on 2026-08-27. Every row quoted a live status and a live date, which
+`.claude/rules/memory-discipline.md` forbids in an always-loaded index. The copy
+also drifted: on its last day it listed 3 of 33 active threads.
 
-`archive-scan` reports a dated quiet period once it expires, and it never
-proposes on-hold for a thread that is still quiet.
+Run `list` to see the live set. Run `show <id>` to read one thread.
+
+`archive-scan` reports a dated quiet period once it expires. It never proposes
+on-hold for a thread that is still quiet.
 
 ## Personal-thread rule
 

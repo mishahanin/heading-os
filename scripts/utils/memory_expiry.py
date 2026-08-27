@@ -102,10 +102,11 @@ def strip_index_pointers(index_text: str, names: Iterable[str]) -> str:
     A line is deleted only when every pointer on it matched, so a single-pointer
     line still disappears whole rather than leaving a bare group label.
 
-    Matches the exact ``](<name>)`` link target, so a managed thread pointer like
+    Matches the exact ``](<name>)`` link target, so a thread pointer like
     ``](threads/business/drop.md)`` is never hit by a bare ``drop.md``. Lines that
-    match no name pass through unchanged, preserving the managed ## Active Threads
-    section.
+    match no name pass through unchanged. That carve-out was written for the
+    ``## Active Threads`` block, which is retired as of 2026-08-27; the path-vs-
+    name distinction is kept because any pointer to a subdirectory needs it.
     """
     wanted = set(names)
     out = []

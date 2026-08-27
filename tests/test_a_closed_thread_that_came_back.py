@@ -13,7 +13,7 @@ of zero findings. Those fixes and their tests live in
 `tests/test_a_tick_that_landed_on_the_wrong_line.py`, beside the string match
 they replace.
 
-A CLOSED THREAD CAME BACK. `close` and `hold` remove a thread's line from
+A CLOSED THREAD CAME BACK. `close` and `hold` removed a thread's line from
 `## Active Threads` in MEMORY.md. `thread.py log` then called
 `update_thread_hook`, which raises when the line is absent - and the handler for
 that raise read it as damage and put the line back. One `log` on a closed thread
@@ -21,6 +21,16 @@ silently resurrected it in the index that every session loads, with no `reopen`.
 `scripts/memory-hygiene.py` already reported the regrowth and named this writer
 as the cause, advisorily, because a gate there would have fired on the next
 legitimate write instead of on the mistake.
+
+  SUPERSEDED 2026-08-27. The index itself is gone: the block was retired on
+  2026-08-20 on the reader side, and the writer was removed from
+  `scripts/thread.py` and `scripts/utils/threads_lib.py` seven days later. The
+  status-gated handler this shard added went with it, so the six tests that
+  pinned it are replaced below by what still holds - a `log` on a closed thread
+  records the event and changes nothing else. The standing guard against the
+  index coming back lives in `tests/test_thread_cli.py`
+  (`test_no_subcommand_writes_a_memory_index`) and `tests/test_threads_lib.py`
+  (`test_the_retired_index_helper_is_gone`).
 
 A DRY RUN CHANGED THE DISK. `thread.py archive-scan` without `--apply` prints
 "would archive:" and is a preview. Its `dest_dir.mkdir(parents=True)` sat ABOVE
@@ -36,10 +46,11 @@ then SUCCEEDED at committing the source deletion in the real repo, printed
 that file and never called.
 
 NOT A DEFECT, checked and dismissed: the shard report claimed `cmd_archive_scan`
-could leave a half-archived batch when MEMORY.md is missing. It cannot. The
-index removal runs BEFORE `shutil.move` in the same iteration, and a missing
-MEMORY.md raises FileNotFoundError, which the `except ValueError` there does not
-catch, so the first candidate aborts the command before any file moves.
+could leave a half-archived batch when MEMORY.md is missing. It could not. The
+index removal ran BEFORE `shutil.move` in the same iteration, and a missing
+MEMORY.md raised FileNotFoundError, which the `except ValueError` there did not
+catch, so the first candidate aborted the command before any file moved. Moot
+since 2026-08-27: `cmd_archive_scan` no longer opens MEMORY.md at all.
 
 NOTE ON METHOD: nothing here writes outside tmp_path, spawns git, or touches a
 real workspace. `transfer-contact` is driven only far enough to reach its own
@@ -75,18 +86,21 @@ def _load(name, rel):
 
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):
-    """A threads root and a MEMORY.md, with the real CLI pointed at them."""
+    """A threads root with the real CLI pointed at it.
+
+    It used to hand back a MEMORY.md as well, and patch `_memory_md` to reach
+    it. Both went with the index on 2026-08-27; the thread file is the record.
+    """
     th = _load("thread_p13c", "scripts/thread.py")
     threads = tmp_path / "threads"
     (threads / "business").mkdir(parents=True)
-    memory = tmp_path / "MEMORY.md"
-    memory.write_text(
-        "# Memory index\n\n## Active Threads\n\n### Business\n\n"
-        "### Personal (CEO-ONLY)\n",
-        encoding="utf-8")
     monkeypatch.setattr(th, "_threads_root", lambda: threads)
-    monkeypatch.setattr(th, "_memory_md", lambda: memory)
-    return th, threads, memory
+    # No path here reaches the data root today. Pinned anyway: a mutation
+    # that puts the MEMORY.md writer back must land in tmp, not in the
+    # operator's live overlay. It did, on 2026-08-27.
+    monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path / "data"))
+    (tmp_path / "data").mkdir(exist_ok=True)
+    return th, threads
 
 
 def _thread_file(threads, slug, status, title="A thread", last="2026-01-01"):
@@ -112,63 +126,65 @@ def _log(th, path, note="something happened"):
 
 
 @pytest.mark.parametrize("status", ["closed", "on-hold"])
-def test_logging_to_a_non_active_thread_does_not_re_add_it(workspace, status):
-    """The finding. `close` removed the line on purpose; the handler that was
-    written for a hand-edited MEMORY.md put it back."""
-    th, threads, memory = workspace
-    path = _thread_file(threads, "quiet-deal", status)
-    assert _log(th, path) == 0
-    assert "quiet-deal" not in memory.read_text(encoding="utf-8")
-
-
-@pytest.mark.parametrize("status", ["closed", "on-hold"])
-def test_the_operator_is_told_why_the_index_was_not_touched(workspace, capsys, status):
-    """Silence would read as "it worked", which is how this went unnoticed."""
-    th, threads, _ = workspace
-    _log(th, _thread_file(threads, "quiet-deal", status))
-    out = capsys.readouterr().out
-    assert "stays out of the active-threads index" in out
-    assert "reopen" in out
-
-
-@pytest.mark.parametrize("status", ["closed", "on-hold"])
 def test_the_log_entry_itself_is_still_written(workspace, status):
     """Logging to a closed thread is legitimate - the record belongs in the
-    file. Only the INDEX membership was wrong."""
-    th, threads, _ = workspace
+    file. Only the INDEX membership was ever wrong."""
+    th, threads = workspace
     path = _thread_file(threads, "quiet-deal", status)
-    _log(th, path, note="the buyer called back")
+    assert _log(th, path, note="the buyer called back") == 0
     assert "the buyer called back" in path.read_text(encoding="utf-8")
 
 
-def test_an_active_thread_is_still_repaired_into_the_index(workspace):
-    """The self-heal this handler exists for must survive: an active thread
-    whose section was hand-wiped gets its line back."""
-    th, threads, memory = workspace
-    path = _thread_file(threads, "live-deal", "active")
-    memory.write_text("# Memory index\n", encoding="utf-8")  # section wiped
+@pytest.mark.parametrize("status", ["closed", "on-hold", "active"])
+def test_a_log_does_not_change_the_status(workspace, status):
+    """What the resurrection actually did, restated on the surviving surface.
+
+    Membership of the active set is now decided by one field, `status`, in one
+    file. `log` records an event; only `close`, `hold` and `reopen` may move a
+    thread in or out. A `log` that touched the status would be the same defect
+    in the one place it can still happen.
+    """
+    th, threads = workspace
+    path = _thread_file(threads, "quiet-deal", status)
     assert _log(th, path) == 0
-    assert "live-deal" in memory.read_text(encoding="utf-8")
+    assert f"status: {status}" in path.read_text(encoding="utf-8")
 
 
-def test_an_active_thread_already_in_the_index_keeps_one_line(workspace):
-    """The ordinary path: update the hook, do not append a second row."""
-    th, threads, memory = workspace
-    path = _thread_file(threads, "live-deal", "active")
-    _log(th, path)
-    _log(th, path)
-    assert memory.read_text(encoding="utf-8").count("live-deal") == 1
+@pytest.mark.parametrize("status", ["closed", "on-hold", "active"])
+def test_a_log_writes_the_thread_file_and_nothing_else(workspace, tmp_path, status):
+    """The handler wrote a SECOND file. There is no second file to write now."""
+    th, threads = workspace
+    path = _thread_file(threads, "quiet-deal", status)
+    before = {p for p in tmp_path.rglob("*") if p.is_file()}
+    assert _log(th, path) == 0
+    assert {p for p in tmp_path.rglob("*") if p.is_file()} == before
 
 
-def test_the_re_add_is_gated_on_status_not_on_the_exception(workspace):
-    """Structural. Catching a narrower exception would look like a fix and
-    still re-add a closed thread whenever the section really was damaged."""
-    src = THREAD_SRC.read_text(encoding="utf-8")
-    body = src.split("def cmd_log", 1)[1].split("\ndef ", 1)[0]
-    handler = body.split("except ValueError:", 1)[1]
-    assert 'if thread.status == "active":' in handler
-    assert handler.index('if thread.status == "active":') < handler.index(
-        "add_thread_to_index(")
+def test_the_log_handler_no_longer_reaches_a_second_file(workspace):
+    """Structural, and asked of the parse tree rather than of the text.
+
+    `cmd_log`'s `except ValueError:` handler is what re-added the closed thread.
+    A source grep for the old helper names would also match the comment above
+    that explains them, so this walks the function's AST and requires it to call
+    exactly the writers that belong there.
+    """
+    import ast
+
+    tree = ast.parse(THREAD_SRC.read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "cmd_log")
+    called = {
+        n.func.id for n in ast.walk(fn)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+    }
+    assert "write_thread_file" in called
+    assert not (called & {"add_thread_to_index", "update_thread_hook",
+                          "ensure_active_threads_section", "compose_thread_hook",
+                          "_memory_md"}), f"cmd_log reaches the retired index: {called}"
+    assert not [n for n in ast.walk(fn) if isinstance(n, ast.ExceptHandler)], (
+        "cmd_log grew an exception handler again; the last one turned a missing "
+        "index line into a resurrection"
+    )
 
 
 # ============================================================
@@ -187,7 +203,7 @@ def _closed_long_ago(threads, slug):
 
 def test_a_dry_run_creates_no_archive_directory(workspace, capsys):
     """The whole finding: `archive-scan` with no --apply is a preview."""
-    th, threads, _ = workspace
+    th, threads = workspace
     _closed_long_ago(threads, "ancient-deal")
     assert _archive_scan(th, apply=False) == 0
     assert "would archive" in capsys.readouterr().out
@@ -196,7 +212,7 @@ def test_a_dry_run_creates_no_archive_directory(workspace, capsys):
 
 
 def test_a_dry_run_moves_nothing(workspace):
-    th, threads, _ = workspace
+    th, threads = workspace
     path = _closed_long_ago(threads, "ancient-deal")
     _archive_scan(th, apply=False)
     assert path.exists()
@@ -204,7 +220,7 @@ def test_a_dry_run_moves_nothing(workspace):
 
 def test_apply_still_creates_the_directory_and_moves_the_file(workspace):
     """The mkdir moved INSIDE the branch; it must not have been lost."""
-    th, threads, _ = workspace
+    th, threads = workspace
     path = _closed_long_ago(threads, "ancient-deal")
     assert _archive_scan(th, apply=True) == 0
     assert not path.exists()
@@ -218,19 +234,22 @@ def test_the_mkdir_sits_inside_the_apply_branch():
     assert body.index("if args.apply:") < body.index("dest_dir.mkdir(")
 
 
-def test_a_missing_memory_file_aborts_before_any_move(workspace):
-    """The shard report claimed this left a half-archived batch. It does not:
-    the index removal runs before the move, and FileNotFoundError is not the
-    ValueError the handler catches, so the first candidate stops the command.
-    Pinned so the ordering is not 'tidied' into the defect the report imagined.
+def test_the_scan_archives_every_candidate_in_one_pass(workspace):
+    """Replaces `test_a_missing_memory_file_aborts_before_any_move`.
+
+    That test pinned the ordering inside the loop: the index removal ran before
+    `shutil.move`, so a missing MEMORY.md aborted on the first candidate rather
+    than leaving a half-archived batch. `cmd_archive_scan` no longer opens
+    MEMORY.md, so there is nothing left to abort on and no partial state to
+    guard. What is worth keeping is the other half of that claim, never asserted
+    at the time: a batch of candidates is archived whole.
     """
-    th, threads, memory = workspace
+    th, threads = workspace
     first = _closed_long_ago(threads, "aaa-deal")
     second = _closed_long_ago(threads, "zzz-deal")
-    memory.unlink()
-    with pytest.raises(FileNotFoundError):
-        _archive_scan(th, apply=True)
-    assert first.exists() and second.exists()
+    assert _archive_scan(th, apply=True) == 0
+    assert not first.exists() and not second.exists()
+    assert len(list((threads / "archive").rglob("*.md"))) == 2
 
 
 # ============================================================

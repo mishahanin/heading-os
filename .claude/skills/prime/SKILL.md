@@ -153,9 +153,11 @@ After the parallel block prints, render the **Active Threads panel**. This part 
    python scripts/thread.py list --status active
    ```
 
-   Each line is `[status] <type>/<slug> - <title> (last_touched: DATE)`, with an
-   optional `[quiet until DATE]` suffix. If the command prints nothing, no
-   threads are open: skip the panel silently and continue.
+   Each line is `[status] <type>/<slug> - <title> (last_touched: DATE)`. A quiet
+   thread carries a suffix: `[quiet until DATE]` for a dated pause, or
+   `[quiet indefinitely]` for a freeze with no end date. Never surface a thread
+   that carries either suffix. If the command prints nothing, no threads are
+   open: skip the panel silently and continue.
 
    This used to read a `## Active Threads` block out of MEMORY.md. The block was
    retired on 2026-08-20. Every row quoted a live status and a live date, which

@@ -1,216 +1,159 @@
-"""Tests for scripts.thread CLI."""
+"""Tests for scripts.thread CLI.
+
+Every test here used to set `MEMORY_MD` and assert against a `## Active Threads`
+block in that file. The block was retired on 2026-08-20 and its writer removed
+on 2026-08-27, so the assertions moved to the thread file, which was always the
+record. `test_no_subcommand_writes_a_memory_index` is what stops the writer
+coming back.
+"""
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
+
 from scripts.utils.threads_lib import parse_thread_file
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
-def test_thread_open_creates_file_and_index_entry(tmp_path: Path, monkeypatch) -> None:
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
 
-    cmd = [sys.executable, "scripts/thread.py", "open", "business", "Porkbun TrustONE phishing"]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    assert result.returncode == 0, result.stderr
+def _run(*argv: str, check: bool = False) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "scripts/thread.py", *argv],
+        capture_output=True, text=True, check=check, cwd=REPO_ROOT,
+    )
+
+
+@pytest.fixture()
+def threads_root(tmp_path: Path, monkeypatch) -> Path:
+    """An isolated threads root, and an isolated DATA ROOT beside it.
+
+    The data root is pinned even though this CLI no longer reaches it. On
+    2026-08-27 a mutation put the MEMORY.md writer back into `cmd_open` to prove
+    the guard, and every test here that calls `open` inherited the operator's
+    real `HEADING_OS_DATA` and truncated their live memory index. A test must not
+    be able to reach the overlay whether or not today's code tries to.
+    """
+    root = tmp_path / "threads"
+    monkeypatch.setenv("THREADS_ROOT", str(root))
+    monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path / "data"))
+    (tmp_path / "data").mkdir(exist_ok=True)
+    return root
+
+
+def _open_thread(threads_root: Path, title: str = "Test thread") -> Path:
+    """Open one thread and return its file path."""
+    r = _run("open", "business", title)
+    assert r.returncode == 0, r.stderr
+    return list((threads_root / "business").glob("*.md"))[0]
+
+
+def test_thread_open_creates_the_file(threads_root: Path) -> None:
+    r = _run("open", "business", "Quillon registrar abuse report")
+    assert r.returncode == 0, r.stderr
 
     files = list((threads_root / "business").glob("*.md"))
     assert len(files) == 1
     parsed = parse_thread_file(files[0])
-    assert parsed.title == "Porkbun TrustONE phishing"
+    assert parsed.title == "Quillon registrar abuse report"
     assert parsed.status == "active"
     assert parsed.type == "business"
 
-    mem = memory_md.read_text(encoding="utf-8")
-    assert "Porkbun TrustONE phishing" in mem
-    assert "### Business" in mem
+
+def test_thread_log_appends_the_entry_and_the_artifact(threads_root: Path) -> None:
+    path = _open_thread(threads_root)
+    r = _run("log", path.stem, "Sent reply to the abuse desk",
+             "--artifact", "outputs/email-drafts/2026-04-29_reply.md")
+    assert r.returncode == 0, r.stderr
+
+    parsed = parse_thread_file(path)
+    assert "Sent reply to the abuse desk" in parsed.body
+    assert "outputs/email-drafts/2026-04-29_reply.md" in parsed.links["outputs"]
 
 
-def test_thread_log_appends_entry_and_updates_hook(tmp_path: Path, monkeypatch) -> None:
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
-
-    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Test thread"], check=True)
-    files = list((threads_root / "business").glob("*.md"))
-    thread_id = files[0].stem
-
-    result = subprocess.run(
-        [sys.executable, "scripts/thread.py", "log", thread_id, "Sent reply to abuse desk",
-         "--artifact", "outputs/email-drafts/2026-04-29_email-draft_porkbun-abuse-reply.md"],
-        capture_output=True, text=True, check=False,
-    )
-    assert result.returncode == 0, result.stderr
-
-    parsed = parse_thread_file(files[0])
-    assert "Sent reply to abuse desk" in parsed.body
-    assert "outputs/email-drafts/2026-04-29_email-draft_porkbun-abuse-reply.md" in parsed.links["outputs"]
-    mem = memory_md.read_text(encoding="utf-8")
-    # The hook reports state, not the event: see compose_thread_hook. The event
-    # text is asserted against the thread body above, which is where it lives.
-    assert f"- active, last {parsed.last_touched}" in mem
+def test_thread_close_keeps_the_file_and_flips_the_status(threads_root: Path) -> None:
+    path = _open_thread(threads_root, "Closeable")
+    r = _run("close", path.stem, "--reason", "resolved")
+    assert r.returncode == 0, r.stderr
+    assert path.exists()
+    assert parse_thread_file(path).status == "closed"
 
 
-def test_thread_close_removes_from_index_keeps_file(tmp_path: Path, monkeypatch) -> None:
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
+def test_thread_hold_and_reopen_round_trip(threads_root: Path) -> None:
+    path = _open_thread(threads_root, "Holdable")
 
-    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Closeable"], check=True)
-    files = list((threads_root / "business").glob("*.md"))
-    thread_id = files[0].stem
+    _run("hold", path.stem, "--reason", "waiting on counterparty", check=True)
+    assert parse_thread_file(path).status == "on-hold"
 
-    result = subprocess.run(
-        [sys.executable, "scripts/thread.py", "close", thread_id, "--reason", "resolved"],
-        capture_output=True, text=True, check=False,
-    )
-    assert result.returncode == 0, result.stderr
-
-    parsed = parse_thread_file(files[0])
-    assert parsed.status == "closed"
-    mem = memory_md.read_text(encoding="utf-8")
-    assert "Closeable" not in mem
+    _run("reopen", path.stem, check=True)
+    assert parse_thread_file(path).status == "active"
 
 
-def test_thread_hold_and_reopen_round_trip(tmp_path: Path, monkeypatch) -> None:
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
+def test_thread_list_shows_active_threads(threads_root: Path) -> None:
+    _run("open", "business", "Alpha thread", check=True)
+    _run("open", "business", "Bravo thread", check=True)
 
-    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Holdable"], check=True)
-    thread_id = list((threads_root / "business").glob("*.md"))[0].stem
-
-    subprocess.run([sys.executable, "scripts/thread.py", "hold", thread_id,
-                    "--reason", "waiting on counterparty"], check=True)
-    parsed = parse_thread_file(threads_root / "business" / f"{thread_id}.md")
-    assert parsed.status == "on-hold"
-    mem = memory_md.read_text(encoding="utf-8")
-    assert "Holdable" not in mem
-
-    subprocess.run([sys.executable, "scripts/thread.py", "reopen", thread_id], check=True)
-    parsed = parse_thread_file(threads_root / "business" / f"{thread_id}.md")
-    assert parsed.status == "active"
-    mem = memory_md.read_text(encoding="utf-8")
-    assert "Holdable" in mem
+    r = _run("list")
+    assert r.returncode == 0, r.stderr
+    assert "Alpha thread" in r.stdout
+    assert "Bravo thread" in r.stdout
 
 
-def test_thread_list_shows_active_threads(tmp_path: Path, monkeypatch) -> None:
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
-
-    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Alpha thread"], check=True)
-    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Bravo thread"], check=True)
-
-    result = subprocess.run(
-        [sys.executable, "scripts/thread.py", "list"],
-        capture_output=True, text=True, check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    assert "Alpha thread" in result.stdout
-    assert "Bravo thread" in result.stdout
+def test_thread_list_hides_a_closed_thread(threads_root: Path) -> None:
+    """`list` with no --status shows active only, which is what /prime reads."""
+    path = _open_thread(threads_root, "Retired thread")
+    _run("close", path.stem, "--reason", "done", check=True)
+    assert "Retired thread" not in _run("list").stdout
+    assert "Retired thread" in _run("list", "--status", "closed").stdout
 
 
-def test_thread_find_matches_title_substring(tmp_path: Path, monkeypatch) -> None:
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
+def test_thread_find_matches_title_substring(threads_root: Path) -> None:
+    _run("open", "business", "Quillon registrar", check=True)
+    _run("open", "business", "ExampleTelco negotiation", check=True)
 
-    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Porkbun TrustONE"], check=True)
-    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "ExampleTelco negotiation"], check=True)
-
-    result = subprocess.run(
-        [sys.executable, "scripts/thread.py", "find", "Porkbun"],
-        capture_output=True, text=True, check=False,
-    )
-    assert result.returncode == 0
-    assert "Porkbun TrustONE" in result.stdout
-    assert "ExampleTelco" not in result.stdout
+    r = _run("find", "Quillon")
+    assert r.returncode == 0
+    assert "Quillon registrar" in r.stdout
+    assert "ExampleTelco" not in r.stdout
 
 
-def test_thread_archive_scan_moves_old_closed_threads(tmp_path: Path, monkeypatch) -> None:
+def test_thread_archive_scan_moves_old_closed_threads(threads_root: Path) -> None:
     from datetime import datetime, timedelta
 
+    from scripts.utils.threads_lib import write_thread_file
     from scripts.utils.workspace import get_default_tz
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
 
-    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Old"], check=True)
-    files = list((threads_root / "business").glob("*.md"))
-    thread_id = files[0].stem
-    subprocess.run([sys.executable, "scripts/thread.py", "close", thread_id,
-                    "--reason", "resolved"], check=True)
+    path = _open_thread(threads_root, "Old")
+    _run("close", path.stem, "--reason", "resolved", check=True)
 
     # Backdate the file's last_touched to 100 days ago
-    parsed = parse_thread_file(files[0])
-    old_date = (datetime.now(get_default_tz()).date() - timedelta(days=100)).isoformat()
-    parsed.last_touched = old_date
-    from scripts.utils.threads_lib import write_thread_file
-    write_thread_file(files[0], parsed)
+    parsed = parse_thread_file(path)
+    parsed.last_touched = (
+        datetime.now(get_default_tz()).date() - timedelta(days=100)
+    ).isoformat()
+    write_thread_file(path, parsed)
 
-    result = subprocess.run(
-        [sys.executable, "scripts/thread.py", "archive-scan", "--apply"],
-        capture_output=True, text=True, check=False,
-    )
-    assert result.returncode == 0, result.stderr
+    r = _run("archive-scan", "--apply")
+    assert r.returncode == 0, r.stderr
     archived = list((threads_root / "archive").rglob("*.md"))
     assert len(archived) == 1
-    assert not files[0].exists()
-    # H3 regression: MEMORY.md must not retain a link pointing at the moved file.
-    mem = memory_md.read_text(encoding="utf-8")
-    assert f"threads/business/{thread_id}.md" not in mem
+    assert not path.exists()
 
 
-def test_thread_show_prints_file_content(tmp_path: Path, monkeypatch) -> None:
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
-
-    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Showable thread"], check=True)
-    files = list((threads_root / "business").glob("*.md"))
-    thread_id = files[0].stem
-
-    result = subprocess.run(
-        [sys.executable, "scripts/thread.py", "show", thread_id],
-        capture_output=True, text=True, check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    assert "Showable thread" in result.stdout
-    assert "## Open follow-ups" in result.stdout
+def test_thread_show_prints_file_content(threads_root: Path) -> None:
+    path = _open_thread(threads_root, "Showable thread")
+    r = _run("show", path.stem)
+    assert r.returncode == 0, r.stderr
+    assert "Showable thread" in r.stdout
+    assert "## Open follow-ups" in r.stdout
 
 
-def test_thread_show_returns_error_on_missing_thread(tmp_path: Path, monkeypatch) -> None:
+def test_thread_show_returns_error_on_missing_thread(threads_root: Path) -> None:
     """C-1 regression: missing thread should print clean error, not Python traceback."""
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
-
-    result = subprocess.run(
-        [sys.executable, "scripts/thread.py", "show", "nonexistent-thread"],
-        capture_output=True, text=True, check=False,
-    )
-    assert result.returncode == 1
-    assert "error:" in result.stderr.lower()
-    assert "Traceback" not in result.stderr
+    r = _run("show", "nonexistent-thread")
+    assert r.returncode == 1
+    assert "error:" in r.stderr.lower()
+    assert "Traceback" not in r.stderr
 
 
 # ======================================
@@ -218,140 +161,85 @@ def test_thread_show_returns_error_on_missing_thread(tmp_path: Path, monkeypatch
 # ======================================
 
 
-def test_log_two_follow_ups_does_not_duplicate_section(tmp_path: Path, monkeypatch) -> None:
+def test_log_two_follow_ups_does_not_duplicate_section(threads_root: Path) -> None:
     """H1 regression: appending two follow-ups must not corrupt or duplicate the section."""
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
+    path = _open_thread(threads_root, "Two follow-ups")
+    _run("log", path.stem, "e1", "--follow-up", "First", check=True)
+    _run("log", path.stem, "e2", "--follow-up", "Second", check=True)
 
-    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Two follow-ups"], check=True)
-    files = list((threads_root / "business").glob("*.md"))
-    thread_id = files[0].stem
-    subprocess.run([sys.executable, "scripts/thread.py", "log", thread_id, "e1", "--follow-up", "First"], check=True)
-    subprocess.run([sys.executable, "scripts/thread.py", "log", thread_id, "e2", "--follow-up", "Second"], check=True)
-
-    body = files[0].read_text(encoding="utf-8")
+    body = path.read_text(encoding="utf-8")
     assert body.count("## Open follow-ups") == 1, "section header was duplicated"
     assert "## Open follow-ups\n\n- [ ] First\n- [ ] Second" in body
 
 
-def test_log_three_decisions_does_not_duplicate_section(tmp_path: Path, monkeypatch) -> None:
+def test_log_three_decisions_does_not_duplicate_section(threads_root: Path) -> None:
     """H1 regression: same corruption pattern affects --decision, not just --follow-up."""
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
-
-    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Decisions stack"], check=True)
-    thread_id = list((threads_root / "business").glob("*.md"))[0].stem
+    path = _open_thread(threads_root, "Decisions stack")
     for txt in ("Alpha", "Bravo", "Charlie"):
-        subprocess.run(
-            [sys.executable, "scripts/thread.py", "log", thread_id, f"e-{txt}", "--decision", txt],
-            check=True,
-        )
-    body = (threads_root / "business" / f"{thread_id}.md").read_text(encoding="utf-8")
-    assert body.count("## Decisions") == 1
+        _run("log", path.stem, f"e-{txt}", "--decision", txt, check=True)
+    assert path.read_text(encoding="utf-8").count("## Decisions") == 1
 
 
-def test_log_done_indexes_remain_stable_after_multiple_adds(tmp_path: Path, monkeypatch) -> None:
+def test_log_done_indexes_remain_stable_after_multiple_adds(threads_root: Path) -> None:
     """H1 regression: --done <N> must target the right item after multiple --follow-up adds."""
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
-
-    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Done index"], check=True)
-    thread_id = list((threads_root / "business").glob("*.md"))[0].stem
+    path = _open_thread(threads_root, "Done index")
     for txt in ("First", "Second", "Third"):
-        subprocess.run(
-            [sys.executable, "scripts/thread.py", "log", thread_id, f"e-{txt}", "--follow-up", txt],
-            check=True,
-        )
-    subprocess.run([sys.executable, "scripts/thread.py", "log", thread_id, "tick", "--done", "1"], check=True)
-    body = (threads_root / "business" / f"{thread_id}.md").read_text(encoding="utf-8")
+        _run("log", path.stem, f"e-{txt}", "--follow-up", txt, check=True)
+    _run("log", path.stem, "tick", "--done", "1", check=True)
+
+    body = path.read_text(encoding="utf-8")
     assert "- [x] Second" in body
     assert "- [ ] First" in body
     assert "- [ ] Third" in body
 
 
-def test_log_collapses_whitespace_in_event_hook(tmp_path: Path, monkeypatch) -> None:
+def test_log_collapses_whitespace_in_the_event(threads_root: Path) -> None:
     """L1 regression: a multi-paragraph event must not keep its line breaks.
 
     Retargeted 2026-08-18. The collapse originally protected the MEMORY.md hook,
-    which no longer carries event text at all; but the sanitising step it guards
-    still runs, and its output now lands in the thread body, so the guard moved
-    there rather than being deleted with the hook it used to watch.
+    which stopped carrying event text; the sanitising step it guards still runs,
+    and its output lands in the thread body, so the guard moved there rather than
+    being deleted with the hook it used to watch. The hook itself is gone as of
+    2026-08-27 and the body is now its only destination.
     """
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
+    path = _open_thread(threads_root, "Whitespace test")
+    _run("log", path.stem, "line one\nline two\n\nline three", check=True)
 
-    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Whitespace test"], check=True)
-    thread_id = list((threads_root / "business").glob("*.md"))[0].stem
-    subprocess.run(
-        [sys.executable, "scripts/thread.py", "log", thread_id, "line one\nline two\n\nline three"],
-        check=True,
-    )
-    body = parse_thread_file(list((threads_root / "business").glob("*.md"))[0]).body
+    body = parse_thread_file(path).body
     assert "line one line two line three" in body
     assert "line one  line two" not in body  # no double spaces
 
 
-def test_open_rejects_empty_slug_with_clean_error(tmp_path: Path, monkeypatch) -> None:
+def test_open_rejects_empty_slug_with_clean_error(threads_root: Path) -> None:
     """H5 + M3 regression: empty-slug title must produce clean rc=1, not a traceback."""
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
-
-    result = subprocess.run(
-        [sys.executable, "scripts/thread.py", "open", "business", "!!!"],
-        capture_output=True, text=True, check=False,
-    )
-    assert result.returncode == 1
-    assert "error:" in result.stderr.lower()
-    assert "Traceback" not in result.stderr
+    r = _run("open", "business", "!!!")
+    assert r.returncode == 1
+    assert "error:" in r.stderr.lower()
+    assert "Traceback" not in r.stderr
 
 
-def test_log_aborts_when_memory_md_missing(tmp_path: Path, monkeypatch) -> None:
-    """Atomicity: if MEMORY.md does not exist, log must fail BEFORE mutating the thread."""
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
-    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Atomic test"], check=True)
-    thread_id = list((threads_root / "business").glob("*.md"))[0].stem
-    thread_path = threads_root / "business" / f"{thread_id}.md"
-    body_before = thread_path.read_text(encoding="utf-8")
+def test_log_on_an_unknown_thread_writes_nothing(threads_root: Path) -> None:
+    """Atomicity: a log that cannot resolve its target must leave the tree alone.
 
-    # Repoint MEMORY_MD at a missing file.
-    monkeypatch.setenv("MEMORY_MD", str(tmp_path / "missing" / "MEMORY.md"))
-    result = subprocess.run(
-        [sys.executable, "scripts/thread.py", "log", thread_id, "should-not-land"],
-        capture_output=True, text=True, check=False,
-    )
-    assert result.returncode == 1
-    assert "does not exist" in result.stderr.lower()
-    assert "Traceback" not in result.stderr
-    assert thread_path.read_text(encoding="utf-8") == body_before
+    This replaces `test_log_aborts_when_memory_md_missing`, which pinned the
+    same property against the second file `log` used to write. With one file
+    left, the remaining way to half-apply a log is to resolve the wrong target
+    or none, so that is what is asserted.
+    """
+    existing = _open_thread(threads_root, "Atomic test")
+    before = existing.read_text(encoding="utf-8")
+
+    r = _run("log", "2026-01-01-no-such-thread", "should-not-land")
+    assert r.returncode == 1
+    assert "not found" in r.stderr.lower()
+    assert "Traceback" not in r.stderr
+    assert existing.read_text(encoding="utf-8") == before
+    assert list((threads_root / "business").glob("*.md")) == [existing]
 
 
-def test_list_warns_about_corrupted_threads(tmp_path: Path, monkeypatch) -> None:
+def test_list_warns_about_corrupted_threads(threads_root: Path) -> None:
     """Corrupted threads must surface as a stderr warning, not silently disappear."""
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
-    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Healthy thread"], check=True)
+    _open_thread(threads_root, "Healthy thread")
 
     # Plant a corrupted thread file (id-stem mismatch triggers L3 ValueError).
     bad = threads_root / "business" / "2026-04-30-corrupted.md"
@@ -362,48 +250,35 @@ def test_list_warns_about_corrupted_threads(tmp_path: Path, monkeypatch) -> None
         encoding="utf-8",
     )
 
-    result = subprocess.run(
-        [sys.executable, "scripts/thread.py", "list"],
-        capture_output=True, text=True, check=False,
-    )
-    assert result.returncode == 0
-    assert "Healthy thread" in result.stdout
-    assert "warning" in result.stderr.lower()
-    assert "2026-04-30-corrupted.md" in result.stderr
+    r = _run("list")
+    assert r.returncode == 0
+    assert "Healthy thread" in r.stdout
+    assert "warning" in r.stderr.lower()
+    assert "2026-04-30-corrupted.md" in r.stderr
 
 
-def test_log_accepts_multiple_followups_artifacts_decisions_in_one_call(tmp_path: Path, monkeypatch) -> None:
+def test_log_accepts_multiple_followups_artifacts_decisions_in_one_call(
+    threads_root: Path,
+) -> None:
     """Repeatable-flag regression: passing --follow-up / --artifact / --decision
     twice or more in one log call must record EVERY value, not just the last.
     """
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
+    path = _open_thread(threads_root, "Repeatable flags")
+    r = _run("log", path.stem, "multi-flag event",
+             "--artifact", "outputs/a/one.md",
+             "--artifact", "outputs/a/two.pdf",
+             "--follow-up", "Follow-up alpha",
+             "--follow-up", "Follow-up bravo",
+             "--follow-up", "Follow-up charlie",
+             "--decision", "Decision one",
+             "--decision", "Decision two")
+    assert r.returncode == 0, r.stderr
 
-    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Repeatable flags"], check=True)
-    files = list((threads_root / "business").glob("*.md"))
-    thread_id = files[0].stem
-
-    result = subprocess.run(
-        [sys.executable, "scripts/thread.py", "log", thread_id, "multi-flag event",
-         "--artifact", "outputs/a/one.md",
-         "--artifact", "outputs/a/two.pdf",
-         "--follow-up", "Follow-up alpha",
-         "--follow-up", "Follow-up bravo",
-         "--follow-up", "Follow-up charlie",
-         "--decision", "Decision one",
-         "--decision", "Decision two"],
-        capture_output=True, text=True, check=False,
-    )
-    assert result.returncode == 0, result.stderr
-
-    parsed = parse_thread_file(files[0])
+    parsed = parse_thread_file(path)
     assert "outputs/a/one.md" in parsed.links["outputs"]
     assert "outputs/a/two.pdf" in parsed.links["outputs"]
 
-    body = files[0].read_text(encoding="utf-8")
+    body = path.read_text(encoding="utf-8")
     assert "- [ ] Follow-up alpha" in body
     assert "- [ ] Follow-up bravo" in body
     assert "- [ ] Follow-up charlie" in body
@@ -413,39 +288,94 @@ def test_log_accepts_multiple_followups_artifacts_decisions_in_one_call(tmp_path
     assert body.count("## Decisions") == 1
 
 
-def test_log_self_heals_corrupted_memory_section(tmp_path: Path, monkeypatch) -> None:
-    """M1 regression: log must self-heal a hand-edited MEMORY.md missing the index line."""
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
+# ======================================
+# The retired MEMORY.md index (2026-08-27)
+# ======================================
 
-    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Self-heal test"], check=True)
-    thread_id = list((threads_root / "business").glob("*.md"))[0].stem
 
-    # Wipe the entire ## Active Threads section as if user had hand-edited it.
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
+@pytest.mark.parametrize("argv", [
+    ("open", "business", "A second probe"),
+    ("open", "personal", "A personal probe"),
+    ("log", "{id}", "an event"),
+    ("log", "{id}", "an event", "--follow-up", "something"),
+    ("quiet", "{id}", "--until", "2999-01-01"),
+    ("quiet", "{id}", "--indefinite"),
+    ("quiet", "{id}", "--clear"),
+    ("hold", "{id}", "--reason", "waiting"),
+    ("close", "{id}", "--reason", "done"),
+    ("reopen", "{id}"),
+    ("list",),
+    ("find", "probe"),
+    ("archive-scan", "--apply"),
+])
+def test_no_subcommand_writes_a_memory_index(
+    threads_root: Path, tmp_path: Path, monkeypatch, argv: tuple[str, ...],
+) -> None:
+    """No path through the CLI may create or touch an auto-memory index.
 
-    result = subprocess.run(
-        [sys.executable, "scripts/thread.py", "log", thread_id, "after wipe"],
-        capture_output=True, text=True, check=False,
+    The check is the whole data root, not one filename: the resolver this CLI
+    used to call was `get_data_root() / "auto-memory" / "MEMORY.md"`, so a
+    re-added writer lands there whatever it calls the file. `HEADING_OS_DATA`
+    points at an empty directory, so ANY file appearing under it is the writer
+    coming back.
+    """
+    data_root = tmp_path / "data"  # created and pinned by the threads_root fixture
+    (data_root / "auto-memory").mkdir(parents=True, exist_ok=True)
+    monkeypatch.delenv("MEMORY_MD", raising=False)
+
+    path = _open_thread(threads_root, "Index probe")
+    before = sorted(p.relative_to(data_root) for p in data_root.rglob("*") if p.is_file())
+
+    r = _run(*[a.format(id=path.stem) for a in argv])
+    assert r.returncode == 0, r.stderr
+
+    after = sorted(p.relative_to(data_root) for p in data_root.rglob("*") if p.is_file())
+    assert after == before == [], (
+        f"`thread.py {argv[0]}` wrote {after} under the data root; the "
+        f"`## Active Threads` index was retired on 2026-08-20 and its writer "
+        f"removed on 2026-08-27"
     )
-    assert result.returncode == 0, result.stderr
-    mem = memory_md.read_text(encoding="utf-8")
-    assert "## Active Threads" in mem
-    assert "Self-heal test" in mem
 
 
-def _open_thread(tmp_path: Path, monkeypatch, title: str = "Test thread"):
-    """Set up an isolated registry with one open thread; return its id."""
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
-    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", title], check=True)
-    return threads_root, list((threads_root / "business").glob("*.md"))[0]
+def test_the_reindex_subcommand_is_gone(threads_root: Path) -> None:
+    """`reindex` existed only to repair MEMORY.md drift.
+
+    It must refuse loudly rather than survive as a no-op that reports success
+    over an index it no longer maintains.
+    """
+    r = _run("reindex")
+    assert r.returncode != 0
+    assert "invalid choice" in r.stderr.lower()
+
+
+def test_the_event_text_lands_in_the_body_and_nowhere_else(
+    threads_root: Path, tmp_path: Path, monkeypatch,
+) -> None:
+    """Until 2026-08-18 `log` wrote `event[:120]` into the always-loaded index.
+
+    That was a live value in a pointer, which `.claude/rules/memory-discipline.md`
+    forbids. It was cut back to a status-and-date hook, and then the hook went
+    with the index. The event has one home.
+    """
+    data_root = tmp_path / "data"  # created and pinned by the threads_root fixture
+
+    path = _open_thread(threads_root, "Hook shape")
+    event_text = "Marlow Carter answered at 08:00 UTC with a commercial objection"
+    _run("log", path.stem, event_text, check=True)
+
+    assert event_text in parse_thread_file(path).body
+    assert list(data_root.rglob("*")) == []
+
+
+def _open_thread_legacy(tmp_path: Path, monkeypatch, title: str = "Test thread"):
+    """Set up an isolated registry with one open thread; return (root, path)."""
+    root = tmp_path / "threads"
+    monkeypatch.setenv("THREADS_ROOT", str(root))
+    monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path / "data"))
+    (tmp_path / "data").mkdir(exist_ok=True)
+    r = _run("open", "business", title)
+    assert r.returncode == 0, r.stderr
+    return root, list((root / "business").glob("*.md"))[0]
 
 
 def test_close_refuses_without_a_reason(tmp_path: Path, monkeypatch) -> None:
@@ -458,11 +388,8 @@ def test_close_refuses_without_a_reason(tmp_path: Path, monkeypatch) -> None:
     one awaiting a data dump, another a meeting slot. Reading the registry
     afterwards could not tell you which.
     """
-    threads_root, path = _open_thread(tmp_path, monkeypatch)
-    result = subprocess.run(
-        [sys.executable, "scripts/thread.py", "close", path.stem],
-        capture_output=True, text=True, check=False,
-    )
+    _, path = _open_thread_legacy(tmp_path, monkeypatch)
+    result = _run("close", path.stem)
     assert result.returncode != 0, "close succeeded with no reason"
     assert "reason" in (result.stderr + result.stdout).lower()
     assert parse_thread_file(path).status == "active", "status changed on a refused close"
@@ -470,12 +397,8 @@ def test_close_refuses_without_a_reason(tmp_path: Path, monkeypatch) -> None:
 
 def test_close_with_a_reason_records_it_in_the_log(tmp_path: Path, monkeypatch) -> None:
     """The reason must land in the body, not only in the operator's memory."""
-    threads_root, path = _open_thread(tmp_path, monkeypatch)
-    result = subprocess.run(
-        [sys.executable, "scripts/thread.py", "close", path.stem,
-         "--reason", "Superseded by the Q3 rollout thread"],
-        capture_output=True, text=True, check=False,
-    )
+    _, path = _open_thread_legacy(tmp_path, monkeypatch)
+    result = _run("close", path.stem, "--reason", "Superseded by the Q3 rollout thread")
     assert result.returncode == 0, result.stderr
     parsed = parse_thread_file(path)
     assert parsed.status == "closed"
@@ -484,25 +407,18 @@ def test_close_with_a_reason_records_it_in_the_log(tmp_path: Path, monkeypatch) 
 
 
 def test_hold_also_requires_a_reason(tmp_path: Path, monkeypatch) -> None:
-    """`hold` removes a thread from the index exactly like `close` does.
+    """`hold` retires a thread from the active set exactly like `close` does.
 
     A silent hold is the same loss of information, so the guard covers both.
-    `reopen` is deliberately exempt: it ADDS a thread back to the index, and
-    demanding a justification to resume work is friction with nothing behind it.
+    `reopen` is deliberately exempt: it brings a thread BACK, and demanding a
+    justification to resume work is friction with nothing behind it.
     """
-    threads_root, path = _open_thread(tmp_path, monkeypatch)
-    bare = subprocess.run(
-        [sys.executable, "scripts/thread.py", "hold", path.stem],
-        capture_output=True, text=True, check=False,
-    )
+    _, path = _open_thread_legacy(tmp_path, monkeypatch)
+    bare = _run("hold", path.stem)
     assert bare.returncode != 0
     assert parse_thread_file(path).status == "active"
 
-    ok = subprocess.run(
-        [sys.executable, "scripts/thread.py", "hold", path.stem,
-         "--reason", "Waiting on the counterparty's legal review"],
-        capture_output=True, text=True, check=False,
-    )
+    ok = _run("hold", path.stem, "--reason", "Waiting on the counterparty's legal review")
     assert ok.returncode == 0, ok.stderr
     parsed = parse_thread_file(path)
     assert parsed.status == "on-hold"
@@ -511,73 +427,128 @@ def test_hold_also_requires_a_reason(tmp_path: Path, monkeypatch) -> None:
 
 def test_reopen_needs_no_reason(tmp_path: Path, monkeypatch) -> None:
     """Resuming work is not a decision that needs defending."""
-    threads_root, path = _open_thread(tmp_path, monkeypatch)
-    subprocess.run([sys.executable, "scripts/thread.py", "close", path.stem,
-                    "--reason", "done"], check=True)
-    result = subprocess.run(
-        [sys.executable, "scripts/thread.py", "reopen", path.stem],
-        capture_output=True, text=True, check=False,
-    )
+    _, path = _open_thread_legacy(tmp_path, monkeypatch)
+    _run("close", path.stem, "--reason", "done", check=True)
+    result = _run("reopen", path.stem)
     assert result.returncode == 0, result.stderr
     assert parse_thread_file(path).status == "active"
 
 
-def test_index_hook_is_derived_state_not_the_event_text(tmp_path: Path, monkeypatch) -> None:
-    """The MEMORY.md hook is a pointer, not a record.
+def test_the_reason_gate_reads_the_destination_status(tmp_path: Path, monkeypatch) -> None:
+    """The gate used to test `index_action == "remove"`, an index that is gone.
 
-    Until 2026-08-18 `log` wrote `event[:120]` into the index, so the
-    always-loaded index carried a 120-character retelling of the newest event --
-    a live value, which `.claude/rules/memory-discipline.md` forbids in a hook
-    precisely because it goes stale into a wrong answer. Thirty threads at that
-    width made the Active Threads block 8 KB of a 20.6 KB index. The hook now
-    reports the thread's STATUS and last-activity DATE, both of which are
-    re-derived from frontmatter on every write and cannot drift from it.
+    `new_status != "active"` must cover the same two commands and no others, so
+    the rename cannot have quietly widened or narrowed it. Asserted through the
+    CLI: close and hold refuse, reopen does not.
     """
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
-
-    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Hook shape"], check=True)
-    thread_id = list((threads_root / "business").glob("*.md"))[0].stem
-    event_text = "Marlow Carter answered at 08:00 UTC and the answer is a commercial objection"
-    subprocess.run(
-        [sys.executable, "scripts/thread.py", "log", thread_id, event_text], check=True)
-
-    mem = memory_md.read_text(encoding="utf-8")
-    parsed = parse_thread_file(list((threads_root / "business").glob("*.md"))[0])
-
-    # The event text belongs in the thread body, and ONLY there.
-    assert event_text in parsed.body
-    assert "Marlow Carter" not in mem
-
-    line = next(ln for ln in mem.splitlines() if "Hook shape" in ln)
-    assert line.endswith(f"- active, last {parsed.last_touched}")
+    _, path = _open_thread_legacy(tmp_path, monkeypatch)
+    assert _run("close", path.stem).returncode != 0
+    assert _run("hold", path.stem).returncode != 0
+    _run("hold", path.stem, "--reason", "parked", check=True)
+    assert _run("reopen", path.stem).returncode == 0
 
 
-def test_index_lines_stay_within_the_budget(tmp_path: Path, monkeypatch) -> None:
-    """A thread line must fit the index budget even with a long title.
+# ======================================
+# The reason gate, asked of the function
+# ======================================
+#
+# The four tests above drive the CLI, and the CLI cannot reach the gate: `main`
+# declares `--reason` as `required=True` on `close` and `hold`, so argparse
+# refuses first with exit 2. Mutation testing found this on 2026-08-27 - the gate
+# was deleted outright and every CLI test stayed green.
+#
+# The gate is not dead code. `cmd_close`, `cmd_hold` and `cmd_quiet` are imported
+# and called in-process (two shard test files do exactly that), and a caller
+# there supplies its own Namespace with no argparse in between. So the CLI keeps
+# its argparse guard, the function keeps its own, and these ask the function.
 
-    The old writer added a 120-char hook on top of an already-long title and
-    path, so the worst real line reached 344 characters against a 150-char
-    budget. The derived hook is bounded, so the only unbounded inputs left are
-    the title and its slug -- both of which the operator sees when opening.
+
+@pytest.fixture()
+def th(tmp_path: Path, monkeypatch):
+    """`scripts/thread.py` loaded in-process, pointed at an isolated tree."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "thread_reason_gate", REPO_ROOT / "scripts" / "thread.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["thread_reason_gate"] = module
+    spec.loader.exec_module(module)
+
+    threads = tmp_path / "threads"
+    (threads / "business").mkdir(parents=True)
+    monkeypatch.setattr(module, "_threads_root", lambda: threads)
+    monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path / "data"))
+    (tmp_path / "data").mkdir(exist_ok=True)
+    return module, threads
+
+
+def _ns(**kw):
+    import argparse
+
+    return argparse.Namespace(**kw)
+
+
+def _one_thread(module, threads: Path, title: str = "Gate probe") -> Path:
+    module.cmd_open(_ns(type="business", title=title))
+    (made,) = sorted((threads / "business").glob("*.md"))
+    return made
+
+
+@pytest.mark.parametrize("command", ["cmd_close", "cmd_hold"])
+@pytest.mark.parametrize("reason", [None, "", "   ", "\n\t "])
+def test_a_direct_retire_with_no_reason_raises(th, command, reason) -> None:
+    """Both retiring commands, and every shape of an empty reason."""
+    module, threads = th
+    path = _one_thread(module, threads)
+    with pytest.raises(ValueError, match="needs --reason"):
+        getattr(module, command)(_ns(thread_id=path.stem, reason=reason))
+    assert parse_thread_file(path).status == "active", "status moved on a refused call"
+
+
+@pytest.mark.parametrize("command", ["cmd_close", "cmd_hold"])
+def test_a_direct_retire_with_a_reason_is_allowed(th, command) -> None:
+    """The gate must refuse the empty case only, not the whole call."""
+    module, threads = th
+    path = _one_thread(module, threads)
+    assert getattr(module, command)(_ns(thread_id=path.stem, reason="a real reason")) == 0
+    assert parse_thread_file(path).status in ("closed", "on-hold")
+
+
+def test_a_direct_reopen_needs_no_reason(th) -> None:
+    """`reopen` is the exemption, and it must survive the gate being tightened."""
+    module, threads = th
+    path = _one_thread(module, threads)
+    module.cmd_hold(_ns(thread_id=path.stem, reason="parked"))
+    assert module.cmd_reopen(_ns(thread_id=path.stem)) == 0
+    assert parse_thread_file(path).status == "active"
+
+
+def test_a_stray_until_does_not_survive_a_direct_clear(th) -> None:
+    """`--clear` wins over a `--until` that arrives with it.
+
+    Through the CLI the two cannot arrive together: `main` puts `--until`,
+    `--indefinite` and `--clear` in a mutually exclusive group, so `args.until`
+    is already None whenever the other two are set. A direct caller has no such
+    group, and dropping the `None if ...` here changed nothing the CLI could
+    show. It changes this.
     """
-    threads_root = tmp_path / "threads"
-    memory_md = tmp_path / "MEMORY.md"
-    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
-    monkeypatch.setenv("MEMORY_MD", str(memory_md))
+    module, threads = th
+    path = _one_thread(module, threads)
+    module.cmd_quiet(_ns(thread_id=path.stem, until="2999-01-01",
+                         clear=False, indefinite=False))
+    assert parse_thread_file(path).quiet_until == "2999-01-01"
 
-    title = "Ivory Coast tender evaluation round and the four item file request"
-    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", title], check=True)
-    thread_id = list((threads_root / "business").glob("*.md"))[0].stem
-    subprocess.run(
-        [sys.executable, "scripts/thread.py", "log", thread_id,
-         "A very long operational event " * 20], check=True)
+    module.cmd_quiet(_ns(thread_id=path.stem, until="2999-01-01",
+                         clear=True, indefinite=False))
+    assert parse_thread_file(path).quiet_until is None
 
-    line = next(ln for ln in memory_md.read_text(encoding="utf-8").splitlines()
-                if title in ln)
-    hook = line.split(") - ", 1)[1]
-    assert len(hook) <= 40, f"hook grew unbounded: {hook!r}"
+
+def test_a_stray_until_does_not_survive_a_direct_indefinite(th) -> None:
+    """Same shape: an indefinite freeze must carry no date, ever."""
+    module, threads = th
+    path = _one_thread(module, threads)
+    module.cmd_quiet(_ns(thread_id=path.stem, until="2999-01-01",
+                         clear=False, indefinite=True))
+    parsed = parse_thread_file(path)
+    assert parsed.do_not_remind is True
+    assert parsed.quiet_until is None

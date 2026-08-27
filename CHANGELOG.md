@@ -32,6 +32,35 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **`checkpoint-paths.py --done` answers in one line instead of four.** It still
   names both halves of the state - the stretch ended, the switch stays on - and
   drops the session slug and the echo of the note the assistant had just typed.
+- **`thread.py list` marks an indefinite freeze instead of printing a None.**
+  The suffix was composed from `quiet_until` alone, while `is_quiet` is also true
+  for `do_not_remind`, which has no date. Every indefinitely frozen thread listed
+  as `[quiet until None]`, which is not the `[quiet until DATE]` suffix `/prime`
+  documents and reads. It now prints `[quiet indefinitely]`.
+
+### Removed
+
+- **`/thread` stops writing the memory index, seven days after `/prime` stopped
+  reading it.** 0.13.0 retired the `## Active Threads` block on the READER side
+  only: `/prime` moved to `thread.py list --status active`, and
+  `scripts/memory-hygiene.py` began reporting the block's own row shape as a
+  defect. The writer was left in place, so `/thread` kept regrowing rows that
+  nothing read and that the workspace's own hygiene tool then flagged. Seven days
+  later it had regrown three rows against thirty-three active threads on disk, so
+  the copy was wrong about ninety percent of the set it claimed to index.
+  Removed: fifteen names in `scripts/utils/threads_lib.py` (the header
+  constants, `SUBSECTIONS`, `QUIET_PREFIX_RE`, `quiet_hook_prefix`,
+  `ensure_active_threads_section`, `_index_block`, `_split_at_subheader`,
+  `compose_thread_hook`, `add_thread_to_index`, `update_thread_hook`,
+  `read_thread_hook`, `read_thread_quiet_marker`, `remove_thread_from_index`),
+  the `_memory_md()` resolver and every index call in `scripts/thread.py`, and
+  the `reindex` subcommand, which existed only to repair drift between the index
+  and the threads it pointed at. Two closed defect classes go with it: a `log` on
+  a closed thread resurrecting it, and a `reopen` dropping the quiet marker. The
+  freeze now lives in frontmatter only and surfaces through `list`. Guards:
+  `test_no_subcommand_writes_a_memory_index` (twelve subcommands, asserted
+  against an empty data root), `test_the_retired_index_helper_is_gone`, and an
+  AST check that `threads_lib` writes nothing but the thread file.
 
 ## [0.13.0] - 2026-08-22
 

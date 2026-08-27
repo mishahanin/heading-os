@@ -251,7 +251,7 @@ Follow the exclusion rules from the auto-memory system:
 5. **Organization:** Group entries semantically by topic, not chronologically
 6. **No content in index:** MEMORY.md is a pointer file only
 
-**Sections marked `<!-- managed-by: ... -->` are owned by another skill and MUST be left untouched.** Do not re-order, re-format, or move lines inside any level-2 section whose body begins (immediately after the header) with an HTML comment `<!-- managed-by: <skill-name> -->`. Currently this includes `## Active Threads` (managed by `/thread`).
+**Sections marked `<!-- managed-by: ... -->` are owned by another skill and MUST be left untouched.** Do not re-order, re-format, or move lines inside any level-2 section whose body begins (immediately after the header) with an HTML comment `<!-- managed-by: <skill-name> -->`. No section carries that marker today. `## Active Threads`, managed by `/thread`, was the only one, and it was retired on 2026-08-27.
 
 ### Step 2: Produce Consolidation Report
 

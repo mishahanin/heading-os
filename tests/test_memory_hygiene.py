@@ -262,28 +262,33 @@ def test_the_live_index_is_reported_but_never_gated():
         assert {"target", "line", "signals"} <= set(row), row
 
 
-def test_real_memory_index_keeps_managed_marker_on_the_header_line():
-    """`## Active Threads` must be followed IMMEDIATELY by the managed-by marker.
+def test_the_real_memory_index_claims_no_managed_section():
+    """No section of the index may claim a manager it does not have.
 
-    /dream skips "any level-2 section whose body begins (immediately after the
-    header) with an HTML comment `<!-- managed-by: ... -->`", and that is the
-    exact shape threads_lib.ensure_active_threads_section() writes. When the
-    block was retired on 2026-08-20 the replacement prose was inserted ABOVE the
-    marker, pushing it 10 lines down, which takes the section out of /dream's
-    managed set and lets a consolidation pass re-order it. Prose belongs under
-    the marker, not in front of it.
+    INVERTED 2026-08-27, and the inversion is the point. This asserted that
+    `## Active Threads` was followed IMMEDIATELY by `<!-- managed-by: /thread -->`,
+    because /dream skips "any level-2 section whose body begins (immediately
+    after the header) with an HTML comment `<!-- managed-by: ... -->`", and the
+    marker sitting ten lines down took the section out of that protected set.
+
+    `/thread` stopped writing the section on 2026-08-27, so the marker became a
+    false claim: it tells /dream to leave the block alone on behalf of a writer
+    that no longer exists, which freezes prose nobody maintains. The marker was
+    removed with the writer. Nothing else in the index carries one, so the check
+    is corpus-wide rather than aimed at the one header: a marker that reappears
+    is either a new managed section, which is a decision, or the retired one
+    growing back.
     """
     mod = _load_hygiene()
     memory_md = mod.get_data_root() / "auto-memory" / "MEMORY.md"
     if not memory_md.exists():
         pytest.skip("private data overlay not present (bare engine clone)")
     lines = memory_md.read_text(encoding="utf-8").splitlines()
-    if "## Active Threads" not in lines:
-        pytest.skip("no ## Active Threads section (no thread ever opened)")
-    idx = lines.index("## Active Threads")
-    assert lines[idx + 1].startswith("<!-- managed-by: /thread"), (
-        "managed-by marker is not on the line after '## Active Threads'; "
-        f"found {lines[idx + 1]!r}"
+    claimed = [ln for ln in lines if ln.strip().startswith("<!-- managed-by:")]
+    assert not claimed, (
+        f"the memory index claims a managed section: {claimed}. `/thread` was "
+        f"its only manager and stopped writing on 2026-08-27; a managed-by "
+        f"marker tells /dream to skip a block on behalf of a writer that is gone"
     )
 
 

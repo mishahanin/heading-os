@@ -134,11 +134,15 @@ def scan_live_state_rows(memory_dir: Path) -> dict:
     the rule it enforces went unflagged for months. This check works on the
     PATTERN instead of the target, so it holds for any hook that regrows one.
 
-    Advisory rather than gating, deliberately: `thread.py open|log` re-adds rows
-    through ensure_active_threads_section()/add_thread_to_index() in
-    scripts/utils/threads_lib.py, so a gate here would fire on the next
-    legitimate thread write rather than on a mistake. Retiring that writer is the
-    follow-up; until then this reports the regrowth instead of blocking on it.
+    The writer is gone. `thread.py` kept re-adding rows through
+    ensure_active_threads_section()/add_thread_to_index() until 2026-08-27, when
+    both were removed from scripts/utils/threads_lib.py along with the rest of
+    the index manager, so nothing in the workspace regrows the shape now.
+
+    Still advisory rather than gating, for a different reason: what remains is a
+    HAND-written hook, in a file only the operator edits, and blocking a commit
+    over a line in the memory index would stop unrelated work to report a
+    convention. `.claude/rules/memory-discipline.md` states the advisory contract.
 
     READS ONLY; never mutates. Returns:
         {"ok": bool, "flagged": [{"target", "line", "signals"}], "note": str}

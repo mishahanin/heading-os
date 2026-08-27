@@ -4,7 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from types import MappingProxyType
 from datetime import date, datetime
 import re
 import yaml
@@ -124,7 +123,9 @@ def new_thread_path(threads_root: Path, type_: str, title: str, date: str) -> Pa
         raise ValueError(
             f"title {title!r} slugifies to empty; provide a title with at least one ASCII alphanumeric character",
         )
-    # Defensive invariant: paths stored in MEMORY.md regex must not contain parens.
+    # Belt-and-braces: `slugify` already strips parens, so this can only fire if
+    # that changes. A paren in the stem breaks every markdown link that names the
+    # thread path, in the thread's own `links:` and in anything that quotes it.
     if "(" in slug or ")" in slug:
         raise ValueError(f"slug must not contain parens: {slug!r}")
     return threads_root / type_ / f"{date}-{slug}.md"
@@ -165,9 +166,6 @@ def write_thread_file(path: Path, thread: ThreadFile) -> None:
 # Quiet periods
 # ============================================================
 
-QUIET_PREFIX_RE = re.compile(r"^\[quiet until \d{4}-\d{2}-\d{2}\]\s*")
-
-
 def is_quiet(thread: ThreadFile, today: date) -> bool:
     """Is this thread inside a deliberate quiet period on `today`?
 
@@ -188,163 +186,34 @@ def is_quiet(thread: ThreadFile, today: date) -> bool:
         return False
 
 
-def quiet_hook_prefix(quiet_until: str | None) -> str:
-    """The marker prepended to a quiet thread's MEMORY.md hook."""
-    return f"[quiet until {quiet_until}] " if quiet_until else ""
-
-
 # ============================================================
-# MEMORY.md Index Manager
+# The retired MEMORY.md index (removed 2026-08-27)
 # ============================================================
-
-ACTIVE_THREADS_HEADER = "## Active Threads"
-ACTIVE_THREADS_HEADER_RE = re.compile(r"^## Active Threads$", re.MULTILINE)
-ACTIVE_THREADS_MARKER = "<!-- managed-by: /thread - do not edit by hand; /dream skips this section -->"
-SUBSECTIONS = MappingProxyType({"business": "### Business", "personal": "### Personal (CEO-ONLY)"})
-
-
-def ensure_active_threads_section(memory_md: Path) -> None:
-    """Append the ## Active Threads scaffold if MEMORY.md doesn't have it."""
-    text = memory_md.read_text(encoding="utf-8") if memory_md.exists() else ""
-    if ACTIVE_THREADS_HEADER_RE.search(text):
-        return
-    block = (
-        f"\n{ACTIVE_THREADS_HEADER}\n{ACTIVE_THREADS_MARKER}\n\n"
-        f"### Business\n\n"
-        f"### Personal (CEO-ONLY)\n"
-    )
-    atomic_write_text(memory_md, text.rstrip() + block)
-
-
-def _index_block(memory_md: Path) -> tuple[str, str, str]:
-    """Return (before, threads_block, after) split around ## Active Threads.
-
-    Uses line-anchored regex split so that future MEMORY.md additions like
-    `## Active Threads History` (an H2 with a different text) do not collide
-    with the substring match on the bare header.
-    """
-    text = memory_md.read_text(encoding="utf-8")
-    if not ACTIVE_THREADS_HEADER_RE.search(text):
-        raise ValueError("## Active Threads section not initialised; call ensure_active_threads_section first")
-    parts = re.split(r"^## Active Threads$\n", text, maxsplit=1, flags=re.MULTILINE)
-    before, rest = parts[0], parts[1]
-    next_h2 = re.search(r"^## ", rest, flags=re.MULTILINE)
-    if next_h2:
-        threads_block = ACTIVE_THREADS_HEADER + "\n" + rest[: next_h2.start()]
-        after = rest[next_h2.start():]
-    else:
-        threads_block = ACTIVE_THREADS_HEADER + "\n" + rest
-        after = ""
-    return before, threads_block, after
-
-
-def _split_at_subheader(block: str, sub_header: str) -> tuple[str, str]:
-    """Line-anchored split on a level-3 sub-header.
-
-    Avoids substring-collision with body text that happens to contain
-    '### Business' inside a hook or title.
-    """
-    pattern = re.compile(rf"^{re.escape(sub_header)}$", re.MULTILINE)
-    m = pattern.search(block)
-    if not m:
-        raise ValueError(f"sub-section '{sub_header}' missing; section corrupted")
-    return block[: m.end()], block[m.end():]
-
-
-def compose_thread_hook(status: str, last_touched: str) -> str:
-    """Build the MEMORY.md hook for a thread from its own state.
-
-    The index is always loaded, so a hook must be a POINTER, not a record --
-    `.claude/rules/memory-discipline.md` forbids a hook that quotes a live
-    value, because a pointer that goes stale is read as a fact. Until
-    2026-08-18 `thread.py log` wrote `event[:120]`, i.e. a retelling of the
-    newest event, which is a live value by construction and drifted the moment
-    the thread moved on.
-
-    Status and last-activity date are re-derived from frontmatter on every
-    write, so they cannot disagree with the record they point at, and they are
-    bounded, which is what keeps the block off the index budget.
-    """
-    return f"{status}, last {last_touched}"
-
-
-def add_thread_to_index(memory_md: Path, *, type_: str, title: str, path: str, hook: str,
-                        quiet_until: str | None = None) -> None:
-    """Append a thread line under ### Business or ### Personal (CEO-ONLY)."""
-    if "\n" in hook or "\r" in hook:
-        raise ValueError("hook must not contain newlines or carriage returns")
-    if type_ not in SUBSECTIONS:
-        raise ValueError(f"invalid type '{type_}'")
-    before, block, after = _index_block(memory_md)
-    sub_header = SUBSECTIONS[type_]
-    hook = quiet_hook_prefix(quiet_until) + QUIET_PREFIX_RE.sub("", hook)
-    line = f"- [{title}]({path}) - {hook}\n"
-    head_with_subheader, tail = _split_at_subheader(block, sub_header)
-    # Append after the sub-header (and after any existing entries)
-    next_sub = re.search(r"^### ", tail, flags=re.MULTILINE)
-    if next_sub:
-        existing = tail[: next_sub.start()].rstrip("\n") + "\n"
-        rest_of_block = tail[next_sub.start():]
-    else:
-        existing = tail.rstrip("\n") + "\n"
-        rest_of_block = ""
-    new_block = head_with_subheader + existing + line + rest_of_block
-    atomic_write_text(memory_md, before + new_block + after)
-
-
-def update_thread_hook(memory_md: Path, *, path: str, hook: str,
-                       quiet_until: str | None = None) -> None:
-    """Replace the hook text on the line whose link target matches `path`.
-
-    The quiet marker is REGENERATED from `quiet_until` on every write rather
-    than carried over from the old hook, so it can neither be dropped by a
-    routine log nor stack up across writes.
-    """
-    if "\n" in hook or "\r" in hook:
-        raise ValueError("hook must not contain newlines or carriage returns")
-    before, block, after = _index_block(memory_md)
-    hook = quiet_hook_prefix(quiet_until) + QUIET_PREFIX_RE.sub("", hook)
-    pattern = re.compile(rf"(- \[[^\]]+\]\({re.escape(path)}\)) - [^\n]*", re.MULTILINE)
-    new_block, n = pattern.subn(lambda m: f"{m.group(1)} - {hook}", block)
-    if n == 0:
-        raise ValueError(f"no thread line found for path '{path}'")
-    atomic_write_text(memory_md, before + new_block + after)
-
-
-def read_thread_hook(memory_md: Path, *, path: str) -> str:
-    """Return the current hook for `path`, stripped of any quiet marker."""
-    _, block, _ = _index_block(memory_md)
-    m = re.search(rf"- \[[^\]]+\]\({re.escape(path)}\) - ([^\n]*)", block, re.MULTILINE)
-    if not m:
-        raise ValueError(f"no thread line found for path '{path}'")
-    return QUIET_PREFIX_RE.sub("", m.group(1)).strip()
-
-
-def read_thread_quiet_marker(memory_md: Path, *, path: str) -> str | None:
-    """The `quiet until` date carried on the index line, or None if absent.
-
-    `read_thread_hook` deliberately strips the marker, because its callers
-    compare hook TEXT. That made a dropped marker invisible to `thread.py
-    reindex`, the one tool whose job is repairing index drift: the stripped
-    read always matched the composed hook, which never carries a marker, so a
-    reopened quiet thread stayed silently un-marked in the always-loaded index.
-    """
-    _, block, _ = _index_block(memory_md)
-    m = re.search(rf"- \[[^\]]+\]\({re.escape(path)}\) - ([^\n]*)", block, re.MULTILINE)
-    if not m:
-        raise ValueError(f"no thread line found for path '{path}'")
-    marker = re.match(r"\[quiet until (\d{4}-\d{2}-\d{2})\]", m.group(1).strip())
-    return marker.group(1) if marker else None
-
-
-def remove_thread_from_index(memory_md: Path, *, path: str) -> None:
-    """Drop the line whose link target matches `path`."""
-    before, block, after = _index_block(memory_md)
-    pattern = re.compile(rf"- \[[^\]]+\]\({re.escape(path)}\) - [^\n]*(?:\n|$)", re.MULTILINE)
-    new_block, n = pattern.subn("", block)
-    if n == 0:
-        raise ValueError(f"no thread line found for path '{path}'")
-    atomic_write_text(memory_md, before + new_block + after)
+#
+# A `## Active Threads` block in the auto-memory index used to mirror every
+# active thread, and fifteen names here maintained it: ACTIVE_THREADS_HEADER,
+# ACTIVE_THREADS_HEADER_RE, ACTIVE_THREADS_MARKER, SUBSECTIONS,
+# QUIET_PREFIX_RE, quiet_hook_prefix, ensure_active_threads_section,
+# _index_block, _split_at_subheader, compose_thread_hook, add_thread_to_index,
+# update_thread_hook, read_thread_hook, read_thread_quiet_marker,
+# remove_thread_from_index.
+#
+# The block was retired on 2026-08-20 on the READER side only. `/prime` moved to
+# `thread.py list --status active`, and `scripts/memory-hygiene.py` began
+# reporting the block's own row shape as a defect, because every row quoted a
+# live status and a live date and `.claude/rules/memory-discipline.md` forbids
+# that in a file injected at every SessionStart. The writer here was never
+# removed, so `/thread` kept regrowing rows that nothing read and that the
+# workspace's own hygiene tool then flagged. Seven days later three rows were
+# back.
+#
+# Removing the writer deletes two whole defect classes with it, both of which
+# had already cost a shard each: a `log` on a closed thread silently
+# resurrecting it in the index, and a `reopen` dropping the quiet marker. An
+# index that does not exist cannot drift from the record.
+#
+# The record is the thread file. Read the live set with
+# `python scripts/thread.py list`.
 
 
 # ============================================================

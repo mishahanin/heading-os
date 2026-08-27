@@ -109,86 +109,64 @@ def test_write_thread_file_round_trip(tmp_path: Path) -> None:
 
 
 # ======================================
-# Task 6: Index Manager Tests
+# Task 6: the index manager is retired
 # ======================================
+#
+# Six tests stood here and pinned add_thread_to_index, update_thread_hook,
+# remove_thread_from_index and ensure_active_threads_section. All four were
+# removed on 2026-08-27 with the rest of the `## Active Threads` writer. What
+# replaces them is the guard that the removal holds: a helper that comes back
+# is a helper that starts writing the index again.
 
-from scripts.utils.threads_lib import (
-    add_thread_to_index, remove_thread_from_index, update_thread_hook,
-    ensure_active_threads_section,
+import scripts.utils.threads_lib as threads_lib
+
+RETIRED_INDEX_NAMES = (
+    "ACTIVE_THREADS_HEADER", "ACTIVE_THREADS_HEADER_RE", "ACTIVE_THREADS_MARKER",
+    "SUBSECTIONS", "QUIET_PREFIX_RE", "quiet_hook_prefix",
+    "ensure_active_threads_section", "_index_block", "_split_at_subheader",
+    "compose_thread_hook", "add_thread_to_index", "update_thread_hook",
+    "read_thread_hook", "read_thread_quiet_marker", "remove_thread_from_index",
 )
 
 
-ACTIVE_THREADS_HEADER = (
-    "## Active Threads\n"
-    "<!-- managed-by: /thread - do not edit by hand; /dream skips this section -->\n"
-)
+@pytest.mark.parametrize("name", RETIRED_INDEX_NAMES)
+def test_the_retired_index_helper_is_gone(name: str) -> None:
+    assert not hasattr(threads_lib, name), (
+        f"threads_lib.{name} is back; it maintained the `## Active Threads` block "
+        f"in MEMORY.md, which was retired on 2026-08-20 and whose writer was "
+        f"removed on 2026-08-27"
+    )
 
 
-def test_ensure_active_threads_section_appends_when_missing(tmp_path: Path) -> None:
-    mem = tmp_path / "MEMORY.md"
-    mem.write_text("# Persistent Memory\n\n## User Profile\n\n- Some line\n", encoding="utf-8")
-    ensure_active_threads_section(mem)
-    text = mem.read_text(encoding="utf-8")
-    assert ACTIVE_THREADS_HEADER in text
-    assert "### Business" in text
-    assert "### Personal (CEO-ONLY)" in text
+def test_the_library_writes_nothing_but_the_thread_file(tmp_path: Path) -> None:
+    """Asked of the SOURCE, not of a name list, so a new writer is caught too.
 
+    `hasattr` above only refuses the fifteen names that existed. This walks every
+    `atomic_write_text(...)` call in the module and requires each one to write a
+    thread path, so a differently-named helper that appends to MEMORY.md fails
+    here even though no retired name came back.
+    """
+    import ast
+    import inspect
 
-def test_add_thread_to_index_appends_under_correct_subsection(tmp_path: Path) -> None:
-    mem = tmp_path / "MEMORY.md"
-    mem.write_text("# Persistent Memory\n", encoding="utf-8")
-    ensure_active_threads_section(mem)
-    add_thread_to_index(mem, type_="business", title="Porkbun TrustONE phishing",
-                        path="threads/business/2026-04-28-porkbun-trustone-phishing.md",
-                        hook="Awaiting Porkbun abuse evidence")
-    text = mem.read_text(encoding="utf-8")
-    business_block = text.split("### Business")[1].split("###")[0]
-    assert "Porkbun TrustONE phishing" in business_block
-    assert "Awaiting Porkbun abuse evidence" in business_block
-
-
-def test_update_thread_hook_replaces_only_hook_text(tmp_path: Path) -> None:
-    mem = tmp_path / "MEMORY.md"
-    mem.write_text("# Persistent Memory\n", encoding="utf-8")
-    ensure_active_threads_section(mem)
-    add_thread_to_index(mem, type_="business", title="Porkbun",
-                        path="threads/business/p.md", hook="Old hook")
-    update_thread_hook(mem, path="threads/business/p.md", hook="New hook")
-    text = mem.read_text(encoding="utf-8")
-    assert "New hook" in text
-    assert "Old hook" not in text
-
-
-def test_remove_thread_from_index_drops_only_target_line(tmp_path: Path) -> None:
-    mem = tmp_path / "MEMORY.md"
-    mem.write_text("# Persistent Memory\n", encoding="utf-8")
-    ensure_active_threads_section(mem)
-    add_thread_to_index(mem, type_="business", title="A", path="threads/business/a.md", hook="hook A")
-    add_thread_to_index(mem, type_="business", title="B", path="threads/business/b.md", hook="hook B")
-    remove_thread_from_index(mem, path="threads/business/a.md")
-    text = mem.read_text(encoding="utf-8")
-    assert "threads/business/b.md" in text
-    assert "threads/business/a.md" not in text
-
-
-def test_add_thread_to_index_rejects_newline_in_hook(tmp_path: Path) -> None:
-    mem = tmp_path / "MEMORY.md"
-    mem.write_text("# Persistent Memory\n", encoding="utf-8")
-    ensure_active_threads_section(mem)
-    with pytest.raises(ValueError, match="hook must not contain newlines"):
-        add_thread_to_index(mem, type_="business", title="X",
-                            path="threads/business/x.md",
-                            hook="Multi\nline hook")
-
-
-def test_update_thread_hook_rejects_newline_in_hook(tmp_path: Path) -> None:
-    mem = tmp_path / "MEMORY.md"
-    mem.write_text("# Persistent Memory\n", encoding="utf-8")
-    ensure_active_threads_section(mem)
-    add_thread_to_index(mem, type_="business", title="X",
-                        path="threads/business/x.md", hook="Single line")
-    with pytest.raises(ValueError, match="hook must not contain newlines"):
-        update_thread_hook(mem, path="threads/business/x.md", hook="Multi\nline")
+    tree = ast.parse(inspect.getsource(threads_lib))
+    writers = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "atomic_write_text"
+    ]
+    assert writers, "no atomic_write_text call found; the AST probe is looking at nothing"
+    enclosing = []
+    for func in ast.walk(tree):
+        if isinstance(func, ast.FunctionDef):
+            for node in ast.walk(func):
+                if node in writers:
+                    enclosing.append(func.name)
+    assert sorted(enclosing) == ["write_thread_file"], (
+        f"threads_lib writes files from {sorted(enclosing)}; only write_thread_file "
+        f"may write, and it writes the thread, never MEMORY.md"
+    )
 
 
 # ======================================

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Thread registry CLI - open, log, close, hold, reopen, list, find, show, archive-scan."""
+"""Thread registry CLI - open, log, close, hold, reopen, quiet, list, find, show, archive-scan."""
 from __future__ import annotations
 import argparse
-import os
 import re
 import shutil
 import sys
@@ -10,40 +9,21 @@ from datetime import date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.utils.workspace import get_threads_dir, get_data_root, get_default_tz  # noqa: E402
+from scripts.utils.workspace import get_threads_dir, get_default_tz  # noqa: E402
 from scripts.utils.threads_lib import (  # noqa: E402
     ThreadFile, write_thread_file, new_thread_path,
-    ensure_active_threads_section, add_thread_to_index,
-    parse_thread_file, update_thread_hook, remove_thread_from_index,
-    scan_for_archive, is_quiet, compose_thread_hook, read_thread_hook,
-    read_thread_quiet_marker,
+    parse_thread_file, scan_for_archive, is_quiet,
 )
+
+# This CLI writes thread files and nothing else. It used to also maintain a
+# `## Active Threads` block in the auto-memory MEMORY.md, through a `_memory_md()`
+# resolver and six index helpers; that block was retired on 2026-08-20 and the
+# writer was removed on 2026-08-27. `scripts/utils/threads_lib.py` carries the
+# full account under "The retired MEMORY.md index".
 
 
 def _threads_root() -> Path:
     return get_threads_dir()
-
-
-def _memory_md() -> Path:
-    """Resolve the canonical auto-memory MEMORY.md index.
-
-    Resolution order:
-      1. `MEMORY_MD` env var (returned as-is, no existence check; used by tests).
-      2. `<data-root>/auto-memory/MEMORY.md` -- the durable, canonical memory home
-         in the data repo (loaded into session context, indexed by memory-index).
-
-    The native per-launch harness store under `~/.claude/projects/<slug>/memory/`
-    is a runtime cache that `.claude/hooks/memory-reconcile.py` keeps in sync with
-    canonical (newest-wins, both directions) at every SessionStart -- so writing
-    canonical here propagates to the native store on the next launch from any path.
-    Targeting the native store directly (pre-split behaviour) broke after the
-    engine/data split: the project slug derives from the data-root path, which has
-    no native project dir, and reconcile's newest-wins would overwrite a native-only
-    edit with stale canonical anyway.
-    """
-    if env := os.environ.get("MEMORY_MD"):
-        return Path(env)
-    return get_data_root() / "auto-memory" / "MEMORY.md"
 
 
 def _initial_body(title: str) -> str:
@@ -199,15 +179,6 @@ def cmd_open(args: argparse.Namespace) -> int:
         path=path,
     )
     write_thread_file(path, thread)
-
-    memory_md = _memory_md()
-    if not memory_md.exists():
-        memory_md.parent.mkdir(parents=True, exist_ok=True)
-        memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
-    ensure_active_threads_section(memory_md)
-    rel_path = f"threads/{args.type}/{path.name}"  # leak-guard: ok (relative reference string, not a filesystem path)
-    add_thread_to_index(memory_md, type_=args.type, title=args.title, path=rel_path,
-                        hook=compose_thread_hook(thread.status, thread.last_touched))
     print(f"opened: {path}")
     return 0
 
@@ -219,11 +190,6 @@ def cmd_log(args: argparse.Namespace) -> int:
 
     threads_root = _threads_root()
     path = _find_thread_by_id(threads_root, args.thread_id)
-    # Validate MEMORY.md before mutating the thread, so a missing index file
-    # cannot leave thread/MEMORY out of sync.
-    memory_md = _memory_md()
-    if not memory_md.exists():
-        raise FileNotFoundError(f"MEMORY.md does not exist at {memory_md}")
     thread = parse_thread_file(path)
     today = datetime.now(get_default_tz()).date().isoformat()
 
@@ -248,56 +214,31 @@ def cmd_log(args: argparse.Namespace) -> int:
 
     thread.last_touched = today
     write_thread_file(path, thread)
-    rel_path = f"threads/{thread.type}/{path.name}"  # leak-guard: ok (relative reference string, not a filesystem path)
-    # The MEMORY hook points AT the thread; the event itself lives only in the
-    # body written above. See compose_thread_hook for why it carries no prose.
-    hook = compose_thread_hook(thread.status, thread.last_touched)
-    try:
-        update_thread_hook(memory_md, path=rel_path, hook=hook,
-                           quiet_until=thread.quiet_until)
-    except ValueError:
-        # Section missing or hand-edited: repair and re-add the index line -
-        # but ONLY for a thread that belongs in `## Active Threads`.
-        #
-        # `close` and `hold` deliberately REMOVE the line, so on a closed thread
-        # `update_thread_hook` raises for the ordinary reason that the line is
-        # gone, and this handler read that as damage and put it back. A single
-        # `thread.py log` on a closed thread silently resurrected it in the
-        # index, with no `reopen` and no way to tell from the file. The
-        # regrowth was already visible: `scripts/memory-hygiene.py`'s
-        # `scan_live_state_rows` names this writer as the cause and reports it
-        # advisorily rather than gating, because a gate would have fired on the
-        # next legitimate write instead of on the mistake.
-        if thread.status == "active":
-            ensure_active_threads_section(memory_md)
-            add_thread_to_index(memory_md, type_=thread.type, title=thread.title,
-                                path=rel_path, hook=hook,
-                                quiet_until=thread.quiet_until)
-        else:
-            print(f"note: {thread.status} thread, so it stays out of the "
-                  f"active-threads index; run `reopen` to bring it back")
     print(f"logged to {path}")
     return 0
 
 
-def _set_status(thread_id: str, new_status: str, index_action: str,
-                reason: str | None = None) -> int:
-    """index_action: 'remove' | 'add'.
+def _set_status(thread_id: str, new_status: str, reason: str | None = None) -> int:
+    """Move a thread to `new_status`, recording `reason` as a log entry.
 
-    A status change that REMOVES a thread from the index must carry a reason.
-    Until 2026-08-17 it did not, and one operator run closed nineteen threads at
-    once with only `status` and `last_touched` written. Six of them closed over
-    a loop the deal pipeline still showed as live - one side awaiting a data
-    dump, another awaiting a meeting slot - and nothing on disk distinguished
-    those from the threads that were genuinely resolved. Reopening
-    (`index_action == "add"`) is exempt: resuming work is not a decision that
-    needs defending, and friction there buys nothing.
+    A status change that RETIRES a thread must carry a reason. Until 2026-08-17
+    it did not, and one operator run closed nineteen threads at once with only
+    `status` and `last_touched` written. Six of them closed over a loop the deal
+    pipeline still showed as live - one side awaiting a data dump, another
+    awaiting a meeting slot - and nothing on disk distinguished those from the
+    threads that were genuinely resolved. Reopening is exempt: resuming work is
+    not a decision that needs defending, and friction there buys nothing.
+
+    The test is the destination status, not an index action. It used to be
+    `index_action == "remove"`, which named a MEMORY.md index this CLI no longer
+    writes; `new_status != "active"` is the same set of commands (`close`,
+    `hold`) stated in terms that still exist.
     """
-    if index_action == "remove" and not (reason or "").strip():
+    if new_status != "active" and not (reason or "").strip():
         raise ValueError(
-            f"{new_status} needs --reason: a status change that drops a thread "
-            f"from the index must say why, or nobody can tell later whether the "
-            f"work finished or just went quiet"
+            f"{new_status} needs --reason: a status change that retires a thread "
+            f"must say why, or nobody can tell later whether the work finished "
+            f"or just went quiet"
         )
     threads_root = _threads_root()
     path = _find_thread_by_id(threads_root, thread_id)
@@ -311,44 +252,20 @@ def _set_status(thread_id: str, new_status: str, index_action: str,
         thread.body = _prepend_log_entry(
             thread.body, f"### {today} - **{verb}.** {event}\n")
     write_thread_file(path, thread)
-    rel_path = f"threads/{thread.type}/{path.name}"  # leak-guard: ok (relative reference string, not a filesystem path)
-    memory_md = _memory_md()
-    if index_action == "remove":
-        try:
-            remove_thread_from_index(memory_md, path=rel_path)
-        except ValueError:
-            # Line already absent -- the thread was closed or on-hold, so it was
-            # never in the active index. Same expected case its twin in
-            # cmd_archive_scan documents; the frontmatter write above already
-            # landed and is what every reader consults.
-            pass
-    elif index_action == "add":
-        ensure_active_threads_section(memory_md)
-        # `quiet_until=` is what every other writer in this file passes. Without
-        # it a reopened thread came back into the always-loaded index as a plain
-        # active line, and the quiet marker is the ONLY thing an index reader has
-        # to know the thread must not be surfaced. That is the fail-open
-        # direction, and `reindex` could not see it: `read_thread_hook` strips
-        # the marker before comparing, so the drift was invisible to the one
-        # tool written to repair it.
-        add_thread_to_index(memory_md, type_=thread.type, title=thread.title,
-                            path=rel_path,
-                            hook=compose_thread_hook(thread.status, thread.last_touched),
-                            quiet_until=thread.quiet_until)
     print(f"{thread_id}: status={new_status}")
     return 0
 
 
 def cmd_close(args: argparse.Namespace) -> int:
-    return _set_status(args.thread_id, "closed", "remove", args.reason)
+    return _set_status(args.thread_id, "closed", args.reason)
 
 
 def cmd_hold(args: argparse.Namespace) -> int:
-    return _set_status(args.thread_id, "on-hold", "remove", args.reason)
+    return _set_status(args.thread_id, "on-hold", args.reason)
 
 
 def cmd_reopen(args: argparse.Namespace) -> int:
-    return _set_status(args.thread_id, "active", "add")
+    return _set_status(args.thread_id, "active")
 
 
 def cmd_quiet(args: argparse.Namespace) -> int:
@@ -365,20 +282,6 @@ def cmd_quiet(args: argparse.Namespace) -> int:
     thread.quiet_until = None if (args.clear or args.indefinite) else args.until
     thread.do_not_remind = bool(args.indefinite)
     write_thread_file(path, thread)
-
-    rel_path = f"threads/{thread.type}/{path.name}"  # leak-guard: ok (relative reference string, not a filesystem path)
-    memory_md = _memory_md()
-    try:
-        # Recomposed, not carried over: the hook is derived state, so there is
-        # nothing in the old line worth preserving across a quiet change.
-        update_thread_hook(memory_md, path=rel_path,
-                           hook=compose_thread_hook(thread.status, thread.last_touched),
-                           quiet_until=thread.quiet_until)
-    except (ValueError, FileNotFoundError) as exc:
-        # The frontmatter -- which every reader consults -- is already correct;
-        # say the index was not, rather than implying the whole change landed.
-        print(f"warning: frontmatter updated but MEMORY.md index was not: {exc}",
-              file=sys.stderr)
     if args.clear:
         print(f"{args.thread_id}: quiet period cleared")
     elif args.indefinite:
@@ -404,55 +307,13 @@ def _all_threads(threads_root: Path) -> list[ThreadFile]:
     return threads
 
 
-def cmd_reindex(args: argparse.Namespace) -> int:
-    """Rewrite every index hook from the thread's own frontmatter.
-
-    Repairs drift between MEMORY.md and the threads it points at. It rewrites
-    HOOKS only -- it never adds or drops a line, because membership of the
-    index is a status decision (`close`/`hold`/`reopen`) and silently
-    reconciling it here would let a rebuild retire a thread nobody closed.
-    """
-    memory_md = _memory_md()
-    if not memory_md.exists():
-        print(f"MEMORY.md does not exist at {memory_md}", file=sys.stderr)
-        return 1
-    changed = missing = missing_active = 0
-    for t in _all_threads(_threads_root()):
-        rel_path = f"threads/{t.type}/{t.path.name}"  # leak-guard: ok (relative reference string, not a filesystem path)
-        hook = compose_thread_hook(t.status, t.last_touched)
-        try:
-            before = read_thread_hook(memory_md, path=rel_path)
-            before_quiet = read_thread_quiet_marker(memory_md, path=rel_path)
-        except (ValueError, FileNotFoundError):
-            missing += 1
-            # `t.status` is in hand, so read it instead of asserting a cause.
-            # The old summary said "expected for closed/on-hold" over every
-            # miss, so a MEMORY.md whose whole index section had been removed
-            # by a hand edit or a bad merge produced a clean bill of health
-            # from the command that exists to repair exactly that.
-            if t.status == "active":
-                missing_active += 1
-            continue
-        # The quiet marker is compared too. `read_thread_hook` strips it, so
-        # comparing hook text alone could never see a dropped one.
-        if before == hook and before_quiet == (t.quiet_until or None):
-            continue
-        if args.dry_run:
-            print(f"would rewrite {t.id}\n  - {before}\n  + {hook}")
-        else:
-            update_thread_hook(memory_md, path=rel_path, hook=hook,
-                               quiet_until=t.quiet_until)
-        changed += 1
-    verb = "would rewrite" if args.dry_run else "rewrote"
-    tail = f"{missing} thread(s) not in the index"
-    if missing_active:
-        tail += (f", {missing_active} of them ACTIVE and therefore missing from "
-                 f"an index that should carry them")
-    elif missing:
-        tail += " (all closed or on-hold, which is expected)"
-    print(f"{verb} {changed} hook(s); {tail}")
-    # An active thread absent from the index is index loss, not a clean run.
-    return 1 if missing_active else 0
+# `cmd_reindex` stood here and rewrote every MEMORY.md hook from thread
+# frontmatter, to repair drift between the index and the threads it pointed at.
+# It went with the index on 2026-08-27: with no copy of the record, there is
+# nothing to reconcile, and `list` reads the thread files directly. Its
+# subcommand was removed from the parser in the same change, so `thread.py
+# reindex` now exits 2 with argparse's "invalid choice" rather than silently
+# doing nothing.
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -465,7 +326,16 @@ def cmd_list(args: argparse.Namespace) -> int:
         threads = [t for t in threads if t.status == "active"]
     today = datetime.now(get_default_tz()).date()
     for t in threads:
-        quiet = f" [quiet until {t.quiet_until}]" if is_quiet(t, today) else ""
+        # `do_not_remind` is tested FIRST because `is_quiet` is true for it while
+        # `quiet_until` is None, and the single-branch version interpolated that
+        # None: an indefinitely frozen thread listed as `[quiet until None]`,
+        # which is neither the documented suffix nor a date anyone can act on.
+        if t.do_not_remind:
+            quiet = " [quiet indefinitely]"
+        elif is_quiet(t, today):
+            quiet = f" [quiet until {t.quiet_until}]"
+        else:
+            quiet = ""
         print(f"[{t.status}] {t.type}/{t.id} - {t.title} (last_touched: {t.last_touched}){quiet}")
     return 0
 
@@ -504,14 +374,6 @@ def cmd_archive_scan(args: argparse.Namespace) -> int:
                 # on disk anyway - a filesystem side effect from a command whose
                 # whole contract is that it previews and changes nothing.
                 dest_dir.mkdir(parents=True, exist_ok=True)
-                # Defensive: ensure no orphan MEMORY.md link survives the move.
-                # /thread close should have already removed the line, but a hand-
-                # edit or stale state could leave it. Catch ValueError silently.
-                rel_path = f"threads/{type_}/{c.path.name}"  # leak-guard: ok (relative reference string, not a filesystem path)
-                try:
-                    remove_thread_from_index(_memory_md(), path=rel_path)
-                except ValueError:
-                    pass  # line already absent (closed/on-hold thread) - expected
                 shutil.move(str(c.path), str(dest))
                 print(f"archived: {c.path} -> {dest} ({c.reason})")
             else:
@@ -563,11 +425,6 @@ def main(argv: list[str] | None = None) -> int:
                         help="Quiet with no end date; lifts only when you raise it")
     q_mode.add_argument("--clear", action="store_true", help="Lift the quiet period")
     p_quiet.set_defaults(func=cmd_quiet)
-    p_reindex = sub.add_parser(
-        "reindex", help="Rewrite every MEMORY.md hook from thread frontmatter")
-    p_reindex.add_argument("--dry-run", action="store_true",
-                           help="Show what would change without writing")
-    p_reindex.set_defaults(func=cmd_reindex)
     p_list = sub.add_parser("list", help="List threads")
     p_list.add_argument("--type", choices=["business", "personal"])
     p_list.add_argument("--status", choices=["active", "on-hold", "closed"])

@@ -188,28 +188,39 @@ def _isolate_runtime_logs():
 
 
 # ============================================================
-# The operator's handoff archive is not scratch space
+# The operator's overlay is not scratch space
 # ============================================================
 #
-# `checkpoint-save.py` resolves where it writes through `get_data_root()`, which
-# reads HEADING_OS_DATA from the environment. A child process launched with
-# `cwd=tmp_path` and no env override therefore writes a REAL handoff into the
-# operator's overlay. Measured 2026-08-27: 114 archives named
-# `..._handoff_compact-manual_probe-session.md` had accumulated in
-# `outputs/operations/handoff-archive/`, and the shared `.latest/summary.md` and
-# `.latest/prompt.md` - the pair `/next` reads as "the newest handoff in this
-# workspace" - were pointing at one of them.
+# Anything that resolves a path through `get_data_root()` reads HEADING_OS_DATA
+# from the environment. A child process launched with `cwd=tmp_path` and no env
+# override therefore writes into the operator's REAL overlay.
 #
-# One test-level assertion fixes one test. This catches the next one, whoever
-# writes it. Two `listdir` calls per xdist worker, at session start and session
-# finish, and nothing at all when there is no overlay on disk.
+# Measured 2026-08-27, twice in one day:
+#
+#   * 114 archives named `..._handoff_compact-manual_probe-session.md` had
+#     accumulated in `outputs/operations/handoff-archive/`, and the shared
+#     `.latest/summary.md` and `.latest/prompt.md` - the pair `/next` reads as
+#     "the newest handoff in this workspace" - were pointing at one of them.
+#   * A mutation-testing run put a `MEMORY.md` writer back into `thread.py open`,
+#     to prove the guard against it. The CLI tests that call `open` did not pin
+#     HEADING_OS_DATA, so the mutant truncated the operator's live 20 KB memory
+#     index to a 20-byte stub. It was restored, and the lesson is that the first
+#     guard was scoped to one directory while the hazard is the whole overlay.
+#
+# So this watches both, and watches CONTENT as well as membership: a truncation
+# in place adds no file and removes none. Names and sizes only, at session start
+# and session finish, and nothing at all when there is no overlay on disk.
 
-_HANDOFF_ARCHIVE = None
-_HANDOFF_BEFORE = None
+_WATCH_DIRS = (
+    ("handoff archive", ("outputs", "operations", "handoff-archive"), False),
+    ("auto-memory index", ("auto-memory",), True),
+)
+
+_WATCH_BEFORE = None
 
 
-def _handoff_archive_dir():
-    """The live archive, or None when this clone has no private overlay."""
+def _overlay_dir(parts):
+    """A live overlay directory, or None when this clone has no private overlay."""
     try:
         from scripts.utils.paths import data_overlay_present
         from scripts.utils.workspace import get_data_root
@@ -217,34 +228,72 @@ def _handoff_archive_dir():
         return None
     if not data_overlay_present():
         return None
-    directory = get_data_root() / "outputs" / "operations" / "handoff-archive"
+    directory = get_data_root().joinpath(*parts)
     return directory if directory.is_dir() else None
 
 
+def _watch_snapshot():
+    """{label: (directory, {name: size or None})} for every watched directory."""
+    snap = {}
+    for label, parts, with_size in _WATCH_DIRS:
+        directory = _overlay_dir(parts)
+        if directory is None:
+            continue
+        try:
+            entries = {
+                p.name: (p.stat().st_size if with_size else None)
+                for p in directory.iterdir() if p.is_file()
+            }
+        except OSError:
+            continue
+        snap[label] = (directory, entries)
+    return snap
+
+
 def pytest_sessionstart(session):
-    global _HANDOFF_ARCHIVE, _HANDOFF_BEFORE
-    _HANDOFF_ARCHIVE = _handoff_archive_dir()
-    if _HANDOFF_ARCHIVE is not None:
-        _HANDOFF_BEFORE = {p.name for p in _HANDOFF_ARCHIVE.iterdir()}
+    global _WATCH_BEFORE
+    _WATCH_BEFORE = _watch_snapshot()
+
+
+def watch_complaints(before, after):
+    """Pure diff of two `_watch_snapshot()` results. Public so a test can drive it.
+
+    A directory present in `before` and absent from `after` is itself reported:
+    a run that removed the whole archive must not read as a clean pass.
+    """
+    complaints = []
+    for label, (directory, snapshot) in before.items():
+        if label not in after:
+            complaints.append(f"{label} at {directory} disappeared during the run")
+            continue
+        now = after[label][1]
+        added = sorted(set(now) - set(snapshot))
+        removed = sorted(set(snapshot) - set(now))
+        resized = sorted(
+            n for n in set(snapshot) & set(now)
+            if snapshot[n] is not None and snapshot[n] != now[n]
+        )
+        for what, names in (("wrote", added), ("deleted", removed), ("rewrote", resized)):
+            if names:
+                complaints.append(
+                    f"a test {what} {len(names)} file(s) in the operator's live "
+                    f"{label} at {directory}: {names[:5]}"
+                )
+    return complaints
 
 
 def pytest_sessionfinish(session, exitstatus):
-    if _HANDOFF_ARCHIVE is None or _HANDOFF_BEFORE is None:
+    if not _WATCH_BEFORE:
         return
-    try:
-        after = {p.name for p in _HANDOFF_ARCHIVE.iterdir()}
-    except OSError:
-        return
-    new = sorted(after - _HANDOFF_BEFORE)
-    if not new:
+    complaints = watch_complaints(_WATCH_BEFORE, _watch_snapshot())
+    if not complaints:
         return
     # Reported through the reporter rather than an exception: a raise here is
     # attributed to no test and reads as a harness crash.
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     message = (
-        f"a test wrote {len(new)} file(s) into the operator's live handoff "
-        f"archive at {_HANDOFF_ARCHIVE}: {new[:5]}. Pass HEADING_OS_DATA "
-        f"pointing at a tmp_path to any hook that writes."
+        "; ".join(complaints)
+        + ". Pass HEADING_OS_DATA pointing at a tmp_path to anything that writes."
     )
     if reporter is not None:
         reporter.write_line("")

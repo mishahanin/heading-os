@@ -16,6 +16,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 _SRC = Path(__file__).resolve().parent.parent / "scripts" / "memory-index.py"
@@ -26,8 +28,58 @@ _spec.loader.exec_module(mi)
 CFG_REL = "config/memory-index.yaml"
 
 
+@pytest.fixture(autouse=True)
+def _no_embedder_probe(monkeypatch):
+    """Read the shipped YAML without asking the network which host answers.
+
+    `load_config` resolves the embedder pin through `resolve_pinned_host`, which
+    OPENS A SOCKET to each candidate. Measured 2026-08-27 by wrapping
+    `socket.socket.connect`: every one of the seven tests below connected to
+    172.30.48.1:11434, the Windows ollama daemon. Nothing here is about the
+    embedder - these tests read threshold numbers out of a YAML file - so the
+    probe bought nothing and made the outcome depend on whether a daemon on
+    another operating system happened to be up.
+
+    The assertion below is the point of the fixture: patching a name the module
+    does not read would restore the network in silence.
+    """
+    assert hasattr(mi, "_resolve_embed_host"), (
+        "memory-index.py no longer resolves the host under this name; the patch "
+        "below is aimed at nothing and these tests are back on the network")
+    monkeypatch.setattr(mi, "_resolve_embed_host", lambda preferred, **kw: preferred)
+
+
 def _shipped():
     return mi.load_config(mi.get_workspace_root())
+
+
+def test_reading_the_shipped_config_opens_no_socket_off_this_machine():
+    """The fixture above is only as good as something that notices it is gone.
+
+    Without this, deleting `_no_embedder_probe` puts all seven tests back on the
+    network and every one of them still passes, which is how the defect survived
+    in the first place. Loopback is left alone: a local stub server is a
+    legitimate test double, an address on the LAN is not.
+    """
+    import socket
+
+    original = socket.socket.connect
+    off_machine = []
+
+    def _watch(self, address):
+        host = address[0] if isinstance(address, tuple) else str(address)
+        if host in ("127.0.0.1", "::1", "localhost"):
+            return original(self, address)
+        off_machine.append(address)
+        raise OSError(f"this test does not use the network: {address}")
+
+    socket.socket.connect = _watch
+    try:
+        _shipped()
+    finally:
+        socket.socket.connect = original
+    assert off_machine == [], (
+        f"reading a YAML file reached {off_machine}; the embedder probe is back")
 
 
 def test_the_shipped_commit_layers_carry_the_measured_cut():

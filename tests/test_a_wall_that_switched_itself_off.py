@@ -30,7 +30,6 @@ Run: python3 -m pytest tests/test_a_wall_that_switched_itself_off.py
 """
 from __future__ import annotations
 
-import contextlib
 import http.server
 import json
 import socketserver
@@ -245,11 +244,41 @@ def test_a_usable_token_is_not_reported_as_broken(tmp_path, monkeypatch, capsys)
     }), encoding="utf-8")
     monkeypatch.setattr(gmail_auth, "token_path", lambda: str(token))
     monkeypatch.setattr(gmail_auth, "creds_path", lambda: str(tmp_path / "absent.json"))
-    # The refresh needs a network and the consent flow needs the absent secrets
-    # file; neither outcome is the subject here, only the absence of the message.
-    with contextlib.suppress(Exception):
+
+    # Until 2026-08-27 this test REACHED GOOGLE. The comment above the suppress
+    # said "the refresh needs a network", and it took one: the token has no
+    # expiry, so `creds.valid` is False and `get_service` POSTed this fabricated
+    # refresh_token to https://oauth2.googleapis.com/token on every run of the
+    # suite. Measured by replacing `socket.socket.connect` with a raiser and
+    # reading the traceback. `contextlib.suppress(Exception)` then hid the
+    # outcome, so a test whose subject is one stderr message quietly made the
+    # whole suite depend on the internet and on a third party's endpoint.
+    #
+    # The refusal below is the network, refused. Reaching it at all still means
+    # the decision under test - "a readable token is not called unusable" - was
+    # taken correctly at the parse, several branches earlier.
+    reached = []
+
+    def _no_network(*args, **kwargs):
+        reached.append(True)
+        raise RuntimeError("refresh refused: this test does not use the network")
+
+    monkeypatch.setattr(
+        "google.oauth2.credentials.Credentials.refresh", _no_network, raising=True)
+
+    # Subject first. Whatever `get_service` raises, the claim under test is the
+    # stderr line, so it is asserted before the exception type. Ordering it the
+    # other way sent a reader chasing a FileNotFoundError from the consent-flow
+    # branch when the real regression was the parse three branches earlier.
+    raised = None
+    try:
         gmail_auth.get_service()
+    except BaseException as exc:  # noqa: BLE001 - narrowed by the last assert
+        raised = exc
     assert "unusable" not in capsys.readouterr().err
+    assert reached, "the refresh was never attempted; this test lost its path"
+    assert isinstance(raised, RuntimeError) and "refresh refused" in str(raised), (
+        f"expected the refusal this test installs, got {raised!r}")
 
 
 # ============================================================

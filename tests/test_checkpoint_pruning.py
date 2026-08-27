@@ -217,7 +217,16 @@ def test_state_prune_is_silent_when_the_dir_is_absent(tmp_path, capsys):
 # ------------------------------------------------------------ bound_summary
 
 
-@pytest.mark.parametrize("length,cut", [(10, False), (5000, True)])
+@pytest.mark.parametrize("length,cut", [
+    (10, False),
+    (5000, True),
+    # The two that decide the comparison. Until 2026-08-27 the set bracketed the
+    # limit at 10 and 5000 and stood on neither side of it, so `len(text) <=
+    # limit` could become `<` and a summary of exactly the limit would be cut
+    # and told the rest lives in an archive file that holds nothing more.
+    (100, False),
+    (101, True),
+])
 def test_bound_summary_states_where_the_rest_lives(length, cut):
     text = "x" * length
     out = CP.bound_summary(text, "outputs/operations/handoff-archive/x.md", limit=100)

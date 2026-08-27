@@ -34,6 +34,12 @@ WORKSPACE = Path(__file__).resolve().parents[1]
 # a literal temp path in a test reads to ruff (S108) as a real insecure write.
 SESSION_PATH = "sessions/c9bbd8dc.jsonl"
 
+# How much of a real transcript the last test reads. Two megabytes is above the
+# 1.7 MB session the module docstring measures, so the regression it holds is
+# still reproduced in full, and it is a CEILING rather than "whatever the
+# operator's longest session happens to be tonight".
+_MAX_BYTES = 2_000_000
+
 
 @pytest.fixture(scope="module")
 def calibrate():
@@ -119,11 +125,23 @@ def test_malformed_content_does_not_raise(calibrate):
     assert env["user_turns"] == [] and env["assistant_turns"] == []
 
 
+@pytest.mark.slow
 def test_a_real_transcript_yields_far_more_than_the_string_only_filter(calibrate):
     """The regression this exists to hold, measured on whatever is on disk.
 
     Skips rather than fails when no transcript is present: a fresh clone and CI
     have none, and this assertion is about the shape of real harness output.
+
+    Two bounds, both added 2026-08-27. It used to take `big[-1]`, the LARGEST
+    transcript on the machine, which during a long session is that session's own
+    file, still being appended to. The cost therefore grew with the session:
+    4.10s measured at one point in this run, 15.58s at another, on a test whose
+    subject is a parser and needs no more than a few thousand turns. It also
+    carried no `slow` marker, so every turn-check paid it.
+
+    Now: the SMALLEST file over the floor, and at most `_MAX_BYTES` of it. A
+    truncated last line is dropped by the `ValueError` continue below, which is
+    the same path a half-written line already took.
     """
     import json
 
@@ -132,15 +150,17 @@ def test_a_real_transcript_yields_far_more_than_the_string_only_filter(calibrate
     big = [p for p in candidates if p.stat().st_size > 200_000]
     if not big:
         pytest.skip("no substantial transcript on this machine")
+    chosen = big[0]
 
     events = []
-    for line in big[-1].read_text(encoding="utf-8", errors="replace").splitlines():
-        try:
-            events.append(json.loads(line))
-        except ValueError:
-            continue
+    with chosen.open(encoding="utf-8", errors="replace") as fh:
+        for line in fh.read(_MAX_BYTES).splitlines():
+            try:
+                events.append(json.loads(line))
+            except ValueError:
+                continue
 
-    env = calibrate.build_envelope(big[-1], events)
+    env = calibrate.build_envelope(chosen, events)
     recovered = sum(len(t["text"]) for t in env["assistant_turns"])
     assert recovered > 0, (
         "not one assistant turn survived a real transcript — the block shape is "

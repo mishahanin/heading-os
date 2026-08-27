@@ -169,6 +169,56 @@ def test_a_list_under_the_entry_cap_can_still_be_too_much_text():
     assert reason and "characters; the cap is" in reason
 
 
+@pytest.mark.parametrize("cap, answer", [
+    # MAX_SOURCE_LEN: one entry of exactly the cap.
+    ("MAX_SOURCE_LEN",
+     {"kind": "count", "value": 1,
+      "sources": ["a" * (cs.MAX_SOURCE_LEN - 3) + ".md"]}),
+    # MAX_ENTRIES: exactly the cap, kept small enough to clear the char cap.
+    ("MAX_ENTRIES",
+     {"kind": "paths", "sources": _OK_SOURCES,
+      "paths": [f"n{i}.md" for i in range(cs.MAX_ENTRIES)]}),
+    # MAX_STRUCTURED_CHARS: twenty entries of four hundred, exactly the cap.
+    ("MAX_STRUCTURED_CHARS",
+     {"kind": "paths", "sources": _OK_SOURCES,
+      "paths": [("d" * 397) + ".md"] * (cs.MAX_STRUCTURED_CHARS // 400)}),
+    # MAX_TEXT_LEN: a text answer of exactly the cap.
+    ("MAX_TEXT_LEN",
+     {"kind": "text", "text": "t" * cs.MAX_TEXT_LEN, "provenance": cs.UNTRUSTED,
+      "sources": _OK_SOURCES}),
+])
+def test_an_answer_exactly_at_a_cap_is_accepted(cap, answer):
+    """Every cap was tested at cap+1 and nowhere else, so `>` could become `>=`.
+
+    A refusal test proves the guard fires. It does not prove the guard STOPS
+    firing, and the two are different failures with different victims: a guard
+    that never fires lets a payload through, a guard that fires one step early
+    refuses a legal answer and the operator sees a census that cannot return.
+
+    All four comparisons in `scripts/utils/census_schema.py` are `>`, so the
+    value AT the cap is legal by construction of the message each one prints
+    ("the cap is 200" is a promise that 200 is allowed). Nothing asserted it.
+    """
+    assert cs.validate(answer, free_text_allowed=True) is None, (
+        f"{cap} refuses a value exactly at the cap; the refusal message promises "
+        "that value is allowed")
+
+
+def test_the_cap_boundary_cases_really_sit_on_the_cap():
+    """The parametrize above is worthless if an entry is one short of the cap.
+
+    Arithmetic in a test fixture is exactly where an off-by-one hides: it makes
+    the boundary case a mid-range case, and a mid-range case cannot tell `>`
+    from `>=`.
+    """
+    assert len("a" * (cs.MAX_SOURCE_LEN - 3) + ".md") == cs.MAX_SOURCE_LEN
+    assert len([f"n{i}.md" for i in range(cs.MAX_ENTRIES)]) == cs.MAX_ENTRIES
+    filler = [("d" * 397) + ".md"] * (cs.MAX_STRUCTURED_CHARS // 400)
+    assert sum(len(e) for e in filler) == cs.MAX_STRUCTURED_CHARS
+    assert len(filler) <= cs.MAX_ENTRIES, "the char case trips the entry cap first"
+    assert len("t" * cs.MAX_TEXT_LEN) == cs.MAX_TEXT_LEN
+
+
 # ============================================================
 # 2. The sandbox output directory
 # ============================================================
@@ -375,7 +425,26 @@ def test_a_connection_failure_is_an_error_not_a_block(osint, monkeypatch):
     assert status == "ERROR" and "Name or service" in detail
 
 
-def test_a_github_repo_url_still_short_circuits_to_cli(osint):
-    """The one branch that WAS tested, kept so the others cannot displace it."""
+def test_a_github_repo_url_still_short_circuits_to_cli(osint, monkeypatch):
+    """The one branch that WAS tested, kept so the others cannot displace it.
+
+    `_probe` is stubbed even though the first assertion never reaches it. The
+    SECOND one does: a `/search` path is deliberately NOT a repository, so it
+    falls past the short circuit into the prober. Until 2026-08-27 that was a
+    live HTTPS HEAD to github.com on every run of the suite - measured by
+    blocking `socket.connect` and watching this line raise. A unit test that
+    reaches the internet reports the network's state, not the code's.
+    """
+    seen = []
+
+    def _probe(url, verb):
+        seen.append((url, verb))
+        return "WORKING", "HTTP 200 OK"
+
+    monkeypatch.setattr(osint, "_probe", _probe)
     assert osint.validate_url("https://github.com/someone/tool")[0] == "CLI"
+    assert seen == [], "the repo short circuit issued a request"
     assert osint.validate_url("https://github.com/search?q=x")[0] != "CLI"
+    assert seen == [("https://github.com/search?q=x", "HEAD")], (
+        "the /search path did not reach the prober, so it was short-circuited "
+        "after all and the second assertion passed for the wrong reason")

@@ -158,6 +158,20 @@ def test_compact_at_reports_the_derived_soft_threshold(env):
     assert "30" in result.stdout
 
 
+@pytest.mark.parametrize("good", ["15", "90"])
+def test_a_value_exactly_on_a_bound_is_accepted(env, good):
+    """The refused set was 5, 95 and 0, and none of them stands on a bound.
+
+    `checkpoint-paths.py` refuses on `hard < MIN or hard > MAX`, so both bounds
+    are INCLUSIVE and the message says so: "outside 15-90". Nothing asserted the
+    ends. Either comparison could gain an `=` and the CLI would refuse the exact
+    numbers it tells the operator to use, with a message naming them as legal.
+    """
+    result = _run(env, "--compact-at", good)
+    assert result.returncode == 0, result.stderr
+    assert _state(env)["session_hard_threshold"] == int(good)
+
+
 @pytest.mark.parametrize("bad", ["5", "95", "0"])
 def test_a_value_outside_the_bounds_is_refused(env, bad):
     result = _run(env, "--compact-at", bad)

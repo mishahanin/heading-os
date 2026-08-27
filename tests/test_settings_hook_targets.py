@@ -174,6 +174,14 @@ def test_post_tool_use_covers_every_write_shape():
         if not path.is_file():
             pytest.skip(f"{rel} not present in this clone")
         entries = json.loads(path.read_text(encoding="utf-8"))["hooks"].get("PostToolUse", [])
+        # Floored. This is the workspace's only guard that the write-side hooks
+        # are registered at all, and its assertion sat two loops deep over a list
+        # that `.get(..., [])` makes empty whenever the key is absent, emptied or
+        # renamed. Measured: with `"PostToolUse": []` in all three shipped
+        # templates - every write hook gone - this file reported 15 passed. The
+        # sibling test only asserts the three templates AGREE, which an equally
+        # empty trio satisfies.
+        assert entries, f"{rel} registers no PostToolUse hook at all"
         for entry in entries:
             matcher = entry.get("matcher", "")
             missing = [t for t in ("Write", "Edit", "MultiEdit", "NotebookEdit") if t not in matcher]

@@ -158,11 +158,38 @@ def test_a_scorer_that_cannot_be_run_names_itself(monkeypatch, core):
 
 
 def test_a_nonzero_exit_is_a_refusal_not_a_traceback(monkeypatch, core):
-    def _fail(*a, **k):
-        raise subprocess.CalledProcessError(1, "crm-health.py")
-    monkeypatch.setattr(core.subprocess, "run", _fail)
-    with pytest.raises(RuntimeError):
+    """Let the CHILD exit non-zero; do not hand-raise the exception it causes.
+
+    This test used to raise `CalledProcessError` from the stub itself, which
+    tests nothing about `check=True` - the one line that turns a non-zero exit
+    into that exception. Deleting `check=True` left the test green, while a real
+    `crm-health.py` exit 2 with a diagnostic on stderr fell through to the JSON
+    branch and refused with "crm-health.py --json exited 0 but its output is not
+    JSON", a message asserting a false fact about the exit code
+    (`.claude/rules/scope-claims.md`).
+
+    The bare `pytest.raises(RuntimeError)` was the second half of the defect:
+    `_fetch_rows` raises RuntimeError from three sites with three diagnoses, so
+    with no `match=` any of them satisfied a test named for one.
+    """
+    real_run = subprocess.run
+    seen = {}
+
+    def _child(cmd, **kwargs):
+        seen["check"] = kwargs.get("check")
+        # A real child, and it really exits 2. `check=True` is what must turn
+        # that into the refusal; nothing here raises on its own.
+        return real_run(
+            [sys.executable, "-c",
+             "import sys; sys.stderr.write('crm-health: bad config\\n'); sys.exit(2)"],
+            **kwargs)
+
+    monkeypatch.setattr(core.subprocess, "run", _child)
+    with pytest.raises(RuntimeError, match="could not be run"):
         core._fetch_rows(ROOT)
+    assert seen["check"] is True, (
+        "the producer is run without check=True, so a non-zero exit reaches the "
+        "JSON branch and is reported as 'exited 0'")
 
 
 # ============================================================

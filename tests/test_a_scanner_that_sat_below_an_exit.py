@@ -254,6 +254,13 @@ def test_the_terminal_and_json_reports_now_agree_on_the_issue_set():
     report = kh.format_terminal_report(notes)
     payload = json.loads(kh.format_json(notes))
     json_issues = {i for n in payload["schema_issues"] for i in n["issues"]}
+    # Floored, then checked. The loop below is derived entirely from
+    # `format_json`'s own output, so a `--json` that stops emitting issues makes
+    # `json_issues` empty and this test - the one that exists to prove the two
+    # consumers of one scan report the same picture - assert nothing at all.
+    assert json_issues, "--json emitted no schema issue; the loop below is vacuous"
+    assert "invalid status: bogus" in json_issues, (
+        f"--json lost the schema issue this case is built from: {json_issues}")
     for issue in json_issues - {i for i in json_issues if "stale seed" in i}:
         assert issue in report, f"{issue!r} is in --json and not on the terminal"
 

@@ -97,7 +97,14 @@ def test_cap1_default_run_does_not_invoke_the_deep_engine():
 
     impeccable_engine.run_detector = _spy
     try:
-        sys.path.insert(0, str(ROOT / "scripts"))
+        # The `sys.path.insert(0, ROOT/"scripts")` that stood here was never
+        # removed: no `finally`, no fixture. It leaked `<repo>/scripts` onto the
+        # path for the REST OF THE XDIST WORKER, where `scripts/firecrawl.py`
+        # shadows the installed `firecrawl` SDK for every test that ran after.
+        # Measured with a `pytest_sessionfinish` probe: the entry was still
+        # there at session end. It was also unnecessary -
+        # `scripts/visual-discipline-check.py` puts the repo root on `sys.path`
+        # itself before it imports anything.
         import importlib.util
 
         spec = importlib.util.spec_from_file_location("_vdc", CHECKER)
@@ -106,6 +113,11 @@ def test_cap1_default_run_does_not_invoke_the_deep_engine():
         vdc.audit_file(FIXTURES / "side-tab.html", strict=False)
     finally:
         impeccable_engine.run_detector = original
+
+    assert str(ROOT / "scripts") not in sys.path, (
+        "this test put the scripts directory on sys.path and left it there; "
+        "scripts/firecrawl.py then shadows the firecrawl SDK for every later "
+        "test in this worker")
 
     assert calls == [], "audit_file invoked the deep engine without being asked for it"
 

@@ -163,6 +163,16 @@ def test_unknown_duration_is_treated_as_long():
 def test_subtitle_formats_stay_sequential_at_any_length():
     """Batched inference returned 5 cues where sequential returned 37 over the
     same 120s, which is unusable as subtitles."""
+    # The membership set is asserted BEFORE it is looped over. `resolve_batching`
+    # consults this same constant (`if fmt in FINE_GRAINED_FORMATS`), so emptying
+    # it IS the regression - and it also empties the loop, which used to remove
+    # the guard along with the behaviour it guards. Measured: with the constant
+    # set to (), all 43 tests in this file passed while every subtitle run
+    # silently took the batched path that returns 5 cues where sequential
+    # returns 37.
+    assert set(transcribe_media.FINE_GRAINED_FORMATS) == {"srt", "vtt"}, (
+        "the subtitle formats no longer name themselves; the loop below would "
+        "assert nothing")
     for fmt in transcribe_media.FINE_GRAINED_FORMATS:
         assert transcribe_media.resolve_batching(fmt, None, LONG) is False
         assert transcribe_media.resolve_batching(fmt, None, None) is False

@@ -440,8 +440,18 @@ def test_load_mock_response_tags_by_author():
     assert len(posts) > 0
     handles = {p["handle"] for p in posts}
     assert handles.issubset({"techfounder", "founder_two", "acmenetworks"})
+    # Both floors matter, and neither was here. `issubset` is satisfied by a
+    # single-handle set, and `all([])` is True, so tagging every post with the
+    # FIRST configured handle left this test - the only one named for tagging BY
+    # AUTHOR - fully green with an empty `sand_posts`.
+    assert handles == {"techfounder", "founder_two", "acmenetworks"}, (
+        f"the fixture's three authors did not all survive tagging: {handles}")
     sand_posts = [p for p in posts if p["handle"] == "acmenetworks"]
+    assert sand_posts, "no post was tagged to acmenetworks; the check below is vacuous"
     assert all(p["category"] == "dpi_competitors" for p in sand_posts)
+    peer = [p for p in posts if p["handle"] == "techfounder"]
+    assert peer and all(p["category"] == "peer_ceos" for p in peer), (
+        "one category is not a test of a per-author map; the second one is")
 
 
 def test_load_mock_response_logs_skipped(capsys):

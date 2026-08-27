@@ -59,6 +59,11 @@ VIRAID_STATE_FILE = get_outputs_dir() / "operations" / "viraid" / "state.json"
 NEWSLETTERS_DIR = get_outputs_dir() / "intel" / "newsletters"
 LINKEDIN_DIR = get_outputs_dir() / "content" / "linkedin"
 LINKEDIN_DRAFTS_DIR = get_outputs_dir() / "content" / "linkedin-drafts"
+# Where a PUBLISHED post ends up. `scripts/linkedin-archive.py` `git mv`s the
+# staged .md out of LINKEDIN_DIR into here, under {posts|articles|comments}/
+# {slug}/, so a post counted while it sat unpublished stopped being counted the
+# moment it went live.
+LINKEDIN_ARCHIVE_DIR = get_datastore_dir() / "content" / "linkedin-archive"
 # R10 capture-payoff: Odin brain + zk captures, and the ceo-only cadence script.
 KNOWLEDGE_DIR = get_knowledge_dir()
 ODIN_BRAIN_DIR = get_knowledge_dir() / "odin-brain"
@@ -233,7 +238,7 @@ def collect_pipeline():
     content = read_file(PIPELINE_FILE)
     result = {
         "deals": [], "investors": [], "partnerships": [], "won": [],
-        "stages": {}, "total_deals": 0, "total_investors": 0,
+        "stages": {}, "off_stages": {}, "total_deals": 0, "total_investors": 0,
         "total_partnerships": 0, "total_won": 0,
         "total_value": 0, "weighted_value": 0, "stale_count": 0,
         "top_deals": [],
@@ -270,6 +275,20 @@ def collect_pipeline():
         val = parse_money(d.get("Est. Value", ""),
                           where=f"{PIPELINE_FILE} deal {d.get('Company', '?')!r}")
         total_value += val
+
+        # A stage spelled anything other than the six canonical strings was
+        # weighted at 5% and drawn in no bar, in silence, while the same deal
+        # still counted in Active Deals and its money in Total Value. So
+        # "Demo/PoC", "demo/poc" and a renamed stage each moved a deal off the
+        # funnel chart and cut its weighted contribution by up to 95% with
+        # nothing said - and `parse_money`, reading the cell one column to the
+        # left of this one, has warned about an unreadable value since it was
+        # written. The rule was already in this loop, applied to one field.
+        if stage not in stage_prob:
+            result["off_stages"][stage] = result["off_stages"].get(stage, 0) + 1
+            print(f"  Warning: deal {d.get('Company', '?')!r} has stage {stage!r}, "
+                  f"which is not a canonical stage; weighted at 5% and drawn "
+                  f"under 'Other'", file=sys.stderr)
 
         prob = stage_prob.get(stage, 0.05)
         w_val = val * prob
@@ -418,18 +437,66 @@ def _as_percent(value):
     return float(max(0.0, min(100.0, value)))
 
 
+# A sync file older than this is reported as stale rather than read as fact.
+# `/prime` has flagged these same two paths RED at 48 hours, under the literal
+# label "SYNC STALE", since before this script existed.
+SYNC_STALE_HOURS = 48
+
+
+def sync_age_hours(sync_time):
+    """Hours since a `> Synced: YYYY-MM-DD HH:MM [(Zone)]` stamp, or None.
+
+    `sync-exchange` writes that stamp at the top of both files it produces, and
+    both collectors below have parsed it out and rendered it since the initial
+    import. NOTHING has ever compared it with the clock. So the page carried the
+    age of its own inputs, in plain text, beside a table it presented as today's
+    truth, and could not tell a sync from an hour ago apart from one from last
+    week.
+
+    Returns None when the stamp is missing or unreadable, which the callers
+    render as "age unknown" rather than as fresh. A stamp that cannot be read is
+    not evidence of freshness.
+    """
+    if not sync_time:
+        return None
+    m = re.match(r"\s*(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})", str(sync_time))
+    if not m:
+        return None
+    try:
+        stamped = datetime(
+            *(int(p) for p in m.group(1).split("-")),
+            int(m.group(2)), int(m.group(3)), tzinfo=get_default_tz(),
+        )
+    except ValueError:
+        # The regex matches the SHAPE of a timestamp, not a real one, so
+        # `2026-02-30 09:00` reaches here. One unreadable stamp degrades to
+        # "unknown"; it never kills the run, the way an impossible
+        # `Last verified:` date once killed the whole dashboard.
+        return None
+    return (NOW - stamped).total_seconds() / 3600.0
+
+
 def collect_calendar():
     """Parse upcoming.md for today's meetings."""
     content = read_file(CALENDAR_FILE)
-    result = {"meetings": [], "sync_time": "", "date_str": TODAY.strftime("%Y-%m-%d")}
+    result = {"meetings": [], "sync_time": "", "date_str": TODAY.strftime("%Y-%m-%d"),
+              "source_read": False, "age_hours": None}
 
     if not content:
+        # An absent or empty file leaves `source_read` False, and `build_bridge`
+        # says the source was not read. Until this flag existed the same empty
+        # meeting list produced the sentence "No meetings scheduled today" - an
+        # affirmative claim about the CEO's day, generated from a file nothing
+        # had opened. `build_urgent` was hardened against exactly this shape one
+        # panel to the left, through `crm["failed"]`, and this panel was not.
         return result
+    result["source_read"] = True
 
     # Extract sync time
     sync_match = re.search(r"Synced:\s*(.+)", content)
     if sync_match:
         result["sync_time"] = sync_match.group(1).strip()
+        result["age_hours"] = sync_age_hours(result["sync_time"])
 
     # NO conversion. `upcoming.md` is already local, in both of its fields.
     #
@@ -487,14 +554,19 @@ def collect_calendar():
 def collect_emails():
     """Parse inbox-latest.md for email summary."""
     content = read_file(EMAIL_FILE)
-    result = {"emails": [], "sync_time": "", "count": 0}
+    result = {"emails": [], "sync_time": "", "count": 0,
+              "source_read": False, "age_hours": None}
 
     if not content:
+        # Same rule as the calendar beside it: an unread source is not an empty
+        # inbox. "No recent emails" used to be printed either way.
         return result
+    result["source_read"] = True
 
     sync_match = re.search(r"Synced:\s*(.+)", content)
     if sync_match:
         result["sync_time"] = sync_match.group(1).strip()
+        result["age_hours"] = sync_age_hours(result["sync_time"])
 
     count_match = re.search(r"Count:\s*(\d+)", content)
     if count_match:
@@ -546,8 +618,57 @@ def collect_strategy():
     return result
 
 
+# Every figure section 06 renders, with the pattern that finds it in
+# current-data.md. The value in the tuple is the last-known reading, kept so a
+# file that cannot be read still draws a page; it is NOT a fallback the code
+# quietly prefers, which is what the old comment called it.
+_METRIC_PATTERNS = {
+    "headcount": (r"Headcount.*?(\d+\+?)", "50+"),
+    "hiring_target": (r"Hiring target.*?\|\s*~?(\d+)", "200"),
+    "dpi_tam_2030": (r"Global market \(2030\)\s*\|\s*\*{0,2}(\$[\d.]+[KMB])", "$78.04B"),
+    "cagr": (r"Global market \(2030\)\s*\|[^|]*\|\s*\*{0,2}([\d.]+%)", "22.05%"),
+    "cis_2030": (r"CIS DPI market[^|]*\|[^|]*?(\$[\d.]+[KMB])\s*\|", "$1.15B"),
+    # `exited`, not a bare `(\d+) countries`. The loose form matched "Across 14
+    # countries" in the headcount row, thirty lines earlier in the file, and
+    # would have printed 14 under the label "Incumbent Vacuum" - a NEW wrong
+    # number introduced by the fix for a stale one. Caught by running the
+    # pattern against the real file before shipping it.
+    "predecessor_vacuum_countries": (r"exited\s+(\d+)\s+countries", "56"),
+}
+
+
 def collect_metrics():
-    """Extract key business metrics from current-data.md."""
+    """The figures section 06 draws, read from current-data.md where they exist.
+
+    This said "Extract key business metrics from current-data.md" and extracted
+    exactly ONE of the fifteen values it returned. The other fourteen were
+    literals in this file under a comment calling them a fallback, so the Market
+    Context panel could not change when its stated source did: editing
+    current-data.md, or deleting it outright, produced byte-identical output,
+    while section 07 certified that same file green and "0d ago" underneath.
+
+    Measured on 2026-08-28, every constant still equalled the file, so no number
+    on the page was wrong that day. That is the whole danger of this shape: it
+    is correct until the day it silently is not, and nothing anywhere would have
+    said which day that was.
+
+    A figure that cannot be found now says so by name, on stderr, and the page
+    falls back to the last known reading rather than to a blank. Two of the
+    patterns below read rows whose exact shape was not verified when they were
+    written; if either guessed wrong, the warning fires on the first run rather
+    than staying silent for a year.
+
+    `mea_2030` stays a literal on purpose. Its row lives in the geography table,
+    whose cells carry a bare `$3.47` where the global table writes `$78.04B`, and
+    that table states no unit anywhere. Extracting it would render "$3.47" under
+    the label "MEA 2030" - a wrong figure introduced by the fix for a stale one.
+    The page will not guess a unit its source does not state.
+
+    `modules_live`, `processing`, `countries`, the 2024 figures, and the two
+    fundraising values stay literals with no pattern too: `modules_live` appears
+    nowhere in current-data.md, and the rest are pre-existing keys that no
+    builder on this page reads.
+    """
     content = read_file(METRICS_FILE)
     result = {
         "headcount": "50+", "countries": "14", "hiring_target": "200",
@@ -562,10 +683,14 @@ def collect_metrics():
     if not content:
         return result
 
-    # Try to extract specific numbers (fallback to defaults above)
-    hc_match = re.search(r"Headcount.*?(\d+\+?)", content)
-    if hc_match:
-        result["headcount"] = hc_match.group(1)
+    for field, (pattern, _known) in _METRIC_PATTERNS.items():
+        m = re.search(pattern, content)
+        if m:
+            result[field] = m.group(1)
+        else:
+            print(f"  Warning: {field} not found in {METRICS_FILE.name}; "
+                  f"showing the last known reading {result[field]!r}",
+                  file=sys.stderr)
 
     return result
 
@@ -696,19 +821,40 @@ def collect_content_cadence():
             result["newsletter_last"] = latest.strftime("%Y-%m-%d")
             result["newsletter_status"] = "ON TRACK" if days_since <= 7 else "BEHIND"
 
-    # LinkedIn: count posts in the last 7 days
+    # LinkedIn: count posts in the last 7 days.
+    #
+    # The archive is counted too, and it is the half that matters. The panel's
+    # target is "2+/week" PUBLISHED, and `/linkedin-archive` `git mv`s a post out
+    # of LINKEDIN_DIR the moment it goes live. So this counted staged drafts and
+    # nothing else: publishing two posts moved the indicator from ON TRACK to
+    # BEHIND, and the way to stay green was to leave work unpublished. `git mv`
+    # is a rename, so the file keeps the mtime this window is measured against.
     week_ago = TODAY - timedelta(days=7)
     linkedin_count = 0
-    for ldir in [LINKEDIN_DIR, LINKEDIN_DRAFTS_DIR]:
-        if ldir.exists():
-            for f in ldir.iterdir():
-                if f.is_file():
-                    # Check by file modification date
-                    mtime = datetime.fromtimestamp(f.stat().st_mtime, tz=get_default_tz()).date()
-                    if mtime >= week_ago:
-                        linkedin_count += 1
+    any_source = False
+    for ldir, files in ((LINKEDIN_DIR, "flat"), (LINKEDIN_DRAFTS_DIR, "flat"),
+                        (LINKEDIN_ARCHIVE_DIR, "deep")):
+        if not ldir.exists():
+            continue
+        any_source = True
+        # The archive nests one folder per slug, so a flat iterdir sees only
+        # directories and counts nothing.
+        entries = ldir.rglob("*.md") if files == "deep" else ldir.iterdir()
+        for f in entries:
+            if f.is_file():
+                # Check by file modification date
+                mtime = datetime.fromtimestamp(f.stat().st_mtime, tz=get_default_tz()).date()
+                if mtime >= week_ago:
+                    linkedin_count += 1
     result["linkedin_count_week"] = linkedin_count
-    result["linkedin_status"] = "ON TRACK" if linkedin_count >= 2 else "BEHIND"
+    # Only overwrite NO DATA when something was actually measured. This line ran
+    # unconditionally, so the "NO DATA" the dict is initialised with was
+    # unreachable for LinkedIn and a workspace with no content directory at all
+    # reported BEHIND - a verdict on a cadence nothing had looked at. The
+    # newsletter half of this same function has always guarded its own status
+    # behind `if NEWSLETTERS_DIR.exists()`.
+    if any_source:
+        result["linkedin_status"] = "ON TRACK" if linkedin_count >= 2 else "BEHIND"
 
     return result
 
@@ -719,11 +865,16 @@ def collect_viraid():
         "active_total": 0, "p1": 0, "p2": 0, "p3": 0,
         "aging": 0, "completion_rate": 0.0,
         "tasks": [],
+        # Whether each of the two sources was actually read. Without these the
+        # panel could not tell "read it, the answer is zero" from "never opened
+        # it", and rendered the second as the first.
+        "tasks_read": False, "rate_known": False,
     }
 
     # Parse tasks.md for active items
     tasks_content = read_file(VIRAID_TASKS_FILE)
     if tasks_content:
+        result["tasks_read"] = True
         in_active = False
         for line in tasks_content.split("\n"):
             if re.match(r"##\s*Active", line, re.IGNORECASE):
@@ -766,8 +917,19 @@ def collect_viraid():
             state = json.loads(VIRAID_STATE_FILE.read_text(encoding="utf-8"))
             stats = state.get("stats", {})
             result["completion_rate"] = _as_percent(stats.get("completion_rate"))
-        except (json.JSONDecodeError, OSError):
-            pass
+            result["rate_known"] = True
+        except (json.JSONDecodeError, OSError) as e:
+            # The only handler in this file that said nothing at all. A corrupt
+            # or unreadable state.json left `completion_rate` at its initialised
+            # 0.0, which reached `{rate:.0f}%` and drew a measured-looking "0%"
+            # on the CEO's page: a truncated write and a genuinely idle week
+            # produced the same number, with nothing on stderr and nothing on
+            # the page. Every sibling reader here degrades AND says so;
+            # `_as_percent`, whose result this line assigns, warns on three
+            # separate paths one function away.
+            print(f"[generate-dashboard] viraid state.json unreadable "
+                  f"({type(e).__name__}: {e}); completion rate unknown",
+                  file=sys.stderr)
 
     return result
 
@@ -1001,6 +1163,47 @@ def build_urgent(crm):
 """
 
 
+# How many of the synced emails the table shows. Named, because the number has
+# to reach the label that admits to the cut.
+EMAIL_PREVIEW_ROWS = 6
+
+
+def _sync_label(name, source):
+    """The panel's source line: when it synced, and whether that is stale.
+
+    Both halves of this panel printed the sync stamp and neither ever compared
+    it with the clock, so a file from last week and one from ten minutes ago
+    rendered the same way.
+    """
+    if not source.get("source_read"):
+        return (f'<div class="sync-label" style="color:var(--red);">{esc(name)} '
+                f'&bull; NOT SYNCED</div>')
+    age = source.get("age_hours")
+    stamp = esc(source.get("sync_time") or "no timestamp")
+    if age is None:
+        return f'<div class="sync-label">{esc(name)} &bull; {stamp} (age unknown)</div>'
+    if age >= SYNC_STALE_HOURS:
+        return (f'<div class="sync-label" style="color:var(--red);">{esc(name)} '
+                f'&bull; {stamp} &bull; STALE ({age / 24:.0f}d old)</div>')
+    return f'<div class="sync-label">{esc(name)} &bull; {stamp}</div>'
+
+
+def _empty_row(source, span, empty_text):
+    """The row shown when a table has nothing in it.
+
+    An unread source and an empty one are different facts and used to produce
+    the same sentence. "No meetings scheduled today" is an affirmative claim
+    about the CEO's day; generated from a file that was never opened, it is a
+    false one. `build_urgent` refuses to print "All Clear" from an error path
+    for exactly this reason, one panel above.
+    """
+    if not source.get("source_read"):
+        return (f'<tr><td colspan="{span}" style="color:var(--red);font-style:italic;">'
+                f'Source not synced &mdash; this panel is EMPTY, not clear.</td></tr>')
+    return (f'<tr><td colspan="{span}" style="color:var(--ink35);font-style:italic;">'
+            f'{empty_text}</td></tr>')
+
+
 def build_bridge(calendar, emails):
     # Calendar table
     cal_rows = ""
@@ -1011,23 +1214,33 @@ def build_bridge(calendar, emails):
         cal_rows += f"<tr><td>{esc(time_val)}</td><td>{esc(subject)}</td><td>{esc(duration)}</td></tr>\n"
 
     if not cal_rows:
-        cal_rows = '<tr><td colspan="3" style="color:var(--ink35);font-style:italic;">No meetings scheduled today</td></tr>'
+        cal_rows = _empty_row(calendar, 3, "No meetings scheduled today")
 
-    cal_sync = f'<div class="sync-label">Calendar &bull; {esc(calendar["sync_time"])}</div>' if calendar["sync_time"] else '<div class="sync-label">Calendar</div>'
+    cal_sync = _sync_label("Calendar", calendar)
 
     # Email table
     email_rows = ""
-    for e in emails["emails"][:6]:
+    for e in emails["emails"][:EMAIL_PREVIEW_ROWS]:
         from_val = e.get("From", "")
         subject = e.get("Subject", "")
         read = e.get("Read", "")
         dot = '<span style="color:var(--orange);">&#9679;</span> ' if read.lower() == "no" else ""
         email_rows += f"<tr><td>{dot}{esc(from_val)}</td><td>{esc(subject[:50])}</td></tr>\n"
 
-    if not email_rows:
-        email_rows = '<tr><td colspan="2" style="color:var(--ink35);font-style:italic;">No recent emails</td></tr>'
+    # The cut, admitted. Six rows were drawn under a heading carrying no count,
+    # so thirty synced emails and six read as the same inbox. `collect_emails`
+    # has parsed the real figure out of the file's `Count:` header since it was
+    # written and no builder had ever rendered it.
+    shown = min(len(emails["emails"]), EMAIL_PREVIEW_ROWS)
+    if len(emails["emails"]) > EMAIL_PREVIEW_ROWS:
+        email_rows += (f'<tr><td colspan="2" style="color:var(--ink35);font-style:italic;">'
+                       f'Showing {shown} of {len(emails["emails"])} synced'
+                       f'</td></tr>\n')
 
-    email_sync = f'<div class="sync-label">Email &bull; {esc(emails["sync_time"])}</div>' if emails["sync_time"] else '<div class="sync-label">Email</div>'
+    if not email_rows:
+        email_rows = _empty_row(emails, 2, "No recent emails")
+
+    email_sync = _sync_label("Email", emails)
 
     return f"""
 <div class="section">
@@ -1058,15 +1271,25 @@ def build_pipeline(pipeline):
     raw_stages = pipeline["stages"]
     canonical_order = ["Lead", "Qualified", "Demo/POC", "Proposal", "Negotiation", "Won"]
 
+    # A deal whose Stage is not one of the six was counted in Active Deals and
+    # its money in Total Value, then drawn in no bar at all: the chart summed to
+    # fewer deals than the number printed beside it, and nothing on the page
+    # said a deal was missing. The bars iterate `canonical_order` alone, so the
+    # off-list deals need a column of their own or they cannot appear.
+    off_total = sum(pipeline.get("off_stages", {}).values())
+    bar_stages = canonical_order + (["Other"] if off_total else [])
+    counts = {s: raw_stages.get(s, 0) for s in canonical_order}
+    counts["Other"] = off_total
+
     if not raw_stages:
         bars_html = '<div style="color:var(--ink35);font-style:italic;">No pipeline data available</div>'
     else:
-        max_count = max(raw_stages.get(s, 0) for s in canonical_order) if raw_stages else 1
+        max_count = max(counts[s] for s in bar_stages)
         if max_count == 0:
             max_count = 1
         bars = []
-        for stage in canonical_order:
-            count = raw_stages.get(stage, 0)
+        for stage in bar_stages:
+            count = counts[stage]
             height_pct = max(10, int((count / max_count) * 100)) if count > 0 else 4
             bars.append(f"""
 <div class="bar-item">
@@ -1146,6 +1369,27 @@ def build_radar(crm):
     red_count = len(crm["red"])
     yellow_count = len(crm["yellow"])
     green_count = len(crm["green"])
+    gray_count = len(crm["gray"])
+
+    # The fourth bucket, finally on the page. `HEALTH_BUCKETS` has four values,
+    # `health_bucket` routes every unrecognised health to gray precisely so a bad
+    # value cannot vanish, and `result["total"]` counts all four - but only three
+    # were ever drawn here or printed in the terminal summary. So the circles
+    # summed to less than the total beside them, and the contacts whose health
+    # could not be read, the ones a person most needs to see, were the ones
+    # nothing showed. Drawn only when non-zero: an empty fourth circle would be
+    # noise on the ordinary morning.
+    #
+    # Inline style rather than a `.radar-circle.n` class. The stylesheet lives in
+    # the private data overlay, so a class would make this engine file render
+    # correctly only on a workspace that also carries the matching CSS edit.
+    gray_circle = ""
+    if gray_count:
+        gray_circle = f"""
+    <div class="radar-circle" style="background:#f7f7f7;border:1px solid #dcdcdc;">
+      <div class="radar-num" style="color:var(--ink55);">{gray_count}</div>
+      <div class="radar-lbl" style="color:var(--ink55);">Health Unreadable</div>
+    </div>"""
 
     # RED contact details
     red_rows = ""
@@ -1192,15 +1436,23 @@ def build_radar(crm):
     <div class="radar-circle g">
       <div class="radar-num">{green_count}</div>
       <div class="radar-lbl">On Track</div>
-    </div>
+    </div>{gray_circle}
   </div>
   {contacts_table}
 </div>
 """
 
 
-def build_heading(strategy, pipeline, metrics):
-    # Determine indicator states based on available data
+def build_heading(strategy, pipeline, metrics, hiring):
+    # Determine indicator states based on available data.
+    #
+    # Three of the five did. Indicators 4 and 5 were the literal "y" under this
+    # comment: Hiring Momentum never consulted `collect_hiring()`, whose p1/p2/p3
+    # and urgent lists are collected on every run and were reaching this page
+    # only through section 08, and Fundraising Progress hardcoded its dot beside
+    # an `investors_active` it had already computed for the text next to it. Two
+    # amber lights that could not turn red however bad the underlying data got,
+    # on a panel whose entire job is to say which way the ship is heading.
     indicators = []
 
     # 1. Revenue conversion
@@ -1219,12 +1471,24 @@ def build_heading(strategy, pipeline, metrics):
     mwc_state = "g" if post_mwc >= 5 else ("y" if post_mwc >= 2 else "r")
     indicators.append(("Post-MWC Follow-up Execution", mwc_state, f"{post_mwc} prospects"))
 
-    # 4. Hiring momentum
-    indicators.append(("Hiring Momentum", "y", f"{metrics['headcount']} of {metrics['hiring_target']}"))
+    # 4. Hiring momentum. An unfilled URGENT role is the drag this indicator
+    # exists to show, and the status names the same numbers the state is read
+    # from - a dot computed from one fact beside a caption quoting another is
+    # the smaller version of the defect above.
+    open_roles = hiring["total"]
+    urgent_roles = len(hiring["urgent"])
+    hire_state = "r" if urgent_roles else ("y" if open_roles else "g")
+    # Plain text, no HTML entity: this string goes through `esc()` at the render
+    # below, which would turn a `&bull;` into the literal characters "&bull;".
+    hire_status = (f"{metrics['headcount']} of {metrics['hiring_target']}, "
+                   f"{open_roles} open, {urgent_roles} urgent")
+    indicators.append(("Hiring Momentum", hire_state, hire_status))
 
-    # 5. Fundraising progress
-    fund_state = "y"
+    # 5. Fundraising progress, on the same bands as Partner Channel Activation
+    # above. Zero live investor conversations is a red state on this page, and
+    # was drawn amber.
     investors_active = pipeline["total_investors"]
+    fund_state = "g" if investors_active >= 3 else ("y" if investors_active >= 1 else "r")
     indicators.append(("Fundraising Progress", fund_state, f"{investors_active} conversations"))
 
     items = ""
@@ -1381,8 +1645,16 @@ def build_content_cadence(cadence):
         nl_detail = "No newsletter issues found"
         nl_status = "NO DATA"
 
-    # LinkedIn indicator
-    li_color = "var(--green)" if li_status == "ON TRACK" else "var(--red)"
+    # LinkedIn indicator, on the same three states as the newsletter beside it.
+    # This half had two and the collector could only ever hand it two, so a
+    # workspace with no LinkedIn directory at all was told it was BEHIND on a
+    # cadence nothing had measured.
+    if li_status == "NO DATA":
+        li_color = "var(--ink35)"
+        li_detail = "No LinkedIn content directory found"
+    else:
+        li_color = "var(--green)" if li_status == "ON TRACK" else "var(--red)"
+        li_detail = f"{li_count} posts/drafts this week"
 
     return f"""
 <div class="section">
@@ -1403,7 +1675,7 @@ def build_content_cadence(cadence):
         <div class="heading-dot {'g' if li_status == 'ON TRACK' else 'r'}"></div>
         <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:{li_color};font-weight:700;">{esc(li_status)}</span>
       </div>
-      <div class="alert-sub" style="margin-top:6px;">{li_count} posts/drafts this week</div>
+      <div class="alert-sub" style="margin-top:6px;">{esc(li_detail)}</div>
     </div>
   </div>
 </div>
@@ -1418,10 +1690,18 @@ def build_viraid(viraid):
     aging = viraid["aging"]
     rate = viraid["completion_rate"]
 
-    if active == 0:
+    # `active == 0` was the test, so a tasks.md that was never opened and one
+    # read to the end with nothing outstanding produced the same sentence - and
+    # the branch also threw away `completion_rate`, which comes from a DIFFERENT
+    # file and may have been read perfectly well. An empty in-tray is a result;
+    # a file nobody opened is not.
+    if not viraid.get("tasks_read"):
         body = '<div style="color:var(--ink35);font-style:italic;">No Viraid tasks data available</div>'
     else:
         aging_cls = "danger" if aging > 5 else ("accent" if aging > 0 else "up")
+        # "0%" is a measurement. An unreadable state.json is not one, and drew
+        # the same three characters.
+        rate_str = f"{rate:.0f}%" if viraid.get("rate_known") else "-"
 
         body = f"""
 <div class="metrics-strip">
@@ -1446,7 +1726,7 @@ def build_viraid(viraid):
     <div class="metric-label">Aging (&gt;3d)</div>
   </div>
   <div class="metric-box">
-    <div class="metric-val">{rate:.0f}%</div>
+    <div class="metric-val">{rate_str}</div>
     <div class="metric-label">Completion</div>
   </div>
 </div>"""
@@ -1547,7 +1827,7 @@ def generate_html(crm, pipeline, calendar, emails, strategy, metrics, freshness,
         build_bridge(calendar, emails),
         build_pipeline(pipeline),
         build_radar(crm),
-        build_heading(strategy, pipeline, metrics),
+        build_heading(strategy, pipeline, metrics, hiring),
         build_market(metrics),
         build_freshness(freshness),
         build_hiring(hiring),
@@ -1602,7 +1882,11 @@ def main():
     print("Collecting data...")
 
     crm = collect_crm_health()
-    print(f"  CRM: {crm['total']} contacts ({len(crm['red'])} red, {len(crm['yellow'])} yellow, {len(crm['green'])} green)")
+    # Four buckets, four numbers. Printing three of them against a total that
+    # counts all four made the line fail to add up on exactly the mornings when
+    # a contact file was malformed.
+    print(f"  CRM: {crm['total']} contacts ({len(crm['red'])} red, {len(crm['yellow'])} yellow, "
+          f"{len(crm['green'])} green, {len(crm['gray'])} unreadable)")
 
     pipeline = collect_pipeline()
     print(f"  Pipeline: {pipeline['total_deals']} deals, {pipeline['total_investors']} investors, {pipeline['total_partnerships']} partnerships")
@@ -1644,6 +1928,7 @@ def main():
     print(f"  Dashboard: {html_path}")
     print(f"  Size: {size:,} bytes")
 
+    pdf_failed = False
     if args.pdf:
         print("\nGenerating PDF...")
         pdf_path = out_dir / "morning-dashboard.pdf"
@@ -1654,9 +1939,21 @@ def main():
             )
         except Exception as e:
             print(f"  PDF generation failed: {e}", file=sys.stderr)
+            pdf_failed = True
+
+    # A requested output that was not produced is a failed run. This printed
+    # "Done." and returned 0 either way, so the only trace of a missing PDF was
+    # one stderr line, and a cron entry or a wrapper script had no way at all to
+    # tell a complete run from half of one.
+    if pdf_failed:
+        print("\nDone, WITHOUT the requested PDF.")
+        return 1
 
     print("\nDone.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    # `main()` alone. The return value was discarded, so the exit code was 0
+    # whatever happened inside.
+    sys.exit(main())

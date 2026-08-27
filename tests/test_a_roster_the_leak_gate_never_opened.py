@@ -609,6 +609,11 @@ def test_log_session_matches_display_names_not_handles(fb, tmp_path, monkeypatch
                  "speaker_name": "Vesper Lynd", "speaker_username": "vlynd",
                  "no_show": False, "completed": False}]
     saved = {}
+    # The lock this command now takes resolves STATE_DIR for real, so patching
+    # load_state and save_state alone is no longer enough to keep the test off
+    # disk. Unpatched it reads the ambient data root, which is why this passed on
+    # a workstation with an overlay and refused under CI without one.
+    monkeypatch.setattr(fb, "STATE_DIR", tmp_path)
     monkeypatch.setattr(fb, "load_state", lambda n: schedule)
     monkeypatch.setattr(fb, "save_state", lambda n, d: saved.update({n: d}))
     monkeypatch.setattr(fb, "_log_event", lambda *a, **k: None)
@@ -624,6 +629,7 @@ def test_log_session_refuses_a_handle_where_a_name_belongs(fb, tmp_path, monkeyp
     schedule = [{"session_date": "2026-05-12", "day": "Mon", "slot": 1,
                  "speaker_name": "Vesper Lynd", "speaker_username": "vlynd",
                  "no_show": False, "completed": False}]
+    monkeypatch.setattr(fb, "STATE_DIR", tmp_path)
     monkeypatch.setattr(fb, "load_state", lambda n: schedule)
     monkeypatch.setattr(fb, "save_state", lambda n, d: None)
     monkeypatch.setattr(fb, "_log_event", lambda *a, **k: None)

@@ -17,7 +17,9 @@ from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
 from scripts.utils.docx_helpers import (
+    TBLBORDERS_SUCCESSORS,
     brand_master_template,
+    insert_in_order,
     load_docx,
     save_docx,
     set_cell_shading,
@@ -272,12 +274,13 @@ def add_table(doc, headers, rows, col_widths_cm=None):
     # belongs before `tblLook`, which python-docx always appends. A plain
     # `append()` put it last, after `tblLook` — schema-invalid, and the visible
     # symptom is a table with no borders at all.
+    #
+    # Through the shared funnel since 2026-08-28. This block was the only
+    # correct copy of the rule in the workspace, hand-rolled here, and five
+    # sites in four sibling generators had the same mistake it fixes. A rule
+    # that lives in one file is a rule the next author does not read.
     borders = parse_xml(borders_xml)
-    tbl_look = tbl_pr.find(qn("w:tblLook"))
-    if tbl_look is not None:
-        tbl_look.addprevious(borders)
-    else:
-        tbl_pr.append(borders)
+    insert_in_order(tbl_pr, borders, TBLBORDERS_SUCCESSORS)
 
     # Header row
     for i, header in enumerate(headers):

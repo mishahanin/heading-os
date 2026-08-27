@@ -121,10 +121,86 @@ def save_docx(doc, path) -> Path:
     return target
 
 
+# ============================================================
+# OOXML child ordering
+# ============================================================
+#
+# `w:pPr`, `w:tcPr` and `w:tblPr` each have a FIXED child sequence in ECMA-376,
+# and a child in the wrong position is schema-invalid: the consumer is free to
+# ignore the element, so the border or shading the code just wrote may simply
+# not appear.
+#
+# python-docx places a child correctly whenever it declares one, through
+# `get_or_add_<tag>()`. It declares none for `w:pBdr`, `w:tcBorders` or
+# `w:tblBorders` - the three elements the generators here need most - so every
+# generator hand-rolled the insertion, and every one of them appended. Appending
+# is right only while the container is empty of later siblings, which it usually
+# is not: setting `space_before` first puts `w:spacing` in, python-docx puts
+# `w:tblLook` in by itself, and shading a cell puts `w:shd` in.
+#
+# `scripts/generate-odunone-docx.py` found this twice and fixed it twice, in
+# `add_bullet` and `add_table`, each with a comment naming the symptom. The rule
+# never crossed to its four sibling generators. This is that rule, written once.
+#
+# The tuples are the tail of each container's sequence, copied from ECMA-376.
+# `tests/test_a_rule_that_reached_one_of_six_generators.py` re-derives them from
+# the installed python-docx and fails if they ever disagree, so a version bump
+# cannot leave a stale copy here.
+PBDR_SUCCESSORS = (
+    "w:shd", "w:tabs", "w:suppressAutoHyphens", "w:kinsoku", "w:wordWrap",
+    "w:overflowPunct", "w:topLinePunct", "w:autoSpaceDE", "w:autoSpaceDN",
+    "w:bidi", "w:adjustRightInd", "w:snapToGrid", "w:spacing", "w:ind",
+    "w:contextualSpacing", "w:mirrorIndents", "w:suppressOverlap", "w:jc",
+    "w:textDirection", "w:textAlignment", "w:textboxTightWrap", "w:outlineLvl",
+    "w:divId", "w:cnfStyle", "w:rPr", "w:sectPr", "w:pPrChange",
+)
+TCBORDERS_SUCCESSORS = (
+    "w:shd", "w:noWrap", "w:tcMar", "w:textDirection", "w:tcFitText",
+    "w:vAlign", "w:hideMark", "w:headers", "w:cellIns", "w:cellDel",
+    "w:cellMerge", "w:tcPrChange",
+)
+TCSHD_SUCCESSORS = (
+    "w:noWrap", "w:tcMar", "w:textDirection", "w:tcFitText", "w:vAlign",
+    "w:hideMark", "w:headers", "w:cellIns", "w:cellDel", "w:cellMerge",
+    "w:tcPrChange",
+)
+TBLBORDERS_SUCCESSORS = (
+    "w:shd", "w:tblLayout", "w:tblCellMar", "w:tblLook", "w:tblCaption",
+    "w:tblDescription", "w:tblPrChange",
+)
+
+
+def insert_in_order(parent, element, successors):
+    """Put `element` into `parent` before the first of `successors` present.
+
+    Falls back to appending when none of them is there, which is what the
+    callers were doing unconditionally.
+
+    Returns `element`, so a caller can keep building it in one expression.
+    """
+    # Lazy docx import (F-2.1: this util must import pure so callers stay collectable).
+    from docx.oxml.ns import qn
+
+    for tag in successors:
+        found = parent.find(qn(tag))
+        if found is not None:
+            found.addprevious(element)
+            return element
+    parent.append(element)
+    return element
+
+
 def set_cell_shading(cell, color_hex: str) -> None:
-    """Set background color for a table cell."""
+    """Set background color for a table cell.
+
+    Through the funnel above rather than a bare append. `w:shd` sits at index 6
+    of the `w:tcPr` sequence with eleven tags after it, so appending was correct
+    only for a cell that carried none of them. Every current caller shades
+    before setting anything later, so nothing was wrong on this path today; a
+    cell given a vertical alignment first would have been.
+    """
     # Lazy docx import (F-2.1: this util must import pure so callers stay collectable).
     from docx.oxml import parse_xml
     from docx.oxml.ns import nsdecls
     shading = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{color_hex}" w:val="clear"/>')
-    cell._tc.get_or_add_tcPr().append(shading)
+    insert_in_order(cell._tc.get_or_add_tcPr(), shading, TCSHD_SUCCESSORS)

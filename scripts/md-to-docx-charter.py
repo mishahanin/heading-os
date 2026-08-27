@@ -27,7 +27,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
-from scripts.utils.docx_helpers import load_docx, save_docx
+from scripts.utils.docx_helpers import (
+    PBDR_SUCCESSORS,
+    insert_in_order,
+    load_docx,
+    save_docx,
+)
 from scripts.utils.workspace import get_outputs_dir
 
 # docx names are bound lazily (F-2.1: import stays pure).
@@ -56,7 +61,11 @@ def add_horizontal_line(doc):
     bottom.set(qn('w:space'), '1')
     bottom.set(qn('w:color'), '333333')
     pBdr.append(bottom)
-    pPr.append(pBdr)
+    # `space_before` above put `w:spacing` in first, and `w:pBdr` belongs
+    # twelve places earlier in the `w:pPr` sequence. Appending emitted every
+    # horizontal rule in this charter out of order. Same rule, same fix, as the
+    # three sibling generators.
+    insert_in_order(pPr, pBdr, PBDR_SUCCESSORS)
 
 
 def add_formatted_text(paragraph, text, default_size=None):

@@ -13,7 +13,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
-from scripts.utils.docx_helpers import load_docx, save_docx, set_cell_shading
+from scripts.utils.docx_helpers import (
+    TBLBORDERS_SUCCESSORS,
+    insert_in_order,
+    load_docx,
+    save_docx,
+    set_cell_shading,
+)
 from scripts.utils.workspace import get_outputs_dir
 
 INPUT_PATH = str(get_outputs_dir() / 'proposals' / '31C-National-Programme-DPI-Proposal-v1.md')
@@ -148,7 +154,14 @@ def format_table(table):
         '  <w:insideV w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>'
         '</w:tblBorders>'
     )
-    tblPr.append(borders)
+    # python-docx puts `w:tblLook` into `tblPr` by itself, and `w:tblBorders`
+    # belongs four places before it. So this append landed the borders last on
+    # EVERY table in the proposal. `scripts/generate-odunone-docx.py` fixed the
+    # same line in its own `add_table` and named the symptom there: "a table
+    # with no borders at all". The comment above this block records an earlier,
+    # different bug on the same three lines, which is how the second one kept
+    # its cover.
+    insert_in_order(tblPr, borders, TBLBORDERS_SUCCESSORS)
 
 
 def add_cover_page(doc):

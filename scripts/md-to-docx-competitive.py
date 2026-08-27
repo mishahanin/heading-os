@@ -14,7 +14,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
-from scripts.utils.docx_helpers import load_docx, save_docx, set_cell_shading
+from scripts.utils.docx_helpers import (
+    PBDR_SUCCESSORS,
+    insert_in_order,
+    load_docx,
+    save_docx,
+    set_cell_shading,
+)
 from scripts.utils.workspace import get_outputs_dir
 
 import os
@@ -173,7 +179,8 @@ def build_docx():
             # Add a border-bottom effect
             pPr = p._p.get_or_add_pPr()
             pBdr = parse_xml(f'<w:pBdr {nsdecls("w")}><w:bottom w:val="single" w:sz="4" w:space="1" w:color="CCCCCC"/></w:pBdr>')
-            pPr.append(pBdr)
+            # `w:spacing` went in two lines up; `w:pBdr` belongs before it.
+            insert_in_order(pPr, pBdr, PBDR_SUCCESSORS)
             i += 1
             continue
 
@@ -281,7 +288,10 @@ def build_docx():
                 p.paragraph_format.left_indent = Cm(0.5)
                 pPr = p._p.get_or_add_pPr()
                 pBdr = parse_xml(f'<w:pBdr {nsdecls("w")}><w:left w:val="single" w:sz="12" w:space="4" w:color="1A73E8"/></w:pBdr>')
-                pPr.append(pBdr)
+                # `left_indent` above put `w:ind` in, which sits at index 22
+                # against `w:pBdr`'s 8. The blockquote's left rule is the whole
+                # point of this branch, and it was the part emitted out of order.
+                insert_in_order(pPr, pBdr, PBDR_SUCCESSORS)
                 parse_inline(p, text, default_color=MED_GRAY, default_size=9)
             i += 1
             continue

@@ -15,7 +15,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
-from scripts.utils.docx_helpers import load_docx, save_docx, set_cell_shading
+from scripts.utils.docx_helpers import (
+    PBDR_SUCCESSORS,
+    TCBORDERS_SUCCESSORS,
+    insert_in_order,
+    load_docx,
+    save_docx,
+    set_cell_shading,
+)
 from scripts.utils.workspace import get_outputs_dir
 
 # ============================================================
@@ -213,14 +220,22 @@ def add_separator(doc):
     p = doc.add_paragraph()
     p.paragraph_format.space_before = Pt(6)
     p.paragraph_format.space_after = Pt(6)
-    # Add a bottom border to simulate a line
+    # Add a bottom border to simulate a line.
+    #
+    # POSITION matters, and this appended. `space_before` two lines up puts
+    # `w:spacing` into the empty `pPr`, and `w:pBdr` belongs at index 8 of the
+    # `w:pPr` sequence while `w:spacing` sits at 21 - so all sixteen section
+    # rules in this document were emitted as `[spacing, pBdr]`, out of sequence,
+    # and the committed golden fixture carries that order sixteen times with the
+    # correct one zero times. The sibling generator found the identical mistake
+    # twice and fixed it twice; the rule is shared now.
     pPr = p._p.get_or_add_pPr()
     pBdr = parse_xml(
         f'<w:pBdr {nsdecls("w")}>'
         '  <w:bottom w:val="single" w:sz="6" w:space="1" w:color="006BB6"/>'
         '</w:pBdr>'
     )
-    pPr.append(pBdr)
+    insert_in_order(pPr, pBdr, PBDR_SUCCESSORS)
 
 
 # ============================================================
@@ -317,7 +332,15 @@ def build_document():
             set_cell_shading(cell_l, TABLE_ALT_BG)
             set_cell_shading(cell_r, TABLE_ALT_BG)
 
-    # Remove table borders for cleaner look
+    # Remove table borders for cleaner look.
+    #
+    # The loop above shaded the even rows, which puts `w:shd` into their
+    # `w:tcPr`. `w:tcBorders` belongs at index 5 and `w:shd` at 6, so appending
+    # here produced `[tcW, shd, tcBorders]` on rows 0, 2 and 4 and the correct
+    # `[tcW, tcBorders]` on the other three: the same table emitted valid cell
+    # properties for half its rows and invalid for the other half, decided by
+    # which loop happened to run first. Rows 0, 2 and 4 are "Prepared for",
+    # "Date" and "Document Reference" on the cover the partner forwards.
     for row in cover_table.rows:
         for cell in row.cells:
             tc = cell._tc
@@ -330,7 +353,7 @@ def build_document():
                 '  <w:right w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
                 '</w:tcBorders>'
             )
-            tcPr.append(tcBorders)
+            insert_in_order(tcPr, tcBorders, TCBORDERS_SUCCESSORS)
 
     doc.add_page_break()
 

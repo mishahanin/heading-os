@@ -17,9 +17,13 @@ settings.local.json still names one of them runs with that wall entirely absent
 and MUST be re-provisioned.
 
 Matcher scope: settings.local.json registers this dispatcher under three
-matchers — `Write|Edit|MultiEdit|NotebookEdit`, `Bash`, and `Read`. All three
-payload shapes reach every check, so a new check has to answer what it does with
-each of them rather than inherit a two-matcher assumption. Read carries a
+matchers — `Write|Edit|MultiEdit|NotebookEdit`, `Bash`, and `Read|Grep|Glob`.
+All three payload shapes reach every check, so a new check has to answer what it
+does with each of them rather than inherit a two-matcher assumption. Grep and
+Glob joined the third matcher on 2026-08-28: `check_protect_personal_threads`
+refused the Bash spellings of a personal-thread read (`grep`, `rg`) while the
+native tools were not dispatched here at all, so the guard covered the harder
+route and missed the plain one. Read carries a
 `file_path` but no content, which is why `check_protect_corporate` and
 `check_protect_docs` exclude it by name: `check_protect_docs` reaching a path
 test on a Read payload is what policy-denied an ordinary operator Read at
@@ -311,6 +315,13 @@ def check_prevent_secrets(payload: dict) -> dict | None:
 
 PERSONAL_PATH_RE = re.compile(r"threads[/\\]personal[/\\]", re.IGNORECASE)
 
+# Same subtree, but matching the DIRECTORY itself as well as a path inside it.
+# `PERSONAL_PATH_RE` needs a separator after `personal`, which is right for a
+# file path and wrong for a search root: `Grep(path="threads/personal")` is the
+# natural spelling and carries no trailing slash. The alternation end-anchors
+# instead, so `threads/personal-notes/` — a different directory — still passes.
+_PERSONAL_DIR_RE = re.compile(r"threads[/\\]personal(?:[/\\]|$)", re.IGNORECASE)
+
 # Order of patterns is irrelevant for correctness (any match blocks).
 # The list follows the original protect-personal-threads.py order to
 # preserve git blame lineage. Adding new patterns: append to the end
@@ -404,6 +415,35 @@ def check_protect_personal_threads(payload: dict) -> dict | None:
                 ),
                 "_policy_deny": True,
             }
+        return None
+
+    if tool_name in ("Grep", "Glob"):
+        # Grep returns MATCHING LINES, which is reading. Its Bash twin was
+        # refused throughout (`grep` and `rg` are both in DANGEROUS_BASH_PATTERNS
+        # above), so the native tool was the one spelling of the same read that
+        # went through. Verified 2026-08-28: this function returned None for both
+        # tools, AND `_dispatch.py` was not even registered for them —
+        # `data-path-redirect.py` was, on the same two tools, which is how the
+        # gap stayed invisible. Glob returns only paths, but a personal thread's
+        # FILENAME is CEO-only too, and the pair is cheaper to reason about than
+        # a carve-out.
+        #
+        # Every field that can point the tool at the subtree is checked: `path`
+        # (both tools), `pattern` (a Glob pattern is a path, and a Grep pattern
+        # can carry one), and `glob` (Grep's file filter).
+        for key in ("path", "pattern", "glob"):
+            candidate = re.sub(r"\\+", "/", tool_input.get(key) or "")
+            if _PERSONAL_DIR_RE.search(candidate):
+                return {
+                    "decision": "block",
+                    "reason": (
+                        f"Personal-threads protection — intentional policy block, "
+                        f"not an error. {tool_name} targets threads/personal/ via "  # leak-guard: ok (string in a message/log, not a path)
+                        f"its {key!r} argument: CEO-only content must not enter "
+                        f"the transcript."
+                    ),
+                    "_policy_deny": True,
+                }
         return None
 
     if tool_name not in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
@@ -564,6 +604,8 @@ def check_protect_corporate(payload: dict) -> dict | None:
 # 2026-05-12 perf v2 sprint. SYNCED_FILES must match SYNC_FILES in
 # scripts/sync-docs.py — keep in sync if either side changes.
 
+_DOCS_DIR_RE = re.compile(r"(?:^|/)docs/")
+
 SYNCED_FILES = {
     "GETTING-STARTED.md",
     "GETTING-STARTED.html",
@@ -604,10 +646,23 @@ def check_protect_docs(payload: dict) -> dict | None:
         return None
 
     norm_path = file_path.replace("\\", "/")
-    if "/docs/" not in norm_path:
+    # `(?:^|/)docs/`, not the substring `"/docs/"`. The substring needs a
+    # separator BEFORE `docs`, so the plainest spelling of the very path this
+    # guard exists for — a repo-relative `docs/GETTING-STARTED.md` — went
+    # through, while `./docs/GETTING-STARTED.md` was blocked. Verified
+    # 2026-08-28. The anchor also keeps `my-docs/GETTING-STARTED.md` out, which
+    # the substring already did.
+    if not _DOCS_DIR_RE.search(norm_path):
         return None
 
-    file_name = os.path.basename(file_path)
+    # basename of the NORMALISED path. `os.path.basename` splits on `\` only on
+    # Windows, so on the Linux/WSL host this hook runs on, a Windows-spelled
+    # `docs\GETTING-STARTED.md` came back whole and matched nothing in
+    # SYNCED_FILES — while the directory test two lines up had already accepted
+    # it, because that one normalises. One guard, two spellings of the path, and
+    # the write went through. This repo ships settings for Windows hosts
+    # (.claude/settings.local.windows.json), so the spelling is not exotic.
+    file_name = norm_path.rsplit("/", 1)[-1]
     if file_name not in SYNCED_FILES:
         return None
 
@@ -784,7 +839,117 @@ def _shell_segments(command: str) -> list:
 
 # A polling loop: any while/until that sleeps inside its body. Duration is not the
 # question here — the loop holds the turn for as long as the watched thing runs.
+#
+# Run this over `_unquoted_skeleton(command)`, never over the raw text. A shell
+# keyword is only a keyword outside quotes and outside a comment, and this
+# pattern reaches across the whole string by design (a real loop puts `while` and
+# `sleep` in different segments, so `_shell_segments` cannot be used here). Over
+# raw text that reach turned `echo "while you wait"; sleep 1` into a policy deny
+# whose own message promises that short sleeps pass. Reproduced 2026-08-28.
 _POLL_LOOP_RE = re.compile(r"\b(?:while|until)\b[\s\S]*?\bsleep\b")
+
+
+def _unquoted_skeleton(command: str) -> str:
+    """`command` with quoted spans and comments blanked out, structure preserved.
+
+    Quote contents become empty, so a shell keyword written inside a string
+    cannot be read as one; separators, redirections and unquoted words are kept
+    exactly where they were, so a pattern that reaches across segments still
+    does. Trailing `#` comments are dropped for the same reason: `sleep 1 # a
+    while later` is not a poll loop.
+
+    A HERE-DOCUMENT body is blanked for the same reason. It is data being fed to
+    a program's stdin, not shell syntax, and this hook's own commit message was
+    refused by it on 2026-08-28: the message describes the poll-loop defect, so
+    it contains the words `while` and `sleep` in ordinary prose. Both spellings
+    (`<<WORD` and `<<-WORD`, delimiter quoted or bare) end at a line holding the
+    delimiter alone. An UNTERMINATED heredoc consumes the rest of the string,
+    which matches what the shell would do with it.
+
+    Deliberately shares the quote-walk shape of `_shell_segments` above rather
+    than calling shlex: shlex drops the quotes AND keeps the words, which is the
+    opposite of what this needs.
+    """
+    out = []
+    quote = None
+    pending_heredocs: list = []
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote:
+            if char == "\\" and quote == '"' and index + 1 < len(command):
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+                out.append(char)
+            index += 1
+            continue
+        if char in "'\"":
+            quote = char
+            out.append(char)
+            index += 1
+            continue
+        if char == "\\" and index + 1 < len(command):
+            # An escaped character is data, never a keyword letter.
+            out.append(" ")
+            out.append(" " if command[index + 1] != "\n" else "\n")
+            index += 2
+            continue
+        if char == "#" and (not out or out[-1].isspace()):
+            # Comment to end of line. A newline is a shell separator, so keep it.
+            while index < len(command) and command[index] != "\n":
+                index += 1
+            continue
+        heredoc = _HEREDOC_START_RE.match(command, index)
+        if heredoc:
+            # The redirection itself stays; only the BODY is data. The body does
+            # not start here, it starts after this line ends, so the delimiter is
+            # queued and the walk carries on with the rest of the line.
+            out.append("<<")
+            pending_heredocs.append(heredoc)
+            index = heredoc.end()
+            continue
+        if char == "\n" and pending_heredocs:
+            out.append("\n")
+            index += 1
+            for opened in pending_heredocs:
+                index = _skip_heredoc_body(command, index, opened)
+            pending_heredocs = []
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+# `<<` or `<<-`, optional space, then the delimiter word: bare, 'single' or
+# "double" quoted. `<<<` is a here-STRING, one word on the same line, and is not
+# matched here: the negative lookahead keeps it out so it falls through to the
+# ordinary character walk.
+_HEREDOC_START_RE = re.compile(
+    r"<<(?!<)(?P<dash>-?)\s*(?P<quote>['\"]?)(?P<word>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)")
+
+
+def _skip_heredoc_body(command: str, position: int, match) -> int:
+    """Index just past the body `match` opened, body and terminator removed.
+
+    `position` is the first character of the body (the walk has already consumed
+    the newline that ends the opening line). Returns len(command) for an
+    unterminated heredoc, which is what the shell does with it too. `<<-` strips
+    leading TABS from the terminator line, per POSIX; the plain form requires the
+    delimiter alone on its line.
+    """
+    delimiter = match.group("word")
+    while position <= len(command):
+        line_end = command.find("\n", position)
+        line = command[position:line_end if line_end != -1 else len(command)]
+        candidate = line.lstrip("\t") if match.group("dash") else line
+        if candidate.rstrip("\r") == delimiter:
+            return len(command) if line_end == -1 else line_end + 1
+        if line_end == -1:
+            return len(command)
+        position = line_end + 1
+    return len(command)
 
 # A bare wait long enough that the operator feels it. Short sleeps (a daemon
 # socket coming up) are ordinary and stay allowed.
@@ -830,13 +995,42 @@ Short sleeps are untouched — under {threshold} s with no polling loop passes. 
 For a deliberate blocking wait, append `# {escape}` and it goes through."""
 
 
+# Environment runners that execute their next non-flag word as a program:
+# `uv run pytest ...` runs pytest exactly as a bare `pytest` would. `uv` is this
+# repo's canonical toolchain, so its spelling of a serial suite run has to land
+# inside the guard. Deliberately a short, named list: a runner is recognised by
+# name, never guessed, so an ordinary program whose second word happens to be
+# `run` cannot be mistaken for one.
+_ENV_RUNNERS = ("uv", "uvx", "poetry", "pdm", "hatch", "rye", "pipenv")
+
+
+def _is_runner_invocation(tokens: list, index: int) -> bool:
+    """True when `tokens[index]` is the program a `<runner> run ...` executes.
+
+    Flags between `run` and the program are allowed (`uv run --frozen pytest`),
+    because they configure the runner, not the run. Anything that is not a flag
+    ends the search: in `uv run python -m pytest`, the program is `python`, and
+    the `-m` clause in the caller already recognises that shape.
+    """
+    if index < 2 or tokens[0] not in _ENV_RUNNERS or tokens[1] != "run":
+        return False
+    return all(word.startswith("-") for word in tokens[2:index])
+
+
 def _pytest_argv(command: str) -> list | None:
     """The argv of a pytest invocation in `command`, or None if there is none.
 
-    Judged positionally: `pytest` must be the first word of a shell segment, or
-    follow `-m` on an interpreter. A `pytest` that is merely an argument to some
-    other program — a grep pattern, a path being echoed — is not an invocation
-    and must not be treated as one.
+    Judged positionally: `pytest` must be the first word of a shell segment,
+    follow `-m` on an interpreter, or follow a named environment runner
+    (`uv run pytest`). A `pytest` that is merely an argument to some other
+    program — a grep pattern, a path being echoed — is not an invocation and
+    must not be treated as one.
+
+    The runner form was missing until 2026-08-28, and `uv` is this repo's own
+    canonical toolchain (CLAUDE.md § Setup). `uv run python -m pytest tests/` was
+    caught by the `-m` clause while `uv run pytest tests/` — the shorter spelling
+    of the same serial full-suite run — went through untouched. A guard the
+    prescribed tool walks around stops being a guard.
     """
     import shlex  # local: this hook runs on every Bash, Read and write call
 
@@ -857,6 +1051,8 @@ def _pytest_argv(command: str) -> list | None:
             if index == 0:
                 return tokens
             if tokens[index - 1] == "-m":
+                return tokens
+            if _is_runner_invocation(tokens, index):
                 return tokens
         # `python scripts/run-tests.py` reaches pytest through the runner, which
         # already distributes; it is the prescribed form, not a finding.
@@ -935,7 +1131,7 @@ def _is_subdirectory_target(token: str) -> bool:
 
 
 def _blocking_wait(command: str) -> bool:
-    if _POLL_LOOP_RE.search(command):
+    if _POLL_LOOP_RE.search(_unquoted_skeleton(command)):
         return True
 
     import shlex  # local, same reason as above
@@ -1197,7 +1393,15 @@ def _stable_args_signature(tool_name: str, tool_input: dict) -> str:
 def check_tool_budget(payload: dict) -> dict | None:
     """Total-tool-call cap in 30-min rolling window + same-args repeat detection.
 
-    Counts every tool invocation (not just writes). Soft cap warns; hard cap blocks.
+    Counts every tool invocation THIS DISPATCHER SEES — the matchers listed in
+    the module docstring, which is writes, Bash, Read, Grep and Glob, not just
+    writes. It is NOT every tool call the session makes: WebFetch, Task, the MCP
+    tools and the rest never reach this hook, so a runaway loop built out of
+    those is invisible here. The sentence read "counts every tool invocation"
+    flat until it was narrowed, which is the shape
+    `.claude/rules/scope-claims.md` exists to stop.
+
+    Soft cap warns; hard cap blocks.
     TOOL_REPEAT_THRESHOLD identical calls in a row (same tool, same args) →
     advisory only, which is 4. The prose said three, from before the threshold
     was raised on 2026-08-20, so the docstring described behaviour the code had

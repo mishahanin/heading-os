@@ -224,8 +224,9 @@ def test_check_crm_health_end_to_end_counts_three(hook, tmp_path, monkeypatch):
         os.replace(cache, sidecar)
         moved = True
     try:
-        result = hook.check_crm_health(str(ROOT))
-        assert result is not None, "three overdue contacts produced no alert"
+        result, failure = hook.check_crm_health(str(ROOT))
+        assert failure is None, f"the check reported it did not run: {failure}"
+        assert result, "three overdue contacts produced no alert"
         assert len(result) == 3, f"alert counted {len(result)}: {result}"
     finally:
         if moved:

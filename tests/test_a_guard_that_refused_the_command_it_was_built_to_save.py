@@ -302,7 +302,36 @@ def test_the_docstring_does_not_promise_shims_that_were_deleted():
     assert "MUST be re-provisioned" in doc
 
 
-@pytest.mark.parametrize("matcher", ["Write|Edit|MultiEdit|NotebookEdit", "Bash", "Read"])
+def _registered_matchers(settings: dict) -> set[str]:
+    return {
+        entry.get("matcher")
+        for entry in settings.get("hooks", {}).get("PreToolUse", [])
+        if any("_dispatch.py" in (h.get("command") or "")
+               for h in entry.get("hooks", []))
+    }
+
+
+def _tracked_matchers() -> list[str]:
+    """The matchers the TRACKED settings register the dispatcher under.
+
+    Read from disk, not written down here. This list used to be a literal
+    `["Write|Edit|MultiEdit|NotebookEdit", "Bash", "Read"]`, and on 2026-08-28
+    the Read matcher widened to `Read|Grep|Glob` — the guard's own registration
+    moved and the test that checks the registration is documented failed on the
+    stale copy, not on the change. A pin that has to be edited alongside the
+    thing it pins is a second copy, and the second copy is the one that rots.
+    """
+    matchers: set[str] = set()
+    for name in ("settings.json", "settings.local.linux.json",
+                 "settings.local.macos.json", "settings.local.windows.json"):
+        path = ROOT / ".claude" / name
+        if path.is_file():
+            matchers |= _registered_matchers(
+                json.loads(path.read_text(encoding="utf-8")))
+    return sorted(matchers)
+
+
+@pytest.mark.parametrize("matcher", _tracked_matchers())
 def test_every_registered_matcher_is_named_in_the_docstring(matcher):
     """Backticked, because the bare word is not evidence of an enumeration.
 
@@ -314,13 +343,19 @@ def test_every_registered_matcher_is_named_in_the_docstring(matcher):
     assert f"`{matcher}`" in doc
 
 
-def _registered_matchers(settings: dict) -> set[str]:
-    return {
-        entry.get("matcher")
-        for entry in settings.get("hooks", {}).get("PreToolUse", [])
-        if any("_dispatch.py" in (h.get("command") or "")
-               for h in entry.get("hooks", []))
-    }
+def test_the_tracked_matcher_list_is_not_empty():
+    """A parametrize over an empty list is a green test that ran nothing.
+
+    `_tracked_matchers()` reads files; if the shape of those files changes and
+    the reader stops matching, every case above vanishes silently and the suite
+    still passes. This is the vacuity check for that.
+    """
+    found = _tracked_matchers()
+    assert len(found) >= 3, f"expected the three dispatcher matchers, got {found}"
+    assert "Bash" in found, found
+    assert any("Grep" in m and "Glob" in m for m in found), (
+        "the Grep/Glob registration added on 2026-08-28 is gone from every "
+        f"tracked settings file: {found}")
 
 
 def test_the_docstring_matches_what_settings_actually_registers():

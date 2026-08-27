@@ -134,10 +134,28 @@ def _red_contacts(output: str) -> list:
 
 def check_crm_health(project_dir):
     """Run CRM health check and extract RED contacts. Result cached for 30 minutes
-    in .sessions/crm-health-cache.json to keep SessionStart fast."""
+    in .sessions/crm-health-cache.json to keep SessionStart fast.
+
+    Returns `(red_contacts, failure)`. `failure` is None on every path where the
+    check actually ran, and a one-line reason on the path where it did not.
+
+    It used to return one list carrying both meanings, and `main()` read only
+    `len()` of it: a crm-health.py that exited non-zero produced the banner
+    `CRM ALERT: 1 contact(s) need attention today`, byte-identical to a session
+    with exactly one genuinely overdue contact. The failure string this function
+    took care to write reached nothing but stderr, which an exit-0 SessionStart
+    hook shows only in transcript mode. Reproduced 2026-08-28 against a fixture
+    exiting 3.
+
+    The staleness check ten lines below the caller already separated the two
+    states, and says `CONTEXT STALENESS NOT CHECKED` when it could not look. This
+    is that fix landing in the second of two adjacent copies. `scope-claims.md`
+    obligation 3: a check that could not run reports over, never toward silence.
+    """
     script = os.path.join(project_dir, "scripts", "crm-health.py")
     if not os.path.isfile(script):
-        return None
+        # No CRM engine in this workspace. Nothing ran, and nothing was meant to.
+        return [], None
 
     cache_dir = os.path.join(project_dir, ".sessions")
     cache_file = os.path.join(cache_dir, "crm-health-cache.json")
@@ -150,7 +168,9 @@ def check_crm_health(project_dir):
             cached_at = cached.get("cached_at", 0)
             if (datetime.now().astimezone().timestamp() - cached_at) < _CRM_CACHE_TTL_SECONDS:
                 red_lines = cached.get("red_contacts") or []
-                return red_lines if red_lines else None
+                # A cache hit is a successful run: only the exit-0 branch below
+                # ever writes this file.
+                return red_lines, None
     except Exception as e:
         print(f"[session-start] crm-health cache read failed: {e}", file=sys.stderr)
 
@@ -184,8 +204,7 @@ def check_crm_health(project_dir):
                 os.replace(tmp_path, cache_file)
             except Exception as e:
                 print(f"[session-start] crm-health cache write failed: {e}", file=sys.stderr)
-            if red_lines:
-                return red_lines
+            return red_lines, None
         else:
             # `subprocess.run` does not raise on a non-zero exit, so the outer
             # handler never fired and this branch did not exist: a crm-health
@@ -199,11 +218,11 @@ def check_crm_health(project_dir):
             detail = tail[-1] if tail else "no output"
             print(f"[session-start] crm-health exited {result.returncode}: {detail}",
                   file=sys.stderr)
-            return [f"CRM HEALTH CHECK DID NOT RUN (exit {result.returncode}: "
-                    f"{detail}). Overdue contacts are UNKNOWN, not zero."]
+            return [], f"crm-health.py exited {result.returncode}: {detail}"
     except Exception as e:
         print(f"[session-start] check_crm-health failed: {e}", file=sys.stderr)
-    return None
+        return [], f"crm-health.py could not be run: {e}"
+    return [], None
 
 
 def check_corporate_updates(project_dir, identity):
@@ -517,8 +536,12 @@ def main():
     if dep_alert:
         alerts.append(dep_alert)
 
-    # Check CRM health
-    red_contacts = check_crm_health(project_dir)
+    # Check CRM health. Two separate states: the check failed, and the check ran
+    # and found overdue contacts. A count is only meaningful in the second.
+    red_contacts, crm_failure = check_crm_health(project_dir)
+    if crm_failure:
+        alerts.append(f"CRM HEALTH CHECK NOT RUN: {crm_failure} "
+                      f"-- overdue contacts are UNKNOWN, not zero")
     if red_contacts:
         alerts.append(f"CRM ALERT: {len(red_contacts)} contact(s) need attention today")
 

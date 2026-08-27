@@ -40,6 +40,7 @@ Run: python3 -m pytest tests/test_alerts_that_never_reached_the_session.py
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -115,7 +116,20 @@ def test_no_json_object_is_written_to_the_alert_stream():
 
 
 def test_a_failed_crm_health_run_becomes_an_alert(tmp_path, monkeypatch):
-    """Silence read as "nothing is overdue" while the red debt grew."""
+    """Silence read as "nothing is overdue" while the red debt grew.
+
+    Asserted on `check_crm_health`'s RETURN VALUE until 2026-08-28, and passed
+    for four days while `main()` threw the text away and printed
+    `CRM ALERT: 1 contact(s) need attention today` instead - the count of a
+    one-element failure list, byte-identical to one genuinely overdue contact.
+    That is precisely the "unit test of a function that never checks the
+    contract with its one caller" failure the docstring of
+    `test_a_missing_context_directory_becomes_an_alert` below was written to
+    call out, in the same file, about the adjacent check.
+
+    So this now asserts the two-part contract: what the function returns AND
+    what the caller renders from it.
+    """
     hook = _load("session_start_crm_probe", ".claude/hooks/session-start.py")
 
     class _Proc:
@@ -127,10 +141,47 @@ def test_a_failed_crm_health_run_becomes_an_alert(tmp_path, monkeypatch):
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "crm-health.py").write_text("", encoding="utf-8")
 
-    alerts = hook.check_crm_health(str(tmp_path))
-    assert alerts is not None
-    assert any("DID NOT RUN" in a for a in alerts)
-    assert any("UNKNOWN, not zero" in a for a in alerts)
+    contacts, failure = hook.check_crm_health(str(tmp_path))
+    assert contacts == [], (
+        "a failed run has no contact list; anything non-empty here becomes a "
+        f"count in the banner: {contacts!r}")
+    assert failure and "exited 2" in failure
+    assert "malformed frontmatter" in failure
+
+
+def test_the_failed_crm_run_reaches_the_operator_not_just_the_return_value(
+        tmp_path, monkeypatch, capsys):
+    """The caller's half. Drive `main()` and read the stream the operator sees.
+
+    SessionStart injects STDOUT into the session; the hook exits 0, so the
+    stderr line the failure branch also prints is transcript-mode debug and is
+    not the alert. What must be on stdout is a NOT RUN banner, and what must NOT
+    be on stdout is a contact count, which would be indistinguishable from a
+    real one-overdue session.
+    """
+    hook = _load("session_start_crm_main", ".claude/hooks/session-start.py")
+
+    class _Proc:
+        returncode = 3
+        stdout = ""
+        stderr = "boom"
+
+    monkeypatch.setattr(hook.subprocess, "run", lambda *a, **k: _Proc())
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "crm-health.py").write_text("", encoding="utf-8")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(
+        json.dumps({"cwd": str(tmp_path)})))
+
+    with pytest.raises(SystemExit) as exit_info:
+        hook.main()
+    assert exit_info.value.code == 0
+
+    out = capsys.readouterr().out
+    assert "CRM HEALTH CHECK NOT RUN" in out, out
+    assert "exited 3" in out
+    assert "UNKNOWN, not zero" in out
+    assert "contact(s) need attention" not in out, (
+        "a check that did not run is being reported as a contact count: " + out)
 
 
 def test_a_missing_context_directory_becomes_an_alert(tmp_path, monkeypatch):

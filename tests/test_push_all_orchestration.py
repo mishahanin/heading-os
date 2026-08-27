@@ -29,6 +29,33 @@ class _Args:
         self.no_commit = no_commit
 
 
+def _default_gate_marker():
+    """`push_repo`'s own default for `gate_marker`, read off the SOURCE.
+
+    The ENGINE call site passes no marker, so this default is what actually
+    gates the engine push. Read from the file with `ast`, not from the live
+    object: the tests here replace `push_all.push_repo` with a recording stub,
+    so `inspect.signature` would report the stub's parameters, and reading it
+    by calling is out of the question - the real one pushes.
+    """
+    import ast
+
+    tree = ast.parse(Path(push_all.__file__).read_text(encoding="utf-8"))
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "push_repo"), None)
+    assert fn is not None, "push_repo is gone from push-all.py"
+    names = [a.arg for a in fn.args.kwonlyargs] or [a.arg for a in fn.args.args]
+    defaults = fn.args.kw_defaults if fn.args.kwonlyargs else fn.args.defaults
+    if not fn.args.kwonlyargs:
+        names = names[len(fn.args.args) - len(defaults):]
+    idx = names.index("gate_marker")
+    node = defaults[idx]
+    assert node is not None, "gate_marker no longer has a default"
+    assert isinstance(node, ast.Name), (
+        f"gate_marker's default is no longer a named constant: {ast.dump(node)}")
+    return getattr(push_all, node.id)
+
+
 def _code(fn):
     """fn()'s exit code, treating a clean return as 0."""
     try:
@@ -283,8 +310,19 @@ def test_the_suite_gate_is_required_at_both_engine_pushing_call_sites(
     by_name = dict(calls)
 
     assert by_name["ENGINE"].get("test_gate") is True
-    assert by_name["ENGINE"].get("gate_marker", push_all.ENGINE_GATE_MARKER) == \
-        push_all.ENGINE_GATE_MARKER
+    # The ENGINE call passes no `gate_marker` at all: it takes the default in
+    # `push_repo`'s signature. Asserting `.get("gate_marker", ENGINE_GATE_MARKER)
+    # == ENGINE_GATE_MARKER` compared that default against itself and held
+    # whether or not the key existed, so flipping the signature default to
+    # DATA_GATE_MARKER left this green while the engine's pre-push suite gate was
+    # checked against the overlay's marker. Assert the absence, then assert what
+    # the absence resolves to.
+    assert "gate_marker" not in by_name["ENGINE"], (
+        "the ENGINE call now passes a marker explicitly; assert that value here "
+        "instead of the signature default below")
+    assert _default_gate_marker() == push_all.ENGINE_GATE_MARKER, (
+        "push_repo's default marker is no longer the engine's, so the ENGINE "
+        "push is gated on another repository's suite")
     assert by_name["DATA"].get("test_gate") is True
     assert by_name["DATA"].get("gate_marker") == push_all.DATA_GATE_MARKER
 

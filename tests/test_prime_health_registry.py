@@ -92,11 +92,27 @@ def test_the_skill_page_states_the_real_worker_count(helper):
 
 
 def test_every_check_in_the_registry_is_reachable(helper):
-    """A registry entry that is not callable would fail only at session start."""
+    """A registry entry that is not callable would fail only at session start.
+
+    The assertion used to end `or isinstance(value, (tuple, list, dict))`, and
+    `CHECKS` is a dict of tuples, so that disjunct was True for every entry by
+    construction and nothing ever looked INSIDE one. A registry holding
+    `("crm_health", (None, "CRM health"))` passed it, while `run_all` does
+    `fn, _label = CHECKS[key]` and then calls `fn(...)`, so `/prime` raised
+    `TypeError: 'NoneType' object is not callable` at session start.
+
+    Unpacked the way the consumer unpacks it, so the shape and the callable are
+    both real assertions.
+    """
     checks = helper.CHECKS
-    entries = checks.items() if hasattr(checks, "items") else enumerate(checks)
-    for key, value in entries:
-        target = value if callable(value) else getattr(value, "fn", value)
-        assert callable(target) or isinstance(value, (tuple, list, dict)), (
-            f"CHECKS entry {key!r} is neither callable nor a spec: {value!r}"
-        )
+    assert isinstance(checks, dict) and checks, "CHECKS is empty or not a mapping"
+    for key, value in checks.items():
+        assert isinstance(value, tuple) and len(value) == 2, (
+            f"CHECKS[{key!r}] is not the (callable, label) pair run_all unpacks: "
+            f"{value!r}")
+        fn, label = value
+        assert callable(fn), (
+            f"CHECKS[{key!r}] holds {fn!r} where run_all will call it; /prime "
+            "raises at session start")
+        assert isinstance(label, str) and label.strip(), (
+            f"CHECKS[{key!r}] has no printable label")

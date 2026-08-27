@@ -248,13 +248,39 @@ def test_downgrade_signal_returns_none_for_non_anthropic_shape():
 # ============================================================
 # _invoke_vendor: kimi branch + unknown-vendor rejection
 # ============================================================
-def test_invoke_vendor_supports_kimi(monkeypatch):
-    monkeypatch.setattr(
-        F, "_load_consult_fn",
-        lambda path, fn: (lambda prompt, model, temperature, max_tokens: "kimi says hi"),
-    )
-    out = F._invoke_vendor("kimi", "kimi-for-coding", "prompt", 1000, 0.7)
-    assert out == "kimi says hi"
+@pytest.mark.parametrize("vendor, script, fn_name", [
+    ("kimi", "scripts/kimi-consult.py", "consult_kimi"),
+    ("grok", "scripts/grok-consult.py", "consult_grok"),
+    ("gemini", "scripts/gemini-consult.py", "consult_gemini"),
+])
+def test_invoke_vendor_loads_the_matching_wrapper(monkeypatch, vendor, script, fn_name):
+    """Which module the branch reaches IS the branch; the rest is shared.
+
+    This test used to stub `_load_consult_fn` with a lambda that discarded both
+    `path` and `fn` and returned a fixed string, which was then the value
+    asserted equal, and only `kimi` had a test at all. Pointing the kimi branch
+    at `scripts/grok-consult.py` therefore left the file green while this module
+    - which its own docstring says carries sentinel and email-intelligence
+    prompts - shipped mail bodies to a different vendor, with the logs and
+    `LLMResult.vendor` still saying kimi.
+    """
+    seen = []
+
+    def _load(path, fn):
+        seen.append((path, fn))
+        return lambda prompt, model, temperature, max_tokens: f"{vendor} says hi"
+
+    monkeypatch.setattr(F, "_load_consult_fn", _load)
+    out = F._invoke_vendor(vendor, f"{vendor}-model", "prompt", 1000, 0.7)
+    assert out == f"{vendor} says hi"
+    assert seen == [(script, fn_name)], (
+        f"the {vendor} branch loaded {seen}, not {script}::{fn_name}")
+
+
+def test_an_unknown_vendor_is_refused_by_name():
+    """The fall-through, so a new branch cannot silently be the default."""
+    with pytest.raises(ValueError, match="unknown fallback vendor"):
+        F._invoke_vendor("carrier-pigeon", "m", "prompt", 10, 0.1)
 
 
 def test_invoke_vendor_rejects_unknown():

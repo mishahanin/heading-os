@@ -71,9 +71,22 @@ def test_both_swap_states_use_both_families():
 
 
 def test_swap_bit_is_derived_from_the_run_not_from_the_model():
-    """Same run id yields the same side assignment; a different one may differ."""
-    assert disp.swap_for_run("r1") == disp.swap_for_run("r1")
+    """Same run id yields the same side assignment; different ids differ.
+
+    The first assertion used to be the whole test, and `swap_for_run` is a pure
+    function of one argument over an unsalted sha256, so `f(x) == f(x)` could not
+    fail whatever the body did. `return False` passed it, and `assign_families`
+    then pinned every run to the same three seats forever - Claude never sitting
+    as skeptic - with the suite green. Only the SECOND half, that the bit tracks
+    the id, has any content.
+    """
+    assert disp.swap_for_run("r1") == disp.swap_for_run("r1"), "not stable per run"
     assert isinstance(disp.swap_for_run("r1"), bool)
+
+    bits = {disp.swap_for_run(f"run-{i}") for i in range(24)}
+    assert bits == {False, True}, (
+        "24 distinct run ids produced one side assignment; the bit is a constant "
+        "and every run seats the same family as skeptic")
 
 
 # ============================================================

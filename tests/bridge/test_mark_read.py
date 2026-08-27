@@ -3,6 +3,8 @@ import subprocess
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from scripts.bridge_daemon.finalizers.mark_read import mark_conversation_read
 
 
@@ -21,6 +23,41 @@ def test_mark_conversation_read_parses_result(tmp_path):
         r = mark_conversation_read(tmp_path, "c1", mark_read=True)
     assert r["ok"] is True
     assert r["messages_changed"] == 3
+
+
+@pytest.mark.parametrize("mark_read, flag", [
+    (True, "--mark-read"),
+    (False, "--mark-unread"),
+])
+def test_the_flag_matches_the_direction_asked_for(tmp_path, mark_read, flag):
+    """The one thing this finalizer computes, and nothing asserted it.
+
+    Every other test here patches `subprocess.run` away and then asserts the
+    JSON the stub itself supplied, so the whole file measured its own setup.
+    `flag = "--mark-read" if mark_read else "--mark-unread"` is the only real
+    line, and `mark_read=False` was never passed: inverting the ternary left the
+    bridge tests green while `POST /inbox/undo-dismiss` marked a conversation
+    READ instead of unread, so the mail stayed hidden in Outlook with no undo.
+    """
+    _stub_script(tmp_path)
+    seen = []
+
+    def _run(argv, **kwargs):
+        seen.append(argv)
+        return SimpleNamespace(stdout='{"ok": true, "messages_changed": 1}',
+                               returncode=0)
+
+    with patch("subprocess.run", _run):
+        mark_conversation_read(tmp_path, " c1 ", mark_read=mark_read)
+
+    assert len(seen) == 1, f"expected one child run, got {len(seen)}"
+    argv = seen[0]
+    assert flag in argv, f"{flag} missing from {argv}"
+    other = "--mark-unread" if flag == "--mark-read" else "--mark-read"
+    assert other not in argv, f"both directions were passed: {argv}"
+    assert argv[-1] == "c1", "the conversation id is not stripped and last"
+    assert argv[1].endswith("email-intelligence.py"), (
+        f"the finalizer ran something else: {argv}")
 
 
 def test_mark_conversation_read_surfaces_producer_error(tmp_path):

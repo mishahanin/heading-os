@@ -257,7 +257,13 @@ def test_rollback_removes_what_apply_created(applied, monkeypatch, capsys):
     rc, ws, data, contacts, legacy = applied
     monkeypatch.setattr("builtins.input", lambda *a: "yes")
 
-    assert mig.cmd_rollback() == 0 or True  # returns None on the success path
+    # `X or True` is unconditionally true: Python evaluates the comparison,
+    # discards it, and yields True. No return value could make it red. The
+    # comment that licensed it ("returns None on the success path") was also
+    # false - `cmd_rollback` is annotated `-> int` and its success path returns
+    # 0 - so a `return 1` there would exit a clean rollback non-zero and every
+    # scripted caller would read success as failure, with this line still green.
+    assert mig.cmd_rollback() == 0, "a successful rollback must exit 0"
     assert not (contacts / "james-bond.md").exists(), (
         "an apply-then-rollback cycle left both generations on disk while "
         "printing 'Rollback complete'"

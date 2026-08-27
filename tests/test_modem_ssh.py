@@ -10,6 +10,37 @@ def test_shquote_wraps_and_escapes_single_quotes():
     assert shquote("it's") == "'it'\"'\"'s'"
 
 
+def test_the_host_argument_overrides_the_credentials_default(monkeypatch):
+    """`host or default_host` decides which router is reconfigured.
+
+    Every test here stubbed `subprocess.run` with a lambda that ignored `a[0]`
+    and returned a fixed stdout, which was then the value asserted equal. So the
+    command was never read: collapsing line 44 to `host = default_host` left the
+    modem tests green while `resolve_device` probed one box and `send_egmr`
+    wrote an IMEI to whichever router `.env` happened to name.
+    """
+    seen = []
+
+    def _run(cmd, **kwargs):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "359...\n", "")
+
+    monkeypatch.setattr(modem_ssh, "credentials",
+                        lambda: ("192.0.2.10", "root", "synthetic-not-a-real-password"))
+    monkeypatch.setattr(modem_ssh.subprocess, "run", _run)
+
+    assert modem_ssh.ssh("AT+GSN") == "359..."
+    assert modem_ssh.ssh("AT+GSN", host="192.0.2.99") == "359..."
+
+    targets = [c[-2] for c in seen]
+    assert targets == ["root@192.0.2.10", "root@192.0.2.99"], (
+        f"the host argument did not reach the command: {targets}")
+    assert seen[0][-1] == "AT+GSN", "the remote command is not last"
+    for cmd in seen:
+        assert "StrictHostKeyChecking=no" in cmd, (
+            "the documented host-key stance is gone from the command")
+
+
 def test_a_failed_askpass_removal_is_reported_not_swallowed(monkeypatch, capsys):
     """The askpass helper carries the router password in cleartext.
 

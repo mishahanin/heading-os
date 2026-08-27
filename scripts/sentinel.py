@@ -18,6 +18,7 @@ Usage:
 
 import argparse
 import asyncio
+import contextlib
 import fnmatch
 import hashlib
 import io
@@ -48,6 +49,8 @@ from scripts.utils.llm_fallback import call_anthropic_with_fallback  # noqa: E40
 from scripts.utils.observability import observe  # noqa: E402
 from scripts.utils.operator_identity import get_operator  # noqa: E402
 from scripts.utils.trace_filter import install_log_factory  # noqa: E402
+from scripts.utils.paths import DataRootError, get_data_root  # noqa: E402
+from scripts.utils.untrusted_input import sanitize_untrusted, wrap_untrusted  # noqa: E402
 from scripts.utils.workspace import get_default_tz, get_default_tz_name, get_workspace_root, load_env, resolve_config_with_example  # noqa: E402
 
 
@@ -1517,11 +1520,10 @@ class TelegramSource:
             if not messages:
                 return None
 
-            # The cursor advances over everything fetched, including the
-            # operator's own messages. Skipping that would rescan the dialog
-            # every cycle for as long as he happened to write last.
+            # The cursor covers everything fetched, including the operator's
+            # own messages. Skipping those would rescan the dialog every cycle
+            # for as long as he happened to write last.
             max_id = max(m.id for m in messages)
-            self.state.set_telegram_last_id(chat_id, chat_name, max_id)
 
             combined_text = []
             for msg in reversed(messages):
@@ -1533,16 +1535,30 @@ class TelegramSource:
                     combined_text.append("[media attachment]")
 
             if not combined_text:
+                # Nothing to analyse, so nothing downstream will ever mark this
+                # window done. Advance here or the same messages are re-fetched
+                # every cycle forever.
+                self.state.set_telegram_last_id(chat_id, chat_name, max_id)
                 return None
 
             full_text = "\n---\n".join(combined_text)
             if len(full_text) > 2000:
                 full_text = full_text[:2000] + "\n[...truncated]"
 
+            # `cursor_id` rides along instead of being written here. The cursor
+            # is this source's only memory of what it has read, and advancing
+            # it at FETCH time consumed the message before anything looked at
+            # it: an Anthropic outage, or a cycle that raised anywhere between
+            # here and the digest, lost the DM permanently - never retried,
+            # never digested, never notified. `_mark_item_processed` advances
+            # it once the item reaches a terminal outcome, which is exactly the
+            # change the email path already carries (see the note in
+            # `_analyze_and_notify`).
             return {
                 "source": "telegram",
                 "chat_id": chat_id,
                 "chat_name": chat_name,
+                "cursor_id": max_id,
                 "sender": chat_name,
                 "subject": f"Telegram DM from {chat_name}",
                 "body": full_text,
@@ -1594,7 +1610,6 @@ class TelegramSource:
 
             max_id = max(m.id for m in messages)
             chat_display = self._entity_name(entity)
-            self.state.set_telegram_last_id(chat_id, chat_display, max_id)
 
             combined_text = []
             for msg in reversed(messages):
@@ -1606,10 +1621,14 @@ class TelegramSource:
             if len(full_text) > 2000:
                 full_text = full_text[:2000] + "\n[...truncated]"
 
+            # Deferred to the terminal outcome, for the reason spelled out in
+            # `_fetch_dm`. Every fetched message becomes a line above, so this
+            # loop has no "nothing to analyse" branch to advance early.
             items.append({
                 "source": "telegram",
                 "chat_id": chat_id,
                 "chat_name": chat_display,
+                "cursor_id": max_id,
                 "sender": chat_display,
                 "subject": f"Telegram Group: {chat_display}",
                 "body": full_text,
@@ -1756,19 +1775,62 @@ Respond ONLY in this JSON format (no markdown, no code fences):
         context_files = config.get("context_files", [])
         self._load_business_context(context_files)
 
+    def _resolve_context_file(self, rel_path: str) -> Path | None:
+        """First existing match for `rel_path` across the DATA and engine roots.
+
+        The shipped `context_files` are `context/strategy.md`,
+        `context/pipeline.md`, `context/people.md` and
+        `reference/ceo-calendar-policy.md` - every one of them a DATA-overlay
+        path. This resolved them against the ENGINE root alone, where
+        `context/` does not exist at all, so every file missed, `parts` stayed
+        empty, and `{business_context}` was substituted as the empty string on
+        every run since the seam landed. The prompt above says the business
+        context is the mechanism that replaced the hardcoded operator details;
+        it was loading nothing.
+
+        DATA is tried first because that is where the configured files live. An
+        absolute path needs no branch of its own: on POSIX `root / "/a/b.md"` is
+        `/a/b.md`, so the first root already returns the path as given. A guard
+        clause for that case was written here and removed, because no mutation
+        of it could change an answer.
+        """
+        roots = []
+        # A public clone with no overlay: the engine root is all there is.
+        with contextlib.suppress(DataRootError):
+            roots.append(get_data_root())
+        roots.append(WORKSPACE_ROOT)
+        for root in roots:
+            full_path = root / rel_path
+            if full_path.exists():
+                return full_path
+        return None
+
     def _load_business_context(self, context_files: list):
         parts = []
+        missing = []
         for rel_path in context_files:
-            full_path = WORKSPACE_ROOT / rel_path
-            if full_path.exists():
-                try:
-                    content = full_path.read_text(encoding="utf-8")
-                    # Truncate each context file to keep prompt manageable
-                    if len(content) > 3000:
-                        content = content[:3000] + "\n[...truncated]"
-                    parts.append(f"--- {rel_path} ---\n{content}")
-                except Exception as e:
-                    self.logger.warning(f"Could not read context file {rel_path}: {e}")
+            full_path = self._resolve_context_file(rel_path)
+            if full_path is None:
+                missing.append(rel_path)
+                continue
+            try:
+                content = full_path.read_text(encoding="utf-8")
+                # Truncate each context file to keep prompt manageable
+                if len(content) > 3000:
+                    content = content[:3000] + "\n[...truncated]"
+                parts.append(f"--- {rel_path} ---\n{content}")
+            except OSError as e:
+                self.logger.warning(f"Could not read context file {rel_path}: {e}")
+
+        if missing:
+            # Say it. A configured file that resolves nowhere used to be
+            # skipped by a bare `exists()` test with no log line, so a scoring
+            # prompt running on no business context at all looked exactly like
+            # one running on all of it.
+            self.logger.warning(
+                "business context: %d of %d configured file(s) found under no "
+                "known root, so they are NOT in the scoring prompt: %s",
+                len(missing), len(context_files), ", ".join(missing))
 
         if parts:
             self.business_context = "BUSINESS CONTEXT:\n" + "\n\n".join(parts)
@@ -1786,20 +1848,42 @@ Respond ONLY in this JSON format (no markdown, no code fences):
         return self.client
 
     def _format_item_prompt(self, item: dict, index: int = None) -> str:
-        """Format a single item for the LLM prompt."""
-        attachments_str = ""
+        """Format a single item for the LLM prompt.
+
+        Every field an outsider authored is sanitised, and the whole item is
+        wrapped in the labelled untrusted-data frame from
+        `scripts/utils/untrusted_input.py`. This used to interpolate the sender,
+        the subject, the attachment filenames and the body straight into a bare
+        `---` fence, and a bare fence is not a boundary the model can tell from
+        the prompt's own structure: a body containing its own `SUBJECT:` and
+        `---` lines rendered as if this function had emitted them. The prompt
+        that surrounds this text carries the whole business context and asks for
+        a routing decision, so the message being scored could argue about how it
+        should be scored.
+
+        `source` and `date` are ours - a literal set at fetch time, and a
+        timestamp the server stamped and `local_stamp` formatted - so they stay
+        outside the frame and identify the item even if the frame is stripped.
+        """
+        parts = [
+            f"FROM: {sanitize_untrusted(str(item.get('sender', 'unknown')))} "
+            f"({sanitize_untrusted(str(item.get('sender_email') or item.get('chat_name') or ''))})",
+            f"SUBJECT: {sanitize_untrusted(str(item.get('subject', '')))}",
+            f"BODY:\n{sanitize_untrusted(str(item.get('body') or '(empty)'))}",
+        ]
         if item.get("attachments"):
-            attachments_str = f"\nATTACHMENTS: {', '.join(item['attachments'])}"
+            # Filenames are chosen by the sender, so they are content, not
+            # metadata: "invoice.pdf" and a filename holding a paragraph of
+            # instructions arrive by the same route.
+            names = ", ".join(sanitize_untrusted(str(a)) for a in item["attachments"])
+            parts.append(f"ATTACHMENTS: {names}")
 
         prefix = f"MESSAGE {index}:\n" if index is not None else ""
-        return f"""{prefix}SOURCE: {item.get('source', 'unknown')}
-FROM: {item.get('sender', 'unknown')} ({item.get('sender_email', item.get('chat_name', ''))})
-DATE: {item.get('date', '')}
-SUBJECT: {item.get('subject', '')}
-BODY:
----
-{item.get('body', '(empty)')}
----{attachments_str}"""
+        return (
+            f"{prefix}SOURCE: {item.get('source', 'unknown')}\n"
+            f"DATE: {item.get('date', '')}\n"
+            + wrap_untrusted("message-content", "\n".join(parts))
+        )
 
     def _extract_json(self, text: str) -> dict:
         """Extract first valid JSON object from text."""
@@ -2470,9 +2554,19 @@ class Sentinel:
         self.logger.info(f"Cycle complete: {len(items)} items in {elapsed:.1f}s")
 
     def _mark_item_processed(self, item: dict) -> None:
-        """Record that an email reached a terminal outcome this cycle."""
+        """Record that an item reached a terminal outcome this cycle.
+
+        Each source has its own memory of what it has read: an id set for
+        email, a per-chat high-water mark for Telegram. Both are advanced HERE
+        and nowhere else, so "fetched" and "accounted for" stay separate states
+        and a failure between them costs a re-read rather than the message.
+        """
         if item.get("source") == "email" and item.get("message_id"):
             self.state.mark_email_processed(item["message_id"])
+        elif item.get("source") == "telegram" and item.get("cursor_id"):
+            self.state.set_telegram_last_id(
+                item.get("chat_id", ""), item.get("chat_name", ""),
+                item["cursor_id"])
 
     async def _analyze_and_notify(self, items: list):
         threshold = self.config.urgency_threshold
@@ -2481,21 +2575,49 @@ class Sentinel:
 
         # Pre-process: dedup and collect items needing LLM analysis.
         #
-        # Emails are NOT marked processed here any more. Marking before analysis
-        # meant an Anthropic outage, or a cycle that hit
-        # max_notifications_per_cycle, permanently consumed the message: never
-        # retried, never in the digest, never notified. Silence is the worst
-        # failure an urgency monitor has. A message is now marked only once it
-        # reaches a terminal outcome below.
+        # NOTHING is marked processed here. Marking before analysis meant an
+        # Anthropic outage, or a cycle that hit max_notifications_per_cycle,
+        # permanently consumed the message: never retried, never in the digest,
+        # never notified. Silence is the worst failure an urgency monitor has.
+        # A message is now marked only once it reaches a terminal outcome
+        # below. Email was fixed here first and Telegram was left behind,
+        # advancing its per-chat cursor inside the fetch itself; both sources
+        # go through `_mark_item_processed` now.
         items_to_analyze = []  # (item, content_hash) pairs
         for item in items:
+            # The subject is part of the identity. Without it, two different
+            # messages from one sender whose first 500 body characters match
+            # hashed the same and the second was dropped as a duplicate,
+            # notifying nobody. That is routine, not exotic: a templated alert
+            # ("Please review the attached.") or a reply quoting the same
+            # thread carries its whole meaning in the subject line. The field
+            # separator matters too - without one, sender "ab" + body "c" and
+            # sender "a" + body "bc" are the same string.
+            #
+            # Widening the key invalidates the hashes already in state, so the
+            # first cycle after this lands may repeat a notification. That is
+            # the safe direction for a monitor whose worst failure is silence.
             content_hash = hashlib.md5(
-                f"{item.get('source')}{item.get('sender')}{item.get('body', '')[:500]}".encode(),
+                "\x1f".join([
+                    str(item.get("source") or ""),
+                    str(item.get("sender") or ""),
+                    str(item.get("subject") or ""),
+                    str(item.get("body") or "")[:500],
+                ]).encode(),
                 usedforsecurity=False,
             ).hexdigest()
 
             if self.state.is_already_notified(content_hash):
+                # Terminal: this exact content already reached the operator, so
+                # there is nothing left to do with it. It must still be marked.
+                # An unmarked duplicate is re-fetched and re-hashed every cycle
+                # until the hash ages out, and for Telegram - whose memory is a
+                # per-chat cursor rather than a per-message id - the cursor
+                # never advances past it at all, so the dialog is re-read
+                # forever and every message behind the duplicate is re-analysed
+                # with it.
                 self.logger.debug(f"Skipping duplicate: {item.get('subject', '')}")
+                self._mark_item_processed(item)
                 continue
 
             items_to_analyze.append((item, content_hash))

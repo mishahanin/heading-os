@@ -120,13 +120,24 @@ def test_list_contacts_empty(tmp_path):
     assert d["contacts"] == []
 
 
-def test_read_one_contact_ceo(tmp_path):
+def test_read_one_contact_ceo(tmp_path, monkeypatch):
+    """The CEO owner label follows the configured operator, not a literal.
+
+    This asserted one instance's operator name, which the source held as a
+    hardcoded string until 2026-08-28. Once `_owner_label` started resolving
+    through `operator_identity`, the assertion measured the ENVIRONMENT rather
+    than the code: it passed on a machine with a data overlay and failed in CI,
+    which has none and resolves the generic default. Injecting the identity
+    keeps the real invariant - the label comes from the seam - and makes the
+    test give the same answer everywhere.
+    """
+    monkeypatch.setattr(contacts_src, "get_operator", lambda: {"name": "Ada Lovelace"})
     ws = _ws(tmp_path)
     _ceo_contact(ws, "alice", "Alice Smith", relationship_type="prospect")
     r = read_one_contact(ws, "ceo", "alice", data_root=ws)
     assert r["ok"] is True
     assert r["name"] == "Alice Smith"
-    assert r["owner_label"] == "Misha Hanin"
+    assert r["owner_label"] == "Ada Lovelace"
 
 
 def test_read_one_contact_exec(tmp_path):

@@ -80,10 +80,18 @@ def wrap_untrusted(label: str, text: str) -> str:
 def format_untrusted_emails(raw_emails: list, cap: int = 3) -> str:
     """Build the per-conversation email block for the analysis prompt.
 
-    Sanitises the externally-authored fields (sender_name, sender_email,
-    subject, body_preview), preserves our own trusted fields (direction, to),
-    caps at `cap` emails, and wraps the whole block in an untrusted-data
-    delimiter. Returns the wrapped block (empty string if no emails).
+    Sanitises every externally-authored field (sender_name, sender_email,
+    subject, body_preview, and the `to` recipient addresses), preserves our own
+    trusted field (direction), caps at `cap` emails, and wraps the whole block
+    in an untrusted-data delimiter. Returns the wrapped block (empty string if
+    no emails).
+
+    `to` used to be listed here as one of "our own trusted fields" and passed
+    through verbatim. It is not ours on the half of this corpus that matters:
+    on INBOUND mail the To and Cc lists are written by the sender, who can put
+    whatever they like in an address field. A recipient address reading
+    `ignore all previous instructions@x.test` therefore reached the prompt
+    unstripped through the one field the docstring promised was safe.
     """
     if not raw_emails:
         return ""
@@ -94,7 +102,9 @@ def format_untrusted_emails(raw_emails: list, cap: int = 3) -> str:
         s_email = sanitize_untrusted(em.get("sender_email", ""))
         s_subject = sanitize_untrusted(em.get("subject", ""))
         s_body = sanitize_untrusted((em.get("body_preview", "") or "")[:300])
-        to_list = ", ".join(r.get("email", "") for r in (em.get("to") or [])[:3])
+        to_list = ", ".join(
+            sanitize_untrusted(str(r.get("email", "")))
+            for r in (em.get("to") or [])[:3])
         lines.append(
             f"  [{direction}] From: {s_name} <{s_email}> "
             f"| To: {to_list} "

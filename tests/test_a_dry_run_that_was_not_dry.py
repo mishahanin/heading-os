@@ -173,10 +173,32 @@ def test_the_score_is_coerced_and_clamped(raw, expected):
 # ============================================================
 def test_the_pre_pass_no_longer_consumes_emails():
     """Marking before analysis meant an LLM outage dropped the message for good
-    -- never retried, never in the digest, never notified."""
+    -- never retried, never in the digest, never notified.
+
+    The pre-pass marks in exactly ONE place: the already-notified branch, where
+    the content has already reached the operator and there is nothing left to
+    do with it. Everything else must reach a terminal outcome first, so the
+    state writer must not be called directly here.
+    """
     src = (ROOT / "scripts" / "sentinel.py").read_text(encoding="utf-8")
     pre = src.split("# Pre-process:", 1)[1].split("if not items_to_analyze:", 1)[0]
     assert "mark_email_processed" not in pre, pre
+    assert "set_telegram_last_id" not in pre, pre
+    assert pre.count("_mark_item_processed(item)") == 1, pre
+
+
+def test_a_duplicate_is_marked_so_it_stops_coming_back():
+    """The dedup branch is a terminal outcome and must say so in state.
+
+    An unmarked duplicate is re-fetched and re-hashed every cycle until the
+    hash ages out, and Telegram - whose memory is a per-chat cursor rather than
+    a per-message id - never advances past it at all, so the dialog and every
+    message behind the duplicate are re-read forever.
+    """
+    src = (ROOT / "scripts" / "sentinel.py").read_text(encoding="utf-8")
+    branch = src.split("if self.state.is_already_notified(content_hash):", 1)[1]
+    branch = branch.split("continue", 1)[0]
+    assert "_mark_item_processed(item)" in branch, branch
 
 
 def test_the_terminal_path_marks_the_email():
@@ -185,14 +207,49 @@ def test_the_terminal_path_marks_the_email():
     assert "_mark_item_processed(item)" in body, body
 
 
-def test_mark_item_processed_ignores_non_email_sources(tmp_path):
+def test_mark_item_processed_writes_each_source_its_own_memory(tmp_path):
+    """One writer, two memories: an id set for email, a cursor for Telegram.
+
+    This asserted that a telegram item was IGNORED here, which was true only
+    because Telegram advanced its cursor inside the fetch instead - the same
+    consume-before-analysis defect the email path above was fixed for. A
+    telegram item now carries `cursor_id` and is written here like its twin.
+    """
     st = sen.StateManager(state_path=tmp_path / "s.json")
     obj = sen.Sentinel.__new__(sen.Sentinel)
     obj.state = st
-    obj._mark_item_processed({"source": "telegram", "message_id": "t-1"})
+
+    # An email id never lands in the telegram cursor map, and vice versa.
+    obj._mark_item_processed({"source": "telegram", "chat_id": "7",
+                              "chat_name": "James", "cursor_id": 105})
     assert not st.is_email_processed("t-1")
+    assert st.get_telegram_last_id("7") == 105
+
     obj._mark_item_processed({"source": "email", "message_id": "e-1"})
     assert st.is_email_processed("e-1")
+
+    # A source this function does not know writes nothing at all, rather than
+    # landing in whichever branch happens to be last.
+    obj._mark_item_processed({"source": "signal", "chat_id": "7",
+                              "cursor_id": 999, "message_id": "s-1"})
+    assert st.get_telegram_last_id("7") == 105
+    assert not st.is_email_processed("s-1")
+
+
+def test_a_telegram_item_without_a_cursor_writes_nothing(tmp_path):
+    """Vacuity guard on the `and item.get("cursor_id")` half.
+
+    A telegram item that never carried a cursor must not write one: a missing
+    key read as 0 would rewind the chat to the beginning of its history and
+    re-report every message in it.
+    """
+    st = sen.StateManager(state_path=tmp_path / "s.json")
+    obj = sen.Sentinel.__new__(sen.Sentinel)
+    obj.state = st
+    st.set_telegram_last_id("7", "James", 105)
+
+    obj._mark_item_processed({"source": "telegram", "chat_id": "7"})
+    assert st.get_telegram_last_id("7") == 105
 
 
 # ============================================================

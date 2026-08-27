@@ -70,7 +70,8 @@ _HIGH_VALUE_RELATIONSHIPS = frozenset({
 })
 
 
-def _short_circuit(tier: str, weight: int, marker: str) -> dict:
+def _short_circuit(tier: str, weight: int, marker: str,
+                   keyword_override: Optional[str] = None) -> dict:
     """Build a short-circuit classification result dict.
 
     Used by the recipient-aware rule block in CheapClassifier.classify() to
@@ -84,13 +85,19 @@ def _short_circuit(tier: str, weight: int, marker: str) -> dict:
                    tl_to_important            -- internal TL sender + CEO in To
                    internal_nonlead_to_normal -- internal non-leadership sender + CEO in To
                    internal_cc_normal         -- internal sender (any role) + CEO in CC only
+        keyword_override: What `match_keywords` actually returned for this
+                 message. This field was hardcoded to None, which is not the
+                 same claim as "no keyword matched": the rule had not been
+                 consulted at all, and the breakdown reported the absence as a
+                 finding. A caller reading the breakdown to explain a LOW
+                 verdict was told the keywords were checked and were clean.
     """
     return {
         "tier_guess": tier,
         "weight": weight,
         "reason_breakdown": {
             "sender_override": marker,
-            "keyword_override": None,
+            "keyword_override": keyword_override,
             "crm_contact": 0,
             "pipeline": 0,
             "threads": 0,
@@ -187,7 +194,21 @@ class CheapClassifier:
         # `always_important` never claimed precedence ("acts as a weight"), so
         # the 2026-05-29 directive still governs it.
         sender_match = self.rules.match_sender(sender_email)
-        overridden = sender_match in ("always_critical", "always_normal")
+
+        # `promote_to_critical` is resolved here for the SAME reason the two
+        # short-circuiting sender verdicts above are: the recipient block below
+        # returns before step 2 ever runs, so the operator's critical keywords
+        # could not fire for internal mail at all. A colleague inside the Tribe
+        # writing "PRODUCTION DOWN" straight to him classified LOW, and the
+        # breakdown blamed `internal_nonlead_to_normal` while reporting
+        # `keyword_override: None` as though the words had been read.
+        #
+        # `promote_to_important` deliberately does NOT jump the block. It is a
+        # weight (3), never a verdict, exactly like `always_important` one line
+        # up - but it is now REPORTED by the short circuit rather than erased.
+        keyword_match = self.rules.match_keywords(subject, body_preview)
+        overridden = (sender_match in ("always_critical", "always_normal")
+                      or keyword_match == "promote_to_critical")
 
         # 0. Recipient-aware rule (CEO directive 2026-05-29, extended from bbdfde5).
         # Applies ONLY when sender is internal (sender's domain in rules.internal_domains).
@@ -233,12 +254,15 @@ class CheapClassifier:
                                  and relationship.strip().lower()
                                  .startswith("tribe-leadership"))
                     if is_tl:
-                        return _short_circuit("HIGH_LIKELY", 99, "tl_to_important")
+                        return _short_circuit("HIGH_LIKELY", 99, "tl_to_important",
+                                              keyword_match)
                     else:
-                        return _short_circuit("LOW", 0, "internal_nonlead_to_normal")
+                        return _short_circuit("LOW", 0, "internal_nonlead_to_normal",
+                                              keyword_match)
 
                 if in_cc:
-                    return _short_circuit("LOW", 0, "internal_cc_normal")
+                    return _short_circuit("LOW", 0, "internal_cc_normal",
+                                          keyword_match)
         # else: not internal OR sender domain is empty OR my_email unset
         #        OR neither in_to nor in_cc -> fall through to existing classifier
 
@@ -262,7 +286,8 @@ class CheapClassifier:
         # always_important does NOT short-circuit -- it acts as a weight (3)
 
         # 2. Keyword overrides -- promote_to_critical short-circuits to HIGH_LIKELY
-        keyword_match = self.rules.match_keywords(subject, body_preview)
+        # Resolved above step 0, which is what lets a critical keyword
+        # outrank the recipient rule.
         breakdown["keyword_override"] = keyword_match
         if keyword_match == "promote_to_critical":
             return {"tier_guess": "HIGH_LIKELY", "weight": 99, "reason_breakdown": breakdown}

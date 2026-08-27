@@ -129,7 +129,10 @@ def test_a_dm_read_on_the_phone_is_still_seen():
 
     assert len(items) == 1
     assert "shipment slipped" in items[0]["body"]
-    assert state.cursors["7"] == 105
+    assert items[0]["cursor_id"] == 105
+    assert state.cursors["7"] == 100, (
+        "the cursor moved at fetch time again; see the deferred-cursor tests "
+        "at the bottom of this file")
 
 
 def test_a_dialog_where_the_operator_spoke_last_advances_without_alerting():
@@ -163,7 +166,10 @@ def test_an_incoming_message_is_kept_when_the_operator_also_replied():
     assert len(items) == 1
     assert "confirm the price" in items[0]["body"]
     assert "checking now" not in items[0]["body"]
-    assert state.cursors["7"] == 106
+    assert items[0]["cursor_id"] == 106, (
+        "the cursor must still cover the operator's own reply, or the dialog "
+        "is rescanned for as long as he happened to write last")
+    assert state.cursors["7"] == 100
 
 
 def test_a_dialog_with_nothing_new_is_never_fetched():
@@ -210,7 +216,8 @@ def test_first_sight_with_unread_still_reports_exactly_the_unread():
 
     assert len(items) == 1
     assert client.calls[0]["limit"] == 2
-    assert state.cursors["7"] == 902
+    assert items[0]["cursor_id"] == 902
+    assert "7" not in state.cursors
 
 
 @pytest.mark.parametrize(
@@ -229,3 +236,94 @@ def test_bots_and_ignored_chats_stay_out(dialog, config):
 
     assert items == []
     assert client.calls == []
+
+
+# ============================================================
+# The cursor is advanced by the OUTCOME, never by the fetch
+# ============================================================
+#
+# The reader wrote `set_telegram_last_id` the moment it had the messages, so a
+# DM was consumed before anything looked at it. An Anthropic outage, or any
+# raise between the fetch and the digest, lost it permanently: never retried,
+# never digested, never notified. The email half of the same function was fixed
+# for exactly this and Telegram was left behind. The fetch now carries
+# `cursor_id` on the item and `Sentinel._mark_item_processed` writes it once
+# the item reaches a terminal outcome.
+
+
+def test_a_failed_analysis_leaves_the_message_readable_next_cycle():
+    """The whole point. Fetch, then lose the analysis, then fetch again."""
+    user = _user()
+    messages = [FakeMessage(105, "the wire did not land")]
+    state = FakeState({"7": 100})
+
+    first = _run(_source(FakeClient(
+        dialogs=[FakeDialog(user, top_message_id=105, unread_count=1)],
+        messages=messages), state))
+    assert len(first) == 1
+
+    # The analysis raises, so nothing marks the item. State is untouched.
+    second = _run(_source(FakeClient(
+        dialogs=[FakeDialog(user, top_message_id=105, unread_count=1)],
+        messages=messages), state))
+    assert len(second) == 1, (
+        "the DM was consumed by the fetch, so an outage between reading it and "
+        "scoring it loses it for good")
+    assert "wire did not land" in second[0]["body"]
+
+
+def test_the_terminal_outcome_advances_the_cursor_and_the_dialog_goes_quiet():
+    """The mirror: once marked, the same messages are never offered again.
+
+    Without this the pair above is satisfied by a reader that simply never
+    advances, which re-reports every DM on every cycle forever.
+    """
+    from scripts.sentinel import Sentinel
+
+    user = _user()
+    messages = [FakeMessage(105, "the wire did not land")]
+    state = FakeState({"7": 100})
+
+    items = _run(_source(FakeClient(
+        dialogs=[FakeDialog(user, top_message_id=105, unread_count=1)],
+        messages=messages), state))
+    assert len(items) == 1
+
+    marker = Sentinel.__new__(Sentinel)
+    marker.state = state
+    marker._mark_item_processed(items[0])
+    assert state.cursors["7"] == 105
+
+    client = FakeClient(
+        dialogs=[FakeDialog(user, top_message_id=105, unread_count=1)],
+        messages=messages)
+    assert _run(_source(client, state)) == []
+    assert client.calls == [], "a dialog at its cursor must cost zero API calls"
+
+
+def test_a_monitored_group_defers_its_cursor_the_same_way():
+    """`_check_monitored_chats` is the second copy of this code path.
+
+    The DM half and the group half each wrote the cursor at fetch time. Fixing
+    one and not the other is the failure shape this audit keeps finding.
+    """
+    chat = types.Chat(id=42, title="Ops room", participants_count=3,
+                      date=None, version=1, photo=None)
+    client = FakeClient(dialogs=[], messages=[FakeMessage(77, "server is down")])
+    state = FakeState({"42": 70})
+    source = _source(client, state, {"max_messages_per_chat": 30})
+
+    async def _resolve(_identifier):
+        return chat
+
+    async def _sender_name(_msg):
+        return "Ada"
+
+    source._resolve_chat = _resolve
+    source._get_sender_name = _sender_name
+
+    items = asyncio.run(source._check_monitored_chats([{"name": "Ops room"}]))
+
+    assert len(items) == 1
+    assert items[0]["cursor_id"] == 77
+    assert state.cursors["42"] == 70, "the group cursor moved at fetch time"

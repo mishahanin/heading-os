@@ -5,13 +5,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tests.integration.wizard_fixture import build_workspace
+
 REPO = Path(__file__).parent.parent.parent
 
 
 def test_pristine_heading_os_full_run(tmp_path):
-    src = REPO / "tests" / "fixtures" / "pristine_heading_os"
-    dest = tmp_path / "workspace"
-    shutil.copytree(src, dest)
+    # Built from the SHIPPED wizard config, not the fixture's own copy: the
+    # wizard resolves config against cwd, so a duplicate inside the fixture
+    # shadows the files a real /setup-wizard reads. See
+    # tests/integration/wizard_fixture.py.
+    dest = build_workspace(tmp_path / "workspace")
 
     result = subprocess.run(
         [sys.executable, str(REPO / "scripts" / "dev" / "wizard-simulate.py"),

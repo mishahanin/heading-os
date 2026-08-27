@@ -326,6 +326,111 @@ def _card(name: str) -> str:
             "status: active\nlast_touch: '2026-06-01'\n---\n")
 
 
+def _migrated_card(slug: str) -> str:
+    """A relationship record as scripts/crm_migrate_to_entity_model.py writes it.
+
+    No `name:` anywhere: `config/schemas/crm-relationship.schema.json` requires
+    only entity_ref / relationship_type / last_touch / created, and the name
+    lives in the address-book entity.
+    """
+    return (f"---\nentity_ref: {slug}\nrelationship_type: prospect\n"
+            "status: active\nlast_touch: '2026-06-01'\ncreated: '2026-01-01'\n---\n")
+
+
+def _entity(tmp_path: Path, slug: str, name: str) -> None:
+    d = tmp_path / "crm" / "address-book"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{slug}.md").write_text(f"---\nname: {name}\n---\n\n# {name}\n",
+                                  encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# The entity model. `scripts/utils/crm.py` has read both card shapes since the
+# migration landed; the census truth set read `name:` only, so every migrated
+# card fell out of it and the two "who has no CRM card" oracles counted those
+# people as cardless. Migrate them all and both report 100% missing. All six
+# cards in the shared corpus were the legacy shape, so nothing said so.
+# ---------------------------------------------------------------------------
+
+def test_the_shared_corpus_holds_a_card_of_each_shape(corpus):
+    """A corpus that drifts back to one shape stops testing the resolution."""
+    parse_frontmatter = census_oracles.parse_frontmatter
+
+    shapes = {"inline": 0, "entity_ref": 0}
+    for p in sorted(corpus.crm.glob("*.md")):
+        fm = parse_frontmatter(p.read_text(encoding="utf-8")) or {}
+        if (fm.get("name") or "").strip():
+            shapes["inline"] += 1
+        elif (fm.get("entity_ref") or "").strip():
+            shapes["entity_ref"] += 1
+    assert shapes["inline"] >= 1 and shapes["entity_ref"] >= 1, shapes
+
+
+def test_a_migrated_card_is_in_the_truth_set(corpus):
+    """sofia-reyes.md carries no `name:`; her name comes from the entity."""
+    names = census_oracles._contact_names(corpus)
+    assert "sofia reyes" in names, sorted(names)
+
+
+def test_a_person_with_only_a_migrated_card_is_not_counted_as_cardless(tmp_path):
+    """The consequence, through the oracle that reports it.
+
+    agg-06 asks which active threads name a counterparty who has no CRM card.
+    A migrated card IS a card.
+    """
+    _entity(tmp_path, "dana-osei", "Dana Osei")
+    corpus = _corpus_from(
+        tmp_path,
+        threads={"a.md": _thread("A", counterparties=["Dana Osei"]),
+                 "b.md": _thread("B", counterparties=["James Bond"])},
+        contacts={"dana-osei.md": _migrated_card("dana-osei")},
+    )
+    a = resolve("agg-06")(corpus, TODAY)
+    assert a.paths == {f"{T}/b.md"}, (
+        f"a counterparty holding a migrated card was reported as having none: "
+        f"{a.paths}"
+    )
+
+
+def test_a_card_pointing_at_a_missing_entity_is_refused_not_dropped(tmp_path):
+    """Silently dropping the card produces a smaller answer that reads as a
+    correct one. 'Cannot compute truth' is the honest result."""
+    corpus = _corpus_from(
+        tmp_path,
+        threads={"a.md": _thread("A", counterparties=["Dana Osei"])},
+        contacts={"dana-osei.md": _migrated_card("dana-osei")},  # no entity written
+    )
+    with pytest.raises(census_oracles.UnreadableCorpus, match="dana-osei"):
+        resolve("agg-06")(corpus, TODAY)
+
+
+def test_an_entity_that_exists_but_names_nobody_is_refused_too(tmp_path):
+    """`parse_frontmatter` returns {} for a file with no frontmatter, and {} is
+    not None: the same hole `scripts/utils/crm.py` documents at load_entity."""
+    d = tmp_path / "crm" / "address-book"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "dana-osei.md").write_text("# Dana Osei\n\nNo frontmatter here.\n",
+                                    encoding="utf-8")
+    corpus = _corpus_from(
+        tmp_path,
+        threads={"a.md": _thread("A", counterparties=["Dana Osei"])},
+        contacts={"dana-osei.md": _migrated_card("dana-osei")},
+    )
+    with pytest.raises(census_oracles.UnreadableCorpus, match="carries no name"):
+        resolve("agg-06")(corpus, TODAY)
+
+
+def test_a_legacy_card_still_resolves_without_an_address_book(tmp_path):
+    """Anchor. Most of the tree is still the legacy shape, and the entity lookup
+    must not become a requirement for cards that never needed one."""
+    corpus = _corpus_from(
+        tmp_path,
+        threads={"a.md": _thread("A", counterparties=["Dana Osei"])},
+        contacts={"dana-osei.md": _card("Dana Osei")},
+    )
+    assert resolve("agg-06")(corpus, TODAY).paths == set()
+
+
 def test_agg_06_resolves_a_counterparty_written_with_a_role_suffix(tmp_path):
     """'Alba Karimova (Northwind, CTO)' names a person who HAS a card.
 

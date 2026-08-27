@@ -91,17 +91,98 @@ def test_malformed_jsonl_lines_skipped():
 # ---------- tool_errors extraction ----------
 
 def test_tool_errors_extracted():
-    """tool_result events with exit_code != 0 or stderr -> tool_errors array."""
+    """tool_result BLOCKS flagged is_error -> tool_errors array.
+
+    The fixture used to model tool activity as top-level JSONL events carrying
+    `exit_code` and `stderr` keys, and `build_envelope` dispatched on exactly
+    that. Claude Code has never written that shape: measured 2026-08-27 across
+    all 1115 transcripts under ~/.claude/projects, zero such events exist, while
+    one session's transcript alone carried 13,503 tool_use blocks and 192 failed
+    tool_result blocks. So this test passed on invented data while the array was
+    always empty in production, and /calibrate's "Errors / friction" section -
+    which its own reference file calls the highest-quality category, because the
+    signal is structured - reported nothing, every run.
+
+    Both the fixture and the parser now use the real shape.
+    """
     fixture = FIXTURES / "tool-errors.jsonl"
     rc, out, err = run_parser("--session", str(fixture))
     assert rc == 0
     env = json.loads(out)
-    assert len(env["tool_errors"]) == 2
-    assert env["tool_errors"][0]["exit_code"] == 2
-    assert "linkedin_archive.py" in env["tool_errors"][0]["stderr"]
-    # cmd field carries the command from the preceding tool_use
-    assert env["tool_errors"][0]["cmd"] == "python scripts/linkedin_archive.py"
-    assert env["tool_errors"][1]["cmd"] == "python scripts/missing.py"
+    errors = env["tool_errors"]
+    assert len(errors) == 3, errors
+    assert errors[0]["exit_code"] == 2
+    assert errors[0]["tool"] == "Bash"
+    assert "linkedin_archive.py" in errors[0]["stderr"]
+    # cmd comes from the tool_use block with the MATCHING id, not from "the last
+    # command seen for this tool name": two Bash calls in one turn used to
+    # attribute the second command to the first result.
+    assert errors[0]["cmd"] == "python scripts/linkedin_archive.py"
+    assert errors[1]["cmd"] == "python scripts/missing.py"
+    # A non-Bash failure carries no exit code anywhere in the transcript. None
+    # says so; 0 would read as success.
+    assert errors[2]["tool"] == "Read"
+    assert errors[2]["exit_code"] is None, errors[2]
+    assert errors[2]["stderr"] == "File does not exist.", errors[2]
+
+
+def test_a_successful_tool_result_is_not_an_error():
+    """Anchor. The fixture's middle call succeeds, so a parser that recorded
+    every tool_result would report four errors instead of three."""
+    fixture = FIXTURES / "tool-errors.jsonl"
+    rc, out, _ = run_parser("--session", str(fixture))
+    assert rc == 0
+    env = json.loads(out)
+    assert all("linkedin-archive.py" not in e["cmd"] for e in env["tool_errors"]), (
+        env["tool_errors"]
+    )
+
+
+def test_the_parser_reads_the_shape_this_machine_actually_writes():
+    """Read a REAL transcript, not a fixture, and require the branch to fire.
+
+    A fixture is an assertion about the world, and this one was wrong for
+    months. This test asks the world directly: it walks the newest transcripts
+    on disk, finds one containing a failed tool_result block, and requires
+    build_envelope to extract at least that many errors from it.
+
+    Skipped where no transcript is available (a fresh clone, or CI).
+    """
+    import importlib.util
+
+    projects = Path.home() / ".claude" / "projects"
+    if not projects.is_dir():
+        pytest.skip("no Claude Code transcripts on this machine")
+    spec = importlib.util.spec_from_file_location("calibrate_real", SCRIPT)
+    cal = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cal)
+
+    candidates = sorted(projects.rglob("*.jsonl"),
+                        key=lambda p: p.stat().st_mtime, reverse=True)[:40]
+    for path in candidates:
+        try:
+            events, _ = cal.parse_jsonl(path)
+        except OSError:
+            continue
+        expected = sum(
+            1
+            for ev in events
+            for b in (cal._message_content(ev) if isinstance(cal._message_content(ev), list) else [])
+            if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("is_error")
+        )
+        if expected < 1:
+            continue
+        env = cal.build_envelope(path, events)
+        assert len(env["tool_errors"]) == expected, (
+            f"{path.name}: the transcript carries {expected} failed tool_result "
+            f"blocks and the parser extracted {len(env['tool_errors'])}"
+        )
+        assert any(e["tool"] for e in env["tool_errors"]), (
+            "every extracted error has an empty tool name, so the tool_use "
+            "pairing is not working on real data"
+        )
+        return
+    pytest.skip("no recent transcript on this machine carries a failed tool call")
 
 
 def test_nonexistent_session_exits_code_3(tmp_path):

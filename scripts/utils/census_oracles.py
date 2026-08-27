@@ -298,12 +298,54 @@ def _contacts(corpus: CorpusPaths) -> list[tuple[Path, dict]]:
     return contacts
 
 
+def _contact_name(corpus: CorpusPaths, path: Path, fm: dict) -> str:
+    """The person a CRM card is about, in either shape the tree may hold.
+
+    A legacy card carries `name:` inline. A card migrated by
+    `scripts/crm_migrate_to_entity_model.py` is a RELATIONSHIP record: its
+    frontmatter is `entity_ref` / `relationship_type` / `last_touch` / `created`
+    with no `name:` at all, because the name lives in the address-book entity.
+    `config/schemas/crm-relationship.schema.json` declares exactly that, and
+    `scripts/utils/crm.py` has read both shapes since the migration landed.
+
+    This function did not: it read `fm.get("name")` only. Every migrated card
+    therefore dropped out of the truth set, so `oracle_agg_03` ("people named in
+    context/people.md with no CRM card") and `oracle_agg_06` ("active threads
+    naming a counterparty who has no CRM card") counted those people as
+    cardless. Migrate them all and both oracles report 100% missing. The
+    corpus held six cards and all six were the legacy shape, so nothing said so.
+
+    Resolved against the corpus rather than through the workspace seam, because
+    `CorpusPaths` exists so every oracle can be pointed at a fixture tree.
+    """
+    inline = (fm.get("name") or "").strip()
+    if inline:
+        return inline
+    ref = (fm.get("entity_ref") or "").strip()
+    if not ref:
+        return ""
+    entity_file = corpus.crm.parent / "address-book" / f"{ref}.md"
+    if not entity_file.exists():
+        raise UnreadableCorpus(
+            f"cannot compute truth over CRM card {path.name}: it points at "
+            f"entity '{ref}', which is not in {entity_file.parent}. A relationship "
+            f"record whose entity is missing has no name, and counting it as a "
+            f"person with no card is the wrong answer, not a smaller one."
+        )
+    entity = parse_frontmatter(entity_file.read_text(encoding="utf-8"))
+    name = (entity.get("name") or "").strip() if entity else ""
+    if not name:
+        raise UnreadableCorpus(
+            f"cannot compute truth over CRM card {path.name}: entity "
+            f"'{ref}' carries no name. An entity that exists and says nothing "
+            f"is as dangling as one that is gone."
+        )
+    return name
+
+
 def _contact_names(corpus: CorpusPaths) -> set[str]:
-    return {
-        (fm.get("name") or "").strip().lower()
-        for _, fm in _contacts(corpus)
-        if (fm.get("name") or "").strip()
-    }
+    names = {_contact_name(corpus, path, fm) for path, fm in _contacts(corpus)}
+    return {n.lower() for n in names if n}
 
 
 _OPEN_FOLLOWUPS_RE = re.compile(r"^## Open follow-ups\s*\n(.*?)(?=^## |\Z)", re.M | re.S)

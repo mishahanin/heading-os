@@ -158,13 +158,64 @@ def _message_content(ev: dict):
     return message.get("content", "") if isinstance(message, dict) else ""
 
 
+def _result_text(content) -> str:
+    """The readable payload of a tool_result block, whichever shape it carries.
+
+    Usually a plain string. Some tools return a list of blocks instead, and a
+    `str(...)` of that list would put Python repr punctuation into the envelope
+    the detection prompts read.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [b.get("text", "") for b in content
+                 if isinstance(b, dict) and isinstance(b.get("text"), str)]
+        return "\n".join(p for p in parts if p)
+    return ""
+
+
+_EXIT_CODE_RE = re.compile(r"^(?:Error:\s*)?Exit code (\d+)\b")
+
+
+def _exit_code_from(text: str):
+    """The exit code a Bash failure spells out, or None when there is none.
+
+    The transcript records no numeric exit code anywhere; for Bash the harness
+    writes it into the first line of the error text ("Exit code 1"). For every
+    other tool there is no code at all, and None means exactly that - not zero,
+    which would read as success. The `is_error` flag is what decides the record
+    exists; this is diagnostic detail on top.
+    """
+    m = _EXIT_CODE_RE.match(text.strip())
+    return int(m.group(1)) if m else None
+
+
 def build_envelope(session_path: Path, events: list) -> dict:
-    """Filter and shape events into the envelope schema."""
+    """Filter and shape events into the envelope schema.
+
+    Tool traffic is read from CONTENT BLOCKS inside messages, which is the only
+    place Claude Code puts it. This function used to dispatch on TOP-LEVEL
+    `{"type": "tool_use"}` / `{"type": "tool_result"}` events reading
+    `exit_code` and `stderr` keys, a shape the harness has never written:
+    measured 2026-08-27 across all 1115 transcripts under ~/.claude/projects,
+    zero such events exist, while this session's own transcript alone carries
+    13,503 tool_use blocks and 192 failed tool_result blocks. So `tool_errors`
+    was ALWAYS empty on real data, and /calibrate's "Errors / friction" section
+    - the one its own reference file calls "the highest-quality category,
+    because the signal is structured" - silently had nothing to report. Only a
+    fixture written in the invented shape kept the branches green.
+
+    A failure is flagged by `is_error: true` on the tool_result block. The
+    matching command comes from the tool_use block with the same id, which is
+    the correct pairing: the old code keyed "last command per tool NAME", so
+    with two Bash calls in one assistant turn the second command was attributed
+    to the first result.
+    """
     user_turns = []
     assistant_turns = []
     tool_errors = []
     system_reminders = []
-    last_tool_use_cmd: dict[str, str] = {}  # tool name -> last command string
+    tool_uses: dict[str, dict] = {}  # tool_use_id -> {"tool", "cmd"}
     for ev in events:
         ev_type = ev.get("type")
         ts = ev.get("timestamp", "")
@@ -176,38 +227,40 @@ def build_envelope(session_path: Path, events: list) -> dict:
             text = _turn_text(_message_content(ev))
             if text:
                 assistant_turns.append({"ts": ts, "text": text})
-        elif ev_type == "tool_use":
-            tool = ev.get("tool", "")
-            # `.get("input", {})` only defaults when the KEY IS ABSENT, so an
-            # explicit `"input": null` (or a string) went straight to
-            # AttributeError. This isinstance check was the only correct one in
-            # the loop; the comment here used to call the `message` reads above
-            # "the correct idiom", and they carried the very defect it names.
-            # Both now route through `_message_content`.
-            raw_input = ev.get("input")
-            cmd = raw_input.get("command", "") if isinstance(raw_input, dict) else ""
-            if tool:
-                last_tool_use_cmd[tool] = cmd
-        elif ev_type == "tool_result":
-            # A null exit_code means "the harness did not record one", not
-            # "failed": `None != 0` was recording every such result as an error.
-            exit_code = ev.get("exit_code")
-            if exit_code is None:
-                exit_code = 0
-            stderr = ev.get("stderr", "")
-            if exit_code != 0 or stderr:
-                tool = ev.get("tool", "")
-                tool_errors.append({
-                    "ts": ts,
-                    "tool": tool,
-                    "cmd": last_tool_use_cmd.get(tool, ""),
-                    "exit_code": exit_code,
-                    "stderr": stderr,
-                })
         elif ev_type == "system":
             content = ev.get("content", "")
             if isinstance(content, str) and content:
                 system_reminders.append({"ts": ts, "text": content})
+
+        # Tool traffic rides inside user and assistant messages alike, so this
+        # runs for every event rather than as another branch of the chain above.
+        blocks = _message_content(ev)
+        if not isinstance(blocks, list):
+            continue
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if btype == "tool_use":
+                use_id = block.get("id")
+                if not use_id:
+                    continue
+                # `.get("input", {})` only defaults when the KEY IS ABSENT, so an
+                # explicit `"input": null` (or a string) goes straight to
+                # AttributeError without this isinstance check.
+                raw_input = block.get("input")
+                cmd = raw_input.get("command", "") if isinstance(raw_input, dict) else ""
+                tool_uses[use_id] = {"tool": block.get("name", ""), "cmd": cmd}
+            elif btype == "tool_result" and block.get("is_error"):
+                use = tool_uses.get(block.get("tool_use_id")) or {}
+                stderr = _result_text(block.get("content"))
+                tool_errors.append({
+                    "ts": ts,
+                    "tool": use.get("tool", ""),
+                    "cmd": use.get("cmd", ""),
+                    "exit_code": _exit_code_from(stderr),
+                    "stderr": stderr,
+                })
     started = events[0].get("timestamp", "") if events else ""
     ended = events[-1].get("timestamp", "") if events else ""
     return {

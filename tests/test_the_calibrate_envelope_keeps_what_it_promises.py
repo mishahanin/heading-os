@@ -83,42 +83,125 @@ def test_unparseable_json_is_still_tolerated(tmp_path):
     assert skipped == [1] and len(events) == 1
 
 
+# Tool traffic is a CONTENT BLOCK inside a message, which is the only shape
+# Claude Code writes. These cases used to be top-level events carrying
+# `exit_code` / `stderr` keys - a shape that does not exist in any of the 1115
+# transcripts on this machine - so they exercised a branch that never ran in
+# production. Rewritten 2026-08-27 with the parser.
+
+def _tool_use(use_id, name, tool_input, ts="t"):
+    return json.dumps({
+        "type": "assistant", "timestamp": ts,
+        "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": use_id, "name": name, "input": tool_input}]}})
+
+
+def _tool_result(use_id, content, ts="t", is_error=False):
+    block = {"type": "tool_result", "tool_use_id": use_id, "content": content}
+    if is_error:
+        block["is_error"] = True
+    return json.dumps({
+        "type": "user", "timestamp": ts,
+        "message": {"role": "user", "content": [block]}})
+
+
 def test_a_null_tool_input_does_not_crash(tmp_path):
     """`.get("input", {})` defaults only when the KEY is absent."""
-    path = _write(tmp_path, json.dumps(
-        {"type": "tool_use", "tool": "Bash", "input": None, "timestamp": "t"}))
+    path = _write(tmp_path, _tool_use("u1", "Bash", None))
     events, _ = calibrate.parse_jsonl(path)
     calibrate.build_envelope(path, events)  # used to raise
 
 
 def test_a_string_tool_input_does_not_crash(tmp_path):
-    path = _write(tmp_path, json.dumps(
-        {"type": "tool_use", "tool": "Bash", "input": "ls", "timestamp": "t"}))
+    path = _write(tmp_path, _tool_use("u1", "Bash", "ls"))
     events, _ = calibrate.parse_jsonl(path)
     calibrate.build_envelope(path, events)
 
 
-def test_a_null_exit_code_is_not_an_error(tmp_path):
-    """`None != 0` recorded every unstamped result as a failure."""
-    path = _write(tmp_path, json.dumps(
-        {"type": "tool_result", "tool": "Bash", "exit_code": None,
-         "stderr": "", "timestamp": "t"}))
+def test_a_result_that_is_not_flagged_an_error_is_not_one(tmp_path):
+    """`is_error` is the only failure signal the transcript carries. Recording
+    every tool_result would drown the array in successful calls: this session
+    alone made 13,502 of them against 192 failures."""
+    path = _write(tmp_path,
+                  _tool_use("u1", "Bash", {"command": "ls"}),
+                  _tool_result("u1", "a.md  b.md"))
     events, _ = calibrate.parse_jsonl(path)
     env = calibrate.build_envelope(path, events)
-    assert env["tool_errors"] == [], (
-        "a missing exit code means the harness did not record one, not that "
-        "the tool failed"
+    assert env["tool_errors"] == [], env["tool_errors"]
+
+
+def test_a_flagged_error_is_recorded_with_its_command(tmp_path):
+    """Anchor for the test above, and the pairing: the command comes from the
+    tool_use block with the MATCHING id."""
+    path = _write(tmp_path,
+                  _tool_use("u1", "Bash", {"command": "python missing.py"}),
+                  _tool_result("u1", "Exit code 2\nboom", is_error=True))
+    events, _ = calibrate.parse_jsonl(path)
+    env = calibrate.build_envelope(path, events)
+    assert len(env["tool_errors"]) == 1, env["tool_errors"]
+    err = env["tool_errors"][0]
+    assert err["exit_code"] == 2
+    assert err["tool"] == "Bash"
+    assert err["cmd"] == "python missing.py"
+    assert "boom" in err["stderr"]
+
+
+def test_two_calls_in_one_turn_keep_their_own_commands(tmp_path):
+    """The old code kept "the last command seen for this tool NAME", so with two
+    Bash calls in one assistant turn the second command was attributed to the
+    first result. Ids are what pair them."""
+    path = _write(
+        tmp_path,
+        json.dumps({
+            "type": "assistant", "timestamp": "t",
+            "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "u1", "name": "Bash",
+                 "input": {"command": "first.py"}},
+                {"type": "tool_use", "id": "u2", "name": "Bash",
+                 "input": {"command": "second.py"}}]}}),
+        _tool_result("u2", "Exit code 1\nsecond failed", is_error=True),
+        _tool_result("u1", "Exit code 1\nfirst failed", is_error=True))
+    events, _ = calibrate.parse_jsonl(path)
+    env = calibrate.build_envelope(path, events)
+    assert [e["cmd"] for e in env["tool_errors"]] == ["second.py", "first.py"], (
+        env["tool_errors"]
     )
 
 
-def test_a_real_nonzero_exit_code_is_still_an_error(tmp_path):
-    """Anchor: the guard above must not swallow genuine failures."""
-    path = _write(tmp_path, json.dumps(
-        {"type": "tool_result", "tool": "Bash", "exit_code": 2,
-         "stderr": "boom", "timestamp": "t"}))
+def test_a_result_with_no_matching_use_is_still_recorded(tmp_path):
+    """A transcript truncated mid-turn, or a --since-utc window that starts
+    after the call, leaves a result whose tool_use was never seen. Dropping it
+    would hide a real failure; an empty tool name is the honest report."""
+    path = _write(tmp_path, _tool_result("orphan", "Exit code 3\nboom", is_error=True))
     events, _ = calibrate.parse_jsonl(path)
     env = calibrate.build_envelope(path, events)
-    assert len(env["tool_errors"]) == 1 and env["tool_errors"][0]["exit_code"] == 2
+    assert len(env["tool_errors"]) == 1
+    assert env["tool_errors"][0]["tool"] == ""
+    assert env["tool_errors"][0]["exit_code"] == 3
+
+
+def test_a_non_bash_failure_reports_no_exit_code_rather_than_zero(tmp_path):
+    """Only Bash spells a code into its error text. For everything else there is
+    none, and None says so - 0 would read as success."""
+    path = _write(tmp_path,
+                  _tool_use("u1", "Read", {"file_path": "/nowhere.md"}),
+                  _tool_result("u1", "File does not exist.", is_error=True))
+    events, _ = calibrate.parse_jsonl(path)
+    env = calibrate.build_envelope(path, events)
+    assert env["tool_errors"][0]["exit_code"] is None, env["tool_errors"]
+    assert env["tool_errors"][0]["stderr"] == "File does not exist."
+
+
+def test_a_block_list_result_is_flattened_to_its_text(tmp_path):
+    """Some tools return a list of blocks. `str(...)` of that list would put
+    Python repr punctuation into the envelope the detection prompts read."""
+    path = _write(tmp_path,
+                  _tool_use("u1", "Read", {"file_path": "/nowhere.md"}),
+                  _tool_result("u1", [{"type": "text", "text": "File does not exist."}],
+                               is_error=True))
+    events, _ = calibrate.parse_jsonl(path)
+    env = calibrate.build_envelope(path, events)
+    assert env["tool_errors"][0]["stderr"] == "File does not exist.", env["tool_errors"]
 
 
 # ---------------------------------------------------------------------------

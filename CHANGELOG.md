@@ -38,6 +38,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   as `[quiet until None]`, which is not the `[quiet until DATE]` suffix `/prime`
   documents and reads. It now prints `[quiet indefinitely]`.
 
+### Added
+
+- **An active-threads panel at every session start, computed from the thread
+  files.** `.claude/hooks/session-start.py`. Removing the memory index (below)
+  took passive awareness with it: the running set became visible only from
+  `/prime` or an explicit `/thread`. The panel gives it back without a copy to
+  keep in sync. It lists the threads touched in the last 14 days, up to 12 rows,
+  newest first, and it names both kinds of omission separately, because "20 more
+  active" cannot tell a thread that went quiet for a month from one the row cap
+  cut off this morning. A quiet thread never appears: this panel is the
+  definition of proactive surfacing, so the rule binds here first. A thread whose
+  `last_touched` will not parse sorts to the TOP and prints `(no date)` rather
+  than being buried under the cap. An unreadable thread file is counted in the
+  header and named below the rows, up to three of them, so the operator knows
+  which file to repair rather than only that one is broken; a resolver that
+  raises prints one line to stderr instead of an empty panel. Read-only, and
+  `python scripts/thread.py list` stays the primary interface. Guard:
+  `tests/test_a_panel_that_reads_the_record_not_a_copy.py`.
+
 ### Removed
 
 - **`/thread` stops writing the memory index, seven days after `/prime` stopped
@@ -61,6 +80,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   `test_no_subcommand_writes_a_memory_index` (twelve subcommands, asserted
   against an empty data root), `test_the_retired_index_helper_is_gone`, and an
   AST check that `threads_lib` writes nothing but the thread file.
+
+### Security
+
+- **The personal-threads read guard named fifteen utilities and left out `cat`.**
+  `.claude/hooks/_dispatch.py`. The pattern's own comment promised "any plain
+  read utility" pointed at the personal subtree, and the alternation listed head,
+  tail, sed, awk, base64, b64encode, xxd, od, strings, nl, fold, cut, less, more,
+  grep and rg. The only two `cat` patterns beside it both require a redirect or a
+  pipe to tee, which is exactly the case this pattern was added to close. So
+  `head` on a personal thread was refused while the plainest read of the same
+  file went straight into the transcript, from 2026-06-09 to 2026-08-27. Added
+  `cat` with thirteen neighbours (tac, rev, sort, uniq, shuf, paste, pr, fmt,
+  expand, unexpand, column, tr, hexdump), and wrote down in the module that this
+  is a DENY-LIST which no list of names can complete. Two claims that hid the
+  gap are corrected with it: `tests/security/test_dispatch_read_guard.py` said
+  "the Bash branch already blocks the cat/grep equivalent", half true and read as
+  whole, and `tests/test_protect_personal_threads_hook.py` hand-listed ten
+  utilities with the same omission, so it agreed with the defect instead of
+  catching it. That enumeration now derives its names from the compiled
+  alternation, so a name added to the guard is exercised and a name dropped from
+  it fails. Guard:
+  `tests/security/test_a_read_guard_that_named_every_utility_but_one.py`.
+  The structural fix, a default-deny on any Bash command naming that directory,
+  is a decision for the operator and is not taken here.
 
 ## [0.13.0] - 2026-08-22
 

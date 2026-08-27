@@ -5,7 +5,7 @@ import json
 import os
 import re
 import subprocess
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 
@@ -355,6 +355,128 @@ def check_stale_files(project_dir, identity=None):
     return stale
 
 
+# ============================================================
+# Active threads panel
+# ============================================================
+#
+# The `## Active Threads` block in the auto-memory index used to put the running
+# set in front of the operator at every session start. It was retired on
+# 2026-08-27 because it was a stale COPY: on its last day it listed 3 threads
+# against 33 active on disk, and each row quoted a live status and a live date,
+# which `.claude/rules/memory-discipline.md` forbids in an always-loaded index.
+#
+# What the operator lost with it was passive awareness, and that was worth
+# keeping. This restores it from the RECORD instead of from a copy: the panel is
+# computed from the thread files on every session start, so it cannot go stale,
+# and nothing is written anywhere.
+#
+# Read-only. Console-first: `python scripts/thread.py list` is the same answer
+# and stays the primary interface; this is a convenience surface over it.
+
+THREAD_PANEL_DAYS = 14      # a thread untouched for longer is not "running"
+THREAD_PANEL_ROWS = 12      # a panel longer than this is a wall, not a summary
+THREAD_PANEL_UNREADABLE_NAMED = 3   # name the broken files, then say how many more
+
+
+def _parse_thread_or_reason(parse_thread_file, path):
+    """Parse one thread file. Returns (thread, None) or (None, reason).
+
+    The failure is RETURNED to the caller rather than counted here. A handler
+    that absorbed it would make a broken thread file invisible, and an invisible
+    broken file is a thread silently missing from the panel.
+    """
+    try:
+        return parse_thread_file(path), None
+    except Exception as exc:  # noqa: BLE001 - returned, never dropped
+        return None, f"{exc.__class__.__name__}: {exc}"
+
+
+def _thread_panel_lines(project_dir):
+    """Lines for the active-threads panel, or a one-line reason it is absent.
+
+    Returns (lines, note). `note` is non-empty only when the panel could not be
+    computed, and it is printed: silence about a check that did not run reads as
+    "nothing to report", which is the failure this whole change exists to end.
+    """
+    root = Path(project_dir).resolve()
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    try:
+        from scripts.utils.threads_lib import is_quiet, parse_thread_file
+        from scripts.utils.workspace import get_default_tz, get_threads_dir
+    except ImportError as exc:
+        return [], f"active-threads panel unavailable ({exc.__class__.__name__}: {exc})"
+
+    try:
+        threads_root = get_threads_dir()
+        today = datetime.now(get_default_tz()).date()
+    except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+        return [], f"active-threads panel unavailable ({exc.__class__.__name__}: {exc})"
+    if not threads_root.is_dir():
+        return [], ""
+
+    active, quiet, unreadable = [], 0, []
+    for type_ in ("business", "personal"):
+        type_dir = threads_root / type_
+        if not type_dir.is_dir():
+            continue
+        for path in sorted(type_dir.glob("*.md")):
+            thread, reason = _parse_thread_or_reason(parse_thread_file, path)
+            if thread is None:
+                unreadable.append(f"{type_}/{path.name} ({reason})")
+                continue
+            if thread.status != "active":
+                continue
+            # A quiet thread must not be surfaced proactively. This panel is the
+            # definition of proactive, so it is the first place that rule binds.
+            if is_quiet(thread, today):
+                quiet += 1
+                continue
+            try:
+                age = (today - date.fromisoformat(thread.last_touched)).days
+            except (TypeError, ValueError):
+                age = None
+            active.append((age, thread))
+
+    if not active and not quiet and not unreadable:
+        return [], ""
+
+    # An unparseable date sorts first: it is a defect worth seeing, not a thread
+    # worth burying at the bottom of a truncated list.
+    active.sort(key=lambda row: (row[0] is not None, row[0] if row[0] is not None else 0))
+    recent = [row for row in active if row[0] is None or row[0] <= THREAD_PANEL_DAYS]
+    shown = recent[:THREAD_PANEL_ROWS]
+
+    # Two different reasons a thread is absent, named separately. "20 more
+    # active" collapsed them, and a reader cannot tell a thread that went quiet
+    # for a month from one the row cap cut off this morning.
+    older = len(active) - len(recent)
+    head = f"Active threads: {len(active)} active"
+    if quiet:
+        head += f", {quiet} quiet"
+    if unreadable:
+        head += f", {len(unreadable)} unreadable"
+    head += ". Showing "
+    head += (f"{len(shown)} of {len(recent)}" if len(shown) < len(recent)
+             else f"the {len(shown)}")
+    head += f" touched in the last {THREAD_PANEL_DAYS} days"
+    if older:
+        head += f"; {older} older"
+    head += "."
+    lines = [head]
+    for age, thread in shown:
+        age_text = "no date" if age is None else ("today" if age == 0 else f"{age}d")
+        lines.append(f"- {thread.type}/{thread.id} - {thread.title} ({age_text})")
+    # A count says a thread is broken; the name says which one. Without it the
+    # operator has to walk the registry by hand to find the file to repair.
+    for name in unreadable[:THREAD_PANEL_UNREADABLE_NAMED]:
+        lines.append(f"  Unreadable: {name}")
+    if len(unreadable) > THREAD_PANEL_UNREADABLE_NAMED:
+        lines.append(f"  Unreadable: and {len(unreadable) - THREAD_PANEL_UNREADABLE_NAMED} more")
+    lines.append("  Full set: `python scripts/thread.py list`")
+    return lines, ""
+
+
 def main():
     try:
         input_data = json.loads(sys.stdin.read())
@@ -467,6 +589,15 @@ def main():
         print("Session alerts:")
         for alert in alerts:
             print(f"- {alert}")
+
+    panel, panel_note = _thread_panel_lines(project_dir)
+    if panel_note:
+        print(f"[session-start] {panel_note}", file=sys.stderr)
+    if panel:
+        if alerts:
+            print()
+        for line in panel:
+            print(line)
 
     sys.exit(0)
 

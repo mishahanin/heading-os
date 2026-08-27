@@ -35,7 +35,7 @@ Some hook events can block work by protocol; the rest can only observe, enrich, 
 
 | Hook | Purpose |
 |------|---------|
-| `session-start.py` | Surfaces urgent CRM contacts and data-freshness alerts at the start of a session. |
+| `session-start.py` | Surfaces urgent CRM contacts and data-freshness alerts at the start of a session. Also prints the active-threads panel, computed from the thread files. |
 | `memory-inject.py` | Loads the auto-memory index (`MEMORY.md` pointers) into context on startup. **Dormant by default** -- `inject.enabled` is `false` in `config/memory-index.yaml`, superseded 2026-08-07 by `recall-inject.py` below. Wiring it as well gives you two memory injections per session, one of them date-ordered rather than relevance-ranked. |
 | `memory-reconcile.py` | Reconciles the native harness memory store with the workspace auto-memory files. |
 | `checkpoint-inject.py` | On `compact`, `clear`, or `resume`, injects the latest saved handoff so work continues across a context reset. |

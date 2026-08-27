@@ -141,6 +141,11 @@ also drifted: on its last day it listed 3 of 33 active threads.
 
 Run `list` to see the live set. Run `show <id>` to read one thread.
 
+The `session-start.py` hook prints an active-threads panel at every session
+start. It computes the panel from the thread files, so it cannot go stale. It
+shows the threads touched in the last 14 days, up to 12 rows, and it names every
+thread it left out. A quiet thread never appears in it.
+
 `archive-scan` reports a dated quiet period once it expires. It never proposes
 on-hold for a thread that is still quiet.
 

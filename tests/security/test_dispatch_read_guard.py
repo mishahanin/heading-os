@@ -4,9 +4,18 @@ and the Read PreToolUse hook must be wired in the tracked per-OS settings templa
 
 The Read tool was not in the guarded-tool set, and the templates had no Read matcher,
 so a Read of threads/personal/... dumped CEO-only content into the transcript unguarded
-(the Bash branch already blocks the `cat`/`grep` equivalent). The shipped wiring lives
+while the Bash branch blocked the shell equivalent. The shipped wiring lives
 in the tracked settings.local.{linux,macos,windows}.json templates that seed each
 machine's gitignored live settings.local.json.
+
+That parenthesis used to read "the Bash branch already blocks the cat/grep
+equivalent". It was half true and it read as whole: `grep` was in the read
+alternation, `cat` was not, and the two `cat` patterns beside it both needed a
+redirect. So a bare `cat` of a personal thread passed from 2026-06-09 until
+2026-08-27. The Bash branch is a deny-list of utility names, which no sentence
+here should describe as covering an "equivalent" of anything.
+`tests/security/test_a_read_guard_that_named_every_utility_but_one.py` holds the
+list down now.
 """
 import importlib.util
 import json

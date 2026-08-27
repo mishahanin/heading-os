@@ -330,11 +330,29 @@ DANGEROUS_BASH_PATTERNS = [
     re.compile(r"\b(Copy-Item|Move-Item|Get-Content)\b.*threads[/\\]personal", re.IGNORECASE),
     re.compile(r"\bshutil\.(copy|copy2|move|copytree)\b.*threads[/\\]personal", re.IGNORECASE),
     re.compile(r"\bopen\s*\(\s*['\"]threads[/\\]personal", re.IGNORECASE),
-    # Read-then-emit exfil: any plain read utility pointed at threads/personal/
+    # Read-then-emit exfil: a plain read utility pointed at the personal subtree
     # dumps CEO-only content into the transcript (a leak by itself, no redirect
     # needed). Added 2026-06-09 audit (hooks finding 2 — guard was narrower than
     # secure-projects.md/security.md claim of technical enforcement).
-    re.compile(r"\b(head|tail|sed|awk|base64|b64encode|xxd|od|strings|nl|fold|cut|less|more|grep|rg)\b.*threads[/\\]personal", re.IGNORECASE),
+    #
+    # THIS IS A DENY-LIST, and a deny-list of utility names can never be
+    # complete. An unlisted reader passes: `busybox cat`, a shell function, a
+    # compiled helper, a name invented after this line was written. Read the
+    # alternation as "the common ones are refused", never as "reading is
+    # impossible". The structural alternative is a default-deny on any Bash
+    # command naming that directory, and it is the operator's decision, not this
+    # file's.
+    #
+    # `cat` was missing from 2026-06-09 to 2026-08-27. The other two `cat`
+    # patterns above both require a redirect or a pipe to tee, so `head` on a
+    # personal thread was refused while the plainest read of the same file was
+    # allowed. Added with its neighbours: tac, rev, sort, uniq, shuf, paste, pr,
+    # fmt, expand, unexpand, column, tr, hexdump.
+    re.compile(
+        r"\b(cat|tac|head|tail|sed|awk|base64|b64encode|xxd|hexdump|od|strings|"
+        r"nl|fold|cut|less|more|grep|rg|rev|sort|uniq|shuf|paste|pr|fmt|expand|"
+        r"unexpand|column|tr)\b.*threads[/\\]personal",
+        re.IGNORECASE),
     re.compile(r"\bopen\s*\(\s*['\"][^'\"]*threads[/\\]personal", re.IGNORECASE),
 ]
 

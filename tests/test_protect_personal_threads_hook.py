@@ -12,6 +12,7 @@ itself never moved: it has lived in `_dispatch.py` since the hooks were
 consolidated, and the shim only ran the same code by another name. Driving the
 dispatcher directly is what the settings templates have always wired.
 """
+import importlib.util
 import json
 import subprocess
 import sys
@@ -297,19 +298,47 @@ def test_hook_blocks_python_open_of_personal_thread() -> None:
 # ======================================
 
 
+_UTILITY_ARGS = {
+    "sed": "-n '1,5p'", "awk": "'{print}'", "grep": ".", "rg": ".",
+    "cut": "-c1-80", "od": "-c", "fold": "-w 80", "column": "-t",
+    "hexdump": "-C", "tr": "a-z A-Z <", "head": "-n 5", "tail": "-n 50",
+}
+
+
+def _read_utility_names() -> list[str]:
+    """Every name in the guard's read alternation, taken from the code.
+
+    This used to be ten names typed out by hand, and they carried the same
+    omission as the guard itself: no `cat`. So the test agreed with the defect
+    instead of catching it, for eleven weeks. Reading the alternation means a
+    name added to the guard is exercised on the next run, and a name quietly
+    deleted from it fails here.
+    """
+    spec = importlib.util.spec_from_file_location("_dispatch_read_utils", HOOK)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    marker = "threads[/" + "\\\\]" + "personal"
+    for pattern in module.DANGEROUS_BASH_PATTERNS:
+        src = pattern.pattern
+        if src.startswith(r"\b(") and marker in src and "|head|" in src:
+            return [n for n in src[3:src.index(r")\b")].split("|") if n.isalnum()]
+    raise AssertionError(
+        "no read-utility alternation in DANGEROUS_BASH_PATTERNS: this test can "
+        "no longer see what it claims to check"
+    )
+
+
 def test_hook_blocks_read_utility_exfil_of_personal_thread() -> None:
-    for cmd in (
-        "head threads/personal/secret.md",
-        "tail -n 50 threads/personal/secret.md",
-        "sed -n '1,5p' threads/personal/secret.md",
-        "awk '{print}' threads/personal/secret.md",
-        "base64 threads/personal/secret.md",
-        "xxd threads/personal/secret.md",
-        "od -c threads/personal/secret.md",
-        "strings threads/personal/secret.md",
-        "cut -c1-80 threads/personal/secret.md",
-        "grep . threads/personal/secret.md",
-    ):
+    target = "threads/" + "personal/secret.md"
+    names = _read_utility_names()
+    assert "cat" in names, (
+        "the plainest read of all is missing from the guard's alternation"
+    )
+    assert len(names) >= 25, (
+        f"the read alternation shrank to {len(names)} names: {names}"
+    )
+    for util in names:
+        cmd = f"{util} {_UTILITY_ARGS.get(util, '')} {target}".replace("  ", " ")
         payload = {"tool_name": "Bash", "tool_input": {"command": cmd}}
         rc, out, _ = _run_hook(payload)
         assert _blocked(rc, out), f"hook failed to block read-utility exfil: {cmd!r}"

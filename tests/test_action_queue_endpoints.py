@@ -85,6 +85,55 @@ def test_deposit_dedup_same_contact(client):
     assert _list(client)["total"] == 1
 
 
+def test_deposit_dedup_within_one_batch(client):
+    """Two same-key cards in ONE call, not two calls.
+
+    `append_cards` calls itself THE sole dedup authority and carries two
+    mechanisms: an index built from the cards already on disk, and a
+    within-batch registration that adds each accepted card to that index as it
+    goes. Every dedup test in the suite deposited duplicates as two SEPARATE
+    calls, so only the first mechanism was exercised - and every multi-card
+    deposit anywhere in the suite used cards with DISTINCT keys.
+
+    Deleting the within-batch registration left the whole suite green. Then one
+    cold sweep whose build_cards emits two rows for the same contact - the shape
+    its own test pins as legal - queues two pending email_send cards, and the
+    CEO is shown two drafts to one recipient from a single sweep.
+    """
+    r = _deposit(client, [_email_card(), _email_card(title="Second nudge")])
+    assert r.status_code == 200
+    assert (r.json()["added"], r.json()["skipped"]) == (1, 1), r.json()
+    assert _list(client)["total"] == 1
+
+
+def test_two_different_contacts_in_one_batch_both_land(client):
+    """Anchor. The test above passes on an `append_cards` that keeps only the
+    first card of any batch, which would silently drop most of a cold sweep."""
+    r = _deposit(client, [
+        _email_card(to="jane@acme.com", contact="crm/contacts/jane.md"),
+        _email_card(to="raj@acme.com", contact="crm/contacts/raj.md",
+                    title="Nudge Raj"),
+    ])
+    assert r.json()["added"] == 2, r.json()
+    assert r.json()["skipped"] == 0, r.json()
+    assert _list(client)["total"] == 2
+
+
+def test_within_batch_dedup_holds_for_a_three_card_run(client):
+    """Three cards, two of them the same contact. The counts have to add up, or
+    the queue and the report disagree about what happened."""
+    r = _deposit(client, [
+        _email_card(contact="crm/contacts/jane.md"),
+        _email_card(contact="crm/contacts/raj.md", title="Nudge Raj"),
+        _email_card(contact="crm/contacts/jane.md", title="Jane again"),
+    ])
+    assert (r.json()["added"], r.json()["skipped"]) == (2, 1), r.json()
+    d = _list(client)
+    assert d["total"] == 2
+    assert sorted(i["contact_file"] for i in d["items"]) == [
+        "crm/contacts/jane.md", "crm/contacts/raj.md"]
+
+
 def test_approve_card_does_not_send(client, root):
     # approve_card is the non-send disposition helper (note/pipeline_update);
     # for email_send the terminal CLI's approve_and_send sends synchronously

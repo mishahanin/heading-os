@@ -92,9 +92,14 @@ def test_by_output_dir_matches_prefix(rows):
 
 
 def test_by_output_dir_shared_subdir_returns_all(rows):
-    # outputs/intel is shared by osint + competitor-intel
+    # outputs/intel is shared by osint + competitor-intel. The ORDER is the
+    # tiebreak `t[1]` in the comparator: equal prefix lengths, alphabetical.
+    # `set(...)` hid it, and the fixture lists osint first - the reverse of
+    # alphabetical - so dropping the tiebreak changed nothing visible while
+    # by_output_dir stopped being deterministic across catalog reorderings.
+    # /next relies on it to name the producing skill for an output path.
     skills = skill_graph.by_output_dir(rows, "outputs/intel/osint/2026-06-04_osint_exampletelco.md")
-    assert set(skills) == {"osint", "competitor-intel"}
+    assert skills == ["competitor-intel", "osint"], skills
 
 
 def test_by_output_dir_orders_most_specific_first(rows):
@@ -102,6 +107,56 @@ def test_by_output_dir_orders_most_specific_first(rows):
     # (outputs/operations); the docstring promises most-specific-first ordering.
     order = skill_graph.by_output_dir(rows, "outputs/operations/implement/_trajectory_x.jsonl")
     assert order == ["implement", "ops-parent"]
+
+
+def test_the_order_comes_from_the_comparator_not_the_csv_row_order(tmp_path):
+    """`load` preserves CSV order, and the shipped fixture happens to list the
+    deeper skill first. So the asserted order was already the PRE-SORT order,
+    and deleting `matches.sort(...)` entirely left both order tests green.
+
+    Feeding the same rows in every order and demanding one answer is what makes
+    the comparator the thing under test. Reversing the two rows in the fixture
+    used to change the test result while production code stood still, which is
+    the tell that row order was being measured.
+    """
+    import itertools
+
+    header = "skill,phase,preceded_by,followed_by,produces_in,consumes_from\n"
+    parent = "ops-parent,operations,,,outputs/operations,\n"
+    child = "implement,operations,create-plan,evaluate,outputs/operations/implement,plans\n"
+    other = "osint,intel,,,outputs/intel,datastore\n"
+
+    seen = set()
+    for perm in itertools.permutations([parent, child, other]):
+        f = tmp_path / "skill-graph.csv"
+        f.write_text(header + "".join(perm), encoding="utf-8")
+        got = skill_graph.by_output_dir(
+            skill_graph.load(f), "outputs/operations/implement/_trajectory_x.jsonl")
+        seen.add(tuple(got))
+    assert seen == {("implement", "ops-parent")}, (
+        f"by_output_dir answers differently depending on CSV row order: {seen}"
+    )
+
+
+def test_the_tiebreak_is_alphabetical_whatever_the_csv_order(tmp_path):
+    """The secondary key `t[1]`, pinned the same way. Two skills at the same
+    prefix depth must come back in one fixed order, or the same output path
+    names a different producing skill after an unrelated catalog edit."""
+    import itertools
+
+    header = "skill,phase,preceded_by,followed_by,produces_in,consumes_from\n"
+    zulu = "zulu-skill,intel,,,outputs/intel,datastore\n"
+    alpha = "alpha-skill,intel,,,outputs/intel,datastore\n"
+
+    seen = set()
+    for perm in itertools.permutations([zulu, alpha]):
+        f = tmp_path / "skill-graph.csv"
+        f.write_text(header + "".join(perm), encoding="utf-8")
+        seen.add(tuple(skill_graph.by_output_dir(
+            skill_graph.load(f), "outputs/intel/x.md")))
+    assert seen == {("alpha-skill", "zulu-skill")}, (
+        f"equal-depth matches are not ordered deterministically: {seen}"
+    )
 
 
 def test_by_output_dir_no_match_returns_empty(rows):

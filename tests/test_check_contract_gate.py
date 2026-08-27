@@ -78,6 +78,73 @@ def test_staleness(tmp_path):
     assert "stale" in detail
 
 
+# TEST-6b [newest wins]: the comparator, with something to compare
+def test_the_newest_contract_wins_when_a_slug_has_two(tmp_path):
+    """`_dir_slug` strips the date prefix, so two directories can legitimately
+    share one slug after a plan is re-contracted. That is the ONLY reason the
+    `max(...)` at check-contract-gate.py exists, and every test that called
+    `check_gate` created at most one directory per slug - so `matches` never had
+    length above 1 and the comparator was never consulted.
+
+    Replacing `max(...)` with `min(...)` or with `matches[0]` was green. The
+    advisory would then name the superseded contract and tell the operator that
+    a freshly-contracted plan is stale.
+    """
+    (tmp_path / "2026-06-01-foo").mkdir()
+    (tmp_path / "2026-08-20-foo").mkdir()
+    status, detail = gate.check_gate("plans/2026-08-20-foo.md", contract_dir=tmp_path,
+                                     today=date(2026, 8, 25))
+    assert status == "FOUND"
+    assert detail.startswith("2026-08-20-foo"), detail
+    assert "stale" not in detail, (
+        f"the fresh contract was reported stale, so the gate is reading the "
+        f"superseded one: {detail}"
+    )
+
+
+def test_the_newest_wins_whatever_order_the_directories_are_created_in(tmp_path):
+    """`iterdir()` order is filesystem-dependent, so creating the newest last
+    could be what makes the test above pass. Create them the other way round."""
+    (tmp_path / "2026-08-20-foo").mkdir()
+    (tmp_path / "2026-06-01-foo").mkdir()
+    (tmp_path / "2026-07-04-foo").mkdir()
+    status, detail = gate.check_gate("plans/2026-08-20-foo.md", contract_dir=tmp_path,
+                                     today=date(2026, 8, 25))
+    assert status == "FOUND"
+    assert detail.startswith("2026-08-20-foo"), detail
+
+
+def test_a_directory_with_an_unparsable_date_never_outranks_a_real_one(tmp_path):
+    """The comparator's first key, isolated from its second.
+
+    The two tests above do NOT pin `_artifact_date`: directory names start with
+    an ISO date, and ISO dates sort alphabetically in chronological order, so
+    `max(matches, key=lambda p: p.name)` returns the right answer by accident.
+    Mutation-confirmed 2026-08-27: dropping the date key survived both.
+
+    `_dir_slug` accepts any digits-and-dashes prefix, but `_artifact_date` calls
+    `date.fromisoformat` and returns None on a bad one. So a typo'd month makes
+    a candidate that sorts LAST by name and FIRST by date - the one case where
+    the two keys disagree, and a realistic one: 2026-13-45 is a fat-fingered
+    2026-03-04.
+    """
+    (tmp_path / "2026-08-20-foo").mkdir()
+    (tmp_path / "2026-13-45-foo").mkdir()   # unparsable: month 13, day 45
+    assert gate._dir_slug("2026-13-45-foo") == "foo", "the bad name is not a candidate"
+    assert gate._artifact_date(tmp_path / "2026-13-45-foo") is None
+    assert max("2026-08-20-foo", "2026-13-45-foo") == "2026-13-45-foo", (
+        "the fixture no longer distinguishes name order from date order"
+    )
+
+    status, detail = gate.check_gate("plans/2026-08-20-foo.md", contract_dir=tmp_path,
+                                     today=date(2026, 8, 25))
+    assert status == "FOUND"
+    assert detail.startswith("2026-08-20-foo"), (
+        f"a directory whose date does not parse was ranked above one whose date "
+        f"does, so the gate is sorting by name: {detail}"
+    )
+
+
 # Advisory invariant: the CLI exits 0 even on MISSING
 def test_cli_exit_zero_on_missing(tmp_path):
     proc = subprocess.run(

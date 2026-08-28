@@ -116,14 +116,30 @@ Routes: `illustration`, `photo`, `logo`, `text-graphic`, `draft`, `edit`, `upsca
 | Upscale for print | `crisp-upscale` | `upscale --image {path}` |
 | Remove background | `eraser` | `remove-bg --image {path}` |
 
-**Generation command:**
+**Generation command.** The size flags differ by family, and passing the wrong
+pair is not an error: the model never sees them. `design-engine.py` prints a
+`[WARN]` naming every flag it did not send, so read that line.
+
+| Family | Models | Size flags | Also accepts |
+|---|---|---|---|
+| recraft | `recraft-v4*` | `--width --height` | (nothing else) |
+| ideogram | `ideogram-v3*` | `--width --height` | (nothing else) |
+| flux | `flux-2-pro`, `flux-schnell` | `--aspect` | `--count --format --seed` |
+| banana | `banana`, `banana-pro` | `--aspect` | `--count --format --seed` |
+
 ```bash
-python3 scripts/design-engine.py generate \
-  --model {model} \
-  --prompt "{prompt}" \
-  --width {W} --height {H} \
-  -o outputs/content/images/{name}.png
+# recraft / ideogram
+python3 scripts/design-engine.py generate --model {model} --prompt "{prompt}" \
+  --width {W} --height {H} -o outputs/content/images/{name}.png
+
+# flux / banana
+python3 scripts/design-engine.py generate --model {model} --prompt "{prompt}" \
+  --aspect {W}:{H} -o outputs/content/images/{name}.png
 ```
+
+Omit `-o` and the engine names the file from the returned bytes, which is the
+only place the real format is knowable. Pass `-o` and the engine keeps your
+name, then prints a `[WARN]` when the contents disagree with the extension.
 
 **Edit/upscale/remove-bg:**
 ```bash

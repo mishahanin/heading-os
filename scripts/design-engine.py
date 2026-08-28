@@ -13,7 +13,12 @@ Environment:
     REPLICATE_API_TOKEN  Loaded from .env via workspace utils.
                          Get one at: https://replicate.com/account/api-tokens
 
+Note: each model family accepts a different set of the generate flags. Pass one
+the family does not take and `generate` prints a [WARN] naming it; nothing is
+translated on your behalf. See `_build_generate_input`.
+
 Tests: tests/test_a_retry_that_promised_a_longer_timeout.py
+       tests/test_the_flags_a_tool_accepted_and_never_sent.py
 """
 
 import argparse
@@ -76,6 +81,8 @@ MODELS = {
 REPLICATE_API = "https://api.replicate.com/v1"
 POLL_INTERVAL = 2
 POLL_TIMEOUT = 120
+# A generated image is single-digit MB; this is a runaway guard, not a fit.
+MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024
 
 # ============================================================
 # Helpers
@@ -92,6 +99,10 @@ def ok(msg: str) -> None:
 
 def error(msg: str) -> None:
     print(f"{RED}[ERROR]{RESET} {msg}", file=sys.stderr)
+
+
+def warn(msg: str) -> None:
+    print(f"{YELLOW}[WARN]{RESET} {msg}")
 
 
 def cost(msg: str) -> None:
@@ -124,6 +135,46 @@ def _default_output_dir() -> Path:
 
 def _timestamp() -> str:
     return datetime.now(get_default_tz()).strftime("%Y%m%d-%H%M%S")
+
+
+def _unique_path(path: Path) -> Path:
+    """A free path near `path`, so a name the TOOL chose never destroys a file.
+
+    `_timestamp()` has one-second resolution, so two runs inside the same second
+    produced the same default name and the second silently overwrote the first
+    while printing "Saved" over a path whose earlier bytes were gone. Only the
+    tool's own default names go through here; a path the operator typed with
+    `-o` is theirs to overwrite.
+    """
+    if not path.exists():
+        return path
+    for n in range(2, 1000):
+        candidate = path.parent / f"{path.stem}-{n}{path.suffix}"
+        if not candidate.exists():
+            return candidate
+    return path.parent / f"{path.stem}-{uuid4().hex[:8]}{path.suffix}"
+
+
+def _sniff_ext(data: bytes) -> str | None:
+    """The extension the BYTES say, or None when nothing recognisable leads.
+
+    The filename used to be built from `--format`, a flag two of the four
+    generation families are never told (see `_build_generate_input`). Asking
+    for webp from recraft produced a PNG named `.webp`: a name that lies about
+    its contents, which the next tool in the chain then reads as fact.
+    """
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return ".webp"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return ".gif"
+    head = data[:512].lstrip()
+    if head.startswith((b"<?xml", b"<svg")):
+        return ".svg" if b"<svg" in data[:2048] else None
+    return None
 
 
 def _api_request(method: str, url: str, token: str, data: dict = None) -> dict:
@@ -164,7 +215,13 @@ def _upload_file(file_path: Path, token: str) -> str:
     body = io.BytesIO()
     # Content-Disposition part
     body.write(f"--{boundary}\r\n".encode())
-    body.write(f'Content-Disposition: form-data; name="content"; filename="{filename}"\r\n'.encode())
+    # The name is interpolated into a header inside a quoted string. A `"` in it
+    # closes that string early and a CR or LF ends the header line, so a file
+    # named `evil".png` rewrites the part this tool believes it is sending.
+    # The name is a label to the receiving end, so neutering the three
+    # characters that carry structure costs nothing.
+    safe_name = filename.replace("\\", "_").replace('"', "_").replace("\r", "_").replace("\n", "_")
+    body.write(f'Content-Disposition: form-data; name="content"; filename="{safe_name}"\r\n'.encode())
     body.write(f"Content-Type: {content_type}\r\n\r\n".encode())
     body.write(file_bytes)
     body.write(f"\r\n--{boundary}--\r\n".encode())
@@ -197,11 +254,52 @@ def _upload_file(file_path: Path, token: str) -> str:
         sys.exit(1)
 
 
-def _download(url: str, dest: Path) -> None:
-    """Download a URL to a local file."""
-    req = urllib.request.Request(url)
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        dest.write_bytes(resp.read())
+def _download(url: str, dest: Path) -> bytes:
+    """Download a URL to a local file. Returns the bytes written.
+
+    The scheme check and the size cap are the ones its sibling
+    `scripts/updaters/cliproxyapi_update.py:_download` already carries, with the
+    same reason: this URL is NOT a literal. It arrives inside the prediction
+    response as `output`, so the scheme is remote data, and `urlopen` honours
+    `file:` -- which would turn a tampered response into a local-file read saved
+    as the operator's image. The cap replaces an uncapped `resp.read()` that
+    held the whole body in memory before anything was written.
+
+    Errors are reported in this tool's own voice. It had none, so a network
+    blip surfaced as a raw traceback while every sibling call printed [ERROR]
+    and exited 1.
+
+    Note for whoever reads `pyproject.toml` next: the `[tool.bandit]` skip of
+    B310 is justified there by "our scripts call hardcoded https API endpoints
+    ... never user-controlled schemes". That was true of every urlopen in this
+    workspace EXCEPT this one. The check below is what makes the claim true.
+    """
+    if not url.startswith("https://"):
+        error(f"Refusing a non-https download URL: {url!r}")
+        sys.exit(1)
+    req = urllib.request.Request(url)  # noqa: S310 - scheme checked above
+    written = 0
+    chunks = []
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310 - scheme checked above
+            while True:
+                chunk = resp.read(1 << 20)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > MAX_DOWNLOAD_BYTES:
+                    error(f"Download exceeded {MAX_DOWNLOAD_BYTES} bytes: {url}")
+                    sys.exit(1)
+                chunks.append(chunk)
+    except urllib.error.HTTPError as e:
+        error(f"Download failed - HTTP {e.code}: {url}")
+        sys.exit(1)
+    except urllib.error.URLError as e:
+        error(f"Download network error: {e.reason}")
+        sys.exit(1)
+    data = b"".join(chunks)
+    dest.write_bytes(data)
+    return data
 
 
 def _create_prediction(token: str, model_id: str, input_params: dict) -> dict:
@@ -250,17 +348,38 @@ def _normalize_outputs(output) -> list:
     return []
 
 
-def _save_outputs(urls: list, output_path: Path, multi: bool, is_svg: bool) -> list:
-    """Download output URLs to local files. Returns list of saved Paths."""
+def _save_outputs(urls: list, output_path: Path, name_from_bytes: bool) -> list:
+    """Download output URLs to local files. Returns the list of saved Paths.
+
+    Two things this used to get wrong, both of the same shape: it reported more
+    than it did.
+
+    Numbering was gated on a `multi` flag the caller derived from `--count`, so
+    the three callers that hardcoded `multi=False` wrote every URL to ONE path.
+    MEASURED with three URLs: three "Saved" lines naming the same file, three
+    identical paths returned, one file on disk holding the last body, and the
+    cost line then billing three images against it. Numbering now follows the
+    only fact that decides it - how many URLs came back.
+
+    `is_svg` was a parameter this function never read. It is gone; the format
+    is now taken from the bytes, which is the only place it is knowable.
+    """
     os.makedirs(output_path.parent, exist_ok=True)
     saved = []
+    numbered = len(urls) > 1
     for idx, url in enumerate(urls):
-        if multi and len(urls) > 1:
-            dest = output_path.parent / f"{output_path.stem}_{idx + 1}{output_path.suffix}"
-        else:
-            dest = output_path
-        # For SVG models the API may return text content in a URL
-        _download(url, dest)
+        dest = (output_path.parent / f"{output_path.stem}_{idx + 1}{output_path.suffix}"
+                if numbered else output_path)
+        data = _download(url, dest)
+        actual = _sniff_ext(data)
+        if actual and actual != dest.suffix.lower():
+            if name_from_bytes:
+                renamed = _unique_path(dest.with_suffix(actual))
+                dest.rename(renamed)
+                dest = renamed
+            else:
+                warn(f"{dest.name} is named {dest.suffix} and the bytes are {actual}. "
+                     f"Kept the name you gave with -o; the contents are {actual}.")
         saved.append(dest)
         ok(f"Saved: {dest.resolve()}")
     return saved
@@ -271,29 +390,65 @@ def _save_outputs(urls: list, output_path: Path, multi: bool, is_svg: bool) -> l
 # ============================================================
 
 
+# Which payload key would carry each CLI flag, if the family accepts it at all.
+# `dropped` is derived by checking the payload this builder ACTUALLY produced
+# against this map, rather than from a second hand-written per-family table.
+# A second table is the thing that drifts: the builder gets a new family and the
+# table does not, and the tool goes back to reporting a flag as sent because a
+# list said so. Here a new family reports correctly with no edit here at all.
+_FLAG_CARRIERS = {
+    "width": ("size", "width"),
+    "height": ("size", "height"),
+    "aspect": ("aspect_ratio",),
+    "count": ("num_outputs",),
+    "format": ("output_format",),
+    "seed": ("seed",),
+}
+
+
 def _build_generate_input(family: str, prompt: str, width: int, height: int,
-                          aspect: str, count: int, fmt: str, seed: int = None) -> dict:
-    """Build input dict based on model family."""
+                          aspect: str, count: int, fmt: str, seed: int = None,
+                          explicit: set = None) -> tuple:
+    """Build the model input, and name the operator's flags that never reach it.
+
+    Returns `(params, dropped)`. `dropped` lists the flags the operator TYPED
+    that no key of `params` carries, sorted, without the leading dashes.
+
+    Each family takes a different set, and the four disagree. MEASURED:
+
+        recraft   -> prompt, size                 (no --count, --seed, --format)
+        ideogram  -> prompt, width, height        (no --count, --seed, --format)
+        flux      -> prompt, aspect_ratio, num_outputs, output_format, seed
+        banana    -> the same as flux             (both: no --width, --height)
+
+    That last row is the one that bites. `.claude/skills/design/SKILL.md` gives
+    ONE documented generate command and it always passes `--width` and
+    `--height`, while the same file's model table routes "photorealistic image"
+    to flux-2-pro and "fast concept draft" to flux-schnell. Both dropped the
+    two flags on the floor and said nothing, so an operator asking for
+    1024x1024 got whatever 16:9 gave and had no way to learn otherwise.
+
+    No flag is TRANSLATED here. Guessing a mapping onto an API this tool cannot
+    reach without spending the operator's money would replace a silent drop
+    with a confident wrong parameter, which is worse. It reports instead.
+    """
+    explicit = explicit or set()
     if family == "recraft":
-        return {"prompt": prompt, "size": f"{width}x{height}"}
-
-    if family == "flux":
+        params = {"prompt": prompt, "size": f"{width}x{height}"}
+    elif family in ("flux", "banana"):
         params = {"prompt": prompt, "aspect_ratio": aspect, "num_outputs": count, "output_format": fmt}
         if seed is not None:
             params["seed"] = seed
-        return params
+    elif family == "ideogram":
+        params = {"prompt": prompt, "width": width, "height": height}
+    else:
+        params = {"prompt": prompt}
 
-    if family == "ideogram":
-        return {"prompt": prompt, "width": width, "height": height}
-
-    if family == "banana":
-        params = {"prompt": prompt, "aspect_ratio": aspect, "num_outputs": count, "output_format": fmt}
-        if seed is not None:
-            params["seed"] = seed
-        return params
-
-    # Fallback
-    return {"prompt": prompt}
+    dropped = sorted(
+        flag for flag in explicit
+        if not any(key in params for key in _FLAG_CARRIERS.get(flag, ()))
+    )
+    return params, dropped
 
 
 # ============================================================
@@ -311,12 +466,11 @@ def cmd_generate(args) -> None:
         error(f"Available: {', '.join(k for k, v in MODELS.items() if v['type'] == 'generate')}")
         sys.exit(1)
 
-    is_svg = "svg" in alias
-    ext = ".svg" if is_svg else f".{args.format}"
-    if args.output:
-        output_path = Path(args.output)
-    else:
-        output_path = _default_output_dir() / f"design-{_timestamp()}{ext}"
+    # Every one of these defaults to None in argparse precisely so that "the
+    # operator typed it" and "the operator left it alone" stay distinguishable
+    # here. `--format` used to default to "png", which made every run look like
+    # a run that had asked for a format.
+    explicit = {name for name in _FLAG_CARRIERS if getattr(args, name, None) is not None}
 
     width = args.width or 1024
     height = args.height or 1024
@@ -324,15 +478,33 @@ def cmd_generate(args) -> None:
     count = args.count or 1
     fmt = args.format or "png"
 
+    is_svg = "svg" in alias
+    ext = ".svg" if is_svg else f".{fmt}"
+    # The tool's own name is provisional: `_save_outputs` corrects it from the
+    # returned bytes. A name the operator gave with -o is kept as given.
+    output_path = Path(args.output) if args.output else _unique_path(
+        _default_output_dir() / f"design-{_timestamp()}{ext}")
+
     info(f"Model: {alias} ({model['id']})")
     info(f"Prompt: {args.prompt[:120]}{'...' if len(args.prompt) > 120 else ''}")
-    info(f"Output: {output_path.resolve()}")
+    if args.output:
+        info(f"Output: {output_path.resolve()}")
+    else:
+        # Not the filename. The extension is decided by the returned bytes and
+        # the number of files by how many URLs come back, so naming one path
+        # here would be a promise this command cannot keep. The "Saved" lines
+        # below carry the paths that exist.
+        info(f"Output directory: {output_path.parent.resolve()}")
 
-    input_params = _build_generate_input(
+    input_params, dropped = _build_generate_input(
         family=model["family"], prompt=args.prompt,
         width=width, height=height, aspect=aspect,
-        count=count, fmt=fmt, seed=args.seed,
+        count=count, fmt=fmt, seed=args.seed, explicit=explicit,
     )
+    if dropped:
+        warn(f"Not sent to '{alias}' ({model['family']} family): "
+             f"{', '.join('--' + flag for flag in dropped)}. "
+             f"The model does not accept them. The run continues without them.")
 
     prediction = _create_prediction(token, model["id"], input_params)
     urls = _normalize_outputs(prediction.get("output", []))
@@ -340,7 +512,7 @@ def cmd_generate(args) -> None:
         error("No output URLs returned.")
         sys.exit(1)
 
-    saved = _save_outputs(urls, output_path, multi=(count > 1), is_svg=is_svg)
+    saved = _save_outputs(urls, output_path, name_from_bytes=not args.output)
     _report_cost(alias, model, len(saved))
 
 
@@ -364,10 +536,8 @@ def cmd_edit(args) -> None:
         error(f"Image not found: {image_path}")
         sys.exit(1)
 
-    if args.output:
-        output_path = Path(args.output)
-    else:
-        output_path = _default_output_dir() / f"edit-{_timestamp()}{image_path.suffix}"
+    output_path = Path(args.output) if args.output else _unique_path(
+        _default_output_dir() / f"edit-{_timestamp()}{image_path.suffix}")
 
     info(f"Model: {alias} ({model['id']})")
     info(f"Image: {image_path.resolve()}")
@@ -382,7 +552,7 @@ def cmd_edit(args) -> None:
         error("No output URLs returned.")
         sys.exit(1)
 
-    saved = _save_outputs(urls, output_path, multi=False, is_svg=False)
+    saved = _save_outputs(urls, output_path, name_from_bytes=not args.output)
     _report_cost(alias, model, len(saved))
 
 
@@ -406,10 +576,8 @@ def cmd_upscale(args) -> None:
         error(f"Image not found: {image_path}")
         sys.exit(1)
 
-    if args.output:
-        output_path = Path(args.output)
-    else:
-        output_path = _default_output_dir() / f"upscale-{_timestamp()}{image_path.suffix}"
+    output_path = Path(args.output) if args.output else _unique_path(
+        _default_output_dir() / f"upscale-{_timestamp()}{image_path.suffix}")
 
     info(f"Model: {alias} ({model['id']})")
     info(f"Image: {image_path.resolve()}")
@@ -425,7 +593,7 @@ def cmd_upscale(args) -> None:
         error("No output URLs returned.")
         sys.exit(1)
 
-    saved = _save_outputs(urls, output_path, multi=False, is_svg=False)
+    saved = _save_outputs(urls, output_path, name_from_bytes=not args.output)
     _report_cost(alias, model, len(saved))
 
 
@@ -444,10 +612,8 @@ def cmd_remove_bg(args) -> None:
         error(f"Image not found: {image_path}")
         sys.exit(1)
 
-    if args.output:
-        output_path = Path(args.output)
-    else:
-        output_path = _default_output_dir() / f"nobg-{_timestamp()}.png"
+    output_path = Path(args.output) if args.output else _unique_path(
+        _default_output_dir() / f"nobg-{_timestamp()}.png")
 
     info(f"Model: eraser ({model['id']})")
     info(f"Image: {image_path.resolve()}")
@@ -461,7 +627,7 @@ def cmd_remove_bg(args) -> None:
         error("No output URLs returned.")
         sys.exit(1)
 
-    saved = _save_outputs(urls, output_path, multi=False, is_svg=False)
+    saved = _save_outputs(urls, output_path, name_from_bytes=not args.output)
     _report_cost("eraser", model, len(saved))
 
 
@@ -520,9 +686,12 @@ def main() -> None:
     gen_parser.add_argument("--width", type=int, default=None, help="Width in pixels (recraft/ideogram, default 1024)")
     gen_parser.add_argument("--height", type=int, default=None, help="Height in pixels (recraft/ideogram, default 1024)")
     gen_parser.add_argument("--aspect", default=None, help="Aspect ratio (flux/banana, default 16:9)")
-    gen_parser.add_argument("--count", type=int, default=None, help="Number of images (default 1)")
-    gen_parser.add_argument("--format", default="png", choices=["png", "jpg", "webp"], help="Output format (default png)")
-    gen_parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
+    gen_parser.add_argument("--count", type=int, default=None, help="Number of images (flux/banana, default 1)")
+    # default=None, not "png". The tool has to be able to tell a format the
+    # operator asked for from one it assumed, because the two families that
+    # never receive the flag are reported differently in each case.
+    gen_parser.add_argument("--format", default=None, choices=["png", "jpg", "webp"], help="Output format (flux/banana, default png)")
+    gen_parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility (flux/banana)")
     gen_parser.add_argument("-o", "--output", default=None, help="Output file path")
     gen_parser.set_defaults(func=cmd_generate)
 

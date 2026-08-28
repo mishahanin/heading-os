@@ -80,11 +80,21 @@ exists for a human at a private terminal, not for this flow.
 
 If it errors:
 
-- **`No cookies found`** — the profile is not logged in to that domain; ask the user to
-  log in in that browser/profile first.
+- **`No cookies found`** (exit 1) — the read matched nothing at all. The profile is not
+  logged in to that domain. Ask the user to log in in that browser/profile first.
+  Read this ONLY as an empty profile. The next entry covers a read that found
+  cookies and could not read them. Both cases printed this same line until
+  2026-08-28, so this entry taught the wrong cause for one of them.
+- **`N of M cookie(s) could not be decrypted`** (exit 4) — the cookies are there and
+  unreadable. The reader leaves the store untouched on purpose. A partial import
+  replaces a working session with an incomplete one. The printed `cause:` lines
+  say which of the cases below applies.
 - **`App-bound v20 ... not yet supported`** — Chrome M127+ app-bound encryption. Fall
   back to `yt-dlp --cookies-from-browser brave` for that workflow (documented in
   `reference/vpn-preflight.md`).
+- **`decrypted bytes are not a valid cookie value`** — the key is wrong for this
+  profile, or the browser changed its storage format again. Do not retry blindly;
+  report it.
 - **`secretstorage not installed` / locked keyring (Linux)** — only v10 cookies decrypt;
   unlock the keyring (gnome-keyring / kwallet) for v11.
 
@@ -98,8 +108,13 @@ value into context to write it back out — the same leak step 2 exists to avoid
 The shape the script writes, for reference only:
 
 ```json
-{"name": "<name>", "value": "<value>", "domain": ".<domain>", "path": "/", "secure": true, "httpOnly": false, "sameSite": "Lax"}
+{"name": "<name>", "value": "<value>", "domain": "<the host the browser stored it on>", "path": "/", "secure": true, "httpOnly": false, "sameSite": "Lax"}
 ```
+
+The `domain` field carries the host the browser scoped the cookie to. A domain
+cookie keeps its leading dot, as in `.example.com`. A host-only cookie has no
+dot, as in `accounts.example.com`. The reader stamped every entry `.<domain>`
+until 2026-08-28, which handed a host-only token to every subdomain.
 
 ### 4. Confirm
 

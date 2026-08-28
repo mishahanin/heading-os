@@ -15,17 +15,28 @@ Algorithm summary:
     libsecret-stored "<Browser> Safe Storage" entry (v11 keyring). Both
     keys are derived; the encrypted_value prefix dispatches.
   - macOS: 16-byte AES key from PBKDF2 of `security find-generic-password
-    -wa "<Browser> Safe Storage"`, iterations=1003. v10/v11 = AES-128-CBC
+    -w -s "<Browser> Safe Storage"`, iterations=1003. v10/v11 = AES-128-CBC
     with IV=b" "*16, PKCS7-padded, identical to Linux.
+
+Since Chromium schema version 24 the decrypted plaintext of a v10/v11 cookie
+begins with a 32-byte SHA-256 of the host, which is NOT part of the value. The
+schema version is read from the `meta` table of the cookie DB and the prefix is
+stripped when it is 24 or higher. This file did neither until 2026-08-28, and
+because the plaintext was decoded with `errors="replace"` the hash came back as
+replacement characters glued to the front of every value rather than as an
+error: on this machine's own Brave profile (`meta.version = 24`, 130 cookies,
+all `v10`) every exported token was unusable and the CLI printed a green
+success line over it.
 
 Dependencies (lazy-imported, clear error on miss):
   - cryptography  (all platforms)
-  - secretstorage (Linux only; Windows + macOS skip this import)
+  - secretstorage (Linux only, OPTIONAL; without it only v10 cookies decrypt)
 
-Out of scope: v20 app-bound encryption (Chrome >= M127). Detection raises
-a clean error directing the caller to yt-dlp `--cookies-from-browser`
-which handles ABE internally via the elevation service. Brave has not
-adopted v20 as of 2026-05-23.
+Out of scope: v20 app-bound encryption (Chrome >= M127). Each v20 blob raises,
+the reader reports it per cookie and again in its closing count, and the CLI
+exits non-zero rather than reporting an empty profile. Recovery is yt-dlp
+`--cookies-from-browser`, which handles ABE via the elevation service. Brave
+has not adopted v20 as of 2026-05-23.
 
 UNTESTED ON LINUX as of file authorship. Windows DPAPI path smoke-tested.
 WSL2 dry-run only on the Linux branch (no Brave keyring available in the
@@ -36,8 +47,12 @@ Usage (as a module):
     from scripts.utils.chromium_cookies import get_cookies, to_cookiejar
 
     cookies = get_cookies("youtube.com", profile_name="ClaudeCode", browser="brave")
-    jar = to_cookiejar(cookies)
+    jar = to_cookiejar(cookies, domain="youtube.com")
     requests.get(url, cookies=jar)
+
+Pass the domain. Without it every cookie in the jar is unscoped, and requests
+will then offer these session tokens to whatever host the call reaches,
+including the host at the end of a redirect.
 
 Usage (as a CLI; prints cookie NAMES only by default to avoid leaking
 session tokens to terminals, logs, or screen shares):
@@ -68,7 +83,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
+from scripts.utils.cookie_domains import host_match_sql, pick_per_name  # noqa: E402
 from scripts.utils.sqlite_uri import read_only_uri  # noqa: E402
+
+# Chromium schema version at which the decrypted plaintext of a v10/v11 cookie
+# gained a 32-byte SHA-256 host prefix ahead of the value.
+HASH_PREFIX_SCHEMA_VERSION = 24
+HASH_PREFIX_LEN = 32
 
 _SUPPORTED_BROWSERS = ("brave", "chrome", "chromium", "edge")
 
@@ -377,6 +398,14 @@ def _get_keys_linux(safe_storage_app: str) -> dict[str, bytes]:
         )
         return keys
 
+    # Every call below can raise: get_default_collection on a missing or
+    # unreadable collection, is_locked and search_items on a D-Bus round trip,
+    # get_secret on a keyring that answers with a prompt. Only ImportError and
+    # dbus_init were guarded, so those raises escaped and killed the whole read
+    # - while the docstring promises v11 is best-effort and every other failure
+    # here degrades to v10 with a warning. The split was accidental: it followed
+    # which lines happened to sit inside an earlier try, not which failures are
+    # recoverable. They all are; none of them stops v10 from working.
     try:
         collection = secretstorage.get_default_collection(bus)
         if collection.is_locked():
@@ -400,6 +429,13 @@ def _get_keys_linux(safe_storage_app: str) -> dict[str, bytes]:
                 f"decrypted.{RESET}",
                 file=sys.stderr,
             )
+    except Exception as exc:
+        print(
+            f"{YELLOW}[chromium_cookies] keyring lookup for "
+            f"application='{safe_storage_app}' failed ({exc}); v11 cookies "
+            f"cannot be decrypted. v10 cookies are unaffected.{RESET}",
+            file=sys.stderr,
+        )
     finally:
         bus.close()
 
@@ -414,9 +450,17 @@ def _get_keys_mac(safe_storage_label: str) -> dict[str, bytes]:
             stderr=subprocess.PIPE,
         ).strip()
     except subprocess.CalledProcessError as exc:
+        # `security` writes the real reason to stderr - no such keychain item,
+        # user denied the prompt, keychain locked - and stderr=PIPE captured it.
+        # The message used to discard that and assert one cause of several,
+        # which is what `.claude/rules/scope-claims.md` forbids: a sentence the
+        # method never established. Report what the tool said, then the hint.
+        detail = (exc.stderr or b"").decode("utf-8", errors="replace").strip()
         raise RuntimeError(
             f"`security find-generic-password -w -s '{safe_storage_label}'` "
-            "failed. User may need to approve keychain access via the system prompt."
+            f"failed (exit {exc.returncode})"
+            + (f": {detail}" if detail else " with no message on stderr")
+            + ". If the prompt was denied, approve keychain access and retry."
         ) from exc
     except FileNotFoundError:
         raise RuntimeError("`security` CLI not found on PATH (macOS only).")
@@ -438,7 +482,33 @@ def _get_keys(browser: str, user_data: Path) -> dict[str, bytes]:
 # Decryption
 # ------------------------------------------------------------
 
-def _decrypt_blob_aesgcm(blob: bytes, key: bytes) -> str:
+def _finish_plaintext(plaintext: bytes, hash_prefix: bool) -> str:
+    """Strip the schema-24 host hash if present, then decode STRICTLY.
+
+    Both halves used to be wrong together, and each hid the other. The prefix
+    was never stripped, and `errors="replace"` then turned those 32 binary bytes
+    into replacement characters rather than raising - so a value that could not
+    possibly work came back looking like a string, and every layer above
+    reported success. Measured on a synthetic blob in the exact stored format:
+    an 18-character token came back as 48 characters and the CLI printed its
+    green line over it.
+
+    Strict decoding is also how the reference implementation detects a wrong
+    key: a cookie value is `cookie-octet` per RFC 6265 and is therefore always
+    decodable, so a UnicodeDecodeError means the bytes are not the value.
+    """
+    if hash_prefix:
+        plaintext = plaintext[HASH_PREFIX_LEN:]
+    try:
+        return plaintext.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            "decrypted bytes are not a valid cookie value; the key is probably "
+            "wrong, or the schema version was misread"
+        ) from exc
+
+
+def _decrypt_blob_aesgcm(blob: bytes, key: bytes, hash_prefix: bool = False) -> str:
     """Windows AES-256-GCM: 3-byte prefix + 12-byte nonce + ciphertext + 16-byte tag."""
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -449,10 +519,10 @@ def _decrypt_blob_aesgcm(blob: bytes, key: bytes) -> str:
     nonce = blob[3:15]
     ciphertext = blob[15:]
     plaintext = AESGCM(key).decrypt(nonce, ciphertext, None)
-    return plaintext.decode("utf-8", errors="replace")
+    return _finish_plaintext(plaintext, hash_prefix)
 
 
-def _decrypt_blob_aescbc(blob: bytes, key: bytes) -> str:
+def _decrypt_blob_aescbc(blob: bytes, key: bytes, hash_prefix: bool = False) -> str:
     """Linux/macOS AES-128-CBC: 3-byte prefix + ciphertext. IV=b" "*16, PKCS7."""
     try:
         from cryptography.hazmat.primitives import padding
@@ -466,7 +536,7 @@ def _decrypt_blob_aescbc(blob: bytes, key: bytes) -> str:
     padded = decryptor.update(blob[3:]) + decryptor.finalize()
     unpadder = padding.PKCS7(128).unpadder()
     plaintext = unpadder.update(padded) + unpadder.finalize()
-    return plaintext.decode("utf-8", errors="replace")
+    return _finish_plaintext(plaintext, hash_prefix)
 
 
 def _decrypt_blob_dpapi(blob: bytes) -> str:
@@ -495,11 +565,21 @@ def _decrypt_blob_dpapi(blob: bytes) -> str:
         raise RuntimeError("DPAPI CryptUnprotectData failed on legacy cookie blob.")
     plaintext = ctypes.string_at(blob_out.pbData, blob_out.cbData)
     ctypes.WinDLL("kernel32").LocalFree(blob_out.pbData)
-    return plaintext.decode("utf-8", errors="replace")
+    # No hash prefix here: the legacy form predates schema 24 by years.
+    return _finish_plaintext(plaintext, hash_prefix=False)
 
 
-def _decrypt_cookie(encrypted_value: bytes, keys: dict[str, bytes]) -> str:
-    """Decrypt a single Chromium encrypted_value blob, dispatching on prefix."""
+def _decrypt_cookie(
+    encrypted_value: bytes,
+    keys: dict[str, bytes],
+    hash_prefix: bool = False,
+) -> str:
+    """Decrypt a single Chromium encrypted_value blob, dispatching on prefix.
+
+    `hash_prefix` says whether this DB's schema version puts a 32-byte host
+    hash ahead of the value. It reaches the two AES paths only; the legacy
+    DPAPI form predates the change.
+    """
     if not encrypted_value:
         return ""
 
@@ -518,8 +598,8 @@ def _decrypt_cookie(encrypted_value: bytes, keys: dict[str, bytes]) -> str:
                 f"No key available for {prefix.decode('ascii')} cookies on this platform."
             )
         if sys.platform == "win32":
-            return _decrypt_blob_aesgcm(encrypted_value, key)
-        return _decrypt_blob_aescbc(encrypted_value, key)
+            return _decrypt_blob_aesgcm(encrypted_value, key, hash_prefix)
+        return _decrypt_blob_aescbc(encrypted_value, key, hash_prefix)
 
     if sys.platform == "win32":
         return _decrypt_blob_dpapi(encrypted_value)
@@ -530,6 +610,121 @@ def _decrypt_cookie(encrypted_value: bytes, keys: dict[str, bytes]) -> str:
 # ------------------------------------------------------------
 # Public API
 # ------------------------------------------------------------
+
+def _schema_version(conn) -> int:
+    """Chromium cookie-DB schema version, or 0 when the meta row is absent.
+
+    The version decides whether a decrypted plaintext carries the 32-byte host
+    hash. Reading it wrong in the SAFE direction (0) reproduces the old
+    behaviour on that one DB rather than corrupting a modern one, so a missing
+    or unreadable row degrades to 0 instead of raising.
+    """
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key = 'version'").fetchone()
+    except sqlite3.Error:
+        return 0
+    try:
+        return int(row[0]) if row and row[0] is not None else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _read_cookies(
+    domain: str,
+    profile_name: str = "ClaudeCode",
+    browser: str = "brave",
+    include_subdomains: bool = True,
+) -> tuple[dict[str, tuple[str, str]], list[tuple[str, str, str]]]:
+    """The real reader. Returns ({name: (host_key, value)}, failures).
+
+    `failures` is [(name, host_key, reason)] for every cookie that matched but
+    could not be decrypted. It used to exist only as stderr noise, so a caller
+    could not tell "this profile has no cookies for that domain" from "every
+    cookie was there and none of them could be read" - which are the two
+    opposite diagnoses, and the CLI printed the first one for both.
+
+    `get_cookies` flattens this to the documented {name: value} map.
+    """
+    if not domain:
+        raise ValueError("domain must be non-empty")
+    if not profile_name:
+        raise ValueError("profile_name must be non-empty")
+
+    user_data = _resolve_user_data(browser)
+    folder = find_profile_folder(user_data, profile_name)
+    profile_dir = user_data / folder
+    db_path = _cookies_db_path(profile_dir)
+
+    keys = _get_keys(browser, user_data)
+
+    snapshot = _snapshot_db(db_path)
+    try:
+        conn = sqlite3.connect(read_only_uri(snapshot), uri=True)
+        try:
+            where, params = host_match_sql("host_key", domain, include_subdomains)
+            # noqa S608: `where` carries no caller data. It is built from the
+            # column literal on this line, which `host_match_sql` checks with
+            # `isidentifier()`, plus `?` placeholders and an ESCAPE clause. The
+            # domain is always a bound parameter.
+            sql = (
+                "SELECT host_key, name, value, encrypted_value, expires_utc "  # noqa: S608  # nosec B608 - `where` is host_match_sql output: a checked column literal, `?` placeholders and an ESCAPE clause
+                f"FROM cookies WHERE {where}"
+            )
+
+            hash_prefix = _schema_version(conn) >= HASH_PREFIX_SCHEMA_VERSION
+            cur = conn.execute(sql, params)
+            now_us = (int(time.time()) + 11_644_473_600) * 1_000_000
+
+            live = [
+                (host_key, name, (plain, encrypted))
+                for host_key, name, plain, encrypted, expires_utc in cur.fetchall()
+                if not (expires_utc and expires_utc < now_us)
+            ]
+
+            # Resolve the name collisions BEFORE decrypting, so a cookie that
+            # loses is never decrypted at all, and so the winner is the one the
+            # browser would send rather than the last row of the table scan.
+            winners, dropped = pick_per_name(live, domain)
+            for name, loser, keeper in dropped:
+                print(
+                    f"{YELLOW}[chromium_cookies] cookie '{name}' exists on both "
+                    f"{loser} and {keeper}; kept {keeper}.{RESET}",
+                    file=sys.stderr,
+                )
+
+            cookies: dict[str, tuple[str, str]] = {}
+            failures: list[tuple[str, str, str]] = []
+            for name, (host_key, (plain, encrypted)) in winners.items():
+                if plain:
+                    cookies[name] = (host_key, plain)
+                    continue
+                if not encrypted:
+                    cookies[name] = (host_key, "")
+                    continue
+                try:
+                    cookies[name] = (host_key, _decrypt_cookie(encrypted, keys, hash_prefix))
+                except Exception as exc:
+                    failures.append((name, host_key, str(exc)))
+                    print(
+                        f"{YELLOW}[chromium_cookies] failed to decrypt cookie "
+                        f"'{name}' on host {host_key}: {exc}{RESET}",
+                        file=sys.stderr,
+                    )
+            return cookies, failures
+        finally:
+            conn.close()
+    finally:
+        try:
+            snapshot.unlink()
+        except OSError as exc:
+            # Named, not swallowed. The snapshot is a full copy of the cookie
+            # store; the operator is entitled to know one is still on disk.
+            print(
+                f"{YELLOW}[chromium_cookies] could not remove the temporary "
+                f"cookie snapshot {snapshot}: {exc}{RESET}",
+                file=sys.stderr,
+            )
+
 
 def get_cookies(
     domain: str,
@@ -551,71 +746,26 @@ def get_cookies(
     since 1601-01-01 UTC). Session cookies (expires_utc=0) are kept since
     they remain live for the browser session.
 
+    When one name exists on several matched hosts, the host-only row for the
+    asked-for domain wins, then its domain row, then the shallowest subdomain;
+    the losers are named on stderr. See `scripts/utils/cookie_domains.py`.
+
+    Callers that need the host each value came from, or the list of cookies
+    that failed to decrypt, use `_read_cookies` instead.
+
     Raises:
         FileNotFoundError: profile, Cookies DB, or Local State missing.
         RuntimeError: key acquisition or DPAPI failure.
         ImportError: required dependency (cryptography / secretstorage) missing.
         sqlite3.Error: Cookies DB unreadable.
     """
-    if not domain:
-        raise ValueError("domain must be non-empty")
-    if not profile_name:
-        raise ValueError("profile_name must be non-empty")
-
-    user_data = _resolve_user_data(browser)
-    folder = find_profile_folder(user_data, profile_name)
-    profile_dir = user_data / folder
-    db_path = _cookies_db_path(profile_dir)
-
-    keys = _get_keys(browser, user_data)
-
-    snapshot = _snapshot_db(db_path)
-    try:
-        conn = sqlite3.connect(read_only_uri(snapshot), uri=True)
-        try:
-            if include_subdomains:
-                sql = (
-                    "SELECT host_key, name, value, encrypted_value, expires_utc "
-                    "FROM cookies "
-                    "WHERE host_key = ? OR host_key = ? OR host_key LIKE ?"
-                )
-                params = (domain, f".{domain}", f"%.{domain}")
-            else:
-                sql = (
-                    "SELECT host_key, name, value, encrypted_value, expires_utc "
-                    "FROM cookies WHERE host_key = ?"
-                )
-                params = (domain,)
-
-            cur = conn.execute(sql, params)
-            now_us = (int(time.time()) + 11_644_473_600) * 1_000_000
-
-            cookies: dict[str, str] = {}
-            for host_key, name, plain, encrypted, expires_utc in cur.fetchall():
-                if expires_utc and expires_utc < now_us:
-                    continue
-                if plain:
-                    cookies[name] = plain
-                    continue
-                if not encrypted:
-                    cookies[name] = ""
-                    continue
-                try:
-                    cookies[name] = _decrypt_cookie(encrypted, keys)
-                except Exception as exc:
-                    print(
-                        f"{YELLOW}[chromium_cookies] failed to decrypt cookie "
-                        f"'{name}' on host {host_key}: {exc}{RESET}",
-                        file=sys.stderr,
-                    )
-            return cookies
-        finally:
-            conn.close()
-    finally:
-        try:
-            snapshot.unlink()
-        except OSError:
-            pass
+    cookies, _failures = _read_cookies(
+        domain,
+        profile_name=profile_name,
+        browser=browser,
+        include_subdomains=include_subdomains,
+    )
+    return {name: value for name, (_host, value) in cookies.items()}
 
 
 def to_cookiejar(cookies: dict[str, str], domain: str | None = None):
@@ -640,15 +790,38 @@ def to_cookiejar(cookies: dict[str, str], domain: str | None = None):
 # CLI
 # ------------------------------------------------------------
 
-def _merge_playwright(store: Path, domain: str, cookies: dict) -> list:
+def _merge_playwright(
+    store: Path,
+    domain: str,
+    cookies: dict,
+    include_subdomains: bool = True,
+) -> list:
     """Playwright cookie objects for `domain`, merged into an existing store.
 
+    `cookies` is {name: (host_key, value)} - the host each value really came
+    from, not the domain that was asked for. Every entry used to be stamped
+    `domain: ".{domain}"`, which WIDENED a host-only cookie: a token the browser
+    scoped to `accounts.google.com` alone was exported as `.google.com`, so
+    Playwright then offered it to `mail.google.com` and every other subdomain.
+    Host-only scoping is a boundary the browser maintains on purpose, and the
+    real host was already selected by the query and thrown away.
+
     Cookies for other domains are preserved; cookies for THIS domain are
-    replaced, because a stale value for a name we just re-read is wrong.
+    replaced, because a stale value for a name we just re-read is wrong. Only
+    what was actually re-read is evicted: with `--exact-host` the read is the
+    exact host alone, so the stored SUBDOMAIN entries are left where they are.
+    Evicting them was silent session loss on a flag combination the CLI
+    advertises, and the docstring's own justification did not cover it - those
+    names were never re-read.
+
     A store that cannot be parsed is treated as empty rather than as a reason to
     fail: losing another domain's session is bad, but refusing to import is
     worse, and the caller is re-running this precisely because the store is
-    unusable.
+    unusable. That catch named `json.JSONDecodeError` and `OSError`, which miss
+    the `UnicodeDecodeError` a store holding non-UTF-8 bytes raises, so the
+    documented recovery crashed on one of the two ways a file is unparseable.
+    `ValueError` covers both, since `JSONDecodeError` and `UnicodeDecodeError`
+    are each a subclass of it.
     """
     existing = []
     if store.is_file():
@@ -656,7 +829,7 @@ def _merge_playwright(store: Path, domain: str, cookies: dict) -> list:
             loaded = json.loads(store.read_text(encoding="utf-8"))
             if isinstance(loaded, list):
                 existing = loaded
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             existing = []
     suffix = domain.lstrip(".").lower()
 
@@ -671,14 +844,59 @@ def _merge_playwright(store: Path, domain: str, cookies: dict) -> list:
         the opposite, and the caller had already truncated the file by then.
         """
         got = str(raw).lstrip(".").lower()
+        if not include_subdomains:
+            return got == suffix
         return got == suffix or got.endswith("." + suffix)
 
     kept = [c for c in existing
             if isinstance(c, dict) and not _is_this_domain(c.get("domain", ""))]
-    fresh = [{"name": n, "value": v, "domain": f".{suffix}", "path": "/",
-              "secure": True, "httpOnly": False, "sameSite": "Lax"}
-             for n, v in sorted(cookies.items())]
+    fresh = [{"name": n, "value": v, "domain": _playwright_domain(host, suffix),
+              "path": "/", "secure": True, "httpOnly": False, "sameSite": "Lax"}
+             for n, (host, v) in sorted(cookies.items())]
     return kept + fresh
+
+
+def _playwright_domain(host_key: str, suffix: str) -> str:
+    """Keep the browser's own scoping: host-only stays host-only.
+
+    Chromium writes a leading dot for a domain cookie and none for a host-only
+    one. Playwright reads the same convention, so passing `host_key` through
+    preserves the distinction. A blank host_key (which the schema should never
+    produce) falls back to the asked-for domain rather than exporting an entry
+    with no scope at all.
+    """
+    host = (host_key or "").strip()
+    return host if host else f".{suffix}"
+
+
+def _write_secret_json(out: Path, payload) -> str:
+    """Write `payload` to `out` at 0600, atomically. Return the measured mode.
+
+    Two defects, one line apart. The write was `os.open(..., O_CREAT|O_TRUNC,
+    0o600)` in place: that mode argument applies ONLY when O_CREAT creates the
+    file, so a store already at 0644 - which is what an editor, a `cp`, or a
+    checkout of the data overlay leaves - stayed 0644 while the success line
+    printed "mode 0600" over a file of live session tokens. And an in-place
+    O_TRUNC is not an atomic state write, which
+    `~/.claude/CLAUDE.md` requires: an interrupted run leaves a truncated store
+    where a whole one was.
+
+    A fresh 0600 temp beside the target, then `os.replace`, fixes both. The
+    temp is CREATED each time, so `os.open`'s mode does apply to it, and
+    `os.replace` carries that mode onto the destination whatever the
+    destination's mode used to be. The returned string is read back off the file
+    with `stat`, so the caller states what is true rather than what was intended.
+    """
+    tmp = out.with_name(out.name + ".tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+        os.replace(tmp, out)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return oct(out.stat().st_mode & 0o777)
 
 
 def _main() -> int:
@@ -745,12 +963,13 @@ def _main() -> int:
         args.playwright = True
 
     try:
-        cookies = get_cookies(
+        detailed, failures = _read_cookies(
             args.domain,
             profile_name=args.profile,
             browser=args.browser,
             include_subdomains=not args.exact_host,
         )
+        cookies = {name: value for name, (_host, value) in detailed.items()}
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         print(f"{RED}ERROR: {exc}{RESET}", file=sys.stderr)
         return 1
@@ -767,14 +986,35 @@ def _main() -> int:
         print(f"{RED}ERROR: {exc}{RESET}", file=sys.stderr)
         return 3
 
+    # A cookie that matched and could not be decrypted is NOT an absent cookie,
+    # and every surface below used to report the two the same way. Refusing the
+    # write is the same call the empty-read guard already makes, for the same
+    # reason: a partial store silently replaces a working one. On a Chrome
+    # M127+ profile, where v20 blobs sit beside older ones, partial is the
+    # normal outcome, so the guard that only covered total failure covered the
+    # rarer half.
+    if failures:
+        reasons = sorted({reason for _n, _h, reason in failures})
+        print(
+            f"{RED}ERROR: {len(failures)} of {len(failures) + len(cookies)} "
+            f"cookie(s) for {args.domain} could not be decrypted.{RESET}",
+            file=sys.stderr,
+        )
+        for reason in reasons:
+            print(f"{YELLOW}  cause: {reason}{RESET}", file=sys.stderr)
+        if args.out:
+            print(f"{YELLOW}{Path(args.out).expanduser()} left untouched; a "
+                  f"partial store would replace a working session with an "
+                  f"incomplete one.{RESET}", file=sys.stderr)
+        return 4
+
     if args.out:
         out = Path(args.out).expanduser()
         # Nothing read means nothing to write, and writing anyway DESTROYS what
-        # is there: the merge drops this domain's stored entries and the open
-        # below truncates the file. An empty read is the normal outcome of a
-        # wrong profile, a wrong domain, or every v11 blob failing to decrypt
-        # (see the warn-and-skip above), and it used to end in a green line and
-        # exit 0 while the session it was meant to refresh was gone.
+        # is there: the merge drops this domain's stored entries and the write
+        # below replaces the file. An empty read is the normal outcome of a
+        # wrong profile or a wrong domain, and it used to end in a green line
+        # and exit 0 while the session it was meant to refresh was gone.
         if not cookies:
             print(f"{YELLOW}No cookies found for {args.domain} "
                   f"(profile={args.profile}, browser={args.browser}). "
@@ -782,7 +1022,9 @@ def _main() -> int:
             return 1
         out.parent.mkdir(parents=True, exist_ok=True)
         if args.playwright:
-            payload = _merge_playwright(out, args.domain, cookies)
+            payload = _merge_playwright(
+                out, args.domain, detailed, include_subdomains=not args.exact_host
+            )
             # Both numbers. The store total alone said nothing about whether
             # THIS import worked, which is the only question the caller has.
             note = (f"{len(cookies)} cookie(s) imported for {args.domain}; "
@@ -790,13 +1032,14 @@ def _main() -> int:
         else:
             payload = cookies
             note = f"{len(cookies)} cookie(s)"
-        fd = os.open(str(out), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=2)
+        mode = _write_secret_json(out, payload)
         # Names and a count only. The values are the whole point of the file and
-        # must not also appear on stdout.
+        # must not also appear on stdout. The mode is the one just measured off
+        # the file, never the one that was asked for: `os.open`'s mode argument
+        # applies only when O_CREAT actually creates, so an existing 0644 store
+        # kept 0644 while this line claimed 0600 over live session tokens.
         print(f"{GREEN}{note} written to {out}{RESET} "
-              f"{GRAY}(mode 0600; values not printed){RESET}")
+              f"{GRAY}(mode {mode}; values not printed){RESET}")
         return 0
 
     if args.json:

@@ -8,8 +8,12 @@ Usage (as a module):
     from scripts.utils.firefox_cookies import get_cookies, to_cookiejar
 
     cookies = get_cookies("linkedin.com", profile_name="ClaudeCode", browser="floorp")
-    jar = to_cookiejar(cookies)
+    jar = to_cookiejar(cookies, domain="linkedin.com")
     requests.get(url, cookies=jar)
+
+Pass the domain. Without it every cookie in the jar is unscoped, and requests
+will then offer these session tokens to whatever host the call reaches,
+including the host at the end of a redirect.
 
 Usage (as a CLI, prints cookie NAMES only by default to avoid leaking session
 tokens to the terminal):
@@ -34,6 +38,7 @@ from pathlib import Path
 # evaluator's workspace_import check is a false positive here.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
+from scripts.utils.cookie_domains import host_match_sql, pick_per_name
 from scripts.utils.sqlite_uri import read_only_uri
 
 _SUPPORTED_BROWSERS = ("firefox", "floorp", "librewolf", "waterfox")
@@ -210,6 +215,15 @@ def get_cookies(
 
     Expired cookies are filtered out (Gecko uses `expiry` in Unix seconds; 0 means
     session cookie - those are kept since they are still live for the browser session).
+
+    When one name exists on several matched hosts, the host-only row for the
+    asked-for domain wins, then its domain row, then the shallowest subdomain,
+    and the losers are named on stderr. That choice used to be whichever row the
+    table scan reached last, which for `li_at` on `linkedin.com` decided which
+    session `scripts/linkedin-activity.py` authenticated with, silently. Both
+    that rule and the LIKE escaping live in `scripts/utils/cookie_domains.py`,
+    shared with the Chromium reader, because each file had written both by hand
+    and each had got both wrong.
     """
     if not domain:
         raise ValueError("domain must be non-empty")
@@ -225,31 +239,41 @@ def get_cookies(
     try:
         conn = sqlite3.connect(read_only_uri(snapshot), uri=True)
         try:
-            if include_subdomains:
-                sql = (
-                    "SELECT name, value, host, expiry FROM moz_cookies "
-                    "WHERE host = ? OR host = ? OR host LIKE ?"
-                )
-                params = (domain, f".{domain}", f"%.{domain}")
-            else:
-                sql = "SELECT name, value, host, expiry FROM moz_cookies WHERE host = ?"
-                params = (domain,)
+            where, params = host_match_sql("host", domain, include_subdomains)
+            # noqa S608: `where` carries no caller data - only the column
+            # literal above, which `host_match_sql` checks with `isidentifier()`,
+            # plus `?` placeholders. The domain is always a bound parameter.
+            sql = f"SELECT name, value, host, expiry FROM moz_cookies WHERE {where}"  # noqa: S608  # nosec B608 - `where` is host_match_sql output: a checked column literal, `?` placeholders and an ESCAPE clause
             cur = conn.execute(sql, params)
             import time
             now = int(time.time())
-            cookies: dict[str, str] = {}
-            for name, value, _host, expiry in cur.fetchall():
-                if expiry and expiry < now:
-                    continue  # expired
-                cookies[name] = value
-            return cookies
+            live = [
+                (host, name, value)
+                for name, value, host, expiry in cur.fetchall()
+                if not (expiry and expiry < now)
+            ]
+            winners, dropped = pick_per_name(live, domain)
+            for name, loser, keeper in dropped:
+                print(
+                    f"{YELLOW}[firefox_cookies] cookie '{name}' exists on both "
+                    f"{loser} and {keeper}; kept {keeper}.{RESET}",
+                    file=sys.stderr,
+                )
+            return {name: value for name, (_host, value) in winners.items()}
         finally:
             conn.close()
     finally:
         try:
             snapshot.unlink()
-        except OSError:
-            pass  # temp file cleanup best-effort; OS will reap eventually
+        except OSError as exc:
+            # Named, not swallowed. This snapshot holds Gecko's cookie values in
+            # PLAINTEXT, so a copy left behind is worth one line of output. The
+            # old comment said the OS would reap it, which nothing here verifies.
+            print(
+                f"{YELLOW}[firefox_cookies] could not remove the temporary "
+                f"cookie snapshot {snapshot}: {exc}{RESET}",
+                file=sys.stderr,
+            )
 
 
 def to_cookiejar(cookies: dict[str, str], domain: str | None = None):

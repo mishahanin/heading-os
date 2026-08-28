@@ -52,6 +52,18 @@ def _store(tmp_path: Path, entries) -> Path:
     return p
 
 
+def _fresh(domain: str, **names) -> dict:
+    """`_merge_playwright`'s input shape: {name: (host_key, value)}.
+
+    It took a flat {name: value} until 2026-08-28 and stamped every entry with
+    `.{domain}`, which widened a host-only cookie to all of that domain's
+    subdomains. The host now travels with the value. These tests pin the
+    EVICTION rule, not the scoping, so they hand it the domain cookie for the
+    domain being imported and keep asserting exactly what they asserted before.
+    """
+    return {n: (f".{domain.lstrip('.')}", v) for n, v in names.items()}
+
+
 @pytest.mark.parametrize("kept_domain,imported", [
     (".netflix.com", "x.com"),          # "netflix.com".endswith("x.com")
     (".linux.com", "x.com"),
@@ -63,7 +75,7 @@ def test_a_domain_that_merely_ends_the_same_is_not_deleted(tmp_path, kept_domain
     import of an unrelated domain."""
     store = _store(tmp_path, [{"name": "keep", "domain": kept_domain}])
 
-    merged = CC._merge_playwright(store, imported, {"fresh": "v"})
+    merged = CC._merge_playwright(store, imported, _fresh(imported, fresh="v"))
 
     assert kept_domain in {c["domain"] for c in merged}
 
@@ -74,7 +86,7 @@ def test_this_domain_and_its_subdomains_are_still_replaced(tmp_path, stale):
     a name we just re-read is wrong."""
     store = _store(tmp_path, [{"name": "old", "domain": stale}])
 
-    merged = CC._merge_playwright(store, "x.com", {"fresh": "v"})
+    merged = CC._merge_playwright(store, "x.com", _fresh("x.com", fresh="v"))
 
     assert [c["name"] for c in merged] == ["fresh"]
 
@@ -85,7 +97,7 @@ def test_an_unparseable_store_is_still_treated_as_empty(tmp_path):
     store = tmp_path / "cookies.json"
     store.write_text("{not json")
 
-    merged = CC._merge_playwright(store, "x.com", {"fresh": "v"})
+    merged = CC._merge_playwright(store, "x.com", _fresh("x.com", fresh="v"))
 
     assert [c["name"] for c in merged] == ["fresh"]
 
@@ -95,7 +107,8 @@ def test_an_unparseable_store_is_still_treated_as_empty(tmp_path):
 # ============================================================
 
 def _run_main(monkeypatch, capsys, argv, cookies):
-    monkeypatch.setattr(CC, "get_cookies", lambda *a, **k: cookies)
+    detailed = {n: (".example.com", v) for n, v in cookies.items()}
+    monkeypatch.setattr(CC, "_read_cookies", lambda *a, **k: (detailed, []))
     monkeypatch.setattr(sys, "argv", ["chromium_cookies.py", *argv])
     code = CC._main()
     return code, capsys.readouterr()

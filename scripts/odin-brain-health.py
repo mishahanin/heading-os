@@ -11,12 +11,13 @@ import argparse
 import json
 import sys
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import RESET, YELLOW
+from scripts.utils.markdown import frontmatter_date
 from scripts.utils.markdown import parse_frontmatter as _parse_frontmatter_text
 from scripts.utils.workspace import get_default_tz, get_knowledge_dir
 
@@ -71,22 +72,17 @@ def _date_key(value) -> str:
 def _as_date(value):
     """A `datetime.date` from a frontmatter date of any shape.
 
-    `date.fromisoformat(str(value))` was the old form and it cannot read its own
-    input: `yaml.safe_load` turns `created: 2026-01-01 09:30:00` into a
-    `datetime.datetime`, whose `str()` is `"2026-01-01 09:30:00"`, which
-    `date.fromisoformat` rejects on this repo's Python 3.11. The sibling
-    `_date_key` above already branches on the type before stringifying; this
-    does the same, so the two agree on what a date is.
+    Thin alias for `scripts.utils.markdown.frontmatter_date`. The type branch
+    lived here privately until 2026-08-28, and `knowledge-health.py` -- the
+    OTHER health engine over this same knowledge root, applying the same
+    `status: seed` + `created:` rule -- kept the old `str(value)` form and so
+    disagreed with this one about which seeds were stale. The reason the branch
+    exists is in the shared function's docstring, with the measurement.
 
-    Raises ValueError/TypeError on anything genuinely unreadable, which the
-    caller reports.
+    Raises ValueError on anything genuinely unreadable, which the caller
+    reports. TypeError is no longer reachable.
     """
-    import datetime as _dt
-    if isinstance(value, _dt.datetime):
-        return value.date()
-    if isinstance(value, _dt.date):
-        return value
-    return date.fromisoformat(str(value).strip())
+    return frontmatter_date(value)
 
 
 def _recent_rows(files, subdir, date_fields, limit, label):
@@ -360,7 +356,7 @@ def find_stale_seeds(files, stale_days=7):
                         "created": fm["created"],
                         "age_days": age,
                     })
-            except (ValueError, TypeError) as exc:
+            except ValueError as exc:
                 # Reported, THEN skipped. `pass` alone made this hole invisible
                 # from the tool's own output: a seed whose `created` could not
                 # be parsed was dropped from the count, and the report then
@@ -368,6 +364,14 @@ def find_stale_seeds(files, stale_days=7):
                 # about what it could not read. The workspace policy is
                 # explicit -- an exception handler logs or re-raises, never
                 # both-silent.
+                #
+                # ValueError only. `TypeError` sat in this tuple and was already
+                # unreachable before `frontmatter_date` existed: the coercion
+                # ends in `date.fromisoformat(str(value).strip())`, whose
+                # argument is a string by construction, and every type
+                # `yaml.safe_load` can produce has a safe `__str__`. A named
+                # exception a function cannot raise reads as a case that was
+                # considered, which is a false claim about behaviour.
                 print(f"{YELLOW}warn:{RESET} {subdir}/{f.name} has an unreadable "
                       f"`created:` value ({fm['created']!r}: {exc}); not aged.",
                       file=sys.stderr)

@@ -28,6 +28,12 @@ Public surface:
     variants above collapse every failure into ``({}, text)``, which is why
     three callers kept private copies until 2026-08-28.
 
+- ``frontmatter_date(value)`` -> ``datetime.date``
+    One date from a frontmatter value of any shape (``date``, ``datetime``,
+    ``str``). Raises ``ValueError`` on anything unreadable. Two health engines
+    had private copies of this and disagreed; see the function's docstring for
+    the measurement.
+
 - ``parse_config(text, key)`` -> ``Optional[str]``
     Extract a single ``key: value`` pair from a ``## Config:`` (or similarly
     named) markdown block. No existing callers in the workspace use this
@@ -65,6 +71,7 @@ comment block at the call site explaining why):
 
 from __future__ import annotations
 
+import datetime as _dt
 import re
 import sys
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -256,6 +263,52 @@ def parse_frontmatter_str(text: str) -> Tuple[Dict[str, str], str]:
         else:
             coerced[k] = str(v)
     return coerced, body
+
+
+def frontmatter_date(value: Any) -> _dt.date:
+    """One ``datetime.date`` from a frontmatter date of any shape.
+
+    ``parse_frontmatter`` returns NATIVE YAML types, so a ``created:`` field is
+    a ``datetime.date`` when written bare, a ``datetime.datetime`` when it
+    carries a time, and a ``str`` only when quoted. Every caller that ages a
+    note therefore meets three types on one field.
+
+    ``date.fromisoformat(str(value))`` is the shape that cannot read its own
+    input: ``yaml.safe_load`` turns ``created: 2026-01-01 09:30:00`` into a
+    ``datetime.datetime`` whose ``str()`` is ``"2026-01-01 09:30:00"``, which
+    ``date.fromisoformat`` rejects on this repo's Python 3.11. MEASURED
+    2026-08-28 against one fixture note per shape: ``odin-brain-health.py``
+    aged both the bare date and the datetime, while ``knowledge-health.py``
+    aged the bare date and silently dropped the datetime, over the same
+    knowledge root and the same ``status: seed`` + ``created:`` rule. Two health
+    engines, one corpus, two answers.
+
+    A QUOTED datetime goes through ``datetime.fromisoformat``, because on Python
+    3.11 ``date.fromisoformat`` accepts date forms only. Without that fallback
+    the same instant was readable unquoted (YAML typed it) and unreadable quoted
+    (``ValueError: Invalid isoformat string: '2026-01-02T09:30:00'``), which is
+    the coercion failing to read its own domain. Found by a test written for the
+    2026-08-28 consolidation, not by a report from the field.
+
+    NOT ``str(value)[:10]``, the third spelling this repo carries (see
+    ``scripts/utils/census_oracles._iso``). A blind ten-character slice reads
+    ``"2026-01-02garbage"`` as 2026-01-02, so a mistyped field becomes a
+    confident date. Trying the two ISO parsers in turn accepts exactly the ISO
+    forms and rejects the rest.
+
+    Raises ``ValueError`` and nothing else. ``str(value)`` guarantees a string
+    argument, so ``TypeError`` is unreachable from here and a caller catching it
+    is catching a case this function cannot produce.
+    """
+    if isinstance(value, _dt.datetime):
+        return value.date()
+    if isinstance(value, _dt.date):
+        return value
+    text = str(value).strip()
+    try:
+        return _dt.date.fromisoformat(text)
+    except ValueError:
+        return _dt.datetime.fromisoformat(text).date()
 
 
 _CONFIG_BLOCK_RE = re.compile(

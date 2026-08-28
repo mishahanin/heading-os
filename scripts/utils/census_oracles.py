@@ -73,6 +73,7 @@ from scripts.utils.crm import (
     parse_pipeline_stages,
     scan_contacts,
 )
+from scripts.utils.markdown import frontmatter_date
 from scripts.utils.threads_lib import is_quiet, parse_thread_file
 
 # ============================================================
@@ -236,11 +237,19 @@ def _iso(value: Any) -> date | None:
     says so. ABSENT is legitimate and stays silent; UNPARSEABLE is a corpus
     defect and raises, because a ground-truth oracle that quietly answers a
     smaller question still produces a number that looks like an answer.
+
+    Through the shared coercion since 2026-08-28. This was
+    `date.fromisoformat(str(value)[:10])`, and a blind ten-character slice does
+    not raise on a broken date - it INVENTS one. MEASURED over ten value shapes
+    against `frontmatter_date`: the two agreed on nine and diverged on
+    `"2026-01-02garbage"`, which the slice read as 2026-01-02. That is the one
+    outcome the docstring above rules out, since a wrong date is worse for a
+    ground-truth oracle than a named refusal.
     """
     if not value:
         return None
     try:
-        return date.fromisoformat(str(value)[:10])
+        return frontmatter_date(value)
     except ValueError as exc:
         raise UnreadableCorpus(
             f"unparseable date {value!r}: a record with a broken date drops out "

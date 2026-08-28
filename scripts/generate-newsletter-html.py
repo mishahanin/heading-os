@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.html_templates import load_template
 from scripts.utils.html_text import strip_html
 from scripts.utils.image import load_logo_base64
+from scripts.utils.markdown import frontmatter_date
 from scripts.utils.sanitize_text import word_count
 from scripts.utils.workspace import get_default_tz, get_outputs_dir
 
@@ -768,11 +769,14 @@ def generate_newsletter(data, image_paths=None):
 
     # Format display date
     try:
-        # str() is the fix: a JSON number in `date` used to reach
-        # fromisoformat as an int and raise TypeError, which nothing caught,
-        # so the render died. With the coercion, TypeError is unreachable and
-        # catching it would be dead code.
-        dt = date.fromisoformat(str(date_str))
+        # `frontmatter_date` carries the str() coercion that was the fix here: a
+        # JSON number in `date` used to reach fromisoformat as an int and raise
+        # TypeError, which nothing caught, so the render died. TypeError stays
+        # unreachable, and the shared form additionally reads an ISO datetime,
+        # which the date-only parser refuses on Python 3.11 -- a newsletter
+        # stamped `"2026-08-25T00:00:00"` rendered that raw string as its
+        # masthead date instead of "25 August 2026".
+        dt = frontmatter_date(date_str)
         display_date = dt.strftime("%d %B %Y")
     except ValueError:
         display_date = str(date_str)

@@ -24,23 +24,31 @@ from typing import Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from scripts.utils.markdown import parse_frontmatter
+from scripts.utils.markdown import frontmatter_date, parse_frontmatter
 
 INDEX_NAME = "MEMORY.md"
 
 
 def _coerce_date(value) -> datetime.date | None:
-    """Best-effort coerce a frontmatter value to a date. None on anything odd."""
-    if isinstance(value, datetime.datetime):
-        return value.date()
-    if isinstance(value, datetime.date):
-        return value
-    if isinstance(value, str):
-        try:
-            return datetime.date.fromisoformat(value.strip())
-        except ValueError:
-            return None
-    return None
+    """Best-effort coerce a frontmatter value to a date. None on anything odd.
+
+    The None contract is this module's, not the shared coercion's: a record whose
+    `expires:` cannot be read must not be retired, and a raise here would abort a
+    sweep over the whole index. The GRAMMAR of "what is a date" is shared, so the
+    fourth private type branch is gone.
+
+    MEASURED 2026-08-28 against `frontmatter_date` over nine value shapes, the
+    two diverged twice and this copy was the more restrictive both times:
+      * `"2026-08-25 09:30:00"` (a QUOTED datetime) -> None here, a date there,
+        while the same instant UNQUOTED was read fine because YAML typed it. The
+        record's fate depended on the author's quotes.
+      * `"20260825"` (ISO basic form) -> None here, a date there.
+    Both directions silently dropped a record from the sweep.
+    """
+    try:
+        return frontmatter_date(value)
+    except ValueError:
+        return None
 
 
 def parse_expires(text: str) -> datetime.date | None:

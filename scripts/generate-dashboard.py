@@ -37,6 +37,7 @@ from scripts.utils.workspace import (
     get_context_dir,
     get_people_file,
 )
+from scripts.utils.markdown import frontmatter_date
 from scripts.utils.markdown import parse_frontmatter as _parse_fm
 from scripts.utils.markdown import parse_md_table
 
@@ -952,6 +953,7 @@ def collect_capture_payoff():
             fm, _ = _parse_fm(md_path.read_text(encoding="utf-8"))
         except Exception:
             return False
+        unreadable = []
         for key in ("updated", "created", "date", "ingested"):
             val = fm.get(key)
             if not val:
@@ -963,10 +965,24 @@ def collect_capture_payoff():
                 # never consulted, so a note captured THIS WEEK from an old
                 # source was missing from "Signals Captured (7d)" -- the one
                 # number the panel exists to report.
-                if datetime.fromisoformat(str(val)[:10]).date() >= cutoff:
+                #
+                # Through the shared coercion, not `str(val)[:10]`. A blind
+                # ten-character slice does not refuse a broken date, it INVENTS
+                # one: MEASURED 2026-08-28, `"2026-08-25garbage"` read as
+                # 2026-08-25 and the note was counted as a signal captured this
+                # week. That is the only input on which the two disagree, and it
+                # disagrees in the direction that inflates the number.
+                if frontmatter_date(val) >= cutoff:
                     return True
             except ValueError:
+                unreadable.append(f"{key}={val!r}")
                 continue
+        if unreadable:
+            # Said, not swallowed. A note whose every date field is unreadable is
+            # not counted, and the panel prints a number that looks measured.
+            print(f"[generate-dashboard] {md_path.name}: no readable date "
+                  f"({'; '.join(unreadable)}); not counted as a captured signal",
+                  file=sys.stderr)
         return False
 
     signals = 0

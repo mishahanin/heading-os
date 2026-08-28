@@ -261,20 +261,15 @@ def test_the_old_form_is_what_could_not_read_its_own_input():
 # the other three are latent gaps in files this shard did not open; widening the
 # diff to reach them would have cost each one its own measurement.
 DECLARED_OLD_FORM_SITES = {
-    # A JSON field, so always str/int/float and never a YAML date. The `str()` is
-    # there for a JSON NUMBER, documented at the call site.
-    "scripts/generate-newsletter-html.py": "json `date` field, never a YAML type",
-    # State-file timestamps, written by this same hook as ISO strings.
-    ".claude/hooks/checkpoint-offer.py": "own state file, ISO strings only",
-    # LATENT. `last_touch` arrives through `parse_frontmatter_str`, so a value
-    # carrying a time reaches this as "2026-08-01 09:30:00" and the `except
-    # ValueError: pass` two lines below leaves `days_since` None with nothing
-    # said. Not a wrong number, a missing one, and the raw value is still shown.
-    "scripts/email-intelligence.py": "LATENT: a timed last_touch yields days_since None, silently",
-    # LATENT, and a truncating slice besides: `str(val)[:10]` reads
-    # "2026-01-02garbage" as a date. Guarded by `except ValueError: continue`
-    # inside a first-hit-wins chain the call site documents.
-    "scripts/generate-dashboard.py": "LATENT: [:10] truncates a broken date into a real one",
+    # The last one, and it must STAY. This hook compares two full TIMESTAMPS
+    # (`last_compact_at` against the previous one), so a date-returning coercion
+    # would make two compactions on the same day compare equal. Migrating it
+    # would be a defect, not a fix. Pinned by
+    # tests/test_a_digest_that_read_a_card_the_schema_had_left.py.
+    ".claude/hooks/checkpoint-offer.py": "compares timestamps, not dates; a date coercion loses the hour",
+    # Three entries left on 2026-08-28 (shard 54): generate-newsletter-html.py,
+    # email-intelligence.py and generate-dashboard.py all route through
+    # frontmatter_date now. Their measurements are in that shard's test file.
 }
 
 

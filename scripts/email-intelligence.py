@@ -29,7 +29,7 @@ import re
 import sys
 import time
 from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -37,10 +37,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.api import load_api_key
 from scripts.utils import claude_models
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
+from scripts.utils.crm import parse_config as crm_parse_config, scan_contacts
 from scripts.utils.html_text import strip_html
+from scripts.utils.markdown import frontmatter_date
 from scripts.utils.llm_fallback import call_anthropic_with_fallback
 from scripts.utils.observability import observe
-from scripts.utils.workspace import get_workspace_root, load_env, resolve_config_with_example, get_outputs_dir, get_crm_contacts_dir, get_context_dir, get_default_tz
+from scripts.utils.workspace import get_workspace_root, load_env, resolve_config_with_example, get_outputs_dir, get_crm_config_path, get_crm_contacts_dir, get_context_dir, get_default_tz
 from scripts.utils.atomic import atomic_write_text
 # The one exclusive-lock primitive this workspace has. It lives beside the
 # checkpoint code because that is where it was first needed, not because it is
@@ -699,31 +701,61 @@ def group_conversations(emails: list[dict]) -> dict[str, dict]:
 # ============================================================
 
 def load_crm_contacts() -> dict[str, dict]:
-    """Pre-load all CRM contacts. Returns email -> contact_info mapping."""
+    """Pre-load all CRM contacts. Returns email -> contact_info mapping.
+
+    Through the CRM family's own readers since 2026-08-28. This held a FIFTH
+    private frontmatter parser -- a hand-rolled line splitter -- and it carried
+    the "three characters, not a line" defect that shard 52 fixed in three other
+    copies. Its name is not a `parse_frontmatter` spelling, so the
+    anti-duplication sweep in tests/test_markdown_frontmatter_single_source.py
+    had never seen it; that is the second time a name-keyed detector missed the
+    copy carrying the defect.
+
+    MEASURED 2026-08-28 on the six fields this digest reads
+    (email/name/company/type/last_touch/cadence):
+
+      * `name: Jane --- Bond` -- `text.find("---", 3)` cut the block at the
+        dashes, so `company` and `last_touch` were LOST. The digest then had no
+        company to look up in the pipeline (reported as "no live deal attached")
+        and no date to age the relationship against.
+      * `---extra` as an opening line was accepted as a fence; the canonical
+        parser refuses the file. Fail-open on a malformed card.
+
+    Across the live 169 cards the key SETS agreed, and 47 cards differed on
+    values -- all in `tags`, `relevant_principles`, `source` and
+    `tribe_email_ok`, none of which this consumer reads. So the two defects above
+    were latent on today's corpus, and both are one hand-edit away.
+
+    The parser was not even the biggest defect it carried. Reading the
+    relationship card's own frontmatter skips the ENTITY MERGE: a CRM record
+    carries `entity_ref` instead of inline biographical facts, and `company`,
+    `type` and often `email` live on the address-book entity. `scan_contacts`
+    resolves that; this did not. MEASURED 2026-08-28 over the live 169 cards,
+    old reader against `scan_contacts`:
+
+        contacts found by email      89   ->  144
+        blank `company`              87   ->    0
+        blank `type`                 89   ->    0
+
+    So the digest was blind to 55 contacts outright, and for every one it did
+    find it had no company to look up in the pipeline (rendered as no live deal
+    attached) and no relationship type, which the analysis prompt prints as
+    `type=?`. That was LIVE on every run, not a latent shape. The scan costs
+    0.45s for 169 cards.
+
+    `is_contact_file` comes along inside `scan_contacts`, which matters because
+    this glob was a FOURTH copy of the "is this a contact record?" question, and
+    the only one excluding nothing at all: a README carrying frontmatter and an
+    `email:` line would have been loaded as a contact.
+    """
     email_map: dict[str, dict] = {}
     if not CRM_DIR.exists():
         return email_map
 
-    for f in CRM_DIR.glob("*.md"):
-        try:
-            text = f.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        if not text.startswith("---"):
-            continue
-        end = text.find("---", 3)
-        if end < 0:
-            continue
-        front = text[3:end].strip()
-        contact: dict = {}
-        for line in front.split("\n"):
-            if ":" not in line:
-                continue
-            key, val = line.split(":", 1)
-            contact[key.strip()] = val.strip().strip('"').strip("'")
-        slug = f.stem
-        contact["slug"] = slug
-        addr = contact.get("email", "").lower()
+    config = crm_parse_config(get_crm_config_path())
+    contacts, _warnings, _dangling, _stages, _aliases = scan_contacts(config)
+    for contact in contacts:
+        addr = str(contact.get("email", "")).strip().lower()
         if addr:
             email_map[addr] = contact
 
@@ -771,10 +803,24 @@ def enrich_conversation(conv: dict, crm_map: dict[str, dict], pipeline_text: str
             days_since = None
             if last_touch:
                 try:
-                    lt = date.fromisoformat(str(last_touch))
+                    # Computed here rather than taken from the scan's own
+                    # `days_since`, on purpose. The scan answers the RADAR's
+                    # question ("is this contact overdue?") and returns None for
+                    # a tribe member, a frozen contact, or `cadence: 0`. The
+                    # digest asks a different one ("how long since we spoke?"),
+                    # which has an answer for all of them.
+                    #
+                    # Through the shared coercion. `date.fromisoformat(str(...))`
+                    # sat here and cannot read a value carrying a time, and the
+                    # handler below was a bare `pass`: the digest then showed the
+                    # raw `last_touch` beside no age at all, and nothing said the
+                    # date had been unreadable rather than the contact fresh.
+                    lt = frontmatter_date(last_touch)
                     days_since = (datetime.now(get_default_tz()).date() - lt).days
-                except ValueError:
-                    pass
+                except ValueError as exc:
+                    print(f"{YELLOW}warn:{RESET} contact {contact.get('slug', '?')} "
+                          f"has an unreadable `last_touch` ({last_touch!r}: {exc}); "
+                          f"no age computed.", file=sys.stderr)
             crm_context = {
                 "contact_slug": contact.get("slug"),
                 "name": contact.get("name"),

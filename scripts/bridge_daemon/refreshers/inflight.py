@@ -19,6 +19,8 @@ import re
 import time
 from pathlib import Path
 
+from scripts.utils.markdown import FM_OK, split_frontmatter
+
 logger = logging.getLogger(__name__)
 
 # Serialised fingerprint of the last scan, so the component version only moves
@@ -31,14 +33,22 @@ SCAN_DIRS = {
     "negotiation": "outputs/negotiations",  # leak-guard: ok (in-flight scan suffix rooted by caller)
 }
 
-FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---", re.DOTALL)
 SESSION_ID_RE = re.compile(r"^session_id:\s*(\S+)", re.MULTILINE)
 
+
 def _extract_session_id(text: str) -> str | None:
-    m = FRONTMATTER_RE.search(text)
-    if not m:
+    """The `session_id` of an in-flight artifact, or None when it carries none.
+
+    The fences come from the shared splitter. `^---\\n(.*?)\\n---` sat here and
+    required the fence to be exactly three characters followed by a newline.
+    MEASURED 2026-08-29: an artifact whose opening fence carries a trailing
+    space or a tab returned None, so its row went to the dashboard with no
+    session_id at all -- indistinguishable from an artifact that genuinely has
+    none, which is the one thing this function exists to tell apart.
+    """
+    fm, _body, kind = split_frontmatter(text)
+    if fm is None or kind != FM_OK:
         return None
-    fm = m.group(1)
     sid_match = SESSION_ID_RE.search(fm)
     return sid_match.group(1) if sid_match else None
 

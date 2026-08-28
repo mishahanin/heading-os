@@ -39,6 +39,7 @@ from pathlib import Path
 import yaml
 
 from scripts.utils.atomic import atomic_write_text
+from scripts.utils.markdown import FM_OK, split_frontmatter
 
 NOTE_DIR = Path("records") / "slices"
 DATA_OVERLAY_DIR = ".heading-os-data"
@@ -90,7 +91,6 @@ _LEAK = re.compile(
 # check that was its only reader, so the rule lives here now.)
 _SHA = re.compile(r"[0-9a-f]{7,40}")
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
-_FENCE = re.compile(r"\A---\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n(.*))?\Z", re.S)
 
 
 class NoteError(ValueError):
@@ -189,13 +189,20 @@ def read_note(root: Path, slug: str) -> dict:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise NoteError(f"note {slug!r} is unreadable: {exc}") from exc
-    match = _FENCE.match(text)
-    if match is None:
+    # The fences come from the shared splitter. `_FENCE` accepted trailing
+    # whitespace on the CLOSING fence and not on the OPENING one, which is the
+    # kind of asymmetry no reader of the pattern would predict. MEASURED
+    # 2026-08-29: a note opening `--- ` or `---\t` raised "has no '---'
+    # frontmatter fence" on a note whose YAML is fine, and `canopus_check.py`
+    # takes `note_paths()` as its ENTIRE population, so one such note aborts the
+    # check for every clause in the set.
+    block, body, kind = split_frontmatter(text)
+    if block is None or kind != FM_OK:
         raise NoteError(f"note {slug!r} has no '---' frontmatter fence")
-    fields = yaml.safe_load(match.group(1))
+    fields = yaml.safe_load(block)
     if not isinstance(fields, dict):
         raise NoteError(f"note {slug!r} has frontmatter that is not a mapping")
-    body = (match.group(2) or "").strip()
+    body = body.strip()
     if body:
         fields[BODY_FIELD] = body
     return fields

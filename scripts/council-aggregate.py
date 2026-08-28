@@ -38,13 +38,13 @@ WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKSPACE_ROOT))
 
 from scripts.utils.colors import CYAN, GRAY, GREEN, RESET, YELLOW  # noqa: E402
+from scripts.utils.markdown import FM_OK, split_frontmatter  # noqa: E402
 from scripts.utils.workspace import display_path, get_default_tz, get_outputs_dir  # noqa: E402
 
 COUNCIL_DIR = get_outputs_dir() / "operations" / "council"
 AGGREGATE_PATH = COUNCIL_DIR / "_aggregate.md"
 VERDICTS_PATH = COUNCIL_DIR / "_verdicts.jsonl"
 
-_FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---", re.DOTALL)
 _H1_TOPIC_RE = re.compile(r"^# (?:Council Consultation\s*-\s*)?(.*?)$", re.MULTILINE)
 _SECTION_RES = {
     "question": re.compile(r"^## (?:Question|Question\s*/\s*Draft|Draft).*?\n(.*?)(?=^## |\Z)", re.DOTALL | re.MULTILINE),
@@ -102,11 +102,22 @@ def _snippet(text: str, max_chars: int = 320) -> str:
 
 
 def _parse_frontmatter(text: str) -> dict:
-    m = _FRONTMATTER_RE.match(text)
-    if not m:
+    """The transcript's `key: value` header, or {} when it has none.
+
+    The fences come from the shared splitter. `^---\\n(.*?)\\n---` sat here and
+    took the fence to be exactly three characters. MEASURED 2026-08-29: a
+    transcript whose fence carries a trailing space or a tab returned {}, and
+    `parse_transcript` reads `mode` out of this dict to decide whether the file
+    IS a council transcript at all. A transcript with no recognised section
+    heading was therefore dropped from the aggregate entirely, and one with a
+    section fell through to `mode: "?"` and a timestamp guessed from the
+    filename.
+    """
+    block, _body, kind = split_frontmatter(text)
+    if block is None or kind != FM_OK:
         return {}
     out: dict = {}
-    for line in m.group(1).splitlines():
+    for line in block.splitlines():
         if ":" in line:
             k, v = line.split(":", 1)
             out[k.strip()] = v.strip()

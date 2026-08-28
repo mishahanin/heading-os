@@ -39,6 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+from scripts.utils.markdown import FM_OK, split_frontmatter_raw  # noqa: E402
 from scripts.utils.paths import get_workspace_root  # noqa: E402
 
 try:
@@ -66,8 +67,14 @@ _REWRITE_SUB = r'\1\2"${CLAUDE_PLUGIN_ROOT}"/scripts/'
 # body keeps the plain form; only the frontmatter is escaped.
 _REWRITE_SUB_YAML = r'\1\2\\"${CLAUDE_PLUGIN_ROOT}\\"/scripts/'
 
-# The frontmatter block, when the file opens with one.
-_FRONTMATTER_RE = re.compile(r"\A(---\r?\n.*?\r?\n---\r?\n)(.*)\Z", re.DOTALL)
+# The frontmatter block comes from `split_frontmatter_raw`, which is
+# byte-preserving: `front + body == text`, so nothing is normalised on the way
+# through. `\A(---\r?\n.*?\r?\n---\r?\n)(.*)\Z` sat here and did not accept a
+# fence carrying trailing whitespace. MEASURED 2026-08-29 on a SKILL.md whose
+# opening fence is `--- `: the match failed, so the WHOLE file took the body
+# substitution, and the plain form closes the `allowed-tools` double-quoted
+# scalar early. That is the exact bundle-breaks-YAML defect `_REWRITE_SUB_YAML`
+# above was written to prevent, reachable again through the splitter.
 
 # Reference scanners for the completeness gate.
 #
@@ -281,11 +288,10 @@ def rewrite_script_paths(text: str) -> tuple[str, int]:
     YAML and the body is prose. See `_REWRITE_SUB_YAML` for what the single-form
     version broke and for how long.
     """
-    match = _FRONTMATTER_RE.match(text)
-    if not match:
+    front, body, kind = split_frontmatter_raw(text)
+    if front is None or kind != FM_OK:
         return _REWRITE_RE.subn(_REWRITE_SUB, text)
 
-    front, body = match.group(1), match.group(2)
     front_new, front_n = _rewrite_frontmatter(front)
     body_new, body_n = _REWRITE_RE.subn(_REWRITE_SUB, body)
     return front_new + body_new, front_n + body_n

@@ -40,6 +40,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
+from scripts.utils.markdown import FM_OK, split_frontmatter  # noqa: E402
 from scripts.utils.workspace import get_workspace_root  # noqa: E402
 
 # Bytes per token, as an ESTIMATE. English prose and YAML sit near four bytes per
@@ -48,7 +49,6 @@ from scripts.utils.workspace import get_workspace_root  # noqa: E402
 # wearing a token label.
 BYTES_PER_TOKEN = 4
 
-FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 # `description:` runs until the next top-level key. Skill descriptions are often
 # folded scalars spanning many lines, so a single-line match undercounts badly.
 # `|\Z` in the lookahead. Without it the pattern required a FOLLOWING top-level
@@ -71,16 +71,34 @@ def _tokens(byte_count: int) -> int:
 
 
 def measure_skills(root: Path) -> dict:
-    """The catalogue, split into the surface a caller can edit and the rest."""
+    """The catalogue, split into the surface a caller can edit and the rest.
+
+    A SKILL.md this cannot read is NAMED, never skipped in silence. The number
+    below feeds a growth gate with a 5% tolerance, and a dropped skill makes the
+    measured floor SMALLER: the gate would then pass on a floor that grew, which
+    is the one direction a gate must not fail in.
+    """
     total_fm = total_desc = count = 0
     per_skill = []
+    unreadable: list[str] = []
     for path in sorted((root / ".claude" / "skills").glob("*/SKILL.md")):
         text = path.read_text(encoding="utf-8", errors="replace")
-        match = FRONTMATTER_RE.match(text)
-        if not match:
+        frontmatter, _body, kind = split_frontmatter(text)
+        if frontmatter is None or kind != FM_OK:
+            unreadable.append(f"{path.parent.name} ({kind})")
             continue
+        # The shared block KEEPS the newline before the closing fence; the
+        # `\A---\n(.*?)\n---\n` regex that used to sit here put it outside
+        # group 1. Dropping one terminator preserves the recorded byte count
+        # EXACTLY (measured 2026-08-29: 94 skills, +94 bytes without this line),
+        # so migrating the grammar moves no number in
+        # config/context-floor-baseline.json. The grammar is the whole change:
+        # a fence written `--- ` or `---\t` was read as no frontmatter at all.
+        if frontmatter.endswith("\n"):
+            frontmatter = frontmatter[:-1]
+            if frontmatter.endswith("\r"):
+                frontmatter = frontmatter[:-1]
         count += 1
-        frontmatter = match.group(1)
         fm_bytes = len(frontmatter.encode("utf-8"))
         found = DESCRIPTION_RE.search(frontmatter)
         desc_bytes = len(found.group(1).encode("utf-8")) if found else 0
@@ -92,21 +110,32 @@ def measure_skills(root: Path) -> dict:
             "description_bytes": desc_bytes,
         })
     per_skill.sort(key=lambda row: row["description_bytes"], reverse=True)
+    if unreadable:
+        print(f"{YELLOW}warn:{RESET} {len(unreadable)} SKILL.md file(s) carry no "
+              f"readable frontmatter and are NOT in the figures below: "
+              f"{', '.join(unreadable)}", file=sys.stderr)
     return {
         "skills": count,
         "frontmatter_bytes": total_fm,
         "description_bytes": total_desc,
         "other_frontmatter_bytes": total_fm - total_desc,
         "per_skill": per_skill,
+        "unreadable_skills": unreadable,
     }
 
 
 def _is_always_on(text: str) -> bool:
-    """A rule with no `paths:` key, or an empty one, loads in every session."""
-    match = FRONTMATTER_RE.match(text)
-    if not match:
+    """A rule with no `paths:` key, or an empty one, loads in every session.
+
+    Same grammar as `measure_skills`, and for a sharper reason: a rule that
+    HAS `paths:` but whose fence carries a trailing space read here as "no
+    frontmatter", which this function turns into always-on. A path-scoped rule
+    was then counted in the always-on floor and reported to the operator as
+    loading in every session when it does not.
+    """
+    body, _rest, kind = split_frontmatter(text)
+    if body is None or kind != FM_OK:
         return True
-    body = match.group(1)
     found = re.search(r"^paths:(.*)$", body, re.M)
     if not found:
         return True
@@ -191,6 +220,10 @@ def measure(root: Path) -> dict:
     return {
         "bytes_per_token": BYTES_PER_TOKEN,
         "skill_count": skills["skills"],
+        # What `skill_count` does NOT cover. A machine reader of this payload
+        # would otherwise take the count as the whole catalogue; the stderr
+        # warning it cannot see is not a substitute for the field.
+        "unreadable_skills": skills["unreadable_skills"],
         "components": components,
         "total_bytes": sum(components.values()),
         "observed_bytes": sum(components[k] for k in observed_keys),

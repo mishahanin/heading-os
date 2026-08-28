@@ -403,19 +403,23 @@ def test_no_open_fence_reader_survives():
 # only shrink. `\n`-only fences reject a CRLF file and a fence with trailing
 # whitespace; the two entries with an empty tuple carry a different capture shape
 # than this sweep can read, and are listed so they are not silently uncounted.
+# Shard 56 (2026-08-29) emptied eight of the ten entries this registry opened
+# with, including both UNJUDGED ones: each of those readers now takes its fences
+# from `scripts.utils.markdown`. The consequences they cost, and the measurement
+# behind each fix, are in
+# `tests/test_ten_regexes_that_spelled_the_fence_themselves.py`.
+#
+# The two that remain diverge ONLY on a CRLF document, and no reader in the set
+# can receive one: both obtain their text through universal-newline decoding, so
+# a `\r` never reaches the pattern. `merge-contacts.py` must NOT be widened for
+# it -- that reader writes the record back with LF, so accepting CRLF on the
+# read would convert a file's line endings on a merge asked to change one field.
+# The reachability claim is a test, not a comment:
+# `test_no_reader_in_the_set_can_receive_a_cr` goes red if either file starts
+# decoding with `newline=""`.
 KNOWN_REGEX_DIVERGENCE = {
-    "scripts/bridge_daemon/refreshers/inflight.py": ("fence with a trailing space", "fence with a tab", "CRLF throughout"),
-    "scripts/context-floor-audit.py": ("fence with a trailing space", "fence with a tab", "CRLF throughout"),
-    "scripts/council-aggregate.py": ("fence with a trailing space", "fence with a tab", "CRLF throughout"),
-    "scripts/inbox-pulse-report.py": ("fence with a trailing space", "fence with a tab", "CRLF throughout"),
-    "scripts/utils/content_denylist.py": ("fence with a trailing space", "fence with a tab", "CRLF throughout"),
     "scripts/merge-contacts.py": ("CRLF throughout",),
     "scripts/odin_pagerank.py": ("CRLF throughout",),
-    "scripts/utils/canopus_note.py": ("fence with a trailing space", "fence with a tab"),
-    # These two capture the WHOLE block rather than its body, so this sweep's
-    # single-group comparison cannot judge them. Listed, not waved through.
-    "scripts/dev/build-plugins.py": ("UNJUDGED: whole-block capture",),
-    "scripts/humanization-check.py": ("UNJUDGED: substitution, no capture read",),
 }
 
 

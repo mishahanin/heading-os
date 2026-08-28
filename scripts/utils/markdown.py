@@ -23,6 +23,10 @@ Public surface:
     The fences only: ``(yaml_block, body, kind)``, no YAML parsed. For callers
     with their own YAML policy.
 
+- ``split_frontmatter_raw(text)`` -> ``(Optional[str], str, str)``
+    The same split, byte-preserving: ``front + rest == text``. For a caller that
+    rewrites one half and emits the file again.
+
 - ``parse_frontmatter_strict(text)`` -> ``(Optional[Dict], str, str)``
     ``(data, kind, detail)``, keeping the REASON a document failed. The two
     variants above collapse every failure into ``({}, text)``, which is why
@@ -205,6 +209,52 @@ def split_frontmatter(text: str) -> Tuple[Optional[str], str, str]:
     if closing is None:
         return None, text, FM_NO_CLOSING
     return rest[:closing.start()], rest[closing.end():].lstrip("\r\n"), FM_OK
+
+
+def split_frontmatter_raw(text: str) -> Tuple[Optional[str], str, str]:
+    """The same split, byte-preserving: ``(front, rest, kind)`` with
+    ``front + rest == text`` whenever ``kind`` is ``FM_OK``.
+
+    ``split_frontmatter`` above drops the fence lines and strips the newlines
+    that follow the closing one, which is right for a caller that wants the YAML
+    and the prose. It is wrong for a caller that must REWRITE one half and emit
+    the file again: the dropped bytes would be silently normalised, so a fence
+    written ``---\\t`` or a body opening on a blank line would come back changed.
+
+    ``front`` is the opening fence line, the block, and the closing fence line,
+    each with its own line terminator. ``rest`` is everything after, verbatim,
+    including any leading blank lines. When there is no usable block, ``front``
+    is None and ``rest`` is *text* unchanged, so a caller can treat the whole
+    file as body without a second read.
+
+    Written for ``scripts/dev/build-plugins.py``, which applies a YAML-escaped
+    substitution to the frontmatter and a plain one to the body, then
+    concatenates. Its own regex ``\\A(---\\r?\\n.*?\\r?\\n---\\r?\\n)(.*)\\Z`` did
+    not accept a fence with trailing whitespace, so on such a file the whole
+    document took the BODY substitution: the plain form closes the
+    ``allowed-tools`` double-quoted scalar early and the bundle's frontmatter
+    stops being YAML. That is the defect ``_REWRITE_SUB_YAML`` exists to prevent,
+    reintroduced through the splitter instead of the substitution.
+    """
+    if not text:
+        return None, text, FM_NO_OPENING
+    first, sep, rest = text.partition("\n")
+    if not sep or not _FENCE_LINE.match(first):
+        return None, text, FM_NO_OPENING
+    closing = _FENCE_LINE.search(rest)
+    if closing is None:
+        return None, text, FM_NO_CLOSING
+    # The closing fence line ends where its own terminator ends, not where the
+    # match ends: `_FENCE_LINE` is anchored with `$`, so it stops BEFORE the
+    # newline. Consuming that newline here is what keeps `front + rest == text`
+    # without handing the body a leading blank line that was never in the file.
+    after = closing.end()
+    if rest.startswith("\r\n", after):
+        after += 2
+    elif rest.startswith("\n", after):
+        after += 1
+    cut = len(first) + len(sep) + after
+    return text[:cut], text[cut:], FM_OK
 
 
 def parse_frontmatter_strict(text: str) -> Tuple[Optional[Dict[str, Any]], str, str]:

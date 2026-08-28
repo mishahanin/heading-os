@@ -57,6 +57,12 @@ try:
 except ImportError:
     GREEN = YELLOW = RED = CYAN = GRAY = BOLD = RESET = ""
 
+# NOT wrapped in the try above. Colour degrades to empty strings; the
+# frontmatter grammar has no degraded form, and a silent fallback here would
+# put a second, divergent splitter back into the file this change removes one
+# from.
+from scripts.utils.markdown import FM_OK, split_frontmatter  # noqa: E402
+
 
 # ============================================================
 # Configuration - audit signal definitions
@@ -494,12 +500,19 @@ def strip_markdown_noise(text):
     text = text.replace("’", "'").replace("‘", "'")
     # Strip explicit audit-skip blocks (for documentation files that list banned items)
     text = re.sub(r"<!--\s*audit-skip-start\s*-->[\s\S]*?<!--\s*audit-skip-end\s*-->", "", text, flags=re.IGNORECASE)
-    # Strip YAML frontmatter. `(?:\n|$)`, because requiring a newline AFTER the
-    # closing fence left the frontmatter in place for any file that ends on it
-    # with no trailing newline -- and the YAML was then audited as prose, so a
-    # `title: leveraging robust systems` line produced two banned-vocab errors
-    # from metadata this function's own name says it removes.
-    text = re.sub(r"^---\n.*?\n---(?:\n|$)", "", text, count=1, flags=re.DOTALL)
+    # Strip YAML frontmatter, through the shared splitter.
+    #
+    # `^---\n.*?\n---(?:\n|$)` sat here. It already carried a fix for the
+    # end-of-file case, and the SAME failure mode was still open one character
+    # to the left: it required the fence to be exactly three characters followed
+    # by a newline. MEASURED 2026-08-29 on a document whose fence is `--- `, the
+    # frontmatter survived the strip and `title: leveraging robust systems` was
+    # audited as prose, producing two banned-vocab errors out of metadata this
+    # function's own name says it removes. A false finding in an audit is worse
+    # than a missed one: the operator edits real prose to satisfy it.
+    _fm, body, kind = split_frontmatter(text)
+    if kind == FM_OK:
+        text = body
     # Strip code fences (```...```)
     text = re.sub(r"```[\s\S]*?```", "", text)
     # Strip inline code (`...`)

@@ -37,6 +37,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
+from scripts.utils.markdown import FM_OK, split_frontmatter
 from scripts.utils.paths import get_workspace_root, load_env
 from scripts.utils.workspace import get_crm_contacts_dir, get_data_config_dir, get_outputs_dir, get_default_tz
 
@@ -258,18 +259,23 @@ def _pattern_matches_domain(pattern: str, domain: str) -> bool:
 
 
 def load_known_crm_domains(workspace_root: Path) -> set[str]:
-    """Walk crm/contacts/*.md and extract email domains from YAML frontmatter."""
+    """Walk crm/contacts/*.md and extract email domains from YAML frontmatter.
+
+    The fences come from the shared splitter. `^---\\n(.+?)\\n---` sat here and
+    took the fence to be exactly three characters. MEASURED 2026-08-29: a
+    contact whose fence carries a trailing space or a tab contributed NO domain,
+    so every message from that person's employer counted as coming from an
+    unknown sender in a report whose whole subject is known-versus-unknown.
+    """
     crm_dir = get_crm_contacts_dir()
     domains: set[str] = set()
     if not crm_dir.is_dir():
         return domains
     for md_file in crm_dir.glob("*.md"):
         text = md_file.read_text(encoding="utf-8", errors="replace")
-        # Extract YAML frontmatter between --- delimiters
-        match = re.match(r"^---\n(.+?)\n---", text, re.DOTALL)
-        if not match:
+        frontmatter, _body, kind = split_frontmatter(text)
+        if frontmatter is None or kind != FM_OK:
             continue
-        frontmatter = match.group(1)
         for line in frontmatter.splitlines():
             if line.strip().startswith("email:"):
                 email_val = line.split(":", 1)[1].strip()

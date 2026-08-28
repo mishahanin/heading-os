@@ -79,6 +79,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from scripts.utils.markdown import FM_OK, split_frontmatter
+
 # Public identity -- deliberately shareable, NEVER flagged.
 ALLOW_IDENTITY = {
     "misha", "hanin", "misha hanin", "misha.hanin@odinix.com", "misha.hanin@31c.io",
@@ -174,8 +176,6 @@ _ORG_GENERIC = {
     "spa", "srl", "systems", "technologies", "technology", "telecom", "telecoms",
     "ventures",
 }
-
-_FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---", re.S)
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _ID_RE = re.compile(r"\b\d{7,}\b")
@@ -381,15 +381,32 @@ def _harvest_contact_frontmatter(data_root: Path, tokens: dict[str, str]) -> Non
     contacts = data_root / "crm" / "contacts"
     if not contacts.is_dir():
         return
+    unreadable: list[str] = []
     for md in contacts.glob("*.md"):
         try:
             text = md.read_text(encoding="utf-8", errors="replace")
         except FileNotFoundError:
             continue  # globbed then removed; absence is not a failed harvest
-        m = _FRONTMATTER_RE.match(text)
-        if not m:
+        # The fences come from the shared splitter. `\A---\n(.*?)\n---` sat
+        # here, so a contact record whose fence carries a trailing space or a
+        # tab was read as having NO frontmatter and `continue` dropped it.
+        #
+        # MEASURED 2026-08-29 on a synthetic contact carrying an e-mail and a
+        # `company:`: the canonical fence yielded 5 tokens and the same record
+        # with `--- ` yielded 2 (the slug forms, which come from the FILENAME in
+        # a different harvester). The person's own address and their employer,
+        # the two highest-value tokens a contact holds, were absent from the
+        # denylist, so the content-leak wall would scan public engine prose
+        # naming them and print clean. A security control failing open on a
+        # space, and silently: nothing counted the skip.
+        #
+        # The skip is now counted and raised. `build_denylist` catches it, marks
+        # the list `degraded`, and `egress_proof` refuses on degraded, which is
+        # the fail-CLOSED direction this file's own comments demand elsewhere.
+        block, _body, kind = split_frontmatter(text)
+        if block is None or kind != FM_OK:
+            unreadable.append(md.name)
             continue
-        block = m.group(1)
         for email in _EMAIL_RE.findall(block):
             _add(tokens, email, "crm-email")
         for line in block.splitlines():
@@ -403,6 +420,23 @@ def _harvest_contact_frontmatter(data_root: Path, tokens: dict[str, str]) -> Non
                 continue
             for form in _org_token_forms(value):
                 _add(tokens, form, "crm-org")
+    if unreadable:
+        # Printed, NOT raised, and the difference was measured rather than
+        # guessed. `build_denylist` catches a harvester exception, sets
+        # `degraded`, and stops: the four harvesters after this one never run.
+        # `scripts/content-guard.py` then reads `degraded` and SKIPS the scan
+        # with exit 0. So raising here would trade one contact's two tokens for
+        # switching the whole content-leak layer off, which is the exact
+        # fail-open this file's `build_denylist` comment already records as a
+        # past defect.
+        #
+        # A record reaching this line after the splitter fix has an opening
+        # fence with no close, or no fence at all. Say which files, so the
+        # operator can fix the record instead of the gate.
+        print(f"content-denylist: {len(unreadable)} CRM record(s) have no "
+              f"readable frontmatter; their e-mail and employer are NOT "
+              f"denylist tokens: {', '.join(sorted(unreadable)[:5])}"
+              + (" ..." if len(unreadable) > 5 else ""), file=sys.stderr)
 
 
 def _harvest_executives(data_root: Path, tokens: dict[str, str]) -> None:

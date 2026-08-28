@@ -91,6 +91,13 @@ def test_consult_kimi_forwards_reasoning_effort(monkeypatch):
 
 
 def test_cli_reasoning_effort_passed_through(monkeypatch):
+    """Argparse only. The patch replaces `consult_kimi`, which is the function
+    that forwards these two values to `call_model`, so what this pins is that
+    `main` reads the flags and hands them on - not that they reach the
+    transport. That second hop is pinned in
+    tests/test_a_model_call_contract_two_wrappers_never_got.py, which patches
+    `call_model` instead.
+    """
     captured = {}
     def _fake(prompt, model=kc.DEFAULT_MODEL, temperature=kc.DEFAULT_TEMPERATURE,
               max_tokens=kc.DEFAULT_MAX_TOKENS, reasoning_effort=None, timeout=None):

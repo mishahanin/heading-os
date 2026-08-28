@@ -67,9 +67,19 @@ def consult_gemini(
     model: str = DEFAULT_MODEL,
     temperature: float = DEFAULT_TEMPERATURE,
     max_tokens: int = DEFAULT_MAX_TOKENS,
+    timeout: Optional[float] = None,
 ) -> str:
-    """Send the council prompt to Gemini through the proxy; return the answer text."""
-    return call_model(model, prompt, temperature=temperature, max_tokens=max_tokens)
+    """Send the council prompt to Gemini through the proxy; return the answer text.
+
+    `timeout` overrides the proxy socket timeout (seconds). Leave None to inherit
+    proxy_transport.DEFAULT_TIMEOUT. The truncation error the transport raises
+    tells the operator to raise this exact flag, so every wrapper that can print
+    that message has to accept it.
+    """
+    kwargs = {"temperature": temperature, "max_tokens": max_tokens}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    return call_model(model, prompt, **kwargs)
 
 
 # ============================================================
@@ -132,6 +142,15 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default=DEFAULT_MAX_TOKENS,
         help=f"Max output tokens. Default: {DEFAULT_MAX_TOKENS}",
     )
+    p.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="Socket timeout in seconds for ONE call. Omit to inherit the transport "
+             "default. Raise it (e.g. 480) for a large critique that would otherwise "
+             "time out. A truncation retry makes a second call at up to twice this "
+             "value, so the worst-case wall time is about 3x what you pass.",
+    )
     args = p.parse_args(argv)
 
     if args.mode == "independent" and not args.question.strip():
@@ -169,6 +188,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             model=args.model,
             temperature=args.temperature,
             max_tokens=args.max_tokens,
+            timeout=args.timeout,
         )
     except RuntimeError as e:
         msg = str(e)

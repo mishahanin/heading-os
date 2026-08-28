@@ -215,10 +215,28 @@ def call_model(model, prompt, *, temperature=0.7, max_tokens=8192, timeout=DEFAU
                 ) from e
             raise RuntimeError(f"Proxy call failed for {model}: {e}") from e
 
-        if not resp.choices:
-            raise RuntimeError(f"Proxy returned no choices for {model}.")
-        ch = resp.choices[0]
-        return (ch.message.content or ""), ch.finish_reason
+        # The shape read sits INSIDE a classification, like every exception
+        # above it. It used to sit after the try, so an answer that parsed but
+        # carried a different shape - `message` absent on a delta-shaped choice,
+        # no `finish_reason`, no `choices` attribute at all - raised
+        # AttributeError past every branch here. The two CLI wrappers that catch
+        # only RuntimeError then printed a traceback instead of the classified
+        # message their own docstrings promise. Which SDK version the proxy
+        # answers is not this module's to assume, so the read is guarded rather
+        # than trusted.
+        try:
+            if not resp.choices:
+                raise RuntimeError(f"Proxy returned no choices for {model}.")
+            ch = resp.choices[0]
+            return (ch.message.content or ""), ch.finish_reason
+        except RuntimeError:
+            raise
+        except Exception as e:  # noqa: BLE001 - classification, then re-raised
+            raise RuntimeError(
+                f"Proxy returned an unreadable response for {model}: "
+                f"{type(e).__name__}: {e}. The proxy answered, but not in the "
+                "shape this transport reads; check the CLIProxyAPI version."
+            ) from e
 
     content, finish_reason = _call(max_tokens, timeout)
     if _is_complete(content, finish_reason):

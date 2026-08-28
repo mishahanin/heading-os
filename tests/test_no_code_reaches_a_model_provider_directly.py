@@ -49,6 +49,28 @@ CODE_SUFFIXES = {".py", ".js", ".sh", ".ps1"}
 # The one module allowed to know the proxy's address, plus this test.
 PROXY_OWNER = "scripts/utils/proxy_transport.py"
 
+# One socket, four spellings. The scan below used to look for the literal
+# `127.0.0.1:8317`, so the only second client in the tree was invisible to it
+# for the price of writing `localhost` - measured 2026-08-28 against
+# scripts/census-submodel-bench.py, which builds its own urllib client and was
+# never reported. The port is what makes this the proxy: matching any loopback
+# address would catch the bridge daemon, ollama and every local health check,
+# and a guard that noisy gets turned off.
+PROXY_ADDRESS_RE = re.compile(r"(?:127\.0\.0\.1|localhost|\[?::1\]?|0\.0\.0\.0):8317")
+
+# Second clients allowed to exist, each for a stated reason. This is a list of
+# decisions, and it must stay one: an entry added to silence the scan puts the
+# hole back by hand.
+#
+# census-submodel-bench.py measures wall time (`perf_counter` around every call,
+# `latencies` per prompt). `call_model` adds a bounded 503 retry and a
+# truncation retry, both of which are right for a caller that wants an answer
+# and wrong for one that is timing the provider: the retry would be counted as
+# the model's latency. It POSTs to the same loopback port, so the proxy still
+# holds the subscription, the key and the boundary; what it does not inherit is
+# the retry and truncation policy, deliberately.
+OWN_CLIENT_EXEMPT = ("scripts/census-submodel-bench.py",)
+
 
 def _tracked_code() -> list[Path]:
     out = []
@@ -100,13 +122,35 @@ def test_only_one_module_holds_the_proxy_address():
         rel = p.relative_to(ROOT).as_posix()
         # Reading the proxy's own model list or health is fine; building a
         # completion client against it outside the owner is not.
-        if (re.search(r"127\.0\.0\.1:8317", text) and rel != PROXY_OWNER
+        if (PROXY_ADDRESS_RE.search(text) and rel != PROXY_OWNER
+                and rel not in OWN_CLIENT_EXEMPT
                 and re.search(r"OpenAI\(|Anthropic\(|/v1/(chat/)?completions|/v1/messages", text)):
             holders.append(rel)
     assert not holders, (
         f"these build their own model client against the proxy instead of "
         f"calling {PROXY_OWNER}: {holders}"
     )
+
+
+def test_the_exemptions_still_point_at_files_that_exist():
+    """An exemption that outlives its file is a hole nobody can see. It is also
+    the only way this list can silently grow: a stale entry looks like a
+    decision and covers whatever is written at that path next.
+    """
+    missing = [rel for rel in OWN_CLIENT_EXEMPT if not (ROOT / rel).exists()]
+    assert not missing, f"exempted files no longer exist: {missing}"
+
+
+def test_every_exemption_is_a_file_the_scan_would_otherwise_report():
+    """A name on the list that the scan would never have flagged is not an
+    exemption, it is a decoration - and it hides that the real second client
+    stopped being one.
+    """
+    for rel in OWN_CLIENT_EXEMPT:
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        assert PROXY_ADDRESS_RE.search(text), (
+            f"{rel} is exempt but holds no proxy address; drop the entry"
+        )
 
 
 def test_the_proxy_owner_still_exists_and_points_at_the_proxy():

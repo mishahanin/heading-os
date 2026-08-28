@@ -162,7 +162,11 @@ Optional model overrides (these take **proxy** ids — check `cliproxy models` f
 - `--kimi-model <id>` — override the Kimi voice's model (default: `k3`, see fallback above)
 
 Other passthrough flags (apply to all calls): `--temperature`, `--max-tokens`,
-`--length-hint`.
+`--length-hint`, `--timeout`.
+
+Only kimi-consult.py accepted `--timeout` until 2026-08-28. The other two
+wrappers stopped with exit 2. The truncation remedy below names that flag, so
+the two other voices could not obey it.
 
 **A cut-off answer is an ERROR since 2026-08-23, not a short answer.** The
 transport used to return whatever escaped before the budget ran out, exit 0, so

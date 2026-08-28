@@ -64,9 +64,19 @@ def consult_grok(
     model: str = DEFAULT_MODEL,
     temperature: float = DEFAULT_TEMPERATURE,
     max_tokens: int = DEFAULT_MAX_TOKENS,
+    timeout: Optional[float] = None,
 ) -> str:
-    """Send the council prompt to Grok through the proxy; return the answer text."""
-    return call_model(model, prompt, temperature=temperature, max_tokens=max_tokens)
+    """Send the council prompt to Grok through the proxy; return the answer text.
+
+    `timeout` overrides the proxy socket timeout (seconds). Leave None to inherit
+    proxy_transport.DEFAULT_TIMEOUT. grok-4.5 is a thinking model, so a large
+    critique can exceed the default in the reasoning phase, and the truncation
+    error the transport raises tells the operator to raise this exact flag.
+    """
+    kwargs = {"temperature": temperature, "max_tokens": max_tokens}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    return call_model(model, prompt, **kwargs)
 
 
 # ============================================================
@@ -129,6 +139,15 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default=DEFAULT_MAX_TOKENS,
         help=f"Max output tokens. Default: {DEFAULT_MAX_TOKENS}",
     )
+    p.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="Socket timeout in seconds for ONE call. Omit to inherit the transport "
+             "default. Raise it (e.g. 480) for a large grok-4.5 critique that would "
+             "otherwise time out. A truncation retry makes a second call at up to "
+             "twice this value, so the worst-case wall time is about 3x what you pass.",
+    )
     args = p.parse_args(argv)
 
     if args.mode == "independent" and not args.question.strip():
@@ -166,6 +185,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             model=args.model,
             temperature=args.temperature,
             max_tokens=args.max_tokens,
+            timeout=args.timeout,
         )
     except RuntimeError as e:
         msg = str(e)
@@ -173,6 +193,17 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"{RED}Error:{RESET} {msg}", file=sys.stderr)
             return 2
         print(f"{RED}Error:{RESET} {msg}", file=sys.stderr)
+        return 3
+    except Exception as e:  # noqa: BLE001 - the exit code IS the contract
+        # Exit 3 is documented above as "API call failed", and the /council
+        # skill is written against these codes. A catch limited to RuntimeError
+        # let anything the proxy layer did not wrap escape as a traceback and
+        # exit 1, a code this docstring does not define. Both siblings gained
+        # this branch and this file did not, which is the shape that keeps
+        # happening here: the fix reached two of three copies. The type is named
+        # so an unexpected failure stays diagnosable.
+        print(f"{RED}Error:{RESET} unexpected {type(e).__name__} from the proxy "
+              f"call: {e}", file=sys.stderr)
         return 3
 
     # Print response to stdout for the skill to capture

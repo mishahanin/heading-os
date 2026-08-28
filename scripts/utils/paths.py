@@ -359,6 +359,40 @@ def state_dir(*parts: str) -> Path:
     return target
 
 
+def private_cache_dir(*parts: str) -> Path:
+    """A cache directory for derived PRIVATE content, never inside the demo tree.
+
+    A scraped page and a parsed document are rebuildable, so they are a cache,
+    and they are made of private material, so they belong beside the material
+    they derive from. Two rules, and the second is the one that was missing.
+
+      * With a separate data overlay, the cache goes under the overlay.
+      * Without one, it goes under the WORKSPACE root, never under the data
+        root. With no overlay `get_data_root()` answers
+        `<workspace_root>/examples`, the bundled demo tree, which
+        `scripts/utils/engine_guard.py` treats as a CLOSED MANIFEST: anything
+        untracked under it is a data artifact, and the pre-commit wall and the
+        push wall both refuse. MEASURED 2026-08-28 on a clone with no overlay,
+        one cached scrape wrote `examples/outputs/browser/firecrawl-cache/
+        <key>.json`; no gitignore rule covers it (the rule is root-anchored to
+        `outputs/`), and `scan_engine_repo` flagged it. Every commit and every
+        push then refuses until the operator finds a directory nothing told
+        them about.
+
+    Override the base with WORKSPACE_CACHE_DIR, as with the three helpers
+    around it. Unlike them, this does NOT create the directory: writers already
+    `mkdir` before they write, and a resolver that makes a directory leaves an
+    empty one behind on every clone that merely asked where the cache would be.
+    """
+    base = os.environ.get("WORKSPACE_CACHE_DIR")
+    if base:
+        root = Path(base).expanduser()
+    else:
+        owner = get_data_root() if data_overlay_present() else get_workspace_root()
+        root = owner / ".cache"
+    return root.joinpath(*parts) if parts else root
+
+
 def log_dir(*parts: str) -> Path:
     """Return a workspace log directory, creating it if needed.
 

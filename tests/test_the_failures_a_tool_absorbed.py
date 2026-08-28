@@ -84,7 +84,7 @@ nl = _load("generate-newsletter-html", "newsletter_s48")
 def _cache(tmp_path: Path, monkeypatch) -> Path:
     cache = tmp_path / "cache"
     cache.mkdir()
-    monkeypatch.setattr(dp, "CACHE_DIR", cache)
+    monkeypatch.setattr(dp, "cache_dir", lambda: cache)
     return cache
 
 

@@ -95,8 +95,12 @@ config/ollama-hosts.yaml
 .sync/
 .heartbeat.json
 
-# Firecrawl cache (scraped web content, potentially sensitive)
+# Firecrawl cache (scraped web content, potentially sensitive). Both places it
+# can land: under the data overlay, and under this root on a clone that has no
+# overlay. The overlay path is root-anchored here and so does not match one
+# under examples/, which is the point: nothing may write there at all.
 outputs/browser/firecrawl-cache/
+.cache/firecrawl/
 
 # DocParse cache (parsed document data, regenerated on demand)
 .cache/docparse/

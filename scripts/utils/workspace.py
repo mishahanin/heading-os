@@ -37,6 +37,7 @@ from scripts.utils.paths import (  # noqa: F401
     load_env,
     log_dir,
     parse_env_line,
+    private_cache_dir,
     read_data_schema_version,
     read_env_value,
     require_outside_engine_clone,

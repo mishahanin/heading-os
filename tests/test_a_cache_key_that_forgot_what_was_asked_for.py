@@ -160,7 +160,7 @@ class _FakeClient:
 @pytest.fixture()
 def wired(fc, tmp_path, monkeypatch):
     client = _FakeClient()
-    monkeypatch.setattr(fc, "CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr(fc, "cache_dir", lambda: tmp_path / "cache")
     monkeypatch.setattr(fc, "get_client", lambda *a, **k: client)
     return client
 

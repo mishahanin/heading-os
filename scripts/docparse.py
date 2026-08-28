@@ -36,12 +36,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import BOLD, CYAN, GREEN, GRAY, RED, RESET, YELLOW
-from scripts.utils.workspace import get_workspace_root, get_outputs_dir, get_default_tz
+from scripts.utils.workspace import (
+    get_default_tz,
+    get_outputs_dir,
+    get_workspace_root,
+    private_cache_dir,
+)
 
 WORKSPACE = get_workspace_root()
-CACHE_DIR = WORKSPACE / ".cache" / "docparse"
 DEFAULT_DPI = 150
-DEFAULT_OUTPUT_DIR = get_outputs_dir() / "intel" / "docparse"
 CACHE_TTL_HOURS = 168  # 7 days
 
 # One constant, because three copies disagreed. Until 2026-08-23 the installer
@@ -98,9 +101,36 @@ def _cache_key(
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def cache_dir() -> Path:
+    """Where parsed documents are cached.
+
+    A cache entry here holds the full extracted TEXT of the document that was
+    parsed, so it is private material even though it is rebuildable. It used to
+    be `<workspace_root>/.cache/docparse`, which is INSIDE the engine clone, on
+    a workspace whose whole premise is that the engine carries code and nothing
+    else. It is gitignored, so it could never be committed and this was never a
+    leak; it was simply on the wrong side of the seam, in a tree no content wall
+    looks at (`repo_carried_paths` passes `--exclude-standard`, and rightly so).
+    MEASURED 2026-08-28 on the operator's own machine: five parsed documents.
+
+    `private_cache_dir` puts it under the data overlay when there is one, and
+    leaves it under the workspace root when there is not, which is where a
+    standalone clone's own documents belong. Both destinations are already
+    covered by their repository's gitignore, so this needs no new rule.
+
+    A FUNCTION, not the module constant it replaces. The constant resolved at
+    import time, which would have made `import scripts.docparse` raise on a
+    stale HEADING_OS_DATA. Deleting the name rather than reassigning it is also
+    deliberate: a test still doing `monkeypatch.setattr(dp, "CACHE_DIR", ...)`
+    now fails loudly instead of binding nothing and quietly writing into the
+    operator's live cache.
+    """
+    return private_cache_dir("docparse")
+
+
 def _cache_get(key: str) -> dict | None:
     """Return cached parse result if exists and not expired."""
-    cache_file = CACHE_DIR / f"{key}.json"
+    cache_file = cache_dir() / f"{key}.json"
     if not cache_file.exists():
         return None
     try:
@@ -127,9 +157,10 @@ def _cache_get(key: str) -> dict | None:
 
 def _cache_put(key: str, data: dict) -> None:
     """Write parse result to cache."""
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cdir = cache_dir()
+    cdir.mkdir(parents=True, exist_ok=True)
     data["_cached_at"] = datetime.now(timezone.utc).isoformat()
-    (CACHE_DIR / f"{key}.json").write_text(
+    (cdir / f"{key}.json").write_text(
         json.dumps(data, ensure_ascii=False), encoding="utf-8"
     )
 
@@ -1240,7 +1271,13 @@ def cmd_report(args):
         output_dir = Path(args.output_dir)
     else:
         date_str = datetime.now(get_default_tz()).strftime("%Y-%m-%d")
-        output_dir = DEFAULT_OUTPUT_DIR / date_str
+        # Resolved HERE, not at import. As a module constant this called
+        # `get_outputs_dir()` the moment anything imported docparse, so a
+        # HEADING_OS_DATA naming a directory that had since moved raised
+        # DataRootError out of the import itself: no argparse, no usage line, a
+        # traceback from `--help`. Only the `report` subcommand needs it, and
+        # only when `--output-dir` was not given.
+        output_dir = get_outputs_dir() / "intel" / "docparse" / date_str
 
     output_dir.mkdir(parents=True, exist_ok=True)
     html_path = output_dir / "docparse-report.html"
@@ -1308,11 +1345,12 @@ def _image_mime(data: bytes) -> str:
 
 def cmd_status(_args):
     """Show cache statistics."""
-    if not CACHE_DIR.exists():
+    cdir = cache_dir()
+    if not cdir.exists():
         print("Cache directory does not exist yet (no documents parsed).")
         return
 
-    entries = list(CACHE_DIR.glob("*.json"))
+    entries = list(cdir.glob("*.json"))
     if not entries:
         print("Cache is empty.")
         return
@@ -1321,7 +1359,7 @@ def cmd_status(_args):
     oldest = min(entries, key=lambda f: f.stat().st_mtime)
     newest = max(entries, key=lambda f: f.stat().st_mtime)
 
-    print(f"  Cache dir:   {CACHE_DIR}")
+    print(f"  Cache dir:   {cdir}")
     print(f"  Entries:     {len(entries)}")
     print(f"  Total size:  {total_size:,} bytes ({total_size / 1024:.1f} KB)")
     print(f"  Oldest:      {datetime.fromtimestamp(oldest.stat().st_mtime, tz=get_default_tz()).isoformat()}")
@@ -1334,7 +1372,8 @@ def cmd_status(_args):
 
 def cmd_clear_cache(args):
     """Clear parse cache."""
-    if not CACHE_DIR.exists():
+    cdir = cache_dir()
+    if not cdir.exists():
         print("Cache is already empty.")
         return
 
@@ -1344,7 +1383,7 @@ def cmd_clear_cache(args):
         removed = 0
         unreadable = []
         undeletable = []
-        for entry in CACHE_DIR.glob("*.json"):
+        for entry in cdir.glob("*.json"):
             try:
                 data = json.loads(entry.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError) as e:
@@ -1387,12 +1426,12 @@ def cmd_clear_cache(args):
             sys.exit(1)
     else:
         if not args.force:
-            entries = list(CACHE_DIR.glob("*.json"))
+            entries = list(cdir.glob("*.json"))
             print(f"This will delete {len(entries)} cached parse results.")
             print(f"Use --force to confirm, or --file to clear a specific file.")
             sys.exit(1)
 
-        entries = list(CACHE_DIR.glob("*.json"))
+        entries = list(cdir.glob("*.json"))
         # The same defect as the --file branch, in its other copy: this counted
         # the entries it FOUND and called them cleared, and an OSError on any
         # one of them aborted the sweep with a traceback and no summary at all,

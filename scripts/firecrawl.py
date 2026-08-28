@@ -28,7 +28,9 @@ Environment:
   Free tier: 500 credits.
 
 Cache:
-  Results cached at outputs/browser/firecrawl-cache/ to avoid re-spending credits.
+  Results cached to avoid re-spending credits: outputs/browser/firecrawl-cache/
+  under the data overlay, or .cache/firecrawl/ under the workspace root when
+  there is no overlay. `clear-cache` prints the path it acted on.
   Default TTLs: scrape 24h, batch 24h, crawl 48h, extract 72h, search 6h,
   map 168h. All six, matching DEFAULT_TTLS; the list reads as exhaustive and
   used to name five, leaving an operator tuning cache behaviour from this
@@ -55,14 +57,51 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.api import load_api_key
-from scripts.utils.workspace import get_data_root, get_outputs_dir, get_reference_dir
+from scripts.utils.workspace import (
+    data_overlay_present,
+    get_data_root,
+    get_outputs_dir,
+    get_reference_dir,
+    private_cache_dir,
+)
 
 # ============================================================
 # Configuration
 # ============================================================
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKSPACE_ROOT = os.path.dirname(SCRIPT_DIR)
-CACHE_DIR = str(get_outputs_dir() / "browser" / "firecrawl-cache")
+
+
+def cache_dir() -> Path:
+    """Where scraped pages are cached.
+
+    With a data overlay this is unchanged, `<overlay>/outputs/browser/
+    firecrawl-cache`, which the data repository's own gitignore already covers.
+    Keeping the path is deliberate: moving it would orphan whatever is cached
+    there now, and a cache the `clear-cache` command can no longer see is worse
+    than an untidy path.
+
+    WITHOUT an overlay it used to resolve to `<engine>/examples/outputs/browser/
+    firecrawl-cache`, inside the bundled demo tree. `engine_guard.py` treats
+    that tree as a closed manifest, so anything untracked under it is a data
+    artifact. MEASURED 2026-08-28 on a clone with no overlay: one cached scrape
+    put a file there, no gitignore rule covered it (`outputs/browser/
+    firecrawl-cache/` is root-anchored and does not match a path under
+    `examples/`), and `scan_engine_repo` flagged it. The pre-commit wall runs on
+    every commit and the push wall on every push, so from that moment both
+    refuse, over a directory nothing told the operator about.
+
+    A FUNCTION, not the module constant it replaces. The constant called
+    `get_outputs_dir()` at import time, so `import scripts.firecrawl` raised
+    DataRootError on a stale HEADING_OS_DATA before argparse ever ran, and
+    `--help` answered with a traceback. That is a by-product of the move, not a
+    claim about the workspace: 31 scripts still bind such a constant at import,
+    and the loud raise itself is deliberate. Only the timing changed here.
+    """
+    if data_overlay_present():
+        return get_outputs_dir() / "browser" / "firecrawl-cache"
+    return private_cache_dir("firecrawl")
+
 
 DEFAULT_TTLS = {
     "scrape": 24,
@@ -219,7 +258,7 @@ def scrape_cache_key(url, formats):
 
 def check_cache(key, ttl_hours):
     """Return cached content or None."""
-    cache_file = str(Path(CACHE_DIR) / f"{key}.json")
+    cache_file = str(cache_dir() / f"{key}.json")
     if not os.path.exists(cache_file):
         return None
 
@@ -240,8 +279,9 @@ def check_cache(key, ttl_hours):
 
 def write_cache(key, data, command, identifier, credits_used=0, ttl_hours=24):
     """Write result to cache with metadata."""
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    cache_file = str(Path(CACHE_DIR) / f"{key}.json")
+    cdir = cache_dir()
+    os.makedirs(cdir, exist_ok=True)
+    cache_file = str(cdir / f"{key}.json")
     payload = {
         "url": identifier,
         "command": command,
@@ -836,16 +876,20 @@ def write_output(content, output_path=None):
 
 def cmd_clear_cache(args):
     """Clear the firecrawl cache."""
-    if not os.path.exists(CACHE_DIR):
-        print("Cache directory does not exist.", file=sys.stderr)
+    # Both messages name the directory. The cache moves with the data overlay,
+    # so "Cache directory does not exist" without a path leaves the operator
+    # unable to tell an empty cache from a cache somewhere they did not look.
+    cdir = cache_dir()
+    if not os.path.exists(cdir):
+        print(f"Cache directory does not exist: {cdir}", file=sys.stderr)
         return
 
     count = 0
-    for f in os.listdir(CACHE_DIR):
+    for f in os.listdir(cdir):
         if f.endswith(".json"):
-            os.remove(Path(CACHE_DIR) / f)
+            os.remove(cdir / f)
             count += 1
-    print(f"Cleared {count} cached entries.", file=sys.stderr)
+    print(f"Cleared {count} cached entries from {cdir}.", file=sys.stderr)
 
 
 # ============================================================

@@ -311,7 +311,7 @@ def test_the_liteparse_pin_is_two_point_zero():
 @pytest.mark.parametrize("cached_at", ["not-a-date", 123, None, 4.5, [], "2026-13-45"])
 def test_a_corrupt_cache_timestamp_regenerates(dp, tmp_path, monkeypatch, cached_at,
                                                capsys):
-    monkeypatch.setattr(dp, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(dp, "cache_dir", lambda: tmp_path)
     (tmp_path / "k.json").write_text(
         json.dumps({"_cached_at": cached_at, "pages": []}), encoding="utf-8")
     assert dp._cache_get("k") is None, (
@@ -326,7 +326,7 @@ def test_a_corrupt_cache_timestamp_regenerates(dp, tmp_path, monkeypatch, cached
 def test_a_good_cache_entry_is_still_returned(dp, tmp_path, monkeypatch):
     """Anchor: widening the except must not discard working cache entries."""
     from datetime import datetime, timezone
-    monkeypatch.setattr(dp, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(dp, "cache_dir", lambda: tmp_path)
     fresh = datetime.now(timezone.utc).isoformat()
     (tmp_path / "k.json").write_text(
         json.dumps({"_cached_at": fresh, "pages": [1]}), encoding="utf-8")
@@ -346,7 +346,7 @@ def test_clear_cache_matches_the_exact_path_only(dp, tmp_path, monkeypatch):
     """
     cache = tmp_path / "cache"
     cache.mkdir()
-    monkeypatch.setattr(dp, "CACHE_DIR", cache)
+    monkeypatch.setattr(dp, "cache_dir", lambda: cache)
     drafts = tmp_path / "drafts" / "q3.pdf"
     contracts = tmp_path / "contracts" / "q3.pdf"
     for p in (drafts, contracts):

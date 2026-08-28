@@ -53,9 +53,17 @@ LOGO_PATH = (
 # Utilities
 # ============================================================
 def embed_image(file_path):
-    """Read an image file and return a base64 data URI string."""
+    """Read an image file and return a base64 data URI string.
+
+    A missing file yields `""`, which every caller renders as no image at all.
+    That is the right OUTPUT (a briefing with a missing figure still ships),
+    but it was also silent, so a mistyped `--images` path produced an issue
+    with a hole in it and no line anywhere saying why.
+    """
     path = Path(file_path)
     if not path.exists():
+        print(f"Warning: image not found, rendering without it: {file_path}",
+              file=sys.stderr)
         return ""
     suffix = path.suffix.lower().lstrip(".")
     mime_map = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp"}
@@ -66,8 +74,16 @@ def embed_image(file_path):
 
 
 def esc(text):
-    """HTML-escape text content."""
-    if not text:
+    """HTML-escape text content. `None` and `""` render as nothing; 0 does not.
+
+    The guard was `if not text`, which is true of `0`, `0.0` and `False` as
+    well. MEASURED: `esc(0)` returned `""`, so a stat written as
+    `{"value": 0, "label": "deals closed"}` rendered with an empty value and a
+    label beside it, and the reader saw a missing number rather than a zero.
+    Zero is a finding in a briefing, and it is the one number a reader cannot
+    reconstruct from the absence of a number.
+    """
+    if text is None or text == "":
         return ""
     return html.escape(str(text))
 
@@ -216,7 +232,11 @@ def build_top_bar(regions):
 def build_masthead(logo_uri, display_date, issue_num, regions, threat_level):
     """Two-column masthead with logo, date, issue, threat level."""
     region_str = " &middot; ".join(esc(r) for r in regions) if regions else "GCC &middot; CIS &middot; Africa"
-    issue_str = f"Issue #{issue_num:03d}" if isinstance(issue_num, int) else f"Issue #{issue_num}"
+    # `issue_number` is a document field, so a non-int value went into the page
+    # verbatim. Escaped in BOTH places it is rendered; `build_footer` had the
+    # same line and fixing one of the two is this repository's usual defect.
+    issue_str = (f"Issue #{issue_num:03d}" if isinstance(issue_num, int)
+                 else f"Issue #{esc(issue_num)}")
 
     logo_html = ""
     if logo_uri:
@@ -463,7 +483,15 @@ def build_navigation_chart(data, section_num=3):
     # "afr" and "africa" are aliases, so a document carrying both used to
     # render Africa twice. First one present wins.
     seen_regions = set()
-    for key in ["gcc", "cis", "afr", "africa"]:
+    # The loop read a fixed list of four keys, so any other region in the
+    # document was dropped without a word. MEASURED: a navigation_chart
+    # carrying "apac" and "eu" beside "gcc" rendered the Gulf row alone, and
+    # the two written regions vanished from the briefing. The four keys keep
+    # their order because that order is editorial; everything else follows in
+    # document order rather than not at all.
+    known = ["gcc", "cis", "afr", "africa"]
+    ordered = known + [k for k in data if k not in known]
+    for key in ordered:
         region = data.get(key)
         if not region:
             continue
@@ -523,9 +551,15 @@ def build_market_depth(data, section_num=4):
 
     header = build_section_header(section_num, "Capital Markets", "Market Depth")
 
-    # Bar chart
+    # Bar chart, stats overlay and market caption.
+    #
+    # All three used to be built inside `if bars:`. MEASURED with stats and a
+    # market_caption present and `bars` absent: "$347,850", "median" and the
+    # caption were all missing from the output, and nothing said so. The stats
+    # are the operator's own figures; the bars are decoration around them. A
+    # decoration that is absent must not take the numbers with it.
     bar_html = ""
-    if bars:
+    if bars or stats or market_caption_text:
         bar_items = []
         for val in bars:
             # `val > 60` on a string raised TypeError, and a string like
@@ -703,7 +737,7 @@ def build_footer(logo_uri, issue_num, display_date):
     if logo_uri:
         logo_html = f'<img src="{logo_uri}" alt="31C" class="logo-footer"/>'
 
-    issue_str = f"{issue_num:03d}" if isinstance(issue_num, int) else str(issue_num)
+    issue_str = f"{issue_num:03d}" if isinstance(issue_num, int) else esc(issue_num)
 
     return f"""
 <div class="footer">
@@ -934,10 +968,19 @@ def main():
     # Parse image paths
     image_paths = {}
     if args.images:
+        # `--images` takes `section=path`. A mapping without `=` used to be
+        # dropped in silence, and the shape that produces one is a space
+        # instead of an equals sign: `--images sea_state /path/img.png` is two
+        # bare words under `nargs="*"`, so the issue rendered with no image and
+        # nothing anywhere said the argument had not been understood.
+        malformed = [m for m in args.images if "=" not in m]
+        if malformed:
+            print(f"Error: --images takes section=path. Not understood: "
+                  f"{', '.join(repr(m) for m in malformed)}", file=sys.stderr)
+            sys.exit(2)
         for mapping in args.images:
-            if "=" in mapping:
-                section, path = mapping.split("=", 1)
-                image_paths[section] = path
+            section, path = mapping.split("=", 1)
+            image_paths[section] = path
 
     # Determine output directory
     # `date` is a field of the input document, and it used to become a path

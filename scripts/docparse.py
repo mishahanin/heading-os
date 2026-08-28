@@ -427,6 +427,21 @@ def _generate_report_html(
 
     logo_b64 = load_logo_base64()
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    # The parse this report is built on may have been partial. `cmd_parse` now
+    # records every document it could not read under `failures`, and this is
+    # where that reaches the reader: a report over three of five documents used
+    # to look exactly like a report over all five, and the answer above it was
+    # written against the three.
+    parse_failures = parse_data.get("failures") or []
+    parse_failure_note = ""
+    if parse_failures:
+        _names = ", ".join(sorted(html.escape(Path(f.get("file", "?")).name)
+                                  for f in parse_failures))
+        parse_failure_note = f'''
+    <div class="cite-caveat">The parse behind this report did not cover every
+    document it was given. {len(parse_failures)} failed and are absent from the
+    evidence below: {_names}.</div>'''
     # `sorted`, not bare `set`: the header is part of a document the operator
     # keeps, and two runs over identical input printed the file names in
     # different orders.
@@ -785,7 +800,7 @@ def _generate_report_html(
     <div class="meta">{html.escape(files_str)} | {pages_cited} pages cited | {len(citations)} citations | {now}</div>{"" if not capped_pages else f'''
     <div class="cite-caveat">This report was limited to a maximum number of
     cited pages, so {capped_pages} cited page(s) below carry no page image. The
-    limit is set by --max-pages.</div>'''}
+    limit is set by --max-pages.</div>'''}{parse_failure_note}
   </header>
 
   <div class="question-box">
@@ -909,17 +924,41 @@ def _setup_check() -> bool:
         print(f"         Install: npm install -g @llamaindex/liteparse")
         all_ok = False
 
-    # Python package
+    # Python package. The version is checked, not merely the import, because
+    # `setup --install` pins `liteparse=={LITEPARSE_VERSION}` and a drifted
+    # install is exactly what this command exists to catch. MEASURED
+    # 2026-08-28 on the operator's machine: LITEPARSE_VERSION is "2.0.0", the
+    # installed package is 2.9.0, and this printed "All prerequisites met".
+    version_unknown = False
     try:
         import liteparse
-        print(f"  {GREEN}OK{RESET}  liteparse Python package installed")
+        installed = getattr(liteparse, "__version__", None)
+        if installed is None:
+            print(f"  {YELLOW}WARN{RESET}  liteparse installed, version not "
+                  f"reported by the package (expected {LITEPARSE_VERSION})")
+            version_unknown = True
+        elif installed != LITEPARSE_VERSION:
+            print(f"  {YELLOW}WARN{RESET}  liteparse {installed} installed, "
+                  f"this tool is written against {LITEPARSE_VERSION}")
+            version_unknown = True
+        else:
+            print(f"  {GREEN}OK{RESET}  liteparse {installed}")
     except ImportError:
         print(f"  {RED}FAIL{RESET}  liteparse Python package not installed")
         print(f"         Install: pip install liteparse=={LITEPARSE_VERSION}")
         all_ok = False
 
-    if all_ok:
-        print(f"\n{GREEN}All prerequisites met.{RESET}")
+    # What the sentence may claim is what the three checks above established:
+    # that node, the CLI and the package are PRESENT. It said "All
+    # prerequisites met", which reads as a verdict on the whole setup, over a
+    # method that never compared a single version.
+    if all_ok and not version_unknown:
+        print(f"\n{GREEN}Node.js, the LiteParse CLI and the Python package are "
+              f"present, at the versions this tool expects.{RESET}")
+    elif all_ok:
+        print(f"\n{YELLOW}Node.js, the LiteParse CLI and the Python package are "
+              f"present. The package version was not confirmed as "
+              f"{LITEPARSE_VERSION}; see the WARN above.{RESET}")
     else:
         print(f"\n{RED}Some prerequisites missing. Run: python scripts/docparse.py setup --install{RESET}")
 
@@ -991,7 +1030,8 @@ def _password(args) -> str | None:
 
 def cmd_parse(args):
     """Parse one or more documents."""
-    results = {"files": [], "summary": {}}
+    results = {"files": [], "failures": [], "summary": {}}
+    failures = results["failures"]
     t0 = time.time()
     cache_hits = 0
 
@@ -999,6 +1039,9 @@ def cmd_parse(args):
         fp = Path(file_str).resolve()
         if not fp.exists():
             print(f"  {RED}SKIP{RESET}  {file_str} (not found)", file=sys.stderr)
+            # A path the operator NAMED and that does not exist is the loudest
+            # failure of the three, and it was the one nothing recorded.
+            failures.append({"file": str(fp), "error": "not found"})
             continue
 
         # Auto-discover if directory
@@ -1030,12 +1073,24 @@ def cmd_parse(args):
                 )
             except FileNotFoundError:
                 print(f"  {RED}SKIP{RESET}  {f.name} (not found)", file=sys.stderr)
+                failures.append({"file": str(f), "error": "not found"})
             except Exception as e:
                 print(f"  {RED}ERROR{RESET}  {f.name}: {e}", file=sys.stderr)
+                failures.append({"file": str(f), "error": f"{type(e).__name__}: {e}"})
 
     elapsed = time.time() - t0
+    results["failures"] = failures
     results["summary"] = {
         "total_files": len(results["files"]),
+        # `total_files` counts successes, and it was the ONLY count written.
+        # MEASURED on five documents of which two raised: the archived JSON
+        # said `total_files: 3`, carried no record of the other two, and the
+        # errors went to stderr where they scroll away. `cmd_report` then read
+        # that file and had no way to know the sweep was partial, so a report
+        # built over three fifths of a corpus looked exactly like one built
+        # over all of it.
+        "total_failed": len(failures),
+        "total_requested": len(results["files"]) + len(failures),
         "total_pages": sum(len(f.get("pages", [])) for f in results["files"]),
         "cache_hits": cache_hits,
         "elapsed_seconds": round(elapsed, 2),
@@ -1046,12 +1101,23 @@ def cmd_parse(args):
     output_path.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
 
     s = results["summary"]
+    # `N files` alone reads as "N is what there was". Say what was asked for
+    # whenever the two numbers differ, so a partial sweep cannot be mistaken
+    # for a complete one at a glance.
+    scope = (f"{s['total_files']} of {s['total_requested']} files"
+             if s["total_failed"] else f"{s['total_files']} files")
     print(
-        f"\n{BOLD}{s['total_files']} files, {s['total_pages']} pages, "
+        f"\n{BOLD}{scope}, {s['total_pages']} pages, "
         f"{s['cache_hits']} cache hits, {s['elapsed_seconds']}s{RESET}",
         file=sys.stderr,
     )
     print(f"Output: {output_path}", file=sys.stderr)
+
+    if s["total_failed"]:
+        print(f"{RED}{s['total_failed']} file(s) failed{RESET} and are recorded "
+              f"under `failures` in {output_path.name}:", file=sys.stderr)
+        for fail in results["failures"]:
+            print(f"  {Path(fail['file']).name}: {fail['error']}", file=sys.stderr)
 
     if s["total_files"] == 0:
         print(f"\n{RED}Error: No files were successfully parsed.{RESET}", file=sys.stderr)
@@ -1276,20 +1342,49 @@ def cmd_clear_cache(args):
         fp = Path(args.file).resolve()
         # Try to find matching cache entries by reading them
         removed = 0
+        unreadable = []
+        undeletable = []
         for entry in CACHE_DIR.glob("*.json"):
             try:
                 data = json.loads(entry.read_text(encoding="utf-8"))
-                # Exact path only. The basename fallback deleted the cache of
-                # every document sharing a filename across directories — asking
-                # to clear `~/drafts/q3.pdf` also cleared `~/contracts/q3.pdf`.
-                # The cost is only recompute, but the deletion was broader than
-                # what was asked for, and the exact match already sufficed.
-                if data.get("file") == str(fp):
-                    entry.unlink()
-                    removed += 1
-            except (json.JSONDecodeError, OSError):
-                pass
+            except (json.JSONDecodeError, OSError) as e:
+                # This used to be `pass`, under a handler that also covered the
+                # unlink below. An entry this loop cannot read is an entry it
+                # cannot rule out: it may be the cache of exactly the file the
+                # operator asked to clear, and the count printed afterwards
+                # said nothing about it either way.
+                unreadable.append((entry.name, str(e)))
+                continue
+            # Exact path only. The basename fallback deleted the cache of
+            # every document sharing a filename across directories — asking
+            # to clear `~/drafts/q3.pdf` also cleared `~/contracts/q3.pdf`.
+            # The cost is only recompute, but the deletion was broader than
+            # what was asked for, and the exact match already sufficed.
+            if data.get("file") != str(fp):
+                continue
+            try:
+                entry.unlink()
+            except OSError as e:
+                # The sharper half of the same swallow. MEASURED: one matching
+                # entry that raises EACCES on unlink printed "Removed 0 cache
+                # entries for q3.pdf" and stopped there, which an operator
+                # reads as "there was no cache for that file" — the exact
+                # opposite of what happened. The entry is still on disk and the
+                # next parse still reads it.
+                undeletable.append((entry.name, str(e)))
+                continue
+            removed += 1
         print(f"Removed {removed} cache entries for {fp.name}")
+        for name, err in unreadable:
+            print(f"{YELLOW}Skipped{RESET} {name}: unreadable ({err}). "
+                  f"It may or may not belong to {fp.name}.", file=sys.stderr)
+        for name, err in undeletable:
+            print(f"{RED}Failed to remove{RESET} {name}, which does belong to "
+                  f"{fp.name}: {err}", file=sys.stderr)
+        if undeletable:
+            # An entry that matched and survived means the command did not do
+            # what it was asked to do, so it must not report success.
+            sys.exit(1)
     else:
         if not args.force:
             entries = list(CACHE_DIR.glob("*.json"))
@@ -1298,9 +1393,24 @@ def cmd_clear_cache(args):
             sys.exit(1)
 
         entries = list(CACHE_DIR.glob("*.json"))
+        # The same defect as the --file branch, in its other copy: this counted
+        # the entries it FOUND and called them cleared, and an OSError on any
+        # one of them aborted the sweep with a traceback and no summary at all,
+        # leaving the operator with no idea how many had gone.
+        cleared = 0
+        undeletable = []
         for entry in entries:
-            entry.unlink(missing_ok=True)
-        print(f"Cleared {len(entries)} cache entries.")
+            try:
+                entry.unlink(missing_ok=True)
+            except OSError as e:
+                undeletable.append((entry.name, str(e)))
+                continue
+            cleared += 1
+        print(f"Cleared {cleared} of {len(entries)} cache entries.")
+        for name, err in undeletable:
+            print(f"{RED}Failed to remove{RESET} {name}: {err}", file=sys.stderr)
+        if undeletable:
+            sys.exit(1)
 
 
 # ============================================================

@@ -334,12 +334,38 @@ def test_a_good_cache_entry_is_still_returned(dp, tmp_path, monkeypatch):
     assert got is not None and got["pages"] == [1]
 
 
-def test_clear_cache_matches_the_exact_path_only():
-    assert 'Path(data.get("file", "")).name == fp.name' not in DOCPARSE_CODE, (
-        "the basename fallback deleted the cache of every document sharing a "
-        "filename across directories"
-    )
-    assert 'if data.get("file") == str(fp):' in DOCPARSE_CODE
+def test_clear_cache_matches_the_exact_path_only(dp, tmp_path, monkeypatch):
+    """Two documents with the same basename in different directories.
+
+    This used to assert the SOURCE contained `if data.get("file") == str(fp):`,
+    which is a claim about how the comparison is spelled, not about what it
+    does. Shard 48 inverted that branch to an early `continue` while leaving the
+    behaviour identical, and the test failed over a rewording. Run it instead:
+    the defect it guards is that clearing `drafts/q3.pdf` also cleared
+    `contracts/q3.pdf`, and that is observable.
+    """
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr(dp, "CACHE_DIR", cache)
+    drafts = tmp_path / "drafts" / "q3.pdf"
+    contracts = tmp_path / "contracts" / "q3.pdf"
+    for p in (drafts, contracts):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"%PDF")
+    (cache / "d.json").write_text(
+        json.dumps({"file": str(drafts.resolve())}), encoding="utf-8")
+    (cache / "c.json").write_text(
+        json.dumps({"file": str(contracts.resolve())}), encoding="utf-8")
+
+    import argparse
+    import contextlib
+    import io
+    with contextlib.redirect_stdout(io.StringIO()):
+        dp.cmd_clear_cache(argparse.Namespace(file=str(drafts), force=False))
+
+    assert not (cache / "d.json").exists(), "the named document was not cleared"
+    assert (cache / "c.json").exists(), (
+        "clearing drafts/q3.pdf also cleared contracts/q3.pdf")
 
 
 def test_the_password_prefers_the_environment(dp, monkeypatch, capsys):

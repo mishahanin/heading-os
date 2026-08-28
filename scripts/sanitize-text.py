@@ -22,16 +22,13 @@ from pathlib import Path
 # Workspace import boilerplate
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.atomic import atomic_write_text
-from scripts.utils.sanitize_text import sanitize_report, scan
+from scripts.utils.sanitize_text import sanitize_report, scan, word_count
 
-
-def _word_count(text: str) -> int:
-    """Words as a human counts them in prose.
-
-    Whitespace-separated runs that contain at least one letter or digit, so a
-    bare bullet, a lone em-dash or a `|` table rule does not inflate the figure.
-    """
-    return sum(1 for tok in text.split() if any(ch.isalnum() for ch in tok))
+# The definition moved to `scripts/utils/sanitize_text.py` so the rest of the
+# workspace can reach it. It lived here, inside a kebab-case CLI that no module
+# can import, and four other word counters were written rather than shared this
+# one. The alias keeps this file's own reference short.
+_word_count = word_count
 
 
 def main():

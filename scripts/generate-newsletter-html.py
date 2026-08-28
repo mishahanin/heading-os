@@ -25,7 +25,9 @@ from datetime import date, datetime
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.html_templates import load_template
+from scripts.utils.html_text import strip_html
 from scripts.utils.image import load_logo_base64
+from scripts.utils.sanitize_text import word_count
 from scripts.utils.workspace import get_default_tz, get_outputs_dir
 
 
@@ -854,12 +856,22 @@ def safe_date_segment(raw):
     return text
 
 
-def count_words(html_text):
-    """Rough word count from HTML by stripping tags."""
-    text = re.sub(r"<[^>]+>", " ", html_text)
-    text = re.sub(r"&[a-z]+;", " ", text)
-    words = text.split()
-    return len(words)
+def count_words(html_doc):
+    """Editorial words in a rendered newsletter.
+
+    `re.sub(r"<[^>]+>", " ", ...)` removes the `<style>` TAG and leaves its
+    BODY, and `build_css()` inlines 17424 characters of CSS into every issue.
+    MEASURED before this change: a newsletter carrying three words of prose
+    reported `Word count: ~1961`. Every issue was inflated by about 1958, and
+    the figure is what the operator reads to judge whether a briefing runs the
+    right length.
+
+    `strip_html` has removed `<style>` and `<script>` bodies since it was
+    written, and its own docstring asks new callers to import it rather than
+    copy the logic. `word_count` is the workspace's one definition of a word
+    (`.claude/rules/hidden-chars.md`). Both were here to be used.
+    """
+    return word_count(strip_html(html_doc))
 
 
 def generate_pdf(html_path, pdf_path):
@@ -944,9 +956,13 @@ def main():
     newsletter_html = generate_newsletter(data, image_paths)
     output_path.write_text(newsletter_html, encoding="utf-8")
 
-    word_count = count_words(newsletter_html)
+    # Not named `word_count`: that is the imported function, and a local of the
+    # same name in this scope is a trap for the next edit here.
+    words = count_words(newsletter_html)
     print(f"Newsletter generated: {output_path}")
-    print(f"Word count: ~{word_count}")
+    # No "~". It was an estimate over a regex that counted the stylesheet, and
+    # it is now the editorial word count of the rendered text.
+    print(f"Word count: {words}")
     print(f"File size: {output_path.stat().st_size:,} bytes")
 
     # Generate PDF (single continuous page)

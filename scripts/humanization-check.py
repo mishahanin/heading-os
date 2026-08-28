@@ -1202,11 +1202,19 @@ def print_report(result, source):
     f = result["findings"]
     if not f:
         print(f"\n  {GREEN}{source}: clean - no humanisation findings.{RESET}")
-        print(f"  Word count: {s['word_count']}. Paragraphs: {s['paragraph_count']}.")
+        print(f"  Rhythm words: {s['word_count']}. "
+              f"Paragraphs: {s['paragraph_count']}.")
+        print(f"  {GRAY}(This tool's own token count, used for its sentence and "
+              f"paragraph thresholds. The deliverable's word count comes from "
+              f"`sanitize-text.py --scan`.){RESET}")
         return
 
     print(f"\n  {BOLD}{source}: {s['errors']} error(s), {s['warnings']} warning(s).{RESET}")
-    print(f"  Word count: {s['word_count']}. Paragraphs: {s['paragraph_count']}.\n")
+    print(f"  Rhythm words: {s['word_count']}. "
+          f"Paragraphs: {s['paragraph_count']}.")
+    print(f"  {GRAY}(This tool's own token count, used for its sentence and "
+          f"paragraph thresholds. The deliverable's word count comes from "
+          f"`sanitize-text.py --scan`.){RESET}\n")
 
     errors = [x for x in f if x.get("severity") == "error"]
     warnings = [x for x in f if x.get("severity") == "warning"]

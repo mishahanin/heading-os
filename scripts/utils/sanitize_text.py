@@ -240,3 +240,25 @@ def scan_file(path) -> Tuple[int, str]:
     buf = io.StringIO()
     count = scan(text, str(path), out=buf)
     return count, buf.getvalue().strip()
+
+
+def word_count(text: str) -> int:
+    """Words as a human counts them in prose. The workspace's one definition.
+
+    A whitespace-separated run counts when it contains at least one letter or
+    digit, so a bare bullet, a lone dash or a `|` table rule does not inflate
+    the figure.
+
+    It lived as `_word_count` inside `scripts/sanitize-text.py`, which is a
+    kebab-case CLI and cannot be imported. So four other counters were written
+    instead, and on one ordinary sentence the five disagreed 11 / 12 / 15 / 15 /
+    17. `.claude/rules/hidden-chars.md` is the rule that settles this and it is
+    explicit that the number "comes from the tool, never from an estimate" - a
+    line that means little while the tools answer differently. This is the tool.
+
+    Prose only. An HTML document must go through
+    `scripts.utils.html_text.strip_html` first, which removes `<style>` and
+    `<script>` BODIES; a bare tag-stripping regex leaves the stylesheet behind
+    and counts it as text.
+    """
+    return sum(1 for tok in text.split() if any(ch.isalnum() for ch in tok))

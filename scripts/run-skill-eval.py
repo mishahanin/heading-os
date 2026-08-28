@@ -55,6 +55,7 @@ from scripts.utils import claude_models  # noqa: E402
 from scripts.utils.atomic import atomic_write_text  # noqa: E402
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET  # noqa: E402
 from scripts.utils.observability import observe  # noqa: E402
+from scripts.utils.sanitize_text import word_count  # noqa: E402
 from scripts.utils.workspace import get_workspace_root, load_env  # noqa: E402
 
 ROOT = get_workspace_root()
@@ -197,20 +198,26 @@ def run_checks(output: str, checks: dict) -> list[dict]:
             "detail": "" if passed else f"contains banned {term!r}",
         })
 
-    word_count = len(output.split())
+    # `len(output.split())` counted every whitespace-separated run, so a bare
+    # `-` bullet, a `|` table rule and a `---` separator each cleared a word of
+    # a `min_words` floor. A length floor a list of bullets can satisfy on its
+    # punctuation is not a length floor. `word_count` is the workspace's one
+    # definition (`.claude/rules/hidden-chars.md`), and it is stricter, so this
+    # gate is now harder to pass than it was rather than easier.
+    words = word_count(output)
     if "min_words" in checks:
-        passed = word_count >= checks["min_words"]
+        passed = words >= checks["min_words"]
         results.append({
             "check": f"min_words>={checks['min_words']}",
             "passed": passed,
-            "detail": f"got {word_count}",
+            "detail": f"got {words}",
         })
     if "max_words" in checks:
-        passed = word_count <= checks["max_words"]
+        passed = words <= checks["max_words"]
         results.append({
             "check": f"max_words<={checks['max_words']}",
             "passed": passed,
-            "detail": f"got {word_count}",
+            "detail": f"got {words}",
         })
 
     if checks.get("hidden_chars_clean"):

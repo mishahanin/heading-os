@@ -422,6 +422,42 @@ def load_gh_token() -> Optional[str]:
     return None
 
 
+def enclosing_repo_root(path) -> Optional[Path]:
+    """The work-tree root of the repository containing ``path``, or None.
+
+    None means "could not establish one" and NEVER "the path is a root": not a
+    repository at all, a bare repository (which has no work tree), or git
+    unavailable. Callers must treat None as unknown, so this can only ever
+    REFUSE on positive evidence.
+
+    Every git call in this module is `git -C <path> ...`, and git walks UP from
+    that path to the enclosing repository. Nothing here ever checked that the
+    path it was handed was a root. MEASURED 2026-08-28 against a bare engine
+    clone: `ahead_behind` answered `(0, 20)` for the repo root, for
+    `<root>/examples`, and for `<root>/scripts/utils` alike - the same three
+    numbers, because all three questions were about the enclosing repository.
+    A linked git worktree IS its own toplevel, so this does not object to one.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        logger.debug("repo root unreadable for %s: %s", path, exc)
+        return None
+    if out.returncode != 0:
+        return None
+    top = out.stdout.strip()
+    if not top:
+        return None
+    try:
+        return Path(top).resolve()
+    except OSError as exc:
+        logger.debug("repo root unresolvable for %s: %s", path, exc)
+        return None
+
+
 def current_branch(repo) -> Optional[str]:
     """Return the current branch name of ``repo`` (or None)."""
     try:
@@ -473,6 +509,35 @@ def supervised_push(
     postcondition_failed). The caller decides what a non-"ok" state means.
     """
     repo = Path(repo)
+
+    # Is this path the repository it claims to be? `git -C <path>` walks UP to
+    # the enclosing repository, so a SUBDIRECTORY pushes its parent and the
+    # ahead/behind postcondition then verifies the PARENT's ref: the run reports
+    # a verified push of a repository it was never given. Six callers reach this
+    # function, each passing a path it believes is a root, and none of them
+    # checked. Refusing here covers all six, which is what "universal
+    # chokepoint" below is supposed to mean.
+    #
+    # Only ever refuses on positive evidence. `enclosing_repo_root` returns None
+    # for a bare repository and for a path that is no repository at all, and
+    # None is treated as unknown so git still gets to fail on its own. A linked
+    # git worktree is its own toplevel and passes.
+    root = enclosing_repo_root(repo)
+    if root is not None and root != repo.resolve():
+        return {
+            "state": "failed",
+            "reason": (
+                f"{repo} is not a git repository root: it sits inside the "
+                f"repository at {root}. Pushing from here would push "
+                f"'{root.name}', and the ahead/behind postcondition would "
+                f"verify '{root.name}' too, so this run would report a "
+                f"verified push of a repository it was never given."
+            ),
+            "elapsed_s": 0.0,
+            "exit_code": None,
+            "tail": "",
+            "flagged": [],
+        }
 
     # Engine/data leak wall (universal chokepoint). EVERY engine push -- push-all,
     # safe-push, or any future caller -- routes through here, so a private/corporate-

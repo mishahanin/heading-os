@@ -37,7 +37,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
-from scripts.utils.git_push import load_gh_token, supervised_push
+from scripts.utils.git_push import (
+    enclosing_repo_root,
+    load_gh_token,
+    supervised_push,
+)
 from scripts.utils.workspace import get_data_root, get_workspace_root
 
 # state -> exit code
@@ -52,6 +56,33 @@ def _repo_path(name: str) -> Path:
     with no private overlay configured, before any push was attempted.
     """
     return get_workspace_root() if name == "engine" else get_data_root()
+
+
+def _no_data_overlay() -> str | None:
+    """Why 'data' is not a repository on this machine, or None if it is.
+
+    On a clone with no private overlay `get_data_root()` resolves to
+    `<engine>/examples`, a demo DIRECTORY inside the engine clone rather than a
+    repository of its own. MEASURED on a bare clone: `--repo all` sent that
+    directory through the push pipeline, `git -C` resolved it to the ENGINE's
+    remote, and the remote wall refused with "examples pushes to the ENGINE
+    remote ... this would publish private content". The refusal is correct and
+    the stated cause is not: there is no private content, and no data overlay
+    either. An operator reading that goes looking for a leak in `examples/`.
+    """
+    engine = get_workspace_root().resolve()
+    try:
+        data = get_data_root().resolve()
+    except Exception as exc:            # noqa: BLE001 - reported, never swallowed
+        return f"the data root could not be resolved: {exc}"
+    if data == engine:
+        return (f"the data root resolves to the engine clone itself ({engine}), "
+                f"so there is no separate overlay to push")
+    root = enclosing_repo_root(data)
+    if root is not None and root != data:
+        return (f"the data root ({data}) is not a repository of its own: it sits "
+                f"inside {root}. This clone has no private data overlay")
+    return None
 
 
 REPO_NAMES = ("engine", "data")
@@ -96,14 +127,29 @@ def main() -> int:
 
     token = load_gh_token()
     if not token:
-        msg = "no GH_TOKEN in engine .env — cannot authenticate push"
+        msg = "no GH_TOKEN in engine .env, cannot authenticate push"
         print(f"{RED}auth error:{RESET} {msg}", file=sys.stderr)
         if args.json:
-            print(json.dumps({"state": "auth_error", "reason": msg}))
+            # A LIST of one, not a bare object. Every other exit from this
+            # command prints a list of verdicts, so a consumer doing
+            # `json.loads(out)[0]["state"]` crashed on exactly the path it most
+            # needs to read. One documented shape, always.
+            print(json.dumps([{"repo": None, "state": "auth_error",
+                               "reason": msg}], indent=2))
         return 3
 
     status_dir = get_workspace_root() / ".push-state"
     targets = list(REPO_NAMES) if args.repo == "all" else [args.repo]
+
+    if "data" in targets:
+        why = _no_data_overlay()
+        if why:
+            msg = f"nothing to push for 'data': {why}."
+            print(f"{RED}config error:{RESET} {msg}", file=sys.stderr)
+            if args.json:
+                print(json.dumps([{"repo": "data", "state": "no_data_repo",
+                                   "reason": msg}], indent=2))
+            return 3
 
     verdicts = []
     for name in targets:

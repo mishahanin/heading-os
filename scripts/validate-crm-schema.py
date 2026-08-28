@@ -38,6 +38,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import GREEN, YELLOW, RED, RESET  # noqa: E402
+from scripts.utils.markdown import FM_OK, split_frontmatter  # noqa: E402
 from scripts.utils.workspace import (  # noqa: E402
     get_workspace_root, get_crm_contacts_dir, get_corporate_root,
 )
@@ -94,17 +95,26 @@ def parse_frontmatter(path: Path) -> dict | None:
     below deliberately EXCLUDES
     phone/telegram/zip/postal_code so a numeric-looking phone stays a string for
     the string-typed schema field. Keep this parser paired with the schemas.
+
+    Only the FENCES are shared, since 2026-08-28. `startswith("---\\n")` plus
+    `find("\\n---\\n", 4)` demanded a fence of exactly four characters, so a card
+    whose opening fence carries a trailing space or a tab returned None and this
+    gate reported "missing or malformed YAML frontmatter" -- a FAIL, which blocks
+    the record from aggregation, against a file that is correct on disk.
+    MEASURED 2026-08-28 over eight documents: `--- ` and `---\\t` were refused
+    here and parsed cleanly through `split_frontmatter`.
     """
     try:
         text = path.read_text(encoding="utf-8")
-    except Exception:
+    except OSError:
+        # Named, not swallowed by a bare `except`. An unreadable FILE and a
+        # malformed BLOCK are different findings, and the caller renders both as
+        # "missing or malformed YAML frontmatter" -- so at least say which.
+        print(f"{YELLOW}warn:{RESET} {path}: could not be read", file=sys.stderr)
         return None
-    if not text.startswith("---\n"):
+    fm_raw, _body, kind = split_frontmatter(text)
+    if fm_raw is None or kind != FM_OK:
         return None
-    end = text.find("\n---\n", 4)
-    if end == -1:
-        return None
-    fm_raw = text[4:end]
     # Line-based YAML parser - handles flat key:value AND YAML array fields.
     # Supports:
     #   key: []                    -> []  (inline empty array)

@@ -53,6 +53,7 @@ from scripts.utils.ollama_host import (  # noqa: E402
     generation_host,
 )
 from scripts.utils.paths import load_env  # noqa: E402
+from scripts.utils.markdown import FM_OK, split_frontmatter  # noqa: E402
 from scripts.utils.workspace import get_data_root, get_default_tz  # noqa: E402
 
 # ============================================================
@@ -996,14 +997,21 @@ def _load_personal_entries() -> list[dict]:
     entries = []
     for f in sorted(d.glob("session-*.md")):
         raw = f.read_text(encoding="utf-8")
-        parts = raw.split("---", 2)
-        meta, body = {}, raw
-        if len(parts) >= 3:
-            for line in parts[1].splitlines():
+        # `raw.split("---", 2)` sat here, with no line anchor of any kind.
+        # MEASURED 2026-08-28 against the shared splitter over eight documents:
+        # a `---` inside a scalar cut the block mid-value, so `title: "alpha ---
+        # beta"` was read as `"alpha` and the REST of the frontmatter became the
+        # body the gist is computed from. A document opening `---extra` was
+        # accepted here and refused everywhere else.
+        block, body, kind = split_frontmatter(raw)
+        meta = {}
+        if block is None or kind != FM_OK:
+            body = raw
+        else:
+            for line in block.splitlines():
                 m = _FRONT_RE.match(line.strip())
                 if m:
                     meta[m.group(1)] = m.group(2).strip()
-            body = parts[2]
         gist = _personal_gist(body)
         topics = meta.get("topics", "").strip("[]")
         text = f"{meta.get('title', '')} {topics} {gist}".strip()

@@ -42,6 +42,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from scripts.utils.markdown import FM_OK, split_frontmatter
 from scripts.utils.workspace import get_data_root
 
 # ============================================================
@@ -83,13 +84,23 @@ def _slug_tokens(slug: str):
 
 
 def _frontmatter(text: str) -> dict:
-    if not text.startswith("---"):
-        return {}
-    end = text.find("\n---", 3)
-    if end == -1:
+    """Flat scalar frontmatter, read with a line regex. `{}` when there is none.
+
+    Fences via the shared splitter since 2026-08-28. `startswith("---")` plus
+    `find("\\n---", 3)` tested for the CHARACTERS, so a document opening
+    `---extra` was read here and REFUSED by every migrated reader in the engine
+    (MEASURED 2026-08-28 over eight documents). Fail-open on a malformed file is
+    the wrong direction for a counterpart resolver: it invents a record from a
+    file nothing else considers to have frontmatter.
+
+    The line regex stays: this reader wants flat scalars only and must not turn a
+    numeric-looking value into an int the way `yaml.safe_load` would.
+    """
+    block, _body, kind = split_frontmatter(text)
+    if block is None or kind != FM_OK:
         return {}
     fm = {}
-    for line in text[3:end].splitlines():
+    for line in block.splitlines():
         m = re.match(r"^([A-Za-z_][\w-]*):\s*(.*)$", line)
         if m:
             fm[m.group(1)] = m.group(2).strip().strip('"').strip("'")

@@ -66,6 +66,7 @@ from typing import Any
 # Workspace import bootstrap (per development-standards.md)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.utils.markdown import FM_OK, split_frontmatter  # noqa: E402
 from scripts.utils.workspace import get_data_root, get_default_tz  # noqa: E402
 from scripts.utils.air_gap import is_denied  # noqa: E402
 from scripts.utils import viraid_counterpart  # noqa: E402
@@ -178,10 +179,17 @@ def read_marker(root: Path):
 # ============================================================
 
 def _frontmatter_block(text: str) -> str:
-    if not text.startswith("---"):
-        return ""
-    end = text.find("\n---", 3)
-    return text[3:end] if end != -1 else ""
+    """The raw YAML block, or "" when the document has no usable frontmatter.
+
+    Fences via the shared splitter since 2026-08-28. `startswith("---")` plus
+    `find("\\n---", 3)` tested for the CHARACTERS: MEASURED against the shared
+    splitter over eight documents, a fence written `---\\t` and an opening line
+    `---extra` both left the malformed opener inside the block, and PyYAML then
+    failed on a file whose YAML is fine. `_fm_scalar` and `_fm_list` below read
+    this block with their own line regexes, which is why only the fences move.
+    """
+    block, _body, kind = split_frontmatter(text)
+    return block if (block is not None and kind == FM_OK) else ""
 
 
 def _fm_scalar(block: str, key: str) -> str:

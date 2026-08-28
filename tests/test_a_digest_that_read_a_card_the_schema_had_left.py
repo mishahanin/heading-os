@@ -510,16 +510,11 @@ DECLARED_FENCE_SITES = {
     "scripts/marp_render.py": "guard only; delegates to the shared parser",
     "scripts/dev/extract-router-rows.py": "guard only; closing fence via ^---[ \\t]*$ MULTILINE",
     "scripts/utils/memory_health.py": "opening guard; the closing test is `line.strip() == '---'`",
-    # --- OPEN: a real reader still splitting on the characters ---
-    "scripts/chronicle.py": "OPEN: raw.split('---', 2), no line anchor at all",
-    "scripts/crm_migrate_to_entity_model.py": "OPEN: text.split('---', 2)[-1], no line anchor",
-    "scripts/odin-cadence.py": "OPEN: find('\\n---', 3) accepts any line BEGINNING with dashes",
-    "scripts/utils/router_payload.py": "OPEN: find('\\n---', 3), same shape",
-    "scripts/utils/viraid_counterpart.py": "OPEN: find('\\n---', 3), same shape",
-    "scripts/run-skill-eval.py": "OPEN: find('\\n---\\n', 4) refuses a fence with trailing space",
-    "scripts/validate-crm-schema.py": "OPEN: same, and a false FAIL blocks the record",
-    "scripts/utils/threads_lib.py": "OPEN: startswith('---\\n') raises on a fence with trailing space",
-    ".claude/skills/skill-creator/scripts/quick_validate.py": "OPEN: closing `\\n---` is not line-anchored",
+    # Nine OPEN entries left on 2026-08-28 (shard 55), all migrated to
+    # `split_frontmatter`: chronicle, crm_migrate_to_entity_model, odin-cadence,
+    # router_payload, viraid_counterpart, run-skill-eval, validate-crm-schema,
+    # threads_lib, and quick_validate. Their measurements and the divergence
+    # table are in tests/test_nine_readers_that_looked_for_three_characters.py.
 }
 
 
@@ -571,16 +566,23 @@ def test_the_digest_left_the_fence_registry():
     assert "scripts/email-intelligence.py" not in _fence_sites()
 
 
-def test_the_open_entries_are_named_not_hidden():
-    """The registry must keep saying which entries are still defects.
+def test_no_entry_is_still_marked_open():
+    """Shard 55 cleared the nine, and a new OPEN entry must not sit here quietly.
 
-    A registry that quietly relabels an OPEN site as acceptable is worse than no
-    registry: it converts a known defect into a documented feature.
+    Marking a site OPEN was the right move while nine of them waited for their
+    own measurement. Leaving the mechanism in place after they are fixed is what
+    turns a known defect into a documented feature, so the assertion is inverted:
+    a site that needs fixing gets FIXED, not relabelled.
     """
     open_sites = [f for f, why in DECLARED_FENCE_SITES.items() if why.startswith("OPEN")]
-    assert len(open_sites) >= 1, "no OPEN entries left -- delete this test with the last one"
-    for f in open_sites:
-        assert (ROOT / f).exists(), f"OPEN entry names a file that is gone: {f}"
+    assert open_sites == [], (
+        f"still marked OPEN: {open_sites}. Fix them, or say plainly why the "
+        f"characters are the right test for that caller.")
+
+
+def test_every_declared_file_still_exists():
+    missing = sorted(f for f in DECLARED_FENCE_SITES if not (ROOT / f).exists())
+    assert missing == [], f"registry names files that are gone: {missing}"
 
 
 # ============================================================

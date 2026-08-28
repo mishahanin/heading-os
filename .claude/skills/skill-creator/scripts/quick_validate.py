@@ -51,14 +51,33 @@ def validate_skill(skill_path):
     if not skill_md.exists():
         return False, "SKILL.md not found"
 
-    # Read and validate frontmatter
+    # Read and validate frontmatter.
+    #
+    # A fence is a LINE of exactly three dashes, with optional trailing
+    # whitespace and an optional CR. `^---\n(.*?)\n---` demanded exactly four
+    # characters, so a SKILL.md whose opening fence carries a trailing space or
+    # a tab was rejected with "Invalid frontmatter format" on a file that is
+    # valid YAML. MEASURED 2026-08-28 over eight documents: `--- ` and `---\t`
+    # were refused here and parsed cleanly by
+    # `scripts.utils.markdown.split_frontmatter`.
+    #
+    # NOT that shared splitter, deliberately: inside skill-creator the module
+    # path `scripts.utils` already resolves to this plugin's OWN
+    # `scripts/utils.py` (see run_eval.py, which imports `parse_skill_md` from
+    # it), so putting the repo root on sys.path here would make the same import
+    # name mean two different modules depending on path order. The grammar below
+    # is the shared one, kept in step by
+    # tests/test_nine_readers_that_looked_for_three_characters.py.
+    #
+    # The sibling `scripts/utils.py::parse_skill_md` in this same directory has
+    # always tested `line.strip() == "---"` and so was never wrong. Two readers,
+    # one directory, one file format, two answers.
     content = skill_md.read_text()
-    if not content.startswith('---'):
-        return False, "No YAML frontmatter found"
-
-    # Extract frontmatter
-    match = re.match(r'^---\n(.*?)\n---', content, re.DOTALL)
+    match = re.match(r'^---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|$)',
+                     content, re.DOTALL)
     if not match:
+        if not re.match(r'^---[ \t]*\r?$', content.split('\n', 1)[0]):
+            return False, "No YAML frontmatter found"
         return False, "Invalid frontmatter format"
 
     frontmatter_text = match.group(1)

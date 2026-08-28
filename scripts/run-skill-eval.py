@@ -54,6 +54,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils import claude_models  # noqa: E402
 from scripts.utils.atomic import atomic_write_text  # noqa: E402
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET  # noqa: E402
+from scripts.utils.markdown import FM_OK, split_frontmatter  # noqa: E402
 from scripts.utils.observability import observe  # noqa: E402
 from scripts.utils.sanitize_text import word_count  # noqa: E402
 from scripts.utils.workspace import get_workspace_root, load_env  # noqa: E402
@@ -122,17 +123,22 @@ def load_skill_system_prompt(skill_dir: Path) -> tuple[str, dict]:
         raise FileNotFoundError(f"SKILL.md not found in {skill_dir}")
     text = skill_md.read_text(encoding="utf-8")
     frontmatter: dict = {}
-    body = text
-    if text.startswith("---\n"):
-        end = text.find("\n---\n", 4)
-        if end != -1:
-            fm_raw = text[4:end]
-            body = text[end + 5:]
-            # Cheap line-based parse - good enough for `model:` and `metadata.version`
-            for line in fm_raw.splitlines():
-                if ":" in line and not line.startswith((" ", "-")):
-                    k, v = line.split(":", 1)
-                    frontmatter[k.strip()] = v.strip().strip('"').strip("'")
+    # Fences via the shared splitter. `startswith("---\n")` plus
+    # `find("\n---\n", 4)` demanded a fence of exactly four characters, and this
+    # branch fails OPEN: a skill whose opening fence carries a trailing space or
+    # a tab kept `body = text`, so the eval's SYSTEM PROMPT was the whole file
+    # with its YAML block prepended, and `model:` was lost so the run silently
+    # used the default model. MEASURED 2026-08-28 over eight documents: `--- `
+    # and `---\t` both landed there, and both parse cleanly through the splitter.
+    fm_raw, body, kind = split_frontmatter(text)
+    if fm_raw is None or kind != FM_OK:
+        body = text
+    else:
+        # Cheap line-based parse - good enough for `model:` and `metadata.version`
+        for line in fm_raw.splitlines():
+            if ":" in line and not line.startswith((" ", "-")):
+                k, v = line.split(":", 1)
+                frontmatter[k.strip()] = v.strip().strip('"').strip("'")
     return body.strip(), frontmatter
 
 

@@ -28,6 +28,7 @@ import subprocess
 from pathlib import Path
 from typing import Iterator
 
+from scripts.utils.markdown import FM_OK, split_frontmatter
 from scripts.utils.workspace import get_workspace_root
 
 ROOT = get_workspace_root()
@@ -83,17 +84,25 @@ def load_triggers(skill_dir: Path) -> list[dict]:
 
 
 def load_skill_description(skill_dir: Path) -> str:
-    """Return the `description` frontmatter field of a skill's SKILL.md (best-effort)."""
+    """Return the `description` frontmatter field of a skill's SKILL.md (best-effort).
+
+    The fences come from the shared splitter. `text.find("\\n---", 3)` sat here
+    and took any line merely BEGINNING with three dashes as the close, and
+    `startswith("---")` took any line beginning with them as the open. MEASURED
+    2026-08-28 against the shared splitter over six documents: a SKILL.md opening
+    `---extra` was read here and REFUSED there, so the judge payload was built
+    from a file the rest of the engine treats as having no frontmatter.
+
+    The line scan below stays: it deliberately reads the RAW folded scalar rather
+    than a YAML-parsed one, so the judge sees the author's own wording.
+    """
     skill_md = skill_dir / "SKILL.md"
     if not skill_md.exists():
         return ""
     text = skill_md.read_text(encoding="utf-8")
-    if not text.startswith("---"):
+    fm, _body, kind = split_frontmatter(text)
+    if fm is None or kind != FM_OK:
         return ""
-    end = text.find("\n---", 3)
-    if end == -1:
-        return ""
-    fm = text[3:end]
     # Capture `description:` possibly spanning until the next top-level key.
     lines = fm.splitlines()
     desc_lines: list[str] = []

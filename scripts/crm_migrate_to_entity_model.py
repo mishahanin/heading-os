@@ -51,6 +51,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.atomic import atomic_write_text
 from scripts.utils.crm import parse_frontmatter
+from scripts.utils.markdown import FM_OK, split_frontmatter
 from scripts.utils.workspace import (
     get_workspace_root,
     get_all_active_exec_slugs,
@@ -461,6 +462,15 @@ def pick_canonical_record(records: list[dict]) -> dict:
 
     Heuristic: read each record's body, count length minus the Interaction Log section.
     Longest non-log body wins.
+
+    The frontmatter is stripped through the shared splitter. `text.split("---",
+    2)[-1]` sat here with no line anchor, so a card carrying `---` inside a
+    scalar left the REST of its YAML in the "body" and inflated the score.
+    MEASURED 2026-08-28 on a two-record pair, one with `name: "A --- B"`: 29
+    against 14 for the same body text, so this heuristic picked the WRONG record
+    as canonical. That decides which card becomes the address-book entity and
+    which is rewritten as a thin relationship record, and the run is only
+    idempotent for the CEO's side, so the choice is not cheap to undo.
     """
     best = records[0]
     best_score = 0
@@ -469,9 +479,9 @@ def pick_canonical_record(records: list[dict]) -> dict:
         if not path.exists():
             continue
         text = path.read_text(encoding="utf-8")
-        # Strip frontmatter
-        if text.startswith("---"):
-            text = text.split("---", 2)[-1]
+        _block, body, kind = split_frontmatter(text)
+        if kind == FM_OK:
+            text = body
         # Strip Interaction Log + Active Commitments
         for section_header in ("## Interaction Log", "## Active Commitments"):
             if section_header in text:

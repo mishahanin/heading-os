@@ -8,6 +8,7 @@ from datetime import date, datetime
 import re
 import yaml
 from scripts.utils.atomic import atomic_write_text
+from scripts.utils.markdown import FM_OK, split_frontmatter
 from scripts.utils.slugs import transliterate
 from scripts.utils.workspace import get_default_tz
 
@@ -56,9 +57,17 @@ class ThreadFile:
 def parse_thread_file(path: Path) -> ThreadFile:
     """Parse a thread markdown file into a ThreadFile dataclass."""
     text = path.read_text(encoding="utf-8")
-    if not text.startswith("---\n"):
+    # Fences via the shared splitter. `startswith("---\n")` plus
+    # `split("---\n", 2)` demanded the fence be exactly four characters, so a
+    # thread file whose opening fence carries a trailing space or tab RAISED
+    # "missing YAML frontmatter" on a file that is perfectly valid YAML.
+    # MEASURED 2026-08-28: `--- ` and `---\t` both raised here and both parsed
+    # cleanly through the splitter. This function has 45 callers; the one that
+    # catches ValueError is `scan_for_archive`, which then drops the thread from
+    # the archive scan without a word, and the other callers get a traceback.
+    frontmatter_raw, body, kind = split_frontmatter(text)
+    if frontmatter_raw is None or kind != FM_OK:
         raise ValueError(f"{path}: missing YAML frontmatter")
-    _, frontmatter_raw, body = text.split("---\n", 2)
     fm: dict[str, Any] = yaml.safe_load(frontmatter_raw) or {}
 
     for required in REQUIRED_FIELDS:

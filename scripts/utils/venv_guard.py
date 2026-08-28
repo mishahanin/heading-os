@@ -118,6 +118,31 @@ def ensure_venv() -> None:
         return
     if _SENTINEL_SEEN:
         return
+    # There has to BE a script to relaunch, and `sys.argv[0]` is not always one.
+    #
+    # Under `python -c "<code>"` argv[0] is the literal string "-c" and the code
+    # appears nowhere in argv at all; under the REPL and `python -` it is "" and
+    # "-". This line used to resolve argv[0] unconditionally, so a `-c` process
+    # re-exec'd as `[python, "<cwd>/-c"]` and died with
+    #   can't open file '<cwd>/-c': [Errno 2] No such file or directory
+    # having thrown the payload away. MEASURED 2026-08-28 while running the
+    # suite from a git worktree with the engine's own interpreter: the two
+    # `.venv/bin` directories differ, so the identity check above did not return
+    # and 25 subprocess-based tests failed with that message, none of them for
+    # the reason they were asserting.
+    #
+    # Nothing here can recover a `-c` payload, so the honest move is to say the
+    # relaunch did not happen rather than corrupt the process. Silence would be
+    # this guard failing open invisibly, which its own docstring calls worse than
+    # no guard; the line prints only in the case where a relaunch was actually
+    # due, so it cannot become background noise.
+    argv0 = sys.argv[0]
+    script = Path(argv0).resolve() if argv0 not in ("", "-", "-c") else None
+    if script is None or not script.is_file():
+        print(f"[venv-guard] running under {sys.executable}, not {target}. "
+              f"Cannot relaunch: sys.argv[0] is {argv0!r}, which names no "
+              f"script file. Continuing under the current interpreter.",
+              file=sys.stderr)
+        return
     os.environ[_SENTINEL] = "1"
-    script = str(Path(sys.argv[0]).resolve())
-    os.execv(str(target), [str(target), script, *sys.argv[1:]])  # noqa: S606  # fixed argv, no shell
+    os.execv(str(target), [str(target), str(script), *sys.argv[1:]])  # noqa: S606  # fixed argv, no shell

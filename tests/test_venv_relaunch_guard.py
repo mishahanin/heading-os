@@ -302,6 +302,15 @@ def test_a_venv_symlinked_to_the_invoking_interpreter_still_re_execs(
     # one pytest process, where conftest sets it at import.
     monkeypatch.setattr(_venv, "_SENTINEL_SEEN", False)
     monkeypatch.setattr(sys, "executable", str(base))
+    # A script for the guard to relaunch. This case is about the IDENTITY
+    # comparison, so it used to borrow the runner's `sys.argv[0]`: a real path
+    # under a plain `pytest`, the literal "-c" inside an xdist worker, because
+    # execnet spawns workers that way. `ensure_venv` now refuses to exec a path
+    # that is not a file, so the borrowed argv decided the outcome of a test
+    # that is not about argv.
+    entry = tmp_path / "entry.py"
+    entry.write_text("print('hi')\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", [str(entry)])
 
     _venv.ensure_venv()
 

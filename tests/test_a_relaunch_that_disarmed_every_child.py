@@ -143,6 +143,16 @@ def guard(monkeypatch, tmp_path):
     monkeypatch.setattr(_venv.os, "execv", lambda path, argv: calls.append(path))
     monkeypatch.setattr(_venv, "_SENTINEL_SEEN", False)
     monkeypatch.delenv(_venv._SENTINEL, raising=False)
+    # A script for the guard to relaunch. These cases are about the SENTINEL,
+    # so they used to inherit whatever `sys.argv[0]` the runner happened to
+    # carry -- which is a real path under a plain `pytest` and the literal
+    # "-c" inside an xdist worker, because execnet spawns workers that way.
+    # `ensure_venv` now refuses to exec a path that is not a file, so the
+    # borrowed argv decided the outcome of a test that is not about argv.
+    # See tests/test_a_relaunch_that_had_no_script_to_relaunch.py.
+    script = tmp_path / "entry.py"
+    script.write_text("print('hi')\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", [str(script)])
     return target, calls
 
 

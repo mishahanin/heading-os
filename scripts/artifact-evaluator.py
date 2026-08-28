@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import get_default_tz, get_workspace_root
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
+from scripts.utils import markdown as md
+from scripts.utils.markdown import split_frontmatter
 
 ROOT = get_workspace_root()
 
@@ -135,24 +137,34 @@ def run_py_compile(file_path):
 
 
 def parse_yaml_frontmatter(text):
-    """Extract YAML frontmatter from text. Returns (dict, error_str|None)."""
-    if not text.startswith("---"):
+    """Extract YAML frontmatter from text. Returns (dict, error_str|None).
+
+    The FENCES come from ``scripts.utils.markdown.split_frontmatter``; the YAML
+    policy stays here, because this evaluator must keep working on a host with
+    no PyYAML and its ``_frontmatter_without_pyyaml`` fallback is better than the
+    shared module's generic one.
+
+    Its own match was `re.match(r"^---\\r?\\n(.*?)\\r?\\n---", text, re.DOTALL)`,
+    which ends the block at the three characters wherever they land. MEASURED
+    2026-08-28 on `description: drift --- check`: the block was cut at the
+    embedded dashes, so the mapping came back truncated and every later check
+    here -- required fields, metadata shape -- judged a file it had only half
+    read. The CRLF tolerance the previous comment describes is preserved by the
+    shared splitter's fence-line regex.
+    """
+    block, _body, kind = split_frontmatter(text)
+    if kind == md.FM_NO_OPENING:
         return None, "No YAML frontmatter found"
-    # `\r?` on both sides: a CRLF checkout (core.autocrlf=true on Windows)
-    # otherwise failed the match, returned "Invalid frontmatter format",
-    # and took the required-field and metadata checks down with it -- so
-    # the verdict on identical content depended on the checkout OS.
-    match = re.match(r"^---\r?\n(.*?)\r?\n---", text, re.DOTALL)
-    if not match:
+    if kind == md.FM_NO_CLOSING:
         return None, "Invalid frontmatter format"
     try:
         import yaml
-        data = yaml.safe_load(match.group(1))
+        data = yaml.safe_load(block)
         if not isinstance(data, dict):
             return None, "Frontmatter must be a YAML dictionary"
         return data, None
     except ImportError:
-        return _frontmatter_without_pyyaml(match.group(1)), None
+        return _frontmatter_without_pyyaml(block), None
     except Exception as exc:
         return None, f"YAML parse error: {exc}"
 

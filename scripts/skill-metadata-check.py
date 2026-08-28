@@ -51,12 +51,12 @@ import json
 import sys
 from pathlib import Path
 
-import yaml
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.workspace import get_workspace_root
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
+from scripts.utils import markdown as md
+from scripts.utils.markdown import parse_frontmatter_strict
 
 
 REQUIRED_TOP_FIELDS = ["name", "description"]
@@ -196,38 +196,40 @@ def parse_frontmatter(skill_md: Path) -> tuple[dict, str]:
 
     Returns (frontmatter_dict, error_message). error_message is empty on success.
 
-    NOT MIGRATED to ``scripts.utils.markdown.parse_frontmatter`` (deferred from
-    Phase 6.2). The shared util collapses every failure mode (no opening fence,
-    no closing fence, YAML parse error, empty block, non-mapping root) into a
-    single ``({}, text)`` return. This audit's whole purpose is to surface those
-    distinctions to the operator so SKILL.md authoring problems can be fixed
-    deliberately. Migrating here would erase the diagnostic categories that
-    make the audit useful, so the custom parser is intentionally retained.
+    A thin wrapper over ``scripts.utils.markdown.parse_frontmatter_strict``,
+    which keeps the failure REASON this audit exists to report. The audit kept a
+    private copy because the plain shared parser collapses every failure into
+    ``({}, text)``; that reason is gone now that the shared module classifies.
+
+    Its own copy split on `text.split("---", 2)`, the three characters wherever
+    they land. MEASURED 2026-08-28 on `description: drift --- check` in an
+    otherwise ordinary SKILL.md: every key after the embedded dashes was
+    dropped, this audit reported `metadata.author`, `metadata.version` and
+    `x-heading-orchestration` as missing while all three sat in the file, and
+    `triggers_status` flipped from MISSING to EXEMPT, so the coverage gate
+    stopped asking for a corpus it requires. `generate-skill-router.py`, reading
+    the same file with the same intent, read the whole mapping. Two CI gates,
+    one corpus, two answers.
+
+    The word "YAML parse error" is kept for that case, so the audit's own output
+    is unchanged on every file it parses today (MEASURED: identical over all 94
+    SKILL.md).
     """
     try:
         text = skill_md.read_text(encoding="utf-8")
     except OSError as e:
         return {}, f"read failed: {e}"
 
-    if not text.startswith("---"):
-        return {}, "no frontmatter (missing opening ---)"
-
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        return {}, "malformed frontmatter (missing closing ---)"
-
-    yaml_block = parts[1]
-    try:
-        data = yaml.safe_load(yaml_block)
-    except yaml.YAMLError as e:
-        return {}, f"YAML parse error: {e}"
-
-    if data is None:
-        return {}, "empty frontmatter"
-    if not isinstance(data, dict):
-        return {}, f"frontmatter must be a mapping, got {type(data).__name__}"
-
-    return data, ""
+    data, kind, detail = parse_frontmatter_strict(text)
+    if kind == md.FM_OK:
+        return data, ""
+    return {}, {
+        md.FM_NO_OPENING: "no frontmatter (missing opening ---)",
+        md.FM_NO_CLOSING: "malformed frontmatter (missing closing ---)",
+        md.FM_INVALID_YAML: f"YAML parse error: {detail}",
+        md.FM_EMPTY: "empty frontmatter",
+        md.FM_NOT_MAPPING: f"frontmatter must be a mapping, got {detail}",
+    }[kind]
 
 
 def _classify_corpus(result: dict, skill_dir: Path, frontmatter: dict | None,

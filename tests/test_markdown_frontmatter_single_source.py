@@ -39,19 +39,31 @@ PARSER_NAMES = {
     "_parse_frontmatter_str",
     "parse_frontmatter_raw",
     "_parse_frontmatter_raw",
+    # Added 2026-08-28. `scripts/artifact-evaluator.py` spelled its copy
+    # `parse_yaml_frontmatter`, so this detector never saw it, and that copy
+    # carried the `---`-inside-a-scalar defect the sweep exists to catch. A
+    # detector keyed on names only sees the spellings it was told about, so a
+    # new copy under a fourth spelling is still invisible; this is a ratchet,
+    # not a proof.
+    "parse_yaml_frontmatter",
+    "_parse_yaml_frontmatter",
+    "split_frontmatter",
+    "parse_frontmatter_strict",
 }
 
 # Files allowed to define their own parser, with the reason it cannot be a
 # wrapper. Removing an entry once its copy migrates is a strict improvement and
 # needs no change here; the test only fails on a copy that is NOT listed.
 ALLOWED_SURVIVORS = {
-    "scripts/generate-skill-router.py":
-        "CI gate: the error taxonomy IS its output (the shared util collapses "
-        "every failure mode into ({}, text)); parsed dict already differs on "
-        "2 of 96 SKILL.md (trailing newline of the last folded scalar).",
-    "scripts/skill-metadata-check.py":
-        "CI gate: same error taxonomy (no opening fence / no closing fence / "
-        "YAML parse error / empty / non-mapping) is what the audit reports.",
+    # `scripts/generate-skill-router.py`, `scripts/skill-metadata-check.py` and
+    # `scripts/artifact-evaluator.py` left this list on 2026-08-28. All three
+    # were here because the shared parser collapsed every failure into
+    # ({}, text) and the error string is a gate's whole output;
+    # `markdown.parse_frontmatter_strict` and `markdown.split_frontmatter` now
+    # return the classification and let each caller keep its own wording. The
+    # copies had drifted apart in the meantime: two of the three cut the block
+    # at a `---` inside a scalar and the third did not, so two CI gates
+    # disagreed about the same SKILL.md.
     "scripts/validate-crm-schema.py":
         "Schema-aware coercion: its value types are what jsonschema then checks. "
         "Measured 326/326 records violate a declared type under "

@@ -32,12 +32,12 @@ import re
 import sys
 from pathlib import Path
 
-import yaml
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import RED, GREEN, CYAN, YELLOW, RESET  # noqa: E402
 from scripts.utils.workspace import get_workspace_root  # noqa: E402
+from scripts.utils import markdown as md  # noqa: E402
+from scripts.utils.markdown import parse_frontmatter_strict  # noqa: E402
 
 # ============================================================
 # Configuration
@@ -91,47 +91,40 @@ x-heading-routing:
 def parse_frontmatter(skill_md: Path) -> tuple[dict, str]:
     """Return (frontmatter_dict, error_message); error_message is empty on success.
 
-    Mirrors scripts/skill-metadata-check.py::parse_frontmatter for consistency.
+    A thin wrapper over ``scripts.utils.markdown.parse_frontmatter_strict``,
+    which is the diagnostic parser the previous version of this docstring asked
+    for. The error string is this gate's whole output - ``load_routing_rows``
+    prints ``{rel}: {err}`` and CI fails on it - so the classification comes from
+    the shared parser and the WORDING stays here, unchanged.
 
-    NOT MIGRATED to ``scripts.utils.markdown.parse_frontmatter``, for the same
-    reason that audit keeps its own copy: the shared util collapses every failure
-    mode into ``({}, text)``, and the error string is this gate's whole output -
-    ``load_routing_rows`` prints ``{rel}: {err}`` and CI fails on it. Measured
-    2026-08-20 over the 96 SKILL.md corpus: the rendered rows and the audit
-    results are identical under the shared util today, but the parsed dict
-    already differs on 2 of 96 (canopus, census - the shared util's regex drops
-    the newline before the closing fence, so the last folded scalar of
-    ``x-heading-capability`` loses its trailing "\\n"). Deduplicating the two
-    gates needs a diagnostic parser in scripts/utils/markdown.py that returns the
-    taxonomy; until that exists, the mirrored copy is deliberate.
+    Its own copy was already fence-line anchored, and carried one defect of its
+    own: it computed the block as ``text[4:...]``, assuming the opening fence is
+    exactly four characters. MEASURED 2026-08-28, an opening fence written
+    ``---\\t\\t`` left a tab at the start of the block and PyYAML refused it with
+    "found character '\\t' that cannot start any token", on a file whose YAML was
+    perfectly good. The shared splitter computes the offset from the first line.
+
+    The docstring this replaces claimed to mirror
+    ``skill-metadata-check.py::parse_frontmatter`` "for consistency". It had not
+    mirrored it since 2026-08-20, when the fence-line fix landed HERE and not
+    there, and the two gates then disagreed about any SKILL.md whose frontmatter
+    contained ` --- ` inside a scalar. Both are wrappers now, so the claim is
+    true again by construction.
     """
     try:
         text = skill_md.read_text(encoding="utf-8")
     except OSError as exc:
         return {}, f"unreadable: {exc}"
-    # Split on FENCE LINES, not on the three characters wherever they land.
-    # `text.split("---", 2)` matched `---` inside a scalar, so a description
-    # like `handles drift --- state check` either failed the gate with a
-    # misleading "invalid YAML" message or, worse, parsed a TRUNCATED mapping:
-    # every key after the embedded `---` silently dropped, the routing row
-    # generated from partial data, and `--check` ratifying it. The same defect
-    # was fixed in `scripts/dev/extract-router-rows.py` on 2026-08-24; this was
-    # the second copy.
-    if not re.match(r"^---[ \t]*$", text.split("\n", 1)[0]):
-        return {}, "no frontmatter (missing opening ---)"
-    closing = re.search(r"^---[ \t]*$", text[4:], re.MULTILINE)
-    if closing is None:
-        return {}, "malformed frontmatter (missing closing ---)"
-    body = text[4:4 + closing.start()]
-    try:
-        data = yaml.safe_load(body)
-    except yaml.YAMLError as exc:
-        return {}, f"invalid YAML frontmatter: {exc}"
-    if data is None:
-        return {}, "empty frontmatter"
-    if not isinstance(data, dict):
-        return {}, f"frontmatter must be a mapping, got {type(data).__name__}"
-    return data, ""
+    data, kind, detail = parse_frontmatter_strict(text)
+    if kind == md.FM_OK:
+        return data, ""
+    return {}, {
+        md.FM_NO_OPENING: "no frontmatter (missing opening ---)",
+        md.FM_NO_CLOSING: "malformed frontmatter (missing closing ---)",
+        md.FM_INVALID_YAML: f"invalid YAML frontmatter: {detail}",
+        md.FM_EMPTY: "empty frontmatter",
+        md.FM_NOT_MAPPING: f"frontmatter must be a mapping, got {detail}",
+    }[kind]
 
 
 # ============================================================

@@ -420,14 +420,25 @@ def _generate_report_html(
     page_screenshots: dict,  # {(file, page_num): bytes}
     parse_data: dict,        # full parse JSON
     title: str = "Document Analysis Report",
+    capped_pages: int = 0,   # cited pages dropped by --max-pages, 0 if none
 ) -> str:
     """Generate self-contained 31C-branded HTML report with visual citations."""
     from scripts.utils.image import load_logo_base64
 
     logo_b64 = load_logo_base64()
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    files_str = ", ".join(set(c.get("file", "?") for c in citations))
-    pages_cited = len(page_screenshots)
+    # `sorted`, not bare `set`: the header is part of a document the operator
+    # keeps, and two runs over identical input printed the file names in
+    # different orders.
+    files_str = ", ".join(sorted({c.get("file", "?") for c in citations}))
+    # Counted from the CITATIONS, which is what the label says. It was
+    # `len(page_screenshots)`, the number of screenshots the run managed to
+    # take: a screenshot that failed (`cmd_report` logs the error and carries
+    # on) or two documents sharing a basename (that dict is keyed by basename)
+    # both made the header print fewer "pages cited" than the cards below it
+    # showed. A screenshot count under a citation label is a measurement
+    # answering a different question than its own caption.
+    pages_cited = len({(c.get("file", "?"), c.get("page", 0)) for c in citations})
     answer_html = _markdown_to_html(answer_md)
 
     # Build citation cards HTML
@@ -438,10 +449,31 @@ def _generate_report_html(
         page_num = cit.get("page", 0)
         quote_text = cit.get("quote", "")
         relevance = cit.get("relevance", "")
-        screenshot_key = (file_name, page_num)
+        # Resolve the file first, so the page and the screenshot are looked up
+        # against the SAME document. `_find_page_in_parse` collapses "no such
+        # document" and "no such page" into one None, and the card has to tell
+        # a reader which of the two happened.
+        parse_file, ambiguous = _resolve_parse_file(parse_data, file_name)
+        page_data = None
+        if parse_file is not None:
+            for _p in parse_file.get("pages", []):
+                if _p.get("page_num") == page_num:
+                    page_data = _p
+                    break
 
-        # Find bounding boxes for this quote
-        page_data, ambiguous = _find_page_in_parse(parse_data, file_name, page_num)
+        # `cmd_report` keys `page_screenshots` by BASENAME, so the key is built
+        # from the RESOLVED file and never from the citation's raw string.
+        # Citing the full path is the remedy the ambiguity note below tells the
+        # operator to use, and it was the one spelling that matched no
+        # screenshot: the fix for the ambiguous name landed in
+        # `_resolve_parse_file` and never reached this lookup, so following the
+        # advice silently cost the reader the page image and the highlight.
+        if parse_file is not None:
+            shot_name = parse_file.get("file_name") or Path(parse_file.get("file", "")).name
+        else:
+            shot_name = Path(file_name).name
+        screenshot_key = (shot_name, page_num)
+
         dpi = DEFAULT_DPI
         if page_data:
             boxes = find_boxes_for_quote(page_data.get("text_items", []), quote_text, dpi)
@@ -454,7 +486,12 @@ def _generate_report_html(
 
         # Screenshot image. Withheld when the name resolves to more than one
         # document: showing SOME page under an unresolved name is the defect.
-        img_bytes = None if ambiguous else page_screenshots.get(screenshot_key)
+        # Withheld for the same reason when the parse data holds no such page:
+        # the only page size available then is the invented 800x600 above, so
+        # any highlight drawn over the image would be in a made-up coordinate
+        # space.
+        img_bytes = (None if (ambiguous or page_data is None)
+                     else page_screenshots.get(screenshot_key))
         if img_bytes:
             img_b64 = base64.b64encode(img_bytes).decode("ascii")
             img_src = f"data:{_image_mime(img_bytes)};base64,{img_b64}"
@@ -470,11 +507,54 @@ def _generate_report_html(
                 f'fill="rgba(91,95,255,0.2)" stroke="#5B5FFF" stroke-width="2"/>\n'
             )
 
-        ambiguity_note = "" if not ambiguous else (
-            f'\n      <div class="cite-ambiguous">More than one parsed document '
-            f'is named {html.escape(file_name)}. This citation does not say '
-            f'which, so no page image or highlight is shown. Cite the full path '
-            f'to resolve it.</div>')
+        # One note channel, every degraded state. There used to be exactly one
+        # state that said anything -- the ambiguous name -- and four that did
+        # not: a document absent from the parse data, a page absent from it, a
+        # quote the matcher PROVED is not in the page's extracted text, and a
+        # page whose screenshot was never captured. All four rendered as an
+        # ordinary, confident card. The worst of them is the quote: the report
+        # exists to show a reader WHERE a document says something, and the one
+        # case where the tool established that it does not say it there was the
+        # case it kept to itself.
+        #
+        # A list, not a single message. The states are independent, and a
+        # second problem hidden behind the first is the same defect again.
+        notes = []
+        if ambiguous:
+            notes.append(
+                f'More than one parsed document is named {html.escape(file_name)}. '
+                f'This citation does not say which, so no page image or highlight '
+                f'is shown. Cite the full path to resolve it.')
+        elif parse_file is None:
+            notes.append(
+                f'No parsed document named {html.escape(file_name)} is in this '
+                f'report, so the quote below was never checked against a source '
+                f'and no page image is shown.')
+        elif page_data is None:
+            notes.append(
+                f'Page {html.escape(str(page_num))} is not among the parsed pages '
+                f'of {html.escape(file_name)}, so the quote below was never '
+                f'checked against a source and no page image is shown.')
+        else:
+            if not quote_text.strip():
+                notes.append(
+                    'This citation carries no quote, so there is nothing to '
+                    'locate on the page.')
+            elif not boxes:
+                notes.append(
+                    f'The quote below was NOT found in the extracted text of page '
+                    f'{html.escape(str(page_num))} of {html.escape(file_name)}. '
+                    f'The page is shown, but nothing on it is highlighted because '
+                    f'the quote could not be located.')
+            if img_bytes is None:
+                notes.append(
+                    f'No page image was captured for page '
+                    f'{html.escape(str(page_num))} of {html.escape(file_name)}.')
+
+        ambiguity_note = "".join(
+            f'\n      <div class="{"cite-ambiguous" if ambiguous else "cite-caveat"}">'
+            f'{n}</div>'
+            for n in notes)
 
         card = f"""
     <section class="citation-card" id="cite-{html.escape(str(cit_id), quote=True)}">
@@ -616,6 +696,18 @@ def _generate_report_html(
     color: var(--text-muted);
     font-size: 0.85rem;
   }}
+  /* Same look, separate rule. Written out rather than added to the selector
+     above, because `test_the_ambiguous_style_is_defined` matches the literal
+     `.cite-ambiguous {{`, and a grouped selector would silently stop matching
+     it while the style still worked. */
+  .cite-caveat {{
+    margin: 0 1.25rem 0.75rem;
+    padding: 0.6rem 0.85rem;
+    border-left: 3px solid #F5922B;
+    background: rgba(245,146,43,0.08);
+    color: var(--text-muted);
+    font-size: 0.85rem;
+  }}
 
   .card-body {{
     display: grid;
@@ -690,7 +782,10 @@ def _generate_report_html(
   <header>
     {"" if not logo_b64 else f'<img src="{logo_b64}" class="logo" alt="31C">'}
     <h1>{html.escape(title)}</h1>
-    <div class="meta">{html.escape(files_str)} | {pages_cited} pages cited | {len(citations)} citations | {now}</div>
+    <div class="meta">{html.escape(files_str)} | {pages_cited} pages cited | {len(citations)} citations | {now}</div>{"" if not capped_pages else f'''
+    <div class="cite-caveat">This report was limited to a maximum number of
+    cited pages, so {capped_pages} cited page(s) below carry no page image. The
+    limit is set by --max-pages.</div>'''}
   </header>
 
   <div class="question-box">
@@ -1009,7 +1104,14 @@ def cmd_report(args):
 
     # Limit screenshots
     max_pages = getattr(args, "max_pages", MAX_REPORT_PAGES)
+    # The count travels into the report. It used to be a stderr warning and
+    # nothing else, so the HTML the operator keeps and forwards recorded no
+    # trace of the cut: a reader opening it later saw citation cards with no
+    # page image and had no way to learn that the tool chose not to capture
+    # them rather than failed to.
+    capped_pages = 0
     if len(pages_to_screenshot) > max_pages:
+        capped_pages = len(pages_to_screenshot) - max_pages
         print(
             f"{YELLOW}Warning:{RESET} Limiting to {max_pages} cited pages "
             f"(requested {len(pages_to_screenshot)})",
@@ -1064,6 +1166,7 @@ def cmd_report(args):
         page_screenshots=page_screenshots,
         parse_data=parse_data,
         title=args.title,
+        capped_pages=capped_pages,
     )
 
     # Write output

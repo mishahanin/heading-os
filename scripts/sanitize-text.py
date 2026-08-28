@@ -22,7 +22,7 @@ from pathlib import Path
 # Workspace import boilerplate
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.atomic import atomic_write_text
-from scripts.utils.sanitize_text import sanitize, scan
+from scripts.utils.sanitize_text import sanitize_report, scan
 
 
 def _word_count(text: str) -> int:
@@ -93,8 +93,7 @@ def main():
         print(f"  Word count: {_word_count(text)}", file=sys.stderr)
         sys.exit(1 if count > 0 else 0)
 
-    clean = sanitize(text)
-    removed = len(text) - len(clean)
+    clean, removed, replaced = sanitize_report(text)
 
     if args.text or args.file == "-":
         sys.stdout.write(clean)
@@ -105,8 +104,16 @@ def main():
         # pre-commit chains run this over source files.
         atomic_write_text(Path(output_path), clean)
 
-    if removed > 0:
-        print(f"  Removed {removed} hidden character(s) from {source}", file=sys.stderr)
+    # Both numbers, because the file is rewritten for either one. The old line
+    # reported deletions only, so a replaced non-breaking space was a silent
+    # rewrite under the word "clean".
+    if removed or replaced:
+        parts = []
+        if removed:
+            parts.append(f"removed {removed}")
+        if replaced:
+            parts.append(f"replaced {replaced}")
+        print(f"  {source}: {', '.join(parts)} hidden character(s)", file=sys.stderr)
     else:
         print(f"  {source}: already clean", file=sys.stderr)
 

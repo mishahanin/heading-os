@@ -703,7 +703,25 @@ def main():
     if not (args.file or args.text or args.all or args.skills):
         parser.error("a file, --text, --all, or --skills is required")
 
+    # The three reads below were unguarded. An unreadable or non-UTF-8 page threw
+    # out of `main`, and the traceback exited 1 - the code this script's own
+    # docstring defines as "findings present", not the 2 it defines as "script
+    # error". A gate that tells the two apart therefore reported a crash as a
+    # style problem. Worse on `--all` and `--skills`: the loop died on the first
+    # bad page, so every page after it went unread and nothing said so, which is
+    # the silent-truncation shape `.claude/rules/scope-claims.md` forbids.
     targets = []
+    unreadable: list[str] = []
+
+    def _read(path):
+        try:
+            return path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            print(f"Error: cannot read {path}: {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+            unreadable.append(str(path))
+            return None
+
     if args.text:
         targets.append(("inline text", args.text))
     if args.file:
@@ -711,13 +729,16 @@ def main():
         if not path.exists():
             print(f"Error: {path} does not exist", file=sys.stderr)
             sys.exit(2)
-        targets.append((str(path), path.read_text(encoding="utf-8")))
-    if args.all:
-        for path in resolve_scope():
-            targets.append((str(path), path.read_text(encoding="utf-8")))
-    if args.skills:
-        for path in resolve_skill_scope():
-            targets.append((str(path), path.read_text(encoding="utf-8")))
+        text = _read(path)
+        if text is None:
+            sys.exit(2)
+        targets.append((str(path), text))
+    for scope in (resolve_scope() if args.all else [],
+                  resolve_skill_scope() if args.skills else []):
+        for path in scope:
+            text = _read(path)
+            if text is not None:
+                targets.append((str(path), text))
 
     results, passed = {}, True
     for source, text in targets:
@@ -733,6 +754,17 @@ def main():
         errors = sum(r["summary"]["errors"] for r in results.values())
         warnings = sum(r["summary"]["warnings"] for r in results.values())
         print(f"  {BOLD}{len(results)} files: {errors} error(s), {warnings} warning(s).{RESET}\n")
+
+    # Name what was left out. A sweep that read fewer pages than it was asked to
+    # must not report like one that read them all, and the exit code says which
+    # kind of failure happened: 2 is "this run did not do its job", 1 is "the
+    # pages it read carry errors".
+    if unreadable:
+        print(f"  {BOLD}{len(unreadable)} file(s) could not be read and were NOT "
+              f"checked:{RESET}", file=sys.stderr)
+        for name in unreadable:
+            print(f"    {name}", file=sys.stderr)
+        sys.exit(2)
 
     sys.exit(0 if passed else 1)
 

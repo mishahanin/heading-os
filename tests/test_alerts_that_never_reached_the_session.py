@@ -46,6 +46,7 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -92,18 +93,68 @@ def _run(hook: str, payload: dict, cwd: Path | None = None,
 # The alerts that were written in a shape nothing reads
 # ============================================================
 
-def test_session_alerts_are_plain_text_not_a_json_blob():
+def _stale_overlay(tmp_path: Path) -> Path:
+    """A data overlay whose context files are old enough to raise STALE DATA.
+
+    The hook reads a `Last verified: YYYY-MM-DD` line out of the file CONTENT,
+    not the mtime, and calls anything past 30 days CRITICAL. The date is written
+    relative to now rather than pinned, so the fixture states the relationship
+    the hook actually tests and cannot expire.
+
+    UTC, while the hook itself reads a local clock. The offset is 400 days
+    against a 30-day threshold, so no timezone on Earth moves this date across
+    the line; an aware clock is what keeps the fixture out of the lint ratchet.
+    """
+    context = tmp_path / "context"
+    context.mkdir(parents=True)
+    long_ago = (datetime.now(timezone.utc) - timedelta(days=400)).strftime("%Y-%m-%d")
+    for name in ("business-info.md", "current-data.md", "strategy.md"):
+        (context / name).write_text(
+            f"# {name}\n\nLast verified: {long_ago}\n\nplaceholder\n",
+            encoding="utf-8",
+        )
+    return tmp_path
+
+
+def test_session_alerts_are_plain_text_not_a_json_blob(tmp_path):
     """SessionStart injects stdout; a JSON object arrives as a literal blob.
 
-    And this hook already prints a plain-text setup banner onto the same
-    stream, so a single JSON document could not be parsed either way.
+    Driven against a CONSTRUCTED overlay that is guaranteed to raise an alert.
+    It used to run against whatever overlay the machine happened to have and
+    assert `out.startswith("Session alerts:")`, which is a reading of live state
+    dressed as an invariant. Under CI there is no overlay, `get_data_root()`
+    falls back to the bundled `examples/`, no context file is stale, and the
+    hook's other plain-text banner - the active-threads line, which this file's
+    own docstring already acknowledges shares the stream - arrives first. The
+    test then failed on a clean checkout with nothing wrong.
+
+    Two properties survive that, and they are the ones worth pinning: the stream
+    is never a JSON document, and when there ARE alerts they arrive under their
+    own heading rather than loose among the banners.
+    """
+    proc = _run("session-start.py", {"cwd": str(ROOT)},
+                data_root=_stale_overlay(tmp_path))
+    assert proc.returncode == 0
+    out = proc.stdout.strip()
+    assert out, "the constructed overlay raised no alert; the fixture is broken"
+    assert out.startswith("Session alerts:"), out[:200]
+    assert "STALE DATA" in out, out[:200]
+    with pytest.raises(ValueError):
+        json.loads(out)
+
+
+def test_the_alert_stream_is_never_json_whatever_this_workspace_holds():
+    """The half that must hold in every state, including the empty one.
+
+    Separated from the test above because it needs no alert to be meaningful,
+    and folding the two is what let a live-state reading ride along inside an
+    invariant.
     """
     proc = _run("session-start.py", {"cwd": str(ROOT)})
     assert proc.returncode == 0
     out = proc.stdout.strip()
     if not out:
-        pytest.skip("this workspace currently raises no session alerts")
-    assert out.startswith("Session alerts:")
+        return
     with pytest.raises(ValueError):
         json.loads(out)
 

@@ -79,7 +79,22 @@ def main() -> int:
         # malformed config on the operator's own machine switched the content
         # layer off while blaming a condition that was not true. The overlay
         # directory is right there to check.
-        if not data_root.is_dir():
+        # `data_root is None` FIRST. The `except` clause above sets it to None so
+        # this branch can degrade gracefully, and this branch then called
+        # `.is_dir()` on it, so the graceful path raised AttributeError, the
+        # __main__ handler turned that into the documented exit 2 "internal
+        # error", and the operator read a traceback instead of the message
+        # written to name the state. The branch could never be taken. The sibling
+        # wall `push_all.engine_content_scan` guards the same value correctly.
+        #
+        # An unresolvable root is also a DIFFERENT state from an overlay that is
+        # simply absent - it means HEADING_OS_DATA names a path that is not
+        # there, or the resolver itself failed - so it gets its own sentence.
+        # Reporting "no DATA overlay at this path" for it is the guessed cause
+        # the comment above forbids.
+        if data_root is None:
+            why = "the DATA overlay path could not be resolved"
+        elif not data_root.is_dir():
             why = "no DATA overlay at this path"
         elif dl.degraded:
             why = "the denylist harvest failed; see the stderr line above"

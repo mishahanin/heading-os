@@ -188,11 +188,13 @@ class Denylist:
 
     tokens: dict[str, str] = field(default_factory=dict)
     _pattern: re.Pattern | None = None
+    _loose_pattern: re.Pattern | None = None
     degraded: bool = False
 
     def _compile(self) -> None:
         if not self.tokens:
             self._pattern = None
+            self._loose_pattern = None
             return
         # Longest-first so a full name wins over its component word in reporting.
         ordered = sorted(self.tokens, key=len, reverse=True)
@@ -204,21 +206,88 @@ class Denylist:
             rf"(?<![A-Za-z0-9_])(?:{alts})(?![A-Za-z0-9_])", re.IGNORECASE
         )
 
+        # The SECOND pattern, over multi-word tokens only, with each internal
+        # space widened to a whitespace run. Prose in this tree is hard-wrapped,
+        # so "Firstname Lastname" routinely arrives with a newline between the
+        # two words, and the line-scoped pass above cannot see it: it matches a
+        # literal space inside one line. A double space and a non-breaking space
+        # hid a name the same way. Measured 2026-08-28 over a synthetic overlay:
+        # the flat form was reported and all three spaced forms returned nothing,
+        # from the token class added because a live counterparty's name had
+        # reached a tracked engine file.
+        #
+        # Single-word tokens are deliberately NOT in here. Widening them would
+        # let any token join its neighbour across a break, which matches text
+        # that is not the entity.
+        multi = [t for t in ordered if " " in t]
+        if multi:
+            loose_alts = "|".join(
+                r"\s+".join(re.escape(w) for w in t.split(" ")) for t in multi
+            )
+            self._loose_pattern = re.compile(
+                rf"(?<![A-Za-z0-9_])(?:{loose_alts})(?![A-Za-z0-9_])", re.IGNORECASE
+            )
+        else:
+            self._loose_pattern = None
+
     def scan_text(self, text: str) -> list[tuple[int, str, str]]:
         """Return (lineno, matched_text, category) for every denylist hit.
 
         Lines carrying an inline ``content-guard: ok`` suppression are skipped.
+        A hit spanning a wrapped line is suppressed when EITHER of its lines
+        carries the marker, because the marker is written per line and the
+        operator cannot know which line the scanner will report.
         """
         if self._pattern is None:
             return []
+        lines = text.splitlines()
+        suppressed = {n for n, line in enumerate(lines, 1)
+                      if "content-guard: ok" in line}
         hits: list[tuple[int, str, str]] = []
-        for n, line in enumerate(text.splitlines(), 1):
-            if "content-guard: ok" in line:
+        seen: set[tuple[int, str]] = set()
+
+        for n, line in enumerate(lines, 1):
+            if n in suppressed:
                 continue
             for m in self._pattern.finditer(line):
                 cat = self.tokens.get(m.group(0).lower(), "entity")
                 hits.append((n, m.group(0), cat))
+                seen.add((n, m.group(0).lower()))
+
+        if self._loose_pattern is not None:
+            hits.extend(self._scan_wrapped(lines, suppressed, seen))
         return hits
+
+    def _scan_wrapped(self, lines, suppressed, seen):
+        """Multi-word hits the line-scoped pass could not reach.
+
+        Scanned paragraph by paragraph, never across a blank line: two
+        paragraphs whose last and first words happen to spell a name are not an
+        occurrence of it, and a guard that says otherwise gets suppressed
+        everywhere, which costs more than it catches.
+        """
+        found = []
+        start = 0
+        while start < len(lines):
+            if not lines[start].strip():
+                start += 1
+                continue
+            end = start
+            while end < len(lines) and lines[end].strip():
+                end += 1
+            block = "\n".join(lines[start:end])
+            for m in self._loose_pattern.finditer(block):
+                lineno = start + 1 + block.count("\n", 0, m.start())
+                span_lines = range(lineno, lineno + m.group(0).count("\n") + 1)
+                if any(ln in suppressed for ln in span_lines):
+                    continue
+                flat = " ".join(m.group(0).split()).lower()
+                if (lineno, flat) in seen:
+                    continue
+                cat = self.tokens.get(flat, "entity")
+                found.append((lineno, m.group(0), cat))
+            start = end
+        return found
 
 
 def _add(tokens: dict[str, str], value: str, category: str) -> None:

@@ -17,6 +17,15 @@ import yaml
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# The `.env` grammar, shared with every other reader and writer of that file.
+# This module is a WRITER, and a writer that cannot recognise the line a reader
+# reads appends a duplicate instead of replacing it. `parse_env_line` is pure
+# (no path resolution, no I/O), so importing it resolves nothing outside the
+# workspace this script was pointed at.
+from scripts.utils.paths import parse_env_line  # noqa: E402
+
 __version__ = "0.1.0"
 
 # ============================================================
@@ -433,7 +442,13 @@ def _upsert_env_line(env_path: Path, key: str, value: str) -> None:
     updated = False
     new_line = f"{key}={value}"
     for i, line in enumerate(lines):
-        if line.startswith(f"{key}="):
+        # `parse_env_line`, not `startswith`: the reader side strips the line
+        # first, so `  KEY=old` assigns KEY to every reader in the workspace and
+        # was invisible to this writer. The secret was appended as a second
+        # line, and `load_env` (setdefault, FIRST line wins) then handed every
+        # caller the OLD value while the wizard reported the new one written.
+        pair = parse_env_line(line)
+        if pair is not None and pair[0] == key:
             lines[i] = new_line
             updated = True
             break
@@ -1308,10 +1323,13 @@ def _plan_question(workspace_root, q, entry, all_answers, audience):
         env_path = workspace_root / ".env"
         if entry.get("env_written"):
             env_content = _read_text(env_path) if env_path.exists() else ""
-            # Line-anchored, like the writer `_upsert_env_line`. A substring
+            # Key-anchored, like the writer `_upsert_env_line`. A substring
             # test let `OTHER_API_KEY=x` satisfy a check for `API_KEY`, so the
-            # "marked written but missing" warning never fired.
-            if not any(line.startswith(f"{env_var}=")
+            # "marked written but missing" warning never fired. It reads through
+            # the shared grammar so this check, the writer, and `load_env` agree
+            # about which lines assign the key.
+            if not any((pair := parse_env_line(line)) is not None
+                       and pair[0] == env_var
                        for line in env_content.splitlines()):
                 _planner_warning(
                     f"{env_var} marked written but missing from .env. "

@@ -21,7 +21,6 @@ A check spec is a dict:
 from __future__ import annotations
 
 import os
-import re
 import stat
 import sys
 from pathlib import Path
@@ -29,19 +28,40 @@ from pathlib import Path
 import requests
 
 from scripts.utils.atomic import atomic_write_text
-from scripts.utils.workspace import get_workspace_root
+from scripts.utils.workspace import (
+    get_workspace_root,
+    iter_env_pairs,
+    parse_env_line,
+)
 
 API_BASE = "https://healthchecks.io/api/v3"
 _ENV_FILE = get_workspace_root() / ".env"
 
 
 def load_env_key() -> str:
-    """Return HEALTHCHECKS_API_KEY from the engine .env, or exit with an error."""
+    """Return HEALTHCHECKS_API_KEY from the engine .env, or exit with an error.
+
+    Parsing is `paths.parse_env_line`, shared with `load_env` and every other
+    reader of this file. This function used to keep the quotes: MEASURED
+    2026-08-28, `HEALTHCHECKS_API_KEY="abc"` written in the dotenv style the
+    canonical loader documents as supported yielded the 5-character string
+    '"abc"', which then went out as the `X-Api-Key` header and came back 401
+    with nothing in the message to say why. A leading space in front of the key
+    made it invisible here while `load_env` read it, and the exit said the key
+    was "not set in .env" while it sat in the file.
+
+    An undecodable file used to raise UnicodeDecodeError out of a provisioning
+    CLI as a traceback. It now exits with the reason.
+    """
     if not _ENV_FILE.exists():
         sys.exit(f"ERROR: .env not found at {_ENV_FILE}")
-    for line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
-        if line.startswith("HEALTHCHECKS_API_KEY="):
-            return line.split("=", 1)[1].strip()
+    try:
+        text = _ENV_FILE.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        sys.exit(f"ERROR: could not read {_ENV_FILE}: {exc}")
+    for key, value in iter_env_pairs(text):
+        if key == "HEALTHCHECKS_API_KEY":
+            return value
     sys.exit("ERROR: HEALTHCHECKS_API_KEY not set in .env")
 
 
@@ -76,16 +96,32 @@ def upsert_check(api_key: str, spec: dict, dry_run: bool) -> dict:
 
 
 def write_env(updates: dict) -> None:
-    """Atomically upsert KEY=value lines into the engine .env (tmp + os.replace)."""
-    content = _ENV_FILE.read_text(encoding="utf-8")
-    for key, val in updates.items():
-        pattern = re.compile(rf"^{re.escape(key)}=.*$", re.MULTILINE)
-        if pattern.search(content):
-            content = pattern.sub(f"{key}={val}", content)
-        else:
-            if not content.endswith("\n"):
-                content += "\n"
-            content += f"{key}={val}\n"
+    """Atomically upsert KEY=value lines into the engine .env (tmp + os.replace).
+
+    A writer and a reader that disagree about which line assigns a key leave a
+    duplicate behind, and then the two disagree about which value is live. This
+    matched with `^KEY=.*$`, which no more sees `  KEY=old` than the old reader
+    did. MEASURED 2026-08-28 on `  HEALTHCHECKS_API_KEY=OLD`: the substitution
+    matched nothing, `KEY=NEW` was appended, and afterwards this module's own
+    reader answered NEW while `load_env` (setdefault, so the FIRST line wins)
+    answered OLD. The daemons read the ping URL through `load_env`, so they
+    would have gone on pinging the old check while the provisioner reported the
+    new one written.
+
+    Matching is now `parse_env_line`, the same grammar every reader uses, and
+    the replacement line is written bare, so the file ends up agreeing with
+    itself rather than carrying an indented ghost of the old value.
+    """
+    lines = _ENV_FILE.read_text(encoding="utf-8").splitlines()
+    remaining = dict(updates)
+    for i, line in enumerate(lines):
+        pair = parse_env_line(line)
+        if pair is not None and pair[0] in updates:
+            lines[i] = f"{pair[0]}={updates[pair[0]]}"
+            remaining.pop(pair[0], None)
+    for key, val in remaining.items():
+        lines.append(f"{key}={val}")
+    content = "".join(f"{line}\n" for line in lines)
     # Preserve the file's own mode instead of letting the umask decide it. A
     # fresh tempfile is 0644, and `os.replace` carries the tempfile's mode onto
     # the target - so writing one ping URL back silently widened a 0600 `.env`,

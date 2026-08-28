@@ -302,11 +302,38 @@ def test_the_dispatch_wraps_every_subcommand():
 # Smaller truths
 # ============================================================
 
-def test_an_env_key_is_matched_line_anchored_not_by_substring():
-    """`OTHER_API_KEY=x` satisfied a check for `API_KEY`, so the warning slept."""
-    code = _code("apply-wizard-answers.py")
-    assert 'if f"{env_var}=" not in env_content:' not in code
-    assert 'line.startswith(f"{env_var}=")' in code
+@pytest.mark.parametrize("env_body, expect_warning", [
+    ("OTHER_API_KEY=x\n", True),      # substring only: the key is NOT present
+    ("", True),                       # the file exists and is empty
+    ("API_KEY=x\n", False),           # plainly present
+    ("  API_KEY=x\n", False),         # indented: every reader sees this
+    ("export API_KEY=x\n", False),    # exported: every reader sees this
+    ('API_KEY="x"\n', False),         # dotenv-quoted
+    ("#API_KEY=x\n", True),           # commented out is not written
+])
+def test_an_env_key_is_matched_by_key_not_by_substring(tmp_path, env_body,
+                                                       expect_warning):
+    """`OTHER_API_KEY=x` satisfied a check for `API_KEY`, so the warning slept.
+
+    This used to assert the SPELLING of the check (`'line.startswith(...)' in
+    code`), which measures how the line is written and not what it decides. A
+    grep cannot tell an indented key from an absent one; this asks the planner.
+    """
+    mod = _load("apply-wizard-answers.py")
+    (tmp_path / ".env").write_text(env_body, encoding="utf-8")
+    mod._PLANNER_WARNINGS.clear()
+
+    plans = mod._plan_question(
+        tmp_path,
+        {"id": "q1", "type": "secret", "target": {"env_var": "API_KEY"}},
+        {"env_written": True},
+        {}, "ceo",
+    )
+
+    assert plans == [], "a secret question plans no file writes"
+    fired = any("API_KEY marked written but missing" in w
+                for w in mod._PLANNER_WARNINGS)
+    assert fired is expect_warning, mod._PLANNER_WARNINGS
 
 
 def test_archiving_a_question_with_no_draft_is_refused():

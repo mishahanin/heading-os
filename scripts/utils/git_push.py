@@ -37,7 +37,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from scripts.utils.engine_guard import scan_engine_repo
 from scripts.utils.supervise import run_supervised
-from scripts.utils.workspace import get_data_root, get_workspace_root
+from scripts.utils.workspace import (
+    get_data_root,
+    get_workspace_root,
+    read_env_value,
+)
 
 # Echoes the token from the child env (NOT argv) into git's credential protocol.
 _CRED_HELPER = '!f(){ echo username=x-access-token; echo "password=$GH_PUSH_TOKEN"; }; f'
@@ -404,22 +408,22 @@ def remote_objection(repo, *, token: Optional[str] = None,
 
 
 def load_gh_token() -> Optional[str]:
-    """Return GH_TOKEN from the engine ``.env`` (the git pushgh source of truth)."""
-    env_path = get_workspace_root() / ".env"
-    try:
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            if line.startswith("GH_TOKEN="):
-                return line.split("=", 1)[1].strip().strip('"').strip("'")
-    except (OSError, UnicodeDecodeError) as exc:
-        # A wall built to fail open must not carry a hard-crash path. This
-        # function's own token expression is evaluated eagerly by every
-        # `supervised_push` caller, including `offboard-exec` and
-        # `create-data-repo`, none of which used to reach this read, and Check A
-        # never uses the token anyway, so a single non-UTF-8 byte in `.env` must
-        # not crash them.
-        logger.debug("gh token unreadable: %s", exc)
-        return None
-    return None
+    """Return GH_TOKEN from the engine ``.env`` (the git pushgh source of truth).
+
+    Parsing is `paths.parse_env_line`, the one grammar every reader and writer
+    of this file now shares. This function used to match with
+    `line.startswith("GH_TOKEN=")`, so a single leading space in front of the
+    key made the token invisible to it while `load_env` read it perfectly well:
+    safe-push then reported "no GH_TOKEN in engine .env" and named a cause that
+    was not true. It also unquoted with a chained `.strip('"').strip("'")`,
+    which is a character-class strip, not a pair strip.
+
+    `read_env_value` is fail-soft, which this caller requires: a wall built to
+    fail open must not carry a hard-crash path, and this expression is evaluated
+    eagerly by every `supervised_push` caller, including `offboard-exec` and
+    `create-data-repo`. A single non-UTF-8 byte in `.env` must not crash them.
+    """
+    return read_env_value(get_workspace_root() / ".env", "GH_TOKEN")
 
 
 def enclosing_repo_root(path) -> Optional[Path]:

@@ -242,10 +242,7 @@ def _secrets_path_allowed(file_path: str) -> bool:
         return True
     if normalized in SECRETS_ALLOW_EXACT_PATHS:
         return True
-    for seg in SECRETS_ALLOW_DIR_SEGMENTS:
-        if _under_dir(normalized, seg):
-            return True
-    return False
+    return any(_under_dir(normalized, seg) for seg in SECRETS_ALLOW_DIR_SEGMENTS)
 
 def _scan_for_secrets(text: str) -> tuple[bool, str | None]:
     if not text:
@@ -1743,6 +1740,191 @@ def check_tool_budget(payload: dict) -> dict | None:
 
 
 # ============================================================
+# check_graph_first — a code lookup asks the graph before it greps
+# ============================================================
+#
+# The operator's standing instruction, given four times: 2026-08-27 twice (the
+# second in capitals), then 2026-08-29 twice, the last one asking for a
+# MECHANISM rather than another note. "сам реши как записать, чтобы не позволять
+# самому себе нарушать правила."
+#
+# A written rule had already failed three times. There is also an always-on
+# UserPromptSubmit hook that names matching indexed symbols on every code-shaped
+# prompt, and the relapses happened anyway, with that text on screen. A reminder
+# that is ignored while visible is not a weaker control than this one, it is a
+# different kind of thing: advice. This is a wall.
+#
+# What it refuses: the FIRST code-shaped search of a session, when no
+# `codegraph_explore` has been attempted yet. One explore unlocks the session.
+# The bar is deliberately low, because the failure being fixed is skipping the
+# graph ENTIRELY on a question, not under-using it later in a long session.
+#
+# What it never refuses, by construction:
+#   - a repo with no `.codegraph/` index, matching the global instruction to
+#     skip CodeGraph entirely where it is not indexed;
+#   - a search over `.tmp/`, `/tmp`, logs, markdown or JSON, which is reading
+#     output rather than locating code;
+#   - anything at all once an explore has been ATTEMPTED. A failed or empty
+#     explore still unlocks, because the rule is "ask the graph first", not
+#     "the graph must answer". A graph that is down must not wedge the session.
+
+_GRAPH_STATE_DIR = WORKSPACE / ".claude" / "state" / "graph-first"
+
+# Bash utilities that are code searches. `find` is here for `find ... -name`
+# over source; its `.tmp/` and log uses are filtered by the path test below.
+_SEARCH_BINARIES = ("grep", "rg", "egrep", "fgrep", "ag", "ack", "ast-grep", "sg")
+
+# Reading output, not locating code. Any of these in the target and the search
+# is none of this check's business.
+# `tmp/` covers `.tmp/`, `/tmp/` and any scratch directory under another name,
+# in one token. Spelling the system path out drew a hardcoded-temp-path finding
+# from both linters, and two suppression comments to say "this is a substring I
+# match, not a path I open" is worse than one token that needs neither.
+_NOT_CODE_HINTS = ("tmp/", ".log", ".json", ".jsonl", ".md",
+                   ".txt", ".html", ".csv", "node_modules", ".venv",
+                   "__pycache__", ".git/")
+
+# The trees whose contents are the code this rule is about. Matched as whole
+# path segments: `path="scripts"` carries no trailing slash and a substring test
+# for "scripts/" missed it, which the parametrised case caught on the first run.
+_CODE_TREE_RE = re.compile(r"(^|[\s/\\'\"])(scripts|tests)([\s/\\'\"]|$)")
+_CODE_HINTS = (".py", ".claude/hooks", ".claude\\hooks")
+
+
+def _graph_marker(session_id: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", session_id or "unknown")[:80]
+    return _GRAPH_STATE_DIR / f"{safe}.stamp"
+
+
+def is_code_search(tool_name: str, tool_input: dict) -> bool:
+    """True when this call is a code lookup the graph should have answered.
+
+    Pure apart from its arguments, so both directions are measurable on
+    synthetic input. That matters here more than usual: over a session where
+    the marker already exists this predicate decides nothing, so deleting its
+    body would change no live result and the rule would quietly stop existing.
+    """
+    if tool_name in ("Grep", "Glob"):
+        target = " ".join(str(tool_input.get(k, ""))
+                          for k in ("pattern", "path", "glob"))
+    elif tool_name == "Bash":
+        command = str(tool_input.get("command", ""))
+        first = re.split(r"[\s|;&]+", command.strip())
+        binaries = {part.split("/")[-1] for part in first if part}
+        if not binaries & set(_SEARCH_BINARIES):
+            return False
+        target = command
+    else:
+        return False
+
+    lowered = target.lower()
+    if any(hint in lowered for hint in _NOT_CODE_HINTS):
+        return False
+    if any(hint in lowered for hint in _CODE_HINTS):
+        return True
+    if _CODE_TREE_RE.search(lowered):
+        return True
+    # A Grep with no path at all sweeps the whole repo, which is the case the
+    # graph answers best and the one most often reached for by reflex.
+    return tool_name == "Grep" and not tool_input.get("path")
+
+
+# The cage bound. A wall whose UNLOCK path is broken stops being a wall and
+# becomes a cage, and this one nearly shipped as one: the dispatcher's
+# PreToolUse matchers are `Bash`, `Read|Grep|Glob` and the write family, so an
+# MCP tool call never reached this check and no real `codegraph_explore` could
+# ever stamp the marker. Measured 2026-08-29: the wall refused, the explore ran,
+# the wall refused again. A matcher for the codegraph tool is the real fix, and
+# it lives in `.claude/settings.local.json`, which is gitignored and therefore
+# machine-local. This counter is the part that CANNOT be lost with the config:
+# after this many refusals in one session the check yields and says so, so a
+# broken unlock costs a few turns instead of the session.
+MAX_GRAPH_REFUSALS = 3
+
+
+def _graph_refusals(marker: Path) -> int:
+    try:
+        return int(marker.read_text(encoding="utf-8").strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def check_graph_first(payload: dict):
+    tool_name = payload.get("tool_name", "")
+    session_id = str(payload.get("session_id", "")).strip()
+
+    # No session, no rule. "The first code search of the SESSION" needs a
+    # session to be the first of, and every real PreToolUse payload carries one.
+    # A payload without it is another test driving a different wall, and keying
+    # them all on one shared "unknown" marker would make those suites depend on
+    # each other's order. That is not hypothetical: the rate limiter's single
+    # shared state file did exactly this to a wall test earlier on 2026-08-29.
+    if not session_id:
+        return None
+
+    marker = _graph_marker(session_id)
+
+    # Stamp on the explore ITSELF, at PreToolUse, before it runs. Stamping on
+    # success instead would mean a graph outage locks the session out of grep
+    # too, and a control that wedges a session gets switched off.
+    if "codegraph" in tool_name.lower():
+        try:
+            _GRAPH_STATE_DIR.mkdir(parents=True, exist_ok=True)
+            marker.write_text("unlocked", encoding="utf-8")
+        except OSError as exc:
+            print(f"[_dispatch:graph_first] could not stamp: {exc}",
+                  file=sys.stderr)
+        return None
+
+    if not (WORKSPACE / ".codegraph").is_dir():
+        return None
+    if marker.exists() and not marker.read_text(encoding="utf-8").strip().isdigit():
+        return None
+    if not is_code_search(tool_name, payload.get("tool_input") or {}):
+        return None
+
+    refusals = _graph_refusals(marker)
+    if refusals >= MAX_GRAPH_REFUSALS:
+        return {
+            "additionalContext": (
+                f"graph-first: yielding after {refusals} refusals in this "
+                f"session. An explore should have unlocked this and did not, so "
+                f"the unlock path is broken rather than ignored. Check that "
+                f".claude/settings.local.json carries a PreToolUse matcher for "
+                f"mcp__codegraph__.* pointing at .claude/hooks/_dispatch.py; "
+                f"without it the dispatcher never sees an explore. Search "
+                f"allowed, but the graph is still the better answer."
+            ),
+        }
+
+    try:
+        _GRAPH_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        marker.write_text(str(refusals + 1), encoding="utf-8")
+    except OSError as exc:
+        print(f"[_dispatch:graph_first] could not count: {exc}", file=sys.stderr)
+
+    return {
+        "decision": "block",
+        "_policy_deny": True,
+        "reason": (
+            "Ask the graph first. This is a code lookup and no "
+            "`codegraph_explore` has run in this session yet.\n\n"
+            "One call to `codegraph_explore` returns the verbatim source of "
+            "the relevant symbols PLUS who calls them, which grep cannot "
+            "produce at any number of round trips. The operator has given this "
+            "instruction four times; it is a wall now because the written "
+            "version was ignored three times with a reminder on screen.\n\n"
+            "Call `codegraph_explore` with the symbol or file names in this "
+            "search. Any attempt unlocks the session, including one that "
+            "errors or returns nothing, so a graph outage cannot wedge you. "
+            "Searches over .tmp/, logs, markdown and JSON are never refused, "
+            f"and this check yields after {MAX_GRAPH_REFUSALS} refusals so it "
+            "can never become a cage."
+        ),
+    }
+
+
+# ============================================================
 # Dispatcher main
 # ============================================================
 CHECKS = [
@@ -1753,6 +1935,7 @@ CHECKS = [
     check_cwd_anchor,
     check_slow_shell,
     check_rate_limit,
+    check_graph_first,
     check_tool_budget,
 ]
 

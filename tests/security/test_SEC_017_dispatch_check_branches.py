@@ -303,7 +303,7 @@ def test_tool_budget_allows_under_cap(dispatch, monkeypatch):
 # ============================================================
 
 
-def test_checks_list_has_eight_branches(dispatch):
+def test_checks_list_has_nine_branches(dispatch):
     """If a check is added or removed, this test forces an intentional update.
     check_prevent_secrets stays first: first-block-wins means whichever check
     runs first owns the message, and secret detection is the one that must own
@@ -312,8 +312,18 @@ def test_checks_list_has_eight_branches(dispatch):
     `check_slow_shell` joined on 2026-08-22 and sits with the other two
     session-shaped guards, after every content guard. Order matters for the same
     first-block-wins reason: a command that both leaks a credential and runs the
-    suite serially must be refused for the credential."""
-    assert len(dispatch.CHECKS) == 8
+    suite serially must be refused for the credential.
+
+    `check_graph_first` joined on 2026-08-29, second to last. It carries the
+    weakest claim in the list, a working-method rule rather than a safety one,
+    so every guard that protects data or the machine owns the message ahead of
+    it. It sits above `check_tool_budget` for the reason that one is last: the
+    budget notice is advisory and must not pre-empt a refusal.
+
+    The tripwire is the point. This assertion does not drift with the list; a
+    new check fails it until its author writes down where in the order it
+    belongs and why."""
+    assert len(dispatch.CHECKS) == 9
     names = [c.__name__ for c in dispatch.CHECKS]
     assert names == [
         "check_prevent_secrets",
@@ -323,6 +333,7 @@ def test_checks_list_has_eight_branches(dispatch):
         "check_cwd_anchor",
         "check_slow_shell",
         "check_rate_limit",
+        "check_graph_first",
         "check_tool_budget",
     ]
 

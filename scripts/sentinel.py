@@ -119,7 +119,8 @@ if ENV_FILE.exists():
 class SentinelConfig:
     """Load and validate sentinel_config.yaml."""
 
-    def __init__(self, config_path: Path = CONFIG_FILE):
+    def __init__(self, config_path: Path | None = None):
+        config_path = CONFIG_FILE if config_path is None else config_path
         if not config_path.exists():
             raise FileNotFoundError(f"Config not found: {config_path}")
         with open(config_path, "r", encoding="utf-8") as f:
@@ -200,8 +201,8 @@ class StateManager:
     message and invite the test had seen, with nothing said about it.
     """
 
-    def __init__(self, state_path: Path = STATE_FILE, read_only: bool = False):
-        self.path = state_path
+    def __init__(self, state_path: Path | None = None, read_only: bool = False):
+        self.path = STATE_FILE if state_path is None else state_path
         self.read_only = read_only
         self.data = self._load()
 
@@ -2199,8 +2200,9 @@ Summary: {analysis.get('summary', 'N/A')}
 class Sentinel:
     """Main orchestrator."""
 
-    def __init__(self, config_path: Path = CONFIG_FILE, dry_run: bool = False,
+    def __init__(self, config_path: Path | None = None, dry_run: bool = False,
                  once: bool = False):
+        config_path = CONFIG_FILE if config_path is None else config_path
         self.config = SentinelConfig(config_path)
         self.dry_run = dry_run
         # `once` is a LIVE single cycle, which is not the same thing as

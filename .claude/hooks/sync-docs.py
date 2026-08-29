@@ -114,13 +114,14 @@ def is_real_template(file_path: Path) -> bool:
     return True
 
 
-def sync_targets(file_path: Path, engine_root: Path = ENGINE_ROOT) -> list:
+def sync_targets(file_path: Path, engine_root: Path | None = None) -> list:
     """Every docs/ path a template must be copied to, in publish order.
 
     The template's own sibling docs/ always receives the copy; an engine-published
     pair additionally receives one in the engine clone. Kept a pure function so
     tests can assert the destinations without running the hook.
     """
+    engine_root = ENGINE_ROOT if engine_root is None else engine_root
     targets = [file_path.resolve().parent.parent / "docs" / file_path.name]
     if file_path.name in ENGINE_PUBLISHED:
         engine_target = engine_root / "docs" / file_path.name

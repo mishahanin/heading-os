@@ -192,7 +192,11 @@ class StateManager:
         # still resolved the operator's real overlay. On 2026-08-29 that wrote
         # the live state file during an audit: two real message ids and two real
         # conversation keys were evicted by the caps, with no git copy to
-        # restore from. `scripts/sentinel.py:203` still has the same shape.
+        # restore from. An AST sweep of `scripts/` and `.claude/` then found
+        # seven more of the same shape, `scripts/sentinel.py` worst among them;
+        # all eight are fixed, and
+        # `tests/test_defaults_that_froze_a_path_at_import.py` now refuses a
+        # ninth.
         self.path = STATE_FILE if path is None else path
         self.data = self._load()
 

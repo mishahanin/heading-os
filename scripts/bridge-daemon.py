@@ -583,13 +583,14 @@ def _verify_port_free(port: int) -> tuple[int, socket.socket]:
         raise RuntimeError(f"port {port} is already in use") from exc
 
 
-def _configure_logging(log_path: Path = LOG_PATH) -> logging.Logger:
+def _configure_logging(log_path: Path | None = None) -> logging.Logger:
     """Configure the root logger for the daemon process and return it.
 
     Extracted from start_daemon() on 2026-08-20 so the logger levels have a
     test seam - start_daemon() itself ends in uvicorn.run() and cannot be
     called from a test.
     """
+    log_path = LOG_PATH if log_path is None else log_path
     install_log_factory()
     log_path.parent.mkdir(parents=True, exist_ok=True)
     # Rotating handler: 1 MB per file, 3 backups (~4 MB total cap).

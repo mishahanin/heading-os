@@ -189,7 +189,8 @@ def _declared_destinations(stem: str, inventory_dir: Path, repo_root: Path) -> l
 
 
 def _rule_union_sentences(stem: str, rules_dir: str = ".claude/rules",
-                          inventory_dir: Path = INVENTORY_DIR) -> set[str]:
+                          inventory_dir: Path | None = None) -> set[str]:
+    inventory_dir = INVENTORY_DIR if inventory_dir is None else inventory_dir
     # stem is a basename like "development-standards.md"; glob its core+detail siblings
     # so the snapshot survives a later split (development-standards.md + -detail.md),
     # plus any file the rule declared as an offload destination.
@@ -222,8 +223,9 @@ def snapshot_inventory(rule_path: str) -> Path:
     return inv
 
 
-def check_inventories(inventory_dir: Path = INVENTORY_DIR,
+def check_inventories(inventory_dir: Path | None = None,
                       rules_dir: str = ".claude/rules") -> list[tuple[str, str]]:
+    inventory_dir = INVENTORY_DIR if inventory_dir is None else inventory_dir
     # For every snapshot, assert each frozen imperative is still an exact sentence of the
     # current core+detail union. Returns [(stem, dropped_line), ...]; empty = clean.
     bad = []

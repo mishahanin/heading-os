@@ -61,42 +61,24 @@ DATA_DIRS = frozenset(
 )
 
 
-def _normalize_rel(path: str) -> str | None:
-    """Collapse `.` and `..` lexically. None if absolute, empty, or escaping.
-
-    `..` segments were never normalized, so classification ran on the raw first
-    segment and the rewrite concatenated the raw path onto the data root.
-    Reproduced 2026-08-23:
-
-        outputs/../scripts/foo.py     -> <data-root>/scripts/foo.py
-        outputs/../../x               -> <workspaces>/x
-        outputs/../../../etc/passwd   -> <home>/ai/etc/passwd
-
-    The first is a path that resolves to the ENGINE tree from cwd, silently
-    redirected into the data tree, in a hook whose docstring promises engine
-    paths are left untouched. The last two leave the data root altogether.
-
-    Lexical, not `Path.resolve()`: the target usually does not exist yet (this
-    runs before a Write), and resolve() would also follow symlinks, which
-    `no-symlinks-ever` says should not exist here but which this hook must not
-    depend on.
-    """
-    if not path:
-        return None
-    norm = path.replace("\\", "/")
-    if norm.startswith("/") or (len(norm) > 1 and norm[1] == ":"):
-        return None  # absolute (POSIX or Windows drive) -- never rewrite
-    parts: list[str] = []
-    for segment in norm.split("/"):
-        if segment in ("", "."):
-            continue
-        if segment == "..":
-            if not parts or parts[-1] == "..":
-                return None  # climbs out of the relative root; refuse to rewrite
-            parts.pop()
-            continue
-        parts.append(segment)
-    return "/".join(parts) or None
+# The lexical collapse lives in `scripts/utils/pathnorm.py`, imported here.
+#
+# It was written in this file on 2026-08-23, after `..` segments were found
+# reaching the rewrite unnormalized: classification ran on the raw first segment
+# and the rewrite concatenated the raw path onto the data root, so
+# `outputs/../scripts/foo.py` became `<data-root>/scripts/foo.py` and
+# `outputs/../../../etc/passwd` left the data root altogether.
+#
+# The personal-threads wall in `_dispatch.py` needed the same collapse and never
+# got it, so for six days it refused one spelling of a CEO-only path and allowed
+# three others that open the same file. Measured 2026-08-29: 4 of 9. A private
+# copy in one hook is what let the second hook stay broken, so there is now one
+# copy and both import it.
+#
+# The import costs ~0.9 ms of a ~55 ms hook, which is inside the run-to-run
+# noise; measured 12 runs each way before moving it out of the lazy section.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from scripts.utils.pathnorm import normalize_rel as _normalize_rel  # noqa: E402
 
 
 def _first_segment(path: str) -> str:
@@ -158,8 +140,8 @@ def main() -> int:
         return 0
 
     # A data-relative path is present. Resolve the data root; no-op if data is
-    # in-tree (data_root == workspace_root), i.e. ceo-main pre-cutover.
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+    # in-tree (data_root == workspace_root), i.e. ceo-main pre-cutover. The
+    # workspace root reached sys.path at import time, for pathnorm.
     try:
         from scripts.utils.workspace import get_data_root, get_workspace_root
         data_root = get_data_root().resolve()

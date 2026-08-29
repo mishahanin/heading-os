@@ -49,6 +49,12 @@ from pathlib import Path
 
 WORKSPACE = Path(__file__).resolve().parent.parent.parent
 
+# One lexical path collapse, shared with `data-path-redirect.py`. Measured cost
+# of the import: inside the run-to-run noise of this hook (12 runs each way,
+# 2026-08-29), so it is at module scope rather than deferred.
+sys.path.insert(0, str(WORKSPACE))
+from scripts.utils.pathnorm import normalize_path, normalize_segments  # noqa: E402
+
 def _record_denial(mechanism: str, payload: dict, reason: str) -> None:
     """Count one refusal. Telemetry only — it can never change a decision.
 
@@ -335,9 +341,43 @@ _PERSONAL_ARCHIVE_RE = re.compile(
     r"threads[/\\]archive[/\\].+[/\\]personal(?:[/\\]|$)", re.IGNORECASE)
 
 
+# A path-like run inside free text: anything containing a separator, stopping at
+# whitespace and the shell metacharacters that end a word. Used to canonicalise
+# the paths in a Bash command line and in written content, so a `.`, `//` or
+# `..` segment cannot hide the directory from a pattern that spells it plainly.
+_PATH_TOKEN_RE = re.compile(r"[^\s'\"<>|;&()]*[/\\][^\s'\"<>|;&()]*")
+
+# Cheap pre-filter. Every spelling of a CEO-only path has to name the threads
+# root followed by a separator somewhere, so text without that cannot be made to
+# match by canonicalising it, and the substitution pass is skipped. This keeps
+# the write-content branch, which sees whole file bodies, at one extra search on
+# the overwhelming majority of writes.
+_THREADS_HINT_RE = re.compile(r"threads[/\\]", re.IGNORECASE)
+
+
+def _canonicalise_paths(text: str) -> str:
+    """Rewrite every path-like run in free text to its collapsed form.
+
+    Returns `text` unchanged when it cannot name the threads root at all, which
+    is the common case and the reason this is affordable on a Write payload.
+    """
+    if not _THREADS_HINT_RE.search(text):
+        return text
+    return _PATH_TOKEN_RE.sub(lambda m: normalize_path(m.group(0)), text)
+
+
 def _names_personal_threads(text: str) -> bool:
-    """True when `text` spells a path inside either CEO-only threads subtree."""
-    return bool(_PERSONAL_DIR_RE.search(text) or _PERSONAL_ARCHIVE_RE.search(text))
+    """True when `text` spells a path inside either CEO-only threads subtree.
+
+    Asked of the raw text AND of its canonical form. The two differ exactly when
+    the text carries a `.`, `//` or `..` segment, which changes the spelling and
+    not the file. Until 2026-08-29 only the raw form was asked, and three
+    ordinary spellings of one CEO-only file walked through the wall.
+    """
+    for haystack in (text, _canonicalise_paths(text)):
+        if _PERSONAL_DIR_RE.search(haystack) or _PERSONAL_ARCHIVE_RE.search(haystack):
+            return True
+    return False
 
 
 # A glob segment that is not a plain directory name. `*`, `?` and `[abc]` can
@@ -377,6 +417,99 @@ def _tail_reaches_personal(tail: list[str]) -> bool:
     return False
 
 
+def _threads_roots() -> list[Path]:
+    """Every threads directory a sweep on this machine could descend into.
+
+    Only directories that EXIST are returned. The engine clone ships no threads
+    at all, which is what makes the unanchored-sweep carve-out below safe, and
+    an entry for a directory that is not there would take that carve-out away
+    for no gain.
+    """
+    global _THREADS_ROOTS_CACHE
+    if _THREADS_ROOTS_CACHE is not None:
+        return _THREADS_ROOTS_CACHE
+    bases = [WORKSPACE]
+    # `get_data_root()` already honours the `HEADING_OS_DATA` pin, so reading
+    # the variable here as well was a second answer to a question that has one.
+    # Mutation-checked 2026-08-29: removing the env branch changed no verdict.
+    try:
+        from scripts.utils.workspace import get_data_root
+        bases.append(get_data_root())
+    except Exception:  # pragma: no cover - resolver unavailable
+        # Fail toward the wall, not away from it: guess the sibling layout
+        # rather than conclude there is no threads directory anywhere.
+        bases.append(WORKSPACE.parent / f"{WORKSPACE.name}-data")
+    roots = []
+    for base in bases:
+        try:
+            candidate = Path(base).resolve() / "threads"
+        except OSError:  # pragma: no cover - unresolvable base
+            continue
+        if candidate.is_dir() and candidate not in roots:
+            roots.append(candidate)
+    _THREADS_ROOTS_CACHE = roots
+    return roots
+
+
+_THREADS_ROOTS_CACHE: list[Path] | None = None
+
+
+def _expression_can_reach(expression: list[str], rel: list[str]) -> bool:
+    """Can these glob segments walk down `rel`, then into a CEO-only subtree?
+
+    `rel` is the threads root stated relative to the search root. Once it is
+    consumed the ordinary tail question applies.
+    """
+    if not rel:
+        return _tail_reaches_personal(expression)
+    if not expression:
+        return False
+    head, rest = expression[0], expression[1:]
+    if head == "**":
+        return True                       # crosses any depth, so it crosses rel
+    if _segment_can_be(head, rel[0].lower()):
+        return _expression_can_reach(rest, rel[1:])
+    return False
+
+
+def _sweep_descends_from_above(tool_name: str, fields: dict, cwd: str) -> bool:
+    """Can a sweep rooted ABOVE the threads tree descend into the CEO-only part?
+
+    The anchor test below only fires on a LITERAL `threads` segment, so a search
+    rooted one directory higher carried no such segment and was allowed. That is
+    the plainest way to sweep the private corpus, and the shape this workspace
+    instructs, because agent threads reset cwd and absolute paths are the fix.
+    Measured 2026-08-29: `Grep(path=<data-root>)`, `Glob("**/*.md",
+    path=<data-root>)` and a Grep two levels up were all allowed while
+    `Grep(path=<data-root>/threads)` was refused.
+
+    The comment on the unanchored carve-out justified itself with "an unanchored
+    sweep stays inside the engine clone, which holds no threads at all". That
+    premise is now checked rather than assumed: the question asked here is
+    whether the resolved search root is an ancestor of a threads directory that
+    actually exists.
+    """
+    raw_path = fields["path"]
+    try:
+        root = Path(raw_path).resolve() if raw_path else Path(cwd or ".").resolve()
+    except OSError:  # pragma: no cover - unresolvable root
+        return False
+    for threads_root in _threads_roots():
+        try:
+            rel = threads_root.relative_to(root).parts
+        except ValueError:
+            continue                      # not below this search root
+        if not rel:
+            continue                      # the root IS the threads dir: anchored
+        if tool_name == "Grep":
+            # ripgrep walks the whole tree under `path`, and applies `--glob` at
+            # any depth rather than as a ceiling, so it descends either way.
+            return True
+        if _expression_can_reach(fields["pattern"].split("/"), list(rel)):
+            return True
+    return False
+
+
 def _search_reaches_personal(segments: list[str]) -> bool:
     """Can a search described by these path segments reach the CEO-only threads?
 
@@ -395,7 +528,11 @@ def _search_reaches_personal(segments: list[str]) -> bool:
     data-path-redirect.py, so an unanchored sweep stays inside the engine clone,
     which holds no threads at all.
     """
-    parts = [s for s in segments if s not in ("", ".")]
+    # `..` was left in place here while `""` and `.` were dropped, so
+    # `Grep(path="threads/business/../personal")` found no `personal` segment
+    # directly after `threads` and was allowed. The shared collapse pops it.
+    parts = normalize_segments("/".join(segments))
+    parts = [s for s in parts if s]
     for index, segment in enumerate(parts):
         if segment.lower() == "threads":
             return _tail_reaches_personal(parts[index + 1:])
@@ -474,8 +611,16 @@ def check_protect_personal_threads(payload: dict) -> dict | None:
 
     if tool_name == "Bash":
         command = tool_input.get("command", "") or ""
+        # Raw first, then with every path-like run collapsed. The patterns pair
+        # a verb with a literal path shape, and a `.`, `//` or `..` segment
+        # broke the path half while the verb half still matched: `cat` of a
+        # CEO-only file was refused and `cat` of `<threads>/./<personal>/x.md`
+        # was allowed. Canonicalising the command, rather than widening ten
+        # regexes, keeps one answer for one file.
+        canonical = _canonicalise_paths(command)
+        haystacks = (command,) if canonical == command else (command, canonical)
         for pattern in DANGEROUS_BASH_PATTERNS:
-            if pattern.search(command):
+            if any(pattern.search(h) for h in haystacks):
                 cmd_display = command[:200] + ("..." if len(command) > 200 else "")
                 return {
                     "decision": "block",
@@ -489,7 +634,10 @@ def check_protect_personal_threads(payload: dict) -> dict | None:
         return None
 
     if tool_name == "Read":
-        target = re.sub(r"\\+", "/", tool_input.get("file_path") or "")
+        # Collapsed, not just backslash-folded. `re.sub(r"\\+", "/")` answered
+        # about the spelling: three ordinary spellings of one CEO-only file
+        # opened it while this branch said nothing. Measured 2026-08-29.
+        target = normalize_path(tool_input.get("file_path") or "")
         if PERSONAL_PATH_RE.search(target) or _PERSONAL_ARCHIVE_RE.search(target):
             return {
                 "decision": "block",
@@ -516,6 +664,14 @@ def check_protect_personal_threads(payload: dict) -> dict | None:
         # Every field that can point the tool at the subtree is checked: `path`
         # (both tools), `pattern` (a Glob pattern is a path, and a Grep pattern
         # can carry one), and `glob` (Grep's file filter).
+        # Folded, NOT collapsed. The collapse has to happen after the fields are
+        # joined, and doing it here as well is worse than redundant: with
+        # `path="<threads>/business"` and `pattern="../personal/*.md"`, a
+        # per-field collapse drops the `..` against nothing and composes
+        # `<threads>/business/personal/*.md`, which reaches nowhere and is
+        # allowed. Joined first, the same two fields collapse onto the CEO-only
+        # directory. Found by mutation, 2026-08-29: reverting this line changed
+        # no verdict, which is what a redundant guard looks like.
         fields = {key: re.sub(r"\\+", "/", tool_input.get(key) or "")
                   for key in ("path", "pattern", "glob")}
         for key in ("path", "pattern", "glob"):
@@ -546,7 +702,9 @@ def check_protect_personal_threads(payload: dict) -> dict | None:
             expression = fields["path"].split("/")
             if fields["glob"]:
                 expression = expression + ["**"] + fields["glob"].split("/")
-        if _search_reaches_personal(expression):
+        if (_search_reaches_personal(expression)
+                or _sweep_descends_from_above(tool_name, fields,
+                                              payload.get("cwd") or "")):
             return {
                 "decision": "block",
                 "reason": (
@@ -563,7 +721,8 @@ def check_protect_personal_threads(payload: dict) -> dict | None:
     if tool_name not in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
         return None
 
-    target = (tool_input.get("file_path") or tool_input.get("notebook_path") or "").replace("\\", "/")
+    target = normalize_path(
+        tool_input.get("file_path") or tool_input.get("notebook_path") or "")
     contents = []
     if tool_name == "Write":
         contents.append(tool_input.get("content") or "")

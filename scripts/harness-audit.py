@@ -88,6 +88,21 @@ OUR_SURFACE_GLOBS = (".claude/skills/**/*.md", ".claude/rules/**/*.md",
                      ".claude/hooks/**/*.py")
 OUR_SURFACE_FILES = ("AGENTS.md", "CLAUDE.md")
 
+# THIS SWEEP DELIBERATELY DOES NOT ASK GIT WHAT TO SKIP. Do not "fix" it.
+#
+# On 2026-08-29 a shard made `classification-health.py` git-aware, because that
+# tool REPORTS a corpus and 427 of its 2363 rows were files git ignores. This
+# tool is not that. It hunts prompt-injection phrasing in the surface the
+# harness LOADS, and the harness does not consult `.gitignore` before reading a
+# file. Measured the same day: the sweep sees 250 files and git ignores exactly
+# one of them, a scratch `.sample-deck.marp-src-*.md` sitting inside a skill
+# directory. That file is still readable by the harness, so excluding it would
+# reduce security coverage to make a count tidier.
+#
+# The rule of thumb: a tool that REPORTS a corpus filters by git, a tool that
+# SCANS for danger does not. Over-scanning here costs one extra finding;
+# under-scanning costs the finding that mattered.
+
 # Files in THIS REPOSITORY that legitimately contain the phrases this tool hunts.
 #
 # Matched as repository-relative path prefixes, deliberately NOT as basenames.

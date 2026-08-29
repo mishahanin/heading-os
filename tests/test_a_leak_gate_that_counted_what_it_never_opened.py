@@ -707,13 +707,27 @@ def test_no_verdict_row_is_written_for_an_empty_verdict(dispatch, monkeypatch):
 
 
 def test_a_supplied_verdict_still_records_and_exits_zero(dispatch, monkeypatch):
+    """The verdict is `REFUTED`, and it used to be `CONFIRMED`.
+
+    `CONFIRMED` is in no vocabulary this workspace has: not
+    `scrutinize_record.VERDICTS`, not the seven a judge may rule. The test
+    passed anyway because the stub below accepts any keyword, so the only
+    coverage the claude happy path had was a value the real record REFUSES.
+    That is what hid the missing check for a year of edits: measured
+    2026-08-29, `--verdict REFUTTED` against the real `append_row` was an
+    uncaught ValueError with nothing written at all.
+
+    The stub stays - this test is about the exit code and the row shape, not
+    about the record - but the value it carries is now one that would survive
+    the round trip.
+    """
     rows: list[dict] = []
     monkeypatch.setattr(dispatch, "append_row", lambda **kw: rows.append(kw))
     code = dispatch.judge(run_id="r1", target="t", finding_id="H1", pass_="2.5a",
-                          brief="", family="claude", verdict="CONFIRMED")
+                          brief="", family="claude", verdict="REFUTED")
     assert code == 0
     assert rows[0]["kind"] == "verdict"
-    assert rows[0]["verdict"] == "CONFIRMED"
+    assert rows[0]["verdict"] == "REFUTED"
 
 
 def test_the_refusal_uses_the_code_the_table_reserves():

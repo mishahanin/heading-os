@@ -353,9 +353,28 @@ def judge(
                   f"judge IS this session, so its verdict is supplied, never "
                   f"inferred{RESET}", file=sys.stderr)
             return 1
+        # The same normalisation the kimi branch does, on the branch that did
+        # none. `append_row` refuses a verdict outside its vocabulary by
+        # RAISING, and nothing caught it here: measured 2026-08-29,
+        # `--verdict REFUTTED` left this module as an uncaught
+        # `ValueError: unknown verdict 'REFUTTED'` with exit 1 and NOTHING
+        # recorded - no verdict row and no `degraded` row either, so
+        # `--validate` saw a finding nobody judged. `_verdict_in` accepts the
+        # seven judge tokens and nothing else, which also refuses `REPRODUCED`
+        # and `FALSIFIED`: those are reproduction outcomes, not rulings, and
+        # `append_row`'s wider vocabulary would have taken them.
+        token = _verdict_in(verdict)
+        if token is None:
+            append_row(run_id=run_id, kind="degraded", target=target,
+                       finding_id=finding_id,
+                       degraded=f"claude judge verdict {verdict!r} names no "
+                                "recognised verdict token; nothing was recorded")
+            print(f"{RED}{verdict!r} is not a verdict token: expected one of "
+                  f"{', '.join(sorted(_JUDGE_VERDICTS))}{RESET}", file=sys.stderr)
+            return 1
         append_row(run_id=run_id, kind="verdict", target=target,
                    finding_id=finding_id, pass_=pass_, judge_family="claude",
-                   verdict=verdict)
+                   verdict=token)
         return 0
 
     if sensitivity_is_declared():
@@ -409,15 +428,34 @@ def judge(
     return 0
 
 
-_VERDICT_RE = re.compile(
-    r"\b(REFUTE_PARTIAL|REFUTATION_FAILED|REFUTED|CORRECT_DOWNGRADE|CORRECT"
-    r"|INCORRECT|AMBIGUOUS)\b")
+# The seven tokens a JUDGE may rule. Longest spelling first, but the ORDER is
+# not what keeps `CORRECT` from swallowing `CORRECT_DOWNGRADE` - the `\b`
+# anchors on both regexes are, since `_` is a word character and the boundary
+# after `CORRECT` cannot fall inside `CORRECT_DOWNGRADE`. Measured 2026-08-29:
+# with the anchors, either order resolves all seven correctly; without them,
+# only this order does. The order is the belt behind the braces, so a later
+# edit that loosens an anchor does not silently start recording the wrong
+# ruling. Deliberately narrower than `scrutinize_record.VERDICTS`,
+# which also admits `REPRODUCED` and `FALSIFIED` - those are reproduction
+# outcomes and no judge rules them.
+#
+# Both regexes below are BUILT from this tuple. They used to spell the seven out
+# twice more, in two hand-maintained alternations, and a third copy was about to
+# go into the operator-facing error message. This audit keeps finding the same
+# defect shape: a fix that lands in one of N copies.
+_JUDGE_VERDICT_ORDER = (
+    "REFUTE_PARTIAL", "REFUTATION_FAILED", "REFUTED",
+    "CORRECT_DOWNGRADE", "CORRECT", "INCORRECT", "AMBIGUOUS",
+)
+_JUDGE_VERDICTS = frozenset(_JUDGE_VERDICT_ORDER)
+_VERDICT_ALT = "|".join(_JUDGE_VERDICT_ORDER)
+
+
+_VERDICT_RE = re.compile(rf"\b({_VERDICT_ALT})\b")
 
 
 _VERDICT_LINE_RE = re.compile(
-    r"^\s*(?:\*\*)?VERDICT(?:\*\*)?\s*[:\-]\s*(?:\*\*)?\s*"
-    r"(REFUTE_PARTIAL|REFUTATION_FAILED|REFUTED|CORRECT_DOWNGRADE|CORRECT"
-    r"|INCORRECT|AMBIGUOUS)\b",
+    rf"^\s*(?:\*\*)?VERDICT(?:\*\*)?\s*[:\-]\s*(?:\*\*)?\s*({_VERDICT_ALT})\b",
     re.MULTILINE | re.IGNORECASE)
 
 
@@ -590,22 +628,54 @@ def shell_operators_in_source(raw: str) -> list[str]:
     wrong: it refused `python3 -c "import sys; sys.exit(3)"`, where the `;`
     belongs to Python and was quoted on purpose. After the split, a quoted `;`
     and a bare one are the same characters. `shlex` with `punctuation_chars`
-    keeps them apart - an unquoted operator becomes its OWN token, a quoted one
-    stays inside its argument - so the guard refuses shell syntax without
-    refusing an inline snippet.
+    keeps them apart, so the guard refuses shell syntax without refusing an
+    inline snippet.
+
+    Two corrections, both measured 2026-08-29 by driving `--reproduce`:
+
+    A NAMED SET OF OPERATORS IS ALWAYS ONE SPELLING SHORT. `shlex` returns a RUN
+    of adjacent punctuation as ONE token, and the enumerated set held no
+    combined form. `2>&1` tokenizes to `2`, `>&`, `1`; `&>` and `|&` yield
+    themselves; `>|` and `<>` likewise. Each equalled no member of either set,
+    so `/bin/cat /shard58-no-such-file 2>&1` ran as a fixed argv, `cat` exited 1
+    over two filenames that do not exist, and the record gained
+    `verdict: "REPRODUCED"`. That is verbatim the defect the 2026-08-26 pass
+    closed for the SPACED spelling and left open for the combined one. The test
+    is now structural: a token made only of punctuation characters is an
+    operator, whatever it spells.
+
+    AND THE POSIX FLAG ERASED THE QUOTING THIS FUNCTION EXISTS TO READ. Under
+    `posix=True` `shlex` strips the quotes, so `grep -c ';' /etc/hostname` -
+    a legal command whose `;` belongs to `grep` - arrived as the bare token `;`
+    and was refused. Quoting only survived when the quoted region carried other
+    characters too. `posix=False` keeps the quote characters inside the token,
+    which is what actually separates `';'` from `;`.
     """
     try:
         # The default punctuation set is `();<>|&`. The backtick is added
         # because it is the older spelling of a command substitution and a fixed
         # argv expands it no better than `$(`.
-        lexer = shlex.shlex(raw, posix=True, punctuation_chars=_SHELL_PUNCTUATION)
+        #
+        # `commenters` is emptied to match `shlex.split`, which uses none. With
+        # the default `#` this lexer STOPPED at the first hash while the split
+        # carried on past it, so `/bin/cat /nope #x|/bin/cat` was scanned as two
+        # tokens, the `|` was never seen, and the run recorded REPRODUCED off a
+        # missing-file exit. Measured 2026-08-29.
+        lexer = shlex.shlex(raw, posix=False, punctuation_chars=_SHELL_PUNCTUATION)
         lexer.whitespace_split = True
+        lexer.commenters = ""
         tokens = list(lexer)
     except ValueError:
-        # Unbalanced quotes. `shlex.split` below raises the same way and `main`
-        # reports it; this guard has nothing to add, so it stays silent.
+        # Unbalanced quotes. `main` hits the same fault when it calls
+        # `shlex.split`, and refuses the command there with a recorded row; this
+        # guard has nothing to add, so it stays silent.
         return []
-    return sorted({t for t in tokens if t in SHELL_OPERATORS or t in _SHELL_PUNCT})
+    # `_SHELL_PUNCT` is still consulted for the one character it holds that is
+    # not punctuation to `shlex`: a bare `$`, which `$(cmd)` leaves behind as
+    # its own token once the parentheses split away.
+    return sorted({t for t in tokens
+                   if t and (all(ch in _SHELL_PUNCTUATION for ch in t)
+                             or t in _SHELL_PUNCT)})
 
 
 def _reject_shell_syntax(cmd: list[str]) -> str | None:
@@ -637,18 +707,35 @@ def _run(cmd: list[str], source: str | None = None) -> CommandRun:
     """
     if not cmd:
         return CommandRun(None, unusable="empty command")
-    typed = shell_operators_in_source(source) if source else []
-    if typed:
-        return CommandRun(None, unusable=(
-            f"the command carries shell syntax ({' '.join(typed)}) but runs as "
-            "a fixed argv with no shell, so it would not do what it reads as; "
-            "rewrite it as a single command or wrap it in a script"))
-    rejected = _reject_shell_syntax(cmd)
-    if rejected:
-        return CommandRun(None, unusable=rejected)
+    if source:
+        typed = shell_operators_in_source(source)
+        if typed:
+            return CommandRun(None, unusable=(
+                f"the command carries shell syntax ({' '.join(typed)}) but runs as "
+                "a fixed argv with no shell, so it would not do what it reads as; "
+                "rewrite it as a single command or wrap it in a script"))
+        # And then STOP. The argv check below is for a caller that had no raw
+        # string; running it here re-imposes the quote-blindness the raw check
+        # exists to remove. `shlex.split` strips quotes, so `grep -c ';' f`
+        # arrives as the whole token `;` and was refused - measured 2026-08-29,
+        # a legal command the raw guard had just cleared. The raw guard now
+        # catches every unquoted punctuation run, so a whole-token operator that
+        # survives it was quoted on purpose and belongs to the child.
+    else:
+        rejected = _reject_shell_syntax(cmd)
+        if rejected:
+            return CommandRun(None, unusable=rejected)
+    # `errors="replace"`, because a reproduction command is allowed to print
+    # bytes. `text=True` alone decodes strict UTF-8, and `UnicodeDecodeError` is
+    # raised INSIDE `subprocess.run`, past every handler below: measured
+    # 2026-08-29, `--cmd "/bin/cat /bin/cat"` left this module as a traceback
+    # with exit 1 and NOTHING in the run record, so `--validate` could not tell
+    # the attempt from a finding nobody tried. A mangled tail is readable
+    # evidence; a traceback is none.
     try:
         proc = subprocess.run(  # nosec B603 - list argv from the operator, never shell
-            cmd, capture_output=True, text=True, timeout=REPRODUCTION_TIMEOUT_S)
+            cmd, capture_output=True, text=True, errors="replace",
+            timeout=REPRODUCTION_TIMEOUT_S)
     except FileNotFoundError:
         return CommandRun(None, unusable=f"executable not found: {cmd[0]}")
     except PermissionError:
@@ -794,9 +881,23 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{RED}ERROR: --finding and --cmd are required{RESET}",
                   file=sys.stderr)
             return 2
+        try:
+            cmd = shlex.split(args.cmd)
+        except ValueError as exc:
+            # Unbalanced quotes. `shell_operators_in_source` stays silent on
+            # this fault and its comment used to say `main` reports it; `main`
+            # had no handler at all. Measured 2026-08-29: the ValueError left
+            # the interpreter as a traceback with exit 1 and NOTHING in the run
+            # record, which is neither of the two exit codes this CLI documents
+            # and leaves `--validate` unable to see the attempt.
+            append_row(run_id=args.run_id, kind="degraded", target=args.target,
+                       finding_id=args.finding,
+                       degraded=f"--cmd could not be parsed: {exc}")
+            print(f"{RED}--cmd could not be parsed: {exc}{RESET}", file=sys.stderr)
+            return 4
         fn = reproduce if args.reproduce else promote
         return fn(run_id=args.run_id, target=args.target, finding_id=args.finding,
-                  cmd=shlex.split(args.cmd), source=args.cmd)
+                  cmd=cmd, source=args.cmd)
 
     # --judge
     if not (args.finding and args.pass_):

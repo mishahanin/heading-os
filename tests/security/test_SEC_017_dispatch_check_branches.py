@@ -303,7 +303,7 @@ def test_tool_budget_allows_under_cap(dispatch, monkeypatch):
 # ============================================================
 
 
-def test_checks_list_has_nine_branches(dispatch):
+def test_checks_list_has_ten_branches(dispatch):
     """If a check is added or removed, this test forces an intentional update.
     check_prevent_secrets stays first: first-block-wins means whichever check
     runs first owns the message, and secret detection is the one that must own
@@ -320,10 +320,18 @@ def test_checks_list_has_nine_branches(dispatch):
     it. It sits above `check_tool_budget` for the reason that one is last: the
     budget notice is advisory and must not pre-empt a refusal.
 
+    `check_fanout_first` joined on 2026-08-29 too, directly after it. Same
+    class of claim -- a working-method rule, not a safety one -- and the same
+    placement reason: every guard that protects data or the machine owns the
+    message first. It sits AFTER `check_graph_first` deliberately. A session
+    that has neither asked the graph nor considered fanning out should be told
+    to ask the graph, because that is the cheaper of the two answers and often
+    removes the need for the other.
+
     The tripwire is the point. This assertion does not drift with the list; a
     new check fails it until its author writes down where in the order it
     belongs and why."""
-    assert len(dispatch.CHECKS) == 9
+    assert len(dispatch.CHECKS) == 10
     names = [c.__name__ for c in dispatch.CHECKS]
     assert names == [
         "check_prevent_secrets",
@@ -334,6 +342,7 @@ def test_checks_list_has_nine_branches(dispatch):
         "check_slow_shell",
         "check_rate_limit",
         "check_graph_first",
+        "check_fanout_first",
         "check_tool_budget",
     ]
 

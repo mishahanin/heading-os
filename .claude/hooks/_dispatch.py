@@ -1957,6 +1957,164 @@ def check_graph_first(payload: dict):
 
 
 # ============================================================
+# check_fanout_first — a wide stretch of work considers agents
+# ============================================================
+#
+# The operator's standing instruction, escalated twice: "агенты и workflow
+# разрешены всегда и везде", then "не только разрешены, они MUST BE USED, если
+# это даёт скорость и оптимизацию". On 2026-08-29 he asked for the same kind of
+# mechanism `check_graph_first` gives the graph rule, and for the same reason:
+# he had said it three times and it kept lapsing.
+#
+# HOW THIS DIFFERS FROM THE GRAPH WALL, stated plainly because the difference
+# decides the design. `check_graph_first` refuses one specific WRONG ACTION: a
+# code search. "Did not use an agent" is not an action, it is an ABSENCE, and
+# there is no single tool call to refuse. So this wall watches the SHAPE OF A
+# STRETCH instead: how many distinct files this session has investigated by hand
+# since it last considered fanning out.
+#
+# Distinct paths, not call count, and that choice is the whole precision of the
+# rule. Thirty calls against one file is deep work and inherently serial;
+# twelve calls against twelve files is a fan-out that was not dispatched. A
+# counter keyed on calls would fire on the first kind, which is the sort of
+# false refusal that gets a control switched off.
+#
+# TWO WAYS PAST, and the second is the honest part. Dispatching an Agent or a
+# Workflow clears the budget, because the rule has been obeyed. Otherwise
+# `python scripts/fanout-note.py "<why this is serial>"` clears it AND APPENDS
+# THE REASON to a log the operator can read. Unlike a refusal counter, that
+# escape cannot be taken silently: every use leaves a claim with a timestamp,
+# so "I decided this was serial" becomes auditable rather than assumed. A wall
+# whose only escape is invisible teaches nothing.
+
+_FANOUT_STATE_DIR = WORKSPACE / ".claude" / "state" / "fanout"
+
+# The tools that ARE fanning out. `Agent` is this harness's name; `Task` is the
+# older one and `Workflow` the orchestrated form. All three clear the budget.
+FANOUT_TOOLS = ("Agent", "Task", "Workflow")
+
+# How many distinct files may be investigated by hand before the question is
+# forced. A first setting, tunable by env rather than by editing this file: the
+# right number is a property of how the operator works, and it should be moved
+# on evidence rather than on argument.
+FANOUT_PATH_BUDGET = int(os.environ.get("WS_FANOUT_BUDGET", "12"))
+
+# Reading output, not investigating a corpus. Same list the graph wall uses for
+# the same reason: a session must be able to read its own logs and scratch
+# files without spending budget it did not mean to spend.
+_FANOUT_IGNORE = ("tmp/", ".log", ".jsonl", "node_modules", ".venv",
+                  "__pycache__", ".git/")
+
+_PATH_TOKEN = re.compile(r"[A-Za-z0-9_./\\-]*[/\\][A-Za-z0-9_./\\-]*")
+
+
+def _fanout_marker(session_id: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", session_id or "unknown")[:80]
+    return _FANOUT_STATE_DIR / f"{safe}.json"
+
+
+def investigated_paths(tool_name: str, tool_input: dict) -> set[str]:
+    """The distinct files this one call investigates by hand.
+
+    Pure, so both directions are measurable on synthetic input. That matters
+    more than usual here: over a session already under budget this function
+    decides nothing, so a body that returned an empty set would change no live
+    result and the rule would quietly stop existing.
+    """
+    if tool_name in ("Read", "Grep", "Glob"):
+        candidates = [str(tool_input.get(k, ""))
+                      for k in ("file_path", "path", "glob", "pattern")]
+    elif tool_name == "Bash":
+        candidates = _PATH_TOKEN.findall(str(tool_input.get("command", "")))
+    else:
+        return set()
+
+    found = set()
+    for raw in candidates:
+        token = raw.strip().strip("'\"")
+        if not token or "/" not in token.replace("\\", "/"):
+            continue
+        lowered = token.lower()
+        if any(hint in lowered for hint in _FANOUT_IGNORE):
+            continue
+        found.add(token.replace("\\", "/"))
+    return found
+
+
+def _fanout_state(marker: Path) -> set[str]:
+    try:
+        data = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return set(data) if isinstance(data, list) else set()
+
+
+def check_fanout_first(payload: dict):
+    tool_name = payload.get("tool_name", "")
+    session_id = str(payload.get("session_id", "")).strip()
+    if not session_id:
+        return None          # same reason as check_graph_first: no session, no rule
+
+    marker = _fanout_marker(session_id)
+
+    # Clearing the budget. Both doors write the same empty state, so the rule
+    # cannot tell them apart afterwards and does not need to: what it enforces
+    # is that ONE of them happened.
+    command = str((payload.get("tool_input") or {}).get("command", ""))
+    cleared = tool_name in FANOUT_TOOLS or "fanout-note.py" in command
+    if cleared:
+        try:
+            _FANOUT_STATE_DIR.mkdir(parents=True, exist_ok=True)
+            marker.write_text("[]", encoding="utf-8")
+        except OSError as exc:
+            print(f"[_dispatch:fanout] could not clear: {exc}", file=sys.stderr)
+        return None
+
+    seen = _fanout_state(marker) | investigated_paths(
+        tool_name, payload.get("tool_input") or {})
+    if not seen:
+        return None
+
+    try:
+        _FANOUT_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps(sorted(seen)), encoding="utf-8")
+    except OSError as exc:
+        print(f"[_dispatch:fanout] could not count: {exc}", file=sys.stderr)
+
+    if len(seen) <= FANOUT_PATH_BUDGET:
+        return None
+
+    return {
+        "decision": "block",
+        "_policy_deny": True,
+        "reason": (
+            f"Consider fanning out. This session has investigated "
+            f"{len(seen)} distinct files by hand without dispatching a single "
+            f"agent or workflow.\n\n"
+            f"The operator's standing instruction is that agents and workflows "
+            f"are not merely permitted but MUST BE USED wherever they buy speed "
+            f"or better coverage. Work this wide is usually several independent "
+            f"questions being answered one after another.\n\n"
+            f"TWO WAYS PAST:\n"
+            f"  - dispatch an Agent or a Workflow. Give each one a complete, "
+            f"self-contained brief: what to find, what NOT to do, and the shape "
+            f"of the answer.\n"
+            f"  - if this stretch really is serial (one dependency chain, one "
+            f"file being edited repeatedly, a measurement that must be taken in "
+            f"order), say so and continue:\n"
+            f"        python scripts/fanout-note.py \"<why this is serial>\"\n\n"
+            f"That second option is NOT a silent bypass. It appends the reason "
+            f"with a timestamp to a log the operator reads, so the judgement is "
+            f"recorded rather than assumed. Either way the budget resets and the "
+            f"count starts again.\n\n"
+            f"Never counted: .tmp/ and scratch directories, logs, and JSONL. "
+            f"The budget is {FANOUT_PATH_BUDGET} distinct files "
+            f"(WS_FANOUT_BUDGET)."
+        ),
+    }
+
+
+# ============================================================
 # Dispatcher main
 # ============================================================
 CHECKS = [
@@ -1968,6 +2126,7 @@ CHECKS = [
     check_slow_shell,
     check_rate_limit,
     check_graph_first,
+    check_fanout_first,
     check_tool_budget,
 ]
 

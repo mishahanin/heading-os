@@ -16,10 +16,15 @@ keep working without re-provisioning". They do not exist, so a workspace whose
 settings.local.json still names one of them runs with that wall entirely absent
 and MUST be re-provisioned.
 
-Matcher scope: settings.local.json registers this dispatcher under three
-matchers — `Write|Edit|MultiEdit|NotebookEdit`, `Bash`, and `Read|Grep|Glob`.
-All three payload shapes reach every check, so a new check has to answer what it
-does with each of them rather than inherit a two-matcher assumption. Grep and
+Matcher scope: settings.local.json registers this dispatcher under five
+matchers — `Write|Edit|MultiEdit|NotebookEdit`, `Bash`, `Read|Grep|Glob`,
+`mcp__codegraph__.*`, and `Agent|Task|Workflow`.
+Every payload shape reaches every check, so a new check has to answer what it
+does with each of them rather than inherit a three-matcher assumption. The last
+two arrived on 2026-08-29 with the walls that need them: a matcher is the only
+thing that makes a door reachable, and `check_graph_first` and
+`check_fanout_first` were each written with an unlock the dispatcher could not
+see. A wall whose unlock is unreachable is a cage. Grep and
 Glob joined the third matcher on 2026-08-28: `check_protect_personal_threads`
 refused the Bash spellings of a personal-thread read (`grep`, `rg`) while the
 native tools were not dispatched here at all, so the guard covered the harder
@@ -2043,7 +2048,19 @@ FANOUT_PATH_BUDGET = int(os.environ.get("WS_FANOUT_BUDGET", "12"))
 _FANOUT_IGNORE = ("tmp/", ".log", ".jsonl", "node_modules", ".venv",
                   "__pycache__", ".git/")
 
-_PATH_TOKEN = re.compile(r"[A-Za-z0-9_./\\-]*[/\\][A-Za-z0-9_./\\-]*")
+# A FORWARD slash, and only a forward slash. The separator class used to
+# accept a backslash as well, for Windows paths, and the test below
+# normalised backslashes to slashes before looking -- so every regex escape
+# in a command (`\s`, `\n`, `\t`, `\d`) and every line continuation was
+# counted as a distinct file. MEASURED 2026-08-29: one heredoc patching ONE
+# file reported fourteen. This workspace is WSL-only and runs no Windows
+# tooling, so nothing real is lost by dropping the backslash form.
+#
+# The GUARD in `investigated_paths` is the enforcement, not this class. Putting
+# the backslash back here alone is a mutation that survives, because the guard
+# tests for a literal forward slash and rejects `\s` whatever this matched. The
+# narrower class only avoids building junk tokens to iterate.
+_PATH_TOKEN = re.compile(r"[A-Za-z0-9_./-]*/[A-Za-z0-9_./-]*")
 
 
 def _fanout_marker(session_id: str, actor: str = "main") -> Path:
@@ -2069,7 +2086,9 @@ def investigated_paths(tool_name: str, tool_input: dict) -> set[str]:
     found = set()
     for raw in candidates:
         token = raw.strip().strip("'\"")
-        if not token or "/" not in token.replace("\\", "/"):
+        # `alnum` as well as the slash: a bare `/`, or `../`, is a separator
+        # someone typed, not a file that was opened.
+        if not token or "/" not in token or not any(c.isalnum() for c in token):
             continue
         lowered = token.lower()
         if any(hint in lowered for hint in _FANOUT_IGNORE):

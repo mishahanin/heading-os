@@ -526,8 +526,15 @@ def strip_markdown_noise(text):
     # Strip blockquote markers
     text = re.sub(r"^>\s?", "", text, flags=re.MULTILINE)
     # Strip bullet markers
-    text = re.sub(r"^[\s]*[-*+]\s+", "", text, flags=re.MULTILINE)
-    text = re.sub(r"^[\s]*\d+\.\s+", "", text, flags=re.MULTILINE)
+    # A space or a tab, never `[\s]`. `\s` includes the newline, and under
+    # re.MULTILINE `^` anchors at the start of the BLANK line above a list,
+    # so the strip ate the paragraph separator along with the marker.
+    # MEASURED 2026-08-29: a lead-in paragraph plus a three-item list came
+    # back from `get_paragraphs` as ONE paragraph, and the list's own
+    # monotone `burstiness_violation` disappeared with it. Only the
+    # indentation before the marker was ever meant to go.
+    text = re.sub(r"^[ \t]*[-*+]\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^[ \t]*\d+\.\s+", "", text, flags=re.MULTILINE)
     return text
 
 
@@ -826,8 +833,12 @@ def check_burstiness(text):
       different range. CV catches this; the fixed-threshold rule does not.
 
     The systemic-burstiness error fires only when MORE THAN 60% of qualifying
-    paragraphs fail AND the document is recognisably outbound prose (>200 words;
-    not pure documentation).
+    paragraphs fail AND the document is recognisably outbound prose (200+ words;
+    not pure documentation). The code tests `total_words >= 200`, so exactly
+    200 fires. This line read ">200 words" against that until 2026-08-29, the
+    same off-by-one the Track A and 60% lines above already record. "200+" is
+    also what `check_over_fragmentation` says about its identical `< 200`
+    guard.
 
     This line said ">50%" until 2026-08-24 while the code tested `rate > 0.6`,
     so a document failing exactly 60% of its paragraphs was documented as a
@@ -914,7 +925,13 @@ def check_specificity(text):
         has_proper = bool(PROPER_NOUN_RE.search(para))
         has_number = bool(NUMBER_RE.search(para))
         has_month = bool(MONTH_RE.search(para))
-        # Also accept any capitalised word at the start of a sentence that's not a common opener
+        # There is NO sentence-initial-capital acceptance, and this comment
+        # used to promise one. `PROPER_NOUN_RE` needs a lowercase letter and
+        # a space before the capital, so a name opening a sentence is not a
+        # proper noun to this check and the paragraph is flagged. Adding the
+        # acceptance means guessing which sentence-initial capitals are
+        # names and which are ordinary openers; the guess would silence real
+        # findings, so it is not implemented. Warning only, --strict opt-in.
         if not (has_proper or has_number or has_month):
             findings.append({
                 "type": "specificity_missing",

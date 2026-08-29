@@ -112,6 +112,17 @@ INVESTIGATES_NOTHING = [
     # Not an investigating tool.
     ("Write", {"file_path": "scripts/a.py", "content": "x"}),
     ("Edit", {"file_path": "scripts/a.py"}),
+    # A backslash escape is not a Windows path. The separator class used to take
+    # a backslash and the guard normalised it to a slash before looking, so
+    # `\\s`, `\\n`, `\\t` and `\\d` each counted as a distinct file. MEASURED
+    # 2026-08-29: one heredoc patching ONE file reported fourteen, and the wall
+    # refused the session in the middle of repairing itself.
+    ("Bash", {"command": r"""echo -e 'a\nb\tc'"""}),
+    ("Bash", {"command": r"""python -c 're.sub(r"[\s]*\d+", "", t)'"""}),
+    ("Bash", {"command": r"""grep -c '\bword\b' <<'EOF'"""}),
+    # A separator somebody typed is not a file either.
+    ("Bash", {"command": "echo a / b"}),
+    ("Bash", {"command": "cd .."}),
 ]
 
 
@@ -134,6 +145,22 @@ def test_the_predicate_separates_the_two_lists(hook):
     no = [t for t, p in INVESTIGATES_NOTHING if hook.investigated_paths(t, p)]
     assert len(yes) == len(INVESTIGATES)
     assert no == []
+
+
+def test_a_patch_script_charges_only_the_file_it_patches(hook):
+    """The live case that exposed it. One heredoc, one file being edited, and
+    a body full of regex escapes: the wall charged fourteen and refused the
+    session mid-repair."""
+    command = (
+        "python - <<'PY'\n"
+        "from pathlib import Path\n"
+        "p = Path('scripts/humanization-check.py')\n"
+        "s = re.sub(r'^[\\s]*[-*+]\\s+', '', s, flags=re.MULTILINE)\n"
+        "s = re.sub(r'^[ \\t]*\\d+\\.\\s+', '', s)\n"
+        "PY"
+    )
+    assert hook.investigated_paths("Bash", {"command": command}) == {
+        "scripts/humanization-check.py"}
 
 
 def test_one_bash_command_naming_three_files_counts_three(hook):

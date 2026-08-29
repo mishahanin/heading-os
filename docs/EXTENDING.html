@@ -348,9 +348,12 @@ is not deterministic. It gates only under <code>--strict --threshold</code>.</p>
 <p><code>/push-updates</code> Phase 0 runs <code>--changed --strict --threshold 0.85</code> as a <strong>soft gate</strong>. It
 surfaces routing regressions on changed skills, and the CEO confirms to override. It is
 not a hard block yet, per audit #63-2.</p>
-<p>69 routing-sensitive skills carry <code>triggers.json</code> today, and they hold 710 cases between
-them. Both figures were counted on 2026-08-03; the prior figure of 24 was stale. When you
-add or re-scope a skill, update its <code>triggers.json</code> and re-run the harness.</p>
+<p>70 routing-sensitive skills carry <code>triggers.json</code>, and they hold 730 cases between them.
+<code>scripts/dev/check-readme-numbers.py</code> derives both figures from the tree, and it fails
+when this page disagrees. The <code>readme-numbers</code> pre-commit hook runs that guard whenever a
+<code>triggers.json</code> file or this page changes. Until 2026-08-29 someone typed the two numbers
+by hand and dated them to the day of the last count. Both had drifted. When you add or
+re-scope a skill, update its <code>triggers.json</code> and re-run the harness.</p>
 <hr />
 <h2 id="10-archived-skills">10. Archived skills</h2>
 <p><code>.claude/skills/archive/{date-slug}/SKILL.md</code> is the workspace convention for retired

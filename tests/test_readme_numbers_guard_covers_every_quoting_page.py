@@ -95,6 +95,11 @@ def test_a_watched_page_carrying_no_figure_is_reported(guard, tmp_path, monkeypa
     monkeypatch.setattr(guard, "ROOT", tmp_path)
     monkeypatch.setattr(guard, "FRONT_DOORS", [blank])
     monkeypatch.setattr(guard, "derive_security_test_count", lambda: 563)
+    # The guard grew a third derived figure on 2026-08-29 (the trigger corpus,
+    # read out of docs/EXTENDING.md). It is stubbed for the same reason the
+    # test count is: this tree is a fixture, not a git repository, and the
+    # front-door logic under test here does not depend on it.
+    monkeypatch.setattr(guard, "check_trigger_figures", lambda: ([], 70, 730))
     monkeypatch.setattr(sys, "argv", ["check-readme-numbers.py", "--quiet"])
 
     assert guard.main() == 1
@@ -110,6 +115,11 @@ def test_the_guard_reports_a_mismatched_count(guard, tmp_path, monkeypatch, caps
     monkeypatch.setattr(guard, "ROOT", tmp_path)
     monkeypatch.setattr(guard, "FRONT_DOORS", [page])
     monkeypatch.setattr(guard, "derive_security_test_count", lambda: 563)
+    # The guard grew a third derived figure on 2026-08-29 (the trigger corpus,
+    # read out of docs/EXTENDING.md). It is stubbed for the same reason the
+    # test count is: this tree is a fixture, not a git repository, and the
+    # front-door logic under test here does not depend on it.
+    monkeypatch.setattr(guard, "check_trigger_figures", lambda: ([], 70, 730))
     monkeypatch.setattr(sys, "argv", ["check-readme-numbers.py", "--quiet"])
 
     assert guard.main() == 1
@@ -122,6 +132,11 @@ def test_the_guard_passes_when_the_count_matches(guard, tmp_path, monkeypatch):
     monkeypatch.setattr(guard, "ROOT", tmp_path)
     monkeypatch.setattr(guard, "FRONT_DOORS", [page])
     monkeypatch.setattr(guard, "derive_security_test_count", lambda: 563)
+    # The guard grew a third derived figure on 2026-08-29 (the trigger corpus,
+    # read out of docs/EXTENDING.md). It is stubbed for the same reason the
+    # test count is: this tree is a fixture, not a git repository, and the
+    # front-door logic under test here does not depend on it.
+    monkeypatch.setattr(guard, "check_trigger_figures", lambda: ([], 70, 730))
     monkeypatch.setattr(sys, "argv", ["check-readme-numbers.py", "--quiet"])
 
     assert guard.main() == 0

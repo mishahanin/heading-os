@@ -186,7 +186,7 @@ Full triggers, exclusions, and compound patterns: `reference/skill-router/operat
 | `/queue-draft` | NEVER auto-trigger. Explicit `/queue-draft` only. Deposits one GATED draft card into the Action Queue; never approves or sends. |
 | `/radar` | radar, ops radar, what's overdue, what am I forgetting to run, what manual actions are due, ack a radar item, crunch mode on/off |
 | `/request-skill` | NEVER auto-trigger. Explicit `/request-skill` only. |
-| `/scrutinize [target] [--relentless] [--no-refute] [--include-low-confidence] [--include-ambiguous]` | NEVER auto-trigger. Explicit `/scrutinize [target] ...` only. |
+| `/scrutinize [target] [--relentless] [--no-refute] [--include-low-confidence] [--include-ambiguous] [--no-code-review]` | NEVER auto-trigger. Explicit `/scrutinize [target] ...` only. |
 | `/sentinel` | NEVER auto-trigger. Explicit `/sentinel` only. |
 | `/setup-browser-cookies` | setup browser cookies, import cookies |
 | `/setup-wizard` | NEVER auto-trigger. Explicit `/setup-wizard` only. |

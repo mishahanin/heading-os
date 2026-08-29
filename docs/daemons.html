@@ -77,7 +77,8 @@
 
 <main class="content">
   <h1>Daemons &amp; scheduled tasks</h1>
-  <p class="page-meta">Every long-running daemon and every scheduled task, with exact install / inspect / cancel commands. All real data, credentials, hostnames, and chat IDs live outside the engine in the gitignored <code>.env</code> / <code>.sessions</code> and the data overlay — replace the placeholders with your own values.</p>
+  <p class="page-meta">Every long-running daemon the engine ships, and every scheduled task it ships an installer for, with exact install / inspect / cancel commands. All real data, credentials, hostnames, and chat IDs live outside the engine in the gitignored <code>.env</code> / <code>.sessions</code> and the data overlay — replace the placeholders with your own values.</p>
+  <p>Two companion files carry what this page summarises: <a href="https://github.com/mishahanin/heading-os/blob/main/scripts/templates/systemd/README.md"><code>scripts/templates/systemd/README.md</code></a> is the unit-template catalog (placeholders, reboot survival, the timezone rule), and <a href="https://github.com/mishahanin/heading-os/blob/main/reference/scheduled-tasks.md"><code>reference/scheduled-tasks.md</code></a> explains why a <code>CronCreate</code> task is session-scoped and a systemd timer is not.</p>
 
   <div class="callout note">
     <span class="ttl">Platform model</span>
@@ -197,18 +198,28 @@ python scripts/fireside-bot-daemon.py stop</code></pre>
   <table>
     <thead><tr><th>Timer</th><th>Cadence</th><th>Install</th><th>Runs</th></tr></thead>
     <tbody>
-      <tr><td><code>ollama-autoupdate.timer</code></td><td>daily, persistent</td><td><em>system-wide installer</em> (sudo)</td><td>Upgrades Ollama only when a newer tag exists; smoke-tests <code>bge-m3</code></td></tr>
-      <tr><td><code>memory-index-refresh.timer</code></td><td>daily 03:30</td><td><code>bash scripts/install-memory-index-timer.sh</code></td><td><code>memory-index.py build</code> (incremental re-embed)</td></tr>
+      <tr><td><code>archive-transcripts.timer</code></td><td>daily 02:50</td><td><code>bash scripts/install-archive-transcripts-timer.sh</code></td><td><code>archive-transcripts.py</code> (copy settled transcripts into the data overlay, gzipped)</td></tr>
+      <tr><td><code>chronicle.timer</code></td><td>daily 03:00</td><td><code>bash scripts/install-chronicle-timer.sh</code></td><td><code>chronicle.py build</code> (summarise new sessions into the dated history)</td></tr>
+      <tr><td><code>council-models-check.timer</code></td><td>daily 08:30</td><td><code>bash scripts/install-council-models-timer.sh</code></td><td><code>council-models-notify.py</code> (broken or superseded model pins → Telegram)</td></tr>
+      <tr><td><code>dream-shadow.timer</code></td><td>daily 03:10</td><td><code>bash scripts/install-dream-shadow-timer.sh</code></td><td><code>dream-shadow.py</code> (salience-ranked memory consolidation worklist)</td></tr>
+      <tr><td><code>memory-auto-retire.timer</code></td><td>daily 07:20 <strong>(retired)</strong></td><td><code>bash scripts/install-memory-auto-retire-timer.sh</code> <em>refuses, exit 9</em></td><td><code>memory-auto-retire.py</code>. Switched off on purpose: auto-memory is never pruned on a clock, so the installer refuses without an explicit override flag. See <a href="memory-lifecycle.html">memory lifecycle</a>.</td></tr>
       <tr><td><code>memory-hygiene.timer</code></td><td>Mon 07:34</td><td><code>bash scripts/install-memory-hygiene-timer.sh</code></td><td><code>memory-hygiene.py</code> (defect detector)</td></tr>
-      <tr><td><code>odin-cadence.timer</code></td><td>Mon 09:00 (in <code>HEADING_OS_TZ</code>)</td><td><code>bash scripts/install-odin-cadence-timer.sh</code></td><td><code>odin-cadence-notify.py</code> (nudge)</td></tr>
-      <tr><td><code>ops-radar.timer</code></td><td>daily 08:00 (in <code>HEADING_OS_TZ</code>)</td><td><code>bash scripts/install-ops-radar-timer.sh</code></td><td><code>ops-radar-notify.py</code> (manual-action detector)</td></tr>
+      <tr><td><code>memory-index-refresh.timer</code></td><td>daily 03:30</td><td><code>bash scripts/install-memory-index-timer.sh</code></td><td><code>memory-index.py build</code> (incremental re-embed)</td></tr>
+      <tr><td><code>odin-cadence.timer</code></td><td>Mon 09:00</td><td><code>bash scripts/install-odin-cadence-timer.sh</code></td><td><code>odin-cadence-notify.py</code> (nudge)</td></tr>
+      <tr><td><code>odin-propose.timer</code></td><td>Mon 05:31</td><td><code>bash scripts/install-odin-propose-timer.sh</code></td><td><code>odin-cadence-notify.py --propose-only</code> (weekly headless reflect-propose draft → Telegram DM)</td></tr>
+      <tr><td><code>ollama-guard.timer</code></td><td>every 5 min, 2 min after boot</td><td><code>bash scripts/install-ollama-guard-timer.sh</code></td><td><code>ollama-guard.py heal</code> (start the pinned Ollama when nothing answers)</td></tr>
+      <tr><td><code>ops-radar.timer</code></td><td>daily 08:00</td><td><code>bash scripts/install-ops-radar-timer.sh</code></td><td><code>ops-radar-notify.py</code> (manual-action detector)</td></tr>
+      <tr><td><code>reminders.timer</code></td><td>daily 07:45</td><td><code>bash scripts/install-reminders-timer.sh</code></td><td><code>reminders-notify.py</code> (durable due-date nudges → Telegram)</td></tr>
+      <tr><td><code>router-accuracy.timer</code></td><td>daily 03:00</td><td><code>bash scripts/install-router-accuracy-timer.sh</code></td><td><code>router-accuracy-nightly.py</code> (skill-trigger-test trend into the data overlay)</td></tr>
+      <tr><td><code>update-manager.timer</code></td><td>daily 07:00</td><td><code>bash scripts/install-update-manager-timer.sh</code></td><td><code>update-manager.py check</code> then <code>apply --auto</code></td></tr>
     </tbody>
   </table>
   </div>
   <pre><code>systemctl --user list-timers &lt;name&gt;.timer --no-pager
 systemctl --user start &lt;name&gt;.service          # run once now
 systemctl --user disable --now &lt;name&gt;.timer    # cancel</code></pre>
-  <p>The odin-cadence/ops-radar templates substitute <code>HEADING_OS_TZ</code> (default UTC) so no operating locale is baked into the engine. The <code>ollama-autoupdate</code> timer is system-wide (<code>sudo</code>); each real upgrade restarts the <code>ollama</code> service → a few-seconds blip for recall.</p>
+  <p>Every <code>OnCalendar</code> above fires in <code>HEADING_OS_TZ</code> (default UTC), which the installer substitutes at render time, so no operating locale is baked into the engine. Every timer sets <code>Persistent=true</code> and so replays a fire missed while the machine was off, with one deliberate exception: <code>ollama-guard.timer</code> probes the CURRENT state, and replaying a missed look buys nothing.</p>
+  <p><strong>One installer per task, and the list above is the whole set.</strong> The engine ships exactly these fourteen <code>scripts/install-&lt;name&gt;-timer.sh</code> scripts, one per unit-template pair in <code>scripts/templates/systemd/</code>. A shipped installer missing from this table is a documentation defect, and <code>tests/test_a_daemons_page_that_documented_four_of_fourteen_timers.py</code> fails on it. Any other timer you see on a host (an Ollama auto-update unit, for instance) came from somewhere else: the engine neither ships nor installs it.</p>
 
   <h3>D. Healthcheck pings (deadman monitoring)</h3>
   <p>Not a scheduler — best-effort deadman pings via <code>scripts/utils/healthchecks.py</code>. Idempotent setup writes ping URLs back as gitignored <code>.env</code> keys:</p>

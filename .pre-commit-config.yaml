@@ -375,8 +375,8 @@ repos:
   - repo: local
     hooks:
       - id: readme-numbers
-        name: README numbers in sync (derived vs README/index)
+        name: Documented numbers in sync (derived vs README/index/EXTENDING)
         entry: bash -c 'command -v uv >/dev/null 2>&1 || { echo "uv not found; skipping readme-numbers (CI is authoritative)"; exit 0; }; uv run python scripts/dev/check-readme-numbers.py --quiet'
         language: system
-        files: '^(README\.md|ROADMAP\.md|docs/index\.html|scripts/dev/check-readme-numbers\.py)$'
+        files: '^(README\.md|ROADMAP\.md|docs/index\.html|docs/EXTENDING\.md|\.claude/skills/[^/]+/triggers\.json|scripts/dev/check-readme-numbers\.py)$'
         pass_filenames: false

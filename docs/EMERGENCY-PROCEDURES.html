@@ -78,7 +78,7 @@
 <main class="content">
   <h1>Emergency Procedures</h1>
   <p class="page-meta">What to do when the normal sync/push/update chain is broken. For routine operations, see GETTING-STARTED.md (execs) or CEO-ADMIN-GUIDE.md (CEO).</p>
-  <!-- version: 1.2.4 | last-updated: 2026-08-27 -->
+  <!-- version: 1.3.0 | last-updated: 2026-08-29 -->
 
 <blockquote>
 <p>What to do when the normal sync/push/update chain is broken. For routine operations, see <code>GETTING-STARTED.md</code> (execs) or <code>CEO-ADMIN-GUIDE.md</code> (CEO).</p>
@@ -110,13 +110,27 @@
 - Personal CRM, knowledge notes, local outputs all function normally.
 - <code>/backup</code> still works (<code>push-all.py</code> pushes your data repo to your own GitHub).
 - <code>/sync</code> still works for the data-up backup (your CRM rides your private <code>heading-os-data-{slug}</code> repo).</p>
-<p><strong>Bridge mode:</strong> If the CEO designates a Deputy Admin in advance (via <code>config/admin.json</code> role field), the deputy can:
-- Run <code>/publish-corporate</code> from their own workspace (requires they hold GitHub push rights)
-- Issue temporary policy updates via an emergency branch, clearly marked <code>emergency-{date}</code>
-- Never override classification boundaries; all deputy pushes must still pass <code>sanitize-check.py</code></p>
+<p><strong>Bridge mode: the engine ships no Deputy Admin feature.</strong> This page described one until
+2026-08-29. No code reads a <code>role</code> field from <code>config/admin.json</code>, so an exec who followed
+that procedure in a real outage got nothing. Three separate grants decide who can publish,
+and only one of them lives in <code>config/admin.json</code>:</p>
+<ol>
+<li><strong>The workspace identity.</strong> <code>is_admin()</code> in <code>scripts/utils/workspace.py</code> reads <code>role</code>
+   from the gitignored <code>.workspace-identity.json</code> at the engine root. The value <code>admin</code>
+   there is the first thing <code>validate_admin()</code> checks. The file is machine-local, so the
+   CEO grants this by placing a file on a machine.</li>
+<li><strong>The admin allow-list.</strong> <code>validate_admin()</code> then requires the identity <code>slug</code> inside
+   the <code>admin_slugs</code> array of <code>config/admin.json</code>, under your data root. Both checks must
+   pass; either one alone exits with an error.</li>
+<li><strong>GitHub push rights</strong> on the corporate repo. No workspace file grants these.</li>
+</ol>
+<p><code>config/admin.json</code> supplies exactly two keys that code reads: <code>admin_slugs</code> and
+<code>github_org</code>. It carries no role field, no deputy, and no expiry. Nothing revokes a grant
+on a timer either. The CEO removes it by hand, or with <code>scripts/emergency-revoke.py</code>.</p>
 <p><strong>Do NOT:</strong>
-- Elect an unofficial deputy. Admin authority flows from <code>config/admin.json</code>, not from group consensus.
-- Push directly to the corporate repo without explicit admin role.
+- Elect an unofficial deputy. Admin authority needs all three grants above, never group consensus.
+- Edit <code>config/admin.json</code> and expect a promotion. Grant 1 lives in a different file.
+- Push directly to the corporate repo without all three grants.
 - Attempt credential recovery on the CEO&rsquo;s behalf.</p>
 <hr />
 <h2 id="scenario-3-credentials-leaked-api-key-session-token-or-password-exposed-in-a-commit">Scenario 3: Credentials leaked (API key, session token, or password exposed in a commit)</h2>

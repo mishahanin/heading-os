@@ -45,7 +45,7 @@ Two families, and that is the whole roster. The CEO cut the other families from 
 |---|---|
 | `SCRUTINIZE_JUDGE_SPLIT=fixed-claude` | Collapse the split, use Claude for every judge call. Prose-only knob; no code reads it. |
 | `SCRUTINIZE_JUDGE_SPLIT=split` (default) | Two-family adversarial split per the table above. |
-| `--judge-family={claude\|kimi}` (one-shot) | Pin one family for this pass. The roster is the two families; there is nothing else to reach. |
+| `scripts/scrutinize-dispatch.py --family {claude\|kimi}` | Pin the family for ONE judge call, overriding the side assignment. It is a dispatcher argument, not a `/scrutinize` flag; nothing pins a family for a whole pass. The roster is the two families, and there is nothing else to reach. |
 | `python scripts/council-models.py --set kimi_reasoning=<id>` | Bump the Kimi judge pin. Distinct from the `kimi` fast pin other callers get; the judge layer must not run a coding pin. There is deliberately NO Claude equivalent - see slot 1. |
 
 **Invocation pattern.** The k3 judge is dispatched with an explicit model pin:

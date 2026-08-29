@@ -1,4 +1,4 @@
-<!-- version: 1.2.4 | last-updated: 2026-08-27 -->
+<!-- version: 1.3.0 | last-updated: 2026-08-29 -->
 
 # Emergency Procedures
 
@@ -40,14 +40,28 @@
 - `/backup` still works (`push-all.py` pushes your data repo to your own GitHub).
 - `/sync` still works for the data-up backup (your CRM rides your private `heading-os-data-{slug}` repo).
 
-**Bridge mode:** If the CEO designates a Deputy Admin in advance (via `config/admin.json` role field), the deputy can:
-- Run `/publish-corporate` from their own workspace (requires they hold GitHub push rights)
-- Issue temporary policy updates via an emergency branch, clearly marked `emergency-{date}`
-- Never override classification boundaries; all deputy pushes must still pass `sanitize-check.py`
+**Bridge mode: the engine ships no Deputy Admin feature.** This page described one until
+2026-08-29. No code reads a `role` field from `config/admin.json`, so an exec who followed
+that procedure in a real outage got nothing. Three separate grants decide who can publish,
+and only one of them lives in `config/admin.json`:
+
+1. **The workspace identity.** `is_admin()` in `scripts/utils/workspace.py` reads `role`
+   from the gitignored `.workspace-identity.json` at the engine root. The value `admin`
+   there is the first thing `validate_admin()` checks. The file is machine-local, so the
+   CEO grants this by placing a file on a machine.
+2. **The admin allow-list.** `validate_admin()` then requires the identity `slug` inside
+   the `admin_slugs` array of `config/admin.json`, under your data root. Both checks must
+   pass; either one alone exits with an error.
+3. **GitHub push rights** on the corporate repo. No workspace file grants these.
+
+`config/admin.json` supplies exactly two keys that code reads: `admin_slugs` and
+`github_org`. It carries no role field, no deputy, and no expiry. Nothing revokes a grant
+on a timer either. The CEO removes it by hand, or with `scripts/emergency-revoke.py`.
 
 **Do NOT:**
-- Elect an unofficial deputy. Admin authority flows from `config/admin.json`, not from group consensus.
-- Push directly to the corporate repo without explicit admin role.
+- Elect an unofficial deputy. Admin authority needs all three grants above, never group consensus.
+- Edit `config/admin.json` and expect a promotion. Grant 1 lives in a different file.
+- Push directly to the corporate repo without all three grants.
 - Attempt credential recovery on the CEO's behalf.
 
 ---

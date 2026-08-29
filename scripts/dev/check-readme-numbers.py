@@ -23,6 +23,15 @@ Derived vs asserted:
     source, so this guard instead asserts every page in `FRONT_DOORS` agrees with
     the constant and with the others, catching an accidental divergence between
     the front doors.
+  * trigger-corpus figures -- DERIVED by counting the tracked
+    ``.claude/skills/*/triggers.json`` files and the cases inside them, with the
+    same "the file IS the array" reading `scripts/utils/router_payload.load_triggers`
+    uses. docs/EXTENDING.md quotes both, and nothing checked them: MEASURED
+    2026-08-29 the page said 69 files / 710 cases against a real 70 / 730, and it
+    dated the figures to 2026-08-03 while asserting them in the present tense. This
+    guard grew past the README front doors on that date, because a number a human
+    must remember to update is the defect, and re-typing today's number only
+    resets the clock.
 
 Exit 0 when every figure matches; exit 1 (with a diff) on any mismatch.
 
@@ -30,11 +39,13 @@ Usage:
     python scripts/dev/check-readme-numbers.py            # check, exit non-zero on mismatch
     python scripts/dev/check-readme-numbers.py --quiet    # only print on mismatch
 
-Tests: tests/test_a_guard_that_was_green_over_an_absent_tree.py
+Tests: tests/test_a_guard_that_was_green_over_an_absent_tree.py,
+       tests/test_a_trigger_count_nothing_recounted.py
 """
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -63,6 +74,12 @@ _SEC_RE = re.compile(r"(\d+)\s+security tests", re.IGNORECASE)
 _LAYER_RE = re.compile(r"(\d+)\s+enforcement layers", re.IGNORECASE)
 _COLLECTED_RE = re.compile(r"(\d+)\s+tests?\s+collected")
 
+# The two sentences on docs/EXTENDING.md that carry the trigger-corpus figures.
+# Each pattern is anchored on the surrounding words, not on a bare number, so a
+# reworded paragraph fails loudly here instead of silently going unchecked.
+_TRIGGER_FILES_RE = re.compile(r"(\d+)\s+routing-sensitive skills carry")
+_TRIGGER_CASES_RE = re.compile(r"they hold (\d+) cases")
+
 
 def derive_security_test_count() -> int:
     """Collect tests/security and return the number of collected test items."""
@@ -86,6 +103,91 @@ def derive_security_test_count() -> int:
             f"--- stdout tail ---\n{proc.stdout[-1500:]}"
         )
     return int(matches[-1])
+
+
+def tracked_trigger_files(root: Path | None = None) -> list[Path]:
+    """Every tracked `.claude/skills/*/triggers.json`, as absolute paths.
+
+    `git ls-files` rather than a glob: an untracked or ignored scratch file is
+    not part of the engine anyone clones, and counting it would put a figure in
+    the page that no other machine can reproduce. `-z` because git C-quotes a
+    non-ASCII path, and a quoted name is not a file this guard can open.
+    """
+    repo = ROOT if root is None else root
+    out = subprocess.run(
+        ["git", "-C", str(repo), "ls-files", "-z", ".claude/skills/*/triggers.json"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    return sorted(repo / rel for rel in out.split("\0") if rel)
+
+
+def count_trigger_cases(paths) -> int:
+    """Total cases across ``paths``, reading each file the way the harness does.
+
+    `scripts/utils/router_payload.load_triggers` returns the parsed document
+    itself and requires a JSON array, so the case count of one skill is the
+    length of that array. Anything else raises here rather than counting zero:
+    a malformed file that silently contributed nothing would move the documented
+    figure for a reason no reader could see.
+    """
+    total = 0
+    for path in paths:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, list):
+            raise SystemExit(
+                f"{RED}{path}: triggers.json must be a JSON array of cases.{RESET}"
+            )
+        total += len(data)
+    return total
+
+
+def trigger_figure_problems(text: str, page_label: str, files: int, cases: int) -> list[str]:
+    """Every disagreement between ``text`` and the derived (files, cases) pair.
+
+    Pure, so it can be measured on synthetic input in both directions. A missing
+    sentence is a problem, not a pass: this page is the only one quoting these
+    figures, so an unanchored guard here checks nothing at all.
+    """
+    problems: list[str] = []
+    for pattern, derived, label in (
+        (_TRIGGER_FILES_RE, files, "skills carrying triggers.json"),
+        (_TRIGGER_CASES_RE, cases, "trigger cases"),
+    ):
+        found = {int(m) for m in pattern.findall(text)}
+        if not found:
+            problems.append(
+                f"{page_label}: no '{label}' figure matched {pattern.pattern!r}; "
+                f"the sentence was reworded and this guard now checks nothing"
+            )
+            continue
+        if len(found) > 1:
+            problems.append(
+                f"{page_label}: inconsistent '{label}' figures {sorted(found)} "
+                f"within the same page"
+            )
+            continue
+        stated = found.pop()
+        if stated != derived:
+            problems.append(f"{page_label}: says {stated} {label}, the tree holds {derived}")
+    return problems
+
+
+def check_trigger_figures(root: Path | None = None) -> tuple[list[str], int, int]:
+    """Derive the two trigger figures and hold `docs/EXTENDING.md` against them.
+
+    One seam for the whole check, in the same shape as `derive_security_test_count`,
+    so a caller driving `main()` over a synthetic tree can substitute it. The page
+    is resolved from ``root`` rather than from an import-time constant, for the
+    same reason.
+    """
+    repo = ROOT if root is None else root
+    page = repo / "docs" / "EXTENDING.md"
+    files = tracked_trigger_files(repo)
+    cases = count_trigger_cases(files)
+    problems = trigger_figure_problems(
+        page.read_text(encoding="utf-8"), str(page.relative_to(repo)), len(files), cases
+    )
+    return problems, len(files), cases
 
 
 def _extract(pattern: re.Pattern[str], text: str, path: Path, label: str) -> int | None:
@@ -132,12 +234,16 @@ def main() -> int:
         if layers is not None and layers != EXPECTED_LAYERS:
             problems.append(f"{rel}: says {layers} enforcement layers, expected {EXPECTED_LAYERS}")
 
+    trigger_problems, derived_files, derived_cases = check_trigger_figures()
+    problems += trigger_problems
+
+    watched = [*FRONT_DOORS, ROOT / "docs" / "EXTENDING.md"]
     if problems:
-        print(f"{RED}{BOLD}README numbers out of sync:{RESET}", file=sys.stderr)
+        print(f"{RED}{BOLD}Documented numbers out of sync:{RESET}", file=sys.stderr)
         for p in problems:
             print(f"  {RED}- {p}{RESET}", file=sys.stderr)
         print(
-            f"\nFix the figure(s) in {', '.join(str(p.relative_to(ROOT)) for p in FRONT_DOORS)} "
+            f"\nFix the figure(s) in {', '.join(str(p.relative_to(ROOT)) for p in watched)} "
             f"to match, then re-run this guard.",
             file=sys.stderr,
         )
@@ -145,9 +251,11 @@ def main() -> int:
 
     if not args.quiet:
         print(
-            f"{GREEN}README numbers in sync: {derived_sec} security tests, "
-            f"{EXPECTED_LAYERS} enforcement layers, across "
-            f"{', '.join(str(p.relative_to(ROOT)) for p in FRONT_DOORS)}.{RESET}"
+            f"{GREEN}Documented numbers in sync: {derived_sec} security tests, "
+            f"{EXPECTED_LAYERS} enforcement layers, "
+            f"{derived_files} skills carrying triggers.json holding "
+            f"{derived_cases} cases, across "
+            f"{', '.join(str(p.relative_to(ROOT)) for p in watched)}.{RESET}"
         )
     return 0
 

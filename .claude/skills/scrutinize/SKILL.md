@@ -13,7 +13,7 @@ description: >
   improve", "review the plan before I approve", "audit what you just did",
   "ultrathink review". Do NOT trigger for artifact grading alone (use /evaluate),
   fact-checking drafts (use /validate), or strategic reasoning (use /deep-think).
-argument-hint: "[plan | execution | file:<path> | dir:<path> | workspace | trajectory:<run_id>] [--relentless] [--no-refute]"
+argument-hint: "[plan | execution | file:<path> | dir:<path> | workspace | trajectory:<run_id>] [--relentless] [--no-refute] [--include-low-confidence] [--include-ambiguous] [--no-code-review]"
 allowed-tools: "Read, Glob, Grep, Bash(python3:*), Bash(python:*), Bash(git:*), Edit, Write, Agent"
 context: fork
 # Backgrounded forks lack the Agent tool; this skill dispatches specialists.
@@ -39,12 +39,12 @@ x-heading-capability:
   what: >
     Maximum-effort review gate over a plan, executed work, a file or dir, the workspace, or a past /implement trajectory. Produces evidence-backed findings with confidence scores and proposed fixes, after an adversarial layer drops false positives. Blocks progress until approved.
   how: >
-    Explicit-invocation only (disable-model-invocation). Run /scrutinize [plan | execution | file:<path> | dir:<path> | workspace | trajectory:<run_id>] [--relentless] [--no-refute]. Reports save to outputs/operations/scrutiny/.
+    Explicit-invocation only (disable-model-invocation). Run /scrutinize [plan | execution | file:<path> | dir:<path> | workspace | trajectory:<run_id>] [--relentless] [--no-refute] [--include-low-confidence] [--include-ambiguous] [--no-code-review]. Reports save to outputs/operations/scrutiny/.
   when: >
     Use to stress-test a plan before approval or audit changes after /implement. For artifact grading against a rubric use /evaluate; for draft fact-checking use /validate; for decision reasoning use /deep-think.
 x-heading-routing:
   category: Operations
-  label: /scrutinize [target] [--relentless] [--no-refute] [--include-low-confidence] [--include-ambiguous]
+  label: /scrutinize [target] [--relentless] [--no-refute] [--include-low-confidence] [--include-ambiguous] [--no-code-review]
   triggers:
     - NEVER auto-trigger. Explicit `/scrutinize [target] ...` only.
   exclusions:
@@ -64,9 +64,11 @@ Principal-engineer posture: find what is wrong, not what works. Every finding ne
 
 ## Variables
 
-One optional `target` plus five flags. Full catalog: `references/flags.md`,
-which Phase 0 step 1 already loads. `argument-hint` in the frontmatter carries
-the same list in one line.
+One optional `target` plus the flags in `references/flags.md`, which Phase 0
+step 1 already loads. That catalog is the source of truth. The one-line copies
+in `argument-hint`, `x-heading-capability.how` and `x-heading-routing.label`
+carry the same flags. `tests/test_three_flag_lists_that_described_one_skill.py`
+fails when a copy drifts from the catalog, or names a flag no code reads.
 
 ---
 

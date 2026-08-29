@@ -278,9 +278,12 @@ is not deterministic. It gates only under `--strict --threshold`.
 surfaces routing regressions on changed skills, and the CEO confirms to override. It is
 not a hard block yet, per audit #63-2.
 
-69 routing-sensitive skills carry `triggers.json` today, and they hold 710 cases between
-them. Both figures were counted on 2026-08-03; the prior figure of 24 was stale. When you
-add or re-scope a skill, update its `triggers.json` and re-run the harness.
+70 routing-sensitive skills carry `triggers.json`, and they hold 730 cases between them.
+`scripts/dev/check-readme-numbers.py` derives both figures from the tree, and it fails
+when this page disagrees. The `readme-numbers` pre-commit hook runs that guard whenever a
+`triggers.json` file or this page changes. Until 2026-08-29 someone typed the two numbers
+by hand and dated them to the day of the last count. Both had drifted. When you add or
+re-scope a skill, update its `triggers.json` and re-run the harness.
 
 ---
 

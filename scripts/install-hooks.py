@@ -40,6 +40,27 @@ SCANNER_BLOCK = f"""{HOOK_MARKER}
 
 STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
 if [ -n "$STAGED" ]; then
+    # The scanner takes PATHS and reads them from the WORKING TREE, while the
+    # list above comes from the INDEX. When the two differ it scans bytes that
+    # will not be committed and never sees the bytes that will. MEASURED
+    # 2026-08-29 by installing this hook in a scratch repository: an AWS secret
+    # was staged, the worktree copy was then cleaned without re-staging, the
+    # hook printed "No secrets detected", and the secret landed in the commit.
+    #
+    # The pre-commit FRAMEWORK, which superseded this installer, stashes
+    # unstaged changes before running its hooks, so its pass_filenames gates do
+    # not have this hole (measured the same day). This standalone hook has no
+    # stash, so it refuses instead: a partially-staged file is re-staged by the
+    # author, not silently scanned in the wrong version.
+    DIRTY=$(git diff --name-only -- $STAGED)
+    if [ -n "$DIRTY" ]; then
+        echo ""
+        echo "COMMIT BLOCKED: these files have unstaged edits, so the secret"
+        echo "scanner cannot see the bytes that would be committed:"
+        echo "$DIRTY"
+        echo "Re-stage them (git add), or commit them separately."
+        exit 1
+    fi
     # Run scanner - if python3 fails, warn but don't block
     echo "$STAGED" | python3 scripts/secret-scanner.py --stdin
     EXIT_CODE=$?

@@ -61,8 +61,12 @@ sr = _load("scrutinize_replay_p10c", "scripts/scrutinize-replay.py")
 def test_a_failing_git_raises_instead_of_reporting_nothing_staged(monkeypatch):
     class Fake:
         returncode = 128
-        stdout = ""
-        stderr = "fatal: not a git repository"
+        # BYTES since 2026-08-29: `staged_files` dropped `text=True` so git's
+        # raw `-z` path bytes are decoded with `os.fsdecode` instead of the
+        # caller's locale. The fake carries the real shape or it measures a
+        # contract the code no longer has.
+        stdout = b""
+        stderr = b"fatal: not a git repository"
 
     monkeypatch.setattr(sc.subprocess, "run", lambda *a, **k: Fake())
     with pytest.raises(sc.GitUnavailable, match="not a git repository"):
@@ -73,8 +77,8 @@ def test_a_genuinely_empty_staged_set_is_still_empty(monkeypatch):
     """The guard must not turn "nothing staged" into an error."""
     class Fake:
         returncode = 0
-        stdout = ""
-        stderr = ""
+        stdout = b""
+        stderr = b""
 
     monkeypatch.setattr(sc.subprocess, "run", lambda *a, **k: Fake())
     assert sc.staged_files() == []
@@ -87,8 +91,8 @@ def test_git_is_run_in_the_workspace_root(monkeypatch):
 
     class Fake:
         returncode = 0
-        stdout = ""
-        stderr = ""
+        stdout = b""
+        stderr = b""
 
     def spy(cmd, **kwargs):
         seen.update(kwargs)

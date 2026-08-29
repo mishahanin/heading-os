@@ -96,16 +96,28 @@ def test_the_original_hooks_work_is_still_in_the_merged_file(hooks_dir):
     assert body.rstrip().endswith("exit 0")
 
 
-def _run_merged_hook(hooks_dir, tmp_path, staged: str):
+def _run_merged_hook(hooks_dir, tmp_path, staged: str, dirty: str = ""):
     """Actually execute the merged hook with a stub `git` on PATH.
 
     Reading the block's source for the string `exit` is not enough: the early
     return that made this a defect was `[ -z "$STAGED" ] && exit 0`, which no
     line-shape test notices. Running it is the only check that does.
+
+    The stub answers TWO different questions since 2026-08-29, because the block
+    now asks two: `git diff --cached ...` for the staged set, and `git diff
+    --name-only -- <staged>` for the subset that also has unstaged edits. A stub
+    that printed the same string for every git call answered the second question
+    with the first question's answer, so every merged hook looked dirty.
     """
     stub = tmp_path / "bin"
     stub.mkdir(exist_ok=True)
-    (stub / "git").write_text(f'#!/bin/sh\nprintf "%s" "{staged}"\n', encoding="utf-8")
+    (stub / "git").write_text(
+        "#!/bin/sh\n"
+        'for a in "$@"; do\n'
+        '  if [ "$a" = "--cached" ]; then printf "%s" "' + staged + '"; exit 0; fi\n'
+        "done\n"
+        'printf "%s" "' + dirty + '"\n',
+        encoding="utf-8")
     (stub / "git").chmod(0o755)
     (stub / "python3").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     (stub / "python3").chmod(0o755)
@@ -131,6 +143,24 @@ def test_a_merged_hook_with_staged_files_still_runs_the_original(hooks_dir, tmp_
     ih.install_pre_commit(hooks_dir, check_only=False)
     out = _run_merged_hook(hooks_dir, tmp_path, staged="a.py\n")
     assert "ORIGINAL-HOOK-RAN" in out.stdout, out.stdout + out.stderr
+
+
+def test_a_merged_hook_refuses_when_a_staged_file_has_unstaged_edits(
+        hooks_dir, tmp_path):
+    """The scanner reads PATHS off disk while the list comes from the INDEX, and
+    this hook has no stash, so on a partially-staged file it would scan the
+    wrong version. MEASURED 2026-08-29 before the guard: a staged AWS key with a
+    cleaned worktree copy produced "No secrets detected" and the key was
+    committed. Full measurement in
+    `tests/test_a_gate_that_named_one_file_and_read_another.py`.
+    """
+    (hooks_dir / "pre-commit").write_text(
+        "#!/bin/sh\necho ORIGINAL-HOOK-RAN\nexit 0\n", encoding="utf-8")
+    ih.install_pre_commit(hooks_dir, check_only=False)
+    out = _run_merged_hook(hooks_dir, tmp_path, staged="a.py\n", dirty="a.py\n")
+    assert out.returncode == 1, out.stdout + out.stderr
+    assert "COMMIT BLOCKED" in out.stdout
+    assert "ORIGINAL-HOOK-RAN" not in out.stdout
 
 
 def test_the_scanner_block_never_exits_on_the_clean_path():

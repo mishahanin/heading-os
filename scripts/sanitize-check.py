@@ -36,7 +36,7 @@ AIOS became an independent OSS repo.)
 
 Usage:
     python scripts/sanitize-check.py FILE [FILE ...]     # scan specific files
-    python scripts/sanitize-check.py --staged             # scan git-staged changes
+    python scripts/sanitize-check.py --staged             # scan the git INDEX (staged bytes)
     python scripts/sanitize-check.py --list-terms         # print the critical-terms set and exit
 
 Exit codes:
@@ -48,6 +48,7 @@ Exit codes:
         it.
 """
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -103,6 +104,21 @@ TEXT_EXTENSIONS = {
 SNIFF_BYTES = 8192
 
 
+def is_text_blob(name: str, head: bytes) -> bool:
+    """True when a blob named *name* whose first bytes are *head* is scannable.
+
+    Split out of `is_text_file` so the `--staged` path can make the same
+    decision about bytes that exist only in the git index and never on disk.
+    Two callers, one rule: a suffix allowlist as a fast path, then the NUL
+    sniff. See `is_text_file` for why the sniff is not optional.
+    """
+    if Path(name).suffix.lower() in TEXT_EXTENSIONS:
+        return True
+    if Path(name).name in {".env.example", "Makefile"}:
+        return True
+    return b"\0" not in head[:SNIFF_BYTES]
+
+
 def is_text_file(path: Path) -> bool:
     """True when the file should be opened and scanned.
 
@@ -126,7 +142,7 @@ def is_text_file(path: Path) -> bool:
     if path.name in {".env.example", "Makefile"}:
         return True
     with path.open("rb") as fh:
-        return b"\0" not in fh.read(SNIFF_BYTES)
+        return is_text_blob(path.name, fh.read(SNIFF_BYTES))
 
 
 class GitUnavailable(RuntimeError):
@@ -168,13 +184,67 @@ def staged_files() -> list[Path]:
     result = subprocess.run(
         ["git", "diff", "--cached", "--name-only", "-z", "--diff-filter=AM"],
         capture_output=True,
-        text=True,
         check=False,
         cwd=str(get_workspace_root()),
     )
     if result.returncode != 0:
-        raise GitUnavailable((result.stderr or "git failed").strip())
-    return [Path(name) for name in result.stdout.split("\0") if name]
+        raise GitUnavailable(
+            (result.stderr.decode("utf-8", "replace") or "git failed").strip())
+    # `os.fsdecode`, not `text=True`. Without an explicit encoding, subprocess
+    # decodes with `locale.getpreferredencoding()`, and git emits raw path bytes
+    # under `-z`. On a cp1252 console -- the very case the stream reconfigure at
+    # the top of this file exists for -- a staged path holding a non-ASCII byte
+    # decoded to mojibake, `scan_file` found no such file, and the gate exited 0
+    # with a gray "not scanned" note. That is the same fail-open the `-z` fix
+    # claims to have closed, one layer down; the quoting half was carried here
+    # and the decoding half was not.
+    return [Path(os.fsdecode(raw)) for raw in result.stdout.split(b"\0") if raw]
+
+
+def staged_blob(path: Path) -> bytes:
+    """The bytes git will COMMIT for *path*, read from the index.
+
+    THE POINT OF THIS FUNCTION. Until 2026-08-29 `--staged` took only the NAMES
+    from the index and then read the WORKING TREE. When the two differ the gate
+    scanned bytes that will never be committed and never saw the bytes that
+    will, and it failed in both directions. MEASURED on a real repository:
+
+      staged `ceo@gmail.com`, worktree cleaned, never re-staged
+        -> "[PASS] 1 file(s) scanned. No critical terms found.", exit 0,
+           and the commit ships the address.
+      staged clean, worktree holds the term in a scratch edit
+        -> "[FAIL] ... contain critical terms", exit 1, blocking a commit that
+           would not have contained it.
+
+    Raises GitUnavailable when the blob cannot be produced. That direction is
+    deliberate: a name that came out of `git diff --cached` one call earlier and
+    has no index blob a moment later means the index moved under the gate, and
+    an unreadable staged blob is UNKNOWN coverage, never clean.
+    """
+    result = subprocess.run(
+        ["git", "cat-file", "blob", f":{path.as_posix()}"],
+        capture_output=True,
+        check=False,
+        cwd=str(get_workspace_root()),
+    )
+    if result.returncode != 0:
+        raise GitUnavailable(
+            f"{path}: cannot read the staged blob: "
+            f"{(result.stderr.decode('utf-8', 'replace') or 'git failed').strip()}")
+    return result.stdout
+
+
+def scan_blob(
+    name: str,
+    data: bytes,
+    substring_terms: set[str],
+    boundary_terms: set[str],
+) -> list[tuple[str, int, str, str]] | None:
+    """Scan bytes that may exist only in the index. None when not scanned."""
+    if not is_text_blob(name, data):
+        return None
+    return scan_for_terms(data.decode("utf-8", "replace"), substring_terms,
+                          word_boundary_terms=boundary_terms)
 
 
 def scan_file(
@@ -266,10 +336,18 @@ def main() -> int:
     not_scanned: list[Path] = []
     unreadable: list[str] = []
     for f in files:
-        abs_path = f if f.is_absolute() else workspace_root / f
         try:
-            findings = scan_file(abs_path, substring_terms, boundary_terms)
+            if args.staged:
+                # The INDEX, not the working tree. See `staged_blob`.
+                findings = scan_blob(f.name, staged_blob(f),
+                                     substring_terms, boundary_terms)
+            else:
+                abs_path = f if f.is_absolute() else workspace_root / f
+                findings = scan_file(abs_path, substring_terms, boundary_terms)
         except UnreadableFile as exc:
+            unreadable.append(str(exc))
+            continue
+        except GitUnavailable as exc:
             unreadable.append(str(exc))
             continue
         if findings is None:
@@ -293,8 +371,13 @@ def main() -> int:
     if not file_findings:
         print(f"{GREEN}[PASS]{RESET} {scanned} file(s) scanned. No critical terms found.")
         if not_scanned:
-            print(f"{GRAY}{len(not_scanned)} file(s) not scanned (binary, or gone "
-                  f"between the diff and the scan): "
+            # In --staged mode a file cannot be "gone": the bytes come from the
+            # index, which is why this reason list is mode-dependent. Saying
+            # otherwise would attribute a binary skip to a race that cannot
+            # happen on that path.
+            reason = "binary" if args.staged else (
+                "binary, or gone between the diff and the scan")
+            print(f"{GRAY}{len(not_scanned)} file(s) not scanned ({reason}): "
                   f"{', '.join(str(p) for p in not_scanned[:5])}"
                   f"{' ...' if len(not_scanned) > 5 else ''}{RESET}")
         return 0

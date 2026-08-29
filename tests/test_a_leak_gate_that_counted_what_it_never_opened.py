@@ -220,12 +220,31 @@ def test_output_with_a_real_file_still_works(tmp_path):
 # ============================================================
 # 3 - the staged listing that lost non-ASCII paths
 # ============================================================
-def test_the_staged_listing_uses_nul_separation(check):
-    src = SANITIZE_CHECK.read_text(encoding="utf-8")
-    code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
-    assert '"-z"' in code
-    assert 'result.stdout.split("\\0")' in code
-    assert "result.stdout.splitlines()" not in code
+def test_the_staged_listing_uses_nul_separation(check, monkeypatch):
+    """Behaviour, not a source grep.
+
+    This asserted three substrings of the source, which is a control that reads
+    the code instead of running it: it went red on 2026-08-29 for a change that
+    made the splitting MORE correct (`text=True` dropped, so git's raw path
+    bytes are decoded with `os.fsdecode` rather than the caller's locale). A
+    grep cannot tell a regression from a refactor. Drive the function instead.
+    """
+    seen = {}
+
+    class Fake:
+        returncode = 0
+        # Two paths, NUL-separated, the second holding a byte no ASCII codec
+        # would survive. A `splitlines()` implementation returns ONE path here.
+        stdout = "one.md\0документ.md\0".encode("utf-8")
+        stderr = b""
+
+    def spy(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return Fake()
+
+    monkeypatch.setattr(check.subprocess, "run", spy)
+    assert check.staged_files() == [Path("one.md"), Path("документ.md")]
+    assert "-z" in seen["cmd"]
 
 
 def test_a_cyrillic_named_staged_file_is_actually_scanned(check, tmp_path, monkeypatch):

@@ -325,29 +325,15 @@ def test_the_webhook_log_separates_handler_time_from_queue_time():
     assert src.index("t_start = time.monotonic()") > lock_at
 
 
-def test_the_success_log_still_reports_every_duration_it_passes():
-    """A dropped `%d` is silent: logging swallows the formatting error.
-
-    `queued_ms` was ADDED to this line, so the format string and its five
-    arguments have to be counted together. Drop one conversion and the
-    record raises inside `logging`, which prints the traceback to stderr and
-    emits nothing -- the daemon log then has no line at all for a handled
-    update, and the operator reads the silence as "no traffic".
-    """
-    src = (ROOT / "scripts" / "fireside_webhook.py").read_text(encoding="utf-8")
-    start = src.index('logger.info("webhook: ok update=')
-    call = src[start:src.index("\n            try:", start)]
-    fmt = "".join(seg for seg in call.split('"')[1::2])
-    for field in ("update=%s", "kind=%s", "handler_ms=%d", "queued_ms=%d",
-                  "total_ms=%d"):
-        assert field in fmt, f"{field} missing from the success log"
-    assert fmt.count("%") == 5, "format conversions must match the five arguments"
-
-
-def test_a_failed_update_is_logged_with_its_id_and_the_offset_consequence():
-    src = (ROOT / "scripts" / "fireside_webhook.py").read_text(encoding="utf-8")
-    assert "offset NOT advanced" in src
-    assert "re-served on a" in src
+# Two webhook logging controls lived here and read the module's SOURCE TEXT.
+# The first counted `%` conversions in the success log's format string while its
+# own docstring said the format string and its five arguments "have to be
+# counted together"; deleting an ARGUMENT survived it, and at runtime `logging`
+# raises inside `emit` and writes no line at all. The second asserted that two
+# COMMENT phrases appear in the file, which stays true however the code beneath
+# them behaves. Replaced, not dropped, by tests that build the real app, POST at
+# it, and call `record.getMessage()` on what was actually emitted:
+# `tests/test_controls_that_restated_the_code_they_guarded.py`.
 
 
 def test_a_non_runtime_error_still_exits_with_the_documented_code(gc, monkeypatch):

@@ -361,16 +361,13 @@ def test_the_sweep_returns_a_pair_so_the_caller_cannot_ignore_failures(gal):
 # The two smaller ones
 # ============================================================
 
-def test_the_webhook_message_branch_survives_a_null_from():
-    """The callback branch guarded this; the message branch did not."""
-    msg = {"from": None, "text": "hi"}
-    assert (msg.get("from") or {}).get("username", "?") == "?"
-
-
-def test_the_webhook_message_branch_survives_a_non_object_message():
-    update = {"message": "hello"}
-    msg = update["message"] if isinstance(update["message"], dict) else {}
-    assert msg.get("text") is None
+# The webhook message-branch guards were covered here by two tests that
+# restated the guard expression in their own bodies and asserted on the
+# restatement, so they never loaded `scripts/fireside_webhook.py` and passed
+# identically with the guards removed (measured 2026-08-29: three real 500s,
+# suite still green). Replaced, not dropped, by behavioural tests that build the
+# real app and POST at it:
+# `tests/test_controls_that_restated_the_code_they_guarded.py`.
 
 
 def test_the_gate_yield_root_flag_does_not_claim_a_scope_it_lacks():

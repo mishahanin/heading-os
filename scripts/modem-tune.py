@@ -133,6 +133,37 @@ def resolve_device(requested, cfg):
     return device, host
 
 
+def resolve_device_offline(requested, cfg) -> str:
+    """Return the device id from CONFIG ALONE. Never opens SSH.
+
+    `resolve_device` above probes the router in BOTH of its branches -- even
+    with an explicit `--device`, where the probe only fills in the "(modem: ...)"
+    text of a display line. `generate` needs the device's TAC and the ledger and
+    nothing else, yet it went through that path, so the command documented as
+    "No SSH" stalled through two 15-second probe timeouts on an unreachable
+    router before printing a number it had all along. The docstring stated the
+    intent; the code was the wrong side of the disagreement.
+
+    With no `--device` and exactly one configured device, that one is used --
+    there is nothing to disambiguate. With several, it refuses and names them,
+    because guessing here would silently mint an IMEI against the wrong TAC.
+    """
+    devices = cfg.get("devices", {})
+    if requested:
+        return requested
+    named = sorted(devices)
+    if len(named) == 1:
+        return named[0]
+    if not named:
+        print(f"{RED}No devices configured in config/modem.json. "
+              f"Re-run with --device xe300|e5800.{RESET}", file=sys.stderr)
+        sys.exit(2)
+    print(f"{RED}Several devices are configured ({', '.join(named)}) and "
+          f"generate does not probe to choose between them. "
+          f"Re-run with --device <name>.{RESET}", file=sys.stderr)
+    sys.exit(2)
+
+
 # ============================================================
 # Subcommands
 # ============================================================
@@ -203,8 +234,13 @@ def cmd_status(args) -> int:
 
 
 def cmd_generate(args) -> int:
-    device, _host, drv, led = _device_ctx(args)
+    # No `_device_ctx`: that resolves a HOST and builds an ssh-bound driver, and
+    # this command touches neither. See `resolve_device_offline`.
+    device = resolve_device_offline(getattr(args, "device", None), load_config())
     cfg = _require_cfg(device)
+    led = mc.load_ledger(LEDGER_PATH)
+    print(f"{CYAN}Device:{RESET} {BOLD}{device}{RESET} {GRAY}(from config; "
+          f"generate does not contact the router){RESET}", file=sys.stderr)
     used = set(led.get("used", []))
     seed = int(time.time() * 1000) % 1_000_000
     imei = mc.generate_unique(cfg["tac"], used, seed)

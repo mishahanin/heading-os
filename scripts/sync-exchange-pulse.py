@@ -14,6 +14,7 @@ Usage:
 """
 from __future__ import annotations
 
+import contextlib
 import io
 import os
 import re
@@ -135,9 +136,16 @@ def _last_job_ok() -> str | None:
     """Parse daemon.log for the most recent 'job-ok sync-exchange' line.
 
     Returns a friendly relative time like '12m ago' or None if not found.
+
+    The rotated backups are read too, newest first. The daemon logs through
+    `RotatingFileHandler(maxBytes=1_000_000, backupCount=3)`, which moves all
+    history into `daemon.log.1`-`.3` and starts a fresh EMPTY `daemon.log`.
+    Reading only the active file therefore reported "no sync logged yet" for a
+    daemon that had synced minutes earlier, for up to the whole two-hour gap
+    until the next job: MEASURED 2026-08-29 with a 7-minute-old job-ok line in
+    `daemon.log.1` and an empty `daemon.log`, where this returned None. The
+    liveness signal silently reset on every rotation.
     """
-    if not LOG_FILE.exists():
-        return None
     # The R12 trace-id convention (2026-06-03) inserts an optional "[<hex>] "
     # correlation token between INFO and the message. Match it optionally so
     # both pre- and post-R12 log lines parse.
@@ -145,20 +153,39 @@ def _last_job_ok() -> str | None:
         r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+ INFO (?:\[[0-9a-f]+\] )?job-ok sync-exchange"
     )
     last_ts: datetime | None = None
-    try:
-        with LOG_FILE.open(encoding="utf-8", errors="replace") as f:
-            for line in f:
-                m = pattern.match(line)
-                if m:
-                    try:
-                        last_ts = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=datetime.now().astimezone().tzinfo)
-                    except ValueError:
-                        pass
-    except OSError:
-        return None
+    # Newest first, and stop at the first file that yields a match: a rotated
+    # backup can only hold lines OLDER than the file that displaced it.
+    candidates = [LOG_FILE] + [
+        LOG_FILE.with_name(f"{LOG_FILE.name}.{n}") for n in (1, 2, 3)
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            with path.open(encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    m = pattern.match(line)
+                    if m:
+                        # A line the regex accepted but strptime rejects is a
+                        # truncated write, which a rotating log produces at its
+                        # tail. Skipping it keeps the previous match; raising
+                        # here would turn a torn byte into "no sync logged yet",
+                        # which is the exact wrong answer this function was just
+                        # fixed to stop giving.
+                        with contextlib.suppress(ValueError):
+                            last_ts = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=datetime.now().astimezone().tzinfo)
+        except OSError:
+            continue
+        if last_ts is not None:
+            break
     if last_ts is None:
         return None
-    # last_ts is naive (logs are written in local/local time by default).
+    # `last_ts` is AWARE: the `.replace(tzinfo=...)` above attaches the local
+    # zone, because the daemon writes `%(asctime)s` in local time. The comment
+    # here read "last_ts is naive" until 2026-08-29 and described the state that
+    # line deliberately eliminates. A reader who trusted it and dropped the
+    # `.replace` got `TypeError: can't subtract offset-naive and offset-aware
+    # datetimes`, verified on that date.
     delta = datetime.now().astimezone() - last_ts
     mins = int(delta.total_seconds() / 60)
     if mins < 1:

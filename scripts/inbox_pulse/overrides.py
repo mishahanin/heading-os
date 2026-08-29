@@ -69,6 +69,10 @@ class RulesEngine:
     # throttled to avoid. Retrying is right; saying so 2,880 times a day is not.
     # Keyed on mtime, so SAVING the file warns again if it is still broken.
     _bad_load_warned_mtime: float | None = field(default=None, repr=False)
+    # Buckets already reported as scalar-instead-of-list, so the warning is
+    # emitted once per config rather than once per inbound email. Cleared
+    # whenever a new config is accepted, so a re-saved file warns again.
+    _scalar_warned: set = field(default_factory=set, repr=False)
 
     def __post_init__(self) -> None:
         self.reload()
@@ -135,6 +139,7 @@ class RulesEngine:
 
         self._config = parsed
         self._last_mtime = mtime
+        self._scalar_warned.clear()
         log.info("email-triage-rules.yaml reloaded from %s", self.yaml_path)
         return True
 
@@ -169,6 +174,41 @@ class RulesEngine:
         return self.reload()
 
     # ------------------------------------------------------------------
+    # Bucket shape
+    # ------------------------------------------------------------------
+
+    def _pattern_list(self, raw: object, where: str) -> list:
+        """Return `raw` as a list of pattern strings, tolerating a bare scalar.
+
+        `reload()` checks only that the YAML root is a dict, so a bucket may
+        hold anything the operator typed. The natural single-entry form is a
+        scalar, `always_critical: "*@acme-telecom.example"`, and iterating a
+        string yields its CHARACTERS. Measured 2026-08-29 on exactly that
+        config: the first character is `*`, `fnmatch(addr, "*")` is true for
+        every address, and `match_sender("nobody@unrelated.example")` returned
+        "always_critical". The same shape in `breakthrough_allowlist` made every
+        sender a breakthrough sender, and a scalar keyword "DUE" degraded to the
+        single-character test `"d" in haystack`, which matched "lunch tomorrow".
+        The config parses cleanly, so nothing anywhere said a word about it.
+
+        Wrapping the scalar reads it the way the operator meant it, and the
+        warning tells them the file wants a list.
+        """
+        if raw is None:
+            return []
+        if isinstance(raw, list):
+            return raw
+        if where not in self._scalar_warned:
+            log.warning(
+                "%s: %s is a single value, not a list; reading it as a "
+                "one-entry list. Write it as a YAML list to silence this.",
+                self.yaml_path,
+                where,
+            )
+            self._scalar_warned.add(where)
+        return [str(raw)]
+
+    # ------------------------------------------------------------------
     # Sender matching
     # ------------------------------------------------------------------
 
@@ -182,7 +222,9 @@ class RulesEngine:
         addr_lower = email_addr.lower()
 
         for bucket in _SENDER_PRIORITY:
-            patterns: list = sender_overrides.get(bucket) or []
+            patterns = self._pattern_list(
+                sender_overrides.get(bucket), f"sender_overrides.{bucket}"
+            )
             for pattern in patterns:
                 if fnmatch(addr_lower, pattern.lower()):
                     return bucket
@@ -203,7 +245,9 @@ class RulesEngine:
         haystack = (subject + " " + body_preview[:_BODY_PREVIEW_CHARS]).lower()
 
         for bucket in _KEYWORD_PRIORITY:
-            keywords: list = keyword_overrides.get(bucket) or []
+            keywords = self._pattern_list(
+                keyword_overrides.get(bucket), f"keyword_overrides.{bucket}"
+            )
             for kw in keywords:
                 if kw.lower() in haystack:
                     return bucket
@@ -219,6 +263,8 @@ class RulesEngine:
 
         Handles wrap-around (start=23:00 end=07:00 means 23:00-23:59 + 00:00-07:00).
         The end boundary is exclusive: exactly 07:00 is NOT quiet.
+
+        A naive `at` is interpreted as UTC, never as the host's local time.
         """
         quiet: dict = self._config.get("quiet_hours", {})
         if not quiet:
@@ -244,6 +290,15 @@ class RulesEngine:
 
         if at is None:
             at = datetime.now(tz=timezone.utc)
+        elif at.tzinfo is None or at.utcoffset() is None:
+            # A naive `at` is read as UTC, the same instant the default branch
+            # above would have produced. Without this, `astimezone()` assumes
+            # the HOST's local timezone: measured 2026-08-29 with
+            # quiet_hours 23:00-07:00 UTC and a naive 23:30, the answer was
+            # True on a UTC host and False on an Asia/Dubai one, from identical
+            # config and identical input. Which machine the daemon runs on is
+            # not an input to "is 23:30 inside the quiet window".
+            at = at.replace(tzinfo=timezone.utc)
 
         # Convert to target timezone.
         local_dt = at.astimezone(tz)
@@ -269,12 +324,11 @@ class RulesEngine:
 
     def is_breakthrough_sender(self, email_addr: str) -> bool:
         """Return True if sender is in breakthrough_allowlist (glob match)."""
-        allowlist: list = self._config.get("breakthrough_allowlist") or []
+        allowlist = self._pattern_list(
+            self._config.get("breakthrough_allowlist"), "breakthrough_allowlist"
+        )
         addr_lower = email_addr.lower()
-        for pattern in allowlist:
-            if fnmatch(addr_lower, pattern.lower()):
-                return True
-        return False
+        return any(fnmatch(addr_lower, pattern.lower()) for pattern in allowlist)
 
     # ------------------------------------------------------------------
     # Cost properties
@@ -300,7 +354,10 @@ class RulesEngine:
         cost: dict = self._config.get("cost_ceiling", {})
         if not isinstance(cost, dict):
             return 50.0
-        return float(cost.get("monthly_anthropic_usd", 50.0))
+        return _coerce_number(
+            cost.get("monthly_anthropic_usd"), 50.0, float,
+            "cost_ceiling.monthly_anthropic_usd",
+        )
 
     @property
     def cost_warn_at_percent(self) -> int:
@@ -308,12 +365,41 @@ class RulesEngine:
         cost: dict = self._config.get("cost_ceiling", {})
         if not isinstance(cost, dict):
             return 80
-        return int(cost.get("warn_at_percent", 80))
+        return _coerce_number(
+            cost.get("warn_at_percent"), 80, int, "cost_ceiling.warn_at_percent"
+        )
 
 
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
+
+
+def _coerce_number(raw: object, default, caster, field_name: str):
+    """Cast `raw` with `caster`, falling back to `default` instead of raising.
+
+    `dict.get(key, default)` substitutes only when the key is ABSENT, and YAML
+    has a second way to say nothing: `warn_at_percent:` with no value parses as
+    None. Measured 2026-08-29 on that exact file, `int(None)` raised TypeError
+    and `float("fifty")` raised ValueError, both straight out of a property the
+    class docstring promises never to crash on a bad config. A parseable file
+    took the daemon down.
+
+    None means "not configured" and takes the default silently, matching the
+    absent-key case. A value that is present but uncastable is the operator
+    getting something wrong, so it is worth a line in the log: their ceiling is
+    not the number they wrote.
+    """
+    if raw is None:
+        return default
+    try:
+        return caster(raw)
+    except (TypeError, ValueError):
+        log.warning(
+            "email-triage-rules.yaml: %s=%r is not a number; using %r",
+            field_name, raw, default,
+        )
+        return default
 
 
 def _parse_hhmm(value: str) -> Optional[time]:

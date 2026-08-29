@@ -8,8 +8,8 @@ scripts/utils/ops_signals.py into a two-tier view:
     and stay SILENT unless auto-heal has failed >= AUTOHEAL_ESCALATE consecutive
     times - at which point a critical "auto-heal FAILED" line surfaces.
   Tier B (sovereign manual): backup, publish-to-fleet, weekly-review, cold-sweep,
-    Odin collect/reflect. These surface an EXCEPTION-ONLY, COUNTS-ONLY nudge when
-    objectively overdue and not suppressed.
+    Odin collect/reflect. These surface an EXCEPTION-ONLY nudge when objectively
+    overdue and not suppressed: one line carrying each due signal's summary.
 
 Suppression: an `ack` silences a signal until its TTL expires OR its severity
 band worsens; `crunch on` suppresses everything except the critical floor
@@ -20,13 +20,17 @@ I/O goes through the data-root helpers; state files are written atomically.
 
 Usage:
     python3 scripts/ops-radar.py                  # detailed due-items view (or "all clear")
-    python3 scripts/ops-radar.py --quiet          # counts-only one line; empty when nothing due
+    python3 scripts/ops-radar.py --quiet          # due-item summaries on one line; empty when nothing due
     python3 scripts/ops-radar.py --json           # machine-readable
     python3 scripts/ops-radar.py ack backup [--ttl 24h]
     python3 scripts/ops-radar.py crunch on|off
     python3 scripts/ops-radar.py heal             # Tier-A auto-heal (ollama/index)
 
-Exit 0 always (a detector, not a gate).
+Exit 0 on every DETECTION path (a detector, not a gate). The mutating
+subcommands are not covered by that: `ack` exits 2 on an unknown signal key, and
+argparse exits 2 on malformed usage. A wrapper that reads any nonzero exit as
+"the radar is broken" misfires on a typo'd ack, which is why the word "always"
+came out of this line.
 """
 from __future__ import annotations
 
@@ -62,11 +66,18 @@ ACK_FILE = "ack.json"
 CRUNCH_FILE = "crunch.json"
 AUTOHEAL_FILE = "autoheal.json"
 
-# Known signal keys that `ack` will accept (plus the synthetic auto-heal keys).
+# Known signal keys that `ack` will accept. The synthetic auto-heal keys are
+# DERIVED from TIER_A_TARGETS rather than spelled out, because the comment here
+# already claimed they were accepted and they were not: `autoheal_signals` mints
+# them as f"{target}_autoheal", so an escalated Tier-A failure surfaced a
+# critical line on every run, crunch could not suppress it (critical pierces the
+# floor by design), and `ack ollama_autoheal` exited 2 with "unknown signal key".
+# That is the exact stuck state `ack` exists for. Deriving the names keeps a
+# future Tier-A target ackable without a second edit anyone can forget.
 KNOWN_KEYS = {
     "backup", "publish", "weekly_review", "cold_sweep", "odin_cadence",
     "queue", "ollama", "ollama_accel", "memory_index", "router_accuracy",
-}
+} | {f"{target}_autoheal" for target in TIER_A_TARGETS}
 
 
 # ============================================================
@@ -262,7 +273,16 @@ def cmd_ack(args, state_dir: Path, engine_root: Path, data_root: Path) -> int:
         # tell the ack never happened while the signal kept firing.
         return 2
     # Acked band = the signal's CURRENT severity, so a later worsening re-surfaces.
+    #
+    # The synthetic auto-heal keys live only in `autoheal_signals`, never in the
+    # live list, so resolving the band from `gather_live_signals` alone fell
+    # through to "ok". Measured: an ack banded "ok" leaves a critical
+    # `ollama_autoheal` in `displayed`, because `ack_suppressed` compares
+    # severity_rank(critical) <= severity_rank(ok) and that is false. Accepting
+    # the key without this line would have stored an ack that silenced nothing,
+    # which is worse than the exit-2 refusal it replaced.
     signals = gather_live_signals(engine_root, data_root)
+    signals = signals + autoheal_signals(signals, load_json(state_dir / AUTOHEAL_FILE))
     cur = next((s for s in signals if s["key"] == key), None)
     band = cur["severity"] if cur else "ok"
     ttl = parse_ttl(args.ttl, key)
@@ -457,7 +477,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Manual-actions + silent-health detector.")
     ap.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     ap.add_argument("--quiet", action="store_true",
-                    help="print a counts-only one-line summary; nothing when nothing is due")
+                    help="print the due-item summaries on one line; nothing when nothing is due")
     sub = ap.add_subparsers(dest="cmd")
 
     p_ack = sub.add_parser("ack", help="silence a signal until TTL or worsening")

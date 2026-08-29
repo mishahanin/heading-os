@@ -54,7 +54,21 @@ def parse_partnerships(content: str) -> list[dict]:
             in_table, seen_sep = True, False
             continue
         if in_table and line.strip().startswith("|"):
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            # Split on UNESCAPED pipes only. GitHub-flavoured markdown writes a
+            # literal pipe inside a cell as `\|`, and a plain `split("|")` does
+            # not honour that escape. Measured on a row whose topic read
+            # `JV \| licensing talks`: topic came out `JV \`, and every later
+            # column shifted one left, so stage got `licensing talks`, priority
+            # got the real stage `Active`, and stage_date got the priority. The
+            # row still had five cells, so nothing skipped it -- it was parsed
+            # wrong and rendered into partners.md as fact, with `_health()`
+            # reading `licensing talks` and returning `--` for a GREEN partner.
+            #
+            # The `\|` is deliberately LEFT escaped rather than unescaped here:
+            # `render_scorecard` writes the topic cell through verbatim, so an
+            # unescaped pipe would break the generated table open at exactly the
+            # column this fix repaired.
+            cells = [c.strip() for c in re.split(r"(?<!\\)\|", line.strip().strip("|"))]
             if not seen_sep:
                 # A GitHub-flavoured separator row may carry alignment colons:
                 # `|:---|---:|:---:|`. `startswith("---")` matched none of
@@ -134,6 +148,20 @@ def splice(partners_md: str, table: str) -> str:
         )
     pattern = re.compile(
         re.escape(BEGIN) + r"[\s\S]*?" + re.escape(END), re.MULTILINE)
+    if not pattern.search(partners_md):
+        # Presence is not order. Measured on a partners.md whose two marker
+        # lines were swapped: both markers are present so the guard above
+        # passes, `BEGIN[\s\S]*?END` then matches nothing, `pattern.sub` returns
+        # the input untouched, and `--update` prints "wrote N partnerships"
+        # while `--check` prints "in sync" over the stale table. That is the
+        # silent no-op the ValueError above says must never happen, arriving
+        # through the one door the marker-presence check left open.
+        raise ValueError(
+            f"partners.md has the {BEGIN} / {END} marker pair out of order "
+            f"(END before BEGIN, or a stray marker between them); nothing can "
+            f"be spliced, and reporting success over an unchanged file is the "
+            f"failure this generator exists to prevent"
+        )
     # A FUNCTION replacement, not a string one: as a string, `re.sub` reads
     # backslashes in the generated table as escape sequences, so a partner name
     # or topic holding a Windows path either corrupted the output or raised

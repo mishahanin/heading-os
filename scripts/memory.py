@@ -110,15 +110,24 @@ def build_parser() -> argparse.ArgumentParser:
         prog="memory.py",
         description="One console-first entry point over the six memory operations.",
     )
+    # An unrecognised flag is REFUSED unless the subcommand opts in below. This
+    # facade runs on `parse_known_args`, which silently pockets anything it does
+    # not know, and three subcommands never read that pocket: `retire --dry-run
+    # feedback_foo.md` dropped the flag and performed a REAL all-store retire,
+    # and `reconcile --queit` ran loud with no complaint. `retire-memory.py` has
+    # no `--dry-run` at all, so the operator's expectation was wrong twice over.
+    # The default is the safe one, so a subcommand added later refuses until its
+    # author decides otherwise.
+    p.set_defaults(passthrough=False)
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="read-only overview").set_defaults(func=cmd_status)
 
     sp = sub.add_parser("recall", help="semantic query over the memory index")
     sp.add_argument("text", help="query text")
-    sp.set_defaults(func=cmd_recall)
+    sp.set_defaults(func=cmd_recall, passthrough=True)
 
-    sub.add_parser("promote", help="promote a knowledge note to corporate (passthrough --note PATH --type TYPE)").set_defaults(func=cmd_promote)
+    sub.add_parser("promote", help="promote a knowledge note to corporate (passthrough --note PATH --type TYPE)").set_defaults(func=cmd_promote, passthrough=True)
 
     sp = sub.add_parser("retire", help="all-store retire by name")
     sp.add_argument("names", nargs="+", help="memory file name(s), e.g. feedback_foo.md")
@@ -128,7 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--quiet", action="store_true")
     sp.set_defaults(func=cmd_reconcile)
 
-    sub.add_parser("hygiene", help="run the objective-defect detector (passthrough --json / --no-report)").set_defaults(func=cmd_hygiene)
+    sub.add_parser("hygiene", help="run the objective-defect detector (passthrough --json / --no-report)").set_defaults(func=cmd_hygiene, passthrough=True)
 
     return p
 
@@ -179,6 +188,13 @@ def main(argv: list[str] | None = None) -> int:
     # hygiene --json) reach the backing script instead of erroring on a leading
     # unknown optional (argparse REMAINDER does not capture a leading flag).
     args, extras = build_parser().parse_known_args(argv)
+    if extras and not args.passthrough:
+        print(f"memory.py {args.command}: unrecognised argument(s): "
+              f"{' '.join(extras)}\n"
+              f"This subcommand passes nothing through, so the flag would have "
+              f"been DISCARDED and the command run without it.",
+              file=sys.stderr)
+        return 2
     args.extras = extras
     return args.func(args)
 

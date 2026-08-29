@@ -282,7 +282,7 @@ LOGGED = (
 
 
 def test_a_trailing_section_is_post_log_not_part_of_the_last_entry():
-    pre, entries, post = mc.extract_interaction_log(LOGGED)
+    pre, entries, post, _lead = mc.extract_interaction_log(LOGGED)
     assert entries == ["### 2026-01-01\nentry one\n"]
     assert post.startswith("## Follow-ups")
     assert "Follow-ups" not in entries[0]
@@ -291,7 +291,7 @@ def test_a_trailing_section_is_post_log_not_part_of_the_last_entry():
 def test_an_entry_header_is_not_mistaken_for_a_section_header():
     """`### ` is three hashes, so the level-2 pattern cannot align with it."""
     body = ("## Interaction Log\n\n### 2026-01-01\na\n\n### 2026-02-01\nb\n")
-    _, entries, post = mc.extract_interaction_log(body)
+    _, entries, post, _lead = mc.extract_interaction_log(body)
     assert len(entries) == 2
     assert post == ""
 
@@ -322,7 +322,7 @@ def test_a_dated_line_below_a_later_section_is_not_pulled_back_into_the_log():
         "## Follow-ups\nnotes\n\n"
         "### 2026-03-01\nnot a log entry\n"
     )
-    _, entries, post = mc.extract_interaction_log(body)
+    _, entries, post, _lead = mc.extract_interaction_log(body)
     assert entries == ["### 2026-01-01\nentry one\n"]
     assert "Follow-ups" not in entries[0]
     assert post.count("2026-03-01") == 1, "the trailing block was duplicated"
@@ -331,13 +331,13 @@ def test_a_dated_line_below_a_later_section_is_not_pulled_back_into_the_log():
 
 def test_a_log_with_no_entries_still_keeps_its_content():
     body = "## Interaction Log\n\nfreeform note, no dated entries\n"
-    _, entries, post = mc.extract_interaction_log(body)
+    _, entries, post, _lead = mc.extract_interaction_log(body)
     assert entries == []
     assert "freeform note" in post
 
 
 def test_a_record_with_no_log_header_is_returned_untouched():
-    pre, entries, post = mc.extract_interaction_log("just a body\n")
+    pre, entries, post, _lead = mc.extract_interaction_log("just a body\n")
     assert (pre, entries, post) == ("just a body\n", [], "")
 
 

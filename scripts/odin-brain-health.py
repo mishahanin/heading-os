@@ -6,6 +6,7 @@ Usage:
     python scripts/odin-brain-health.py --update-index   # Regenerate INDEX.md
     python scripts/odin-brain-health.py --validate       # Validate all brain files (exit 1 if issues)
     python scripts/odin-brain-health.py --stats          # Quick stats only
+    python scripts/odin-brain-health.py --compile        # JSON compile report for the /odin semantic layer
 """
 import argparse
 import json
@@ -241,6 +242,35 @@ def find_orphan_principles(files):
     return orphans
 
 
+def _source_ref_forms(fm, path) -> set:
+    """Every string another note may legitimately use to reference this source.
+
+    `find_orphan_principles` already documents the convention for
+    position-to-principle links: references come "in two interchangeable forms,
+    by timestamp id or by filename slug", and it checks both. The two joins that
+    walk principle `sources:` lists checked only the id, so a slug-form link
+    read as no link at all.
+
+    Measured read-only against the live brain 2026-08-29 (57 sources, 294
+    principles, 441 principle-to-source references): 13 references use the slug
+    form. That suppressed one genuine multi-author domain cluster outright, the
+    `creativity` keyword with 5 principles, whose two sources resolved to one
+    author instead of two and so failed the `len(authors) >= 2` gate. It also
+    produced 11 of the 1318 reported keyword overlaps as false positives,
+    "shares 2+ keywords but isn't wiki-linked" about a link that exists.
+
+    An empty or whitespace-only `id:` is dropped rather than registered. Every
+    id-less source would otherwise share the one `""` key, later file
+    overwriting earlier, merging their distinct authors into one. No source on
+    the live brain has an empty id today, so that half is latent, not measured.
+    """
+    forms = {path.stem}
+    sid = str(fm.get("id", "") or "").strip()
+    if sid:
+        forms.add(sid)
+    return forms
+
+
 def find_domain_clusters(files):
     """Group principles by keyword and count distinct authors via source lookup."""
     keyword_map = defaultdict(list)
@@ -259,13 +289,17 @@ def find_domain_clusters(files):
                 "source_ids": source_ids,
             })
 
+    # Keyed by BOTH reference forms, so a principle that links its source by
+    # filename slug still contributes that source's author. See _source_ref_forms.
     source_authors = {}
     for f in files["sources"]:
         fm = parse_frontmatter(f)
         if fm:
-            source_authors[fm.get("id", "")] = fm.get("author", "Unknown")
+            for ref in _source_ref_forms(fm, f):
+                source_authors[ref] = fm.get("author", "Unknown")
 
     clusters = []
+    unresolved = set()
     for keyword, principles in keyword_map.items():
         if len(principles) < 3:
             continue
@@ -276,6 +310,8 @@ def find_domain_clusters(files):
         for sid in all_source_ids:
             if sid in source_authors:
                 authors.add(source_authors[sid])
+            else:
+                unresolved.add(str(sid))
         if len(authors) >= 2:
             clusters.append({
                 "keyword": keyword,
@@ -285,6 +321,23 @@ def find_domain_clusters(files):
                 "author_count": len(authors),
                 "authors": sorted(authors),
             })
+    if unresolved:
+        # Reported, THEN skipped, the same shape as the handler in
+        # `find_stale_seeds`. A reference naming a source with no file in
+        # `sources/` has no author to contribute, so dropping it is right; doing
+        # it WORDLESSLY is not. A cluster is only reported at `len(authors) >=
+        # 2`, so each dropped reference can silently take a whole genuine
+        # multi-author cluster out of a report that then reads as complete.
+        #
+        # Measured read-only on the live brain 2026-08-29: 80 of the 441
+        # principle-to-source references resolve to no source file, across 57
+        # sources and 294 principles. That is the normal case here, not an edge
+        # one, which is why this is a count on stderr rather than a line per
+        # reference. No author is invented for them: an unknown author stays
+        # uncounted, and the operator is told how much was uncounted.
+        print(f"{YELLOW}warn:{RESET} {len(unresolved)} principle source "
+              f"reference(s) name no file in sources/; their authors could not "
+              f"be counted toward any cluster.", file=sys.stderr)
     return sorted(clusters, key=lambda x: x["principle_count"], reverse=True)
 
 
@@ -296,7 +349,7 @@ def find_keyword_overlaps(files):
         if fm:
             kws = frontmatter_list(fm.get("keywords"))
             source_keywords[f"sources/{f.name}"] = {
-                "id": fm.get("id", ""),
+                "refs": _source_ref_forms(fm, f),
                 "keywords": set(k.lower() for k in kws),
             }
 
@@ -310,14 +363,14 @@ def find_keyword_overlaps(files):
                 linked_sources = [linked_sources]
             principle_data[f"principles/{f.name}"] = {
                 "keywords": set(k.lower() for k in kws),
-                "linked_sources": set(linked_sources),
+                "linked_sources": {str(s) for s in linked_sources},
             }
 
     overlaps = []
     for src_path, src_info in source_keywords.items():
         for pri_path, pri_info in principle_data.items():
             shared = src_info["keywords"] & pri_info["keywords"]
-            if len(shared) >= 2 and src_info["id"] not in pri_info["linked_sources"]:
+            if len(shared) >= 2 and not (src_info["refs"] & pri_info["linked_sources"]):
                 overlaps.append({
                     "source_file": src_path,
                     "principle_file": pri_path,
@@ -328,24 +381,57 @@ def find_keyword_overlaps(files):
 
 
 def find_stale_seeds(files, stale_days=7):
-    """Find brain files with status=seed older than stale_days."""
+    """Find brain files with status=seed older than stale_days.
+
+    The date field is resolved PER SUBDIR, first field carrying a value wins. A
+    source is dated by `ingested:`, which is what REQUIRED_FIELDS["source"]
+    demands; `created:` is not a required field on a source at all. Requiring
+    `created:` meant a fully valid source seed was skipped every time, silently,
+    and the report then asserted a smaller stale count with nothing said, the
+    exact failure mode the handler below was written to end. Reproduced
+    2026-08-29 on a constructed source seed carrying `ingested: 2026-01-01` and
+    no `created:`: 240 days old, and the function returned nothing. The live
+    brain holds 0 source seeds today, so the defect is real but currently
+    unexercised.
+
+    `created` is tried BEFORE `ingested`, which is the reverse of the order
+    `_recent_rows` uses for the same subdir, and the difference is deliberate.
+    `_recent_rows` answers "when was this learned", where the ingest date is the
+    better recency signal. This answers "how long has this seed sat unfinished",
+    where a seed that states its own `created:` is stating exactly that, and
+    `knowledge-health.py` reads the same field over the sibling subtree. Putting
+    `ingested` first would change the answer for every source carrying both
+    fields and split the two engines apart again, which
+    tests/test_a_health_engine_that_scanned_a_name_list.py pins shut. Falling
+    back keeps this purely additive: it covers the sources nothing covered
+    before and moves no source that was already covered.
+
+    The result key stays `created` whichever field supplied the value: it is the
+    documented contract with the /odin compile pipeline, and renaming it would
+    break a consumer to fix a label.
+    """
     stale = []
     today = datetime.now(get_default_tz()).date()
+    seed_date_fields = {"sources": ("created", "ingested")}
     for subdir in ["sources", "principles", "positions", "reference"]:
         for f in files[subdir]:
             fm = parse_frontmatter(f)
             if not fm:
                 continue
-            if fm.get("status") != "seed" or not fm.get("created"):
+            if fm.get("status") != "seed":
+                continue
+            field = next((k for k in seed_date_fields.get(subdir, ("created",))
+                          if fm.get(k)), None)
+            if field is None:
                 continue
             try:
-                created = _as_date(fm["created"])
+                created = _as_date(fm[field])
                 age = (today - created).days
                 if age > stale_days:
                     stale.append({
                         "file": f"{subdir}/{f.name}",
                         "title": fm.get("title", f.stem),
-                        "created": fm["created"],
+                        "created": fm[field],
                         "age_days": age,
                     })
             except ValueError as exc:
@@ -364,8 +450,11 @@ def find_stale_seeds(files, stale_days=7):
                 # `yaml.safe_load` can produce has a safe `__str__`. A named
                 # exception a function cannot raise reads as a case that was
                 # considered, which is a false claim about behaviour.
+                # Names the field it actually read. Hard-coding `created` here
+                # would raise KeyError out of the handler on a source dated by
+                # `ingested:`, turning a warning into a crash.
                 print(f"{YELLOW}warn:{RESET} {subdir}/{f.name} has an unreadable "
-                      f"`created:` value ({fm['created']!r}: {exc}); not aged.",
+                      f"`{field}:` value ({fm[field]!r}: {exc}); not aged.",
                       file=sys.stderr)
     return stale
 

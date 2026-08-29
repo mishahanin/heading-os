@@ -115,12 +115,33 @@ def check_marp_installed() -> tuple[bool, str]:
         return False, ""
 
 
+# The first version-looking token in `marp --version` output belongs to
+# marp-cli itself; anything after it names a bundled package.
+_VERSION_TOKEN_RE = re.compile(r"\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?")
+
+
 def check_version_match(installed_version: str) -> bool:
-    """Check if installed version matches pinned version."""
+    """Check if installed version matches pinned version.
+
+    Compares the FIRST version token exactly. The test was
+    `pinned_num in installed_version`, and a substring match is not a version
+    match. MEASURED 2026-08-29 on this machine, where the pin reads
+    `@marp-team/marp-cli@4.4.0` and marp prints
+    `@marp-team/marp-cli v4.5.0 (w/ @marp-team/marp-core v4.4.0)`: the pin
+    matched the bundled marp-core, so `render` and `--self-test` both reported
+    the version as matching while a different marp-cli did the rendering. Same
+    hole for `14.4.0` and `4.4.0-beta.1`, which also answered True.
+
+    An unparsable version string answers False, so an unrecognised format warns
+    rather than claims a match it never established.
+    """
     pinned = get_pinned_version()
     # Extract version number from pin (e.g., "@marp-team/marp-cli@4.1.1" -> "4.1.1")
     pinned_num = pinned.rsplit("@", 1)[-1] if "@" in pinned else pinned
-    return pinned_num in installed_version
+    m = _VERSION_TOKEN_RE.search(installed_version)
+    if not m:
+        return False
+    return m.group(0) == pinned_num
 
 
 # ============================================================
@@ -196,8 +217,29 @@ def _run_marp(cmd: list):
         return None
 
 
+def theme_missing_result() -> dict:
+    """The structured result for an unreadable theme template.
+
+    `prepare_theme` reads `THEME_TEMPLATE` and raises `OSError` when it is
+    absent, and that exception used to walk straight out of `render`,
+    `transform_workspace_md` and `watch_start`. MEASURED 2026-08-29 by pointing
+    `THEME_TEMPLATE` at a path that does not exist: `render` died with a raw
+    `FileNotFoundError` traceback instead of the `{"ok": False, ...}` every
+    other failure in this file returns. The template can genuinely be absent on
+    a partial skill install, or when `--theme-variant` names a variant whose
+    file was never added.
+    """
+    return {"ok": False, "error": "theme-missing",
+            "message": f"Theme template not readable: {THEME_TEMPLATE}. "
+                       f"Check the marp skill install, or the --theme-variant name."}
+
+
 def prepare_theme() -> Path:
-    """Substitute {FONTS_DIR} in theme template and write to temp file. Returns path."""
+    """Substitute {FONTS_DIR} in theme template and write to temp file. Returns path.
+
+    Raises OSError when the template is missing; callers turn that into
+    `theme_missing_result()`.
+    """
     template_text = THEME_TEMPLATE.read_text(encoding="utf-8")
     # Path.as_uri() properly percent-encodes spaces and special characters
     # (e.g., a space becomes "%20", a parenthesis becomes "%28"), which is
@@ -278,6 +320,31 @@ def parse_frontmatter(text: str) -> tuple[dict | None, str]:
     return data, body.strip()
 
 
+def yaml_scalar(value) -> str:
+    """Render one frontmatter value as a YAML scalar.
+
+    One emitter for both frontmatter writers (`inject_frontmatter` and
+    `paginate_heavy`), which carried the same three-branch f-string. Values
+    merged in from an existing deck come from `yaml.safe_load`, so a key with
+    no value arrives as `None`, and `f"{key}: {value}"` wrote `reviewed_by:
+    None`. MEASURED 2026-08-29 on a deck whose frontmatter reads
+    `reviewed_by:`: the round trip through `inject_frontmatter` turned a YAML
+    null into the four-letter STRING "None", silently, on every render.
+    """
+    if isinstance(value, bool):
+        return str(value).lower()
+    if value is None:
+        return "null"
+    if isinstance(value, str) and (" " in value or ":" in value):
+        # json.dumps, not an f-string. A double-quoted YAML scalar uses the
+        # same escaping as JSON, so this handles an embedded `"` or newline,
+        # which the bare interpolation did not: a title of Says "hello"
+        # emitted `title: "Says "hello""`, and marp then failed to parse the
+        # frontmatter or rendered garbled metadata.
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
 def inject_frontmatter(source_text: str, title: str = "", mode: str = "dark",
                        subtitle: str = "", classification: str = "ceo-only") -> str:
     """Inject MARP frontmatter if missing, or merge with existing."""
@@ -311,17 +378,7 @@ def inject_frontmatter(source_text: str, title: str = "", mode: str = "dark",
     # Build frontmatter string
     lines = ["---"]
     for key, value in fm.items():
-        if isinstance(value, bool):
-            lines.append(f"{key}: {str(value).lower()}")
-        elif isinstance(value, str) and (" " in value or ":" in value):
-            # json.dumps, not an f-string. A double-quoted YAML scalar uses the
-            # same escaping as JSON, so this handles an embedded `"` or newline
-            # -- which the bare interpolation did not: a title of Says "hello"
-            # emitted `title: "Says "hello""`, and marp then failed to parse the
-            # frontmatter or rendered garbled metadata.
-            lines.append(f"{key}: {json.dumps(value, ensure_ascii=False)}")
-        else:
-            lines.append(f"{key}: {value}")
+        lines.append(f"{key}: {yaml_scalar(value)}")
     lines.append("---")
     lines.append("")
 
@@ -350,21 +407,27 @@ def fence_mask(lines: list) -> list:
     the fence across two slides; a literal `---` inside a fence made
     `auto_slide_breaks` decide manual breaks already existed and do nothing at
     all, and made `check_overflow` and `paginate_heavy` count one slide as two.
+
+    The fence LENGTH is tracked alongside its character, because CommonMark
+    (and Marpit) close a fence only on a run at least as long as the opener,
+    and a four-backtick outer fence wrapping a three-backtick sample is the
+    canonical way to show a code block inside a deck about markdown. MEASURED
+    2026-08-29 on that exact deck: the mask went False at the inner three
+    backticks, `auto_slide_breaks` read the `## Example` after it as a real H2,
+    and pushed a `---` slide break into the middle of the outer fence.
     """
     mask = []
-    fence = None
+    fence = None  # (character, length) of the open fence
     for line in lines:
         m = _FENCE_RE.match(line)
-        if fence is None and m:
-            fence = m.group(1)[0]
-            mask.append(True)
+        if fence is None:
+            if m:
+                fence = (m.group(1)[0], len(m.group(1)))
+            mask.append(m is not None)
             continue
-        if fence is not None:
-            mask.append(True)
-            if m and m.group(1)[0] == fence:
-                fence = None
-            continue
-        mask.append(False)
+        mask.append(True)
+        if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1]:
+            fence = None
     return mask
 
 
@@ -493,6 +556,32 @@ def check_overflow(source_text: str) -> list[dict]:
     return warnings
 
 
+def fence_aware_paragraphs(slide: str) -> list:
+    """Split a slide on blank lines that are NOT inside a code fence.
+
+    `split_slides` was taught about fences; this second splitter was not, and
+    `re.split(r"\\n\\n+", slide)` chops on any blank line. A blank line inside a
+    fenced code block is legal and ordinary. MEASURED 2026-08-29 on a 181-word
+    slide holding one ```python block with a blank line in it: `paginate_heavy`
+    split on that blank line and produced two slides carrying one fence
+    delimiter each, so the opener never closed and the rest of the deck
+    rendered as code.
+    """
+    lines = slide.split("\n")
+    mask = fence_mask(lines)
+    paragraphs, current = [], []
+    for line, inside in zip(lines, mask, strict=True):
+        if not inside and not line.strip():
+            if current:
+                paragraphs.append("\n".join(current))
+                current = []
+            continue
+        current.append(line)
+    if current:
+        paragraphs.append("\n".join(current))
+    return paragraphs
+
+
 def paginate_heavy(source_text: str) -> str:
     """Sub-break heavy slides on paragraph boundaries."""
     fm, body = parse_frontmatter(source_text)
@@ -501,7 +590,7 @@ def paginate_heavy(source_text: str) -> str:
     for slide in slides:
         words = len(slide.split())
         if words > WORD_OVERFLOW_THRESHOLD:
-            paragraphs = re.split(r"\n\n+", slide)
+            paragraphs = fence_aware_paragraphs(slide)
             if len(paragraphs) > 1:
                 current = []
                 current_words = 0
@@ -525,13 +614,7 @@ def paginate_heavy(source_text: str) -> str:
     if fm is not None:
         fm_lines = ["---"]
         for key, value in fm.items():
-            if isinstance(value, bool):
-                fm_lines.append(f"{key}: {str(value).lower()}")
-            elif isinstance(value, str) and (" " in value or ":" in value):
-                # Same escaping as inject_frontmatter; see the note there.
-                fm_lines.append(f"{key}: {json.dumps(value, ensure_ascii=False)}")
-            else:
-                fm_lines.append(f"{key}: {value}")
+            fm_lines.append(f"{key}: {yaml_scalar(value)}")
         fm_lines.append("---")
         return "\n".join(fm_lines) + "\n\n" + "\n\n---\n\n".join(new_slides)
     return "\n\n---\n\n".join(new_slides)
@@ -551,6 +634,16 @@ def render(source: Path, output_dir: Path = None, pdf_only: bool = False,
     if not source.exists():
         return {"ok": False, "error": "source-not-found",
                 "message": f"Source not found: {source}. Check the path and try again."}
+
+    # `--pdf-only --html-only` skips the PDF branch AND the HTML branch, and
+    # neither branch records an error when it is skipped. MEASURED 2026-08-29:
+    # the call answered {"ok": True, "outputs": [], "errors": []}, so the CLI
+    # printed "Render successful" and exited 0 having written no file at all.
+    # A scripted pipeline reading that exit code ships nothing and says it won.
+    if pdf_only and html_only:
+        return {"ok": False, "error": "conflicting-format-flags",
+                "message": "--pdf-only and --html-only exclude each other; "
+                           "passing both would render nothing. Pass one, or neither."}
 
     # Check marp-cli
     installed, version_str = check_marp_installed()
@@ -582,7 +675,10 @@ def render(source: Path, output_dir: Path = None, pdf_only: bool = False,
         source_text = clean_text
 
     # Prepare theme
-    theme_path = prepare_theme()
+    try:
+        theme_path = prepare_theme()
+    except OSError:
+        return theme_missing_result()
 
     # Write temp source (never mutate original). Place it next to the
     # original so relative image paths (e.g. `![bg](_assets/foo.png)`)
@@ -678,6 +774,19 @@ def render(source: Path, output_dir: Path = None, pdf_only: bool = False,
         # Render PNG images
         if images_png:
             img_out = out_dir / f"{stem}.001.png"
+            # Fingerprint what is already on disk under this stem. The glob
+            # after the run matches every `{stem}.*.png` in the directory, not
+            # what this invocation wrote, and output directories are reused.
+            # MEASURED 2026-08-29 with a stub marp that exits 0 and writes
+            # nothing: a `deck.004.png` left by an earlier run was reported as
+            # a fresh output of this one, and its presence satisfied the
+            # no-output check below, which exists to catch exactly that.
+            # Size rides along with mtime so a same-second rewrite of a
+            # different length still reads as new.
+            before = {}
+            for png in out_dir.glob(f"{stem}.*.png"):
+                st = png.stat()
+                before[png] = (st.st_mtime_ns, st.st_size)
             cmd = base_cmd + ["--images", "png", "-o", str(out_dir / f"{stem}.png")]
             if verbose:
                 print(f"{GRAY}Running: {' '.join(cmd)}{RESET}")
@@ -686,8 +795,13 @@ def render(source: Path, output_dir: Path = None, pdf_only: bool = False,
                 errors.append({"type": "png", "error": "timeout",
                                "message": "marp-cli did not finish within 120s."})
             elif result.returncode == 0:
-                # Count generated PNGs
-                pngs = list(out_dir.glob(f"{stem}.*.png"))
+                # Count the PNGs THIS run wrote: new files, plus ones whose
+                # fingerprint moved.
+                pngs = []
+                for png in sorted(out_dir.glob(f"{stem}.*.png")):
+                    st = png.stat()
+                    if before.get(png) != (st.st_mtime_ns, st.st_size):
+                        pngs.append(png)
                 for png in pngs:
                     outputs.append({"type": "png", "path": str(png), "size": png.stat().st_size})
                 # A zero exit with no files is still a failure. The PDF and HTML
@@ -696,7 +810,7 @@ def render(source: Path, output_dir: Path = None, pdf_only: bool = False,
                 # absent and `ok` stayed True.
                 if not pngs:
                     errors.append({"type": "png", "error": "no-output",
-                                   "message": f"marp-cli exited 0 but wrote no "
+                                   "message": f"marp-cli exited 0 but wrote no new "
                                               f"{stem}.*.png in {out_dir}."})
             else:
                 err_msg = result.stderr.strip() if result.stderr else "Unknown error"
@@ -806,8 +920,15 @@ def transform_workspace_md(source: Path, break_at: str = "h2", mode: str = None,
     # Assemble full source
     full_body = "\n\n---\n\n".join(slides)
 
-    # Inject frontmatter
+    # Inject frontmatter. `subtitle=` was omitted, so `slide_subtitle` reached
+    # the cover slide and nothing else. MEASURED 2026-08-29 by walking the AST
+    # of this function: the single `inject_frontmatter` call passed title, mode
+    # and classification only, which left the `subtitle` parameter of
+    # `inject_frontmatter` with no caller anywhere in the file and every deck
+    # generated by `from` without a `subtitle:` key, whatever `--subtitle` or
+    # the WORKSPACE_DEFAULTS table said.
     full_source = inject_frontmatter(full_body, title=doc_title, mode=slide_mode,
+                                     subtitle=slide_subtitle,
                                      classification="ceo-only")
 
     # Paginate heavy if requested
@@ -877,7 +998,10 @@ def watch_start(source: Path) -> dict:
                 "message": f"marp-cli not installed. Run: npm install -g {pinned}"}
 
     # Prepare theme
-    theme_path = prepare_theme()
+    try:
+        theme_path = prepare_theme()
+    except OSError:
+        return theme_missing_result()
 
     # Build command
     cmd = [
@@ -1065,14 +1189,25 @@ def self_test() -> dict:
         "detail": browser or "Not found (Chromium will be downloaded)"
     })
 
-    # 3. Check sample deck exists
+    # 3. Check the theme template exists. Every render reads it, and until now
+    # the self-test checked the sample deck and the browser but not this file,
+    # so a missing template killed `--self-test` itself with a traceback at
+    # step 4 rather than reporting a failed check.
+    if not THEME_TEMPLATE.exists():
+        results["checks"].append({"name": "theme template", "ok": False,
+                                  "detail": f"NOT FOUND: {THEME_TEMPLATE}"})
+        results["ok"] = False
+        return results
+    results["checks"].append({"name": "theme template", "ok": True, "detail": str(THEME_TEMPLATE)})
+
+    # 4. Check sample deck exists
     if not SAMPLE_DECK.exists():
         results["checks"].append({"name": "sample deck", "ok": False, "detail": "NOT FOUND"})
         results["ok"] = False
         return results
     results["checks"].append({"name": "sample deck", "ok": True, "detail": str(SAMPLE_DECK)})
 
-    # 4. Render to temp dir
+    # 5. Render to temp dir
     with tempfile.TemporaryDirectory(prefix="marp-test-") as tmp_dir:
         tmp_path = Path(tmp_dir)
         start_time = time.time()
@@ -1189,8 +1324,12 @@ def main():
     # the top-level value in the same namespace, so `marp_render.py --verbose
     # render deck.md` reported verbose=False - the flag was accepted, echoed in
     # --help, and discarded. Measured with argparse directly on 2026-08-27.
-    # It is now accepted in EITHER position because the sub-declaration below
-    # inherits this one's value through `default=argparse.SUPPRESS`.
+    # It is now accepted in EITHER position because each sub-declaration below
+    # inherits this one's value through `default=argparse.SUPPRESS`. That has
+    # to hold for EVERY subcommand: `watch` had no redeclaration at all, so
+    # `marp_render.py watch deck.md --verbose` exited on "unrecognized
+    # arguments: --verbose" while the comment claimed either position worked.
+    # Measured on the CLI, 2026-08-29.
     parser.add_argument("--verbose", action="store_true", help="Verbose output")
     parser.add_argument("--theme-variant", choices=sorted(THEME_VARIANTS),
                         default="31c",
@@ -1202,8 +1341,11 @@ def main():
     # render
     render_p = subparsers.add_parser("render", help="Render a MARP .md file")
     render_p.add_argument("source", type=Path, help="Source .md file")
-    render_p.add_argument("--pdf-only", action="store_true")
-    render_p.add_argument("--html-only", action="store_true")
+    # Mutually exclusive at the CLI so argparse names the conflict, and guarded
+    # again inside `render` for programmatic callers. See the note there.
+    formats = render_p.add_mutually_exclusive_group()
+    formats.add_argument("--pdf-only", action="store_true")
+    formats.add_argument("--html-only", action="store_true")
     render_p.add_argument("--images", choices=["png"], help="Also generate PNG images")
     render_p.add_argument("--output", type=Path, help="Output directory")
     render_p.add_argument("--auto-sanitize", action="store_true", default=False,
@@ -1228,6 +1370,8 @@ def main():
     # watch
     watch_p = subparsers.add_parser("watch", help="Watch mode")
     watch_p.add_argument("action", nargs="?", default=None, help="Path to watch, or 'stop'/'status'")
+    watch_p.add_argument("--verbose", action="store_true",
+                         default=argparse.SUPPRESS)
 
     args = parser.parse_args()
 

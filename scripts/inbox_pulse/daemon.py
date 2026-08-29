@@ -114,6 +114,27 @@ def install_signal_handlers() -> None:
 # ---------------------------------------------------------------------------
 POLL_INTERVAL_SECONDS = 30
 
+# How far below the persisted cursor the next poll's window opens.
+#
+# The cursor is a high-water mark one second past the newest item processed,
+# and the poll filter is `datetime_received__gt`, which is STRICT. On-prem EWS
+# stores datetime_received truncated to whole seconds, so the only values the
+# server can ever hold are whole seconds -- and the cursor names one of them
+# exactly. Anything stamped in that second therefore compares EQUAL to the
+# cursor, never GREATER, and is excluded from this poll and from every poll
+# after it. Measured 2026-08-29 against a fake mailbox that reproduces the
+# truncation and the strict comparison: one item at 10:00:00 advanced the
+# cursor to 10:00:01, a message that landed stamped 10:00:01 was then withheld
+# from four consecutive polls, and it would never have been logged.
+#
+# Opening the window one microsecond lower makes the strict comparison behave
+# like `>=` for whole-second stamps, so that second is served exactly once and
+# nothing below it is replayed. It is safe whichever way the server rounds the
+# filter value: rounded down it lands on the previous second (whose items are
+# already past the cursor and excluded anyway), rounded up it reproduces
+# today's behaviour, so this can lose nothing that is not already lost.
+_POLL_FLOOR_NUDGE = timedelta(microseconds=1)
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -264,8 +285,12 @@ def _main_loop(
 
     Cursor management:
     - On first poll (cursor is None), sets cursor to now (skips historical email).
-    - After each successful poll cycle, cursor advances to the most-recent
-      item's datetime_received (or stays put if no new items).
+    - Each item advances the cursor to its own datetime_received plus one
+      second, persisted the moment that item's log line is written, so a poll
+      that dies half way through cannot replay what it already logged.
+    - Each poll opens its window one microsecond BELOW the cursor, because the
+      EWS filter is strictly greater-than over whole-second stamps. See
+      `_POLL_FLOOR_NUDGE`.
     - Cursor persists across daemon restarts via state file (key: inbox_cursor).
 
     Shadow-mode (Phase 2):
@@ -290,8 +315,7 @@ def _main_loop(
             if rules_engine is not None and rules_engine.reload_if_changed():
                 logger.info("Rules YAML reloaded")
 
-            latest_received = cursor
-            for event in ews.poll_inbox(since=cursor):
+            for event in ews.poll_inbox(since=cursor - _POLL_FLOOR_NUDGE):
                 if shutdown_event.is_set():
                     break
 
@@ -367,20 +391,31 @@ def _main_loop(
                     log_entry["tier_guess"],
                 )
 
-                # Update cursor candidate to this item's datetime_received
+                # Advance the cursor NOW, for the item just written, rather than
+                # once the whole generator has drained.
+                #
+                # `poll_inbox` raises mid-iteration on a dropped connection or an
+                # EWS error, and the handler below swallows it and `continue`s.
+                # While the advance sat after the loop, every item already
+                # appended in that cycle was left behind an unmoved cursor, so
+                # the next poll re-fetched and re-appended all of them. Measured
+                # 2026-08-29 against a fake mailbox that raises after serving two
+                # of three items: the JSONL came out
+                # ['MSG-A', 'MSG-B', 'MSG-A', 'MSG-B', 'MSG-C']. The report
+                # pipeline counts those rows, so tier totals, domain counts and
+                # suggestion thresholds all double-counted the pair.
+                #
+                # Persisting per item makes the cursor mean what the log says:
+                # everything at or below it is on disk. A crash between the
+                # append and this line can still repeat one item, which is the
+                # smallest window the two writes allow.
                 if event["datetime_received"]:
                     item_received = datetime.fromisoformat(event["datetime_received"])
-                    if latest_received is None or item_received > latest_received:
-                        latest_received = item_received
-
-            # Advance cursor if any new items were processed.
-            # Add 1 second so the next filter(datetime_received__gt=cursor) does not
-            # re-fetch the boundary item (EWS on-prem truncates received timestamps
-            # to whole seconds, so __gt with the exact timestamp is unreliable).
-            if latest_received != cursor:
-                cursor = latest_received + timedelta(seconds=1)
-                set_cursor_fn(cursor)
-                logger.debug("Cursor advanced to %s", cursor.isoformat())
+                    candidate = item_received + timedelta(seconds=1)
+                    if candidate > cursor:
+                        cursor = candidate
+                        set_cursor_fn(cursor)
+                        logger.debug("Cursor advanced to %s", cursor.isoformat())
 
         except Exception as exc:
             logger.warning("Poll cycle failed, retrying after backoff: %s", exc, exc_info=True)

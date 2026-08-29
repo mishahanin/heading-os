@@ -3,7 +3,8 @@
 
 Thin orchestrator (no LLM, no state write of its own). On each fire it:
   1. runs `ops-radar.py heal` (Tier-A: restart ollama / rebuild a stale index),
-  2. runs `ops-radar.py --quiet` (exception-only, COUNTS-ONLY line),
+  2. runs `ops-radar.py --quiet` (exception-only; one line of signal
+     LABELS and COUNTS, never operational content),
   3. sends that line to the CEO's Telegram alert channel ONLY when non-empty.
 
 When nothing is due it sends nothing. A transient send failure is logged and
@@ -71,7 +72,10 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 - heal failure is non-critical to the nudge
         _log(f"heal step failed to run ({type(exc).__name__}: {exc}); continuing to nudge")
 
-    # 2. Exception-only counts-only line.
+    # 2. The exception-only line. `--quiet` prints each due signal's summary,
+    #    and every summary is a fixed label plus numbers. That is what makes the
+    #    wire safe, not the word "counts": see the NEVER clause in
+    #    `.claude/skills/radar/SKILL.md`.
     try:
         proc = subprocess.run([sys.executable, str(radar), "--quiet"],
                               cwd=str(root), capture_output=True, text=True, timeout=QUIET_TIMEOUT)
@@ -96,7 +100,9 @@ def main() -> int:
         _log("nothing due -- no nudge to send")
         return 0
 
-    # 3. Send the counts-only line to the alert channel (override-able target).
+    # 3. Send THAT line, and only that line, to the alert channel. Never the
+    #    detailed view and never the JSON: both carry paths and per-item detail
+    #    that the sovereignty clause keeps off an external wire.
     recipient = (
         os.environ.get("OPS_RADAR_TELEGRAM_TARGET")
         or os.environ.get("ODIN_CADENCE_TELEGRAM_TARGET")

@@ -205,6 +205,54 @@ def _to_local(value, local_tz):
         return None
 
 
+UNDATED_KEY = "undated"
+"""Grouping key for an event whose start is missing.
+
+`str(None)[:10]` is the four characters "None", so a malformed item produced a
+`## None` heading in upcoming.md and a per-day file literally named `None.md`.
+`DAY_FILE_RE` never matches that name, so the prune pass could not remove it and
+it stayed on disk forever. MEASURED 2026-08-29 with one `start=None` item in the
+range.
+
+The word, not a bracketed label: the day sections are written in
+`sorted(by_date.keys())` order, and a letter sorts after every ISO date while a
+punctuation mark sorts before all of them. The undated bucket belongs at the end
+of the file, where the accidental "None" key used to put it.
+"""
+
+
+def _start_sort_key(value, local_tz):
+    """A total ordering over starts that mix EWSDate, EWSDateTime and None.
+
+    `sorted(events, key=lambda e: e.start)` raised
+    `TypeError: can't compare EWSDateTime to EWSDate` as soon as one all-day
+    event shared a range with one timed meeting, and the whole calendar lane
+    died at that line: `_to_local`, the grouping, the duration handling and the
+    stale-file prune below were all built for exactly these inputs and none of
+    them ever ran. `sync_calendar` returned -1 and the process exited 1.
+
+    MEASURED 2026-08-29 on exchangelib 5.6.0, and the crash even depended on
+    arrival order. `date.__lt__` compares happily against a datetime, while
+    `datetime.__lt__` refuses, so `[all-day, timed]` raised and `[timed,
+    all-day]` silently sorted by year/month/day alone. A calendar view returns
+    the all-day item first, which is the half that raised.
+
+    Every component is an int, so no comparison here can raise whatever the
+    server sends. Day first, then the clock, so an all-day event leads its own
+    day; a start that is neither a date nor a datetime sorts last rather than
+    taking the lane down.
+    """
+    if isinstance(value, datetime):
+        local = _to_local(value, local_tz)
+        if local is not None:
+            return (0, local.year, local.month, local.day,
+                    local.hour * 60 + local.minute)
+        return (1, 0, 0, 0, 0)
+    if isinstance(value, date):
+        return (0, value.year, value.month, value.day, -1)
+    return (1, 0, 0, 0, 0)
+
+
 def _event_time_str(value, local_tz):
     """`HH:MM` in local time, or a best-effort label for a non-datetime start."""
     local = _to_local(value, local_tz)
@@ -249,7 +297,7 @@ def sync_calendar(account, days=7, timezone_str=None):
     print(f"[INFO] Fetching calendar events: {start.date()} to {end.date()}...")
 
     events = account.calendar.view(start=start, end=end)
-    event_list = sorted(events, key=lambda e: e.start)
+    event_list = sorted(events, key=lambda e: _start_sort_key(e.start, local_tz))
 
     if not event_list:
         print("[INFO] No calendar events found in this range.")
@@ -260,6 +308,8 @@ def sync_calendar(account, days=7, timezone_str=None):
         local = _to_local(event.start, local_tz)
         if local is not None:
             date_key = local.date()
+        elif event.start is None:
+            date_key = UNDATED_KEY
         else:
             date_key = event.start.date() if hasattr(event.start, "date") else str(event.start)[:10]
         date_str = str(date_key)
@@ -355,6 +405,12 @@ def sync_calendar(account, days=7, timezone_str=None):
     # Also write per-day files
     written_days = set()
     for date_str, day_events in by_date.items():
+        # Only a real day gets a per-day file. `_prune_stale_day_files` can
+        # remove nothing whose name `DAY_FILE_RE` does not match, so writing
+        # `(undated).md` would create a file that outlives every later sync.
+        # The undated bucket is still listed in upcoming.md above.
+        if not DAY_FILE_RE.match(f"{date_str}.md"):
+            continue
         day_file = CALENDAR_DIR / f"{date_str}.md"
         written_days.add(day_file.name)
         day_lines = [f"# Calendar - {date_str}", "",
@@ -433,8 +489,14 @@ def sync_emails(account, count=30, unread_only=False, folder_name="Inbox"):
     email_list = list(items)
 
     if not email_list:
+        # No early return. This used to skip the write entirely, so the file
+        # from the LAST successful run stayed on disk carrying its own older
+        # `> Synced:` stamp: MEASURED 2026-08-29, a second sync over an emptied
+        # mailbox left `inbox-latest.md` still saying "Count: 1 emails" and
+        # still listing that message, and any reader globbing EMAIL_DIR served
+        # it as current. That is the same defect `_prune_stale_day_files` names
+        # on the calendar side, where a zero-event range still writes its file.
         print(f"[INFO] No emails found in {folder_name}.")
-        return 0
 
     # Write combined file
     suffix = "unread" if unread_only else "latest"
@@ -640,13 +702,19 @@ def create_meeting(account, subject, start_time, duration_minutes=30, location=N
     if timezone_str is None:
         timezone_str = get_default_tz_name()
 
-    tz = EWSTimeZone.from_timezone(
-        ZoneInfo(timezone_str)
-    )
+    local_tz = ZoneInfo(timezone_str)
+    tz = EWSTimeZone.from_timezone(local_tz)
 
     # Parse start_time: "HH:MM" (today) or "YYYY-MM-DD HH:MM"
     if len(start_time) <= 5:
-        now = datetime.now(get_default_tz())
+        # "Today" in the zone the timestamp is stamped with. It was read from
+        # `get_default_tz()` and then stamped with `tz`, the same mismatch
+        # `sync_calendar` carries a comment about having fixed. MEASURED
+        # 2026-08-29 with HEADING_OS_TZ=UTC and EXCHANGE_TIMEZONE=Asia/Dubai at
+        # the instant 2026-09-01T20:30Z: the Dubai wall clock reads 2026-09-02
+        # 00:30, and `--time 02:00` booked 2026-09-01 02:00 +04:00, twenty two
+        # hours in the past.
+        now = datetime.now(local_tz)
         hour, minute = map(int, start_time.split(":"))
         start = EWSDateTime(now.year, now.month, now.day, hour, minute, 0, tzinfo=tz)
     else:
@@ -721,7 +789,14 @@ def main():
     account = connect(config)
 
     # Handle email deletion
-    if args.delete:
+    #
+    # `is not None`, not truthiness. `--delete ""` parses to the empty string,
+    # which is falsy, so this branch was skipped and the run fell through to an
+    # ordinary calendar-plus-email sync and exited 0. MEASURED 2026-08-29: the
+    # operator asked for a destructive action, got an unrelated sync, and was
+    # told nothing. `delete_emails` raises ValueError on a blank query for
+    # exactly this reason, and the blank value never reached it.
+    if args.delete is not None:
         try:
             delete_emails(
                 account,
@@ -734,8 +809,14 @@ def main():
             return 1
         return 0
 
-    # Handle meeting creation
-    if args.create_meeting:
+    # Handle meeting creation. Same `is not None`, same reason as --delete
+    # above: `--create-meeting ""` ran a full sync and exited 0. Unlike
+    # `delete_emails` there is no downstream validator for a blank subject, so
+    # the refusal lives here rather than saving an untitled item to the calendar.
+    if args.create_meeting is not None:
+        if not args.create_meeting.strip():
+            print("[ERROR] --create-meeting needs a subject; refusing a blank one.")
+            sys.exit(1)
         if not args.time:
             print("[ERROR] --time is required for --create-meeting (e.g., --time 14:30)")
             sys.exit(1)

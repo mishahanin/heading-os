@@ -128,6 +128,21 @@ def main() -> None:
             print(f"  Known slugs: {', '.join(sorted(known)) or '(none resolved)'}")
             sys.exit(1)
 
+    # The contact slug is a path component too, and it was the only one nobody
+    # checked. It goes straight into `from_contacts / f"{slug}.md"`, so
+    # `--contact "../config"` resolved to `crm/contacts/../config.md`: MEASURED
+    # 2026-08-29, a `crm/config.md` sitting OUTSIDE the contacts tree was
+    # rewritten with an owner field, moved into the target exec's `crm/` root,
+    # renamed to a `.transferred-` backup in the source repo, committed in both,
+    # and reported as "Transfer complete:" with exit 0. Same three shapes
+    # `get_per_exec_repo_path` rejects for an exec slug, and for the same reason.
+    if (not args.contact or "/" in args.contact or "\\" in args.contact
+            or ".." in args.contact):
+        print(f"{RED}ERROR:{RESET} --contact {args.contact!r} is not a contact "
+              f"slug. Expected a bare file stem such as 'priya-anand', with no "
+              f"'/', '\\' or '..'.")
+        sys.exit(1)
+
     def _contacts_dir(exec_slug: str) -> Path:
         if exec_slug in admin_slugs:
             return get_crm_contacts_dir()

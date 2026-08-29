@@ -95,7 +95,21 @@ def cmd_apply(dry_run: bool) -> int:
                 return 1
             continue
         print(f"Applying {label} -> v{version} ...")
-        mod.up(data_root, dry_run=False)
+        # Reported, not a traceback. The dry-run branch four lines up already
+        # sets this standard, and the REAL apply is the moment the operator most
+        # needs a readable account: a migration that dies half way leaves the
+        # overlay at whatever the last completed step wrote, and a stack trace
+        # does not say which version that is. The version marker itself is
+        # correct either way (written per step, after the step), so the only
+        # thing missing was saying so.
+        try:
+            mod.up(data_root, dry_run=False)
+        except Exception as exc:  # noqa: BLE001 - reported with the version reached
+            print(f"{RED}{label}: apply FAILED: {exc}{RESET}", file=sys.stderr)
+            print(f"{RED}The overlay is at v{current if version == pending[0][0] else version - 1} "
+                  f"and step v{version} is incomplete. Inspect it before re-running.{RESET}",
+                  file=sys.stderr)
+            return 1
         _write_version(data_root, version)
         print(f"  {GREEN}done, overlay now at v{version}.{RESET}")
     return 0

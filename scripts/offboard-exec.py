@@ -418,9 +418,20 @@ def _find_exec_contacts(slug: str) -> tuple[Path | None, bool]:
     False when a repo could not be reached at all -- "there are no contacts"
     and "I could not check" are different answers, and only the first one may
     be reported as a success.
+
+    The flag counted UNREACHED candidates because it used to be a `reachable`
+    latch set True on the first successful clone and never lowered afterwards.
+    That is "at least one repo answered", which is not what the sentence above
+    promises. Reproduced 2026-08-29 with a stubbed `run_cmd`: candidate 1
+    cloned clean but held no contacts subdirectory, candidate 2 failed to
+    clone, and this returned `(None, True)`; `preserve_crm_contacts` took its
+    success branch, `offboard_verdict` said complete with no reasons, and the
+    durable audit log recorded "contacts preserved" for a location nothing ever
+    opened. The next step, `archive_workspace_repo`, then makes that unchecked
+    repo read-only.
     """
     workspace_root = get_workspace_root()
-    reachable = False
+    unreached = 0
     for repo_name, subpath in _contacts_candidates(slug):
         local = workspace_root.parent / repo_name
         if not local.exists():
@@ -432,15 +443,15 @@ def _find_exec_contacts(slug: str) -> tuple[Path | None, bool]:
                 # offboard, leaving contacts unpreserved and the registry
                 # untouched with no rollback.
                 print(f"  {YELLOW}[skip]{RESET} Could not clone {repo_name}: {exc}")
+                unreached += 1
                 continue
         else:
             run_cmd(["git", "pull"], cwd=str(local), check=False)
-        reachable = True
         src = local / subpath
         if src.is_dir():
             print(f"  {GREEN}[ok]{RESET} Found contacts in {repo_name}/{subpath}")
             return src, True
-    return None, reachable
+    return None, unreached == 0
 
 
 def preserve_crm_contacts(slug: str) -> bool:
@@ -534,6 +545,16 @@ def reassign_contacts(slug: str, reassign_to: str) -> None:
                     # nobody, which is the one thing "reassign" is supposed to do.
                     frontmatter = frontmatter + f"owner: {reassign_to}\n"
                 content = pre + frontmatter + post + rest
+            else:
+                # No frontmatter block to rewrite, so the branch above was
+                # skipped entirely and the contact landed in the CEO's CRM
+                # carrying a transfer note and no `owner:` at all. The `n == 0`
+                # comment above calls that "the one thing reassign is supposed
+                # to do", and it was handled for frontmatter-bearing files only.
+                # Give the file the minimal block rather than skipping it: an
+                # unowned contact in the destination CRM is invisible to every
+                # owner-scoped query that follows.
+                content = f"---\nowner: {reassign_to}\n---\n\n" + content
             dest_file = dst / item.name
             if dest_file.exists():
                 print(f"  {YELLOW}[skip]{RESET} {item.name} already exists in {reassign_to}")

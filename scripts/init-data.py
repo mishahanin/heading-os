@@ -27,7 +27,17 @@ DATA_DIRS = [
 
 
 def init_data(target: Path) -> int:
-    if target.exists() and any(target.iterdir()):
+    # Not-a-directory is checked before emptiness, because `iterdir()` is what
+    # raises. Measured 2026-08-29 with `touch /tmp/fake-data-probe` and
+    # `--path /tmp/fake-data-probe`: `any(target.iterdir())` raised
+    # NotADirectoryError before `any()` could reach a decision, so the operator
+    # got a traceback where the next line promises a refusal. A symlink counts
+    # here too, both because a broken one answers False to `exists()` and would
+    # fall through to the mkdir, and because this workspace does not use them.
+    if target.is_symlink() or (target.exists() and not target.is_dir()):
+        print(f"Refusing to scaffold: {target} exists and is not a directory.")
+        return 1
+    if target.is_dir() and any(target.iterdir()):
         print(f"Refusing to scaffold: {target} exists and is not empty.")
         return 1
     for d in DATA_DIRS:

@@ -35,14 +35,20 @@ _CONTACT_SLUG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 # YAML / Markdown parsing helpers
 # ---------------------------------------------------------------------------
 
-# `[ \t]*\n` after the closing `---`, not `\s*\n`. `\s` includes the newline, so
+# `[ \t]*\n` at BOTH fences, not `\s*\n`. `\s` includes the newline, so
 # the greedy form also swallowed every BLANK LINE that followed the frontmatter,
 # and the writer then put exactly one back. A record with a blank line survived
 # that round trip; a record with none came back with one inserted, which is a
 # rewrite of a file the tool was asked to merge one field into. Invisible across
 # the operator's 326 records, which all carry the blank line, and caught by
 # `examples/crm/contacts/EXAMPLE-contact.md`, which does not.
-FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---[ \t]*\n", re.DOTALL)
+#
+# The OPENING fence was left greedy until 2026-08-29 and had the same defect
+# mirrored: a blank line immediately INSIDE the block was eaten into the match
+# and never reached `raw_yaml`, while the serializer always writes `---\n` and
+# then the first field. 0 of the operator's 334 records open that way, so it was
+# invisible there too -- and invisible is exactly how the closing half survived.
+FRONTMATTER_RE = re.compile(r"^---[ \t]*\n(.*?)\n---[ \t]*\n", re.DOTALL)
 
 
 class _BlockList(list):
@@ -85,14 +91,30 @@ class _Block(_Raw):
     hoisted -- and `merge_frontmatter`'s union then carried the hoisted keys into
     the target on the first merge.
 
+    A YAML BLOCK SCALAR (`notes: |`) reached the outer loop by a different road
+    and landed in the same ditch. Its key line carries a value, so it took the
+    plain-scalar branch and its indented body was never consumed; any body line
+    holding a colon (`met at conference: discussed deal`) then parsed as a
+    top-level key and the union injected it into the OTHER record. Same
+    corruption, same cross-record leak, different trigger. 0 of the operator's
+    334 records use a block scalar today, which is why nothing caught it.
+
+    `header` is the exact text after the colon, so `notes: |` goes back as
+    `notes: |` and `address:` goes back as `address:`. Carrying it is what makes
+    this class usable for both forms; writing a bare `f"{key}:"` would turn a
+    block scalar into a nested mapping on the way out.
+
     This parser is deliberately naive (see `parse_frontmatter`), so it does not
     try to understand the nesting. It holds the lines and writes them back
     byte-for-byte, which is all a merge of a DIFFERENT field needs.
     """
 
-    def __new__(cls, lines):
+    header = ""
+
+    def __new__(cls, lines, header: str = ""):
         obj = super().__new__(cls, "")
         obj.lines = list(lines)
+        obj.header = header
         return obj
 
 
@@ -148,6 +170,55 @@ def _scalar(raw: str):
     if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
         return _Quoted(raw[1:-1], raw[0])
     return raw
+
+
+# A YAML block-scalar header: `|`, `>`, either with a chomping indicator (`-`,
+# `+`) and/or an explicit indentation digit. Anything else after the colon is an
+# ordinary value.
+_BLOCK_SCALAR_RE = re.compile(r"^[|>][+-]?\d*[+-]?$")
+
+
+def _consume_indented(lines: list[str], i: int, key_indent: int) -> tuple[list[str], int]:
+    """Take the lines indented deeper than ``key_indent``, from index ``i``.
+
+    Returns the block and the index after it. Pure, so both the nested-mapping
+    and the block-scalar caller are measurable on synthetic input.
+
+    A BLANK LINE inside the block is kept, in both forms. It is a real empty
+    line of a block scalar's text, and YAML lets one sit inside a block mapping
+    too -- the indented lines after it are still children of the same key. This
+    started as a `keep_blanks` flag, one value per caller, and a mutation run
+    showed the nested-mapping value was never exercised by any test and was the
+    less correct of the two. Dropping the flag is simpler and right for both.
+
+    A blank run is taken ONLY when deeper-indented content follows it. Trailing
+    blanks belong to the document, not to the value, and are left for the outer
+    loop -- which writes them back as `_Raw` lines, in place.
+
+    Why this matters beyond fidelity: a line held inside the `_Block` travels
+    with its key, and a line left as `_Raw` does not. `merge_frontmatter` skips
+    `_Raw` entries when it unions the source's fields into the target, so a
+    paragraph that fell out of a block scalar here is silently dropped from the
+    merged record.
+    """
+    block: list[str] = []
+    j = i
+    while j < len(lines):
+        nxt = lines[j]
+        if not nxt.strip():
+            k = j
+            while k < len(lines) and not lines[k].strip():
+                k += 1
+            if k >= len(lines) or len(lines[k]) - len(lines[k].lstrip()) <= key_indent:
+                break
+            block.extend(lines[j:k])
+            j = k
+            continue
+        if len(nxt) - len(nxt.lstrip()) <= key_indent:
+            break
+        block.append(nxt)
+        j += 1
+    return block, j
 
 
 def _emit(value) -> str:
@@ -274,16 +345,15 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
                 # nested mapping. Consume those lines verbatim (see `_Block`);
                 # anything at or left of the key's own column belongs to the
                 # parent level and is left for the outer loop.
-                block = []
-                while i < len(lines):
-                    nxt = lines[i]
-                    if not nxt.strip():
-                        break
-                    if len(nxt) - len(nxt.lstrip()) <= key_indent:
-                        break
-                    block.append(nxt)
-                    i += 1
-                value = _Block(block) if block else _Empty(raw_value)
+                block, i = _consume_indented(lines, i, key_indent)
+                value = _Block(block, raw_value) if block else _Empty(raw_value)
+        elif _BLOCK_SCALAR_RE.match(value):
+            # A block scalar (`notes: |`). Its body is indented under the key
+            # exactly like a nested mapping's, but it was reaching the plain
+            # branch below and leaving its own lines to the outer loop, where a
+            # body line with a colon became a top-level key. See `_Block`.
+            block, i = _consume_indented(lines, i, key_indent)
+            value = _Block(block, raw_value) if block else _scalar(value)
         else:
             value = _scalar(value)
         fm[key] = value
@@ -301,7 +371,7 @@ def serialize_frontmatter(fm: dict) -> str:
     lines = ["---"]
     for key, value in fm.items():
         if isinstance(value, _Block):
-            lines.append(f"{key}:")
+            lines.append(f"{key}:{value.header}")
             lines.extend(value.lines)
         elif isinstance(value, _Raw):
             lines.append(str(value))       # a comment or blank line, in place
@@ -318,8 +388,8 @@ def serialize_frontmatter(fm: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def extract_interaction_log(body: str) -> tuple[str, list[str], str]:
-    """Split body into (pre_log, log_entries, post_log).
+def extract_interaction_log(body: str) -> tuple[str, list[str], str, str]:
+    """Split body into (pre_log, log_entries, post_log, log_preamble).
 
     Each log entry starts with ``### YYYY-MM-DD``.
 
@@ -334,6 +404,28 @@ def extract_interaction_log(body: str) -> tuple[str, list[str], str]:
 
     A `###` entry header is not matched by the level-2 pattern: `### ` is three
     hashes, so `^## ` cannot align with it.
+
+    `log_preamble` is whatever sits between the `## Interaction Log` header and
+    the FIRST dated entry. It used to be returned by nobody: not in `pre_log`,
+    not in an entry, not in `post_log`, so `merge_notes` rebuilt the body
+    without it and a merge deleted it from both records.
+
+    It is not decoration. MEASURED 2026-08-29 over the operator's live 334
+    records: 39 of them keep log entries there in BULLET form
+    (`- 2026-04-29 | Email | Outbound: "..."`), which this function's `###`
+    pattern does not match. A merge silently dropped every one.
+
+    It comes back as its own element rather than folded into `pre_log`, because
+    `pre_log` is written ABOVE the `## Interaction Log` header and this content
+    belongs under it. It is not folded into `entries` either: `entry_date` can
+    only date a `### YYYY-MM-DD` header, so a preamble in that list would sort
+    as `0000-00-00` and inflate the entry counts the merge summary prints.
+
+    It is LAST in the tuple on purpose. `main` reads the entry count as
+    `extract_interaction_log(body)[1]`, and inserting the preamble at index 1
+    would have made `len()` return a character count -- a silently wrong number
+    in a summary, which is the defect class this whole file is being audited
+    for. Appending it instead makes every old 3-tuple unpack raise loudly.
     """
     log_header_re = re.compile(r"^(## Interaction Log\s*)$", re.MULTILINE)
     entry_re = re.compile(r"^### \d{4}-\d{2}-\d{2}", re.MULTILINE)
@@ -341,7 +433,7 @@ def extract_interaction_log(body: str) -> tuple[str, list[str], str]:
 
     header_match = log_header_re.search(body)
     if not header_match:
-        return body, [], ""
+        return body, [], "", ""
 
     pre_log = body[:header_match.start()]
     rest = body[header_match.end():]
@@ -358,8 +450,9 @@ def extract_interaction_log(body: str) -> tuple[str, list[str], str]:
         entries.append(rest[pos:end].rstrip("\n") + "\n")
 
     post_log = rest if not positions else rest[log_end:]
+    preamble = rest[:positions[0]].strip() if positions else ""
 
-    return pre_log, entries, post_log
+    return pre_log, entries, post_log, preamble
 
 
 def entry_date(entry: str) -> str:
@@ -435,8 +528,8 @@ def merge_frontmatter(fm_from: dict, fm_into: dict, from_slug: str, into_slug: s
 
 def merge_notes(body_from: str, body_into: str, from_slug: str, into_slug: str) -> str:
     """Merge interaction logs chronologically and combine strategic notes."""
-    pre_into, entries_into, post_into = extract_interaction_log(body_into)
-    pre_from, entries_from, post_from = extract_interaction_log(body_from)
+    pre_into, entries_into, post_into, lead_into = extract_interaction_log(body_into)
+    pre_from, entries_from, post_from, lead_from = extract_interaction_log(body_from)
 
     # Interleave log entries by date (newest first after sort, but we keep chronological)
     all_entries = entries_into + entries_from
@@ -451,11 +544,27 @@ def merge_notes(body_from: str, body_into: str, from_slug: str, into_slug: str) 
 
     # Rebuild body
     result = combined_pre + "## Interaction Log\n\n"
+    # The log-section preamble goes back at the top of the log region, where it
+    # was. 39 of 334 live records keep bullet-form entries there; folding them
+    # into `pre_log` would move them above the header they were written under.
+    lead = "\n\n".join(part for part in (lead_into, lead_from) if part)
+    if lead:
+        result += lead + "\n\n"
     for entry in all_entries:
         result += entry.rstrip("\n") + "\n\n"
 
-    # Append any trailing content
-    trailing = (post_into.strip() + "\n" + post_from.strip()).strip()
+    # Append any trailing content. The source's trailing sections get the same
+    # provenance header the source's PRE-log content gets a few lines up. Both
+    # records are copies of one contact template, so both usually end in the
+    # same `## Follow-ups` heading; raw concatenation produced that heading
+    # twice, back to back, with no way to tell whose content was whose.
+    trailing = post_into.strip()
+    extra_trailing = post_from.strip()
+    if extra_trailing:
+        if trailing:
+            trailing += f"\n\n---\n\n**Notes merged from {from_slug}:**\n\n{extra_trailing}"
+        else:
+            trailing = extra_trailing
     if trailing:
         result += trailing + "\n"
 

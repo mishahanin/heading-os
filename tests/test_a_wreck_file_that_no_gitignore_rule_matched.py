@@ -425,6 +425,16 @@ DECLARED_SIDECAR_SITES = {
         "trade a data-leak fix for a measurement one",
     ("scripts/utils/mutation_harness.py", "derived", "target.suffix + '.mutbak'"):
         "the same site seen through the other shape",
+    ("scripts/sync-exchange-pulse.py", "derived", "f'{LOG_FILE.name}.{n}'"):
+        "the only entry here that WRITES NOTHING. The pulse reads back what the "
+        "daemon's RotatingFileHandler already rotated, so it can answer 'when did "
+        "sync-exchange last succeed' across a rotation boundary; `path.open()` on "
+        "each candidate is read mode and no branch creates a file. The names it "
+        "builds are the handler's, and they land in `.sync-exchange/`, which "
+        "`.gitignore:193` covers whole. MEASURED 2026-08-29: `git check-ignore -v "
+        ".sync-exchange/daemon.log.1` exits 0 naming that rule. The detector is "
+        "deliberately wide and does not ask read from write, which is the right "
+        "trade for it to make; this is where that argument gets recorded",
     ("scripts/datastore-extract.py", "derived", "filepath.stem + '-extract.md'"):
         "an extraction OUTPUT, not a wreck: it is the deliverable, it is meant to "
         "be tracked, and the source file is tracked beside it",

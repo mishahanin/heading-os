@@ -101,6 +101,10 @@ python scripts/ops-radar.py crunch off   # normal posture
 ## NEVER
 
 - NEVER send, commit, push, publish, or run a manual action on the CEO's behalf - the radar only detects; the CEO runs the named command.
-- NEVER put anything but counts on the Telegram wire - the notify path is counts-only by contract (sovereignty).
+- NEVER put operational CONTENT on the Telegram wire. The notify path sends the
+  `--quiet` line and nothing else, and every signal summary in it is a fixed
+  label plus numbers (`cold-sweep: 7 red-debt contacts`). No contact name, no
+  subject, no quoted text, no path. Never the detailed view and never the JSON.
+  Pinned by `tests/test_a_radar_that_refused_to_silence_its_own_alarm.py`.
 - NEVER auto-clear or auto-ack a signal the CEO did not ack - suppression is the CEO's call.
 - NEVER claim an item is due that `ops-radar.py` did not report, or hide one it did.

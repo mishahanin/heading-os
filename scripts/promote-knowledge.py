@@ -116,8 +116,20 @@ def git_commit_and_push(repo: Path, files: list[Path], message: str) -> None:
     for f in files:
         subprocess.run(["git", "add", str(f)], cwd=str(repo), check=True,
                        capture_output=True)
-    subprocess.run(["git", "commit", "-m", message], cwd=str(repo), check=True,
-                   capture_output=True)
+    # An empty index skips the commit and goes straight to the push, because the
+    # push is the step that failed. Measured: run 1 commits and the push fails,
+    # so the note sits committed-but-unpushed; the operator follows this
+    # script's own advice and re-runs with --overwrite the same day; the rebuilt
+    # target is byte-identical (promoted_date is the only time-varying field),
+    # nothing stages, `git commit` exits non-zero on "nothing to commit", and
+    # `supervised_push` is never reached. The advice looped forever and the
+    # commit never left the laptop. `git diff --cached --quiet` exits 0 for an
+    # empty index and is locale-independent, unlike matching git's message text.
+    staged = subprocess.run(["git", "diff", "--cached", "--quiet"],
+                            cwd=str(repo), capture_output=True)
+    if staged.returncode != 0:
+        subprocess.run(["git", "commit", "-m", message], cwd=str(repo), check=True,
+                       capture_output=True)
     branch = current_branch(str(repo)) or "main"
     verdict = supervised_push(str(repo), branch=branch, stall_window=120,
                               label="promote-knowledge")
@@ -241,8 +253,9 @@ def main() -> None:
         # and never reaches the push -- telling the operator to "re-run" without
         # that is advice that cannot work.
         print(f"{GRAY}The local files were written; the target now exists, so a "
-              f"re-run needs --overwrite. Or commit and push {corp_repo} by "
-              f"hand.{RESET}")
+              f"re-run needs --overwrite. That re-run retries the push even when "
+              f"the content is unchanged and nothing new stages. Or commit and "
+              f"push {corp_repo} by hand.{RESET}")
         # Non-zero, and no completion banner. Printing "Promotion complete" here
         # is what let a note be marked "Promoted to corporate" in the source
         # while it never left the laptop.

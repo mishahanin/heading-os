@@ -157,14 +157,25 @@ def _run_headless_propose(root: Path) -> Optional[Path]:
         "odin", "reflect", "--propose",
     ]
     started = time.time()
+    proc = None
     try:
         proc = subprocess.run(
             cmd, cwd=str(root), capture_output=True, text=True,
             timeout=PROPOSE_HEADLESS_TIMEOUT,
         )
     except Exception as exc:  # noqa: BLE001 - boundary; a missed propose run is non-critical
-        _log(f"headless propose call failed to run ({type(exc).__name__}: {exc}); skipping")
-        return None
+        # `return None` stood here, and it skipped the integrity check below on
+        # the ONE path where the child ran unsupervised. TimeoutExpired fires
+        # after up to PROPOSE_HEADLESS_TIMEOUT (600s) of a hung or looping
+        # headless agent, which is precisely the run whose brain writes the
+        # backstop exists to catch. Measured 2026-08-29 against a stub that
+        # wrote knowledge/odin-brain/ and then blew the timeout: the file was
+        # left reading "TAMPERED", nothing logged CRITICAL, and no Telegram
+        # escalation was sent. The before-snapshot was already in hand. Fall
+        # through instead, so the after-snapshot is taken whenever the before
+        # one was, and let the `proc is None` guard below stop the run.
+        _log(f"headless propose call failed to run ({type(exc).__name__}: {exc}); "
+             f"checking brain integrity before skipping")
 
     brain_after = _brain_snapshot(brain_dir)
     if brain_before != brain_after:
@@ -180,12 +191,29 @@ def _run_headless_propose(root: Path) -> Optional[Path]:
         # main() resolves; notify() never raises, so a send failure cannot
         # turn the integrity failure into a crash.
         recipient = os.environ.get("ODIN_CADENCE_TELEGRAM_TARGET", DEFAULT_RECIPIENT)
-        telegram_notify.notify(
+        delivered = telegram_notify.notify(
             recipient,
             "CRITICAL: knowledge/odin-brain/ changed during a headless "
             "odin reflect --propose run -- integrity check failed. The proposal "
             "was withheld; inspect the brain and the run immediately.",
         )
+        if not delivered:
+            # The escalation's whole point is reaching the CEO OFF the machine
+            # whose integrity is in question, and it can silently fail to: on an
+            # unconfigured workspace `recipient` is DEFAULT_RECIPIENT (""), which
+            # telegram_notify documents as never a send attempt, so notify()
+            # logs under ITS logger and returns False. Nothing under this
+            # script's own journald prefix said the most serious message it can
+            # produce went nowhere. Say it here, where an operator reading the
+            # unit's log will see it beside the CRITICAL line above.
+            _log(f"CRITICAL escalation was NOT delivered to Telegram "
+                 f"(target={recipient!r}); this alert exists only in this log")
+        return None
+
+    if proc is None:
+        # The subprocess never completed (the exception path above). The brain
+        # is verified clean by this point, which is the only thing that path
+        # could still establish; there is no proposal to look for.
         return None
 
     if proc.returncode != 0:

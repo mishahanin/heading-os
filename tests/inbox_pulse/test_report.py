@@ -208,49 +208,73 @@ def test_groups_by_tier():
 # ---------------------------------------------------------------------------
 
 
-def test_known_domains_from_crm(tmp_path: Path):
-    """load_known_crm_domains extracts email domains from CRM YAML frontmatter."""
+def test_known_domains_from_crm(tmp_path: Path, monkeypatch):
+    """Every domain the CRM knows, in BOTH card schemas.
+
+    This set is the report's safety net: its "LOW items from known good domains"
+    section exists to surface a contact the classifier under-scored, and a
+    domain missing here is instead filed under "Unknown domains" with an
+    `Add to always_normal` tuning suggestion beside it. So a blind spot in this
+    function does not merely hide a contact, it advises the operator to suppress
+    one permanently.
+
+    Until 2026-08-29 the function scanned frontmatter text for a line starting
+    `email:` and this test wrote only that shape, so both were blind to the
+    entity schema that `/crm` and the migration actually produce. Measured on
+    the operator's tree the same day: 89 addresses reachable, 148 real.
+
+    Driven through the real data-root seam rather than by patching a symbol, so
+    a later refactor of how the CRM directory is resolved cannot leave this
+    green over the wrong tree.
+    """
     contacts_dir = tmp_path / "crm" / "contacts"
+    book = tmp_path / "crm" / "address-book"
     contacts_dir.mkdir(parents=True)
+    book.mkdir(parents=True)
+    monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path))
 
-    # Write a contact file with an email field
-    (contacts_dir / "alice-smith.md").write_text(
-        textwrap.dedent("""\
-            ---
-            entity_ref: alice-smith
-            relationship_type: partner
-            email: alice@example.com
-            last_touch: 2026-05-01
-            created: 2026-04-01
-            status: active
-            ---
+    def card(slug, body):
+        (contacts_dir / f"{slug}.md").write_text(
+            textwrap.dedent(body), encoding="utf-8")
 
-            # Alice Smith
+    # Legacy: the address inline on the card.
+    card("alice-smith", """\
+        ---
+        relationship_type: partner
+        email: alice@legacy-example.test
+        last_touch: 2026-05-01
+        status: active
+        ---
+    """)
+    # Entity: the address lives on the address-book record. THE REGRESSION.
+    card("carol-nwosu", """\
+        ---
+        entity_ref: carol-nwosu
+        relationship_type: customer
+        last_touch: 2026-05-01
+        status: active
+        ---
+    """)
+    (book / "carol-nwosu.md").write_text(
+        "---\nslug: carol-nwosu\nname: Carol Nwosu\n"
+        "canonical_email: carol@entity-example.test\n---\n", encoding="utf-8")
+    # Dangling: an entity_ref pointing at nothing. No address exists anywhere,
+    # so contributing no domain is correct, and it keeps the assertion below
+    # from passing on a function that simply returns every domain it can find.
+    card("bob-jones", """\
+        ---
+        entity_ref: bob-jones
+        relationship_type: investor
+        last_touch: 2026-05-01
+        status: active
+        ---
+    """)
 
-            ## Interaction Log
-        """),
-        encoding="utf-8",
-    )
-    # Write a contact with no email
-    (contacts_dir / "bob-jones.md").write_text(
-        textwrap.dedent("""\
-            ---
-            entity_ref: bob-jones
-            relationship_type: investor
-            last_touch: 2026-05-01
-            status: active
-            ---
-        """),
-        encoding="utf-8",
-    )
+    domains = _mod.load_known_crm_domains(tmp_path)
 
-    # load_known_crm_domains resolves the CRM dir via get_crm_contacts_dir()
-    # (data-root seam), so patch that to the fixture's contacts dir.
-    with patch.object(_mod, "get_crm_contacts_dir", return_value=contacts_dir):
-        domains = _mod.load_known_crm_domains(tmp_path)
-
-    assert "example.com" in domains
-    assert len(domains) == 1  # bob has no email
+    assert domains == {"legacy-example.test", "entity-example.test"}, (
+        f"got {sorted(domains)}; the entity-schema contact is the one a text "
+        f"scan for `email:` cannot see")
 
 
 # ---------------------------------------------------------------------------

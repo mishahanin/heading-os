@@ -121,21 +121,52 @@ def _write_crm_contact(
     slug: str,
     email: str,
     relationship_type: str = "lead",
+    schema: str = "hybrid",
 ) -> None:
-    content = textwrap.dedent(f"""\
-        ---
-        entity_ref: {slug}
-        relationship_type: {relationship_type}
-        email: {email}
-        last_touch: 2026-05-28
-        created: 2026-05-01
-        status: active
-        tags: []
-        ---
+    """Write one CRM contact card in a named schema.
 
-        # {slug}
-    """)
-    (contacts_dir / f"{slug}.md").write_text(content, encoding="utf-8")
+    Three shapes exist on the operator's tree and a reader must handle two of
+    them; the third is the one this fixture used to write unconditionally.
+
+      `legacy` the address inline on the card, no `entity_ref`. 14 of 169 cards.
+      `entity` `entity_ref` pointing at `crm/address-book/<slug>.md`, which
+               carries `canonical_email`. This is what `/crm` add-contact writes
+               and what `crm_migrate_to_entity_model.py --apply` produces, so it
+               is the CURRENT schema. 66 of 169 cards inline nothing at all.
+      `hybrid` both keys at once. 89 of 169 cards, all of them mid-migration.
+
+    The fixture wrote `hybrid` only, and that is why twelve green tests missed a
+    reader that could see nothing but the inline key: the `entity_ref` line made
+    every one of them LOOK migration-aware while the inline `email:` quietly
+    fed the reader the one shape it could parse. Measured 2026-08-29, the old
+    reader saw 89 of the operator's 148 CRM addresses.
+
+    `entity` also writes the address-book record, because a card pointing at a
+    file that does not exist is a dangling ref, not the entity schema.
+    """
+    if schema not in ("legacy", "entity", "hybrid"):
+        raise ValueError(f"unknown schema {schema!r}")
+
+    lines = ["---"]
+    if schema in ("entity", "hybrid"):
+        lines.append(f"entity_ref: {slug}")
+    lines.append(f"relationship_type: {relationship_type}")
+    if schema in ("legacy", "hybrid"):
+        lines.append(f"email: {email}")
+    lines += ["last_touch: 2026-05-28", "created: 2026-05-01",
+              "status: active", "tags: []", "---", "", f"# {slug}", ""]
+    (contacts_dir / f"{slug}.md").write_text("\n".join(lines), encoding="utf-8")
+
+    if schema in ("entity", "hybrid"):
+        book = contacts_dir.parent / "address-book"
+        book.mkdir(parents=True, exist_ok=True)
+        # `hybrid` gets an entity with NO canonical_email, which is the real
+        # mid-migration state: the address is still on the card. Four live
+        # contacts are in exactly this state.
+        canonical = f"canonical_email: {email}\n" if schema == "entity" else ""
+        (book / f"{slug}.md").write_text(
+            f"---\nslug: {slug}\nname: {slug}\n{canonical}---\n\n# {slug}\n",
+            encoding="utf-8")
 
 
 def _write_thread(

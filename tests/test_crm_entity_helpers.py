@@ -206,3 +206,58 @@ def test_scan_contacts_records_dangling_entity_refs(fake_workspace, monkeypatch,
     # The contacts list contains only the happy-path karl-mertens (the ghost record is dropped):
     assert len(contacts) == 1
     assert contacts[0]["file"] == "karl-mertens.md"
+
+
+def test_merge_falls_back_to_the_cards_address_when_the_entity_has_none():
+    """Four live contacts are in exactly this state, measured 2026-08-29.
+
+    The address-book record EXISTS and its `canonical_email` is empty, while the
+    real address is still on the relationship card: four cards, all of them
+    `entity_found=True canonical_email=''`. Taking the entity's value
+    unconditionally reported those four as having NO email, to `scan_contacts`
+    and through it to CRM health, the dashboard, `aggregate-crm`, and
+    `/cold-sweep`, which drafts outreach and would have had nowhere to send it.
+
+    Driven through `merge_entity_and_relationship` directly, not through
+    `contact_index_by_email`: the index consults the card's inline key itself,
+    so it papers over this and cannot detect the regression.
+    """
+    from scripts.utils.crm import merge_entity_and_relationship
+
+    entity = {"slug": "rowan-vance", "name": "Rowan Vance", "canonical_email": ""}
+    rel = {"entity_ref": "rowan-vance", "relationship_type": "lead",
+           "email": "rowan@mid-migration.test", "last_touch": "2026-05-28"}
+
+    merged = merge_entity_and_relationship(entity, rel)
+    assert merged["email"] == "rowan@mid-migration.test", (
+        f"merged email is {merged['email']!r}; the entity carries none, so the "
+        f"card's address is the only one that exists")
+    assert merged["name"] == "Rowan Vance"
+
+
+def test_merge_keeps_the_entity_address_when_both_are_present():
+    """Anchor: the fallback must not become "the card always wins".
+
+    The address-book record is the biographical truth in the two-tier model. A
+    card left holding a stale address after the migration moved the real one
+    must not override it.
+    """
+    from scripts.utils.crm import merge_entity_and_relationship
+
+    entity = {"slug": "dana", "name": "Dana",
+              "canonical_email": "dana@nimbus-freight.test"}
+    rel = {"entity_ref": "dana", "relationship_type": "customer",
+           "email": "stale@old-employer.test"}
+
+    assert merge_entity_and_relationship(entity, rel)["email"] == \
+        "dana@nimbus-freight.test"
+
+
+def test_merge_reports_no_address_when_neither_side_has_one():
+    """The empty case must stay empty, or `email` becomes a field that is never
+    falsy and every "has an address" check downstream silently passes."""
+    from scripts.utils.crm import merge_entity_and_relationship
+
+    merged = merge_entity_and_relationship(
+        {"slug": "ghost", "name": "Ghost"}, {"entity_ref": "ghost"})
+    assert merged["email"] == ""

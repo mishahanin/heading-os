@@ -642,6 +642,61 @@ def resolve_entity_ref(relationship_record: dict, workspace_root: Path | None = 
     return load_entity(slug, workspace_root=workspace_root)
 
 
+def contact_index_by_email(contacts_dir: Path | None = None,
+                           workspace_root: Path | None = None) -> dict[str, dict]:
+    """Lower-cased email address to its merged contact record, for every card.
+
+    THE ONE PLACE that answers "which contact owns this address". A card holds
+    the address in either of two shapes and a reader must handle both:
+
+      legacy   `email: someone@example.test` inline in the contact card
+      entity   `entity_ref: some-slug`, with the address at
+               `crm/address-book/some-slug.md::canonical_email`
+
+    The entity shape is what `/crm` add-contact writes and what
+    `crm_migrate_to_entity_model.py --apply` rewrites cards into, so it is the
+    current schema, not an exotic one. Measured on the operator's tree
+    2026-08-29: of 169 cards, 89 inline an address and 80 do not; 59 addresses
+    that `scan_contacts` resolves are reachable ONLY through the entity.
+
+    `scripts/inbox_pulse/rules.py` carried two copies of a walk that read the
+    inline key alone, and this function exists so there is no third. Written as
+    an INDEX rather than a per-address lookup because both callers ask about
+    many addresses over one run, and the old shape reopened all 169 cards per
+    question.
+
+    Parity with `merge_entity_and_relationship` is deliberate: the entity's
+    `other_emails` list is NOT indexed, because the canonical reader does not
+    use it either and one reader disagreeing with another about who owns an
+    address is the defect this replaces. It is also empty on every one of the
+    165 address-book entities today, so indexing it would be speculative.
+    Widening both readers together is a separate, deliberate change.
+    """
+    if contacts_dir is None:
+        contacts_dir = get_crm_contacts_dir()
+    index: dict[str, dict] = {}
+    if not Path(contacts_dir).is_dir():
+        return index
+
+    for card in sorted(Path(contacts_dir).glob("*.md")):
+        try:
+            relationship, _body = _parse_frontmatter(card.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if not relationship:
+            continue
+        entity = resolve_entity_ref(relationship, workspace_root=workspace_root)
+        merged = merge_entity_and_relationship(entity, relationship)
+        # Inline wins when both are present: it is the per-relationship view,
+        # and `merge_entity_and_relationship` already gives the entity's
+        # `canonical_email` to `merged["email"]` when there is no inline one.
+        address = str(relationship.get("email") or merged.get("email") or "").strip()
+        if not address:
+            continue
+        index.setdefault(address.lower(), merged)
+    return index
+
+
 def merge_entity_and_relationship(entity: dict, relationship: dict) -> dict:
     """Merge biographical facts from entity with per-exec view from relationship.
 
@@ -670,7 +725,20 @@ def merge_entity_and_relationship(entity: dict, relationship: dict) -> dict:
     if entity:
         merged["name"] = entity.get("name", "")
         merged["company"] = entity.get("employer", "")
-        merged["email"] = entity.get("canonical_email", "")
+        # Fall back to the card's inline address when the entity carries none.
+        # The migration is supposed to move the address onto the entity, and on
+        # four live contacts it did not: the address-book record exists, its
+        # `canonical_email` is empty, and the real address is still sitting on
+        # the relationship card. Taking the entity's value unconditionally
+        # reported those four as having NO email at all, to CRM health, the
+        # dashboard, `aggregate-crm` and `/cold-sweep`, which drafts outreach
+        # and would have had nowhere to send it. Measured 2026-08-29:
+        # four cards, every one `entity_found=True canonical_email=''`.
+        #
+        # The entity still WINS when it has a value, so the two-tier model is
+        # unchanged; this only stops an empty entity field erasing an address
+        # the workspace already knows.
+        merged["email"] = entity.get("canonical_email", "") or relationship.get("email", "")
         merged["linkedin"] = entity.get("linkedin", "")
         merged["telegram"] = entity.get("telegram", "")
         merged["phone"] = entity.get("phone", "")

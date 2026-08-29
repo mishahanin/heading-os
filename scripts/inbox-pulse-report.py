@@ -37,9 +37,9 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
-from scripts.utils.markdown import FM_OK, split_frontmatter
+from scripts.utils.crm import contact_index_by_email
 from scripts.utils.paths import get_workspace_root, load_env
-from scripts.utils.workspace import get_crm_contacts_dir, get_data_config_dir, get_outputs_dir, get_default_tz
+from scripts.utils.workspace import get_data_config_dir, get_outputs_dir, get_default_tz
 
 # ===========================================================================
 # Constants
@@ -259,30 +259,39 @@ def _pattern_matches_domain(pattern: str, domain: str) -> bool:
 
 
 def load_known_crm_domains(workspace_root: Path) -> set[str]:
-    """Walk crm/contacts/*.md and extract email domains from YAML frontmatter.
+    """Every email domain the CRM knows about.
 
-    The fences come from the shared splitter. `^---\\n(.+?)\\n---` sat here and
-    took the fence to be exactly three characters. MEASURED 2026-08-29: a
-    contact whose fence carries a trailing space or a tab contributed NO domain,
-    so every message from that person's employer counted as coming from an
-    unknown sender in a report whose whole subject is known-versus-unknown.
+    Reads through `contact_index_by_email`, the shared CRM reader, so both
+    card schemas resolve: an inline `email:` on the card, and the entity form
+    (`entity_ref` plus `crm/address-book/<slug>.md::canonical_email`) that
+    `/crm` and the migration actually write.
+
+    This function used to scan the frontmatter text for a line beginning
+    `email:`, so it was blind to the entity form in exactly the same way
+    `inbox_pulse/rules.py` was. That mattered more here than anywhere: this set
+    IS the report's safety net. Its "LOW items from known good domains
+    (potential false negatives)" section exists to surface a contact the
+    classifier under-scored, and a domain missing from this set is instead filed
+    under "Unknown domains" with an `Add to always_normal` tuning suggestion
+    beside it. So the report would have advised the operator to permanently
+    suppress a customer that the classifier had already failed to recognise.
+    Two blind readers, one of them the check on the other.
+
+    Measured on the operator's tree 2026-08-29: 89 addresses reachable by the
+    old text scan, 148 by the shared reader.
+
+    The earlier fix here is preserved by the shared reader, which parses
+    frontmatter properly rather than assuming a three-character fence: a
+    contact whose fence carried a trailing space or a tab contributed no domain
+    at all, in a report whose whole subject is known-versus-unknown.
     """
-    crm_dir = get_crm_contacts_dir()
     domains: set[str] = set()
-    if not crm_dir.is_dir():
-        return domains
-    for md_file in crm_dir.glob("*.md"):
-        text = md_file.read_text(encoding="utf-8", errors="replace")
-        frontmatter, _body, kind = split_frontmatter(text)
-        if frontmatter is None or kind != FM_OK:
+    for address in contact_index_by_email():
+        if "@" not in address:
             continue
-        for line in frontmatter.splitlines():
-            if line.strip().startswith("email:"):
-                email_val = line.split(":", 1)[1].strip()
-                if "@" in email_val:
-                    domain = email_val.split("@", 1)[1].lower().strip()
-                    if domain:
-                        domains.add(domain)
+        domain = address.split("@", 1)[1].strip()
+        if domain:
+            domains.add(domain)
     return domains
 
 

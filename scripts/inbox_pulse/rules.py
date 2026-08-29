@@ -138,6 +138,32 @@ class CheapClassifier:
         self.data_root = data_root if data_root is not None else workspace_root
         self.account = account
         self.my_email = my_email
+        self._crm_index: Optional[dict] = None
+
+    def _crm_by_email(self) -> dict:
+        """Lower-cased address to merged contact record, built once per instance.
+
+        Delegates to `scripts.utils.crm.contact_index_by_email`, the shared
+        reader, instead of walking the cards here. Two copies of that walk used
+        to live in this file and both read only an inline `email:` key, so every
+        card on the entity schema (`entity_ref` plus
+        `crm/address-book/<slug>.md::canonical_email`) scored as a stranger.
+        That is the schema `/crm` writes and the migration produces, not an
+        exotic one. Measured on the operator's tree 2026-08-29: 89 addresses
+        visible to the old walk, 148 to the shared reader, 59 of them invisible
+        here, and 37 of those carry a relationship type worth the maximum CRM
+        weight of 3.
+
+        Built once and held, because both callers ask about the same corpus and
+        the old shape reopened all 169 cards per question. A classifier instance
+        is constructed per run, so the index cannot go stale within one.
+        """
+        if self._crm_index is None:
+            from scripts.utils.crm import contact_index_by_email
+            self._crm_index = contact_index_by_email(
+                contacts_dir=self.data_root / "crm" / "contacts",
+                workspace_root=self.data_root)
+        return self._crm_index
 
     def classify(
         self,
@@ -349,66 +375,31 @@ class CheapClassifier:
     # ------------------------------------------------------------------
 
     def _lookup_relationship_type(self, sender_email: str) -> Optional[str]:
-        """Return the relationship_type from the first CRM contact matching sender_email.
+        """The relationship_type of the CRM contact owning `sender_email`.
 
-        Walks crm/contacts/*.md and parses YAML frontmatter. Match is case-insensitive.
-        Returns None if no contact file matches or the field is absent.
-
-        Kept cheap: same light frontmatter walk as _score_crm_contact; no caching needed
-        because this short-circuits before the rest of classify() runs.
+        Case-insensitive. None when no card owns the address, or the field is
+        empty. Reads through `_crm_by_email`, so it sees both card schemas.
         """
-        contacts_dir = self.data_root / "crm" / "contacts"
-        if not contacts_dir.is_dir():
+        record = self._crm_by_email().get(sender_email.lower())
+        if record is None:
             return None
-
-        addr_lower = sender_email.lower()
-
-        for md_file in contacts_dir.glob("*.md"):
-            frontmatter = _extract_frontmatter(md_file)
-            if frontmatter is None:
-                continue
-
-            contact_email = frontmatter.get("email", "")
-            if not contact_email:
-                continue
-
-            if str(contact_email).lower() == addr_lower:
-                relationship = frontmatter.get("relationship_type", "")
-                return str(relationship) if relationship else None
-
-        return None
+        relationship = record.get("type", "")
+        return str(relationship) if relationship else None
 
     def _score_crm_contact(self, sender_email: str) -> int:
-        """Walk crm/contacts/*.md, look for matching email in frontmatter.
+        """The CRM signal's weight for `sender_email`.
 
-        Returns 0 if no contact file matches.
-        Returns 1 if a contact file's email field matches (case-insensitive).
-        Returns 3 if matched AND contact's relationship_type is in the
-            high-value set (tribe, tribe-leadership, customer, investor,
-            investor-active, prospect, prospect-partner, etc.).
+        Returns 0 when no contact owns the address, 1 when one does, and 3 when
+        that contact's relationship_type is in the high-value set (tribe,
+        tribe-leadership, customer, investor-active, prospect, and the rest of
+        `_HIGH_VALUE_RELATIONSHIPS`).
         """
-        contacts_dir = self.data_root / "crm" / "contacts"
-        if not contacts_dir.is_dir():
+        record = self._crm_by_email().get(sender_email.lower())
+        if record is None:
             return 0
-
-        addr_lower = sender_email.lower()
-
-        for md_file in contacts_dir.glob("*.md"):
-            frontmatter = _extract_frontmatter(md_file)
-            if frontmatter is None:
-                continue
-
-            contact_email = frontmatter.get("email", "")
-            if not contact_email:
-                continue
-
-            if str(contact_email).lower() == addr_lower:
-                relationship = str(frontmatter.get("relationship_type", "")).lower()
-                if relationship in _HIGH_VALUE_RELATIONSHIPS:
-                    return 3  # 1 baseline + 2 bonus
-                return 1
-
-        return 0
+        if str(record.get("type", "")).lower() in _HIGH_VALUE_RELATIONSHIPS:
+            return 3  # 1 baseline + 2 bonus
+        return 1
 
     def _score_pipeline(self, sender_email: str) -> int:
         """Check context/pipeline.md for sender's domain mention.

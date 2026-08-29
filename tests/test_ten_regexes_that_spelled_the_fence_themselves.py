@@ -29,10 +29,12 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import os
 import re
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -132,10 +134,33 @@ def _r_council(text):
     return _council._parse_frontmatter(text)
 
 
+def _pinned_data_root(root: Path):
+    """Point the data-root SEAM at `root`, and put it back afterwards.
+
+    Both call sites here used to do `_ipr.get_crm_contacts_dir = lambda: ...`,
+    a raw module-attribute assignment. Two defects in one line.
+
+    It never restored, so the replacement leaked into every later test in the
+    session. And it patched a name on the REPORT module, which stopped being the
+    name the code reads on 2026-08-29: `load_known_crm_domains` now goes through
+    `scripts.utils.crm.contact_index_by_email` so it can see both CRM card
+    schemas. The patch bound a stranger, the function resolved the OPERATOR'S
+    LIVE CRM instead of the fixture, and the assertion came back holding real
+    company domains. It read, it did not write, so nothing was damaged; the
+    point is that a moved seam turned a hermetic test into one that reaches the
+    operator's data with nothing saying so.
+
+    Pinning `HEADING_OS_DATA` binds the seam itself rather than one symbol on
+    one module, so the next consumer added to this battery is covered without
+    anybody remembering to patch it.
+    """
+    return patch.dict(os.environ, {"HEADING_OS_DATA": str(root)})
+
+
 def _r_inbox_pulse(text):
     def run(root, _p):
-        _ipr.get_crm_contacts_dir = lambda: root / "crm" / "contacts"
-        return sorted(_ipr.load_known_crm_domains(root))
+        with _pinned_data_root(root):
+            return sorted(_ipr.load_known_crm_domains(root))
     return _in_tree("crm/contacts/dana-okonkwo.md", run)(text)
 
 
@@ -345,8 +370,11 @@ def test_a_crm_contact_with_a_spaced_fence_still_yields_its_email_domain():
         contacts = root / "crm" / "contacts"
         contacts.mkdir(parents=True)
         (contacts / "dana-okonkwo.md").write_text(text, encoding="utf-8")
-        _ipr.get_crm_contacts_dir = lambda: contacts
-        assert _ipr.load_known_crm_domains(root) == {"nimbus-freight.example"}
+        with _pinned_data_root(root):
+            domains = _ipr.load_known_crm_domains(root)
+        assert domains == {"nimbus-freight.example"}, (
+            "a fixture of one contact must yield exactly one domain; anything "
+            "wider means the seam resolved somewhere other than the fixture")
 
 
 # ------------------------------------------------------------------

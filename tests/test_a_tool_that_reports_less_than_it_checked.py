@@ -150,6 +150,12 @@ def clshealth():
 
 
 def test_unclassified_is_a_real_bucket(clshealth, monkeypatch, tmp_path):
+    # A REAL repository, because `walk_workspace` asks git what to ignore since
+    # 2026-08-29 and RAISES when git cannot answer. That contract is the point:
+    # on the live tree the unfiltered sweep reported 427 gitignored files as
+    # classification rows. Initialising the fixture keeps the contract intact
+    # and leaves this test measuring what it is for, the bucketing.
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "a.py").write_text("x = 1\n")
     (tmp_path / "outputs").mkdir()

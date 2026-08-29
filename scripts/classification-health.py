@@ -29,8 +29,15 @@ from scripts.utils.workspace import (
     matched_routing_rule,
 )
 from scripts.utils.colors import GRAY, GREEN, YELLOW, RED, CYAN, BOLD, RESET
+from scripts.utils.repo_files import not_ignored
 
-# Directories to skip entirely
+# Directories to skip entirely.
+#
+# This set is a SPEED filter now, not the correctness boundary. git decides what
+# is ignored, below; these names are pruned before git is asked because walking
+# them is slow and pointless. Removing a name from here changes no verdict, only
+# the time taken. Adding one CAN hide a tracked file, so add nothing that git
+# tracks.
 SKIP_DIRS = {
     ".git", ".sync", ".sentinel", ".sessions", "__pycache__",
     "node_modules", ".corporate-repo", ".crm-central-repo",
@@ -42,14 +49,34 @@ SKIP_FILES = {".DS_Store", "Thumbs.db", ".gitignore", ".gitattributes"}
 
 
 def walk_workspace(root: Path) -> list[str]:
-    """Walk workspace and return list of relative file paths."""
-    files = []
+    """Every file in the workspace that git does not ignore, relative to root.
+
+    The hand-written skip list above cannot know what `.gitignore` says, and the
+    gap was not theoretical. MEASURED 2026-08-29 on this repository: this sweep
+    returned 2363 files and git ignores 427 of them, eighteen percent. Among
+    them `.claude/settings.local.json`, a stale `.bak-...~` file, the marp
+    web-font binaries and a scratch `.marp-src-*.md`. The operator reads this
+    report to judge whether the engine/data split is holding, and every one of
+    those rows is a file no split decision applies to.
+
+    The `.claude` carve-out below is what made it worst. Hidden directories are
+    skipped except `.claude`, and `.claude/worktrees/` is where agent worktrees
+    are checked out. A worktree is a full second copy of the repository, so
+    while one exists this sweep would count the whole tree twice and classify
+    every file in the copy.
+
+    `git check-ignore` is the only thing that knows the answer, and
+    `scripts/utils/repo_files.py` RAISES when git cannot answer rather than
+    degrading to "nothing is ignored" -- that degradation is the silent failure
+    this call exists to prevent.
+    """
+    walked = []
     for item in sorted(root.rglob("*")):
         if not item.is_file():
             continue
         rel = item.relative_to(root)
         parts = rel.parts
-        # Skip excluded directories
+        # Prune the expensive subtrees before asking git (speed only).
         if any(part in SKIP_DIRS for part in parts):
             continue
         # Skip hidden directories (except .claude)
@@ -58,8 +85,10 @@ def walk_workspace(root: Path) -> list[str]:
         # Skip specific files
         if rel.name in SKIP_FILES:
             continue
-        files.append(str(rel).replace("\\", "/"))
-    return files
+        walked.append(item)
+
+    kept = not_ignored(walked, root)
+    return [str(p.relative_to(root)).replace("\\", "/") for p in kept]
 
 
 def classify_files(root: Path) -> dict:

@@ -54,6 +54,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import get_workspace_root, get_routing_destination  # noqa: E402
 from scripts.utils.paths import get_data_root, data_root_is_demo  # noqa: E402
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET  # noqa: E402
+from scripts.utils.repo_files import ignored_paths_or_none  # noqa: E402
 
 # Repo-relative paths, anchored on the top-level directories the engine owns.
 # The trailing class refuses a bare trailing dot so `foo.py.` yields `foo.py`.
@@ -110,23 +111,18 @@ BASELINE = {
 def gitignored(root: Path, paths: list[str]) -> set[str]:
     """Of `paths`, those `.gitignore` covers -- absent from a clone by design.
 
-    Outside a git repo (a synthetic root in a test) git errors and stdout is
-    empty, so nothing is filtered: the tool over-reports rather than going
-    quiet, per `.claude/rules/scope-claims.md`.
+    Outside a git repo (a synthetic root in a test) git cannot answer, so
+    nothing is filtered: the tool over-reports rather than going quiet, per
+    `.claude/rules/scope-claims.md`. That choice is made HERE, in one visible
+    line, which is why this calls the `_or_none` form.
+
+    The `git check-ignore` invocation itself used to be spelled out here, a
+    second copy of the one in `scripts/utils/repo_files.py`. The two had drifted
+    to opposite contracts -- this one degraded silently, the other raised -- and
+    a bug fixed in one would not have reached the other. The contracts still
+    differ, deliberately; the CALL no longer does.
     """
-    if not paths:
-        return set()
-    out = subprocess.run(
-        ["git", "check-ignore", "--stdin", "-z"],
-        cwd=root,
-        input="\0".join(paths) + "\0",
-        capture_output=True,
-        text=True,
-    )
-    # NUL-separated. `.split()` split on every space too, so a gitignored path
-    # containing one came back as fragments that matched nothing and was never
-    # popped from `hits` -- reported as dangling when it is merely ignored.
-    return {p for p in out.stdout.split("\0") if p}
+    return ignored_paths_or_none(paths, root) or set()
 
 
 def tracked_markdown(root: Path) -> list[str]:

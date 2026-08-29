@@ -161,6 +161,34 @@ def _is_exposed_base(receiver: str) -> bool:
     return names_root and (".claude" in receiver)
 
 
+def _is_narrow_literal_glob(call: ast.Call) -> bool:
+    """A one-level `glob` for a literal name, which is not a corpus sweep.
+
+    The defect this rule exists for is a walk that COLLECTS the tree and holds
+    the result against a registry, because a worktree under `.claude/worktrees/`
+    doubles that corpus. `ROOT.glob("_content_guard_probe*")` does something
+    else: it names one specific thing among the root's direct children and
+    asserts there is none of it.
+
+    Routing that through `tracked_paths` would BREAK it. Litter is untracked by
+    definition, and often gitignored, so a git-aware filter would hide exactly
+    what the assertion exists to find. Added 2026-08-29 after this rule flagged
+    such an assertion and the only "fix" available was one that defeats it.
+
+    Narrow means all three: `glob` (not `rglob`, `iterdir` or `walk`), a literal
+    pattern, and no `**`. A leading `*` is still a sweep -- `ROOT.glob("*.py")`
+    collects a corpus -- so it is not narrow.
+    """
+    func = call.func
+    if getattr(func, "attr", None) != "glob" or len(call.args) != 1:
+        return False
+    arg = call.args[0]
+    if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
+        return False
+    pattern = arg.value
+    return "**" not in pattern and "/" not in pattern and not pattern.startswith("*")
+
+
 def exposed_walks(source: str) -> list[tuple[int, str]]:
     """(line, unparsed call) for every walk of the repo root or `.claude`."""
     found: list[tuple[int, str]] = []
@@ -168,6 +196,8 @@ def exposed_walks(source: str) -> list[tuple[int, str]]:
         func = getattr(node, "func", None)
         if not (isinstance(node, ast.Call) and isinstance(func, ast.Attribute)
                 and func.attr in WALK_METHODS):
+            continue
+        if _is_narrow_literal_glob(node):
             continue
         if _is_exposed_base(ast.unparse(func.value).strip()):
             found.append((node.lineno, ast.unparse(node)[:100]))
@@ -311,8 +341,29 @@ def spells_a_batch_filter(text: str) -> bool:
     Extracted and unit-tested below for the same reason as `walk_violations`:
     with the only duplicate migrated, the repository sweep runs over an empty
     set and a predicate that always answered False survived the mutation run.
+
+    READS THE CODE, NOT THE CHARACTERS. This was `"check-ignore" in text and
+    "--stdin" in text`, and on 2026-08-29 that flagged two modules whose only
+    sin was DESCRIBING the command in a docstring, plus a test file whose
+    parametrised fixtures quote it as example source. A rule with false
+    positives gets suppressed, and it takes the true positive with it. The AST
+    form asks whether an argument list actually carries both words.
     """
-    return "check-ignore" in text and "--stdin" in text
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:  # pragma: no cover - another test's job
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for arg in node.args:
+            if not isinstance(arg, (ast.List, ast.Tuple)):
+                continue
+            words = [e.value for e in arg.elts
+                     if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+            if "check-ignore" in words and "--stdin" in words:
+                return True
+    return False
 
 
 def test_the_predicate_sees_a_batch_filter():
@@ -320,8 +371,13 @@ def test_the_predicate_sees_a_batch_filter():
         'subprocess.run(["git", "check-ignore", "--stdin", "-z"], input=payload)')
 
 
+def test_the_predicate_sees_a_batch_filter_carrying_a_repo_flag():
+    assert spells_a_batch_filter(
+        'run(["git", "-C", str(repo), "check-ignore", "--stdin", "-z"])')
+
+
 def test_the_predicate_leaves_a_single_path_question_alone():
-    """Six modules ask git whether ONE named path is ignored. That is a
+    """Eight modules ask git whether ONE named path is ignored. That is a
     different question and must not be flagged."""
     assert not spells_a_batch_filter(
         'subprocess.run(["git", "check-ignore", "-q", str(path)])')
@@ -329,6 +385,85 @@ def test_the_predicate_leaves_a_single_path_question_alone():
 
 def test_the_predicate_leaves_prose_about_the_command_alone():
     assert not spells_a_batch_filter("# `git check-ignore` answers about a path")
+
+
+def test_the_predicate_leaves_a_quoted_example_alone():
+    """The false positive that forced the AST rewrite: a test whose fixtures
+    quote the command as example source is not running it."""
+    assert not spells_a_batch_filter(
+        'CASES = [(\'run(["git", "check-ignore", "--stdin"])\', True)]')
+
+
+def test_the_predicate_leaves_another_git_command_alone():
+    assert not spells_a_batch_filter('subprocess.run(["git", "ls-files", "-z"])')
+
+
+def _batch_rule_corpus() -> list[Path]:
+    """Every module the one-implementation rule inspects: tests AND scripts.
+
+    A function rather than an expression inlined in the rule, so the scope test
+    below can ask the rule what it sweeps instead of agreeing with it by
+    coincidence. Mutation found the difference: narrowing the rule back to
+    `tests/**` changed no test result while a separate list said `scripts/` was
+    covered.
+    """
+    return _test_modules() + tracked_paths(("scripts/**/*.py",))
+
+
+# `_is_narrow_literal_glob` on synthetic input, both directions. Without these
+# the carve-out is only exercised through whatever the tree happens to contain,
+# and two mutations widening it survived: accepting a leading `*`, and
+# accepting `rglob`.
+
+_NARROW = [
+    "ROOT.glob('_content_guard_probe*')",
+    "ROOT.glob('probe.md')",
+    "(ROOT / '.claude').glob('settings.local.json')",
+]
+
+_NOT_NARROW = [
+    "ROOT.glob('*.py')",                  # a leading star IS a corpus sweep
+    "ROOT.glob('scripts/**/*.py')",       # recursive
+    "ROOT.glob('scripts/*.py')",          # reaches into a subtree
+    "ROOT.rglob('*.py')",                 # rglob is recursive by definition
+    # A narrow literal name is still recursive under rglob, so it DOES reach
+    # a worktree copy. Mutation found this: with every other rglob fixture
+    # excluded by its pattern anyway, deleting the `glob` check changed no
+    # verdict and the guard was decorative.
+    "ROOT.rglob('probe.md')",
+    "ROOT.iterdir()",
+    "ROOT.glob(pattern)",                 # not a literal, so unknowable
+    "ROOT.glob('a', 'b')",                # not the one-argument form
+]
+
+
+@pytest.mark.parametrize("source", _NARROW)
+def test_a_narrow_literal_glob_is_not_a_corpus_sweep(source):
+    node = ast.parse(source).body[0].value
+    assert _is_narrow_literal_glob(node) is True
+
+
+@pytest.mark.parametrize("source", _NOT_NARROW)
+def test_everything_wider_is_still_a_corpus_sweep(source):
+    node = ast.parse(source).body[0].value
+    assert _is_narrow_literal_glob(node) is False
+
+
+def test_the_carve_out_separates_the_two_lists():
+    """Both directions in one call, so a predicate ignoring its argument cannot
+    satisfy the two parametrised suites separately."""
+    yes = [s for s in _NARROW
+           if _is_narrow_literal_glob(ast.parse(s).body[0].value)]
+    no = [s for s in _NOT_NARROW
+          if _is_narrow_literal_glob(ast.parse(s).body[0].value)]
+    assert (yes, no) == (_NARROW, [])
+
+
+def test_the_carve_out_reaches_the_rule_it_exempts():
+    """The wiring. The predicate can be right and unreached: `exposed_walks` is
+    what must honour it."""
+    assert exposed_walks("ROOT.glob('_content_guard_probe*')") == []
+    assert [c for _, c in exposed_walks("ROOT.glob('*.py')")] == ["ROOT.glob('*.py')"]
 
 
 def test_the_shared_helper_is_the_only_place_a_batch_filter_is_spelled():
@@ -343,9 +478,9 @@ def test_the_shared_helper_is_the_only_place_a_batch_filter_is_spelled():
     with a different answer shape. A rule that flagged them too would be turned
     off, and the real duplicate would go with it.
     """
-    owner = "tests/repo_files.py"
+    owner = "scripts/utils/repo_files.py"
     holders = []
-    for path in _test_modules():
+    for path in _batch_rule_corpus():
         rel = path.relative_to(ROOT).as_posix()
         if rel in (owner, Path(__file__).relative_to(ROOT).as_posix()):
             continue
@@ -354,3 +489,29 @@ def test_the_shared_helper_is_the_only_place_a_batch_filter_is_spelled():
     assert not holders, (
         f"these batch-filter through `git check-ignore --stdin` themselves "
         f"instead of calling {owner}: {holders}")
+
+
+def test_the_batch_rule_reaches_production_code_too():
+    """The scope this rule did NOT have until 2026-08-29.
+
+    It swept `tests/**` only, and the whole reason the implementation moved out
+    of `tests/repo_files.py` is that production could not import it and grew its
+    own copy. `scripts/check-path-references.py` held one for weeks, with the
+    OPPOSITE contract on git failure, and this rule could not see it.
+
+    Asks `_batch_rule_corpus`, the function the rule itself calls. Building its
+    own list here is what let a mutation narrowing the rule back to `tests/**`
+    survive: the test agreed with the old scope and never consulted the new one.
+    """
+    rels = {p.relative_to(ROOT).as_posix() for p in _batch_rule_corpus()}
+    assert "scripts/check-path-references.py" in rels
+    assert "scripts/utils/repo_files.py" in rels
+    assert any(r.startswith("tests/") for r in rels)
+
+
+def test_the_owner_still_spells_the_batch_filter():
+    """The exemption must be earned. If the shared module stopped batching, the
+    sweep above would run over an empty corpus and the rule would silently stop
+    meaning anything."""
+    owner = ROOT / "scripts" / "utils" / "repo_files.py"
+    assert spells_a_batch_filter(owner.read_text(encoding="utf-8"))

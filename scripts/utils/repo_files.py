@@ -27,6 +27,7 @@ more directories, so `scripts/**/*.py` covers `scripts/a.py` as well as
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -56,9 +57,36 @@ def ignored_paths_or_none(paths, root: Path | None = None) -> set[str] | None:
     different contracts and only one got fixed.
     """
     repo = ROOT if root is None else root
-    walked = [str(Path(p)) for p in paths]
-    if not walked:
+    # Ask git ONLY about paths inside the repository. `git check-ignore`
+    # exits 128 on a path outside it, which this function reports as "git
+    # could not answer" -- and one such path poisoned the whole batch, so
+    # every sweep raised. MEASURED 2026-08-29: with a worktree checked out
+    # at `.claude/worktrees/hdr`, its `.venv/bin/python3.11` is a SYMLINK
+    # to the uv interpreter under ~/.local, `not_ignored` resolved it, and
+    # four sweeps died on a corpus of 31776 files. A path outside the repo
+    # is not a path git ignores, so it simply is not in the answer.
+    # A RELATIVE path is inside by construction, and both forms reach here:
+    # `check-path-references.py` passes repo-relative strings while the tree
+    # sweeps pass absolute ones. Testing the raw string against the repo prefix
+    # answered False for every relative path, so the whole batch looked outside
+    # and nothing was filtered. Git is handed the caller's own spelling either
+    # way, because `-C repo` resolves a relative path against the repo anyway
+    # and the answer must come back in the form the caller can match on.
+    inside, walked = [], []
+    repo_str = str(repo)
+    for candidate in paths:
+        text = str(Path(candidate))
+        walked.append(text)
+        # `Path(...) / text`, not `os.path.join`: the workspace forbids the
+        # latter on any path it did not author, and this one comes from a
+        # caller's walk. `Path.__truediv__` returns `text` unchanged when it is
+        # already absolute, which is the same behaviour with a safer name.
+        absolute = str(Path(repo_str) / text)
+        if absolute == repo_str or absolute.startswith(repo_str + os.sep):
+            inside.append(text)
+    if not walked or not inside:
         return set()
+    walked = inside
     payload = b"\0".join(p.encode() for p in walked) + b"\0"
     proc = subprocess.run(
         ["git", "-C", str(repo), "check-ignore", "--stdin", "-z"],
@@ -99,7 +127,12 @@ def not_ignored(paths, root: Path | None = None) -> list[Path]:
     ask git the one question a skip list cannot answer.
     """
     repo = ROOT if root is None else root
-    unique = sorted({Path(p).resolve() for p in paths})
+    # `abspath`, not `resolve`. `resolve` follows symlinks, and a symlink
+    # inside the tree pointing outside it (a venv's interpreter) turned an
+    # in-repo path into an out-of-repo one before git ever saw it. The
+    # sweep is about paths in this tree, so the link is what it walks and
+    # the link is what git should be asked about.
+    unique = sorted({Path(os.path.abspath(p)) for p in paths})
     ignored = ignored_paths(unique, repo)
     return [p for p in unique if str(p) not in ignored]
 

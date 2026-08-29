@@ -80,6 +80,12 @@ DENIAL_MECHANISMS = (
     "check_slow_shell",
     "check_rate_limit",
     "check_tool_budget",
+    # Added 2026-08-29 with the two walls themselves. Both refuse a model
+    # mistake rather than a dangerous write, so both will sit at zero
+    # catches for long stretches, and zero-with-a-name is exactly what this
+    # list exists to tell apart from absent-entirely.
+    "check_graph_first",
+    "check_fanout_first",
 )
 
 # ============================================================
@@ -155,6 +161,12 @@ GATES = (
     "check_slow_shell",
     "check_rate_limit",
     "check_tool_budget",
+    # Added 2026-08-29 with the two walls themselves. Their loss function is
+    # symmetric and bounded like the gates above: under-friction costs a
+    # worse answer and rework, over-friction costs time. Neither protects a
+    # write, so neither belongs with the walls.
+    "check_graph_first",
+    "check_fanout_first",
 )
 
 

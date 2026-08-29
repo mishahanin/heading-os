@@ -28,7 +28,12 @@ under the heading is still the right prose - no test can hold that.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from scripts.utils.repo_files import not_ignored  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 POINTER_RE = re.compile(r"((?:\.heading-os-data/)?docs/[\w./-]+\.md)#([\w-]+)")
@@ -53,7 +58,12 @@ def _pointers():
         base = ROOT / root
         if not base.exists():
             continue
-        for path in base.rglob("*"):
+        # Ask git what to skip. A bare `rglob` reads a checked-out worktree and
+        # its vendored `.venv` as source: with `.claude/worktrees/hdr` present
+        # this sweep reported broken pointers inside
+        # `site-packages/opentelemetry/`, naming files the operator cannot fix
+        # and cannot delete, in a tree `.gitignore` already covers.
+        for path in not_ignored(base.rglob("*"), ROOT):
             if path.suffix not in (".py", ".md", ".sh") or not path.is_file():
                 continue
             try:

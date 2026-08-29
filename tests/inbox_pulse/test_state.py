@@ -74,30 +74,36 @@ def test_get_state_dir_falls_back_to_data_root(monkeypatch, tmp_path):
     assert expected.exists()
 
 
-def test_get_workspace_root_finds_dir_with_config_and_scripts(tmp_path, monkeypatch):
-    """get_workspace_root() walks parents until it finds config/ and scripts/."""
-    # Build a minimal fake workspace tree under tmp_path.
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    (workspace / "config").mkdir()
-    (workspace / "scripts").mkdir()
+def test_get_workspace_root_honours_the_shared_override(tmp_path, monkeypatch):
+    """This module has no walk of its own; it delegates, and that is the point.
 
-    # Create a nested file path simulating paths.py living at
-    # workspace/scripts/inbox_pulse/paths.py
-    nested = workspace / "scripts" / "inbox_pulse"
-    nested.mkdir()
-    fake_file = nested / "paths.py"
-    fake_file.touch()
+    It used to carry a private copy that walked up from `_THIS_FILE` looking for
+    a directory holding both `config/` and `scripts/`, and that copy silently
+    ignored the `WORKSPACE_ROOT` override the shared helper honours: two answers
+    to one question, with the daemon reading the one that cannot be redirected.
+    The copy was deleted; this test kept monkeypatching `_THIS_FILE`, a name the
+    module no longer has, so it was pinning a removed implementation and failing
+    against the correct one. It now pins the delegation itself.
+    """
+    workspace = tmp_path / "workspace"
+    (workspace / "config").mkdir(parents=True)
+    (workspace / "scripts").mkdir()
+    monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
 
     paths = _reload_paths()
+    assert paths.get_workspace_root() == workspace.resolve()
 
-    # Override the module's _THIS_FILE so the walk starts from the nested dir.
-    monkeypatch.setattr(paths, "_THIS_FILE", fake_file.resolve())
-    monkeypatch.setattr(paths, "_workspace_root_cache", None)
 
-    result = paths.get_workspace_root()
+def test_get_workspace_root_is_not_a_second_implementation():
+    """The other direction: with no override, both modules answer the same.
 
-    assert result == workspace.resolve()
+    A private copy reintroduced here would satisfy the override test above only
+    if it also read the env var, and would still be a second answer to drift.
+    """
+    from scripts.utils.paths import get_workspace_root as shared
+
+    paths = _reload_paths()
+    assert paths.get_workspace_root() == shared()
 
 
 # ---------------------------------------------------------------------------

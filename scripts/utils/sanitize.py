@@ -78,6 +78,29 @@ def apply_phone_scrubbing(
     return phone_pattern.sub(replacer, content)
 
 
+def _locate(lines: list[str], prefix: str) -> tuple[int, str]:
+    """(1-based line number, that line's text) for a match sitting just past `prefix`.
+
+    ONE notion of a line, shared by both halves of `scan_for_terms`. Until
+    2026-08-29 the number was computed by counting "\\n" and then used to index
+    into `content.splitlines()`, which are two different notions:
+    `str.splitlines()` also breaks on \\r, \\x0b, \\x0c, \\x85, U+2028 and U+2029.
+    On any content carrying one of those, the printed source line belonged to a
+    different line than the number printed beside it - a correct verdict with
+    wrong evidence under it, which sends the reader to the wrong place in the
+    file. Callers pass `lines` from `content.split("\\n")`, so
+    `len(lines) == content.count("\\n") + 1` and the index below is always in
+    range; no bounds guard is needed, and one would be dead code.
+
+    `prefix` may be a case-folded slice (the substring pass scans lowered text)
+    while `lines` comes from the original. `str.lower()` can change a string's
+    length but never adds or removes a "\\n", so the count is the same in both,
+    and indexing the original list yields the line as the operator will see it.
+    """
+    line_num = prefix.count("\n") + 1
+    return line_num, lines[line_num - 1].strip()
+
+
 def scan_for_terms(
     content: str,
     substring_terms: set[str] | list[str],
@@ -103,7 +126,9 @@ def scan_for_terms(
     findings: list[tuple[str, int, str, str]] = []
     seen: set[tuple[str, int]] = set()
     content_lower = content.lower()
-    lines = content.splitlines()
+    # split("\n"), never splitlines(): see _locate. The line number and the line
+    # text must come from the same split or the evidence contradicts the number.
+    lines = content.split("\n")
 
     for term in substring_terms:
         if not term:
@@ -112,12 +137,11 @@ def scan_for_terms(
         if t_lower not in content_lower:
             continue
         for match in re.finditer(re.escape(t_lower), content_lower):
-            line_num = content_lower[: match.start()].count("\n") + 1
+            line_num, line_text = _locate(lines, content_lower[: match.start()])
             key = (t_lower, line_num)
             if key in seen:
                 continue
             seen.add(key)
-            line_text = lines[line_num - 1].strip() if line_num <= len(lines) else ""
             findings.append((term, line_num, line_text[:200], "substring"))
 
     for term in (word_boundary_terms or set()):
@@ -125,12 +149,11 @@ def scan_for_terms(
             continue
         pattern = re.compile(r"\b" + re.escape(term) + r"\b", re.IGNORECASE)
         for match in pattern.finditer(content):
-            line_num = content[: match.start()].count("\n") + 1
+            line_num, line_text = _locate(lines, content[: match.start()])
             key = (term.lower(), line_num)
             if key in seen:
                 continue
             seen.add(key)
-            line_text = lines[line_num - 1].strip() if line_num <= len(lines) else ""
             findings.append((term, line_num, line_text[:200], "word-boundary"))
 
     return findings

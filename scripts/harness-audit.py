@@ -14,7 +14,7 @@ hook files, and 6 PostToolUse hooks from a single plugin, each running a bash
 script out of that cache. Files of that surface scanned by any layer: zero.
 `superpowers` moved 5.1.0 to 6.1.1 on 2026-07-14 and nobody read the diff.
 
-Tests: tests/test_an_edit_that_deleted_the_addresses_it_promised_to_keep.py, tests/test_harness_audit.py, tests/test_harness_audit_contract.py
+Tests: tests/test_an_edit_that_deleted_the_addresses_it_promised_to_keep.py, tests/test_harness_audit.py, tests/test_harness_audit_contract.py, tests/test_an_audit_that_vouched_for_a_surface_it_never_read.py
 
     python scripts/harness-audit.py                    # report, exit 1 on findings
     python scripts/harness-audit.py --json
@@ -62,8 +62,30 @@ SURFACE_SUFFIXES = frozenset({
 })
 
 # Our own instruction surface: what this repository contributes to a session.
+#
+# Five globs, and the last two were missing until 2026-08-29. Measured that day
+# with one identical payload planted in all six surfaces: four were scanned and
+# flagged, `.claude/commands/` and `.claude/hooks/` drew no finding, no
+# `unreadable` entry and no note, and the run exited 0 over them.
+#
+# `.claude/commands/*.md` is a slash command's BODY, injected as the prompt the
+# moment the operator types the command. That is the most direct instruction
+# surface this repository owns, and it was the one nothing read.
+#
+# `.claude/hooks/**/*.py` is scanned AS TEXT, and it is Python rather than
+# markdown, which is a deliberate choice with a known cost. The scan is a
+# substring hunt over lines, so a hook that QUOTES the vocabulary it guards
+# would trip it. Measured 2026-08-29: none of the 17 Python hooks here does, so
+# nothing needed an allowance, and `prompt-guard.py` reaches the vocabulary
+# through an import of `scripts/utils/injection_patterns.py` rather than by
+# spelling it. The cost is worth paying, because a hook does not merely load -
+# it EXECUTES on every tool call, so text nobody read matters more here than
+# anywhere else on the surface. The `<!-- audit-skip-* -->` convention works in a
+# Python comment as well, which is the escape hatch for a hook that grows a
+# legitimate quote.
 OUR_SURFACE_GLOBS = (".claude/skills/**/*.md", ".claude/rules/**/*.md",
-                     ".claude/agents/**/*.md")
+                     ".claude/agents/**/*.md", ".claude/commands/**/*.md",
+                     ".claude/hooks/**/*.py")
 OUR_SURFACE_FILES = ("AGENTS.md", "CLAUDE.md")
 
 # Files in THIS REPOSITORY that legitimately contain the phrases this tool hunts.
@@ -72,16 +94,35 @@ OUR_SURFACE_FILES = ("AGENTS.md", "CLAUDE.md")
 # A basename allowance is the first thing an attacker aims at: ship a file called
 # `prompt-guard.py` inside the plugin cache and disappear. Installed content is
 # never covered by this list, whatever it calls itself.
+#
+# EVERY ENTRY MUST BE REACHABLE BY THE CORPUS ABOVE, and
+# `tests/test_an_audit_that_vouched_for_a_surface_it_never_read.py` asserts it.
+# Six of the nine entries this list carried until 2026-08-29 named paths no glob
+# could ever produce: `scripts/harness-audit.py`,
+# `scripts/utils/injection_patterns.py`, `tests/`, `docs/SECURITY-MODEL.md`,
+# `SECURITY.md`, and `.claude/hooks/prompt-guard.py`. They read as coverage and
+# were carve-outs from a scan that never happened, which is how the two missing
+# surfaces stayed invisible: the list looked like it already reached further than
+# it did. Widening the corpus to a new tree means adding that tree's allowances
+# back in the same change, rather than keeping them speculatively now.
+#
+# `.claude/hooks/prompt-guard.py` is NOT re-listed, even though adding
+# `.claude/hooks/**/*.py` finally made it reachable. Measured 2026-08-29 with the
+# allowance removed: the whole own-tree corpus produces zero findings, this hook
+# included, because the vocabulary it guards moved out to
+# `scripts/utils/injection_patterns.py` and the hook only imports it. Exempting a
+# file that executes on every tool call, for a phrase it does not contain, would
+# re-open the exact hole this change closes on the riskiest file on the surface.
+# If a future edit gives it a legitimate quote, the audit says so out loud and
+# the fix is the `<!-- audit-skip-* -->` markers or an entry here, decided then.
+#
+# The three that remain are reachable, and each also matches nothing today. They
+# stay because those rules discuss the vocabulary by design and the next edit to
+# one is likelier to quote it than not.
 ALLOWED_REPO_PREFIXES = (
-    ".claude/hooks/prompt-guard.py",
     ".claude/rules/security.md",
     ".claude/rules/lethal-trifecta.md",
     ".claude/rules/hidden-chars.md",
-    "scripts/harness-audit.py",
-    "scripts/utils/injection_patterns.py",
-    "tests/",
-    "docs/SECURITY-MODEL.md",
-    "SECURITY.md",
 )
 
 # The workspace's existing convention for prose that legitimately discusses the
@@ -516,8 +557,18 @@ def _scan_one(path: Path, label: str, findings, scanned, unreadable,
 
 
 def scan_loaded_content(repo: Path, root: Path):
-    """Injection findings across everything that loads into a session."""
-    findings, scanned, unreadable = [], [], []
+    """Injection findings over the corpus named by `OUR_SURFACE_GLOBS`.
+
+    Returns `(findings, scanned, unreadable, allowed_skipped)`. The corpus is
+    this repository's own instruction and hook surface plus the installed plugin
+    surface, and it is NOT everything that reaches a session: settings files,
+    `.claude/hooks/*.sh`, MCP server output and anything the operator pastes are
+    all outside it. The fourth return value is the allow-list drop count, which
+    `.claude/rules/scope-claims.md` obligation 2 requires be reported rather than
+    absorbed into silence - a skipped file used to leave no trace at all, so the
+    printed sentence counted it as neither scanned nor excluded.
+    """
+    findings, scanned, unreadable, allowed_skipped = [], [], [], []
 
     ours = []
     for pattern in OUR_SURFACE_GLOBS:
@@ -529,6 +580,7 @@ def scan_loaded_content(repo: Path, root: Path):
     for path in sorted(set(ours)):
         rel = path.relative_to(repo).as_posix()
         if _is_allowed_repo_path(rel):
+            allowed_skipped.append(rel)
             continue
         _scan_one(path, rel, findings, scanned, unreadable, honour_skip=True)
 
@@ -537,12 +589,23 @@ def scan_loaded_content(repo: Path, root: Path):
         _scan_one(path, f"plugins/{path.relative_to(root).as_posix()}",
                   findings, scanned, unreadable)
 
-    return findings, scanned, unreadable
+    return findings, scanned, unreadable, allowed_skipped
 
 
 # ============================================================
 # Output
 # ============================================================
+
+def _corpus_summary() -> str:
+    """The corpus, DERIVED from the constants rather than described by hand.
+
+    A hand-written sentence about coverage is the thing that goes stale the
+    moment a glob is added, and a stale coverage sentence is the defect
+    `.claude/rules/scope-claims.md` is about. Reading the constants means the
+    printed claim cannot outrun the code that produces it.
+    """
+    return ", ".join((*OUR_SURFACE_GLOBS, *OUR_SURFACE_FILES))
+
 
 def _render(result) -> None:
     hooks = result["third_party_hooks"]
@@ -601,8 +664,24 @@ def _render(result) -> None:
             print(f"  {RED}{finding['category']:<20}{RESET} "
                   f"{finding['path']}:{finding['line']}")
     else:
+        # Names the corpus, never "everything that loads". The scan reads this
+        # repository's skills, rules, agents, commands and Python hooks plus the
+        # installed plugin surface; settings files and shell hooks are outside
+        # it, and the allow-listed files below were not read at all. Saying "in N
+        # loaded file(s)" over that is the over-claim `.claude/rules/scope-claims.md`
+        # exists to refuse.
         print(f"{GREEN}No injected instruction patterns{RESET} "
-              f"{GRAY}in {len(result['scanned'])} loaded file(s){RESET}")
+              f"{GRAY}in the {len(result['scanned'])} file(s) scanned: this "
+              f"repository's {_corpus_summary()} plus the installed plugin "
+              f"surface. Settings files and non-Python hooks are outside the "
+              f"corpus.{RESET}")
+
+    if result["allowed_skipped"]:
+        print(f"{GRAY}{len(result['allowed_skipped'])} file(s) were NOT scanned: "
+              f"they are allow-listed as legitimately carrying the phrases this "
+              f"tool hunts, so nothing here is evidence either way:{RESET}")
+        for path in result["allowed_skipped"]:
+            print(f"  {GRAY}allowed  {path}{RESET}")
 
     if result["symlinks"]:
         print()
@@ -671,7 +750,8 @@ def main() -> int:
         return 0
 
     baseline = read_manifest(manifest_path)
-    findings, scanned, scan_unreadable = scan_loaded_content(repo, root)
+    findings, scanned, scan_unreadable, allowed_skipped = scan_loaded_content(
+        repo, root)
 
     seen, unreadable = set(), []
     for entry in hash_unreadable + scan_unreadable:
@@ -690,6 +770,7 @@ def main() -> int:
                   else compare(index, baseline)),
         "injection": findings,
         "scanned": scanned,
+        "allowed_skipped": allowed_skipped,
         "unreadable": unreadable,
         "symlinks": symlinks,
         "surface_files": len(index),

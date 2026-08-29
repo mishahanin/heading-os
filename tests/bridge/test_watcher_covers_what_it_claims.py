@@ -34,7 +34,7 @@ from scripts.bridge_daemon.watcher import (  # noqa: E402
     PATH_TO_COMPONENTS,
     REFRESHER_COMPONENTS,
     WATCHED_COMPONENTS,
-    DebouncedBumper,
+    _Handler,
     classify_path,
 )
 from scripts.bridge_daemon.sources.pulse import IN_FLIGHT_DIRS  # noqa: E402
@@ -152,12 +152,35 @@ def test_every_watched_component_is_a_real_component():
 
 # ---------------------------------------------------------- the handler wiring
 
-def test_a_single_write_schedules_every_matching_component():
-    """The handler used to schedule at most one."""
-    fired: list[str] = []
-    bumper = DebouncedBumper(fired.append, interval=0.01)
-    for component in classify_path("outputs/documents/x.pdf"):
-        bumper.schedule(component)
-    import time
-    time.sleep(0.2)
-    assert sorted(fired) == ["inflight", "studio"], fired
+class _Created:
+    """The one field `on_any_event` reads on a non-move event."""
+
+    is_directory = False
+
+    def __init__(self, src):
+        self.src_path = str(src)
+
+
+def _recording_handler(root: Path):
+    scheduled: list[str] = []
+    bumper = type("_Recorder", (), {"schedule": staticmethod(scheduled.append)})()
+    return _Handler(root, bumper), scheduled
+
+
+def test_a_single_write_schedules_every_matching_component(tmp_path):
+    """The handler used to schedule at most one.
+
+    Until 2026-08-29 this test never touched the handler. It ran
+    `for component in classify_path(...): bumper.schedule(component)` in its own
+    body and asserted against that loop, which is the fan-out re-implemented in
+    the test rather than measured in the code. `_Handler` was not even imported
+    here. Truncating the real comprehension to `self._classify(p)[:1]` left this
+    file at 15 passed and all of `tests/bridge` at 1210 passed, so the one write
+    to `outputs/documents/` that must bump BOTH the Pulse in-flight count and
+    the Studio page was unguarded: write a document, in-flight moves, Studio
+    stays stale until a manual refresh. That is the exact failure this module's
+    docstring says it was written to close.
+    """
+    handler, scheduled = _recording_handler(tmp_path)
+    handler.on_any_event(_Created(tmp_path / "outputs/documents/x.pdf"))
+    assert sorted(scheduled) == ["inflight", "studio"], scheduled

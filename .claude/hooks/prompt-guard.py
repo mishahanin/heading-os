@@ -144,7 +144,20 @@ def main():
     if not isinstance(input_data, dict):
         sys.exit(0)
 
-    tool_input = input_data.get("tool_input", {})
+    # `.get("tool_input", {})` returns the STORED value when the key is present,
+    # so a `null`, a list or a string reached `.get` one line below and raised
+    # an uncaught AttributeError - the injection scanner died before it scanned.
+    # This is the copy the 2026-08-23 sweep missed: `post-write-sanitize.py` and
+    # `sync-docs.py` both got this guard then and their comments claim every
+    # stdin hook was covered. Measured 2026-08-29 with a real payload:
+    # `{"tool_input": null}`, `{"tool_input": []}` and `{"tool_input": "x"}`
+    # each exited 1 with a traceback. Same spelling as the two neighbours, so
+    # there is one shape of this rule rather than a third.
+    tool_input = input_data.get("tool_input") or {}
+    if not isinstance(tool_input, dict):
+        print(f"[prompt-guard] tool_input was {type(tool_input).__name__}, "
+              "not an object", file=sys.stderr)
+        sys.exit(0)
     # Write/Edit/MultiEdit carry file_path; NotebookEdit carries notebook_path.
     file_path = tool_input.get("file_path", "") or tool_input.get("notebook_path", "")
 

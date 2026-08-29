@@ -25,6 +25,7 @@ the pattern this closes.
 """
 import ast
 import re
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -44,7 +45,37 @@ _BARE_INTERPRETER = re.compile(r"^python(3(\.\d+)?)?$")
 _SPAWN_FUNCS = {"run", "Popen", "call", "check_call", "check_output"}
 
 
+def _git_ignored(paths):
+    """The subset of `paths` git ignores, asked of git in one call.
+
+    The walk below used to be filtered by a hand-written list of directory
+    names, and on 2026-08-29 that list did not know about `.claude/worktrees/`.
+    An agent working in an isolated worktree INSIDE the repository put four
+    copies of its own scratch files in front of this guard, and the suite failed
+    on files that are not part of the repository at all. A hand-written list can
+    only ever name the places that have already caused trouble; git already
+    knows the answer, so ask it.
+
+    Untracked files are still scanned. Only IGNORED ones are dropped, so a test
+    written a minute ago and not yet added is covered, which is the case this
+    guard exists for.
+    """
+    if not paths:
+        return set()
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(ROOT), "check-ignore", "--stdin", "-z"],
+            input="\0".join(str(p) for p in paths), capture_output=True,
+            text=True, check=False, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        # No git, so nothing is known to be ignored and everything is scanned.
+        # Over-reporting, never silence: `.claude/rules/scope-claims.md`.
+        return set()
+    return {Path(line) for line in proc.stdout.split("\0") if line}
+
+
 def _python_files():
+    candidates = []
     for top in _SCANNED_DIRS:
         base = ROOT / top
         if not base.is_dir():
@@ -52,6 +83,10 @@ def _python_files():
         for path in base.rglob("*.py"):
             if _SKIPPED_PARTS & set(path.parts):
                 continue
+            candidates.append(path)
+    ignored = _git_ignored(candidates)
+    for path in candidates:
+        if path not in ignored:
             yield path
 
 
@@ -117,3 +152,42 @@ def test_the_guard_recognises_the_pattern_it_forbids():
 
     real_path = ast.parse('subprocess.run(["/decoy/python", str(PATH)])')
     assert _bare_interpreter_calls(real_path) == []
+
+
+def test_a_git_ignored_tree_is_not_part_of_the_repository(tmp_path):
+    """An agent worktree lives under `.claude/worktrees/`, which git ignores.
+
+    On 2026-08-29 four of them were inside the tree and this guard walked
+    straight into their scratch files, so the suite failed over code that is not
+    part of the repository. The filter was a hand-written list of directory
+    names, and such a list can only name the places that have already caused
+    trouble.
+    """
+    probe_dir = ROOT / ".claude" / "worktrees" / "probe-not-the-repository"
+    probe = probe_dir / "spawner.py"
+    probe_dir.mkdir(parents=True, exist_ok=True)
+    probe.write_text(
+        "import subprocess\nsubprocess.run(['python3', 'x.py'])\n", encoding="utf-8")
+    try:
+        assert probe not in set(_python_files())
+    finally:
+        probe.unlink()
+        probe_dir.rmdir()
+
+
+def test_a_brand_new_untracked_test_is_still_scanned():
+    """Dropping every untracked file would exempt the file being written now,
+    which is the only moment this guard is useful."""
+    probe = ROOT / "tests" / "test_zz_probe_untracked_spawner.py"
+    probe.write_text(
+        "import subprocess\nsubprocess.run(['python3', 'x.py'])\n", encoding="utf-8")
+    try:
+        assert probe in set(_python_files())
+    finally:
+        probe.unlink()
+
+
+def test_the_scan_is_not_empty():
+    """A filter that dropped everything would make this file pass over nothing."""
+    found = list(_python_files())
+    assert len(found) > 200, f"only {len(found)} python files reached the guard"

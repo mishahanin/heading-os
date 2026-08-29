@@ -97,7 +97,11 @@ def test_a_corrupt_queue_is_moved_aside_before_anything_writes(tmp_path, caplog)
 
     assert loaded["actions"] == []
     assert not q.exists(), "the corrupt file must not still be in the live path"
-    wrecks = list(q.parent.glob("queue.json.corrupt-*"))
+    # `.quarantine/`, not a sibling of the live file: the sibling name matched no
+    # gitignore rule in either repository and `push-all`'s `git add -A` would
+    # have committed the draft bodies. See
+    # tests/test_a_wreck_file_that_no_gitignore_rule_matched.py.
+    wrecks = list(q.parent.glob(".quarantine/queue.json.corrupt-*"))
     assert len(wrecks) == 1
     assert "card-1" in wrecks[0].read_text(encoding="utf-8"), (
         "the whole point is that the bytes survive"
@@ -110,7 +114,7 @@ def test_a_queue_of_the_wrong_shape_is_also_quarantined(tmp_path):
     q.parent.mkdir(parents=True, exist_ok=True)
     q.write_text('["not", "a", "queue"]', encoding="utf-8")
     aq._load_queue(tmp_path)
-    assert list(q.parent.glob("queue.json.corrupt-*"))
+    assert list(q.parent.glob(".quarantine/queue.json.corrupt-*"))
 
 
 def test_an_absent_queue_is_not_quarantined(tmp_path, caplog):
@@ -125,7 +129,7 @@ def test_an_absent_queue_is_not_quarantined(tmp_path, caplog):
     q.parent.mkdir(parents=True, exist_ok=True)
     with caplog.at_level(logging.ERROR):
         assert aq._load_queue(tmp_path)["actions"] == []
-    assert not list(q.parent.glob("queue.json.corrupt-*"))
+    assert not list(q.parent.glob(".quarantine/queue.json.corrupt-*"))
     assert caplog.text == "", f"cold start logged an error: {caplog.text}"
 
 
@@ -143,7 +147,7 @@ def test_two_corruptions_do_not_clobber_each_others_wreckage(tmp_path):
     for body in ("{bad one", "{bad two"):
         q.write_text(body, encoding="utf-8")
         aq._load_queue(tmp_path)
-    assert len(list(q.parent.glob("queue.json.corrupt-*"))) == 2
+    assert len(list(q.parent.glob(".quarantine/queue.json.corrupt-*"))) == 2
 
 
 def test_the_disposition_log_is_appended_not_rewritten():

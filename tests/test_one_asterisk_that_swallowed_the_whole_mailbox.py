@@ -154,8 +154,15 @@ def test_a_corrupt_state_is_still_quarantined(ei, state_path, capsys):
     ei.StateManager(path=state_path)
     err = capsys.readouterr().err
     assert "unusable" in err
-    assert list(state_path.parent.glob("state.json.corrupt-*")), (
+    # Into the `.quarantine/` sibling since 2026-08-29. The wreck used to land
+    # beside the live file as `state.json.corrupt-<stamp>`, a name no ignore
+    # rule in either repository matched, so `git add -A` would have committed
+    # it. This assertion followed the wreck; it still asks the same question.
+    assert list((state_path.parent / ".quarantine").glob("state.json.corrupt-*")), (
         "the damaged file must be kept, not replaced"
+    )
+    assert not list(state_path.parent.glob("state.json.corrupt-*")), (
+        "the wreck must not sit beside the live file, where nothing ignores it"
     )
 
 

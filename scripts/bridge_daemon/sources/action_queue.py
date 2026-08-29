@@ -46,6 +46,7 @@ from scripts.bridge_daemon._atomic import atomic_write_text
 from scripts.bridge_daemon._jsonl import append_jsonl
 from scripts.utils import dead_letter, tool_risk, tracing
 from scripts.utils.checkpoint_paths import file_lock
+from scripts.utils.quarantine import quarantine_file, quarantine_ref
 from scripts.utils.timeparse import parse_iso
 
 QUEUE_FILE = "outputs/operations/action-queue/queue.json"  # leak-guard: ok (relative suffix rooted by caller)
@@ -164,15 +165,18 @@ def _quarantine_corrupt_queue(path: Path, why: str) -> None:
     Renaming costs nothing and keeps the wreck recoverable. The daemon carries
     on with an empty queue, which is the same behaviour as before; the
     difference is that the old cards still exist somewhere.
+
+    WHERE it lands is the second half, and it was wrong until 2026-08-29. The
+    wreck was `queue.json.corrupt-<stamp>` NEXT TO the live file: `queue.json`
+    is gitignored in the data overlay precisely because it carries recipient
+    addresses and whole drafted email bodies, and that name matched no rule in
+    either repository. `push-all.py` runs `git add -A`, so one `GET
+    /action-queue` over a torn file would have committed every pending draft
+    into permanent history. `quarantine_file` puts it in a `.quarantine/`
+    sibling, which both repositories ignore whole.
     """
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    target = path.with_name(f"{path.name}.corrupt-{stamp}")
-    n = 2
-    while target.exists():
-        target = path.with_name(f"{path.name}.corrupt-{stamp}-{n}")
-        n += 1
     try:
-        path.rename(target)
+        target = quarantine_file(path)
     except OSError:
         logger.error(
             "queue.json is unreadable (%s) AND could not be moved aside; the "
@@ -183,7 +187,7 @@ def _quarantine_corrupt_queue(path: Path, why: str) -> None:
     logger.error(
         "queue.json was unreadable (%s); moved to %s and starting from an empty "
         "queue. Recover any pending cards from that file by hand.",
-        why, target.name,
+        why, quarantine_ref(target),
     )
 
 

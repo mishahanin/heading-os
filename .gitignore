@@ -274,6 +274,18 @@ knowledge/odin-brain/.last-collect
 outputs/operations/action-queue/queue.json
 outputs/operations/action-queue/disposition-log.jsonl
 
+# Quarantined wreck files, present and future. `scripts/utils/quarantine.py` is
+# the only writer and it always lands in a `.quarantine/` directory beside the
+# original, so this one rule covers every state file rather than the name of one.
+# Written after the measurement on 2026-08-29: `queue.json` and `state.json` are
+# both ignored for carrying private content, and the wrecks their readers made -
+# `queue.json.corrupt-<stamp>`, `state.json.corrupt-<stamp>` - matched no rule in
+# either repository, which is the lock-sidecar failure again ("named one path at
+# a time"). The engine's own site was `.claude/skills/*/evals/benchmark.json.corrupt`,
+# a wreck inside a tracked directory of a PUBLIC repo. This is the belt; the
+# durable half is that no caller gets to choose the name.
+**/.quarantine/
+
 # Dead-letter queue runtime artifacts (R14, 2026-06-04): failed-finalizer
 # records keyed by trace_id, carrying recipient + body payloads (mode 0600).
 # CEO-local, never committed.

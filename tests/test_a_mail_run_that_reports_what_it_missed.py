@@ -217,7 +217,9 @@ def test_corrupt_state_is_moved_aside_and_reported(tmp_path, capsys):
 
     err = capsys.readouterr().err
     assert "unusable" in err
-    kept = list(tmp_path.glob("state.json.corrupt-*"))
+    # `.quarantine/`, not a sibling: the sibling name matched no gitignore rule.
+    # See tests/test_a_wreck_file_that_no_gitignore_rule_matched.py.
+    kept = list(tmp_path.glob(".quarantine/state.json.corrupt-*"))
     assert len(kept) == 1, f"the damaged file was not kept: {list(tmp_path.iterdir())}"
     assert "<a@x>" in kept[0].read_text(encoding="utf-8")
     assert state.data["processed_message_ids"] == []
@@ -228,7 +230,7 @@ def test_a_state_file_that_is_a_list_is_also_quarantined(tmp_path):
     path = tmp_path / "state.json"
     path.write_text("[1, 2, 3]", encoding="utf-8")
     state = ei.StateManager(path=path)
-    assert list(tmp_path.glob("state.json.corrupt-*"))
+    assert list(tmp_path.glob(".quarantine/state.json.corrupt-*"))
     assert isinstance(state.data, dict)
 
 
@@ -238,7 +240,7 @@ def test_a_healthy_state_file_is_left_exactly_alone(tmp_path):
                     encoding="utf-8")
     state = ei.StateManager(path=path)
     assert state.data["processed_message_ids"] == ["<a@x>"]
-    assert not list(tmp_path.glob("state.json.corrupt-*"))
+    assert not list(tmp_path.glob(".quarantine/state.json.corrupt-*"))
 
 
 # ============================================================

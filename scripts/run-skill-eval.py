@@ -56,6 +56,7 @@ from scripts.utils.atomic import atomic_write_text  # noqa: E402
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET  # noqa: E402
 from scripts.utils.markdown import FM_OK, split_frontmatter  # noqa: E402
 from scripts.utils.observability import observe  # noqa: E402
+from scripts.utils.quarantine import quarantine_file, quarantine_ref  # noqa: E402
 from scripts.utils.sanitize_text import word_count  # noqa: E402
 from scripts.utils.workspace import get_workspace_root, load_env  # noqa: E402
 
@@ -414,10 +415,15 @@ def run_one_skill(skill_name: str, case_filter: str | None, model_override: str 
                 # Keep the corrupt file and SAY SO. Silently resetting to {}
                 # deleted the baseline -- the one artefact that makes future runs
                 # comparable -- and the run that did it looked entirely normal.
-                backup = benchmark_path.with_suffix(".json.corrupt")
-                benchmark_path.replace(backup)
+                #
+                # Into the `.quarantine/` sibling, which both repositories ignore
+                # whole. `benchmark.json.corrupt` sat inside a TRACKED skill
+                # directory in the public engine and matched no ignore rule
+                # (measured 2026-08-29), so the next `git add -A` committed a
+                # wreck file into a repo that ships to strangers.
+                backup = quarantine_file(benchmark_path)
                 print(f"{YELLOW}benchmark.json was unparseable; kept it at "
-                      f"{backup.name} and starting a fresh baseline{RESET}",
+                      f"{quarantine_ref(backup)} and starting a fresh baseline{RESET}",
                       file=sys.stderr)
                 existing = {}
         existing["last_run"] = {

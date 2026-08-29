@@ -44,6 +44,7 @@ from scripts.utils.llm_fallback import call_anthropic_with_fallback
 from scripts.utils.observability import observe
 from scripts.utils.workspace import get_workspace_root, load_env, resolve_config_with_example, get_outputs_dir, get_crm_config_path, get_crm_contacts_dir, get_context_dir, get_default_tz
 from scripts.utils.atomic import atomic_write_text
+from scripts.utils.quarantine import quarantine_file
 # The one exclusive-lock primitive this workspace has. It lives beside the
 # checkpoint code because that is where it was first needed, not because it is
 # checkpoint-specific; `label` is what keeps its stderr honest here.
@@ -248,12 +249,16 @@ class StateManager:
         return loaded
 
     def _quarantine(self, reason: Exception) -> None:
-        """Move an unusable state file aside instead of overwriting it."""
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        dest = self.path.with_name(f"{self.path.name}.corrupt-{stamp}")
+        """Move an unusable state file aside instead of overwriting it.
+
+        Into a `.quarantine/` sibling, not next to the live file. `state.json`
+        is gitignored in the data overlay (per-machine, high-entropy Exchange
+        message ids); `state.json.corrupt-<stamp>` matched no rule in either
+        repository until 2026-08-29, so `push-all`'s `git add -A` would have
+        committed it. Same defect, same fix, as the action queue's.
+        """
         try:
-            os.replace(self.path, dest)
-            where = str(dest)
+            where = str(quarantine_file(self.path))
         except OSError as move_err:
             where = f"(could not move it aside: {move_err})"
         print(

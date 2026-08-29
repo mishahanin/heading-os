@@ -281,8 +281,14 @@ def test_the_dry_run_prints_the_declared_sensitivity():
 def test_an_unparseable_benchmark_is_preserved_and_announced():
     src = (ROOT / "scripts" / "run-skill-eval.py").read_text(encoding="utf-8")
     block = src.split("except json.JSONDecodeError:", 1)[1].split("existing[", 1)[0]
-    assert ".corrupt" in block, block
-    assert "benchmark_path.replace(backup)" in block
+    # It goes through the shared quarantine writer, which puts the wreck in a
+    # `.quarantine/` sibling. The old spelling built the wreck's name here, and
+    # `benchmark.json.corrupt` landed inside a TRACKED skill directory in the
+    # public engine, matched by no ignore rule (measured 2026-08-29). Pinning
+    # the shared call is the stronger claim: the caller no longer picks a name.
+    assert "quarantine_file(benchmark_path)" in block, block
+    assert "benchmark_path.replace(" not in block, (
+        "a wreck named beside the live file is the defect this fixed")
 
 
 def test_the_benchmark_is_written_atomically():

@@ -41,7 +41,7 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
 from scripts.utils.workspace import display_path, get_default_tz, get_knowledge_dir, get_shared_knowledge_dir, is_exec_workspace
-from scripts.utils.markdown import frontmatter_date
+from scripts.utils.markdown import frontmatter_date, frontmatter_list
 from scripts.utils.markdown import parse_frontmatter as _parse_frontmatter
 
 KNOWLEDGE_DIR = get_knowledge_dir()
@@ -226,9 +226,7 @@ def scan_notes():
                       f"unreadable `created:` value ({fm['created']!r}: {exc}); "
                       f"not aged.", file=sys.stderr)
 
-        keywords = fm.get("keywords", [])
-        if isinstance(keywords, str):
-            keywords = [keywords]
+        keywords = frontmatter_list(fm.get("keywords"))
 
         notes.append({
             "file": file_path.name,
@@ -309,7 +307,7 @@ def scan_shared_notes():
                 "title": fm.get("title", file_path.stem),
                 "type": fm.get("type", ""),
                 "status": fm.get("status", ""),
-                "keywords": fm.get("keywords", []) if isinstance(fm.get("keywords", []), list) else [fm.get("keywords", "")],
+                "keywords": frontmatter_list(fm.get("keywords")),
                 "confidence": fm.get("confidence", ""),
                 "created": str(fm.get("created", "")),
                 "updated": str(fm.get("updated", "")),

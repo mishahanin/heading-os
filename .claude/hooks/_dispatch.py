@@ -2046,7 +2046,10 @@ FANOUT_PATH_BUDGET = int(os.environ.get("WS_FANOUT_BUDGET", "12"))
 # the same reason: a session must be able to read its own logs and scratch
 # files without spending budget it did not mean to spend.
 _FANOUT_IGNORE = ("tmp/", ".log", ".jsonl", "node_modules", ".venv",
-                  "__pycache__", ".git/")
+                  "__pycache__", ".git/",
+                  # Device and kernel nodes are plumbing in a command line, not
+                  # a corpus: `2>/dev/null` on a real search charged a file.
+                  "/dev/", "/proc/", "/sys/")
 
 # A FORWARD slash, and only a forward slash. The separator class used to
 # accept a backslash as well, for Windows paths, and the test below
@@ -2067,6 +2070,87 @@ def _fanout_marker(session_id: str, actor: str = "main") -> Path:
     return _FANOUT_STATE_DIR / f"{_state_key(session_id, actor)}.json"
 
 
+_HEREDOC_OPEN = re.compile(r"<<-?\s*[\"\']?([A-Za-z_][A-Za-z0-9_]*)[\"\']?")
+
+
+def strip_heredocs(command: str) -> str:
+    """The command line with every heredoc BODY removed.
+
+    A heredoc body is content the command writes; it is not a corpus the caller
+    is reading. MEASURED 2026-08-29: a `cat > msg.txt <<'EOF' ... EOF` holding a
+    commit message spent the whole fan-out budget on the file names the message
+    NAMED, and the wall then refused the commit. The same shape charges a patch
+    script for the paths it edits, twice: once in the redirect and once in the
+    body.
+
+    Pure, so both directions are measurable on synthetic input. The delimiter is
+    matched at the start of a line, per the shell, and an unterminated heredoc
+    runs to the end, which is also what the shell does.
+    """
+    lines = command.split("\n")
+    kept, i = [], 0
+    while i < len(lines):
+        line = lines[i]
+        kept.append(line)
+        markers = _HEREDOC_OPEN.findall(line)
+        i += 1
+        for marker in markers:
+            while i < len(lines) and lines[i].strip() != marker:
+                i += 1
+            i += 1        # drop the terminator line too
+    return "\n".join(kept)
+
+
+# The commands that READ a file so a human can look at it. An allowlist, not a
+# denylist, and that is the whole design: the wall exists to notice a session
+# opening file after file by hand, and a denylist has to anticipate every
+# command that is not that. MEASURED 2026-08-29, twice in one hour: `pytest a b
+# c` and `ruff a b` were charged as five hand-reads and the wall refused the
+# next step, and a `git commit` was charged for the files its message named.
+# Running a suite, linting a set, committing a change: each names paths, none
+# is a person reading them.
+_READER_BINARIES = (
+    "grep", "rg", "egrep", "fgrep", "ag", "ack", "ast-grep", "sg",
+    "find", "sed", "awk", "cat", "head", "tail", "less", "more",
+    "nl", "wc", "diff", "od", "xxd", "strings", "jq", "yq",
+)
+
+# Where one command ends and the next begins. Only the FIRST word of a segment
+# is the binary, so `git commit -F msg` and `grep -n x a.py` split cleanly.
+_SEGMENT_SPLIT = re.compile(r"(?:\|\||&&|[;|&\n])")
+
+
+def reader_path_tokens(command: str) -> list[str]:
+    """Path-looking tokens from the READER segments of a shell command.
+
+    Pure, so both directions are measurable on synthetic input, which matters
+    here because the allowlist decides everything: a body that returned every
+    token would restore the false refusals, and one that returned none would
+    delete the Bash half of the rule without failing anything else.
+    """
+    found: list[str] = []
+    for segment in _SEGMENT_SPLIT.split(strip_heredocs(command)):
+        words = segment.split()
+        if not words:
+            continue
+        # Skip a leading `sudo`, `time`, or `VAR=value` assignment.
+        i = 0
+        while i < len(words) and ("=" in words[i].split("/")[-1].split()[0]
+                                  and not words[i].startswith("-")
+                                  or words[i] in ("sudo", "time", "command", "nohup")):
+            i += 1
+        if i >= len(words):
+            continue
+        binary = words[i].split("/")[-1]
+        if binary in _READER_BINARIES:
+            # The ARGUMENTS, not the command word. Scanning the whole segment
+            # charged `/bin/cat` and `/usr/bin/grep` as files being read, which
+            # is how a reader invoked by absolute path spent two budget slots
+            # for one file.
+            found.extend(_PATH_TOKEN.findall(" ".join(words[i + 1:])))
+    return found
+
+
 def investigated_paths(tool_name: str, tool_input: dict) -> set[str]:
     """The distinct files this one call investigates by hand.
 
@@ -2079,7 +2163,7 @@ def investigated_paths(tool_name: str, tool_input: dict) -> set[str]:
         candidates = [str(tool_input.get(k, ""))
                       for k in ("file_path", "path", "glob", "pattern")]
     elif tool_name == "Bash":
-        candidates = _PATH_TOKEN.findall(str(tool_input.get("command", "")))
+        candidates = reader_path_tokens(str(tool_input.get("command", "")))
     else:
         return set()
 

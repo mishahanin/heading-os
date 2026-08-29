@@ -147,10 +147,139 @@ def test_the_predicate_separates_the_two_lists(hook):
     assert no == []
 
 
-def test_a_patch_script_charges_only_the_file_it_patches(hook):
-    """The live case that exposed it. One heredoc, one file being edited, and
-    a body full of regex escapes: the wall charged fourteen and refused the
-    session mid-repair."""
+# ============================================================
+# Only a READER command charges for the paths it names
+#
+# MEASURED 2026-08-29, twice in one hour: `pytest a b c` and `ruff a b` were
+# charged as five hand-reads and the wall refused the next step, and a
+# `git commit` was charged for every file its message named. Running a suite,
+# linting a set and committing a change each name paths; none is a person
+# reading them one after another, which is the only thing this wall is about.
+# ============================================================
+
+READS = [
+    ("grep -n x scripts/a.py", {"scripts/a.py"}),
+    ("wc -l scripts/a.py scripts/b.py", {"scripts/a.py", "scripts/b.py"}),
+    ("sed -n '1,5p' scripts/a.py", {"scripts/a.py"}),
+    ("cat scripts/a.py | head -3", {"scripts/a.py"}),
+    ("diff scripts/a.py scripts/b.py", {"scripts/a.py", "scripts/b.py"}),
+    ("sudo cat scripts/a.py", {"scripts/a.py"}),
+    ("tail -20 scripts/a.py", {"scripts/a.py"}),
+    # A reader invoked by path is still that reader. Mutation caught this:
+    # comparing the whole word rather than its basename made `/usr/bin/grep`
+    # a non-reader, and the wall stopped counting an ordinary absolute call.
+    ("/usr/bin/grep -n x scripts/a.py", {"scripts/a.py"}),
+    ("/bin/cat scripts/a.py", {"scripts/a.py"}),
+    # One reader beside one runner: the reader's segment still counts.
+    ("grep -n x scripts/a.py 2>/dev/null && pytest tests/z.py", {"scripts/a.py"}),
+]
+
+RUNS = [
+    "pytest tests/a.py tests/b.py tests/c.py",
+    "ruff check scripts/a.py scripts/b.py",
+    "git add scripts/a.py && git commit -m x",
+    "git diff scripts/a.py",
+    "python scripts/tool.py --out scripts/b.py",
+    "mkdir -p scripts/newdir",
+    "cp scripts/a.py scripts/b.py",
+    "mypy scripts/a.py",
+]
+
+
+@pytest.mark.parametrize("command, expected", READS,
+                         ids=[c.split()[0] + f"-{i}" for i, (c, _) in enumerate(READS)])
+def test_a_reader_charges_for_what_it_opens(hook, command, expected):
+    assert hook.investigated_paths("Bash", {"command": command}) == expected
+
+
+@pytest.mark.parametrize("command", RUNS,
+                         ids=[c.split()[0] + f"-{i}" for i, c in enumerate(RUNS)])
+def test_a_runner_charges_for_nothing(hook, command):
+    assert hook.investigated_paths("Bash", {"command": command}) == set()
+
+
+def test_the_two_command_classes_are_disjoint(hook):
+    """Both directions over one call, so an allowlist that matched everything
+    and one that matched nothing are each refuted by a single assertion."""
+    charged = [c for c, _ in READS if hook.investigated_paths("Bash", {"command": c})]
+    free = [c for c in RUNS if hook.investigated_paths("Bash", {"command": c})]
+    assert len(charged) == len(READS)
+    assert free == []
+
+
+# ============================================================
+# A heredoc body is data the command writes, not a corpus it reads
+# ============================================================
+
+COMMIT_MESSAGE_COMMAND = (
+    "cat > .tmp/audit/msg.txt <<'EOF'\n"
+    "fix: three readers that lost a field\n"
+    "\n"
+    "Touched scripts/knowledge-health.py, scripts/odin-brain-health.py,\n"
+    "scripts/odin_brain_lint.py, scripts/odin_pagerank.py and\n"
+    "scripts/utils/crm.py, plus tests/test_a_bare_keywords_field.py.\n"
+    "EOF\n"
+    "git add -A && git commit -F .tmp/audit/msg.txt"
+)
+
+
+def test_a_commit_message_naming_files_charges_none_of_them(hook):
+    """MEASURED 2026-08-29: writing a commit message spent the whole budget on
+    the file names the MESSAGE named, and the wall then refused the commit."""
+    assert hook.investigated_paths("Bash", {"command": COMMIT_MESSAGE_COMMAND}) == set()
+
+
+# Every body below opens with a READER command, deliberately. A body of inert
+# lines is dropped by the reader allowlist whether the stripper runs or not, so
+# fixtures written that way left three mutations of `strip_heredocs` alive: they
+# proved the allowlist, not the stripper. A heredoc that quotes a shell reader
+# is the case where the two rules disagree, and it is the ordinary case for a
+# patch script or a commit message quoting a command.
+HEREDOC_CASES = [
+    # (command, expected paths) - the body is dropped, the command line is not.
+    ("cat <<'EOF' > out\ncat scripts/inside.py\nEOF\nwc -l scripts/outside.py",
+     {"scripts/outside.py"}),
+    # An unquoted marker is still a marker.
+    ("python - <<PY\ngrep -n q scripts/inside.py\nPY\ndiff scripts/outside.py x",
+     {"scripts/outside.py"}),
+    # `<<-` strips leading tabs; the marker still ends it.
+    ("cat <<-EOF\n\thead scripts/inside.py\n\tEOF\nhead scripts/outside.py",
+     {"scripts/outside.py"}),
+    # Unterminated: the shell reads to the end, and so does this.
+    ("cat <<'EOF' > out\ncat scripts/inside.py\n", set()),
+    # No heredoc at all: nothing is dropped.
+    ("grep -n x scripts/outside.py", {"scripts/outside.py"}),
+]
+
+
+@pytest.mark.parametrize("command, expected", HEREDOC_CASES,
+                         ids=[f"case-{i}" for i in range(len(HEREDOC_CASES))])
+def test_the_heredoc_body_is_dropped_and_the_command_line_is_not(hook, command,
+                                                                 expected):
+    """Both directions in one table. A `strip_heredocs` that returned the empty
+    string would satisfy every drop case and fail every keep case."""
+    assert hook.investigated_paths("Bash", {"command": command}) == expected
+
+
+PLUMBING = ["grep -rn x scripts/a.py 2>/dev/null",
+            "cat /proc/cpuinfo scripts/a.py",
+            "wc -l /sys/kernel/x scripts/a.py"]
+
+
+@pytest.mark.parametrize("command", PLUMBING)
+def test_device_nodes_are_plumbing_not_a_corpus(hook, command):
+    assert hook.investigated_paths("Bash", {"command": command}) == {"scripts/a.py"}
+
+
+def test_an_inline_patch_script_charges_nothing(hook):
+    """The live case that exposed both defects, and it lands on zero twice over.
+
+    The body is a heredoc, so it is content being written rather than a corpus
+    being read; and every regex escape in it (`\\s`, `\\t`, `\\d`) used to count
+    as a Windows path on top of that. MEASURED before the fixes: this one
+    command charged fourteen files and the wall refused the session in the
+    middle of repairing itself.
+    """
     command = (
         "python - <<'PY'\n"
         "from pathlib import Path\n"
@@ -159,8 +288,14 @@ def test_a_patch_script_charges_only_the_file_it_patches(hook):
         "s = re.sub(r'^[ \\t]*\\d+\\.\\s+', '', s)\n"
         "PY"
     )
-    assert hook.investigated_paths("Bash", {"command": command}) == {
-        "scripts/humanization-check.py"}
+    assert hook.investigated_paths("Bash", {"command": command}) == set()
+
+
+def test_the_escapes_alone_still_charge_nothing_without_a_heredoc(hook):
+    """The same escapes on a bare command line, so the heredoc fix cannot be
+    the only reason the case above passes."""
+    command = r"""python -c 're.sub(r"^[\s]*[-*+]\s+", "", t)'"""
+    assert hook.investigated_paths("Bash", {"command": command}) == set()
 
 
 def test_one_bash_command_naming_three_files_counts_three(hook):

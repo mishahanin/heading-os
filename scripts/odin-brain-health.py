@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import RESET, YELLOW
-from scripts.utils.markdown import frontmatter_date
+from scripts.utils.markdown import frontmatter_date, frontmatter_list
 from scripts.utils.markdown import parse_frontmatter as _parse_frontmatter_text
 from scripts.utils.workspace import get_default_tz, get_knowledge_dir
 
@@ -188,9 +188,7 @@ def collect_domains(files):
             fm = parse_frontmatter(f)
             if not fm:
                 continue
-            keywords = fm.get("keywords", [])
-            if isinstance(keywords, str):
-                keywords = [keywords]
+            keywords = frontmatter_list(fm.get("keywords"))
             for kw in keywords:
                 domains[kw][subdir] += 1
     return dict(sorted(domains.items(), key=lambda x: sum(x[1].values()), reverse=True))
@@ -218,7 +216,7 @@ def find_orphan_principles(files):
     for f in files["positions"]:
         fm = parse_frontmatter(f)
         if fm:
-            refs = fm.get("principles", [])
+            refs = frontmatter_list(fm.get("principles"))
             if isinstance(refs, str):
                 refs = [refs]
             position_principles.update(refs)
@@ -237,8 +235,8 @@ def find_orphan_principles(files):
             orphans.append({
                 "file": rel_path,
                 "title": fm.get("title", f.stem),
-                "keywords": fm.get("keywords", []),
-                "sources": fm.get("sources", []),
+                "keywords": frontmatter_list(fm.get("keywords")),
+                "sources": frontmatter_list(fm.get("sources")),
             })
     return orphans
 
@@ -250,10 +248,8 @@ def find_domain_clusters(files):
         fm = parse_frontmatter(f)
         if not fm:
             continue
-        keywords = fm.get("keywords", [])
-        if isinstance(keywords, str):
-            keywords = [keywords]
-        source_ids = fm.get("sources", [])
+        keywords = frontmatter_list(fm.get("keywords"))
+        source_ids = frontmatter_list(fm.get("sources"))
         if isinstance(source_ids, str):
             source_ids = [source_ids]
         for kw in keywords:
@@ -298,9 +294,7 @@ def find_keyword_overlaps(files):
     for f in files["sources"]:
         fm = parse_frontmatter(f)
         if fm:
-            kws = fm.get("keywords", [])
-            if isinstance(kws, str):
-                kws = [kws]
+            kws = frontmatter_list(fm.get("keywords"))
             source_keywords[f"sources/{f.name}"] = {
                 "id": fm.get("id", ""),
                 "keywords": set(k.lower() for k in kws),
@@ -310,10 +304,8 @@ def find_keyword_overlaps(files):
     for f in files["principles"]:
         fm = parse_frontmatter(f)
         if fm:
-            kws = fm.get("keywords", [])
-            if isinstance(kws, str):
-                kws = [kws]
-            linked_sources = fm.get("sources", [])
+            kws = frontmatter_list(fm.get("keywords"))
+            linked_sources = frontmatter_list(fm.get("sources"))
             if isinstance(linked_sources, str):
                 linked_sources = [linked_sources]
             principle_data[f"principles/{f.name}"] = {
@@ -385,7 +377,7 @@ def collect_all_keywords(files):
         for f in files[subdir]:
             fm = parse_frontmatter(f)
             if fm:
-                kws = fm.get("keywords", [])
+                kws = frontmatter_list(fm.get("keywords"))
                 if isinstance(kws, str):
                     kws = [kws]
                 for k in kws:
@@ -566,7 +558,7 @@ def run_health_report(files):
     for f in files["positions"]:
         fm = parse_frontmatter(f)
         if fm:
-            refs = fm.get("principles", [])
+            refs = frontmatter_list(fm.get("principles"))
             if isinstance(refs, str):
                 refs = [refs]
             position_principles.update(refs)

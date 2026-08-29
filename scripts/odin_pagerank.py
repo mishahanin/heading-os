@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import get_knowledge_dir, get_workspace_root  # noqa: E402
 from scripts.utils.air_gap import is_denied  # noqa: E402
 from scripts.utils.markdown import parse_frontmatter as _parse_frontmatter  # noqa: E402
+from scripts.utils.markdown import frontmatter_list
 
 try:  # pyyaml is pinned in requirements; degrade to defaults if absent.
     import yaml
@@ -311,7 +312,8 @@ def seed_from_query(query: str, graph: BrainGraph) -> dict[str, float]:
         return {}
     seeds: dict[str, float] = {}
     for key, meta in graph.nodes.items():
-        hay = _tokenize(meta["title"] + " " + " ".join(meta.get("keywords", [])))
+        hay = _tokenize(meta["title"] + " "
+                        + " ".join(frontmatter_list(meta.get("keywords"))))
         overlap = len(q & hay)
         if overlap:
             seeds[key] = float(overlap)

@@ -35,6 +35,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.markdown import parse_frontmatter as _parse_fm  # noqa: E402
+from scripts.utils.markdown import frontmatter_list
 from scripts.utils.workspace import (  # noqa: E402
     get_crm_contacts_dir,
     get_knowledge_dir,
@@ -203,7 +204,7 @@ def check_orphan_superseded(files_by_subdir):
     issues = []
     position_refs = set()
     for info in files_by_subdir.get("positions", {}).values():
-        refs = info["frontmatter"].get("principles", [])
+        refs = frontmatter_list(info["frontmatter"].get("principles"))
         if isinstance(refs, str):
             refs = [refs]
         position_refs.update(str(r) for r in refs)
@@ -220,7 +221,7 @@ def check_orphan_superseded(files_by_subdir):
         successor = by_slug.get(str(tgt))
         cites_old = False
         if successor:
-            srcs = successor["frontmatter"].get("sources", [])
+            srcs = frontmatter_list(successor["frontmatter"].get("sources"))
             if isinstance(srcs, str):
                 srcs = [srcs]
             srcs = {str(s) for s in srcs}

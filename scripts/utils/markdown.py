@@ -423,6 +423,37 @@ _CONFIG_BLOCK_RE = re.compile(
 )
 
 
+def frontmatter_list(value: Any) -> List[str]:
+    """A frontmatter field that should be a list, as a list of strings.
+
+    `yaml.safe_load` returns native types, so a key written with no value at
+    all -- `keywords:` on its own line -- parses to None, and a key written as
+    one bare word parses to a string. Six readers spelled the coercion
+    themselves and five of them handled the string but not the None.
+
+    MEASURED 2026-08-29: one note with a bare `keywords:` made
+    `knowledge-health.py` die with `TypeError: 'NoneType' object is not
+    iterable` in all three of its output modes, and both health-check callers
+    (`scripts/memory.py`, `scripts/prime-health-parallel.py`) reported the
+    check as failed. `REQUIRED_FIELDS` tests key PRESENCE, so the note counted
+    as valid on the way in.
+
+    Beside `frontmatter_date` for the same reason: the coercion belongs once,
+    where every reader can find it, not once per reader.
+    """
+    if value is None or value == "":
+        return []
+    # The container test names its three types and does NOT say `Iterable`. A
+    # string is iterable, so a widened test would shatter `keywords: alpha`
+    # into `['a', 'l', 'p', 'h', 'a']`. A separate `isinstance(value, str)`
+    # branch used to sit above this and mutation showed it changed no answer
+    # (the tail below returns `[str(value)]`, which is the same list), so the
+    # dead branch is gone and the explicit tuple of types is the guard.
+    if isinstance(value, (list, tuple, set)):
+        return [str(v) for v in value if v is not None]
+    return [str(value)]
+
+
 def parse_config(text: str, key: str) -> Optional[str]:
     """Extract a ``key: value`` from a ``## Config:`` markdown block.
 

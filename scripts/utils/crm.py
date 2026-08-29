@@ -51,6 +51,7 @@ from scripts.utils.workspace import (  # noqa: E402
     is_exec_workspace,
 )
 from scripts.utils.markdown import parse_frontmatter_str as _parse_frontmatter  # noqa: E402
+from scripts.utils.markdown import frontmatter_list
 
 
 def try_commit(commit_fn, repo: Path, files, message: str, label: str) -> bool:
@@ -751,7 +752,11 @@ def merge_entity_and_relationship(entity: dict, relationship: dict) -> dict:
     merged["cadence"] = relationship.get("cadence", "")
     merged["status"] = relationship.get("status", "active")
     merged["source"] = relationship.get("source", "")
-    merged["tags"] = relationship.get("tags", [])
+    # `frontmatter_list`, not a `[]` default: a card written with a bare
+    # `tags:` parses to None through yaml.safe_load, and the default only
+    # applies when the key is ABSENT. Every reader of merged["tags"] then
+    # iterates None.
+    merged["tags"] = frontmatter_list(relationship.get("tags"))
     merged["entity_ref"] = relationship.get("entity_ref", "")
     merged["pipeline_company"] = relationship.get("pipeline_company", "")
     merged["radar_freeze_until"] = relationship.get("radar_freeze_until", "")

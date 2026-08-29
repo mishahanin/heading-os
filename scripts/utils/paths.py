@@ -393,12 +393,27 @@ def private_cache_dir(*parts: str) -> Path:
     return root.joinpath(*parts) if parts else root
 
 
+_LOG_FILE_SUFFIXES = (".log", ".jsonl", ".ndjson", ".json", ".txt", ".csv")
+
+
 def log_dir(*parts: str) -> Path:
     """Return a workspace log directory, creating it if needed.
 
     Override base with the WORKSPACE_LOG_DIR env var; otherwise defaults to
     ``<workspace_root>/.logs``. Optional path *parts* are appended.
     """
+    # A part that names a FILE is a caller error, and it used to be a silent
+    # one: this function mkdirs the whole joined path, so `log_dir("x.log")`
+    # created a DIRECTORY called `x.log` and every append to it raised
+    # IsADirectoryError. MEASURED 2026-08-29: `.logs/memory-auto-retire.log`
+    # had been a directory since 2026-07-06 and that script's audit trail had
+    # never recorded a line, because its writer swallowed OSError. Refusing is
+    # the fix to the WRITER; the caller wants `log_dir(...) / "name.log"`.
+    for part in parts:
+        if str(part).lower().endswith(_LOG_FILE_SUFFIXES):
+            raise ValueError(
+                f"log_dir() creates directories and {part!r} names a file. "
+                f"Write log_dir(...) / {part!r} instead.")
     base = os.environ.get("WORKSPACE_LOG_DIR")
     root = Path(base).expanduser() if base else get_workspace_root() / ".logs"
     target = root.joinpath(*parts) if parts else root

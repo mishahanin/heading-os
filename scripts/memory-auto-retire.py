@@ -30,7 +30,12 @@ from scripts.utils.workspace import get_auto_memory_dir, get_default_tz
 from scripts.utils.paths import load_env, log_dir
 
 INDEX_NAME = "MEMORY.md"
-LOG_PATH = log_dir("memory-auto-retire.log")
+# `log_dir(*parts)` mkdirs the WHOLE joined path, so passing the filename made
+# `.logs/memory-auto-retire.log` a DIRECTORY. Every append then raised
+# IsADirectoryError into the `except OSError` below, and the retire audit
+# trail recorded nothing from 2026-07-06 until this was found on 2026-08-29.
+# Directory from the helper, filename here, as every other caller does.
+LOG_PATH = log_dir() / "memory-auto-retire.log"
 
 
 def _log_line(msg: str) -> None:

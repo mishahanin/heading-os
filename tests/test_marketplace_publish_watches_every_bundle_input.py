@@ -120,6 +120,74 @@ def test_the_declared_commands_actually_exist(manifest):
     )
 
 
+def _declared_hooks(manifest: dict) -> set[str]:
+    """Every hook filename the manifest names, from BOTH fields that name one.
+
+    `hooks:` is the copy list. `hook_events:` is the wiring the generated
+    hooks.json is built from, and until 2026-08-29 nothing in this file or in
+    the builder read it, so a hook could be wired without ever being a bundle
+    input by any check's reckoning.
+    """
+    names: set[str] = set()
+    for bundle in _bundles(manifest):
+        names.update(bundle.get("hooks") or [])
+        for blocks in (bundle.get("hook_events") or {}).values():
+            for block in blocks:
+                names.update(block.get("hooks") or [])
+    return names
+
+
+def test_every_hook_a_bundle_declares_is_watched(watched, manifest):
+    """The pair `scripts:` and `commands:` already had, one field along.
+
+    `.claude/hooks/**` happens to be in the filter today, so this test passes on
+    arrival. That is the point of writing it: the coverage was true by accident
+    of an older line rather than by anything that would notice its removal.
+    """
+    declared = sorted(_declared_hooks(manifest))
+    assert declared, "no bundle declares any hook; has the manifest shape changed?"
+    missed = sorted(h for h in declared
+                    if not _covered(f".claude/hooks/{h}", watched))
+    assert not missed, (
+        f"these bundled hooks do not trigger a publish: {missed}. Changing one "
+        "ships nothing and says nothing."
+    )
+
+
+def test_the_declared_hooks_actually_exist(manifest):
+    """The mirror defect, and the one that was real.
+
+    A name in `hook_events` that exists nowhere still reached the generated
+    hooks.json as a `python3 "${CLAUDE_PLUGIN_ROOT}/hooks/<name>"` command, so
+    the consumer registered a PostToolUse guard pointing at nothing.
+    """
+    declared = sorted(_declared_hooks(manifest))
+    assert declared, "no bundle declares any hook; has the manifest shape changed?"
+    missing = sorted(h for h in declared
+                     if not (ROOT / ".claude" / "hooks" / h).exists())
+    assert not missing, f"plugin-bundles.yaml declares hooks that do not exist: {missing}"
+
+
+def test_at_least_one_bundle_actually_wires_a_hook_event(manifest):
+    """Anti-vacuity for the two tests above.
+
+    Four of the five bundles carry `hook_events: {}`. If heading-core's wiring
+    were ever emptied, `_declared_hooks` would fall back to the `hooks:` lists
+    alone and the `hook_events` half of both tests would assert over nothing
+    while still passing. Green over an empty corpus is how this defect survived
+    in the first place.
+    """
+    wired = {name
+             for bundle in _bundles(manifest)
+             for blocks in (bundle.get("hook_events") or {}).values()
+             for block in blocks
+             for name in (block.get("hooks") or [])}
+    assert wired, (
+        "no bundle wires any hook_events entry, so the hook tests above cover "
+        "only the hooks: field and prove nothing about the wiring."
+    )
+
+
 def test_the_build_scripts_are_watched(watched):
     """A change to the builder itself changes every bundle's output."""
     for path in ("scripts/dev/build-plugins.py", "scripts/dev/publish-marketplace.py"):

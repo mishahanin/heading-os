@@ -88,8 +88,11 @@ def ollama_url() -> str:
     `generate:` in the machine-local `config/ollama-hosts.yaml`, overridden by
     `HEADING_OS_OLLAMA_HOST`, degrading to the local daemon when neither
     answers. A speed number is only comparable to another one taken on the same
-    host, so a run that reports ollama timings should say which host it reached
-    - print `ollama_url()` beside them.
+    host, so `score_speed` stamps `endpoint` on every timing it returns, via
+    `_endpoint`. The promise used to live in this sentence alone and nothing
+    delivered it: two ollama runs against different `HEADING_OS_OLLAMA_HOST`
+    values wrote two reports with no way to tell the hosts apart, which is
+    exactly the un-attributed number this docstring says must not exist.
 
     Resolved on first use rather than at import, because it probes and
     `--dry-run` promises no network.
@@ -200,7 +203,15 @@ def _truth(text: str, marker: str) -> dict:
     Deliberately mirrors the question wording rather than the corpus schema: what
     is being measured is whether the model can read what is in front of it.
     """
-    field_match = re.search(rf"^{re.escape(FIELD_KEY)}:\s*'?(\d{{4}}-\d{{2}}-\d{{2}})", text, re.M)
+    # `[^\S\n]*`, never `\s*`: `\s` matches a newline, so with `re.M` the anchor
+    # sat on `^last_touched:` while the gap consumed the line break and the date
+    # group matched a date that STARTED A LATER LINE. An empty or absent field
+    # then recorded a truth of that date, a model answering `null` correctly lost
+    # the point, and a model hallucinating the same way the regex did won it -
+    # the code-computed ground truth this file exists to protect, corrupted in
+    # the `field` third of every affected case. Found 2026-08-29.
+    field_match = re.search(
+        rf"^{re.escape(FIELD_KEY)}:[^\S\n]*'?(\d{{4}}-\d{{2}}-\d{{2}})", text, re.M)
     section_match = re.search(
         rf"^## {re.escape(SECTION)}\s*\n(.*?)(?=^## |\Z)", text, re.M | re.S,
     )
@@ -383,8 +394,28 @@ def _post(url: str, payload: dict, headers: dict, timeout: int = 300) -> dict:
         return json.loads(response.read().decode())
 
 
+def _require_text(value: object, where: str) -> str:
+    """The string at `where`, or a ValueError naming what arrived instead."""
+    if not isinstance(value, str):
+        raise ValueError(f"response {where} was {type(value).__name__}, not text")
+    return value
+
+
 def call_model(runner: Runner, prompt: str) -> str:
-    """One sub-call. Raises on transport failure so the caller can name the cause."""
+    """One sub-call. Raises on transport failure so the caller can name the cause.
+
+    Every malformed response is turned into a `ValueError` HERE rather than
+    left to fault at the subscript. `TRANSPORT_FAILURES` carries `KeyError`,
+    which covers a MISSING key and nothing else: `{"choices": []}` is a
+    well-formed 200 with the key present, so `data["choices"][0]` raised
+    `IndexError` - a sibling of `KeyError` under `LookupError`, outside the
+    tuple. It escaped `score_accuracy`'s handler, killed the run with a
+    traceback and exit 1 (a code the module docstring does not define), and
+    threw away every measurement collected so far. The Anthropic path had the
+    same hole one shape over: `block.get(...)` on a non-object block raised
+    `AttributeError`, also outside the tuple. Both are now `ValueError`, which
+    the tuple already catches, and the message says which half was wrong.
+    """
     if runner.transport == "ollama":
         data = _post(ollama_url(), {
             "model": runner.model,
@@ -392,7 +423,12 @@ def call_model(runner: Runner, prompt: str) -> str:
             "stream": False,
             "options": {"temperature": 0, "num_predict": 300},
         }, {"Content-Type": "application/json"})
-        return data["message"]["content"]
+        message = data.get("message")
+        if not isinstance(message, dict):
+            raise ValueError(
+                f"ollama response carried no message object, got "
+                f"{type(message).__name__}")
+        return _require_text(message.get("content"), "message.content")
 
     if runner.transport == "proxy":
         key = load_api_key("CLIPROXY_API_KEY", required=False)
@@ -405,7 +441,18 @@ def call_model(runner: Runner, prompt: str) -> str:
             "temperature": 0,
             "max_tokens": 400,
         }, headers)
-        return data["choices"][0]["message"]["content"]
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise ValueError(
+                "proxy response carried no choices; a 200 with an empty list "
+                "is not an answer")
+        first = choices[0]
+        message = first.get("message") if isinstance(first, dict) else None
+        if not isinstance(message, dict):
+            raise ValueError(
+                f"proxy response choice carried no message object, got "
+                f"{type(message).__name__}")
+        return _require_text(message.get("content"), "choices[0].message.content")
 
     if runner.transport == "anthropic":
         key = load_api_key("ANTHROPIC_API_KEY", required=True)
@@ -420,7 +467,14 @@ def call_model(runner: Runner, prompt: str) -> str:
             "x-api-key": key,
             "anthropic-version": "2023-06-01",
         })
-        return "".join(block.get("text", "") for block in data.get("content", []))
+        blocks = data.get("content")
+        if not isinstance(blocks, list) or not blocks:
+            raise ValueError("anthropic response carried no content blocks")
+        if any(not isinstance(block, dict) for block in blocks):
+            raise ValueError(
+                "anthropic response carried a non-object content block")
+        return "".join(_require_text(block.get("text", ""), "content[].text")
+                       for block in blocks)
 
     raise ValueError(f"unknown transport {runner.transport!r}")
 
@@ -471,6 +525,13 @@ def _describe_failure(exc: BaseException) -> str:
 
 # Everything a model call can fail with. Named once because `score_speed`
 # had three call sites and only two of them were guarded.
+#
+# The tuple stays closed by construction rather than by enumeration: a
+# malformed response never reaches a subscript, because `call_model` checks the
+# shape and raises `ValueError`. Widening this tuple with `IndexError` and
+# `AttributeError` instead would have fixed the two shapes then known and left
+# the next one to escape - the comment above claiming completeness is only true
+# while nothing indexes a response outside `call_model`.
 TRANSPORT_FAILURES = (urllib.error.URLError, urllib.error.HTTPError, KeyError,
                       TimeoutError, OSError, ValueError)
 
@@ -507,6 +568,19 @@ def score_accuracy(runner: Runner, cases: list[Case], marker: str) -> dict | Non
         "n": len(cases), "hits": hits, "total": total, "max": maximum,
         "parsed_ok": parsed_ok, "wall_s": round(wall, 2),
     }
+
+
+def _endpoint(runner: Runner) -> str:
+    """Where this runner's calls went, for the speed report to record.
+
+    `ollama_url()` is resolved only on the ollama branch, because it probes and
+    every other branch answers from a module constant.
+    """
+    if runner.transport == "ollama":
+        return ollama_url()
+    if runner.transport == "anthropic":
+        return ANTHROPIC_URL
+    return PROXY_URL
 
 
 def score_speed(runner: Runner, cases: list[Case], marker: str) -> dict | None:
@@ -557,6 +631,9 @@ def score_speed(runner: Runner, cases: list[Case], marker: str) -> dict | None:
 
     return {
         "runner": runner.label, "model": runner.model,
+        # A timing with no host on it is not comparable to any other timing;
+        # see `ollama_url`.
+        "endpoint": _endpoint(runner),
         "cold_s": round(cold, 2),
         "median_s": round(statistics.median(latencies), 2),
         "parallel_wall_s": round(parallel_wall, 2),

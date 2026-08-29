@@ -290,9 +290,18 @@ def test_a_morning_opened_on_critical_counts_as_browser_first(workspace_root):
     the later terminal launch, and the whole weekday counts against
     `browser_first_pct_weekdays`, one of the three booleans in `all_pass`.
     """
-    today = datetime.now(get_default_tz())
+    # A FIXED Thursday, not `datetime.now()`. `browser_first_mornings` only
+    # counts WEEKDAYS (`if is_weekday` in `adoption.summarize`), and this test
+    # asserts it reaches 1 for "yesterday". Built from the host clock, that
+    # holds Tuesday through Saturday and fails every Sunday and Monday, when
+    # yesterday is a weekend day and the count is 0 no matter what the gate
+    # does. MEASURED 2026-08-30, a Sunday: the suite went red with no commit in
+    # between, on a test tracked and unmodified since ddb77b8. A test that
+    # reads the host clock is not a test; it is a test of the day it ran on.
+    today = datetime(2026, 8, 27, 12, 0, tzinfo=get_default_tz())  # Thursday
     morning = (today - timedelta(days=1)).replace(
         hour=8, minute=0, second=0, microsecond=0)
+    assert morning.weekday() < 5, "the fixture morning must be a weekday"
     usage = workspace_root / ".daemon-state" / "usage.jsonl"
 
     def write(rows):

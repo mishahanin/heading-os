@@ -87,7 +87,13 @@ def _trim_participants(parts: list) -> tuple[list, int]:
     for p in parts[:PARTICIPANT_CAP]:
         # Each participant can be a dict {name, email} or a bare string.
         if isinstance(p, dict):
-            trimmed.append(p.get("name") or p.get("email") or "")
+            # Through `_as_text`, like every other field this module takes from
+            # the fetch file. The dict's CONTENTS are exactly as hand-editable
+            # as the dict itself, so `{"name": 5}` used to append the integer 5,
+            # survive the truthiness filter below, and put a non-string into
+            # `participants` on the wire -- the one value class `_as_text` was
+            # written to neutralise everywhere else in this file.
+            trimmed.append(_as_text(p.get("name")) or _as_text(p.get("email")))
         elif isinstance(p, str):
             trimmed.append(p)
     trimmed = [t for t in trimmed if t]

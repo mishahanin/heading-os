@@ -13,6 +13,7 @@ with tombstone undo, mirroring the inbox-dismiss pattern.
 A future phase may extend coverage to other draft surfaces (LinkedIn
 posts in outputs/content/linkedin/, fundraising first-touches, etc.).
 """
+import logging
 import re
 import threading
 from datetime import date, datetime, timezone
@@ -22,6 +23,8 @@ from pathlib import Path
 
 from scripts.bridge_daemon._jsonl import append_jsonl, read_jsonl_capped
 from scripts.bridge_daemon._shapes import entry_ts, is_undo
+
+logger = logging.getLogger(__name__)
 
 EMAIL_DRAFTS_DIR = "outputs/communications/email"  # leak-guard: ok (relative suffix rooted by caller)
 APPROVALS_ROW_CAP = 20  # safety cap; CEO unlikely to have more pending
@@ -188,19 +191,35 @@ def undo_sent(workspace_root: Path, rel_path: str) -> dict:
 
 
 def _parse_headers(text: str) -> dict:
-    """Return {to, cc, subject, body_offset} from the draft header block.
+    """Return {to, cc, subject, _body_offset} from the draft header block.
 
-    body_offset is the character index where the body content begins
-    (after the first standalone '---' separator).
+    ``_body_offset`` is the character index where the body content begins,
+    after the first standalone ``---`` separator. It is 0 when the text holds
+    no separator, and that reads unambiguously: a real ``---`` line is four
+    characters at minimum, so a separator that WAS found always leaves a
+    positive offset. Zero means "no separator", never "separator at the start".
+
+    The header block is CONTIGUOUS: capture begins at the first ``**Key:**``
+    line and ends at the first ordinary prose line after it, or at ``---``,
+    whichever comes first. Without that end condition the regex ran over every
+    line of the 4 KB the caller reads, so a draft with no separator -- or one
+    whose separator sits past that read cap -- had its real ``**To:**``
+    silently OVERWRITTEN by a header-shaped line further down in the body, and
+    the approvals queue displayed a recipient the draft was never addressed to.
+    Last-write-wins over the whole file is not a header parser.
+
+    A blank line inside the block is tolerated, so a header block a human broke
+    up with one still parses whole.
     """
     headers: dict = {}
     body_offset = 0
     pos = 0
-    # No `in_header_block` flag here. It was initialised True, never set False,
-    # and gated a `continue` that could not run -- the `---` break above is what
-    # actually ends the header scan. A dead flag reads as unfinished logic and
-    # leaves the next reader unsure whether post-`---` headers were meant to be
-    # skipped.
+    # `started` is read, unlike the `in_header_block` flag removed from here
+    # earlier: that one was initialised True, never set False, and gated a
+    # `continue` that could not run. This flag is what distinguishes preamble
+    # (an H1 above the headers, which must not end a block that has not begun)
+    # from body prose (which must).
+    started = False
     for raw in text.splitlines(keepends=True):
         line = raw.rstrip()
         pos += len(raw)
@@ -209,9 +228,14 @@ def _parse_headers(text: str) -> dict:
             break
         m = _HDR_RE.match(line)
         if m:
+            started = True
             key = m.group(1).strip().lower()
             val = m.group(2).strip()
             headers[key] = val
+        elif started and line:
+            # Ordinary prose after the header block. The block has ended, and
+            # anything header-shaped below here is body content.
+            break
     headers["_body_offset"] = body_offset
     return headers
 
@@ -257,6 +281,21 @@ def list_approvals(workspace_root: Path) -> dict:
     items: list[dict] = []
     most_recent: float = 0.0
     for p in drafts_dir.glob("*.md"):
+        # The symlink policy `read_draft` enforces, applied by the LIST scan
+        # too. `p.is_file()` follows a symlink, so a link planted in the drafts
+        # directory had the first 4 KB of a file OUTSIDE the workspace read
+        # here and its `**To:**` / `**Subject:**` published on the approvals
+        # queue -- while the drill-down on that same row refused to open it,
+        # and the row stayed markable-sent. `capabilities.py` carries the twin
+        # of this check.
+        try:
+            if contains_symlink(drafts_dir, p):
+                logger.warning("skipping symlinked draft %s; symlinks are not "
+                               "served, and read_draft refuses this row too", p)
+                continue
+        except OSError:
+            logger.warning("skipping unstattable draft %s", p, exc_info=True)
+            continue
         if not p.is_file():
             continue
         rel = str(p.relative_to(workspace_root)).replace("\\", "/")

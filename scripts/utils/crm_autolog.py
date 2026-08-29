@@ -14,12 +14,14 @@ Audit log: every log_outbound / bump_inbound / multi-match conflict appends a
 JSONL entry to .sync/logs/crm-autolog-{date}.jsonl for observability.
 """
 
+import contextlib
 import html as _html
 import json as _json
 import os
 import re
 import stat
 import sys
+import tempfile
 from datetime import datetime, timezone
 
 from scripts.utils.workspace import DataRootError, get_default_tz
@@ -233,20 +235,46 @@ def resolve_recipient(email: str, workspace_root: Optional[Path] = None) -> Opti
 
 
 def atomic_write(path: Path, content: str) -> None:
-    """Atomic write via tmp + os.replace, per global security rule.
+    """Atomic write via a private tmp file + os.replace, per global security rule.
 
     Clears the Windows read-only bit before the rename so corporate-sync-
     marked files (on exec workspaces) can be overwritten. See
     reference_windows_readonly_unlink memory.
+
+    The tmp name is unique per call. It used to be `<name>.md.tmp`, one fixed
+    name per target file, which makes the rename atomic only for a single
+    writer: two processes writing the same relationship record share that one
+    scratch file, so B truncates and rewrites it while A still believes it owns
+    it, and A's `os.replace` either installs B's half-written bytes over the
+    contact or raises `FileNotFoundError` because B renamed it away first. The
+    exception escapes `log_outbound`, which never raises anywhere else. Two
+    writers is the ordinary case here, not a contrived one: `sync-exchange`
+    calls `bump_inbound` on a schedule while `send-email.py` calls
+    `log_outbound` from the operator's terminal. `daemon_heartbeat.py` and
+    `dead_letter.py` already use `mkstemp` for the same reason.
     """
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(content, encoding="utf-8")
-    if path.exists():
-        try:
-            path.chmod(stat.S_IWRITE | stat.S_IREAD)
-        except OSError:
-            pass
-    os.replace(tmp, path)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".",
+                                    suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        # mkstemp opens 0600; the record it replaces was 0644 under the usual
+        # umask, and a rename carries the tmp file's mode with it. Copy the
+        # target's mode across so an auto-log does not quietly narrow a contact
+        # file's permissions as a side effect of a bug fix about tmp names.
+        if path.exists():
+            with contextlib.suppress(OSError):
+                os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
+            try:
+                path.chmod(stat.S_IWRITE | stat.S_IREAD)
+            except OSError:
+                pass
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
 
 
 def plain_snippet(body: str, limit: int = 200) -> str:

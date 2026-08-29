@@ -165,9 +165,28 @@ def main() -> int:
         print("[]")
         return 1
 
+    # Parsing is not reading. The except above catches JSON that is not JSON;
+    # JSON that PARSES into the wrong shape got through it and died on
+    # `data.get` / `card.get` with a raw AttributeError, no stderr diagnostic
+    # and no JSON array on stdout - which breaks the same contract the comment
+    # above is about, just one layer later. `[1,2]`, `"hello"` and
+    # `{"actions": {...}}` all reached that traceback.
+    #
+    # A non-object element is rejected with the document rather than skipped.
+    # Skipping it would be the silent drop this file exists not to do: an
+    # element that is not an object cannot be inspected for `status`, so
+    # "it was not approved anyway" is an assumption, not a reading.
+    cards = data.get("actions") if isinstance(data, dict) else None
+    if not isinstance(cards, list) or not all(isinstance(c, dict) for c in cards):
+        print(f"action-queue-execute: {queue_path} is not a queue document "
+              f"(expected an object with a list of card objects under 'actions')",
+              file=sys.stderr)
+        print("[]")
+        return 1
+
     now = datetime.now(timezone.utc)
     results: list[dict] = []
-    for card in data.get("actions", []):
+    for card in cards:
         if card.get("status") != "approved":
             continue
         # Backoff gate: skip a transient-failed card still inside its window.

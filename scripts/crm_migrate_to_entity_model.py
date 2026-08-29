@@ -594,8 +594,20 @@ def render_address_book_entry(group: dict) -> str:
         fm_lines.append("other_emails:")
         for e in other_emails:
             fm_lines.append(f"  - {_yaml_quote(e)}")
-    fm_lines.append(f"phone: \"{canonical.get('phone', '')}\"")
-    fm_lines.append(f"linkedin: {canonical.get('linkedin', '')}")
+    # Through _yaml_quote, like name/employer/region. `phone` was wrapped in
+    # hand-written double quotes with no escaping, so a value carrying a `"` or
+    # a `\` closed the scalar early; `linkedin` was interpolated raw, so a value
+    # carrying `: ` or ` #` parsed as a mapping or lost its tail to a comment.
+    # Both come from the same frontmatter scan as the fields that are quoted,
+    # and both land in a file the staged validation must parse - a break here
+    # aborts the run after the backup and before the rename, or lands
+    # mis-parsed data in a live entity if the validator is lenient.
+    # `_yaml_quote` renders an empty value as the empty string, which would turn
+    # the long-standing `phone: ""` into a bare `phone:` (YAML null) for every
+    # entity without a number, so the explicit empty scalar is kept here.
+    phone_val = _yaml_quote(canonical.get('phone', '')) or '""'
+    fm_lines.append(f"phone: {phone_val}")
+    fm_lines.append(f"linkedin: {_yaml_quote(canonical.get('linkedin', ''))}")
     fm_lines.append(f"telegram: \"\"")
     employer_val = _yaml_quote(canonical.get('company', '') or 'Unknown')
     fm_lines.append(f"employer: {employer_val}")
@@ -631,7 +643,12 @@ def render_relationship_record(record: dict, entity_slug: str) -> str:
     fm = [
         "---",
         f"entity_ref: {entity_slug}",
-        # Through _yaml_quote, like every field in render_address_book_entry.
+        # Through _yaml_quote, like every SCANNED field in
+        # render_address_book_entry. That comment used to say "every field",
+        # which was false twice over: `phone` and `linkedin` were not quoted
+        # there either (fixed above), and slug / canonical_owner / created /
+        # last_updated are still interpolated raw because the tool generates
+        # them and no scanned value reaches them.
         # These three were interpolated raw, so a company of `Holdings: Europe`
         # or a source of `A # B` produced frontmatter that is invalid YAML or
         # parses to the wrong value -- aborting the staged validation mid-run,
@@ -961,8 +978,18 @@ def cmd_rollback() -> int:
     print(f"Restoring from {latest}...")
     print(_apply_state(latest))
 
-    # Confirm
-    resp = input("This will overwrite current crm/contacts/ and remove crm/address-book/. Confirm? [yes/no]: ").strip().lower()
+    # Confirm. The prompt used to say "remove crm/address-book/", which the code
+    # below deliberately stopped doing: it unlinks only the entries the manifest
+    # says this migration created, and rmdirs the directory only if that leaves
+    # it empty. Consent text that overstates the blast radius is not a harmless
+    # inaccuracy - an operator who wanted the whole directory gone did not get
+    # that, and one who refused in order to protect entries that predate the
+    # migration refused a rollback that was already sparing them.
+    resp = input(
+        "This will overwrite current crm/contacts/ with the backup and remove "
+        "the crm/address-book/ entries this migration created (entries that "
+        "predate it are kept). Confirm? [yes/no]: "
+    ).strip().lower()
     if resp != "yes":
         print("Aborted.")
         return 1
@@ -1032,9 +1059,24 @@ def cmd_rollback() -> int:
 
     # Restore each file. Clear read-only bit before overwrite so Windows
     # doesn't reject the copy (per reference_windows_readonly_unlink memory).
+    #
+    # The pre-existing address book is the one subtree in this backup whose
+    # path is NOT a workspace-relative path. `--apply` copies it to
+    # `address-book-pre-existing/`, invented by the backup and belonging to no
+    # tree, so `ws.parent / rel` sent every one of those entries to
+    # `<workspace-parent>/address-book-pre-existing/<slug>.md` - outside the CRM
+    # tree, referenced by nothing. Combined with the manifest deletion above,
+    # which unlinks a created slug that may have overwritten a pre-existing
+    # entry of the same name during apply, the only copy of that entry was
+    # filed somewhere nothing reads while the tool printed "Rollback complete".
+    # These go back where they came from.
+    restored = 0
     for f in latest.rglob("*.md"):
         rel = f.relative_to(latest)
-        target = ws.parent / rel
+        if rel.parts and rel.parts[0] == "address-book-pre-existing":
+            target = crm_root / "address-book" / Path(*rel.parts[1:])
+        else:
+            target = ws.parent / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
             try:
@@ -1042,7 +1084,8 @@ def cmd_rollback() -> int:
             except OSError:
                 pass
         shutil.copy2(f, target)
-    print(f"Rollback complete. Restored {sum(1 for _ in latest.rglob('*.md'))} files.")
+        restored += 1
+    print(f"Rollback complete. Restored {restored} files.")
     return 0
 
 

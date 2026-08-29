@@ -6,12 +6,15 @@ list; Phase 2 will add launch buttons + invocation tracking.
 
 Phase 1.11 is browse-only - no skill is invoked from this page.
 """
+import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
 from scripts.bridge_daemon._safepath import contains_symlink
+
+logger = logging.getLogger(__name__)
 
 # Locked archive directory (per workspace convention) - skip.
 ARCHIVE_NAMES = {"archive"}
@@ -136,12 +139,25 @@ def list_capabilities(workspace_root: Path) -> dict:
                 ...
             ] sorted by slug ASC,
             "count": int,
+            "category_counts": {category: int} over the returned skills,
+            "category_order": CATEGORY_ORDER, the render order for the
+                              browser-side section headers,
             "data_time": ISO 8601 UTC of the most-recent SKILL.md mtime,
         }
+
+    A symlinked skill directory (or a symlinked SKILL.md) is skipped and
+    logged, the same refusal `read_skill` makes below.
     """
     skills_dir = workspace_root / ".claude" / "skills"
     if not skills_dir.exists():
-        return {"skills": [], "count": 0, "data_time": None}
+        # The SAME key set the populated payload returns. `approvals.py` and
+        # `pipeline.py` each landed this fix already: a key added to the
+        # parsed dict and not to the degraded one goes missing exactly when
+        # `.claude/skills/` is absent, which is a fresh clone. The browser
+        # iterates `category_order` to draw its section headers, so the shape
+        # broke on the one install that has no skills to draw.
+        return {"skills": [], "count": 0, "category_counts": {},
+                "category_order": CATEGORY_ORDER, "data_time": None}
 
     skills = []
     most_recent_mtime: float = 0.0
@@ -152,6 +168,22 @@ def list_capabilities(workspace_root: Path) -> dict:
             continue
         skill_md = d / "SKILL.md"
         if not skill_md.exists():
+            continue
+        # The symlink policy `read_skill` enforces, applied by the LIST scan
+        # too. `d.is_dir()` follows a symlink, so a linked skill directory got
+        # the frontmatter of a SKILL.md OUTSIDE the workspace published to the
+        # dashboard -- name, description, author, capability text -- and the
+        # drill-down on that same row then refused to open it. One rule, both
+        # layers, which is the shape `contacts.py` and `approvals.py` were
+        # already corrected into.
+        try:
+            if contains_symlink(skills_dir, skill_md):
+                logger.warning("skipping symlinked skill %s; symlinks are not "
+                               "served, and read_skill refuses this row too",
+                               skill_md)
+                continue
+        except OSError:
+            logger.warning("skipping unstattable skill %s", skill_md, exc_info=True)
             continue
         try:
             text = skill_md.read_text(encoding="utf-8")

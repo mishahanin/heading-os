@@ -141,7 +141,14 @@ def parse_transcript(path: Path) -> Transcript | None:
     """
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # `UnicodeDecodeError` is a `ValueError`, not an `OSError`, so it used
+        # to escape this handler entirely. `collect_transcripts` has no guard
+        # of its own, so ONE stray `.md` saved as Latin-1 by an editor -- the
+        # exact class of file the paragraph above is about -- aborted the whole
+        # scan and left the aggregate unwritten. MEASURED 2026-08-29. The
+        # contract is skip what is not a transcript, and an undecodable file is
+        # not one.
         return None
     fm = _parse_frontmatter(text)
     topic_match = _H1_TOPIC_RE.search(text)
@@ -198,6 +205,16 @@ def load_verdicts() -> dict[str, dict]:
         try:
             rec = json.loads(line)
         except json.JSONDecodeError:
+            continue
+        # `json.loads` returns any JSON value, and only a DECODE failure is
+        # caught above. A ledger line of `null`, `[]` or `42` parses fine and
+        # then raises AttributeError on `.get`, out of `main`, so no aggregate
+        # is written -- on every run afterwards, because the ledger is
+        # append-only and nothing removes the bad line. MEASURED 2026-08-29.
+        # `scripts/council-record-verdict.py` already guards the identical
+        # parse of this identical file; the guard reached one of the two
+        # readers and not this one.
+        if not isinstance(rec, dict):
             continue
         vid = rec.get("verdict_id")
         if vid:

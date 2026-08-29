@@ -54,8 +54,13 @@ Exit codes:
 `--emit-answers` records a run that was REFUSED by the sandbox (exit 5) as an
 answer of None, which the scorer counts as a refusal rather than a wrong
 answer. That is deliberate: the attempt happened and the acceptance file is a
-record of attempts. A run that never started, because the corpus fits the
-context window (exit 4), returns before the record is written.
+record of attempts. The same holds for an argument failure that names its
+question (exit 2 for a missing --program or an unknown scope).
+
+Exactly two exits write no row, and both because no row could say anything.
+Exit 4, the corpus that fits the context window, returns before a traversal is
+attempted at all. Exit 2 for --emit-answers without --question-id has no
+question to file the row under.
 
 Tests: tests/test_a_guard_that_stopped_one_level_short.py
 """
@@ -388,6 +393,22 @@ def _emit_record(args, record: dict) -> int | None:
     return None
 
 
+def _refused_before_running(args, corpus_paths: list[Path], reason: str,
+                            exit_code: int = EXIT_BAD_ARGS) -> int:
+    """Record a refusal that happened before any traversal ran, and return.
+
+    One shape for every pre-run refusal that knows which question it refused.
+    The record carries `answer: None` and the reason, which the scorer counts as
+    a refusal; a MISSING row is counted as "not answered" instead, and the
+    reason is gone.
+    """
+    record = {"question": args.question, "mounts": {},
+              "corpus": [str(p) for p in corpus_paths],
+              "elapsed_s": 0.0, "answer": None, "error": reason}
+    failed = _emit_record(args, record)
+    return failed if failed is not None else exit_code
+
+
 def append_answer(path: Path, record: dict, question_id: str,
                   state: dict) -> None:
     """Append one record to the acceptance answers file, atomically.
@@ -533,16 +554,23 @@ def main(argv: list[str] | None = None) -> int:
               f"name its question cannot be graded{RESET}", file=sys.stderr)
         return EXIT_BAD_ARGS
 
+    # Both argument failures below happen AFTER --question-id is known, so both
+    # can name the question they failed on - and a row saying why is the only
+    # thing that distinguishes "this question was attempted and refused" from
+    # "this question was never run". The scorer reads a missing row as the
+    # latter, which is how a setup error reads as an untouched question. The
+    # air-gap refusal further down already reasoned exactly this way for exit 5;
+    # these two exits were left out of it.
     if not args.program.is_file():
-        print(f"{RED}traversal program not found: {args.program}{RESET}",
-              file=sys.stderr)
-        return EXIT_BAD_ARGS
+        message = f"traversal program not found: {args.program}"
+        print(f"{RED}{message}{RESET}", file=sys.stderr)
+        return _refused_before_running(args, [], message)
 
     corpus_paths, mount_names, error = resolve_corpus(
         list(args.corpus or DEFAULT_SCOPES))
     if error:
         print(f"{RED}{error}{RESET}", file=sys.stderr)
-        return EXIT_BAD_ARGS
+        return _refused_before_running(args, [], error)
 
     # The air-gap refusal comes FIRST, ahead of the window refusal, and the order
     # is the point. `run_sandboxed` already refuses an air-gapped mount, so
@@ -559,13 +587,17 @@ def main(argv: list[str] | None = None) -> int:
             # out, so the one exit code this file's docstring PROMISES is
             # written as `answer: None` left no row at all — and a missing row
             # is read by the scorer as "not answered", which loses the reason.
-            # The docstring carves out exactly one unrecorded exit, 4, the
-            # corpus that fits the window; this was a second, unnamed one.
-            record = {"question": args.question, "mounts": {},
-                      "corpus": [str(p) for p in corpus_paths],
-                      "elapsed_s": 0.0, "answer": None, "error": denial}
-            failed = _emit_record(args, record)
-            return failed if failed is not None else EXIT_SANDBOX_REFUSED
+            #
+            # The comment here used to say the docstring carved out "exactly
+            # one" unrecorded exit and that this was "a second". Both halves
+            # were wrong on the face of this same function: the three
+            # EXIT_BAD_ARGS returns above also wrote no row, so this was at
+            # least the fourth, and a reader trusting the count would never
+            # look for the exit-2 gaps. Two of those three now record; the
+            # third cannot, and the docstring names both survivors instead of
+            # counting.
+            return _refused_before_running(args, corpus_paths, denial,
+                                           EXIT_SANDBOX_REFUSED)
 
     fits = refuse_if_corpus_fits_window(corpus_paths)
     if fits:

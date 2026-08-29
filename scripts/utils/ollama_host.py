@@ -22,14 +22,22 @@ computer: `auto:11434` names whatever answers at THIS machine's default gateway,
 and a pin written into a tracked file refuses on every clone that is not this
 laptop. No file at all is a valid setup and means the local daemon.
 
-Two resolvers, because two jobs want opposite answers when nothing responds:
+Two resolvers, because two callers want opposite answers when nothing responds:
 
-- `resolve_ollama_host` degrades to the local daemon. Right for GENERATION,
-  where a slower model beats no model.
-- `resolve_pinned_host` raises `OllamaHostUnavailable`. Right for EMBEDDING,
-  where the operator pinned a machine on 2026-08-23 and a quiet substitution is
-  the failure, not the mitigation. Both take a list as readily as a string, so
-  one pin can name several ports on the same machine.
+- `resolve_pinned_host` raises `OllamaHostUnavailable`. It is what both PINNED
+  jobs use: EMBEDDING, and GENERATION through `generation_host`. The operator
+  pinned a machine on 2026-08-23 and a quiet substitution is the failure, not
+  the mitigation. Both take a list as readily as a string, so one pin can name
+  several ports on the same machine.
+- `resolve_ollama_host` degrades to the local daemon. It survives for the
+  unpinned embed callers that ask for a host by argument or environment
+  variable (`scripts/utils/embeddings.py`, `scripts/memory-index.py`).
+
+This bullet used to say degrading was "right for GENERATION, where a slower
+model beats no model". That stopped being true on 2026-08-23 and the sentence
+outlived it by six days: `generation_host` pins and refuses, and its docstring
+records why (there is no second copy of the model to degrade TO). No caller of
+`resolve_ollama_host` generates anything.
 
 Sovereignty note: both candidates are on this machine. `auto` crosses the WSL
 NAT boundary to the Windows side of the SAME laptop; it never reaches a network
@@ -141,6 +149,32 @@ def probe(host: str, timeout: float = DEFAULT_PROBE_TIMEOUT) -> bool:
     return isinstance(payload, dict) and "version" in payload
 
 
+def auto_pin_port(value: str) -> str | None:
+    """The port an `auto` gateway pin names, or None when it names none.
+
+    None covers three cases, and the caller treats them alike because all three
+    mean "this string does not name the gateway": the value is not an `auto`
+    pin at all, its port is not a number, or its number is not a port.
+
+    The membership test used to be `value.startswith("auto")`, which is a prefix
+    where the documented forms are exactly `auto` and `auto:<port>`. MEASURED
+    2026-08-29 on this laptop: `candidate_url("autobahn")` returned
+    `http://172.30.48.1:11434` and `candidate_url("automotive:9000")` returned
+    `http://172.30.48.1:9000`. A misspelt pin did not fail, it silently
+    repointed at the gateway, and a probe against whatever answers there decides
+    where embedding runs. The port was unvalidated too, so `auto:banana` built
+    `http://172.30.48.1:banana` and `resolve_ollama_host` then reported that
+    malformed pin as "unreachable" -- a wrong address, not a wrong string.
+    """
+    if value != "auto" and not value.startswith("auto:"):
+        return None
+    _, _, port = value.partition(":")
+    port = port.strip() or "11434"
+    if not port.isdigit() or not 1 <= int(port) <= 65535:
+        return None
+    return port
+
+
 def candidate_url(preferred: str | None) -> str | None:
     """Turn a preference into the address it names, WITHOUT probing it.
 
@@ -157,9 +191,8 @@ def candidate_url(preferred: str | None) -> str | None:
     if not wanted:
         return None
 
-    if wanted.startswith("auto"):
-        _, _, port = wanted.partition(":")
-        port = port.strip() or "11434"
+    port = auto_pin_port(wanted)
+    if port is not None:
         gateway = read_default_gateway()
         if gateway is None:
             return None
@@ -360,9 +393,13 @@ def resolve_ollama_host(
 
     candidates = host_candidates(wanted)
     if not candidates:
+        # `auto_pin_port`, not `startswith("auto")`: only a pin that really
+        # names the gateway can have failed for want of a gateway. `autobahn`
+        # and `auto:banana` used to be blamed on an unreadable route table,
+        # which sends the reader to /proc/net/route over a typo in the pin.
         reason = (
             "cannot read default gateway"
-            if isinstance(wanted, str) and wanted.startswith("auto")
+            if isinstance(wanted, str) and auto_pin_port(wanted) is not None
             else f"{wanted!r} is not an http(s) URL"
         )
         _warn(verbose, f"ollama: {reason}, using {default}")

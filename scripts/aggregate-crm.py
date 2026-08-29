@@ -161,6 +161,18 @@ def calculate_health(last_touch_str: str, config_entry: dict) -> tuple:
 
     days_since = (TODAY - last_touch).days
 
+    # A last_touch in the future is corrupt data, not a fresh contact. It fails
+    # both threshold tests below and so fell out as "green", the strongest
+    # on-track signal the company radar has, for a date nobody could have
+    # touched. `admin-health.py` treats a clock-ahead timestamp as the one
+    # condition under which its output must not look healthy; this did the
+    # opposite. Gray is the state this function already uses for a last_touch
+    # it cannot trust (an unparseable one, twelve lines up), it sorts last in
+    # HEALTH_ORDER, and it keeps the bad row out of the green count. The
+    # negative day figure is returned unchanged so a caller can see the skew.
+    if days_since < 0:
+        return "gray", days_since
+
     if days_since >= config_entry["red"]:
         return "red", days_since
     elif days_since >= config_entry["yellow"]:

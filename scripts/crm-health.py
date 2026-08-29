@@ -356,23 +356,37 @@ def main():
         from scripts.utils.crm import find_dormancy_candidates
         from scripts.utils.crm_autolog import atomic_write
         import re as _re
+        # The third branch that emits non-JSON on the shared stream, and the
+        # last one still doing it. MEASURED 2026-08-29 against the live CRM:
+        # `--json --demote-candidates` printed a valid 169-record JSON document
+        # and then appended 5 038 bytes of candidate prose, the confirmation
+        # question and the `> ` prompt after it, so `| jq .` died on "Extra
+        # data" - the same failure the dangling-ref warning and the `--update`
+        # status line were each moved off stdout to prevent, with the comments
+        # twenty and forty lines up saying so. Prose that a JSON consumer must
+        # not see goes to stderr, which a terminal caller still reads on the
+        # same TTY; without --json stdout stays the primary stream.
+        out = sys.stderr if args.json else sys.stdout
         candidates = find_dormancy_candidates(contacts, today=datetime.now(get_default_tz()).date(), threshold_days=args.demote_threshold)
         if not candidates:
-            print(f"{GREEN}No dormancy candidates - all active contacts within {args.demote_threshold}d.{RESET}")
+            print(f"{GREEN}No dormancy candidates - all active contacts within {args.demote_threshold}d.{RESET}", file=out)
         else:
-            print(f"\n{YELLOW}{BOLD}DORMANCY CANDIDATES ({len(candidates)} contacts {args.demote_threshold}+ days silent):{RESET}")
+            print(f"\n{YELLOW}{BOLD}DORMANCY CANDIDATES ({len(candidates)} contacts {args.demote_threshold}+ days silent):{RESET}", file=out)
             for c in candidates:
                 name = c.get("name", c.get("slug", c["file"]))
                 ctype = c.get("type", "?")
                 lt = c.get("last_touch", "?")
                 days = c.get("days_silent", "?")
-                print(f"  {c['file']}: {name} ({ctype}) - last touch {lt} ({days} days)")
-            print(f"\nTo demote: set `status: dormant` in each contact file.")
-            print(f"Confirm demote all {len(candidates)} contacts to dormant? [yes/no]")
+                print(f"  {c['file']}: {name} ({ctype}) - last touch {lt} ({days} days)", file=out)
+            print(f"\nTo demote: set `status: dormant` in each contact file.", file=out)
+            print(f"Confirm demote all {len(candidates)} contacts to dormant? [yes/no]", file=out)
             try:
-                resp = input("> ").strip().lower()
+                # The prompt string of `input()` goes to stdout unconditionally,
+                # so it too has to be written by hand to the chosen stream.
+                print("> ", end="", flush=True, file=out)
+                resp = input().strip().lower()
             except (EOFError, KeyboardInterrupt):
-                print("\nAborted.")
+                print("\nAborted.", file=out)
                 return
             if resp == "yes":
                 demoted = 0
@@ -391,7 +405,7 @@ def main():
                         # A hard index here crashed mid-demote, AFTER some
                         # contacts had been rewritten and with no rollback.
                         label = c.get("slug", c["file"])
-                        print(f"  {YELLOW}[skipped]{RESET} {label}: no frontmatter")
+                        print(f"  {YELLOW}[skipped]{RESET} {label}: no frontmatter", file=out)
                         continue
                     frontmatter = text[:fm_end]
                     # Anchored, like the replacement it guards. `"status:" in
@@ -409,17 +423,17 @@ def main():
                         text = text[:insert_at] + "\nstatus: dormant" + text[insert_at:]
                     atomic_write(path, text)
                     demoted += 1
-                    print(f"  {GREEN}[demoted]{RESET} {c['file']}")
+                    print(f"  {GREEN}[demoted]{RESET} {c['file']}", file=out)
                 # What was WRITTEN, not what was offered. This printed
                 # `len(candidates)`, and the loop above can `continue` past a
                 # file with no frontmatter, so the confirmation line overstated
                 # a human-approved bulk mutation by the number it had skipped.
                 skipped = len(candidates) - demoted
-                print(f"{GREEN}{demoted} contacts demoted to dormant.{RESET}")
+                print(f"{GREEN}{demoted} contacts demoted to dormant.{RESET}", file=out)
                 if skipped:
-                    print(f"{YELLOW}{skipped} skipped (see above).{RESET}")
+                    print(f"{YELLOW}{skipped} skipped (see above).{RESET}", file=out)
             else:
-                print("No changes made.")
+                print("No changes made.", file=out)
 
 
 if __name__ == "__main__":

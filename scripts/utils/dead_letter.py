@@ -217,14 +217,25 @@ def record(
 
 
 def list_entries(*, workspace_root: Path | None = None) -> list[Path]:
-    """Return the dead-letter entry paths, newest first by mtime."""
+    """Return the dead-letter entry paths, newest first by mtime.
+
+    An entry that disappears between the glob and the stat is dropped, not
+    raised over. The stat used to sit in a ``sorted`` key, so a file removed in
+    that window raised ``FileNotFoundError`` out of a read path this module's
+    docstring says must survive degraded conditions. The window is not
+    theoretical: ``purge`` below calls this function BEFORE its own OSError
+    guard, and ``scripts/dead-letter.py`` retries an entry and then deletes it,
+    so two of those running together crashed the reader and ``purge`` with it.
+    """
     directory = dead_letter_dir(workspace_root)
-    paths = sorted(
-        directory.glob("*.json"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    return paths
+    dated: list[tuple[float, Path]] = []
+    for path in directory.glob("*.json"):
+        try:
+            dated.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    dated.sort(key=lambda item: item[0], reverse=True)
+    return [path for _, path in dated]
 
 
 def load(path: Path) -> dict:

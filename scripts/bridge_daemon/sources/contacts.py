@@ -241,7 +241,12 @@ def list_contacts(workspace_root: Path, today: date | None = None,
 
     # Crawl crm-central for any execs not in the registry (provisional
     # backstop while migration completes). Skip owners already scanned and
-    # the misha-hanin snapshot.
+    # the operator's own stale snapshot, named by `self_dir` and resolved
+    # through the operator seam. This line used to spell one instance's
+    # operator slug as a literal, which is wrong on every other install: a
+    # fresh clone resolves `self_dir` to the generic default, so the comment
+    # described a directory the scan there never meets. `_crm_central_self_dir`
+    # is the function that answers this, and it always was.
     central = workspace_root.parent / CRM_CENTRAL_DIRNAME / "contacts"
     if central.is_dir():
         for exec_dir in sorted(central.iterdir()):

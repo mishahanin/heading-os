@@ -218,9 +218,28 @@ def approve_and_send(engine_root: Path, data_root: Path, id_or_prefix: str) -> d
                         "error": recorded.get("error", "")}
             return {"result": "sent", "action_id": aid}
         # M2: stamp classification=None -> apply_status writes NO dead-letter entry.
-        apply_status(data_root, aid, "send_failed", event="send_failed",
-                     error=res.get("error", ""), classification=None)
-        return {"result": "send_failed", "action_id": aid, "error": res.get("error", "")}
+        #
+        # Guarded for the same two failures the `sent` path above guards, and for
+        # a while this one was guarded for neither. `apply_status` returns
+        # {"ok": False, "error": "not found"} when the card was pruned or the
+        # queue quarantined between the read above and this write, and it can
+        # raise OSError (full disk, permissions) straight out through here.
+        # Unguarded, the first case still printed `card kept as send_failed -
+        # fix and retry` about a card that is not in the queue, and `cmd_retry`
+        # only runs on a card whose status IS `send_failed`, so the advice named
+        # a command that cannot find it. The second case produced a raw
+        # traceback out of a file whose own contract is `Exit codes: 0 ok, 1
+        # request/usage error`.
+        send_error = res.get("error", "")
+        try:
+            recorded = apply_status(data_root, aid, "send_failed", event="send_failed",
+                                    error=send_error, classification=None)
+        except OSError as exc:
+            recorded = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        if not recorded.get("ok"):
+            return {"result": "send_failed_unrecorded", "action_id": aid,
+                    "error": send_error, "record_error": recorded.get("error", "")}
+        return {"result": "send_failed", "action_id": aid, "error": send_error}
 
     # Non-send disposition (note / pipeline_update / alert).
     approve_card(data_root, aid)
@@ -279,6 +298,18 @@ def cmd_approve(engine_root: Path, data_root: Path, args) -> int:
     if r == "send_failed":
         print(f"{RED}send failed{RESET} {aid}: {res.get('error', '')}\n"
               f"{GRAY}card kept as send_failed - fix and `retry {aid}`{RESET}", file=sys.stderr)
+        return 1
+    if r == "send_failed_unrecorded":
+        # Nothing left the workspace, so this is not the `sent_unrecorded`
+        # emergency. It is still a lie to say the card was kept as send_failed:
+        # the queue write did not land, so the card holds its pre-approval
+        # status and `retry` will refuse it.
+        print(f"{RED}send failed, and the queue was not updated{RESET} {aid}: "
+              f"{res.get('error', '')}\n"
+              f"{GRAY}the queue write failed too ({res.get('record_error', '')}), so the "
+              f"card kept its pre-approval status and `retry {aid}` will not "
+              f"find it - fix the queue store, then approve again{RESET}",
+              file=sys.stderr)
         return 1
     print(f"{YELLOW}{r}{RESET} {aid}: {res.get('error', '')}", file=sys.stderr)
     return 1

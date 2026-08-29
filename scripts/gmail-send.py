@@ -42,6 +42,7 @@ from scripts.utils.workspace import load_env  # noqa: E402
 load_env(PROJECT_ROOT)
 
 from scripts.utils.colors import BOLD, GRAY, GREEN, RESET, YELLOW  # noqa: E402
+from scripts.utils.argtypes import positive_int  # noqa: E402
 
 
 class DraftSelectionError(Exception):
@@ -266,7 +267,7 @@ def main():
     sub = parser.add_subparsers(dest="command")
 
     p_list = sub.add_parser("list", help="List drafts with their ids")
-    p_list.add_argument("--limit", type=int, default=25)
+    p_list.add_argument("--limit", type=positive_int, default=25)
 
     p_send = sub.add_parser("send", help="Send one existing draft")
     p_send.add_argument("--draft-id", help="Exact draft id (from `list`)")
@@ -275,7 +276,7 @@ def main():
     # alongside `list`, which made a uniqueness claim over one page. Every
     # draft inside the horizon costs one metadata fetch, so this trades a
     # slower search for an answer the script is entitled to give.
-    p_send.add_argument("--limit", type=int, default=SEARCH_LIMIT,
+    p_send.add_argument("--limit", type=positive_int, default=SEARCH_LIMIT,
                         help=f"How many drafts --match-subject searches "
                              f"(default {SEARCH_LIMIT})")
 

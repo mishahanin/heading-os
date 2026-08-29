@@ -188,7 +188,14 @@ def main() -> int:
     print(f"  to          : {', '.join(args.to)}")
     print(f"  subject     : {subject}")
     if thread_id:
-        print(f"  thread id   : {thread_id}  {GRAY}(in-reply-to {in_reply_to}){RESET}")
+        # The suffix only when there IS a header. `parent_headers` returns
+        # None for a parent carrying no Message-ID (imported mail, some
+        # automated senders), and the guard above tests `thread_id`, which is
+        # essentially always present. So the summary read "in-reply-to None"
+        # and told the operator a header was set that was not. The draft was
+        # always fine: `build_message` skips the header when it is falsy.
+        suffix = f"  {GRAY}(in-reply-to {in_reply_to}){RESET}" if in_reply_to else ""
+        print(f"  thread id   : {thread_id}{suffix}")
     if args.attach:
         print(f"  attachments : {len(args.attach)} file(s), {size / 1_048_576:.1f} MB")
     print(f"\n{GRAY}Nothing was sent. Review it, then:{RESET}")

@@ -391,8 +391,17 @@ def main():
     elif args.command == "mark-all-read":
         cmd_mark_all_read(args)
     else:
+        # Non-zero, and the value is passed to the shell. `main` used to fall
+        # off the end here returning None while `__main__` discarded it, so a
+        # forgotten or misspelled subcommand printed usage and exited 0: a
+        # wrapper or skill read that as success with an empty result. The
+        # sibling `gmail-send.py` already returns 1 and calls `sys.exit(main())`
+        # for the identical case, so the two disagreed about what "did nothing"
+        # means.
         parser.print_help()
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -71,6 +71,7 @@ load_env(Path(WORKSPACE_ROOT))
 # stays local. (2026-06-09 audit #43 — removed the duplicated color block.)
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET  # noqa: E402
 from scripts.utils.atomic import atomic_write_text  # noqa: E402
+from scripts.utils.argtypes import positive_int  # noqa: E402
 DIM = "\033[2m"
 
 # ---------------------------------------------------------------------------
@@ -539,7 +540,22 @@ def cmd_edit(service, resource_name, name=None, email=None, phone=None,
 
     if name:
         given, family = split_name(name)
-        body["names"] = [{"givenName": given, "familyName": family}]
+        # Through `_replace_first` like every other repeated field. `names` is a
+        # LIST in the People API and a merged contact can carry more than one
+        # entry; a one-element body deleted the rest. Measured on a two-entry
+        # contact: the second entry was discarded with nothing said.
+        #
+        # No `value`/`formattedValue` key here, so `_replace_first` takes its
+        # documented no-dedup path: element [0] is replaced and the tail is
+        # kept, which is exactly the semantics a rename wants.
+        #
+        # `familyName` is sent even when empty, and that is deliberate: `--name`
+        # takes a WHOLE name, so `--name "Cher"` is a rename TO a single-word
+        # name and must clear the old family name. `cmd_add` omits an empty
+        # family instead, because there is nothing there to clear. The two
+        # differ on purpose; do not "harmonise" them.
+        body["names"] = _replace_first(
+            current, "names", {"givenName": given, "familyName": family})
         update_fields.append("names")
     if email:
         body["emailAddresses"] = _replace_first(current, "emailAddresses", {"value": email})
@@ -562,7 +578,12 @@ def cmd_edit(service, resource_name, name=None, email=None, phone=None,
         body["organizations"] = [org] + orgs[1:]
         update_fields.append("organizations")
     if notes:
-        body["biographies"] = [{"value": notes, "contentType": "TEXT_PLAIN"}]
+        # `biographies` is repeated too, and this was the one field left behind
+        # when the others were routed through `_replace_first`. Measured on a
+        # two-biography contact: `--notes` shipped a one-element list and the
+        # server dropped the other entry, silently.
+        body["biographies"] = _replace_first(
+            current, "biographies", {"value": notes, "contentType": "TEXT_PLAIN"})
         update_fields.append("biographies")
     if address:
         body["addresses"] = _replace_first(current, "addresses", {"formattedValue": address})
@@ -686,7 +707,7 @@ def main():
     # search
     p_search = sub.add_parser("search", help="Search contacts by name, email, phone")
     p_search.add_argument("query", help="Search query (prefix matching)")
-    p_search.add_argument("--limit", "-l", type=int, default=SEARCH_DEFAULT_LIMIT,
+    p_search.add_argument("--limit", "-l", type=positive_int, default=SEARCH_DEFAULT_LIMIT,
                           help=f"Max results (default: {SEARCH_DEFAULT_LIMIT}). "
                                f"Without this flag the search stops at one page "
                                f"and says so.")
@@ -724,7 +745,8 @@ def main():
 
     # list
     p_list = sub.add_parser("list", help="List all contacts")
-    p_list.add_argument("--limit", "-l", type=int, default=100, help="Max contacts (default: 100)")
+    p_list.add_argument("--limit", "-l", type=positive_int, default=100,
+                        help="Max contacts (default: 100)")
     p_list.add_argument("--json", action="store_true", help="Output as JSON")
 
     # delete

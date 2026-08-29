@@ -42,6 +42,7 @@ WORKSPACE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKSPACE))
 
 from scripts.utils import daemon_heartbeat  # noqa: E402
+from scripts.utils.pid_liveness import pid_is_running  # noqa: E402
 from scripts.utils import tracing  # noqa: E402
 from scripts.utils.scheduler_defaults import JOB_DEFAULTS  # noqa: E402
 from scripts.utils.trace_filter import install_log_factory  # noqa: E402
@@ -195,35 +196,22 @@ def is_daemon_alive() -> bool:
 
 
 def _pid_is_running(pid: int) -> bool:
-    """Cross-platform: is the given PID alive?"""
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        # On Windows, use ctypes OpenProcess + GetExitCodeProcess.
-        import ctypes
-        PROCESS_QUERY_LIMITED_INFO = 0x1000
-        STILL_ACTIVE = 259
-        h = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFO, False, pid)
-        if not h:
-            return False
-        try:
-            code = ctypes.c_ulong(0)
-            if ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(code)) == 0:
-                return False
-            return code.value == STILL_ACTIVE
-        finally:
-            ctypes.windll.kernel32.CloseHandle(h)
-    else:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            # The process EXISTS and belongs to another user. Reporting it dead
-            # let `is_daemon_alive()` say "not running", which permits a second
-            # daemon start and makes `status` lie.
-            return True
-        return True
+    """Cross-platform: is the given PID alive? One implementation, in
+    `pid_liveness`.
+
+    The POSIX half of this copy was correct and carried the reason. The Windows
+    half was not, and had exactly the defect the POSIX half was fixed for: a
+    NULL handle from `OpenProcess` is not "no such process", it is also what
+    access-denied returns, so a daemon under a service account read as dead. It
+    could not have told the difference either, because `ctypes.windll` never
+    populates the ctypes error slot, so `GetLastError` through it is a stale
+    zero. The shared implementation opens `kernel32` with `use_last_error=True`
+    for that reason, and it is exercised from Linux.
+
+    Two of the three hand-written Windows branches in `scripts/` were right and
+    this one was wrong, which is the shape a private copy always ends in.
+    """
+    return pid_is_running(pid)
 
 
 # ============================================================

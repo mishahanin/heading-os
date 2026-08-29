@@ -48,6 +48,7 @@ from scripts.utils.html_text import email_body_text  # noqa: E402
 from scripts.utils.llm_fallback import call_anthropic_with_fallback  # noqa: E402
 from scripts.utils.observability import observe  # noqa: E402
 from scripts.utils.operator_identity import get_operator  # noqa: E402
+from scripts.utils.pid_liveness import pid_is_running  # noqa: E402
 from scripts.utils.trace_filter import install_log_factory  # noqa: E402
 from scripts.utils.paths import DataRootError, get_data_root  # noqa: E402
 from scripts.utils.untrusted_input import sanitize_untrusted, wrap_untrusted  # noqa: E402
@@ -3039,20 +3040,26 @@ Reply with your decision or handle in Outlook."""
 # ============================================================
 
 def _is_pid_alive(pid: int) -> bool:
-    """Check if a process is alive (works for detached processes on Windows)."""
-    if sys.platform == "win32":
-        import subprocess
-        result = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-            capture_output=True, text=True
-        )
-        return str(pid) in result.stdout
-    else:
-        try:
-            os.kill(pid, 0)
-            return True
-        except OSError:
-            return False
+    """Check if a process is alive. One implementation, in `pid_liveness`.
+
+    This was a private copy, and it caught `OSError`. On POSIX,
+    `os.kill(pid, 0)` raising `PermissionError` means the process EXISTS and
+    belongs to another user, so the copy answered "dead" about a running
+    daemon. MEASURED 2026-08-29 against PID 1: the shared function says True,
+    this one said False.
+
+    That is not a cosmetic wrong answer here. Sentinel runs on the Steward VM,
+    under a service account rather than the operator's shell, which is exactly
+    the case that raises `PermissionError`. `check_status()` responds to a
+    "dead" verdict by DELETING the PID file, and `stop_daemon()` does the same,
+    so a read-only `--status` on a live daemon removed the only handle the CLI
+    has for stopping it. Reproduced in a scratch directory: the PID file was
+    present before the call and gone after.
+
+    The correct answer was already written and already tested. It had landed in
+    four of the six places that ask this question.
+    """
+    return pid_is_running(pid)
 
 
 def _read_pid_file() -> int | None:
@@ -3184,12 +3191,15 @@ def stop_daemon():
         os.kill(pid, signal.SIGTERM)
         print(f"Sent SIGTERM to Sentinel (PID: {pid})")
         time.sleep(2)
-        try:
-            os.kill(pid, 0)
+        # The escalation asks the same question as everywhere else, so it asks
+        # it the same way. Inline, `except OSError` swallowed `PermissionError`
+        # too, which is the answer "it is alive and not ours to signal" -- the
+        # one case where escalating matters most, and the one where this skipped
+        # the SIGKILL and reported the daemon stopped.
+        if pid_is_running(pid):
             print("Process still alive, sending SIGKILL")
-            os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGKILL)
 
     time.sleep(1)
     PID_FILE.unlink(missing_ok=True)

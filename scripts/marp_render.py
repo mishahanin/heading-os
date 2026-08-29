@@ -39,6 +39,7 @@ from scripts.utils.workspace import (
 )
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
 from scripts.utils.markdown import parse_frontmatter as _parse_frontmatter_text
+from scripts.utils.pid_liveness import pid_is_running
 from scripts.utils.slugs import stable_suffix, transliterate
 
 # ============================================================
@@ -1020,12 +1021,13 @@ def _is_process_running(pid: int) -> bool:
         import io
         return any(len(row) >= 2 and row[1].strip() == str(pid)
                    for row in csv.reader(io.StringIO(result.stdout)))
-    else:
-        try:
-            os.kill(pid, 0)
-            return True
-        except OSError:
-            return False
+    # POSIX asks the shared implementation. Inline, this caught `OSError`, so
+    # `PermissionError` -- which means the process EXISTS and belongs to another
+    # user -- read as dead. MEASURED 2026-08-29 against PID 1: `watch_status()`
+    # then reported "Watch process no longer running. State cleaned up." and
+    # deleted BOTH the watch state file and the generated theme file, from a
+    # command whose whole job is to report.
+    return pid_is_running(pid)
 
 
 # ============================================================

@@ -107,7 +107,7 @@
 </tr>
 <tr>
 <td><code>_dispatch.py</code></td>
-<td>The consolidated PreToolUse guard, registered on three matchers: the write tools, <code>Bash</code>, and <code>Read</code>. It runs, in one process, the secret-detection block (API-key and credential patterns), the corporate-boundary block (no writes to read-only corporate content), the docs-protection block, the personal-threads protection, and the slow-shell block (a <code>Bash</code> call that runs the whole test suite in one process, or waits in the foreground, is refused and pointed at <code>scripts/run-tests.py</code> or <code>run_in_background</code>).</td>
+<td>The consolidated PreToolUse guard, registered on three matchers: the write tools, <code>Bash</code>, and <code>Read</code>, <code>Grep</code> and <code>Glob</code> together. It runs, in one process, the secret-detection block (API-key and credential patterns), the corporate-boundary block (no writes to read-only corporate content), the docs-protection block, the personal-threads protection (it covers the live CEO-only subtree and the archived copies of it under a closed year, and for <code>Grep</code> and <code>Glob</code> it refuses any expression that can EXPAND into either, so a wildcard sweep of the whole threads tree and a bare <code>Grep</code> at its root are both refused; name a business subtree instead), and the slow-shell block (a <code>Bash</code> call that runs the whole test suite in one process, or waits in the foreground, is refused and pointed at <code>scripts/run-tests.py</code> or <code>run_in_background</code>).</td>
 </tr>
 </tbody>
 </table>

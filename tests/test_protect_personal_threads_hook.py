@@ -18,6 +18,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 HOOK = Path(".claude/hooks/_dispatch.py").resolve()
 
 
@@ -317,7 +319,12 @@ def _read_utility_names() -> list[str]:
     spec = importlib.util.spec_from_file_location("_dispatch_read_utils", HOOK)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    marker = "threads[/" + "\\\\]" + "personal"
+    # Taken from the module's own shared fragment, not typed out here. Every
+    # Bash pattern was built from a hand-copied path clause until 2026-08-29,
+    # and this locator carried its own copy of that clause: when the patterns
+    # started covering the archived subtree too, the copy stopped matching and
+    # the test could no longer find the alternation it checks.
+    marker = module._BASH_CEO_THREADS
     for pattern in module.DANGEROUS_BASH_PATTERNS:
         src = pattern.pattern
         if src.startswith(r"\b(") and marker in src and "|head|" in src:
@@ -328,8 +335,15 @@ def _read_utility_names() -> list[str]:
     )
 
 
-def test_hook_blocks_read_utility_exfil_of_personal_thread() -> None:
-    target = "threads/" + "personal/secret.md"
+@pytest.mark.parametrize("target", [
+    "threads/" + "personal/secret.md",
+    # The archived copy of the same thread. `scripts/thread.py` closes a thread
+    # into threads/archive/<year>/<type>/ and `personal` is one of the types, so
+    # this is the same CEO-only body one directory deeper. Every read utility
+    # was allowed on it until 2026-08-29, while `cp` of it was refused.
+    "threads/archive/2026/" + "personal/secret.md",
+])
+def test_hook_blocks_read_utility_exfil_of_personal_thread(target: str) -> None:
     names = _read_utility_names()
     assert "cat" in names, (
         "the plainest read of all is missing from the guard's alternation"

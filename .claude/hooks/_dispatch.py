@@ -32,6 +32,7 @@ None on a Bash payload for the plainer reason that it carries no `file_path` at
 all.
 """
 from __future__ import annotations
+import fnmatch
 import hashlib
 import json
 import os
@@ -322,25 +323,109 @@ PERSONAL_PATH_RE = re.compile(r"threads[/\\]personal[/\\]", re.IGNORECASE)
 # instead, so `threads/personal-notes/` — a different directory — still passes.
 _PERSONAL_DIR_RE = re.compile(r"threads[/\\]personal(?:[/\\]|$)", re.IGNORECASE)
 
+# The archived copies of the same material, one directory deeper.
+# `scripts/thread.py` writes a closed thread to `threads/archive/<year>/<type>/`
+# and `VALID_TYPES` in scripts/utils/threads_lib.py includes `personal`, so the
+# archive holds CEO-only bodies under a path that `_PERSONAL_DIR_RE` cannot see:
+# it needs `personal` immediately after `threads`. Two of the Bash patterns
+# below have carried the archive shape since they were written, which left the
+# wall self-contradictory on ONE file - `cp threads/archive/2026/personal/x.md`
+# was refused while `cat` of it, and `Read` of it, went through.
+_PERSONAL_ARCHIVE_RE = re.compile(
+    r"threads[/\\]archive[/\\].+[/\\]personal(?:[/\\]|$)", re.IGNORECASE)
+
+
+def _names_personal_threads(text: str) -> bool:
+    """True when `text` spells a path inside either CEO-only threads subtree."""
+    return bool(_PERSONAL_DIR_RE.search(text) or _PERSONAL_ARCHIVE_RE.search(text))
+
+
+# A glob segment that is not a plain directory name. `*`, `?` and `[abc]` can
+# each expand to `personal`, so a segment carrying one is treated as if it might.
+_GLOB_META_RE = re.compile(r"[*?\[]")
+
+
+def _segment_can_be(segment: str, name: str) -> bool:
+    """Can ONE glob segment expand to the literal directory `name`?"""
+    if segment.lower() == name:
+        return True
+    if not _GLOB_META_RE.search(segment):
+        return False
+    return fnmatch.fnmatch(name, segment.lower())
+
+
+def _tail_reaches_personal(tail: list[str]) -> bool:
+    """Can these segments, taken below the threads root, reach a CEO-only one?
+
+    The two shapes are `<threads>/personal/...` and
+    `<threads>/archive/<anything>/personal/...`; both are produced by
+    `scripts/thread.py`. Anything else under `threads/` is business content and
+    must stay searchable, which is why this asks about those two shapes rather
+    than refusing every `**`.
+    """
+    if not tail:
+        return True                       # the threads root itself, read whole
+    head, rest = tail[0], tail[1:]
+    if head == "**":
+        return True                       # crosses any depth, so it crosses these
+    if _segment_can_be(head, "personal"):
+        return True
+    if _segment_can_be(head, "archive"):
+        if not rest or rest[0] == "**":
+            return True                   # the whole archive, or any depth in it
+        return not rest[1:] or _segment_can_be(rest[1], "personal")
+    return False
+
+
+def _search_reaches_personal(segments: list[str]) -> bool:
+    """Can a search described by these path segments reach the CEO-only threads?
+
+    The wall used to ask "does this argument SPELL the directory", and a
+    wildcard never spells it: a Glob that sweeps the whole threads tree with a
+    double star walked straight through and put private thread filenames in the
+    transcript. Measured 2026-08-29, 7 of 13 verdicts wrong. This asks the
+    question that matters instead - can the expression EXPAND to something
+    inside the subtree.
+
+    Only a LITERAL `threads` segment anchors the search. A wildcard that could
+    itself expand to `threads` is not treated as an anchor, because then
+    `Glob("**/*.py")` is refused and that is every ordinary sweep in the engine.
+    The limit is deliberate and the redirect is what makes it safe: only a
+    `threads`-prefixed path is re-anchored at the data root by
+    data-path-redirect.py, so an unanchored sweep stays inside the engine clone,
+    which holds no threads at all.
+    """
+    parts = [s for s in segments if s not in ("", ".")]
+    for index, segment in enumerate(parts):
+        if segment.lower() == "threads":
+            return _tail_reaches_personal(parts[index + 1:])
+    return False
+
 # Order of patterns is irrelevant for correctness (any match blocks).
 # The list follows the original protect-personal-threads.py order to
 # preserve git blame lineage. Adding new patterns: append to the end
 # or group with related shell-builtin / language-specific variants.
+#
+# One spelling of "either CEO-only threads directory", shared by every pattern
+# below. Until 2026-08-29 the archive shape was pasted onto exactly two of them
+# (`cp` and `git add`), so `cp threads/archive/2026/personal/x.md` was refused
+# while `cat` of the same file was allowed - the wall gave two answers about one
+# file. A fragment cannot drift the way a hand-copied clause did.
+_BASH_CEO_THREADS = r"threads[/\\](?:personal|archive[/\\][^\s'\"]+[/\\]personal)"
+
 DANGEROUS_BASH_PATTERNS = [
-    re.compile(r"\b(cp|mv|rsync|scp|xcopy|robocopy)\b.*threads[/\\]personal", re.IGNORECASE),
-    re.compile(r"\b(tar|zip|7z|gzip)\b.*threads[/\\]personal", re.IGNORECASE),
-    re.compile(r"\bcat\b.*threads[/\\]personal.*>", re.IGNORECASE),
-    re.compile(r"\bgit\s+(add|stash\s+push)\b.*threads[/\\]personal", re.IGNORECASE),
-    re.compile(r"<\s*threads[/\\]personal", re.IGNORECASE),
-    re.compile(r"\btee\b.*threads[/\\]personal", re.IGNORECASE),
-    re.compile(r"\bcat\b.*threads[/\\]personal.*\|\s*tee", re.IGNORECASE),
-    re.compile(r"\bdd\b.*\bif=threads[/\\]personal", re.IGNORECASE),
-    re.compile(r"\bcd\b.*threads[/\\]personal", re.IGNORECASE),
-    re.compile(r"\b(cp|mv|rsync|scp|xcopy|robocopy)\b.*threads[/\\]archive.*[/\\]personal", re.IGNORECASE),
-    re.compile(r"\bgit\s+(add|stash\s+push)\b.*threads[/\\]archive.*[/\\]personal", re.IGNORECASE),
-    re.compile(r"\b(Copy-Item|Move-Item|Get-Content)\b.*threads[/\\]personal", re.IGNORECASE),
-    re.compile(r"\bshutil\.(copy|copy2|move|copytree)\b.*threads[/\\]personal", re.IGNORECASE),
-    re.compile(r"\bopen\s*\(\s*['\"]threads[/\\]personal", re.IGNORECASE),
+    re.compile(rf"\b(cp|mv|rsync|scp|xcopy|robocopy)\b.*{_BASH_CEO_THREADS}", re.IGNORECASE),
+    re.compile(rf"\b(tar|zip|7z|gzip)\b.*{_BASH_CEO_THREADS}", re.IGNORECASE),
+    re.compile(rf"\bcat\b.*{_BASH_CEO_THREADS}.*>", re.IGNORECASE),
+    re.compile(rf"\bgit\s+(add|stash\s+push)\b.*{_BASH_CEO_THREADS}", re.IGNORECASE),
+    re.compile(rf"<\s*{_BASH_CEO_THREADS}", re.IGNORECASE),
+    re.compile(rf"\btee\b.*{_BASH_CEO_THREADS}", re.IGNORECASE),
+    re.compile(rf"\bcat\b.*{_BASH_CEO_THREADS}.*\|\s*tee", re.IGNORECASE),
+    re.compile(rf"\bdd\b.*\bif={_BASH_CEO_THREADS}", re.IGNORECASE),
+    re.compile(rf"\bcd\b.*{_BASH_CEO_THREADS}", re.IGNORECASE),
+    re.compile(rf"\b(Copy-Item|Move-Item|Get-Content)\b.*{_BASH_CEO_THREADS}", re.IGNORECASE),
+    re.compile(rf"\bshutil\.(copy|copy2|move|copytree)\b.*{_BASH_CEO_THREADS}", re.IGNORECASE),
+    re.compile(rf"\bopen\s*\(\s*['\"]{_BASH_CEO_THREADS}", re.IGNORECASE),
     # Read-then-emit exfil: a plain read utility pointed at the personal subtree
     # dumps CEO-only content into the transcript (a leak by itself, no redirect
     # needed). Added 2026-06-09 audit (hooks finding 2 — guard was narrower than
@@ -362,9 +447,9 @@ DANGEROUS_BASH_PATTERNS = [
     re.compile(
         r"\b(cat|tac|head|tail|sed|awk|base64|b64encode|xxd|hexdump|od|strings|"
         r"nl|fold|cut|less|more|grep|rg|rev|sort|uniq|shuf|paste|pr|fmt|expand|"
-        r"unexpand|column|tr)\b.*threads[/\\]personal",
+        rf"unexpand|column|tr)\b.*{_BASH_CEO_THREADS}",
         re.IGNORECASE),
-    re.compile(r"\bopen\s*\(\s*['\"][^'\"]*threads[/\\]personal", re.IGNORECASE),
+    re.compile(rf"\bopen\s*\(\s*['\"][^'\"]*{_BASH_CEO_THREADS}", re.IGNORECASE),
 ]
 
 ALLOWED_DOC_PATH_RE = re.compile(
@@ -405,7 +490,7 @@ def check_protect_personal_threads(payload: dict) -> dict | None:
 
     if tool_name == "Read":
         target = re.sub(r"\\+", "/", tool_input.get("file_path") or "")
-        if PERSONAL_PATH_RE.search(target):
+        if PERSONAL_PATH_RE.search(target) or _PERSONAL_ARCHIVE_RE.search(target):
             return {
                 "decision": "block",
                 "reason": (
@@ -431,9 +516,10 @@ def check_protect_personal_threads(payload: dict) -> dict | None:
         # Every field that can point the tool at the subtree is checked: `path`
         # (both tools), `pattern` (a Glob pattern is a path, and a Grep pattern
         # can carry one), and `glob` (Grep's file filter).
+        fields = {key: re.sub(r"\\+", "/", tool_input.get(key) or "")
+                  for key in ("path", "pattern", "glob")}
         for key in ("path", "pattern", "glob"):
-            candidate = re.sub(r"\\+", "/", tool_input.get(key) or "")
-            if _PERSONAL_DIR_RE.search(candidate):
+            if _names_personal_threads(fields[key]):
                 return {
                     "decision": "block",
                     "reason": (
@@ -444,6 +530,34 @@ def check_protect_personal_threads(payload: dict) -> dict | None:
                     ),
                     "_policy_deny": True,
                 }
+        # The fields COMPOSE, and a wildcard names the subtree in none of them.
+        # Testing each argument on its own let three ordinary spellings through:
+        # `Glob("threads/**/*.md")`, `Grep(path="threads")` and
+        # `Grep(path="threads", glob="personal/*.md")` all reached CEO-only
+        # files while every field passed its own test. Build the expression the
+        # tool will actually expand, then ask where it can land.
+        if tool_name == "Glob":
+            # A Glob pattern is relative to `path` when both are given.
+            expression = fields["path"].split("/") + fields["pattern"].split("/")
+        else:
+            # ripgrep applies `--glob` at ANY depth below `path`, not only at the
+            # top of it, which is what the `**` stands for here. With no filter,
+            # the search is the whole tree under `path`.
+            expression = fields["path"].split("/")
+            if fields["glob"]:
+                expression = expression + ["**"] + fields["glob"].split("/")
+        if _search_reaches_personal(expression):
+            return {
+                "decision": "block",
+                "reason": (
+                    f"Personal-threads protection — intentional policy block, "
+                    f"not an error. {tool_name} can expand into the CEO-only "
+                    f"threads subtree, so its result set is not safe for the "
+                    f"transcript. Name the subtree you want, for example "
+                    f"threads/business/, instead of searching the whole tree."  # leak-guard: ok (string in a message/log, not a path)
+                ),
+                "_policy_deny": True,
+            }
         return None
 
     if tool_name not in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
@@ -461,12 +575,12 @@ def check_protect_personal_threads(payload: dict) -> dict | None:
     elif tool_name == "NotebookEdit":
         contents.append(tool_input.get("new_source") or "")
 
-    if PERSONAL_PATH_RE.search(target):
+    if PERSONAL_PATH_RE.search(target) or _PERSONAL_ARCHIVE_RE.search(target):
         return None
     if ALLOWED_DOC_PATH_RE.search(target):
         return None
     for c in contents:
-        if PERSONAL_PATH_RE.search(c):
+        if _names_personal_threads(c):
             return {
                 "decision": "block",
                 "reason": (

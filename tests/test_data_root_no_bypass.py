@@ -27,6 +27,7 @@ these literals legitimately sit next to a root, so those files are exempt. Engin
 dirs (reference/, config/, scripts/, docs/, .claude/, examples/, tests/) are NOT
 data and are not flagged.
 """
+import ast
 import re
 import sys
 from pathlib import Path
@@ -109,6 +110,153 @@ _ENGINE_PRODUCER = r"(?:get_workspace_root\(\)|WORKSPACE_ROOT|workspace_root|PRO
 # `workspace_root` producer token matched the kwarg `name=value` form and falsely
 # collected the var (false positive on scripts/utils/crm.py, 2026-06-16).
 _ENGINE_BIND_RE = re.compile(r"(?:^|;)\s*(\w+)\s*=\s*" + _ENGINE_PRODUCER, re.MULTILINE)
+
+# Names a regex binder cannot recognise, whatever the producer alternation says.
+# `_ENGINE_BIND_RE` requires the producer to sit IMMEDIATELY after the `=`, which
+# is the anchor that stopped `load_entity(slug, workspace_root=workspace_root)`
+# being read as an assignment (2026-06-16). The anchor is right and it is also
+# blind, and on 2026-08-29 the blindness cost something real:
+#
+#     _ws_root = Path(workspace_root) if workspace_root else _WORKSPACE_ROOT
+#     _stages = parse_pipeline_stages(_ws_root / "context" / "pipeline.md")
+#
+# in `scripts/utils/crm.py`. Two independent reasons it was invisible. The
+# producer is behind a TERNARY, so nothing engine-shaped follows the `=`; and it
+# carries a LEADING UNDERSCORE, so even matching after `else` fails, because
+# `WORKSPACE_ROOT` cannot match starting at the `_` of `_WORKSPACE_ROOT`.
+# Measured: both the shipped binder and a widened `else`-aware one returned []
+# on that line.
+#
+# The consequence was not theoretical. `context/pipeline.md` and `crm/aliases.md`
+# are operator data and do not exist in the engine clone, so both reads resolved
+# to nothing, and stage-aware CRM cadence had never once applied in production.
+#
+# The AST does not care about ternaries or underscores. It is ADDED beside the
+# regex rather than replacing it, so the existing coverage and its survivor floor
+# are untouched, and a parse failure degrades to the regex rather than to silence.
+# CONSTANTS only, plus the two direct producers. A lower-case `workspace_root` is
+# excluded deliberately: as a parameter it is a value the CALLER chose, which is
+# the sanctioned fixture and exec-repo override, not the frozen engine root. The
+# first version of this binder included it and produced three false positives,
+# all of them correct code following the very pattern this guard recommends:
+# `crm_autolog._address_book_dir` and `_contacts_dir` (seam when the argument is
+# None, explicit tree when it is given) and `aggregate-crm.py`, where `repo_path`
+# is another executive's clone. `_WORKSPACE_ROOT` is a different thing entirely:
+# a module constant computed from `__file__` that no caller can redirect.
+_ENGINE_CONST_RE = re.compile(r"^_*(?:WORKSPACE_ROOT|PROJECT_ROOT|PROJECT_DIR|WORKSPACE|WS)$")
+
+
+def _is_file_parent_idiom(node: "ast.AST") -> bool:
+    """`Path(__file__)[.resolve()].parent.parent`, at two or more parents.
+
+    The argument is checked, not just the shape: `Path(other).parent.parent` is
+    somebody else's tree and must not be called an engine root. Two parents is
+    the floor because one gets you `scripts/`, not the repository root.
+
+    The `os.path.dirname(os.path.dirname(...))` spelling is NOT handled here.
+    The regex binder already covers it and still runs beside this one; a second
+    partial copy would be the very shape this whole shard is about.
+    """
+    depth = 0
+    cur = node
+    while True:
+        if isinstance(cur, ast.Attribute):
+            if cur.attr == "parent":
+                depth += 1
+            elif cur.attr != "resolve":
+                return False
+            cur = cur.value
+        elif isinstance(cur, ast.Call):
+            if (isinstance(cur.func, ast.Name) and cur.func.id == "Path"
+                    and len(cur.args) == 1
+                    and isinstance(cur.args[0], ast.Name)
+                    and cur.args[0].id == "__file__"):
+                return depth >= 2
+            cur = cur.func
+        else:
+            return False
+
+
+def _mentions_engine_producer(node: "ast.AST") -> bool:
+    """True when an expression reads an engine-root value anywhere inside it."""
+    for child in ast.walk(node):
+        if isinstance(child, ast.Name) and _ENGINE_CONST_RE.match(child.id):
+            return True
+        if isinstance(child, ast.Attribute) and (
+                _ENGINE_CONST_RE.match(child.attr) or _is_file_parent_idiom(child)):
+            return True
+        if (isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+                and child.func.id == "get_workspace_root"):
+            return True
+    return False
+
+
+def _engine_bound_vars_ast(text: str) -> set[str]:
+    """Local names assigned an expression that mentions an engine-root producer.
+
+    Keyword arguments cannot reach this: `f(x, workspace_root=y)` is a `Call`,
+    never an `Assign`, so the false positive the regex anchor exists to prevent
+    is structurally impossible here rather than defended against.
+    """
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return set()  # the regex binder still covers this file
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        if not _mentions_engine_producer(value):
+            continue
+        for target in targets:
+            for name in ast.walk(target):
+                if isinstance(name, ast.Name):
+                    found.add(name.id)
+    return found
+
+
+def _bound_var_violations(text: str, rel: str) -> tuple[list[str], int]:
+    """Engine-bound vars in `text` that are joined to a data directory.
+
+    Extracted from the tree scan on 2026-08-29 so a unit test can drive the SAME
+    code on a synthetic file. It was inline, and the tree is clean, so unwiring
+    the AST binder from it changed nothing and the mutation survived: a guard is
+    green over an empty corpus whether or not it works. Now the wiring has a
+    case with a real violation in it.
+
+    Returns `(violations, vars_checked)`; the count is the survivor floor's
+    input.
+    """
+    # Union, not replacement. The regex still catches the
+    # `os.path.dirname(os.path.dirname(...))` spelling the AST binder
+    # deliberately leaves alone, and it keeps working on a file the AST cannot
+    # parse. The AST adds the ternary and underscored-constant bindings the
+    # regex cannot see. Measured 2026-08-29 over 430 files: 211 vars found by
+    # both, 45 regex-only, 66 AST-only, and zero new violations once a
+    # caller-supplied `workspace_root` was excluded from the AST producers.
+    engine_vars = set(_ENGINE_BIND_RE.findall(text)) | _engine_bound_vars_ast(text)
+    engine_vars.discard("")  # safety
+    violations: list[str] = []
+    for v in sorted(engine_vars):
+        # \)? after the var name catches the `Path(BASE) / "outputs"` wrapper
+        # form, not just the bare `BASE / "outputs"`.
+        op = re.compile(r"\b" + re.escape(v) + r"\b\)?\s*(?:/|\+)\s*[\"']" + _DATA_DIRS + r"\b")
+        join = re.compile(
+            r"os\.path\.join\([^)]*\b" + re.escape(v) + r"\s*,\s*[\"']" + _DATA_DIRS + r"\b"
+        )
+        # v is PROVEN engine-bound here, so joinpath/f-string forms of the same
+        # bypass are unambiguous, with no benign-param risk like the line-based
+        # test guards against.
+        jp = re.compile(r"\b" + re.escape(v) + r"\b\.joinpath\(\s*[\"']" + _DATA_DIRS + r"\b")
+        fs = re.compile(r"\{[^{}]*\b" + re.escape(v) + r"\b[^{}]*\}/" + _DATA_DIRS + r"\b")
+        for i, line in enumerate(text.splitlines(), 1):
+            if op.search(line) or join.search(line) or jp.search(line) or fs.search(line):
+                violations.append(f"{rel}:{i}: ({v} is engine-root-bound) {line.strip()}")
+    return violations, len(engine_vars)
 
 
 def _scan_roots() -> list[Path]:
@@ -205,24 +353,17 @@ def test_no_engine_root_alias_joined_to_data_dir():
                 text = py.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
-            engine_vars = set(_ENGINE_BIND_RE.findall(text))
-            engine_vars.discard("")  # safety
-            for v in engine_vars:
-                inspected += 1
-                # \)? after the var name catches the `Path(BASE) / "outputs"`
-                # wrapper form, not just the bare `BASE / "outputs"`.
-                op = re.compile(r"\b" + re.escape(v) + r"\b\)?\s*(?:/|\+)\s*[\"']" + _DATA_DIRS + r"\b")
-                join = re.compile(
-                    r"os\.path\.join\([^)]*\b" + re.escape(v) + r"\s*,\s*[\"']" + _DATA_DIRS + r"\b"
-                )
-                # v is PROVEN engine-bound here, so joinpath/f-string forms of the
-                # same bypass are unambiguous -- no benign-param risk like the
-                # line-based test guards against.
-                jp = re.compile(r"\b" + re.escape(v) + r"\b\.joinpath\(\s*[\"']" + _DATA_DIRS + r"\b")
-                fs = re.compile(r"\{[^{}]*\b" + re.escape(v) + r"\b[^{}]*\}/" + _DATA_DIRS + r"\b")
-                for i, line in enumerate(text.splitlines(), 1):
-                    if op.search(line) or join.search(line) or jp.search(line) or fs.search(line):
-                        violations.append(f"{rel}:{i}: ({v} is engine-root-bound) {line.strip()}")
+            # Union, not replacement. The regex still catches the
+            # `os.path.dirname(os.path.dirname(...))` spelling the AST binder
+            # deliberately leaves alone, and it keeps working on a file the AST
+            # cannot parse. The AST adds the ternary and underscored-constant
+            # bindings the regex cannot see. Measured 2026-08-29 over 430 files:
+            # 211 vars found by both, 45 regex-only, 66 AST-only, and zero new
+            # violations once a caller-supplied `workspace_root` was excluded
+            # from the AST producers.
+            found, checked = _bound_var_violations(text, rel)
+            violations.extend(found)
+            inspected += checked
     # Survivor floor: counts engine-bound vars that actually reached the per-line
     # regex checks. Measured 258 on 2026-08-26; floored well below so retiring a
     # script does not fail this test. If _is_exempt() drifts to true for every file,
@@ -332,3 +473,113 @@ def test_joinpath_and_fstring_alias_forms_detected_binding_aware():
     # Param default (= None) is not a producer -> var not collected -> joinpath safe.
     param = "def f(workspace_root=None):\n    o = workspace_root.joinpath('outputs')\n"
     assert "workspace_root" not in set(_ENGINE_BIND_RE.findall(param))
+
+
+# ============================================================
+# The AST binder, pinned against the shapes it exists for
+# ============================================================
+#
+# Added 2026-08-29 after `scripts/utils/crm.py` joined a data directory to a
+# module constant behind a ternary and the regex binder reported nothing. These
+# run on literal snippets, never on the tree, so the guard stays regression-proof
+# without file I/O.
+
+def test_the_ast_binder_sees_a_producer_behind_a_ternary():
+    """The exact line that got through, verbatim."""
+    src = ('_ws_root = Path(workspace_root) if workspace_root else _WORKSPACE_ROOT\n'
+           '_stages = parse_pipeline_stages(_ws_root / "context" / "pipeline.md")\n')
+    assert "_ws_root" in _engine_bound_vars_ast(src)
+    # And the reason a widened regex was not enough: the shipped one is blind to
+    # it, so the AST binder is carrying this case alone.
+    assert "_ws_root" not in set(_ENGINE_BIND_RE.findall(src))
+
+
+def test_the_ast_binder_sees_an_underscored_module_constant():
+    """`WORKSPACE_ROOT` cannot match starting at the `_` of `_WORKSPACE_ROOT`."""
+    assert "p" in _engine_bound_vars_ast("p = _WORKSPACE_ROOT\n")
+    assert "p" in _engine_bound_vars_ast("p = __WORKSPACE_ROOT\n")
+
+
+def test_the_ast_binder_sees_the_file_parent_idiom_in_either_spelling():
+    for src in ("BASE = Path(__file__).resolve().parent.parent\n",
+                "BASE = Path(__file__).parent.parent\n",
+                "BASE = override if override else Path(__file__).resolve().parent.parent\n"):
+        assert "BASE" in _engine_bound_vars_ast(src), src
+
+
+def test_the_ast_binder_spares_a_caller_supplied_root():
+    """A parameter is the caller's choice, which is the sanctioned override.
+
+    Three real call sites follow exactly this pattern and must stay clean:
+    `crm_autolog._address_book_dir`, `crm_autolog._contacts_dir`, and
+    `aggregate-crm.py`, where the root is another executive's clone. An earlier
+    version of this binder flagged all three.
+    """
+    assert _engine_bound_vars_ast("ws = Path(workspace_root)\n") == set()
+    assert _engine_bound_vars_ast("repo_path = clones[slug]\n") == set()
+    assert _engine_bound_vars_ast("r = get_data_root()\n") == set()
+
+
+def test_the_ast_binder_spares_someone_elses_parent_chain():
+    """Shape alone is not enough; the argument decides whose tree it is."""
+    assert _engine_bound_vars_ast("B = Path(other).resolve().parent.parent\n") == set()
+    # One parent is `scripts/`, not the repository root.
+    assert _engine_bound_vars_ast("B = Path(__file__).resolve().parent\n") == set()
+
+
+def test_the_ast_binder_degrades_to_the_regex_on_unparseable_source():
+    """A syntax error must narrow the claim, never fail the suite.
+
+    `.claude/` carries hook scripts that are edited by hand; one broken file
+    must not turn this guard into a red run about something it does not govern.
+    """
+    assert _engine_bound_vars_ast("def (:\n") == set()
+
+
+def test_the_ast_binder_is_not_matching_everything():
+    """Anti-vacuity from the other side: a binder that returned every name would
+    pass every test above and flood the tree with false positives."""
+    src = ("a = 1\nb = get_data_root()\nc = some_call(x, y)\n"
+           "d = {'k': 'v'}\ne = [i for i in range(3)]\n")
+    assert _engine_bound_vars_ast(src) == set()
+
+
+def test_the_ast_binder_sees_an_annotated_assignment():
+    """`x: Path = _WORKSPACE_ROOT` is an `AnnAssign`, a different node type.
+
+    Missed by the first version of the binder, and mutation-caught: skipping
+    `AnnAssign` changed nothing until this case existed.
+    """
+    assert "p" in _engine_bound_vars_ast("p: Path = _WORKSPACE_ROOT\n")
+    assert "p" in _engine_bound_vars_ast(
+        "p: Path = override if override else _WORKSPACE_ROOT\n")
+    assert _engine_bound_vars_ast("p: Path\n") == set()  # no value, no binding
+
+
+def test_the_scan_flags_a_ternary_bound_var_end_to_end():
+    """The wiring, not just the binder.
+
+    This drives the SAME function the tree scan calls, on a file that really
+    does contain the defect. The tree itself is clean, so without this case
+    unwiring the AST binder from the scan changed nothing and the mutation
+    survived: green over an empty corpus is not evidence.
+    """
+    src = ('_ws_root = Path(workspace_root) if workspace_root else _WORKSPACE_ROOT\n'
+           '_stages = parse_pipeline_stages(_ws_root / "context" / "pipeline.md")\n')
+    violations, checked = _bound_var_violations(src, "scripts/utils/crm.py")
+
+    assert checked >= 1, "no engine-bound var reached the per-line check"
+    assert len(violations) == 1, violations
+    assert "crm.py:2" in violations[0]
+    assert "_ws_root is engine-root-bound" in violations[0]
+
+
+def test_the_scan_spares_the_fixed_form():
+    """The shape that replaced it must be clean, or the guard blocks its own fix."""
+    src = ('    if workspace_root:\n'
+           '        _ws_root = Path(workspace_root)\n'
+           '        _pipeline_file = _ws_root / "context" / "pipeline.md"\n'
+           '    else:\n'
+           '        _pipeline_file = get_context_dir() / "pipeline.md"\n')
+    violations, _ = _bound_var_violations(src, "scripts/utils/crm.py")
+    assert violations == [], violations

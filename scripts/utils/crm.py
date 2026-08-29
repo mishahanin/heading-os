@@ -44,6 +44,7 @@ if str(_WORKSPACE_ROOT) not in sys.path:
     sys.path.insert(0, str(_WORKSPACE_ROOT))
 
 from scripts.utils.workspace import (  # noqa: E402
+    get_context_dir,
     get_default_tz,
     get_crm_contacts_dir,
     get_corporate_root,
@@ -370,11 +371,41 @@ def scan_contacts(config: dict, today=None, contacts_dir: Path | None = None,
         contacts_dir = get_crm_contacts_dir()
 
     # Phase 2.4: load pipeline stages + aliases once for stage-aware cadence.
-    # Resolve paths relative to workspace_root (test fixture support) or the
-    # canonical workspace root when called in production.
-    _ws_root = Path(workspace_root) if workspace_root else _WORKSPACE_ROOT
-    _stages = parse_pipeline_stages(_ws_root / "context" / "pipeline.md")
-    _aliases = parse_aliases(_ws_root / "crm" / "aliases.md")
+    #
+    # Through the DATA-ROOT SEAM, not `_WORKSPACE_ROOT`. That constant is the
+    # ENGINE clone root, computed at import from `__file__`, and the comment
+    # here used to call it "the canonical workspace root when called in
+    # production". On the split engine/data topology it is not: `pipeline.md`
+    # and `aliases.md` are operator data and live in the overlay. Both reads
+    # therefore resolved to paths that do not exist, `parse_*` returned empty
+    # dicts, and stage-aware cadence has never once applied in production.
+    #
+    # Measured 2026-08-29 against the real tree:
+    #   engine context/pipeline.md exists: False   data: True
+    #   engine crm/aliases.md      exists: False   data: True
+    #   stages from the ENGINE path: 0    from the DATA path: 29
+    #   aliases from the ENGINE path: 0   from the DATA path: 61
+    #   28 of those 29 rows carry a stage that maps to a STAGE_CADENCE entry
+    #   (9 Demo/POC at 7 days, 3 Negotiation at 3, 10 Qualified, 6 Lead)
+    # so every one of them fell back to the contact-type default and went
+    # yellow and red days late. `STAGE_CADENCE["Won"] = 0`, the stop-tracking
+    # signal, was unreachable from the pipeline side, so closed accounts kept
+    # accruing red debt and feeding `/cold-sweep`'s outreach drafting.
+    #
+    # `census_oracles.py` reads the same two files through its corpus paths and
+    # was right all along. This is the second copy.
+    #
+    # `workspace_root` keeps its exact meaning: a fixture override. Only the
+    # FALLBACK changed, so every existing caller that passes it is unaffected.
+    if workspace_root:
+        _ws_root = Path(workspace_root)
+        _pipeline_file = _ws_root / "context" / "pipeline.md"
+        _aliases_file = _ws_root / "crm" / "aliases.md"
+    else:
+        _pipeline_file = get_context_dir() / "pipeline.md"
+        _aliases_file = get_crm_contacts_dir().parent / "aliases.md"
+    _stages = parse_pipeline_stages(_pipeline_file)
+    _aliases = parse_aliases(_aliases_file)
 
     contacts: list = []
     tribe_warnings: list = []

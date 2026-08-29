@@ -93,16 +93,38 @@ def _attach_freshness(payload: dict, component: str, computed_at: str | None = N
     payload["server_now"] = now_iso
     payload["watching"] = component in WATCHED_COMPONENTS
 
+# The set of pages the dashboard can render, and therefore the only names
+# `/return` may open and `/telemetry/page-view` may record.
+#
+# INVARIANT: this set is exactly the key set of the `ROUTES` table in
+# `web/app.js`. It is written out by hand rather than parsed, because it is a
+# request allowlist and an allowlist that reads its contents from another file
+# at import is one file-read away from allowing everything. The equality is
+# held instead by `tests/bridge/test_an_allowlist_that_drifted_from_the_page_it_guards.py`,
+# which parses `ROUTES` and fails on drift in either direction. Add a page here
+# in the same change that adds its renderer.
+#
+# It had drifted both ways by 2026-08-29, measured:
+#   - `critical` (Phase 1.140) shipped a renderer, a KPI tile and a keyboard
+#     shortcut, and was never added here. Every page-view of it answered 422,
+#     the browser swallowed the failure, and the time the operator spent on the
+#     page reached neither `usage.jsonl` nor the Phase 1 to Phase 2 adoption
+#     gate. Worse than a shortfall: `browser_first` is decided by the first
+#     event of the local day, so a morning opened on Critical counted against
+#     `browser_first_pct_weekdays`, one of the three booleans in `all_pass`.
+#   - `signals` (page folded into Pulse, 2026-06-22) and `spaces` (no renderer
+#     in any shipped version) both stayed. `/return` answered 200 for them and
+#     opened a window showing Pulse under a `#/signals` address.
 ALLOWED_RETURN_PAGES = frozenset({
     "pulse", "inbox", "conversations", "capabilities", "library",
-    "studio", "spaces", "tribe", "day", "tasks", "pipeline", "investors",
+    "studio", "tribe", "day", "tasks", "pipeline", "investors",
     "approvals", "threads", "settings", "search",
-    # Phase 1.101: dedicated /signals overflow page.
-    "signals",
     # Phase 1.35: full CRM contacts page.
     "contacts",
     # R1 (2026-06-03): Action Queue page.
     "action-queue",
+    # Phase 1.140: Critical page, reached from the Pulse KPI tile and `m`.
+    "critical",
 })
 
 def build_app(workspace_root: Path, state, token: str, user_slug: str,

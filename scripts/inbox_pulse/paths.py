@@ -34,6 +34,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from scripts.utils.paths import get_data_root  # noqa: E402
+from scripts.utils.paths import (  # noqa: E402
+    get_workspace_root as _shared_workspace_root,
+)
 
 __all__ = ["get_workspace_root", "get_state_dir", "get_data_root"]
 
@@ -44,7 +47,6 @@ _THIS_FILE = Path(__file__).resolve()
 # Module-level cache (path is stable for the process lifetime)
 # ---------------------------------------------------------------------------
 
-_workspace_root_cache: Path | None = None
 _state_dir_cache: Path | None = None
 # The env value the cached state dir was resolved FROM. The cache used to key
 # on nothing, so the first call in a process fixed the answer for its lifetime
@@ -62,29 +64,24 @@ _state_dir_cache_key: str | None = None
 def get_workspace_root() -> Path:
     """Return the workspace root directory.
 
-    The directory containing both config/ and scripts/, found by walking
-    parent directories upward from this file. Resolves correctly on the
-    laptop checkout and on the service host alike.
+    Delegates to `scripts.utils.paths.get_workspace_root`, which is the one
+    implementation. This module used to carry a private copy that walked up
+    from its own file looking for a directory holding both `config/` and
+    `scripts/`. That copy answered correctly on the laptop and on the service
+    host, so nothing ever looked at it again, and it silently ignored the
+    `WORKSPACE_ROOT` environment override the shared helper honours.
 
-    Cached after the first call.
+    MEASURED 2026-08-29 with `WORKSPACE_ROOT=/tmp/pretend-workspace` exported
+    and that directory seeded with `config/` and `scripts/`:
+
+        scripts.utils.paths        -> /tmp/pretend-workspace
+        scripts.inbox_pulse.paths  -> the real checkout
+
+    Two answers to one question, and the daemon read the one that cannot be
+    redirected. The caching also moved to the shared helper, which resolves in
+    microseconds and needs none.
     """
-    global _workspace_root_cache
-    if _workspace_root_cache is not None:
-        return _workspace_root_cache
-
-    # Walk up from this file until we find a dir with both config/ and scripts/.
-    candidate = _THIS_FILE.parent
-    while True:
-        if (candidate / "config").is_dir() and (candidate / "scripts").is_dir():
-            _workspace_root_cache = candidate
-            return _workspace_root_cache
-        parent = candidate.parent
-        if parent == candidate:
-            # Reached filesystem root without a match; fall back to the
-            # grandparent of scripts/inbox_pulse/ (scripts/ parent).
-            _workspace_root_cache = _THIS_FILE.parent.parent.parent
-            return _workspace_root_cache
-        candidate = parent
+    return _shared_workspace_root()
 
 
 def get_state_dir() -> Path:

@@ -35,7 +35,10 @@ Cache:
   map 168h. All six, matching DEFAULT_TTLS; the list reads as exhaustive and
   used to name five, leaving an operator tuning cache behaviour from this
   header with no documented TTL for batch.
-  Use --no-cache to bypass, --clear-cache to wipe.
+  Use --no-cache to bypass, and the `clear-cache` COMMAND to wipe. There is no
+  `--clear-cache` flag: argparse answers `unrecognized arguments: --clear-cache`
+  and prints the usage line. Two lines above, this same header already spelled
+  it as a command, so the header contradicted itself.
 
 Tests: tests/test_a_cache_key_that_forgot_what_was_asked_for.py
        tests/test_a_bundle_that_never_said_the_keys_were_live.py

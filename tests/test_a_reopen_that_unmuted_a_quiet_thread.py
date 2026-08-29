@@ -329,7 +329,8 @@ def test_an_empty_test_file_does_not_fail_the_lane(tc, tmp_path, monkeypatch):
     probe = tmp_path / "test_empty_probe.py"
     probe.write_text('"""Nothing yet."""\n', encoding="utf-8")
 
-    failures, ran, skipped, dropped, empty = _lane(tc, monkeypatch, probe)
+    failures, ran, skipped, dropped, empty, _unmeasured = _lane(
+        tc, monkeypatch, probe)
 
     assert failures == []
     assert empty == 1
@@ -340,7 +341,8 @@ def test_a_file_holding_only_helpers_does_not_fail_the_lane(tc, tmp_path,
     probe = tmp_path / "test_helpers_only.py"
     probe.write_text("def helper():\n    return 1\n", encoding="utf-8")
 
-    failures, _ran, _skipped, _dropped, empty = _lane(tc, monkeypatch, probe)
+    failures, _ran, _skipped, _dropped, empty, _unmeasured = _lane(
+        tc, monkeypatch, probe)
 
     assert failures == []
     assert empty == 1
@@ -363,7 +365,8 @@ def test_a_real_failure_still_fails_the_lane(tc, tmp_path, monkeypatch):
     probe = tmp_path / "test_red_probe.py"
     probe.write_text("def test_red():\n    assert False\n", encoding="utf-8")
 
-    failures, _ran, _skipped, _dropped, empty = _lane(tc, monkeypatch, probe)
+    failures, _ran, _skipped, _dropped, empty, _unmeasured = _lane(
+        tc, monkeypatch, probe)
 
     assert failures
     assert empty == 0
@@ -373,7 +376,8 @@ def test_a_passing_file_still_passes(tc, tmp_path, monkeypatch):
     probe = tmp_path / "test_green_probe.py"
     probe.write_text("def test_green():\n    assert True\n", encoding="utf-8")
 
-    failures, ran, _skipped, _dropped, empty = _lane(tc, monkeypatch, probe)
+    failures, ran, _skipped, _dropped, empty, _unmeasured = _lane(
+        tc, monkeypatch, probe)
 
     assert failures == []
     assert ran == 1
@@ -386,20 +390,32 @@ def test_an_all_slow_file_is_deselected_not_empty(tc, tmp_path, monkeypatch):
     probe.write_text("import pytest\n\n\n@pytest.mark.slow\n"
                      "def test_slow():\n    assert True\n", encoding="utf-8")
 
-    failures, _ran, _skipped, dropped, empty = _lane(tc, monkeypatch, probe)
+    failures, _ran, _skipped, dropped, empty, _unmeasured = _lane(
+        tc, monkeypatch, probe)
 
     assert failures == []
     assert dropped == 1
     assert empty == 0
 
 
-def test_every_lane_tests_return_has_five_values(tc, tmp_path, monkeypatch):
-    """A short tuple unpacks into a ValueError inside the Stop hook."""
+def test_every_lane_tests_return_has_the_declared_arity(tc, tmp_path, monkeypatch):
+    """A short tuple unpacks into a ValueError inside the Stop hook.
+
+    The expected width is DERIVED from the function's own return annotation, not
+    restated here. It was restated as 5 until 2026-08-29, and the annotation
+    said 4 at the same time, so the two disagreed and neither was checked
+    against the other. Widening the tuple now updates both at once or fails.
+    """
+    import typing
+
+    declared = len(typing.get_args(typing.get_type_hints(tc.lane_tests)["return"]))
+    assert declared >= 5, "the annotation itself went stale"
+
     probe = tmp_path / "test_green2.py"
     probe.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
 
-    assert len(_lane(tc, monkeypatch, probe)) == 5
-    assert len(tc.lane_tests([], 60)) == 5
+    assert len(_lane(tc, monkeypatch, probe)) == declared
+    assert len(tc.lane_tests([], 60)) == declared
 
 
 def test_the_run_result_carries_the_count(tc, monkeypatch, tmp_path):

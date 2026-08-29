@@ -559,5 +559,3 @@ def parse_md_table(text: str, header_pattern: Optional[str] = None, *,
         rows.append({h: cells[j] if j < len(cells) else ""
                      for j, h in enumerate(headers)})
     return rows
-
-    return None

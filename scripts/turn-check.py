@@ -380,10 +380,23 @@ def _deselected(body: str) -> int:
     return int(match.group(1)) if match else 0
 
 
-def lane_tests(paths: list[Path], timeout: int) -> tuple[list[str], int, int, int]:
+def lane_tests(paths: list[Path],
+               timeout: int) -> tuple[list[str], int, int, int, int, int]:
     """Run the matched tests, minus the ones marked slow.
 
-    Returns (failures, test files run, contract files skipped, tests deselected).
+    Returns (failures, test files run, contract files skipped, tests deselected,
+    files that collected nothing, files left unmeasured).
+
+    The annotation said four values while the body returned five, which is the
+    kind of stale contract nothing checks.
+
+    A run that never finished reports `tests_run=0` and counts its files as
+    unmeasured. Until 2026-08-29 both non-completion paths, the wall-clock
+    timeout and the `OSError`, returned `tests_run=len(targets)` and a plain
+    failure. MEASURED that day by forcing `TimeoutExpired`: the result carried
+    `"tests_run": 2` when pytest had been killed and zero tests had run, and the
+    Stop hook rendered "a failure here is almost always real" over it. A number
+    for work that did not happen is worse than no number.
 
     `-m "not slow"` is the difference between a check that runs at the end of
     every turn and one the operator learns to dread. Measured 2026-08-22: an edit
@@ -399,7 +412,7 @@ def lane_tests(paths: list[Path], timeout: int) -> tuple[list[str], int, int, in
     targets = [t for t in picked if not is_contract(t)]
     skipped = len(picked) - len(targets)
     if not targets:
-        return [], 0, skipped, 0, 0
+        return [], 0, skipped, 0, 0, 0
     args = [
         sys.executable, "-m", "pytest", "-q", "-p", "no:randomly",
         "-m", "not slow", "--no-header", "-x", *[str(t) for t in targets],
@@ -412,9 +425,9 @@ def lane_tests(paths: list[Path], timeout: int) -> tuple[list[str], int, int, in
         return [
             f"the matched tests did not finish in {timeout}s "
             f"({len(targets)} file(s)); run them yourself or raise --timeout"
-        ], len(targets), skipped, 0, 0
+        ], 0, skipped, 0, 0, len(targets)
     except OSError as e:
-        return [f"pytest could not run: {e}"], len(targets), skipped, 0, 0
+        return [f"pytest could not run: {e}"], 0, skipped, 0, 0, len(targets)
     body = (out.stdout or "") + (out.stderr or "")
     dropped = _deselected(body)
     # Exit 5 is "no tests collected", and in NO form of it did a test fail.
@@ -427,12 +440,12 @@ def lane_tests(paths: list[Path], timeout: int) -> tuple[list[str], int, int, in
     # file that ran nothing is an exclusion, and a silent exclusion reads as
     # coverage.
     if out.returncode == NO_TESTS_COLLECTED:
-        return [], len(targets), skipped, dropped, (0 if dropped else len(targets))
+        return [], len(targets), skipped, dropped, (0 if dropped else len(targets)), 0
     if out.returncode != 0:
         tail = [ln for ln in body.strip().splitlines() if ln.strip()][-12:]
         return (["\n".join(tail) or f"pytest exited {out.returncode}"],
-                len(targets), skipped, dropped, 0)
-    return [], len(targets), skipped, dropped, 0
+                len(targets), skipped, dropped, 0, 0)
+    return [], len(targets), skipped, dropped, 0, 0
 
 
 def run(timeout: int, use_cache: bool, transcript=None) -> dict:
@@ -462,9 +475,10 @@ def run(timeout: int, use_cache: bool, transcript=None) -> dict:
     skipped_contract = 0
     deselected_slow = 0
     collected_nothing = 0
+    unmeasured = 0
     if not failures:
         (failures, tests_run, skipped_contract, deselected_slow,
-         collected_nothing) = lane_tests(paths, timeout)
+         collected_nothing, unmeasured) = lane_tests(paths, timeout)
         lane = "tests"
 
     if failures:
@@ -473,13 +487,15 @@ def run(timeout: int, use_cache: bool, transcript=None) -> dict:
                 "skipped_foreign": foreign,
                 "skipped_contract": skipped_contract,
                 "deselected_slow": deselected_slow,
-                "collected_nothing": collected_nothing}
+                "collected_nothing": collected_nothing,
+                "unmeasured": unmeasured}
 
     write_state({"last_pass": fp, "files": len(paths), "tests_run": tests_run})
     return {"status": "pass", "files": len(paths), "tests_run": tests_run,
             "skipped_foreign": foreign, "skipped_contract": skipped_contract,
             "deselected_slow": deselected_slow,
-            "collected_nothing": collected_nothing}
+            "collected_nothing": collected_nothing,
+            "unmeasured": unmeasured}
 
 
 def _foreign_note(result: dict) -> str:
@@ -527,9 +543,23 @@ def _empty_note(result: dict) -> str:
             f"nothing ran, and nothing failed]{RESET}")
 
 
+def _unmeasured_note(result: dict) -> str:
+    """The files the lane never got an answer about.
+
+    A run killed by the wall clock, or one where pytest could not start, judged
+    nothing. Counting those files as run was a claim about work that did not
+    happen, which `.claude/rules/scope-claims.md` calls the defect that gets
+    trusted and quoted back later."""
+    count = result.get("unmeasured") or 0
+    if not count:
+        return ""
+    return (f" {GRAY}[{count} matched file(s) left unmeasured: the lane did not "
+            f"finish, so nothing about them is known]{RESET}")
+
+
 def _notes(result: dict) -> str:
     return (_foreign_note(result) + _contract_note(result) + _slow_note(result)
-            + _empty_note(result))
+            + _empty_note(result) + _unmeasured_note(result))
 
 
 def render(result: dict) -> str:
@@ -540,7 +570,10 @@ def render(result: dict) -> str:
         return (f"{GREEN}turn-check: clean{RESET} "
                 f"{GRAY}({result['files']} changed file(s), "
                 f"{result['tests_run']} test file(s)){RESET}" + _notes(result))
-    head = f"{RED}turn-check: {result['lane']} lane failed{RESET}" + _notes(result)
+    # "failed" is a verdict about the code. A lane that never finished reached
+    # no verdict, so it does not get that word.
+    verb = "did not finish" if result.get("unmeasured") else "failed"
+    head = f"{RED}turn-check: {result['lane']} lane {verb}{RESET}" + _notes(result)
     return head + "\n" + "\n".join(result["failures"])
 
 

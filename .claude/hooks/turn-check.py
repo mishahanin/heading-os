@@ -51,6 +51,26 @@ Fix it, or say explicitly why it is being left. Re-run with:
 
 Full suite when you want the whole picture: `python scripts/run-tests.py`."""
 
+# A lane killed by the wall clock reached no verdict about anything. Until
+# 2026-08-29 it was rendered with REASON above, so the operator was told a
+# check had failed and that "a failure here is almost always real", when in
+# fact nothing had been measured. MEASURED that day by forcing
+# `subprocess.TimeoutExpired`: the result carried `"status": "fail"` and
+# `"tests_run": 2` with zero tests actually run. Both halves are fixed; this is
+# the half the operator reads.
+UNMEASURED_REASON = """\
+`scripts/turn-check.py` did not finish the {lane} lane on the uncommitted \
+Python edits in this turn. This is NOT a failure: nothing was measured, so \
+nothing about those edits is known yet.
+
+{body}
+
+Re-run with a longer cap, or run the files yourself:
+
+    python scripts/turn-check.py --timeout 300
+
+Full suite when you want the whole picture: `python scripts/run-tests.py`."""
+
 
 def interpreter() -> str:
     """Prefer the project venv; the checker imports workspace modules."""
@@ -107,7 +127,9 @@ def main() -> int:
         return 0
 
     body = "\n".join(result.get("failures") or []) or "(no detail reported)"
-    reason = REASON.format(lane=result.get("lane", "unknown"), body=body)
+    unmeasured = result.get("unmeasured") or 0
+    template = UNMEASURED_REASON if unmeasured else REASON
+    reason = template.format(lane=result.get("lane", "unknown"), body=body)
 
     # Name what the check left out. `scripts/turn-check.py` reports three
     # exclusion counts and prints all three in its own human renderer, "because
@@ -129,6 +151,9 @@ def main() -> int:
     if slow:
         exclusions.append(f"{slow} slow test(s) not run here: run "
                           f"`python scripts/run-tests.py` for those")
+    if unmeasured:
+        exclusions.append(f"{unmeasured} matched file(s) left unmeasured: the "
+                          f"lane did not finish, so nothing about them is known")
     if exclusions:
         reason += ("\n\nNot covered by this check: " + "; ".join(exclusions) + ".")
 

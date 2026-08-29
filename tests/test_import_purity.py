@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from tests.repo_files import tracked_paths
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -64,11 +65,10 @@ BASELINE: frozenset[str] = frozenset()
 
 
 def _params():
-    scripts = sorted(
-        p
-        for p in list(ROOT.glob("scripts/*.py")) + list(ROOT.glob(".claude/skills/*/scripts/*.py"))
+    scripts = [
+        p for p in tracked_paths(("scripts/*.py", ".claude/skills/*/scripts/*.py"))
         if p.name != "__init__.py"
-    )
+    ]
     out = []
     for p in scripts:
         rel = str(p.relative_to(ROOT))

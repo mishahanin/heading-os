@@ -36,6 +36,7 @@ import runpy
 from pathlib import Path, PurePosixPath
 
 import pytest
+from tests.repo_files import tracked_paths
 
 _ROOT = Path(__file__).resolve().parent.parent
 _CLI = _ROOT / "scripts" / "harness-audit.py"
@@ -245,7 +246,8 @@ def test_no_hook_is_exempted_from_the_scan_because_a_hook_executes(audit):
 
     findings, scanned, _unreadable, _skipped = audit["scan_loaded_content"](
         _ROOT, _ROOT / ".no-plugins-here")
-    hooks = {p.relative_to(_ROOT).as_posix() for p in _ROOT.glob(".claude/hooks/**/*.py")}
+    hooks = {p.relative_to(_ROOT).as_posix()
+             for p in tracked_paths((".claude/hooks/**/*.py",))}
     assert hooks, "this checkout has no Python hooks, so the assertion below is empty"
     assert hooks <= set(scanned), f"never read: {sorted(hooks - set(scanned))}"
     assert not [f for f in findings if f["path"] in hooks]
@@ -309,7 +311,8 @@ def test_the_live_repository_is_scanned_across_each_surface_that_has_files(
 
     populated = 0
     for pattern in audit["OUR_SURFACE_GLOBS"]:
-        on_disk = {p.relative_to(_ROOT).as_posix() for p in _ROOT.glob(pattern)}
+        on_disk = {p.relative_to(_ROOT).as_posix()
+                   for p in tracked_paths((pattern,))}
         if not on_disk:
             continue
         populated += 1

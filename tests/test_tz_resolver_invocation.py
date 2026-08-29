@@ -29,9 +29,10 @@ import sys
 from pathlib import Path
 
 import pytest
+from tests.repo_files import tracked_paths
 
 _ROOT = Path(__file__).resolve().parents[1]
-_INSTALLERS = sorted(_ROOT.glob("scripts/install-*-timer.sh"))
+_INSTALLERS = tracked_paths(("scripts/install-*-timer.sh",))
 
 
 def test_there_are_installers_to_check():

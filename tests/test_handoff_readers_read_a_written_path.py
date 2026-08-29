@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from tests.repo_files import tracked_paths
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -50,10 +51,8 @@ def _is_written(ref: str) -> bool:
 
 def _readers():
     seen = set()
-    for pattern in READER_GLOBS:
-        for path in ROOT.glob(pattern):
-            if not path.is_file() or path in seen:
-                continue
+    for path in tracked_paths(READER_GLOBS):
+        if path not in seen:
             seen.add(path)
             try:
                 text = path.read_text(encoding="utf-8", errors="ignore")

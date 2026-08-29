@@ -31,6 +31,7 @@ import ast
 import sys
 import warnings
 from pathlib import Path
+from tests.repo_files import tracked_paths
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -99,7 +100,7 @@ def test_only_the_single_source_names_an_embedding_model():
     """A fourth copy fails here, with the file and the line that added it."""
     offenders: dict[str, list[tuple[int, str]]] = {}
     inspected = 0
-    for path in sorted(ROOT.glob("scripts/**/*.py")):
+    for path in tracked_paths(("scripts/**/*.py",)):
         rel = _rel(path)
         if rel in ALLOWED:
             continue

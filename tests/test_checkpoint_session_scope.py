@@ -36,6 +36,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from scripts.utils.colors import supports_ansi  # noqa: E402
+from tests.repo_files import tracked_paths
 
 HOOKS = ROOT / ".claude" / "hooks"
 STATUSLINE = HOOKS / "checkpoint-statusline.py"
@@ -131,7 +132,7 @@ def _registered_stop_timeout() -> int:
     macOS is still a defect.
     """
     timeouts = []
-    for path in sorted(ROOT.glob(".claude/settings.local.*.json")):
+    for path in tracked_paths((".claude/settings.local.*.json",)):
         data = json.loads(path.read_text(encoding="utf-8"))
         for entry in (data.get("hooks") or {}).get("Stop", []):
             for hook in entry.get("hooks", []):

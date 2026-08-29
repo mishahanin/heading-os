@@ -34,6 +34,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tests.repo_files import tracked_paths
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -56,12 +58,11 @@ def test_only_one_module_implements_the_slug_rule():
     Scoped to the two-replacement form; `scripts/census.py` mangles a corpus
     name with a single replacement for a different purpose and is not a copy.
     """
-    paths = sorted(
+    paths = [
         path
-        for pattern in ("scripts/**/*.py", ".claude/**/*.py")
-        for path in ROOT.glob(pattern)
+        for path in tracked_paths(("scripts/**/*.py", ".claude/**/*.py"))
         if path.name != "checkpoint_paths.py"
-    )
+    ]
     # "no offenders" is green over zero files, so a renamed directory or a
     # changed suffix would switch this guard off without failing anything.
     # Measured 2026-08-26: 428 files across the two patterns.

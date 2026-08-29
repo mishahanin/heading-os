@@ -54,6 +54,7 @@ from scripts.utils.markdown import (  # noqa: E402
     parse_frontmatter_strict,
     split_frontmatter,
 )
+from tests.repo_files import tracked_paths  # noqa: E402
 
 
 def _load(name: str, rel: str):
@@ -238,7 +239,7 @@ def test_the_live_skill_corpus_reads_identically_through_both_gates(gates):
     only that it stays latent on the corpus as it stands.
     """
     smc, gsr, _ae = gates
-    skills = sorted((ROOT / ".claude" / "skills").glob("*/SKILL.md"))
+    skills = tracked_paths((".claude/skills/*/SKILL.md",))
 
     assert len(skills) >= 50, f"only {len(skills)} SKILL.md found; the glob is wrong"
     differ = [f.parent.name for f in skills

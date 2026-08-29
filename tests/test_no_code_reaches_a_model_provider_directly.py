@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from tests.repo_files import tracked_paths
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -73,17 +74,14 @@ OWN_CLIENT_EXEMPT = ("scripts/census-submodel-bench.py",)
 
 
 def _tracked_code() -> list[Path]:
-    out = []
-    for d in ("scripts", "tests", ".claude"):
-        base = ROOT / d
-        if not base.exists():
-            continue
-        for p in base.rglob("*"):
-            if (p.is_file() and p.suffix in CODE_SUFFIXES
-                    and "__pycache__" not in p.parts
-                    and p.resolve() != Path(__file__).resolve()):
-                out.append(p)
-    return out
+    """Named "tracked" and, until 2026-08-29, not tracked at all: the walk was a
+    plain `rglob` with a hand-written `__pycache__` skip, so an agent worktree
+    under `.claude/worktrees/` doubled the corpus and both sweeps below reported
+    the copy. `tests/repo_files` asks git instead."""
+    return [
+        p for p in tracked_paths([f"{d}/**/*" for d in ("scripts", "tests", ".claude")])
+        if p.suffix in CODE_SUFFIXES and p != Path(__file__).resolve()
+    ]
 
 
 def test_the_scan_actually_reads_files():

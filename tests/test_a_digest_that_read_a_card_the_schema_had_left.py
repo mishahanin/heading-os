@@ -43,6 +43,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from scripts.utils.markdown import frontmatter_date  # noqa: E402
+from tests.repo_files import tracked_python_files  # noqa: E402
 
 PY = sys.executable
 
@@ -521,21 +522,20 @@ DECLARED_FENCE_SITES = {
 def _fence_sites():
     """Files with a call testing a string against the literal `---`."""
     found = {}
-    for root in (ROOT / "scripts", ROOT / ".claude"):
-        for path in sorted(root.rglob("*.py")):
-            try:
-                tree = ast.parse(path.read_text(encoding="utf-8"))
-            except SyntaxError:  # pragma: no cover - another test's job
+    for path in tracked_python_files():
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:  # pragma: no cover - another test's job
+            continue
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in ("find", "startswith", "split",
+                                           "index", "partition", "endswith")):
                 continue
-            for node in ast.walk(tree):
-                if not (isinstance(node, ast.Call)
-                        and isinstance(node.func, ast.Attribute)
-                        and node.func.attr in ("find", "startswith", "split",
-                                               "index", "partition", "endswith")):
-                    continue
-                if any(isinstance(a, ast.Constant) and isinstance(a.value, str)
-                       and a.value.startswith("---") for a in node.args):
-                    found.setdefault(str(path.relative_to(ROOT)), []).append(node.lineno)
+            if any(isinstance(a, ast.Constant) and isinstance(a.value, str)
+                   and a.value.startswith("---") for a in node.args):
+                found.setdefault(str(path.relative_to(ROOT)), []).append(node.lineno)
     return found
 
 

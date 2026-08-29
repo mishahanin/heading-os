@@ -48,6 +48,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from tests.repo_files import tracked_paths
 
 _ROOT = Path(__file__).resolve().parents[1]
 _TEMPLATES = _ROOT / "scripts" / "templates" / "systemd"
@@ -140,7 +141,7 @@ def test_every_installer_substitutes_the_timezone_token():
     and a filename guess would silently pair nothing and pass.
     """
     offenders = []
-    installers = sorted(_ROOT.glob("scripts/install-*.sh"))
+    installers = tracked_paths(("scripts/install-*.sh",))
     for timer in _timer_templates():
         renderers = [i for i in installers if timer.name in i.read_text(encoding="utf-8")]
         assert renderers, f"no installer references {timer.name}; the pairing is broken"
@@ -221,7 +222,7 @@ def test_no_timer_installer_uses_the_operators_zone_as_its_example():
     example. Any other zone documents the flag equally well, so the engine
     settles on the one its own docstring already uses.
     """
-    installers = sorted(_ROOT.glob("scripts/install-*-timer.sh"))
+    installers = tracked_paths(("scripts/install-*-timer.sh",))
     # An empty offender list is green over zero installers, so a renamed script
     # prefix or a moved directory would switch this check off in silence.
     # Measured 2026-08-26: 14 installers match the glob.

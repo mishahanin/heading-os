@@ -44,6 +44,8 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tests.repo_files import tracked_python_files  # noqa: E402
+
 from scripts.utils.markdown import FM_OK, split_frontmatter  # noqa: E402
 from scripts.utils.threads_lib import parse_thread_file  # noqa: E402
 from scripts.utils.viraid_counterpart import _frontmatter as viraid_frontmatter  # noqa: E402
@@ -426,24 +428,23 @@ KNOWN_REGEX_DIVERGENCE = {
 def _frontmatter_regexes():
     """Every `re.*` call whose pattern is anchored at the start and holds two fences."""
     found = []
-    for root in (ROOT / "scripts", ROOT / ".claude"):
-        for path in sorted(root.rglob("*.py")):
-            try:
-                tree = ast.parse(path.read_text(encoding="utf-8"))
-            except SyntaxError:  # pragma: no cover
+    for path in tracked_python_files():
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:  # pragma: no cover
+            continue
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and ast.unparse(node.func.value) == "re" and node.args):
                 continue
-            for node in ast.walk(tree):
-                if not (isinstance(node, ast.Call)
-                        and isinstance(node.func, ast.Attribute)
-                        and ast.unparse(node.func.value) == "re" and node.args):
-                    continue
-                arg = node.args[0]
-                if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
-                    continue
-                pattern = arg.value
-                anchored = pattern.startswith(("^---", "\\A---", "\\A(---"))
-                if anchored and pattern.count("---") >= 2 and "(" in pattern:
-                    found.append((str(path.relative_to(ROOT)), node.lineno, pattern))
+            arg = node.args[0]
+            if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
+                continue
+            pattern = arg.value
+            anchored = pattern.startswith(("^---", "\\A---", "\\A(---"))
+            if anchored and pattern.count("---") >= 2 and "(" in pattern:
+                found.append((str(path.relative_to(ROOT)), node.lineno, pattern))
     return found
 
 

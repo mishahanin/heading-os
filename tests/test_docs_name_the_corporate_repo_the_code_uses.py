@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from tests.repo_files import tracked_paths
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -57,10 +58,8 @@ CANONICAL = _canonical_name()
 
 
 def _files() -> list[Path]:
-    out: list[Path] = []
-    for pattern in ("docs/*.md", "docs/*.html", "*.md", "reference/*.md",
-                    ".claude/rules/*.md"):
-        out.extend(p for p in ROOT.glob(pattern) if p.is_file())
+    out = tracked_paths(("docs/*.md", "docs/*.html", "*.md", "reference/*.md",
+                         ".claude/rules/*.md"))
     # The search index is generated FROM docs/*.html; checking it twice adds
     # noise without adding coverage.
     return [p for p in out if p.name != "search-index.json"]

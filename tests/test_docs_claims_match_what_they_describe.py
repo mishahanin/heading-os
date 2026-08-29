@@ -37,6 +37,7 @@ import re
 from pathlib import Path
 
 import yaml
+from tests.repo_files import tracked_paths
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
@@ -170,10 +171,8 @@ _MARKER = re.compile(r"<!--\s*audit-skip-(?:start|end)\s*-->")
 
 
 def _markdown_files() -> list[Path]:
-    out: list[Path] = []
-    for pattern in ("docs/*.md", "reference/*.md", ".claude/rules/*.md", "*.md"):
-        out.extend(p for p in ROOT.glob(pattern) if p.is_file())
-    return out
+    return tracked_paths(
+        ("docs/*.md", "reference/*.md", ".claude/rules/*.md", "*.md"))
 
 
 def test_the_marker_guard_has_markers_to_check():

@@ -25,6 +25,7 @@ from __future__ import annotations
 import re
 from datetime import timezone
 from pathlib import Path
+from tests.repo_files import tracked_paths
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -70,7 +71,7 @@ def test_no_filename_stamp_is_built_from_a_utc_clock():
     offenders = []
     targets = [ROOT / "scripts" / "checkpoint-paths.py",
                ROOT / "scripts" / "utils" / "checkpoint_paths.py"]
-    targets += sorted((ROOT / ".claude" / "hooks").glob("checkpoint-*.py"))
+    targets += tracked_paths((".claude/hooks/checkpoint-*.py",))
 
     for path in targets:
         text = path.read_text(encoding="utf-8")

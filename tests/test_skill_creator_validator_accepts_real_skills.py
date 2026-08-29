@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from tests.repo_files import tracked_paths
 
 ROOT = Path(__file__).resolve().parent.parent
 SKILL_CREATOR = ROOT / ".claude" / "skills" / "skill-creator"
@@ -42,7 +43,7 @@ ALLOWED_PROPERTIES = quick_validate.ALLOWED_PROPERTIES
 NAMESPACE_PREFIX = quick_validate.NAMESPACE_PREFIX
 validate_skill = quick_validate.validate_skill
 
-SKILLS = sorted(p.parent for p in (ROOT / ".claude" / "skills").glob("*/SKILL.md"))
+SKILLS = sorted(p.parent for p in tracked_paths((".claude/skills/*/SKILL.md",)))
 
 
 def _frontmatter(skill_dir: Path) -> dict:

@@ -25,10 +25,11 @@ the pattern this closes.
 """
 import ast
 import re
-import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+from tests.repo_files import tracked_paths  # noqa: E402
 
 # Trees whose Python is ours to hold to the rule. `.claude` carries skill-local
 # scripts and hooks that spawn children exactly like `scripts/` does.
@@ -45,48 +46,16 @@ _BARE_INTERPRETER = re.compile(r"^python(3(\.\d+)?)?$")
 _SPAWN_FUNCS = {"run", "Popen", "call", "check_call", "check_output"}
 
 
-def _git_ignored(paths):
-    """The subset of `paths` git ignores, asked of git in one call.
-
-    The walk below used to be filtered by a hand-written list of directory
-    names, and on 2026-08-29 that list did not know about `.claude/worktrees/`.
-    An agent working in an isolated worktree INSIDE the repository put four
-    copies of its own scratch files in front of this guard, and the suite failed
-    on files that are not part of the repository at all. A hand-written list can
-    only ever name the places that have already caused trouble; git already
-    knows the answer, so ask it.
-
-    Untracked files are still scanned. Only IGNORED ones are dropped, so a test
-    written a minute ago and not yet added is covered, which is the case this
-    guard exists for.
-    """
-    if not paths:
-        return set()
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(ROOT), "check-ignore", "--stdin", "-z"],
-            input="\0".join(str(p) for p in paths), capture_output=True,
-            text=True, check=False, timeout=60)
-    except (OSError, subprocess.SubprocessError):
-        # No git, so nothing is known to be ignored and everything is scanned.
-        # Over-reporting, never silence: `.claude/rules/scope-claims.md`.
-        return set()
-    return {Path(line) for line in proc.stdout.split("\0") if line}
+# The `_git_ignored` helper that stood here was a third independent copy of
+# "ask git what it ignores", written the same day as two others for the same
+# incident. `tests/repo_files` is the one implementation; its contract RAISES on
+# a git failure rather than returning an empty ignore set, because a sweep that
+# silently loses its filter is the defect this guard was rewritten for.
 
 
 def _python_files():
-    candidates = []
-    for top in _SCANNED_DIRS:
-        base = ROOT / top
-        if not base.is_dir():
-            continue
-        for path in base.rglob("*.py"):
-            if _SKIPPED_PARTS & set(path.parts):
-                continue
-            candidates.append(path)
-    ignored = _git_ignored(candidates)
-    for path in candidates:
-        if path not in ignored:
+    for path in tracked_paths(tuple(f"{top}/**/*.py" for top in _SCANNED_DIRS)):
+        if not _SKIPPED_PARTS & set(path.parts):
             yield path
 
 

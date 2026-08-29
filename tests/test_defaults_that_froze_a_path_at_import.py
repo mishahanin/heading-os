@@ -36,7 +36,6 @@ from __future__ import annotations
 import ast
 import importlib.util
 import logging
-import subprocess
 import sys
 from pathlib import Path
 
@@ -45,6 +44,10 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from tests.repo_files import (  # noqa: E402
+    tracked_python_files as _shared_tracked_python_files,
+)
 
 
 # ============================================================
@@ -221,32 +224,14 @@ def allow_list_defects(entries) -> list[str]:
 def tracked_python_files() -> list[Path]:
     """Every Python file under the scanned directories that git does not ignore.
 
-    The file list is WALKED, and the exclusions come from git rather than from a
-    hand-written skip list. A hand-written list is how `.claude/worktrees/`
-    escaped a different guard on 2026-08-29: an agent worktree is a full copy of
-    the tree, so a sweep that does not know it is ignored either scans it twice
-    or trips over a half-finished edit inside it.
+    This function used to spell `git check-ignore` here. It was the FIRST place
+    in the suite to ask git rather than keep a hand-written skip list, and it
+    stayed the only one, so sixteen other sweeps went on walking the tree blind
+    until 2026-08-29. The implementation moved to `tests/repo_files.py` so there
+    is one of it; the reasoning and the measurement live in that module and in
+    `tests/test_a_walker_that_never_asked_git.py`.
     """
-    walked: list[Path] = []
-    for directory in SCAN_DIRS:
-        base = ROOT / directory
-        if base.is_dir():
-            walked.extend(sorted(base.rglob("*.py")))
-    if not walked:
-        return []
-    payload = b"\0".join(str(p).encode() for p in walked) + b"\0"
-    proc = subprocess.run(
-        ["git", "-C", str(ROOT), "check-ignore", "--stdin", "-z"],
-        input=payload, capture_output=True, check=False,
-    )
-    # check-ignore exits 1 when nothing matched, which is a normal outcome here.
-    if proc.returncode not in (0, 1):
-        raise RuntimeError(
-            f"git check-ignore failed ({proc.returncode}): "
-            f"{proc.stderr.decode(errors='replace')}"
-        )
-    ignored = {chunk.decode() for chunk in proc.stdout.split(b"\0") if chunk}
-    return [p for p in walked if str(p) not in ignored]
+    return _shared_tracked_python_files(SCAN_DIRS)
 
 
 # ============================================================

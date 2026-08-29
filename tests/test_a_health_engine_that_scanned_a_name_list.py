@@ -38,6 +38,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tests.repo_files import tracked_python_files  # noqa: E402
+
 from scripts.utils.markdown import frontmatter_date, parse_frontmatter  # noqa: E402
 
 PY = sys.executable
@@ -277,25 +279,24 @@ def _old_form_sites():
     """Every `date.fromisoformat(str(...))` (or `[:10]` of one) under the engine."""
     import ast
     found = {}
-    for root in (ROOT / "scripts", ROOT / ".claude"):
-        for path in sorted(root.rglob("*.py")):
-            try:
-                tree = ast.parse(path.read_text(encoding="utf-8"))
-            except SyntaxError:  # pragma: no cover - a broken file is another test's job
+    for path in tracked_python_files():
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:  # pragma: no cover - a broken file is another test's job
+            continue
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "fromisoformat"
+                    and node.args):
                 continue
-            for node in ast.walk(tree):
-                if not (isinstance(node, ast.Call)
-                        and isinstance(node.func, ast.Attribute)
-                        and node.func.attr == "fromisoformat"
-                        and node.args):
-                    continue
-                if "date" not in ast.unparse(node.func.value):
-                    continue
-                arg = node.args[0]
-                inner = arg.value if isinstance(arg, ast.Subscript) else arg
-                if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
-                        and inner.func.id == "str"):
-                    found.setdefault(str(path.relative_to(ROOT)), []).append(node.lineno)
+            if "date" not in ast.unparse(node.func.value):
+                continue
+            arg = node.args[0]
+            inner = arg.value if isinstance(arg, ast.Subscript) else arg
+            if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
+                    and inner.func.id == "str"):
+                found.setdefault(str(path.relative_to(ROOT)), []).append(node.lineno)
     return found
 
 

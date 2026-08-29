@@ -42,6 +42,8 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tests.repo_files import tracked_paths  # noqa: E402
+
 from scripts.utils.markdown import (  # noqa: E402
     FM_OK,
     split_frontmatter,
@@ -335,7 +337,7 @@ def test_the_context_floor_byte_count_did_not_move_on_the_live_catalogue():
     """
     old = re.compile(r"\A---\n(.*?)\n---\n", re.S)
     total_old = 0
-    for path in sorted((ROOT / ".claude" / "skills").glob("*/SKILL.md")):
+    for path in tracked_paths((".claude/skills/*/SKILL.md",)):
         match = old.match(path.read_text(encoding="utf-8", errors="replace"))
         if match:
             total_old += len(match.group(1).encode("utf-8"))

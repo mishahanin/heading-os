@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from tests.repo_files import tracked_paths
 
 ROOT = Path(__file__).resolve().parent.parent
 DOC = ROOT / ".claude" / "skills" / "scrutinize" / "references" / "eval-case-template.md"
@@ -37,7 +38,7 @@ def _section(heading: str) -> str:
 
 def test_the_file_is_the_one_place_the_gate_is_stated():
     """A second copy elsewhere would reintroduce the drift by another route."""
-    paths = sorted((ROOT / ".claude" / "skills" / "scrutinize").rglob("*.md"))
+    paths = tracked_paths((".claude/skills/scrutinize/**/*.md",))
     # "no second copy" is green over zero files, so a renamed skill directory or a
     # changed suffix would switch this guard off without failing anything.
     # Measured 2026-08-26: 17 markdown files under .claude/skills/scrutinize/.

@@ -367,10 +367,19 @@ def test_an_unreadable_file_is_reported_rather_than_silently_skipped(
 def test_the_injection_vocabulary_lives_in_one_place():
     """Two divergent copies of a detection vocabulary is the drift the secret
     patterns already needed a lockstep test to prevent. This one is a single
-    module both consumers import."""
+    module both consumers import.
+
+    This is a SHAPE check, and says so since 2026-08-29. It used to assert
+    `len(INJECTION_PATTERNS) >= 8` over a table of 13, which reads like coverage
+    and is not: a floor never says which patterns it is standing on, so the nine
+    nobody had written a sample for could be deleted with the whole suite still
+    green. Measured. Per-pattern coverage now lives in
+    `tests/test_a_floor_that_let_nine_patterns_rot.py`, one positive and one
+    near-miss negative per pattern, and the count belongs there with the samples
+    rather than here as a number to raise."""
     from scripts.utils.injection_patterns import INJECTION_PATTERNS
 
-    assert len(INJECTION_PATTERNS) >= 8
+    assert INJECTION_PATTERNS
     for pattern, category in INJECTION_PATTERNS:
         assert hasattr(pattern, "search")
         assert isinstance(category, str) and category

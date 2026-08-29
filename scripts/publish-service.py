@@ -140,11 +140,24 @@ def secret_scan(dest: Path) -> bool:
     all: the manifest is hand-maintained config, so one secret-bearing file
     added to `include` propagated to the VM-pullable mirror with no friction --
     exactly the leak class push-all.py's walls exist to stop.
+
+    The listing exit code is checked because it was not. `git ls-files` writes
+    nothing to stdout when it fails, so a failed call parsed to an empty list,
+    fell into the `not files` shortcut, and reported the mirror clean without
+    ever starting the scanner. main()'s `(dest / '.git').exists()` does not stand
+    in front of that: a `.git` GITFILE whose gitdir has been removed satisfies
+    the check while every git call under it exits 128. An empty list is only a
+    clean verdict when git succeeded in producing it.
     """
     listing = subprocess.run(
         ["git", "-C", str(dest), "ls-files", "-z", "--cached", "--others",
          "--exclude-standard"],
         capture_output=True, text=True)
+    if listing.returncode != 0:
+        sys.stderr.write(listing.stderr)
+        print(f"{RED}REFUSING TO PUBLISH -- cannot list the files to scan in "
+              f"{dest} (git ls-files exit {listing.returncode}).{RESET}")
+        return False
     files = [f for f in listing.stdout.split("\0") if f]
     if not files:
         return True
@@ -168,6 +181,14 @@ def git(dest: Path, *args: str) -> subprocess.CompletedProcess:
 
 def publish(dest: Path, push: bool) -> int:
     status = git(dest, "status", "--porcelain")
+    # A failed `git status` prints nothing to stdout, so the emptiness test below
+    # read it as "nothing changed" and returned success. The copy had already
+    # landed in the mirror, and the run said 0 over a repo it could not read.
+    if status.returncode != 0:
+        sys.stderr.write(status.stderr)
+        print(f"{RED}Cannot read the downstream repo at {dest} "
+              f"(git status exit {status.returncode}).{RESET}")
+        return 1
     if not status.stdout.strip():
         print(f"{GRAY}No changes to publish.{RESET}")
         return 0

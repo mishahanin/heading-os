@@ -17,7 +17,7 @@ from pathlib import Path
 from scripts.bridge_daemon._shapes import is_undo
 
 from scripts.bridge_daemon._jsonl import append_jsonl, read_jsonl_capped
-from scripts.bridge_daemon._safepath import contains_symlink
+from scripts.bridge_daemon._safepath import contains_symlink, normalize_rel_path
 
 PROGRAM_DIR = "outputs/operations/fundraising/2026-05-17_investor-outreach-program"  # leak-guard: ok (relative suffix rooted by caller)
 SHORTLIST_FILE = "00-master-shortlist-v1.md"
@@ -607,7 +607,10 @@ def read_dossier(workspace_root: Path, rel_path: str) -> dict:
     """
     if not rel_path or not isinstance(rel_path, str):
         return {"ok": False, "error": "missing path"}
-    rel_path = rel_path.replace("\\", "/").lstrip("./")
+    # No prefix is stripped: a leading dot or slash means the caller did not
+    # name a served file, and the check below is where that dies. See
+    # `normalize_rel_path`.
+    rel_path = normalize_rel_path(rel_path)
     if not rel_path.startswith(PROGRAM_DIR + "/"):
         return {"ok": False, "error": "path must be under fundraising program"}
     parts = [p for p in rel_path.split("/") if p]

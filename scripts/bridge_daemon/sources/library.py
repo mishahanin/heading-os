@@ -24,7 +24,7 @@ import re
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from scripts.bridge_daemon._safepath import contains_symlink
+from scripts.bridge_daemon._safepath import contains_symlink, normalize_rel_path
 
 LIBRARY_ROW_CAP = 50
 KNOWLEDGE_ROOT = "knowledge"
@@ -238,8 +238,10 @@ def read_note(data_root: Path, rel_path: str) -> dict:
     """
     if not rel_path or not isinstance(rel_path, str):
         return {"ok": False, "error": "missing path"}
-    # Normalize forward slashes (Windows-friendly).
-    rel_path = rel_path.replace("\\", "/").lstrip("./")
+    # Normalize forward slashes (Windows-friendly). No prefix is stripped: a
+    # leading dot or slash means the caller did not name a served file, and the
+    # `knowledge/` check below is where that dies. See `normalize_rel_path`.
+    rel_path = normalize_rel_path(rel_path)
     if not rel_path.startswith("knowledge/"):
         return {"ok": False, "error": "path must be under knowledge/"}
     # No traversal segments.

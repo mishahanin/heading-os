@@ -16,7 +16,7 @@ posts in outputs/content/linkedin/, fundraising first-touches, etc.).
 import re
 import threading
 from datetime import date, datetime, timezone
-from scripts.bridge_daemon._safepath import contains_symlink
+from scripts.bridge_daemon._safepath import contains_symlink, normalize_rel_path
 from scripts.utils.workspace import get_default_tz
 from pathlib import Path
 
@@ -38,16 +38,13 @@ _SENT_LOG_LOCK = threading.Lock()
 _HDR_RE = re.compile(r"^\*\*([A-Za-z]+):\*\*\s*(.+?)\s*$")
 
 
-def _normalize_rel_path(rel_path: str) -> str:
-    """Forward-slash + trim, so log entries are comparable across OSes.
-
-    It does NOT lowercase, whatever this line claimed until 2026-08-24, and it
-    must not start: the value is used to build a real path, and `outputs/` sits
-    on a case-sensitive filesystem here. A reader who trusted the old wording
-    would conclude that comparisons in this module are case-insensitive; they
-    are not.
-    """
-    return rel_path.replace("\\", "/").strip()
+# Forward-slash + trim, so log entries are comparable across OSes. This module
+# owned the only correct copy of that normalisation until 2026-08-29, while the
+# five other readers under `sources/` stripped with `.lstrip("./")` and accepted
+# what this one refused. The implementation now lives once, in `_safepath`, and
+# its docstring carries the measurement; the local name stays because six call
+# sites below read it.
+_normalize_rel_path = normalize_rel_path
 
 
 def validate_draft_rel_path(rel_path: str) -> str | None:

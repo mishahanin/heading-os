@@ -1,4 +1,4 @@
-"""The symlink half of the bridge daemon's path guard.
+"""The bridge daemon's path guard: separator normalisation, and symlinks.
 
 Nine of the ten file readers under ``sources/`` carried this shape::
 
@@ -30,6 +30,49 @@ nine).
 from __future__ import annotations
 
 from pathlib import Path
+
+
+def normalize_rel_path(rel_path: str) -> str:
+    """Forward-slash the separators and trim. Strips NO prefix, deliberately.
+
+    Every file reader under ``sources/`` normalises its caller-supplied
+    ``rel_path`` and then checks the result starts with its own directory
+    prefix. Six of them wrote that normalisation as::
+
+        rel_path.replace("\\\\", "/").lstrip("./")
+
+    ``str.lstrip`` takes a CHARACTER SET, not a prefix, so it removes EVERY
+    leading ``.`` and ``/`` rather than one ``./``. The prefix check then runs
+    against a string the caller never sent. ``approvals.py`` found this first
+    and dropped the strip; the other five kept it until 2026-08-29.
+
+    Measured that day against the real readers, ``library.read_note``,
+    ``threads.read_thread``, ``investors.read_dossier``,
+    ``studio.read_inflight`` and ``studio.resolve_artifact_image``: 25 of 30
+    hostile inputs were accepted where ``validate_draft_rel_path`` refused all
+    5 of the same shapes. ``../../knowledge/note.md`` returned
+    ``{"ok": True, "path": "knowledge/note.md"}``, and ``/knowledge/note.md``,
+    ``...knowledge/note.md`` and ``.././/knowledge/note.md`` all read the same
+    file.
+
+    Nothing escaped the served tree. ``lstrip`` eats the ``..`` along with the
+    dots, so by the time the path is joined there is no traversal segment left,
+    and ``../secret.md`` was refused. What was lost is refusal fidelity: a
+    string the reference validator rejects was silently rewritten into an
+    in-tree path, served, and reported back under a ``path`` field holding the
+    rewritten value rather than the requested one. That is the same asymmetry
+    ``validate_draft_rel_path`` was written to end, one reader disagreeing with
+    another about what a valid path is.
+
+    Trimming whitespace and unifying separators is all the normalisation a
+    relative path needs here. Anything with a leading dot or slash is not the
+    caller naming a served file, so the prefix check each reader already owns
+    is the right place for it to die.
+
+    It does NOT lowercase. The value builds a real path, and the served trees
+    sit on a case-sensitive filesystem.
+    """
+    return rel_path.replace("\\", "/").strip()
 
 
 def contains_symlink(root: Path, target: Path) -> bool:

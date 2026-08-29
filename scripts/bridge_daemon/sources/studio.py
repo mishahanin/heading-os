@@ -18,7 +18,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from scripts.bridge_daemon._safepath import contains_symlink
+from scripts.bridge_daemon._safepath import contains_symlink, normalize_rel_path
 
 logger = logging.getLogger(__name__)
 
@@ -179,8 +179,10 @@ def read_inflight(data_root: Path, rel_path: str) -> dict:
     """
     if not rel_path or not isinstance(rel_path, str):
         return {"ok": False, "error": "missing path"}
-    # Normalize forward slashes.
-    rel_path = rel_path.replace("\\", "/").lstrip("./")
+    # Normalize forward slashes. No prefix is stripped: a leading dot or slash
+    # means the caller did not name a served file, and the prefix check below
+    # is where that dies. See `normalize_rel_path`.
+    rel_path = normalize_rel_path(rel_path)
     # Allow only paths that BEGIN with one of the IN_FLIGHT_DIRS prefixes.
     if not any(rel_path.startswith(d + "/") for d, _ in IN_FLIGHT_DIRS):
         return {"ok": False, "error": "path not under in-flight dirs"}
@@ -465,7 +467,10 @@ def resolve_artifact_image(data_root: Path, rel_path: str) -> Path | None:
     """
     if not rel_path or not isinstance(rel_path, str):
         return None
-    rel = rel_path.replace("\\", "/").lstrip("./")
+    # No prefix is stripped: a leading dot or slash means the caller did not
+    # name a served file, and the check below is where that dies. See
+    # `normalize_rel_path`.
+    rel = normalize_rel_path(rel_path)
     if not rel.startswith(ARTIFACT_ROOT + "/"):
         return None
     parts = [p for p in rel.split("/") if p]

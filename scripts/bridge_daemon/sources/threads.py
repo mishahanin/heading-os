@@ -23,7 +23,7 @@ from .pulse import (
     THREADS_ACTIVE_STATUSES,
     _parse_thread_frontmatter,
 )
-from scripts.bridge_daemon._safepath import contains_symlink
+from scripts.bridge_daemon._safepath import contains_symlink, normalize_rel_path
 
 THREADS_ROW_CAP = 50
 THREAD_MAX_BYTES = 200_000  # 200 KB upper bound on any thread body read
@@ -172,7 +172,10 @@ def read_thread(data_root: Path, rel_path: str) -> dict:
     """
     if not rel_path or not isinstance(rel_path, str):
         return {"ok": False, "error": "missing path"}
-    rel_path = rel_path.replace("\\", "/").lstrip("./")
+    # No prefix is stripped: a leading dot or slash means the caller did not
+    # name a served file, and the check below is where that dies. See
+    # `normalize_rel_path`.
+    rel_path = normalize_rel_path(rel_path)
     if not rel_path.startswith(THREADS_BUSINESS_DIR + "/"):
         return {"ok": False, "error": "path must be under threads/business/"}
     parts = [p for p in rel_path.split("/") if p]

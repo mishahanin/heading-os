@@ -88,10 +88,54 @@ def find_expired(memory_dir: Path, today: datetime.date) -> list[tuple[str, date
     return out
 
 
-# One pointer in the index: `[title](name.md)` plus any trailing note, up to the
-# next `·` separator or the end of the line. The title is non-greedy and forbids
-# `]`, so two pointers on one line can never be read as one.
-_POINTER_RE = re.compile(r"\[[^\]]*?\]\((?P<target>[^)]+)\)[^·\n]*")
+# One LINK in the index: `[title](name.md)`. The title is non-greedy and forbids
+# `]`, so two links on one line can never be read as one. This is the grammar of
+# a link and nothing more, which is what a READER of the index needs.
+_LINK_RE = re.compile(r"\[[^\]]*?\]\((?P<target>[^)]+)\)")
+
+# One pointer to REMOVE: the link plus any trailing note, up to the next `·`
+# separator or the end of the line, so retiring a memory takes its note with it.
+#
+# That trailing run is why the two uses cannot share one pattern. It is greedy up
+# to `·`, so on the index line
+#     `- Address him as [Misha](a.md); he [calls me Mimir](b.md)`
+# the FIRST match swallows the second link and `finditer` never reports it.
+# Harmless when removing (the whole run goes), wrong when reading: measured
+# 2026-08-29 against the live index, `b.md` was reported as an orphan although
+# the index points straight at it. Reading uses `_LINK_RE`; removing uses this.
+_POINTER_RE = re.compile(_LINK_RE.pattern + r"[^·\n]*")
+
+
+def _pointers(text: str) -> list[re.Match]:
+    """Every REMOVABLE pointer in ``text``, in order: a link and its trailing
+    note. Used by the rewriter. A reader wants `_LINK_RE`, see above."""
+    return list(_POINTER_RE.finditer(text))
+
+
+def index_link_targets(index_text: str) -> set[str]:
+    """The exact ``](<target>)`` link targets the index points at.
+
+    The read-side of the same rule ``strip_index_pointers`` writes with, exposed
+    because ``memory_health.compute_memory_defects`` was answering "is this file
+    referenced?" with ``name in index_text`` - a substring of the whole index.
+    Two ordinary inputs defeated that, and reproducing them took one file each:
+
+      * A name nested in a longer one. With ``harbour-lantern-ledger.md`` linked
+        and ``lantern-ledger.md`` not, the shorter file was reported as
+        referenced forever, because its name sits inside its neighbour's.
+      * A path-qualified pointer. ``](threads/business/drop.md)`` names a thread
+        record, and a bare memory file ``drop.md`` was counted as referenced by
+        it.
+
+    Both are silent in the direction that matters: the orphan report said zero
+    and the operator believed it. Targets are returned verbatim, so a
+    subdirectory pointer stays distinct from the bare filename it ends with.
+
+    Reads `_LINK_RE`, not `_POINTER_RE`: the removal pattern eats the trailing
+    note up to the next `·`, which on a line joining two links with `;` hides
+    the second one. See the comment on those two patterns.
+    """
+    return {m.group("target") for m in _LINK_RE.finditer(index_text)}
 
 
 def strip_index_pointers(index_text: str, names: Iterable[str]) -> str:
@@ -119,7 +163,7 @@ def strip_index_pointers(index_text: str, names: Iterable[str]) -> str:
     wanted = set(names)
     out = []
     for line in index_text.splitlines(keepends=True):
-        pointers = list(_POINTER_RE.finditer(line))
+        pointers = _pointers(line)
         matched = [m for m in pointers if m.group("target") in wanted]
         if not matched:
             out.append(line)

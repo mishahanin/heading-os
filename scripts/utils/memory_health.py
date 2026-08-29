@@ -24,6 +24,7 @@ import math
 import re
 from pathlib import Path
 
+from scripts.utils.memory_expiry import index_link_targets
 from scripts.utils.workspace import get_default_tz
 
 # Budget + staleness thresholds (kept identical to the prior inlined values).
@@ -303,7 +304,16 @@ def compute_memory_defects(memory_dir: Path) -> dict:
         if age > STALE_DAYS:
             stale.append((p.name, age))
 
-    # Orphans: fact files whose name is not referenced anywhere in MEMORY.md.
+    # Orphans: fact files the index carries no pointer to.
+    #
+    # "Referenced" is the exact `](<name>)` link target, read through
+    # `memory_expiry.index_link_targets` - the same grammar the retirement path
+    # rewrites with, so what counts as a pointer here and what counts as a
+    # pointer there cannot drift apart. It was `p.name not in content`, a
+    # substring of the whole index, which reported a file as referenced whenever
+    # its name sat inside a LONGER name on the same index, or inside a pointer to
+    # a different record under a subdirectory. See that function for the two
+    # reproductions.
     #
     # An ABSENT or unreadable index is the state where EVERY fact file is
     # unreferenced, and the check simply skipped it: the caller received
@@ -326,10 +336,11 @@ def compute_memory_defects(memory_dir: Path) -> dict:
             index_readable = False
             index_problem = f"{memory_file} could not be read: {exc}"
 
+    linked = index_link_targets(content)
     for p in files:
         if p.name == "MEMORY.md":
             continue
-        if p.name not in content:
+        if p.name not in linked:
             orphans.append(p.name)
 
     return {

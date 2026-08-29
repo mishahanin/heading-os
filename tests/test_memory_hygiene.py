@@ -44,7 +44,18 @@ def _make_defect_memory(memory_dir: Path) -> None:
     os.utime(stale, (sixty_days_ago, sixty_days_ago))
     # MEMORY.md references linked-fact + stale-fact but NOT orphan-fact, and runs
     # past the 200-line budget.
-    index = ["# Memory index", "", "- linked-fact.md", "- stale-fact.md", ""]
+    #
+    # The two reference lines were bare names, `- linked-fact.md`, which the old
+    # substring orphan test accepted and the live index never writes. A bare name
+    # passes a substring test by construction, so the fixture could not tell a
+    # working rule from the broken one; see
+    # tests/test_an_orphan_that_hid_inside_a_longer_name.py.
+    index = [
+        "# Memory index",
+        "",
+        "- Facts: [linked fact](linked-fact.md) · [stale fact](stale-fact.md)",
+        "",
+    ]
     index += [f"- filler line {i}" for i in range(250)]
     (memory_dir / "MEMORY.md").write_text("\n".join(index), encoding="utf-8")
 
@@ -53,7 +64,7 @@ def _make_clean_memory(memory_dir: Path) -> None:
     memory_dir.mkdir(parents=True, exist_ok=True)
     (memory_dir / "linked-fact.md").write_text("a linked fact\n", encoding="utf-8")
     (memory_dir / "MEMORY.md").write_text(
-        "# Memory index\n\n- linked-fact.md\n", encoding="utf-8"
+        "# Memory index\n\n- Facts: [linked fact](linked-fact.md)\n", encoding="utf-8"
     )
 
 

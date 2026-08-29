@@ -517,7 +517,11 @@ def push_repo(name: str, repo: Path, message: str, do_commit: bool, dry_run: boo
     # and nothing about the others. A remote pointing somewhere it must not
     # says the configuration is wrong, which makes every repository in the run
     # suspect for the same reason.
-    objection = remote_objection(repo, token=push_env.get("GH_TOKEN"))
+    # `env=push_env`: the precondition must ask git the same question, in the
+    # same environment, that the push at the chokepoint will. Without it this
+    # check reads the ambient world while the push runs `push_env`.
+    objection = remote_objection(repo, token=push_env.get("GH_TOKEN"),
+                                 env=push_env)
     if objection:
         print(f"{RED}REFUSING TO PUSH — {objection}{RESET}")
         # Both sides of the comparison, not just the pushing repository's remote:

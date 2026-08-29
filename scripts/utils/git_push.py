@@ -14,10 +14,36 @@ gates, offboard) shares ONE mechanism that:
       documented "bare push silently fails" case).
 
 Auth is flexible so each caller keeps its existing credential model:
-  * ``token=`` injects the GH_TOKEN credential helper through the child env
-    (the token never touches argv);
-  * ``env=`` uses a caller-built auth env as-is;
-  * neither inherits the ambient environment (preserves a caller's own setup).
+  * ``token=`` COPIES the ambient environment and adds the GH_TOKEN credential
+    helper to that copy (the token never touches argv);
+  * ``env=`` uses a caller-built env as-is, and nothing ambient is added;
+  * passing neither leaves ``env=None``, which ``Popen`` resolves by inheriting
+    the ambient environment in full.
+
+That third bullet read "neither inherits the ambient environment (preserves a
+caller's own setup)" until 2026-08-29. It was false on two of the four paths,
+and on a primitive whose whole job is refusing the wrong push it was the
+security promise a reviewer would rely on.
+
+ONE ENVIRONMENT, for the wall and for the push. Every git call this module makes
+on behalf of a push - the remote-identity wall, the repository-root check, the
+ahead/behind postcondition - takes the SAME ``env`` the push itself will run
+with. They used to differ: the wall shelled out with the ambient environment
+while the push ran the caller's, so the two answered questions about different
+worlds. Measured 2026-08-29 with a local ``file://`` remote standing in for the
+engine's:
+
+  * a ``url.<base>.insteadOf`` (or ``pushInsteadOf``) pair present only in the
+    PUSH env sent the private overlay to the engine remote with the wall silent,
+    ``state: "ok"`` and the ahead/behind postcondition satisfied;
+  * the same pair present only in the AMBIENT environment refused a push that
+    would have been perfectly safe.
+
+The fix is not a denylist of dangerous variables - that is always one variable
+short. It is that both halves ask git the same question in the same world.
+``git remote get-url --push`` already reports the URL a push will really use,
+including ``pushurl``, ``insteadOf`` and ``pushInsteadOf``; it was simply being
+asked under the wrong environment.
 """
 from __future__ import annotations
 
@@ -182,17 +208,24 @@ def _normalize_remote_url(url: str) -> str:
     return f"{head}/{path}".rstrip("/").lower()
 
 
-def _push_url(repo, remote: str = "origin") -> Optional[str]:
+def _push_url(repo, remote: str = "origin", *,
+              env: Optional[dict] = None) -> Optional[str]:
     """The URL git would actually PUSH ``repo`` to, or None.
 
     ``--push`` is load-bearing: a remote may carry a ``pushurl`` that differs
     from its fetch URL, and the question this wall asks is where a push lands,
-    not where a fetch came from.
+    not where a fetch came from. Measured 2026-08-29, this form also applies
+    ``url.<base>.insteadOf`` and ``url.<base>.pushInsteadOf``, and agrees with
+    ``git push --dry-run`` in every combination of the three.
+
+    ``env`` is the environment the PUSH will run under, and it must be the same
+    one. A rewrite pair lives in the environment, so reading the URL in a
+    different environment answers a question about a different push.
     """
     try:
         out = subprocess.run(
             ["git", "-C", str(repo), "remote", "get-url", "--push", remote],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=15, env=env,
         )
     except (subprocess.SubprocessError, OSError) as exc:
         logger.debug("push url unreadable for %s: %s", repo, exc)
@@ -272,7 +305,7 @@ def _visibility_cached(normalized: str,
     return visibility, True
 
 
-def _engine_push_urls(engine) -> set:
+def _engine_push_urls(engine, *, env: Optional[dict] = None) -> set:
     """Every normalized push URL the ENGINE clone has, under any remote name.
 
     Deliberately not `_push_url(engine, remote)`. The caller's remote NAME says
@@ -283,7 +316,7 @@ def _engine_push_urls(engine) -> set:
     try:
         out = subprocess.run(
             ["git", "-C", str(engine), "remote"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=15, env=env,
         )
     except (subprocess.SubprocessError, OSError) as exc:
         logger.debug("engine remotes unreadable: %s", exc)
@@ -292,15 +325,21 @@ def _engine_push_urls(engine) -> set:
         return set()
     urls = set()
     for name in out.stdout.split():
-        url = _push_url(engine, name)
+        url = _push_url(engine, name, env=env)
         if url:
             urls.add(_normalize_remote_url(url))
     return urls
 
 
 def remote_objection(repo, *, token: Optional[str] = None,
-                     remote: str = "origin") -> Optional[str]:
+                     remote: str = "origin",
+                     env: Optional[dict] = None) -> Optional[str]:
     """Why *repo* must not be pushed to its current remote, or None.
+
+    ``env`` is the environment the push will run under. Pass it. Omitting it
+    asks git about the ambient world while the push happens in another one, and
+    a rewrite pair that exists in only one of the two is invisible to the half
+    that does not have it. See the module docstring for the measurement.
 
     Pure: it reads git config and may read the GitHub API, and it changes
     nothing. Every segregation layer in this workspace answers "does this TREE
@@ -333,7 +372,7 @@ def remote_objection(repo, *, token: Optional[str] = None,
         # compare. Comparing it to itself would refuse every backup.
         return None
 
-    url = _push_url(repo, remote)
+    url = _push_url(repo, remote, env=env)
     # `remote` may itself BE a location rather than the name of a configured
     # one: `git push <url> <branch>` is valid git and needs no remote at all,
     # so an unconfigured NAME is not evidence that nothing can be pushed. An
@@ -348,7 +387,7 @@ def remote_objection(repo, *, token: Optional[str] = None,
     # and `git push` still gets to fail on its own.
     here = _normalize_remote_url(url if url is not None else remote)
 
-    engine_urls = _engine_push_urls(engine)
+    engine_urls = _engine_push_urls(engine, env=env)
     if here in engine_urls:
         return (f"{repo.name} pushes to the ENGINE remote ({here}), which is the "
                 f"public code repository. Refusing: this would publish private "
@@ -426,7 +465,7 @@ def load_gh_token() -> Optional[str]:
     return read_env_value(get_workspace_root() / ".env", "GH_TOKEN")
 
 
-def enclosing_repo_root(path) -> Optional[Path]:
+def enclosing_repo_root(path, *, env: Optional[dict] = None) -> Optional[Path]:
     """The work-tree root of the repository containing ``path``, or None.
 
     None means "could not establish one" and NEVER "the path is a root": not a
@@ -445,7 +484,7 @@ def enclosing_repo_root(path) -> Optional[Path]:
     try:
         out = subprocess.run(
             ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=15, env=env,
         )
     except (subprocess.SubprocessError, OSError) as exc:
         logger.debug("repo root unreadable for %s: %s", path, exc)
@@ -474,13 +513,19 @@ def current_branch(repo) -> Optional[str]:
     return out.stdout.strip() if out.returncode == 0 else None
 
 
-def ahead_behind(repo, remote: str = "origin", branch: str = "main") -> Optional[tuple[int, int]]:
-    """Return (behind, ahead) of HEAD vs ``remote/branch``, or None on error."""
+def ahead_behind(repo, remote: str = "origin", branch: str = "main", *,
+                 env: Optional[dict] = None) -> Optional[tuple[int, int]]:
+    """Return (behind, ahead) of HEAD vs ``remote/branch``, or None on error.
+
+    ``env`` is the environment the push ran under, for the same reason the wall
+    takes one: ``GIT_DIR`` and friends decide which repository the question is
+    about, so verifying in a different environment verifies a different tree.
+    """
     try:
         out = subprocess.run(
             ["git", "-C", str(repo), "rev-list", "--left-right", "--count",
              f"{remote}/{branch}...HEAD"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=30, env=env,
         )
     except (subprocess.SubprocessError, OSError):
         return None
@@ -514,6 +559,20 @@ def supervised_push(
     """
     repo = Path(repo)
 
+    # The child environment is resolved FIRST, before any wall runs, because
+    # every wall below has to ask git its question in the same world the push
+    # will happen in. It used to be built after them, so they read the ambient
+    # environment while the push ran the caller's. See the module docstring for
+    # what that cost, measured.
+    run_env = dict(env) if env is not None else None
+    cmd = ["git", "-C", str(repo)]
+    if token:
+        run_env = dict(run_env if run_env is not None else os.environ)
+        run_env["GH_PUSH_TOKEN"] = token
+        run_env["GIT_TERMINAL_PROMPT"] = "0"
+        cmd += ["-c", f"credential.helper={_CRED_HELPER}"]
+    cmd += ["push", remote, branch]
+
     # Is this path the repository it claims to be? `git -C <path>` walks UP to
     # the enclosing repository, so a SUBDIRECTORY pushes its parent and the
     # ahead/behind postcondition then verifies the PARENT's ref: the run reports
@@ -526,7 +585,7 @@ def supervised_push(
     # for a bare repository and for a path that is no repository at all, and
     # None is treated as unknown so git still gets to fail on its own. A linked
     # git worktree is its own toplevel and passes.
-    root = enclosing_repo_root(repo)
+    root = enclosing_repo_root(repo, env=run_env)
     if root is not None and root != repo.resolve():
         return {
             "state": "failed",
@@ -587,7 +646,7 @@ def supervised_push(
     # the caller already had: push-all passes GH_TOKEN inside env rather than
     # as the token argument.
     objection = remote_objection(
-        repo, remote=remote,
+        repo, remote=remote, env=run_env,
         token=token or (env or {}).get("GH_TOKEN") or load_gh_token(),
     )
     if objection:
@@ -597,19 +656,18 @@ def supervised_push(
             "elapsed_s": 0.0,
             "exit_code": None,
             "tail": "",
+            # The three sibling refusals above all carry this key and this one
+            # did not, so a caller reading `verdict["flagged"]` uniformly got a
+            # KeyError on the highest-stakes refusal in the function: the one
+            # that fires when a private repository is about to be pushed to the
+            # public engine remote. Nothing was flagged in the TREE here - the
+            # objection is about the remote - so the empty list is the honest
+            # value, not a placeholder.
+            "flagged": [],
         }
 
-    run_env = dict(env) if env is not None else None
-    cmd = ["git", "-C", str(repo)]
-    if token:
-        run_env = dict(run_env if run_env is not None else os.environ)
-        run_env["GH_PUSH_TOKEN"] = token
-        run_env["GIT_TERMINAL_PROMPT"] = "0"
-        cmd += ["-c", f"credential.helper={_CRED_HELPER}"]
-    cmd += ["push", remote, branch]
-
     def postcondition() -> bool:
-        return ahead_behind(repo, remote, branch) == (0, 0)
+        return ahead_behind(repo, remote, branch, env=run_env) == (0, 0)
 
     return run_supervised(
         cmd, env=run_env, stall_window=stall_window, poll=3,

@@ -7,9 +7,18 @@ Thin orchestrator (no LLM, no state write of its own). On each fire it:
      LABELS and COUNTS, never operational content),
   3. sends that line to the CEO's Telegram alert channel ONLY when non-empty.
 
-When nothing is due it sends nothing. A transient send failure is logged and
-SWALLOWED (exit 0) so the oneshot systemd unit is never left `failed` -- the next
-`/prime` surfaces the same signals as a backstop.
+When nothing is due it sends nothing. A transient SEND failure is logged and
+swallowed (exit 0): the message is lost, the measurement was still made, and the
+next `/prime` surfaces the same signals as a backstop.
+
+A radar that never produced a verdict is the opposite case and exits NON-ZERO,
+so the oneshot unit goes `failed` and the failure surfaces. That covers both a
+radar that ran and crashed (non-zero exit) and one that never finished at all
+(timeout, or a process that could not be started). The docstring claimed a
+blanket "the unit is never left `failed`" until 2026-08-30, which had stopped
+being true when the crash path was given its exit 1, and which
+scripts/templates/systemd/ops-radar.service already contradicts in writing
+("deliberately NO SuccessExitStatus=1").
 
 The recipient is read from the gitignored engine `.env`, never hardcoded in this
 engine-routed (eventually-public) file:
@@ -79,9 +88,17 @@ def main() -> int:
     try:
         proc = subprocess.run([sys.executable, str(radar), "--quiet"],
                               cwd=str(root), capture_output=True, text=True, timeout=QUIET_TIMEOUT)
-    except Exception as exc:  # noqa: BLE001 - a missed nudge is non-critical
-        _log(f"radar check failed to run ({type(exc).__name__}: {exc}); exiting 0")
-        return 0
+    # A check that never finished is not a quiet radar either, and this branch
+    # said "exiting 0" one line above the branch below that exists to refuse
+    # exactly that inference. `TimeoutExpired` is the live case: the radar had
+    # QUIET_TIMEOUT seconds and produced no verdict, so nothing measured whether
+    # anything was due -- and the daily unattended timer reported success. The
+    # returncode fix below landed in one of the two paths that reach the same
+    # wrong conclusion; this is the other one.
+    except Exception as exc:  # noqa: BLE001 - boundary; classified, not swallowed
+        _log(f"radar check never completed ({type(exc).__name__}: {exc}); "
+             f"NOT a quiet radar")
+        return 1
 
     # An exit code is not the same fact as an empty stdout. A radar that CRASHED
     # (module-level ImportError, a bad state file) exits nonzero with a

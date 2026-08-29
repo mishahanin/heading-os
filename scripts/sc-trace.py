@@ -56,11 +56,24 @@ def main(argv=None) -> int:
         print(f"{RED}sc-trace: no artifact at {anchor}{RESET}", file=sys.stderr)
         return 2
 
-    criteria = read_criteria(anchor.read_text(encoding="utf-8", errors="replace"))
-    # Same courtesy `--anchor` already gets one branch up. A mistyped
-    # `--contract` reached `read_text` and tracebacked, which reads as a broken
-    # tool rather than as a wrong argument -- and this is the command an author
-    # runs at step 4 to check a path he is still guessing at.
+    # `is_file()` answers whether the name is there, never whether the bytes
+    # can be read. An artifact with its permission bits off, or one that turned
+    # unreadable between that check and this line, raised PermissionError out of
+    # `main`: a traceback and interpreter exit 1, where the exit-code table
+    # promises 2 for an artifact this command cannot get at. The read is the
+    # operation that actually fails, so the read is what needs the guard.
+    try:
+        anchor_text = anchor.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        print(f"{RED}sc-trace: cannot read the artifact at "
+              f"{exc.filename or anchor}: {exc.strerror or exc}{RESET}",
+              file=sys.stderr)
+        return 2
+    criteria = read_criteria(anchor_text)
+    # The same guard for the other input. A mistyped `--contract` reached
+    # `read_text` and tracebacked, which reads as a broken tool rather than as a
+    # wrong argument -- and this is the command an author runs at step 4 to
+    # check a path he is still guessing at.
     try:
         sources = contract_sources(args.contract)
     except OSError as exc:

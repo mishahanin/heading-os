@@ -210,8 +210,15 @@ def resolve_fonts(html: str, font_dirs, verbose=False):
     """Return HTML with every referenced font-family backed by an embedded
     @font-face (base64). Existing @font-face rules that point at missing
     `assets/*` files are re-pointed at resolved fonts too."""
-    used = set(re.findall(r'font-family:\s*"([^"]+)"', html))
-    declared = set(re.findall(r'@font-face\s*\{[^}]*?font-family:\s*"([^"]+)"', html, re.S))
+    # `font-family:'Brand'` is valid CSS and Pencil can emit it. Matching only
+    # the double-quoted form made such a family invisible to BOTH sets at once:
+    # never "used", so step 2 synthesised no @font-face, and never "declared",
+    # so the verbose "no font file for used family" line could not fire either.
+    # The font fell back to a system default with nothing printed anywhere.
+    used = set(re.findall(r"""font-family:\s*["']([^"']+)["']""", html))
+    declared = set(re.findall(
+        r"""@font-face\s*\{[^}]*?font-family:\s*["']([^"']+)["']""", html, re.S,
+    ))
 
     # 1. re-embed srcs of already-declared @font-face rules (assets/* won't exist)
     def _embed_src(m):
@@ -223,10 +230,21 @@ def resolve_fonts(html: str, font_dirs, verbose=False):
             if verbose:
                 print(f"{YELLOW}  font not found for declared @font-face {fam} ({url}){RESET}")
             return m.group(0)
-        return m.group(0).replace(f'"{url}"', f'"{_data_uri(f)}"').replace(f"'{url}'", f"'{_data_uri(f)}'")
+        # Splice over the `url` group's own span rather than string-replacing
+        # the quoted spellings. The pattern deliberately accepts an UNQUOTED
+        # `src:url(assets/brand.woff2)`, but the replacement only knew `"url"`
+        # and `'url'`, so on the unquoted form both calls no-opped, the rule
+        # kept pointing at the `assets/*` file that does not exist in the
+        # export, and the brand font fell back silently - no warning, because
+        # the font file itself WAS found. Measured 2026-08-30.
+        whole = m.group(0)
+        start = m.start("url") - m.start()
+        end = m.end("url") - m.start()
+        return whole[:start] + _data_uri(f) + whole[end:]
 
     html = re.sub(
-        r'@font-face\s*\{[^}]*?font-family:\s*"(?P<fam>[^"]+)"[^}]*?src:\s*url\(["\']?(?P<url>[^"\')]+)["\']?\)[^}]*?\}',
+        r"""@font-face\s*\{[^}]*?font-family:\s*["'](?P<fam>[^"']+)["']"""
+        r"""[^}]*?src:\s*url\(["']?(?P<url>[^"')]+)["']?\)[^}]*?\}""",
         _embed_src, html, flags=re.S,
     )
 
@@ -693,20 +711,33 @@ def inline_html(work_html: Path, out_html: Path):
             return None
         return _data_uri(fp)
 
+    # Both patterns below used to accept one spelling each - `src="..."` only,
+    # and `url("...")` / `url('...')` only. `src='images/a.png'` and the
+    # unquoted `url(images/a.png)` are both valid and both survived untouched,
+    # so the file `main` announces as "(self-contained)" 404'd its images the
+    # moment it moved off the export directory. Measured 2026-08-30: both forms
+    # still referenced `images/a.png` in the written output.
     def _src(m):
-        u = _uri(m.group(1))
-        return f'src="{u}"' if u else m.group(0)
+        quote = m.group(1)
+        u = _uri(m.group(2))
+        return f"src={quote}{u}{quote}" if u else m.group(0)
 
-    html = re.sub(r'src="(?!data:|https?:|file:)([^"]+)"', _src, html)
+    html = re.sub(
+        r"""src=(["'])(?!data:|https?:|file:)([^"']+)\1""", _src, html,
+    )
 
     def _url(m):
-        q, path = m.group(1), m.group(2)
+        quote = m.group(1) or ""
+        path = m.group("quoted") if m.group("quoted") is not None else m.group("bare")
         if path.startswith(("data:", "http", "file:")):
             return m.group(0)
         u = _uri(path)
-        return f"url({q}{u}{q})" if u else m.group(0)
+        return f"url({quote}{u}{quote})" if u else m.group(0)
 
-    html = re.sub(r"""url\((['"])([^'"]+)\1\)""", _url, html)
+    html = re.sub(
+        r"""url\(\s*(?:(["'])(?P<quoted>[^"']+)\1|(?P<bare>[^"')\s]+))\s*\)""",
+        _url, html,
+    )
     out_html.write_text(html, encoding="utf-8")
     return out_html
 

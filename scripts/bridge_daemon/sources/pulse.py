@@ -595,7 +595,7 @@ _THREAD_FM_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 _THREAD_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$")
 
 
-def tribe_state_preview(data_root: Path) -> dict | None:
+def tribe_state_preview(data_root: Path, today: date | None = None) -> dict | None:
     """Compact tribe-state snapshot for the Pulse footer card.
 
     'on watch' is defined as days_since_touch <= TRIBE_ON_WATCH_DAYS;
@@ -617,10 +617,18 @@ def tribe_state_preview(data_root: Path) -> dict | None:
 
     HEADING OS engine/data split: the tribe (crm/contacts + roster xlsx) is
     DATA, the single root this takes IS the data root (it used to take a ``workspace_root`` too, which this module never read).
+
+    ``today`` is forwarded to ``list_tribe``, which is what dates every
+    ``days_since_touch`` this function then bands. It was NOT forwarded until
+    2026-08-30, although ``list_tribe`` has always accepted it, so the boundary
+    at ``TRIBE_ON_WATCH_DAYS`` could only ever be exercised against the host
+    clock: a fixture had to be built relative to "now", which puts the test one
+    midnight tick away from flipping. The live exposure is only that
+    microsecond-wide race; the testability was the real cost.
     """
     try:
         from .tribe import list_tribe
-        d = list_tribe(data_root)
+        d = list_tribe(data_root, today=today)
     except Exception:
         return None
     members_in = d.get("members") or []
@@ -816,7 +824,7 @@ def _parse_thread_frontmatter(text: str) -> dict:
     return result
 
 
-def threads_state_preview(data_root: Path) -> dict | None:
+def threads_state_preview(data_root: Path, today: date | None = None) -> dict | None:
     """Compact threads snapshot for the Pulse footer card.
 
     Walks THREADS_BUSINESS_DIR (threads/business/) for *.md files, parses
@@ -847,7 +855,10 @@ def threads_state_preview(data_root: Path) -> dict | None:
     if not biz_dir.is_dir():
         return None
     threads: list[dict] = []
-    today = datetime.now(get_default_tz()).date()
+    # Injectable for the same reason as its sibling above, and this one widens
+    # the diff past what was reported: the defect is identical, one function
+    # away, and every `days_since` here was datable only from the host clock.
+    today = today or datetime.now(get_default_tz()).date()
     for p in biz_dir.glob("*.md"):
         if not p.is_file():
             continue

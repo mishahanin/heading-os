@@ -177,7 +177,19 @@ def load_cadence(workspace_root: Path) -> dict[str, tuple[int, int]]:
         -- so one typo in the config disabled the watchdog on every tick while
         the daemon kept reporting itself healthy. The watchdog is the thing that
         notices silence; it must not be the thing that goes silent.
+
+        A bool is rejected before the int() call for a different reason. It does
+        not raise: bool subclasses int, so YAML's `expected: true` reached
+        `int(True)` and became a ONE-SECOND expected cadence. Every beat then
+        looked overdue, the daemon classified `silent`, and the CEO was paged
+        about a process that was running normally. A malformed value must fall
+        back to the default, not to a number that fabricates an outage.
         """
+        if isinstance(entry.get(key), bool):
+            logger.warning(
+                "watchdog: cadence.%s.%s is %r, not a number; using %ds",
+                name, key, entry.get(key), default)
+            return default
         try:
             return int(entry[key])
         except KeyError:
@@ -206,7 +218,12 @@ def _realert_minutes(workspace_root: Path) -> int:
 
         cfg = load_config(workspace_root) or {}
         v = cfg.get("daemon", {}).get("watchdog", {}).get("realert_minutes")
-        if isinstance(v, (int, float)) and v > 0:
+        # `not isinstance(v, bool)` is load-bearing: bool subclasses int, and
+        # YAML reads `realert_minutes: yes` / `true` as True, which passed the
+        # numeric guard and returned 1. A one-MINUTE re-alert window turns a
+        # sustained outage into a critical alert every minute, which is the
+        # exact spam the dedup model exists to prevent.
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
             return int(v)
     except Exception as exc:  # noqa: BLE001 - best-effort; default below
         logger.debug("watchdog: realert-minutes config read failed: %s", exc)
@@ -227,7 +244,18 @@ def _read_beat(workspace_root: Path, name: str) -> dict | None:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        # UnicodeError belongs here for the same reason the non-dict branch
+        # below exists. `read_text(encoding="utf-8")` raises UnicodeDecodeError
+        # on undecodable bytes, and that is a ValueError, neither an OSError nor
+        # a JSONDecodeError (which only fires on text that DECODED and then
+        # failed to parse). A torn write, a restore through a mangling tool or
+        # any byte corruption therefore escaped this handler, escaped
+        # `check_once`, and landed in the bridge daemon's blanket per-tick
+        # handler, which logs and carries on. One corrupt beat file stopped the
+        # WHOLE fleet being classified on every tick while the daemon reported
+        # itself healthy. `classify`'s docstring says a beat with no parseable
+        # timestamp is `missing`; for invalid UTF-8 that was not true.
         return None
     if not isinstance(data, dict):
         # Valid JSON, wrong shape. A beat file holding an array, a string or a

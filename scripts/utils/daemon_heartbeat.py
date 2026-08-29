@@ -105,5 +105,14 @@ def beat(daemon_name: str, *, config_version: str | None = None) -> None:
             "trace_id": tracing.get(),
         }
         _atomic_write_json(path, payload)
-    except OSError as e:
+    except Exception as e:  # noqa: BLE001 - the docstring's promise is total
+        # `except OSError` did not deliver "Never raises". The try block also
+        # calls `get_workspace_root()` and `tracing.get()`, and neither is
+        # confined to OSError: a workspace that will not resolve (no marker, an
+        # unresolvable `~` in WORKSPACE_ROOT) raises RuntimeError straight
+        # through this handler and into the caller's scheduler tick. Callers
+        # rely on the total promise (`fireside-bot-daemon` piggybacks this beat
+        # on the job whose only purpose is the healthchecks ping), so a
+        # liveness-telemetry fault became a monitoring outage. Losing one beat
+        # is the correct cost; taking the scheduler with it is not.
         logging.warning("daemon heartbeat write failed for %s: %s", daemon_name, e)

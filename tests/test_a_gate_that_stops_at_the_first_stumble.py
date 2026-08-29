@@ -29,6 +29,7 @@ Diagnostics pointing the wrong way:
 Run: .venv/bin/python -m pytest tests/test_a_gate_that_stops_at_the_first_stumble.py -q
 """
 
+import ast
 import importlib.util
 import json
 import subprocess
@@ -96,11 +97,40 @@ def test_every_page_is_attempted_even_after_a_failure(monkeypatch, capsys):
 
 
 def test_the_all_call_is_over_a_materialised_list():
-    """Pinned at the source, because the short-circuit is invisible in output:
-    a generator here silently drops work that a list does not."""
-    src = (ROOT / "scripts" / "regenerate-docs-html.py").read_text(encoding="utf-8")
-    assert "results = [regenerate(md, quiet=args.quiet) for md in pairs]" in src
-    assert "ok = all(regenerate(md, quiet=args.quiet) for md in pairs)" not in src
+    """A generator here silently drops work that a list does not.
+
+    Asserted structurally, not textually. This used to require one exact source
+    LINE, so renaming `pairs`, reflowing the comprehension, or dropping the
+    intermediate name broke the test over a change that kept the property. What
+    matters is the NODE TYPE: `all(<GeneratorExp>)` short-circuits and
+    `all(<list>)` cannot, whatever the expression is spelled like.
+    """
+    tree = ast.parse(
+        (ROOT / "scripts" / "regenerate-docs-html.py").read_text(encoding="utf-8"))
+    all_calls = [n for n in ast.walk(tree)
+                 if isinstance(n, ast.Call)
+                 and isinstance(n.func, ast.Name) and n.func.id == "all"]
+    assert all_calls, "no all() call left to check; this test is measuring nothing"
+
+    regenerating = [n for n in ast.walk(tree)
+                    if isinstance(n, (ast.GeneratorExp, ast.ListComp))
+                    and isinstance(n.elt, ast.Call)
+                    and isinstance(n.elt.func, ast.Name)
+                    and n.elt.func.id == "regenerate"]
+    assert regenerating, "the per-page comprehension is gone; re-point this test"
+
+    # The claim is narrow on purpose: a generator handed STRAIGHT to `all()` is
+    # the defect. `list(<genexpr>)` materialises just as a list comprehension
+    # does, so flagging every generator would fail a refactor that keeps the
+    # property, and a test that cries over a safe change gets edited away.
+    lazy = [c for c in all_calls
+            if c.args and isinstance(c.args[0], ast.GeneratorExp)
+            and isinstance(c.args[0].elt, ast.Call)
+            and isinstance(c.args[0].elt.func, ast.Name)
+            and c.args[0].elt.func.id == "regenerate"]
+    assert not lazy, (
+        "all() is fed regenerate() lazily, so the first page that fails stops "
+        "every later page from being attempted")
 
 
 # ============================================================
@@ -278,23 +308,64 @@ def test_the_dry_run_prints_the_declared_sensitivity():
 # ============================================================
 # 10 - a corrupt baseline is kept, not silently discarded
 # ============================================================
+def _eval_calls_on(name: str) -> list:
+    """Every call in run-skill-eval.py whose first argument is `name`.
+
+    Both tests below used to split the SOURCE on two literals and search the
+    slice for a phrase. That is fragile twice over: it breaks when the code is
+    reworded, and it breaks when an unrelated COMMENT happens to contain the
+    closing literal, which is how it was found (an added comment carrying
+    `existing[` truncated the window and turned the test red over a change it
+    did not touch). A rule that punishes a file for documenting itself teaches
+    people to stop documenting it. The claim is structural, so it is asserted
+    structurally.
+    """
+    tree = ast.parse((ROOT / "scripts" / "run-skill-eval.py").read_text(encoding="utf-8"))
+    out = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        first = node.args[0]
+        if isinstance(first, ast.Name) and first.id == name:
+            out.append(node)
+    return out
+
+
+def _eval_method_calls_on(name: str) -> set[str]:
+    """Every `name.<attr>(...)` method call in run-skill-eval.py."""
+    tree = ast.parse((ROOT / "scripts" / "run-skill-eval.py").read_text(encoding="utf-8"))
+    return {node.func.attr for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == name}
+
+
 def test_an_unparseable_benchmark_is_preserved_and_announced():
-    src = (ROOT / "scripts" / "run-skill-eval.py").read_text(encoding="utf-8")
-    block = src.split("except json.JSONDecodeError:", 1)[1].split("existing[", 1)[0]
-    # It goes through the shared quarantine writer, which puts the wreck in a
-    # `.quarantine/` sibling. The old spelling built the wreck's name here, and
-    # `benchmark.json.corrupt` landed inside a TRACKED skill directory in the
-    # public engine, matched by no ignore rule (measured 2026-08-29). Pinning
-    # the shared call is the stronger claim: the caller no longer picks a name.
-    assert "quarantine_file(benchmark_path)" in block, block
-    assert "benchmark_path.replace(" not in block, (
+    """The wreck goes through the SHARED quarantine writer, which puts it in a
+    `.quarantine/` sibling. The old spelling built the name at the call site,
+    and `benchmark.json.corrupt` landed inside a TRACKED skill directory in the
+    public engine, matched by no ignore rule (measured 2026-08-29). Pinning the
+    shared call is the stronger claim: the caller no longer picks a name.
+
+    The end-to-end behaviour is driven in
+    tests/test_a_broken_fixture_that_billed_itself_as_an_api_error.py; this pins
+    that no second, self-named path grows back beside it.
+    """
+    callees = {c.func.id for c in _eval_calls_on("benchmark_path")
+               if isinstance(c.func, ast.Name)}
+    assert "quarantine_file" in callees, callees
+    assert "replace" not in _eval_method_calls_on("benchmark_path"), (
         "a wreck named beside the live file is the defect this fixed")
 
 
 def test_the_benchmark_is_written_atomically():
-    src = (ROOT / "scripts" / "run-skill-eval.py").read_text(encoding="utf-8")
-    assert "atomic_write_text(benchmark_path," in src
-    assert "benchmark_path.write_text(" not in src
+    """An interrupt mid-write left unparseable JSON, which the quarantine branch
+    above then had to deal with."""
+    callees = {c.func.id for c in _eval_calls_on("benchmark_path")
+               if isinstance(c.func, ast.Name)}
+    assert "atomic_write_text" in callees, callees
+    assert "write_text" not in _eval_method_calls_on("benchmark_path")
 
 
 # ============================================================

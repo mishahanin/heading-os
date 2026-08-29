@@ -12,9 +12,16 @@ Two roots, deliberately not the same thing:
   - the PROJECT root comes from the hook payload and is where `.claude/state/`
     lives. It follows the session's own tree, so a plugin installed in someone
     else's repository writes there and not into the plugin cache.
-  - the ENGINE root is found by walking up from this file until the tree that
-    contains `scripts/utils/`. In the monorepo that is the engine; inside a
-    built plugin bundle it is the bundle. It decides which layout applies.
+  - the ENGINE root is the third parent of this file, which is the tree owning
+    the `scripts/utils/` it sits in. In the monorepo that is the engine; inside
+    a built plugin bundle it is the bundle. It decides which layout applies.
+    This said "found by walking up from this file until the tree that contains
+    `scripts/utils/`" until 2026-08-30, describing a search `engine_root()` does
+    not perform - and could not usefully perform, since three parents up from
+    any `<X>/scripts/utils/checkpoint_paths.py` IS `<X>`, so the two agree
+    wherever the walk has an answer at all. What the fixed climb really rests on
+    is the file's installed LOCATION, and a caller that cannot vouch for it
+    passes its own root instead (see `handoff_dir`).
 
 The archive follows the engine's data seam when this is a HEADING OS tree AND a
 private overlay actually backs it. Without the overlay it goes to gitignored
@@ -63,7 +70,16 @@ def force_utf8() -> None:
 
 
 def engine_root() -> Path:
-    """The tree that owns `scripts/utils/` — engine monorepo or plugin bundle."""
+    """The tree that owns `scripts/utils/` — engine monorepo or plugin bundle.
+
+    Three fixed parents, no search and no verification: correct exactly while
+    this file sits at `<root>/scripts/utils/checkpoint_paths.py`, and silently
+    an ancestor of the wrong tree if a packager ever moves it. Measured
+    2026-08-30 from `/tmp/bundle/utils/checkpoint_paths.py`, one level short:
+    it answered `/tmp`. There is nothing better to do here - a walk looking for
+    `scripts/utils/` finds the same answer whenever it finds one at all - so the
+    guard is on the CALLER side: `handoff_dir` takes an explicit `root`.
+    """
     return Path(__file__).resolve().parent.parent.parent
 
 
@@ -157,16 +173,33 @@ def handoff_dir(project: Path, root: Path | None = None) -> Path:
     A hook must not raise here. `checkpoint-save.py` runs after the session
     context is gone, so a refusal that propagates costs a handoff nobody can
     regenerate. This one redirects instead.
+
+    And until 2026-08-30 it did not: the engine branch reached two in-tree
+    modules with nothing around them, so anything they raised left this function
+    and the handoff with it. Not hypothetical, and it needs no sabotage to
+    reproduce - `HEADING_OS_DATA` is pinned per host, and pointing it at a
+    directory that has been moved or deleted makes `data_overlay_present()`
+    raise `DataRootError` by design ("Refusing to fall back"). Measured that day
+    against this very tree. That refusal is right for a tool about to WRITE the
+    operator's data and wrong for a hook about to write a handoff, so it is
+    caught here and the archive redirects to the gitignored project-local
+    directory - never into the engine tree. `local_now`, in this same file,
+    has guarded its sibling import this way all along.
     """
     root = root or engine_root()
     if is_engine_tree(root):
         if str(root) not in sys.path:
             sys.path.insert(0, str(root))
-        from scripts.utils.paths import data_overlay_present
-        from scripts.utils.workspace import get_outputs_dir
+        try:
+            from scripts.utils.paths import data_overlay_present
+            from scripts.utils.workspace import get_outputs_dir
 
-        if data_overlay_present():
-            return get_outputs_dir() / "operations" / "handoff-archive"
+            if data_overlay_present():
+                return get_outputs_dir() / "operations" / "handoff-archive"
+        except Exception as exc:  # noqa: BLE001 - losing the handoff is the worse outcome
+            print(f"checkpoint: cannot resolve the data overlay ({exc}); "
+                  "filing the handoff under .claude/state/handoff",
+                  file=sys.stderr)
         return project / ".claude" / "state" / "handoff"
     return project / ".claude" / "handoff"
 
@@ -802,13 +835,32 @@ def record_compaction(state: dict, when_iso: str, trigger: str) -> dict | None:
 
 
 def read_json(path: Path) -> dict:
+    """This session's state, or `{}`. Always a dict, whatever the file holds.
+
+    The isinstance check is the second half of the same promise the `except`
+    below makes, and it was missing until 2026-08-30. `json.loads` succeeds on
+    any well-formed JSON, not only on an object, so `null`, `"oops"`, `[]` and
+    `3` were returned as-is under a `-> dict` annotation. Measured that day:
+    every one of them crashed the first consumer to touch it - `locked_state`
+    raised TypeError on `state["session_auto"] = True`, `auto_mode` raised
+    AttributeError on `.get`. A statusline runs on every render and the Stop
+    hook on every turn, so that is the whole session broken by the exact input
+    the `except` comment says must not stop a turn. `_session_hard` already
+    documents hand-edited state files as an anticipated reality.
+    """
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        parsed = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001 - a corrupt state file must not stop a turn
         print(f"checkpoint: unreadable state at {path.name}: {exc}", file=sys.stderr)
         return {}
+    if not isinstance(parsed, dict):
+        print(f"checkpoint: state at {path.name} is a "
+              f"{type(parsed).__name__}, not an object; ignoring it",
+              file=sys.stderr)
+        return {}
+    return parsed
 
 
 def write_json_atomic(path: Path, data: dict) -> None:

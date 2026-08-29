@@ -15,8 +15,18 @@ Usage:
 
 Three signals (all read-only, counts only):
   (a) days_since_collect  -- from knowledge/odin-brain/.last-collect (absent = never).
-  (b) unharvested_total   -- dated entries newer than the marker across collect's
-                             EXACT allowlist, using the SAME air-gap + VIRAID gate.
+  (b) unharvested_total   -- dated entries ON OR AFTER the marker date across
+                             collect's EXACT allowlist, using the SAME air-gap +
+                             VIRAID gate. The boundary is inclusive because the
+                             marker carries a date and no time, so an entry
+                             logged later on the day of the collect cannot be
+                             told from one the collect already saw; counting it
+                             again is the direction that cannot lose material.
+                             This said "newer than the marker" until 2026-08-30
+                             while both comparisons were `>=`. The reflect side
+                             below is deliberately STRICT (`>`) and says why --
+                             the two boundaries differ on purpose, and only one
+                             of them was ever written down.
   (c) reflect_clusters    -- connected components (size >= 2) of raw-status episodes
                              sharing >= CLUSTER_MIN_SHARED tags, counted only where
                              they hold an episode logged after `.last-reflect`. A
@@ -115,6 +125,19 @@ EPOCH_FLOOR = "0001-01-01"
 # suffixes like "## Log (newest first)").
 THREAD_SECTIONS = ("Log", "Recent activity", "Decisions")
 
+# The prefix match needs a word boundary after it. A bare `head.startswith(s)`
+# also accepted `## Logistics`, `## Login attempts` and `## Logic`, whose dated
+# bullets were then counted as harvestable -- while the module docstring above
+# promises the counted set EQUALS /odin collect's allowlist, "same globs, same
+# exclusions". Measured on a two-section fixture, `## Logistics` plus
+# `## Login attempts` contributed 2 phantom un-harvested entries. The suffix the
+# comment above licenses (" (newest first)") opens with a space, so requiring
+# the next character to be a non-word one keeps every real header and drops the
+# coincidental ones.
+THREAD_SECTION_RE = re.compile(
+    r"^(?:%s)(?![0-9A-Za-z_])" % "|".join(re.escape(s) for s in THREAD_SECTIONS)
+)
+
 # The SAME two dated-entry forms collect uses (separator spans em/en-dash + hyphen).
 THREAD_HEADING_RE = re.compile(r"^###\s+(\d{4}-\d{2}-\d{2})\s*[—–-]\s*.+$")
 THREAD_BULLET_RE = re.compile(r"^-\s+(\d{4}-\d{2}-\d{2})\s*[—–-]\s*.+$")
@@ -174,6 +197,34 @@ def read_marker(root: Path):
     return raw, (datetime.now(get_default_tz()).date() - d).days
 
 
+def marker_state(root: Path) -> str:
+    """"absent" | "ok" | "unreadable" for `.last-collect`.
+
+    `read_marker` collapses absent and corrupt into the same `(None, None)`, and
+    that collapse is right for the COUNTING direction: both fall through to
+    `EPOCH_FLOOR` and count everything, which is the safe way to be wrong. It is
+    wrong for the SENTENCE. A garbage marker made the JSON say
+    `"last_collect": null` and the nudge -- sent verbatim to Telegram -- say
+    "collect never run", beside a marker file that plainly exists, and nothing
+    anywhere said the file was unreadable. A torn write therefore masqueraded as
+    a fresh install indefinitely.
+
+    An existing but EMPTY marker is unreadable, not absent, for the same reason:
+    something wrote that file.
+    """
+    p = root / MARKER
+    if not p.exists():
+        return "absent"
+    raw = p.read_text(encoding="utf-8", errors="replace").strip()
+    if not raw:
+        return "unreadable"
+    try:
+        date.fromisoformat(raw[:10])
+    except ValueError:
+        return "unreadable"
+    return "ok"
+
+
 # ============================================================
 # Frontmatter (lightweight -- scalar + simple list fields only)
 # ============================================================
@@ -192,11 +243,44 @@ def _frontmatter_block(text: str) -> str:
     return block if (block is not None and kind == FM_OK) else ""
 
 
+def _strip_comment(raw: str) -> str:
+    """Drop a trailing YAML comment: an unquoted `#` preceded by whitespace.
+
+    `odin-brain-health.py` reads these same files through `yaml.safe_load`,
+    which honours comments; this hand-rolled parser did not, so the two tools
+    disagreed about one file on disk. Measured: `status: raw  # draft` came back
+    as the string `"raw  # draft"`, compared unequal to `"raw"`, and the episode
+    dropped out of clustering entirely -- one cluster became zero, with nothing
+    appended to `compute()`'s `skipped` list, so the JSON asserted a complete
+    pass it had not made. `keywords: [a, b]  # note` and `keywords:  # note`
+    both defeated `_fm_list`'s regexes the same silent way.
+
+    A `#` inside quotes, and one with no whitespace in front of it (`#fff`), is
+    part of the value and is left alone -- that is YAML's own rule.
+    """
+    out = []
+    quote = None
+    for i, ch in enumerate(raw):
+        if quote:
+            out.append(ch)
+            if ch == quote:
+                quote = None
+            continue
+        if ch in "\"'":
+            quote = ch
+            out.append(ch)
+            continue
+        if ch == "#" and i and raw[i - 1] in " \t":
+            break
+        out.append(ch)
+    return "".join(out).rstrip()
+
+
 def _fm_scalar(block: str, key: str) -> str:
     m = re.search(rf"^{re.escape(key)}:\s*(.*)$", block, re.MULTILINE)
     if not m:
         return ""
-    return m.group(1).strip().strip('"').strip("'")
+    return _strip_comment(m.group(1)).strip().strip('"').strip("'")
 
 
 def _fm_list(block: str, key: str):
@@ -218,12 +302,15 @@ def _fm_list(block: str, key: str):
     Latent for episodes today (90 of 90 use the inline form), not hypothetical
     for the brain: block-list frontmatter is already on disk under `sources/`.
     """
+    # Comment-stripped per line, indentation preserved (the block-list branch
+    # below anchors its key at column 0 and reads the indented `- ` items).
+    lines = [_strip_comment(ln) for ln in block.splitlines()]
+    block = "\n".join(lines)
     m = re.search(rf"^{re.escape(key)}:\s*\[(.*)\]\s*$", block, re.MULTILINE)
     if m:
         inner = m.group(1).strip()
         parts = inner.split(",") if inner else []
     else:
-        lines = block.splitlines()
         key_re = re.compile(rf"^{re.escape(key)}:[ \t]*$")
         parts = None
         for idx, line in enumerate(lines):
@@ -271,7 +358,7 @@ def count_threads(root: Path, since: str) -> int:
             sec = SECTION_RE.match(line)
             if sec:
                 head = sec.group(1)
-                in_section = any(head.startswith(s) for s in THREAD_SECTIONS)
+                in_section = bool(THREAD_SECTION_RE.match(head))
                 continue
             if not in_section:
                 continue
@@ -474,8 +561,11 @@ def count_reflect_clusters(root: Path) -> int:
 
 def compute(root: Path, min_entries: int) -> dict[str, Any]:
     marker, days_since = read_marker(root)
+    mstate = marker_state(root)
     since = marker[:10] if marker else EPOCH_FLOOR
     skipped: list[str] = []
+    if mstate == "unreadable":
+        skipped.append("collect marker unreadable; counting from the epoch floor")
 
     thread_n = count_threads(root, since)
     crm_n = count_crm(root, since)
@@ -486,17 +576,28 @@ def compute(root: Path, min_entries: int) -> dict[str, Any]:
 
     reasons = []
     if days_since is None or days_since >= DAYS_THRESHOLD:
-        reasons.append("never collected" if days_since is None else f"days_since>={DAYS_THRESHOLD}")
+        if days_since is None:
+            reasons.append("collect marker unreadable" if mstate == "unreadable"
+                           else "never collected")
+        else:
+            reasons.append(f"days_since>={DAYS_THRESHOLD}")
     if total >= min_entries:
         reasons.append(f"unharvested>={min_entries}")
     if clusters >= 1:
         reasons.append("reflect_clusters>=1")
     if ca["stale_count"] >= 1:
-        reasons.append(f"stale_clusters>={ca['stale_count']}")
+        # The THRESHOLD, like every sibling reason on this list. This one
+        # interpolated the observed COUNT, so three stale clusters read
+        # `stale_clusters>=3` -- indistinguishable in shape from a configuration
+        # whose stale threshold happens to be 3, and unusable by a consumer
+        # diffing reasons against thresholds. The count is already in the JSON,
+        # under `stale_clusters`.
+        reasons.append("stale_clusters>=1")
     nudge = bool(reasons)
 
     return {
         "last_collect": marker,
+        "marker_state": mstate,
         "last_reflect": read_reflect_marker(root),
         "days_since": days_since,
         "unharvested_total": total,
@@ -550,14 +651,25 @@ def write_cadence_report(root: Path, result: dict[str, Any], today: date) -> Pat
     return path
 
 
+def _no_marker_phrase(r: dict[str, Any]) -> str:
+    """What to say when there is no usable date: absent and corrupt differ.
+
+    Both reach here as `days_since is None`, and both used to read "collect
+    never run" -- so an unreadable marker told the CEO, over Telegram, that a
+    tool he runs weekly had never been run at all.
+    """
+    return ("collect marker unreadable" if r.get("marker_state") == "unreadable"
+            else "collect never run")
+
+
 def suggestion_line(r: dict[str, Any], report_rel: str | None = None) -> str:
     if not r["nudge"]:
         days = r["days_since"]
-        when = f"last collect {days}d ago" if days is not None else "collect never run"
+        when = f"last collect {days}d ago" if days is not None else _no_marker_phrase(r)
         return f"Odin cadence: up to date ({when}, no new harvestable entries)."
 
     days = r["days_since"]
-    when = f"collect last ran {days}d ago" if days is not None else "collect never run"
+    when = f"collect last ran {days}d ago" if days is not None else _no_marker_phrase(r)
     bs = r["by_source"]
     total = r["unharvested_total"]
     parts = []

@@ -241,7 +241,17 @@ def enrich_with_registry(records: list) -> list:
 
 
 def find_shared_contacts(exec_repos: list) -> int:
-    """Count contacts that appear in multiple exec per-exec repos."""
+    """Count contacts that appear in multiple exec per-exec repos.
+
+    "Multiple" means multiple OWNERS, so the value is a set of slugs and not a
+    list of them. With a list, one exec holding two files that resolve to the
+    same identity -- `jordan-kim.md` and `kim-jordan.md`, both `name: Jordan
+    Kim` -- appended their own slug twice, `len(owners) > 1` passed, and the
+    dashboard printed a multi-owner shared contact owned by exactly one person.
+    `aggregate-crm.detect_shared_contacts` has always used a set, so the two
+    fleet tools printed different numbers for one directory, which is the class
+    of disagreement the comment below says was closed.
+    """
     contact_owners: dict = {}
     for slug, _repo_path in exec_repos:
         contacts_dir = get_per_exec_contacts_dir(slug)
@@ -261,7 +271,7 @@ def find_shared_contacts(exec_repos: list) -> int:
                 print(f"  {YELLOW}[warn]{RESET} unreadable contact {f}: {exc}",
                       file=sys.stderr)
                 continue
-            contact_owners.setdefault(contact_identity_key(fm), []).append(slug)
+            contact_owners.setdefault(contact_identity_key(fm), set()).add(slug)
 
     return sum(1 for owners in contact_owners.values() if len(owners) > 1)
 

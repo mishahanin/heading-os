@@ -1,10 +1,27 @@
 #!/usr/bin/env python3
 """CEO-side fleet health reader for the bridge daemon.
 
-Reads `<workspace>/.daemon-state/heartbeat.json` from the CEO workspace
-and any exec workspaces synced under `../31c-exec-*/` or
-`~/exec-workspaces/<slug>/`, then prints an N-cell status grid with
-the daemon's posture per workspace.
+Reads `<workspace>/.daemon-state/heartbeat.json` from the CEO workspace, then
+prints an N-cell status grid with the daemon's posture per workspace.
+
+Discovery is wider than a name pattern, and this paragraph used to claim
+otherwise (`../31c-exec-*/` only). `_candidate_workspaces` accepts, in order:
+
+- the CEO workspace itself (kind `local`);
+- ANY sibling directory of the CEO workspace holding
+  `.daemon-state/heartbeat.json`, whatever it is called, minus the retired
+  clones and `*-data` siblings in `_NON_FLEET_SIBLINGS` / `_is_non_fleet_sibling`
+  (kind `local`);
+- any sibling named `31c-crm-<slug>` (except `31c-crm-central`) holding
+  `bridge-heartbeat.json` at its repo ROOT, which is where an exec's
+  `push-all.py` puts it because the exec's `.daemon-state/` never ships
+  (kind `crm-mirror`);
+- `~/exec-workspaces/<slug>/` holding `.daemon-state/heartbeat.json`
+  (kind `local`).
+
+A name-pattern description of a discovery loop that matches no name pattern
+hides the surface a reader is trying to audit, so the list above is the
+contract; `tests/test_fleet_health.py` pins it.
 
 Usage:
   python scripts/daemon-fleet-health.py
@@ -22,7 +39,14 @@ Status conventions (matches spec section 3.7):
 Phase 3 will plug this into a CEO dashboard surface; for now it's a
 CLI so the CEO can run it from `/state-check` or as a cron.
 
-Tests: tests/test_a_rollback_that_deleted_what_it_never_backed_up.py
+Tests: tests/test_fleet_health.py is the primary pin. Also covering this file:
+tests/test_a_number_the_record_never_carried.py (a malformed beat still yields
+a record), tests/test_a_gate_that_passes_a_broken_bundle.py (the yaml import
+guard), tests/test_a_rollback_that_deleted_what_it_never_backed_up.py
+(`_classify` widened to TypeError/ValueError), and
+tests/test_a_fleet_report_that_died_on_one_undecodable_heartbeat.py. The
+rollback file alone used to be named here, which sends a reader after this
+tool's coverage into the CRM migration's test file.
 """
 from __future__ import annotations
 
@@ -116,7 +140,13 @@ def _read_heartbeat(workspace: Path, kind: str = "local") -> dict:
         }
     try:
         data = json.loads(hb.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
+    except (OSError, UnicodeError, json.JSONDecodeError) as e:
+        # UnicodeError for the same reason as the non-dict branch below.
+        # `read_text(encoding="utf-8")` raises UnicodeDecodeError on undecodable
+        # bytes, and that is a ValueError, so it escaped a handler whose
+        # docstring promises a synthetic 'error' record and killed the loop in
+        # `main`, taking the whole fleet report down over one byte-corrupt file
+        # written by somebody else's machine.
         return {
             "workspace": str(workspace),
             "status": "error",

@@ -158,10 +158,18 @@ def state_dirs() -> list:
 
 
 def main() -> int:
+    # load_env FIRST. `get_data_root()` reads HEADING_OS_DATA out of os.environ,
+    # and `load_env()` is what copies .env into os.environ, so resolving the
+    # root above the load read the override before it existed. MEASURED
+    # 2026-08-30 with HEADING_OS_DATA in .env: the root came back as the
+    # examples fallback before the load and as the operator's overlay after it,
+    # so every run wrote the mirror under the wrong root and reported success.
+    # This is the same ordering bug `vm_roots` above already burned this file
+    # once, in the same run, for the same reason.
+    load_env()
     # The mirror is PRIVATE data (routing-map: datastore/operations/service-mirror/
     # -> private), so it must resolve under the DATA root, never the engine clone.
     data_root = get_data_root()
-    load_env()
     try:
         targets = state_dirs()
     except ValueError as exc:

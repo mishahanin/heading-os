@@ -170,6 +170,18 @@ def repo_carried_paths(root: Path) -> list[str]:
     `engine` default, and the wall clears exactly the file it exists to stop. This
     is a bilingual RU/EN workspace, so such a filename is ordinary. NUL-terminated
     output is never quoted and never escaped.
+
+    `encoding` is load-bearing for the same reason and was missing until
+    2026-08-30. `text=True` alone decodes with `locale.getpreferredencoding()`,
+    so the wall read git's bytes through whatever locale the host happened to
+    boot with. Measured that day in a scratch repo holding `docs/план.md`: under
+    `LC_ALL=C` (preferred encoding `ANSI_X3.4-1968`) this raised
+    `UnicodeDecodeError` and took the whole scan with it, and on a host whose
+    preferred encoding decodes every byte -- stock Windows Python, cp1252 -- the
+    same path comes back as mojibake instead, so `engine_text_files`' `is_file()`
+    is False and the file receives no content scan at all. Git emits path BYTES;
+    they are UTF-8 here, and `surrogateescape` carries the ones that are not
+    through to `os.fsencode` intact rather than losing them.
     """
     paths: list[str] = []
     for args in (
@@ -177,7 +189,8 @@ def repo_carried_paths(root: Path) -> list[str]:
         ["git", "ls-files", "-z", "--others", "--exclude-standard"],
     ):
         out = subprocess.run(
-            args, cwd=str(root), capture_output=True, text=True, check=True
+            args, cwd=str(root), capture_output=True, text=True, check=True,
+            encoding="utf-8", errors="surrogateescape",
         ).stdout
         paths.extend(entry for entry in out.split("\0") if entry.strip())
     return paths

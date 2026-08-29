@@ -57,7 +57,26 @@ PRUNE_TERMINAL_DAYS = 90     # drop terminal cards older than this (bound growth
 ROW_CAP = 100                # max active cards returned to the UI
 
 ACTION_TYPES = ("email_send", "note", "pipeline_update", "alert")
-ACTIVE_STATUSES = ("pending", "approved", "send_failed")
+
+# The CLAIM. A card sits here for the life of one synchronous send and nothing
+# else may send it. Measured 2026-08-30 before it existed: two threads calling
+# `approve_and_send` on one pending card both read the status, both passed the
+# guard, and the sender ran TWICE on one card, each call returning `sent`.
+#
+# Deliberately NOT `approved`: `action-queue-execute.py` selects cards whose
+# status IS `approved`, so claiming with it would hand the same card to the
+# batch executor mid-send and rebuild the duplicate from the other end.
+SENDING = "sending"
+
+# How long a claim is believed before `approve` may take it over. Longer than
+# `SEND_TIMEOUT_S` (120 s in action-queue-execute.py), which bounds the only slow
+# step inside a claim, so a live sender is never overrun. Without a ceiling a
+# terminal killed mid-send would strand its card in `sending`: `approve` refuses
+# a claimed card and `retry` only runs on `send_failed`, so nothing could move
+# it. Takeover happens on an explicit operator `approve`, never on its own.
+STALE_CLAIM_SECONDS = 300
+
+ACTIVE_STATUSES = ("pending", "approved", SENDING, "send_failed")
 
 # A card is either ACTIVE or TERMINAL; there is no third state, and every writer
 # of `status` has to land in one of these two tuples.
@@ -81,7 +100,9 @@ PRIORITY_ORDER = {"P1": 0, "P2": 1, "P3": 2}
 # a card's status - and `annotate_card` two functions below drops `status` from
 # its fields for exactly that reason ("an advisory layer can annotate, never
 # approve/dismiss/send"). An undo is not an advisory layer, but it is not a
-# state transition either: `apply_status` is the only writer of `status`, and
+# state transition either: `status` has exactly three writers, and all of them
+# are state transitions (`apply_status`, plus `claim_card_for_send` and
+# `release_claim`, which move a card in and out of `SENDING`), and
 # `tier` / `action_type` are what `tool_risk.tier_for` bands a card by, so a
 # rewrite of either moves a card between the gated and non-gated lanes.
 _UNDO_PROTECTED = frozenset({
@@ -387,6 +408,102 @@ def apply_status(workspace_root: Path, action_id: str, status: str,
                 error=str(card.get("error") or fields.get("error") or ""),
                 workspace_root=workspace_root,
             )
+    return {"ok": True, "card": card}
+
+
+def _claim_age_seconds(card: dict, now: datetime | None = None) -> float | None:
+    """Seconds since this card was claimed, or None when that cannot be read.
+
+    A stamp in the FUTURE returns a negative number rather than a clamped zero,
+    and every caller treats "below the stale window" as still held, so a skewed
+    stamp refuses the takeover instead of granting it. That is the safe
+    direction here: the cost of refusing is a card the operator must dismiss,
+    and the cost of granting is a second copy of an email already sent.
+    """
+    stamp = parse_iso(card.get("sending_since"))
+    if stamp is None:
+        return None
+    now = datetime.now(timezone.utc) if now is None else now
+    return (now - stamp).total_seconds()
+
+
+def claim_card_for_send(workspace_root: Path, action_id: str,
+                        sendable, stale_after: float = STALE_CLAIM_SECONDS,
+                        now: datetime | None = None) -> dict:
+    """Atomically move one card from a sendable status to ``SENDING``.
+
+    THE compare-and-set that closes the concurrent-approve race. The status
+    check and the status write happen inside ONE ``_queue_lock``, so a second
+    approve of the same card finds it already ``SENDING`` and is refused. Read
+    and write used to sit in different locks with a send between them, and two
+    approves therefore both passed the check and both sent (measured
+    2026-08-30: sender invoked twice, both calls returning ``sent``).
+
+    A claim older than ``stale_after`` is taken over: it can only mean the
+    process holding it died, since nothing inside a claim outlives the sender's
+    own 120-second timeout. A claim whose ``sending_since`` cannot be read is
+    NOT taken over - absent and stale are different facts, and guessing costs a
+    duplicate outbound message - so the refusal names ``dismiss`` as the way out.
+
+    Returns {ok: True, card, prev_status} or {ok: False, error, status}.
+    """
+    if not action_id:
+        return {"ok": False, "error": "action_id required", "status": None}
+    with _queue_lock(workspace_root):
+        data = _load_queue(workspace_root)
+        card = _find(data["actions"], action_id)
+        if card is None:
+            return {"ok": False, "error": "not found", "status": None}
+        status = card.get("status")
+        if status == SENDING:
+            held = _claim_age_seconds(card, now=now)
+            if held is None:
+                return {"ok": False, "status": status,
+                        "error": ("card is already 'sending' and carries no "
+                                  "readable claim time, so it cannot be shown "
+                                  "abandoned; dismiss it if no send is running")}
+            if held < stale_after:
+                return {"ok": False, "status": status,
+                        "error": (f"another approve claimed this card {int(held)}s "
+                                  f"ago and may still be sending; the claim frees "
+                                  f"after {int(stale_after)}s")}
+        elif status not in sendable:
+            return {"ok": False, "status": status,
+                    "error": (f"card is {status!r}; approve only sends a card in "
+                              f"{sorted(sendable)}")}
+        card["status"] = SENDING
+        card["sending_since"] = _now_iso()
+        _write_queue(workspace_root, data)
+        _log_event(workspace_root, {"event": "claim", "action_id": action_id,
+                                    "from": status})
+        return {"ok": True, "card": dict(card), "prev_status": status}
+
+
+def release_claim(workspace_root: Path, action_id: str, prev_status: str) -> dict:
+    """Undo a claim, for the path where the send never ran.
+
+    Only the sender raising something nobody planned for reaches here. Putting
+    the card back where the claim found it reproduces the behaviour that path
+    had before claiming existed, rather than inventing a `send_failed` about a
+    send that was never attempted.
+
+    ``prev_status`` may itself be ``SENDING`` (this claim was a takeover). The
+    card then keeps THIS claim's fresh timestamp and goes stale again on the
+    normal schedule, so it is never stranded.
+    """
+    if not action_id or not prev_status:
+        return {"ok": False, "error": "action_id and prev_status required"}
+    with _queue_lock(workspace_root):
+        data = _load_queue(workspace_root)
+        card = _find(data["actions"], action_id)
+        if card is None:
+            return {"ok": False, "error": "not found"}
+        card["status"] = prev_status
+        if prev_status != SENDING:
+            card.pop("sending_since", None)
+        _write_queue(workspace_root, data)
+        _log_event(workspace_root, {"event": "claim_released",
+                                    "action_id": action_id, "to": prev_status})
     return {"ok": True, "card": card}
 
 

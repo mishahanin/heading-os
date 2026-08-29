@@ -636,7 +636,39 @@ def test_the_comment_no_longer_claims_an_account_root_lookup(se):
 # ============================================================
 
 def test_every_failing_stage_has_its_own_guidance(se):
-    assert set(se._STAGE_GUIDANCE) == {"attachments", "save_draft", "attach", "send"}
+    """DERIVED from the code, not listed here.
+
+    This asserted a hardcoded four-name set, which pins the invariant only for
+    as long as nobody adds a stage -- and then reports the addition as a
+    failure instead of reporting an UNGUIDED stage. A `validation` stage was
+    added on 2026-08-30 (a missing --to and an unknown mode were both stamped
+    `attachments`, so the guidance told the operator to fix a path on a failure
+    that involved no path) and this test failed for the one reason that is not
+    a defect. Walk the two senders for the stage literals they can return and
+    require each to have an entry; `sent` is the success value and needs none.
+    """
+    import ast
+
+    tree = ast.parse(_SEND_EMAIL.read_text(encoding="utf-8"))
+    returned = set()
+    for name in ("_send_email_core", "_send_threaded_core"):
+        fn = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == name)
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Dict):
+                continue
+            for key, value in zip(node.keys, node.values, strict=True):
+                if (isinstance(key, ast.Constant) and key.value == "stage"
+                        and isinstance(value, ast.Constant)):
+                    returned.add(value.value)
+
+    assert returned, "no stage literals found; the AST walk is binding nothing"
+    unguided = returned - {"sent"} - set(se._STAGE_GUIDANCE)
+    assert not unguided, f"stages a send can return with no guidance: {sorted(unguided)}"
+    # And nothing in the table is dead: a guidance line no stage returns is a
+    # sentence the operator can never be shown. `malformed` is send_batch's own.
+    orphans = set(se._STAGE_GUIDANCE) - returned - {"malformed"}
+    assert not orphans, f"guidance entries no stage returns: {sorted(orphans)}"
 
 
 def test_the_send_stage_does_not_claim_the_message_was_not_sent(se):

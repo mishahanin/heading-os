@@ -105,10 +105,14 @@ OUR_SURFACE_FILES = ("AGENTS.md", "CLAUDE.md")
 
 # Files in THIS REPOSITORY that legitimately contain the phrases this tool hunts.
 #
-# Matched as repository-relative path prefixes, deliberately NOT as basenames.
-# A basename allowance is the first thing an attacker aims at: ship a file called
+# Matched as repository-relative paths, deliberately NOT as basenames. A basename
+# allowance is the first thing an attacker aims at: ship a file called
 # `prompt-guard.py` inside the plugin cache and disappear. Installed content is
 # never covered by this list, whatever it calls itself.
+#
+# An entry naming a FILE matches only that exact path; an entry meaning a subtree
+# must end in `/`. See `_is_allowed_repo_path` for what a boundary-less prefix
+# match let through.
 #
 # EVERY ENTRY MUST BE REACHABLE BY THE CORPUS ABOVE, and
 # `tests/test_an_audit_that_vouched_for_a_surface_it_never_read.py` asserts it.
@@ -359,15 +363,22 @@ def _walk_surface(root: Path):
 
     The walk is `os.walk(followlinks=False)` and not `Path.rglob`, because
     rglob handled only symlinked FILES and the promise above is about content.
-    On Python 3.11 (this workspace's floor) rglob descends THROUGH a symlinked
-    directory, and the children it yields are not themselves symlinks, so
-    `is_symlink()` never fired: a `docs-link -> /tmp/payload` inside the plugin
-    cache had its contents hashed into the baseline and scanned as ordinary
-    vouched surface. A symlinked directory also carries no surface suffix, so
-    the suffix filter discarded the link itself before it could be reported.
-    Followed on one interpreter, invisible on another, and never a finding on
-    either. Directory links are now recorded before any suffix test and never
-    descended.
+
+    This paragraph used to say rglob "descends THROUGH a symlinked directory"
+    on Python 3.11. Measured on the pinned interpreter (3.11.15, 2026-08-30):
+    it does NOT. Over `real/docs-link -> /tmp/rgtest/target`, `rglob("*")`
+    yielded the link and nothing under it. The false half is corrected here
+    rather than deleted, because a wrong claim about a past measurement is what
+    the next audit re-derives from.
+
+    The defect that was real: rglob yields the symlinked DIRECTORY itself, and
+    a directory link carries no surface suffix, so the suffix filter discarded
+    it before it could be reported. A `docs-link -> /tmp/payload` inside the
+    plugin cache was therefore neither hashed nor named - unvouchable content
+    on the loaded surface, and no finding. Whether an interpreter descends is
+    also not this tool's to assume; `os.walk(followlinks=False)` states the
+    answer instead of inheriting it. Directory links are now recorded before
+    any suffix test and never descended.
     """
     if not root.is_dir():
         return [], []
@@ -464,8 +475,21 @@ def third_party_hooks(root: Path, settings: Path, active: set | None = None,
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
+            # `_is_loaded`, not a hardcoded True. An unreadable `hooks.json`
+            # tells us nothing about the file's CONTENT, and it tells us nothing
+            # NEW about activation either -- the settings files that switch a
+            # plugin off are still perfectly readable, and this function already
+            # holds their answer in `disabled`. Hardcoding True skipped that
+            # answer, so a plugin set `false` in `enabledPlugins` whose cached
+            # `hooks.json` was corrupt printed under "running in this session".
+            # MEASURED 2026-08-30. That is the over-claim this file has been
+            # fixed for twice (2026-08-12 superseded versions, 2026-08-20
+            # `security-guidance`); `.claude/rules/scope-claims.md` obligation 1
+            # says resolve the claim where a resolver exists, and here one does.
+            # Absence of proof still reads as live, via `_is_loaded` itself.
             found.append({"event": "?", "command": f"<unreadable: {type(exc).__name__}>",
-                          "source": str(path), "loaded": True})
+                          "source": str(path),
+                          "loaded": _is_loaded(path, active, disabled)})
             continue
         block = data.get("hooks") if isinstance(data, dict) else None
         loaded = _is_loaded(path, active, disabled)
@@ -479,7 +503,15 @@ def third_party_hooks(root: Path, settings: Path, active: set | None = None,
             found.append({"event": "?", "command": f"<unreadable: {type(exc).__name__}>",
                           "source": str(settings), "loaded": True})
         else:
-            for entry in _hooks_from_mapping(data.get("hooks"), str(settings)):
+            # `isinstance`, like every other JSON read in this file. `json.loads`
+            # returns any JSON type, so a settings file holding `[]` or `"x"`
+            # reached `.get` and raised AttributeError, which the handler above
+            # does not catch: the whole audit died with a traceback and produced
+            # no report at all. This tool's own rule is that an unreadable record
+            # degrades to "treat everything as live", never to silence, and a
+            # crash is the loudest form of silence there is.
+            block = data.get("hooks") if isinstance(data, dict) else None
+            for entry in _hooks_from_mapping(block, str(settings)):
                 found.append({**entry, "loaded": True})
     return found
 
@@ -527,12 +559,24 @@ def read_manifest(path: Path):
 
     None is a finding, never a pass. Absent evidence of review would otherwise
     make a fresh clone look audited.
+
+    `entries` is shape-checked here and not only at the top level. A hand-edited
+    manifest whose `entries` is a JSON LIST parsed cleanly, passed the old
+    isinstance test, and then killed `compare` with `TypeError: list indices
+    must be integers` on the first path present in both -- and `--update-manifest`
+    with `len(previous["entries"])`. A manifest nobody can read as a baseline is
+    not a baseline, so it takes the same road as a missing one: reported loudly,
+    never mistaken for agreement.
     """
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    return data if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return None
+    if "entries" in data and not isinstance(data["entries"], dict):
+        return None
+    return data
 
 
 # ============================================================
@@ -540,7 +584,23 @@ def read_manifest(path: Path):
 # ============================================================
 
 def _is_allowed_repo_path(rel: str) -> bool:
-    return any(rel == p or rel.startswith(p) for p in ALLOWED_REPO_PREFIXES)
+    """Whether a repo-relative path is one of the three allow-listed FILES.
+
+    The boundary matters. A bare `rel.startswith(p)` also matched anything whose
+    path merely begins with an entry's characters: `.claude/rules/security.md/`
+    as a DIRECTORY holding `payload.md`, and the sibling file
+    `.claude/rules/security.md.draft.md`. Both are reachable by the
+    `.claude/rules/**/*.md` glob, and both were dropped from the injection scan
+    and counted under the reviewed rule file's allowance. The comment above
+    `ALLOWED_REPO_PREFIXES` argues at length that a basename allowance is
+    attackable; a boundary-less prefix reopens the same shape inside the repo.
+    Every entry today names a file, so a file entry matches by EQUALITY only.
+    An entry that means a whole subtree has to say so by ending in `/`, which is
+    a thing the author types on purpose rather than a boundary the matcher
+    invents.
+    """
+    return any(rel == p or (p.endswith("/") and rel.startswith(p))
+               for p in ALLOWED_REPO_PREFIXES)
 
 
 def _blank_skipped(text: str) -> str:
@@ -762,16 +822,50 @@ def main() -> int:
             sort_keys=True) + "\n")
         print(f"{GREEN}Accepted {len(index)} installed file(s) as reviewed."
               f"{RESET} {GRAY}{manifest_path}{RESET}")
+        # What the acceptance does NOT cover, named at the moment of acceptance.
+        # A normal run exits 1 over both of these, calling them content the audit
+        # cannot vouch for; the update branch had them in hand and printed
+        # neither, so the one moment a human asserts "I reviewed this" minted a
+        # silently partial baseline. `.claude/rules/scope-claims.md` obligation
+        # 2: an exclusion nobody can see reads as coverage. Reported, not
+        # refused -- the operator asked to accept, and a caveat they can read is
+        # the honest half of that.
+        if hash_unreadable:
+            print(f"{YELLOW}{len(hash_unreadable)} file(s) could not be read and "
+                  f"are NOT in this baseline{RESET} {GRAY}nothing here was "
+                  f"reviewed and nothing will detect a change to it{RESET}",
+                  file=sys.stderr)
+            for entry in hash_unreadable:
+                print(f"  {YELLOW}{entry['error']:<20}{RESET} {entry['path']}",
+                      file=sys.stderr)
+        if symlinks:
+            print(f"{YELLOW}{len(symlinks)} symlink(s) on the accepted surface"
+                  f"{RESET} {GRAY}not followed, so not hashed and not covered by "
+                  f"this baseline{RESET}", file=sys.stderr)
+            for path in symlinks:
+                print(f"  {YELLOW}symlink {RESET} {path}", file=sys.stderr)
         return 0
 
     baseline = read_manifest(manifest_path)
     findings, scanned, scan_unreadable, allowed_skipped = scan_loaded_content(
         repo, root)
 
+    # Deduped on the FILE, not on the label. The two producers name the same
+    # plugin file differently -- `build_surface_index` records the path relative
+    # to the plugin root, `scan_loaded_content` prefixes it with `plugins/` -- so
+    # keying on `entry["path"]` never matched and one chmod-000 file was listed
+    # twice and counted as two. MEASURED 2026-08-30. The printed line is a count
+    # of files that could not be read, so a doubled count is a wrong measurement,
+    # not a cosmetic repeat. Repo-relative labels never start with `plugins/`
+    # (the own-tree corpus is `.claude/**`, `AGENTS.md`, `CLAUDE.md`), so
+    # stripping that one prefix cannot collide two different files.
     seen, unreadable = set(), []
     for entry in hash_unreadable + scan_unreadable:
-        if entry["path"] not in seen:
-            seen.add(entry["path"])
+        key = entry["path"]
+        if key.startswith("plugins/"):
+            key = key[len("plugins/"):]
+        if key not in seen:
+            seen.add(key)
             unreadable.append(entry)
 
     active = active_install_paths(installed_plugins_path())

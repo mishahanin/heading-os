@@ -86,6 +86,22 @@ def test_the_boundary_holds_from_either_side_of_utc(monkeypatch, tmp_path):
     orphaned sessions."""
     moment = datetime(2026, 8, 21, 0, 30, tzinfo=timezone.utc)
     _session_written_at(tmp_path, "abc123", moment)
+    # Put the zone BACK, rather than deleting the variable. `delenv` + `tzset`
+    # sends libc to /etc/localtime, which is the host's zone and not
+    # necessarily the one the run was started in, and libc keeps that until
+    # something calls `tzset` again. Monkeypatch restores `os.environ` at
+    # teardown but never re-runs `tzset`, so the deletion leaked a zone into
+    # every later test in the same xdist worker. MEASURED 2026-08-30 with the
+    # suite started at `TZ=America/New_York`: after this file, `astimezone()`
+    # answered +0400 and the calendar day it reported was 2026-08-30 while the
+    # environment still said New York and 2026-08-29. Two tests in
+    # `test_the_crm_migration_loses_nothing_and_leaves_nothing.py` went red on
+    # that day-shift, on code nobody had touched. The sibling case in
+    # `test_a_config_scalar_that_matched_every_sender.py` already gets this
+    # right by calling `tzset` AFTER `monkeypatch.undo()`; undo cannot be used
+    # inside this loop, because `_selected` sets attributes through the same
+    # monkeypatch and undoing would drop them too.
+    original_tz = os.environ.get("TZ")
     for tz in ("UTC", "America/New_York", "Asia/Dubai", "Pacific/Kiritimati"):
         monkeypatch.setenv("TZ", tz)
         time_module = __import__("time")
@@ -93,7 +109,10 @@ def test_the_boundary_holds_from_either_side_of_utc(monkeypatch, tmp_path):
         try:
             assert "abc123" in _selected(monkeypatch, tmp_path, "2026-08-21"), tz
         finally:
-            monkeypatch.delenv("TZ", raising=False)
+            if original_tz is None:
+                monkeypatch.delenv("TZ", raising=False)
+            else:
+                monkeypatch.setenv("TZ", original_tz)
             time_module.tzset()
 
 

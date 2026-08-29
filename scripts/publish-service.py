@@ -199,6 +199,42 @@ def git(dest: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", "-C", str(dest), *args], capture_output=True, text=True)
 
 
+PUBLISH_BRANCH = "main"
+
+
+def branch_objection(dest: Path) -> str | None:
+    """The reason this clone must not be published from, or None.
+
+    `publish` commits onto whatever HEAD points at, then pushes and reports
+    `origin/main` unconditionally. MEASURED 2026-08-30 on a scratch clone
+    checked out to `scratch`: the build commit landed on `scratch`, `main`
+    stayed empty, the run exited 0, and it closed by advising
+    `git push origin main` -- a push of a branch that does not carry the
+    build. With --push the supervised push targets `main` all the same.
+
+    `push-all.py` already treats exactly this as worth gating
+    (`branch is '...', expected 'main'`); this publication path had no
+    equivalent. Called BEFORE `copy_includes`, so a refusal leaves the
+    downstream clone untouched rather than rmtree'd and rewritten.
+    """
+    proc = git(dest, "rev-parse", "--abbrev-ref", "HEAD")
+    if proc.returncode != 0:
+        return (f"cannot read the checked-out branch of {dest} "
+                f"(git rev-parse exit {proc.returncode}): "
+                f"{proc.stderr.strip() or 'no stderr'}")
+    branch = proc.stdout.strip()
+    if not branch:
+        return f"git rev-parse named no branch for {dest}"
+    if branch == "HEAD":
+        return (f"{dest} has a DETACHED HEAD; a build commit made here reaches "
+                f"no branch at all, and the push targets {PUBLISH_BRANCH!r}")
+    if branch != PUBLISH_BRANCH:
+        return (f"{dest} is on branch {branch!r}, not {PUBLISH_BRANCH!r}; the "
+                f"build commit would land on {branch!r} while the run reports "
+                f"and pushes {PUBLISH_BRANCH!r}")
+    return None
+
+
 def publish(dest: Path, push: bool) -> int:
     status = git(dest, "status", "--porcelain")
     # A failed `git status` prints nothing to stdout, so the emptiness test below
@@ -260,6 +296,12 @@ def main() -> int:
     if not (dest / ".git").exists():
         print(f"{RED}Downstream service-host repo clone not found at {dest}{RESET}")
         print(f"{GRAY}Create the GitHub repo and clone it there (as a sibling dir) first.{RESET}")
+        return 1
+    objection = branch_objection(dest)
+    if objection is not None:
+        print(f"{RED}REFUSING TO PUBLISH -- {objection}.{RESET}")
+        print(f"{GRAY}Check out {PUBLISH_BRANCH} in the downstream clone:  "
+              f"git -C {dest} checkout {PUBLISH_BRANCH}{RESET}")
         return 1
 
     print(f"{BOLD}Publishing ceo-main -> {dest}{RESET}")

@@ -143,23 +143,46 @@ def append_records(records: list[dict]) -> None:
         )
 
 
+def flagged_pairs() -> set[tuple[str, str]]:
+    """The DISTINCT (run_id, finding_id) pairs the CEO has flagged.
+
+    The same set `scrutinize-replay.load_fp_set` builds, and deliberately the
+    same shape: a finding is flagged or it is not, and flagging it twice does
+    not make it twice as false.
+    """
+    out: set[tuple[str, str]] = set()
+    for row in rows_of_kind("fp_flag"):
+        sid, fid = row.get("run_id"), row.get("finding_id")
+        if sid and fid:
+            out.add((str(sid), str(fid)))
+    return out
+
+
 def print_running_tally() -> None:
-    """Print FP counts by severity from the record's `fp_flag` rows.
+    """Print FP counts by severity over DISTINCT flagged findings.
 
     Severity comes from the finding id's letter, the same mapping the report
     parser uses, so the row needs no severity column of its own.
+
+    Counting ROWS was the defect: measured 2026-08-30, `--ids B1,B1` followed by
+    a second `--ids B1` left three rows for one finding and printed
+    `FP tally: 3 recorded - BLOCKER=3`, while `scrutinize-replay.load_fp_set`
+    read the same record as a single pair. The two numbers this system computes
+    from one file disagreed, and the inflated one feeds the FP-rate-by-severity
+    statistic this script exists to produce. Deduping at the write path (below)
+    stops new duplicates; counting pairs here also makes the tally honest over
+    the duplicates already on disk.
     """
-    rows = rows_of_kind("fp_flag")
-    if not rows:
+    pairs = flagged_pairs()
+    if not pairs:
         print("  Tally: 0 FPs recorded.")
         return
     counts: Counter[str] = Counter(
-        SEVERITY_PREFIX.get(str(r.get("finding_id") or "")[:1], "UNKNOWN")
-        for r in rows
+        SEVERITY_PREFIX.get(fid[:1], "UNKNOWN") for _, fid in pairs
     )
     parts = [f"{sev}={counts.get(sev, 0)}"
              for sev in ("BLOCKER", "HIGH", "MEDIUM", "LOW", "NIT")]
-    print(f"  FP tally: {len(rows)} recorded - " + ", ".join(parts))
+    print(f"  FP tally: {len(pairs)} recorded - " + ", ".join(parts))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -180,7 +203,14 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     findings = parse_findings_from_report(report_path)
-    requested_ids = [i.strip().upper() for i in args.ids.split(",") if i.strip()]
+    # Order-preserving dedupe. `--ids B1,B1` wrote two identical rows and
+    # reported "Flagged 2 finding(s)" - measured 2026-08-30. A flag is a boolean
+    # the CEO sets on a finding, not a counter he increments.
+    requested_ids: list[str] = []
+    for raw in args.ids.split(","):
+        fid = raw.strip().upper()
+        if fid and fid not in requested_ids:
+            requested_ids.append(fid)
 
     missing = [i for i in requested_ids if i not in findings]
     if missing:
@@ -188,6 +218,20 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         print(f"  Available IDs: {', '.join(sorted(findings.keys()))}", file=sys.stderr)
         return 4
+
+    # And the same finding flagged again in a LATER invocation - to attach a
+    # note, say - appended another row. Same measurement, same day. The record
+    # is append-only, so the guard has to be a read of what is already there.
+    already = flagged_pairs()
+    duplicates = [i for i in requested_ids if (args.scrutiny_id, i) in already]
+    requested_ids = [i for i in requested_ids if i not in duplicates]
+    if duplicates:
+        print(f"{YELLOW}Already flagged, not recorded again: "
+              f"{', '.join(duplicates)}{RESET}", file=sys.stderr)
+    if not requested_ids:
+        print(f"{YELLOW}Nothing new to flag.{RESET}")
+        print_running_tally()
+        return 0
 
     target_type = parse_target_type(args.scrutiny_id)
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")

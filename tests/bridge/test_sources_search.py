@@ -54,9 +54,13 @@ def _setup_workspace(tmp_path):
     cal_dir = tmp_path / "outputs" / "_sync" / "calendar"
     cal_dir.mkdir(parents=True)
     from datetime import datetime, timezone
-    from zoneinfo import ZoneInfo
-    # Use local (UTC+4) TZ since today_agenda() reads in local (UTC+4)-local time.
-    today_local = datetime.now(timezone.utc).astimezone(ZoneInfo("Etc/GMT-4")).strftime("%Y-%m-%d")
+
+    # `today_agenda()` dates the file through `get_default_tz()`, so this reads
+    # the same seam. It was the literal `Etc/GMT-4`, equal to the conftest pin
+    # by coincidence; the moment that pin moves, the fixture writes a filename
+    # the code does not look for, four hours out of every day.
+    from scripts.utils.workspace import get_default_tz
+    today_local = datetime.now(timezone.utc).astimezone(get_default_tz()).strftime("%Y-%m-%d")
     (cal_dir / f"{today_local}.md").write_text(
         "| 09:00 | ExampleProject review | - |\n"
         "| 13:00 | Other meeting | - |\n",

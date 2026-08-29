@@ -103,10 +103,25 @@ def build_status(corp_build: int, ex_build: int) -> tuple[str, str]:
 
 def main():
     # Load corporate build
+    #
+    # `if not corp` until 2026-08-30, which is true for a file that parsed
+    # PERFECTLY WELL to `{}` (or `[]`, `0`, `""`). Such a run reported "Cannot
+    # read corporate BUILD.json" and sent the operator after paths and
+    # permission bits for a file whose real problem is that it holds no keys —
+    # and it made the precise branch below, the one that even prints the keys it
+    # found, unreachable for exactly the empty-object case it best describes.
+    # `load_json` says "cannot be used" by returning None, and nothing else.
     corp = load_json(CORPORATE_BUILD)
-    if not corp:
+    if corp is None:
         print("ERROR: Cannot read corporate BUILD.json")
         print(f"  Expected at: {CORPORATE_BUILD}")
+        sys.exit(1)
+
+    # A JSON array or scalar decodes cleanly and then has no `in` / `.get`
+    # semantics this script can use; naming the shape beats a KeyError.
+    if not isinstance(corp, dict):
+        print(f"ERROR: {CORPORATE_BUILD} is not a JSON object")
+        print(f"  Found: {type(corp).__name__}")
         sys.exit(1)
 
     # Indexed directly until 2026-08-23, so a BUILD.json missing either key
@@ -157,8 +172,18 @@ def main():
         exec_build_path = get_per_exec_repo_path(ex["slug"]) / "corporate" / "BUILD.json"
         exec_data = load_json(exec_build_path)
 
-        if not exec_data:
+        # The same `not x` conflation the corporate side above carried, in the
+        # copy nobody fixed with it: an exec BUILD.json that parses to `{}` was
+        # reported "not found" for a file sitting right there on disk, and
+        # `_build_detail`'s "no 'build' key" row — written for precisely that
+        # file — could never be reached. A non-dict has no `.get`, so it is
+        # named as malformed rather than crashing two lines down.
+        if exec_data is None:
             print(f"  {name:<{max_name}}   -       not found")
+            continue
+        if not isinstance(exec_data, dict):
+            print(f"  {name:<{max_name}}   -       malformed build "
+                  f"(not a JSON object: {type(exec_data).__name__})")
             continue
 
         # One malformed exec file is that ROW's problem, never the table's. The

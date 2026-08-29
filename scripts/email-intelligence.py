@@ -353,7 +353,22 @@ def commit_state(state: "StateManager", payload: dict) -> None:
     if payload.get("sent_count"):
         state.data["last_sent_datetime"] = cutoff
 
+    # The STATE side of the same "valid JSON, wrong type" gap the payload side
+    # above is hardened for. `_with_schema` deliberately fills only ABSENT keys,
+    # so a hand-edited `"stats": null` reached `.get` as an AttributeError and
+    # `"stats": {"total_runs": "5"}` reached `+ 1` as a TypeError -- measured
+    # 2026-08-30, both of them. Neither is ValueError, OSError nor
+    # JSONDecodeError, which is the tuple `main`'s --commit-state handler
+    # catches, so the one path that promises a clean "Commit failed" died on a
+    # traceback instead. Raise ValueError and the promise holds.
     stats = state.data["stats"]
+    if not isinstance(stats, dict):
+        raise ValueError(f"stats is a {type(stats).__name__}, not an object")
+    for counter in ("total_runs", "total_conversations", "total_filtered"):
+        value = stats.get(counter, 0)
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError(
+                f"stats.{counter} is a {type(value).__name__}, not an int")
     stats["total_runs"] = stats.get("total_runs", 0) + 1
     # `convs`, the list validated above, not a second raw read of the payload.
     # `.get("conversations", [])` substitutes its default only when the KEY IS
@@ -424,8 +439,21 @@ def _load_ignore_patterns() -> list[str]:
     try:
         cfg = yaml.safe_load(SENTINEL_CONFIG.read_text(encoding="utf-8"))
         extra = cfg.get("email", {}).get("ignore_patterns", [])
+        # A string is iterable, and this loop consumed it one CHARACTER at a
+        # time. Measured 2026-08-30 on `ignore_patterns: "noreply@*"` written as
+        # a YAML scalar instead of a list: the patterns became
+        # ['n','o','r','e','p','l','y','@','*'], the operator's real pattern
+        # never took effect (so noreply mail was analysed, at LLM cost), and the
+        # stray '*' hit the match-everything guard in `_matches_ignore`, which
+        # then printed its warning once per message checked. `commit_state`
+        # hardens `message_ids` against exactly this; this site was left open.
+        if not isinstance(extra, list):
+            print(f"{YELLOW}[warn] sentinel_config.yaml email.ignore_patterns is "
+                  f"a {type(extra).__name__}, not a list; ignoring it. Write it "
+                  f"as a YAML list.{RESET}", file=sys.stderr)
+            extra = []
         for p in extra:
-            if p not in patterns:
+            if isinstance(p, str) and p and p not in patterns:
                 patterns.append(p)
     except (yaml.YAMLError, OSError, AttributeError) as e:
         print(f"{GRAY}[debug] sentinel config ignore_patterns fallback: {e}{RESET}", file=sys.stderr)
@@ -469,8 +497,28 @@ def _matches_ignore(email_addr: str, patterns: list[str]) -> bool:
 # Data Sources / Exchange Connection (reuses sentinel.py pattern)
 # ============================================================
 
+class MissingExchangeCredentials(RuntimeError):
+    """`.env` does not carry the three values needed to reach Exchange.
+
+    Raised, never `sys.exit`ed. `connect_exchange` used to exit(1) from inside
+    the library layer, and every OTHER failure in `run_unread_mode` and
+    `run_mark_read_mode` is emitted as a JSON object on stdout for the bridge
+    daemon. Measured 2026-08-30 with EXCHANGE_PASSWORD unset: stdout was empty,
+    the exit code was 1, and the daemon's `json.loads` of stdout failed instead
+    of receiving `{"error": ...}`. The exit belongs at the CLI boundary, which is
+    where it now happens; the connect function reports and lets the caller decide.
+
+    Not retryable, and that is why it has its own type: `_connect_with_retries`
+    would otherwise have slept through three attempts over a `.env` that cannot
+    change mid-run.
+    """
+
+
 def connect_exchange():
-    """Connect to Exchange and return the Account object."""
+    """Connect to Exchange and return the Account object.
+
+    Raises MissingExchangeCredentials when `.env` is incomplete.
+    """
     from exchangelib import Account, Configuration, Credentials, DELEGATE
 
     load_env()
@@ -479,9 +527,12 @@ def connect_exchange():
     server = os.getenv("EXCHANGE_SERVER")
     username = os.getenv("EXCHANGE_USERNAME", email)
 
-    if not all([email, password, server]):
-        print(f"{RED}Error: Missing Exchange credentials in .env{RESET}", file=sys.stderr)
-        sys.exit(1)
+    missing = [name for name, value in (
+        ("EXCHANGE_EMAIL", email), ("EXCHANGE_PASSWORD", password),
+        ("EXCHANGE_SERVER", server)) if not value]
+    if missing:
+        raise MissingExchangeCredentials(
+            f"missing Exchange credentials in .env: {', '.join(missing)}")
 
     credentials = Credentials(username=username, password=password)
     exchange_config = Configuration(server=server, credentials=credentials)
@@ -798,7 +849,19 @@ def load_pipeline_context() -> str:
     """
     if not PIPELINE_FILE.exists():
         return ""
-    return PIPELINE_FILE.read_text(encoding="utf-8")
+    try:
+        return PIPELINE_FILE.read_text(encoding="utf-8")
+    except OSError as e:
+        # `load_viraid_state`, directly below, wraps the identical read. This
+        # one did not, and it is called on BOTH the time-window path and the
+        # `--unread` bridge path: measured 2026-08-30, an unreadable
+        # pipeline.md (permissions, a transient I/O error) raised
+        # PermissionError out of a context loader and killed the whole run, and
+        # on the bridge path the daemon got no JSON error envelope at all.
+        # Missing pipeline context degrades a digest; it must not end one.
+        print(f"{YELLOW}[warn] pipeline context unreadable ({e}); continuing "
+              f"without it{RESET}", file=sys.stderr)
+        return ""
 
 
 def load_viraid_state() -> dict:
@@ -1022,7 +1085,8 @@ def analyze_conversations(conversations: list[dict], crm_map: dict, pipeline_tex
             )
             result_text = result.text
             if verbose and result.fallback_triggered:
-                print(f"{YELLOW}  LLM fallback: anthropic->{result.vendor} ({result.primary_error}){RESET}")
+                print(f"{YELLOW}  LLM fallback: anthropic->{result.vendor} "
+                      f"({result.primary_error}){RESET}", file=sys.stderr)
 
             try:
                 parsed = _extract_json_array(result_text)
@@ -1170,11 +1234,18 @@ def build_output(conversations: list[dict], analyses: list[dict], run_info: dict
 
 def _connect_with_retries():
     """Connect to Exchange with 3 attempts + backoff. Raises RuntimeError on
-    final failure (connect_exchange itself sys.exit()s on missing creds)."""
+    final failure, which the bridge modes turn into their JSON error envelope.
+
+    A missing credential is re-raised on the first attempt instead of retried:
+    `.env` will not have filled itself in two seconds, and MissingExchangeCredentials
+    is a RuntimeError, so the callers' handlers already carry it to stdout as JSON.
+    """
     last_err = None
     for attempt in range(3):
         try:
             return connect_exchange()
+        except MissingExchangeCredentials:
+            raise
         except Exception as e:  # noqa: BLE001 - retry any transient connect failure
             last_err = e
             if attempt < 2:
@@ -1210,18 +1281,24 @@ def set_conversation_read(account, conv_id: str, mark_read: bool) -> tuple[int, 
             .order_by("-datetime_received")[:UNDO_SCAN_LIMIT]
         )
     scanned = 0
-    found = False
     for item in candidates:
         scanned += 1
         cid = str(item.conversation_id.id if item.conversation_id else "")
         if cid != conv_id:
             continue
-        found = True
         if item.is_read != mark_read:
             item.is_read = mark_read
             item.save(update_fields=["is_read"])
             changed += 1
-    if not mark_read and not found and scanned >= UNDO_SCAN_LIMIT:
+    # The bound alone decides, not the bound AND an empty result. `exhaustive`
+    # used to require `not found`, which left a third outcome invisible:
+    # measured 2026-08-30 with the conversation's newest message inside the
+    # window and 500 older ones beyond it, the walk hit the bound with
+    # found=True, returned exhaustive=True, and the caller emitted
+    # `{"ok": true, "messages_changed": 1}` over a thread it had half reverted.
+    # A full slice means the walk stopped where it was cut, not where the mail
+    # ran out; whether it recognised something on the way does not change that.
+    if not mark_read and scanned >= UNDO_SCAN_LIMIT:
         exhaustive = False
     return changed, exhaustive
 
@@ -1247,11 +1324,21 @@ def run_mark_read_mode(conv_id: str, mark_read: bool) -> None:
         print(json.dumps({"ok": False, "error": f"Exchange write failed: {e}"}))
         sys.exit(1)
     if not exhaustive:
+        # Two different non-exhaustive outcomes, and one message used to cover
+        # both. "nothing was changed" is a false statement about a thread the
+        # walk DID reach and partly reverted before the bound cut it off, so the
+        # wording follows `changed` rather than asserting the zero case.
+        detail = (
+            f"conversation not found in the {UNDO_SCAN_LIMIT} newest Inbox "
+            f"messages; nothing was changed"
+            if changed == 0 else
+            f"the scan stopped at the {UNDO_SCAN_LIMIT} newest Inbox messages "
+            f"after changing {changed}; older messages of this conversation "
+            f"may still be read"
+        )
         print(json.dumps({
             "ok": False, "conv_id": conv_id, "is_read": mark_read,
-            "messages_changed": changed,
-            "error": (f"conversation not found in the {UNDO_SCAN_LIMIT} newest "
-                      f"Inbox messages; nothing was changed"),
+            "messages_changed": changed, "error": detail,
         }))
         sys.exit(1)
     print(json.dumps({
@@ -1366,11 +1453,26 @@ def run_unread_mode(verbose: bool = False) -> None:
     if fetch_path.exists():
         try:
             prior = json.loads(fetch_path.read_text(encoding="utf-8"))
+            # Typed before `.get`. `json.loads` succeeds on any valid JSON, and
+            # a top-level list, string or number then met `.get` as an
+            # AttributeError, which is not in the except tuple below: measured
+            # 2026-08-30, a `_latest-fetch.json` holding `[]` killed every
+            # bridge tick with a raw traceback instead of the JSON error
+            # envelope, and the dashboard feed stopped until the file was
+            # removed by hand. The entries were isinstance-checked; the
+            # document was not. `commit_state_from_file` already refuses the
+            # same "valid JSON, wrong shape" case one screen away.
+            if not isinstance(prior, dict):
+                raise ValueError(
+                    f"{fetch_path.name} is a {type(prior).__name__}, not an object")
             for c in prior.get("conversations", []):
                 if isinstance(c, dict) and c.get("id"):
                     prior_by_id[c["id"]] = c
-        except (json.JSONDecodeError, OSError):
-            pass
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+            # Discarding the cache is the right recovery -- every conversation
+            # is simply re-analysed -- but it is not free, so say why.
+            print(f"{YELLOW}[warn] prior fetch cache unusable ({e}); analysing "
+                  f"every conversation this run{RESET}", file=sys.stderr)
 
     to_analyze = []
     cached_analysis: dict = {}
@@ -1397,7 +1499,8 @@ def run_unread_mode(verbose: bool = False) -> None:
 
     if verbose:
         print(f"{CYAN}  Unread: {len(convs)} conversations "
-              f"({len(cached_analysis)} cached, {len(to_analyze)} to analyze){RESET}")
+              f"({len(cached_analysis)} cached, {len(to_analyze)} to analyze){RESET}",
+              file=sys.stderr)
 
     fresh = analyze_conversations(to_analyze, crm_map, pipeline_text, verbose=verbose) if to_analyze else []
     # This zip had no `strict=`, so a short `fresh` list dropped its tail in
@@ -1508,15 +1611,33 @@ def main():
     parser.add_argument("--json", action="store_true",
                         help="JSON output for skill consumption (state is NOT committed - "
                              "the skill commits with --commit-state after approval)")
-    parser.add_argument("--commit-state", metavar="FILE",
-                        help="Commit the state_commit block of a saved --json run and exit")
+    # One mode per run, refused by argparse rather than by silent precedence.
+    # These were four ordered `if` statements with a `return`, so the LATER one
+    # was dropped without a word: measured 2026-08-30,
+    # `--unread --mark-read ABC` marked the conversation read, produced no
+    # `_latest-fetch.json`, and said nothing about the unread feed it discarded.
+    # `--commit-state f.json --unread` dropped the commit the same way. The
+    # `--inbox-only`/`--sent-only` pair one screen up was grouped for exactly
+    # this reason; the mode flags were left out of that fix.
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--commit-state", metavar="FILE",
+                      help="Commit the state_commit block of a saved --json run and exit")
+    # Every --verbose line goes to STDERR, here and in `run_unread_mode` and
+    # `analyze_conversations`. Stdout carries the machine-readable payload in
+    # both consumed modes: `--json` ends in `print(json.dumps(output))` and
+    # `--unread` ends in the summary object the bridge daemon parses. None of
+    # the progress prints was gated on `not args.json`, so measured 2026-08-30
+    # `--unread --verbose` put a colored "Unread: 0 conversations" line ahead of
+    # the JSON and the consumer's `json.loads` failed on char 0. Every other
+    # diagnostic on these paths was already on stderr; the verbose ones were the
+    # exception.
     parser.add_argument("--verbose", action="store_true", help="Detailed terminal output")
-    parser.add_argument("--unread", action="store_true",
-                        help="Analyze the current Inbox unread set (bridge dashboard feed)")
-    parser.add_argument("--mark-read", metavar="CONV_ID",
-                        help="Mark a conversation read in Exchange, then exit")
-    parser.add_argument("--mark-unread", metavar="CONV_ID",
-                        help="Mark a conversation unread in Exchange (undo), then exit")
+    mode.add_argument("--unread", action="store_true",
+                      help="Analyze the current Inbox unread set (bridge dashboard feed)")
+    mode.add_argument("--mark-read", metavar="CONV_ID",
+                      help="Mark a conversation read in Exchange, then exit")
+    mode.add_argument("--mark-unread", metavar="CONV_ID",
+                      help="Mark a conversation unread in Exchange (undo), then exit")
     args = parser.parse_args()
 
     # Bridge dashboard modes - each handles its own I/O and exits.
@@ -1559,6 +1680,14 @@ def main():
         try:
             account = connect_exchange()
             break
+        except MissingExchangeCredentials as e:
+            # The CLI boundary, and the only place that exits on this. Not
+            # retried, and reported through whichever channel the caller chose.
+            if args.json:
+                print(json.dumps({"error": str(e)}))
+            else:
+                print(f"{RED}Error: {e}{RESET}", file=sys.stderr)
+            sys.exit(1)
         except Exception as e:
             if attempt == 2:
                 msg = f"Exchange connection failed after 3 attempts: {e}"
@@ -1589,7 +1718,8 @@ def main():
             if inbox_truncated:
                 truncated_folders.append("inbox")
             if args.verbose:
-                print(f"{GREEN}  Inbox: {inbox_count} emails fetched{RESET}")
+                print(f"{GREEN}  Inbox: {inbox_count} emails fetched{RESET}",
+                      file=sys.stderr)
         except Exception as e:  # noqa: BLE001 - recorded, never swallowed
             folder_errors["inbox"] = str(e)
             print(f"{RED}  Inbox fetch FAILED: {e}{RESET}", file=sys.stderr)
@@ -1602,7 +1732,8 @@ def main():
             if sent_truncated:
                 truncated_folders.append("sent")
             if args.verbose:
-                print(f"{GREEN}  Sent: {sent_count} emails fetched{RESET}")
+                print(f"{GREEN}  Sent: {sent_count} emails fetched{RESET}",
+                      file=sys.stderr)
         except Exception as e:  # noqa: BLE001 - recorded, never swallowed
             folder_errors["sent"] = str(e)
             print(f"{RED}  Sent fetch FAILED: {e}{RESET}", file=sys.stderr)
@@ -1610,7 +1741,8 @@ def main():
     # --- Filter ---
     clean, noise_filtered = filter_noise(all_emails, state, ignore_patterns)
     if args.verbose:
-        print(f"{CYAN}  After filtering: {len(clean)} emails ({noise_filtered} noise removed){RESET}")
+        print(f"{CYAN}  After filtering: {len(clean)} emails "
+              f"({noise_filtered} noise removed){RESET}", file=sys.stderr)
 
     # --- Group ---
     conv_map = group_conversations(clean)
@@ -1620,7 +1752,8 @@ def main():
     internal_skipped = len(conv_map) - len(external_convs)
 
     if args.verbose:
-        print(f"{CYAN}  Conversations: {len(external_convs)} external, {internal_skipped} internal skipped{RESET}")
+        print(f"{CYAN}  Conversations: {len(external_convs)} external, "
+              f"{internal_skipped} internal skipped{RESET}", file=sys.stderr)
 
     # --- CRM Enrichment ---
     crm_map = load_crm_contacts()
@@ -1634,7 +1767,8 @@ def main():
     # --- LLM Analysis ---
     if convs_list:
         if args.verbose:
-            print(f"{CYAN}  Analyzing {len(convs_list)} conversations with Claude Haiku...{RESET}")
+            print(f"{CYAN}  Analyzing {len(convs_list)} conversations with "
+                  f"Claude Haiku...{RESET}", file=sys.stderr)
         analyses = analyze_conversations(convs_list, crm_map, pipeline_text, verbose=args.verbose)
     else:
         analyses = []
@@ -1712,7 +1846,7 @@ def main():
         commit_state(state, commit_payload)
         state.save()
         if args.verbose:
-            print(f"{GREEN}  State saved to {STATE_FILE}{RESET}")
+            print(f"{GREEN}  State saved to {STATE_FILE}{RESET}", file=sys.stderr)
         # Note: the bridge dashboard's _latest-fetch.json is produced by
         # --unread mode (run_unread_mode), not by this time-window path.
 

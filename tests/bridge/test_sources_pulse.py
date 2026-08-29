@@ -882,10 +882,17 @@ def test_pulse_data_includes_tribe_state(tmp_path):
 
 
 def _write_today_calendar(tmp_path, lines):
-    """Write a calendar file for local (UTC+4)-today with the given event rows."""
+    """Write a calendar file for local-today with the given event rows.
+
+    The zone comes from `get_default_tz()`, the same seam the code under test
+    reads. It was the literal `Etc/GMT-4`, which happens to equal the conftest
+    pin, so the two agreed by coincidence rather than by construction: move the
+    pin and this fixture writes a file the code looks for four hours a day.
+    """
     from datetime import datetime, timezone
-    from zoneinfo import ZoneInfo
-    today_local = datetime.now(timezone.utc).astimezone(ZoneInfo("Etc/GMT-4")).strftime("%Y-%m-%d")
+
+    from scripts.utils.workspace import get_default_tz
+    today_local = datetime.now(timezone.utc).astimezone(get_default_tz()).strftime("%Y-%m-%d")
     cal_dir = tmp_path / "outputs" / "_sync" / "calendar"
     cal_dir.mkdir(parents=True, exist_ok=True)
     (cal_dir / f"{today_local}.md").write_text("\n".join(lines), encoding="utf-8")

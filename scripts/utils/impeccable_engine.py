@@ -300,6 +300,20 @@ def run_detector(paths, timeout: int = DEFAULT_TIMEOUT) -> tuple[list[dict], str
         return [], f"impeccable timed out after {timeout}s; deep design checks skipped"
     except OSError as exc:
         return [], f"impeccable could not be started ({exc}); deep design checks skipped"
+    except UnicodeDecodeError as exc:
+        # The read on the line above decodes as UTF-8, and a detector that emits
+        # any other byte breaks the "Never raises" promise three lines up:
+        # `UnicodeDecodeError` subclasses ValueError, so neither handler beside
+        # this one caught it. Measured 2026-08-30: a child writing
+        # `b"\xff\xfe\x00bad"` raised out of `run_detector` at the `read_text`
+        # call. The victim is `visual-discipline-check.py`, whose whole design is
+        # that a broken deep engine degrades to the regex engine rather than
+        # taking the run down; it got a raw traceback instead.
+        #
+        # Reported as its own reason rather than folded into "not JSON":
+        # undecodable bytes and bad JSON need different things looked at.
+        return [], (f"impeccable output was not valid UTF-8 ({exc}); "
+                    f"deep design checks skipped")
     if not stdout:
         detail = (proc.stderr or "").strip().splitlines()
         tail = detail[-1] if detail else f"exit {proc.returncode}"

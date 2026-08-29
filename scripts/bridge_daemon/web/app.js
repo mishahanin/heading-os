@@ -5017,8 +5017,12 @@ async function renderActionQueue(params) {
   const actionRow = it => {
     const isEmail = it.action_type === 'email_send';
     const cites = (it.citations || []).length;
+    // 'sending' is a live claim held for the length of one synchronous send.
+    // Without a label of its own it rendered as a blank tail, identical to a
+    // pending card, so a claim stuck by a killed terminal looked ordinary.
     const statusTail = it.status === 'approved' ? ' · approved'
-      : (it.status === 'send_failed' ? ' · send failed' : '');
+      : it.status === 'send_failed' ? ' · send failed'
+      : it.status === 'sending' ? ' · sending' : '';
     const toBit = isEmail ? ' · to ' + escapeHtml(it.to || '-') : '';
     return `
     <div class="card appr-row aq-row" data-id="${escapeHtml(it.id)}"

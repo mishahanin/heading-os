@@ -85,7 +85,7 @@ Print the full card so the CEO can read the recipient, subject, and body before 
 python scripts/action-queue.py approve <id-or-prefix>
 ```
 
-This SENDS the card right now and prints `sent` or `send failed (reason)` in the same command. For an `email_send` card it requires `draft_status: ready_for_review` (edit it first otherwise) and refuses anything that does not resolve `gated`. Report the outcome exactly as the command returned it - if it failed, surface the reason and note the card is kept as `send_failed` for `retry`. Approve ONE card per explicit instruction; "approve the first one" means only the first.
+This SENDS the card right now and prints `sent` or `send failed (reason)` in the same command. For an `email_send` card it requires `draft_status: ready_for_review` (edit it first otherwise) and refuses anything that does not resolve `gated`. Report the outcome exactly as the command returned it - if it failed, surface the reason and note the card is kept as `send_failed` for `retry`. Another terminal may already hold the `sending` claim on that card. Then `approve` returns `blocked`. That is the duplicate guard doing its job: surface the message, and do NOT retry. If a terminal died mid-send, its claim frees after five minutes; `dismiss` the card to clear it sooner. Approve ONE card per explicit instruction; "approve the first one" means only the first.
 
 ## Phase 4 - Edit a draft
 

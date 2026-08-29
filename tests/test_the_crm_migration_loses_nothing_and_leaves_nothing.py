@@ -37,6 +37,7 @@ Fixed 2026-08-24.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -49,7 +50,27 @@ sys.path.insert(0, str(ROOT))
 
 import scripts.crm_migrate_to_entity_model as mig  # noqa: E402
 
-TODAY = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
+# A module-scope `TODAY = datetime.now(...)` stood here and four assertions
+# rebuilt `crm/.migration-backup/<TODAY>` from it. `cmd_apply` names that same
+# directory from ITS OWN clock, at the moment the test body runs, and the two
+# reads are not the same instant: the constant is computed once at IMPORT, and
+# under `pytest -n 8` the bodies run minutes later. Two ways that went red on
+# code nobody had touched, both MEASURED 2026-08-30:
+#
+#  * clock 0.8 s before local midnight, this file alone -> 3 failures; at 1.0 s
+#    and at 0.6 s, none. Midnight landed between the import and the bodies.
+#  * whole suite at `TZ=America/New_York`, no clock shift at all -> the two
+#    backup-reading tests failed. `test_a_high_water_mark_read_off_the_wrong_
+#    clock.py` sets TZ to Pacific/Kiritimati and then DELETES the variable in
+#    its `finally`, so libc falls back to /etc/localtime rather than to the
+#    exported zone. Any test importing this module on the other side of that
+#    leak gets one calendar day and the code under test gets another.
+#
+# The four sites read the directory off disk now (see `_backup_dir`). The date
+# is still needed for the review-map filename, so it is computed inside the
+# fixture, next to the call that consumes it, rather than at import.
+# A test that reads the host clock is not a test; it is a test of the second it
+# ran at.
 
 LEGACY = """---
 name: {name}
@@ -90,8 +111,11 @@ def workspace(tmp_path, monkeypatch):
     monkeypatch.setattr(mig, "get_workspace_root", lambda: ws)
     monkeypatch.setattr(mig, "get_crm_contacts_dir", lambda: contacts)
     monkeypatch.setattr(mig, "get_outputs_dir", lambda: outputs)
-    # --apply refuses without today's review map.
-    (outputs / "operations" / "crm" / f"{TODAY}_migration-map.md").write_text(
+    # --apply wants a review map, and prints a note when the newest one is not
+    # from today. Computed HERE, milliseconds before the `cmd_apply` that reads
+    # it, so the two agree; at module scope they were minutes apart.
+    today = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
+    (outputs / "operations" / "crm" / f"{today}_migration-map.md").write_text(
         "# map\n", encoding="utf-8")
 
     # Both validators are separate scripts with their own tests; here they are
@@ -100,6 +124,23 @@ def workspace(tmp_path, monkeypatch):
         mig.subprocess, "run",
         lambda *a, **k: subprocess.CompletedProcess(a[0] if a else [], 0, "", ""))
     return ws, data, contacts
+
+
+def _backup_dir(data: Path) -> Path:
+    """The dated backup directory `--apply` created, read off disk.
+
+    Naming it from this process's clock is what made three tests here fail on
+    the second they ran at; see the note at the top of the file. The two
+    assertions keep the property the old spelling was there for: exactly one
+    backup exists, and it is still filed under a date rather than a fixed name,
+    so the pin cannot rot back into the defect it replaces.
+    """
+    root = data / "crm" / ".migration-backup"
+    dirs = sorted(p for p in root.iterdir() if p.is_dir())
+    assert len(dirs) == 1, f"expected one backup directory under {root}, got {dirs}"
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", dirs[0].name), (
+        f"--apply must file its backup under a date, not {dirs[0].name!r}")
+    return dirs[0]
 
 
 def _legacy_file(contacts: Path, stem: str, name: str, email: str,
@@ -215,7 +256,7 @@ def test_the_legacy_file_is_gone_after_apply(applied):
 def test_the_legacy_file_is_in_the_backup(applied):
     """The deletion is only safe because the backup happened first."""
     rc, ws, data, contacts, legacy = applied
-    backup = data / "crm" / ".migration-backup" / TODAY
+    backup = _backup_dir(data)
     survivors = list(backup.rglob("*.md"))
     assert survivors, f"nothing backed up under {backup}"
     assert any("Met in Vienna" in p.read_text(encoding="utf-8")
@@ -241,7 +282,7 @@ def test_cadence_survives_the_migration(applied):
 
 def test_the_applied_manifest_names_what_was_created_and_removed(applied):
     rc, ws, data, contacts, legacy = applied
-    manifest_path = data / "crm" / ".migration-backup" / TODAY / "applied-manifest.json"
+    manifest_path = _backup_dir(data) / "applied-manifest.json"
     assert manifest_path.exists(), "rollback has nothing to undo without this"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["created_contacts"] == ["james-bond.md"]
@@ -284,7 +325,7 @@ def test_rollback_without_a_manifest_says_what_it_cannot_undo(applied,
                                                               capsys):
     """A backup taken before the manifest existed must not be guessed at."""
     rc, ws, data, contacts, legacy = applied
-    (data / "crm" / ".migration-backup" / TODAY / "applied-manifest.json").unlink()
+    (_backup_dir(data) / "applied-manifest.json").unlink()
     monkeypatch.setattr("builtins.input", lambda *a: "yes")
     mig.cmd_rollback()
     out = capsys.readouterr().out
@@ -299,7 +340,7 @@ def test_rollback_without_a_manifest_says_what_it_cannot_undo(applied,
 
 def test_a_corrupt_manifest_aborts_the_rollback(applied, monkeypatch, capsys):
     rc, ws, data, contacts, legacy = applied
-    path = data / "crm" / ".migration-backup" / TODAY / "applied-manifest.json"
+    path = _backup_dir(data) / "applied-manifest.json"
     path.write_text('{"created_contacts": [', encoding="utf-8")
     monkeypatch.setattr("builtins.input", lambda *a: "yes")
     assert mig.cmd_rollback() == 1

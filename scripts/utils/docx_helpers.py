@@ -198,9 +198,20 @@ def set_cell_shading(cell, color_hex: str) -> None:
     only for a cell that carried none of them. Every current caller shades
     before setting anything later, so nothing was wrong on this path today; a
     cell given a vertical alignment first would have been.
+
+    Any `w:shd` already on the cell is REPLACED, not joined. `CT_TcPr` allows
+    one, and ordering the second one correctly still leaves two: measured
+    2026-08-30, shading a cell red then green produced
+    `<w:shd w:fill="FF0000"/><w:shd w:fill="00FF00"/>` in one `w:tcPr`, which is
+    schema-invalid and leaves the winning colour to the consumer. No current
+    caller shades a cell twice, so this is the same shape of latent defect the
+    ordering rule above was written for.
     """
     # Lazy docx import (F-2.1: this util must import pure so callers stay collectable).
     from docx.oxml import parse_xml
-    from docx.oxml.ns import nsdecls
+    from docx.oxml.ns import nsdecls, qn
     shading = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{color_hex}" w:val="clear"/>')
-    insert_in_order(cell._tc.get_or_add_tcPr(), shading, TCSHD_SUCCESSORS)
+    tc_pr = cell._tc.get_or_add_tcPr()
+    for stale in tc_pr.findall(qn("w:shd")):
+        tc_pr.remove(stale)
+    insert_in_order(tc_pr, shading, TCSHD_SUCCESSORS)

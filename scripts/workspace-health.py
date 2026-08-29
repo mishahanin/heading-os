@@ -77,11 +77,19 @@ def check_reference_validation():
 
     # Extract paths from markdown table rows with backtick-wrapped paths
     path_pattern = re.compile(r"`([^`]+\.[a-z]+)`")
-    # Look for the Reference Resources section
+    # Anchored at a markdown HEADING, not a bare substring. `"Reference
+    # Resources" in line` fired on any prose sentence carrying the phrase -- a
+    # pointer, a changelog note, this check's own documentation quoted back --
+    # and the flag then stayed on until the next `## `, so every table row after
+    # it with a backticked dotted token was existence-checked as a reference
+    # path. Rows from unrelated tables were flagged "Missing:" and failed the
+    # run over paths nothing had claimed were references, while the docstring
+    # scopes this to one table.
+    heading_pattern = re.compile(r"^#{1,6}\s+.*Reference Resources")
     in_ref_section = False
     section_seen = False
     for line in content.split("\n"):
-        if "Reference Resources" in line:
+        if heading_pattern.match(line):
             in_ref_section = True
             section_seen = True
             continue
@@ -140,7 +148,23 @@ def check_context_freshness(max_days=30):
             if match:
                 break
         if match:
-            verified_date = datetime.strptime(match.group(1), "%Y-%m-%d").replace(tzinfo=get_default_tz())
+            # The regex validates digit SHAPE, never the calendar, so
+            # `> Last verified: 2026-02-31` reached `strptime` and raised
+            # ValueError. `main` runs these checks in an unguarded loop -- a fact
+            # `check_build_sync` already carries a fix-comment for -- so one
+            # malformed marker aborted every remaining section with a traceback
+            # and no summary, in front of `/push-updates`. The sibling
+            # `check_doc_versions` wraps the identical parse; this one was
+            # missed. A date nobody can parse is an unverified file, not a
+            # crash, so it counts as an issue and the run continues.
+            try:
+                verified_date = datetime.strptime(
+                    match.group(1), "%Y-%m-%d").replace(tzinfo=get_default_tz())
+            except ValueError:
+                warn(f"{f.name}: malformed freshness date {match.group(1)}; "
+                     f"freshness NOT checked")
+                issues += 1
+                continue
             age_days = (today - verified_date).days
             if age_days > max_days:
                 warn(f"{f.name}: Last verified {age_days} days ago ({match.group(1)})")
@@ -161,8 +185,19 @@ def check_context_freshness(max_days=30):
 
 
 def check_agent_counts():
-    """Count actual commands and skills, compare to CLAUDE.md."""
-    header("Agent Count Verification")
+    """Count the commands and skills on disk, and flag lowercase `skill.md`.
+
+    Scope, stated because the old docstring and the old section title overstated
+    it: this opens nothing and compares nothing. It counts `.claude/commands/*.md`
+    and the `.claude/skills/` directories carrying a SKILL.md, prints both lists,
+    and returns one issue per skill whose manifest is lowercase. The docstring
+    said "compare to CLAUDE.md" and the header said "Verification" while no line
+    in the function reads CLAUDE.md, so a CLAUDE.md claiming 22 commands over a
+    tree of 19 passed green under a title promising the opposite
+    (`.claude/rules/scope-claims.md`). Naming the count is the whole method, so
+    the title now says so.
+    """
+    header("Agent Count (commands and skills found on disk)")
     issues = 0
 
     # Count actual commands
@@ -534,7 +569,12 @@ def check_doc_versions(max_age_days: int = 90) -> int:
         first_block = "\n".join(first_lines)
         match = version_pattern.search(first_block)
         if not match:
-            action(f"{label}: missing version marker on line 1")
+            # "in the first 3 lines", because that is the window searched two
+            # lines up. The message used to say "on line 1", a stricter contract
+            # than the one enforced: a compliant marker on line 2 passes, so an
+            # operator following the remediation moved a marker that was already
+            # fine.
+            action(f"{label}: missing version marker in the first 3 lines")
             issues += 1
             continue
         version, date_str = match.groups()

@@ -82,8 +82,13 @@ so a declared-parallel wave whose steps ran back-to-back is normal
 Each event record: {timestamp, event_type, step_number, payload}.
 
 Atomic append discipline: the JSONL is shared-state in wave-mode
-parallel /implement runs. POSIX uses O_APPEND on file open (line writes
-under PIPE_BUF are atomic). Windows uses msvcrt.locking with retry.
+parallel /implement runs. POSIX uses O_APPEND on file open; Windows uses
+msvcrt.locking with retry. This used to credit PIPE_BUF for the atomicity,
+contradicting `_append_jsonl_posix`'s own docstring, which is the correct one:
+PIPE_BUF is a guarantee about pipes and FIFOs, not about regular files, and
+nothing here bounds a record to it. O_APPEND keeps concurrent writers from
+overwriting each other at the offset; it does not promise one write call, so
+`cmd_event`'s `file_lock` is what actually serialises a whole record.
 
 The trajectory is a verbatim audit record: never mutate, never sanitize.
 Hidden-character checking happens at READ time in the /scrutinize
@@ -313,8 +318,43 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def validate_run_id(run_id: str) -> str:
+    """Return run_id, or raise ValueError when it is not a bare file-name part.
+
+    `trajectory_path` interpolated the operator's string straight into a path.
+    The `_trajectory_` prefix neutralises a LEADING `..`, but nothing stopped a
+    separator in the middle: with `--run-id 'x/../../victimdir/victim'` and the
+    `_trajectory_x` directory in place (which `mint_unique_run_id`'s
+    `mkdir(parents=True)` creates for any run_id carrying a slash), `--event`
+    appended an audit record to a file two levels outside TRAJECTORY_DIR and
+    exited 0. Measured 2026-08-30.
+
+    There is no privilege boundary here - the operator runs this as themselves -
+    so the cost is a misfiled record rather than an escalation. That is still an
+    audit record written somewhere it does not belong, silently, by a tool whose
+    whole value is that its record is where it says it is.
+
+    A DENYLIST, not an allowlist: `derive_slug` takes the slug straight off the
+    plan's filename stem, so a plan called "wave two.md" mints a run_id with a
+    space in it and an allowlist would refuse the run that just minted it. Only
+    what can leave the directory, or name nothing, is refused.
+    """
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError(f"run_id {run_id!r} is empty")
+    bad = [c for c in ("/", "\\", "\0", "\n", "\r") if c in run_id]
+    if ".." in run_id:
+        bad.append("..")
+    if run_id in (".", ".."):
+        bad.append(run_id)
+    if bad:
+        raise ValueError(
+            f"run_id {run_id!r} may not contain {', '.join(repr(b) for b in bad)}: "
+            f"a trajectory id is one file-name part, never a path")
+    return run_id
+
+
 def trajectory_path(run_id: str) -> Path:
-    return TRAJECTORY_DIR / f"_trajectory_{run_id}.jsonl"
+    return TRAJECTORY_DIR / f"_trajectory_{validate_run_id(run_id)}.jsonl"
 
 
 # ============================================================
@@ -420,7 +460,11 @@ def load_data(args: argparse.Namespace) -> Any:
 
     Exactly one of --data-file, --data-stdin, --data-json must be set.
     """
-    supplied = sum(1 for v in (args.data_file, args.data_stdin, args.data_json) if v)
+    # Presence, matching `cmd_event`'s guard: an empty `--data-file`/`--data-json`
+    # is a supplied mode whose value happens to be falsy, and counting it as
+    # absent let `--data-json "" --data-stdin` read as ONE mode.
+    supplied = sum(1 for v in (args.data_file, args.data_json) if v is not None)
+    supplied += 1 if args.data_stdin else 0
     if supplied == 0:
         print(f"{RED}ERROR: one of --data-file, --data-stdin, --data-json is required.{RESET}",
               file=sys.stderr)
@@ -431,7 +475,7 @@ def load_data(args: argparse.Namespace) -> Any:
         sys.exit(2)
 
     raw: str
-    if args.data_file:
+    if args.data_file is not None:
         try:
             raw = Path(args.data_file).read_text(encoding="utf-8")
         except OSError as exc:
@@ -564,7 +608,17 @@ def cmd_event(args: argparse.Namespace) -> int:
               f"Did you call --new first?{RESET}", file=sys.stderr)
         return 3
 
-    any_data_mode = bool(args.data_file or args.data_stdin or args.data_json)
+    # PRESENCE, not truthiness. `--data-json ""` is a supplied payload, and an
+    # empty string is falsy, so this said "no data mode": the run fell through to
+    # `build_payload_from_flags`, appended an event with an empty payload and
+    # exited 0. Two documented behaviours went with it - the exit-4 JSON
+    # validation (`json.loads("")` is a parse error and was never called) and
+    # this very guard, so `--data-json "" --check x` passed the mutual-exclusion
+    # check and the data-json argument vanished. Measured 2026-08-30. In a tool
+    # whose product is a verbatim audit record, an operator-supplied payload
+    # discarded under a success exit code is the worst available outcome.
+    any_data_mode = (args.data_file is not None or args.data_stdin
+                     or args.data_json is not None)
     typed_present = any(getattr(args, d, None) is not None for d in TYPED_FLAG_DESTS)
     if any_data_mode and typed_present:
         print(f"{RED}ERROR: typed flags and --data-file/--data-stdin/--data-json "
@@ -647,6 +701,20 @@ def _is_literal_path(value: object) -> bool:
     if not isinstance(value, str) or not value.strip():
         return False
     return not glob.has_magic(value) and not any(c in value for c in _GLOB_CHARS)
+
+
+def is_scannable_path(value: object) -> bool:
+    """The ONE rule for "this files_affected entry names a real file".
+
+    `--verify` combined `_is_literal_path` with a count-token test ("+3 more")
+    inline, and `--list-files` applied neither: it printed every entry verbatim,
+    so the Phase 3 hidden-character scan named in its own docstring received
+    `scripts/*.py`, `+3 more` and a blank line as if they were file paths.
+    Measured 2026-08-30. One predicate, both readers.
+    """
+    s = str(value).strip()
+    is_count = s[:1] == "+" and s[1:2].isdigit()
+    return _is_literal_path(value) and not is_count
 
 # The plan is the other half of the record. Three of the 2026-08-09 scrutiny
 # findings (M1, M2, N1) were all one shape: the run diverged from its own plan
@@ -781,22 +849,37 @@ def _git_changed_files(git_head: str) -> set[str]:
     # `-z` on both: `core.quotePath` defaults to on, so git C-quotes any path
     # with a byte outside printable ASCII, and a quoted name reconciles against
     # nothing. A file the run really touched would then read as untouched.
+    #
+    # `errors="replace"`, and `UnicodeError` in the except list. `text=True`
+    # alone decodes with the locale encoding and errors="strict", and a git
+    # filename is raw bytes: on a UTF-8 box a file named b'bad\xffname' made
+    # `subprocess.run` raise UnicodeDecodeError INSIDE this try, where neither
+    # OSError nor SubprocessError catches it (it is a ValueError). It travelled
+    # out of here, out of `verify_trajectory` and out of `cmd_verify` as a
+    # traceback, so an ADVISORY reconciliation killed the whole verifier: no
+    # defects printed, no scope line, no clean/dirty verdict. Measured
+    # 2026-08-30 against a real repository holding such a name. Replacing the
+    # undecodable bytes keeps every other path in the change set, and the
+    # mangled one simply reconciles against nothing and is reported unrecorded,
+    # which is the truthful advisory.
     changed: set[str] = set()
     try:
         diff = subprocess.run(
             ["git", "diff", "--name-only", "-z", git_head],
-            cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=10,
+            cwd=str(WORKSPACE_ROOT), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=10,
         )
         if diff.returncode != 0:
             return set()
         changed.update(p for p in diff.stdout.split("\0") if p)
         untracked = subprocess.run(
             ["git", "ls-files", "-z", "--others", "--exclude-standard"],
-            cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=10,
+            cwd=str(WORKSPACE_ROOT), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=10,
         )
         if untracked.returncode == 0:
             changed.update(p for p in untracked.stdout.split("\0") if p)
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, UnicodeError, subprocess.SubprocessError):
         return set()
     return changed
 
@@ -1024,8 +1107,7 @@ def verify_trajectory(run_id: str) -> list[str]:
             continue
         for entry in (e.get("payload") or {}).get("files_affected") or []:
             s = str(entry)
-            is_count = s.strip()[:1] == "+" and s.strip()[1:2].isdigit()
-            if not _is_literal_path(entry) or is_count:
+            if not is_scannable_path(entry):
                 defects.append(
                     f"step_end at position {idx}: files_affected entry "
                     f"{s!r} is not a literal path (glob/shorthand/count/blank)")
@@ -1159,12 +1241,22 @@ def cmd_files(args: argparse.Namespace) -> int:
         print(f"{RED}ERROR: trajectory not found: {path}.{RESET}", file=sys.stderr)
         return 3
     out: set[str] = set()
+    rejected: set[str] = set()
     for e in _read_events(path):
         if e.get("event_type") == "step_end":
             for entry in (e.get("payload") or {}).get("files_affected") or []:
-                out.add(str(entry))
+                (out if is_scannable_path(entry) else rejected).add(str(entry))
     for entry in sorted(out):
         print(entry)
+    # Named on stderr, never on stdout. The consumer pipes stdout into a scan
+    # list, so a glob or a "+3 more" printed there becomes a path the scanner
+    # tries to open; dropping them silently would instead shrink the evidence
+    # without saying so, which is the same defect wearing the other hat.
+    if rejected:
+        print(f"{YELLOW}--list-files dropped {len(rejected)} non-literal "
+              f"files_affected entr{'y' if len(rejected) == 1 else 'ies'}: "
+              f"{', '.join(repr(r) for r in sorted(rejected))}. Run --verify: "
+              f"each one is a defect on the record.{RESET}", file=sys.stderr)
     return 0
 
 
@@ -1269,6 +1361,16 @@ def main(argv: list[str] | None = None) -> int:
                        help="run_end plan status (default Implemented).")
 
     args = parser.parse_args(argv)
+
+    # One place, before dispatch: every run-id command builds its path from this
+    # string, and a rejected id is a bad ARGUMENT (exit 2), not a filesystem
+    # error and not a traceback.
+    if args.run_id is not None:
+        try:
+            validate_run_id(args.run_id)
+        except ValueError as exc:
+            print(f"{RED}ERROR: {exc}{RESET}", file=sys.stderr)
+            return 2
 
     if args.new:
         return cmd_new(args)

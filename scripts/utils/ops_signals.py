@@ -36,6 +36,7 @@ from pathlib import Path
 
 import yaml
 
+from scripts.bridge_daemon.sources.action_queue import SENDING
 from scripts.utils.odin_cadence import read_cadence_json
 
 # ============================================================
@@ -203,8 +204,17 @@ def _repo_uncommitted(repo: Path) -> tuple[int | None, float | None]:
     now = time.time()
     oldest_mtime = None
     for record in entries:
-        # porcelain record: "XY <path>"; the path starts at column 3.
-        path = record[3:].strip()
+        # porcelain record: "XY <path>"; the path starts at column 3, verbatim.
+        #
+        # NOT `.strip()`. That reintroduced exactly the corruption `-z` was
+        # chosen to avoid: a filename with a leading or trailing space is a legal
+        # filename, and stripping it made `stat()` raise FileNotFoundError, so
+        # `except OSError: continue` dropped the path from the oldest-mtime scan
+        # in silence. Measured 2026-08-30 in a scratch repo holding
+        # ` lead.md` (200h old), `old .md` (100h) and `fresh.md`: the oldest
+        # sitting change reported as 100h instead of 200h, understating backup
+        # debt in the direction that keeps the signal quiet.
+        path = record[3:]
         fp = repo / path
         try:
             mt = fp.stat().st_mtime
@@ -429,12 +439,22 @@ def publish_state(engine_root: Path) -> dict:
             if proc.returncode == 0 and proc.stdout.strip():
                 data = json.loads(proc.stdout)
                 if isinstance(data, dict):
+                    # `files` is only counted when it IS countable. It was fed
+                    # straight to `len()`, so `{"pending": 0, "files": 3}` raised
+                    # TypeError - not in the except clause below - out of a
+                    # function whose docstring says it degrades to 0 and is
+                    # "never an emergency". Measured 2026-08-30 against a stub
+                    # publisher printing exactly that. The alternates here exist
+                    # because the shape has varied before; this guards the third.
+                    files = data.get("files")
+                    files_n = len(files) if isinstance(files, (list, tuple, dict)) else 0
                     pending = int(
                         data.get("pending")
                         or data.get("changed")
-                        or len(data.get("files", []))
+                        or files_n
                     )
-        except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ValueError):
+        except (OSError, subprocess.SubprocessError, json.JSONDecodeError,
+                TypeError, ValueError):
             pending = 0
     return classify_publish(pending)
 
@@ -515,7 +535,14 @@ def queue_state(data_root: Path) -> dict:
         status = c.get("status")
         if status == "send_failed":
             failed += 1
-        elif status in ("pending", "approved") and c.get("draft_status") == "ready_for_review":
+        # SENDING is in this set, and it is imported rather than typed, because
+        # a claimed card belongs to neither branch above. A live claim lasts at
+        # most the sender's 120 s, so counting it ready over-reports by one for
+        # two minutes; a claim whose process DIED never leaves `sending` on its
+        # own, and leaving it out meant a stranded send was invisible to the
+        # radar forever. Over-reporting for two minutes beats silence for good.
+        elif (status in ("pending", "approved", SENDING)
+                and c.get("draft_status") == "ready_for_review"):
             ready += 1
     return classify_queue(ready, failed)
 
@@ -574,7 +601,8 @@ def classify_ollama(reachable: bool, model_present: bool | None,
 
 
 def classify_ollama_accel(configured: bool, reachable: bool,
-                          model_present: bool | None = None) -> dict:
+                          model_present: bool | None = None,
+                          *, pin_unresolvable: bool = False) -> dict:
     """Pure: accelerated-host configuration + reachability -> signal dict (Tier B).
 
     Not configured is the normal state on most machines and is never due. A host
@@ -589,10 +617,22 @@ def classify_ollama_accel(configured: bool, reachable: bool,
     it; a Tier-A signal would wait for an auto-heal that cannot exist and stay
     invisible forever, since `select_candidates` only surfaces Tier A after two
     failed heals.
+
+    `pin_unresolvable` says the operator DID pin a host and the pin names no
+    usable address (a typo'd scheme, an `auto:` pin whose gateway cannot be
+    read). It is configured, and it is not "down": nothing was ever probed, so
+    saying a host failed to answer would assert what the method never
+    established. It gets its own sentence for that reason.
     """
     due = configured and (not reachable or model_present is False)
     if not configured:
         severity, summary = "ok", "ollama-accel: not configured"
+    elif pin_unresolvable:
+        severity, summary = (
+            "high",
+            "ollama-accel: the pinned embed host is not a usable address "
+            "-- nothing can embed",
+        )
     elif not reachable:
         # No longer "running on the local daemon": since 2026-08-23 embedding is
         # pinned here, so this host being down means nothing embeds at all.
@@ -604,7 +644,8 @@ def classify_ollama_accel(configured: bool, reachable: bool,
     return {
         "key": "ollama_accel",
         "value": {"configured": configured, "reachable": reachable,
-                  "model_present": model_present},
+                  "model_present": model_present,
+                  "pin_unresolvable": pin_unresolvable},
         "threshold": None,
         "due": due,
         "severity": severity,
@@ -661,19 +702,36 @@ def ollama_accel_state(engine_root: Path, timeout: int = 3) -> dict:
     # several ports on the same machine, and reading only the first entry would
     # call a healthy second one "not configured" - a monitor blind in exactly the
     # case the list was added for.
-    candidates = [c for c in host_candidates(preference) if c != LOCAL_HOST]
+    resolved = host_candidates(preference)
+    candidates = [c for c in resolved if c != LOCAL_HOST]
     if not candidates:
+        # "Nothing is pinned" and "a host IS pinned and the pin names nothing
+        # usable" both arrive here as an empty list, and until 2026-08-30 both
+        # reported `not configured / ok / not due`. Measured that day with
+        # `embed: "htp://typo"` in config/ollama-hosts.yaml: this returned
+        # severity ok while `resolve_pinned_host` refused the identical input
+        # with OllamaHostUnavailable. The monitor showed green on precisely the
+        # misconfiguration the resolver will not start on.
+        #
+        # `resolved`, not `candidates`, is what separates them: a preference that
+        # resolves ONLY to the local daemon is a real, usable address and is
+        # deliberately not an accelerated host, so it stays "not configured".
+        if str(preference or "").strip() and not resolved:
+            return classify_ollama_accel(True, False, pin_unresolvable=True)
         return classify_ollama_accel(False, False)
 
     for candidate in candidates:
         if probe(candidate, timeout=timeout):
             return classify_ollama_accel(
-                True, True, model_present=_embed_model_present(candidate, timeout)
+                True, True,
+                model_present=_embed_model_present(candidate, timeout,
+                                                   root=engine_root),
             )
     return classify_ollama_accel(True, False)
 
 
-def _embed_model_present(host: str, timeout: int = 3) -> bool | None:
+def _embed_model_present(host: str, timeout: int = 3, *,
+                         root: Path | None = None) -> bool | None:
     """Whether the configured embed model is pulled on `host`. None if unknown.
 
     Asked of the PINNED host and nowhere else. Embedding happens there or it does
@@ -681,10 +739,14 @@ def _embed_model_present(host: str, timeout: int = 3) -> bool | None:
     absence on the local daemon. None (the tags endpoint hiccuped) is reported as
     unknown rather than as missing: a monitor that guesses is worse than one that
     abstains.
+
+    `root` is the tree whose config names the model, and it is the same tree the
+    caller read the HOST out of. Without it the two halves of one answer came
+    from two different clones - see `embeddings.index_embed_model`.
     """
     from scripts.utils.embeddings import index_embed_model
 
-    wanted = index_embed_model()
+    wanted = index_embed_model(root=root)
     # The host comes from config/ollama-hosts.yaml, so its scheme is operator
     # input, not a literal. A `file:` host would make urlopen read a local path
     # and report its contents as an ollama tag list.
@@ -695,6 +757,15 @@ def _embed_model_present(host: str, timeout: int = 3) -> bool | None:
         with urllib.request.urlopen(tags_url, timeout=timeout) as resp:  # noqa: S310 - scheme guarded above
             body = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError):
+        return None
+    # A 200 carrying valid JSON that is not an OBJECT parses fine and then raised
+    # AttributeError on `.get` below, which is in no except clause here: the
+    # exception left `ollama_accel_state` and took the whole radar run with it,
+    # exactly as the fixed `queue_state` defect did. Measured 2026-08-30 for
+    # `null`, `[]` and `"x"`. `ollama_host.probe` and `embeddings.model_digest`
+    # both already guard the identical endpoint shape; this copy did not.
+    # Unknown, never guessed: the caller reports it as "could not determine".
+    if not isinstance(body, dict):
         return None
     for m in body.get("models", []) or []:
         name = (m.get("name") or m.get("model") or "") if isinstance(m, dict) else str(m)
@@ -840,17 +911,33 @@ def _index_source_globs(engine_root: Path) -> list[str] | None:
     None when the config cannot be read or declares no globs - the callers below
     then fall back to the hand-written dirs AND say they narrowed, rather than
     reporting a full sweep they did not run.
+
+    "Cannot be read" includes PARSES BUT IS THE WRONG SHAPE, since 2026-08-30.
+    This file is operator-editable, and only `OSError` and `YAMLError` were
+    caught: a config that parses to a list raised AttributeError on `cfg.get`,
+    and a `layers:` holding strings (or a mapping, whose iteration yields string
+    keys) raised the same on `layer.get`. Measured that day for all three. The
+    docstring promised a fall back and the radar got a crash instead - the same
+    valid-JSON-wrong-shape class already fixed in `queue_state` and
+    `_read_trend_records`.
     """
     path = Path(engine_root) / _INDEX_CONFIG_REL
     try:
         cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
         return None
+    if not isinstance(cfg, dict):
+        return None
+    layers = cfg.get("layers") or []
+    if not isinstance(layers, list):
+        return None
     patterns: list[str] = []
-    for layer in cfg.get("layers", []) or []:
+    for layer in layers:
+        if not isinstance(layer, dict):
+            continue
         # A commit corpus layer carries `source: git-log` and no glob; the
         # builder reads git, so there is no file mtime to compare against.
-        glob = (layer or {}).get("glob")
+        glob = layer.get("glob")
         if isinstance(glob, str) and glob:
             patterns.extend(_expand_braces(glob))
     return patterns or None
@@ -1047,8 +1134,12 @@ def _read_trend_records(trend_path: Path, limit: int) -> list[dict]:
 def router_accuracy_state(data_root: Path) -> dict:
     """Read the router-accuracy trend under the DATA root, build a rolling baseline
     (per-skill mean of the prior up-to-N records MEASURED BY THE SAME JUDGE MODEL),
-    and classify. Degrades to not-due when the trend is absent, has < 2 records, or
-    carries no prior run on the current judge. The trend lives under the datastore
+    and classify. An ABSENT trend is due at warn, not quiet: `classify_router_accuracy`
+    treats no measurement on record as the producer being dead, which is the failure
+    that matters most, and this sentence claimed the opposite until 2026-08-30. A
+    trend that exists but has < 2 records, or carries no prior run on the current
+    judge, is the not-due case (a baseline legitimately forming). The trend lives
+    under the datastore
     (get_datastore_dir() == data_root/datastore), written by router-accuracy-nightly.py."""
     trend_path = data_root / "datastore" / "operations" / "router-accuracy" / "trend.jsonl"
     records = _read_trend_records(trend_path, ROUTER_ACCURACY_BASELINE_N + 1)

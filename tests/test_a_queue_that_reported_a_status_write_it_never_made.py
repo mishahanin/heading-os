@@ -23,6 +23,7 @@ Tests: this file.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -79,7 +80,24 @@ def queued(monkeypatch, tmp_path):
         return {"result": "send_failed", "error": "smtp refused the recipient"}
 
     monkeypatch.setattr(AQ, "send_card", fake_send)
-    state["roots"] = (tmp_path / "engine", tmp_path / "data")
+    data_root = tmp_path / "data"
+    state["roots"] = (tmp_path / "engine", data_root)
+
+    # The card also goes on DISK. `approve_and_send` claims it through
+    # `claim_card_for_send`, which reads the real queue store under the same
+    # lock that the write takes - that is the whole point of the claim, so it
+    # cannot be stubbed away without stubbing away the thing under test. A
+    # stubbed lister alone left the claim reading an absent queue and every
+    # approve came back `blocked` for the wrong reason.
+    def put(card: dict) -> None:
+        state["card"] = card
+        qpath = data_root / "outputs/operations/action-queue/queue.json"
+        qpath.parent.mkdir(parents=True, exist_ok=True)
+        qpath.write_text(json.dumps({"version": 1, "generated_at": None,
+                                     "actions": [card]}), encoding="utf-8")
+
+    state["put"] = put
+    put(state["card"])
     return state
 
 
@@ -133,7 +151,7 @@ def test_the_send_gate_still_refuses_an_already_approved_card(queued, monkeypatc
     """The gate is verified by making it REFUSE, never by removing it. An
     `approved` card is outside SENDABLE_STATUSES, so no send may be attempted -
     this is the duplicate-mail failure the queue exists to prevent."""
-    queued["card"] = _card(status="approved")
+    queued["put"](_card(status="approved"))
     monkeypatch.setattr(AQ, "list_action_queue",
                         lambda data_root: {"items": [queued["card"]]})
     monkeypatch.setattr(AQ, "apply_status", lambda *a, **k: {"ok": True})

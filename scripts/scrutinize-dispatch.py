@@ -770,6 +770,24 @@ def _refuse_unusable(run: CommandRun) -> None:
         print(run.stderr_tail, file=sys.stderr)
 
 
+def _recorded_cmd(cmd: list[str], source: str | None) -> str:
+    """The command as evidence: what the operator typed, or a re-runnable spelling.
+
+    `" ".join(cmd)` was neither. `shlex.split` has already thrown the quoting
+    away by the time `cmd` exists, so joining on a space recorded
+    `--cmd "python3 -c \\"import sys; sys.exit(1)\\""` as
+    `python3 -c import sys; sys.exit(1)` - measured 2026-08-30. That string is
+    not the command that ran, and feeding it back to `--cmd` is REFUSED by this
+    module's own guard (`shell_operators_in_source` returns `['(', ')', ';']`
+    for it), so the row's own evidence field fails the harness that wrote it.
+
+    The raw `--cmd` string is exact when the CLI supplied one. An in-process
+    caller passes a ready argv and no source, and there `shlex.join` quotes each
+    argument so the recorded string splits back to the same argv.
+    """
+    return source if source else shlex.join(cmd)
+
+
 def reproduce(*, run_id: str, target: str, finding_id: str, cmd: list[str],
               source: str | None = None) -> int:
     """Run the proposed command and record the pre-fix exit code.
@@ -799,7 +817,8 @@ def reproduce(*, run_id: str, target: str, finding_id: str, cmd: list[str],
         return 3
     append_row(run_id=run_id, kind="reproduction", target=target,
                finding_id=finding_id, verdict="REPRODUCED",
-               reproduction={"cmd": " ".join(cmd), "exit_before": run.exit_code,
+               reproduction={"cmd": _recorded_cmd(cmd, source),
+                             "exit_before": run.exit_code,
                              "exit_after": None,
                              "stdout_tail": run.stdout_tail,
                              "stderr_tail": run.stderr_tail})
@@ -833,7 +852,7 @@ def promote(*, run_id: str, target: str, finding_id: str, cmd: list[str],
         return 3
     append_row(run_id=run_id, kind="reproduction", target=target,
                finding_id=finding_id, verdict="FALSIFIED",
-               reproduction={"cmd": " ".join(cmd),
+               reproduction={"cmd": _recorded_cmd(cmd, source),
                              "exit_before": prior["reproduction"]["exit_before"],
                              "exit_after": run.exit_code,
                              "stdout_tail": run.stdout_tail,

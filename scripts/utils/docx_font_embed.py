@@ -58,10 +58,14 @@ def _obfuscate(font_bytes: bytes, guid_str: str) -> bytes:
 
 
 def _patch_font_table(xml: str, embed_plan: list) -> str:
-    """Append a ``<w:font name="...">`` block per family before
-    ``</w:fonts>``. If the family already has an entry, drop our additions and
-    overwrite via a regex; this method appends fresh and lets duplicates be
-    resolved by Word (last entry wins in practice for our inserted families).
+    """Append a ``<w:font name="...">`` block per family before ``</w:fonts>``,
+    after REMOVING any pre-existing block for that family.
+
+    The docstring here used to say the opposite - that duplicates are left for
+    Word to resolve, "last entry wins in practice". The code has deduplicated
+    since it was written, and nobody guarantees last-entry-wins, so a reader
+    who trusted the docstring could delete the removal as redundant. The code
+    is the contract; this sentence now matches it.
     """
     by_family: dict[str, list] = {}
     for family, weight_attr, guid, _, rel_id, _ in embed_plan:
@@ -71,9 +75,20 @@ def _patch_font_table(xml: str, embed_plan: list) -> str:
     for family, entries in by_family.items():
         # Remove any pre-existing <w:font name="<family>"> block so Word does
         # not see duplicate declarations.
-        # Match opens like <w:font w:name="GT Standard"> ... </w:font>
+        #
+        # `w:name` is matched wherever it sits in the opening tag, not as the
+        # first-and-only attribute. The old pattern was
+        # `<w:font\s+w:name="X"\s*>`, which requires the tag to close straight
+        # after the name. A producer that writes any second attribute -
+        # `<w:font w:name="Bond Sans" w:charset="00">`, or a panose before the
+        # name - slid past it: the removal silently no-opped and the fresh
+        # block was appended anyway, leaving the duplicate declaration this
+        # removal exists to prevent. Measured 2026-08-30: one entry in, two
+        # out. The `/>` alternative matters too - without it a self-closing
+        # entry would swallow `.*?</w:font>` from the NEXT family's block.
         pat = re.compile(
-            r'<w:font\s+w:name="' + re.escape(family) + r'"\s*>.*?</w:font>',
+            r'<w:font\b[^>]*\bw:name="' + re.escape(family) + r'"'
+            r'[^>]*?(?:/>|>.*?</w:font>)',
             re.DOTALL,
         )
         xml = pat.sub("", xml)
@@ -136,22 +151,82 @@ def _build_font_rels(embed_plan: list, existing_xml: str | None) -> str:
     return cleaned.replace("</Relationships>", new_rels + "</Relationships>")
 
 
+# ECMA-376 `CT_Settings` is an xsd:sequence, so a child in the wrong position is
+# schema-invalid and the consumer is free to ignore it. These are the tags that
+# may legally PRECEDE `w:embedTrueTypeFonts`, in sequence order.
+#
+# The predecessor list, not the successor list, because it is ten tags rather
+# than ninety - and because a tag missing from it fails toward inserting a
+# little too early, while a tag missing from a successor list fails toward
+# appending past the end of the document, which is the defect being fixed.
+_SETTINGS_PREDECESSORS = (
+    "w:writeProtection", "w:view", "w:zoom", "w:removePersonalInformation",
+    "w:removeDateAndTime", "w:doNotDisplayPageBoundaries",
+    "w:displayBackgroundShape", "w:printPostScriptOverText",
+    "w:printFractionalCharacterWidth", "w:printFormsData",
+)
+_EMBED_SETTINGS = (
+    "w:embedTrueTypeFonts", "w:embedSystemFonts", "w:saveSubsetFonts",
+)
+
+
+def _element_end(xml: str, tag: str) -> int:
+    """Index just past `tag`'s element in `xml`, or -1 when the tag is absent.
+
+    Handles the self-closing form and the open/close pair alike. The lookahead
+    keeps `w:view` from matching a longer tag that merely starts with it.
+    """
+    match = re.search(r"<" + re.escape(tag) + r"(?=[\s/>])", xml)
+    if match is None:
+        return -1
+    close = xml.find(">", match.start())
+    if close == -1:
+        return -1
+    if xml[close - 1] == "/":
+        return close + 1
+    end_tag = f"</{tag}>"
+    idx = xml.find(end_tag, close)
+    return close + 1 if idx == -1 else idx + len(end_tag)
+
+
 def _patch_settings(xml: str) -> str:
-    """Insert embedTrueTypeFonts / embedSystemFonts / saveSubsetFonts before
-    </w:settings> if absent. The schema permits these at the end of the
-    settings block."""
-    insertions = []
-    if "<w:embedTrueTypeFonts" not in xml:
-        insertions.append("<w:embedTrueTypeFonts/>")
-    if "<w:embedSystemFonts" not in xml:
-        insertions.append("<w:embedSystemFonts/>")
-    if "<w:saveSubsetFonts" not in xml:
-        insertions.append("<w:saveSubsetFonts/>")
-    if not insertions:
+    """Insert embedTrueTypeFonts / embedSystemFonts / saveSubsetFonts, each at
+    its ECMA-376 position in the `w:settings` sequence, if absent.
+
+    These were appended before `</w:settings>` under a docstring claiming "the
+    schema permits these at the end of the settings block". It does not:
+    `CT_Settings` is an xsd:sequence and all three sit near its head, ahead of
+    `w:proofState`, `w:defaultTabStop`, `w:compat`, `w:decimalSymbol` and
+    `w:listSeparator` - every one of which a stock python-docx settings.xml
+    already carries. Measured 2026-08-30 on `Document().save()` output:
+    `<w:embedTrueTypeFonts/>` landed 95 characters AFTER `<w:listSeparator/>`,
+    the last element of the sequence. This module patches strings rather than
+    parsing precisely because Word's schema check is unforgiving, so emitting
+    out-of-order children contradicted the file's own stated premise.
+    """
+    if all(_element_end(xml, tag) != -1 for tag in _EMBED_SETTINGS):
         return xml
-    if "</w:settings>" not in xml:
-        raise ValueError("settings.xml malformed - missing </w:settings>")
-    return xml.replace("</w:settings>", "".join(insertions) + "</w:settings>")
+
+    open_tag = re.search(r"<w:settings\b[^>]*>", xml)
+    if open_tag is None or "</w:settings>" not in xml:
+        raise ValueError(
+            "settings.xml malformed - missing <w:settings> ... </w:settings>"
+        )
+
+    # Insert in sequence order, treating each element already placed as an
+    # anchor for the next: with only `w:embedSystemFonts` present, the fix must
+    # still put `w:embedTrueTypeFonts` BEFORE it, not after the last anchor.
+    anchors = list(_SETTINGS_PREDECESSORS)
+    for tag in _EMBED_SETTINGS:
+        if _element_end(xml, tag) != -1:
+            anchors.append(tag)
+            continue
+        at = open_tag.end()
+        for anchor in anchors:
+            at = max(at, _element_end(xml, anchor))
+        xml = f"{xml[:at]}<{tag}/>{xml[at:]}"
+        anchors.append(tag)
+    return xml
 
 
 def _patch_content_types(xml: str) -> str:
@@ -257,6 +332,19 @@ def embed_fonts(docx_path: Path | str, fonts: dict[str, FontWeights]) -> None:
                     zout.writestr(n, new_settings)
                 elif n == "[Content_Types].xml":
                     zout.writestr(n, new_ctypes)
+                elif n.startswith("word/fonts/"):
+                    # Drop every font part a previous run embedded, rather than
+                    # copying it. `font_counter` restarts at 1 on every call, so
+                    # the copy put `word/fonts/font1.ttf` in and the plan loop
+                    # below then wrote a SECOND entry under the same name.
+                    # `zipfile` only warns ("Duplicate name"), and a reader that
+                    # resolves the first match got the STALE font bytes.
+                    # Measured 2026-08-30: two `word/fonts/font1.ttf` entries
+                    # after embedding twice. A re-embed carrying fewer fonts
+                    # also orphaned the surplus parts. Every font Relationship
+                    # is rebuilt by `_build_font_rels`, so nothing dropped here
+                    # is still referenced.
+                    continue
                 else:
                     zout.writestr(n, zin.read(n))
 

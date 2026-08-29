@@ -52,13 +52,56 @@ if [ -n "$STAGED" ]; then
     # not have this hole (measured the same day). This standalone hook has no
     # stash, so it refuses instead: a partially-staged file is re-staged by the
     # author, not silently scanned in the wrong version.
-    DIRTY=$(git diff --name-only -- $STAGED)
+    # The pathspec list is built NUL-delimited and handed over by `xargs -0`,
+    # never by letting the shell split `$STAGED`.
+    #
+    # Unquoted, the guard failed OPEN. MEASURED 2026-08-30 in a scratch
+    # repository: with `my secret.env` staged and its worktree copy then changed
+    # without re-staging, `git diff --name-only -- $STAGED` split the name into
+    # `my` and `secret.env`, matched neither, reported NO dirty file, and the
+    # hook went on to scan the harmless worktree bytes while the staged bytes
+    # went into the commit. That is precisely the hole the refusal below exists
+    # to close, reopened by the quoting.
+    #
+    # WHITESPACE is the whole of it, and glob characters are NOT a second case:
+    # measured the same day, a staged `a*.env` beside `ab.env` and `ac.env` was
+    # still reported dirty, because git's own pathspec matching is glob-aware
+    # and the expansion only WIDENS what matches. A wider pathspec can block a
+    # commit it need not have blocked; it cannot let one through.
+    #
+    # Scope, stated rather than implied: on a clone using the pre-commit
+    # FRAMEWORK this block is not what runs, and the framework stashes unstaged
+    # changes so it never had the hole. This template is what `install-hooks.py`
+    # writes for a clone without it.
+    DIRTY=$(git diff --cached --name-only --diff-filter=ACMR -z |
+            xargs -0 git diff --name-only --)
     if [ -n "$DIRTY" ]; then
         echo ""
         echo "COMMIT BLOCKED: these files have unstaged edits, so the secret"
         echo "scanner cannot see the bytes that would be committed:"
         echo "$DIRTY"
         echo "Re-stage them (git add), or commit them separately."
+        exit 1
+    fi
+    # An ESCAPED path is refused rather than handed to the scanner.
+    #
+    # Without `-z`, git C-quotes any path holding a newline, a quote, a
+    # backslash or a non-ASCII byte, wrapping the whole thing in double quotes.
+    # The scanner's `--stdin` contract is one raw path per line, so it receives
+    # a literal that names no file on disk. MEASURED 2026-08-30 with a staged
+    # file called `two\\nlines.env`: the scanner printed "No secrets detected."
+    # and exited 0 over a file it never opened. A clean verdict for an unread
+    # file is the failure this whole hook exists to prevent.
+    #
+    # A line beginning with a double quote is git's own signal that it escaped
+    # the path, and a filename that genuinely starts with one is escaped too, so
+    # the test is right in both directions.
+    if printf '%s\\n' "$STAGED" | grep -q '^"'; then
+        echo ""
+        echo "COMMIT BLOCKED: a staged path has characters git must escape (a"
+        echo "newline, a quote, a backslash or a non-ASCII byte), so the secret"
+        echo "scanner cannot be handed the real path. Rename the file, then commit:"
+        printf '%s\\n' "$STAGED" | grep '^"'
         exit 1
     fi
     # Run scanner - if python3 fails, warn but don't block

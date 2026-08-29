@@ -106,15 +106,25 @@ def index_embed_preference(*, root=None):
     )
 
 
-def index_embed_model() -> str:
+def index_embed_model(*, root=None) -> str:
     """The model tag this workspace embeds with. Reads a file, probes nothing.
 
     Split from `index_embed_target` for the one caller that wants the name and
     must NOT touch the network to get it: `ops_signals.ollama_state` asks the
     LOCAL daemon whether the embed model is present, and a health probe that
     resolves a remote host to learn a string would be measuring the wrong machine.
+
+    `root` carries the same meaning it has in `index_embed_preference`, and was
+    missing here until 2026-08-30. `ops_signals.ollama_accel_state` is handed an
+    engine root, reads the pinned HOST from that root's config, and then asked
+    this function for the MODEL - which fell to `get_workspace_root()` and
+    answered out of a different clone. Measured that day: an engine root whose
+    `config/memory-index.yaml` names `nomic-embed-text`, against a host holding
+    only `bge-m3`, was reported as having the embed model pulled. Same defect
+    class as the hardcoded `EMBED_MODEL_PREFIX` removed on 2026-08-22, one clone
+    deeper: a monitor answering about a model the workspace it names does not use.
     """
-    return _index_config().get("model") or INDEX_EMBED_MODEL_DEFAULT
+    return _index_config(root).get("model") or INDEX_EMBED_MODEL_DEFAULT
 
 
 def index_embed_keep_alive() -> str:
@@ -332,6 +342,21 @@ def _post_with_retry(url: str, payload: bytes, timeout: int, attempts: int = 3):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
+            # Valid JSON is not a valid reply. A proxy, a misconfigured gateway
+            # or an ollama version mismatch can answer 200 with `[]`, `null` or
+            # a bare string; each parses fine and then raised AttributeError on
+            # `.get` below. AttributeError is in none of the except clauses, so
+            # it escaped with NO retry and, worse, as something other than
+            # EmbeddingError -- breaking the one contract every caller of this
+            # module handles. Measured 2026-08-30 for `[]`, `null`, `"oops"`
+            # and `3`. `model_digest` has carried the same isinstance guard, for
+            # the same reason, since it was written; this half never got it.
+            if not isinstance(body, dict):
+                raise EmbeddingError(
+                    f"embed endpoint {url} returned a non-object body "
+                    f"({type(body).__name__}); an ollama /api/embed reply is a "
+                    f"JSON object"
+                )
             vectors = body.get("embeddings")
             if not vectors:
                 raise EmbeddingError(

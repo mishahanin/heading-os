@@ -256,7 +256,15 @@ def _load_brand_css(workspace_root: Path) -> str:
     return css_path.read_text(encoding="utf-8")
 
 
-_SECTION_RE = re.compile(r"\{\{#([A-Z_]+)\}\}(.*?)\{\{/\1\}\}", re.DOTALL)
+# The two grammars have to agree. A scalar `{{PHASE_2}}` was always legal, but
+# the section name was `[A-Z_]+` - no digits - so `{{#PHASE_2_ITEMS}}` matched
+# nothing, `_render_sections` left the block alone, and `_substitute_scalars`
+# could not touch it either because `{{#...}}` and `{{/...}}` carry a `#` and a
+# `/`. The raw template syntax and the whole loop body were then emitted
+# verbatim into the rendered HTML and the PDF, with a successful exit code.
+# Measured 2026-08-30: rendering `{{#PHASE_2_ITEMS}}<li>{{.}}</li>{{/PHASE_2_ITEMS}}`
+# returned that string unchanged.
+_SECTION_RE = re.compile(r"\{\{#([A-Z_][A-Z0-9_]*)\}\}(.*?)\{\{/\1\}\}", re.DOTALL)
 _VAR_RE = re.compile(r"\{\{([A-Z_][A-Z0-9_]*|\.)\}\}")
 
 

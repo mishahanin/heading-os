@@ -7,8 +7,10 @@ DISPLAY_ORDER -- see those two objects below for the live set, which is the
 only place it is stated. This sentence used to enumerate eight checks by name
 while the registry held twelve; four (ops_radar, reminders_due, dream_shadow,
 updates) had been added and never written down, which is how a check gets
-added in one place and missed in another. Each runs in its own thread via
-concurrent.futures.ThreadPoolExecutor(max_workers=8). Output blocks are emitted
+added in one place and missed in another. The checks run concurrently on a
+concurrent.futures.ThreadPoolExecutor(max_workers=8) -- a BOUNDED pool, so with
+twelve checks at least four of them run on a reused pool thread; this line said
+"each runs in its own thread" until 2026-08-30. Output blocks are emitted
 in the same fixed order /prime expects so the CEO-facing brief stays unchanged.
 
 A single failing health check never blocks the others: the script captures
@@ -698,11 +700,17 @@ def render_text(results: dict[str, dict[str, Any]]) -> str:
             body = "(no output)"
         lines.append(body)
         # Anything that is NOT a known-good status is a failure, so its stderr
-        # is shown. Keying on `== "error"` alone meant the two checks that
-        # report `"failed"` (fireside, sync-exchange) had their diagnostics
+        # is shown. Keying on `== "error"` alone meant that when fireside and
+        # sync-exchange still reported `"failed"`, their diagnostics were
         # silently dropped -- exactly the two daemon checks where the stderr is
-        # the whole point. Deriving the failure set from the good one means a
-        # NEW status string cannot hide a diagnostic by accident.
+        # the whole point. Both were since changed to `"error"` (see the two
+        # `"error", not "failed"` comments above) and no check in this file
+        # returns `"failed"` any more; the `"failed"` at `run_updates` is
+        # update-manager's own vocabulary, not a check status. This comment read
+        # as a description of live code until 2026-08-30, which invited someone
+        # to "fix" a check back to a word nothing here returns. Deriving the
+        # failure set from the good one means a NEW status string cannot hide a
+        # diagnostic by accident, whatever it is called.
         if res.get("status") not in NON_FAILURE_STATUSES:
             stderr = res.get("stderr", "").strip()
             if stderr:

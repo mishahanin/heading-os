@@ -206,10 +206,24 @@ def scan_files(file_list: list, unreadable: list | None = None) -> dict:
     return results
 
 
-def print_results(results: dict) -> None:
-    """Print scan results with colored output."""
+def print_results(results: dict, covered: bool = True) -> None:
+    """Print scan results with colored output.
+
+    `covered` is False when the run did not read everything it was pointed
+    at. The green line is a claim about the whole scope, and it was printed
+    unconditionally: MEASURED 2026-08-30, a 6 MB file holding a live AWS key
+    under `--scan-dir` produced "No secrets detected." on stdout and exit 0,
+    with the only trace on stderr. That is the sentence
+    `.claude/rules/scope-claims.md` forbids -- one asserting more than the
+    method established. Say what was scanned instead.
+    """
     if not results:
-        print(f"{GREEN}No secrets detected.{RESET}")
+        if covered:
+            print(f"{GREEN}No secrets detected.{RESET}")
+        else:
+            print(f"{YELLOW}No secrets detected IN THE FILES THAT WERE READ. "
+                  f"Coverage was incomplete (see stderr), so this is not a "
+                  f"clean verdict.{RESET}")
         return
 
     total = sum(len(findings) for findings in results.values())
@@ -240,6 +254,10 @@ def main():
     args = parser.parse_args()
 
     file_list = []
+    # Only --scan-dir can populate this: the other two modes scan exactly the
+    # paths they were handed, so the gates that drive --stdin (the pre-commit
+    # hook, push-all.py, publish-service.py) see no change in verdict.
+    oversized: list = []
 
     if args.stdin:
         file_list = sys.stdin.read().strip().split("\n")
@@ -249,7 +267,6 @@ def main():
         # every byte of .git (packfiles read as text), .venv and node_modules
         # through the pattern set, which is where the recursive sweep spent its
         # time and where its false positives came from.
-        oversized: list = []
         for path in _walk_scannable(scan_dir, oversized):
             file_list.append(str(path))
         if oversized:
@@ -279,7 +296,7 @@ def main():
     try:
         unreadable: list = []
         results = scan_files(file_list, unreadable)
-        print_results(results)
+        print_results(results, covered=not (unreadable or oversized))
         if unreadable:
             print(f"{RED}{BOLD}SCANNER ERROR: {len(unreadable)} file(s) could not "
                   f"be read and were NOT scanned:{RESET}", file=sys.stderr)
@@ -307,7 +324,13 @@ def main():
         # about what was found.
         if results:
             sys.exit(1)
-        sys.exit(2 if unreadable else 0)
+        # A file skipped for SIZE is coverage this run did not have, which the
+        # exit-code contract above calls UNKNOWN and "never a pass" -- the same
+        # verdict an unreadable file already gets. It was printed to stderr and
+        # then exited 0, so every machine consumer read the run as clean.
+        # MEASURED 2026-08-30: a 6 MB file holding a live AWS key exited 0 under
+        # `--scan-dir`, while naming the same file explicitly exited 1.
+        sys.exit(2 if (unreadable or oversized) else 0)
     except Exception as e:
         print(f"{RED}Scanner error: {e}{RESET}", file=sys.stderr)
         sys.exit(2)

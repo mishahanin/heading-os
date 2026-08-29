@@ -35,7 +35,7 @@ Usage:
     # and a single Exchange Account connection.
     python scripts/send-email.py --batch messages.json
 
-    # Threaded reply (to the sender of the matched message, preserves thread):
+    # Threaded reply (to the AUTHOR of the matched message, preserves thread):
     python scripts/send-email.py --reply \
         --match-from "alice@example.com" \
         --match-subject "31C / Globex" \
@@ -781,6 +781,23 @@ def _reply_target(original):
     return None
 
 
+def _found_line(original) -> str:
+    """The pre-send confirmation, naming the mailbox the reply will REACH.
+
+    This is the last line the operator reads before an irreversible outbound
+    action, and it printed `original.sender`. For delegate-sent mail that is
+    the assistant's mailbox, while exchangelib addresses the reply to
+    `original.author` -- so the operator confirmed one person and the mail went
+    to another. `_reply_target` is the resolution the CRM auto-log and the
+    post-send line were already fixed onto on 2026-08-26; the confirmation the
+    operator actually acts on was left behind.
+    """
+    target = _reply_target(original)
+    subject = getattr(original, "subject", None) or "(no subject)"
+    return (f"[FOUND] {subject} from "
+            f"{target.email_address if target is not None else '?'}")
+
+
 def _replyall_recipients(account, original):
     """All addresses a reply-all touches (sender + To + CC), minus self.
     Used only to drive the CRM auto-log; exchangelib builds the real envelope."""
@@ -806,12 +823,26 @@ def _send_threaded_core(account, mode, original, body, to=None, cc=None, bcc=Non
     can be attached before send - the same two-step pattern the new-message
     path uses. forward carries the original's attachments automatically.
 
+    ``cc``/``bcc`` are REFUSED, not accepted. They were in the signature and
+    were never passed to create_reply / create_reply_all / create_forward, so a
+    direct caller got ``"status": "sent"`` with the CC absent -- silent loss on
+    an irreversible outbound action, which this file treats as the worst shape
+    it can produce. `main` refuses them one layer up; this is the same refusal
+    at the layer that actually drops them, because the lazy-import design
+    invites other importers. Wiring them onto the saved draft is the other
+    repair and needs a live Exchange account to verify.
+
     Returns {"to": [...], "status": "sent"|"failed", "stage": str,
-    "error": str|None}. ``stage`` carries the same four failing values
-    `_send_email_core` documents, and for the same reason: main's threaded
-    branch has to tell the operator whether a draft exists and whether the
-    request reached the server, and an error string cannot say.
+    "error": str|None}. ``stage`` carries the four failing values
+    `_send_email_core` documents plus ``validation``, and for the same reason:
+    main's threaded branch has to tell the operator whether a draft exists and
+    whether the request reached the server, and an error string cannot say.
     """
+    if cc or bcc:
+        return {"to": to or [], "status": "failed", "stage": "validation",
+                "error": "cc/bcc are not supported for reply/reply_all/forward "
+                         "-- they are dropped, never delivered. Nothing was "
+                         "saved and nothing was sent."}
     _ensure_exchangelib()
     if signature is None:
         signature = load_signature()
@@ -833,12 +864,16 @@ def _send_threaded_core(account, mode, original, body, to=None, cc=None, bcc=Non
             draft_ref = original.create_reply_all(derived_subject, HTMLBody(full_html))
         elif mode == "forward":
             if not to_mb:
-                return {"to": [], "status": "failed", "stage": "attachments",
+                # `validation`, not `attachments`. No path was involved, and
+                # the attachments guidance tells the operator to "fix the
+                # path" -- false instruction on a failure the stage table
+                # exists to describe truthfully.
+                return {"to": [], "status": "failed", "stage": "validation",
                         "error": "forward requires --to (recipients to forward to)"}
             draft_ref = original.create_forward(derived_subject, HTMLBody(full_html),
                                                 to_recipients=to_mb)
         else:
-            return {"to": to or [], "status": "failed", "stage": "attachments",
+            return {"to": to or [], "status": "failed", "stage": "validation",
                     "error": f"unknown mode: {mode}"}
         save_result = draft_ref.save(account.drafts)
     except Exception as e:
@@ -914,6 +949,12 @@ def _send_threaded_core(account, mode, original, body, to=None, cc=None, bcc=Non
 # duplicate the `_SAFE_TO_RESEND` design exists to prevent.
 _STAGE_GUIDANCE = {
     "attachments": "         Nothing was saved and nothing was sent. Fix the path and run it again.",
+    # Refused before anything was built. Distinct from `attachments`, which was
+    # stamped on a missing --to and an unknown mode until 2026-08-30 and sent
+    # the operator to fix a path that no such failure ever involved.
+    "validation": ("         The request was refused before anything was built: "
+                   "nothing was saved and nothing was sent. Fix the arguments "
+                   "and run it again."),
     # NOT "no draft was saved". That stage is stamped on every exception out of
     # `msg.save()`, and a read timeout on the CreateItem call establishes only
     # that the ANSWER did not come back - the item may well exist on the server.
@@ -994,7 +1035,11 @@ def send_batch(account, messages):
 
     Returns:
         list of per-message result dicts: ``{"to": [...], "status": str,
-        "error": str|None}``.
+        "stage": str, "error": str|None}``. ``stage`` is the fourth key every
+        result actually carries -- from :func:`_send_email_core`, or
+        ``"malformed"`` from the validation block below. It was omitted here,
+        so a caller reading this contract had no way to know the
+        `_STAGE_GUIDANCE` mechanism exists at all.
     """
     # Load the signature HTML once for the whole batch (the inline image
     # FileAttachment objects must be rebuilt per message because each one
@@ -1100,7 +1145,11 @@ def main():
     # --- Threaded reply / reply-all / forward ---
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument("--reply", action="store_true",
-                            help="Threaded reply to the matched message's sender.")
+                            help=("Threaded reply to the matched message's AUTHOR "
+                                  "(the From header). Not its sender: for "
+                                  "delegate-sent mail those differ, and "
+                                  "exchangelib addresses the reply to the "
+                                  "author. See _reply_target."))
     mode_group.add_argument("--reply-all", action="store_true",
                             help="Threaded reply to everyone on the matched message.")
     mode_group.add_argument("--forward", action="store_true",
@@ -1267,8 +1316,7 @@ def main():
             print(f"[ERROR] No message found in {folder_key(args.match_folder)} "
                   f"matching: {crit}")
             sys.exit(1)
-        print(f"[FOUND] {getattr(original, 'subject', '(no subject)')} "
-              f"from {getattr(getattr(original, 'sender', None), 'email_address', '?')}")
+        print(_found_line(original))
         result = _send_threaded_core(
             account, threaded_mode, original, body=args.body,
             to=args.to, cc=args.cc, bcc=args.bcc, attach=args.attach,

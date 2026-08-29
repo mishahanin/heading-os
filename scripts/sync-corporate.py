@@ -118,6 +118,18 @@ def sync_corporate(dry_run: bool = False) -> dict:
                 "error", "pull", str(clone),
                 f"git pull --ff-only exceeded {PULL_TIMEOUT_S}s",
             )
+        except OSError as exc:
+            # Only TimeoutExpired was caught, so a machine without `git` on PATH
+            # raised FileNotFoundError straight out of main() -- a traceback
+            # instead of the result dict this file's exit-code contract
+            # promises, and with --json nothing machine-readable at all. Both
+            # documented callers (setup.py, /sync) are headless, and onboarding
+            # is exactly where a missing executable shows up.
+            return _result(
+                "error", "pull", str(clone),
+                f"could not run `git pull --ff-only`: {exc}. Is git installed "
+                f"and on PATH?",
+            )
         if proc.returncode != 0:
             return _result(
                 "error", "pull", str(clone),
@@ -147,6 +159,14 @@ def sync_corporate(dry_run: bool = False) -> dict:
         return _result(
             "error", "clone", str(clone),
             f"gh repo clone exceeded {CLONE_TIMEOUT_S}s",
+        )
+    except OSError as exc:
+        # Same shape as the pull branch above: no `gh` on PATH raised
+        # FileNotFoundError past the contract instead of returning a result.
+        return _result(
+            "error", "clone", str(clone),
+            f"could not run `gh repo clone`: {exc}. Is the GitHub CLI (gh) "
+            f"installed and on PATH?",
         )
     if proc.returncode != 0:
         return _result(
@@ -178,8 +198,17 @@ def main() -> int:
             print(f"{GRAY}{res['message']}{RESET}")
         else:
             print(f"{RED}corporate sync failed — {res['message']}{RESET}")
-            print(f"{YELLOW}Corporate content not updated. Check access to "
-                  f"{load_github_org()}/{CORPORATE_REPO} and your gh auth.{RESET}")
+            org = load_github_org()
+            if org:
+                print(f"{YELLOW}Corporate content not updated. Check access to "
+                      f"{org}/{CORPORATE_REPO} and your gh auth.{RESET}")
+            else:
+                # The unconditional hint interpolated an empty org and told the
+                # operator to "Check access to /heading-os-corporate" -- the very
+                # nonsense path the org_note comment in sync_corporate says was
+                # fixed. When there is no org, the error line above has already
+                # named the seam to set, and access is not the problem.
+                print(f"{YELLOW}Corporate content not updated.{RESET}")
 
     return 1 if res["status"] == "error" else 0
 

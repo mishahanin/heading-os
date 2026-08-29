@@ -28,7 +28,10 @@ Exit codes:
   0     everything that exists was pushed.
   3     everything that COULD be pushed was; at least one repo was skipped for a
         named reason (a branch that is not main, an unarmed engine test gate).
-        Each skipped repo is still committed locally, so nothing is lost. Read the
+        Each skipped repo is still committed locally UNLESS --no-commit or
+        --dry-run was passed, in which case its working-tree changes are still
+        uncommitted; `_report_skips` prints which of the three it was, and this
+        line claimed the first unconditionally until 2026-08-30. Read the
         headline, not the code: "Partial" means some repo did push, while "NOTHING
         PUSHED" means every repo was skipped and this run produced no off-machine
         copy at all. The exec and pre-cutover modes push one repo, so exit 3 there
@@ -515,6 +518,62 @@ ENGINE_GATE_MARKER = "run-tests.py"
 DATA_GATE_MARKER = "heading-os-data-test-gate"
 
 
+def _git_hooks_dir(repo: Path) -> Path | None:
+    """Where git looks for `repo`'s hooks, or None when that cannot be resolved.
+
+    `repo / ".git" / "hooks"` was read directly, and it is only right for an
+    ordinary clone. In a LINKED WORKTREE (and in a submodule) `.git` is a
+    gitFILE holding `gitdir: <path>`, and git resolves hooks against the COMMON
+    gitdir, not the per-worktree one. MEASURED 2026-08-30 in a scratch repo with
+    a worktree added: the armed hook lives at `<main>/.git/hooks/pre-push`,
+    `git rev-parse --git-path hooks/pre-push` from the worktree names exactly
+    that file, and the old expression pointed at a `.git/hooks` directory that
+    does not exist -- so `_pre_push_gate_armed` returned False forever and every
+    push from a worktree was skipped with "the pre-push test gate is not
+    installed" while the gate was armed and would have run. An agent working in
+    a `git worktree` is an ordinary layout here.
+
+    Resolved in pure Python rather than by shelling out, because this feeds a
+    security gate and every unresolvable shape has to fail CLOSED: an
+    unreadable gitfile, a gitfile that does not start with `gitdir:`, or an
+    unreadable `commondir` all return None, which the caller reads as "not
+    armed". Widening it is what would be dangerous, so it never guesses.
+    """
+    dot_git = repo / ".git"
+    if dot_git.is_dir():
+        return dot_git / "hooks"
+    if not dot_git.is_file():
+        return None
+    try:
+        line = dot_git.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not line.startswith("gitdir:"):
+        return None
+    target = line.split(":", 1)[1].strip()
+    if not target:
+        # `Path("")` is `Path(".")`, which would resolve the hooks dir back onto
+        # the worktree itself and answer a question this file cannot answer.
+        return None
+    gitdir = Path(target)
+    if not gitdir.is_absolute():
+        gitdir = (repo / gitdir).resolve()
+    # A worktree's gitdir carries `commondir`, pointing at the shared .git that
+    # actually holds `hooks/`. A submodule's gitdir has no `commondir` and holds
+    # its own `hooks/`, so the absence of the file is the answer, not an error.
+    commondir = gitdir / "commondir"
+    if commondir.is_file():
+        try:
+            rel = commondir.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            return None
+        if not rel:
+            return None
+        common = Path(rel)
+        gitdir = common if common.is_absolute() else (gitdir / common).resolve()
+    return gitdir / "hooks"
+
+
 def _pre_push_gate_armed(repo: Path, marker: str = ENGINE_GATE_MARKER) -> bool:
     """True if repo's pre-push hook is installed and runs the regression gate.
 
@@ -539,7 +598,10 @@ def _pre_push_gate_armed(repo: Path, marker: str = ENGINE_GATE_MARKER) -> bool:
     refusing the push here would block a backup over a degraded gate rather than
     an absent one. `--check` asks "is it correctly installed" and is the surface
     that should go red. Do not collapse them into one predicate."""
-    hook = repo / ".git" / "hooks" / "pre-push"
+    hooks = _git_hooks_dir(repo)
+    if hooks is None:
+        return False
+    hook = hooks / "pre-push"
     try:
         return hook.is_file() and marker in hook.read_text(encoding="utf-8")
     except OSError:
@@ -914,7 +976,13 @@ def main() -> None:
     if skipped:
         _report_skips(skipped, args, attempted)
 
-    print(f"\n{GREEN}{BOLD}Both repos pushed.{RESET}" if not args.dry_run else f"\n{YELLOW}dry-run complete.{RESET}")
+    # Branched on `attempted`, because "Both repos pushed." over the pre-cutover
+    # mode -- which announces "Pushing one repo." nine lines up -- is the closing
+    # headline claiming a second off-machine copy that does not exist. Every
+    # other summary line in this file is careful about exactly that, and this one
+    # was not until 2026-08-30.
+    headline = "Both repos pushed." if attempted > 1 else "Repo pushed."
+    print(f"\n{GREEN}{BOLD}{headline}{RESET}" if not args.dry_run else f"\n{YELLOW}dry-run complete.{RESET}")
 
 
 if __name__ == "__main__":

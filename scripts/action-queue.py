@@ -44,12 +44,16 @@ from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.workspace import get_data_root, get_workspace_root
 from scripts.bridge_daemon.sources.action_queue import (
     ACTIVE_STATUSES,
+    SENDING,
+    STALE_CLAIM_SECONDS,
     append_cards,
     apply_status,
     approve_card,
+    claim_card_for_send,
     dismiss_card,
     edit_card,
     list_action_queue,
+    release_claim,
 )
 
 # send_card lives in the hyphenated scripts/action-queue-execute.py, which is not
@@ -62,10 +66,17 @@ _spec.loader.exec_module(_AQX)
 send_card = _AQX.send_card
 
 # The statuses `approve` will send from. DERIVED from the queue's own active
-# set, minus `approved` — a card already in `approved` has been through this
-# path once, and sending it again is the duplicate this guard exists to stop.
+# set, minus two.
+#
+# `approved` — a card already in `approved` has been through this path once, and
+# sending it again is the duplicate this guard exists to stop.
+#
+# `SENDING` — a live claim. `claim_card_for_send` owns that decision (it also
+# knows when a claim has gone stale and may be taken over), so this set must not
+# offer a second opinion on it.
+#
 # Deriving it means a new active status cannot silently become sendable.
-SENDABLE_STATUSES = frozenset(ACTIVE_STATUSES) - {"approved"}
+SENDABLE_STATUSES = frozenset(ACTIVE_STATUSES) - {"approved", SENDING}
 
 
 def _resolve_id(items: list[dict], prefix: str) -> str:
@@ -87,7 +98,10 @@ def _print_aq_row(c: dict) -> None:
     prio = c.get("priority", "P3")
     pcol = {"P1": RED, "P2": YELLOW, "P3": GRAY}.get(prio, GRAY)
     status = c.get("status", "pending")
-    scol = GREEN if status == "approved" else (RED if status == "send_failed" else CYAN)
+    # `sending` is a live claim, not a resting state: it gets its own colour so
+    # a stuck claim is visible in the list instead of reading as one more
+    # ordinary row.
+    scol = {"approved": GREEN, "send_failed": RED, SENDING: YELLOW}.get(status, CYAN)
     draft = c.get("draft_status")
     dsuffix = f"  {GRAY}{draft}{RESET}" if draft else ""
     print(f"  {pcol}{prio}{RESET} {c.get('id', '')[:8]} "
@@ -123,8 +137,10 @@ def _record_unrecorded_send(data_root: Path, card: dict, why: str) -> None:
     )
     print(f"{RED}{BOLD}WARNING: the message WAS SENT and the queue does not "
           f"know it.{RESET}")
-    print(f"{GRAY}  The card kept its pre-approval status, so approving it "
-          f"again would send a SECOND copy.{RESET}")
+    print(f"{GRAY}  The card is still claimed as '{SENDING}'. That refuses a "
+          f"second approve for {STALE_CLAIM_SECONDS // 60} minutes and then "
+          f"allows one, so DISMISS the card rather than let the claim "
+          f"expire.{RESET}")
     print(f"{GRAY}  Reason the write failed: {why or '(unstated)'}{RESET}")
     if path:
         print(f"{GRAY}  A durable record is at {path}.{RESET}")
@@ -155,42 +171,48 @@ def approve_and_send(engine_root: Path, data_root: Path, id_or_prefix: str) -> d
         if tool_risk.tier_for(atype) != tool_risk.GATED:
             return {"result": "refused", "action_id": aid,
                     "error": f"{atype} does not resolve gated - refusing to send"}
-        # A STATUS guard, which `cmd_retry` has and this did not. Nothing here
-        # looked at `card["status"]`, so running `approve <id>` twice sent the
-        # same email twice -- a repeat keystroke, or a card already moved to
-        # `approved` by another surface, was enough. Duplicate mail to an
-        # external counterparty is the one failure a send-gated queue exists
-        # to prevent.
+        # A STATUS guard, which `cmd_retry` has and this did not, and it is a
+        # CLAIM rather than a read. Two defects in sequence live here.
         #
-        # What this does NOT do, stated rather than implied: there is no
-        # claiming transition. The card keeps its PRE-approval status for the
-        # up-to-120s life of the send, and only `apply_status` below moves it
-        # to `sent`.
+        # Nothing looked at `card["status"]` at all at first, so running
+        # `approve <id>` twice sent the same email twice -- a repeat keystroke,
+        # or a card already moved to `approved` by another surface, was enough.
+        # A plain read then fixed the repeat and left the concurrent case:
+        # measured 2026-08-30, two approves of one `pending` card both passed
+        # the read, the sender ran TWICE, and both calls returned `sent`.
         #
-        # That is not the race this comment used to describe. It said the card
-        # "stays `approved` during the send, so a concurrent batch executor
-        # could still select it" -- and both halves are false.
-        # `SENDABLE_STATUSES` excludes `approved`, so the guard immediately
-        # below returns `blocked` for an `approved` card and this path never
-        # sends one; and `action-queue-execute.py` selects ONLY cards whose
-        # status IS `approved`, so it can never select a card this path is
-        # sending. A reader trusting the old wording would audit a gate that
-        # does not exist.
+        # `claim_card_for_send` does the check and the status write inside ONE
+        # queue lock, so the second approve finds the card `sending` and is
+        # refused. The card holds `sending` for the life of the send, and
+        # `apply_status` below moves it to `sent` or `send_failed`.
         #
-        # The race that IS open: two concurrent `approve` calls on the same
-        # pending card both read the status, both pass this guard, and both
-        # send. Closing it needs a claiming transition, which touches the
-        # shared ACTIVE_STATUSES the daemon UI and sweep both read -- a change
-        # to the send gate, which is the operator's to approve. In practice
-        # the CEO is the single writer typing one command at a time.
-        if card.get("status") not in SENDABLE_STATUSES:
+        # `action-queue-execute.py` selects ONLY cards whose status IS
+        # `approved`, so a claimed card is invisible to the batch executor too,
+        # and `SENDABLE_STATUSES` excludes both `approved` and `sending`.
+        #
+        # Every later check reads the CLAIMED card, not the snapshot above: the
+        # snapshot predates the lock, so a draft edited between the two would
+        # have been sent against a `ready_for_review` that no longer held.
+        claim = claim_card_for_send(data_root, aid, SENDABLE_STATUSES)
+        if not claim.get("ok"):
             return {"result": "blocked", "action_id": aid,
-                    "error": (f"card is {card.get('status')!r}; approve only sends a "
-                              f"card in {sorted(SENDABLE_STATUSES)}")}
+                    "error": claim.get("error", "")}
+        card = claim["card"]
+        prev_status = claim["prev_status"]
         if atype == "email_send" and card.get("draft_status") != "ready_for_review":
+            release_claim(data_root, aid, prev_status)
             return {"result": "blocked", "action_id": aid,
                     "error": "draft not ready_for_review - edit it first"}
-        res = send_card(engine_root, card)
+        try:
+            res = send_card(engine_root, card)
+        except Exception:
+            # `send_card` returns a result for every failure it anticipates, so
+            # anything arriving here never reached a send. The claim goes back
+            # and the exception carries on to the caller exactly as it did
+            # before claiming existed. A card abandoned in `sending` is one no
+            # `approve` and no `retry` can move for the next five minutes.
+            release_claim(data_root, aid, prev_status)
+            raise
         if res.get("result") == "sent":
             # The mail is GONE from here on. Everything below records that fact,
             # and the return value of the recorder used to be discarded.

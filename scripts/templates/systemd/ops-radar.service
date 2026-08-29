@@ -9,8 +9,14 @@ ExecStart={{PYTHON}} {{WORKSPACE}}/scripts/ops-radar-notify.py
 # TZ pins the radar's date math (backup age, review days-since) to the configured
 # timezone regardless of the host. The installer substitutes {{TZ}} from
 # HEADING_OS_TZ (default UTC). journald avoids a log path on a /mnt/c 9P mount.
-# NOTE: deliberately NO SuccessExitStatus=1 -- ops-radar-notify.py always exits 0,
-# so any non-zero exit is a true failure that must surface as `failed`.
+# NOTE: deliberately NO SuccessExitStatus=1. A non-zero exit from
+# ops-radar-notify.py is a true failure and must surface as `failed`.
+#
+# The reason used to read "ops-radar-notify.py always exits 0", and that stopped
+# being true on 2026-08-30: the `--quiet` path now returns 1 when the radar
+# subprocess exits non-zero, times out, or cannot be started at all. Those are
+# exactly the runs with no verdict, so `failed` is the right report and this
+# unit still needs no SuccessExitStatus.
 Environment=TZ={{TZ}}
 Environment=PYTHONUNBUFFERED=1
 StandardOutput=journal

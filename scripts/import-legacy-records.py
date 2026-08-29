@@ -29,6 +29,18 @@ any race, since a dangling symlink made `os.link` fail every single time -- so a
 policy this file documents as skip-and-continue killed the import and left every
 remaining file and subtree unprocessed.
 
+Where the filesystem has no hard links (FAT32, exFAT, some network mounts), the
+copy falls back to `os.replace`, which CAN clobber. That branch re-checks the
+destination immediately before the replace and prints that the guarantee is
+degraded for that file; until 2026-08-30 it did neither and silently overwrote.
+
+Two source-side rules, both added 2026-08-30 after the same audit:
+a source SYMLINK is never followed -- it is counted and named, so a link pointing
+outside the four subtrees cannot pull its target's content into the overlay --
+and a source file that cannot be READ is counted, named, and skipped, with the
+walk continuing and the run exiting 1. One unreadable file used to end the whole
+import with a traceback, no totals, and every later subtree unprocessed.
+
 Usage:
     # dry-run first -- shows exactly what WOULD be copied, writes nothing
     python scripts/import-legacy-records.py --from /path/to/old-workspace --dry-run
@@ -134,8 +146,10 @@ def _atomic_copy(src_file: Path, dest_file: Path) -> None:
     `mkstemp` gives each writer its own scratch name, and `os.link` + unlink
     replaces the check-then-`os.replace` with a create-if-absent that the
     filesystem enforces: `link` fails with EEXIST if the destination appeared
-    between the caller's check and this call. Falls back to `os.replace` where
-    hard links are unavailable, and says so rather than pretending.
+    between the caller's check and this call. Where hard links are unavailable
+    it falls back to `os.replace`, re-checking the destination immediately
+    beforehand and printing that the guarantee is degraded for that file - until
+    2026-08-30 that branch did neither, and simply overwrote.
     """
     dest_file.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=str(dest_file.parent),
@@ -151,8 +165,25 @@ def _atomic_copy(src_file: Path, dest_file: Path) -> None:
                 raise FileExistsError(
                     f"{dest_file} appeared after the existence check; not overwritten"
                 ) from exc
-            # No hard-link support on this filesystem. `os.replace` is the only
-            # option left and it CAN clobber, so the window is named, not hidden.
+            # No hard-link support on this filesystem (FAT32, exFAT, some
+            # network mounts - all reachable recovery targets). `os.replace` is
+            # the only option left and it CLOBBERS: measured 2026-08-30 with
+            # `os.link` raising EPERM and a destination already holding content,
+            # this line overwrote that content and printed nothing, against the
+            # one invariant the module docstring leads with.
+            #
+            # `os.replace` cannot be made create-if-absent, so the check is
+            # moved as close to it as it can get and the degradation is SAID
+            # rather than left for a reader of the source. A name taken in the
+            # microseconds that remain is the same FileExistsError the link path
+            # raises, which the caller already counts as a skip.
+            if os.path.lexists(dest_file):
+                raise FileExistsError(
+                    f"{dest_file} appeared after the existence check; not overwritten"
+                ) from exc
+            print(f"    {YELLOW}warning{RESET} {dest_file.name}: no hard-link "
+                  f"support here, so the create-if-absent guarantee is degraded "
+                  f"to a check-then-replace for this file")
             os.replace(tmp, dest_file)
             return
         tmp.unlink()
@@ -163,20 +194,37 @@ def _atomic_copy(src_file: Path, dest_file: Path) -> None:
 
 def _import_subtree(
     src_dir: Path, dest_dir: Path, *, dry_run: bool
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, int, int]:
     """Walk src_dir; copy each file to dest_dir preserving structure.
 
-    Returns (imported, skipped_existing, skipped_unsafe).
+    Returns (imported, skipped_existing, skipped_unsafe, skipped_link, failed).
     - imported: file copied (or, in dry-run, would be copied)
     - skipped_existing: the destination NAME is taken -> never overwritten.
       Counted whether the name was taken before the walk reached it or by
       another writer during the copy itself.
     - skipped_unsafe: destination escaped dest_dir (traversal) -> refused
+    - skipped_link: the SOURCE entry is a symlink -> not followed
+    - failed: the source file could not be read -> reported, walk continues
     """
     imported = skipped_existing = skipped_unsafe = 0
+    skipped_link = failed = 0
     dest_root_resolved = dest_dir.resolve()
 
     for src_file in sorted(src_dir.rglob("*")):
+        # A SOURCE symlink, checked before `is_file()`, which follows one.
+        # Every path-safety guard in this file watches the destination; nothing
+        # watched the source, so `ln -s /etc/passwd old/knowledge/link.md` had
+        # that file's CONTENT imported into the data overlay under a .md name.
+        # Measured 2026-08-30. The tool's docstring scopes it to four subtrees
+        # off disk, this workspace keeps no symlinks by standing decision, and a
+        # recovery run must not quietly widen its own collection surface.
+        # (`rglob` does not descend into symlinked DIRECTORIES on any supported
+        # Python, checked on 3.11.15, so only the entry itself is at issue.)
+        if src_file.is_symlink():
+            skipped_link += 1
+            print(f"    {YELLOW}symlink{RESET} "
+                  f"{src_file.relative_to(src_dir)} (not followed)")
+            continue
         if not src_file.is_file():
             continue
         rel = src_file.relative_to(src_dir)
@@ -203,7 +251,25 @@ def _import_subtree(
             skipped_existing += 1
             continue
 
+        # Can this source actually be read? One unreadable file (`chmod 000`, a
+        # bad sector, a permission the old workspace carried and this user does
+        # not) raised PermissionError out of `shutil.copy2`, out of this walk and
+        # out of `main` as a traceback: every remaining file in the subtree and
+        # every later subtree went unprocessed, no totals were printed, and the
+        # per-subtree lines already on screen read as success. Measured
+        # 2026-08-30 on a two-subtree tree. The check is deliberately narrow -
+        # it asks only about THIS file's readability, so a full disk or any
+        # other whole-run failure still propagates out of `_atomic_copy` as
+        # before, because that is not a per-file skip and must not read as one.
         if not dry_run:
+            try:
+                with src_file.open("rb"):
+                    pass
+            except OSError as exc:
+                failed += 1
+                print(f"    {RED}unreadable{RESET} {rel}: "
+                      f"{exc.strerror or exc}")
+                continue
             try:
                 _atomic_copy(src_file, dest_file)
             except FileExistsError:
@@ -214,7 +280,7 @@ def _import_subtree(
                 continue
         imported += 1
 
-    return imported, skipped_existing, skipped_unsafe
+    return imported, skipped_existing, skipped_unsafe, skipped_link, failed
 
 
 def _auto_detect(workspace_root: Path) -> list:
@@ -312,6 +378,7 @@ def main() -> int:
     print(f"{BOLD}{mode}Importing legacy records from {CYAN}{from_root}{RESET}\n")
 
     tot_imported = tot_skipped = tot_unsafe = 0
+    tot_link = tot_failed = 0
 
     for key in selected:
         spec = SUBTREES[key]
@@ -322,12 +389,14 @@ def main() -> int:
             continue
 
         dest_dir = spec["dest"]()
-        imported, skipped, unsafe = _import_subtree(
+        imported, skipped, unsafe, links, failed = _import_subtree(
             src_dir, dest_dir, dry_run=args.dry_run
         )
         tot_imported += imported
         tot_skipped += skipped
         tot_unsafe += unsafe
+        tot_link += links
+        tot_failed += failed
 
         verb = "would import" if args.dry_run else "imported"
         line = (
@@ -336,6 +405,10 @@ def main() -> int:
         )
         if unsafe:
             line += f", {RED}{unsafe} refused (unsafe path){RESET}"
+        if links:
+            line += f", {YELLOW}{links} symlink(s) not followed{RESET}"
+        if failed:
+            line += f", {RED}{failed} unreadable{RESET}"
         print(line)
         print(f"    {GRAY}{src_dir}  ->  {dest_dir}{RESET}")
 
@@ -344,9 +417,19 @@ def main() -> int:
         f"\n{BOLD}Total:{RESET} {verb} {GREEN}{tot_imported}{RESET}, "
         f"skipped {tot_skipped} (already exist)"
         + (f", {RED}{tot_unsafe} refused{RESET}" if tot_unsafe else "")
+        + (f", {YELLOW}{tot_link} symlink(s) not followed{RESET}" if tot_link else "")
+        + (f", {RED}{tot_failed} unreadable{RESET}" if tot_failed else "")
     )
     if args.dry_run:
         print(f"{YELLOW}Dry-run: nothing was written.{RESET}")
+    # A recovery run that left files behind did not succeed, and an operator who
+    # scripts this needs the exit code to say so. Symlinks are a POLICY skip and
+    # do not fail the run; a file this tool could not read is a hole in the
+    # recovery and does.
+    if tot_failed:
+        print(f"{RED}{tot_failed} source file(s) could not be read and were not "
+              f"imported.{RESET}")
+        return 1
     return 0
 
 

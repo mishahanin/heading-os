@@ -673,7 +673,9 @@ def step_install_sync(state: dict, identity: dict, reinstall: bool = False, inst
     `import-legacy-records.py`; nothing installs a destructive sync task anymore.
     This step keeps only the Sentinel comms-monitor schedule. Uses
     scripts/utils/schedule.py for all platform-specific install/verify/logging.
-    Honors `--reinstall-schedule` so operators can force a re-install.
+    Honors `--reinstall-schedule` so operators can force a re-install, and
+    `--no-sentinel-schedule`, which declines the install FOR THAT RUN ONLY and
+    records nothing.
     """
     _ensure_workspace_importable()
     try:
@@ -697,9 +699,21 @@ def step_install_sync(state: dict, identity: dict, reinstall: bool = False, inst
     step_header(11, "Installing scheduled tasks")
 
     slug = identity.get("slug", "unknown")
-    if install_sentinel:
-        install_sentinel_schedule(slug, WORKSPACE_ROOT)
+    if not install_sentinel:
+        # `--no-sentinel-schedule` is PER-RUN (operator decision, 2026-08-29):
+        # it declines the install on the run it is typed on and writes no
+        # persistent opt-out. So nothing is recorded. `mark_done` used to run
+        # here regardless, which turned one flagged run into a permanent
+        # opt-out: every later plain run read `install_sync`, printed
+        # "Scheduled tasks already installed", and installed nothing. The
+        # monitor that exists to notice a silent daemon was itself silently
+        # absent, behind a green line, and recovery needed an operator who
+        # already knew about `--reinstall-schedule`.
+        skip("Sentinel schedule declined for this run; nothing recorded, so a "
+             "plain re-run will install it")
+        return True
 
+    install_sentinel_schedule(slug, WORKSPACE_ROOT)
     mark_done(state, "install_sync")
     return True
 

@@ -122,6 +122,14 @@ BANNED_COLORS = {
 # Tailwind purple->pink gradient: the single most-cited tell.
 _GRAD_FROM = re.compile(r"\b(?:bg-gradient-to-\w+\s+)?from-(purple|violet|fuchsia)-\d{2,3}\b", re.IGNORECASE)
 _GRAD_TO = re.compile(r"\bto-(pink|fuchsia|rose|purple)-\d{2,3}\b", re.IGNORECASE)
+# The pair has to SPAN the two families, which "one hue from each list" does not
+# check. `from-purple-600 to-purple-800` is a monochrome purple ramp containing
+# no pink at all, and it raised an ERROR reading "Tailwind purple->pink
+# gradient" -- a false label on the severity that gates the exit code. Same for
+# `from-fuchsia-500 to-fuchsia-700`. The CSS branch below already gets this
+# right by keeping fuchsia on the pink side only; this mirrors it, and keeps
+# fuchsia legal on both ends because it genuinely sits between the two.
+_GRAD_PINKISH_HUES = {"pink", "rose", "fuchsia"}
 # CSS linear-gradient containing both a purple-ish and a pink-ish stop.
 _CSS_GRADIENT = re.compile(r"linear-gradient\([^)]*\)", re.IGNORECASE)
 _PURPLEISH = re.compile(r"(purple|violet|#a855f7|#9333ea|#8b5cf6|#7c3aed|#6d28d9)", re.IGNORECASE)
@@ -233,9 +241,18 @@ def _check_gradient(text, findings, has_lines):
     # Tailwind from-purple/violet/fuchsia + to-pink/fuchsia/rose on the same line.
     for line_match in re.finditer(r"[^\n]+", text):
         seg = line_match.group()
-        if _GRAD_FROM.search(seg) and _GRAD_TO.search(seg):
-            _add(findings, "gradient_purple_pink", "error",
-                 "Tailwind purple->pink gradient", text, line_match.start(), has_lines)
+        m_from = _GRAD_FROM.search(seg)
+        m_to = _GRAD_TO.search(seg)
+        if not (m_from and m_to):
+            continue
+        from_hue = m_from.group(1).lower()
+        to_hue = m_to.group(1).lower()
+        # A same-hue ramp is not a two-family gradient, and a `to-` hue outside
+        # the pink family is not the pink end of one.
+        if from_hue == to_hue or to_hue not in _GRAD_PINKISH_HUES:
+            continue
+        _add(findings, "gradient_purple_pink", "error",
+             "Tailwind purple->pink gradient", text, line_match.start(), has_lines)
     # CSS linear-gradient spanning a purple stop and a pink stop.
     for m in _CSS_GRADIENT.finditer(text):
         span = m.group()
@@ -470,7 +487,8 @@ def _collect_deep(root, profile):
     return grouped, note
 
 
-def _run_audit(root, *, strict, deep, profile, use_baseline, include_internal):
+def _run_audit(root, *, strict, deep, profile, use_baseline, include_internal,
+               read_errors=None):
     """Shared scan path for the default run and for `baseline check`.
 
     The baseline covers BOTH engines. Freezing only the deep findings would
@@ -478,6 +496,10 @@ def _run_audit(root, *, strict, deep, profile, use_baseline, include_internal):
     declarations across docs/ alone), and a gate that is always red is a gate
     nobody reads. `--deep` decides which engines RUN; the baseline decides which
     findings are already accounted for.
+
+    `read_errors`, when a list is passed, collects the files this walk could not
+    read at all. It is an out-parameter rather than a fourth return value on
+    purpose: the 3-tuple is unpacked positionally by callers outside this file.
     """
     files = list(_iter_files(root, include_internal))
     deep_map = {}
@@ -515,6 +537,15 @@ def _run_audit(root, *, strict, deep, profile, use_baseline, include_internal):
         # reporting that file and carrying on.
         except (RuntimeError, OSError, UnicodeError) as exc:
             print(f"  {RED}error{RESET}: {exc}", file=sys.stderr)
+            # Recorded separately from `any_fail` since 2026-08-30. A file this
+            # walk could not open produced no finding, and the exit-code table
+            # reserves 1 for "findings present" and 2 for "script error" -- so a
+            # permission bit exited 1 under a summary line reading "0 error(s),
+            # 0 warning(s)", and a CI caller keying on the documented contract
+            # read that as visual debt. `any_fail` stays set so a caller that
+            # passes no list still cannot mistake a partial scan for a pass.
+            if read_errors is not None:
+                read_errors.append(str(exc))
             any_fail = True
             continue
         visited.append(key)
@@ -573,10 +604,28 @@ def _cmd_baseline(args):
         # Freeze what BOTH engines see, so the recorded line matches what a
         # later `check` will compare against. A record that captured only one
         # engine would leave the other's pre-existing debt failing forever.
-        results, _, _ = _run_audit(
+        read_errors = []
+        results, _, deep_note = _run_audit(
             root, strict=args.strict, deep=True, profile=args.profile,
             use_baseline=False, include_internal=args.include_internal,
+            read_errors=read_errors,
         )
+        # `resolve_cli() is None` only catches an UNRESOLVABLE CLI. A CLI that
+        # resolves and then fails at runtime -- a bad npx pin, a non-zero exit,
+        # a timeout -- comes back through `deep_note`, and this discarded it
+        # with `_, _`. So a degraded run printed the green "Baseline recorded"
+        # and exited 0 over a freeze holding regex findings only, and every
+        # later `check` (which always runs deep, and refuses its OWN degraded
+        # runs) then failed on pre-existing deep debt forever. The comment above
+        # already names that asymmetry as the thing this branch exists to
+        # prevent; the guard just stopped one degradation short of it. A file
+        # the walk could not read makes the freeze partial the same way.
+        if deep_note or read_errors:
+            why = deep_note or f"{len(read_errors)} file(s) unreadable: {read_errors[0]}"
+            print(f"  {RED}refusing to record a baseline from a degraded run{RESET} "
+                  f"({why}). A partial freeze fails every later check on debt it "
+                  f"never recorded.", file=sys.stderr)
+            return 2
         findings = []
         for res in results:
             for finding in res["findings"]:
@@ -588,9 +637,11 @@ def _cmd_baseline(args):
         print(f"  {GRAY}These are frozen, not fixed. The gate now fires only above them.{RESET}")
         return 0
 
+    read_errors = []
     results, any_fail, deep_note = _run_audit(
         root, strict=args.strict, deep=True, profile=args.profile,
         use_baseline=True, include_internal=args.include_internal,
+        read_errors=read_errors,
     )
     # `record` above refuses when the deep CLI is unresolvable. `check` had no
     # such guard, so a degraded deep engine printed the green verdict "No
@@ -602,6 +653,14 @@ def _cmd_baseline(args):
               f"(the deep engine did not run: {deep_note}). Only the regex "
               f"engine ran, so a pass here would assert coverage nothing "
               f"measured.", file=sys.stderr)
+        return 2
+    # Same reason, one degradation the deep-engine guard cannot see: a file the
+    # walk could not open was never compared against the baseline at all, and
+    # the verdict below would speak for it.
+    if read_errors:
+        print(f"  {RED}refusing a baseline check from a partial scan{RESET} "
+              f"({len(read_errors)} file(s) unreadable: {read_errors[0]}).",
+              file=sys.stderr)
         return 2
     above = sum(r["summary"]["total_findings"] for r in results)
     if any_fail:
@@ -673,9 +732,11 @@ def main():
         print(f"  {GRAY}No HTML/SVG/PPTX artifacts found under {root}.{RESET}")
         sys.exit(0)
 
+    read_errors = []
     results, any_fail, deep_note = _run_audit(
         root, strict=args.strict, deep=args.deep, profile=args.profile,
         use_baseline=not args.no_baseline, include_internal=args.include_internal,
+        read_errors=read_errors,
     )
 
     if args.json:
@@ -697,6 +758,12 @@ def main():
         print(f"\n  {BOLD}{len(results)} file(s) scanned ({engines}): "
               f"{total_e} error(s), {total_w} warning(s).{RESET}")
 
+    # 2 before 1: the exit-code table calls 1 "findings present" and 2 "script
+    # error", and a file the scan could not open is the second. Reporting it as
+    # the first told a CI caller there was visual debt over a run whose own
+    # summary line said "0 error(s), 0 warning(s)".
+    if read_errors:
+        sys.exit(2)
     sys.exit(1 if any_fail else 0)
 
 

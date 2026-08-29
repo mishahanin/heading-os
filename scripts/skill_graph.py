@@ -107,6 +107,12 @@ def fmt_show(rows: list[dict], as_json: bool) -> str:
             block += f"\n{GRAY}preceded_by:{RESET} {r['preceded_by']}"
         if r["produces_in"]:
             block += f"\n{GRAY}produces_in:{RESET} {r['produces_in']}"
+        # `show` promises "the full catalog row", and --json emitted all six
+        # FIELDS while the lean text emitted five: consumes_from was dropped for
+        # the 35 of 94 rows that populate it. The LLM reading the text mode was
+        # therefore reasoning over a row the JSON caller could see was wider.
+        if r["consumes_from"]:
+            block += f"\n{GRAY}consumes_from:{RESET} {r['consumes_from']}"
         blocks.append(block)
     return "\n\n".join(blocks)
 

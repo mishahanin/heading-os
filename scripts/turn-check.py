@@ -380,6 +380,61 @@ def _deselected(body: str) -> int:
     return int(match.group(1)) if match else 0
 
 
+def _files_holding_no_test(targets: list[Path], timeout: int) -> int:
+    """How many of the matched files hold no test AT ALL.
+
+    Reached only when pytest answers exit 5, which says zero tests ran across
+    the whole matched set and carries no per-file breakdown. Two different
+    things produce it - a file whose only tests carry the `slow` marker this
+    lane deselects, and a file with no test in it - and the lane used to guess
+    between them with `0 if dropped else len(targets)`. That guess is wrong the
+    moment both are present: MEASURED 2026-08-30 over one all-slow file beside
+    one holding a bare helper, the lane reported zero empties while neither file
+    ran anything, so the empty one went unnamed. A silent exclusion reads as
+    coverage (`.claude/rules/scope-claims.md`).
+
+    So the answer is resolved rather than guessed, by collecting the same files
+    WITHOUT the marker filter and asking which of them yielded no node id. That
+    is a second subprocess, and it is affordable precisely because it only runs
+    on the path where nothing executed: collection, not execution.
+
+    Any probe that does not come back clean returns `len(targets)`, widening to
+    every matched file rather than reporting a zero nothing established -
+    obligation 3 of the same rule.
+
+    Node ids are relative to the rootdir PYTEST picks, which is the repo for a
+    file under `tests/` and the containing directory for a probe somewhere else,
+    so the id cannot be compared to a repo-relative path directly. Matching is
+    by path suffix, and an id that could belong to two different targets makes
+    the whole answer unknown rather than an arbitrary pick.
+    """
+    args = [
+        sys.executable, "-m", "pytest", "-q", "-p", "no:randomly",
+        "--collect-only", "--no-header", *[str(t) for t in targets],
+    ]
+    try:
+        out = subprocess.run(
+            args, cwd=str(ROOT), capture_output=True, text=True, timeout=timeout
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return len(targets)
+    if out.returncode not in (0, NO_TESTS_COLLECTED):
+        return len(targets)
+
+    node_paths = {line.strip().split("::", 1)[0].replace("\\", "/")
+                  for line in (out.stdout or "").splitlines()
+                  if "::" in line}
+    node_paths.discard("")
+    holds_a_test = set()
+    for node in node_paths:
+        owners = [t for t in targets
+                  if t.as_posix() == node or t.as_posix().endswith("/" + node)]
+        if len(owners) != 1:
+            return len(targets)
+        holds_a_test.add(owners[0])
+    return sum(1 for t in targets if t not in holds_a_test)
+
+
 def lane_tests(paths: list[Path],
                timeout: int) -> tuple[list[str], int, int, int, int, int]:
     """Run the matched tests, minus the ones marked slow.
@@ -439,8 +494,17 @@ def lane_tests(paths: list[Path],
     # exists to avoid. The second case is reported instead, because a matched
     # file that ran nothing is an exclusion, and a silent exclusion reads as
     # coverage.
+    #
+    # The two causes are NOT exclusive, which `0 if dropped else len(targets)`
+    # assumed. A matched set holding one all-slow file and one file with no test
+    # in it exits 5 with `dropped >= 1`, and that expression then reported zero
+    # empties, so the file that ran nothing went completely unnamed. MEASURED
+    # 2026-08-30 over exactly that pair. `_files_holding_no_test` resolves the
+    # split by collecting without the marker filter instead of guessing from
+    # `dropped`.
     if out.returncode == NO_TESTS_COLLECTED:
-        return [], len(targets), skipped, dropped, (0 if dropped else len(targets)), 0
+        return ([], len(targets), skipped, dropped,
+                _files_holding_no_test(targets, timeout), 0)
     if out.returncode != 0:
         tail = [ln for ln in body.strip().splitlines() if ln.strip()][-12:]
         return (["\n".join(tail) or f"pytest exited {out.returncode}"],
@@ -535,7 +599,11 @@ def _empty_note(result: dict) -> str:
     Same reason as the three notes above, and one more: pytest answers exit 5
     for this, which the lane used to read as a failure and block the turn on.
     Not failing it must not mean saying nothing about it, or a `test_*.py` that
-    holds no test reads as a passing lane."""
+    holds no test reads as a passing lane.
+
+    The count comes from `_files_holding_no_test`, so it names files with no
+    test in them and not files whose tests were merely deselected; `_slow_note`
+    reports those separately."""
     count = result.get("collected_nothing") or 0
     if not count:
         return ""

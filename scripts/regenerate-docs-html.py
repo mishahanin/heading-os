@@ -531,18 +531,35 @@ def inject_search(html_path: Path, quiet: bool = False) -> bool:
     """Idempotently add the sidebar search box and the loader <script> to a
     hand-authored site page. Md-sourced pages get both from SITE_SHELL on
     regenerate(); this covers index.html, daemons.html, and the other hand-authored
-    pages that regenerate() never rewrites."""
+    pages that regenerate() never rewrites.
+
+    The guard and the insertion read the SAME anchor, and they did not until
+    2026-08-30: the guard asked whether `<button class="menu-toggle"` appeared
+    anywhere, while the insertion was a `str.replace` on `'  <button ...'` with
+    exactly two leading spaces. On a page indented any other way the guard
+    passed, the replace matched nothing, the loader `<script>` below was still
+    appended, and the page shipped `search.js` with no `#doc-search` element for
+    it to bind to -- reported as a success, since this function returns True
+    either way. All 37 site pages happen to use two spaces today, so the defect
+    was latent rather than live; it is one hand-authored page away from real.
+    The regex carries the page's own indentation through, so those 37 pages stay
+    byte-identical.
+    """
     if not html_path.exists():
         print(f"ERROR: HTML not found: {html_path}", file=sys.stderr)
         return False
     text = html_path.read_text(encoding="utf-8")
     orig = text
-    if 'id="doc-search"' not in text and '<button class="menu-toggle"' in text:
-        text = text.replace(
-            '  <button class="menu-toggle"',
-            SEARCH_BOX + "\n  <button class=\"menu-toggle\"",
-            1,
-        )
+    if 'id="doc-search"' not in text:
+        anchor = re.search(r'^([ \t]*)<button class="menu-toggle"', text,
+                           flags=re.MULTILINE)
+        if anchor:
+            indent = anchor.group(1)
+            box = "\n".join(
+                (indent + ln[2:]) if ln.startswith("  ") else ln
+                for ln in SEARCH_BOX.split("\n")
+            )
+            text = text[:anchor.start()] + box + "\n" + text[anchor.start():]
     if "assets/search.js" not in text and "</body>" in text:
         text = text.replace("</body>", SEARCH_SCRIPT + "\n</body>", 1)
     if text != orig:
@@ -940,6 +957,19 @@ def main():
     if not md_path.is_absolute():
         md_path = ROOT / md_path
     ok = regenerate(md_path, quiet=args.quiet)
+    # The search index is rebuilt here too, for a docs-site page. `--all`,
+    # `--nav-sync` and `--search-index` all rebuild it and this path did not, so
+    # the one mode the module docstring calls "hook mode" was the one mode that
+    # left `docs/assets/search-index.json` describing the PREVIOUS version of the
+    # page it had just rewritten: missing new sections, snippets from deleted
+    # prose, anchors that no longer resolve. `--check` compares MD/HTML mtimes
+    # only, so nothing surfaced the drift; the docs-html-drift pre-commit hook
+    # eventually caught it by running `--all` and diffing, which reports the
+    # index as an unexplained change to a file the author never edited.
+    # `md_path.parent == SITE_DIR` is regenerate()'s own test for a site page;
+    # templates/ pages are not in the index and must not trigger a rebuild.
+    if ok and md_path.parent == SITE_DIR:
+        build_search_index(quiet=args.quiet)
     sys.exit(0 if ok else 1)
 
 

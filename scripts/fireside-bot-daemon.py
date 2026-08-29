@@ -246,8 +246,19 @@ class JobDispatcher:
         # R14: piggyback the per-daemon liveness beat on the existing 1-min
         # heartbeat job so the watchdog sees fireside in
         # .daemon-state/heartbeats/fireside.json on a fast tick.
+        #
+        # Guarded on its own. Unguarded, the piggyback defeated the isolation
+        # this dispatcher exists to provide, on the single job where a skipped
+        # run has monitoring consequences: an exception out of `beat` skipped
+        # `cmd_heartbeat` (the healthchecks.io ping that keeps fireside-poll
+        # green in webhook mode), logged no `job-fail heartbeat`, and left only
+        # an APScheduler job-error. Telemetry about the daemon must never be
+        # able to stop the daemon's work.
         if job_name == "heartbeat":
-            daemon_heartbeat.beat("fireside")
+            try:
+                daemon_heartbeat.beat("fireside")
+            except Exception:
+                self.logger.exception("beat-fail fireside")
         fn = self._fn_map.get(job_name)
         if fn is None:
             self.logger.error("dispatch: unknown job %s", job_name)
@@ -459,9 +470,17 @@ async def _run_daemon(logger: logging.Logger) -> None:
         # On Windows, signal.signal under asyncio is effectively a no-op (the
         # ProactorEventLoop does not pump Python-level signal handlers from
         # under `await event.wait()`). Clean shutdown on Windows is driven
-        # exclusively by the STOP_SENTINEL file. Ctrl-C from a foreground
-        # console will hard-kill this process; the `try/finally` in
-        # cmd_daemon below cleans up the PID file if that happens.
+        # exclusively by the STOP_SENTINEL file.
+        #
+        # This used to add that Ctrl-C from a foreground console "will
+        # hard-kill this process; the `try/finally` in cmd_daemon below cleans
+        # up the PID file if that happens." Those two clauses cannot both hold:
+        # a hard kill runs no Python-level finally, so whichever one was true,
+        # the other was instructing a maintainer to rely on cleanup that does
+        # not happen. What IS true on every platform is the fallback: a PID file
+        # that outlives its process is harmless, because `live_daemon_pid()`
+        # re-checks the PID against the OS and returns None for a dead one, so
+        # `status` reports NOT RUNNING and a fresh `daemon` start is permitted.
 
         # Poll the sentinel file every second.
         async def _sentinel_watcher():
@@ -542,6 +561,16 @@ def cmd_daemon(args) -> None:
 def cmd_run(args) -> None:
     load_env()
     fb = _load_fireside_bot()
+    # The same self-heal `_run_daemon` performs, for the same reason. That call
+    # site's comment says the regeneration happens "before any job runs" and
+    # names the consequence when it does not: "without it every DM is rejected
+    # as outsider". `run <job>` is the documented smoke-test and backfill path
+    # and it dispatched with no such call, so on a host whose
+    # fireside-state/tribe-roster.json was gone (fresh checkout, wiped state
+    # dir) `run speaker-dms` rejected the whole Tribe while the daemon path on
+    # the same tree would have rebuilt the roster first. Idempotent: every file
+    # it writes is written only when absent.
+    fb.ensure_state_dir()
     dispatcher = JobDispatcher(fb, _setup_logging())
     dispatcher.dispatch(args.job)
 

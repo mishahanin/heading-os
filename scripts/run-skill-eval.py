@@ -76,6 +76,42 @@ class CaseFileError(Exception):
     """
 
 
+def _validate_case_shape(path: Path, case: dict) -> None:
+    """Refuse a case whose keys are the wrong shape, as a SETUP error.
+
+    Being a JSON object was the whole contract, and it stopped one key short.
+    A case with no `"input"` reached `case["input"]` inside the try whose handler
+    labels everything API ERROR, so a broken fixture was reported as `API ERROR
+    'input'` and exit 3 - sending the reader to the model call instead of to the
+    file. `--dry-run`, the advertised validation mode, could not catch it either:
+    it reads `case.get('input', '')` and passed the same case cleanly, so the
+    wrong exit code only ever appeared on the paid run. Measured 2026-08-30.
+
+    `checks` had the same hole one level down: a non-dict value reached
+    `checks.get(...)` in `run_checks`, OUTSIDE the try, and raised AttributeError
+    after the API call had already been paid for.
+    """
+    if "input" not in case:
+        raise CaseFileError(f"{path}: a case must carry an \"input\" key")
+    if not isinstance(case["input"], str):
+        raise CaseFileError(
+            f"{path}: \"input\" must be a string, not a "
+            f"{type(case['input']).__name__}")
+    checks = case.get("checks", {})
+    if not isinstance(checks, dict):
+        raise CaseFileError(
+            f"{path}: \"checks\" must be a JSON object, not a "
+            f"{type(checks).__name__}")
+    for key in ("must_mention", "must_not_mention"):
+        if key in checks and not isinstance(checks[key], list):
+            # A bare string here iterates CHARACTER BY CHARACTER, so
+            # `"must_mention": "sovereign"` silently becomes nine one-letter
+            # checks that any answer passes.
+            raise CaseFileError(
+                f"{path}: \"{key}\" must be a list, not a "
+                f"{type(checks[key]).__name__}")
+
+
 def load_cases(skill_dir: Path, case_filter: str | None = None) -> list[dict]:
     """Return a list of case dicts from skill's evals/cases/ directory."""
     cases_dir = skill_dir / "evals" / "cases"
@@ -100,6 +136,7 @@ def load_cases(skill_dir: Path, case_filter: str | None = None) -> list[dict]:
             raise CaseFileError(
                 f"{path}: a case file must be a JSON object, not a "
                 f"{type(case).__name__}")
+        _validate_case_shape(path, case)
         # `_path` is a LABEL for the report, so a path outside the repo degrades
         # to the absolute form rather than raising. `relative_to` raises
         # ValueError for any path that is not under ROOT, which turned an
@@ -409,9 +446,21 @@ def run_one_skill(skill_name: str, case_filter: str | None, model_override: str 
         benchmark_path = skill_dir / "evals" / "benchmark.json"
         existing = {}
         if benchmark_path.exists():
+            corrupt_reason = ""
             try:
                 existing = json.loads(benchmark_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
+                corrupt_reason = "unparseable"
+            else:
+                # Parseable is not the same as usable. `[]` and `"reset"` both
+                # load fine, and the last_run assignment below then raised
+                # TypeError - after every case had been graded and PAID for, and
+                # without writing the benchmark. Measured 2026-08-30 with both
+                # shapes. A wrong-shaped sidecar takes the same route a corrupt
+                # one already had.
+                if not isinstance(existing, dict):
+                    corrupt_reason = f"a JSON {type(existing).__name__}, not an object"
+            if corrupt_reason:
                 # Keep the corrupt file and SAY SO. Silently resetting to {}
                 # deleted the baseline -- the one artefact that makes future runs
                 # comparable -- and the run that did it looked entirely normal.
@@ -422,7 +471,7 @@ def run_one_skill(skill_name: str, case_filter: str | None, model_override: str 
                 # (measured 2026-08-29), so the next `git add -A` committed a
                 # wreck file into a repo that ships to strangers.
                 backup = quarantine_file(benchmark_path)
-                print(f"{YELLOW}benchmark.json was unparseable; kept it at "
+                print(f"{YELLOW}benchmark.json was {corrupt_reason}; kept it at "
                       f"{quarantine_ref(backup)} and starting a fresh baseline{RESET}",
                       file=sys.stderr)
                 existing = {}
@@ -448,13 +497,29 @@ def run_one_skill(skill_name: str, case_filter: str | None, model_override: str 
             # diagnosis but the right alarm.
             existing["baseline"] = existing["last_run"].copy()
             existing["baseline"]["source"] = "seeded-from-first-run"
+        # `.get` on a `baseline` that is not an object raised AttributeError one
+        # line before the write, so a hand-edited `"baseline": null` lost the run
+        # it had already paid for. A non-object baseline is not a self-seed, and
+        # saying so is enough - the file is kept as the operator left it.
+        baseline = existing.get("baseline")
         existing["baseline_is_self_seed"] = (
-            existing["baseline"].get("source") == "seeded-from-first-run"
+            isinstance(baseline, dict)
+            and baseline.get("source") == "seeded-from-first-run"
         )
         # Atomic: an interrupt here left unparseable JSON, which the branch
         # above then had to deal with.
         atomic_write_text(benchmark_path, json.dumps(existing, indent=2))
-        print(f"  {GREEN}benchmark.json updated{RESET} -> {benchmark_path.relative_to(ROOT)}")
+        # Same degradation `load_cases` already applies to `_path`: this is a
+        # LABEL, so a benchmark outside ROOT prints its absolute form instead of
+        # raising. `SKILLS_DIR` is the seam every test in this suite redirects,
+        # and it points at a tmp tree, so `relative_to` raised ValueError one
+        # line after the file had been written successfully - a crash reporting
+        # a success. Found while testing the benchmark-shape fix, 2026-08-30.
+        try:
+            shown = benchmark_path.relative_to(ROOT)
+        except ValueError:
+            shown = benchmark_path
+        print(f"  {GREEN}benchmark.json updated{RESET} -> {shown}")
         if existing["baseline_is_self_seed"]:
             print(f"  {YELLOW}baseline is a self-seed{RESET} - this run was compared "
                   "against itself, so the delta detects nothing. Promote a real "

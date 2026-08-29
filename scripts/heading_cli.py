@@ -54,9 +54,10 @@ REGISTRY = {
 DEFAULT_BUDGET_USD = 0.50
 
 # The "propose" tier's write grant is scoped to this one proposal-output
-# directory, and its deny is scoped to the sensitive brain directory --
-# both resolved absolute (//-anchored) from the data root at call time, since
-# the headless process's cwd is the engine workspace root, not the data root.
+# directory, and its WRITE deny (not a read deny: reflect must read the brain to
+# review it) is scoped to the brain directory -- both resolved absolute
+# (//-anchored) from the data root at call time, since the headless process's
+# cwd is the engine workspace root, not the data root.
 # leak-guard: ok (data-root-relative fragment, not a hardcoded absolute path;
 # the data root comes from the get_data_root() seam in _abs_pattern below).
 PROPOSE_WRITE_REL = "outputs/operations/odin-reflect-proposals"  # leak-guard: ok
@@ -140,17 +141,21 @@ SEND_DENY = [
 ]
 
 
-def _abs_pattern(root: Path, rel: str) -> str:
-    """Build a `//`-anchored (filesystem-root-absolute) Edit(...) permission
-    pattern for `root / rel`, e.g. Edit(//home/.../knowledge/odin-brain/**).
+def _abs_pattern(root: Path, rel: str, tool: str = "Edit") -> str:
+    """Build a `//`-anchored (filesystem-root-absolute) permission pattern for
+    `root / rel` and one tool, e.g. Edit(//home/.../knowledge/odin-brain/**).
 
     Confirmed against code.claude.com/docs/en/permissions.md: `//` anchors an
     absolute path (Read(//Users/alice/secrets/**) matches /Users/alice/secrets/**)
     -- the resolved path's own leading `/` must be stripped first, since
     interpolating it directly after `//` produces a three-slash string
     (`Edit(///...)`) that matches nothing.
+
+    `tool` is a parameter because a permission pattern binds ONE tool: the same
+    doc page is why an `Edit(...)` deny constrains Edit and nothing else. A path
+    that must not be written needs one pattern per write tool.
     """
-    return f"Edit(//{str((root / rel).resolve()).lstrip('/')}/**)"
+    return f"{tool}(//{str((root / rel).resolve()).lstrip('/')}/**)"
 
 
 def build_skill_command(skill, args, *, tier, budget_usd=DEFAULT_BUDGET_USD, model=None):
@@ -172,8 +177,35 @@ def build_skill_command(skill, args, *, tier, budget_usd=DEFAULT_BUDGET_USD, mod
     allowed = list(TIER_ALLOWED[tier])
     disallowed = list(SEND_DENY)
     if tier == "propose":
+        # BOTH write tools, on the one directory this tier may write.
+        #
+        # `Edit` alone could not create the file the mode is specified to
+        # produce. Measured 2026-08-30 against the harness: the Edit tool
+        # refuses a path that does not exist ("File does not exist"). The mode
+        # spec appends to a DATED file, `YYYY-MM-DD_odin-reflect-proposal.md`,
+        # which by definition is absent on the first `--propose` of any day - so
+        # the tier could only ever amend yesterday's proposal, never open
+        # today's, and the in-code comment called the pattern "its Write grant"
+        # while emitting `Edit(...)`.
+        #
+        # This widens the grant, and the widening is bounded: `Edit` already
+        # allowed rewriting any file under this glob to any content, so `Write`
+        # on the SAME glob adds creation and nothing else. Both denies below
+        # still apply, and a deny beats a grant.
         allowed.append(_abs_pattern(data_root, PROPOSE_WRITE_REL))
+        allowed.append(_abs_pattern(data_root, PROPOSE_WRITE_REL, tool="Write"))
+        # One deny per write tool. The brain deny was `Edit(...)` alone, and a
+        # permission pattern binds exactly the tool it names, so the mechanism
+        # covered one of the two tools that can write a file while the mode spec
+        # (.claude/skills/odin/references/mode-catalog.md, `--propose` mode)
+        # states flatly that knowledge/odin-brain/ "is never written in this
+        # mode, regardless of confidence". The tier now DOES hold a Write grant,
+        # one line above, which is exactly the case that deny was written for.
+        #
+        # Reads are deliberately NOT denied. `reflect` reviews the brain; that is
+        # the whole mode. The deny protects write-integrity, not confidentiality.
         disallowed.append(_abs_pattern(data_root, ODIN_BRAIN_DENY_REL))
+        disallowed.append(_abs_pattern(data_root, ODIN_BRAIN_DENY_REL, tool="Write"))
     cmd = [
         "claude",
         "-p",

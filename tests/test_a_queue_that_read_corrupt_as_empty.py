@@ -390,7 +390,7 @@ def test_the_documented_batch_executor_race_cannot_happen():
 
 def test_sendable_is_derived_from_active_not_typed_out():
     """A hand-typed set is the thing that drifts back."""
-    assert frozenset(AQ.ACTIVE_STATUSES) - {"approved"} == AQ.SENDABLE_STATUSES
+    assert frozenset(AQ.ACTIVE_STATUSES) - {"approved", AQ.SENDING} == AQ.SENDABLE_STATUSES
 
 
 def test_the_executor_selects_only_approved_cards():
@@ -404,10 +404,29 @@ def test_the_comment_no_longer_describes_the_impossible_race():
     assert "The card stays `approved` for the up-to-120s" not in source
 
 
-def test_the_comment_names_the_race_that_is_open():
-    """Deleting the wrong claim without stating the real one loses the warning."""
-    source = (ROOT / "scripts" / "action-queue.py").read_text(encoding="utf-8")
-    assert "two concurrent `approve` calls" in source
+def test_the_race_the_comment_named_is_now_closed(tmp_path):
+    """The race this section used to only DESCRIBE is closed by a claim.
+
+    This asserted that a phrase appeared in the source, which punished the file
+    for rewording its own warning and proved nothing about behaviour. It drives
+    the claim instead: a card already claimed refuses the second claimer.
+    """
+    import json as _json
+    qpath = tmp_path / "outputs/operations/action-queue/queue.json"
+    qpath.parent.mkdir(parents=True, exist_ok=True)
+    card = {"id": "race-0001", "action_type": "email_send", "status": "pending",
+            "draft_status": "ready_for_review", "to": "a@example.com",
+            "subject": "s", "draft_body": "b"}
+    qpath.write_text(_json.dumps({"version": 1, "generated_at": None,
+                                  "actions": [card]}), encoding="utf-8")
+
+    first = AQ.claim_card_for_send(tmp_path, "race-0001", AQ.SENDABLE_STATUSES)
+    second = AQ.claim_card_for_send(tmp_path, "race-0001", AQ.SENDABLE_STATUSES)
+
+    assert first["ok"] is True and first["prev_status"] == "pending"
+    assert second["ok"] is False
+    assert second["status"] == AQ.SENDING
+    assert "may still be sending" in second["error"]
 
 
 # ==========================================================================
@@ -558,5 +577,7 @@ def test_the_sendable_set_is_derived_in_the_source():
 
 def test_a_new_active_status_would_become_sendable():
     """States the consequence the derivation exists for, in one assertion."""
-    assert set(AQ.ACTIVE_STATUSES) - {"approved"} == set(AQ.SENDABLE_STATUSES)
+    assert set(AQ.ACTIVE_STATUSES) - {"approved", AQ.SENDING} == set(AQ.SENDABLE_STATUSES)
     assert "approved" in AQ.ACTIVE_STATUSES, "the exclusion has nothing to exclude"
+    assert AQ.SENDING in AQ.ACTIVE_STATUSES, \
+        "a claimed card must stay ACTIVE, or no lister and no dedup can see it"

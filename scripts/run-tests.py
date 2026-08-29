@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """The single test-gate entry point. Both push-all.py and .githooks/pre-push call this.
 
-Default mode runs the regression suite (everything EXCEPT the acceptance gates),
-with the coverage floor from pyproject. --acceptance runs only the A+ sign-off
-gates (the findings-registry zero-open check, etc.).
+Default mode runs the regression suite (everything EXCEPT the acceptance gates).
+--acceptance runs only the A+ sign-off gates (the findings-registry zero-open
+check, etc.).
+
+NEITHER mode measures coverage. The docstring said "with the coverage floor from
+pyproject" until 2026-08-30, and both halves of that were false: `pyproject.toml`
+carries no coverage addopts, and `build_command` attaches no `--cov` argument in
+either mode. The floor lives on the unit-tests step of .github/workflows/ci.yml
+(see COVERAGE_FLOOR below), so a reader who trusted this line believed pushing
+through this gate enforced the ratchet, and it never did.
 
 Usage:
   python scripts/run-tests.py            # regression gate (pre-push)

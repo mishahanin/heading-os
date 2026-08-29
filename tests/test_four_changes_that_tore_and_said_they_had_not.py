@@ -78,6 +78,15 @@ def _arrange(monkeypatch, apply_result, *, raises=None):
     """Point approve_and_send at one gated, ready card whose send always works."""
     monkeypatch.setattr(aqcli, "list_action_queue", lambda _r: {"items": [dict(CARD)]})
     monkeypatch.setattr(aqcli, "send_card", lambda _e, _c: {"result": "sent"})
+    # The claim is stubbed for the same reason the lister is: these tests are
+    # about what happens AFTER the mail leaves, and `/d` is a stand-in path with
+    # no queue store behind it. The claim's own behaviour is driven for real in
+    # tests/test_a_card_two_terminals_approved_at_the_same_moment.py.
+    monkeypatch.setattr(aqcli, "claim_card_for_send",
+                        lambda _r, _i, _s: {"ok": True, "card": dict(CARD),
+                                            "prev_status": "pending"})
+    monkeypatch.setattr(aqcli, "release_claim",
+                        lambda _r, _i, _p: {"ok": True})
     calls: list[tuple] = []
 
     def _apply(*a, **k):
@@ -104,7 +113,9 @@ def test_a_send_the_queue_could_not_record_is_not_reported_as_sent(monkeypatch, 
     assert "not found" in res["error"]
     out = capsys.readouterr().out
     assert "WAS SENT and the queue does not know it" in out
-    assert "SECOND copy" in out
+    # The card is left CLAIMED, so the warning must send the operator to
+    # `dismiss` rather than let the claim lapse into a second approve.
+    assert "DISMISS the card" in out
 
 
 def test_the_unrecorded_send_becomes_a_durable_artifact(monkeypatch, capsys):

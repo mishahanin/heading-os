@@ -192,14 +192,27 @@ def stratified_sample(samples: list[FindingSample], n: int) -> list[FindingSampl
     """Pick N samples balanced across severity tiers."""
     if not samples:
         return []
-    by_sev: dict[str, list[FindingSample]] = {sev: [] for sev in
-                                              ("BLOCKER", "HIGH", "MEDIUM", "LOW", "NIT")}
+    known = ("BLOCKER", "HIGH", "MEDIUM", "LOW", "NIT")
+    by_sev: dict[str, list[FindingSample]] = {sev: [] for sev in known}
     for s in samples:
         by_sev.setdefault(s.severity, []).append(s)
     quota = max(1, n // 5)
     picked: list[FindingSample] = []
     rng = random.Random(42)  # noqa: S311 - deterministic sampling for reproducible benchmarks, not cryptographic
-    tiers = ("BLOCKER", "HIGH", "MEDIUM", "LOW", "NIT")
+    # The tiers come from the DATA, not from a second literal.
+    #
+    # `setdefault` above already files an unrecognised severity, and the loops
+    # below then iterated the five known names only, so such a finding was
+    # counted by the caller's "Found N findings in range" line and could never
+    # be sampled. Measured 2026-08-30: a corpus of one `UNKNOWN` finding with
+    # `--sample 5` returned NOTHING, and the kappa this sheet exists to compute
+    # was computed over an empty sheet while the run reported a finding.
+    #
+    # `quota` keeps its `// 5`. Dividing by the live tier count would shrink
+    # every quota the moment one odd severity appeared, changing the sampling
+    # of ordinary runs; the second pass plus the final `picked[:n]` already
+    # bound the total.
+    tiers = known + tuple(sev for sev in by_sev if sev not in known)
     for sev in tiers:
         bucket = by_sev.get(sev, [])
         rng.shuffle(bucket)
@@ -315,7 +328,15 @@ def render_scoring_sheet(samples: list[FindingSample],
 # Kappa computation
 # ============================================================
 _RATING_RE = re.compile(r"\*\*CEO rating:\*\*\s*`([^`]*)`")
-_HEADER_RE = re.compile(r"###\s+\d+\.\s+\[([BHMLN]\d+)\]\s+(\w+)\s+conf=(\d+|\?)\s*(\*\*\[was flagged FP at the time\]\*\*)?",
+# The finding-id class is deliberately wider than `_FINDING_RE`'s `[BHMLN]\d+`.
+# This regex reads back a sheet THIS FILE rendered, and `render_scoring_sheet`
+# prints whatever id the record holds - the dispatcher's `--finding` is a free
+# string. Measured 2026-08-30 with two verdict rows, `B1` and `B-1`: the sheet
+# generated cleanly and exited 0, then `--kappa` on it reported "1 headers vs 2
+# ratings" and exited 4. One odd id did not lose its own row, it lost the WHOLE
+# quarter's kappa, after the CEO had filled the sheet in by hand. Group 1 is
+# never read; only the flagged-FP marker in group 4 is.
+_HEADER_RE = re.compile(r"###\s+\d+\.\s+\[([^\]\s]+)\]\s+(\w+)\s+conf=(\d+|\?)\s*(\*\*\[was flagged FP at the time\]\*\*)?",
                         re.MULTILINE)
 
 
@@ -416,14 +437,38 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         return compute_kappa_from_sheet(sheet)
 
-    # Resolve date range
-    if args.since:
-        date_from = parse_date_arg(args.since)
-        date_to = datetime.now(get_default_tz())
-    elif args.date_from and args.date_to:
-        date_from = parse_date_arg(args.date_from)
-        date_to = parse_date_arg(args.date_to)
-    else:
+    # Resolve date range.
+    #
+    # Both faults below were measured 2026-08-30. A malformed window value left
+    # this module as an uncaught `ValueError` traceback with interpreter exit 1
+    # (`--since abc`, `--since d`, `--from 2026-13-99`), which is not the exit 2
+    # this file's own table reserves for an argument error. And ONE of
+    # `--from` / `--to` was silently discarded: `--from 2026-03-01` fell through
+    # to the current-quarter default, warned "no scrutiny reports found in range
+    # 2026-07-01 to 2026-08-30", and returned 3 - a window the operator never
+    # asked for, named in the message as though they had.
+    #
+    # `is not None`, not truthiness: `--since ""` is a value the operator typed
+    # and an empty string is falsy, so a truthiness test discards it as silently
+    # as the half-range above and falls back to the quarter default. Passed on
+    # to `parse_date_arg`, it fails the parse and is reported.
+    given = args.date_from is not None, args.date_to is not None
+    if given[0] != given[1]:
+        print(f"{RED}ERROR: --from and --to must be given together; got only "
+              f"{'--from' if given[0] else '--to'}{RESET}", file=sys.stderr)
+        return 2
+    try:
+        if args.since is not None:
+            date_from = parse_date_arg(args.since)
+            date_to = datetime.now(get_default_tz())
+        elif given[0]:
+            date_from = parse_date_arg(args.date_from)
+            date_to = parse_date_arg(args.date_to)
+    except ValueError as exc:
+        print(f"{RED}ERROR: could not read the date window ({exc}); expected "
+              f"'<N>d' or YYYY-MM-DD{RESET}", file=sys.stderr)
+        return 2
+    if args.since is None and not given[0]:
         # Default: current quarter
         now = datetime.now(get_default_tz())
         q_start_month = ((now.month - 1) // 3) * 3 + 1

@@ -183,8 +183,18 @@ def test_the_step_installs_exactly_once_when_the_import_works(setup_mod,
     assert "install_sync" in state["completed_steps"]
 
 
-def test_no_sentinel_flag_still_marks_the_step_done(setup_mod, monkeypatch,
-                                                    tmp_path):
+def test_no_sentinel_flag_records_nothing_it_did_not_do(setup_mod, monkeypatch,
+                                                        tmp_path):
+    """This pinned the OPPOSITE until 2026-08-30, under the name
+    `test_no_sentinel_flag_still_marks_the_step_done`.
+
+    Marking the step done turned one flagged run into a permanent opt-out: the
+    next plain run read `install_sync`, printed "Scheduled tasks already
+    installed", and installed nothing. The operator decided the flag is
+    PER-RUN, so a declined install records nothing. The consequence - the next
+    plain run really does install it - is driven in
+    tests/test_a_setup_flag_that_recorded_a_step_it_had_skipped.py.
+    """
     calls = []
     fake = types.ModuleType("scripts.utils.schedule")
     fake.install_sentinel_schedule = lambda slug, root: calls.append(slug)
@@ -195,7 +205,7 @@ def test_no_sentinel_flag_still_marks_the_step_done(setup_mod, monkeypatch,
     setup_mod.step_install_sync(state, {"slug": "demo"}, install_sentinel=False)
 
     assert calls == []
-    assert "install_sync" in state["completed_steps"]
+    assert "install_sync" not in state["completed_steps"]
 
 
 def test_the_docstring_no_longer_names_a_module_it_never_imports(setup_mod):

@@ -26,27 +26,30 @@ from scripts.utils.workspace import (
 from scripts.utils.atomic import atomic_write_text
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
 from scripts.utils.crm import stamped_backup_path, try_commit
-
-
-FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+from scripts.utils.markdown import FM_OK, set_frontmatter_field, split_frontmatter_raw
 
 
 def update_owner_in_frontmatter(text: str, new_owner: str) -> str:
-    """Replace or add the owner field in YAML frontmatter."""
-    m = FRONTMATTER_RE.match(text)
-    if not m:
-        # No frontmatter; prepend a minimal block
+    """Replace or add the owner field in YAML frontmatter.
+
+    The fences come from `scripts.utils.markdown`, not from a regex written
+    here. The local one was `^---\\s*\\n(.*?)\\n---\\s*\\n`, and the trailing `\\n`
+    was required: MEASURED 2026-08-29, a card whose file ENDS at the closing
+    fence matched nothing, took the no-frontmatter branch, and had a SECOND
+    block prepended -- so the card's real fields, name included, became body
+    text that no reader of frontmatter can see.
+
+    Reassembly is byte-preserving too. The old form rebuilt the document from
+    pieces and dropped the blank line between the closing fence and the body on
+    every transfer, and rewrote a CRLF card as LF. A transfer changes the owner;
+    a diff in the rest of the file is churn the operator has to read anyway.
+    """
+    front, _rest, kind = split_frontmatter_raw(text)
+    if kind != FM_OK or front is None:
+        # No usable block. Creating one is THIS caller's policy, not the shared
+        # helper's: `crm_autolog` leaves such a document alone instead.
         return f"---\nowner: {new_owner}\n---\n\n{text}"
-
-    fm_block = m.group(1)
-    body = text[m.end():]
-
-    if re.search(r"^owner\s*:", fm_block, re.MULTILINE):
-        fm_block = re.sub(r"^owner\s*:.*$", f"owner: {new_owner}", fm_block, flags=re.MULTILINE)
-    else:
-        fm_block += f"\nowner: {new_owner}"
-
-    return f"---\n{fm_block}\n---\n{body}"
+    return set_frontmatter_field(text, "owner", new_owner)
 
 
 def append_transfer_note(text: str, from_exec: str, to_exec: str) -> str:

@@ -257,6 +257,62 @@ def split_frontmatter_raw(text: str) -> Tuple[Optional[str], str, str]:
     return text[:cut], text[cut:], FM_OK
 
 
+def set_frontmatter_field(text: str, key: str, value: str) -> str:
+    """Set ``key: value`` inside the FRONTMATTER BLOCK, and nowhere else.
+
+    Returns *text* unchanged when the document has no usable block, so a caller
+    that wants to create one keeps that policy at its own call site: the two
+    callers today disagree about it, and hiding the disagreement in here would
+    give one of them the other's behaviour.
+
+    Everything outside the block is byte-for-byte identical, including the
+    fences, the line endings and any blank line opening the body. The reading
+    side already learned this lesson twice (see :func:`split_frontmatter` and
+    :func:`split_frontmatter_raw`); the WRITING side had not.
+
+    THE DEFECT THIS ENDS. Three functions in this workspace rewrite a field in
+    frontmatter and each spelled the scope itself. MEASURED 2026-08-29:
+
+      `crm_autolog.bump_last_touch_in_text` ran `^last_touch:` MULTILINE over the
+        WHOLE DOCUMENT before deciding to insert. Given a card with no
+        `last_touch` in frontmatter and any body line starting `last_touch:` --
+        a quoted email in the interaction log will do -- it rewrote the BODY
+        line, returned, and left frontmatter without the field. The write
+        succeeded, the audit log recorded `matched: true`, and `calculate_health`
+        went on reading the contact as never touched. Its docstring said the
+        insert "lands inside the frontmatter block or nowhere".
+      `transfer-contact.update_owner_in_frontmatter` scoped the edit correctly
+        and spelled its own fences, `^---\\s*\\n(.*?)\\n---\\s*\\n`. The trailing
+        `\\n` is required, so a card whose file ENDS at the closing fence matched
+        nothing and took the "no frontmatter" branch: it PREPENDED a second
+        block, and the card's real fields became body text.
+      `crm-health.frontmatter_end` had both defects, was fixed on its own, and
+        wrote the reason down. The fix never reached the other two.
+
+    The value is substituted through a callable, so a backslash or a ``\\1`` in
+    it cannot be read as a regex group reference.
+    """
+    front, rest, kind = split_frontmatter_raw(text)
+    if kind != FM_OK or front is None:
+        return text
+    open_line, sep, after_open = front.partition("\n")
+    closing = _FENCE_LINE.search(after_open)
+    if closing is None:          # unreachable while kind is FM_OK; not assumed
+        return text
+    block, tail = after_open[:closing.start()], after_open[closing.start():]
+
+    field = re.compile(rf"^{re.escape(key)}[ \t]*:.*$", re.MULTILINE)
+    if field.search(block):
+        block = field.sub(lambda _m: f"{key}: {value}", block, count=1)
+    else:
+        # `block` carries the newline before the closing fence, so an append
+        # needs no separator of its own. An EMPTY block (`---\n---\n`) is the
+        # one case that does not, and it needs none either.
+        newline = "\r\n" if block.endswith("\r\n") else "\n"
+        block = f"{block}{key}: {value}{newline}"
+    return open_line + sep + block + tail + rest
+
+
 def parse_frontmatter_strict(text: str) -> Tuple[Optional[Dict[str, Any]], str, str]:
     """Frontmatter with the failure REASON kept: ``(data, kind, detail)``.
 

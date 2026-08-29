@@ -29,7 +29,7 @@ from typing import Optional
 # Ensure scripts.utils.markdown is importable when crm_autolog is invoked as a
 # library from elsewhere in the workspace.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from scripts.utils.markdown import parse_frontmatter
+from scripts.utils.markdown import parse_frontmatter, set_frontmatter_field
 
 
 def _crm_root(workspace_root: Optional[Path] = None) -> Path:
@@ -270,27 +270,24 @@ def plain_snippet(body: str, limit: int = 200) -> str:
 
 
 def bump_last_touch_in_text(text: str, new_date: str) -> str:
-    """Replace `last_touch: YYYY-MM-DD` in YAML frontmatter, or insert if missing.
+    """Set `last_touch: YYYY-MM-DD` in YAML frontmatter, or leave the text alone.
 
-    The insert lands inside the frontmatter block or nowhere. `text.find("---", 3)`
-    matched any three hyphens from index 3 onward, so a record with no frontmatter
-    at all - and a markdown horizontal rule anywhere in its prose - had
-    `last_touch: <date>` written into the body, where nothing reads it and a human
-    reader meets a stray key mid-sentence. A `---` sitting inside a frontmatter
-    VALUE moved the insertion point the same way. Both cases now leave the text
-    untouched rather than write into the wrong place.
+    Both halves now run inside the block, through
+    `scripts.utils.markdown.set_frontmatter_field`. The INSERT half was scoped
+    correctly and the docstring said so; the REPLACE half was not, and the
+    docstring's claim that the write "lands inside the frontmatter block or
+    nowhere" was false for it.
+
+    MEASURED 2026-08-29. A card with no `last_touch` in frontmatter and a body
+    line beginning `last_touch:` -- a quoted record in an interaction-log entry
+    is enough -- took the replace branch, rewrote the BODY line and returned. The
+    frontmatter field the whole auto-log exists to maintain stayed absent, the
+    audit entry recorded `matched: true`, and `calculate_health` read the contact
+    as never touched, permanently. A document with no frontmatter at all had the
+    key written into its prose, which is the exact outcome the old docstring
+    claimed to have fixed.
     """
-    pattern = re.compile(r"^last_touch:\s*.*$", re.MULTILINE)
-    if pattern.search(text):
-        return pattern.sub(f"last_touch: {new_date}", text, count=1)
-    first_line, _, _ = text.partition("\n")
-    if first_line.strip() != "---":
-        return text
-    closing = re.compile(r"^---[ \t]*$", re.MULTILINE)
-    match = closing.search(text, len(first_line))
-    if match is None:
-        return text
-    return text[:match.start()] + f"last_touch: {new_date}\n" + text[match.start():]
+    return set_frontmatter_field(text, "last_touch", new_date)
 
 
 def append_log_entry(text: str, date: str, kind: str, subject: str, body: str) -> str:

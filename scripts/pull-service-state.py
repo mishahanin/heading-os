@@ -103,7 +103,29 @@ def _vm_path(entry, roots: dict) -> tuple[str, str]:
     if not isinstance(entry, (list, tuple)) or len(entry) not in (2, 3):
         raise ValueError(f"malformed state_dirs entry (want 2 or 3 items): {entry!r}")
     name, root, rel = entry if len(entry) == 3 else (entry[0], "engine", entry[1])
+    # Types first, because everything below indexes and joins these. A
+    # non-string element raised AttributeError out of `lstrip`/`rstrip`,
+    # and `main` catches only ValueError, so the run ended in a traceback
+    # rather than the named one-line reason this function promises.
+    if not all(isinstance(v, str) for v in (name, root, rel)):
+        raise ValueError(
+            f"state_dirs entry must hold strings only (name, root, rel): "
+            f"{entry!r}")
+    # The mirror name is joined onto the mirror directory and the previous
+    # copy is rmtree'd, so a PATH here deletes outside the mirror.
+    # MEASURED 2026-08-29: `..`, `.` and a single-segment absolute name all
+    # came back accepted. `..` deletes the mirror's parent wholesale, `.`
+    # deletes the mirror, and `/tmp` deletes /tmp.
+    if name != Path(name).name or name in ("", ".", ".."):
+        raise ValueError(
+            f"state_dirs mirror name {name!r} must be a plain directory "
+            f"name: it is joined onto the mirror and the previous copy is "
+            f"deleted, so a path here deletes outside the mirror")
     base = roots.get(root, "")
+    if not isinstance(base, str):
+        raise ValueError(
+            f"VM root {root!r} must be a string, not a "
+            f"{type(base).__name__}")
     if not base:
         raise ValueError(
             f"state_dirs entry {name!r} needs VM root {root!r}, which is empty; "

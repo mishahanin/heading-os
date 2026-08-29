@@ -66,7 +66,20 @@ def _contained(base: Path, rel: str) -> Path:
     """
     joined = (base / rel).resolve()
     root = base.resolve()
-    if joined != root and root not in joined.parents:
+    if joined == root:
+        # `copy_includes` rmtree_force()s a directory include before it
+        # copies into it, so an include that RESOLVES TO THE ROOT deletes
+        # the destination itself, `.git` and all. MEASURED 2026-08-29:
+        # `_contained(dest, ".")` and `_contained(dest, "")` both returned
+        # `dest`, and the `joined != root` clause below was what let them.
+        # `main`'s `(dest / '.git').exists()` check runs BEFORE this, so it
+        # cannot save the clone. No live manifest entry resolves here; one
+        # hand edit does.
+        raise ValueError(
+            f"manifest include {rel!r} IS {base}; a directory include is "
+            f"deleted before it is copied, so this would delete the "
+            f"destination root")
+    if root not in joined.parents:
         raise ValueError(f"manifest include {rel!r} escapes {base}")
     return joined
 
@@ -114,7 +127,14 @@ def write_build_marker(dest: Path) -> int:
     build = 1
     if marker.exists():
         try:
-            build = int(json.loads(marker.read_text(encoding="utf-8")).get("build", 0)) + 1
+            # A marker holding valid JSON that is not an object (`[1]`)
+            # raised AttributeError on `.get`, which is neither
+            # JSONDecodeError nor ValueError, so it walked through the
+            # handler written for exactly a corrupted marker. It landed
+            # after copy_includes had already rmtree'd and rewritten the
+            # mirror, leaving the downstream clone dirty and uncommitted.
+            data = json.loads(marker.read_text(encoding="utf-8"))
+            build = int(data.get("build", 0)) + 1 if isinstance(data, dict) else 1
         except (json.JSONDecodeError, ValueError):
             build = 1
     # Atomic: a torn SERVICE-BUILD.json makes the NEXT run's json.loads fail,

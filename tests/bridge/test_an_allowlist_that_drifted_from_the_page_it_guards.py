@@ -54,6 +54,7 @@ import json
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -210,9 +211,21 @@ def test_every_page_the_frontend_reports_is_accepted_and_recorded(workspace_root
 
 
 def test_return_opens_every_renderable_page(workspace_root):
-    """`/return` must reach any page the dashboard can show."""
+    """`/return` must reach any page the dashboard can show.
+
+    `webbrowser.open` is patched, and that is not optional. `/return` REALLY
+    OPENS A BROWSER WINDOW: `app.py` calls `webbrowser.open(url, new=0)`. The
+    first version of this test omitted the patch, so every full-suite run opened
+    eighteen windows on the operator's desktop, once per page in `ROUTES`. The
+    operator found it, not the suite. Every other `/return` test in
+    `tests/bridge/test_endpoints.py` had the patch; this one was written without
+    looking at them.
+
+    `tests/bridge/test_no_test_opens_a_real_browser.py` now fails any test that
+    posts to `/return` without it, so the next author cannot repeat this.
+    """
     client = _client(workspace_root)
-    with pytest.MonkeyPatch.context() as mp:
+    with pytest.MonkeyPatch.context() as mp, patch("webbrowser.open") as opened:
         mp.setenv("BRIDGE_PORT", "31415")
         refused = [
             (page, r.status_code)
@@ -222,6 +235,8 @@ def test_return_opens_every_renderable_page(workspace_root):
                 ).status_code != 200
         ]
     assert not refused, f"/return refused renderable pages: {refused}"
+    # The patch is load-bearing, so prove it intercepted rather than sat unused.
+    assert opened.call_count == len(_routes())
 
 
 @pytest.mark.parametrize("page", DEAD_PAGES)
@@ -238,9 +253,13 @@ def test_a_page_with_no_renderer_is_refused_by_both_endpoints(workspace_root, pa
                     json={"page": page, "duration_s": 60})
     assert r.status_code == 422, f"page-view still accepts the dead page {page!r}"
 
-    r = client.post("/return", headers=_head(),
-                    json={"session_id": "s", "target_page": page})
+    with patch("webbrowser.open") as opened:
+        r = client.post("/return", headers=_head(),
+                        json={"session_id": "s", "target_page": page})
     assert r.status_code == 422, f"/return still opens the dead page {page!r}"
+    # The point of the allowlist is which names reach `webbrowser.open`, so the
+    # window is the thing to assert about, not only the status code.
+    opened.assert_not_called()
 
     assert not _events(workspace_root), "a refused page must write no telemetry"
 

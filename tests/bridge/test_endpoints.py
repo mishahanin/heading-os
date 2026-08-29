@@ -484,10 +484,19 @@ def test_return_opens_browser(workspace_root):
 
 
 def test_return_requires_auth(workspace_root):
-    """Without a bearer token, /return must 401."""
+    """Without a bearer token, /return must 401 and open NOTHING.
+
+    The patch is not ceremony. `/return` calls `webbrowser.open`, which really
+    opens a window, so "was the refusal reached before the window" is the more
+    important half of this test and it was never asserted. Added 2026-08-29
+    after an unpatched `/return` test opened eighteen windows per suite run.
+    """
     client, _ = _make_client(workspace_root, token="t1")
-    r = client.post("/return", json={"session_id": "abc123", "target_page": "inbox"})
+    with patch("webbrowser.open") as opened:
+        r = client.post("/return",
+                        json={"session_id": "abc123", "target_page": "inbox"})
     assert r.status_code == 401
+    opened.assert_not_called()
 
 
 def test_return_defaults_to_pulse_when_target_page_omitted(workspace_root):
@@ -516,12 +525,20 @@ def test_return_honors_bridge_port_env(workspace_root, monkeypatch):
 
 
 def test_return_rejects_unknown_target_page(workspace_root):
-    """A target_page not on the allowlist is rejected with 422."""
+    """A target_page not on the allowlist is rejected with 422, and opens nothing.
+
+    The allowlist's real job is to decide what reaches `webbrowser.open`, so the
+    window is what the assertion should be about. The genuine drift cases live
+    in `test_an_allowlist_that_drifted_from_the_page_it_guards.py`; this one
+    keeps the path-traversal string, which is a different question.
+    """
     client, _ = _make_client(workspace_root, token="t1")
-    r = client.post("/return",
-        headers={"Authorization": "Bearer t1"},
-        json={"session_id": "abc123", "target_page": "../etc/passwd"})
+    with patch("webbrowser.open") as opened:
+        r = client.post("/return",
+            headers={"Authorization": "Bearer t1"},
+            json={"session_id": "abc123", "target_page": "../etc/passwd"})
     assert r.status_code == 422
+    opened.assert_not_called()
 
 
 def test_refresh_bumps_component(workspace_root):

@@ -17,8 +17,8 @@ Usage:
   python scripts/content-guard.py --files a.py b.md      # scan specific files
   python scripts/content-guard.py --stdin               # newline-delimited paths on stdin
 
-Exit: 0 clean, 1 leak(s) found OR a file that could not be scanned,
-2 internal error.
+Exit: 0 clean, 1 leak(s) found OR a file that could not be scanned OR the
+denylist was empty at scan time, 2 internal error.
 
 An unreadable engine-routed file used to be warned about on stderr and then
 exit 0. The exit code is the contract CI consumes, so "clean" shipped over a
@@ -26,7 +26,8 @@ file nobody had looked at - which is the one outcome this gate exists to
 prevent. Not-scanned now fails the same way a leak does: unverified is not
 clean.
 
-Tests: tests/test_a_gate_that_shipped_what_it_never_read.py
+Tests: tests/test_a_gate_that_shipped_what_it_never_read.py,
+tests/test_two_controls_that_measured_themselves.py
 """
 from __future__ import annotations
 
@@ -42,6 +43,36 @@ from scripts.utils.content_denylist import build_denylist
 from scripts.utils.denial_log import log_denial
 from scripts.utils.engine_guard import engine_text_files, repo_carried_paths
 from scripts.utils.workspace import get_data_root, get_workspace_root
+
+
+def denylist_verdict(degraded: bool, token_count: int, root_state: str):
+    """Decide whether a denylist is usable, and say why when it is not.
+
+    Pure: three scalars in, ``(usable, why)`` out, no filesystem and no config.
+    It was a bare ``if dl.degraded or not dl.tokens:`` inline in ``main`` until
+    2026-08-29, and inline is why nothing ever exercised it: the four states it
+    separates are only reachable through a real overlay, so the suite always
+    drove exactly one of them. Measured that day, rewriting the ``or`` to
+    ``and`` left the gate printing ``content-guard: clean (1 file(s); 0
+    denylist tokens)`` at exit 0 while all 92 tests over this gate passed.
+    Out here the states are just arguments, and each one has a case.
+
+    ``root_state`` is one of ``unresolved`` (no path could be determined),
+    ``absent`` (a path that is not a directory), or ``present``. It only
+    chooses the sentence; it never changes the verdict, because a denylist
+    with no tokens is unusable whatever the overlay looks like.
+    """
+    if not degraded and token_count > 0:
+        return True, ""
+    if root_state == "unresolved":
+        why = "the DATA overlay path could not be resolved"
+    elif root_state == "absent":
+        why = "no DATA overlay at this path"
+    elif degraded:
+        why = "the denylist harvest failed; see the stderr line above"
+    else:
+        why = "the overlay holds no entities to guard"
+    return False, why
 
 
 def main() -> int:
@@ -73,33 +104,33 @@ def main() -> int:
         return 0
 
     dl = build_denylist(data_root, strict=args.strict)
-    if dl.degraded or not dl.tokens:
-        # Name the state, not a guessed cause. This printed "no DATA overlay"
-        # for BOTH the absent overlay and a harvest that failed part-way -- so a
-        # malformed config on the operator's own machine switched the content
-        # layer off while blaming a condition that was not true. The overlay
-        # directory is right there to check.
-        # `data_root is None` FIRST. The `except` clause above sets it to None so
-        # this branch can degrade gracefully, and this branch then called
-        # `.is_dir()` on it, so the graceful path raised AttributeError, the
-        # __main__ handler turned that into the documented exit 2 "internal
-        # error", and the operator read a traceback instead of the message
-        # written to name the state. The branch could never be taken. The sibling
-        # wall `push_all.engine_content_scan` guards the same value correctly.
-        #
-        # An unresolvable root is also a DIFFERENT state from an overlay that is
-        # simply absent - it means HEADING_OS_DATA names a path that is not
-        # there, or the resolver itself failed - so it gets its own sentence.
-        # Reporting "no DATA overlay at this path" for it is the guessed cause
-        # the comment above forbids.
-        if data_root is None:
-            why = "the DATA overlay path could not be resolved"
-        elif not data_root.is_dir():
-            why = "no DATA overlay at this path"
-        elif dl.degraded:
-            why = "the denylist harvest failed; see the stderr line above"
-        else:
-            why = "the overlay holds no entities to guard"
+    # Name the state, not a guessed cause. This printed "no DATA overlay" for
+    # BOTH the absent overlay and a harvest that failed part-way -- so a
+    # malformed config on the operator's own machine switched the content layer
+    # off while blaming a condition that was not true. The overlay directory is
+    # right there to check.
+    # `data_root is None` FIRST. The `except` clause above sets it to None, and
+    # the old inline branch then called `.is_dir()` on it, so the graceful path
+    # raised AttributeError, the __main__ handler turned that into the
+    # documented exit 2 "internal error", and the operator read a traceback
+    # instead of the message written to name the state. The branch could never
+    # be taken. The sibling wall `push_all.engine_content_scan` guards the same
+    # value correctly. Resolving the state HERE, before the verdict, is what
+    # keeps that ordering from being re-broken by an edit inside the verdict.
+    #
+    # An unresolvable root is also a DIFFERENT state from an overlay that is
+    # simply absent - it means HEADING_OS_DATA names a path that is not there,
+    # or the resolver itself failed - so it gets its own sentence. Reporting
+    # "no DATA overlay at this path" for it is the guessed cause the comment
+    # above forbids.
+    if data_root is None:
+        root_state = "unresolved"
+    elif not data_root.is_dir():
+        root_state = "absent"
+    else:
+        root_state = "present"
+    usable, why = denylist_verdict(dl.degraded, len(dl.tokens), root_state)
+    if not usable:
         if not args.quiet:
             print(f"{GRAY}content-guard: denylist unavailable ({why}); skipped.{RESET}")
         return 0
@@ -160,6 +191,26 @@ def main() -> int:
         print(f"{RED}content-guard: REFUSED{RESET} {GRAY}({len(unscanned)} "
               f"engine-routed file(s) could not be scanned; fix or exclude "
               f"them, do not ship unverified){RESET}", file=sys.stderr)
+        return 1
+
+    if not dl.tokens:
+        # Guard the CLAIM, not only the early return. Reaching here with an
+        # empty denylist means the loop above compared every engine file
+        # against nothing and found nothing, which is arithmetic, not evidence.
+        # The early return near the top of main() is what normally makes this
+        # line unreachable, and until 2026-08-29 it was the ONLY thing that
+        # did: measured that day, changing its `or` to `and` printed
+        # "content-guard: clean (1 file(s); 0 denylist tokens)" and exited 0,
+        # and all 92 tests over this gate still passed. The clean line even
+        # printed the token count that refuted it. A clean verdict is a
+        # statement about what was compared, so it is refused when nothing was.
+        # The legitimate empty cases (no overlay, unresolvable root, a harvest
+        # that failed part-way) return 0 above and say "skipped", never
+        # "clean", so this refusal cannot fire on a public clone or in CI.
+        print(f"{RED}content-guard: REFUSED{RESET} {GRAY}(the denylist held 0 "
+              f"tokens at scan time, so nothing was really compared; a clean "
+              f"verdict here would be a verdict over nothing){RESET}",
+              file=sys.stderr)
         return 1
 
     if not args.quiet:

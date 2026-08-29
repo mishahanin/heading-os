@@ -112,10 +112,29 @@ TIER_ALLOWED = {
 
 # Defense-in-depth denylist: every outbound transport, blocked regardless of tier.
 # The allowlist above is the primary boundary; this is belt-and-suspenders.
-# ANY new outbound send transport MUST be added here.
+#
+# Do NOT maintain this list by hand alone. The whole-script entries below are
+# held against a sweep of scripts/*.py in
+# tests/test_two_controls_that_measured_themselves.py, which recomputes the set
+# from the scripts' own source (a transport library plus one of its send verbs,
+# or a bare *.py literal naming such a script in a module that can spawn it).
+# The list and the sweep must agree exactly, in both directions, so a new
+# transport lands here or the suite fails. `gmail-send.py` landed 2026-08-08
+# and was absent from this list until 2026-08-29, because the only tests over
+# it read the constant back to itself and could not notice an omission.
 SEND_DENY = [
+    # Direct transports: these call an outbound mail API themselves.
     "Bash(python scripts/send-email.py:*)",
     "Bash(python3 scripts/send-email.py:*)",
+    "Bash(python scripts/gmail-send.py:*)",
+    "Bash(python3 scripts/gmail-send.py:*)",
+    # One process hop from a direct transport: each spawns send-email.py.
+    "Bash(python scripts/action-queue-execute.py:*)",
+    "Bash(python3 scripts/action-queue-execute.py:*)",
+    "Bash(python scripts/fireside-bot.py:*)",
+    "Bash(python3 scripts/fireside-bot.py:*)",
+    # Subcommand-scoped, not whole-script: `list`/`show`/`dismiss` stay usable,
+    # `approve` is the synchronous send and is the one verb that must not run.
     "Bash(python scripts/action-queue.py approve:*)",
     "Bash(python3 scripts/action-queue.py approve:*)",
 ]

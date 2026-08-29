@@ -4,6 +4,21 @@ The security-critical proof of this slice is the send boundary: for EVERY tier,
 `build_skill_command` must exclude the outbound transports from `--allowedTools`
 and name them under `--disallowedTools`. These are pure-Python assertions on the
 constructed argv; no test invokes the real `claude` binary (it is not in CI).
+
+The send-boundary assertions below name the transports LITERALLY. Three of them
+read `for entry in SEND_DENY: assert entry in disallowed` until 2026-08-29,
+against a `disallowed` that `build_skill_command` builds as `list(SEND_DENY)`:
+the same object on both sides, so each loop held for every value of the
+constant. Measured that day, with `SEND_DENY = []` those three still passed.
+The file was not fully blind. `test_draft_tier_send_boundary` spells `"approve"`
+and `"send-email.py"` out, and it caught both truncations (1 failed at one
+entry, 2 failed at zero). What nothing here could catch was an OMISSION, and one
+was on disk: `gmail-send.py` landed 2026-08-08 outside a denylist written
+2026-07-09, and 13 tests passed over it for 21 days.
+
+Whether the literal set below is the RIGHT set is a separate question, answered
+against the scripts on disk in
+tests/test_two_controls_that_measured_themselves.py.
 """
 
 from scripts import heading_cli
@@ -17,6 +32,24 @@ from scripts.heading_cli import (
     run_skill,
 )
 from scripts.utils.paths import get_data_root, get_workspace_root
+
+
+# Written out, never derived from SEND_DENY. See the module docstring.
+MUST_BE_DENIED = (
+    "scripts/send-email.py",
+    "scripts/gmail-send.py",
+    "scripts/action-queue-execute.py",
+    "scripts/fireside-bot.py",
+    "scripts/action-queue.py approve",
+)
+
+
+def _assert_transports_denied(disallowed):
+    """Every named transport is denied for both `python` and `python3`."""
+    joined = " ".join(disallowed)
+    for target in MUST_BE_DENIED:
+        for interpreter in ("python", "python3"):
+            assert f"Bash({interpreter} {target}:*)" in joined, (interpreter, target)
 
 
 def _values_after(cmd, flag):
@@ -35,7 +68,8 @@ def test_allowlist_and_tiers():
     assert SKILL_ALLOWLIST["odin"]["tier"] == "propose"
     assert SKILL_ALLOWLIST["odin"]["args_prefix"] == ["reflect", "--propose"]
     assert set(TIER_ALLOWED) == {"read-only", "draft", "propose"}
-    assert SEND_DENY  # non-empty denylist
+    # Not `assert SEND_DENY`: a one-entry list is truthy too.
+    _assert_transports_denied(SEND_DENY)
 
 
 def test_read_only_tier_send_boundary():
@@ -50,8 +84,7 @@ def test_read_only_tier_send_boundary():
         "send-email.py" in a or "action-queue.py" in a or a == "Write" for a in allowed
     )
     disallowed = _values_after(cmd, "--disallowedTools")
-    for entry in SEND_DENY:
-        assert entry in disallowed
+    _assert_transports_denied(disallowed)
 
 
 def test_data_overlay_add_dir():
@@ -89,8 +122,7 @@ def test_queue_draft_live_draft_boundary():
     assert not any("approve" in a for a in allowed)  # approve never granted
     assert not any("send-email.py" in a for a in allowed)  # send transport never granted
     disallowed = _values_after(cmd, "--disallowedTools")
-    for entry in SEND_DENY:  # every send transport is explicitly denied
-        assert entry in disallowed
+    _assert_transports_denied(disallowed)  # every send transport is denied
 
 
 def test_args_passthrough():
@@ -175,8 +207,7 @@ def test_propose_tier_denies_odin_brain():
     expected_root = str((get_data_root() / ODIN_BRAIN_DENY_REL).resolve())
     matches = [d for d in disallowed if d.startswith("Edit(//") and expected_root.lstrip("/") in d]
     assert len(matches) == 1
-    for entry in SEND_DENY:
-        assert entry in disallowed
+    _assert_transports_denied(disallowed)
 
 
 def test_odin_reflect_propose_accepted(monkeypatch):

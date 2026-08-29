@@ -124,16 +124,80 @@ def test_every_watched_directory_is_diffed(cf):
 # The scope: the auto-memory index is watched at all
 # ============================================================
 
-def test_the_auto_memory_index_is_on_the_watch_list(cf):
-    watched = {label: parts for label, parts, _ in cf._WATCH_DIRS}
-    assert watched["auto-memory index"] == ("auto-memory",)
-    assert watched["handoff archive"] == ("outputs", "operations", "handoff-archive")
+def test_there_is_no_list_of_interesting_directories_any_more(cf):
+    """The scope was a list of two, and the hazard was never a list.
+
+    Both earlier versions of this guard named the directories they had already
+    been burned by. On 2026-08-29 the third was found the same way: a mutation
+    run rewrote the email-intel state file in the live overlay and the guard was
+    silent, because that path was not one of the two. A list cannot be right
+    here; only the whole overlay can.
+    """
+    assert not hasattr(cf, "_WATCH_DIRS"), (
+        "an allowlist of watched directories came back; the unit is the overlay")
 
 
-def test_the_auto_memory_watch_records_sizes(cf):
-    """A name-only watch on this directory would repeat the 2026-08-27 miss."""
-    with_size = {label: flag for label, _, flag in cf._WATCH_DIRS}
-    assert with_size["auto-memory index"] is True
+@pytest.mark.parametrize("name", [
+    ".git", ".memory-index", ".memory-index-code", ".codegraph", ".sessions",
+])
+def test_only_rebuildable_or_runtime_trees_are_left_out(cf, name):
+    """Each exclusion carries a reason, and none of them is operator data."""
+    assert name in cf._UNWATCHED
+    assert cf._UNWATCHED[name].strip(), f"{name} is excluded with no reason given"
+
+
+@pytest.mark.parametrize("rel", [
+    "outputs/operations/email-intelligence/state.json",
+    "crm/contacts/a-person.md",
+    "threads/business/a-thread.md",
+    "auto-memory/MEMORY.md",
+    "context/pipeline.md",
+    "knowledge/a-note.md",
+])
+def test_a_write_anywhere_in_the_overlay_is_reported(cf, monkeypatch, tmp_path, rel):
+    """Drive the real snapshot over a fake overlay, one write at a time."""
+    from scripts.utils import paths, workspace
+
+    monkeypatch.setattr(paths, "data_overlay_present", lambda: True)
+    monkeypatch.setattr(workspace, "get_data_root", lambda: tmp_path)
+    target = tmp_path / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("original\n", encoding="utf-8")
+
+    before = cf._watch_snapshot()
+    target.write_text("REWRITTEN BY A TEST RUN\n" * 4, encoding="utf-8")
+    complaints = cf.watch_complaints(before, cf._watch_snapshot())
+
+    assert complaints, f"a test rewrote {rel} and nothing said so"
+    assert rel in complaints[0]
+
+
+def test_the_snapshot_records_a_size_for_every_file(cf, monkeypatch, tmp_path):
+    """A name-only watch is how the memory index was lost: same name, 20 bytes."""
+    from scripts.utils import paths, workspace
+
+    monkeypatch.setattr(paths, "data_overlay_present", lambda: True)
+    monkeypatch.setattr(workspace, "get_data_root", lambda: tmp_path)
+    (tmp_path / "auto-memory").mkdir()
+    (tmp_path / "auto-memory" / "MEMORY.md").write_text("x" * 500, encoding="utf-8")
+
+    snapshot = cf._watch_snapshot()
+    assert list(snapshot) == ["operator overlay"]
+    _directory, entries = snapshot["operator overlay"]
+    assert entries == {"auto-memory/MEMORY.md": 500}
+
+
+def test_an_excluded_tree_is_not_snapshotted(cf, monkeypatch, tmp_path):
+    """Otherwise a rebuilt index fails an honest run and the guard gets removed."""
+    from scripts.utils import paths, workspace
+
+    monkeypatch.setattr(paths, "data_overlay_present", lambda: True)
+    monkeypatch.setattr(workspace, "get_data_root", lambda: tmp_path)
+    (tmp_path / ".memory-index").mkdir()
+    (tmp_path / ".memory-index" / "index.db").write_bytes(b"0" * 10)
+
+    _directory, entries = cf._watch_snapshot()["operator overlay"]
+    assert entries == {}
 
 
 def test_a_clone_with_no_overlay_watches_nothing(cf, monkeypatch, tmp_path):

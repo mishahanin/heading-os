@@ -211,16 +211,35 @@ def _isolate_runtime_logs():
 # in place adds no file and removes none. Names and sizes only, at session start
 # and session finish, and nothing at all when there is no overlay on disk.
 
-_WATCH_DIRS = (
-    ("handoff archive", ("outputs", "operations", "handoff-archive"), False),
-    ("auto-memory index", ("auto-memory",), True),
-)
+# The comment above ends "the hazard is the whole overlay", and then the fix
+# watched two directories. On 2026-08-29 the third one was found the same way as
+# the first two: a mutation harness reverted `StateManager.__init__` in
+# scripts/email-intelligence.py to its import-time default, ran the email-intel
+# tests in the main tree, and four runs of `main()` rewrote
+# `outputs/operations/email-intelligence/state.json` in the live overlay. The
+# guard said nothing, because that path was not one of the two. Measured the same
+# day: of four writes into a fake overlay, three drew no complaint.
+#
+# So the snapshot is now the WHOLE overlay, minus a named few that change on
+# their own. Walking it costs about 50 ms for roughly 11,000 files, which is
+# nothing beside a 100-second suite.
+#
+# Each exclusion needs a reason, and "it was noisy" is not one. A rebuildable
+# index or a credential file that a daemon refreshes is genuinely not the
+# operator's data; an output, a CRM record or a thread is.
+_UNWATCHED = {
+    ".git": "git's own object store, rewritten by any git command",
+    ".memory-index": "a rebuildable search index with a live file watcher",
+    ".memory-index-code": "the same, for code",
+    ".codegraph": "the CodeGraph index, rebuilt by its own watcher",
+    ".sessions": "runtime credentials refreshed by the daemons",
+}
 
 _WATCH_BEFORE = None
 
 
-def _overlay_dir(parts):
-    """A live overlay directory, or None when this clone has no private overlay."""
+def _overlay_root():
+    """The live overlay root, or None when this clone has no private overlay."""
     try:
         from scripts.utils.paths import data_overlay_present
         from scripts.utils.workspace import get_data_root
@@ -228,31 +247,146 @@ def _overlay_dir(parts):
         return None
     if not data_overlay_present():
         return None
-    directory = get_data_root().joinpath(*parts)
+    try:
+        root = get_data_root().resolve()
+    except OSError:
+        return None
+    return root if root.is_dir() else None
+
+
+def _overlay_dir(parts):
+    """One directory inside the live overlay, or None. Kept for callers that
+    want a single subtree rather than the whole walk."""
+    root = _overlay_root()
+    if root is None:
+        return None
+    directory = root.joinpath(*parts)
     return directory if directory.is_dir() else None
 
 
 def _watch_snapshot():
-    """{label: (directory, {name: size or None})} for every watched directory."""
-    snap = {}
-    for label, parts, with_size in _WATCH_DIRS:
-        directory = _overlay_dir(parts)
-        if directory is None:
+    """{label: (directory, {relpath: size})} for the whole overlay.
+
+    One label, because the unit being protected is the overlay, not a list of
+    interesting places in it. Sizes are always taken: a truncation in place adds
+    no file and removes none, which is how the memory index was lost in 2026-08.
+    """
+    root = _overlay_root()
+    if root is None:
+        return {}
+    entries = {}
+    for path in root.rglob("*"):
+        try:
+            rel = path.relative_to(root)
+        except ValueError:
+            continue
+        if rel.parts and rel.parts[0] in _UNWATCHED:
             continue
         try:
-            entries = {
-                p.name: (p.stat().st_size if with_size else None)
-                for p in directory.iterdir() if p.is_file()
-            }
+            if not path.is_file():
+                continue
+            entries[rel.as_posix()] = path.stat().st_size
         except OSError:
             continue
-        snap[label] = (directory, entries)
-    return snap
+    return {"operator overlay": (root, entries)}
+
+
+# The snapshot above is a post-mortem: it says the overlay changed, after the
+# run, and it cannot say WHICH test did it. It also catches a child process,
+# which nothing in this interpreter can. The guard below is its opposite half:
+# it refuses an in-process write at the moment it is attempted, so the traceback
+# names the test. Neither replaces the other.
+#
+# The check is a substring test on the path, done before any resolve, because it
+# runs on every `open()` in a 15,000-test suite. A relative path, a symlink or a
+# `..` walk therefore slips past it. That is honest and deliberate: this guards
+# against an accident, and the accidents all look like an absolute path built
+# from `get_data_root()`. The snapshot is what covers the rest.
+
+_OVERLAY_PREFIX = None          # set in pytest_sessionstart
+_WRITE_MODE_CHARS = frozenset("wxa+")
+
+
+class OverlayWriteRefused(RuntimeError):
+    """A test tried to write the operator's live data."""
+
+
+def _refuse_overlay_path(target, verb):
+    if _OVERLAY_PREFIX is None:
+        return
+    try:
+        text = os.fspath(target)
+    except TypeError:
+        return
+    if isinstance(text, bytes):
+        text = os.fsdecode(text)
+    if _OVERLAY_PREFIX not in text:
+        return
+    raise OverlayWriteRefused(
+        f"a test tried to {verb} the operator's live data at {text}. "
+        f"Point HEADING_OS_DATA at a tmp_path before anything that writes, and "
+        f"pass it to any child process too."
+    )
+
+
+def _install_overlay_write_guard():
+    """Wrap the write primitives. Returns a callable that puts them back."""
+    import builtins
+    import io
+
+    real_open = builtins.open
+    real_replace, real_rename = os.replace, os.rename
+    real_remove, real_unlink = os.remove, os.unlink
+
+    def guarded_open(file, mode="r", *args, **kwargs):
+        if _WRITE_MODE_CHARS & set(mode):
+            _refuse_overlay_path(file, "write")
+        return real_open(file, mode, *args, **kwargs)
+
+    def guarded_replace(src, dst, *args, **kwargs):
+        _refuse_overlay_path(dst, "replace")
+        return real_replace(src, dst, *args, **kwargs)
+
+    def guarded_rename(src, dst, *args, **kwargs):
+        _refuse_overlay_path(dst, "rename onto")
+        return real_rename(src, dst, *args, **kwargs)
+
+    def guarded_remove(path, *args, **kwargs):
+        _refuse_overlay_path(path, "delete")
+        return real_remove(path, *args, **kwargs)
+
+    def guarded_unlink(path, *args, **kwargs):
+        _refuse_overlay_path(path, "delete")
+        return real_unlink(path, *args, **kwargs)
+
+    # `io.open` and `builtins.open` are the same object, and pathlib reaches the
+    # one on `io`. Both names are rebound or `Path.write_text` walks straight
+    # past the guard.
+    builtins.open = guarded_open
+    io.open = guarded_open
+    os.replace, os.rename = guarded_replace, guarded_rename
+    os.remove, os.unlink = guarded_remove, guarded_unlink
+
+    def restore():
+        builtins.open = real_open
+        io.open = real_open
+        os.replace, os.rename = real_replace, real_rename
+        os.remove, os.unlink = real_remove, real_unlink
+
+    return restore
+
+
+_RESTORE_WRITE_GUARD = None
 
 
 def pytest_sessionstart(session):
-    global _WATCH_BEFORE
+    global _WATCH_BEFORE, _OVERLAY_PREFIX, _RESTORE_WRITE_GUARD
     _WATCH_BEFORE = _watch_snapshot()
+    root = _overlay_root()
+    if root is None:
+        return
+    _OVERLAY_PREFIX = f"{root}{os.sep}"
+    _RESTORE_WRITE_GUARD = _install_overlay_write_guard()
 
 
 def watch_complaints(before, after):

@@ -191,6 +191,16 @@
             "timeout": 30
           }
         ]
+      },
+      {
+        "matcher": "mcp__codegraph__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import os,runpy;from pathlib import Path;p=next((str(d/'.claude'/'hooks'/'_dispatch.py') for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/'_dispatch.py').is_file()),None);p and runpy.run_path(p,run_name='__main__')\"",
+            "timeout": 30
+          }
+        ]
       }
     ],
     "PostToolUse": [

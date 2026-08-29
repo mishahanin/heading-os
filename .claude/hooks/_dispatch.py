@@ -1770,9 +1770,30 @@ def check_tool_budget(payload: dict) -> dict | None:
 
 _GRAPH_STATE_DIR = WORKSPACE / ".claude" / "state" / "graph-first"
 
-# Bash utilities that are code searches. `find` is here for `find ... -name`
-# over source; its `.tmp/` and log uses are filtered by the path test below.
-_SEARCH_BINARIES = ("grep", "rg", "egrep", "fgrep", "ag", "ack", "ast-grep", "sg")
+# Bash utilities that reach source code. Two groups, one list.
+#
+# SEARCHING: grep and its kin, plus `find ... -name` over source. `find` was
+# named in this comment and absent from the tuple until 2026-08-29, so the
+# comment described a rule the code did not have.
+#
+# READING: sed, awk, cat, head, tail. These are not searches, and leaving them
+# out was not an oversight in reasoning but a measured bypass: earlier in this
+# same session, with the wall armed, `sed -n '1,40p' tests/<file>.py` opened a
+# source file and the wall never saw it. A rule that stops `grep scripts/` and
+# allows `cat scripts/x.py` is not a rule. Log and scratch uses of all five are
+# filtered by `_NOT_CODE_HINTS` below, which is why they can be listed here at
+# all.
+_SEARCH_BINARIES = ("grep", "rg", "egrep", "fgrep", "ag", "ack", "ast-grep", "sg",
+                    "find", "sed", "awk", "cat", "head", "tail")
+
+# The shell form of the graph, documented in the global instructions as the one
+# that "always works". A Bash call carrying it unlocks the session exactly as
+# the MCP tool does, and that redundancy is what lets this wall be absolute:
+# the MCP matcher lives in gitignored machine-local settings and can be absent,
+# but the `Bash` matcher is present in every settings file in the repository.
+# Two independent unlock doors mean a missing matcher can never cage a session,
+# so the rule needs no escape hatch. See `check_graph_first`.
+_GRAPH_CLI_RE = re.compile(r"(^|[\s|;&(])codegraph(\s|$)")
 
 # Reading output, not locating code. Any of these in the target and the search
 # is none of this check's business.
@@ -1807,6 +1828,17 @@ def is_code_search(tool_name: str, tool_input: dict) -> bool:
     if tool_name in ("Grep", "Glob"):
         target = " ".join(str(tool_input.get(k, ""))
                           for k in ("pattern", "path", "glob"))
+    elif tool_name == "Read":
+        # Opening a source file to learn what it does is the same lookup as
+        # grepping for it, and the operator's instruction names both: "before
+        # any grep or Read". The first version of this predicate answered False
+        # for every Read, and `tests/..._four_times_and_obeyed_none.py` pinned
+        # `Read scripts/sentinel.py` in the NOT-a-search list, so the hole was
+        # asserted as correct. Measured 2026-08-29 on the live wall: a fresh
+        # session refused a Grep of `scripts/` and allowed a Read of
+        # `scripts/sentinel.py`, which is the whole rule walked around in one
+        # tool call.
+        target = str(tool_input.get("file_path", ""))
     elif tool_name == "Bash":
         command = str(tool_input.get("command", ""))
         first = re.split(r"[\s|;&]+", command.strip())
@@ -1829,24 +1861,31 @@ def is_code_search(tool_name: str, tool_input: dict) -> bool:
     return tool_name == "Grep" and not tool_input.get("path")
 
 
-# The cage bound. A wall whose UNLOCK path is broken stops being a wall and
-# becomes a cage, and this one nearly shipped as one: the dispatcher's
-# PreToolUse matchers are `Bash`, `Read|Grep|Glob` and the write family, so an
-# MCP tool call never reached this check and no real `codegraph_explore` could
-# ever stamp the marker. Measured 2026-08-29: the wall refused, the explore ran,
-# the wall refused again. A matcher for the codegraph tool is the real fix, and
-# it lives in `.claude/settings.local.json`, which is gitignored and therefore
-# machine-local. This counter is the part that CANNOT be lost with the config:
-# after this many refusals in one session the check yields and says so, so a
-# broken unlock costs a few turns instead of the session.
-MAX_GRAPH_REFUSALS = 3
-
-
-def _graph_refusals(marker: Path) -> int:
-    try:
-        return int(marker.read_text(encoding="utf-8").strip() or 0)
-    except (OSError, ValueError):
-        return 0
+# THE RULE IS UNCONDITIONAL. It used to yield after three refusals in one
+# session, and that hatch is gone as of 2026-08-29 on the operator's explicit
+# instruction: "если есть жёсткое правило, оно ВСЕГДА выполнялось,
+# безоговорочно". A control with a counter is a control the caller can wait out,
+# and this one is a wall precisely because the written version was ignored three
+# times with a reminder on screen.
+#
+# The hatch existed for one real reason, and the reason is now fixed instead of
+# accommodated. A wall whose UNLOCK path is broken is a cage, and this one
+# nearly shipped as one: the dispatcher's PreToolUse matchers are `Bash`,
+# `Read|Grep|Glob` and the write family, so an MCP tool call never reached this
+# check and no real `codegraph_explore` could stamp the marker. Measured
+# 2026-08-29: the wall refused, the explore ran, the wall refused again.
+#
+# Two independent doors now open it, and a session can only be caged if BOTH are
+# shut:
+#   1. the MCP tool, via the `mcp__codegraph__.*` matcher. Added the same day to
+#      all three TRACKED platform templates, so a fresh clone carries it; the
+#      live `.claude/settings.local.json` is gitignored and cannot be relied on.
+#   2. `codegraph explore` in a Bash command, which rides the `Bash` matcher.
+#      That matcher is in every settings file in the repository, so this door
+#      does not depend on anyone having copied a template.
+# Either one stamps the marker BEFORE the call runs, so a graph that is down, an
+# MCP server that is not connected, and a CLI that is not installed all still
+# unlock. The rule is "ask the graph first", never "the graph must answer".
 
 
 def check_graph_first(payload: dict):
@@ -1867,7 +1906,15 @@ def check_graph_first(payload: dict):
     # Stamp on the explore ITSELF, at PreToolUse, before it runs. Stamping on
     # success instead would mean a graph outage locks the session out of grep
     # too, and a control that wedges a session gets switched off.
-    if "codegraph" in tool_name.lower():
+    #
+    # Both doors are read here: the MCP tool by name, and the shell CLI by
+    # command. The second is what makes the rule safe to enforce absolutely.
+    asked_the_graph = "codegraph" in tool_name.lower() or (
+        tool_name == "Bash"
+        and bool(_GRAPH_CLI_RE.search(str((payload.get("tool_input") or {})
+                                          .get("command", ""))))
+    )
+    if asked_the_graph:
         try:
             _GRAPH_STATE_DIR.mkdir(parents=True, exist_ok=True)
             marker.write_text("unlocked", encoding="utf-8")
@@ -1878,48 +1925,33 @@ def check_graph_first(payload: dict):
 
     if not (WORKSPACE / ".codegraph").is_dir():
         return None
-    if marker.exists() and not marker.read_text(encoding="utf-8").strip().isdigit():
+    if marker.exists():
         return None
     if not is_code_search(tool_name, payload.get("tool_input") or {}):
         return None
-
-    refusals = _graph_refusals(marker)
-    if refusals >= MAX_GRAPH_REFUSALS:
-        return {
-            "additionalContext": (
-                f"graph-first: yielding after {refusals} refusals in this "
-                f"session. An explore should have unlocked this and did not, so "
-                f"the unlock path is broken rather than ignored. Check that "
-                f".claude/settings.local.json carries a PreToolUse matcher for "
-                f"mcp__codegraph__.* pointing at .claude/hooks/_dispatch.py; "
-                f"without it the dispatcher never sees an explore. Search "
-                f"allowed, but the graph is still the better answer."
-            ),
-        }
-
-    try:
-        _GRAPH_STATE_DIR.mkdir(parents=True, exist_ok=True)
-        marker.write_text(str(refusals + 1), encoding="utf-8")
-    except OSError as exc:
-        print(f"[_dispatch:graph_first] could not count: {exc}", file=sys.stderr)
 
     return {
         "decision": "block",
         "_policy_deny": True,
         "reason": (
-            "Ask the graph first. This is a code lookup and no "
-            "`codegraph_explore` has run in this session yet.\n\n"
+            "Ask the graph first. This call reaches source code and no "
+            "codegraph query has run in this session yet.\n\n"
             "One call to `codegraph_explore` returns the verbatim source of "
             "the relevant symbols PLUS who calls them, which grep cannot "
-            "produce at any number of round trips. The operator has given this "
-            "instruction four times; it is a wall now because the written "
-            "version was ignored three times with a reminder on screen.\n\n"
-            "Call `codegraph_explore` with the symbol or file names in this "
-            "search. Any attempt unlocks the session, including one that "
-            "errors or returns nothing, so a graph outage cannot wedge you. "
-            "Searches over .tmp/, logs, markdown and JSON are never refused, "
-            f"and this check yields after {MAX_GRAPH_REFUSALS} refusals so it "
-            "can never become a cage."
+            "produce at any number of round trips. The operator gave this "
+            "instruction four times before it became a wall, and made it "
+            "unconditional on the fifth: there is no refusal count to wait "
+            "out and no number of attempts that lets this through.\n\n"
+            "TWO WAYS OUT, both of which unlock the whole session:\n"
+            "  - call `codegraph_explore` with the symbol or file names in "
+            "this lookup, or\n"
+            "  - run `codegraph explore \"<names>\"` in Bash.\n"
+            "Any ATTEMPT unlocks, including one that errors or returns "
+            "nothing, so a graph that is down, an MCP server that is not "
+            "connected and a missing CLI can none of them wedge you.\n\n"
+            "Never refused at all: anything under .tmp/ or a scratch "
+            "directory, logs, markdown, JSON, CSV and HTML. This wall is "
+            "about locating and reading CODE."
         ),
     }
 

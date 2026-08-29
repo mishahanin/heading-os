@@ -18,13 +18,48 @@ properly.
 So the reminder is not a weaker version of this control. It is a different
 kind of thing. This one refuses.
 
-Scope, deliberately small. It refuses the FIRST code-shaped search of a
-session while no `codegraph_explore` has been ATTEMPTED. One attempt unlocks
-the session, including an attempt that errors, because the rule is "ask the
-graph first" and not "the graph must answer": a control that can wedge a
-session over an outage would be turned off, and a control that is off is worth
-nothing. A repository with no `.codegraph/` index is out of scope entirely,
-matching the standing instruction to skip CodeGraph where it is not indexed.
+Scope. It refuses every call of a session that reaches source code while no
+codegraph query has been ATTEMPTED. One attempt unlocks the session, including
+an attempt that errors, because the rule is "ask the graph first" and not "the
+graph must answer". A repository with no `.codegraph/` index is out of scope
+entirely, matching the standing instruction to skip CodeGraph where it is not
+indexed.
+
+FIVE HOLES CLOSED 2026-08-29, after the operator asked for confirmation that
+the rule could no longer be broken and the honest answer was that it could. The
+first four were measured against the armed wall, in the session that wrote it.
+
+1. `Read` WAS NOT COVERED. The predicate answered False for every Read, and the
+   first version of THIS FILE pinned `Read scripts/sentinel.py` in the
+   NOT-a-search list, so the hole was asserted as correct behaviour. Measured:
+   a fresh session refused `Grep scripts/` and allowed `Read
+   scripts/sentinel.py`. The instruction names both ("before any grep or
+   Read"), so this was the rule walked around in one tool call.
+
+2. FIVE SHELL READERS WERE NOT COVERED. `sed`, `awk`, `cat`, `head` and `tail`
+   open a source file without searching it. This is not a hypothetical: earlier
+   in that same session, with the wall armed, `sed -n '1,40p' tests/<file>.py`
+   read a source file and the wall never saw it.
+
+3. `find` WAS NAMED IN A COMMENT AND ABSENT FROM THE CODE. The comment above
+   `_SEARCH_BINARIES` said "find is here for `find ... -name` over source". It
+   was not in the tuple.
+
+4. THE RULE HAD A COUNTER, SO IT COULD BE WAITED OUT. After three refusals the
+   check yielded and allowed the search. Measured: refusals 1-3 denied, refusal
+   4 allowed. The operator's answer was "если есть жёсткое правило, оно ВСЕГДА
+   выполнялось, безоговорочно", so the hatch is gone.
+
+5. THE UNLOCK MATCHER WAS MACHINE-LOCAL ONLY. It lived in
+   `.claude/settings.local.json`, which is gitignored; all three TRACKED
+   platform templates lacked it, so on any other machine an explore could never
+   stamp the marker and the wall was a cage. That is WHY the hatch existed, and
+   removing the hatch demanded fixing the cause: the matcher is now in the
+   three tracked templates, AND `codegraph explore` in a Bash command is a
+   second, independent unlock door riding the `Bash` matcher, which is present
+   in every settings file in the repository. Both doors are asserted below. A
+   session can be caged only if both are shut, which no single missing config
+   can achieve.
 """
 from __future__ import annotations
 
@@ -67,6 +102,20 @@ CODE_SEARCHES = [
     # every other code fixture also carried a code-tree name, so the `.py` hint
     # was decorative: deleting it changed no verdict.
     ("Grep", {"pattern": "import os", "path": "conftest.py"}),
+    # Hole 1: opening a source file IS the lookup the graph answers. This exact
+    # payload sat in the NOT-a-search list until 2026-08-29.
+    ("Read", {"file_path": "scripts/sentinel.py"}),
+    ("Read", {"file_path": ".claude/hooks/turn-check.py"}),
+    ("Read", {"file_path": "conftest.py"}),
+    # Hole 2: five shell readers that open source without searching it. The sed
+    # case is the one that actually happened, with the wall armed.
+    ("Bash", {"command": "sed -n '1,40p' tests/test_content_guard.py"}),
+    ("Bash", {"command": "cat scripts/utils/air_gap.py"}),
+    ("Bash", {"command": "head -50 scripts/leak-guard.py"}),
+    ("Bash", {"command": "tail -20 scripts/memory.py"}),
+    ("Bash", {"command": "awk '/def /' scripts/memory.py"}),
+    # Hole 3: named in the comment, absent from the tuple.
+    ("Bash", {"command": "find scripts -name '*.py'"}),
 ]
 
 NOT_CODE_SEARCHES = [
@@ -78,8 +127,22 @@ NOT_CODE_SEARCHES = [
     # Not a search at all.
     ("Bash", {"command": "git status --short"}),
     ("Bash", {"command": "python -m pytest tests/test_x.py -q"}),
-    ("Read", {"file_path": "scripts/sentinel.py"}),
     ("Write", {"file_path": "scripts/sentinel.py", "content": "x"}),
+    # The five shell readers over things that are NOT code. Without these the
+    # whole `_NOT_CODE_HINTS` filter could be deleted for them and no verdict
+    # would change, which would make `cat` of any log a refusal and get the
+    # wall switched off.
+    ("Bash", {"command": "cat .tmp/audit/ci40.log"}),
+    ("Bash", {"command": "head -20 docs/ARCHITECTURE.md"}),
+    ("Bash", {"command": "tail -5 .claude/settings.json"}),
+    ("Bash", {"command": "sed -n '1,5p' outputs/notes.txt"}),
+    # A Read of something that is not code. Read must not become a blanket.
+    ("Read", {"file_path": ".tmp/audit/mut86b.log"}),
+    ("Read", {"file_path": "docs/ARCHITECTURE.md"}),
+    ("Read", {"file_path": "config/routing-map.yaml"}),
+    # A Read with no path at all cannot be judged, and must not inherit the
+    # Grep catch-all on the predicate's last line.
+    ("Read", {}),
     # A `.py` file that is scratch, not source. Mutation found that no fixture
     # had BOTH a code hint and a scratch hint, so the whole scratch list could
     # be deleted without changing a verdict. This one decides it.
@@ -217,15 +280,53 @@ def test_a_scratch_log_search_is_never_refused(fresh_session):
 @pytest.mark.skipif(not (ROOT / ".codegraph").is_dir(),
                     reason="no .codegraph index here, so the check is out of scope")
 def test_a_write_is_not_this_checks_business(fresh_session):
-    """Scope. This wall is about how code is LOCATED. Anything else it touches
-    is a false refusal, and false refusals are what get a control disabled."""
+    """Scope. This wall is about how code is LOCATED and READ. Editing a file
+    you already have is downstream of that, and refusing it would only stop
+    work the graph has nothing to add to.
+
+    The payload used to be a `Read` of `scripts/firecrawl.py`, asserted to be
+    allowed, under this name. It documented hole 1 as intended behaviour while
+    reading as a scope test about writes.
+    """
+    result = _run_hook({
+        "session_id": fresh_session["id"],
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(ROOT / "scripts" / "firecrawl.py"),
+                       "content": "# edited\n"},
+    }, fresh_session["state"])
+
+    assert _decision(result) == "allow", result
+
+
+@pytest.mark.skipif(not (ROOT / ".codegraph").is_dir(),
+                    reason="no .codegraph index here, so the check is out of scope")
+def test_reading_a_source_file_is_refused_on_the_live_wall(fresh_session):
+    """Hole 1, on the wall rather than the predicate.
+
+    Measured before the fix: this exact call was ALLOWED in a session whose
+    `Grep scripts/` had just been refused.
+    """
     result = _run_hook({
         "session_id": fresh_session["id"],
         "tool_name": "Read",
         "tool_input": {"file_path": str(ROOT / "scripts" / "firecrawl.py")},
     }, fresh_session["state"])
 
-    assert _decision(result) == "allow", result
+    assert _decision(result) == "deny", result
+
+
+@pytest.mark.skipif(not (ROOT / ".codegraph").is_dir(),
+                    reason="no .codegraph index here, so the check is out of scope")
+def test_a_shell_reader_over_source_is_refused_on_the_live_wall(fresh_session):
+    """Hole 2. This command shape was actually used, with the wall armed, in
+    the session that wrote the wall."""
+    result = _run_hook({
+        "session_id": fresh_session["id"],
+        "tool_name": "Bash",
+        "tool_input": {"command": "sed -n '1,40p' tests/test_content_guard.py"},
+    }, fresh_session["state"])
+
+    assert _decision(result) == "deny", result
 
 
 def test_an_unindexed_repository_is_out_of_scope(hook, tmp_path, monkeypatch):
@@ -244,91 +345,196 @@ def test_an_unindexed_repository_is_out_of_scope(hook, tmp_path, monkeypatch):
 
 
 # ============================================================
-# The wall must never become a cage
+# Unconditional, and still not a cage
 # ============================================================
 
-def test_the_wall_yields_after_a_bounded_number_of_refusals(hook, tmp_path,
-                                                            monkeypatch):
-    """MEASURED 2026-08-29, and this nearly shipped as a cage.
-
-    The dispatcher's PreToolUse matchers were `Bash`, `Read|Grep|Glob` and the
-    write family. An MCP tool call reached none of them, so a real
-    `codegraph_explore` could never stamp the marker: the wall refused, the
-    explore ran, the wall refused again, with no way through. A matcher for
-    `mcp__codegraph__.*` is the real fix and it lives in a gitignored,
-    machine-local settings file. This bound is the half that cannot be lost
-    with a config file.
-    """
+def _walled(hook, tmp_path, monkeypatch):
     monkeypatch.setattr(hook, "_GRAPH_STATE_DIR", tmp_path / "state")
     (tmp_path / ".codegraph").mkdir()
     monkeypatch.setattr(hook, "WORKSPACE", tmp_path)
+
+
+def test_the_wall_never_yields_however_long_it_is_pushed(hook, tmp_path,
+                                                         monkeypatch):
+    """Hole 4. The rule used to yield after three refusals, and a rule with a
+    counter is a rule the caller waits out. Measured before the fix: refusals
+    1-3 denied, refusal 4 allowed.
+
+    Twenty is not a magic number. It is far past any bound a future author
+    might reintroduce, so a returning hatch fails here rather than passing
+    quietly at a higher setting.
+    """
+    _walled(hook, tmp_path, monkeypatch)
     call = {
-        "session_id": "cage-probe",
+        "session_id": "no-hatch-probe",
         "tool_name": "Grep",
         "tool_input": {"pattern": "def something", "path": "scripts"},
     }
 
-    verdicts = [hook.check_graph_first(dict(call))
-                for _ in range(hook.MAX_GRAPH_REFUSALS + 1)]
+    verdicts = [hook.check_graph_first(dict(call)) for _ in range(20)]
 
-    blocked = [v for v in verdicts if (v or {}).get("decision") == "block"]
-    assert len(blocked) == hook.MAX_GRAPH_REFUSALS, verdicts
-    last = verdicts[-1] or {}
-    assert last.get("decision") != "block", "the wall never yielded: it is a cage"
-    assert "unlock path is broken" in last.get("additionalContext", "")
+    allowed = [i for i, v in enumerate(verdicts, 1)
+               if (v or {}).get("decision") != "block"]
+    assert not allowed, f"the wall yielded on attempt(s) {allowed}"
 
 
-def test_an_explore_still_unlocks_before_the_bound_is_reached(hook, tmp_path,
-                                                              monkeypatch):
-    """The mirror. If the bound were the ONLY way through, the wall would be a
-    three-refusal speed bump rather than a rule."""
-    monkeypatch.setattr(hook, "_GRAPH_STATE_DIR", tmp_path / "state")
-    (tmp_path / ".codegraph").mkdir()
-    monkeypatch.setattr(hook, "WORKSPACE", tmp_path)
+def test_no_refusal_counter_survives_in_the_module(hook):
+    """The hatch is gone from the code, not merely unreachable. A counter left
+    in place is a counter someone re-wires."""
+    assert not hasattr(hook, "MAX_GRAPH_REFUSALS")
+    assert not hasattr(hook, "_graph_refusals")
+
+
+@pytest.mark.parametrize("unlock", [
+    pytest.param({"tool_name": "mcp__codegraph__codegraph_explore",
+                  "tool_input": {"query": "something"}}, id="mcp-tool"),
+    pytest.param({"tool_name": "Bash",
+                  "tool_input": {"command": 'codegraph explore "something"'}},
+                 id="shell-cli"),
+])
+def test_either_door_unlocks_the_session(hook, tmp_path, monkeypatch, unlock):
+    """Hole 5, and the reason the hatch could be removed at all.
+
+    The MCP door needs a `mcp__codegraph__.*` matcher, which lives in
+    machine-local settings and can be absent. The shell door rides the `Bash`
+    matcher, which is in every settings file in the repository. A session is
+    caged only if BOTH are shut, and no single missing config does that.
+    """
+    _walled(hook, tmp_path, monkeypatch)
     search = {
-        "session_id": "unlock-probe",
+        "session_id": f"unlock-{unlock['tool_name']}",
+        "tool_input": {"pattern": "def something", "path": "scripts"},
+        "tool_name": "Grep",
+    }
+
+    assert (hook.check_graph_first(dict(search)) or {}).get("decision") == "block"
+    hook.check_graph_first({"session_id": search["session_id"], **unlock})
+    assert hook.check_graph_first(dict(search)) is None
+
+
+def test_a_bash_command_merely_naming_the_graph_does_not_unlock(hook, tmp_path,
+                                                                monkeypatch):
+    """The mirror on the shell door. If any mention of the word unlocked the
+    session, writing `# ask codegraph first` into a file would open it, and the
+    second door would be a hole rather than a door."""
+    _walled(hook, tmp_path, monkeypatch)
+    search = {
+        "session_id": "mention-probe",
         "tool_name": "Grep",
         "tool_input": {"pattern": "def something", "path": "scripts"},
     }
 
     assert (hook.check_graph_first(dict(search)) or {}).get("decision") == "block"
-    hook.check_graph_first({
-        "session_id": "unlock-probe",
-        "tool_name": "mcp__codegraph__codegraph_explore",
-        "tool_input": {"query": "something"},
-    })
-    assert hook.check_graph_first(dict(search)) is None
+    for command in ("grep -rn mycodegraph scripts/",
+                    "echo 'use codegraph_explore' >> notes.md",
+                    "ls .codegraph/"):
+        hook.check_graph_first({"session_id": "mention-probe",
+                                "tool_name": "Bash",
+                                "tool_input": {"command": command}})
+    assert (hook.check_graph_first(dict(search)) or {}).get("decision") == "block"
 
 
-def test_the_settings_route_the_graph_tool_into_the_dispatcher():
-    """The real unlock path, asserted where it lives.
+def test_a_payload_with_no_session_is_not_walled(hook, tmp_path, monkeypatch):
+    """Found by mutation: deleting the session guard changed no test result.
 
-    `.claude/settings.local.json` is gitignored and machine-local, so this
-    cannot run on a fresh clone and skips there rather than pretending. On the
-    machine that HAS the file, a missing matcher is the exact defect measured
-    above and must fail loudly.
+    "The first code lookup of the SESSION" needs a session to be the first of.
+    Without one, every caller would share a single `unknown` marker, so one
+    session's explore would silently unlock every other, AND the suites that
+    drive other walls through this dispatcher would depend on each other's
+    order. The rate limiter's single shared state file did exactly that to a
+    wall test earlier the same day.
+
+    Walling instead is not the stricter option, it is a cage: a caller with no
+    session has no marker to stamp, so no explore could ever open it.
     """
+    _walled(hook, tmp_path, monkeypatch)
+    search = {"tool_name": "Grep",
+              "tool_input": {"pattern": "def something", "path": "scripts"}}
+
+    for sessionless in ({}, {"session_id": ""}, {"session_id": "   "}):
+        assert hook.check_graph_first({**search, **sessionless}) is None, sessionless
+
+
+def test_the_same_lookup_with_a_session_is_walled(hook, tmp_path, monkeypatch):
+    """The mirror. Without it the test above is satisfied by a check that
+    returns None for everything."""
+    _walled(hook, tmp_path, monkeypatch)
+    verdict = hook.check_graph_first({
+        "session_id": "has-a-session",
+        "tool_name": "Grep",
+        "tool_input": {"pattern": "def something", "path": "scripts"},
+    })
+    assert (verdict or {}).get("decision") == "block"
+
+
+def _pretooluse_matchers(path: Path) -> list[str]:
+    hooks = json.loads(path.read_text(encoding="utf-8")).get("hooks") or {}
+    return [entry.get("matcher") or "" for entry in (hooks.get("PreToolUse") or [])]
+
+
+TRACKED_SETTINGS = ["linux", "macos", "windows"]
+
+
+@pytest.mark.parametrize("platform", TRACKED_SETTINGS)
+def test_every_tracked_platform_template_routes_the_graph_tool(platform):
+    """Hole 5 at its source.
+
+    This assertion used to read `.claude/settings.local.json`, which is
+    gitignored, and SKIP when it was absent. So it passed on the one machine
+    that was already correct and said nothing about any other. Measured
+    2026-08-29: all three tracked templates lacked the matcher, meaning a fresh
+    clone got a wall whose MCP door was nailed shut.
+
+    These files ARE tracked, so there is nothing to skip and no machine where
+    this cannot run.
+    """
+    import re as _re
+
+    path = ROOT / ".claude" / f"settings.local.{platform}.json"
+    assert path.is_file(), f"{path} is tracked and must exist"
+
+    matchers = _pretooluse_matchers(path)
+    reaching = [m for m in matchers
+                if _re.fullmatch(m, "mcp__codegraph__codegraph_explore")]
+    assert reaching, (
+        f"{path.name} has no PreToolUse matcher reaching the codegraph tool, so "
+        f"a clone using it cannot unlock check_graph_first through the MCP "
+        f"door. Matchers: {matchers}")
+
+    hooks = json.loads(path.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+    routed = [e for e in hooks
+              if (e.get("matcher") or "") in reaching
+              and any("_dispatch.py" in (h.get("command") or "")
+                      for h in e.get("hooks") or [])]
+    assert routed, f"{path.name}: the matcher exists but misses _dispatch.py"
+
+
+@pytest.mark.parametrize("platform", TRACKED_SETTINGS)
+def test_every_tracked_platform_template_routes_bash(platform):
+    """The second door's wiring. It is the one that cannot be lost, and that
+    claim is worth an assertion rather than a comment."""
+    import re as _re
+
+    matchers = _pretooluse_matchers(ROOT / ".claude" / f"settings.local.{platform}.json")
+    assert any(_re.fullmatch(m, "Bash") for m in matchers), (
+        f"{platform}: no Bash matcher, so the shell unlock door is shut too")
+
+
+def test_the_live_settings_route_the_graph_tool():
+    """The machine-local file, where it exists. Kept as a separate assertion
+    from the tracked templates: copying a template is a manual step, and a
+    machine that skipped it must fail here rather than inherit the templates'
+    green."""
     settings = ROOT / ".claude" / "settings.local.json"
     if not settings.is_file():
         pytest.skip("machine-local settings absent, so there is nothing to route")
 
-    hooks = json.loads(settings.read_text(encoding="utf-8")).get("hooks") or {}
-    matchers = [entry.get("matcher") or ""
-                for entry in (hooks.get("PreToolUse") or [])]
-
     import re as _re
-    reaching = [m for m in matchers
-                if _re.fullmatch(m, "mcp__codegraph__codegraph_explore")]
-    assert reaching, (
-        "no PreToolUse matcher reaches the codegraph tool, so an explore can "
-        f"never unlock check_graph_first and the wall is a cage. Matchers: "
-        f"{matchers}")
-
-    routed = [entry for entry in hooks["PreToolUse"]
-              if (entry.get("matcher") or "") in reaching
-              and any("_dispatch.py" in (h.get("command") or "")
-                      for h in entry.get("hooks") or [])]
-    assert routed, "the matcher exists but does not point at _dispatch.py"
+    matchers = _pretooluse_matchers(settings)
+    assert any(_re.fullmatch(m, "mcp__codegraph__codegraph_explore")
+               for m in matchers), (
+        f"this machine's settings do not route the codegraph tool into the "
+        f"dispatcher. Matchers: {matchers}")
 
 
 def test_the_check_is_wired_into_the_dispatcher(hook):

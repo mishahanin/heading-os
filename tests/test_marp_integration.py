@@ -7,7 +7,6 @@ These tests require marp-cli to be installed. Skip gracefully if not available.
 import json
 import os
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -18,33 +17,58 @@ from scripts.marp_render import (
     render,
     transform_workspace_md,
     SAMPLE_DECK,
+    WORKSPACE_DEFAULTS,
     WORKSPACE_ROOT,
 )
-from scripts.utils.paths import DataRootError
-from scripts.utils.workspace import data_root_is_demo, get_data_root
 
 
-def _workspace_dir(rel: str):
-    """The first root that actually holds `rel`, or None.
+@pytest.fixture()
+def sandbox_data_root(tmp_path, monkeypatch):
+    """A private-data overlay that is not the operator's.
 
-    Both source dirs these tests need (`context/`, `outputs/intel/`) live in the
-    private DATA overlay, never in the engine clone. Looking only under
-    `WORKSPACE_ROOT` made both tests skip on the operator's own machine, which
-    is the only machine where the workspace-aware defaults they cover can be
-    exercised at all.
+    Measured 2026-08-29. The two workspace-transform cases used to look for a
+    real `context/` and `outputs/intel/` directory and hand the FIRST document
+    they found to `transform_workspace_md`. On the two-part topology those
+    directories exist only in the private DATA overlay, so the fixture was the
+    operator's live data -- and `transform_workspace_md` writes its MARP
+    intermediate into `source.parent`, deliberately, so relative image paths
+    resolve from the document's own directory. Both cases therefore tried to
+    write the live overlay and were refused by the conftest write guard:
+
+        OverlayWriteRefused: a test tried to write the operator's live data at
+        /home/.../.heading-os-data/outputs/intel/briefs
+
+    The quieter half is that the fixture was the host, not the tree: on any
+    machine without the overlay both cases SKIPPED, so the light-mode and
+    dark-mode rows of `WORKSPACE_DEFAULTS` were measured nowhere. Seeding a
+    throwaway overlay fixes both -- nothing is written outside `tmp_path`, and
+    the assertion runs on every machine.
     """
-    roots = [WORKSPACE_ROOT]
-    try:
-        data_root = get_data_root()
-    except DataRootError:
-        data_root = None
-    if data_root is not None and data_root != WORKSPACE_ROOT:
-        roots.append(data_root)
-    for root in roots:
-        candidate = root / rel
-        if candidate.is_dir():
-            return candidate
-    return None
+    from scripts import marp_render
+
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setattr(marp_render, "get_data_root", lambda: data)
+    return data
+
+
+def _seed_document(data_root: Path, prefix: str) -> Path:
+    """One markdown document at `prefix` inside the sandbox overlay."""
+    source = data_root / prefix / "probe-document.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        "# Probe Document\n\nFirst body paragraph.\n\n"
+        "## Second Section\n\nSecond body paragraph.\n",
+        encoding="utf-8",
+    )
+    return source
+
+
+# The expected mode is DERIVED from the table under test, never restated here.
+# A missing key raises KeyError at collection, which is the loud failure a
+# renamed prefix deserves; restating "light" would have let the rename pass.
+LIGHT_PREFIX = "context/"
+DARK_PREFIX = "outputs/intel/"
 
 # Skip all tests if marp-cli is not installed
 marp_installed, _ = check_marp_installed()
@@ -140,61 +164,34 @@ class TestSampleDeckRender:
 class TestWorkspaceTransform:
     """Integration tests for /marp from <workspace-path>."""
 
-    def test_marp_from_context_fixture_applies_light_mode(self):
-        """Context files should render with light mode default."""
-        # Create a temp fixture simulating a context file
-        context_dir = _workspace_dir("context")
-        if context_dir is None:
-            pytest.skip("No context/ directory in either root")
+    def test_marp_from_context_fixture_applies_light_mode(self, sandbox_data_root, tmp_path):
+        """A context document renders light, and demonstrably not dark."""
+        source = _seed_document(sandbox_data_root, LIGHT_PREFIX)
+        expected = WORKSPACE_DEFAULTS[LIGHT_PREFIX]["mode"]
+        other = WORKSPACE_DEFAULTS[DARK_PREFIX]["mode"]
+        assert expected != other, "the two rows under test must differ"
 
-        # Without a private overlay the data root resolves to the bundled
-        # <engine>/examples, so the only context/ on disk is
-        # <engine>/examples/context. A file under it names itself
-        # "examples/context/..." relative to the engine root, and that prefix is
-        # deliberately absent from WORKSPACE_DEFAULTS, so the transform falls
-        # through to the "mixed" default. Not measured in demo mode: the
-        # context/ row of the workspace-defaults table, i.e. that a real
-        # context document renders in light mode.
-        if data_root_is_demo() and context_dir == get_data_root() / "context":
-            pytest.skip(
-                "demo data root: the only context/ fixtures live under "
-                "<engine>/examples/context, whose prefix is not in "
-                "WORKSPACE_DEFAULTS, so the light-mode default is unmeasurable"
-            )
+        result = transform_workspace_md(source, output_dir=tmp_path / "out-light")
+        # A transform/render failure is a regression, not a pass. Until
+        # 2026-08-20 this assertion sat under `if result["ok"]:`, so a broken
+        # render reported green.
+        assert result["ok"], result.get("errors") or result.get("error")
+        assert result.get("source_mode") == expected
+        assert result.get("source_mode") != other
 
-        # Find any .md in context/
-        context_files = list(context_dir.glob("*.md"))
-        if not context_files:
-            pytest.skip("No .md files in context/")
+    def test_marp_from_intel_fixture_applies_dark_mode(self, sandbox_data_root, tmp_path):
+        """An intel document renders dark, and demonstrably not light."""
+        source = _seed_document(sandbox_data_root, DARK_PREFIX)
+        expected = WORKSPACE_DEFAULTS[DARK_PREFIX]["mode"]
+        other = WORKSPACE_DEFAULTS[LIGHT_PREFIX]["mode"]
+        assert expected != other, "the two rows under test must differ"
 
-        with tempfile.TemporaryDirectory(prefix="marp-from-") as tmp:
-            result = transform_workspace_md(
-                context_files[0], output_dir=Path(tmp)
-            )
-            # A transform/render failure is a regression, not a pass. Until
-            # 2026-08-20 this assertion sat under `if result["ok"]:`, so a broken
-            # render reported green. Environment absence stays a skip (above).
-            assert result["ok"], result.get("errors") or result.get("error")
-            assert result.get("source_mode") == "light"
+        result = transform_workspace_md(source, output_dir=tmp_path / "out-dark")
+        assert result["ok"], result.get("errors") or result.get("error")
+        assert result.get("source_mode") == expected
+        assert result.get("source_mode") != other
 
-    def test_marp_from_intel_fixture_applies_dark_mode(self):
-        """Intel files should render with dark mode default."""
-        intel_dir = _workspace_dir("outputs/intel")
-        if intel_dir is None:
-            pytest.skip("No outputs/intel/ directory in either root")
-
-        intel_files = list(intel_dir.rglob("*.md"))
-        if not intel_files:
-            pytest.skip("No .md files in outputs/intel/")
-
-        with tempfile.TemporaryDirectory(prefix="marp-from-") as tmp:
-            result = transform_workspace_md(
-                intel_files[0], output_dir=Path(tmp)
-            )
-            assert result["ok"], result.get("errors") or result.get("error")
-            assert result.get("source_mode") == "dark"
-
-    def test_marp_from_leaves_the_source_file_untouched(self):
+    def test_marp_from_leaves_the_source_file_untouched(self, sandbox_data_root, tmp_path):
         """The transform reads the source and never writes back to it.
 
         Renamed on 2026-08-20. It was called test_marp_from_strips_wiki_links,
@@ -203,23 +200,26 @@ class TestWorkspaceTransform:
         The stripping itself is now covered by TestStripWikiLinks below, in
         milliseconds, against the pure function that does it. This one keeps the
         integration property its body actually holds, under a name that says so.
-        """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", delete=False, encoding="utf-8",
-            dir=str(WORKSPACE_ROOT / "context") if (WORKSPACE_ROOT / "context").exists() else None
-        ) as f:
-            f.write("# Test Note\n\nSee [[other-note|Other Note]] for details.\n\n## Section\n\nMore content.")
-            source = Path(f.name)
 
-        try:
-            with tempfile.TemporaryDirectory(prefix="marp-from-") as tmp:
-                result = transform_workspace_md(source, output_dir=Path(tmp))
-                # Even if render fails (no marp-cli), the transform itself should work
-                # The source file should not be modified
-                content = source.read_text(encoding="utf-8")
-                assert "[[other-note|Other Note]]" in content
-        finally:
-            source.unlink(missing_ok=True)
+        Moved onto the sandbox overlay on 2026-08-29, with its two siblings. It
+        seeded itself into `WORKSPACE_ROOT / "context"` whenever that directory
+        existed, which is silent here (the engine clone has no `context/`) and
+        is the operator's live data on the transitional single-root topology,
+        where the workspace root IS the data root. Same shape as the two cases
+        above, one branch away from firing.
+        """
+        source = sandbox_data_root / LIGHT_PREFIX / "wiki-link-note.md"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        original = (
+            "# Test Note\n\nSee [[other-note|Other Note]] for details.\n\n"
+            "## Section\n\nMore content.\n"
+        )
+        source.write_text(original, encoding="utf-8")
+
+        transform_workspace_md(source, output_dir=tmp_path / "out-untouched")
+        # The source must come back byte for byte, wiki-link included: the
+        # stripping happens on the copy the transform renders, never in place.
+        assert source.read_text(encoding="utf-8") == original
 
 
 class TestStripWikiLinks:

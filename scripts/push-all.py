@@ -175,10 +175,24 @@ def _push_delta_files(repo: Path) -> set[str]:
     ).returncode == 0
     files: set[str] = set()
     if have_base and have_head:
+        # `--no-renames`, for the reason `push_history.unpushed_blobs`
+        # already gives it. With rename detection on (the git default) a
+        # `git mv` plus an edit is ONE `R` entry, and `--diff-filter=ACM`
+        # drops it, so the DESTINATION path appears in no leg at all.
+        # MEASURED 2026-08-29 in a scratch repo with a real bare remote: a
+        # staged rename carrying a new secret returned the EMPTY set here,
+        # `content_scan` skipped the scanner because `if files:` was False,
+        # `engine_content_scan` opened no file, and step 3 committed and
+        # step 5 pushed the token. Only the bypassable pre-commit hook
+        # stood in the way, which is exactly what this wall backstops.
+        # Turning renames off restores the `A` for the destination path.
         for args in (
-            ["git", "diff", "-z", "--name-only", "--diff-filter=ACM", "origin/main..HEAD"],
-            ["git", "diff", "-z", "--cached", "--name-only", "--diff-filter=ACM"],
-            ["git", "diff", "-z", "--name-only", "--diff-filter=ACM"],
+            ["git", "diff", "-z", "--no-renames", "--name-only",
+             "--diff-filter=ACM", "origin/main..HEAD"],
+            ["git", "diff", "-z", "--cached", "--no-renames", "--name-only",
+             "--diff-filter=ACM"],
+            ["git", "diff", "-z", "--no-renames", "--name-only",
+             "--diff-filter=ACM"],
         ):
             files.update(run(args, repo).stdout.split("\0"))
     else:

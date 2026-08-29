@@ -52,7 +52,11 @@ def _load_service_config() -> tuple[dict, str | None]:
             Path(__file__).resolve().parent / "service-host.example.json",
         )
         raw = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
+        # UnicodeDecodeError is a ValueError, NOT an OSError, and this
+        # function runs at import. A `config/service-host.json` saved as
+        # UTF-16 therefore killed the process with a raw traceback before
+        # `main` could print the named message this docstring promises.
         return {}, f"could not be read: {exc}"
     try:
         data = json.loads(raw)

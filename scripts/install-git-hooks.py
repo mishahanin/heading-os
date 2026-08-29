@@ -28,7 +28,29 @@ from scripts.utils.paths import get_workspace_root
 
 
 def _hooks_dir(repo: Path) -> Path:
-    return repo / ".git" / "hooks"
+    """Where git will ACTUALLY look for hooks in `repo`.
+
+    `.git` is a directory only in an ordinary clone. In a linked worktree
+    it is a regular FILE holding `gitdir: ...`, and this workspace keeps
+    six worktrees, one of them inside the engine tree itself. Spelling the
+    path by hand therefore named a location under a file: MEASURED
+    2026-08-29 from `.claude/worktrees/hdr`, `_hooks_dir` returned
+    `<worktree>/.git/hooks`, which does not exist, while git reported the
+    shared `<repo>/.git/hooks`, which does and is armed. Install died with
+    NotADirectoryError and `--check` called armed security gates MISSING.
+
+    Ask git. Fall back to the literal layout only when there is no git to
+    ask, which is the shape every other caller here already handles.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--git-path", "hooks"],
+            capture_output=True, text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return repo / ".git" / "hooks"
+    if not out:
+        return repo / ".git" / "hooks"
+    return Path(out) if Path(out).is_absolute() else repo / out
 
 
 def install_pre_push(repo: Path, src: Path) -> None:

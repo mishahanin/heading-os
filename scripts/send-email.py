@@ -969,7 +969,18 @@ def _normalize_addrs(value):
     if isinstance(value, str):
         return [value]
     if isinstance(value, list):
-        return [str(v) for v in value]
+        # Refuse, do not stringify. `[123]` became `['123']` and reached
+        # `Mailbox(email_address='123')`, which exchangelib 5.6.0 accepts
+        # client-side, so the bogus address travelled to the server and
+        # failed at save_draft instead of becoming the `malformed`
+        # per-message result the batch contract promises.
+        # `build_file_attachments` already rejects exactly this shape.
+        bad = [v for v in value if not isinstance(v, str)]
+        if bad:
+            raise ValueError(
+                f"address list holds {len(bad)} entry/entries that are not "
+                f"strings: {', '.join(f'{type(b).__name__} {b!r}' for b in bad[:3])}")
+        return list(value)
     raise ValueError(f"expected str or list, got {type(value).__name__}")
 
 
@@ -1131,6 +1142,18 @@ def main():
     # Which mode this invocation selects. Resolved BEFORE the --dry-run guard
     # because the checks below have to run under it.
     threaded_mode = "reply" if args.reply else ("reply_all" if args.reply_all else ("forward" if args.forward else None))
+
+    # argparse accepts --batch beside a threaded flag: --batch is a plain
+    # add_argument, outside mode_group. The batch branch below runs first
+    # and returns, so `--batch f.json --reply ...` sent the batch and the
+    # requested reply silently never happened, exit 0, on the one script
+    # allowed to put mail on the wire. Refuse the ambiguity rather than
+    # resolve it by source order.
+    if args.batch and threaded_mode:
+        parser.error(
+            f"--batch cannot be combined with "
+            f"--{threaded_mode.replace('_', '-')}; run them as separate "
+            f"commands")
 
     # Every argument-contract check lives ABOVE the --dry-run guard, and this is
     # the reason the flag exists. Until 2026-08-25 they all sat below it, so

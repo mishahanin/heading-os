@@ -142,7 +142,14 @@ def parse_table_rows(content, header_marker):
                     for i, col in enumerate(columns):
                         row[col] = cells[i] if i < len(cells) else ""
                     rows.append(row)
-            elif not line.strip() or line.strip().startswith("---"):
+            else:
+                # ANY line that is not a pipe row ends the table: a blank
+                # line, a `---` rule, a note, or the next `##` heading.
+                # Closing on only the first two left the table open, so the
+                # NEXT table's header and separator were absorbed as data.
+                # MEASURED 2026-08-29: a two-table file with no blank line
+                # between them yielded 4 rows for the first table, 3 of them
+                # phantom, and `normalize_stage("Value")` made one a lead.
                 header_found = False
                 in_table = False
                 separator_seen = False
@@ -157,10 +164,13 @@ def normalize_stage(stage_text):
         if canonical == s:
             return canonical
     # Fuzzy matching for common variants
-    if "won" in s or "closed" in s:
-        return "won"
+    # "lost" FIRST. `"closed" in s` matched "Closed Lost" and returned
+    # "won", so the most common CRM spelling of a dead deal was counted as
+    # won revenue at 100% weight and dropped out of the pipeline total.
     if "lost" in s:
         return "lost"
+    if "won" in s or "closed" in s:
+        return "won"
     if "negoti" in s:
         return "negotiation"
     if "proposal" in s:

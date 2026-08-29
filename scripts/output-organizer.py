@@ -43,12 +43,20 @@ EXT_MAP = {
 
 
 def report():
-    """List files in outputs/ by type and size."""
+    """List every file under outputs/, by type and size."""
     if not OUTPUTS_DIR.exists():
         print(f"{RED}outputs/ directory not found{RESET}")
         return
 
-    files = [f for f in OUTPUTS_DIR.iterdir() if f.is_file()]
+    # `rglob`, not `iterdir`. This script's own `organize --execute` and
+    # `archive --execute` move every categorized file into a subdirectory,
+    # so a top-level scan reported 1 file over a tree holding 6814 of them
+    # (MEASURED 2026-08-29), and an emptied top level prints
+    # "outputs/ is empty" over a full tree. Same silent misreport
+    # `archive()` below already carries a comment about having fixed.
+    # `organize()` keeps `iterdir` on purpose: it MOVES top-level files
+    # into subdirectories, so recursing would re-move what it organised.
+    files = [f for f in OUTPUTS_DIR.rglob("*") if f.is_file()]
     if not files:
         print(f"{YELLOW}outputs/ is empty{RESET}")
         return

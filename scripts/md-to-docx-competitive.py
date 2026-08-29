@@ -282,7 +282,17 @@ def build_docx():
 
         # Blockquotes (metadata/callouts)
         if line.startswith('>'):
-            text = line.lstrip('> ').strip()
+            # Strip the quote markers ONE at a time. `.lstrip('> ')` takes a SET
+            # of characters, so `> >100 Gbps sustained` came out as
+            # `100 Gbps sustained`: the ">" that carried the claim was eaten with
+            # the marker, and the callout then understated the number it existed
+            # to make. Same trap `md-to-docx-proposal.py` fixed for `- ` on a
+            # `-5% margin` bullet. A ">" with neither a space nor another ">"
+            # after it is content, not a marker, and stays.
+            text = line
+            while text.startswith('>') and (len(text) == 1 or text[1] in ' >'):
+                text = text[1:].lstrip(' ')
+            text = text.strip()
             if text:
                 p = doc.add_paragraph()
                 p.paragraph_format.left_indent = Cm(0.5)

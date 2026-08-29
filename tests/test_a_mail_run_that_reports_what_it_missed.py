@@ -133,6 +133,22 @@ class _Account:
         self.sent = _QuerySet(sent_items)
 
 
+def _analysed_ok(convs, *a, **kw):
+    """A stand-in for a SUCCESSFUL analysis, for fixtures about fetch behaviour.
+
+    Both fixtures below used to stand in with `ei._fallback_analysis`, which is
+    the placeholder for a conversation the model never analysed. That was
+    invisible while success and failure produced identical dicts. Since
+    2026-08-29 a placeholder carries `analysis_failed`, and a run containing one
+    is `partial` with its message ids deliberately left uncommitted, so using it
+    as the stand-in for success would make these fetch tests assert the failure
+    path by accident.
+    """
+    return [{"category": "fyi", "priority": "P3", "summary": c["topic"],
+             "proposed_actions": [], "commitments": [],
+             "relationship_signal": "stable"} for c in convs]
+
+
 # ============================================================
 # 1 - the fetch cap is measured, not guessed
 # ============================================================
@@ -508,8 +524,7 @@ def unread_run(monkeypatch, tmp_path):
     monkeypatch.setattr(ei, "load_crm_contacts", dict)
     monkeypatch.setattr(ei, "load_pipeline_context", lambda: "")
     monkeypatch.setattr(ei, "load_viraid_state", dict)
-    monkeypatch.setattr(ei, "analyze_conversations",
-                        lambda convs, *a, **kw: [ei._fallback_analysis(c) for c in convs])
+    monkeypatch.setattr(ei, "analyze_conversations", _analysed_ok)
     monkeypatch.setattr(ei, "fetch_emails",
                         lambda a, f, cutoff=None, unread_only=False: ([_msg("<u@x>")], False))
     return state_file.parent / "_latest-fetch.json"
@@ -558,8 +573,7 @@ def offline_run(monkeypatch, tmp_path):
     monkeypatch.setattr(ei, "load_crm_contacts", dict)
     monkeypatch.setattr(ei, "load_pipeline_context", lambda: "")
     monkeypatch.setattr(ei, "load_viraid_state", dict)
-    monkeypatch.setattr(ei, "analyze_conversations",
-                        lambda convs, *a, **kw: [ei._fallback_analysis(c) for c in convs])
+    monkeypatch.setattr(ei, "analyze_conversations", _analysed_ok)
     monkeypatch.setattr(ei, "_load_ignore_patterns", list)
 
     class _Runner:

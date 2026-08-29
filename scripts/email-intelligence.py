@@ -184,8 +184,16 @@ def merge_state(on_disk: dict, mine: dict) -> dict:
 class StateManager:
     """Persistent state for email intelligence runs."""
 
-    def __init__(self, path: Path = STATE_FILE):
-        self.path = path
+    def __init__(self, path: Path | None = None):
+        # Resolved at CALL time, never captured at import. `path: Path =
+        # STATE_FILE` evaluated the module global once, at class-definition
+        # time, and froze it into __defaults__ - so `monkeypatch.setattr(module,
+        # "STATE_FILE", tmp)` redirected nothing and a no-argument construction
+        # still resolved the operator's real overlay. On 2026-08-29 that wrote
+        # the live state file during an audit: two real message ids and two real
+        # conversation keys were evicted by the caps, with no git copy to
+        # restore from. `scripts/sentinel.py:203` still has the same shape.
+        self.path = STATE_FILE if path is None else path
         self.data = self._load()
 
     def _load(self) -> dict:
@@ -1013,15 +1021,24 @@ def analyze_conversations(conversations: list[dict], crm_map: dict, pipeline_tex
                 try:
                     parsed = [_extract_json_object(result_text)]
                 except (json.JSONDecodeError, ValueError):
-                    if verbose:
-                        print(f"{YELLOW}  Batch JSON parse failed (vendor={result.vendor}), falling back to individual{RESET}")
+                    # stderr, and not behind --verbose: the run is about to
+                    # produce placeholders for this whole batch, and a reader
+                    # who does not know that reads a P3 card as a judgement.
+                    # stdout carries the --json payload, so it stays clean.
+                    print(f"{YELLOW}  LLM batch response unparseable "
+                          f"(vendor={result.vendor}); {len(batch)} conversation(s) "
+                          f"NOT analysed{RESET}", file=sys.stderr)
                     for conv in batch:
                         all_results.append(_fallback_analysis(conv))
                     continue
 
             if isinstance(parsed, list):
                 while len(parsed) < len(batch):
+                    # Padding for a conversation the model simply did not answer
+                    # about. It carries the same marker as `_fallback_analysis`
+                    # because it means the same thing: not analysed.
                     parsed.append({
+                        "analysis_failed": True,
                         "category": "fyi", "priority": "P3",
                         "summary": batch[len(parsed)]["topic"],
                         "proposed_actions": ["Review manually"],
@@ -1045,8 +1062,8 @@ def analyze_conversations(conversations: list[dict], crm_map: dict, pipeline_tex
             # error like AuthenticationError. Either way the batch cannot be
             # analyzed; fall through to the placeholder so the inbox card still
             # renders something instead of disappearing.
-            if verbose:
-                print(f"{RED}  LLM batch failed across all vendors: {e}{RESET}")
+            print(f"{RED}  LLM analysis FAILED for {len(batch)} conversation(s) "
+                  f"across all vendors: {e}{RESET}", file=sys.stderr)
             for conv in batch:
                 all_results.append(_fallback_analysis(conv))
 
@@ -1054,8 +1071,19 @@ def analyze_conversations(conversations: list[dict], crm_map: dict, pipeline_tex
 
 
 def _fallback_analysis(conv: dict) -> dict:
-    """Fallback analysis when LLM fails."""
+    """Placeholder for a conversation the model did not analyse.
+
+    `analysis_failed` is the only thing that tells a caller this dict is a
+    placeholder rather than a result. Without it the two are the same shape, so
+    `main()` could not tell "analysed and unremarkable" from "never analysed",
+    and it committed the conversation's message ids into the dedupe set either
+    way. Layer 5 then dropped that mail from every later run: a renewal thread
+    that arrived during a ten-minute vendor outage was never analysed at all,
+    and the only trace was one P3 line in a terminal. `scripts/sentinel.py`
+    has refused to mark an unanalysed item processed since it was written.
+    """
     return {
+        "analysis_failed": True,
         "category": "fyi",
         "priority": "P3",
         "summary": conv.get("topic", "Unknown conversation"),
@@ -1534,6 +1562,25 @@ def main():
     else:
         analyses = []
 
+    # An unanalysed conversation must NOT be marked processed. Layer 5 of
+    # `filter_noise` drops an id that is already in the dedupe set, so a
+    # conversation committed without an analysis is never analysed on any later
+    # run: the mail is silently gone. Measured 2026-08-29 with the vendor chain
+    # dead - one renewal thread went in as P3 "Review manually", the run said
+    # `complete`, and the next run dropped it. `scripts/sentinel.py` has always
+    # left a failed item unprocessed for the next cycle; this file did not.
+    #
+    # Per conversation, not per run: a batch can fail while its neighbours
+    # succeed, and the successful ones are genuinely done.
+    failed_conv_ids = {
+        conv["id"] for conv, analysis in zip(convs_list, analyses, strict=True)
+        if isinstance(analysis, dict) and analysis.get("analysis_failed")
+    }
+    failed_message_ids = {
+        email["message_id"] for conv in convs_list if conv["id"] in failed_conv_ids
+        for email in conv.get("raw_emails", [])
+    }
+
     # --- Build output ---
     run_info = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -1545,7 +1592,12 @@ def main():
         "conversations_processed": len(convs_list),
         "folder_errors": folder_errors,
         "truncated_folders": truncated_folders,
-        "status": "partial" if (folder_errors or truncated_folders) else "complete",
+        "analysis_failures": len(failed_conv_ids),
+        # A run that analysed nothing is not a complete run. Until 2026-08-29
+        # only fetch problems counted, so a total model outage reported
+        # `complete` over a digest made entirely of placeholders.
+        "status": ("partial" if (folder_errors or truncated_folders or failed_conv_ids)
+                   else "complete"),
     }
 
     commit_payload = {
@@ -1554,13 +1606,20 @@ def main():
         # committing from `convs_list` would leave them unprocessed and
         # resurface them on every run. (Audited 2026-08-24: this was already
         # correct, and the check now lives in a test rather than in a reading.)
-        "message_ids": [msg["message_id"] for msg in clean],
-        "conversations": [{"id": c["id"], "topic": c["topic"]} for c in convs_list],
+        # ... minus the messages of any conversation the model did not analyse,
+        # so the next run fetches them again. The deferred `--commit-state` path
+        # replays this payload verbatim and has no way to re-derive the failures,
+        # so the pruning has to happen HERE for both paths to inherit it.
+        "message_ids": [msg["message_id"] for msg in clean
+                        if msg["message_id"] not in failed_message_ids],
+        "conversations": [{"id": c["id"], "topic": c["topic"]} for c in convs_list
+                          if c["id"] not in failed_conv_ids],
         "inbox_count": inbox_count,
         "sent_count": sent_count,
         "noise_filtered": noise_filtered,
         "cutoff": cutoff.isoformat(),
         "status": run_info["status"],
+        "analysis_failures": run_info["analysis_failures"],
     }
 
     # --- Commit state ---
@@ -1590,6 +1649,10 @@ def main():
                 print(f"  {RED}PARTIAL: {folder} could not be fetched: {err}{RESET}")
             for folder in truncated_folders:
                 print(f"  {YELLOW}PARTIAL: {folder} hit the fetch cap; older matches were not read{RESET}")
+            if run_info["analysis_failures"]:
+                print(f"  {RED}PARTIAL: {run_info['analysis_failures']} conversation(s) "
+                      f"were not analysed; their mail is left unprocessed for the "
+                      f"next run{RESET}")
         print(f"  Inbox: {inbox_count} | Sent: {sent_count} | Filtered: {noise_filtered} | Internal: {internal_skipped}")
         print(f"  Conversations analyzed: {len(convs_list)}")
         for conv_out in output["conversations"]:

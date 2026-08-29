@@ -208,6 +208,8 @@ Undo semantics (honest): `undo_card` restores the card's `prev_value` record and
 
    This appends the processed message_ids (cap 500, oldest trimmed), records the conversation keys (cap 200), stamps `last_run` / `last_run_status` / `last_inbox_datetime` / `last_sent_datetime`, and bumps the run counters. **Run it only after Phase 4 has finished.** An earlier commit marks messages handled that the CEO has not decided on. Phase 1's filter then hides them forever. That was a live defect until 2026-08-09, when the fetch itself did the commit; `tests/test_email_intel_state_commit.py` now holds the split.
 
+   The payload may deliberately carry FEWER message ids than Phase 1 fetched. A conversation the model could not analyse (`run_info.analysis_failures` above zero, `status` `partial`) is left out on purpose, so the next run fetches its mail again. Report that number in Phase 5's summary line; a smaller commit with no explanation reads like a bug. Before 2026-08-29 those ids were committed anyway and the mail was never analysed at all.
+
    If the CEO asked to ignore a sender, add it to `learned_ignore_senders` in `state.json` by hand. That is a preference, not run state, and the commit path does not touch it.
 
 2. Save daily digest: `outputs/operations/email-intelligence/digest-YYYY-MM-DD.md`

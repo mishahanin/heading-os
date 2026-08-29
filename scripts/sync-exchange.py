@@ -72,7 +72,8 @@ def _ensure_exchangelib():
     )
 
 
-from scripts.utils.html_text import strip_html  # noqa: E402
+from scripts.utils.html_text import email_body_text, strip_html  # noqa: E402
+from scripts.utils.secret_patterns import redact  # noqa: E402
 from scripts.utils.workspace import get_data_root, get_default_tz, get_default_tz_name, get_outputs_dir, get_personal_root, get_workspace_root, load_env  # noqa: E402
 
 # ============================================================
@@ -335,7 +336,13 @@ def sync_calendar(account, days=7, timezone_str=None):
                         lines.append("")
 
                 if event.body and str(event.body).strip():
-                    body_text = strip_html(event.body)
+                    # `redact` directly, not `email_body_text`: a calendar body
+                    # is read from `body` alone here, and switching it to prefer
+                    # `text_body` would change what this file writes for reasons
+                    # unrelated to the defect. What must not differ between the
+                    # two paths is that neither writes an unredacted body - an
+                    # invite carries a join URL, and a join URL carries a token.
+                    body_text = redact(strip_html(event.body))
                     # Truncate very long bodies
                     if len(body_text) > 1000:
                         body_text = body_text[:1000] + "\n\n[...truncated]"
@@ -487,13 +494,11 @@ def sync_emails(account, count=30, unread_only=False, folder_name="Inbox"):
 
         lines.append("")
 
-        # Email body - prefer plain text, fall back to HTML-stripped
-        if email.text_body and email.text_body.strip():
-            body = email.text_body.strip()
-        elif email.body and str(email.body).strip():
-            body = strip_html(email.body)
-        else:
-            body = "(No body)"
+        # Email body - prefer plain text, fall back to HTML-stripped, and
+        # remove any credential-shaped span before it is written to disk. See
+        # `email_body_text`: this file used to carry its own copy of the
+        # extraction, and the result of that copy is what refused a backup.
+        body = email_body_text(email) or "(No body)"
 
         # Truncate very long emails
         if len(body) > 3000:

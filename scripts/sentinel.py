@@ -44,7 +44,7 @@ from scripts.utils import daemon_heartbeat  # noqa: E402
 from scripts.utils import telegram_notify  # noqa: E402
 from scripts.utils import tracing  # noqa: E402
 from scripts.utils.healthchecks import ping as hc_ping  # noqa: E402
-from scripts.utils.html_text import strip_html  # noqa: E402
+from scripts.utils.html_text import email_body_text  # noqa: E402
 from scripts.utils.llm_fallback import call_anthropic_with_fallback  # noqa: E402
 from scripts.utils.observability import observe  # noqa: E402
 from scripts.utils.operator_identity import get_operator  # noqa: E402
@@ -106,7 +106,10 @@ if ENV_FILE.exists():
     load_env(WORKSPACE_ROOT)
 
 
-# HTML stripping: see scripts/utils/html_text.py (imported above as strip_html)
+# Body extraction and HTML stripping: see scripts/utils/html_text.py.
+# `strip_html` is no longer imported here - this file called it only to
+# build an email body, and that extraction moved to `email_body_text`,
+# which redacts credential spans before the body can be persisted.
 
 
 # ============================================================
@@ -528,12 +531,10 @@ class EmailSource:
                 self.state.mark_email_processed(msg_id)
                 continue
 
-            # Extract body
-            body = ""
-            if email_item.text_body and email_item.text_body.strip():
-                body = email_item.text_body.strip()
-            elif email_item.body and str(email_item.body).strip():
-                body = strip_html(email_item.body)
+            # Extract body. Shared, and redacted before it can be persisted:
+            # this dict is written to the sentinel state file and into queue
+            # cards, both of which live in the DATA overlay and are pushed.
+            body = email_body_text(email_item)
 
             if len(body) > 2000:
                 body = body[:2000] + "\n[...truncated]"
@@ -644,12 +645,10 @@ class MeetingInviteSource:
                 except (TypeError, AttributeError, ValueError) as e:
                     self.logger.debug(f"meeting duration calc fallback: {e}")
 
-            # Body snippet
-            body = ""
-            if hasattr(invite, "text_body") and invite.text_body:
-                body = invite.text_body.strip()[:500]
-            elif hasattr(invite, "body") and invite.body:
-                body = strip_html(invite.body)[:500]
+            # Body snippet. A meeting invite carries a join URL and a join URL
+            # carries a token, so this is redacted for the same reason the mail
+            # path above is. Sliced AFTER extraction, as before.
+            body = email_body_text(invite)[:500]
 
             # Check if recurring
             is_recurring = False

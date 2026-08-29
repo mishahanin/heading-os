@@ -38,7 +38,7 @@ from scripts.utils.api import load_api_key
 from scripts.utils import claude_models
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.crm import parse_config as crm_parse_config, scan_contacts
-from scripts.utils.html_text import strip_html
+from scripts.utils.html_text import email_body_text
 from scripts.utils.markdown import frontmatter_date
 from scripts.utils.llm_fallback import call_anthropic_with_fallback
 from scripts.utils.observability import observe
@@ -107,7 +107,10 @@ DEFAULT_IGNORE_PATTERNS = [
 ]
 
 
-# HTML stripping: see scripts/utils/html_text.py (imported above as strip_html)
+# Body extraction and HTML stripping: see scripts/utils/html_text.py.
+# `strip_html` is no longer imported here - this file called it only to
+# build an email body, and that extraction moved to `email_body_text`,
+# which redacts credential spans before the body can be persisted.
 
 
 # ============================================================
@@ -547,12 +550,10 @@ def fetch_emails(account, folder_name: str, cutoff: datetime | None,
             for r in item.cc_recipients:
                 cc_list.append({"name": str(r.name or ""), "email": str(r.email_address or "").lower()})
 
-        # Body extraction (reuses sentinel pattern)
-        body = ""
-        if item.text_body and str(item.text_body).strip():
-            body = str(item.text_body).strip()
-        elif item.body and str(item.body).strip():
-            body = strip_html(item.body)
+        # Body extraction, shared with sentinel and sync-exchange rather than
+        # copied from them, and redacted: this dict is serialised into the
+        # digest artifacts under the DATA overlay.
+        body = email_body_text(item)
         if len(body) > 2000:
             body = body[:2000] + "\n[...truncated]"
 

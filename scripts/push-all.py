@@ -54,6 +54,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -71,10 +72,19 @@ from scripts.utils.content_denylist import build_denylist
 from scripts.utils.denial_log import CONTEXT_ENV, log_denial
 from scripts.utils.engine_guard import (
     engine_text_files,
+    engine_text_rels,
     repo_carried_paths,
     scan_engine_repo,
 )
 from scripts.utils.git_push import remote_objection, supervised_push
+from scripts.utils.paths import log_dir
+from scripts.utils.push_history import (
+    HistoryUnavailable,
+    generations,
+    read_blob,
+    unpushed_blobs,
+    unpushed_paths,
+)
 from scripts.utils.workspace import (
     get_default_tz,
     get_data_root,
@@ -183,44 +193,148 @@ def _push_delta_files(repo: Path) -> set[str]:
     return {f for f in files if f}
 
 
-def content_scan(repo: Path) -> None:
-    """Scan the contents of every file about to be pushed. Refuse on any hit.
+def _run_scanner(paths, cwd: Path, context: str, extra_env=None):
+    """Run secret-scanner.py over `paths`, relative to `cwd`. Exits 2 on a stall.
 
-    Covers the committed-but-unpushed delta plus staged and unstaged tracked
-    edits, so the result is identical whether or not --no-commit was passed and
-    whether or not this is a dry run.
+    The scanner counts its own refusal; `context` names the caller so a
+    push-time catch is distinguishable from a commit-time one. Counting here as
+    well would record one refusal twice and corrupt the denominator.
+
+    The repo name rides along because the scanner records a repo-RELATIVE path
+    and the callers run over both clones: without it, the same relative path in
+    the engine and in the data overlay produce two records nothing can tell
+    apart, which is the ambiguity the context field exists to remove.
     """
-    files = _push_delta_files(repo)
-    if not files:
-        return
-    # The scanner counts its own refusal; this names the caller so a push-time
-    # catch is distinguishable from a commit-time one. Counting here as well
-    # would record one refusal twice and corrupt the denominator.
-    #
-    # The repo name rides along because the scanner records a repo-RELATIVE path
-    # and this function runs over both clones: without it, the same relative
-    # path in the engine and in the data overlay produce two records nothing can
-    # tell apart, which is the ambiguity the context field exists to remove.
-    env = dict(os.environ, **{CONTEXT_ENV: f"push:{repo.name}"})
+    env = dict(os.environ, **{CONTEXT_ENV: context})
+    if extra_env:
+        env.update(extra_env)
     try:
-        proc = subprocess.run(
+        return subprocess.run(
             [sys.executable, str(SCANNER), "--stdin"],
-            cwd=str(repo), input="\n".join(sorted(files)),
+            cwd=str(cwd), input="\n".join(sorted(paths)),
             capture_output=True, text=True, env=env, timeout=SCANNER_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
         # Bounded for the same reason the pushes are: an indefinite stall in the
         # only irreplaceable-half backup path is worse than a named failure.
         print(f"{RED}REFUSING TO PUSH -- secret scanner exceeded "
-              f"{SCANNER_TIMEOUT_S}s in {repo.name}.{RESET}")
+              f"{SCANNER_TIMEOUT_S}s in {cwd}.{RESET}")
         sys.exit(2)
+
+
+def _refuse_on_scanner(proc, where: str) -> None:
     if proc.returncode != 0:
         sys.stdout.write(proc.stdout)
         sys.stderr.write(proc.stderr)
-        reason = "secret-like CONTENT in a file about to be pushed" if proc.returncode == 1 \
+        reason = f"secret-like CONTENT in {where}" if proc.returncode == 1 \
             else "secret-scanner error"
         print(f"{RED}REFUSING TO PUSH — {reason}.{RESET}")
         sys.exit(2)
+
+
+def content_scan(repo: Path) -> None:
+    """Scan the contents of everything about to be pushed. Refuse on any hit.
+
+    TWO WORLDS, because a push sends both. The working tree and index are what
+    the next commit will carry; the unpushed COMMITS are what the wire will
+    carry regardless of what the disk says now. Scanning only the first was the
+    defect, and it is the defect this docstring used to deny by claiming "a
+    bypassed commit is still caught before anything leaves the machine".
+
+    MEASURED 2026-08-29 on a real repository with a real bare remote
+    (`.tmp/audit/measure61.py`), before the history pass existed:
+
+      secret committed with `--no-verify`, then wiped from the working tree
+        -> the file WAS listed, the scanner read the cleaned bytes off the disk,
+           "No secrets detected.", exit 0, push ships the commit.
+      commit A adds the secret, commit B removes it, both unpushed
+        -> the two-endpoint diff nets to nothing, the file was not even listed,
+           exit 0, push ships commit A.
+      control, the same secret sitting in the working tree
+        -> refused, so the measurement was measuring something.
+
+    Both directions are now covered and neither replaces the other: history says
+    nothing about an uncommitted edit, and the working tree says nothing about a
+    commit already made.
+    """
+    files = _push_delta_files(repo)
+    if files:
+        _refuse_on_scanner(
+            _run_scanner(files, repo, f"push:{repo.name}"),
+            "a file about to be pushed")
+    history_content_scan(repo)
+
+
+def history_content_scan(repo: Path) -> None:
+    """Scan the BYTES of every unpushed commit, not the bytes on disk.
+
+    The blobs are laid out in a scratch tree because the scanner takes file
+    paths, and they are laid out in GENERATIONS because it cannot be handed two
+    versions of one path at once. See `push_history.generations`: the pass count
+    is the largest number of versions any single file has in the range, not the
+    commit count.
+
+    Two environment variables, and both are load-bearing:
+
+    `WORKSPACE_ROOT` points at the scratch tree so the scanner's own
+    `SKIP_PATHS` resolve. Those three self-referencing files -- the scanner,
+    `secret_patterns.py`, `.env.example` -- contain secret patterns by
+    definition, and a commit that edits one of them is ordinary here. Without
+    this the history pass would refuse the backup over the scanner's own source.
+    Re-listing those paths locally was the alternative and it is the duplication
+    this audit keeps finding: the second copy is the one that stops being fixed.
+
+    `WORKSPACE_LOG_DIR` pins the denial log back to the REAL workspace. It is
+    derived from `get_workspace_root()`, so moving the root would have written
+    each refusal into the scratch tree and deleted it seconds later -- a gate
+    that refuses and keeps no record of having refused.
+    """
+    try:
+        blobs = unpushed_blobs(repo)
+    except HistoryUnavailable as exc:
+        # Unverified is not clean, and this branch means git could not say what
+        # the push would send.
+        print(f"{RED}REFUSING TO PUSH — cannot read the unpushed history of "
+              f"{repo.name}: {exc}{RESET}")
+        sys.exit(2)
+    if not blobs:
+        return
+
+    real_log_dir = os.environ.get("WORKSPACE_LOG_DIR") or str(log_dir())
+    with tempfile.TemporaryDirectory(prefix="heading-push-history-") as scratch:
+        for index, group in enumerate(generations(blobs)):
+            root = Path(scratch) / str(index)
+            rels: list[str] = []
+            for blob in group:
+                dest = (root / blob.rel).resolve()
+                # git tree entries cannot hold `..`, so this is belt and braces
+                # rather than a live hole -- and it is cheap insurance on the
+                # one path in this file that writes attacker-influenced names.
+                if not dest.is_relative_to(root.resolve()):
+                    print(f"{RED}REFUSING TO PUSH — a committed path escapes "
+                          f"its own tree: {blob.rel}{RESET}")
+                    sys.exit(2)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                # write_bytes, so a blob whose mode is a symlink lands as an
+                # ORDINARY FILE holding the target string. The workspace creates
+                # no symlinks, and materialising one here would let a committed
+                # link point the scanner at something outside the scratch tree.
+                try:
+                    dest.write_bytes(read_blob(repo, blob.sha))
+                except HistoryUnavailable as exc:
+                    print(f"{RED}REFUSING TO PUSH — {exc}{RESET}")
+                    sys.exit(2)
+                rels.append(blob.rel)
+            proc = _run_scanner(
+                rels, root, f"push:{repo.name}:history",
+                extra_env={"WORKSPACE_ROOT": str(root),
+                           "WORKSPACE_LOG_DIR": real_log_dir})
+            if proc.returncode != 0:
+                print(f"{YELLOW}The paths below are the versions carried by the "
+                      f"UNPUSHED COMMITS of {repo.name}, not the files on disk. "
+                      f"Cleaning the working tree does not remove them: the "
+                      f"history has to be rewritten.{RESET}")
+            _refuse_on_scanner(proc, "a commit about to be pushed")
 
 
 def engine_clean_scan(repo: Path) -> None:
@@ -234,18 +348,42 @@ def engine_clean_scan(repo: Path) -> None:
     wall is not -- a data artifact in the engine tree cannot leave the machine
     regardless of how it got committed. Added 2026-06-22 after a `docs/superpowers/`
     leak survived precisely because the routing check ran only at bypassable layers.
+
+    The unpushed HISTORY is judged alongside the working tree, and the reason is
+    the same 2026-06-22 leak in the shape it would take today: commit the
+    private-routed file, notice, `git rm` it, commit again, push. Both commits go
+    to the remote; `git ls-files` and `--others` have nothing left to report; the
+    wall clears a push that ships the file. A working-tree scan cannot see a
+    deletion, because a deletion is what it looks like from there.
     """
-    flagged = scan_engine_repo(repo)
+    try:
+        carried_history = unpushed_paths(repo)
+    except HistoryUnavailable as exc:
+        print(f"{RED}REFUSING TO PUSH — cannot read the unpushed history of "
+              f"{repo.name}: {exc}{RESET}")
+        sys.exit(2)
+    flagged = dict.fromkeys(scan_engine_repo(repo, extra_paths=carried_history))
     if flagged:
+        # A path can be flagged for either reason or both, and the two need
+        # different remedies, so the report says which. Saying "git rm --cached"
+        # over a path that is already deleted on disk sends the operator to do
+        # something that changes nothing and leaves the leak in the history.
+        on_disk = {rel for rel in flagged if (repo / rel).exists()}
         for rel in flagged:
             log_denial(mechanism="push:engine-clean-scan", action="push",
                        path=rel, reason="routes private/corporate in the engine clone")
         print(f"{RED}REFUSING TO PUSH — data-class artifact(s) in the engine clone:{RESET}")
         for f in flagged:
-            print(f"  {RED}{f}{RESET}")
+            where = "working tree" if f in on_disk else "unpushed history"
+            print(f"  {RED}{f}{RESET} {GRAY}[{where}]{RESET}")
         print(f"{GRAY}The engine repo is code only. These route private/corporate and "
               f"belong in the DATA root (.heading-os-data) or the corporate repo.{RESET}")
-        print(f"{GRAY}Move them out (git rm --cached) and add the path to .gitignore.{RESET}")
+        if on_disk:
+            print(f"{GRAY}Working tree: move them out (git rm --cached) and add the "
+                  f"path to .gitignore.{RESET}")
+        if len(flagged) > len(on_disk):
+            print(f"{GRAY}Unpushed history: deleting the file is not enough, the "
+                  f"commits still carry it. Rewrite the range before pushing.{RESET}")
         sys.exit(2)
 
 
@@ -261,6 +399,12 @@ def engine_content_scan(repo: Path, data_root: Path) -> None:
     legitimately engine-routed file slipped past every layer. Degrades to a no-op
     when the overlay is absent (public clone / CI), where the structural layers
     still hold. Suppress a true false positive inline with `content-guard: ok`.
+
+    Reads the unpushed COMMITS as well as the disk, for the reason `content_scan`
+    measures. This repository is PUBLIC, so a real name that reached any commit
+    in the range is published by the push whatever the working copy says now. A
+    finding from history is labelled `path@blobsha` to keep the two apart, since
+    only one of them can be fixed by editing a file.
     """
     dl = build_denylist(data_root)
     if dl.degraded or not dl.tokens:
@@ -282,6 +426,31 @@ def engine_content_scan(repo: Path, data_root: Path) -> None:
         sys.exit(2)
     findings: list[tuple[str, int, str, str]] = []
     unscanned: list[str] = []
+
+    # The unpushed COMMITS first, then the disk. `engine_text_rels` asks the
+    # routing and suffix questions of the PATH alone, which is the only half of
+    # `engine_text_files` that has an answer for a version of a file a later
+    # commit deleted -- `is_file()` says no, and the push sends it anyway.
+    try:
+        history = [b for b in unpushed_blobs(repo)
+                   if b.rel in set(engine_text_rels([b.rel]))]
+    except HistoryUnavailable as exc:
+        print(f"{RED}REFUSING TO PUSH — cannot read the unpushed history of "
+              f"{repo.name}: {exc}{RESET}")
+        sys.exit(2)
+    for blob in history:
+        label = f"{blob.rel}@{blob.sha[:9]}"
+        try:
+            text = read_blob(repo, blob.sha).decode("utf-8")
+        except HistoryUnavailable as exc:
+            unscanned.append(f"{label}: {exc}")
+            continue
+        except UnicodeDecodeError as exc:
+            unscanned.append(f"{label}: {exc}")
+            continue
+        for lineno, matched, category in dl.scan_text(text):
+            findings.append((label, lineno, matched, category))
+
     for rel in engine_text_files(repo, sorted(_push_delta_files(repo))):
         try:
             text = (repo / rel).read_text(encoding="utf-8")
@@ -310,6 +479,10 @@ def engine_content_scan(repo: Path, data_root: Path) -> None:
             print(f"  {RED}{rel}:{lineno}{RESET}  \"{matched}\"  {GRAY}[{category}]{RESET}")
         print(f"{GRAY}The engine ships no real data. Genericize to a placeholder, move the "
               f"value to the DATA overlay, or annotate the line `content-guard: ok <reason>`.{RESET}")
+        if any("@" in rel for rel, _l, _m, _c in findings):
+            print(f"{GRAY}A path shown as `file@blobsha` is a version carried by an "
+                  f"UNPUSHED COMMIT. Editing the file now does not remove it; the "
+                  f"commit range has to be rewritten before this push can go.{RESET}")
         sys.exit(2)
     if unscanned:
         for note in unscanned:

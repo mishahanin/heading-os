@@ -349,7 +349,14 @@ def test_the_push_wall_counts_a_routing_refusal(tmp_path, monkeypatch):
     spec = importlib.util.spec_from_file_location("push_all_probe", _ROOT / "scripts" / "push-all.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    monkeypatch.setattr(module, "scan_engine_repo", lambda repo: ["crm/contacts/someone.md"])
+    # `extra_paths` is accepted and ignored on purpose: this test is about the
+    # denial RECORD, not about which world flagged the path. The stub has to
+    # carry the real signature all the same -- a lambda that takes only `repo`
+    # made the wall raise TypeError, and a TypeError inside `pytest.raises(
+    # SystemExit)` would have looked like a pass in a slightly different test.
+    monkeypatch.setattr(module, "scan_engine_repo",
+                        lambda repo, extra_paths=(): ["crm/contacts/someone.md"])
+    monkeypatch.setattr(module, "unpushed_paths", lambda repo: [])
     with pytest.raises(SystemExit):
         module.engine_clean_scan(_ROOT)
     records = _records(tmp_path)

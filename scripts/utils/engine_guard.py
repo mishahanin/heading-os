@@ -82,6 +82,32 @@ BINARY_SUFFIXES = frozenset({
 })
 
 
+def engine_text_rels(candidates) -> list[str]:
+    """Of `candidates`, the paths that ROUTE engine and are not binary by suffix.
+
+    The half of `engine_text_files` that asks about the PATH alone. Split out on
+    2026-08-29 for the push wall's history sweep, which judges a version of a
+    file that a later commit deleted: the routing question and the suffix
+    question both still have answers, and `is_file()` does not. Keeping one
+    spelling of "is this a file a content gate should read" is the point --
+    writing the routing test a second time inside the history loop is how the
+    two would drift.
+
+    Order is preserved, so a caller that wants a stable report sorts its input.
+    """
+    out: list[str] = []
+    for rel in candidates:
+        rel = rel.replace("\\", "/").lstrip("/")
+        if not rel:
+            continue
+        if get_routing_destination(rel) != "engine":
+            continue
+        if Path(rel).suffix.lower() in BINARY_SUFFIXES:
+            continue
+        out.append(rel)
+    return out
+
+
 def engine_text_files(root: Path, candidates) -> list[str]:
     """Of `candidates`, the engine-routed, non-binary files that exist on disk.
 
@@ -95,18 +121,7 @@ def engine_text_files(root: Path, candidates) -> list[str]:
 
     Order is preserved, so a caller that wants a stable report sorts its input.
     """
-    out: list[str] = []
-    for rel in candidates:
-        rel = rel.replace("\\", "/").lstrip("/")
-        if not rel:
-            continue
-        if get_routing_destination(rel) != "engine":
-            continue
-        p = root / rel
-        if not p.is_file() or p.suffix.lower() in BINARY_SUFFIXES:
-            continue
-        out.append(rel)
-    return out
+    return [rel for rel in engine_text_rels(candidates) if (root / rel).is_file()]
 
 
 def find_data_artifacts(rel_paths, routing_fn=get_routing_destination) -> list[str]:
@@ -168,10 +183,21 @@ def repo_carried_paths(root: Path) -> list[str]:
     return paths
 
 
-def scan_engine_repo(root: Path) -> list[str]:
+def scan_engine_repo(root: Path, extra_paths=()) -> list[str]:
     """Scan an engine clone working tree and return every data-class artifact in it.
 
     Empty list == clean. The repo-level entry point both the test and the push
     wall call.
+
+    `extra_paths` are judged alongside the working tree and default to nothing,
+    so the existing eighteen callers are unchanged. The push wall passes the
+    paths of the UNPUSHED HISTORY through it. A working-tree scan cannot see the
+    2026-06-22 `docs/superpowers/` leak in the shape it would take today: commit
+    the private-routed file, notice, `git rm` it, commit again, push. Both
+    commits go to the remote and neither `git ls-files` nor `--others` has
+    anything left to report. The test that asserts "this tree is clean" is asking
+    a different and still-correct question, which is why this is an argument
+    rather than a change of behaviour.
     """
-    return find_data_artifacts(repo_carried_paths(Path(root)))
+    return find_data_artifacts(
+        repo_carried_paths(Path(root)) + [str(p) for p in extra_paths])

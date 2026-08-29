@@ -69,15 +69,27 @@ def _load(relpath: str, name: str):
 # 1. The radar signal that shelled out to flags nobody defined
 # ============================================================
 
+# Where a radar signal's argv can be built. `odin_cadence.py` joined the list on
+# 2026-08-29, when the cadence run moved out of `ops_signals` into a reader
+# shared with `scripts/generate-dashboard.py`. Scanning the one file would have
+# dropped that argv from this guard in silence; the count assertion caught it.
+_ARGV_SOURCES = (
+    Path("scripts") / "utils" / "ops_signals.py",
+    Path("scripts") / "utils" / "odin_cadence.py",
+)
+
+
 def _ops_signal_invocations() -> list[tuple[str, str, list[str]]]:
-    """Every `[sys.executable, str(script), "--flag", ...]` ops_signals builds.
+    """Every `[sys.executable, str(script), "--flag", ...]` a radar signal builds.
 
     Derived from the AST, so a fourth signal added tomorrow is checked without
     anyone remembering to add it here. Each entry is
     (enclosing function, the script path literal, the flags).
     """
     import ast
-    tree = ast.parse((ROOT / "scripts" / "utils" / "ops_signals.py").read_text(encoding="utf-8"))
+    src = "\n".join(
+        (ROOT / rel).read_text(encoding="utf-8") for rel in _ARGV_SOURCES)
+    tree = ast.parse(src)
     out = []
     for fn in ast.walk(tree):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):

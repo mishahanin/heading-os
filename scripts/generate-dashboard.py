@@ -40,6 +40,7 @@ from scripts.utils.workspace import (
 from scripts.utils.markdown import frontmatter_date
 from scripts.utils.markdown import parse_frontmatter as _parse_fm
 from scripts.utils.markdown import parse_md_table
+from scripts.utils.odin_cadence import read_cadence_json
 
 # ============================================================
 # Paths
@@ -996,28 +997,33 @@ def collect_capture_payoff():
                 recent_titles.append(md.stem.replace("-", " "))
 
     promote_ready = last_collect = days_since = None
-    if ODIN_CADENCE_SCRIPT.exists():
-        try:
-            out = subprocess.run(
-                [sys.executable, str(ODIN_CADENCE_SCRIPT), "--json"],
-                capture_output=True, text=True, timeout=30,
-            )
-            data = json.loads(out.stdout) if out.stdout.strip() else {}
-            # A non-numeric value here used to reach `promote > 0` and
-            # raise TypeError, uncaught, killing the whole dashboard -- and
-            # only on the days when there WERE clusters to promote.
-            promote_ready = _as_int_or_count(data.get("reflect_clusters"))
-            last_collect = data.get("last_collect")
-            # Through the same guard as `reflect_clusters` one line above.
-            # Both come verbatim from `odin-cadence.py --json`, whose shape
-            # `_as_int_or_count` documents as never promised -- and this one
-            # reaches `days_since >= 7` in the BUILD phase, after every
-            # collector has succeeded, so a string here killed the whole
-            # dashboard with all of its data already in hand.
-            days_since = _as_int_or_count(data.get("days_since"))
-        except (subprocess.SubprocessError, json.JSONDecodeError, OSError, ValueError) as e:
-            # Best-effort Odin cadence block; degrade to None but surface why.
-            print(f"[generate-dashboard] odin cadence collect failed: {e}", file=sys.stderr)
+    # `returncode` was never read here, and the two other callers of this same
+    # child both read it (`prime-health-parallel.run_odin_cadence`,
+    # `ops_signals.odin_cadence_state`). A crashed helper writes its traceback
+    # to stderr and leaves stdout EMPTY, which parsed to `{}` and set all three
+    # cadence fields to None, which is the exact state the panel already uses
+    # for "no cadence script on this workspace". MEASURED 2026-08-29: exit 1 drew
+    # "Clusters to Promote: -" and "Since Last Harvest: -" with zero bytes on
+    # stderr, so a dead helper and a quiet week were the same page. The shared
+    # reader carries the check for both `--json` call sites now.
+    cadence, cadence_error = read_cadence_json(
+        WORKSPACE, script=ODIN_CADENCE_SCRIPT, timeout=30)
+    if cadence_error:
+        print(f"[generate-dashboard] odin cadence collect failed: {cadence_error}",
+              file=sys.stderr)
+    else:
+        # A non-numeric value here used to reach `promote > 0` and
+        # raise TypeError, uncaught, killing the whole dashboard -- and
+        # only on the days when there WERE clusters to promote.
+        promote_ready = _as_int_or_count(cadence.get("reflect_clusters"))
+        last_collect = cadence.get("last_collect")
+        # Through the same guard as `reflect_clusters` one line above.
+        # Both come verbatim from `odin-cadence.py --json`, whose shape
+        # `_as_int_or_count` documents as never promised -- and this one
+        # reaches `days_since >= 7` in the BUILD phase, after every
+        # collector has succeeded, so a string here killed the whole
+        # dashboard with all of its data already in hand.
+        days_since = _as_int_or_count(cadence.get("days_since"))
 
     return {
         "available": True,
@@ -1026,6 +1032,10 @@ def collect_capture_payoff():
         "promote_ready": promote_ready,
         "last_collect": last_collect,
         "days_since": days_since,
+        # None when the helper is absent (an exec workspace, a legitimate
+        # blank) and a reason string when it ran and failed. The panel needs
+        # the difference: one is nothing to show, the other is a broken read.
+        "cadence_error": cadence_error,
     }
 
 
@@ -1764,12 +1774,24 @@ def build_capture_payoff(payoff):
     signals = payoff.get("signals_week", 0)
     promote = payoff.get("promote_ready")
     days_since = payoff.get("days_since")
+    cadence_error = payoff.get("cadence_error")
 
     sig_cls = "up" if signals > 0 else ""
-    promote_val = "-" if promote is None else str(promote)
-    promote_cls = "accent" if (promote or 0) > 0 else ""
-    collect_val = "-" if days_since is None else f"{days_since}d"
-    collect_cls = "danger" if (days_since is not None and days_since >= 7) else ""
+    # "?" and not "-" when the cadence read FAILED. A dash is what this panel
+    # draws for an exec workspace that has no cadence helper at all, so a
+    # crashed helper used to borrow the look of a legitimate blank.
+    unknown = "?" if cadence_error else "-"
+    unread = bool(cadence_error)
+    promote_val = unknown if promote is None else str(promote)
+    if unread and promote is None:
+        promote_cls = "danger"
+    else:
+        promote_cls = "accent" if (promote or 0) > 0 else ""
+    collect_val = unknown if days_since is None else f"{days_since}d"
+    if unread and days_since is None:
+        collect_cls = "danger"
+    else:
+        collect_cls = "danger" if (days_since is not None and days_since >= 7) else ""
 
     titles = payoff.get("recent_titles") or []
     if titles:
@@ -1784,6 +1806,18 @@ def build_capture_payoff(payoff):
                 f'{promote} episode cluster(s) ripe to promote &mdash; run <code>/odin reflect</code>.</div>'
     else:
         nudge = ""
+
+    # Named on the page, not only on stderr. The CEO reads the rendered file,
+    # often hours after the run, and a cadence read that failed silently is a
+    # nudge that did not fire: the "Since Last Harvest" box turns red at 7 days
+    # and a dead helper never turned it any colour at all.
+    if cadence_error:
+        failure = ('<div style="margin-top:10px;color:var(--red);font-size:12px;">'
+                   'Odin cadence unread: ' + esc(cadence_error)
+                   + '. Clusters and last-harvest figures above are unknown, '
+                     'not zero.</div>')
+    else:
+        failure = ""
 
     body = f"""
 <div class="metrics-strip">
@@ -1801,7 +1835,7 @@ def build_capture_payoff(payoff):
   </div>
 </div>
 {recent}
-{nudge}"""
+{nudge}{failure}"""
 
     return f"""
 <div class="section">
@@ -1933,8 +1967,13 @@ def main():
 
     capture_payoff = collect_capture_payoff()
     if capture_payoff.get("available"):
-        print(f"  Capture payoff: {capture_payoff['signals_week']} signals/7d, "
-              f"{capture_payoff.get('promote_ready')} cluster(s) to promote")
+        promote_ready = capture_payoff.get("promote_ready")
+        clusters = "unknown" if promote_ready is None else promote_ready
+        line = (f"  Capture payoff: {capture_payoff['signals_week']} signals/7d, "
+                f"{clusters} cluster(s) to promote")
+        if capture_payoff.get("cadence_error"):
+            line += f" [cadence unread: {capture_payoff['cadence_error']}]"
+        print(line)
 
     print("\nGenerating HTML...")
     html_content = generate_html(crm, pipeline, calendar, emails, strategy, metrics, freshness,

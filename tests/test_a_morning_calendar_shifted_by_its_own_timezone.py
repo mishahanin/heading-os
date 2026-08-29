@@ -394,9 +394,46 @@ def test_the_viraid_read_coerces_at_read_time(gd):
 
 
 def test_days_since_gets_the_guard_its_sibling_already_had(gd):
-    src = (ROOT / "scripts" / "generate-dashboard.py").read_text(encoding="utf-8")
-    assert '_as_int_or_count(data.get("days_since"))' in src
-    assert 'days_since = data.get("days_since")' not in src
+    """Asked of the AST, not of a substring.
+
+    This read `'_as_int_or_count(data.get("days_since"))' in src` until
+    2026-08-29, when the cadence dict was renamed from `data` to `cadence` and
+    the guard reported a missing coercion that was sitting right in front of
+    it. A control that spells the code it checks fails on a rename and passes
+    on a rewrite, which is the wrong way round. It now walks every assignment
+    to `days_since` and asks what is on the right-hand side.
+    """
+    tree = ast.parse((ROOT / "scripts" / "generate-dashboard.py").read_text(encoding="utf-8"))
+    collector = next(
+        (n for n in ast.walk(tree)
+         if isinstance(n, ast.FunctionDef) and n.name == "collect_capture_payoff"),
+        None)
+    assert collector is not None, "collect_capture_payoff is gone from the dashboard"
+
+    # Scoped to the collector. `build_capture_payoff` legitimately does
+    # `payoff.get("days_since")`, reading the value this guard is about AFTER
+    # it has been coerced, and a whole-module scan flags it.
+    rhs = []
+    for node in ast.walk(collector):
+        if not isinstance(node, ast.Assign):
+            continue
+        if "days_since" not in [t.id for t in node.targets if isinstance(t, ast.Name)]:
+            continue
+        rhs.append(node.value)
+
+    assert any(
+        isinstance(v, ast.Call) and isinstance(v.func, ast.Name)
+        and v.func.id == "_as_int_or_count"
+        for v in rhs
+    ), "no assignment to days_since runs through _as_int_or_count"
+
+    # And nothing assigns it a raw `<mapping>.get("days_since")`, which is the
+    # shape the coercion replaced.
+    for v in rhs:
+        if isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute) and v.func.attr == "get":
+            arg = v.args[0] if v.args else None
+            assert not (isinstance(arg, ast.Constant) and arg.value == "days_since"), \
+                "days_since is assigned straight from the child's JSON again"
 
 
 @pytest.mark.parametrize("value,expected", [

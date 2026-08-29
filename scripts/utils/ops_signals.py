@@ -36,6 +36,8 @@ from pathlib import Path
 
 import yaml
 
+from scripts.utils.odin_cadence import read_cadence_json
+
 # ============================================================
 # Severity + thresholds
 # ============================================================
@@ -519,26 +521,16 @@ def queue_state(data_root: Path) -> dict:
 
 
 def odin_cadence_state(engine_root: Path) -> dict:
-    """Run odin-cadence.py --json (reused compute), then classify."""
-    script = engine_root / "scripts" / "odin-cadence.py"
-    cadence: dict = {}
-    if script.exists():
-        try:
-            proc = subprocess.run(
-                [sys.executable, str(script), "--json"],
-                cwd=str(engine_root),
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            if proc.returncode == 0 and proc.stdout.strip():
-                parsed = json.loads(proc.stdout)
-                # A helper that prints `null`, a list or a number is valid JSON
-                # and is not a cadence report. Without this, `classify_odin`
-                # raised AttributeError on `.get` and took the radar with it.
-                cadence = parsed if isinstance(parsed, dict) else {}
-        except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
-            cadence = {}
+    """Run odin-cadence.py --json (reused compute), then classify.
+
+    The run, the `returncode` check and the object-shape guard moved into
+    `scripts/utils/odin_cadence.read_cadence_json` on 2026-08-29, unchanged in
+    behaviour: `scripts/generate-dashboard.py` made the identical call and had
+    neither guard, so a crashed helper reached its panel as a blank. This site
+    ignores the reason string because the radar has always degraded to a
+    not-due signal here and widening that is a separate decision.
+    """
+    cadence, _error = read_cadence_json(engine_root, timeout=60)
     return classify_odin(cadence)
 
 

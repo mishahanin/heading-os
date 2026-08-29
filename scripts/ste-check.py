@@ -740,6 +740,24 @@ def main():
             if text is not None:
                 targets.append((str(path), text))
 
+    if (args.all or args.skills) and not targets:
+        # A gate that read nothing must not exit 0. MEASURED 2026-08-29
+        # with the documented WORKSPACE_ROOT override: `--all --quiet`
+        # printed nothing and exited 0 over zero pages, and `--all --json`
+        # raised StopIteration out of `next(iter(results.values()))` and
+        # exited 1 -- the code this file's own table reserves for findings
+        # present, so a crash was indistinguishable from a style failure to
+        # every machine consumer. This script gates: pre-commit and CI both
+        # run it. One guard closes both halves, because `targets` can only
+        # be empty when the requested scope resolved to nothing.
+        print("Error: the requested scope resolved to 0 files, so nothing "
+              "was checked. A pass over an empty corpus is not a pass.",
+              file=sys.stderr)
+        # `sys.exit`, not `return`: `main()` is called bare at the bottom of
+        # this file, so a returned code is discarded and the process still
+        # exits 0. Every other exit here is spelled the same way.
+        sys.exit(2)
+
     results, passed = {}, True
     for source, text in targets:
         result = audit(text, strict=args.strict)

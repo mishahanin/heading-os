@@ -41,6 +41,22 @@ def bot():
     return module
 
 
+@pytest.fixture(autouse=True)
+def _state_in_tmp(bot, tmp_path, monkeypatch):
+    """Point `STATE_DIR` at a tmp_path for every test in the module.
+
+    One test below redirects it by hand and four do not. A pure-arithmetic test
+    needs no state directory today, but the module-level constant it inherits
+    resolves at the operator's live overlay, so the first test here that reaches
+    a writer writes there. That is how seven tests in the other fireside shards
+    started writing the operator's data on 2026-08-29.
+    """
+    state = tmp_path / "fireside-state"
+    state.mkdir(exist_ok=True)
+    monkeypatch.setattr(bot, "STATE_DIR", state)
+    return state
+
+
 ROSTER = {"Alice Example": {"telegram_username": "alice"}}
 WEEKS = [{"week": 1, "theme": "Opening", "mon": ["Alice Example"], "wed": []}]
 

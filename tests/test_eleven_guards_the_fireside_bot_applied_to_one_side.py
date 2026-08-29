@@ -69,8 +69,20 @@ def fb():
     return mod
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def state(fb, tmp_path, monkeypatch):
+    """Every fireside writer resolves through this one constant, so redirect it
+    for every test in the module rather than for the tests that remembered.
+
+    Autouse, and that is the whole point. It was opt-in until 2026-08-29, and
+    the three `_nudge_ceo_on_helmsman_gaps` tests below did not opt in: the
+    nudge writes a `helmsman_gap_nudge` row through `_log_event`, which landed
+    in the operator's live `sessions.jsonl`. The conftest write guard refused
+    it, the nudge's own `except Exception` caught the refusal, and `log_error`
+    then tried to append to the live `errors.log` and raised out of the test.
+    The behaviour under test was fine; the isolation was missing. That is the
+    same one-side-only shape this file's docstring is about.
+    """
     monkeypatch.setattr(fb, "STATE_DIR", tmp_path)
     return tmp_path
 

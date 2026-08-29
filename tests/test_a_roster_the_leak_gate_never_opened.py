@@ -59,6 +59,22 @@ def fb():
     return mod
 
 
+@pytest.fixture(autouse=True)
+def _state_in_tmp(fb, tmp_path, monkeypatch):
+    """Point `STATE_DIR` at a tmp_path for every test in the module.
+
+    Nine tests below redirect it by hand and twenty-seven do not, which is the
+    defect this file's own title is about, applied to its own fixtures.
+    Redirecting once here is what a per-test line cannot be: a default the next
+    test inherits without knowing it needs one. Tests that set the constant
+    themselves still win, because monkeypatch inside the body runs after this.
+    """
+    state = tmp_path / "fireside-state"
+    state.mkdir(exist_ok=True)
+    monkeypatch.setattr(fb, "STATE_DIR", state)
+    return state
+
+
 # ============================================================
 # 1. The leak gate and the roster it never opened
 # ============================================================

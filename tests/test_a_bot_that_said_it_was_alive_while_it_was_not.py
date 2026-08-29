@@ -54,8 +54,16 @@ def fb():
     return mod
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def state(fb, tmp_path, monkeypatch):
+    """Redirect the one constant every fireside writer resolves through.
+
+    Autouse since 2026-08-29. Opt-in, it covered the tests whose author knew
+    they wrote and left the rest resolving at the operator's live overlay: the
+    same shape cost four tests in `test_a_promise_that_misha_would_help.py` and
+    three in `test_eleven_guards_the_fireside_bot_applied_to_one_side.py`, where
+    an error path nobody expected to reach disk called `log_error`.
+    """
     monkeypatch.setattr(fb, "STATE_DIR", tmp_path)
     return tmp_path
 

@@ -113,6 +113,24 @@ def _bind_error(fb):
     _TelegramError = fb.TelegramAPIError
 
 
+@pytest.fixture(autouse=True)
+def _state_in_tmp(fb, tmp_path, monkeypatch):
+    """Point the one constant every fireside writer resolves through at a
+    tmp_path, for every test in the module.
+
+    Autouse rather than opt-in. The four `_handle_a_tap` tests below never asked
+    for isolation because they only assert on messages, and the undeliverable
+    branch they exercise calls `log_error`, which appended to the operator's live
+    `errors.log` until 2026-08-29. Two fixtures further down already redirected
+    the constant, which is precisely the "landed in one of N copies" shape this
+    file's own docstring catalogues.
+    """
+    state = tmp_path / "fireside-state"
+    state.mkdir()
+    monkeypatch.setattr(fb, "STATE_DIR", state)
+    return state
+
+
 MISHA = 1000
 A_ID = 111
 B_ID = 222

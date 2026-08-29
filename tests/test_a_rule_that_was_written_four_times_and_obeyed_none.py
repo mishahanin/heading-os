@@ -542,3 +542,64 @@ def test_the_check_is_wired_into_the_dispatcher(hook):
     shard of this audit, where every ancestor test called the function directly
     and nothing exercised the registry."""
     assert hook.check_graph_first in hook.CHECKS
+
+
+# ============================================================
+# Hole 6: an agent held the session's key
+#
+# MEASURED 2026-08-29. A dispatched agent's payload carries the dispatching
+# session's `session_id`, so a subagent that called `codegraph_explore`
+# stamped the SESSION's marker and the session never had to ask the graph
+# itself. Every dispatch reopened the hole this file closed that morning.
+# ============================================================
+
+def test_an_agents_explore_does_not_unlock_the_session(hook, tmp_path, monkeypatch):
+    _walled(hook, tmp_path, monkeypatch)
+    session = "s-actor-graph"
+
+    assert hook.check_graph_first({
+        "session_id": session, "agent_id": "a1",
+        "tool_name": "mcp__codegraph__codegraph_explore",
+        "tool_input": {"query": "build_denylist"}}) is None
+
+    verdict = hook.check_graph_first({
+        "session_id": session, "tool_name": "Grep",
+        "tool_input": {"pattern": "def build_denylist", "path": "scripts/"}})
+    assert (verdict or {}).get("decision") == "block"
+
+
+def test_the_sessions_explore_does_not_unlock_an_agent(hook, tmp_path, monkeypatch):
+    """The other direction. Each actor asks the graph for itself."""
+    _walled(hook, tmp_path, monkeypatch)
+    session = "s-actor-graph-rev"
+
+    assert hook.check_graph_first({
+        "session_id": session,
+        "tool_name": "mcp__codegraph__codegraph_explore",
+        "tool_input": {"query": "build_denylist"}}) is None
+
+    verdict = hook.check_graph_first({
+        "session_id": session, "agent_id": "a1", "tool_name": "Grep",
+        "tool_input": {"pattern": "def build_denylist", "path": "scripts/"}})
+    assert (verdict or {}).get("decision") == "block"
+
+
+def test_an_agent_that_asks_the_graph_unlocks_itself(hook, tmp_path, monkeypatch):
+    """Not a cage for the agent either: its own door still opens its own lock."""
+    _walled(hook, tmp_path, monkeypatch)
+    session = "s-actor-graph-own"
+
+    hook.check_graph_first({
+        "session_id": session, "agent_id": "a1",
+        "tool_name": "mcp__codegraph__codegraph_explore",
+        "tool_input": {"query": "build_denylist"}})
+
+    verdict = hook.check_graph_first({
+        "session_id": session, "agent_id": "a1", "tool_name": "Grep",
+        "tool_input": {"pattern": "def build_denylist", "path": "scripts/"}})
+    assert verdict is None
+
+
+def test_two_actors_in_one_session_get_two_graph_stamps(hook):
+    assert hook._graph_marker("s", "main") != hook._graph_marker("s", "a1")
+    assert hook._graph_marker("s", "a1") != hook._graph_marker("s", "a2")

@@ -1812,9 +1812,40 @@ _CODE_TREE_RE = re.compile(r"(^|[\s/\\'\"])(scripts|tests)([\s/\\'\"]|$)")
 _CODE_HINTS = (".py", ".claude/hooks", ".claude\\hooks")
 
 
-def _graph_marker(session_id: str) -> Path:
-    safe = re.sub(r"[^A-Za-z0-9_-]", "_", session_id or "unknown")[:80]
-    return _GRAPH_STATE_DIR / f"{safe}.stamp"
+def actor_id(payload: dict) -> str:
+    """Who is making this call: the main session, or one dispatched agent.
+
+    MEASURED on live payloads, 2026-08-29. A subagent's PreToolUse carries the
+    SAME `session_id` AND the same `transcript_path` as the session that
+    dispatched it. The only field separating them is `agent_id`, which the main
+    session does not carry at all. Neither wall knew that. Both keyed their
+    per-session state on `session_id` alone, so five dispatched agents and the
+    session that dispatched them shared one budget and one stamp: 36 hook calls
+    arrived in 25 seconds and 2 of them were the session's own.
+
+    One shared key, two opposite failures:
+
+    - the graph wall was UNLOCKED by an agent. A subagent calling
+      `codegraph_explore` stamped the dispatching session's marker, so the
+      session never had to ask the graph itself. The hole closed on the morning
+      of 2026-08-29 reopened on every dispatch.
+    - the fan-out wall was TRIPPED by an agent. The agents' own reading filled
+      the parent's budget, so the wall refused the session for having done the
+      exact thing the wall exists to demand.
+
+    Pure and public, so both directions are measurable on synthetic input.
+    """
+    return str(payload.get("agent_id") or "").strip() or "main"
+
+
+def _state_key(session_id: str, actor: str) -> str:
+    """One filesystem-safe name per (session, actor) pair."""
+    return re.sub(r"[^A-Za-z0-9_-]", "_",
+                  f"{session_id or 'unknown'}~{actor or 'main'}")[:96]
+
+
+def _graph_marker(session_id: str, actor: str = "main") -> Path:
+    return _GRAPH_STATE_DIR / f"{_state_key(session_id, actor)}.stamp"
 
 
 def is_code_search(tool_name: str, tool_input: dict) -> bool:
@@ -1901,7 +1932,9 @@ def check_graph_first(payload: dict):
     if not session_id:
         return None
 
-    marker = _graph_marker(session_id)
+    # Per ACTOR, not per session. An agent must ask the graph for itself; its
+    # stamp must not unlock the session that dispatched it. See `actor_id`.
+    marker = _graph_marker(session_id, actor_id(payload))
 
     # Stamp on the explore ITSELF, at PreToolUse, before it runs. Stamping on
     # success instead would mean a graph outage locks the session out of grep
@@ -1993,6 +2026,11 @@ _FANOUT_STATE_DIR = WORKSPACE / ".claude" / "state" / "fanout"
 # older one and `Workflow` the orchestrated form. All three clear the budget.
 FANOUT_TOOLS = ("Agent", "Task", "Workflow")
 
+# The tools whose paths `investigated_paths` charges for, and so the only tools
+# this wall may refuse. Everything else -- a write, an edit, a notebook -- is
+# waved through however far over budget the session is.
+FANOUT_COUNTED_TOOLS = ("Read", "Grep", "Glob", "Bash")
+
 # How many distinct files may be investigated by hand before the question is
 # forced. A first setting, tunable by env rather than by editing this file: the
 # right number is a property of how the operator works, and it should be moved
@@ -2008,9 +2046,8 @@ _FANOUT_IGNORE = ("tmp/", ".log", ".jsonl", "node_modules", ".venv",
 _PATH_TOKEN = re.compile(r"[A-Za-z0-9_./\\-]*[/\\][A-Za-z0-9_./\\-]*")
 
 
-def _fanout_marker(session_id: str) -> Path:
-    safe = re.sub(r"[^A-Za-z0-9_-]", "_", session_id or "unknown")[:80]
-    return _FANOUT_STATE_DIR / f"{safe}.json"
+def _fanout_marker(session_id: str, actor: str = "main") -> Path:
+    return _FANOUT_STATE_DIR / f"{_state_key(session_id, actor)}.json"
 
 
 def investigated_paths(tool_name: str, tool_input: dict) -> set[str]:
@@ -2055,7 +2092,16 @@ def check_fanout_first(payload: dict):
     if not session_id:
         return None          # same reason as check_graph_first: no session, no rule
 
-    marker = _fanout_marker(session_id)
+    # A subagent IS the fan-out. Nudging one to fan out again would ask for the
+    # nested orchestration `.claude/rules/skill-orchestrator.md` principle 8
+    # forbids, and its reading is not the session's hand-work. The marker is
+    # keyed by actor as well, so removing this early return still cannot let an
+    # agent spend the session's budget.
+    actor = actor_id(payload)
+    if actor != "main":
+        return None
+
+    marker = _fanout_marker(session_id, actor)
 
     # Clearing the budget. Both doors write the same empty state, so the rule
     # cannot tell them apart afterwards and does not need to: what it enforces
@@ -2080,6 +2126,13 @@ def check_fanout_first(payload: dict):
         marker.write_text(json.dumps(sorted(seen)), encoding="utf-8")
     except OSError as exc:
         print(f"[_dispatch:fanout] could not count: {exc}", file=sys.stderr)
+
+    # Refuse only the tools this wall actually charges for. A wall that also
+    # refused Write and Edit would, the moment the budget ran out, block the
+    # repair as well as the investigation: that is a cage, not a wall, and it
+    # happened while this very function was being fixed.
+    if tool_name not in FANOUT_COUNTED_TOOLS:
+        return None
 
     if len(seen) <= FANOUT_PATH_BUDGET:
         return None

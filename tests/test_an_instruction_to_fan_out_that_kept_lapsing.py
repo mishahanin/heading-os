@@ -348,3 +348,137 @@ def test_the_claims_log_can_be_read_back():
     audit what was claimed."""
     proc = _note("--show", "--limit", "3")
     assert proc.returncode == 0, proc.stderr
+
+
+# ============================================================
+# One session, many actors
+#
+# MEASURED on live payloads, 2026-08-29. A dispatched agent's PreToolUse
+# carries the SAME `session_id` and the same `transcript_path` as the session
+# that dispatched it; only `agent_id` separates them. Keying the budget on the
+# session alone meant five agents and their dispatcher shared one budget: 36
+# hook calls in 25 seconds, 2 of them the session's own. The wall then refused
+# the session for having done the exact thing the wall exists to demand.
+# ============================================================
+
+ACTORS = [
+    ({}, "main"),
+    ({"agent_id": None}, "main"),
+    ({"agent_id": ""}, "main"),
+    ({"agent_id": "   "}, "main"),
+    # Invented ids. The shape is what matters, and a real one is a live hex
+    # string the secret scanner reads as a credential.
+    ({"agent_id": "agent-one"}, "agent-one"),
+    ({"agent_id": "agent-two", "agent_type": "general-purpose"}, "agent-two"),
+]
+
+
+@pytest.mark.parametrize("payload, expected", ACTORS,
+                         ids=[f"{i}-{e}" for i, (_, e) in enumerate(ACTORS)])
+def test_the_actor_is_read_off_the_payload(hook, payload, expected):
+    assert hook.actor_id(payload) == expected
+
+
+def test_the_actor_split_is_derived_not_restated(hook):
+    """Both directions over one call, so a body that answered "main" to
+    everything cannot satisfy the parametrised cases one at a time."""
+    seen = {hook.actor_id(p) for p, _ in ACTORS}
+    assert "main" in seen
+    assert len(seen - {"main"}) == 2
+
+
+def test_two_actors_in_one_session_get_two_state_files(hook):
+    assert hook._fanout_marker("s", "main") != hook._fanout_marker("s", "a1")
+    assert hook._graph_marker("s", "main") != hook._graph_marker("s", "a1")
+
+
+def _read_as(walled, session, path, agent=None):
+    payload = {"session_id": session, "tool_name": "Read",
+               "tool_input": {"file_path": path}}
+    if agent is not None:
+        payload["agent_id"] = agent
+    return walled.check_fanout_first(payload)
+
+
+def test_a_dispatched_agent_is_never_walled(walled):
+    """An agent IS the fan-out. Asking it to fan out again would ask for the
+    nested orchestration `.claude/rules/skill-orchestrator.md` principle 8
+    forbids."""
+    for i in range(walled.FANOUT_PATH_BUDGET * 4):
+        verdict = _read_as(walled, "s-agent", f"scripts/f{i}.py", agent="a1")
+        assert not _blocked(verdict), f"the agent was refused at file {i}"
+
+
+def test_an_agents_reading_never_lands_in_the_session_budget(walled):
+    """The measured defect, in one assertion: the agent reads three budgets
+    worth of files and the session that dispatched it is still at zero."""
+    for i in range(walled.FANOUT_PATH_BUDGET * 3):
+        _read_as(walled, "s-mixed", f"scripts/agent{i}.py", agent="a1")
+
+    assert not _blocked(_read_as(walled, "s-mixed", "scripts/mine.py"))
+    marker = walled._fanout_marker("s-mixed", "main")
+    assert json.loads(marker.read_text(encoding="utf-8")) == ["scripts/mine.py"]
+
+
+def test_an_agent_leaves_no_budget_state_at_all(walled):
+    """Two agents cannot share a budget because neither has one. Not tracking
+    them is what makes the separation impossible to get wrong later: there is
+    no agent state for a future change to accidentally read as the session's."""
+    for i in range(walled.FANOUT_PATH_BUDGET * 2):
+        _read_as(walled, "s-two", f"scripts/a{i}.py", agent="a1")
+    for i in range(walled.FANOUT_PATH_BUDGET * 2):
+        _read_as(walled, "s-two", f"scripts/b{i}.py", agent="a2")
+
+    for actor in ("a1", "a2", "main"):
+        assert not walled._fanout_marker("s-two", actor).exists(), actor
+
+
+def test_an_agent_dispatched_by_an_agent_does_not_clear_the_session(walled):
+    """A nested dispatch is the agent's own door, not its dispatcher's."""
+    session = "s-nested"
+    for i in range(walled.FANOUT_PATH_BUDGET * 2):
+        _read_as(walled, session, f"scripts/f{i}.py")
+    assert _blocked(_read_as(walled, session, "scripts/more.py")), \
+        "the session budget was not spent, so this proves nothing"
+
+    walled.check_fanout_first({"session_id": session, "agent_id": "a1",
+                               "tool_name": "Agent", "tool_input": {}})
+    assert _blocked(_read_as(walled, session, "scripts/still-more.py"))
+
+
+# ============================================================
+# A wall, never a cage: the repair is never refused with the investigation
+# ============================================================
+
+WRITE_TOOLS = [
+    ("Write", {"file_path": "scripts/a.py", "content": "x"}),
+    ("Edit", {"file_path": ".claude/hooks/_dispatch.py",
+              "old_string": "a", "new_string": "b"}),
+    ("MultiEdit", {"file_path": "scripts/a.py", "edits": []}),
+    ("NotebookEdit", {"notebook_path": "scripts/a.ipynb"}),
+]
+
+
+@pytest.mark.parametrize("tool, tool_input", WRITE_TOOLS,
+                         ids=[t for t, _ in WRITE_TOOLS])
+def test_a_write_is_never_refused_however_far_over_budget(walled, tool, tool_input):
+    """Measured live on 2026-08-29, while this very function was being fixed:
+    the wall ran all ten checks on every matched tool, so once the budget was
+    spent it refused the Edit that carried the repair. A wall that blocks the
+    fix is a cage."""
+    session = f"s-write-{tool}"
+    for i in range(walled.FANOUT_PATH_BUDGET * 2):
+        _read_as(walled, session, f"scripts/f{i}.py")
+    assert _blocked(_read_as(walled, session, "scripts/one-more.py")), \
+        "the budget was not spent, so the next assertion would pass vacuously"
+
+    verdict = walled.check_fanout_first(
+        {"session_id": session, "tool_name": tool, "tool_input": tool_input})
+    assert not _blocked(verdict)
+
+
+def test_the_refusable_set_is_exactly_the_charged_set(hook):
+    """Derived from the predicate's own fixtures, not restated beside them. A
+    tool the wall refuses but never charges could not have caused the count."""
+    charged = {t for t, p, _ in INVESTIGATES if hook.investigated_paths(t, p)}
+    assert charged == set(hook.FANOUT_COUNTED_TOOLS)

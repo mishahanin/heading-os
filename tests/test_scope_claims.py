@@ -71,6 +71,17 @@ DECLARED_CLAIMANTS = {
     # returns different exit codes for them (2 versus 1) rather than collapsing
     # both into the sentence a reader would act on.
     "scripts/compact-now.py": "resolve_pane",
+    # Both walls in the dispatcher speak about "this session": the graph wall
+    # says no codegraph query has run in it yet, and the fan-out wall says how
+    # many files it has investigated by hand. Neither sentence was entitled to
+    # the subject until 2026-08-29. A dispatched agent's payload carries the
+    # DISPATCHING session's `session_id` and its `transcript_path`, so both
+    # walls were reading a set of calls that was mostly not the session's:
+    # measured, 36 hook calls in 25 seconds with 2 of them the session's own.
+    # `actor_id` is what resolves it, by reading the `agent_id` field the main
+    # session does not carry, and every piece of per-session state is keyed on
+    # its answer.
+    ".claude/hooks/_dispatch.py": "actor_id",
 }
 
 # The detector is deliberately wide, because a defect of this shape is written

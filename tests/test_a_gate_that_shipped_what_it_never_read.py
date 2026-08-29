@@ -29,6 +29,8 @@ Run: python3 -m pytest tests/test_a_gate_that_shipped_what_it_never_read.py
 from __future__ import annotations
 
 import importlib.util
+import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -59,43 +61,128 @@ GUARD = ROOT / "scripts" / "content-guard.py"
 # The gate that passed over what it could not read
 # ============================================================
 
-def _guard(*args, cwd=None):
+def _guard(*args, cwd=None, env=None):
     return subprocess.run([sys.executable, str(GUARD), *args],
                           capture_output=True, text=True, timeout=300,
-                          check=False, cwd=cwd)
+                          check=False, cwd=cwd, env=env)
 
 
-def test_an_undecodable_engine_file_fails_the_gate(tmp_path):
+@pytest.fixture()
+def sandbox(tmp_path):
+    """A synthetic engine tree and a synthetic DATA overlay, both throwaway.
+
+    Two defects, measured 2026-08-29, and this fixture is the answer to both.
+
+    FIRST, the three gate cases below ran the CLI with no `--data-root`, so the
+    denylist came from whatever overlay the host happened to have. On the
+    operator's own machine that is his live data. Anywhere else, and under the
+    `HEADING_OS_DATA="$(mktemp -d)"` isolation the rest of the suite uses, the
+    overlay holds no entities, the gate prints "denylist unavailable ...;
+    skipped." and exits 0, and all three assertions fail. So the cases only ever
+    passed on one machine and only because his real records were readable.
+
+    SECOND, they wrote their probe file into the REAL repository root and
+    removed it in a `finally`. A crash between the two lines leaves a stray
+    `_content_guard_probe.md` in the engine tree, where `engine-tree-clean`
+    refuses the next commit and a parallel session's `git status` reads it as
+    that session's own edit.
+
+    The synthetic engine carries the real `config/routing-map.yaml`, because the
+    file selector asks it whether a path routes engine and an absent map fails
+    closed to private, which would silently select nothing and make every case
+    below green over an empty file list.
+    """
+    engine = tmp_path / "engine"
+    (engine / ".claude").mkdir(parents=True)
+    (engine / "CLAUDE.md").write_text("# marker\n", encoding="utf-8")
+    (engine / "config").mkdir()
+    shutil.copy2(ROOT / "config" / "routing-map.yaml",
+                 engine / "config" / "routing-map.yaml")
+    (engine / "docs").mkdir()
+
+    data = tmp_path / "data"
+    (data / "config").mkdir(parents=True)
+    # An invented company. The engine may carry no real entity, so the token
+    # this gate is driven with is fictional by construction.
+    (data / "config" / "content-denylist.yaml").write_text(
+        "companies:\n  - Spectre Holdings\n", encoding="utf-8")
+
+    env = dict(os.environ, WORKSPACE_ROOT=str(engine), HEADING_OS_DATA=str(data))
+    return engine, data, env
+
+
+def _run(sandbox, *rels):
+    engine, data, env = sandbox
+    return _guard("--files", *rels, "--data-root", str(data),
+                  cwd=str(engine), env=env)
+
+
+def test_the_sandbox_really_arms_the_gate(sandbox):
+    """The fixture is the experiment. A denylist that harvested nothing would
+    make the gate skip, and every case below would pass while measuring the
+    skip rather than the gate."""
+    engine, _data, _env = sandbox
+    (engine / "docs" / "ok.md").write_text("Ordinary prose.\n", encoding="utf-8")
+
+    proc = _run(sandbox, "docs/ok.md")
+
+    assert "skipped" not in proc.stdout, proc.stdout
+    assert "1 denylist tokens" in proc.stdout, proc.stdout
+    assert "1 file(s)" in proc.stdout, (
+        "the selector saw no file, so nothing below is being measured")
+
+
+def test_an_undecodable_engine_file_fails_the_gate(sandbox):
     """Unverified is not clean, and the exit code is what a gate IS."""
-    bad = ROOT / "_content_guard_probe.md"
-    bad.write_bytes(b"caf\xe9\n")
-    try:
-        proc = _guard("--files", "_content_guard_probe.md")
-        assert proc.returncode == 1, proc.stdout + proc.stderr
-        assert "REFUSED" in proc.stderr
-    finally:
-        bad.unlink()
+    engine, _data, _env = sandbox
+    (engine / "docs" / "probe.md").write_bytes(b"caf\xe9\n")
+
+    proc = _run(sandbox, "docs/probe.md")
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "REFUSED" in proc.stderr
 
 
-def test_the_refusal_names_the_file(tmp_path):
-    bad = ROOT / "_content_guard_probe2.md"
-    bad.write_bytes(b"\xff\xfe not utf-8\n")
-    try:
-        proc = _guard("--files", "_content_guard_probe2.md")
-        assert "_content_guard_probe2.md" in proc.stderr
-    finally:
-        bad.unlink()
+def test_the_refusal_names_the_file(sandbox):
+    engine, _data, _env = sandbox
+    (engine / "docs" / "probe2.md").write_bytes(b"\xff\xfe not utf-8\n")
+
+    proc = _run(sandbox, "docs/probe2.md")
+
+    assert "docs/probe2.md" in proc.stderr
 
 
-def test_a_readable_file_is_still_clean(tmp_path):
-    ok = ROOT / "_content_guard_probe3.md"
-    ok.write_text("Ordinary prose with nothing private in it.\n", encoding="utf-8")
-    try:
-        proc = _guard("--files", "_content_guard_probe3.md")
-        assert proc.returncode == 0, proc.stdout + proc.stderr
-        assert "clean" in proc.stdout
-    finally:
-        ok.unlink()
+def test_a_readable_file_is_still_clean(sandbox):
+    engine, _data, _env = sandbox
+    (engine / "docs" / "ok.md").write_text(
+        "Ordinary prose with nothing private in it.\n", encoding="utf-8")
+
+    proc = _run(sandbox, "docs/ok.md")
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "clean" in proc.stdout
+
+
+def test_a_real_entity_is_still_blocked(sandbox):
+    """The mirror the three cases above never had. A gate that returned 0 for
+    everything readable would satisfy every one of them."""
+    engine, _data, _env = sandbox
+    (engine / "docs" / "leak.md").write_text(
+        "A note about Spectre Holdings and its quarter.\n", encoding="utf-8")
+
+    proc = _run(sandbox, "docs/leak.md")
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "BLOCKED" in proc.stdout
+    assert "docs/leak.md:1" in proc.stdout
+
+
+def test_nothing_was_written_into_the_real_repository(sandbox):
+    """The second defect, pinned. The probe files used to land in the engine
+    root, where a crash between the write and its `finally` leaves litter that
+    `engine-tree-clean` refuses the next commit over."""
+    strays = sorted(p.name for p in ROOT.glob("_content_guard_probe*"))
+    assert strays == [], strays
 
 
 @pytest.mark.skipif(

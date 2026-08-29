@@ -1367,8 +1367,22 @@ def run_unread_mode(verbose: bool = False) -> None:
     cached_analysis: dict = {}
     for conv in convs:
         p = prior_by_id.get(conv["id"])
-        if p and p.get("analysis") and _cache_key(p) == _cache_key(conv):
-            cached_analysis[conv["id"]] = p["analysis"]
+        prior_analysis = p.get("analysis") if isinstance(p, dict) else None
+        # A placeholder is not an analysis, and caching one made the failure
+        # permanent. `_cache_key` is the SET OF MESSAGE IDS, and the id set of a
+        # quiet unread thread never changes - so once the model failed for a
+        # conversation, the `_fallback_analysis` dict written into the feed came
+        # straight back as a cache hit on every later tick and the model was
+        # never asked about that thread again. The dashboard showed "Review
+        # manually" for as long as the mail stayed unread.
+        #
+        # `analysis_failed` is the same marker the time-window path in `main()`
+        # reads to keep unanalysed mail out of the dedupe set. One spelling, one
+        # meaning in both places: not analysed, so do not treat it as done.
+        if (isinstance(prior_analysis, dict)
+                and not prior_analysis.get("analysis_failed")
+                and _cache_key(p) == _cache_key(conv)):
+            cached_analysis[conv["id"]] = prior_analysis
         else:
             to_analyze.append(conv)
 
@@ -1377,11 +1391,52 @@ def run_unread_mode(verbose: bool = False) -> None:
               f"({len(cached_analysis)} cached, {len(to_analyze)} to analyze){RESET}")
 
     fresh = analyze_conversations(to_analyze, crm_map, pipeline_text, verbose=verbose) if to_analyze else []
-    fresh_by_id = {c["id"]: a for c, a in zip(to_analyze, fresh)}
+    # This zip had no `strict=`, so a short `fresh` list dropped its tail in
+    # silence: measured 2026-08-29, one analysis returned for two conversations
+    # left the second thread showing a placeholder while the run reported
+    # `analyzed_fresh: 2` and `complete`. Nothing anywhere said which thread was
+    # never looked at.
+    #
+    # Chosen deliberately: REPORT AND DEGRADE, do not raise. This runs on a
+    # bridge daemon tick. Raising out of it loses the whole feed, including
+    # every conversation that WAS analysed correctly, and a partial-batch bug
+    # upstream would blank the dashboard instead of dimming one row. Pairing the
+    # analyses that did come back and leaving the rest to `_fallback_analysis`
+    # is strictly more information than a blank page.
+    #
+    # The degradation is not silent and it is not permanent, because the two
+    # fixes above compose: `_fallback_analysis` marks those conversations
+    # `analysis_failed`, which now makes the run `partial` AND keeps them out of
+    # the cache, so the next tick asks the model again. `build_output` keeps its
+    # `strict=True` - by the time we reach it the lists are one-per-conversation
+    # by construction, and a mismatch THERE really is unreachable.
+    #
+    # `strict=True` is the DETECTOR here, not decoration. It is the thing that
+    # raises, and the recovery below pairs by index rather than by a second,
+    # slice-guarded zip - a `zip(a[:n], b[:n], strict=True)` can never raise, so
+    # it would satisfy the linter while detecting nothing.
+    try:
+        fresh_by_id = {c["id"]: a for c, a in zip(to_analyze, fresh, strict=True)}
+    except ValueError:
+        print(f"{RED}  analyze_conversations returned {len(fresh)} analysis/analyses "
+              f"for {len(to_analyze)} conversation(s); the unmatched conversation(s) "
+              f"are NOT analysed and this run is partial{RESET}", file=sys.stderr)
+        fresh_by_id = {to_analyze[i]["id"]: fresh[i]
+                       for i in range(min(len(to_analyze), len(fresh)))}
     analyses = [
         cached_analysis.get(c["id"]) or fresh_by_id.get(c["id"]) or _fallback_analysis(c)
         for c in convs
     ]
+
+    # Same rule and the same spelling as the time-window path in `main()`: a run
+    # whose digest is partly placeholders is not a complete run. Until this fix
+    # only `unread_truncated` counted here, so a total model outage wrote a feed
+    # made entirely of "Review manually" cards and labelled the run `complete` -
+    # exactly the half-blindness the time-window path was fixed for.
+    failed_conv_ids = {
+        conv["id"] for conv, analysis in zip(convs, analyses, strict=True)
+        if isinstance(analysis, dict) and analysis.get("analysis_failed")
+    }
 
     run_info = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -1392,7 +1447,9 @@ def run_unread_mode(verbose: bool = False) -> None:
         "analyzed_fresh": len(to_analyze),
         "analyzed_cached": len(cached_analysis),
         "truncated": unread_truncated,
-        "status": "partial" if unread_truncated else "complete",
+        "analysis_failures": len(failed_conv_ids),
+        "status": ("partial" if (unread_truncated or failed_conv_ids)
+                   else "complete"),
     }
     output = build_output(convs, analyses, run_info)
     try:
@@ -1409,8 +1466,19 @@ def run_unread_mode(verbose: bool = False) -> None:
     except OSError as e:
         print(json.dumps({"error": f"_latest-fetch.json write failed: {e}"}))
         sys.exit(1)
+    # `run_info` now knows the run was partial, and until this line the caller
+    # did not: the summary said `ok: true` and named only how many conversations
+    # were ATTEMPTED, so a total model outage reported success while every card
+    # in the feed said "Review manually". `main()` has printed this since
+    # `42f2e1e`; the unread path is the one the bridge tick actually calls, and
+    # it was the half that stayed quiet.
+    if failed_conv_ids:
+        print(f"{RED}  PARTIAL: {len(failed_conv_ids)} conversation(s) were not "
+              f"analysed; they stay out of the cache and the next run retries "
+              f"them{RESET}", file=sys.stderr)
     print(json.dumps({
         "ok": True, "unread_count": len(convs), "analyzed_fresh": len(to_analyze),
+        "analysis_failures": len(failed_conv_ids), "status": run_info["status"],
     }))
 
 

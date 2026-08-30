@@ -32,6 +32,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 
+from tests.repo_files import read_sources  # noqa: E402
+
 
 def _load(rel: str, name: str):
     """Import a hyphen-or-underscore script by path."""
@@ -74,8 +76,7 @@ SCHEMA_MARKER_WRITERS = [
 def _marker_writers_on_disk() -> list[str]:
     """Every tracked script under scripts/ that writes the marker, by any means."""
     found = []
-    for path in sorted((ROOT / "scripts").rglob("*.py")):
-        code = path.read_text(encoding="utf-8")
+    for path, code in read_sources(sorted((ROOT / "scripts").rglob("*.py"))):
         if 'atomic_write_text(target / ".schema-version"' in code \
                 or '.schema-version").write_text' in code \
                 or "atomic_write_text(data_root / SCHEMA_FILE" in code:

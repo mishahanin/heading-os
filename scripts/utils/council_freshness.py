@@ -81,14 +81,33 @@ def _http_json(url, headers=None, timeout=HTTP_TIMEOUT):
 
 
 def probe_proxy():
-    """GET the proxy /v1/models catalog; None on any failure."""
+    """GET the proxy /v1/models catalog; None on any failure.
+
+    "Any failure" includes a 200 whose body is well-formed JSON of the wrong
+    shape. This read `body.get("data", [])`, and `dict.get` substitutes its
+    default only when the key is ABSENT: a body of `{"data": null}` - a proxy
+    error page, a gateway that answers in its own envelope, a version skew -
+    passed the `if not body` guard and then iterated `None`. MEASURED
+    2026-08-30: `TypeError: 'NoneType' object is not iterable`, raised straight
+    out of `assess()`, which the daily `scripts/council-models-notify.py` unit
+    calls. `{"data": "abc"}` was worse than the crash: a string iterates its
+    characters, so the catalog came back `[]` and every pin classified `broken`,
+    turning a probe failure into three false alarms.
+
+    The whole point of this function is that a probe failure reads as `unknown`
+    downstream (`classify_proxy_model` -> `nudge_line`'s "NOT checked" line), so
+    a non-list `data` has to return None like every other failure.
+    """
     key = load_api_key("CLIPROXY_API_KEY", required=False)
     if not key:
         return None
     body = _http_json(PROXY_MODELS_URL, headers={"Authorization": f"Bearer {key}"})
-    if not body:
+    if not isinstance(body, dict):
         return None
-    return [m.get("id", "") for m in body.get("data", [])
+    data = body.get("data")
+    if not isinstance(data, list):
+        return None
+    return [m.get("id", "") for m in data
             if isinstance(m, dict) and m.get("id")]
 
 

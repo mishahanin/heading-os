@@ -29,7 +29,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-from tests.repo_files import tracked_paths  # noqa: E402
+from tests.repo_files import read_sources, tracked_paths  # noqa: E402
 
 # Trees whose Python is ours to hold to the rule. `.claude` carries skill-local
 # scripts and hooks that spawn children exactly like `scripts/` does.
@@ -92,15 +92,27 @@ def _bare_interpreter_calls(tree: ast.AST):
 
 
 def test_no_bare_python_interpreter_in_spawned_commands():
-    """No subprocess vector may start with a bare `python` / `python3`."""
+    """No subprocess vector may start with a bare `python` / `python3`.
+
+    Read through `read_sources`, because the walk and the read are two moments.
+    On 2026-08-30 a parallel agent's scratch file existed for the first and not
+    the second, and this test died with FileNotFoundError - a crash inside the
+    guard, reported as though the guard had caught something. What it skipped is
+    named rather than dropped, so the sentence below stays true about the corpus
+    it actually read.
+    """
     violations = []
-    for path in _python_files():
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    scanned = 0
+    vanished: list[Path] = []
+    for path, source in read_sources(_python_files(), vanished):
+        scanned += 1
+        tree = ast.parse(source, filename=str(path))
         for lineno, name in _bare_interpreter_calls(tree):
             violations.append(f"{path.relative_to(ROOT).as_posix()}:{lineno}: spawns {name!r}")
 
     assert not violations, (
-        f"{len(violations)} subprocess call(s) launch a bare interpreter. On a host with "
+        f"{len(violations)} subprocess call(s) launch a bare interpreter, over "
+        f"{scanned} file(s) read ({len(vanished)} vanished mid-walk). On a host with "
         f"only `python3` these raise FileNotFoundError; where the name does resolve, the "
         f"child runs outside the pinned environment and the result proves nothing. "
         f"Use `sys.executable`:\n  " + "\n  ".join(violations)

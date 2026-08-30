@@ -109,11 +109,19 @@ def _load_principles(brain_root: Path | None) -> list[dict]:
         kw = fm.get("keywords") or []
         if not isinstance(kw, (list, tuple, set)):
             kw = [kw]
+        # `or`, not a `.get` default, for the same reason the `keywords` comment
+        # gives two lines up: a key written with no value (`title:` alone on its
+        # line) is PRESENT and parses to None, so the default never applies.
+        # MEASURED 2026-08-30 on frontmatter `title:\nkeywords: [negotiation]`:
+        # the returned item carried `title: None`, which renders as the literal
+        # "None" in a /meeting-prep or /deal-strategy citation. `confidence`
+        # carried the identical trap and fed a ranking sort, so it is fixed
+        # beside it.
         out.append({
             "slug": f.stem,
-            "title": fm.get("title", f.stem),
+            "title": fm.get("title") or f.stem,
             "keywords": [str(k) for k in kw],
-            "confidence": fm.get("confidence", ""),
+            "confidence": fm.get("confidence") or "",
         })
     return out
 

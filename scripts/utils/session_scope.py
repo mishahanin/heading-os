@@ -28,6 +28,18 @@ That is a real limit, not an oversight: this workspace's own standards send
 edits through the dedicated tools, and a caller must SAY how much it narrowed
 rather than quietly shrink. Under-reporting coverage you announce beats
 over-claiming coverage you do not have.
+
+**A session is its parent transcript PLUS its subagents' sidecars.** Claude Code
+records a dispatched agent's tool calls in
+`<transcript-dir>/<session-id>/subagents/agent-*.jsonl`, and the parent
+transcript never contains them. Reading only the file the hook hands over
+therefore attributes every subagent write to nobody. MEASURED 2026-08-30 on this
+workspace: of 80 changed files, the parent transcript alone kept 43 and dropped
+37 as another author's - and all 37 were written by three of that same session's
+own subagents. Truly foreign: zero. The union over the parent and its 106
+sidecars kept all 80. A guard silently skipping 46% of the changed set is the
+`.claude/rules/scope-claims.md` defect exactly: a narrowed check reading as a
+complete one.
 """
 from __future__ import annotations
 
@@ -45,17 +57,24 @@ WRITING_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 TRANSCRIPT_ENV = "CLAUDE_TRANSCRIPT_PATH"
 
 
-def _blocks(line: str):
-    """The content blocks of one transcript line, or nothing it cannot parse."""
+def _blocks(line: str) -> tuple[bool, list]:
+    """`(the line parsed as JSON, its content blocks)`.
+
+    The two answers are separate because "no blocks" and "no JSON" are the same
+    empty list and must not be. `files_written` needs the first flag to tell a
+    transcript that recorded no writes from one it could not read at all.
+    """
     try:
         entry = json.loads(line)
     except ValueError:
-        return []
+        return False, []
+    if not isinstance(entry, dict):
+        return False, []
     message = entry.get("message")
     if not isinstance(message, dict):
-        return []
+        return True, []
     content = message.get("content")
-    return content if isinstance(content, list) else []
+    return True, (content if isinstance(content, list) else [])
 
 
 def files_written(transcript: Path | str | None) -> set[Path] | None:
@@ -63,11 +82,70 @@ def files_written(transcript: Path | str | None) -> set[Path] | None:
 
     None is the honest answer for a missing or unreadable transcript, and it is
     distinct from `set()`, which asserts the session wrote nothing.
+
+    "This session" spans the parent transcript AND the sidecars its subagents
+    wrote (see the module docstring). A session that dispatched no agent has no
+    sidecar directory, which is the ordinary case and changes nothing here.
+
+    Unknown propagates from either layer. A sidecar that cannot be read or holds
+    no parseable JSON makes the write set unknowable, so the answer is None and
+    the caller widens back to everything - the same rule the parent transcript
+    already obeyed. A corrupt LINE is a different thing and keeps the existing
+    policy unchanged: `_scan` skips it and still collects its siblings.
     """
     if not transcript:
         return None
     path = Path(transcript)
+    found = _scan(path)
+    if found is None:
+        return None
+    for sidecar in _subagent_transcripts(path):
+        theirs = _scan(sidecar)
+        if theirs is None:
+            return None
+        found |= theirs
+    return found
 
+
+# `_scan` and `_subagent_transcripts` sit BELOW their caller on purpose.
+# `tests/test_session_scope_line_splitting.py` guards the memory and
+# line-splitting properties by slicing this source between the two definitions
+# that bracket them, so the streaming loop has to stay inside that region to
+# keep being guarded. Hoisting either helper above its caller would leave that
+# assertion measuring a slice with no loop in it, which passes nothing.
+#
+# Do not name either bracketing marker verbatim in this file's prose. The slice
+# is found by a plain substring search, so a comment quoting the closing marker
+# IS the closing marker and truncates the guarded region to nothing - measured
+# here 2026-08-30, on the first draft of this very comment.
+
+
+def _subagent_transcripts(transcript: Path) -> list[Path]:
+    """This session's subagent sidecars, newest layout, sorted for determinism.
+
+    Derived from the transcript path handed in, never from the environment or a
+    fixed root: `<dir>/<session-id>.jsonl` implies `<dir>/<session-id>/subagents/`.
+    That derivation IS the session scoping - a sidecar under a different session
+    id lives under a different directory and is never reached, so widening the
+    parent's view does not widen it to another author's work.
+
+    A missing directory is the normal case for a session that dispatched no
+    agent, and answers with no files rather than an error.
+    """
+    directory = transcript.parent / transcript.stem / "subagents"
+    try:
+        return sorted(directory.glob("agent-*.jsonl"))
+    except OSError:
+        return []
+
+
+def _scan(path: Path) -> set[Path] | None:
+    """One transcript file's writes, or None when that file could not be told.
+
+    The whole reader, unchanged, factored out of `files_written` so the parent
+    transcript and each subagent sidecar are read by ONE policy rather than two.
+    A second copy is the one that stops being fixed.
+    """
     # Streamed, never `read_text().splitlines()`, for TWO reasons - and the
     # second is a correctness bug, not a resource one.
     #
@@ -90,11 +168,29 @@ def files_written(transcript: Path | str | None) -> set[Path] | None:
         handle = path.open(encoding="utf-8", errors="replace")
     except OSError:
         return None
+    # A MALFORMED transcript is the third case the docstring promises None for,
+    # and until 2026-08-30 the code could not produce it: every line failed to
+    # parse, `found` stayed empty, and the caller was handed `set()`. Measured
+    # on a file holding "this is not json\n{nope\n\n": `files_written` answered
+    # `set()` where the module's stated invariant says None, and `narrow` then
+    # answered `([], 1)` - every candidate dropped as another author's, so the
+    # caller checked NOTHING while believing scope was established. That is the
+    # exact "I could not tell read as nothing was touched" failure this module
+    # exists to refuse.
+    #
+    # The signal is whether ANY line parsed as JSON, not whether any write was
+    # found: a real session that only read files has parseable lines and no
+    # writes, and `set()` is the right, honest answer there.
+    saw_content = False
+    parsed_any = False
     with handle:
         for line in handle:
             if not line.strip():
                 continue
-            for block in _blocks(line):
+            saw_content = True
+            parsed, blocks = _blocks(line)
+            parsed_any = parsed_any or parsed
+            for block in blocks:
                 if not isinstance(block, dict) or block.get("type") != "tool_use":
                     continue
                 if block.get("name") not in WRITING_TOOLS:
@@ -105,6 +201,8 @@ def files_written(transcript: Path | str | None) -> set[Path] | None:
                 target = data.get("file_path")
                 if isinstance(target, str) and target:
                     found.add(Path(target))
+    if saw_content and not parsed_any:
+        return None
     return found
 
 

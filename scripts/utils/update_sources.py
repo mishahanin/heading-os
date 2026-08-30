@@ -15,10 +15,29 @@ class SourceError(Exception):
 
 
 def _get_json(url: str) -> dict[str, Any]:
-    req = urllib.request.Request(url, headers={"User-Agent": "heading-os-update-manager"})  # noqa: S310 - https literal
+    # The scheme is CHECKED, not asserted. Both suppressions below used to be
+    # justified with "https literal", and `url` is a caller-supplied parameter:
+    # nothing enforced the scheme, so an `http://` or `file:///etc/passwd` URL
+    # would have been opened under an annotation claiming it was a vetted
+    # literal. The guard is what makes the justification true.
+    if not url.startswith("https://"):
+        raise SourceError(f"refusing a non-https source URL: {url!r}")
+    req = urllib.request.Request(url, headers={"User-Agent": "heading-os-update-manager"})  # noqa: S310 - https enforced above
     try:
-        with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310 - https literal
-            return json.loads(resp.read().decode("utf-8"))
+        with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310 - https enforced above
+            body = json.loads(resp.read().decode("utf-8"))
+        # The annotation says dict; `json.loads` says whatever the body was. A
+        # 200 whose body is a JSON array or scalar (a misbehaving proxy, an API
+        # change, a JSON error page) made `latest_version` raise
+        # `AttributeError: 'list' object has no attribute 'get'` and
+        # `github_asset_url` raise KeyError/TypeError - none of them SourceError,
+        # so the update manager, which catches SourceError to mark ONE component
+        # unresolved, lost the whole check instead. SourceError's own docstring
+        # already says "cannot be reached or parsed"; this puts it in code.
+        if not isinstance(body, dict):
+            raise SourceError(
+                f"{url} returned {type(body).__name__}, not a JSON object")
+        return body
     except HTTPError as exc:
         raise SourceError(f"HTTP {exc.code} for {url}") from exc
     except URLError as exc:
@@ -59,9 +78,15 @@ def latest_version(spec: dict[str, Any]) -> str:
 def github_asset_url(spec: dict[str, Any], arch: str = "amd64") -> str | None:
     """URL of the latest-release linux/<arch> plugin tarball, or None."""
     data = _get_json(f"https://api.github.com/repos/{spec['repo']}/releases/latest")
-    for asset in data.get("assets", []):
-        name = asset["name"].lower()
+    for asset in data.get("assets") or []:
+        # `.get`, not `asset["name"]`: an asset entry missing `name` (or not a
+        # mapping at all) raised KeyError/TypeError out of a function whose only
+        # documented failure is SourceError. An asset this loop cannot read is
+        # an asset that does not match.
+        if not isinstance(asset, dict):
+            continue
+        name = str(asset.get("name", "")).lower()
         if "linux" in name and arch in name and name.endswith(".tar.gz") \
                 and "no-plugin" not in name:
-            return asset["browser_download_url"]
+            return asset.get("browser_download_url")
     return None

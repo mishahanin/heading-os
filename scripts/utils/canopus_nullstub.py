@@ -127,7 +127,22 @@ class Stub:
         return isinstance(other, Stub)
 
     def __hash__(self):
-        return id(self)
+        # Constant, because `__eq__` above is True for any other Stub and Python
+        # requires equal objects to hash equally. This returned `id(self)`, so
+        # two stubs compared equal while landing in different buckets: MEASURED
+        # 2026-08-30, `s1 == s2` was True, `s1 in {s2}` was False, `{s1, s2}`
+        # kept both, and `{s1: "x"}[s2]` raised KeyError. Set and dict lookups
+        # over stubs silently disagreed with the equality the whole vacuity
+        # reading rests on. The comment on `__eq__` argues its design carefully
+        # and never reaches the hash, which is what marks this unconsidered
+        # rather than deliberate.
+        #
+        # A constant cannot make a real-value assert pass: `stub in {42}` still
+        # misses, because `hash(Stub)` is not `hash(42)`. It only makes
+        # stub-to-stub membership agree with stub-to-stub equality, and that
+        # pair already reads the same under BOTH value sets - so the vacuity
+        # verdict is unchanged either way.
+        return hash(Stub)
 
     def __str__(self):
         return object.__getattribute__(self, "_values")["item"]

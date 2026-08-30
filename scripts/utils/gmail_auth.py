@@ -53,6 +53,7 @@ def get_service():
     from scripts.utils.optdeps import require
 
     require("google", extra="ai-extra")
+    from google.auth.exceptions import RefreshError
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
@@ -79,8 +80,26 @@ def get_service():
             creds = None
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+            except RefreshError as exc:
+                # A REVOKED grant does not surface where the comment above says
+                # it does. `from_authorized_user_file` succeeds on one - the
+                # file is valid JSON and carries a refresh_token - and the
+                # revocation appears only when this call reaches Google, as
+                # `google.auth.exceptions.RefreshError`. That is a
+                # `GoogleAuthError`, not a `ValueError`, and it sat outside
+                # every handler: the operator of a revoked grant got exactly
+                # the outcome the block above says was fixed, a traceback
+                # instead of a re-authorisation, on a headless machine where
+                # the traceback is the whole failure. MEASURED 2026-08-30 with
+                # a credentials object whose `refresh` raises RefreshError - it
+                # propagated straight out of `get_service`.
+                print(f"gmail_auth: refreshing the saved token at {token} "
+                      f"failed ({type(exc).__name__}: {exc}); re-authorising.",
+                      file=sys.stderr)
+                creds = None
+        if not creds or not creds.valid:
             secrets = creds_path()
             if not os.path.exists(secrets):
                 raise FileNotFoundError(

@@ -23,6 +23,11 @@
   OSError sibling and not a ``URLError``, so a hanging endpoint escaped the
   ``SourceError`` contract the whole update check is built on.
 
+* ``update_sources._get_json`` carried two ``# noqa: S310 - https literal``
+  suppressions over a ``url`` that is a caller-supplied parameter, so the
+  justification was a claim rather than a check and ``file:///etc/passwd``
+  would have been opened under it (measured 2026-08-30).
+
 * ``workspace.load_exec_registry`` and ``load_business_registry`` answered a
   CORRUPT registry with the same silent empty result as an absent one.
 
@@ -328,16 +333,40 @@ def dead_socket():
 
 
 def test_a_hanging_endpoint_raises_the_declared_error(dead_socket, monkeypatch):
-    """TimeoutError is an OSError sibling, not a URLError: it escaped."""
+    """TimeoutError is an OSError sibling, not a URLError: it escaped.
+
+    The URL under test is https, because `_get_json` now refuses anything else.
+    The hanging socket is still reached over http, and that split is the point.
+    Measured 2026-08-30 against this same accept-and-never-answer listener:
+
+        http  -> TimeoutError('timed out')                       (raw, no URLError)
+        https -> URLError(TimeoutError('_ssl.c:999: The handshake
+                 operation timed out'))
+
+    urllib wraps a connect/handshake failure as URLError inside `do_open`, so an
+    https loopback socket times out in the TLS handshake and arrives at a clause
+    `_get_json` has ALWAYS had. Pointing this test at an https dead socket would
+    have made it pass against the code still carrying the defect. Only a timeout
+    at the READ stage, once the request is on the wire, escapes both clauses as a
+    bare TimeoutError, so the transport double below puts the real request on the
+    real hanging socket while the argument under test keeps its https scheme.
+    """
     real = urllib.request.urlopen
     monkeypatch.setattr(urllib.request, "urlopen",
-                        lambda req, timeout=20: real(req, timeout=2))
+                        lambda req, timeout=20: real(dead_socket, timeout=2))
 
     with pytest.raises(us.SourceError, match="network error"):
-        us._get_json(dead_socket)
+        us._get_json("https://api.github.com/repos/acme/tool/releases/latest")
 
 
 def test_a_bad_json_body_is_still_its_own_message(monkeypatch):
+    """An unreadable body keeps its own message, not the network one.
+
+    The URL moved from http to https on 2026-08-30 for the scheme guard below.
+    It is a transport-free test either way: `urlopen` is replaced outright, so
+    the scheme decides nothing here except whether the call gets past the guard
+    to the clause it was written to measure.
+    """
     class _R:
         def __enter__(self):
             return self
@@ -351,7 +380,66 @@ def test_a_bad_json_body_is_still_its_own_message(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: _R())
 
     with pytest.raises(us.SourceError, match="bad JSON"):
-        us._get_json("http://x/y")
+        us._get_json("https://x/y")
+
+
+# ============================================================
+# The scheme the suppression only claimed
+# ============================================================
+
+@pytest.fixture
+def recorded_urlopen(monkeypatch):
+    """Record every URL handed to urlopen, and answer `{}`. Never dials out."""
+    seen: list[str] = []
+
+    class _R:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b"{}"
+
+    def _fake(req, timeout=20):
+        seen.append(req.full_url)
+        return _R()
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake)
+    return seen
+
+
+@pytest.mark.parametrize("url", [
+    "http://example.invalid/x",
+    "file:///etc/passwd",
+    "ftp://example.invalid/x",
+])
+def test_a_non_https_source_url_never_reaches_urlopen(url, recorded_urlopen):
+    """Both `# noqa: S310` suppressions were justified "https literal", and
+    `url` is a caller-supplied parameter: nothing checked it. `urlopen` honours
+    `file:` and `ftp:`, so the annotation claiming a vetted literal sat over a
+    call that would have read `/etc/passwd` or fetched a plaintext body and
+    parsed it as the update manager's answer. Measured 2026-08-30.
+
+    The assertion is that urlopen is never CALLED, not merely that the error is
+    raised: a guard placed after the open would still raise and still have read
+    the file.
+    """
+    with pytest.raises(us.SourceError, match="non-https"):
+        us._get_json(url)
+
+    assert recorded_urlopen == [], "the refused URL was opened anyway"
+
+
+def test_an_https_url_is_not_refused_by_the_scheme_check(recorded_urlopen):
+    """The negative control. A guard that refuses everything reads identically
+    to a working one from the three tests above, and would take the whole update
+    check offline, since every URL `latest_version` and `github_asset_url` build
+    is https.
+    """
+    assert us._get_json("https://example.invalid/x") == {}
+    assert recorded_urlopen == ["https://example.invalid/x"]
 
 
 # ============================================================

@@ -69,8 +69,19 @@ USING_LIBYAML = _Loader is getattr(yaml, "CSafeLoader", None)
 def safe_load(stream: str | bytes | IO[str] | IO[bytes]) -> Any:
     """Drop-in replacement for ``yaml.safe_load`` that prefers the C parser.
 
-    Raises ``yaml.YAMLError`` on malformed input exactly as ``yaml.safe_load`` does,
-    so existing fail-closed handlers keep working unchanged.
+    Raises ``yaml.YAMLError`` on MOST malformed input, and not on all of it. On a
+    libyaml build (``USING_LIBYAML``) two tab cases that ``yaml.safe_load``
+    rejects with a ScannerError parse cleanly here; see the module docstring for
+    the measured list. **Do not build a fail-closed handler on
+    ``except yaml.YAMLError`` alone** - carry your own value check, as
+    ``load_routing_map`` does.
+
+    This paragraph read "exactly as ``yaml.safe_load`` does" until 2026-08-30,
+    contradicting the module docstring above it and inviting, via ``help()`` or
+    an IDE tooltip, precisely the handler the module docstring says not to write.
+    Measured on this build: ``yaml.safe_load("crm/:\\tprivate")`` raises
+    ScannerError, ``yamlio.safe_load`` of the same string returns
+    ``{'crm/': 'private'}``.
     """
     # Suppressed below because _Loader is CSafeLoader or SafeLoader and nothing else —
     # the same safe tag set yaml.safe_load() binds, so no arbitrary object construction.

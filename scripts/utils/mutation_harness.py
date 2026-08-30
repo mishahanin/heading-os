@@ -40,11 +40,22 @@ harness, not a finding.
 from __future__ import annotations
 
 import os
-import resource
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+try:
+    import resource
+except ImportError:  # pragma: no cover - POSIX is the only platform CI runs
+    # `resource` is POSIX-only, so a bare `import resource` made this module
+    # unimportable on precisely the platforms the docstring above promises to
+    # degrade for, and the `os.name != "posix"` branch in `run_mutations` was
+    # dead code that could never print its note. MEASURED 2026-08-30 by hiding
+    # `resource` from the import system: `import scripts.utils.mutation_harness`
+    # raised ModuleNotFoundError. The address-space bound is now optional; the
+    # wall clock, which needs nothing, still applies.
+    resource = None
 
 DEFAULT_TIMEOUT_S = 300
 DEFAULT_MEMORY_LIMIT_GB = 4
@@ -61,9 +72,20 @@ def _limit_child(memory_limit_bytes: int):
 
 
 def _clear_pycache(root: Path) -> None:
-    """Stale bytecode makes a real mutation look like a caught one."""
-    subprocess.run(["find", str(root), "-name", "__pycache__", "-type", "d",
-                    "-exec", "rm", "-rf", "{}", "+"], capture_output=True)
+    """Stale bytecode makes a real mutation look like a caught one.
+
+    `find` is used where it exists because it walks a repo with a `.venv` in it
+    far faster than Python can. Where it does not, the walk happens here rather
+    than not at all: a silent no-op wipe is the stale-bytecode trap this
+    function exists to close.
+    """
+    if shutil.which("find"):
+        subprocess.run(["find", str(root), "-name", "__pycache__", "-type", "d",
+                        "-exec", "rm", "-rf", "{}", "+"], capture_output=True)
+        return
+    for cache in Path(root).rglob("__pycache__"):
+        if cache.is_dir():
+            shutil.rmtree(cache, ignore_errors=True)
 
 
 def run_tests(root: Path, tests, *, timeout: int, memory_limit_bytes: int,
@@ -86,7 +108,7 @@ def run_tests(root: Path, tests, *, timeout: int, memory_limit_bytes: int,
         _clear_pycache(root)
     test_args = [tests] if isinstance(tests, str) else list(tests)
     kwargs = {}
-    if os.name == "posix" and memory_limit_bytes:
+    if os.name == "posix" and resource is not None and memory_limit_bytes:
         kwargs["preexec_fn"] = _limit_child(memory_limit_bytes)
     try:
         proc = subprocess.run(
@@ -117,7 +139,7 @@ def run_mutations(root, tests, mutations, *, timeout: int = DEFAULT_TIMEOUT_S,
     """
     root = Path(root)
     limit = memory_limit_gb * 1024 ** 3
-    if os.name != "posix":
+    if os.name != "posix" or resource is None:
         print("note: no address-space limit on this platform; the wall clock "
               f"({timeout}s) is the only bound", file=sys.stderr)
 

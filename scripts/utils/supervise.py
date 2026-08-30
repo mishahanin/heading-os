@@ -195,11 +195,41 @@ def run_supervised(
     start = time.monotonic()
     log_fd, log_path = tempfile.mkstemp(prefix="supervise-", suffix=".log")
 
-    proc = subprocess.Popen(
-        list(cmd), cwd=cwd, env=env,
-        stdout=log_fd, stderr=subprocess.STDOUT,
-        start_new_session=True,  # own process group -> killable as a unit
-    )
+    # The spawn is guarded, because the function's contract is a VERDICT DICT
+    # and `Popen` raises before any verdict exists. Measured 2026-08-30:
+    # `run_supervised(["/nonexistent-binary-jamesbond"])` raised
+    # FileNotFoundError straight past every caller written against
+    # `verdict["state"]`, `os.close(log_fd)` never ran so the descriptor leaked,
+    # and the mkstemp'd log was left in /tmp with no `log_path` returned to find
+    # it by. A missing binary is an ordinary failure of the step, reported the
+    # same way any other failure is.
+    try:
+        proc = subprocess.Popen(
+            list(cmd), cwd=cwd, env=env,
+            stdout=log_fd, stderr=subprocess.STDOUT,
+            start_new_session=True,  # own process group -> killable as a unit
+        )
+    except (OSError, IndexError) as exc:
+        # IndexError, not only OSError: an empty command list reaches
+        # `executable = args[0]` inside subprocess and raises there. Measured
+        # 2026-08-30, `run_supervised([])` escaped an OSError-only clause with
+        # the same leaked descriptor and stranded temp file. `schedule._run`
+        # carries the same pair for the same reason.
+        os.close(log_fd)
+        Path(log_path).unlink(missing_ok=True)
+        verdict = {
+            "state": "failed",
+            "exit_code": None,
+            "postcondition_ok": None,
+            "elapsed_s": round(time.monotonic() - start, 1),
+            "stalled_s": 0.0,
+            "tail": "",
+            "reason": f"could not start {cmd[0] if cmd else '(empty command)'}: {exc}",
+            "log_path": "",
+            "label": label,
+        }
+        _write_status(status_path, verdict)
+        return verdict
     os.close(log_fd)
 
     last_size = 0

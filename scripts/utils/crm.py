@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import re
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 # Workspace utilities (lazy-imported via the public functions; we resolve
@@ -54,6 +54,16 @@ from scripts.utils.markdown import parse_frontmatter_str as _parse_frontmatter  
 from scripts.utils.markdown import frontmatter_list
 
 
+def _decoded_stderr(exc) -> str:
+    """The stderr of a failed subprocess as text, whatever its capture mode."""
+    raw = getattr(exc, "stderr", None)
+    if raw is None:
+        return str(exc)
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    return str(raw).strip() or str(exc)
+
+
 def try_commit(commit_fn, repo: Path, files, message: str, label: str) -> bool:
     """Run `commit_fn(repo, files, message)`; return whether it landed.
 
@@ -69,7 +79,17 @@ def try_commit(commit_fn, repo: Path, files, message: str, label: str) -> bool:
     try:
         commit_fn(repo, files, message)
     except subprocess.CalledProcessError as exc:
-        detail = exc.stderr.decode().strip() if getattr(exc, "stderr", None) else exc
+        # `CalledProcessError.stderr` is `str` when the child ran with
+        # `text=True` or an `encoding=`, and `bytes` otherwise. This called
+        # `.decode()` unconditionally, so a str stderr raised `AttributeError`
+        # INSIDE the handler and escaped the very function whose contract is to
+        # turn a commit failure into a boolean - skipping the caller's
+        # INCOMPLETE path entirely. MEASURED 2026-08-30 with a `commit_fn`
+        # raising `CalledProcessError(1, "git", stderr="fatal: nope")`:
+        # `AttributeError: 'str' object has no attribute 'decode'`. `commit_fn`
+        # is an injected callable, so the capture mode is the caller's choice
+        # and this function does not get to assume one.
+        detail = _decoded_stderr(exc)
         print(f"Warning: git commit for the {label} repo failed - commit manually.")
         print(f"  {detail}")
         return False
@@ -221,17 +241,33 @@ def _cadence_override(raw, file_name: str) -> int | None:
     single bad record falls back to its type default instead of taking the whole
     scan down with it. The bad value is named on stderr, because silently
     treating `cadence: 7 days` as absent is the other half of the same defect.
+
+    A NEGATIVE number is unusable in the same way `7 days` is. The tolerant
+    parse accepted any int, and `cadence: -30` - the ordinary typo for `30` -
+    became `red = -30`, so `calculate_health` returns red for
+    `days_since >= -30`, which is every value `last_touch` can hold. MEASURED
+    2026-08-30: a contact touched YESTERDAY came back `('red', 1)` and fed the
+    outreach radar. Zero is untouched and still means "no tracking"; only below
+    zero is rejected. The failure direction matters here - a bad value produced
+    the maximally alarming answer rather than a degraded one, so the contact
+    stays permanently at the top of a list nothing can clear.
     """
     text = str(raw).strip()
     if not text:
         return None
     try:
-        return int(text)
+        value = int(text)
     except ValueError:
         print(f"crm: {file_name} has cadence {text!r}, which is not a whole "
               f"number of days; using the type default for this contact.",
               file=sys.stderr)
         return None
+    if value < 0:
+        print(f"crm: {file_name} has cadence {text!r}, which is negative and "
+              f"would hold the contact permanently red; using the type default "
+              f"for this contact.", file=sys.stderr)
+        return None
+    return value
 
 
 def is_radar_frozen(radar_freeze_until, today=None) -> bool:
@@ -239,7 +275,8 @@ def is_radar_frozen(radar_freeze_until, today=None) -> bool:
 
     THE single implementation. Accepts an ISO date (``YYYY-MM-DD``) or a full
     ISO datetime string, with or without a ``Z``. An empty value means not
-    frozen; an UNPARSEABLE one means frozen, and says so on stderr.
+    frozen; an UNPARSEABLE one means frozen, and says so on stderr. A datetime
+    carrying a time of day covers the whole of its final day (see below).
 
     Failing closed, and the consolidation, are both from 2026-08-24. This
     docstring used to end "Matches the freeze semantics already honored by
@@ -266,7 +303,7 @@ def is_radar_frozen(radar_freeze_until, today=None) -> bool:
     # stayed green because it changes nothing on any supported interpreter.
     raw = str(radar_freeze_until).strip()
     try:
-        freeze = datetime.fromisoformat(raw).date()
+        parsed = datetime.fromisoformat(raw)
     except ValueError:
         try:
             freeze = date.fromisoformat(raw)
@@ -275,6 +312,21 @@ def is_radar_frozen(radar_freeze_until, today=None) -> bool:
                   f"is not an ISO date; treating the contact as frozen.",
                   file=sys.stderr)
             return True
+    else:
+        # A time component is rounded UP to the following day, because `today`
+        # is a date and the comparison below is date-granular. Calling
+        # `.date()` on the datetime threw the time away and rounded DOWN, so
+        # `radar_freeze_until: 2026-08-27T18:00:00` compared as
+        # `date(2026,8,27) > date(2026,8,27)` and read UNFROZEN from midnight -
+        # eighteen hours before the recorded instant. MEASURED 2026-08-30:
+        # `is_radar_frozen("2026-08-27T18:00:00", today=date(2026,8,27))`
+        # returned False. That is the fail-OPEN direction this function's own
+        # docstring argues is the dangerous one: a message to someone who was
+        # explicitly frozen. Midnight is left alone, since a freeze expiring at
+        # 00:00 on the 27th really is over for the whole of the 27th.
+        freeze = parsed.date()
+        if (parsed.hour, parsed.minute, parsed.second, parsed.microsecond) != (0, 0, 0, 0):
+            freeze += timedelta(days=1)
     return freeze > today
 
 
@@ -350,7 +402,13 @@ def scan_contacts(config: dict, today=None, contacts_dir: Path | None = None,
 
     Args:
         config: cadence defaults from ``parse_config``.
-        today: optional ``date`` override (defaults to ``datetime.now().date()``).
+        today: optional ``date`` override (defaults to
+            ``datetime.now(get_default_tz()).date()`` -- the CONFIGURED zone,
+            not the host's. This said ``datetime.now().date()``, so a caller
+            who passed that explicitly "to match the default" got a different
+            date from omitting the argument whenever the host clock and the
+            configured zone straddle midnight, and every ``days_since`` and
+            health threshold derived from it shifted by a day).
         contacts_dir: optional path override (defaults to ``get_crm_contacts_dir()``).
         workspace_root: optional workspace root override passed through to
             ``load_entity`` for test fixtures and CEO-only callers.
@@ -835,7 +893,19 @@ def parse_pipeline_stages(pipeline_path: Path) -> dict:
 
 
 def parse_aliases(aliases_path: Path) -> dict:
-    """Parse crm/aliases.md and return {variant_lowercase: canonical_lowercase}."""
+    """Parse the `## Aliases` section of crm/aliases.md.
+
+    Returns {variant_lowercase: canonical_lowercase}, read from that section
+    ONLY. The section ends at the next `## ` heading, which it did not: the flag
+    was set on `## Aliases` and never cleared, so every `### ` heading and every
+    `- ` bullet in every LATER section of the file was ingested as a live alias.
+    MEASURED 2026-08-30 on a file whose `## Aliases` section held Acme and whose
+    `## Retired` section held Oldco: the parse returned `oldco` and `oldco inc`
+    as live aliases, contradicting the heading directly above them. Those feed
+    `compute_stage_aware_cadence` and the stage resolution in `scan_contacts`,
+    so a retired name resolving to a canonical key hands a contact the wrong
+    cadence, or a Won/Lost zero-cadence parking that stops tracking it at all.
+    """
     if not aliases_path.exists():
         return {}
     text = aliases_path.read_text(encoding="utf-8")
@@ -843,8 +913,9 @@ def parse_aliases(aliases_path: Path) -> dict:
     current_canonical = None
     in_aliases_section = False
     for line in text.split("\n"):
-        if line.strip() == "## Aliases":
-            in_aliases_section = True
+        if line.startswith("## "):
+            in_aliases_section = line.strip() == "## Aliases"
+            current_canonical = None
             continue
         if not in_aliases_section:
             continue
@@ -903,12 +974,22 @@ def find_dormancy_candidates(contacts: list, today=None, threshold_days: int = 9
     """Identify contacts that should be auto-demoted to dormant.
 
     Criteria:
-      - status == "active" (or unset, defaults to active)
+      - status not in DORMANCY_EXCLUDED_STATUSES (an unset status defaults to
+        "active", which is not excluded)
       - type not in DORMANCY_EXCLUDED_TYPES
       - last_touch older than threshold_days days
 
     Returns the subset that meet all criteria. CEO approves the batch
     before any status flip happens (this function only proposes).
+
+    The first criterion read `status == "active"`, which is a narrower rule than
+    the code has ever implemented: the filter is an EXCLUSION list, so every
+    other status value reaches it - `prospect`, `pending-review`, and a typo
+    like `actve` alike. MEASURED 2026-08-30: `{"status": "prospect", "type":
+    "partner", "last_touch": "2026-01-01"}` came back as a candidate at
+    `threshold_days=90`. Excluding is the intended shape (the point is to leave
+    already-dormant, closed and blocked records alone), so the sentence moved
+    rather than the filter; the approval step is what catches a typo'd status.
     """
     if today is None:
         today = datetime.now(get_default_tz()).date()

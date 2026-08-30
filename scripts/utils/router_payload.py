@@ -211,14 +211,31 @@ def dirty_sources() -> list[str]:
                   if p.is_relative_to(ROOT)})
     if not rel:
         return []
+    # `-z` and `--no-renames`, because the refusal has to NAME a file the
+    # operator can open.
+    #
+    # MEASURED 2026-08-30, both halves, because only one of them was real:
+    #   * The C-quoting IS reachable. Without `-z`, `git status --porcelain`
+    #     emits a path needing quoting with its escapes intact - a file named
+    #     `od"un.md` arrives as `"ref/od\"un.md"` - and `.strip().strip('"')`
+    #     peeled the outer quotes and left the backslash, naming a path that
+    #     does not exist. `-z` emits the bytes verbatim and needs no unquoting.
+    #   * The rename form is NOT reachable HERE. `git status --porcelain`
+    #     does report `R  old -> new`, but only when the pathspec covers BOTH
+    #     sides; this call passes the declared sources as explicit paths, and a
+    #     pathspec matching one side collapses the record to a plain `D old` or
+    #     `A new`. `--no-renames` is kept anyway, so the guarantee holds if the
+    #     pathspec ever widens to a directory.
+    # The `.strip()` goes with them: it would re-corrupt exactly the
+    # leading/trailing-whitespace names `-z` exists to deliver intact.
     proc = subprocess.run(
-        ["git", "status", "--porcelain", "--", *rel],
+        ["git", "status", "--porcelain", "-z", "--no-renames", "--", *rel],
         cwd=str(ROOT), capture_output=True, text=True, check=False,
     )
     if proc.returncode != 0:
         return []
     dirty: list[str] = []
-    for line in proc.stdout.splitlines():
-        if len(line) > 3:
-            dirty.append(line[3:].strip().strip('"'))
+    for record in proc.stdout.split("\0"):
+        if len(record) > 3:
+            dirty.append(record[3:])
     return dirty

@@ -69,13 +69,13 @@ def test_both_builders_refuse_it(builder):
 
 def test_a_real_session_id_still_builds():
     cmd = terminal.build_tmux_command(
-        "alice", "t", "/srv/workspace", "noop", "2ab651eb-8513-4af5-95e5-d6dbea356c60")
+        "alice", "t", "/srv/workspace", "noop", "bbbbbbbb-0000-4000-8000-000000000001")
     joined = " ".join(cmd)
-    assert "claude --resume 2ab651eb-8513-4af5-95e5-d6dbea356c60" in joined
+    assert "claude --resume bbbbbbbb-0000-4000-8000-000000000001" in joined
 
 
 @pytest.mark.parametrize("good", [
-    "2ab651eb-8513-4af5-95e5-d6dbea356c60",
+    "bbbbbbbb-0000-4000-8000-000000000001",
     "a",
     "0",
     "A1_b-2",

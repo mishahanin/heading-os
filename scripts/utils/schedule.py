@@ -214,6 +214,28 @@ def _install_windows_task(
 
 
 def _uninstall_windows_task(task_name: str) -> bool:
+    """Remove a Windows scheduled task. Idempotent: absent means nothing to do.
+
+    The three platform paths answered the SAME state three different ways.
+    Measured 2026-08-30 with no artifact of any kind present:
+    `uninstall_sync_schedule("jamesbond", target_platform=...)` returned False on
+    windows, False on darwin and True on linux. The module docstring says
+    uninstall is "idempotent (no-op if nothing to remove)" and the boolean is
+    the success signal, so the systemd answer is the one that matches; the other
+    two reported the legacy-teardown no-op that `uninstall_sync_schedule` exists
+    for as a failure.
+
+    `schtasks /delete` exits non-zero for a task that is not there, so the query
+    comes first and only a task that EXISTS is deleted. A missing `schtasks`
+    binary is a different thing again: `_run` reports 127 for it, and "I cannot
+    tell" is not "nothing to remove", so that stays False.
+    """
+    probe = _run(["schtasks", "/query", "/tn", task_name])
+    if probe.returncode == 127:
+        _warn(f"schtasks is not available; cannot tell whether {task_name} exists.")
+        return False
+    if probe.returncode != 0:
+        return True  # nothing to remove
     result = _run(["schtasks", "/delete", "/tn", task_name, "/f"])
     if result.returncode == 0:
         _ok(f"Removed Windows scheduled task: {task_name}")
@@ -307,9 +329,14 @@ def _install_launchd_agent(
 
 
 def _uninstall_launchd_agent(label: str) -> bool:
+    """Remove a launchd user agent. Idempotent: absent plist means nothing to do.
+
+    Returns True for the no-op, matching `_uninstall_systemd_user_timer` and the
+    module docstring. See `_uninstall_windows_task` for the measurement.
+    """
     plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
     if not plist_path.exists():
-        return False
+        return True  # nothing to remove
     uid = os.getuid() if hasattr(os, "getuid") else None
     if uid is not None:
         _run(["launchctl", "bootout", f"gui/{uid}/{label}"])

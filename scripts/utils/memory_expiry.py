@@ -105,6 +105,9 @@ _LINK_RE = re.compile(r"\[[^\]]*?\]\((?P<target>[^)]+)\)")
 # the index points straight at it. Reading uses `_LINK_RE`; removing uses this.
 _POINTER_RE = re.compile(_LINK_RE.pattern + r"[^·\n]*")
 
+# The indent and list marker a line may open with, before any content.
+_PREFIX_RE = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?")
+
 
 def _pointers(text: str) -> list[re.Match]:
     """Every REMOVABLE pointer in ``text``, in order: a link and its trailing
@@ -171,6 +174,10 @@ def strip_index_pointers(index_text: str, names: Iterable[str]) -> str:
         if len(matched) == len(pointers):
             continue  # nothing of substance would survive; drop the line
         body, newline = (line[:-1], line[-1]) if line.endswith("\n") else (line, "")
+        # The line's bullet/indent prefix, taken from the ORIGINAL text: every
+        # removal below happens to the right of it, so it survives the edit and
+        # marks where the line's content begins.
+        prefix = _PREFIX_RE.match(body).group(0)
         for match in reversed(matched):
             body = body[:match.start()] + body[match.end():]
         # Repair the separators the removal left behind: a doubled ` · `, and a
@@ -178,7 +185,15 @@ def strip_index_pointers(index_text: str, names: Iterable[str]) -> str:
         # taken out.
         body = re.sub(r"\s*·\s*(?=·)", "", body)
         body = re.sub(r"·\s*$", "", body).rstrip()
+        # The leading repair used to be `(?<=: )·`, which only fired after a
+        # `Label: ` prefix. The index carries label-less lines too, and MEASURED
+        # 2026-08-30 `strip_index_pointers("- [a](a.md) · [b](b.md)\n", {"a.md"})`
+        # returned `"- · [b](b.md)\n"` - a stray separator hung on the bullet of
+        # an operator-curated index this module may not mangle. Both shapes are
+        # repaired now: the label case by the lookbehind, the label-less case by
+        # stripping a separator that leads the line's content.
         body = re.sub(r"(?<=: )·\s*", "", body)
+        body = prefix + re.sub(r"^\s*·\s*", "", body[len(prefix):])
         # One space either side of every surviving separator. The pointer pattern
         # eats the space that preceded a `·`, so removing a middle pointer would
         # otherwise leave `[a](a.md)· [c](c.md)`.

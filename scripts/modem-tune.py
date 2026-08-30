@@ -258,7 +258,28 @@ def _apply_imei(device, drv, led, cfg, target: str, allow_used: bool) -> int:
     if not allow_used and target in set(led.get("used", [])):
         print(f"{RED}Refusing: {target} already in ledger (never-repeat).{RESET}", file=sys.stderr)
         return 2
-    old = drv.read_imei()
+    # A modem that cannot be READ must not be WRITTEN.
+    #
+    # `read_imei` used to answer "" for a dead channel, so this printed
+    # "(unreadable)" and carried on to `send_egmr` against a device nobody had
+    # reached. Since 2026-08-30 the E5800 driver raises `ModemReadError` on a
+    # failed command, matching its ubus sibling, and the raise then escaped
+    # `_apply_imei` as a traceback: measured with a driver raising
+    # "No route to host", `_apply_imei` propagated it out of a file whose every
+    # other exit is a code. `cmd_status` two hundred lines up already refuses
+    # this way, with the same exit 2.
+    #
+    # Refusing is the substantive point, not the exit code. The old IMEI is
+    # what this function files into `history` and into the never-repeat `used`
+    # list; without it the ledger loses the record of what was replaced, and
+    # the ledger is the only account of which IMEIs have been burned.
+    try:
+        old = drv.read_imei()
+    except ModemReadError as exc:
+        print(f"{RED}Refusing: could not read the current IMEI, so nothing is "
+              f"written and the ledger keeps its record:{RESET} {exc}",
+              file=sys.stderr)
+        return 2
     print(f"{CYAN}Old IMEI:{RESET} {old or '(unreadable)'}\n{CYAN}New IMEI:{RESET} {target}")
     ts = now_iso()
     if old:
@@ -359,13 +380,21 @@ def _wait_for_router(drv, settle: int) -> bool:
     Returns True once a live IMEI is readable, False if `settle` seconds elapse
     first.
 
-    What the guard below actually catches, corrected 2026-08-25: a REFUSED
-    connection does not raise. `modem_ssh.ssh` runs `subprocess.run` without
-    `check=True`, so a booting router's exit-255 stderr comes back as an
-    ordinary string and `read_imei` yields "". The raising cases are a session
-    that hangs past the transport's `timeout` (`subprocess.TimeoutExpired`) and
-    whatever a driver's own parsing raises on a half-formed AT response. Both
-    are swallowed so the poll keeps retrying.
+    What the guard below actually catches, corrected 2026-08-25 and again
+    2026-08-30: `modem_ssh.ssh` runs `subprocess.run` without `check=True`, so
+    a booting router's exit-255 stderr comes back as an ordinary string rather
+    than an exception. The 2026-08-25 note concluded from that "a REFUSED
+    connection does not raise", and half of that stopped being true on
+    2026-08-30: the E5800 driver's `_at` now raises `ModemReadError` on a
+    failed command, matching its ubus sibling, because returning "" made a dead
+    channel indistinguishable from a modem holding no IMEI. So a refusal does
+    reach here as an exception on that driver.
+
+    The other raising cases are unchanged: a session that hangs past the
+    transport's `timeout` (`subprocess.TimeoutExpired`), and whatever a
+    driver's own parsing raises on a half-formed AT response. All of them are
+    swallowed so the poll keeps retrying, which is right HERE and wrong in
+    `_apply_imei`, where a read that failed means the write must not happen.
     """
     deadline = time.time() + settle
     time.sleep(35)

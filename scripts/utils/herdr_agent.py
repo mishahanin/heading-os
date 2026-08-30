@@ -11,8 +11,10 @@ OUTSIDE, by submitting the literal text `/compact` to the terminal that hosts th
 session. The harness then parses it exactly as it would parse the same characters
 typed by hand.
 
-That path is proven rather than assumed. On 2026-08-19, in session
-`10f49ae5-1632-4483-874f-e3a5483afe99`:
+That path is proven rather than assumed. Measured 2026-08-19 in a live session
+(the session id is deliberately not recorded here: it identifies the operator's
+machine and this file ships in the public engine, while the command and its
+outcome are the whole of the evidence):
 
     herdr agent prompt w37:p1 "/compact"
     -> {"type": "agent_prompted", ... "agent_status": "working"}

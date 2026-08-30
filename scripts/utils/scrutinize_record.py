@@ -92,14 +92,29 @@ def _check(row: dict) -> None:
     if role is not None and role not in ROLES:
         raise ValueError(f"unknown role {role!r}")
 
+    # isinstance BEFORE .get, on both of the two dict-shaped columns. Every
+    # other refusal in this function is a ValueError and the docstring promises
+    # only that, but a caller passing a bare string got an AttributeError out of
+    # `.get` instead. Measured 2026-08-30: append_row(kind="currency",
+    # currency="ok") and append_row(kind="verdict", verdict="REPRODUCED",
+    # reproduction="nope") both raised AttributeError, so a caller catching
+    # ValueError to report a rejected row crashed rather than refusing it.
     currency = row.get("currency")
-    if currency is not None and currency.get("result") not in CURRENCY_RESULTS:
-        raise ValueError(f"unknown currency result {currency.get('result')!r}")
+    if currency is not None:
+        if not isinstance(currency, dict):
+            raise ValueError(f"currency must be a mapping, got {type(currency).__name__}")
+        if currency.get("result") not in CURRENCY_RESULTS:
+            raise ValueError(f"unknown currency result {currency.get('result')!r}")
+
+    reproduction = row.get("reproduction")
+    if reproduction is not None and not isinstance(reproduction, dict):
+        raise ValueError(
+            f"reproduction must be a mapping, got {type(reproduction).__name__}")
 
     # The whole point of REPRODUCED / FALSIFIED: the exit codes are observed by
     # the harness, never narrated. A row that cannot show them does not land.
     if verdict in ("REPRODUCED", "FALSIFIED"):
-        repro = row.get("reproduction") or {}
+        repro = reproduction or {}
         before = repro.get("exit_before")
         if not isinstance(before, int) or before == 0:
             raise ValueError(
@@ -157,11 +172,29 @@ def append_row(
     path = record_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     data = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
-    # O_APPEND: a single write under PIPE_BUF is atomic on POSIX, which is what
-    # keeps concurrent judge dispatches from interleaving mid-line.
+    # O_APPEND on a REGULAR FILE guarantees that the seek-to-end and the write
+    # are one operation, so two concurrent judge dispatches cannot overwrite
+    # each other's bytes. It does NOT guarantee a single `write()` lands whole.
+    # The PIPE_BUF atomicity this comment used to cite is defined for pipes and
+    # FIFOs and says nothing about this file.
+    #
+    # So the return of `os.write` is checked rather than assumed. It was
+    # discarded, and a short write silently truncated the row: measured
+    # 2026-08-30 with `os.write` stubbed to take 20 bytes, `append_row` returned
+    # the row as written, the file held `{"run_id": "r", "ts"`, and `iter_rows`
+    # dropped that line on JSONDecodeError and answered []. A verdict row
+    # vanished with nothing raising anywhere, in the one module whose purpose is
+    # not trusting unverified claims of completeness.
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
     try:
-        os.write(fd, data)
+        written = 0
+        while written < len(data):
+            sent = os.write(fd, data[written:])
+            if sent <= 0:
+                raise OSError(
+                    f"short write to {path}: {written} of {len(data)} bytes; "
+                    "the record now holds a truncated row")
+            written += sent
     finally:
         os.close(fd)
     return row

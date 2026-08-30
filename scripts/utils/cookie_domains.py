@@ -45,7 +45,13 @@ Usage:
 
     where, params = host_match_sql("host_key", domain, include_subdomains)
     rows = conn.execute(f"SELECT host_key, name, value FROM cookies WHERE {where}", params)
-    winners, dropped = pick_per_name((r[0], r[1], r[2]) for r in rows)
+    winners, dropped = pick_per_name(((r[0], r[1], r[2]) for r in rows), domain)
+
+`domain` is passed twice on purpose: the SQL selects the candidate rows and
+`pick_per_name` ranks them against the same host. This block used to omit the
+second argument, and it is the only documented call of `pick_per_name` anywhere
+- so every adopter copying it got `TypeError: pick_per_name() missing 1 required
+positional argument: 'domain'` before a single row was read.
 """
 from __future__ import annotations
 
@@ -77,6 +83,18 @@ def host_match_sql(column: str, domain: str, include_subdomains: bool = True):
     `column` is interpolated into SQL and must therefore be a literal the caller
     controls, never operator input. `domain` is always a bound parameter, and
     its LIKE metacharacters are escaped.
+
+    Every leg carries `COLLATE NOCASE`, because SQLite's default LIKE is
+    ASCII-case-insensitive while `=` under the default BINARY collation is not,
+    so the three legs of the OR disagreed about what matches. MEASURED
+    2026-08-30 against a real in-memory table: asking for `example.com` over
+    rows `('EXAMPLE.com','SID')` and `('.EXAMPLE.COM','SID2')` returned only the
+    second - the LIKE leg matched the domain-cookie form while neither `=` leg
+    matched the host-only form. `host_rank` lowercases both sides
+    (`bare = host.lstrip(".").lower()`), so the row the ranker would have picked
+    as rank 0, the exact host, was the one the query never selected. The module
+    exists because two hand-written copies of this rule were wrong; a case rule
+    that changes halfway through the WHERE clause is the same defect.
     """
     if not domain:
         raise ValueError("domain must be non-empty")
@@ -84,10 +102,10 @@ def host_match_sql(column: str, domain: str, include_subdomains: bool = True):
         raise ValueError(f"column must be a plain identifier, got {column!r}")
 
     if not include_subdomains:
-        return f"{column} = ?", (domain,)
+        return f"{column} = ? COLLATE NOCASE", (domain,)
 
     where = (
-        f"{column} = ? OR {column} = ? "
+        f"{column} = ? COLLATE NOCASE OR {column} = ? COLLATE NOCASE "
         f"OR {column} LIKE ? ESCAPE '{LIKE_ESCAPE}'"
     )
     return where, (domain, f".{domain}", f"%.{_escape_like(domain)}")

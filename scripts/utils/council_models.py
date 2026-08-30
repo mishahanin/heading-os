@@ -96,10 +96,17 @@ def _load_config() -> dict:
 
 
 def get_model(provider: str) -> str:
-    """Resolve the model id for one provider (gemini|grok|kimi).
+    """Resolve the model id for one provider named in `PROVIDERS`.
 
     Returns the configured value when present and non-empty, otherwise the
     FALLBACKS baseline. Raises ValueError on an unknown provider name.
+
+    The accepted set is `FALLBACKS`, which is FOUR keys, not the three council
+    voices: `kimi_reasoning` resolves here like any other. This line used to
+    enumerate `(gemini|grok|kimi)`, so a reader of the contract concluded
+    `get_model("kimi_reasoning")` raised - the /scrutinize judge pin, the one
+    caller most likely to be reading it. Deferring to `PROVIDERS` is what stops
+    a fifth pin re-opening the same gap.
     """
     if provider not in FALLBACKS:
         raise ValueError(

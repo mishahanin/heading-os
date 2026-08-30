@@ -137,8 +137,19 @@ def write_env(updates: dict) -> None:
 
 
 def run_setup(checks: list, dry_run: bool) -> None:
-    """Upsert every check spec and write its ping URL back to .env."""
-    api_key = load_env_key()
+    """Upsert every check spec and write its ping URL back to .env.
+
+    A dry run needs no credential. `load_env_key()` `sys.exit`s when `.env` is
+    absent or the key is missing, and it ran BEFORE `dry_run` was consulted -
+    so the preview mode was unavailable in the one situation a preview exists
+    for, a machine where provisioning has not happened yet. MEASURED 2026-08-30
+    against a missing `.env`: `run_setup(specs, dry_run=True)` exited with
+    "ERROR: .env not found" instead of printing the DRY table. The dry path
+    makes no request (`upsert_check` returns `{"ping_url": "<dry-run>"}`
+    without touching `api_key`) and never writes the file, so the key is
+    genuinely unused on it.
+    """
+    api_key = "" if dry_run else load_env_key()
     print(f"Healthchecks.io API base: {API_BASE}")
     print(f"Upserting {len(checks)} checks...")
 

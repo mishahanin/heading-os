@@ -303,6 +303,13 @@ def test_a_missing_meta_table_is_version_zero_not_a_crash():
 # End to end over a synthetic profile
 # ============================================================
 
+# The per-cookie attribute bag `_read_cookies` now carries beside the host and
+# the value. These cases predate it and care about neither, so they pass the
+# neutral bag; the attributes themselves are measured in
+# `tests/test_an_exporter_that_stamped_constants_over_the_real_flags.py`.
+ATTRS = {"path": "/", "secure": False, "httpOnly": False, "sameSite": "Lax"}
+
+
 def _chromium_profile(tmp_path: Path, cookie_rows, schema_version=24) -> Path:
     """A user-data tree the reader accepts: Local State plus Network/Cookies."""
     ud = tmp_path / "User Data"
@@ -314,11 +321,19 @@ def _chromium_profile(tmp_path: Path, cookie_rows, schema_version=24) -> Path:
     conn = sqlite3.connect(db)
     conn.execute("CREATE TABLE meta(key TEXT, value TEXT)")
     conn.execute("INSERT INTO meta VALUES ('version', ?)", (str(schema_version),))
+    # `path` / `is_secure` / `is_httponly` / `samesite` are real Chromium
+    # columns, and `_read_cookies` reads them now that the Playwright export
+    # carries the row's own attributes instead of four stamped constants. A row
+    # tuple may still be the original five fields; the rest default to a plain
+    # non-secure, non-HttpOnly, unspecified-SameSite cookie at `/`, which is
+    # what these tests meant when they did not say.
     conn.execute(
         "CREATE TABLE cookies(host_key TEXT, name TEXT, value TEXT, "
-        "encrypted_value BLOB, expires_utc INT)"
+        "encrypted_value BLOB, expires_utc INT, path TEXT, is_secure INT, "
+        "is_httponly INT, samesite INT)"
     )
-    conn.executemany("INSERT INTO cookies VALUES (?,?,?,?,?)", cookie_rows)
+    padded = [tuple(row) + ("/", 0, 0, -1)[len(row) - 5:] for row in cookie_rows]
+    conn.executemany("INSERT INTO cookies VALUES (?,?,?,?,?,?,?,?,?)", padded)
     conn.commit()
     conn.close()
     return ud
@@ -341,7 +356,11 @@ def test_a_schema_24_profile_yields_the_real_token_not_the_hash(tmp_path, monkey
     cookies, failures = CC._read_cookies("example.com")
 
     assert failures == []
-    assert cookies == {"SID": (".example.com", "REAL-SESSION-VALUE")}
+    assert cookies == {
+        "SID": (".example.com", "REAL-SESSION-VALUE",
+                {"path": "/", "secure": False, "httpOnly": False,
+                 "sameSite": "Lax"}),
+    }
 
 
 def test_the_public_map_stays_flat_name_to_value(tmp_path, monkeypatch, fake_keys):
@@ -469,7 +488,7 @@ def test_a_partial_decryption_failure_refuses_the_write_and_exits_non_zero(
     code, out = _run(
         monkeypatch, capsys,
         ["x.com", "--out", str(store), "--playwright"],
-        {"OK": (".x.com", "v")},
+        {"OK": (".x.com", "v", ATTRS)},
         failures=[("BROKEN", ".x.com", "App-bound v20 encrypted cookie detected")],
     )
 
@@ -506,7 +525,7 @@ def test_the_cli_carries_exact_host_all_the_way_into_the_merge(
     code, _out = _run(
         monkeypatch, capsys,
         ["x.com", "--exact-host", "--out", str(store), "--playwright"],
-        {"fresh": ("x.com", "v")},
+        {"fresh": ("x.com", "v", ATTRS)},
     )
 
     assert code == 0
@@ -522,7 +541,7 @@ def test_the_cli_without_exact_host_still_evicts_the_subdomains(
     code, _out = _run(
         monkeypatch, capsys,
         ["x.com", "--out", str(store), "--playwright"],
-        {"fresh": ("x.com", "v")},
+        {"fresh": ("x.com", "v", ATTRS)},
     )
 
     assert code == 0
@@ -534,7 +553,7 @@ def test_a_clean_read_still_exits_zero(tmp_path, monkeypatch, capsys):
     out_file = tmp_path / "plain.json"
 
     code, _out = _run(monkeypatch, capsys,
-                      ["x.com", "--out", str(out_file)], {"SID": (".x.com", "abc")})
+                      ["x.com", "--out", str(out_file)], {"SID": (".x.com", "abc", ATTRS)})
 
     assert code == 0
     assert json.loads(out_file.read_text()) == {"SID": "abc"}
@@ -551,7 +570,7 @@ def test_a_host_only_cookie_is_not_widened_to_every_subdomain(tmp_path):
     store = tmp_path / "cookies.json"
 
     merged = CC._merge_playwright(
-        store, "google.com", {"SID": ("accounts.google.com", "v")}
+        store, "google.com", {"SID": ("accounts.google.com", "v", ATTRS)}
     )
 
     assert [c["domain"] for c in merged] == ["accounts.google.com"]
@@ -560,7 +579,7 @@ def test_a_host_only_cookie_is_not_widened_to_every_subdomain(tmp_path):
 def test_a_domain_cookie_keeps_its_leading_dot(tmp_path):
     store = tmp_path / "cookies.json"
 
-    merged = CC._merge_playwright(store, "google.com", {"SID": (".google.com", "v")})
+    merged = CC._merge_playwright(store, "google.com", {"SID": (".google.com", "v", ATTRS)})
 
     assert [c["domain"] for c in merged] == [".google.com"]
 
@@ -570,7 +589,7 @@ def test_a_blank_host_falls_back_to_the_asked_for_domain(tmp_path):
     is worse than a conservative one."""
     store = tmp_path / "cookies.json"
 
-    merged = CC._merge_playwright(store, "google.com", {"SID": ("", "v")})
+    merged = CC._merge_playwright(store, "google.com", {"SID": ("", "v", ATTRS)})
 
     assert [c["domain"] for c in merged] == [".google.com"]
 
@@ -585,7 +604,7 @@ def test_exact_host_does_not_evict_the_subdomains_it_never_read(tmp_path):
     ]))
 
     merged = CC._merge_playwright(
-        store, "x.com", {"fresh": ("x.com", "v")}, include_subdomains=False
+        store, "x.com", {"fresh": ("x.com", "v", ATTRS)}, include_subdomains=False
     )
 
     assert {c["name"] for c in merged} == {"sub", "fresh"}
@@ -597,7 +616,7 @@ def test_with_subdomains_the_eviction_is_unchanged(tmp_path):
     store.write_text(json.dumps([{"name": "sub", "domain": ".accounts.x.com"}]))
 
     merged = CC._merge_playwright(
-        store, "x.com", {"fresh": ("x.com", "v")}, include_subdomains=True
+        store, "x.com", {"fresh": ("x.com", "v", ATTRS)}, include_subdomains=True
     )
 
     assert {c["name"] for c in merged} == {"fresh"}
@@ -610,7 +629,7 @@ def test_a_store_that_is_not_utf8_is_treated_as_empty_as_documented(tmp_path):
     store = tmp_path / "cookies.json"
     store.write_bytes(b"\xff\xfe\x00binary")
 
-    merged = CC._merge_playwright(store, "x.com", {"fresh": ("x.com", "v")})
+    merged = CC._merge_playwright(store, "x.com", {"fresh": ("x.com", "v", ATTRS)})
 
     assert [c["name"] for c in merged] == ["fresh"]
 

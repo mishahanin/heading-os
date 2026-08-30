@@ -41,7 +41,11 @@ INVISIBLE_CHARS = (
     "‏"  # Right-to-left mark; sanitizer intentionally lists bidi/invisible chars to strip them  # nosec B613
     "­"  # Soft hyphen
     "⁠"  # Word joiner
-    "﻿"  # Byte order mark (when not at file start)
+    "﻿"  # Byte order mark, at file start included: `.claude/rules/hidden-chars.md`
+         # bans U+FEFF outright and `sanitize()` runs INVISIBLE_PATTERN over the
+         # whole string, so `sanitize("\ufeffhello")` is "hello". The comment
+         # used to read "(when not at file start)", scoping a carve-out the
+         # code has never had.
     "⁢"  # Invisible times
     "⁣"  # Invisible separator
     "⁤"  # Invisible plus

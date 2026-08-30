@@ -66,9 +66,18 @@ def ssh(remote_cmd: str, timeout: int = 30, host: str = None) -> str:
         ]
         p = subprocess.run(cmd, env=env, stdin=subprocess.DEVNULL,
                            capture_output=True, text=True, timeout=timeout)
-        out = (p.stdout or "") + (p.stderr or "")
-        return "\n".join(l for l in out.splitlines()
-                         if "Permanently added" not in l and "Warning: " not in l).strip()
+        # The noise filter belongs to the ssh CLIENT, which writes on stderr.
+        # It used to run over stdout+stderr concatenated, so any line of genuine
+        # router output carrying "Warning: " or "Permanently added" was deleted
+        # before the drivers ever parsed it, with nothing recording the drop.
+        # Concatenating first also glued the last stdout line to the first
+        # stderr line when stdout did not end in a newline, putting real output
+        # inside a line the filter could then judge. Filtering stderr alone, and
+        # keeping stdout verbatim, removes both.
+        out_lines = (p.stdout or "").splitlines()
+        err_lines = [l for l in (p.stderr or "").splitlines()
+                     if "Permanently added" not in l and "Warning: " not in l]
+        return "\n".join(out_lines + err_lines).strip()
     finally:
         try:
             os.unlink(askpass)

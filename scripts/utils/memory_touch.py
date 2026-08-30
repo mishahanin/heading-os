@@ -24,7 +24,18 @@ from pathlib import Path
 from scripts.utils.atomic import atomic_write_text
 from scripts.utils.markdown import parse_frontmatter
 
-FRONTMATTER_RE = re.compile(r"^(---\s*\n)(.*?\n)(---\s*\n)", re.DOTALL)
+# The closing fence may end the FILE, and the block between the fences may be
+# empty. The old pattern was `^(---\s*\n)(.*?\n)(---\s*\n)`, which demanded a
+# newline after the closing fence and at least one line between the fences.
+# MEASURED 2026-08-30: the bytes `---\nmetadata:\n  access_count: 3\n---` (no
+# trailing newline) and `---\n---\n` both raised
+# `TouchError("no frontmatter block found")`, while `parse_frontmatter` - the
+# other frontmatter reader in this very module, used by `touch_if_stale` two
+# functions down - reads the same files without complaint. The two parsers
+# disagreed about what a frontmatter block is, and `TouchError` is reserved for
+# a file that has none at all.
+FRONTMATTER_RE = re.compile(
+    r"^(---[ \t]*\n)(.*?)^(---[ \t]*(?:\n|\Z))", re.DOTALL | re.MULTILINE)
 
 
 class TouchError(ValueError):
@@ -88,12 +99,30 @@ def _bump_frontmatter(text: str, today: str) -> tuple[str, int]:
         for line in block_lines:
             stripped = line.strip()
             if stripped.startswith("access_count:"):
+                # An inline YAML comment is valid on this line, and this
+                # module's docstring invites one by promising comments are kept
+                # byte-for-byte. The parser handed the whole tail to `int()`,
+                # so `access_count: 7  # bumped by cron` raised ValueError, the
+                # except reset the count to 0, and the bump wrote 1 - a file
+                # with real access history silently demoted to the bottom of
+                # recall order, and the comment deleted on the way. MEASURED
+                # 2026-08-30 on exactly that line: it came back
+                # `access_count: 1`. The comment is split off, kept, and put
+                # back; a quoted number is unquoted rather than discarded.
+                raw_value = stripped.split(":", 1)[1]
+                comment = ""
+                cm = re.search(r"\s+#.*$", raw_value)
+                if cm:
+                    comment = cm.group(0)
+                    raw_value = raw_value[:cm.start()]
+                value = raw_value.strip().strip('"').strip("'")
                 try:
-                    current = int(stripped.split(":", 1)[1].strip() or 0)
+                    current = int(value or 0)
                 except ValueError:
                     current = 0
                 new_access_count = current + 1
-                new_block_lines.append(f"{indent}access_count: {new_access_count}")
+                new_block_lines.append(
+                    f"{indent}access_count: {new_access_count}{comment}")
                 found_access = True
             elif stripped.startswith("last_accessed:"):
                 new_block_lines.append(f"{indent}last_accessed: {today}")
@@ -130,9 +159,15 @@ def touch_file(raw_path: str, auto_memory_dir: Path, today: str) -> tuple[int, s
     and put back after it.
     """
     resolved = _resolve(raw_path, auto_memory_dir)
+    # BEFORE the read. `read_text` updates atime on a relatime mount, and the
+    # stat used to run after it, so the atime "restored" was the post-read one
+    # and every touch advanced atime despite the paragraph above saying it does
+    # not. MEASURED 2026-08-30 on this workspace's filesystem: a file whose
+    # atime was three days behind its mtime had atime moved to now by the read
+    # alone.
+    before = resolved.stat()
     text = resolved.read_text(encoding="utf-8")
     new_text, access_count = _bump_frontmatter(text, today)
-    before = resolved.stat()
     atomic_write_text(resolved, new_text)
     os.utime(resolved, (before.st_atime, before.st_mtime))
     return access_count, str(resolved)

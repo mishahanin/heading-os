@@ -111,11 +111,25 @@ def get_workspace_identity() -> dict:
     else:
         try:
             identity = json.loads(identity_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as e:
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
             raise ValueError(
                 f".workspace-identity.json at {identity_file} exists but cannot be parsed: {e}. "
                 "Refusing silent fallback to CEO identity."
             ) from e
+        # Valid JSON of the WRONG SHAPE is a parse failure by the contract this
+        # docstring states ("Returns dict with keys: role, slug, type"), and it
+        # had no check. Measured 2026-08-30 with `[]` in the file:
+        # `is_ceo_workspace()` raised `AttributeError: 'list' object has no
+        # attribute 'get'`, and so did every path helper that resolves through
+        # this - the opaque crash landing far from the hand-edited file that
+        # caused it, instead of the explanatory ValueError designed for exactly
+        # that case.
+        if not isinstance(identity, dict):
+            raise ValueError(
+                f".workspace-identity.json at {identity_file} parsed as "
+                f"{type(identity).__name__}, not an object with role/slug/type. "
+                "Refusing silent fallback to CEO identity."
+            )
     _IDENTITY_CACHE[key] = identity
     return identity
 
@@ -185,8 +199,19 @@ def display_path(path) -> str:
     for getter in (get_data_root, get_workspace_root, get_corporate_root):
         try:
             base = getter()
-        except DataRootError:
+        except (DataRootError, ValueError):
             # No resolvable data/corporate root in this environment; try next base.
+            #
+            # ValueError as well as DataRootError: `get_corporate_root()` calls
+            # `is_ceo_workspace()` -> `get_workspace_identity()`, which raises
+            # ValueError by design on a corrupt `.workspace-identity.json`.
+            # Measured 2026-08-30 with `{invalid` in that file:
+            # `display_path("/etc/hostname")` propagated the ValueError and the
+            # absolute-path fallback was never reached. This helper is what
+            # turns paths into strings for humans, manifests and LOGS, and the
+            # docstring above promises it "degrades to the absolute path rather
+            # than raise"; a logging helper that throws while something is
+            # already broken is the worst possible place to find out.
             continue
         try:
             return str(p.relative_to(base)).replace("\\", "/")
@@ -457,13 +482,32 @@ def get_corporate_repo_path() -> Path:
 
 
 def load_admin_config() -> dict:
-    """Load admin configuration from config/admin.json."""
+    """Load admin configuration from config/admin.json, or `{}` and SAY why.
+
+    An absent file is genuinely no config. An existing-but-unparseable one used
+    to be answered identically and in silence: measured 2026-08-30 with
+    `{invalid` in `<data-config>/admin.json`, this returned `{}` with nothing
+    printed, so `get_admin_slugs()` fell back to `[operator_slug()]` and
+    `load_github_org()` to the operator seam. A typo in a hand-edited file
+    invisibly reverted admin gating and org resolution to their defaults.
+    `_read_registry_or_empty` in this same file already articulates why that is
+    unacceptable for the registries; the same standard applies here.
+    """
     config_path = get_data_config_dir() / "admin.json"
     if config_path.exists():
         try:
-            return json.loads(config_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            pass
+            loaded = json.loads(config_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+            print(f"[workspace] admin config at {config_path} exists but could "
+                  f"not be read ({type(exc).__name__}: {exc}); falling back to "
+                  f"DEFAULT admin gating and org resolution", file=sys.stderr)
+            return {}
+        if not isinstance(loaded, dict):
+            print(f"[workspace] admin config at {config_path} parsed as "
+                  f"{type(loaded).__name__}, not an object; falling back to "
+                  f"DEFAULT admin gating and org resolution", file=sys.stderr)
+            return {}
+        return loaded
     return {}
 
 
@@ -490,13 +534,26 @@ def _read_registry_or_empty(path: Path, what: str) -> dict:
     if not path.exists():
         return {"version": "1.0", "executives": []}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
         print(f"[workspace] {what} at {path} exists but could not be read "
               f"({type(exc).__name__}: {exc}); reporting an EMPTY registry - "
               f"treat every 'no executives' answer this run as unmeasured",
               file=sys.stderr)
         return {"version": "1.0", "executives": []}
+    # The failure taxonomy above had no room for the SHAPE case, so a file
+    # holding valid JSON of the wrong type sailed past the warning machinery and
+    # crashed a caller instead. Measured 2026-08-30 with `[]` in
+    # `<data-root>/admin/executives.json`: `load_fleet()` raised
+    # `AttributeError: 'list' object has no attribute 'get'` from
+    # `load_business_registry().get("executives", [])`. A wrong-shape registry is
+    # a registry that could not be read; route it through the same warning.
+    if not isinstance(loaded, dict):
+        print(f"[workspace] {what} at {path} parsed as {type(loaded).__name__}, "
+              f"not an object; reporting an EMPTY registry - treat every "
+              f"'no executives' answer this run as unmeasured", file=sys.stderr)
+        return {"version": "1.0", "executives": []}
+    return loaded
 
 
 def load_exec_registry() -> dict:
@@ -649,7 +706,16 @@ def _load_routing_map_cached(path: str, mtime_ns: int, size: int) -> dict:
     try:
         with open(path, encoding="utf-8") as fh:
             data = yamlio.safe_load(fh) or {}
-    except (OSError, yaml.YAMLError):
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        # UnicodeDecodeError is a ValueError, NOT an OSError and not a
+        # YAMLError, so one invalid byte in the map escaped both clauses and
+        # crashed the classifier instead of failing closed. Measured 2026-08-30
+        # with `default: \xffprivate` in routing-map.yaml:
+        # `get_routing_destination("crm/x.md")` raised UnicodeDecodeError. This
+        # resolver is called once per tracked file by the push wall and the
+        # engine-tree-clean pre-commit hook, and the docstring above promises
+        # "any read/parse error yields default 'private'" precisely so a
+        # corrupted map cannot take the leak wall down.
         return {"default": "private", "rules": {}}
     # Valid YAML of the WRONG SHAPE is a parse error by any reading the
     # docstring above supports, and it used to raise instead. A `rules:` block

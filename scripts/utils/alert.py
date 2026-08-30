@@ -90,9 +90,25 @@ def _send_telegram(workspace_root: Path, message: str) -> bool:
 
     Returns True on a clean send, False on any failure (missing token,
     unresolvable target, transport/API error). NEVER raises.
+
+    "Never raises" is enforced HERE, not delegated to `telegram_notify`. This
+    function held no handler at all, so any exception out of `notify` - and a
+    transport error is the failure mode this docstring names first - propagated
+    through `alert()` and into the caller, against three separate promises: this
+    line, the module docstring's "degrades to card+log and NEVER raises", and
+    `alert()`'s own "Never raises". MEASURED 2026-08-30 with `notify` raising
+    `OSError("network unreachable")`: `alert("critical", "daemon down")` raised
+    it instead of returning the documented degradation. The callers are
+    watchdogs, so the alert fires exactly when the network is already broken -
+    the one moment the contract has to hold. `_post_card` below already wraps
+    its channel for this reason; the asymmetry was the tell.
     """
     target = _telegram_target(workspace_root)
-    return telegram_notify.notify(target, message)
+    try:
+        return telegram_notify.notify(target, message)
+    except Exception as exc:  # noqa: BLE001 - a channel failure must not stop an alert
+        logger.warning("alert: telegram send failed: %s", exc)
+        return False
 
 
 def _post_card(workspace_root: Path, severity: str, summary: str, detail: str,

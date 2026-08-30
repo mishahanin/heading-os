@@ -144,17 +144,47 @@ def test_stub_bool_carries_the_value():
     assert bool(falsy) is False
 
 
-def test_stub_hash_is_identity_based():
-    """Two stubs sharing one values dict are still distinct for hashing
-    (`__hash__` returns `id(self)`), so a stub can sit in a set or dict key
-    without every stub collapsing into one bucket.
+def test_stub_hash_agrees_with_stub_equality():
+    """Equal objects hash equally. `__eq__` is True for ANY other Stub, so the
+    hash has to be constant.
+
+    This used to assert the opposite -- `hash(first) != hash(second)` -- under a
+    docstring reasoning that identity hashing lets "a stub sit in a set or dict
+    key without every stub collapsing into one bucket". That benefit is
+    unreachable by construction: `__eq__` already declares every stub equal to
+    every other, so two stubs in one set are equal-but-unequally-hashed, which
+    is a violated Python invariant rather than a preserved distinction.
+    MEASURED 2026-08-30 under the old hash: `first == second` was True while
+    `first in {second}` was False, `{first, second}` kept both, and
+    `{first: "x"}[second]` raised KeyError.
+
+    Nothing in production puts a Stub in a set or a dict: every set in
+    `canopus_nullstub` and `canopus_contract` is a `set[str]`, `set[Path]` or
+    `set[tuple[str, str]]`. So the old assertion protected no caller, and the
+    constant costs none.
     """
     from scripts.utils.canopus_nullstub import Stub
 
     values = {"len": 0, "int": 1, "bool": True, "contains": False, "item": "a"}
     first, second = Stub(values), Stub(values)
 
-    assert hash(first) != hash(second)
+    assert first == second
+    assert hash(first) == hash(second)
+    assert first in {second}
+
+
+def test_a_stub_is_still_unequal_to_a_real_value():
+    """The property the vacuity reading rests on, unchanged by the constant.
+
+    A constant hash must not let `assert answer() == 42` or
+    `assert answer() in {42}` start passing.
+    """
+    from scripts.utils.canopus_nullstub import Stub
+
+    stub = Stub({"len": 0, "int": 1, "bool": True, "contains": False, "item": "a"})
+
+    assert (stub == 42) is False
+    assert stub not in {42}
 
 
 def test_a_candidate_validates_its_mode_at_the_door_the_child_uses(monkeypatch):

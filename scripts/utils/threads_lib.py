@@ -263,7 +263,15 @@ def scan_for_archive(threads_root: Path, *, today: date | None = None) -> list[A
         for f in type_dir.glob("*.md"):
             try:
                 t = parse_thread_file(f)
-            except (ValueError, yaml.YAMLError):
+            except (OSError, ValueError, yaml.YAMLError):
+                # OSError too. `parse_thread_file` opens with `read_text`, and
+                # the glob above is a snapshot: an entry that vanishes, turns
+                # unreadable, or is a DIRECTORY named `*.md` raises out of the
+                # read, which is in neither of the other two clauses. Measured
+                # 2026-08-30 against `threads/business/notafile.md/`:
+                # IsADirectoryError aborted the whole scan and BOTH type
+                # directories returned zero candidates. One bad entry must cost
+                # one entry.
                 continue
             if is_quiet(t, today):
                 continue

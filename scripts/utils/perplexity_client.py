@@ -72,7 +72,7 @@ def research(
     )
     try:
         with urllib.request.urlopen(req, timeout=90) as resp:  # nosec B310 - Perplexity API endpoint
-            result = json.loads(resp.read().decode("utf-8"))
+            body = resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"Perplexity API error {e.code}: {body}") from e
@@ -84,6 +84,23 @@ def research(
         # one angle in the orchestrator instead of crashing the whole run.
         raise RuntimeError(f"Perplexity request failed (timeout/socket): {e}") from e
 
-    content = result["choices"][0]["message"]["content"]
-    citations = result.get("citations", [])
+    # An HTTP 200 is not a promise about the body. A non-JSON body raised
+    # `json.JSONDecodeError` and an error payload returned with 200 - `{}`, an
+    # empty `choices`, a `message` with no `content` - raised KeyError or
+    # IndexError, none of which is the `RuntimeError` this function's docstring
+    # tells callers to catch ("urllib errors are converted to RuntimeError so
+    # callers don't sys.exit on a transport failure"). MEASURED 2026-08-30 with
+    # a stubbed 200 carrying `{}`: `KeyError: 'choices'` escaped an
+    # `except RuntimeError` handler as a raw traceback. The shape read sits
+    # inside a classification now, like every transport failure above it.
+    try:
+        result = json.loads(body)
+        content = result["choices"][0]["message"]["content"]
+        citations = result.get("citations", [])
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
+        raise RuntimeError(
+            f"Perplexity answered 200 but not in the shape this client reads "
+            f"({type(e).__name__}: {e}); the first 200 characters were: "
+            f"{body.strip()[:200] or '(empty)'}"
+        ) from e
     return content, citations

@@ -52,6 +52,24 @@ def severity_rank(sev: str) -> int:
     return SEVERITY_ORDER.index(sev) if sev in SEVERITY_ORDER else 0
 
 
+# The signal shape, named. Every producer below returns EXACTLY these keys, and
+# the consumers in scripts/ops-radar.py subscript them with no default, so a dict
+# that is short by one crashes the run rather than reporting a quiet radar.
+#
+# It lived only in this module's docstring until 2026-08-30, which is prose no
+# stub can be held to. A test then handed `autoheal_signals` a hand-built
+# `{"key": ..., "severity": ...}` and `sig["due"]` raised KeyError. It failed in
+# one xdist worker and passed in the next because the stub chose its key with
+# `next(iter(...))` over a set and string hashing is randomized per process: the
+# key was a Tier-A one, and so reached that line at all, for 2 of the 12 members.
+# A fixture, a stub or a new producer now has one object to conform to, and
+# tests/test_a_signal_shape_that_only_a_docstring_promised.py holds every
+# producer in this module to it.
+SIGNAL_KEYS = frozenset({
+    "key", "value", "threshold", "due", "severity", "tier", "summary",
+})
+
+
 # Tier-B (sovereign manual) thresholds.
 BACKUP_UNCOMMITTED_HOURS = 24      # uncommitted work sitting this long is due
 BACKUP_HIGH_HOURS = 48             # ... escalates to high

@@ -89,8 +89,19 @@ def rmtree_force(path: Path | str, *, missing_ok: bool = True) -> None:
     """Remove a tree, retrying once past a read-only file or directory.
 
     `missing_ok` mirrors `Path.unlink`: an absent path is not an error.
+
+    A BROKEN symlink is not absent. `Path.exists()` follows the link, so it
+    answers False for one, and the function returned having removed nothing and
+    raised nothing - the caller was left holding the exact entry it asked to
+    delete. `Path.unlink(missing_ok=True)`, the semantics this docstring claims
+    to mirror, removes the link itself, because unlink operates on the path and
+    not on its target. MEASURED 2026-08-30: after `os.symlink("/nonexistent",
+    link); rmtree_force(link)`, the link was still on disk.
     """
     target = Path(path)
+    if target.is_symlink() and not target.exists():
+        target.unlink()
+        return
     if missing_ok and not target.exists():
         return
     _rmtree(target)

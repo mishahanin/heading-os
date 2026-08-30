@@ -520,7 +520,12 @@ def run(timeout: int, use_cache: bool, transcript=None) -> dict:
     if not paths:
         reason = "no uncommitted Python edits"
         if foreign:
-            reason = f"no uncommitted Python edits by this session ({foreign} by another)"
+            # Same disjunction as `_foreign_note`, and for the same reason: the
+            # scope establishes "no write recorded by this session", which is
+            # another session's file OR a Bash edit made here.
+            reason = (f"no uncommitted Python edits by this session "
+                      f"({foreign} by another session, or edited here "
+                      f"through Bash)")
         if deleted:
             reason += f" ({len(deleted)} deleted, nothing left to run against)"
         return {"status": "idle", "reason": reason, "files": 0,
@@ -564,11 +569,21 @@ def run(timeout: int, use_cache: bool, transcript=None) -> dict:
 
 def _foreign_note(result: dict) -> str:
     """What the scope left out, named. Silence here is how a narrowed check
-    starts reading as a complete one."""
+    starts reading as a complete one.
+
+    The sentence is a disjunction because that is all the method establishes.
+    `session_scope.files_written` reads this session's transcript AND its
+    subagent sidecars for `Write`/`Edit`/`MultiEdit`/`NotebookEdit` calls, so a
+    dropped file is one carrying no such call: another session's work, OR an
+    edit this session made through `Bash`, which records a command and never a
+    path. Until 2026-08-30 this said flatly "written by another session" while
+    the scope read only the parent transcript, and that day it labelled 37 files
+    written by this session's own subagents as a stranger's."""
     count = result.get("skipped_foreign") or 0
     if not count:
         return ""
-    return f" {GRAY}[{count} changed file(s) written by another session, not checked]{RESET}"
+    return (f" {GRAY}[{count} changed file(s) written by another session, or "
+            f"edited here through Bash, not checked]{RESET}")
 
 
 def _contract_note(result: dict) -> str:

@@ -156,3 +156,45 @@ def tracked_paths(patterns, root: Path | None = None, files_only: bool = True):
 def tracked_python_files(directories=("scripts", ".claude"), root: Path | None = None):
     """Every `.py` file under ``directories`` that git does not ignore."""
     return tracked_paths([f"{d}/**/*.py" for d in directories], root)
+
+
+def read_sources(paths, vanished: list | None = None, *, errors: str = "strict"):
+    """Yield `(path, text)` for each path still on disk, skipping and reporting
+    the ones that disappeared between the walk and the read.
+
+    A tree sweep gathers its paths first and reads them afterwards. In a
+    workspace where several agents work against one checkout, a file can be
+    created and deleted inside that window, and `read_text` then raises
+    FileNotFoundError from inside the guard. MEASURED 2026-08-30: a scratch test
+    file a parallel agent wrote under `tests/` and removed moments later killed
+    `tests/test_subprocess_interpreter_guard.py` mid-walk, and the suite reported
+    a guard violation where nothing had been violated.
+
+    Skipping quietly would be the other half of the same defect. The sweep would
+    then hold its verdict over a corpus that shrank underneath it and say
+    nothing, which is the claim `.claude/rules/scope-claims.md` forbids: a
+    narrowed check that prints like a complete one. So a skip WARNS, naming the
+    files, and a caller that wants to put the count in its own assertion message
+    passes a list to collect them.
+
+    Only the vanished case is caught. A permission error, a decoding failure or a
+    directory handed in where a file was expected is a real fault about a file
+    that IS there, and still raises.
+    """
+    skipped: list[Path] = [] if vanished is None else vanished
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8", errors=errors)
+        except FileNotFoundError:
+            skipped.append(path)
+            continue
+        yield path, text
+    if skipped:
+        import warnings
+
+        names = ", ".join(str(p) for p in skipped)
+        warnings.warn(
+            f"{len(skipped)} path(s) vanished between the walk and the read and "
+            f"were not scanned: {names}",
+            stacklevel=2,
+        )

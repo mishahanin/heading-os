@@ -66,8 +66,10 @@ class Mutation:
     """One deliberate break, with the control that proves it is really that break.
 
     `edits` are (relative path, exact old text, new text) triples, applied once
-    each. An anchor that is not present is itself an invalid mutation: it means
-    the author is describing code that is not there.
+    each. An anchor must appear EXACTLY ONCE. Absent means the author is
+    describing code that is not there; ambiguous means the edit lands wherever
+    the anchor happens to come first, which may not be the code the label names.
+    Both are invalid mutations, never `survived` and never `killed`.
     """
 
     label: str
@@ -152,8 +154,24 @@ def run_mutations(mutations: Iterable[Mutation], command: Sequence[str],
                     # tree, and the harness reported a successful restore.
                     saved[path] = (path.read_text(encoding="utf-8"), _digest(path))
                 current = path.read_text(encoding="utf-8")
-                if old not in current:
+                occurrences = current.count(old)
+                if occurrences == 0:
                     invalid = f"anchor not found in {relpath}"
+                    break
+                if occurrences > 1:
+                    # `replace(old, new, 1)` patches the FIRST match, which for
+                    # an anchor that is not unique is whichever function comes
+                    # first in the file. The sibling harness measured the harm
+                    # on 2026-08-26: three mutations landed in
+                    # `_install_windows_task` and `_post_json` instead of their
+                    # targets, so the target code was never mutated and all
+                    # three were reported SURVIVED - a confident wrong verdict
+                    # that sends the reader to weaken a guard that was fine.
+                    # This module exists to make that impossible, and it had the
+                    # `not present` half of the check and not this one.
+                    invalid = (f"anchor matches {occurrences} places in "
+                               f"{relpath}; a mutation that may land somewhere "
+                               f"other than where it was aimed proves nothing")
                     break
                 path.write_text(current.replace(old, new, 1), encoding="utf-8")
 
@@ -163,10 +181,27 @@ def run_mutations(mutations: Iterable[Mutation], command: Sequence[str],
                 invalid = mutation.control(mutated)
 
             if invalid is None:
-                proc = subprocess.run(command, cwd=str(root), env=env,
-                                      capture_output=True, text=True, timeout=timeout)
-                verdict = KILLED if proc.returncode != 0 else SURVIVED
-                results.append(Result(mutation.label, verdict))
+                # A mutation exists to break the code, and "break" includes
+                # "never return": the sibling harness records a mutation that
+                # turned a paging loop into an endless one. The baseline run
+                # above catches `SubprocessError` (which covers TimeoutExpired)
+                # and this one did not, so a hanging mutation raised out of the
+                # function, no `Result` was recorded for it, and EVERY REMAINING
+                # mutation in the batch was dropped - the caller got an
+                # exception where the signature promises `list[Result]`. A
+                # timeout is a CAUGHT mutation: observable behaviour changed,
+                # which is what the probe is looking for. It is labelled so a
+                # hang is never read as a clean assertion failure.
+                try:
+                    proc = subprocess.run(command, cwd=str(root), env=env,
+                                          capture_output=True, text=True,
+                                          timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    results.append(Result(mutation.label, KILLED,
+                                          f"timeout after {timeout}s"))
+                else:
+                    verdict = KILLED if proc.returncode != 0 else SURVIVED
+                    results.append(Result(mutation.label, verdict))
             else:
                 results.append(Result(mutation.label, INVALID, invalid))
         finally:

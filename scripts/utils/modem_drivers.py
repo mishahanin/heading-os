@@ -70,13 +70,35 @@ class E5800Driver(ModemDriver):
     BUS = "cpu"   # embedded Quectel RG650V-EU sits on the `cpu` (MHI) bus
 
     def _at(self, command: str, timeout: int = 3) -> dict:
+        """One AT command over ubus. RAISES when the reply cannot be read.
+
+        It used to convert an unparseable reply into a successful-looking
+        `{"data": <the error text>, "channel_status": False}`, and `read_imei`
+        then ran `parse_at_imei` over that error string and returned `""` - a
+        total transport failure rendered exactly like a modem that answered with
+        no IMEI. That is the outcome `ModemReadError` was created to end, and
+        `_ubus` was rewritten to raise on it while this path was left open.
+        MEASURED 2026-08-30 with the string a failed call really returns,
+        "Command failed: Not found": `read_imei()` returned `""` and said
+        nothing.
+        """
         payload = json.dumps({"cmd": command, "timeout": timeout,
                               "source_flag": 0, "sub_id": 0})
         raw = self._ssh(f"ubus call modem.CPU.AT get_result_AT {shquote(payload)}", 15)
         try:
-            return json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            return {"data": raw, "channel_status": False}
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise ModemReadError(
+                f"the AT channel did not return JSON for {command} "
+                f"({type(exc).__name__}); the reply was: "
+                f"{str(raw).strip()[:200] or '(empty)'}"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise ModemReadError(
+                f"the AT channel returned a {type(parsed).__name__}, not an "
+                f"object, for {command}"
+            )
+        return parsed
 
     def read_imei(self) -> str:
         return parse_at_imei(self._at("AT+GSN").get("data", ""))

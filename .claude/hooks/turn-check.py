@@ -141,8 +141,13 @@ def main() -> int:
     exclusions = []
     foreign = result.get("skipped_foreign") or 0
     if foreign:
+        # A disjunction, because that is what the scope establishes: a dropped
+        # file carries no Write/Edit/MultiEdit/NotebookEdit call in this
+        # session's transcript OR its subagent sidecars. It is another
+        # session's, or an edit this session made through Bash, which records a
+        # command and never a path. See `_foreign_note` in the checker.
         exclusions.append(f"{foreign} changed file(s) written by another session, "
-                          f"not checked")
+                          f"or edited here through Bash, not checked")
     contract = result.get("skipped_contract") or 0
     if contract:
         exclusions.append(f"{contract} frozen-contract file(s) not run: red by "

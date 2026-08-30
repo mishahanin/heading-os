@@ -37,7 +37,12 @@ class Component:
 def load_registry(path: Path) -> list[Component]:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError) as exc:
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        # UnicodeDecodeError is a ValueError, so a byte-level corruption of the
+        # file escaped an OSError/YAMLError pair whose plain intent is "any read
+        # failure becomes RegistryError". Measured 2026-08-30 with b"\xff\xfe"
+        # in the registry: a raw UnicodeDecodeError, past every caller that
+        # catches RegistryError to report a config problem.
         raise RegistryError(f"cannot read registry {path}: {exc}") from exc
 
     if not isinstance(raw, dict):
@@ -62,6 +67,32 @@ def load_registry(path: Path) -> list[Component]:
                 f"component {name!r}: observed entries may not carry an `apply` "
                 "(the manager does not own updates for observed components)"
             )
+        # Every `apply` check below is guarded by `isinstance(apply_block, dict)`,
+        # so before this clause existed a non-mapping value passed ALL of them by
+        # not firing any: `apply: "echo hi"` is truthy, contains neither "cmd"
+        # nor "script" as a key, and satisfies the rollback_cmd and health
+        # invariants vacuously. It was then stored into `Component.apply`, which
+        # is annotated `dict[str, Any] | None`, and `_default_applier` raised
+        # `ValueError: apply block has neither cmd nor script` at APPLY time,
+        # far from the config line that caused it. Same for the other three
+        # fields, which are stored into typed slots with no check at all: an
+        # unquoted `pin: 1.5` arrives from YAML as a float.
+        if apply_block is not None and not isinstance(apply_block, dict):
+            raise RegistryError(
+                f"component {name!r}: `apply` must be a mapping, got "
+                f"{type(apply_block).__name__}"
+            )
+        for field, want, label in (
+            ("health", dict, "a mapping"),
+            ("display", str, "a string"),
+            ("pin", str, "a string"),
+        ):
+            value = body.get(field)
+            if value is not None and not isinstance(value, want):
+                raise RegistryError(
+                    f"component {name!r}: `{field}` must be {label}, got "
+                    f"{type(value).__name__}"
+                )
         # A present apply block must name how to apply -- `cmd` or `script`.
         if isinstance(apply_block, dict) and not ({"cmd", "script"} & set(apply_block)):
             raise RegistryError(

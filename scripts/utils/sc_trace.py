@@ -109,10 +109,17 @@ def read_claims(sources: dict[str, str]) -> dict[str, set[str]]:
 
     A file that will not parse contributes NOTHING and is not an error here: it
     cannot collect under pytest either, so the redness gate already owns it, and
-    raising from this module would reach the shared builder that `approve` and
-    `freeze` both call. Same for a test with no docstring, which is most tests in
-    this workspace: `ast.get_docstring` answers None and a reader that assumes a
-    string raises inside that same builder.
+    raising from this module would take down the whole trace over one bad file.
+    Same for a test with no docstring, which is most tests in this workspace:
+    `ast.get_docstring` answers None and a reader that assumes a string raises
+    the same way.
+
+    The sole consumer is `scripts/sc-trace.py`, which prints a trace and exits
+    non-zero. Until 2026-08-30 this paragraph justified the swallow by "the
+    shared builder that `approve` and `freeze` both call"; the module docstring
+    above records that those two commands were deleted on 2026-08-07, so the
+    rationale pointed at code that no longer exists and the next author had no
+    way to judge whether it still held.
     """
     claims: dict[str, set[str]] = {}
     for name, text in sources.items():

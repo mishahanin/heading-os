@@ -40,6 +40,17 @@ def is_denied(rel_path: str, deny_prefixes=(), deny_segments=()) -> bool:
     Comparison is case-folded: a path whose segment is `Personal` is denied
     exactly as one whose segment is `personal`. Letter-case is never a boundary.
 
+    Case-folded means `str.casefold()`, not `str.lower()`. The two are not the
+    same function: a character whose fold mapping differs from its lowercase
+    mapping slips a `.lower()` comparison entirely. MEASURED 2026-08-30 -
+    `"perſonal".lower()` is `"perſonal"` (unchanged, U+017F LATIN
+    SMALL LETTER LONG S is already lowercase) while `.casefold()` is
+    `"personal"`, so `is_denied("perſonal/todo.md")` returned False while
+    `is_denied("personal/todo.md")` returned True. A one-character bypass of a
+    hard-coded segment, in the module this tree calls the single source of truth
+    for what must never be read. Both sides fold, or the boundary is only as
+    strong as the caller's spelling.
+
     Traversal-safe: `..` is collapsed lexically BEFORE any check, so a path like
     `threads/business/../../_secure/x` resolves to `_secure/x` and still trips
     the deny. A path that still escapes its root after collapse (`../x`) is not a
@@ -49,12 +60,12 @@ def is_denied(rel_path: str, deny_prefixes=(), deny_segments=()) -> bool:
     prefixes = tuple(deny_prefixes) + HARDCODED_DENY_PREFIXES
     segments = set(deny_segments) | set(HARDCODED_DENY_SEGMENTS)
     raw = rel_path.replace("\\", "/").lstrip("/")
-    norm = os.path.normpath(raw).replace("\\", "/").lstrip("/").lower()
+    norm = os.path.normpath(raw).replace("\\", "/").lstrip("/").casefold()
     if norm == ".":
         return False
     if norm == ".." or norm.startswith("../"):
         return True
-    if any(norm.startswith(p.lstrip("/").lower()) for p in prefixes):
+    if any(norm.startswith(p.lstrip("/").casefold()) for p in prefixes):
         return True
-    seg_lower = {s.lower() for s in segments}
-    return any(seg in seg_lower for seg in norm.split("/"))
+    seg_folded = {s.casefold() for s in segments}
+    return any(seg in seg_folded for seg in norm.split("/"))

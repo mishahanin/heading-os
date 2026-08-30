@@ -266,7 +266,17 @@ def compute_memory_defects(memory_dir: Path) -> dict:
           "over_budget": bool,          # memory_md_lines > MEMORY_BUDGET_LINES
           "stale": list[tuple[str,int]],# [(filename, days_old), ...] for >STALE_DAYS
           "orphans": list[str],         # filenames not referenced from MEMORY.md
+          "index_readable": bool,       # MEMORY.md exists and could be read
+          "index_problem": str,         # why not, "" when it could
         }
+
+    BOTH branches return all nine keys. The `"missing"` branch used to return
+    only the first seven, so a caller reading `result["index_readable"]` - the
+    key added precisely because an unreadable index was a blind spot - got a
+    KeyError on exactly the path where the index is most certainly unreadable.
+    MEASURED 2026-08-30: `compute_memory_defects(Path("/nonexistent"))` returned
+    seven keys and `["index_readable"]` raised. The docstring listed seven too,
+    so nothing named the divergence.
     """
     if not memory_dir.is_dir():
         return {
@@ -277,6 +287,8 @@ def compute_memory_defects(memory_dir: Path) -> dict:
             "over_budget": False,
             "stale": [],
             "orphans": [],
+            "index_readable": False,
+            "index_problem": f"{memory_dir} is not a directory",
         }
 
     files = sorted(p for p in memory_dir.glob("*.md") if p.is_file())
@@ -387,7 +399,25 @@ def scan_redundancy(memory_dir, *, threshold=0.86, embedder=None, timeout=120) -
                 return embed(ts, model=model, host=host, timeout=timeout)
         except Exception as e:
             return {"ok": False, "pairs": [], "note": f"embedder unavailable: {e}"}
-    texts = [f.read_text(encoding="utf-8") for f in files]
+    # Every other reader in this module guards `OSError`; this one did not, and
+    # it runs over a directory the auto-retire sweep mutates. MEASURED
+    # 2026-08-30: one memory file at mode 000 raised `PermissionError` straight
+    # out of an advisory check whose contract is to degrade to `ok=False`. A
+    # file that cannot be read is dropped from the pair scan (with `files` kept
+    # in step with `texts`, or every later index would name the wrong file) and
+    # the note says how many went.
+    readable, texts, unreadable = [], [], 0
+    for f in files:
+        try:
+            texts.append(f.read_text(encoding="utf-8"))
+        except OSError:
+            unreadable += 1
+            continue
+        readable.append(f)
+    files = readable
+    if len(files) < 2:
+        return {"ok": False, "pairs": [],
+                "note": f"fewer than 2 readable memory files ({unreadable} unreadable)"}
     try:
         vecs = embedder(texts)
     except Exception as e:
@@ -399,4 +429,6 @@ def scan_redundancy(memory_dir, *, threshold=0.86, embedder=None, timeout=120) -
             if cos >= threshold:
                 pairs.append({"a": files[i].name, "b": files[j].name, "score": round(cos, 4)})
     pairs.sort(key=lambda p: p["score"], reverse=True)
-    return {"ok": True, "pairs": pairs, "note": f"{len(pairs)} near-duplicate pair(s)"}
+    skipped = f"; {unreadable} unreadable file(s) skipped" if unreadable else ""
+    return {"ok": True, "pairs": pairs,
+            "note": f"{len(pairs)} near-duplicate pair(s){skipped}"}

@@ -557,7 +557,25 @@ def _harvest_fireside_roster(data_root: Path, tokens: dict[str, str],
                     _add(tokens, word, "handle-name")
         uid = member.get("telegram_user_id") if isinstance(member, dict) else None
         # ids bypass the _add length/alpha gate, exactly as _harvest_config does.
-        if isinstance(uid, int) and not isinstance(uid, bool):
+        #
+        # A STRING id counts too. This asked `isinstance(uid, int)` alone, and a
+        # roster carrying `"telegram_user_id": "123456789"` - the ordinary shape
+        # once ids are round-tripped through a JavaScript toolchain, exported,
+        # or hand-edited - was dropped with no error and `degraded` left False,
+        # so the gate reported the tree clean over an id it never held.
+        # MEASURED 2026-08-30 on a two-member roster, one string id and one
+        # numeric: the numeric id landed in `tokens` and `scan_text` caught it,
+        # the string id produced no token and `scan_text` returned []. The
+        # asymmetry was already visible in the file: `_harvest_config` finds ids
+        # with `_ID_RE` over raw text, so it catches both forms. Same 7-digit
+        # floor as `_ID_RE`, so a short numeric field cannot become a token that
+        # matches every year and street number in the corpus.
+        if isinstance(uid, bool):
+            uid = None
+        elif isinstance(uid, str):
+            stripped = uid.strip()
+            uid = int(stripped) if _ID_RE.fullmatch(stripped) else None
+        if isinstance(uid, int):
             tokens[str(uid)] = "telegram-id"
 
 

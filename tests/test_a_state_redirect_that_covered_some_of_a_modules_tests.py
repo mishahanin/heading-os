@@ -57,7 +57,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from tests.repo_files import tracked_paths  # noqa: E402
+from tests.repo_files import read_sources, tracked_paths  # noqa: E402
 
 BOT = "fireside-bot.py"
 
@@ -293,10 +293,9 @@ def _corpus() -> list[tuple[Path, str]]:
     is the stronger check of the two.
     """
     found = []
-    for path in tracked_paths(["tests/**/*.py"]):
+    for path, source in read_sources(tracked_paths(["tests/**/*.py"])):
         if path.resolve() == SELF:
             continue
-        source = path.read_text(encoding="utf-8")
         if BOT in source:
             found.append((path, source))
     return found

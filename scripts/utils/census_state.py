@@ -3,11 +3,18 @@
 
 The acceptance rule compares numbers produced days apart: the mechanical ceiling
 measured on 2026-08-13, and the primitive's answers scored afterwards. That
-comparison is only meaningful if both ran against the same world, so four values
-are pinned and any divergence refuses the comparison rather than reporting a
-difference that is really a difference of corpus.
+comparison is only meaningful if both ran against the same world, so the values
+in `PINNED_KEYS` are pinned and any divergence refuses the comparison rather
+than reporting a difference that is really a difference of corpus.
 
-Why four and not one. The corpus SHA alone misses three real ways the world
+This said "four values" twice while `PINNED_KEYS` has named five since
+`corpus_content_sha256` was added (see the ORACLE_PINS comment below, which
+records exactly that addition). A reader counting pins from the prose misread
+what `states_comparable` refuses on by default, so the count now defers to the
+tuple instead of restating it - a number written in two places is the one that
+goes stale.
+
+Why several and not one. The corpus SHA alone misses three real ways the world
 moves underneath a run: `today` enters several oracles directly (a thread goes
 stale by the calendar, not by an edit), the retrieved side depends on the index
 config, and the index is rebuilt without the SHA moving at all.

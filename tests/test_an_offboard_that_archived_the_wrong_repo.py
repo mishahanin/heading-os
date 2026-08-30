@@ -509,15 +509,60 @@ def test_the_ack_write_takes_the_same_lock_the_autoheal_does():
     assert 'file_lock(state_dir / (ACK_FILE + ".lock")' in src
 
 
+def _stub_signal(key: str, severity: str, *, due: bool = True,
+                 tier: str = "A") -> dict:
+    """A signal carrying every key `ops_signals.SIGNAL_KEYS` declares.
+
+    `cmd_ack` does not merely look the key up: it passes the swept list to
+    `autoheal_signals`, which subscripts `sig["due"]` on any Tier-A entry. A
+    stub that omits a field is not a smaller stub, it is a crash.
+    """
+    return {"key": key, "value": None, "threshold": None, "due": due,
+            "severity": severity, "tier": tier, "summary": f"{key}: stub"}
+
+
+def test_the_stub_signal_still_matches_the_shape_the_producers_declare():
+    """So a field added to `SIGNAL_KEYS` fails here, loudly, instead of leaving
+    the stub below quietly short by one again."""
+    from scripts.utils.ops_signals import SIGNAL_KEYS
+    assert set(_stub_signal("ollama", "warn")) == set(SIGNAL_KEYS)
+
+
 def test_an_ack_is_still_written_under_the_lock(tmp_path, monkeypatch):
+    """The key is pinned to a Tier-A one, and the stub is a full signal. Both
+    were wrong together until 2026-08-30, and each hid the other.
+
+    The stub returned `{"key": next(iter(opr.KNOWN_KEYS)), "severity": "warn"}`.
+    A set has no order and Python randomizes string hashing per process, so the
+    chosen key differed between xdist workers; only "ollama" and "memory_index"
+    are read by `autoheal_signals`, so 2 of the 12 members reached `sig["due"]`
+    and raised KeyError there. The test passed alone, passed in most workers,
+    and failed in the full suite about one run in six. `PYTHONHASHSEED=6`
+    reproduces the failing draw on the old code.
+
+    Pinning "ollama" runs the Tier-A path on every execution rather than on a
+    coin flip, which is the coverage the old version only ever had by accident.
+    """
+    key = "ollama"
+    assert key in opr.KNOWN_KEYS and key in opr.TIER_A_TARGETS
     monkeypatch.setattr(opr, "gather_live_signals",
-                        lambda e, d: [{"key": next(iter(opr.KNOWN_KEYS)),
-                                       "severity": "warn"}])
-    key = next(iter(opr.KNOWN_KEYS))
+                        lambda e, d: [_stub_signal(key, "warn")])
     args = types.SimpleNamespace(key=key, ttl=None)
     assert opr.cmd_ack(args, tmp_path, ROOT, tmp_path) == 0
     saved = opr.load_json(tmp_path / opr.ACK_FILE)
     assert saved[key]["acked_band"] == "warn"
+
+
+def test_the_ack_band_comes_from_the_sweep_and_not_from_a_default(tmp_path,
+                                                                 monkeypatch):
+    """`acked_band` is what makes an ack re-surface on worsening, so reading it
+    off the live severity is the behaviour, not an incidental. A stub reporting
+    "high" must be stored as "high"."""
+    monkeypatch.setattr(opr, "gather_live_signals",
+                        lambda e, d: [_stub_signal("ollama", "high")])
+    args = types.SimpleNamespace(key="ollama", ttl=None)
+    assert opr.cmd_ack(args, tmp_path, ROOT, tmp_path) == 0
+    assert opr.load_json(tmp_path / opr.ACK_FILE)["ollama"]["acked_band"] == "high"
 
 
 def test_two_acks_in_sequence_both_survive(tmp_path, monkeypatch):

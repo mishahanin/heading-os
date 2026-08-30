@@ -44,6 +44,7 @@ from scripts.utils.docx_helpers import (  # noqa: E402
     TCSHD_SUCCESSORS,
     insert_in_order,
 )
+from tests.repo_files import read_sources  # noqa: E402
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
@@ -266,8 +267,8 @@ def _raw_property_appends(source: str) -> list[int]:
 
 def test_no_generator_appends_onto_a_property_container():
     offenders = {}
-    for path in sorted(SCRIPTS.rglob("*.py")):
-        lines = _raw_property_appends(path.read_text(encoding="utf-8"))
+    for path, source in read_sources(sorted(SCRIPTS.rglob("*.py"))):
+        lines = _raw_property_appends(source)
         if lines:
             offenders[str(path.relative_to(ROOT))] = lines
     assert offenders == {}, (

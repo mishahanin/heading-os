@@ -26,8 +26,10 @@ RETRY_CEILING = 16384
 # inputs, and 120s cut off council/scrutinize critiques mid-reason. Callers with a
 # genuinely huge draft can still pass an explicit higher `timeout` (kimi-consult
 # exposes --timeout). This is a socket read ceiling for ONE call, not a per-request
-# target: a `length` retry makes a second call, so the worst-case wall time is
-# `timeout * (1 + RETRY_TIMEOUT_GROWTH_CAP)`.
+# target. For the real worst-case wall time see `call_model`; it is far above
+# `timeout * (1 + RETRY_TIMEOUT_GROWTH_CAP)`, which this comment used to claim
+# by counting the `length` retry and forgetting that every call underneath it
+# runs through `_retry_server_errors`.
 DEFAULT_TIMEOUT = 300.0
 # The retry raises the token budget, and a bigger budget means a longer think, so
 # the socket ceiling has to grow with it or the retry times out where the first
@@ -129,11 +131,23 @@ def call_model(model, prompt, *, temperature=0.7, max_tokens=8192, timeout=DEFAU
     the socket ceiling grown to match, before raising an accurate truncation
     error that names how much was lost — never a safety-block claim.
 
-    `timeout` is the ceiling for ONE call. Up to two retries can follow (an
-    empty `stop`, then a `length`), each at up to `RETRY_TIMEOUT_GROWTH_CAP`
-    times that, so budget for `timeout * 5` in the worst case. Passing a
-    `max_tokens` and `timeout` large enough to finish on the first call is
-    cheaper than relying on the retry.
+    `timeout` is the socket ceiling for ONE ATTEMPT, not for this function.
+    Budget `16 * timeout + 210s` in the worst case - 83 minutes at the default
+    300s - and do not set a supervisor, unit or CI wall-time below it.
+
+    The arithmetic, because this docstring told callers to "budget for
+    `timeout * 5`" and that number was wrong by construction: up to three
+    `_call` invocations happen (the first, an empty-`stop` retry, a `length`
+    retry at up to `RETRY_TIMEOUT_GROWTH_CAP` times the ceiling), and EVERY one
+    of them runs through `_retry_server_errors`, which makes up to
+    `SERVER_ERROR_ATTEMPTS` (4) attempts separated by `sum(SERVER_ERROR_BACKOFF)`
+    (70s) of sleeps. So 4·t + 70 + 4·t + 70 + 4·2t + 70. The 503s that drive
+    those attempts normally return in seconds, so the typical wall time is
+    nowhere near the bound - but a supervisor is sized against the bound, and
+    the old one would have killed a legitimate run mid-retry.
+
+    Passing a `max_tokens` and `timeout` large enough to finish on the first
+    call is cheaper than relying on the retry.
 
     `reasoning_effort` (low/high/max) is optional and honored by thinking models
     (e.g. k3); when set it rides `extra_body={"reasoning_effort": ...}`. Omit it
@@ -274,25 +288,41 @@ def call_model(model, prompt, *, temperature=0.7, max_tokens=8192, timeout=DEFAU
 
     if finish_reason == "length":
         ceiling = max(max_tokens * 2, RETRY_CEILING)
+        before = len(content.strip())
         if ceiling > max_tokens:
             growth = min(ceiling / max_tokens, RETRY_TIMEOUT_GROWTH_CAP)
             content, finish_reason = _call(ceiling, timeout * growth)
             if _is_complete(content, finish_reason):
                 return content
         got = len(content.strip())
+        # `finish_reason` is re-read from the retry, so by here it may be
+        # anything the retry ended on. Both messages used to hardcode
+        # `finish_reason=length`, asserting a truncation that was not the
+        # terminal state. MEASURED 2026-08-30 with a first call returning
+        # ("partial answer", "length") and the retry returning ("", "stop"): the
+        # error read "exhausted its token budget ... without a visible answer
+        # (finish_reason=length)" - the reason was wrong AND the 14 characters
+        # the first call did return were invisible, sending diagnosis at the
+        # token budget when the terminal state was an empty `stop`. That is the
+        # same message-accuracy defect the 2026-08-26 block above was written to
+        # end.
         if got:
             # Never put the partial itself in the message: a caller that
             # str()s the exception would treat it as the answer, which is the
             # defect this branch exists to prevent. The length is diagnostic.
             raise RuntimeError(
                 f"{model} hit its token budget ({ceiling}) and the answer is cut "
-                f"off mid-word ({got} characters returned, finish_reason=length). "
+                f"off mid-word ({got} characters returned, "
+                f"finish_reason={finish_reason}). "
                 "Raise --max-tokens and --timeout together, or split the prompt — "
                 "a thinking-model truncation, not a safety block."
             )
+        lost = (f" The call before the retry returned {before} characters, which "
+                f"the retry did not." if before else "")
         raise RuntimeError(
             f"{model} exhausted its token budget ({ceiling}) in the reasoning phase "
-            "without a visible answer (finish_reason=length). Raise --max-tokens or "
+            f"without a visible answer (finish_reason={finish_reason}).{lost} "
+            "Raise --max-tokens or "
             "simplify the prompt — a thinking-model truncation, not a safety block."
         )
     if finish_reason == "content_filter":

@@ -28,17 +28,29 @@ def resolve_current(comp: Component) -> str:
     """Run the component's `current.cmd`; if a `regex` is given, return its first
     capture group, else the first output line. A regex that does not match yields
     "" (unknown) rather than a misleading line of noise."""
+    # Every failure inside here is "unknown", which is what "" means. Only
+    # TimeoutExpired was caught, so two ordinary config-data faults escaped a
+    # function documented to answer "" rather than raise. Measured 2026-08-30:
+    # a component whose `current.regex` is `v(\d+` (an unbalanced paren, and the
+    # registry is hand-edited YAML) raised
+    # `re.error: missing ), unterminated subpattern` out of `resolve_current`,
+    # and no `bash` on PATH would raise OSError the same way. `cmd_apply`'s
+    # broad boundary handler happened to swallow the first; the `check` CLI path
+    # this module exists for gets the raw exception.
     try:
         out = subprocess.run(["bash", "-c", comp.current.get("cmd", "")],
                             capture_output=True, text=True, timeout=30,
                             check=False).stdout.strip()
-    except subprocess.TimeoutExpired:
+    except (subprocess.SubprocessError, OSError):
         return ""
     regex = comp.current.get("regex")
     if regex:
         if not out:
             return ""
-        m = re.search(regex, out)
+        try:
+            m = re.search(regex, out)
+        except re.error:
+            return ""
         return m.group(1) if (m and m.groups()) else ""
     return out.splitlines()[0] if out else ""
 

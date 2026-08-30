@@ -80,10 +80,21 @@ DEFAULT_TIMEOUT_S = 120
 class SandboxResult:
     """One sandboxed run, and whether it ran at all.
 
-    `refused` is the field to read first. When it is set the program NEVER
-    started, and `exit_code` is None: a caller that treats a refusal as a failed
-    traversal reports the wrong cause to the operator, and a caller that treats
-    it as an empty result reports success over nothing.
+    `refused` is the field to read first: when it is set, NO COMPLETED RUN is
+    being reported and `exit_code` is None. A caller that treats a refusal as a
+    failed traversal reports the wrong cause to the operator, and a caller that
+    treats it as an empty result reports success over nothing.
+
+    It used to say "the program NEVER started", and the timeout path in
+    `run_sandboxed` breaks that: it sets `refused` AND `timed_out`, after the
+    traversal has run for up to `timeout_s` seconds inside the box and possibly
+    written partial files into `out_dir`, the one writable mount. So READ
+    `timed_out` BEFORE reasoning about side effects. `timed_out` True means the
+    program started, may have left partial output behind, and read some unknown
+    prefix of the corpus; `refused` with `timed_out` False is the only state in
+    which nothing ran. The wording is corrected rather than the behaviour
+    because `refused` is what carries the human-readable cause to the caller,
+    and dropping it there would turn a timeout into "traversal exited None".
     """
 
     exit_code: int | None

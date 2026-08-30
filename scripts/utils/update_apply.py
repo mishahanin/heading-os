@@ -171,7 +171,17 @@ def cmd_apply(args, components: list[Component], state_path: Path) -> int:
             result = apply_one(comp, applier=_default_applier(comp), rollback=rollback)
             print(f"{comp.name}: {result}")
         except Exception as exc:  # noqa: BLE001 - boundary; one component's failure is contained
-            result = "rolled-back"
+            # "error", never "rolled-back". Nothing in this handler calls
+            # `rollback()`: `apply_one` catches only CalledProcessError and
+            # TimeoutExpired, so an OSError from the spawn or the
+            # `apply block has neither cmd nor script` ValueError arrives here
+            # with the component in an UNKNOWN state, and labelling that
+            # "rolled-back" asserts a restore that never ran. Measured
+            # 2026-08-30 with an applier raising OSError: the outcome printed
+            # "rolled-back" and the rollback closure was never called. That is
+            # the same conflation `RollbackFailed` was added to eliminate one
+            # class earlier.
+            result = "error"
             print(f"{comp.name}: error ({type(exc).__name__}: {exc})")
         results[comp.name] = result
     _mark_state(state_path, results)
@@ -182,7 +192,7 @@ def cmd_apply(args, components: list[Component], state_path: Path) -> int:
 # so a new outcome cannot be added to `apply_one` and then be invisible to BOTH
 # the state file and the exit code, which is what a bare
 # `result == "rolled-back"` in two places invites.
-FAILED_RESULTS = frozenset({"rolled-back", "rollback-failed"})
+FAILED_RESULTS = frozenset({"rolled-back", "rollback-failed", "error"})
 
 
 def _mark_state(state_path: Path, results: dict[str, str]) -> None:

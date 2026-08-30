@@ -417,10 +417,32 @@ def frontmatter_date(value: Any) -> _dt.date:
         return _dt.datetime.fromisoformat(text).date()
 
 
-_CONFIG_BLOCK_RE = re.compile(
-    r"##\s*Config(?:uration)?\s*:?\s*\n(?P<block>(?:.*\n)*?)(?:\n##|\Z)",
-    re.IGNORECASE,
-)
+# The `## Config` heading, matched against ONE line at a time. It used to be one
+# regex over the whole document ending at `(?:\n##|\Z)`, and that terminator
+# needed a BLANK line before the next heading, because each block line had
+# already consumed its own `\n`. MEASURED 2026-08-30:
+#     parse_config("## Config\nother: x\n## Next\ncadence: 99\n", "cadence")
+# returned "99" - a value read out of a DIFFERENT section, because the block
+# could not end at the heading that immediately followed it and ran on to `\Z`.
+# The docstring says the block ends at the next `##` heading; scanning lines
+# says exactly that, with no terminator grammar to get wrong.
+_CONFIG_HEADING_RE = re.compile(
+    r"^##[ \t]*Config(?:uration)?[ \t]*:?[ \t]*$", re.IGNORECASE)
+
+
+def _config_block_lines(text: str) -> Optional[List[str]]:
+    """The lines of the first ``## Config`` block, or None when there is none."""
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        if not _CONFIG_HEADING_RE.match(line.rstrip()):
+            continue
+        block: List[str] = []
+        for later in lines[i + 1:]:
+            if later.startswith("##"):
+                break
+            block.append(later)
+        return block
+    return None
 
 
 def frontmatter_list(value: Any) -> List[str]:
@@ -474,12 +496,11 @@ def parse_config(text: str, key: str) -> Optional[str]:
     if not text or not key:
         return None
 
-    block_match = _CONFIG_BLOCK_RE.search(text)
-    if not block_match:
+    block = _config_block_lines(text)
+    if block is None:
         return None
 
-    block = block_match.group("block")
-    for line in block.split("\n"):
+    for line in block:
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -540,9 +561,12 @@ def parse_md_table(text: str, header_pattern: Optional[str] = None, *,
     value, the stage counts and the top-three, with nothing written anywhere.
     A short row is now padded and reported; the row survives.
 
-    A blank line ends the table. The old copies did `if not line: continue`
-    inside the row loop, so two tables separated by one blank line merged and
-    the second table's header row was parsed as data of the first.
+    A blank line ends the table, and so does a line carrying no pipe at all
+    (prose under the table). A line that DOES carry pipes but lost its leading
+    one is read as a row and reported, never dropped. The old copies did
+    `if not line: continue` inside the row loop, so two tables separated by one
+    blank line merged and the second table's header row was parsed as data of
+    the first.
     """
     emit = warn or _stderr_warn
     lines = text.split("\n")
@@ -578,8 +602,21 @@ def parse_md_table(text: str, header_pattern: Optional[str] = None, *,
     rows: List[Dict[str, str]] = []
     for i in range(data_start, len(lines)):
         line = lines[i].strip()
-        if not line or not line.startswith("|"):
+        if not line:
             break
+        if not line.startswith("|"):
+            if "|" not in line:
+                break  # prose after the table; the table really did end here
+            # A row whose leading pipe is missing is what a hand edit or a
+            # wrapped line produces, and `break` here dropped that row AND
+            # every row after it with nothing written anywhere. MEASURED
+            # 2026-08-30 on "| Deal | Value |\n|---|---|\n| A | 10 |\nB | 20 |\n
+            # | C | 30 |": one row came back, B and C vanished silently. That is
+            # the same silent-row-loss class the padding branch below was
+            # written to end, one column over, so it is reported and the row
+            # survives.
+            emit(f"{source} line {i + 1}: row does not start with '|'; reading "
+                 f"it as a row rather than ending the table. Row: {line}")
         cells = split_table_row(line)
         if len(cells) < len(headers):
             emit(f"{source} line {i + 1}: row has {len(cells)} cells, header has "

@@ -629,13 +629,58 @@ def _schema_version(conn) -> int:
         return 0
 
 
+# Chromium stores the SameSite attribute as an enum in the `samesite` column:
+# -1 UNSPECIFIED, 0 NO_RESTRICTION, 1 LAX_MODE, 2 STRICT_MODE. Playwright wants
+# the spelled-out string. UNSPECIFIED maps to Lax because that is the behaviour
+# Chromium applies to a cookie that declared nothing, so the exported session
+# behaves the way the browser's own session did.
+_SAMESITE_TO_PLAYWRIGHT = {-1: "Lax", 0: "None", 1: "Lax", 2: "Strict"}
+
+
+def _cookie_attrs(path, is_secure, is_httponly, samesite) -> dict:
+    """The row's real Playwright-shaped attributes, never a stamped constant.
+
+    `_merge_playwright` used to emit `"path": "/", "secure": True,
+    "httpOnly": False, "sameSite": "Lax"` for every cookie, and the SELECT did
+    not read the columns that hold the truth. Two of the four constants are
+    wrong in a direction that matters:
+
+      * a genuinely HttpOnly session token exported as `httpOnly: false` becomes
+        readable by page JavaScript inside the automated context - a widening of
+        exactly the session material this module protects everywhere else
+        (hidden values, 0600 store, refusal to write a partial store);
+      * a cookie the browser set WITHOUT Secure, exported as `secure: true`, is
+        never sent over `http://`, so the imported session silently does not
+        authenticate while the CLI has already printed a green success line.
+
+    It is the same class as the `domain` defect `_merge_playwright`'s own
+    docstring narrates fixing: the browser's scoping is a boundary it maintains
+    on purpose, and the export was quietly redrawing it. `path` is here for the
+    same reason - a cookie scoped to `/admin` exported at `/` is sent to paths
+    the browser would never have sent it to.
+
+    A `samesite` value outside the known enum degrades to Lax rather than
+    raising, matching `_schema_version`'s "degrade in the safe direction".
+    """
+    return {
+        "path": str(path) if path else "/",
+        "secure": bool(is_secure),
+        "httpOnly": bool(is_httponly),
+        "sameSite": _SAMESITE_TO_PLAYWRIGHT.get(samesite, "Lax"),
+    }
+
+
 def _read_cookies(
     domain: str,
     profile_name: str = "ClaudeCode",
     browser: str = "brave",
     include_subdomains: bool = True,
-) -> tuple[dict[str, tuple[str, str]], list[tuple[str, str, str]]]:
-    """The real reader. Returns ({name: (host_key, value)}, failures).
+) -> tuple[dict[str, tuple[str, str, dict]], list[tuple[str, str, str]]]:
+    """The real reader. Returns ({name: (host_key, value, attrs)}, failures).
+
+    `attrs` is the row's own `path` / `secure` / `httpOnly` / `sameSite`, in
+    Playwright's spelling - see `_cookie_attrs` for what stamping constants
+    there instead cost.
 
     `failures` is [(name, host_key, reason)] for every cookie that matched but
     could not be decrypted. It used to exist only as stderr noise, so a caller
@@ -667,7 +712,8 @@ def _read_cookies(
             # `isidentifier()`, plus `?` placeholders and an ESCAPE clause. The
             # domain is always a bound parameter.
             sql = (
-                "SELECT host_key, name, value, encrypted_value, expires_utc "  # noqa: S608  # nosec B608 - `where` is host_match_sql output: a checked column literal, `?` placeholders and an ESCAPE clause
+                "SELECT host_key, name, value, encrypted_value, expires_utc, "  # noqa: S608  # nosec B608 - `where` is host_match_sql output: a checked column literal, `?` placeholders and an ESCAPE clause
+                "path, is_secure, is_httponly, samesite "
                 f"FROM cookies WHERE {where}"
             )
 
@@ -676,8 +722,10 @@ def _read_cookies(
             now_us = (int(time.time()) + 11_644_473_600) * 1_000_000
 
             live = [
-                (host_key, name, (plain, encrypted))
-                for host_key, name, plain, encrypted, expires_utc in cur.fetchall()
+                (host_key, name,
+                 (plain, encrypted, _cookie_attrs(path, secure, httponly, samesite)))
+                for (host_key, name, plain, encrypted, expires_utc,
+                     path, secure, httponly, samesite) in cur.fetchall()
                 if not (expires_utc and expires_utc < now_us)
             ]
 
@@ -692,17 +740,21 @@ def _read_cookies(
                     file=sys.stderr,
                 )
 
-            cookies: dict[str, tuple[str, str]] = {}
+            cookies: dict[str, tuple[str, str, dict]] = {}
             failures: list[tuple[str, str, str]] = []
-            for name, (host_key, (plain, encrypted)) in winners.items():
+            for name, (host_key, (plain, encrypted, attrs)) in winners.items():
                 if plain:
-                    cookies[name] = (host_key, plain)
+                    cookies[name] = (host_key, plain, attrs)
                     continue
                 if not encrypted:
-                    cookies[name] = (host_key, "")
+                    cookies[name] = (host_key, "", attrs)
                     continue
                 try:
-                    cookies[name] = (host_key, _decrypt_cookie(encrypted, keys, hash_prefix))
+                    cookies[name] = (
+                        host_key,
+                        _decrypt_cookie(encrypted, keys, hash_prefix),
+                        attrs,
+                    )
                 except Exception as exc:
                     failures.append((name, host_key, str(exc)))
                     print(
@@ -756,7 +808,15 @@ def get_cookies(
     Raises:
         FileNotFoundError: profile, Cookies DB, or Local State missing.
         RuntimeError: key acquisition or DPAPI failure.
-        ImportError: required dependency (cryptography / secretstorage) missing.
+        ImportError: `cryptography` missing. NOT `secretstorage`, which is
+            optional: `_get_keys_linux` catches its ImportError, warns, and
+            returns the v10-only key map, so a v11 (keyring-encrypted) cookie
+            comes back in `failures` instead. This line used to name both, so a
+            caller wrapping `get_cookies` in `except ImportError` to detect the
+            degraded state was writing dead code, and one trusting the contract
+            believed a v11-only profile explodes loudly when it actually
+            succeeds with a partial map plus stderr noise - the absent-versus-
+            unreadable ambiguity the `failures` list exists to kill.
         sqlite3.Error: Cookies DB unreadable.
     """
     cookies, _failures = _read_cookies(
@@ -765,7 +825,7 @@ def get_cookies(
         browser=browser,
         include_subdomains=include_subdomains,
     )
-    return {name: value for name, (_host, value) in cookies.items()}
+    return {name: value for name, (_host, value, _attrs) in cookies.items()}
 
 
 def to_cookiejar(cookies: dict[str, str], domain: str | None = None):
@@ -798,8 +858,10 @@ def _merge_playwright(
 ) -> list:
     """Playwright cookie objects for `domain`, merged into an existing store.
 
-    `cookies` is {name: (host_key, value)} - the host each value really came
-    from, not the domain that was asked for. Every entry used to be stamped
+    `cookies` is {name: (host_key, value, attrs)} - the host each value really
+    came from, not the domain that was asked for, and the row's own `path` /
+    `secure` / `httpOnly` / `sameSite` rather than four stamped constants (see
+    `_cookie_attrs`). Every entry used to be stamped
     `domain: ".{domain}"`, which WIDENED a host-only cookie: a token the browser
     scoped to `accounts.google.com` alone was exported as `.google.com`, so
     Playwright then offered it to `mail.google.com` and every other subdomain.
@@ -851,8 +913,8 @@ def _merge_playwright(
     kept = [c for c in existing
             if isinstance(c, dict) and not _is_this_domain(c.get("domain", ""))]
     fresh = [{"name": n, "value": v, "domain": _playwright_domain(host, suffix),
-              "path": "/", "secure": True, "httpOnly": False, "sameSite": "Lax"}
-             for n, (host, v) in sorted(cookies.items())]
+              **attrs}
+             for n, (host, v, attrs) in sorted(cookies.items())]
     return kept + fresh
 
 
@@ -969,7 +1031,7 @@ def _main() -> int:
             browser=args.browser,
             include_subdomains=not args.exact_host,
         )
-        cookies = {name: value for name, (_host, value) in detailed.items()}
+        cookies = {name: value for name, (_host, value, _attrs) in detailed.items()}
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         print(f"{RED}ERROR: {exc}{RESET}", file=sys.stderr)
         return 1

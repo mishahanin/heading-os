@@ -52,8 +52,17 @@ def _store(tmp_path: Path, entries) -> Path:
     return p
 
 
+# The per-cookie attribute bag `_read_cookies` carries beside the host and the
+# value since 2026-08-30, when the Playwright export stopped stamping four
+# constants over the DB's real `path` / `is_secure` / `is_httponly` / `samesite`.
+# These tests pin the EVICTION rule and care about none of it, so they hand it
+# the neutral bag; the attributes are measured in
+# `tests/test_an_exporter_that_stamped_constants_over_the_real_flags.py`.
+ATTRS = {"path": "/", "secure": False, "httpOnly": False, "sameSite": "Lax"}
+
+
 def _fresh(domain: str, **names) -> dict:
-    """`_merge_playwright`'s input shape: {name: (host_key, value)}.
+    """`_merge_playwright`'s input shape: {name: (host_key, value, attrs)}.
 
     It took a flat {name: value} until 2026-08-28 and stamped every entry with
     `.{domain}`, which widened a host-only cookie to all of that domain's
@@ -61,7 +70,7 @@ def _fresh(domain: str, **names) -> dict:
     EVICTION rule, not the scoping, so they hand it the domain cookie for the
     domain being imported and keep asserting exactly what they asserted before.
     """
-    return {n: (f".{domain.lstrip('.')}", v) for n, v in names.items()}
+    return {n: (f".{domain.lstrip('.')}", v, ATTRS) for n, v in names.items()}
 
 
 @pytest.mark.parametrize("kept_domain,imported", [
@@ -107,7 +116,7 @@ def test_an_unparseable_store_is_still_treated_as_empty(tmp_path):
 # ============================================================
 
 def _run_main(monkeypatch, capsys, argv, cookies):
-    detailed = {n: (".example.com", v) for n, v in cookies.items()}
+    detailed = {n: (".example.com", v, ATTRS) for n, v in cookies.items()}
     monkeypatch.setattr(CC, "_read_cookies", lambda *a, **k: (detailed, []))
     monkeypatch.setattr(sys, "argv", ["chromium_cookies.py", *argv])
     code = CC._main()

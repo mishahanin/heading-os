@@ -52,6 +52,7 @@ _spec.loader.exec_module(report)
 from scripts.inbox_pulse import daemon as dmn  # noqa: E402
 from scripts.inbox_pulse.exchange import EWSConnection  # noqa: E402
 from scripts.inbox_pulse.overrides import RulesEngine  # noqa: E402
+from tests.repo_files import read_sources  # noqa: E402
 
 
 def _engine_with(patterns, bucket="always_normal"):
@@ -511,8 +512,8 @@ def test_the_module_docstring_records_where_the_handlers_go_now():
 
 def test_nothing_else_installs_a_handler_at_import_time():
     """The whole package, not just the one module the finding named."""
-    for path in sorted((ROOT / "scripts" / "inbox_pulse").glob("*.py")):
-        source = path.read_text(encoding="utf-8")
+    walked = sorted((ROOT / "scripts" / "inbox_pulse").glob("*.py"))
+    for path, source in read_sources(walked):
         for lineno, line in enumerate(source.splitlines(), 1):
             if line.startswith("signal.signal("):
                 pytest.fail(f"{path.name}:{lineno} installs a handler at import")

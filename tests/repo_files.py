@@ -25,6 +25,7 @@ from scripts.utils.repo_files import (  # noqa: E402,F401
     ROOT,
     ignored_paths,
     not_ignored,
+    read_sources,
     tracked_paths,
     tracked_python_files,
 )

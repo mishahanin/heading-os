@@ -202,8 +202,17 @@ _EPOCH = re.compile(r"^\d+(?:\.\d+)?$")
 def _parse(stamp):
     """A timestamp as an aware datetime, or None.
 
-    The numeric branch takes the string form too, because `_earliest` passes
-    stamps back through `str()` on the way to the window arithmetic.
+    The numeric branch takes the string form too, because a denial record is
+    JSON written by whatever produced it: an epoch stamp arrives as a bare
+    number from one writer and as `"1756512000"` from another, and both have to
+    read as the same instant.
+
+    That sentence used to justify the branch with "because `_earliest` passes
+    stamps back through `str()`". No `_earliest` is defined or called anywhere
+    in this module - `grep -n "_earliest" scripts/utils/gate_yield.py`
+    2026-08-30 returns only the docstring itself. It was left behind by the
+    deleted lifecycle half, and it sent a reader hunting for a function that is
+    not there, or invited one to delete a live branch as unused.
     """
     if stamp is None or stamp == "" or isinstance(stamp, bool):
         return None

@@ -213,9 +213,18 @@ def _validate_volume(entries: list[str], field: str) -> str | None:
     """Bound how much text one list can carry, entry count and total alike.
 
     The per-entry cap alone bounded nothing: 30 entries of 500 characters each
-    validated clean at 14,726 characters, which is a larger prose payload than
+    validated clean at 14,726 characters -- a prose payload of the same order as
     the 16.8 KB `note` key this module's comment records as the already-fixed
     instance of the same defect, and it needed no `--free-text`.
+
+    That comparison read "a LARGER prose payload than the 16.8 KB `note` key",
+    which contradicts the two numbers in the same sentence: 14,726 is smaller
+    than 16.8 KB under either reading of KB (16,800 or 17,203). The cap itself
+    is sound and unchanged -- `MAX_STRUCTURED_CHARS` (8,000) is well under
+    `MAX_TEXT_LEN` (20,000), which is the property the module docstring claims.
+    Only the stated rationale was wrong, and a maintainer reasoning from "the
+    old hole was bigger than the note incident" would have miscalibrated the
+    limit upward.
 
     This does not make prose impossible -- filenames in this corpus genuinely
     read like sentences, so no shape rule can tell the two apart. It makes the

@@ -42,12 +42,26 @@ from scripts.utils.air_gap import is_denied
 # Anchored on purpose: only a subject that STARTS this way is noise.
 BACKUP_SUBJECT_RE = re.compile(r"^chore: workspace backup\b")
 
-# ASCII unit/record separators. Commit messages contain newlines, tabs and every
-# punctuation mark a human types; these two bytes are the only delimiters git
-# will not find inside the fields it is emitting.
+# Field and record separation.
+#
+# The comment here used to claim these two bytes "are the only delimiters git
+# will not find inside the fields it is emitting". That is false: a commit
+# object may hold any byte except NUL, so `%s` and `%b` can carry `\x1f` and
+# `\x1e` verbatim, and git emits them verbatim. MEASURED 2026-08-30 on a repo
+# with `git commit -m "$(printf 'subject\n\nbefore \x1f after')"` - the indexed
+# body came back `'before'`, with everything past the separator silently
+# dropped. A `\x1e` in a body did the same and additionally split one commit's
+# record in two, so the tail fragment failed the field-count guard and was
+# skipped: silent loss of an adjacent commit.
+#
+# NUL is the byte git genuinely cannot emit inside a field, so `-z` is the real
+# record separator and `_RS` is now only a marker inside a NUL-delimited entry
+# (`_changed_paths` uses it to tell a commit header from a path). `_FS` stays,
+# with `maxsplit=3` at the one parse so a separator inside the body cannot shift
+# a field or shorten the record.
 _FS = "\x1f"
 _RS = "\x1e"
-_FORMAT = f"%H{_FS}%at{_FS}%s{_FS}%b{_RS}"
+_FORMAT = f"%H{_FS}%at{_FS}%s{_FS}%b"
 
 
 def _run(repo: Path, args: list[str]) -> str:
@@ -91,23 +105,42 @@ def _changed_paths(repo: Path, revs: list[str]) -> dict[str, list[str]]:
     Per-commit `--name-only` calls would be 1,100 subprocess spawns. This is one.
     `-m` expands merges so a merge's paths are seen; without it a merge reports
     none and would slip past the air gap.
+
+    `-z`, because `core.quotePath=false` does NOT do what `_run`'s comment
+    assumed. It suppresses quoting for NON-ASCII bytes only; a path holding a
+    CONTROL character is quoted and C-escaped whatever that setting says. This
+    parsed newline-separated output, so such a path arrived as the literal
+    `"_secure/leak\\na.md"` - quotes included - and MEASURED 2026-08-30
+    `is_denied('"_secure/leak\\na.md"')` returned **False** while
+    `is_denied("_secure/leak\\na.md")` returned True. The leading quote defeats
+    the `startswith` prefix match, which is precisely the air-gap bypass
+    `_run`'s comment says was closed: the vault path went into `changed` and
+    into `embed_text`, and the gate reported nothing withheld. `-z` emits every
+    path verbatim and NUL-separated, so there is nothing to quote and nothing
+    for `splitlines()` to cut in half.
+
+    Entries are NUL-delimited. A commit header is the entry the format marks
+    with a leading `_RS`; every other entry is one path.
     """
-    out = _run(repo, ["log", "-m", "--name-only", f"--format={_RS}%H", *revs])
+    out = _run(repo, ["log", "-m", "-z", "--name-only", f"--format={_RS}%H", *revs])
     paths: dict[str, list[str]] = {}
-    for block in out.split(_RS):
-        block = block.strip("\n")
-        if not block:
+    sha = None
+    for entry in out.split("\0"):
+        entry = entry.lstrip("\n")
+        if not entry:
             continue
-        head, _, rest = block.partition("\n")
-        sha = head.strip()
-        if not sha:
+        if entry.startswith(_RS):
+            sha = entry[1:].strip()
+            # `-m` emits one block per parent; seed once and union below so
+            # nothing is missed.
+            if sha:
+                paths.setdefault(sha, [])
             continue
-        found = [ln.strip() for ln in rest.splitlines() if ln.strip()]
-        # `-m` emits one block per parent; union them so nothing is missed.
-        paths.setdefault(sha, [])
-        for p in found:
-            if p not in paths[sha]:
-                paths[sha].append(p)
+        # A path is taken whole. No `.strip()`: a filename may legally begin or
+        # end with whitespace, and trimming it produces a path that matches
+        # neither the deny prefixes nor anything on disk.
+        if sha and entry not in paths.get(sha, []):
+            paths[sha].append(entry)
     return paths
 
 
@@ -147,15 +180,18 @@ def iter_commits(
     if since and _known(repo, since):
         revs = [f"{since}..HEAD"]
 
-    raw = _run(repo, ["log", f"--format={_FORMAT}", *revs])
-    records = [r for r in raw.split(_RS) if r.strip()]
+    raw = _run(repo, ["log", "-z", f"--format={_FORMAT}", *revs])
+    records = [r for r in raw.split("\0") if r.strip()]
     if not records:
         return
 
     path_map = _changed_paths(repo, revs)
 
     for rec in records:
-        parts = rec.lstrip("\n").split(_FS)
+        # `maxsplit=3`, so a `\x1f` inside the BODY -- the last field, and the
+        # only one long enough to hold arbitrary prose -- stays in the body
+        # instead of becoming a fifth part that truncates it.
+        parts = rec.lstrip("\n").split(_FS, 3)
         if len(parts) < 4:
             continue
         sha, at, subject, body = parts[0].strip(), parts[1], parts[2], parts[3]

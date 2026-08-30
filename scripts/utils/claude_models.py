@@ -95,9 +95,19 @@ def _api_key() -> str | None:
     A missing key is a normal state, not an error: a public clone has none, and
     the caller still gets a working model id from BASELINE.
     """
+    # `key.strip()`, not `key`, decides whether the environment answered. A
+    # variable set to whitespace - the ordinary result of
+    # `export ANTHROPIC_API_KEY="$VAR"` in a wrapper where `$VAR` is empty-but-
+    # spaced - is truthy, so this returned None immediately and the `.env`
+    # fallback below never ran, even with a valid key sitting in the file.
+    # MEASURED 2026-08-30: `ANTHROPIC_API_KEY=" "` yielded None while
+    # `ANTHROPIC_API_KEY=""` correctly read the key out of `.env`. The failure
+    # is silent - `fetch_from_api` returns `{}` before printing anything when
+    # there is no key - so every resolution degrades to cache or BASELINE with
+    # nothing said.
     key = os.environ.get("ANTHROPIC_API_KEY")
-    if key:
-        return key.strip() or None
+    if key and key.strip():
+        return key.strip()
     try:
         from scripts.utils.paths import load_env
 
@@ -265,13 +275,29 @@ def load_all(*, refresh: bool = False) -> dict:
 
     One fetch, not one per family: a single Models API response already carries
     every family, so asking four times is four round-trips for one answer.
+
+    "One fetch" holds on the DEGRADED path too, which is where it was breaking.
+    This cleared the memo and fetched, but never touched `_FETCH_FAILED` either
+    way - so when the fetch came back empty the comprehension below called
+    `latest()`, which found no memo, saw `_FETCH_FAILED` still False, and fired
+    a SECOND `fetch_from_api()` with its own up-to-8-second timeout. MEASURED
+    2026-08-30 with a counter around `fetch_from_api` and an unreachable API:
+    `load_all(refresh=True)` invoked it twice, `latest("opus", refresh=True)`
+    once. The flag handling now mirrors `latest(refresh=True)` exactly - reset
+    on entry, raised when the direct fetch yields nothing - because two refresh
+    entry points managing one shared flag differently is what let them disagree.
     """
+    global _FETCH_FAILED
+
     if refresh:
         _RESOLVED.clear()
+        _FETCH_FAILED = False
         fetched = fetch_from_api()
         if fetched:
             _write_cache({**_cached(allow_stale=True), **fetched})
             _RESOLVED.update(fetched)
+        else:
+            _FETCH_FAILED = True
     return {family: latest(family) for family in FAMILIES}
 
 

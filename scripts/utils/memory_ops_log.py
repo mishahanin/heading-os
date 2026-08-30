@@ -47,15 +47,26 @@ def log_recall(*, query_snippet, collection, layer, top_score, gap, n_hits,
 
 
 def read_recall_log():
-    """Return all recall records (empty if none/unreadable)."""
+    """Return all recall records (empty if none/unreadable).
+
+    A corrupt line skips ITSELF and nothing else. The `json.loads` used to sit
+    inside a `try` that wrapped the whole loop, so one torn line - `log_recall`
+    appends while a reader reads, or a hand edit - aborted the iteration and
+    every record after it was dropped without a word, leaving the deferred-memory
+    metrics computed over a silently truncated log. MEASURED 2026-08-30 with
+    three lines and an invalid middle one: one record came back instead of two.
+    """
     path = _recall_log_path()
-    if not path.exists():
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
         return []
     out = []
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                out.append(json.loads(line))
-    except Exception:
-        return out
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue  # this line only; the rest of the log still counts
     return out

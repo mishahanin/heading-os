@@ -39,11 +39,31 @@ def apply_sanitize_map(
 
     result = content
     for find, replace in sanitize_map:
-        if not find or find not in result:
+        if not find:
             continue
         if find.lower() in boundary_set:
-            result = re.sub(r"\b" + re.escape(find) + r"\b", replace, result)
-        else:
+            # IGNORECASE, and no case-SENSITIVE pre-check in front of it.
+            #
+            # Both halves used to disagree with the docstring above and with
+            # `scan_for_terms`, which has compiled its boundary pattern with
+            # re.IGNORECASE the whole time. Measured 2026-08-30:
+            # apply_sanitize_map("ODIN settled the ledger; odin approved.",
+            # [("odin", "[redacted]")], {"odin"}) returned "ODIN settled the
+            # ledger; [redacted] approved." and scan_for_terms then reported the
+            # surviving "ODIN" as a leak - the sanitizer and the pre-publish
+            # scanner disagreeing about what was sanitized. With only the
+            # uppercase form present the `find not in result` pre-check skipped
+            # the term outright and nothing was replaced at all.
+            #
+            # The replacement goes through a lambda because `re.sub` reads its
+            # replacement as a TEMPLATE: r"R:\new" landed as "R:" + newline +
+            # "ew" and r"\1x" raised `re.error: invalid group reference`, while
+            # the plain-str.replace branch below inserted both literally. One
+            # (find, replace) pair must not mean two things depending on which
+            # branch it takes.
+            pattern = re.compile(r"\b" + re.escape(find) + r"\b", re.IGNORECASE)
+            result = pattern.sub(lambda _m, r=replace: r, result)
+        elif find in result:
             result = result.replace(find, replace)
     return result
 

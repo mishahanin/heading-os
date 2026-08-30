@@ -1,7 +1,19 @@
 """End-to-end smoke test: boot daemon, hit each endpoint, verify shape.
 
-Skipped on non-Windows: the Phase 1 terminal launcher is Win32-only
-(uses wt.exe). macOS path lands in Phase 2.
+Skipped on non-Windows, but NOT for a portability reason: this test boots a
+real daemon in the live workspace root and wipes `.daemon-state/` around it,
+and the operator has deliberately stopped and disabled that daemon. Enabling
+it off Windows is the operator's call. The gate and its real reason are
+written out at the skipif itself.
+
+Corrected 2026-08-30. This docstring used to say the gate existed because "the
+Phase 1 terminal launcher is Win32-only (uses wt.exe)". The comment inside
+`test_smoke_boot_and_endpoints` has said since 2026-08-26 that this is false
+and has been for a long time — `--start` in scripts/bridge-daemon.py is pure
+Python with no shell and no `wt.exe` anywhere in the file, and the canonical
+installer here is the WSL2 systemd-user unit. Two statements in one file gave
+opposite reasons for the same gate, and a reader trusting the docstring would
+"re-enable" the test off Windows believing the blocker was gone.
 
 Skipped if a daemon is already running on the configured port (refuse
 to clobber active state).

@@ -137,15 +137,25 @@ def tracked_markdown(root: Path) -> list[str]:
     `-z` for the same reason as above: `.split()` turned a tracked
     `my notes.md` into two names that both fail to open, so that file's prose
     was never scanned and no dangling path inside it could ever be caught.
+
+    Bytes plus a deliberate decode, because `-z` alone does not finish the job.
+    Every subprocess text mode turns on universal newlines and rewrites each CR
+    byte to LF, and `subprocess` has no `newline=` knob to switch it off.
+    MEASURED 2026-08-30: two tracked files `docs/x\\r\\ny.md` and `docs/x\\ny.md`
+    come back as two names in bytes mode and as ONE under `text=True`. The
+    mistranslated name opens nothing, so `scan()` skips it and the same coverage
+    is lost that the paragraph above is about.
     """
     out = subprocess.run(
-        ["git", "ls-files", "-z", "*.md"], cwd=root, capture_output=True, text=True,
+        ["git", "ls-files", "-z", "*.md"], cwd=root, capture_output=True,
     )
     if out.returncode != 0:
-        print(f"warning: `git ls-files` failed in {root} ({out.stderr.strip()[:200]}); "
+        detail = out.stderr.decode("utf-8", "replace").strip()[:200]
+        print(f"warning: `git ls-files` failed in {root} ({detail}); "
               f"no Markdown was scanned", file=sys.stderr)
         return []
-    names = [f for f in out.stdout.split("\0") if f]
+    decoded = out.stdout.decode("utf-8", "surrogateescape")
+    names = [f for f in decoded.split("\0") if f]
     return [f for f in names if f not in _SKIP_FILES]
 
 

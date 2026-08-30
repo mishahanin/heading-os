@@ -171,17 +171,40 @@ def repo_carried_paths(root: Path) -> list[str]:
     is a bilingual RU/EN workspace, so such a filename is ordinary. NUL-terminated
     output is never quoted and never escaped.
 
-    `encoding` is load-bearing for the same reason and was missing until
-    2026-08-30. `text=True` alone decodes with `locale.getpreferredencoding()`,
-    so the wall read git's bytes through whatever locale the host happened to
-    boot with. Measured that day in a scratch repo holding `docs/план.md`: under
-    `LC_ALL=C` (preferred encoding `ANSI_X3.4-1968`) this raised
-    `UnicodeDecodeError` and took the whole scan with it, and on a host whose
-    preferred encoding decodes every byte -- stock Windows Python, cp1252 -- the
-    same path comes back as mojibake instead, so `engine_text_files`' `is_file()`
-    is False and the file receives no content scan at all. Git emits path BYTES;
-    they are UTF-8 here, and `surrogateescape` carries the ones that are not
-    through to `os.fsencode` intact rather than losing them.
+    The decoding is done HERE, from bytes, rather than by any form of subprocess
+    text mode. Two separate reasons, and the second is not fixed by the first.
+
+    `text=True` alone decodes with `locale.getpreferredencoding()`, so the wall
+    read git's bytes through whatever locale the host happened to boot with.
+    Measured 2026-08-30 in a scratch repo holding `docs/план.md`: under `LC_ALL=C`
+    (preferred encoding `ANSI_X3.4-1968`) this raised `UnicodeDecodeError` and
+    took the whole scan with it, and on a host whose preferred encoding decodes
+    every byte -- stock Windows Python, cp1252 -- the same path comes back as
+    mojibake instead.
+
+    Naming an `encoding=` does NOT close it, which is what the previous version
+    of this docstring assumed. Any subprocess text mode also turns on UNIVERSAL
+    NEWLINES, rewriting every CR byte to LF, and `subprocess` exposes no
+    `newline=` knob to switch that off. MEASURED 2026-08-30 on a scratch ext4
+    repository with git 2.43.0, two tracked files whose names differ only by that
+    byte:
+
+        ls-files -z bytes : b'docs/x\\r\\ny.md\\x00docs/x\\ny.md\\x00'
+        encoding=utf-8    : 'docs/x\\ny.md\\x00docs/x\\ny.md\\x00'
+
+    Two files, ONE name. The CRLF file vanishes from the wall's view, and a bare
+    CR name arrives spelled as something that is not on disk. `-z` does not save
+    you: it suppresses git's C-quoting, and the translation happens afterwards,
+    in Python. The damage is the same as the quoting bug arriving by another
+    door -- `engine_text_files`' `is_file()` is False for the mistranslated name,
+    so the file receives NO content scan and the wall reports clean over bytes it
+    never opened. Git emits path BYTES; `surrogateescape` carries the ones that
+    are not UTF-8 through to `os.fsencode` intact rather than losing them.
+
+    No `.strip()` on the entry filter either. A filename may legally consist of
+    whitespace, and `if entry.strip()` dropped exactly those from the wall's
+    view; only the empty trailing entry `-z` leaves is skipped. Same shape as
+    `scripts/build_engine_repo.py`.
     """
     paths: list[str] = []
     for args in (
@@ -189,10 +212,9 @@ def repo_carried_paths(root: Path) -> list[str]:
         ["git", "ls-files", "-z", "--others", "--exclude-standard"],
     ):
         out = subprocess.run(
-            args, cwd=str(root), capture_output=True, text=True, check=True,
-            encoding="utf-8", errors="surrogateescape",
-        ).stdout
-        paths.extend(entry for entry in out.split("\0") if entry.strip())
+            args, cwd=str(root), capture_output=True, check=True,
+        ).stdout.decode("utf-8", "surrogateescape")
+        paths.extend(entry for entry in out.split("\0") if entry)
     return paths
 
 

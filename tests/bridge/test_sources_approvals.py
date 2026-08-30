@@ -198,13 +198,41 @@ def test_sent_log_recent_excludes_tombstones(tmp_path):
     assert all(r["path"] != rel for r in rows)
 
 
-def test_sent_log_recent_orders_ts_desc(tmp_path):
-    import time
+def test_sent_log_recent_orders_ts_desc(tmp_path, monkeypatch):
+    """The two entries are STAMPED an hour apart, not raced a millisecond apart.
+
+    This was `mark_sent(...); time.sleep(0.01); mark_sent(...)`, which leaves
+    the ordering the assertion is about to the wall clock. Two ways that
+    breaks: a coarser `ts` resolution makes both stamps equal and the desc sort
+    tie is arbitrary, and a backward clock step between the two calls inverts
+    them outright. `test_sorted_by_mtime_desc` in this same file documents that
+    second one as a measured incident ("the test failed exactly once in a full
+    parallel suite run on 2026-08-09 ... os.utime states the ordering the
+    assertion is about, and takes the clock out of it") and this test did not
+    apply the lesson. Freezing `datetime` is the same move for a stamp that
+    comes from the clock rather than the filesystem.
+    """
+    from datetime import datetime as _dt, timedelta, timezone
+
+    from scripts.bridge_daemon.sources import approvals as approvals_mod
     from scripts.bridge_daemon.sources.approvals import mark_sent, sent_log_recent
+
+    base = _dt(2026, 5, 13, 10, 0, tzinfo=timezone.utc)
+    ticks = iter([base, base, base + timedelta(hours=1), base + timedelta(hours=1)])
+
+    class _FrozenDatetime(_dt):
+        @classmethod
+        def now(cls, tz=None):
+            moment = next(ticks)
+            return moment if tz is None else moment.astimezone(tz)
+
+    monkeypatch.setattr(approvals_mod, "datetime", _FrozenDatetime)
     mark_sent(tmp_path, f"{EMAIL_DRAFTS_DIR}/first.md")
-    time.sleep(0.01)
     mark_sent(tmp_path, f"{EMAIL_DRAFTS_DIR}/second.md")
     rows = sent_log_recent(tmp_path)
+    # The stamps really are distinct and really are an hour apart, so the sort
+    # below is deciding something.
+    assert rows[0]["ts"] != rows[1]["ts"]
     # Newest is first.
     assert rows[0]["filename"] == "second.md"
     assert rows[1]["filename"] == "first.md"

@@ -20,13 +20,27 @@ counted as synced, a prefix counted as a whole name, a missing document counted
 as nothing at all, and an absent token file reported as proof the daemon never
 started.
 
-These tests drive the real functions against scratch trees. None of them
-asserts on the live workspace's data, so a change in the operator's outputs/
-tree cannot turn them red.
+These tests drive the real functions against scratch trees, with two DELIBERATE
+exceptions that do read the live workspace:
+
+  - `test_the_live_router_still_covers_every_live_skill` runs
+    `check_skill_router_coverage()` against the real `.claude/rules/skill-router.md`
+    and `.claude/skills/`, because an orphaned real skill is the regression the
+    boundary tightening could plausibly cause and a scratch tree cannot show it.
+  - `test_a_single_section_never_claims_all_checks_passed` runs the real
+    `check_extras_importability` against the live workspace, so a genuinely
+    broken extra in the operator's tree turns it red.
+
+Both are named in `LIVE_TREE_TESTS` below and the pairing is asserted, so
+renaming one without revisiting this paragraph fails rather than drifting. This
+docstring claimed "None of them asserts on the live workspace's data" until
+2026-08-30, which was false of exactly those two -- and the first of them says
+so in its own docstring, one screen down.
 """
 from __future__ import annotations
 
 import importlib.util
+import os
 import re
 import stat
 import sys
@@ -36,6 +50,20 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+# The two tests the module docstring declares as live-tree readers. Named here
+# so the paragraph above cannot quietly stop being true.
+LIVE_TREE_TESTS = (
+    "test_the_live_router_still_covers_every_live_skill",
+    "test_a_single_section_never_claims_all_checks_passed",
+)
+
+# `os.chmod` on Windows honours only the read-only bit: 0o777, 0o644 and 0o600
+# cannot be set as distinct modes, so the permission tests below would fail
+# against correct production code. The sibling shard
+# `test_a_harness_that_took_the_machine_with_it.py` already uses this idiom.
+posix_only = pytest.mark.skipif(
+    os.name != "posix", reason="chmod mode bits are not honoured on Windows")
 
 
 @pytest.fixture
@@ -52,6 +80,24 @@ def wh():
 def _plain(captured: str) -> str:
     """Output without ANSI colour, so assertions read the words not the escapes."""
     return re.sub(r"\x1b\[[0-9;]*m", "", captured)
+
+
+def test_the_module_docstring_names_the_live_tree_readers_that_exist() -> None:
+    """The docstring's exception list, held to the file it describes.
+
+    NEW 2026-08-30, with the docstring correction it guards. The paragraph used
+    to say "None of them asserts on the live workspace's data" while two tests
+    did, one of them saying so in its own docstring. A prose correction that
+    nothing checks is the next drift, so both directions are pinned: each named
+    test must still be defined under that name, and the docstring must still
+    name each of them.
+    """
+    defined = {name for name in globals() if name.startswith("test_")}
+    doc = __doc__ or ""
+    for name in LIVE_TREE_TESTS:
+        assert name in defined, (
+            f"{name} was renamed or removed; the module docstring still cites it")
+        assert name in doc, f"{name} reads the live tree and the docstring omits it"
 
 
 # ============================================================
@@ -400,6 +446,7 @@ def test_an_absent_token_is_not_evidence_the_daemon_never_started(
     assert "cannot tell which" in out
 
 
+@posix_only
 def test_a_world_writable_state_dir_is_flagged_even_with_no_token(
         wh, tmp_path, monkeypatch, capsys):
     """The parent check sat after the early return, so it never ran in the
@@ -415,6 +462,7 @@ def test_a_world_writable_state_dir_is_flagged_even_with_no_token(
     assert "world-writable" in _plain(capsys.readouterr().out)
 
 
+@posix_only
 def test_a_loose_token_is_still_flagged(wh, tmp_path, monkeypatch, capsys):
     state = tmp_path / ".daemon-state"
     state.mkdir()
@@ -427,6 +475,7 @@ def test_a_loose_token_is_still_flagged(wh, tmp_path, monkeypatch, capsys):
     assert "expected 0o600" in _plain(capsys.readouterr().out)
 
 
+@posix_only
 def test_a_correct_token_passes(wh, tmp_path, monkeypatch, capsys):
     state = tmp_path / ".daemon-state"
     state.mkdir()

@@ -330,7 +330,13 @@ def _unlocked_read_modify_writes(state_const: str,
     for fn in ast.walk(tree):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        # Names bound from `load_state(<state_const>)`, directly or via `or`.
+        # Names bound from `load_state(<state_const>)`, directly or through
+        # ANY operand of an `or`. This unwrapped `values[0]` alone until
+        # 2026-08-30, which reads the left operand and no other: the ordinary
+        # spelling `s = load_state(SCHEDULE) or []` was caught and the equally
+        # ordinary `s = [] or load_state(SCHEDULE)` was not, so one operand
+        # order of exactly the load-modify-save shape this whole file exists
+        # to eradicate was silently exempt.
         loaded = set()
         for node in ast.walk(fn):
             if not isinstance(node, ast.Assign) or len(node.targets) != 1:
@@ -338,14 +344,15 @@ def _unlocked_read_modify_writes(state_const: str,
             if not isinstance(node.targets[0], ast.Name):
                 continue
             value = node.value
-            if isinstance(value, ast.BoolOp) and value.values:
-                value = value.values[0]
-            if (isinstance(value, ast.Call)
-                    and isinstance(value.func, ast.Name)
-                    and value.func.id == "load_state"
-                    and value.args
-                    and isinstance(value.args[0], ast.Name)
-                    and value.args[0].id == state_const):
+            candidates = (list(value.values) if isinstance(value, ast.BoolOp)
+                          else [value])
+            if any(isinstance(c, ast.Call)
+                   and isinstance(c.func, ast.Name)
+                   and c.func.id == "load_state"
+                   and c.args
+                   and isinstance(c.args[0], ast.Name)
+                   and c.args[0].id == state_const
+                   for c in candidates):
                 loaded.add(node.targets[0].id)
         if not loaded:
             continue
@@ -360,6 +367,38 @@ def _unlocked_read_modify_writes(state_const: str,
                     and node.args[1].id in loaded):
                 offenders.append(fn.name)
     return sorted(set(offenders))
+
+
+@pytest.mark.parametrize("binding", [
+    "s = load_state(SCHEDULE)",
+    "s = load_state(SCHEDULE) or []",
+    # The operand order the detector could not see until 2026-08-30.
+    "s = [] or load_state(SCHEDULE)",
+])
+def test_the_lock_detector_refuses_a_known_offender(binding):
+    """The negative case. Nothing had ever made this guard say no.
+
+    `_unlocked_read_modify_writes` ships a `source` parameter whose docstring
+    says it exists so the detector "can be pointed at a known offender and
+    shown to report it" - and no test used it, so the guard's only evidence
+    was that the real file is clean, which is equally true of a detector that
+    reports nothing at all.
+    """
+    src = f"def f():\n    {binding}\n    save_state(SCHEDULE, s)\n"
+    assert _unlocked_read_modify_writes("SCHEDULE", source=src) == ["f"]
+
+
+def test_the_lock_detector_does_not_report_a_full_rebuild():
+    """The other direction: a save of an object never loaded is not this shape.
+
+    `cmd_cycle_rollover` in the real file does exactly this, so a detector
+    that flagged it would be unusable - and one that flags everything passes
+    the parametrised test above for the wrong reason.
+    """
+    src = ("def f():\n"
+           "    entries = build_schedule()\n"
+           "    save_state(SCHEDULE, entries)\n")
+    assert _unlocked_read_modify_writes("SCHEDULE", source=src) == []
 
 
 def test_no_schedule_read_modify_write_escapes_the_lock():
@@ -413,13 +452,38 @@ def test_health_check_survives_an_unreadable_tick_timestamp():
 
 
 def test_engagement_is_read_from_the_log_that_records_it():
-    code = _code_only()
-    assert "for e in _read_jsonl_rows(state_path(SESSIONS_LOG)):" in code
-    assert "responded_user_ids" in code
-    # dm-log carries `dm_type`; `event_type` rows live in sessions.jsonl only.
-    idx = code.index("responded_user_ids: set[int] = set()")
-    window = code[idx:idx + 600]
-    assert "SESSIONS_LOG" in window and "DM_LOG" not in window
+    """`responded_user_ids` is filled from SESSIONS_LOG, and from nothing else.
+
+    Scoped to the loop that fills the set, via the AST. It used to be a fixed
+    600-character source window with `"DM_LOG" not in window`, which is a
+    claim about layout rather than about behaviour: the same function
+    legitimately reads the DM log for delivery status (three tests in this
+    file depend on that), so moving that read to within 600 characters of the
+    initialisation - an arrangement nothing forbids - failed this test against
+    correct code, while moving the OFFENDING read 601 characters away passed
+    it.
+    """
+    import ast
+
+    tree = ast.parse(SRC.read_text(encoding="utf-8"))
+    loops = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.For)
+        and any(isinstance(t, ast.Name) and t.id == "responded_user_ids"
+                for sub in ast.walk(node)
+                for t in ([sub.func.value] if isinstance(sub, ast.Call)
+                          and isinstance(sub.func, ast.Attribute)
+                          and isinstance(sub.func.value, ast.Name) else []))
+    ]
+    assert len(loops) == 1, (
+        f"expected exactly one loop filling responded_user_ids, found {len(loops)}")
+    names = {n.id for n in ast.walk(loops[0].iter) if isinstance(n, ast.Name)}
+    assert "SESSIONS_LOG" in names, (
+        "the engagement set is no longer built from the log that records "
+        f"engagement events; it iterates {sorted(names)}")
+    assert "DM_LOG" not in names, (
+        "the engagement set is built from the DM log, which records what the "
+        "bot SENT, not what the member did")
 
 
 def _run_backup(fb, tmp_path, monkeypatch, *, roster_entry, sessions_rows=(),

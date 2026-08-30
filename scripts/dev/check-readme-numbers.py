@@ -112,12 +112,19 @@ def tracked_trigger_files(root: Path | None = None) -> list[Path]:
     not part of the engine anyone clones, and counting it would put a figure in
     the page that no other machine can reproduce. `-z` because git C-quotes a
     non-ASCII path, and a quoted name is not a file this guard can open.
+
+    Decoded from bytes, not through subprocess text mode, which turns on
+    universal newlines and rewrites every CR byte to LF (no `newline=` knob
+    exists on `subprocess`). MEASURED 2026-08-30: two tracked files differing
+    only by that byte come back as one name. Here that name reaches
+    `count_trigger_cases`, whose `read_text` then raises FileNotFoundError and
+    takes the whole guard down over a filename that is not the one on disk.
     """
     repo = ROOT if root is None else root
     out = subprocess.run(
         ["git", "-C", str(repo), "ls-files", "-z", ".claude/skills/*/triggers.json"],
-        capture_output=True, text=True, check=True,
-    ).stdout
+        capture_output=True, check=True,
+    ).stdout.decode("utf-8", "surrogateescape")
     return sorted(repo / rel for rel in out.split("\0") if rel)
 
 

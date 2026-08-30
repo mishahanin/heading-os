@@ -60,6 +60,7 @@ is the pin.
 """
 from __future__ import annotations
 
+import ast
 import os
 import sys
 from pathlib import Path
@@ -70,7 +71,10 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from scripts.utils import air_gap  # noqa: E402
 from scripts.utils.air_gap import is_denied  # noqa: E402
+
+AIR_GAP_SRC = ROOT / "scripts" / "utils" / "air_gap.py"
 
 
 # ============================================================
@@ -230,6 +234,98 @@ def test_the_predicate_reaches_no_filesystem_call(target):
         assert is_denied("threads/business/../../_secure/x.md") is True
         assert is_denied("crm/contacts/james-bond.md") is False
         assert is_denied("..") is True
+
+
+_FS_FUNCTION_NAMES = frozenset({
+    "stat", "lstat", "listdir", "scandir", "walk", "exists", "lexists",
+    "isdir", "isfile", "islink", "realpath", "abspath", "readlink", "open",
+    "access", "getsize", "getmtime", "samefile",
+})
+
+
+def test_the_module_binds_no_filesystem_function_of_its_own():
+    """The bypass the parametrized patch above cannot see.
+
+    `mock.patch("os.path.realpath")` swaps an attribute on the `os.path` module
+    object. A `from os.path import realpath` at the top of `air_gap.py` creates
+    a SECOND reference, in air_gap's own namespace, that the patch never
+    reaches: the predicate could stat the disk on every path while all seven
+    purity cases stayed green. So the namespace itself is asked.
+    """
+    offenders = sorted(
+        name for name, value in vars(air_gap).items()
+        if not name.startswith("__") and callable(value)
+        and (name in _FS_FUNCTION_NAMES
+             or getattr(value, "__name__", "") in _FS_FUNCTION_NAMES)
+    )
+    assert offenders == [], (
+        f"air_gap binds {offenders} directly; patching the global os.* leaves "
+        f"those references live, so the purity tests above stop measuring")
+
+
+def test_the_module_imports_nothing_that_could_reach_the_disk():
+    """The whole import surface, stated exactly.
+
+    A namespace check catches a binding that already exists; this catches the
+    import that would create one, including `pathlib`, `shutil`, `io` and an
+    aliased `from os.path import realpath as rp` that no name-based sweep would
+    recognise. The predicate is a pure string transform and needs exactly one
+    module.
+    """
+    tree = ast.parse(AIR_GAP_SRC.read_text(encoding="utf-8"))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported |= {alias.name for alias in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            imported |= {f"{node.module}.{alias.name}" for alias in node.names}
+    assert imported == {"os"}, imported
+
+
+def test_a_planted_secret_is_denied_in_every_spelling(tmp_path):
+    """The guard still REFUSES, proven against a file that really exists.
+
+    The purity tests establish that the predicate never looks at the disk. This
+    one establishes that not looking does not soften the answer: the denied file
+    is planted under tmp_path, its workspace-relative path is derived from the
+    file rather than typed, and every spelling of it has to come back True -
+    including `perſonal`, the U+017F LATIN SMALL LETTER LONG S fold that walked
+    straight through the `.lower()` comparison this module used until
+    2026-08-30.
+    """
+    planted = tmp_path / "threads" / "personal" / "diary.md"
+    planted.parent.mkdir(parents=True)
+    planted.write_text("nothing here may be indexed\n", encoding="utf-8")
+    assert planted.is_file()
+    rel = planted.relative_to(tmp_path).as_posix()
+    assert rel == "threads/personal/diary.md"
+
+    for spelling in (
+        rel,
+        "./" + rel,
+        "outputs/x/../../" + rel,
+        rel.replace("personal", "Personal"),
+        rel.replace("personal", "PERSONAL"),
+        rel.replace("personal", "perſonal"),
+        rel.replace("/", "\\"),
+    ):
+        assert is_denied(spelling) is True, spelling
+
+    vault = tmp_path / "_secure" / "keys.md"
+    vault.parent.mkdir(parents=True)
+    vault.write_text("nor this\n", encoding="utf-8")
+    vrel = vault.relative_to(tmp_path).as_posix()
+    for spelling in (vrel, "./" + vrel, "threads/business/../../" + vrel,
+                     vrel.replace("_secure", "_SECURE")):
+        assert is_denied(spelling) is True, spelling
+
+    # The other direction, on a file planted the same way: an ordinary path
+    # under the same root is still allowed, so the deny above is a decision and
+    # not a predicate that says True to everything.
+    ordinary = tmp_path / "threads" / "business" / "deal.md"
+    ordinary.parent.mkdir(parents=True)
+    ordinary.write_text("routine\n", encoding="utf-8")
+    assert is_denied(ordinary.relative_to(tmp_path).as_posix()) is False
 
 
 def test_the_predicate_answers_for_a_path_that_does_not_exist(tmp_path):

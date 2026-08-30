@@ -163,19 +163,37 @@ def classify_backup(uncommitted: int, oldest_age_hours: float | None, ahead: int
     }
 
 
-def _run_git(repo: Path, args: list[str]) -> tuple[int, str]:
-    """Run git in `repo`, return (returncode, stdout). Never raises."""
+def _run_git_bytes(repo: Path, args: list[str]) -> tuple[int, bytes]:
+    """Run git in `repo`, return (returncode, raw stdout). Never raises.
+
+    Raw, because a caller reading PATHS must not go through subprocess text
+    mode. Text mode turns on universal newlines and rewrites every CR byte to
+    LF, and `subprocess` exposes no `newline=` knob to switch it off. MEASURED
+    2026-08-30: two tracked files `docs/x\\r\\ny.md` and `docs/x\\ny.md` come back
+    from `status --porcelain -z` as two distinct records in bytes mode and as one
+    under `text=True`. `-z` does not help; it suppresses git's C-quoting, and
+    the translation happens afterwards, in Python.
+    """
     try:
         proc = subprocess.run(
             ["git", *args],
             cwd=str(repo),
             capture_output=True,
-            text=True,
             timeout=20,
         )
     except (OSError, subprocess.SubprocessError):
-        return 1, ""
+        return 1, b""
     return proc.returncode, proc.stdout
+
+
+def _run_git(repo: Path, args: list[str]) -> tuple[int, str]:
+    """Run git in `repo`, return (returncode, decoded stdout). Never raises.
+
+    For callers reading counts and refs. A caller reading PATHS wants
+    `_run_git_bytes` and its own decode - see the docstring there.
+    """
+    rc, raw = _run_git_bytes(repo, args)
+    return rc, raw.decode("utf-8", "surrogateescape")
 
 
 def _repo_uncommitted(repo: Path) -> tuple[int | None, float | None]:
@@ -201,10 +219,18 @@ def _repo_uncommitted(repo: Path) -> tuple[int | None, float | None]:
     # FileNotFoundError and the path was dropped from the oldest-mtime scan
     # entirely - understating backup debt in exactly the way this function's
     # docstring says must not happen. `-z` suppresses quoting and separates
-    # records with NUL, so nothing needs decoding.
-    rc, out = _run_git(repo, ["status", "--porcelain", "-z"])
+    # records with NUL.
+    #
+    # Read as BYTES and decoded here, because `-z` closes only half of it. Any
+    # subprocess text mode turns on universal newlines and rewrites each CR byte
+    # to LF (measured 2026-08-30; see `_run_git_bytes`), so a dirty path holding
+    # a CR arrived spelled as a file that does not exist, `stat()` raised
+    # FileNotFoundError, and the path was dropped from the oldest-mtime scan --
+    # the same understated backup debt, by the other door.
+    rc, raw = _run_git_bytes(repo, ["status", "--porcelain", "-z"])
     if rc != 0:
         return None, None
+    out = raw.decode("utf-8", "surrogateescape")
     # Under -z a rename is TWO NUL-separated fields for ONE entry: "R  <new>"
     # then "<old>". Consume the second so it is neither counted as a change nor
     # stat'd as a path that no longer exists.

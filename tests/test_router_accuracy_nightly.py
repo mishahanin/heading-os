@@ -14,6 +14,7 @@ Two surfaces:
 
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -54,10 +55,52 @@ HARNESS_JSON = {
 
 
 class _Proc:
+    """Stands in for a TEXT-MODE `subprocess.run` only, and says so loudly.
+
+    The str/bytes assertion is not decoration. Until 2026-08-30 this module
+    replaced `subprocess.run` on the shared module object with one blanket lambda
+    returning `_Proc(0, <harness JSON str>)`, so it answered the runner's harness
+    call AND `router_payload.dirty_sources`' `git status --porcelain -z` with the
+    same canned string. When `dirty_sources` was corrected to read raw bytes (a
+    subprocess text mode rewrites every CR byte to LF, which loses a filename),
+    the stub no longer resembled the call it stood in for and five tests failed
+    on `'str' object has no attribute 'decode'`. A stub that quietly serves both
+    modes is a second implementation, and it drifts.
+    """
+
     def __init__(self, returncode=0, stdout="", stderr=""):
+        assert isinstance(stdout, str) and isinstance(stderr, str), (
+            "_Proc stands in for a text-mode call; a bytes-mode reader needs the "
+            "real subprocess.run, not this")
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
+
+
+def _dispatching_run(harness_rc=0, harness_stdout=None):
+    """Answer the judge-harness call; hand every other call to the real thing.
+
+    `monkeypatch.setattr(runner.subprocess, "run", ...)` patches the shared
+    `subprocess` MODULE, so it intercepts every caller in the process, not only
+    the runner. Dispatching on the argv keeps each call answered the way that
+    call is actually made: the harness in text mode, git for real and in bytes.
+    """
+    real_run = subprocess.run
+    if harness_stdout is None:
+        harness_stdout = json.dumps(HARNESS_JSON)
+
+    def run(cmd, *args, **kwargs):
+        argv = [str(c) for c in cmd] if isinstance(cmd, (list, tuple)) else [str(cmd)]
+        if any("skill-trigger-test" in part for part in argv):
+            assert kwargs.get("text") or kwargs.get("encoding"), (
+                "the judge harness returns JSON and must be read in text mode; "
+                "this stub cannot stand in for a bytes-mode call")
+            return _Proc(harness_rc, harness_stdout, "" if harness_rc == 0 else "boom")
+        if argv and argv[0] == "git":
+            return real_run(cmd, *args, **kwargs)
+        raise AssertionError(f"unstubbed subprocess call in this test: {argv}")
+
+    return run
 
 
 class _FakeNow:
@@ -90,8 +133,7 @@ def wired_runner(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "egress_state",
                         lambda *a, **k: (EGRESS_CLEAR, ""))
     monkeypatch.setattr(runner, "datetime", _FakeDatetime("2026-07-08"))
-    monkeypatch.setattr(runner.subprocess, "run",
-                        lambda *a, **k: _Proc(0, json.dumps(HARNESS_JSON)))
+    monkeypatch.setattr(runner.subprocess, "run", _dispatching_run())
     out = datastore / "operations" / "router-accuracy"
     return out
 
@@ -181,8 +223,7 @@ def test_the_harness_loads_the_operators_timezone_before_dating_the_record(
 
 
 def test_harness_failure_returns_nonzero(wired_runner, monkeypatch):
-    monkeypatch.setattr(runner.subprocess, "run",
-                        lambda *a, **k: _Proc(1, "", "boom"))
+    monkeypatch.setattr(runner.subprocess, "run", _dispatching_run(harness_rc=1))
     assert runner.run("sonnet") == 1
 
 

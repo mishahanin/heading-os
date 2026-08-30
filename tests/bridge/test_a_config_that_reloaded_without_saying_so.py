@@ -266,10 +266,41 @@ def test_an_ipv6_literal_is_still_returned_whole(bare_host):
     assert bare_host("[::1]:31415") == "::1"
 
 
-def test_an_uppercase_ipv6_literal_lands_in_the_set(bare_host):
-    """Hex in an IPv6 literal is case-insensitive too."""
+def test_an_ipv6_literal_is_lowercased_but_not_otherwise_normalised(bare_host):
+    """Hex in an IPv6 literal is case-insensitive, so it is lowercased.
+
+    RENAMED 2026-08-30. The name was
+    `test_an_uppercase_ipv6_literal_lands_in_the_set` and the docstring
+    justified it by case-insensitivity, but the body asserts the return value
+    is the string `"::0001"` -- which is NOT an element of `LOOPBACK`. Zero
+    padding is not letter case, and no amount of lowercasing turns `::0001`
+    into `::1`. The assertion was right about the code and the name was not;
+    `_bare_host` lowercases and splits, and does no address normalisation at
+    all. Both properties are now stated separately, and the consequence has its
+    own test below rather than being implied by a name.
+    """
     assert bare_host("[::0001]:31415") == "::0001"
     assert bare_host("[FE80::1]") == "fe80::1"
+
+
+def test_a_zero_padded_loopback_literal_is_currently_REFUSED(bare_host):
+    """What the old name asserted, measured: it does NOT land in the set.
+
+    `[::0001]` is the same address as `::1` under RFC 4291, so a client that
+    spells it that way is talking to loopback and the Host guard 421s it. That
+    is the CURRENT behaviour, pinned here so it is a decision rather than an
+    accident, and so the suite stops claiming coverage of a case it refuses.
+
+    Normalising with `ipaddress` would fix it and would also WIDEN the guard:
+    `127.0.0.2` is loopback under RFC 1122's 127.0.0.0/8, and
+    `test_a_foreign_host_is_still_foreign` in this file deliberately refuses it.
+    That trade is the operator's to make, not this test's, so nothing in
+    `app.py` was changed.
+    """
+    assert bare_host("[::0001]:31415") not in LOOPBACK
+    assert bare_host("[::1]:31415") in LOOPBACK, (
+        "the ordinary spelling must still be accepted, or this is not a "
+        "normalisation gap but a broken guard")
 
 
 def test_an_ordinary_host_and_port_still_splits(bare_host):

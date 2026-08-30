@@ -64,7 +64,15 @@ def test_a_failed_pull_warns(monkeypatch, tmp_path, capsys):
 
     monkeypatch.setattr(AH, "run_cmd", failing)
     pairs = AH.ensure_per_exec_repos()
-    out = capsys.readouterr().out + capsys.readouterr().err
+    # ONE readouterr(). The call DRAINS the buffer, so the old
+    # `capsys.readouterr().out + capsys.readouterr().err` always concatenated
+    # stdout with an empty string: the line was written to accept the warning on
+    # either stream and only ever searched stdout. A warning printed to stderr -
+    # the natural stream for one, and where git's own "fatal: could not read
+    # Username" goes - failed this test against a correct implementation, and
+    # the obvious repair is to move the warning to the wrong stream.
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
     assert pairs == [("someone", repo)], "the exec was dropped instead of flagged"
     assert "someone" in out and "pull" in out.lower(), (
         f"a failed pull produced no warning; the dashboard would read a stale "

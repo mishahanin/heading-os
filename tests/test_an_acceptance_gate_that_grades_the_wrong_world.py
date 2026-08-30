@@ -256,10 +256,35 @@ def test_every_query_call_site_uses_the_shared_tuple():
 # census-bench 5 - --no-write means no write
 # ============================================================
 
+@needs_gradable_corpus
 def test_no_write_suppresses_the_score_report(tmp_path):
+    """`--no-write` reached only `--baseline`; three other modes wrote regardless.
+
+    Fixed 2026-08-30 on two counts.
+
+    It was missing the `@needs_gradable_corpus` marker its two `--score`
+    siblings carry, and it is the ONLY guard for that finding. On a clone with
+    no private overlay - a clean CI checkout, i.e. the one environment where
+    this always executes - `load_truth` refuses the bundled `examples/` corpus
+    and exits 2 before any write path runs, so `"Отчёт:"` is absent whether or
+    not `--no-write` is honoured, and the assertion passes over a world where
+    the grader was never reached.
+
+    The marker alone is not enough: an absence assertion needs proof the thing
+    that would have printed actually ran. `mode_score` prints its results table
+    BEFORE it decides whether to write, so the header below is the evidence the
+    grader executed. Without it, "no report" and "no run" are the same string.
+    """
     answers = tmp_path / "a.json"
     answers.write_text(json.dumps({"answers": []}), encoding="utf-8")
+
     proc = _bench("--score", str(answers), "--no-write")
+
+    assert proc.returncode != 2, (
+        f"the grader refused the corpus instead of grading it:\n{proc.stderr}")
+    assert "причина" in proc.stdout, (
+        "mode_score never printed its results table, so this run reached no "
+        f"write path and proves nothing about --no-write:\n{proc.stdout}")
     assert "Отчёт:" not in proc.stdout, "--no-write still wrote a report"
 
 

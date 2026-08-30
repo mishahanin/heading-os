@@ -168,17 +168,26 @@ def secret_scan(dest: Path) -> bool:
     in front of that: a `.git` GITFILE whose gitdir has been removed satisfies
     the check while every git call under it exits 128. An empty list is only a
     clean verdict when git succeeded in producing it.
+
+    The listing is decoded from BYTES rather than read through subprocess text
+    mode. Text mode turns on universal newlines and rewrites every CR byte to
+    LF, and `subprocess` offers no `newline=` knob to switch it off, so the `-z`
+    here closes only the quoting half of the problem. MEASURED 2026-08-30: two
+    tracked files whose names differ only by that byte come back as two names in
+    bytes mode and as one under `text=True`. A mistranslated name is a file the
+    scanner cannot open, published unscanned - the leak this gate exists for.
     """
     listing = subprocess.run(
         ["git", "-C", str(dest), "ls-files", "-z", "--cached", "--others",
          "--exclude-standard"],
-        capture_output=True, text=True)
+        capture_output=True)
     if listing.returncode != 0:
-        sys.stderr.write(listing.stderr)
+        sys.stderr.write(listing.stderr.decode("utf-8", "replace"))
         print(f"{RED}REFUSING TO PUBLISH -- cannot list the files to scan in "
               f"{dest} (git ls-files exit {listing.returncode}).{RESET}")
         return False
-    files = [f for f in listing.stdout.split("\0") if f]
+    decoded = listing.stdout.decode("utf-8", "surrogateescape")
+    files = [f for f in decoded.split("\0") if f]
     if not files:
         return True
     proc = subprocess.run(

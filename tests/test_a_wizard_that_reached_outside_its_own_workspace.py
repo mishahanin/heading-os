@@ -63,7 +63,14 @@ compressed partial transcript in the DATA overlay permanently, invisible to the
 command that reports what is archived.
 
 No test here runs git against the real repository, reads the operator's
-transcripts, writes a real credential, or reaches any path outside tmp_path.
+transcripts, or writes a real credential.
+
+Three tests DO name a path outside `tmp_path`, and they have to: `tmp_path` is
+the workspace root under test, so a path the root does not contain can only sit
+above it. Every one of them goes through the `outside_file` fixture, which gives
+each test a name of its own and deletes it afterwards. The docstring used to
+claim no test reached outside `tmp_path` at all, which was false in three
+places, two of them under fixed names in a directory pytest never cleans.
 """
 from __future__ import annotations
 
@@ -185,28 +192,51 @@ def test_planning_refuses_an_escaping_rich_output(wiz, tmp_path, escape):
     assert "outside the workspace" in str(exc.value)
 
 
-def _escape_target(tmp_path: Path) -> tuple[str, Path]:
-    """A bank output one level above the workspace, named for THIS test.
+@pytest.fixture
+def outside_file(tmp_path):
+    """Factory for a uniquely-named path one level ABOVE the workspace root.
 
-    The escape lands outside tmp_path by construction, so it lands somewhere
-    pytest does not clean between runs. A fixed name would let one run's
-    artifact decide the next run's verdict -- and it did: mutation E1 reverted
-    the fix, the wizard wrote the escape for real, and the file then failed the
-    next unmutated run of a different test.
+    `tmp_path` IS the workspace root in these tests, so a target the root does
+    not contain has to live above it, and pytest does not clean `tmp_path.parent`
+    between runs. A FIXED name there lets one run's artifact decide the next
+    run's verdict, and it did: mutation E1 reverted the fix, the wizard wrote
+    the escape for real, and the leftover file then failed the next unmutated
+    run of a different test.
+
+    `_escape_target` learned that lesson and derived a per-test name. Two other
+    tests did not: `absolute-escape.md` and `host-file.md` were both fixed
+    names in that shared directory, and the second was written and never
+    removed, so the suite littered the basetemp root on every run. This fixture
+    is the one place that decides the name, and it deletes what it handed out
+    whether the test passed or failed.
     """
-    name = f"escape-{tmp_path.name}.md"
-    return f"../{name}", tmp_path.parent / name
+    handed_out: list[Path] = []
+
+    def _make(tag: str) -> Path:
+        path = tmp_path.parent / f"{tag}-{tmp_path.name}.md"
+        handed_out.append(path)
+        return path
+
+    yield _make
+    for path in handed_out:
+        path.unlink(missing_ok=True)
+
+
+def _escape_target(outside_file) -> tuple[str, Path]:
+    """A bank output one level above the workspace, named for THIS test."""
+    landed = outside_file("escape")
+    return f"../{landed.name}", landed
 
 
 @pytest.mark.parametrize("argv", [["--all"], ["--all", "--check"]])
-def test_every_command_refuses_the_same_escaping_bank(wiz, tmp_path,
+def test_every_command_refuses_the_same_escaping_bank(wiz, tmp_path, outside_file,
                                                       monkeypatch, capsys, argv):
     """The point of the fix: one bank, one answer, one verdict.
 
     `--question` refused and `--all` wrote. `--all --check` did neither; it
     raised ValueError out of a command contracted to write nothing.
     """
-    rel, landed = _escape_target(tmp_path)
+    rel, landed = _escape_target(outside_file)
     _rich_bank(tmp_path, rel)
     _answers(tmp_path, _rich_answered())
     rc = _run_main(wiz, tmp_path, monkeypatch, argv)
@@ -214,10 +244,10 @@ def test_every_command_refuses_the_same_escaping_bank(wiz, tmp_path,
     assert not landed.exists()
 
 
-def test_the_single_question_path_refuses_it_too(wiz, tmp_path, monkeypatch,
-                                                 capsys):
+def test_the_single_question_path_refuses_it_too(wiz, tmp_path, outside_file,
+                                                 monkeypatch, capsys):
     """The path that was already right. It is the reference the others matched."""
-    rel, landed = _escape_target(tmp_path)
+    rel, landed = _escape_target(outside_file)
     _rich_bank(tmp_path, rel)
     _answers(tmp_path, _rich_answered())
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(
@@ -229,10 +259,17 @@ def test_the_single_question_path_refuses_it_too(wiz, tmp_path, monkeypatch,
 
 
 def test_an_absolute_output_does_not_discard_the_workspace_root(wiz, tmp_path,
+                                                                outside_file,
                                                                 monkeypatch,
                                                                 capsys):
-    """`workspace_root / "/abs"` is `/abs`. pathlib drops the left side."""
-    target = tmp_path.parent / "absolute-escape.md"
+    """`workspace_root / "/abs"` is `/abs`. pathlib drops the left side.
+
+    The target is per-test and removed afterwards. It used to be the fixed
+    `absolute-escape.md`, so a run against a broken wizard left a real file
+    behind and `assert not target.exists()` then failed the NEXT run with the
+    wizard already fixed.
+    """
+    target = outside_file("absolute-escape")
     _rich_bank(tmp_path, str(target))
     _answers(tmp_path, _rich_answered())
     rc = _run_main(wiz, tmp_path, monkeypatch, ["--all"])
@@ -268,12 +305,12 @@ def test_an_absolute_template_is_refused(wiz, tmp_path):
         wiz.resolve_read_path(tmp_path, "/etc/hostname")
 
 
-def test_a_host_file_never_reaches_the_rendered_output(wiz, tmp_path,
+def test_a_host_file_never_reaches_the_rendered_output(wiz, tmp_path, outside_file,
                                                        monkeypatch, capsys):
     """The whole point: the template's CONTENTS were copied into a workspace file."""
-    secret_ish = tmp_path.parent / "host-file.md"
+    secret_ish = outside_file("host-file")
     secret_ish.write_text("HOST-FILE-CONTENTS\n", encoding="utf-8")
-    _rich_bank(tmp_path, "docs/bio.md", template="../host-file.md")
+    _rich_bank(tmp_path, "docs/bio.md", template=f"../{secret_ish.name}")
     _answers(tmp_path, _rich_answered())
     rc = _run_main(wiz, tmp_path, monkeypatch, ["--all"])
     assert rc == wiz.EXIT_SCHEMA_ERROR
@@ -482,9 +519,22 @@ def test_git_rel_normalises_a_dotdot_segment(wiz, tmp_path):
 
 def test_reset_no_longer_hands_git_an_os_native_path(wiz):
     """Scoped to `cmd_reset`. The `planned` list in `cmd_all` is display JSON,
-    never handed to git, so its OS-native spelling is not this defect."""
+    never handed to git, so its OS-native spelling is not this defect.
+
+    The slice is now terminated at the next top-level `def`, the way
+    `test_the_forward_slash_is_asserted_on_the_source_not_the_result` above
+    already does it. `split("def cmd_reset(")[1]` alone is the whole remainder
+    of the file, which is not a scope: it made the two assertions police every
+    function defined after `cmd_reset`. Both directions were reachable. A
+    legitimate `.relative_to(workspace_root)` in any later helper failed the
+    first assertion with `cmd_reset` untouched; and moving the two `_git_rel`
+    calls out into a later helper while `cmd_reset` regressed to plain `str(p)`
+    left both assertions green with the defect back.
+    """
     code = _code("apply-wizard-answers.py")
-    body = code.split("def cmd_reset(")[1]
+    marker = "def cmd_reset("
+    assert code.count(marker) == 1, "cmd_reset is named more than once in the source"
+    body = code.split(marker)[1].split("\ndef ")[0]
     assert ".relative_to(workspace_root)" not in body
     assert body.count("_git_rel(workspace_root,") == 2
 

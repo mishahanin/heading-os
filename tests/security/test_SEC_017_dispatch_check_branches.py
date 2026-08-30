@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """SEC-017 regression coverage for the consolidated _dispatch.py.
 
-The PreToolUse dispatcher folds eight distinct security/safety checks into
-one in-process pipeline. Each check is a pure function of the tool payload,
-so we exercise them directly rather than via subprocess. Goals:
+The PreToolUse dispatcher folds ten distinct security/safety checks into
+one in-process pipeline, and most of them are pure functions of the tool
+payload, so we exercise them directly rather than via subprocess. Goals:
 
 1. Catch refactors that silently bypass a guardrail.
 2. Pin the BLOCK reason text per check (downstream surfaces parse it).
@@ -11,9 +11,21 @@ so we exercise them directly rather than via subprocess. Goals:
    so the dispatcher behaves identically when invoked from Windows VSCode
    or from WSL/Linux Claude Code against the same files.
 
-All eight checks are stateless and exercised via direct payloads. (The
-`_secure/` vault and its `check_protect_secure` branch were removed in Plan 5;
-sensitivity is now the fail-closed `SENSITIVE_MODE` flag, covered by
+Corrected 2026-08-30. This said "eight distinct checks" and "All eight checks
+are stateless", and both halves were false. `CHECKS` carries TEN entries
+(`test_checks_list_has_ten_branches` pins the list and its order), and two of
+them are not pure functions of the payload: `check_rate_limit` and
+`check_tool_budget` load and save `.claude/state/dispatch-rate.json`. That is
+exactly why `_isolate_rate_state` exists in this file - its own docstring says
+"so the test never touches the live .claude/state/dispatch-rate.json". A reader
+who trusted the old sentence would conclude the whole pipeline can be exercised
+without isolating persisted state, which is the mistake the budget test had to
+fix.
+
+So: eight checks are stateless and exercised via direct payloads; the two
+rate/budget checks persist state and must be run under `_isolate_rate_state`.
+(The `_secure/` vault and its `check_protect_secure` branch were removed in
+Plan 5; sensitivity is now the fail-closed `SENSITIVE_MODE` flag, covered by
 `tests/test_sensitive_mode.py`.)
 """
 from __future__ import annotations
@@ -30,8 +42,19 @@ DISPATCH_PATH = WORKSPACE / ".claude" / "hooks" / "_dispatch.py"
 
 @pytest.fixture(scope="module")
 def dispatch():
-    """Load _dispatch.py as a module (its filename has a leading underscore,
-    so a plain import statement does not pick it up — use importlib.spec)."""
+    """Load _dispatch.py as a module by path.
+
+    The reason is that `.claude/hooks/` is not a package on `sys.path`, so
+    there is no module name to import — the same reason `test_leak_path_matrix._load`
+    gives for its kebab-named script.
+
+    Corrected 2026-08-30. This used to say the leading underscore in the
+    filename was what stopped a plain `import`. That is false as a matter of
+    Python semantics: `import _dispatch` is perfectly valid, and the stdlib
+    ships importable underscore modules (`_thread`, `_socket`). The conclusion
+    was right and the cause was wrong, which is the shape that makes the next
+    reader misdiagnose a real import failure.
+    """
     spec = importlib.util.spec_from_file_location("_dispatch", DISPATCH_PATH)
     module = importlib.util.module_from_spec(spec)
     sys.modules["_dispatch"] = module

@@ -31,6 +31,7 @@ gate that runs; only the source that generates ordinary English stays opt-in.
 """
 from __future__ import annotations
 
+import ast
 import json
 import re
 import subprocess
@@ -153,15 +154,87 @@ def test_the_whole_engine_surface_passes_the_default_gate():
 
 _EXEC_FIXTURE_NAMES = {"james", "bond", "moneypenny", "agent007"}
 
+# A whole string literal that reads as a person's name: one to three
+# capitalised words and nothing else. "Alice Smith" matches; "Anchor: the half
+# that already worked." does not, and neither does a path or a JSON key.
+_NAME_SHAPED = re.compile(r"^[A-Z][a-z]{2,}(?: [A-Z][a-z]{2,}){0,2}$")
+
+
+def _string_constants(src: str) -> list[str]:
+    """Every string constant in `src` except docstrings.
+
+    Docstrings are excluded because they are prose about the fixtures, not
+    fixture data, and scanning them is what makes a widened person-name check
+    flag ordinary sentence-initial words.
+    """
+    tree = ast.parse(src)
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                             ast.AsyncFunctionDef)):
+            body = getattr(node, "body", None)
+            if body and isinstance(body[0], ast.Expr) \
+                    and isinstance(body[0].value, ast.Constant) \
+                    and isinstance(body[0].value.value, str):
+                docstrings.add(id(body[0].value))
+    return [n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and id(n) not in docstrings]
+
+
+def _name_shaped_literals(src: str) -> set[str]:
+    """The capitalised words of every name-shaped string constant in `src`."""
+    return {word
+            for text in _string_constants(src)
+            if _NAME_SHAPED.match(text.strip())
+            for word in text.strip().split()}
+
+
+def test_the_name_extractor_can_actually_fail():
+    """Drive `_name_shaped_literals` with input that must and must not trip it.
+
+    The live check below runs over a corpus that is correct today, so on its
+    own it would pass identically if the extractor returned the empty set.
+    """
+    # Bond scaffolding throughout, because this file's own guard vets every
+    # person-shaped literal it contains, this one included.
+    assert _name_shaped_literals('x = "James Bond"') == {"James", "Bond"}
+    assert _name_shaped_literals(
+        'x = {"name": "Rupert Moneypenny"}') == {"Rupert", "Moneypenny"}
+    # Prose, paths and identifiers are not person-shaped.
+    assert _name_shaped_literals('x = "Anchor: the half that already worked."') == set()
+    assert _name_shaped_literals('x = "outputs/Reports/Latest.md"') == set()
+    # A docstring is not fixture data.
+    assert _name_shaped_literals(
+        'def f():\n    """Rupert Moneypenny wrote this."""\n') == set()
+
 
 def test_this_test_names_only_fictional_people():
     """The guard on the guard: a test written to prove no real name is in the
     engine must not itself carry one. Every person-shaped literal here is Bond
     scaffolding, which the operator nominated as the placeholder on 2026-08-24."""
-    src = Path(__file__).read_text(encoding="utf-8")
-    body = src.split('"""', 2)[2]        # skip the module docstring, which
-                                          # names the two files, not the people
-    quoted = set(re.findall(r'"([A-Z][a-z]{3,})"', body))
-    allowed = {"James", "Bond", "Moneypenny", "World", "Price", "Misha", "Hanin",
-               "Rupert", "Placeholder"}
-    assert quoted <= allowed, f"an unvetted person-shaped literal appeared: {quoted - allowed}"
+    # The pattern used to be `re.findall(r'"([A-Z][a-z]{3,})"', body)`: a whole
+    # double-quoted string of exactly ONE capitalised word. Every person-shaped
+    # literal this file actually contains is two words - "James Bond",
+    # "James Moneypenny", "World Price", "Misha Hanin" - and a space where the
+    # pattern demands a closing quote matches nothing. So the docstring's claim
+    # was being checked against an empty set, and pasting a real two-word
+    # colleague name into the overlay fixture passed in silence: precisely the
+    # leak this file exists to stop.
+    #
+    # Extraction is now by `ast` over the real string constants, with
+    # docstrings excluded. A regex over the raw text cannot tell a triple-quote
+    # from a pair of empty strings, and reading prose out of docstrings is what
+    # made the first widened attempt flag "Anchor" and "Promotion".
+    names = _name_shaped_literals(Path(__file__).read_text(encoding="utf-8"))
+    # One roster, not two. `_EXEC_FIXTURE_NAMES` above is this same list in
+    # lowercase, and it used to sit beside a second hand-maintained copy here,
+    # which is the drift shape this file condemns elsewhere.
+    allowed = {name.capitalize() for name in _EXEC_FIXTURE_NAMES} | {
+        "World", "Price", "Misha", "Hanin", "Rupert", "Placeholder"}
+    # A floor: the extractor must actually see the Bond scaffolding. Without
+    # this, an extractor that silently returns nothing passes the check below.
+    assert {"James", "Bond"} <= names, (
+        f"the extractor did not find the known fixture names; it is broken: {names}")
+    assert names <= allowed, (
+        f"an unvetted person-shaped literal appeared: {sorted(names - allowed)}")

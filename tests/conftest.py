@@ -15,7 +15,17 @@ import pytest
 
 from scripts.utils import venv_guard as _venv
 
-os.environ.setdefault("HEADING_OS_TZ", "Etc/GMT-4")
+# Assignment, not setdefault, for the reason spelled out at WORKSPACE_LOG_DIR
+# fifty lines down: a pin a stray shell variable can switch off is not a pin.
+# It was a `setdefault` until 2026-08-30, so `HEADING_OS_TZ=America/New_York
+# pytest tests/` quietly re-pointed every calendar, scheduling and heartbeat
+# assertion at New York offsets while this docstring still promised Etc/GMT-4,
+# and nothing in the run said the substitution had happened. A test that needs
+# a different zone sets it per case with monkeypatch, which applies inside the
+# test body and still wins.
+# tests/test_a_timezone_pin_a_stray_variable_could_switch_off.py fails without
+# this line being an assignment.
+os.environ["HEADING_OS_TZ"] = "Etc/GMT-4"
 
 # The suite's re-exec guard, set ONCE, here, because this file is collected
 # before any test module.

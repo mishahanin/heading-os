@@ -111,14 +111,31 @@ def _flat(text: str) -> str:
 
 
 def test_the_docstring_no_longer_claims_one_stricter_divergence():
+    """The retracted claim is gone AND the correction that replaced it is there.
+
+    COMMENT CORRECTED 2026-08-30. It used to read "the old sentence is QUOTED in
+    the correction, on purpose, so the test asserts the correction rather than
+    the absence of the words" -- and the very next line asserted exactly that
+    absence. Both could not be true: if the correction really quoted the old
+    sentence verbatim, the assertion would fail on every run. MEASURED
+    2026-08-30: `yamlio.__doc__` does NOT contain "The one divergence is an
+    unsupported", so the comment's premise was the false half. The word
+    "divergence" IS still in the docstring, in the corrected sentence, which is
+    what makes the specific phrase a safe probe for the retracted claim rather
+    than a ban on the vocabulary.
+
+    The three positive assertions carry the weight; the absence catches a
+    straight revert, which the positives alone would not.
+    """
     doc = _flat(yamlio.__doc__)
 
-    # The old sentence is QUOTED in the correction, on purpose, so the test
-    # asserts the correction rather than the absence of the words.
     assert "The one divergence is an unsupported" not in doc
     assert "THREE known ways" in doc
     assert "LOOSER" in doc
     assert "the corpus contained no tab" in doc
+    assert "divergence" in doc, (
+        "the retracted phrasing was removed by deleting the whole subject, not "
+        "by correcting it; this test can no longer tell a fix from a deletion")
 
 
 def test_the_docstring_says_a_handler_must_carry_its_own_value_check():

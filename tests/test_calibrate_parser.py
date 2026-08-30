@@ -15,6 +15,7 @@ Covers cases listed in plans/2026-05-13-calibrate-skill.md Phase 1 Success Crite
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -43,8 +44,16 @@ def test_locate_newest_session_by_mtime(tmp_path):
     older = tmp_path / "older.jsonl"
     newer = tmp_path / "newer.jsonl"
     older.write_text('{"type":"user","timestamp":"2026-05-13T10:00:00Z","message":{"role":"user","content":"older"}}\n', encoding="utf-8")
-    time.sleep(0.05)  # ensure distinct mtimes
     newer.write_text('{"type":"user","timestamp":"2026-05-13T10:00:00Z","message":{"role":"user","content":"newer"}}\n', encoding="utf-8")
+    # The ordering this test is about is STATED, not raced for. A 50 ms sleep
+    # was the only thing separating the two mtimes, and 50 ms is not a
+    # separation on a filesystem with 1 s or 2 s timestamp granularity (FAT,
+    # exFAT, some network mounts, some CI tmpfs): both files then share an
+    # mtime and "newest" is whatever the directory order happens to be.
+    # os.utime takes the clock out of it and removes the sleep with it.
+    now = time.time()
+    os.utime(older, (now - 3600, now - 3600))
+    os.utime(newer, (now, now))
     rc, out, err = run_parser("--sessions-dir", str(tmp_path))
     assert rc == 0, f"stderr: {err}"
     envelope = json.loads(out)
@@ -254,8 +263,17 @@ def test_max_bytes_truncation(tmp_path):
 # ---------- permission error handling ----------
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX chmod required for unreadable test")
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="root bypasses permission bits, so chmod 0o000 is still readable")
 def test_permission_error_exits_code_3(tmp_path):
-    """Unreadable session JSONL -> exit code 3."""
+    """Unreadable session JSONL -> exit code 3.
+
+    The win32 skip was the only guard, and it says nothing about uid 0. `chmod
+    0o000` does not make a file unreadable to root on any mainstream Linux
+    filesystem, so in a root-run container (the default in the stock `python:`
+    images) `calibrate.py` reads the file, exits 0, and `assert rc == 3` fails
+    with nothing wrong. The condition is now measured, not assumed.
+    """
     unreadable = tmp_path / "no-read.jsonl"
     unreadable.write_text("{}\n", encoding="utf-8")
     unreadable.chmod(0o000)
@@ -282,10 +300,20 @@ def test_system_reminders_extracted():
 # ---------- output hidden-character cleanliness ----------
 
 def test_parser_output_has_no_hidden_unicode():
-    """Parser stdout must not contain zero-width characters, em-dashes, etc."""
+    """Parser stdout must not contain INVISIBLE characters.
+
+    The docstring used to say "zero-width characters, em-dashes, etc." and
+    U+2014 is not in the list below, so it named a guarantee that did not
+    exist. The list is the right side: an em-dash is visible, this envelope
+    reproduces user turns verbatim, and `.claude/rules/voice.md` preserves the
+    em-dash in reproduced text. The docstring is what changed.
+    """
     fixture = FIXTURES / "simple-correction.jsonl"
     rc, out, err = run_parser("--session", str(fixture))
     assert rc == 0
+    # A scan over empty output is not a pass. If the parser ever printed
+    # nothing, every assertion below would hold and say nothing.
+    assert out.strip(), "nothing was scanned: the parser produced no stdout"
     # Parser itself must not inject hidden chars. User content passthrough is fine.
     # Build forbidden chars from escape sequences to keep source clean
     forbidden = [

@@ -53,15 +53,29 @@ catch, so the first candidate aborted the command before any file moved. Moot
 since 2026-08-27: `cmd_archive_scan` no longer opens MEMORY.md at all.
 
 NOTE ON METHOD: nothing here writes outside tmp_path, spawns git, or touches a
-real workspace. `transfer-contact` is driven only far enough to reach its own
-refusal.
+real workspace.
+
+  CORRECTED 2026-08-30. That sentence was false for the whole `transfer-contact`
+  half of this file. `_transfer` ran the real script with `cwd=ROOT` and the
+  inherited environment, so `get_admin_slugs()` and `get_all_active_exec_slugs()`
+  answered from the OPERATOR'S live data overlay; the two accepted-slug cases
+  then walked past the slug gate into a real source-contact lookup inside it, and
+  `test_no_phantom_directory_is_left_behind` listed the real sibling directories
+  next to the checkout. The roster is now a fixture (`fleet`): both roots are
+  pinned into tmp_path through `WORKSPACE_ROOT` and `HEADING_OS_DATA`, and the
+  slugs are invented. That is also what turned the admin carve-out from a hope
+  about this machine into an assertion - see
+  `test_the_carve_out_is_the_admin_list_and_not_a_free_pass`.
 """
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -256,34 +270,92 @@ def test_the_scan_archives_every_candidate_in_one_pass(workspace):
 # Finding 5 - a typo that moved a contact nowhere
 # ============================================================
 
-def _transfer(args, cwd=ROOT):
+ADMIN = "ops-admin"       # invented; the engine repo is public
+EXEC = "field-lead"       # invented; the only active exec on the fixture roster
+TYPO = "field-leed"       # what a fat finger produces for EXEC
+
+
+@pytest.fixture
+def fleet(tmp_path):
+    """An engine root and a data overlay that exist only for this test.
+
+    `transfer-contact.py` resolves its roster through `get_workspace_root()` and
+    `get_data_root()`, both of which honour an environment override, so pinning
+    the two variables is enough to move every lookup the script performs -
+    identity, admin list, exec registry, and the CRM contacts directory - inside
+    tmp_path. Without it the script read the operator's live overlay; with it the
+    roster is exactly two invented slugs and every assertion below is about the
+    code rather than about the machine.
+    """
+    engine = tmp_path / "engine"
+    engine.mkdir()
+    (engine / ".workspace-identity.json").write_text(
+        json.dumps({"role": "admin", "slug": ADMIN, "type": "ceo-master"}),
+        encoding="utf-8")
+    data = tmp_path / "data"
+    (data / "config").mkdir(parents=True)
+    (data / "admin").mkdir(parents=True)
+    (data / "config" / "admin.json").write_text(
+        json.dumps({"admin_slugs": [ADMIN]}), encoding="utf-8")
+    (data / "admin" / "executives.json").write_text(
+        json.dumps({"version": "1.0", "executives": [
+            {"slug": EXEC, "status": "active", "role": "exec"}]}),
+        encoding="utf-8")
+    return SimpleNamespace(root=tmp_path, engine=engine, data=data)
+
+
+def _transfer(fleet, args):
+    """Run the real script against the sandbox in `fleet`, never the machine.
+
+    `env=` is explicit rather than inherited: a child process picks up the
+    ambient `HEADING_OS_DATA` otherwise, which on an operator machine is the
+    live private overlay.
+    """
+    env = {**os.environ,
+           "WORKSPACE_ROOT": str(fleet.engine),
+           "HEADING_OS_DATA": str(fleet.data)}
     return subprocess.run(
         [sys.executable, str(TRANSFER_SRC), *args],
-        capture_output=True, text=True, cwd=str(cwd), timeout=120)
+        capture_output=True, text=True, cwd=str(fleet.root), env=env,
+        timeout=120)
 
 
-def test_an_unknown_target_slug_is_refused():
+def test_an_unknown_target_slug_is_refused(fleet):
     """The finding. Any string that is not a path shape became a directory
     name, so a typo wrote the contact into a phantom tree."""
-    proc = _transfer(["--contact", "someone", "--from", "misha-hanin",
-                      "--to", "marlow-cartre"])
+    proc = _transfer(fleet, ["--contact", "someone", "--from", ADMIN,
+                             "--to", TYPO])
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "not an active exec or admin slug" in proc.stdout
 
 
-def test_an_unknown_source_slug_is_refused_too():
-    """Both ends. A bad `--from` resolves a phantom source, so the run dies on
-    "source contact not found" and names a path that never existed."""
-    proc = _transfer(["--contact", "someone", "--from", "nobody-here",
-                      "--to", "misha-hanin"])
+def test_an_unknown_source_slug_is_refused_too(fleet):
+    """Both ends. A `--from` that is on neither the roster nor the admin list is
+    refused by the same gate, before the source path is ever resolved - which is
+    why the message names the slug and not a path.
+
+    The docstring here used to say the run "dies on source contact not found and
+    names a path that never existed", which is the behaviour the gate REPLACED;
+    it could only ever have been true while the assertion below was false.
+    """
+    proc = _transfer(fleet, ["--contact", "someone", "--from", "nobody-here",
+                             "--to", ADMIN])
     assert proc.returncode == 1
     assert "not an active exec or admin slug" in proc.stdout
+    assert "Source contact not found" not in proc.stdout
 
 
-def test_the_refusal_lists_the_slugs_that_would_work():
-    proc = _transfer(["--contact", "someone", "--from", "misha-hanin",
-                      "--to", "marlow-cartre"])
+def test_the_refusal_lists_the_slugs_that_would_work(fleet):
+    """The listing has to be the resolved roster, not the words "Known slugs:".
+
+    Both fixture slugs are required by name, so a regression that prints the
+    header over an empty or hardcoded set fails here.
+    """
+    proc = _transfer(fleet, ["--contact", "someone", "--from", ADMIN,
+                             "--to", TYPO])
     assert "Known slugs:" in proc.stdout
+    assert ADMIN in proc.stdout and EXEC in proc.stdout
+    assert "(none resolved)" not in proc.stdout
 
 
 def test_the_refusal_lands_before_anything_is_written():
@@ -296,67 +368,83 @@ def test_the_refusal_lands_before_anything_is_written():
     assert refusal < src.index("source_path.rename(")
 
 
-def test_no_phantom_directory_is_left_behind():
-    """Behavioural backstop for the ordering test above."""
-    parent = ROOT.parent
-    before = {p.name for p in parent.iterdir() if p.is_dir()}
-    _transfer(["--contact", "someone", "--from", "misha-hanin",
-               "--to", "marlow-cartre"])
-    after = {p.name for p in parent.iterdir() if p.is_dir()}
-    assert after == before, f"the run created {after - before}"
+def test_no_phantom_directory_is_left_behind(fleet):
+    """Behavioural backstop for the ordering test above.
 
-
-def test_an_admin_slug_is_accepted_even_though_it_is_not_on_the_roster():
-    """`get_all_active_exec_slugs()` returns EXECS. The operator running this is
-    an admin and is not among them, so a roster-only check would refuse the CEO
-    his own transfers. Proven by getting PAST the slug gate: the run reaches
-    "Source contact not found", which is the next check.
-
-    The admin slug is RESOLVED, exactly as the roster is read in the test below,
-    and for a second reason on top of the leak one. `get_admin_slugs()` answers
-    from `admin.json` in the DATA overlay, and falls back to the operator seam
-    when no overlay is mounted, so the two workspaces disagree on the string. A
-    slug typed in here therefore only resolved on the machine that wrote the
-    test: on a clone with no overlay it is not an admin slug, the gate refused
-    it, and this test failed for a reason that has nothing to do with the
-    carve-out it exists to pin.
+    The sweep used to list the REAL directory beside the checkout, which both
+    reads the operator's tree and races any other process working in it. The
+    phantom the defect created is `<workspace parent>/.heading-os-data-<typo>`,
+    and the workspace parent is now inside tmp_path, so the same sweep run there
+    covers exactly the same path with none of that.
     """
-    from scripts.utils.workspace import (
-        get_admin_slugs, get_all_active_exec_slugs)
-    admins = sorted(get_admin_slugs())
-    assert admins, "no admin slug resolves in this workspace"
-    admin = admins[0]
-    assert admin not in get_all_active_exec_slugs(), (
-        f"{admin!r} is on the exec roster, so accepting it proves nothing "
-        f"about the admin carve-out")
-    proc = _transfer(["--contact", "definitely-not-a-real-contact",
-                      "--from", admin, "--to", admin])
+    before = {p.name for p in fleet.root.iterdir()}
+    _transfer(fleet, ["--contact", "someone", "--from", ADMIN, "--to", TYPO])
+    after = {p.name for p in fleet.root.iterdir()}
+    assert after == before, f"the run created {after - before}"
+    assert not (fleet.root / f".heading-os-data-{TYPO}").exists()
+
+
+def test_an_admin_slug_is_accepted_even_though_it_is_not_on_the_roster(fleet):
+    """`get_all_active_exec_slugs()` returns EXECS. An admin is not among them,
+    so a roster-only check would refuse the operator their own transfers. Proven
+    by getting PAST the slug gate: the run reaches "Source contact not found",
+    which is the next check.
+
+    The fixture roster carries EXEC and nothing else, so "the admin is not on the
+    roster" is a property of the fixture rather than a claim about whatever
+    machine happens to run this. Before 2026-08-30 this resolved
+    `get_admin_slugs()` live and then handed the answer to a subprocess with no
+    environment override, so both halves - the premise and the run - were reading
+    the operator's overlay.
+    """
+    registry = json.loads(
+        (fleet.data / "admin" / "executives.json").read_text(encoding="utf-8"))
+    assert ADMIN not in {e["slug"] for e in registry["executives"]}, (
+        "the fixture put the admin on the exec roster, so accepting it would "
+        "prove nothing about the admin carve-out")
+    proc = _transfer(fleet, ["--contact", "no-such-contact",
+                             "--from", ADMIN, "--to", ADMIN])
     assert "not an active exec or admin slug" not in proc.stdout, proc.stdout
     assert "Source contact not found" in proc.stdout
 
 
-def test_a_known_exec_slug_is_accepted():
-    """The other half: a real roster entry must not be refused either.
+def test_the_carve_out_is_the_admin_list_and_not_a_free_pass(fleet):
+    """The other direction, which nothing asserted: take the slug OFF the admin
+    list and the same run must be refused.
 
-    The slug is READ from the roster rather than written here. The engine repo
-    is public and ships no real entity names, so hardcoding one would be a leak
-    - the content guard caught exactly that on the first draft of this test.
-    Reading it also keeps the test true when the roster changes.
+    Without this, a gate rewritten to accept any slug it cannot classify would
+    keep the test above green.
     """
-    from scripts.utils.workspace import get_all_active_exec_slugs
-    roster = sorted(get_all_active_exec_slugs())
-    if not roster:
-        pytest.skip("no execs on the roster in this workspace")
-    proc = _transfer(["--contact", "definitely-not-a-real-contact",
-                      "--from", "misha-hanin", "--to", roster[0]])
+    (fleet.data / "config" / "admin.json").write_text(
+        json.dumps({"admin_slugs": ["someone-else"]}), encoding="utf-8")
+    (fleet.engine / ".workspace-identity.json").write_text(
+        json.dumps({"role": "admin", "slug": "someone-else",
+                    "type": "ceo-master"}), encoding="utf-8")
+    proc = _transfer(fleet, ["--contact", "no-such-contact",
+                             "--from", ADMIN, "--to", EXEC])
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "not an active exec or admin slug" in proc.stdout
+
+
+def test_a_known_exec_slug_is_accepted(fleet):
+    """The other half: a roster entry must not be refused either.
+
+    The slug is the fixture's, not the live roster's. Reading the live roster
+    made the test skip itself on any clone with no execs provisioned - a guard
+    that is green over an empty corpus - and pinned the source end to a
+    hardcoded operator slug that the same docstring called a leak.
+    """
+    proc = _transfer(fleet, ["--contact", "no-such-contact",
+                             "--from", ADMIN, "--to", EXEC])
     assert "not an active exec or admin slug" not in proc.stdout, proc.stdout
+    assert "Source contact not found" in proc.stdout
 
 
-def test_the_refusal_stops_the_run_rather_than_warning():
+def test_the_refusal_stops_the_run_rather_than_warning(fleet):
     """Dropping the exit would leave a printed complaint and a run that carries
     on into the phantom path - the defect with a message attached."""
-    proc = _transfer(["--contact", "someone", "--from", "misha-hanin",
-                      "--to", "marlow-cartre"])
+    proc = _transfer(fleet, ["--contact", "someone", "--from", ADMIN,
+                             "--to", TYPO])
     assert proc.returncode == 1
     assert "Source contact not found" not in proc.stdout, (
         "the run continued past its own refusal")

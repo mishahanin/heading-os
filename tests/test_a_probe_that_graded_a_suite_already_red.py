@@ -115,10 +115,37 @@ def test_a_command_that_cannot_start_is_also_a_refusal(tmp_path):
 
 
 def test_the_tree_is_left_clean_after_a_refusal(tmp_path):
+    """A red baseline is refused BEFORE anything is written."""
     root = _tree(tmp_path, 99)
     before = (root / "src.py").read_text(encoding="utf-8")
     run_mutations([_BREAK], [sys.executable, "check.py"], root)
     assert (root / "src.py").read_text(encoding="utf-8") == before
+
+
+def test_the_tree_is_restored_after_a_mutation_is_actually_applied(tmp_path):
+    """The restore path, which the refusal test above cannot reach.
+
+    `test_the_tree_is_left_clean_after_a_refusal` builds `_tree(tmp_path, 99)`
+    - a baseline its own sibling pins as BASELINE_RED, meaning the probe
+      refuses before applying anything. So `src.py` is never touched on that
+    path, the assertion holds no matter what the apply/restore code does, and
+    a `run_mutations` that applied the mutation and never put the file back
+    left every test in this file green. That is coverage that reads as
+    existing and measures nothing.
+
+    A GREEN baseline reaches the mutate/restore code, so this one can fail.
+    """
+    root = _tree(tmp_path, 42)
+    before = (root / "src.py").read_text(encoding="utf-8")
+    assert "return 42" in before
+
+    results = run_mutations([_BREAK], [sys.executable, "check.py"], root)
+
+    assert [r.verdict for r in results] == [KILLED], (
+        "the mutation was not applied, so the restore path was not reached "
+        f"either: {[r.detail for r in results]}")
+    assert (root / "src.py").read_text(encoding="utf-8") == before, (
+        "the mutation was left in the tree after the run")
 
 
 # ============================================================

@@ -106,13 +106,37 @@ def test_priority_counts(tmp_path):
 
 
 def test_pipes_in_body_preserved(tmp_path):
-    """A pipe inside the description (before metadata) is preserved."""
+    """A pipe inside the description (before metadata) is preserved.
+
+    Fixed 2026-08-30: the fixture contained no pipe. The description read
+    `foo and bar with detail`, so the assertion passed against a parser that
+    split naively on every `|` and truncated the body at the first one — which
+    is precisely the regression this test is named to catch. There is now a real
+    `|` between `foo` and `bar with detail`, and `_strip_metadata_suffix` has to
+    rejoin the two body segments to satisfy it.
+    """
     _write_tasks_md(tmp_path,
         "## Active\n\n"
-        "- [ ] **2026-05-01** | `P1` | foo and bar with detail | *Task* | Due: 2026-05-15\n"
+        "- [ ] **2026-05-01** | `P1` | foo | bar with detail | *Task* | Due: 2026-05-15\n"
     )
     result = list_active_tasks(tmp_path, today=date(2026, 5, 10))
-    assert result["tasks"][0]["description"] == "foo and bar with detail"
+    assert result["tasks"][0]["description"] == "foo | bar with detail"
+
+
+def test_metadata_after_a_piped_body_is_still_stripped(tmp_path):
+    """The other half: preserving body pipes must not swallow the metadata.
+
+    A parser that simply stopped splitting would keep `*Task*` and `Due:` in
+    the description and pass the test above.
+    """
+    _write_tasks_md(tmp_path,
+        "## Active\n\n"
+        "- [ ] **2026-05-01** | `P1` | alpha | beta | *Task* | Due: 2026-05-15\n"
+    )
+    task = list_active_tasks(tmp_path, today=date(2026, 5, 10))["tasks"][0]
+    assert task["description"] == "alpha | beta"
+    assert task["kind"] == "Task"
+    assert task["due"] == "2026-05-15"
 
 
 def test_data_time_is_file_mtime(tmp_path):

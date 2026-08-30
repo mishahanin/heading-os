@@ -1,4 +1,5 @@
 """Unit tests for /investors source."""
+import json
 from pathlib import Path
 
 from scripts.bridge_daemon.sources.investors import (
@@ -95,9 +96,18 @@ def test_acronym_match_for_nif(tmp_path):
 
 
 def test_first_token_match_for_contoso(tmp_path):
-    """Contoso CCI in decisions table matches 'Contoso Capital' in regional table via first-token."""
+    """Contoso CCI in decisions table matches 'Contoso Capital' in regional table via first-token.
+
+    FIXTURE CORRECTED 2026-08-30. The section header said `## US (1)` while the
+    row's HQ column said `London` -- one of the two fields was simply wrong
+    data, and because the test asserted only `status` and never `region`, the
+    contradiction passed in silence AND a region-assignment defect in
+    `list_investors` was invisible to it. The header is now `Europe`, matching
+    the HQ, exactly as `test_parses_regional_row` pairs Europe with Hamburg, and
+    the region is asserted so the pairing is measured rather than assumed.
+    """
     _write_shortlist(tmp_path,
-        "## US (1)\n\n"
+        "## Europe (1)\n\n"
         "| # | Firm | Type | HQ | Cheque | Fit | Notes |\n"
         "|---|------|------|----|--------|-----|-------|\n"
         "| 15 | Contoso Capital (regional feeder) | Cyber VC | London | 15-40M | HIGH | institutional LP base |\n\n"
@@ -108,6 +118,8 @@ def test_first_token_match_for_contoso(tmp_path):
     )
     result = list_investors(tmp_path)
     assert result["firms"][0]["status"] == "first-5"
+    assert result["firms"][0]["region"] == "Europe"
+    assert result["firms"][0]["hq"] == "London"
 
 
 def test_dossier_path_matched_by_number(tmp_path):
@@ -225,6 +237,17 @@ def test_mark_sent_strips_newlines_from_note(tmp_path):
     # The body line itself should be single-line JSON.
     lines = [ln for ln in text.splitlines() if ln]
     assert len(lines) == 1
+    # The `\r` in the fixture was DECORATIVE until 2026-08-30: nothing asserted
+    # anything about it. A sanitiser written `note.replace("\n", " ")` alone
+    # leaves the carriage return in place, `json.dumps` escapes it as the two
+    # characters `\r`, the file is still one physical line and `"\\n" not in
+    # text` is still true -- so both assertions above pass while the JSONL log
+    # stores a note carrying a raw CR, which the single-line contract exists to
+    # prevent. Read the value back rather than inspecting the encoded text.
+    assert "\\r" not in text
+    note = json.loads(lines[0])["note"]
+    assert "\r" not in note and "\n" not in note, repr(note)
+    assert note == "line1 line2 line3"
 
 
 def test_mark_sent_appends_multiple_entries(tmp_path):

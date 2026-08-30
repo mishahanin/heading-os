@@ -66,6 +66,7 @@ lr = _load("lint-ratchet", "lint_ratchet_09p3")
 lf = _load("llm-fit-report", "llm_fit_report_09p3")
 
 from scripts import marp_render as m  # noqa: E402
+from scripts.utils.pid_liveness import pid_is_running  # noqa: E402
 
 
 # ============================================================
@@ -532,9 +533,43 @@ def test_the_windows_liveness_check_compares_the_pid_field(monkeypatch):
     assert m._is_process_running(8080) is True
 
 
+def _a_pid_nothing_owns() -> int:
+    """A PID the kernel says is unowned, measured rather than assumed.
+
+    Asks `scripts/utils/pid_liveness.pid_is_running`, the one implementation,
+    rather than spelling `os.kill(pid, 0)` here. This helper first carried its
+    own copy of the question, and `tests/test_a_liveness_answer_that_landed_in_
+    four_of_six.py` refused it on 2026-08-30: a private copy of "is this PID
+    alive" had already been wrong in four modules, because `PermissionError`
+    from `os.kill` means the process EXISTS and belongs to somebody else, which
+    reads as absence to anyone who only catches `ProcessLookupError`. The local
+    copy here happened to handle that correctly, and that is exactly the state
+    the guard exists to stop being relied on: the next edit to it would not
+    have the reasoning in front of it.
+
+    `not pid_is_running(pid)` is the same question the loop asked, with the
+    PermissionError case answered in one place instead of five.
+    """
+    for pid in range(2 ** 22 - 1, 2 ** 22 - 5000, -1):
+        if not pid_is_running(pid):
+            return pid
+    pytest.skip("every PID in the probed range is owned; no dead PID to test")
+
+
+@pytest.mark.skipif(os.name != "posix",
+                    reason="this pins the POSIX branch of _is_process_running")
 def test_the_posix_liveness_check_is_unchanged():
+    """Both answers, and the dead one is the half that was never pinned.
+
+    It read `assert m._is_process_running(2 ** 22 - 1) in (True, False)`, which
+    every boolean satisfies - an implementation that answered True for every PID
+    passed this line. The hedge existed because a hardcoded PID might be in use;
+    the fix is to MEASURE an unowned one instead of guessing at a literal.
+    """
     assert m._is_process_running(os.getpid()) is True
-    assert m._is_process_running(2 ** 22 - 1) in (True, False)
+    dead = _a_pid_nothing_owns()
+    assert m._is_process_running(dead) is False, (
+        f"PID {dead} is owned by no process and was reported as running")
 
 
 def test_watch_stop_does_not_signal_a_dead_pid(tmp_path, monkeypatch):

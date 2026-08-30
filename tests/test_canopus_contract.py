@@ -742,6 +742,12 @@ def test_a_collected_name_carrying_the_separator_is_dropped_and_reported(
     loses no claim, and the drop is said out loud rather than made quietly.
     """
     from scripts.utils.canopus_contract import run_null_stub
+    # Imported, not re-spelled. Two tests in this file exist to argue that the
+    # handshake must be defined once, and a hardcoded "CANOPUS_AST_MODULES" here
+    # was a second definition of the child's wire format: renaming the plugin's
+    # value made this die on a bare KeyError pointing at the wrong layer,
+    # instead of failing on the separator assertion it exists to make.
+    from scripts.utils.canopus_nullstub import MODULES_VAR
 
     contract = _one_import_contract(
         tmp_path,
@@ -753,7 +759,7 @@ def test_a_collected_name_carrying_the_separator_is_dropped_and_reported(
 
     run_null_stub([contract], tmp_path)
 
-    assert seen[0]["CANOPUS_AST_MODULES"] == "absent_thing,pytest"
+    assert seen[0][MODULES_VAR] == "absent_thing,pytest"
     assert "needs, the thing" in capsys.readouterr().err
 
 
@@ -941,17 +947,31 @@ def test_run_null_stub_refuses_when_the_two_runs_collected_different_tests(
     )
 
     real = contract_mod.run_pytest_report
-    seen = []
+    stub_runs = []
 
-    def _drop_a_test_on_the_second_run(*args, **kwargs):
+    def _drop_a_test_on_the_second_stub_run(*args, **kwargs):
+        """Count STUB runs, the way `_capture_probe_env` tells them apart.
+
+        It counted every call and fired on the second. With no
+        `expected_population` the probe runs its own unstubbed BASELINE first,
+        so the sequence is baseline, stub A, stub B: `len(seen) == 2` landed on
+        stub A while the helper's name said stub B. The guard is symmetric in
+        which run is truncated, so the test still passed and still pinned the
+        property - it simply was not testing the run it was named for, and a
+        regression specific to the second report would not have been isolated
+        here. The stub handshake in `extra_env` is the seam that distinguishes
+        them.
+        """
         xml_text = real(*args, **kwargs)
-        seen.append(1)
-        if len(seen) == 2:
+        if not kwargs.get("extra_env"):
+            return xml_text
+        stub_runs.append(1)
+        if len(stub_runs) == 2:
             return xml_text.replace("<testcase", "<skipped-case", 1)
         return xml_text
 
     monkeypatch.setattr(
-        contract_mod, "run_pytest_report", _drop_a_test_on_the_second_run
+        contract_mod, "run_pytest_report", _drop_a_test_on_the_second_stub_run
     )
 
     with pytest.raises(ContractError):
@@ -1207,9 +1227,20 @@ def test_an_errored_test_does_not_cost_its_neighbours_their_verdict(
     Refusing the whole contract for one errored test threw away the verdict on
     every honest test beside it. Measured on four ordinary fixture shapes
     (`json.loads`, `Path(...) / x`, `re.compile`, `datetime.strptime`), all four
-    refused, three of them fully honest contracts. Here the errored test is
-    named and the green one beside it is not, so a contract carrying a test that
-    asserts something is unaffected.
+    refused, three of them fully honest contracts. What changed is that ONE
+    errored test no longer takes the whole contract down: the refusal is now
+    per-test.
+
+    CORRECTED 2026-08-30. This said "the errored test is named and the green one
+    beside it is not", which the assertion below contradicts - both names come
+    back. The assertion is the right half. `test_b` passes under BOTH stub value
+    sets in `_ERROR_BESIDE_A_GREEN_REPORT`, and an invariant pass is this
+    instrument's definition of vacuous (`test_the_probe_sets_exactly_the
+    _variables_the_plugin_reads`, `test_an_errored_test_under_the_stub_is_named
+    _and_not_acquitted`). A maintainer trusting the old sentence would have
+    "fixed" `run_null_stub` to stop naming a green-under-both test, reopening
+    the wholly-vacuous escape this slice closed. What the test pins is narrower
+    and true: an errored test is named WITHOUT the contract being refused whole.
     """
     from scripts.utils.canopus_contract import run_null_stub
 

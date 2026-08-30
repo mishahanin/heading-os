@@ -17,6 +17,7 @@ through a reimplementation of it.
 """
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -24,6 +25,14 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+# The four sibling shards of this campaign all carry this line; this file both
+# omitted it and imports `scripts.utils.workspace` by package path, so under
+# the `pytest` console script (which does not prepend the cwd the way
+# `python -m pytest` does) that one test raised ModuleNotFoundError - an ERROR
+# in an otherwise green shard, of the shape that reads as an environment
+# problem rather than a defect. Added 2026-08-30.
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def _load(script: str, name: str):
@@ -299,10 +308,76 @@ def test_json_and_check_together_emit_one_parseable_document(tmp_path):
 
 
 def test_the_ok_line_and_the_fail_line_use_the_same_stream():
-    code = _code("audit-skill-bash-paths.py")
-    tail = code[code.index("    if args.check:"):]
-    ok = tail.index("no SKILL bash data-path regressions")
-    assert "file=sys.stderr" in tail[ok:ok + 200], "the OK line is on stdout again"
+    """Both --check report lines go to stderr, so --json stays parseable.
+
+    The name promised both lines and the body located only the OK one: the
+    FAIL line was never found, never sliced and never checked, and the sole
+    behavioural companion asserted `returncode == 0` first, so it only ever
+    ran the branch where the FAIL line is not printed. A regression putting
+    the FAIL line back on stdout corrupted `--json --check` on a failing tree
+    while every test here stayed green.
+    """
+    import ast
+
+    tree = ast.parse((ROOT / "scripts" / "audit-skill-bash-paths.py")
+                     .read_text(encoding="utf-8"))
+    checks = [n for n in ast.walk(tree)
+              if isinstance(n, ast.If)
+              and isinstance(n.test, ast.Attribute)
+              and n.test.attr == "check"]
+    assert len(checks) == 1, (
+        f"expected one `if args.check:` block, found {len(checks)}")
+
+    def to_stderr(call: ast.Call) -> bool:
+        return any(kw.arg == "file"
+                   and isinstance(kw.value, ast.Attribute)
+                   and kw.value.attr == "stderr"
+                   for kw in call.keywords)
+
+    prints = [n for n in ast.walk(checks[0])
+              if isinstance(n, ast.Call)
+              and isinstance(n.func, ast.Name) and n.func.id == "print"]
+    assert len(prints) >= 4, (
+        f"the --check block prints {len(prints)} lines; the OK line, the FAIL "
+        "header, the per-regression line and the remedy line are all expected")
+    on_stdout = [ast.unparse(n)[:80] for n in prints if not to_stderr(n)]
+    assert not on_stdout, (
+        f"these --check report lines are on stdout again: {on_stdout}")
+
+
+def test_json_and_check_on_a_failing_tree_still_emit_one_parseable_document(tmp_path):
+    """The behavioural half: exit 1, and stdout is still nothing but JSON.
+
+    The source pins above say where the print goes; this drives the tool at a
+    scratch workspace carrying a skill that is not in BASELINE, which is a
+    regression by definition, and reads stdout back through `json.loads`.
+    Without it the FAIL branch has no test that ever executes it.
+
+    WORKSPACE_ROOT and cwd both point at the scratch tree: `get_workspace_root`
+    reads the variable, and a child with neither would scan the operator's own
+    `.claude/skills/`.
+    """
+    skill = tmp_path / ".claude" / "skills" / "a-skill-not-in-the-baseline"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "# Demo\n\n```bash\npython scripts/demo.py --out outputs/demo/report.md\n```\n",
+        encoding="utf-8")
+
+    env = dict(os.environ)
+    env["WORKSPACE_ROOT"] = str(tmp_path)
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "audit-skill-bash-paths.py"),
+         "--json", "--check"],
+        capture_output=True, text=True, timeout=120, check=False,
+        cwd=str(tmp_path), env=env)
+
+    assert proc.returncode == 1, (
+        f"a skill outside BASELINE is a regression; got rc={proc.returncode}\n"
+        f"{proc.stdout}\n{proc.stderr}")
+    payload = json.loads(proc.stdout)
+    assert payload["counts"] == {"a-skill-not-in-the-baseline": 1}
+    assert "misroute candidate" in proc.stderr, (
+        "the FAIL line did not reach stderr at all")
 
 
 # ============================================================

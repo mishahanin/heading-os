@@ -25,11 +25,19 @@ is worse: while the copy is present every sweep runs over a doubled corpus, so a
 real new defect arrives inside twice the noise, and the "the scan did not
 collapse" floors that several of these tests carry stop meaning anything.
 
-The fix is one implementation, `tests/repo_files.py`, which asks
-`git check-ignore` once per sweep. This file holds two things: that the helper
-actually excludes an ignored path (proved against a real git repository built in
-a temp directory, not asserted), and that no test goes back to walking the
-exposed roots by hand.
+The fix is one implementation, `scripts/utils/repo_files.py`, which asks
+`git check-ignore` once per sweep. `tests/repo_files.py` is a thin re-export of
+it, kept so the existing `from tests.repo_files import tracked_paths` imports
+still resolve. The implementation MOVED there because production code could not
+import out of `tests/`, and grew a second copy instead; the `owner` constant
+further down and `test_the_batch_rule_reaches_production_code_too` both name the
+new location. This paragraph still said `tests/repo_files.py` was the one
+implementation until 2026-08-30, which sent a reader to the wrong file to fix
+the filter -- the dated-figure staleness this suite's own guards exist to catch.
+
+This file holds two things: that the helper actually excludes an ignored path
+(proved against a real git repository built in a temp directory, not asserted),
+and that no test goes back to walking the exposed roots by hand.
 
 The rule below has NO allow-list on purpose. Sixteen sites migrated in one
 change, so there is nothing to grandfather, and an empty exception list is the
@@ -153,8 +161,32 @@ WALK_METHODS = ("glob", "rglob", "iterdir", "walk")
 EXPOSED_ROOT_NAMES = ("ROOT", "_ROOT", "REPO_ROOT", "WORKSPACE_ROOT")
 
 
+# Walkers that take the directory as an ARGUMENT rather than as a receiver.
+# `os.walk(ROOT)` unparses its receiver to `os`, which names no root, so the
+# rule examined the call and then cleared it -- one of the two spellings of the
+# incident shape that stayed invisible until 2026-08-30.
+ARG_WALKERS = ("walk", "fwalk", "scandir", "listdir")
+
+# `Path(ROOT)` is the same base as `ROOT`. Written that way, `names_root` was
+# True but `".claude" in receiver` was False, so `Path(ROOT).rglob("**/*.py")`
+# passed the rule -- the other invisible spelling.
+_PATH_WRAPPERS = ("Path", "pathlib.Path")
+
+
+def _unwrap_receiver(receiver: str) -> str:
+    """`Path(ROOT)` -> `ROOT`. Anything else is returned unchanged."""
+    for wrapper in _PATH_WRAPPERS:
+        if receiver.startswith(wrapper + "(") and receiver.endswith(")"):
+            return receiver[len(wrapper) + 1:-1].strip()
+    return receiver
+
+
 def _is_exposed_base(receiver: str) -> bool:
-    """Does this walk receiver resolve to the repo root, or to `.claude` in it?"""
+    """Does this base resolve to the repo root, or to `.claude` in it?
+
+    Applied to a walk's RECEIVER and, for `ARG_WALKERS`, to its first argument.
+    """
+    receiver = _unwrap_receiver(receiver.strip())
     if receiver in EXPOSED_ROOT_NAMES:
         return True
     names_root = any(tok in receiver for tok in EXPOSED_ROOT_NAMES)
@@ -190,16 +222,38 @@ def _is_narrow_literal_glob(call: ast.Call) -> bool:
 
 
 def exposed_walks(source: str) -> list[tuple[int, str]]:
-    """(line, unparsed call) for every walk of the repo root or `.claude`."""
+    """(line, unparsed call) for every walk of the repo root or `.claude`.
+
+    WIDENED 2026-08-30. The rule inspected `func.value` -- the receiver -- and
+    nothing else, so two ordinary spellings of the exact incident shape passed
+    while the docstring below promised "NO allow-list on purpose":
+
+      os.walk(ROOT)              the receiver is `os`; the root is an ARGUMENT
+      Path(ROOT).rglob("**/*.py")  the receiver is `Path(ROOT)`, not `ROOT`
+
+    A seventeenth sweep written either way kept the whole rule green while a
+    worktree under `.claude/worktrees/` doubled its corpus. Both the receiver
+    and, for `ARG_WALKERS`, the first argument are now checked. Measured
+    2026-08-30 over the tracked `tests/**/*.py` corpus: 0 sites newly flagged,
+    so the widening reports no pre-existing violation and cannot be mistaken
+    for one.
+    """
     found: list[tuple[int, str]] = []
     for node in ast.walk(ast.parse(source)):
-        func = getattr(node, "func", None)
-        if not (isinstance(node, ast.Call) and isinstance(func, ast.Attribute)
-                and func.attr in WALK_METHODS):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = getattr(func, "attr", None) or getattr(func, "id", None)
+        if name not in set(WALK_METHODS) | set(ARG_WALKERS):
             continue
         if _is_narrow_literal_glob(node):
             continue
-        if _is_exposed_base(ast.unparse(func.value).strip()):
+        bases: list[str] = []
+        if isinstance(func, ast.Attribute):
+            bases.append(ast.unparse(func.value).strip())
+        if name in ARG_WALKERS and node.args:
+            bases.append(ast.unparse(node.args[0]).strip())
+        if any(_is_exposed_base(base) for base in bases):
             found.append((node.lineno, ast.unparse(node)[:100]))
     return found
 
@@ -250,6 +304,44 @@ def test_the_rule_fires_on_a_walk_of_the_bare_repository_root():
     `.claude/worktrees/`, and five of the sixteen migrated sites were written
     this way."""
     assert [c for _, c in exposed_walks(_BARE_ROOT_FIXTURE)] == ["ROOT.glob(pattern)"]
+
+
+_ARG_WALKER_FIXTURE = '''
+import os
+from pathlib import Path
+ROOT = Path(__file__).resolve().parent.parent
+
+def sweep():
+    return list(os.walk(ROOT)) + list(Path(ROOT).rglob("*.py"))
+'''
+
+_ARG_WALKER_HARMLESS_FIXTURE = '''
+import os
+from pathlib import Path
+ROOT = Path(__file__).resolve().parent.parent
+SCRIPTS = ROOT / "scripts"
+
+def sweep(tmp_path):
+    return list(os.walk(SCRIPTS)) + list(Path(tmp_path).rglob("*.py"))
+'''
+
+
+def test_the_rule_fires_on_the_root_passed_as_an_argument():
+    """`os.walk(ROOT)` and `Path(ROOT).rglob(...)`. NEW 2026-08-30.
+
+    Both were invisible: the first because the receiver is `os`, the second
+    because the receiver is `Path(ROOT)` and the old predicate demanded the
+    literal string `.claude` alongside the root name. Without this case the
+    widening is a change nothing measures.
+    """
+    assert [c for _, c in exposed_walks(_ARG_WALKER_FIXTURE)] == [
+        "os.walk(ROOT)", "Path(ROOT).rglob('*.py')"]
+
+
+def test_the_widened_rule_still_leaves_a_subtree_and_a_tmp_path_alone():
+    """The other jaw. A rule that flagged every `os.walk` would be turned off,
+    which is the failure mode the narrowness of this rule exists to avoid."""
+    assert exposed_walks(_ARG_WALKER_HARMLESS_FIXTURE) == []
 
 
 def test_the_rule_accepts_the_shape_that_replaced_it():

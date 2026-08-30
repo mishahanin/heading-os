@@ -140,10 +140,52 @@ def test_no_script_passes_the_312_only_keyword():
     # A floor under the corpus. An emptiness claim over zero files is green and
     # says nothing. 371 scripts on 2026-08-26.
     assert len(scripts) >= 250, f"the scan collapsed to {len(scripts)} scripts"
+    # The exemption is ONE path, not a basename.
+    #
+    # Fixed 2026-08-30. This read `p.name != "rmtree.py"`, so ANY file called
+    # `rmtree.py` anywhere under scripts/ was waved through: create
+    # `scripts/_audit/rmtree.py` with `shutil.rmtree(..., onexc=...)` in it and
+    # the guard ignores it, while the call raises TypeError on the 3.11 pin
+    # this test exists to protect. `rmtree_force` is a single canonical helper
+    # and lives at exactly one path; that path is what gets the exemption.
+    canonical = ROOT / "scripts" / "utils" / "rmtree.py"
+    assert canonical.is_file(), (
+        "the canonical rmtree helper moved; this exemption now points at "
+        "nothing and the guard would flag the real implementation")
+    assert "onexc=" in canonical.read_text(encoding="utf-8"), (
+        "the exempted file no longer contains the keyword it is exempted for, "
+        "so the exemption is dead and should be removed rather than left to rot")
+
     offenders = [p for p in scripts
                  if "onexc=" in p.read_text(encoding="utf-8", errors="replace")
-                 and p.name != "rmtree.py"]
+                 and p.resolve() != canonical.resolve()]
     assert offenders == [], offenders
+
+
+def test_the_312_keyword_guard_exempts_a_path_and_not_a_filename(tmp_path):
+    """The case ON the line: the basename exemption let an impostor through.
+
+    Re-runs the guard's own predicate over a synthetic tree holding a
+    same-named file at a different path, and proves the path-based exemption
+    catches what the basename-based one waved past.
+    """
+    canonical = tmp_path / "scripts" / "utils" / "rmtree.py"
+    impostor = tmp_path / "scripts" / "_audit" / "rmtree.py"
+    for path in (canonical, impostor):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("import shutil\nshutil.rmtree('x', onexc=lambda *a: None)\n",
+                        encoding="utf-8")
+
+    candidates = sorted(tmp_path.rglob("*.py"))
+    by_name = [p for p in candidates
+               if "onexc=" in p.read_text(encoding="utf-8") and p.name != "rmtree.py"]
+    by_path = [p for p in candidates
+               if "onexc=" in p.read_text(encoding="utf-8")
+               and p.resolve() != canonical.resolve()]
+
+    assert by_name == [], "the old predicate saw nothing, which was the defect"
+    assert by_path == [impostor], (
+        "the path-based exemption must still flag a same-named file elsewhere")
 
 
 # ============================================================

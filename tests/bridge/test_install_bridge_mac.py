@@ -10,10 +10,18 @@ import sys
 from pathlib import Path
 
 
+ROOT = Path(__file__).resolve().parent.parent.parent
+SCRIPT = ROOT / "scripts" / "install-bridge-service-mac.py"
+
+
 def _load_module():
+    # Anchored on __file__, not on the caller's cwd. `Path("scripts/...")`
+    # resolves against pytest's working directory, so `cd /tmp && pytest
+    # <abs path to this file>` looked for /tmp/scripts/... - a FileNotFoundError
+    # at best, and at worst an unrelated file at that relative path.
+    assert SCRIPT.is_file(), SCRIPT
     spec = importlib.util.spec_from_file_location(
-        "install_bridge_service_mac",
-        Path("scripts/install-bridge-service-mac.py").resolve(),
+        "install_bridge_service_mac", SCRIPT,
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

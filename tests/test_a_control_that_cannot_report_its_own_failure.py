@@ -42,13 +42,16 @@ Findings covered (numbering from `/tmp/audit_out3/scripts-05-p4.md`):
   26  the poll comment said 5min where the trigger says 5s
 """
 
+import ast
 import asyncio
+import contextlib
 import importlib.util
+import io
 import json
 import logging
 import os
-import subprocess
 import sys
+import tokenize
 import zipfile
 from pathlib import Path
 
@@ -230,10 +233,59 @@ def test_missing_windows_env_vars_give_a_sentence_not_a_keyerror(monkeypatch):
     assert "APPDATA" in str(exc.value)
 
 
+def _subprocess_timeouts_for(source: str, marker: str) -> list[int | None]:
+    """Every `subprocess.run(...)` whose argv mentions `marker`, and its timeout.
+
+    `None` means that call has no `timeout=` keyword at all.
+    """
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+        if name != "run":
+            continue
+        if marker not in ast.unparse(ast.Tuple(elts=list(node.args), ctx=ast.Load())):
+            continue
+        timeout = None
+        for kw in node.keywords:
+            if kw.arg == "timeout" and isinstance(kw.value, ast.Constant):
+                timeout = kw.value.value
+        found.append(timeout)
+    return found
+
+
 def test_the_extension_listing_subprocess_is_bounded():
-    src = _code_only(ROOT / "scripts" / "export-antigravity-config.py")
-    assert "--list-extensions" in src
-    assert "timeout=60" in src
+    """Finding 4: the CLI subprocess had no timeout, and the export hung.
+
+    Rewritten 2026-08-30. The predecessor asserted `"--list-extensions" in src`
+    and `"timeout=60" in src` as two INDEPENDENT whole-file greps: putting
+    `timeout=60` on any unrelated call in the same file satisfied it while the
+    extension listing went back to unbounded. The bound is now read off the
+    same call node that carries the flag.
+    """
+    src = (ROOT / "scripts" / "export-antigravity-config.py").read_text(encoding="utf-8")
+    timeouts = _subprocess_timeouts_for(src, "--list-extensions")
+    assert timeouts, "no subprocess.run passes --list-extensions any more"
+    for timeout in timeouts:
+        assert timeout is not None, "the extension-listing subprocess is unbounded again"
+        assert 0 < timeout <= 300, f"implausible bound on the CLI call: {timeout!r}"
+
+
+def test_the_bound_reader_sees_an_unbounded_call_next_to_a_bounded_one():
+    """The negative case: nothing above ever made the bound reader refuse.
+
+    This is finding 4 reintroduced exactly as the grep permitted it — the
+    listing call loses its timeout while a neighbour keeps one.
+    """
+    evaded = (
+        "import subprocess\n"
+        "subprocess.run([cli, '--list-extensions'], capture_output=True)\n"
+        "subprocess.run([cli, '--version'], timeout=60)\n"
+    )
+    assert _subprocess_timeouts_for(evaded, "--list-extensions") == [None]
+    assert _subprocess_timeouts_for(evaded, "--version") == [60]
 
 
 # ============================================================
@@ -512,13 +564,48 @@ async def test_an_ordinary_shutdown_logs_no_alarm():
 # 17 - one log file, one rotating handle
 # ============================================================
 
-def test_the_two_loggers_share_one_rotating_handle(tmp_path, monkeypatch):
+_SHARED_HANDLE_LOGGERS = ("fireside-daemon", "scripts.utils.healthchecks")
+
+
+@contextlib.contextmanager
+def _restore_shared_loggers():
+    """Snapshot and restore the two loggers this file reconfigures.
+
+    Added 2026-08-30. The test below used to `handlers.clear()` and then, in
+    teardown, close and remove whatever `_setup_logging` had installed — never
+    putting back what was there before. Both loggers were left with zero
+    handlers for the rest of the pytest session, so any later in-process test
+    that relies on daemon logging saw different state depending on run order.
+    """
+    saved = {name: (logging.getLogger(name).handlers[:], logging.getLogger(name).level)
+             for name in _SHARED_HANDLE_LOGGERS}
+    try:
+        yield
+    finally:
+        for name, (handlers, level) in saved.items():
+            logger = logging.getLogger(name)
+            for handler in logger.handlers[:]:
+                if handler not in handlers:
+                    handler.close()
+                logger.removeHandler(handler)
+            for handler in handlers:
+                logger.addHandler(handler)
+            logger.setLevel(level)
+
+
+@pytest.fixture
+def _restored_logging():
+    with _restore_shared_loggers():
+        yield
+
+
+def test_the_two_loggers_share_one_rotating_handle(tmp_path, monkeypatch, _restored_logging):
     """Two RotatingFileHandlers on one path rotate independently: on Windows
     the rename fails while the other holds the file, and on POSIX the handler
     that did not rotate keeps writing into the renamed `daemon.log.1`."""
     monkeypatch.setattr(fbd, "RUNTIME_DIR", tmp_path)
     monkeypatch.setattr(fbd, "LOG_FILE", tmp_path / "daemon.log")
-    for name in ("fireside-daemon", "scripts.utils.healthchecks"):
+    for name in _SHARED_HANDLE_LOGGERS:
         logging.getLogger(name).handlers.clear()
 
     fbd._setup_logging()
@@ -531,10 +618,35 @@ def test_the_two_loggers_share_one_rotating_handle(tmp_path, monkeypatch):
     assert len(hc_files) == 1
     assert main_files[0] is hc_files[0], "two independent handles on one log file"
 
-    for name in ("fireside-daemon", "scripts.utils.healthchecks"):
-        for h in logging.getLogger(name).handlers[:]:
-            h.close()
-            logging.getLogger(name).removeHandler(h)
+
+def test_the_logging_test_leaves_the_two_loggers_as_it_found_them(tmp_path, monkeypatch):
+    """The case ON the line for the restore fixture.
+
+    Plant a sentinel handler on each logger, run the same reconfiguration
+    inside the fixture, and prove the sentinel survives. Without the fixture
+    this fails: the loggers came back with zero handlers.
+    """
+    sentinels = {}
+    for name in _SHARED_HANDLE_LOGGERS:
+        handler = logging.NullHandler()
+        logging.getLogger(name).addHandler(handler)
+        sentinels[name] = handler
+    try:
+        with _restore_shared_loggers():
+            monkeypatch.setattr(fbd, "RUNTIME_DIR", tmp_path)
+            monkeypatch.setattr(fbd, "LOG_FILE", tmp_path / "daemon.log")
+            for name in _SHARED_HANDLE_LOGGERS:
+                logging.getLogger(name).handlers.clear()
+            fbd._setup_logging()
+            assert sentinels["fireside-daemon"] not in \
+                logging.getLogger("fireside-daemon").handlers
+
+        for name, handler in sentinels.items():
+            assert handler in logging.getLogger(name).handlers, (
+                f"{name} did not get its pre-test handlers back")
+    finally:
+        for name, handler in sentinels.items():
+            logging.getLogger(name).removeHandler(handler)
 
 
 # ============================================================
@@ -616,13 +728,6 @@ def test_a_daemon_does_delete_its_own_pid_file(tmp_path, monkeypatch):
 # 24, 25, 26 - the sentences these tools print about themselves
 # ============================================================
 
-def _daemon_cli(*argv):
-    return subprocess.run(
-        [sys.executable, "scripts/fireside-bot-daemon.py", *argv],
-        cwd=str(ROOT), capture_output=True, text=True, timeout=120,
-    )
-
-
 def test_stop_does_not_promise_an_exit_it_never_checked():
     assert "daemon will exit within ~1s" not in _code_only(
         ROOT / "scripts" / "fireside-bot-daemon.py")
@@ -635,14 +740,149 @@ def test_the_docstring_does_not_promise_next_run_times():
     assert "next scheduled run for each job." not in header
 
 
+DAEMON_SRC = (ROOT / "scripts" / "fireside-bot-daemon.py").read_text(encoding="utf-8")
+
+
+def _poll_interval_seconds(source: str) -> int:
+    """The `poll` job's interval, read off JOB_SPECS by AST.
+
+    The predecessor did `body.split("JOB_SPECS", 1)[1].split('"heartbeat"', 1)[0]`,
+    which is a declaration-ORDER dependency: move `heartbeat` above `poll` in the
+    dict and the slice no longer contains the poll spec, so a correct file goes
+    red. The dict is a dict; ask it for the key.
+    """
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        target = None
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            target = node.target.id
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                and isinstance(node.targets[0], ast.Name):
+            target = node.targets[0].id
+        if target != "JOB_SPECS" or not isinstance(node.value, ast.Dict):
+            continue
+        for key, value in zip(node.value.keys, node.value.values, strict=True):
+            if not (isinstance(key, ast.Constant) and key.value == "poll"):
+                continue
+            spec = ast.literal_eval(value)
+            return int(spec["trigger"]["seconds"]), key.lineno
+    raise AssertionError("JOB_SPECS has no literal 'poll' entry")
+
+
+def _comment_block_above(source: str, lineno: int) -> str:
+    """The contiguous run of COMMENT tokens directly above `lineno`.
+
+    Read with `tokenize`, not by splitting text on `#`: a `#` inside a string
+    literal is not a comment, and the whole point of this test is to read the
+    comment that `_code_only` deletes.
+    """
+    comments = {}
+    for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+        if tok.type == tokenize.COMMENT:
+            comments[tok.start[0]] = tok.string
+    block, probe = [], lineno - 1
+    while probe in comments:
+        block.append(comments[probe])
+        probe -= 1
+    return "\n".join(reversed(block))
+
+
 def test_the_poll_comment_matches_the_poll_trigger():
-    """The comment said `now + 5min` against a 5-second interval."""
-    body = _code_only(ROOT / "scripts" / "fireside-bot-daemon.py")
-    spec_block = body.split("JOB_SPECS", 1)[1].split('"heartbeat"', 1)[0]
-    assert '"seconds": 5' in spec_block
+    """The comment said `now + 5min` against a 5-second interval.
+
+    Rewritten 2026-08-30. The predecessor ran on `_code_only`, which deletes
+    every comment line BEFORE the scan, so the comment this test is named for
+    was never examined: reverting the comment to `now + 5min` left it green.
+    Both halves are now derived — the interval by AST off JOB_SPECS, the
+    comment by `tokenize` off the block above the `poll` key — and compared.
+    """
+    seconds, poll_lineno = _poll_interval_seconds(DAEMON_SRC)
+    comment = _comment_block_above(DAEMON_SRC, poll_lineno)
+    assert comment, "the poll entry lost the comment this test exists to check"
+    assert f"now + {seconds}s" in comment, (
+        f"the poll trigger fires every {seconds}s but the comment above it "
+        f"does not say `now + {seconds}s`:\n{comment}")
 
 
-def test_status_with_no_daemon_says_so_and_exits_zero():
-    proc = _daemon_cli("status")
-    assert proc.returncode == 0, proc.stderr
-    assert "NOT RUNNING" in proc.stdout
+def test_the_poll_comment_check_fails_when_the_comment_disagrees():
+    """The negative case: nothing above ever made the comment check refuse.
+
+    Feed the same two readers a synthetic module whose comment claims a gap
+    sixty times the trigger — the exact defect finding 26 named — and prove
+    the derived comparison goes red on it.
+    """
+    stale = (
+        'JOB_SPECS: dict[str, dict] = {\n'
+        '    # first poll runs one interval later, so `now + 5min` for the value.\n'
+        '    "poll": {"trigger": {"kind": "interval", "seconds": 5}},\n'
+        '}\n'
+    )
+    seconds, lineno = _poll_interval_seconds(stale)
+    assert seconds == 5
+    assert f"now + {seconds}s" not in _comment_block_above(stale, lineno)
+
+
+def test_the_poll_interval_is_read_by_key_not_by_declaration_order():
+    """`heartbeat` declared first must not hide the poll spec from the reader."""
+    reordered = (
+        'JOB_SPECS = {\n'
+        '    "heartbeat": {"trigger": {"kind": "interval", "minutes": 1}},\n'
+        '    # so `now + 7s` for the value below.\n'
+        '    "poll": {"trigger": {"kind": "interval", "seconds": 7}},\n'
+        '}\n'
+    )
+    seconds, lineno = _poll_interval_seconds(reordered)
+    assert seconds == 7
+    assert "now + 7s" in _comment_block_above(reordered, lineno)
+
+
+def test_status_with_no_daemon_says_so_and_exits_zero(tmp_path, monkeypatch, capsys):
+    """No PID file means NOT RUNNING, and `cmd_status` returns rather than exits.
+
+    Rewritten 2026-08-30. The predecessor shelled out to the real script with no
+    isolation of PID_FILE / RUNTIME_DIR, so it read the DEVELOPER'S OWN machine
+    state: it passed here only because no daemon happened to be running, and a
+    live daemon (or a stale PID recycled by any unrelated process) turned it red
+    for a reason that has nothing to do with the code. The PID file is now
+    `tmp_path`, so the answer comes from the fixture, not from the host.
+    """
+    monkeypatch.setattr(fbd, "PID_FILE", tmp_path / "absent.pid")
+    monkeypatch.setattr(fbd, "STARTED_AT_FILE", tmp_path / "absent.started")
+    monkeypatch.setattr(fbd, "REGISTERED_JOBS_FILE", tmp_path / "absent.json")
+
+    assert fbd.cmd_status(None) is None, "status raised instead of returning"
+    assert "NOT RUNNING" in capsys.readouterr().out
+
+
+def test_status_with_a_live_pid_file_does_not_say_not_running(tmp_path, monkeypatch, capsys):
+    """The case ON the line: a status that always printed NOT RUNNING passed above.
+
+    Without this, `cmd_status` could be reduced to a single unconditional
+    `print("fireside-daemon: NOT RUNNING")` and the suite would stay green.
+    """
+    pid_file = tmp_path / "daemon.pid"
+    pid_file.write_text(str(os.getpid()), encoding="utf-8")
+    monkeypatch.setattr(fbd, "PID_FILE", pid_file)
+    monkeypatch.setattr(fbd, "STARTED_AT_FILE", tmp_path / "absent.started")
+    monkeypatch.setattr(fbd, "REGISTERED_JOBS_FILE", tmp_path / "absent.json")
+
+    fbd.cmd_status(None)
+    out = capsys.readouterr().out
+    assert "NOT RUNNING" not in out
+    assert f"RUNNING pid={os.getpid()}" in out
+
+
+def test_the_status_subcommand_is_wired_to_cmd_status(monkeypatch):
+    """What the removed subprocess proved, without reading the host.
+
+    The old test spawned the real CLI, which is the only reason the dispatch
+    table was covered at all. Drive `main()` with a recorded `cmd_status`
+    instead: same wiring, no PID file, no machine state.
+    """
+    called = []
+    monkeypatch.setattr(fbd, "cmd_status", lambda args: called.append(args))
+    monkeypatch.setattr(sys, "argv", ["fireside-bot-daemon.py", "status"])
+
+    fbd.main()
+
+    assert len(called) == 1, "the `status` subcommand did not reach cmd_status"

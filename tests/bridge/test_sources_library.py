@@ -1,7 +1,7 @@
 """Unit tests for /library knowledge-base source."""
 from pathlib import Path
 
-from scripts.bridge_daemon.sources.library import list_library
+from scripts.bridge_daemon.sources.library import LIBRARY_ROW_CAP, list_library
 
 
 def _make_note(workspace_root, rel_path, title="X", type_="principle",
@@ -92,13 +92,29 @@ def test_type_counts_aggregated(tmp_path):
     assert result["counts"]["source"] == 1
 
 
-def test_capped_at_50_but_total_reflects_all(tmp_path):
-    """Returns at most LIBRARY_ROW_CAP notes; 'total' reflects pre-cap count."""
-    for i in range(60):
+def test_capped_at_the_row_cap_but_total_reflects_all(tmp_path):
+    """Returns at most LIBRARY_ROW_CAP notes; 'total' reflects pre-cap count.
+
+    The cap is imported rather than retyped as 50, and the test name no
+    longer spells the number either. A literal here made a change to
+    LIBRARY_ROW_CAP fail this test on behaviour its own docstring calls
+    correct.
+    """
+    written = LIBRARY_ROW_CAP + 10
+    for i in range(written):
         _make_note(tmp_path, f"n-{i:03d}.md", title=f"Note {i}", updated=f"2026-05-{(i % 28) + 1:02d}")
     result = list_library(tmp_path)
-    assert result["total"] == 60
-    assert len(result["notes"]) == 50
+    assert result["total"] == written
+    assert len(result["notes"]) == LIBRARY_ROW_CAP
+
+
+def test_a_library_exactly_at_the_row_cap_is_not_capped(tmp_path):
+    """The case ON the line: LIBRARY_ROW_CAP notes are all returned."""
+    for i in range(LIBRARY_ROW_CAP):
+        _make_note(tmp_path, f"e-{i:03d}.md", title=f"Note {i}", updated=f"2026-05-{(i % 28) + 1:02d}")
+    result = list_library(tmp_path)
+    assert result["total"] == LIBRARY_ROW_CAP
+    assert len(result["notes"]) == LIBRARY_ROW_CAP
 
 
 def test_missing_frontmatter_fallback(tmp_path):

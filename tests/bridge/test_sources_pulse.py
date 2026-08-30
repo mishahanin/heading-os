@@ -1,6 +1,33 @@
-"""Unit tests for /pulse real-data sources."""
-from datetime import datetime, timezone
+"""Unit tests for /pulse real-data sources.
+
+Every date-sensitive assertion in this file states the day it is about.
+Until 2026-08-30 seven of them did not: the fixtures hardcoded 2026 due
+dates and then called `watch_items`, `sea_state` or `pulse_data` with no
+injection at all, so "overdue" was decided by the wall clock. Those tests
+were green only because the machine's clock had already passed the fixture
+dates, they could never again fail in the not-overdue direction, and on a
+clock set before 2026-05 they all went red at once. `signals` and the two
+state previews in the same module already took `today`; the two overdue
+surfaces did not, so the parameter was added to them (and threaded through
+`pulse_data`) rather than the assertions being loosened.
+
+PINNED_TODAY is the day this file speaks about. It matches the 2026-05-18
+calendar fixtures the meeting tests already use, so one date governs the
+whole file.
+"""
+from datetime import date, datetime, timezone
 from scripts.utils.workspace import get_default_tz
+
+# The stated "today" for every date-sensitive test below. Chosen to sit after
+# the fixture due dates (2026-02-01 … 2026-05-11) and on the same day as the
+# calendar fixtures, so a reader has one date to hold rather than seven.
+PINNED_TODAY = date(2026, 5, 18)
+
+# A day BEFORE every fixture due date. Nothing is overdue here, and that is
+# the direction the wall-clock tests could no longer reach: as real time
+# advances past any boundary, a clock-driven test can only ever confirm the
+# overdue branch. Each overdue assertion below is paired with one of these.
+PINNED_EARLIER = date(2026, 1, 15)
 
 from scripts.bridge_daemon.sources.pulse import (
     days_to_odin_5,
@@ -90,9 +117,15 @@ def test_next_meeting_returns_none_when_all_past(tmp_path):
 
 
 def test_next_meeting_uses_local_tz(tmp_path):
-    """Calendar files are tagged in local (UTC+4); resolution must use local (UTC+4) date,
-    not the daemon's local timezone. A UTC 'now' that's still on the
-    previous calendar day in local (UTC+4) must NOT yet flip to the next day."""
+    """The calendar day is the LOCAL day, so a UTC 'now' can already be on it.
+
+    The docstring here used to say the resolution "must NOT yet flip to the
+    next day", which is the opposite of what is asserted below: `now` is
+    22:00 UTC on 2026-05-17, the local (UTC+4) date has already advanced to
+    2026-05-18, and the 14:00 meeting on THAT day is the one that must be
+    found. Anyone implementing `next_meeting` from the old sentence would
+    have written the wrong rule, and this test would have passed them.
+    """
     cal_dir = tmp_path / "outputs" / "_sync" / "calendar"
     cal_dir.mkdir(parents=True)
     # Build today's calendar for 2026-05-18 local (UTC+4) date.
@@ -222,11 +255,30 @@ def test_watch_items_includes_overdue_tasks(tmp_path):
         "- [ ] **2026-05-01** | `P1` | Another old | *Task* | Due: 2026-05-06\n",
         encoding="utf-8",
     )
-    items = watch_items(tmp_path)
+    items = watch_items(tmp_path, today=PINNED_TODAY)
     assert len(items) == 1
     assert items[0]["count"] == 2
     assert "overdue" in items[0]["label"]
     assert items[0]["severity"] == "red"
+
+
+def test_watch_items_reports_no_overdue_task_before_the_due_date(tmp_path):
+    """The other direction, which a wall-clock run can never reach again.
+
+    Same two tasks, a `today` before both due dates: the red watchpoint must
+    be absent. Without this, dropping the overdue comparison entirely would
+    still leave the sibling test above green.
+    """
+    from scripts.bridge_daemon.sources.pulse import watch_items
+    tasks_md = tmp_path / "outputs" / "operations" / "viraid" / "tasks.md"
+    tasks_md.parent.mkdir(parents=True)
+    tasks_md.write_text(
+        "## Active\n\n"
+        "- [ ] **2026-05-01** | `P1` | Old task | *Task* | Due: 2026-05-05\n"
+        "- [ ] **2026-05-01** | `P1` | Another old | *Task* | Due: 2026-05-06\n",
+        encoding="utf-8",
+    )
+    assert watch_items(tmp_path, today=PINNED_EARLIER) == []
 
 
 def test_watch_items_empty_when_no_overdue(tmp_path):
@@ -236,7 +288,7 @@ def test_watch_items_empty_when_no_overdue(tmp_path):
     tasks_md.parent.mkdir(parents=True)
     # Empty Active section.
     tasks_md.write_text("## Active\n\n", encoding="utf-8")
-    items = watch_items(tmp_path)
+    items = watch_items(tmp_path, today=PINNED_TODAY)
     assert items == []
 
 
@@ -255,12 +307,15 @@ def test_watch_items_includes_overdue_deals(tmp_path):
         "| Acme | UAE | Proposal | $1M | 2026-01-01 | Misha | Send proposal | 2026-02-01 |\n",
         encoding="utf-8",
     )
-    items = watch_items(tmp_path)
+    items = watch_items(tmp_path, today=PINNED_TODAY)
     deal_items = [i for i in items if "deal" in i["label"]]
     assert len(deal_items) == 1
-    assert deal_items[0]["count"] >= 1
+    assert deal_items[0]["count"] == 1
     assert deal_items[0]["severity"] == "red"
     assert deal_items[0]["link"] == "#/pipeline"
+    # The same deal, read on a day before its due date, is not a watchpoint.
+    assert not [i for i in watch_items(tmp_path, today=PINNED_EARLIER)
+                if "deal" in i["label"]]
 
 
 def test_watch_items_includes_stale_drafts(tmp_path):
@@ -278,7 +333,7 @@ def test_watch_items_includes_stale_drafts(tmp_path):
     # Backdate mtime 30 hours.
     old = time.time() - 30 * 3600
     os.utime(target, (old, old))
-    items = watch_items(tmp_path)
+    items = watch_items(tmp_path, today=PINNED_TODAY)
     draft_items = [i for i in items if "draft" in i["label"]]
     assert len(draft_items) == 1
     assert draft_items[0]["count"] == 1
@@ -296,7 +351,7 @@ def test_watch_items_skips_fresh_drafts(tmp_path):
         "# Fresh\n**To:** x@y.com\n**Subject:** S\n\n---\n\nbody",
         encoding="utf-8",
     )
-    items = watch_items(tmp_path)
+    items = watch_items(tmp_path, today=PINNED_TODAY)
     assert not any("draft" in i["label"] for i in items)
 
 
@@ -317,7 +372,7 @@ def test_watch_items_includes_large_inbox(tmp_path):
                     "conversations": convs}),
         encoding="utf-8",
     )
-    items = watch_items(tmp_path)
+    items = watch_items(tmp_path, today=PINNED_TODAY)
     inbox_items = [i for i in items if "inbox" in i["label"]]
     assert len(inbox_items) == 1
     assert inbox_items[0]["count"] >= WATCH_LARGE_INBOX_THRESHOLD
@@ -328,7 +383,7 @@ def test_watch_items_includes_large_inbox(tmp_path):
 def test_pulse_data_includes_now_and_watch(tmp_path):
     """pulse_data top-level dict has 'now' and 'watch' keys."""
     from scripts.bridge_daemon.sources.pulse import pulse_data
-    result = pulse_data(tmp_path)
+    result = pulse_data(tmp_path, today=PINNED_TODAY)
     assert "now" in result
     assert "watch" in result
     assert isinstance(result["watch"], list)
@@ -450,20 +505,26 @@ def test_pulse_data_includes_pipeline_overdue_and_stages(tmp_path):
         "| C | X | Lead | TBD | 2026-03-01 | M | c | - |\n",
         encoding="utf-8",
     )
-    result = pulse_data(tmp_path)
+    result = pulse_data(tmp_path, today=PINNED_TODAY)
     assert "pipeline_overdue" in result["kpi"]
     assert "pipeline_stages" in result["kpi"]
     # Stages dict has both entries.
     assert result["kpi"]["pipeline_stages"]["Negotiation"] == 2
     assert result["kpi"]["pipeline_stages"]["Lead"] == 1
-    # At least one overdue (Deal A's 2026-04-01 due date is before any plausible test "now").
-    # The list_pipeline default uses datetime.now(get_default_tz()).date(), so this assertion is robust.
-    assert result["kpi"]["pipeline_overdue"] >= 1
+    # Exactly one overdue: deal A is due 2026-04-01, and PINNED_TODAY is after
+    # it. The comment here used to call the wall clock "robust" because the due
+    # date is "before any plausible test now" - which is another way of saying
+    # the test could only ever confirm one branch. `>= 1` also passed if B and C
+    # (no due date at all) were counted overdue, so the count is exact now.
+    assert result["kpi"]["pipeline_overdue"] == 1
+    # And nothing is overdue read on a day before that due date.
+    early = pulse_data(tmp_path, today=PINNED_EARLIER)
+    assert early["kpi"]["pipeline_overdue"] == 0
 
 
 def test_pulse_data_pipeline_overdue_zero_when_no_pipeline_file(tmp_path):
     """No pipeline.md -> overdue=0, stages={} (silent degradation)."""
-    result = pulse_data(tmp_path)
+    result = pulse_data(tmp_path, today=PINNED_TODAY)
     assert result["kpi"]["pipeline_overdue"] == 0
     assert result["kpi"]["pipeline_stages"] == {}
 
@@ -607,7 +668,7 @@ def _write_pipeline_with_overdue(tmp_path, overdue_count):
 
 def test_sea_state_calm_when_no_overdue(tmp_path):
     """No pipeline / tasks files -> calm."""
-    r = sea_state(tmp_path)
+    r = sea_state(tmp_path, today=PINNED_TODAY)
     assert r["state"] == "calm"
     assert r["overdue_total"] == 0
     assert r["label"] == "Sea calm"
@@ -616,16 +677,31 @@ def test_sea_state_calm_when_no_overdue(tmp_path):
 def test_sea_state_moderate_threshold(tmp_path):
     """3-9 overdue -> moderate."""
     _write_pipeline_with_overdue(tmp_path, 4)
-    r = sea_state(tmp_path)
+    r = sea_state(tmp_path, today=PINNED_TODAY)
     assert r["state"] == "moderate"
     assert r["pipeline_overdue"] == 4
     assert r["overdue_total"] == 4
 
 
+def test_sea_state_is_calm_on_a_day_before_the_due_dates(tmp_path):
+    """The same twelve deals, read early, are not pressure.
+
+    `_write_pipeline_with_overdue` writes rows due 2026-04-01. Read on a day
+    before that they are ordinary open deals, and the pill must say calm. The
+    twelve-row rough test below cannot distinguish "the threshold works" from
+    "every row counts whatever the date", and this is the case that can.
+    """
+    _write_pipeline_with_overdue(tmp_path, 12)
+    r = sea_state(tmp_path, today=PINNED_EARLIER)
+    assert r["state"] == "calm"
+    assert r["pipeline_overdue"] == 0
+    assert r["overdue_total"] == 0
+
+
 def test_sea_state_rough_threshold(tmp_path):
     """10+ overdue -> rough."""
     _write_pipeline_with_overdue(tmp_path, 12)
-    r = sea_state(tmp_path)
+    r = sea_state(tmp_path, today=PINNED_TODAY)
     assert r["state"] == "rough"
     assert r["overdue_total"] == 12
     assert r["label"] == "Sea rough"
@@ -721,7 +797,12 @@ def test_signals_demo_poc_still_fires_on_overdue_action(tmp_path):
 
 
 def test_signals_paused_deals_excluded(tmp_path):
-    """DEPRIORITIZED / ON HOLD / PAUSED prefixes suppress the signal."""
+    """DEPRIORITIZED / ON HOLD / PAUSED / PARKED prefixes suppress the signal.
+
+    Four prefixes, not the three this docstring listed until 2026-08-30. The
+    fourth row below asserts PARKED is suppressed, and PARKED is not PAUSED,
+    so the enumerated contract was short by one the whole time.
+    """
     from datetime import date
     _write_pipeline_for_signals(tmp_path, [
         {"company": "Skip-D", "stage": "Negotiation", "stage_date": "2026-01-01",
@@ -792,11 +873,11 @@ def test_threads_preview_none_when_no_active(tmp_path):
 def test_threads_preview_returns_active_sorted_by_recency(tmp_path):
     """Active threads sorted by days_since ASC (most recent first), capped at 6."""
     from datetime import timedelta
-    today = datetime.now(get_default_tz()).date()
+    today = PINNED_TODAY
     for i in range(8):
         _write_thread(tmp_path, f"t{i}", f"Thread {i}",
                       (today - timedelta(days=i)).isoformat())
-    r = threads_state_preview(tmp_path)
+    r = threads_state_preview(tmp_path, today=today)
     assert r["active_total"] == 8
     assert len(r["threads"]) == 6
     days = [t["days_since"] for t in r["threads"]]
@@ -840,7 +921,7 @@ def test_tribe_preview_none_when_no_members(tmp_path):
 def test_tribe_preview_returns_top_n_sorted_by_recency(tmp_path):
     """Members ordered by days_since ASC; cap at 6 rows."""
     from datetime import timedelta
-    today = datetime.now(get_default_tz()).date()
+    today = PINNED_TODAY
     for i in range(8):
         _write_tribe_member(
             tmp_path,
@@ -848,7 +929,7 @@ def test_tribe_preview_returns_top_n_sorted_by_recency(tmp_path):
             f"Member {i}",
             (today - timedelta(days=i)).isoformat(),
         )
-    r = tribe_state_preview(tmp_path)
+    r = tribe_state_preview(tmp_path, today=today)
     assert r["total"] == 8
     assert len(r["members"]) == 6  # cap
     days = [m["days_since"] for m in r["members"]]
@@ -858,22 +939,27 @@ def test_tribe_preview_returns_top_n_sorted_by_recency(tmp_path):
 def test_tribe_preview_presence_threshold(tmp_path):
     """days_since <= 7 -> 'on'; > 7 -> 'off'."""
     from datetime import timedelta
-    today = datetime.now(get_default_tz()).date()
+    today = PINNED_TODAY
     _write_tribe_member(tmp_path, "fresh", "Fresh One", (today - timedelta(days=1)).isoformat())
     _write_tribe_member(tmp_path, "edge", "Edge One",  (today - timedelta(days=7)).isoformat())
+    _write_tribe_member(tmp_path, "off", "Off One", (today - timedelta(days=8)).isoformat())
     _write_tribe_member(tmp_path, "stale", "Stale One", (today - timedelta(days=30)).isoformat())
-    r = tribe_state_preview(tmp_path)
+    r = tribe_state_preview(tmp_path, today=today)
     by_name = {m["name"]: m for m in r["members"]}
     assert by_name["Fresh One"]["presence"] == "on"
     assert by_name["Edge One"]["presence"] == "on"
+    # The case ON the far side of the line, one day past it. Day 7 alone
+    # cannot tell `<= 7` from `< 8` from `<= 30`; day 8 is what pins the
+    # boundary, and until 2026-08-30 the nearest "off" case was 30 days out.
+    assert by_name["Off One"]["presence"] == "off"
     assert by_name["Stale One"]["presence"] == "off"
     assert r["on_watch"] == 2
 
 
 def test_pulse_data_includes_tribe_state(tmp_path):
     """pulse_data() surfaces tribe_state under kpi."""
-    _write_tribe_member(tmp_path, "victor", "Morgan H", datetime.now(get_default_tz()).date().isoformat())
-    result = pulse_data(tmp_path)
+    _write_tribe_member(tmp_path, "victor", "Morgan H", PINNED_TODAY.isoformat())
+    result = pulse_data(tmp_path, today=PINNED_TODAY)
     ts = result["kpi"].get("tribe_state")
     assert ts is not None
     assert ts["total"] == 1
@@ -943,7 +1029,7 @@ def test_sea_state_state_and_mood_independent(tmp_path):
     _write_today_calendar(tmp_path, [
         f"| 0{i}:00 | E{i} | - |" for i in range(5)
     ])
-    r = sea_state(tmp_path)
+    r = sea_state(tmp_path, today=PINNED_TODAY)
     assert r["state"] == "rough"
     assert r["mood"] == "split"
 
@@ -1162,7 +1248,13 @@ def test_today_activity_excludes_approval_tombstones(tmp_path):
 
 
 def test_today_activity_total_includes_approvals(tmp_path):
-    """The top-level total sums all four kinds."""
+    """The top-level total sums every activity kind, not a fixed four.
+
+    This said "all four kinds" while `test_today_activity_empty_by_default`
+    in this same file pins a FIVE-key shape (tasks_done joined in Phase
+    1.90). Four marks are written below, so `total == 4` held either way and
+    the stale count was invisible; the sentence is the thing that was wrong.
+    """
     from scripts.bridge_daemon.sources.investors import mark_sent as inv_mark
     from scripts.bridge_daemon.sources.pipeline import mark_touched
     from scripts.bridge_daemon.sources.inbox import mark_dismissed
@@ -1352,13 +1444,17 @@ def test_pulse_data_recent_outputs_carries_category_and_mtime(tmp_path):
     inflight = tmp_path / "outputs" / "content" / "linkedin"
     inflight.mkdir(parents=True)
     (inflight / "post.md").write_text("# X\n", encoding="utf-8")
-    result = pulse_data(tmp_path)
-    if result["recent_outputs"]:
-        it = result["recent_outputs"][0]
-        assert "category" in it
-        assert "mtime" in it
-        assert "name" in it
-        assert "path" in it
+    result = pulse_data(tmp_path, today=PINNED_TODAY)
+    # Asserted, not guarded. Behind `if result["recent_outputs"]:` this whole
+    # test passed when the listing regressed to empty - the exact regression
+    # `test_pulse_data_recent_outputs_top_5` exists to catch, silently
+    # converted into a green run here.
+    assert result["recent_outputs"], "the fixture writes post.md; the panel must list it"
+    it = result["recent_outputs"][0]
+    assert "category" in it
+    assert "mtime" in it
+    assert "name" in it
+    assert "path" in it
 
 
 def test_sea_state_combines_pipeline_and_tasks(tmp_path):
@@ -1373,9 +1469,9 @@ def test_sea_state_combines_pipeline_and_tasks(tmp_path):
         "- [ ] **2026-05-01** | `P1` | Late task B | *Task* | Due: 2026-05-11\n",
         encoding="utf-8",
     )
-    r = sea_state(tmp_path)
+    r = sea_state(tmp_path, today=PINNED_TODAY)
     # 2 pipeline + 2 task = 4 total -> moderate
     assert r["pipeline_overdue"] == 2
-    assert r["tasks_overdue"] >= 2
-    assert r["overdue_total"] >= 4
+    assert r["tasks_overdue"] == 2
+    assert r["overdue_total"] == 4
     assert r["state"] == "moderate"

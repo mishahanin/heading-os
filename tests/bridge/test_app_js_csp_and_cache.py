@@ -85,9 +85,33 @@ def test_the_links_still_declare_they_stop_propagation():
     assert src.count("data-stop-prop") >= 21, src.count("data-stop-prop")
 
 
+def _real_capture_listener(src: str) -> str:
+    """Lift the document-level capture registration verbatim out of app.js.
+
+    The Node harness below used to contain a hand-typed copy of this listener,
+    under a comment that admitted as much ("copied in shape from app.js's
+    registration") while the module docstring claimed the file ran "in Node
+    against the real source". Deleting the real listener and leaving every
+    `data-stop-prop` attribute in place kept all three CSP tests green. The
+    anchor is the selector, which appears exactly once, so a rename of the
+    function or a re-wrap of the arrow body does not slip past.
+    """
+    marker = src.index("closest?.('[data-stop-prop]')")
+    start = src.rindex("document.addEventListener(", 0, marker)
+    end = src.index("}, true);", marker) + len("}, true);")
+    listener = src[start:end]
+    assert "stopPropagation" in listener, listener
+    return listener
+
+
 @requires_node
 def test_a_click_on_a_marked_link_does_not_reach_the_card():
-    """The behaviour the inline handler was supposed to provide."""
+    """The behaviour the inline handler was supposed to provide.
+
+    The listener is the real one, read out of `app.js` at test time. Only the
+    DOM around it is a stand-in.
+    """
+    listener = _real_capture_listener(APP_JS.read_text(encoding="utf-8"))
     script = r"""
     // Minimal DOM: a card with a click handler, holding a marked link.
     class Ev {
@@ -114,11 +138,7 @@ def test_a_click_on_a_marked_link_does_not_reach_the_card():
       },
     };
 
-    // The listener under test, copied in shape from app.js's registration.
-    document.addEventListener('click', (e) => {
-      const link = e.target.closest?.('[data-stop-prop]');
-      if (link) e.stopPropagation();
-    }, true);
+    // __REAL_LISTENER__
 
     const card = new El({'data-route': '#/pulse'});
     let cardFired = false;
@@ -141,6 +161,7 @@ def test_a_click_on_a_marked_link_does_not_reach_the_card():
 
     console.log(JSON.stringify({stoppedOnLink, stoppedOnPlain, plainReachedCard}));
     """
+    script = script.replace("// __REAL_LISTENER__", listener)
     out = _run_node(script)
     assert out["stoppedOnLink"] is True, "the card handler still fires"
     assert out["stoppedOnPlain"] is False, "an ordinary click was swallowed"

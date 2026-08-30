@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -57,6 +57,8 @@ sys.path.insert(0, str(WORKSPACE))
 from scripts.bridge_daemon.finalizers import send_email  # noqa: E402
 from scripts.bridge_daemon.refreshers import inflight, mail  # noqa: E402
 from scripts.bridge_daemon.sources import action_queue, approvals  # noqa: E402
+from scripts.bridge_daemon.sources.agenda import today_agenda  # noqa: E402
+from scripts.utils.workspace import get_default_tz  # noqa: E402
 
 
 # ============================================================
@@ -377,29 +379,51 @@ def _agenda(tmp_path: Path, monkeypatch, line: str, now):
     return day, line, now
 
 
+def _minutes_until(tmp_path: Path, seconds_offset: int) -> int:
+    """Drive the REAL `today_agenda` and read back the field under test.
+
+    One event at 09:00 local, and a `now` displaced from it by
+    `seconds_offset` (negative = the event is in the future). The production
+    code builds `event_dt` by replacing hour/minute on `now_local` and zeroing
+    seconds, so the sub-minute part of the offset comes from `now`'s own
+    seconds -- which is exactly the window the defect lived in.
+    """
+    cal = tmp_path / "outputs" / "_sync" / "calendar"
+    cal.mkdir(parents=True, exist_ok=True)
+    local = get_default_tz()
+    event_local = datetime(2026, 5, 18, 9, 0, tzinfo=local)
+    now = event_local + timedelta(seconds=seconds_offset)
+    (cal / f"{now.strftime('%Y-%m-%d')}.md").write_text(
+        "| 09:00 | Morning sync | - |\n", encoding="utf-8")
+    events = today_agenda(tmp_path, now=now.astimezone(timezone.utc))["events"]
+    assert [e["time"] for e in events] == ["09:00"], events
+    return events[0]["minutes_until"]
+
+
 @pytest.mark.parametrize("seconds_past,expected", [
     (1, 0), (30, 0), (59, 0), (60, -1), (90, -1), (121, -2),
 ])
-def test_minutes_until_truncates_toward_zero(seconds_past, expected):
-    """`//` floors toward minus infinity, so 30 seconds ago read -1."""
-    delta = timedelta(seconds=-seconds_past)
-    assert int(delta.total_seconds() / 60) == expected
-    src = (WORKSPACE / "scripts" / "bridge_daemon" / "sources"
-           / "agenda.py").read_text(encoding="utf-8")
-    # Scoped to the `minutes_until` line. `minutes_to_next` a few lines below
-    # also uses `//`, and correctly: it is the gap between two events in a
-    # sorted list, so it is never negative and floor equals truncation there.
-    line = next(ln for ln in src.splitlines()
-                if 'e["minutes_until"] =' in ln)
-    assert "// 60" not in line
-    assert "/ 60" in line
+def test_minutes_until_truncates_toward_zero(tmp_path, seconds_past, expected):
+    """`//` floors toward minus infinity, so 30 seconds ago read -1.
+
+    REWRITTEN 2026-08-30 to call the code. The six parametrized cases used to
+    assert `int(delta.total_seconds() / 60) == expected` -- a fact about
+    Python's own `int()`, true whatever `agenda.py` does -- and the only line
+    connected to production was a grep requiring the literal `/ 60` and
+    forbidding `// 60` on one specific line shape. That grep also fails a
+    CORRECT refactor: move the arithmetic into a helper and `next(...)` raises
+    `StopIteration` instead of the test passing. `today_agenda` takes both its
+    data root and its `now`, so there is no reason to read the source at all.
+    """
+    assert _minutes_until(tmp_path, seconds_past) == expected
 
 
-def test_a_future_event_is_unaffected_by_the_change():
-    """Truncation and floor agree for every positive value."""
-    for seconds in (1, 59, 60, 61, 3600):
-        delta = timedelta(seconds=seconds)
-        assert int(delta.total_seconds() / 60) == int(delta.total_seconds() // 60)
+@pytest.mark.parametrize("seconds_ahead", [1, 59, 60, 61, 3600])
+def test_a_future_event_is_unaffected_by_the_change(tmp_path, seconds_ahead):
+    """Truncation and floor agree for every positive value, so the fix must not
+    have moved a future event. Also read off the real function now."""
+    delta = timedelta(seconds=seconds_ahead)
+    assert _minutes_until(tmp_path, -seconds_ahead) == int(delta.total_seconds() // 60)
 
 
 # ============================================================

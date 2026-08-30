@@ -35,6 +35,7 @@ Fixed 2026-08-24.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import re
@@ -146,13 +147,67 @@ def test_a_real_candidate_is_still_counted(ph, ds, tmp_path, monkeypatch):
     assert "1 merge candidates" in result["output"]
 
 
+def _module_constant(source: str, name: str) -> str | None:
+    """A module-level string constant's value, read by AST.
+
+    Quote style, spacing and line breaks are the author's business; the value
+    is the contract. Returns None when the name is not bound to a plain string
+    literal at module level, so the caller can fail with a sentence instead of
+    an AttributeError.
+    """
+    for node in ast.walk(ast.parse(source)):
+        targets = []
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        for target in targets:
+            if (isinstance(target, ast.Name) and target.id == name
+                    and isinstance(node.value, ast.Constant)
+                    and isinstance(node.value.value, str)):
+                return node.value.value
+    return None
+
+
+@pytest.mark.parametrize("spelling", [
+    'MERGE_UNAVAILABLE_MARKER = "UNAVAILABLE:"',
+    "MERGE_UNAVAILABLE_MARKER = 'UNAVAILABLE:'",
+    'MERGE_UNAVAILABLE_MARKER   =    "UNAVAILABLE:"',
+    'MERGE_UNAVAILABLE_MARKER: str = "UNAVAILABLE:"',
+])
+def test_the_constant_reader_survives_every_way_of_writing_it(spelling):
+    """The case ON the line for the reader below.
+
+    Each of these used to be a crash rather than a verdict: the old regex
+    matched only the double-quoted, single-spaced form.
+    """
+    assert _module_constant(spelling, "MERGE_UNAVAILABLE_MARKER") == "UNAVAILABLE:"
+
+
+def test_the_constant_reader_answers_none_rather_than_raising():
+    """An absent constant must produce a sentence, not an AttributeError."""
+    assert _module_constant("OTHER = 1\n", "MERGE_UNAVAILABLE_MARKER") is None
+
+
 def test_the_two_files_agree_on_the_marker_text(ph):
     """They match the same literal with separate regexes - prime-health runs at
     session boot and importing a kebab-case module for one string is not worth
     it there - so nothing but this test holds them in step."""
     ds_src = (ROOT / "scripts" / "dream-shadow.py").read_text(encoding="utf-8")
     ph_src = (ROOT / "scripts" / "prime-health-parallel.py").read_text(encoding="utf-8")
-    marker = re.search(r'MERGE_UNAVAILABLE_MARKER = "([^"]+)"', ds_src).group(1)
+
+    # Read the constant off the AST, not off one exact spelling. The
+    # predecessor used `re.search(r'MERGE_UNAVAILABLE_MARKER = "([^"]+)"',
+    # ds_src).group(1)` with no None-guard, so switching the assignment to
+    # single quotes - or changing the spacing - raised
+    # `AttributeError: 'NoneType' object has no attribute 'group'`. The one
+    # test whose whole job is keeping two files in step gave an opaque crash
+    # exactly when one of them drifted, and its careful failure message, the
+    # part that tells the reader what broke, was never printed.
+    marker = _module_constant(ds_src, "MERGE_UNAVAILABLE_MARKER")
+    assert marker is not None, (
+        "dream-shadow.py no longer defines MERGE_UNAVAILABLE_MARKER as a "
+        "module-level literal; the two files can no longer be held in step")
     assert marker in ph_src, (
         f"dream-shadow writes {marker!r} and prime-health does not look for it; "
         "the outage would go back to reading as a clean result"
@@ -196,11 +251,39 @@ def test_the_report_never_proposes_removing_a_memory(ds):
     closing advisory - because a report that keeps one and loses the other
     reads as a worklist for deletion in exactly the section that lists files."""
     text = _report(ds, _PAIR)
-    assert "candidate for removal" in text, "the dormant-section disclaimer"
+
+    # POLARITY, not presence. `assert "candidate for removal" in text` was the
+    # whole dormant-section guard, and dropping the negation from the
+    # disclaimer - "each dormant note is a candidate for removal" - keeps that
+    # substring intact. The safety anchor passed while the report had become
+    # the deletion worklist its docstring says it must never be.
+    disclaimer = next(
+        (line for line in text.splitlines() if "candidate for removal" in line), None)
+    assert disclaimer is not None, "the dormant-section disclaimer is gone"
+    assert "Nothing listed here is a candidate for removal" in disclaimer, (
+        f"the dormant disclaimer lost its negation and now reads as a removal "
+        f"proposal: {disclaimer!r}")
+
     assert "never mutates memory and never proposes removing a fact" in text, (
         "the closing advisory: 'never mutates' alone still leaves the tool "
         "free to PROPOSE a removal, which is the thing it must not do"
     )
+
+
+def test_a_dormant_disclaimer_that_lost_its_negation_is_caught(ds):
+    """The case ON the line: nothing above ever made the polarity check refuse.
+
+    The predecessor's substring survives the negation being dropped, so prove
+    the replacement does not.
+    """
+    negated = "_Informational. Nothing listed here is a candidate for removal — it stays._"
+    stripped = "_Informational. Each dormant note is a candidate for removal._"
+
+    assert "candidate for removal" in negated
+    assert "candidate for removal" in stripped, (
+        "the old assertion could not tell these two apart")
+    assert "Nothing listed here is a candidate for removal" in negated
+    assert "Nothing listed here is a candidate for removal" not in stripped
 
 
 # ===========================================================================

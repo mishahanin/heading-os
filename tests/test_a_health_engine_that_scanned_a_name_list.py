@@ -161,23 +161,43 @@ def test_the_plain_date_branch_is_a_fast_path_not_a_behaviour():
 
     `date.__str__` IS `isoformat()`, so with the `isinstance(value, date)` branch
     gone a plain date falls through to `date.fromisoformat(str(value).strip())`
-    and comes back identical. MEASURED over 3668 dates strided across
+    and comes back identical. MEASURED over 3665 distinct dates strided across
     0001-01-01..9999-12-31 plus both bounds: 0 differing. The branch stays for
     readability and speed; this test says why no test can distinguish it, so a
     future mutation run does not read the survivor as a coverage gap.
+
+    The count was recomputed 2026-08-30; the docstring said 3668 and the loop
+    it documents visits 3664. `(date.max - date.min).days` is 3,652,058, and
+    with stride 997 the body runs for k = 0..3663, i.e. 3664 strided dates. The
+    "plus both bounds" clause then double-counts: `date.min` IS the k=0 stride
+    point, so the bounds loop adds exactly one new date (`date.max`) for 3665
+    distinct. Nothing failed on the wrong number, which is the problem with a
+    measured claim nobody recomputes -- this file's own
+    `test_the_registry_does_not_outlive_its_sites` says stale measured claims
+    mislead the next mutation run. The arithmetic is now derived below and
+    asserted, so the sentence cannot drift from the loop again.
     """
     d = dt.date(1, 1, 1)
     last = dt.date(9999, 12, 31)
     checked = 0
+    seen = set()
     while True:
         assert frontmatter_date(d) == dt.date.fromisoformat(str(d).strip()) == d
         checked += 1
+        seen.add(d)
         if (last - d).days < 997:
             break
         d += dt.timedelta(days=997)
     assert checked > 3000, f"the stride stopped covering the domain: {checked}"
+
+    expected_strided = (last - dt.date(1, 1, 1)).days // 997 + 1
+    assert checked == expected_strided == 3664, (checked, expected_strided)
+
     for bound in (dt.date.min, dt.date.max):
         assert frontmatter_date(bound) == dt.date.fromisoformat(str(bound)) == bound
+        seen.add(bound)
+    assert len(seen) == 3665, (
+        f"the docstring's measured count is stale: {len(seen)} distinct dates")
 
 
 def test_a_broken_date_is_refused_not_truncated():
@@ -275,8 +295,69 @@ DECLARED_OLD_FORM_SITES = {
 }
 
 
+# EXACT receiver names, not a substring.
+#
+# The test used to be `"date" not in ast.unparse(node.func.value)`, which is
+# true of any receiver whose text merely CONTAINS "date" -- `candidate`,
+# `update`, `my_date_col`. Those are now excluded.
+#
+# Both `date` and `datetime` stay in scope, and that is deliberate. The
+# 2026-08-30 audit shard argued the sweep should be narrowed to `date` alone,
+# on the reasoning that `datetime.fromisoformat(str(x))` is the CORRECT
+# coercion for a value that may carry a time and so is swept in wrongly. That
+# reasoning is half right and the conclusion is wrong: narrowing it was tried
+# here and immediately dropped the registry's only entry,
+# `.claude/hooks/checkpoint-offer.py:487`, which is
+# `datetime.fromisoformat(str(compacted_at))` -- declared, justified, and
+# pinned. The registry has always encoded a `str()`-coercion ratchet over BOTH
+# receivers, and the entry's own note ("compares timestamps, not dates") is an
+# argument for keeping a datetime site, not evidence it was swept in by
+# accident. So the docstring below was the narrow half, not the code.
+_DATE_RECEIVERS = {
+    "date", "dt.date", "datetime.date",
+    "datetime", "dt.datetime", "datetime.datetime",
+}
+
+
+def _is_str_coercion(node) -> bool:
+    """`str(x)`, or any method chain hanging off one: `str(x).strip()`.
+
+    The chain case is the blind spot that mattered. Only a bare `ast.Name`
+    call named `str` used to qualify, so `date.fromisoformat(str(created).strip())`
+    -- the most plausible way the defect comes back, since the replacement
+    helper itself strips -- had `inner.func` as an `ast.Attribute` and was never
+    reported. The ratchet sat green over the banned pattern. This file's own
+    `test_the_plain_date_branch_is_a_fast_path_not_a_behaviour` contains exactly
+    that shape, which is how the hole was demonstrated.
+    """
+    import ast
+    seen = 0
+    while isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        node = node.func.value          # unwrap .strip() / .lower() / ...
+        seen += 1
+        if seen > 8:                    # pathological chain; stop rather than spin
+            return False
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "str")
+
+
 def _old_form_sites():
-    """Every `date.fromisoformat(str(...))` (or `[:10]` of one) under the engine."""
+    """Every `date`/`datetime`.`fromisoformat(str(...))`, incl. `[:10]` and `.strip()`.
+
+    The docstring used to scope this to `date.fromisoformat` alone while the
+    code swept both receivers. The code was right -- see `_DATE_RECEIVERS` --
+    and this sentence is the correction.
+
+    Keys are POSIX-relative paths. They used to be `str(path.relative_to(ROOT))`,
+    which produces backslash-separated keys on Windows while
+    `DECLARED_OLD_FORM_SITES` and the `consolidated` parametrize values are all
+    forward-slash. The two sets could never intersect there, so on Windows the
+    declared-site tests went false-RED on a clean tree and
+    `test_the_three_consolidated_readers_no_longer_carry_the_form` -- which
+    asserts `consolidated not in _old_form_sites()` -- passed VACUOUSLY even
+    with the banned form restored to all three files. Same `as_posix()` defect
+    class this audit pins as a production bug in `check-path-references.py`.
+    """
     import ast
     found = {}
     for path in tracked_python_files():
@@ -290,13 +371,12 @@ def _old_form_sites():
                     and node.func.attr == "fromisoformat"
                     and node.args):
                 continue
-            if "date" not in ast.unparse(node.func.value):
+            if ast.unparse(node.func.value) not in _DATE_RECEIVERS:
                 continue
             arg = node.args[0]
             inner = arg.value if isinstance(arg, ast.Subscript) else arg
-            if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
-                    and inner.func.id == "str"):
-                found.setdefault(str(path.relative_to(ROOT)), []).append(node.lineno)
+            if _is_str_coercion(inner):
+                found.setdefault(path.relative_to(ROOT).as_posix(), []).append(node.lineno)
     return found
 
 
@@ -625,3 +705,78 @@ def test_the_shared_tree_is_not_double_counted(monkeypatch, tmp_path):
     _write(tmp_path, "research/b.md", "x\n")
     _point_at(monkeypatch, tmp_path)
     assert [p.name for p in (p for _s, p in kh.scanned_note_files())] == ["b.md"]
+
+
+# ============================================================
+# A2b -- the sweep's own reach, measured on planted source
+# ============================================================
+
+def _sweep_over(source: str, tmp_path, monkeypatch) -> dict:
+    """Run `_old_form_sites` over one synthetic file."""
+    target = tmp_path / "planted.py"
+    target.write_text(source, encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "tracked_python_files",
+                        lambda: [target], raising=True)
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", tmp_path, raising=True)
+    return _old_form_sites()
+
+
+@pytest.mark.parametrize("call", [
+    "date.fromisoformat(str(created))",
+    "date.fromisoformat(str(created)[:10])",
+    "date.fromisoformat(str(created).strip())",
+    "dt.date.fromisoformat(str(created).strip().lower())",
+    "datetime.fromisoformat(str(created))",
+])
+def test_the_sweep_sees_every_shape_of_the_old_form(call, tmp_path, monkeypatch):
+    """The case ON the line, and the reason the sweep was widened.
+
+    Only a BARE `str(...)` used to qualify: `_is_str_coercion`'s predecessor
+    required `inner.func` to be an `ast.Name` named `str`, so any method chain
+    hanging off the coercion -- `.strip()` above all, since the replacement
+    helper itself strips -- had an `ast.Attribute` there and was never
+    reported. The ratchet was green while the banned pattern was present, in
+    the exact shape the defect most plausibly returns as.
+    """
+    found = _sweep_over(f"x = {call}\n", tmp_path, monkeypatch)
+    assert found == {"planted.py": [1]}, f"{call} escaped the sweep"
+
+
+@pytest.mark.parametrize("call", [
+    "candidate.fromisoformat(str(x))",      # receiver merely CONTAINS "date"
+    "update.fromisoformat(str(x))",
+    "my_date_col.fromisoformat(str(x))",
+    "date.fromisoformat(created)",          # no str() coercion at all
+    "date.fromisoformat(created.isoformat())",
+])
+def test_the_sweep_does_not_fire_on_things_that_are_not_the_old_form(
+        call, tmp_path, monkeypatch):
+    """The other direction. A sweep that flags everything is not a ratchet.
+
+    The receiver test was the substring `"date" in ast.unparse(...)`, so the
+    first three of these were swept in as old-form sites and would have forced
+    a bogus DECLARED_OLD_FORM_SITES entry apiece.
+    """
+    assert _sweep_over(f"x = {call}\n", tmp_path, monkeypatch) == {}, \
+        f"{call} was flagged and is not the old form"
+
+
+def test_the_sweep_keys_are_posix_on_every_platform(tmp_path, monkeypatch):
+    """Keys are compared against forward-slash literals in two tests and a
+    parametrize, so a backslash key can never match. On Windows that made the
+    declared-site tests false-red AND made
+    `test_the_three_consolidated_readers_no_longer_carry_the_form` -- which
+    asserts `consolidated not in _old_form_sites()` -- pass vacuously even with
+    the banned form restored to all three files.
+    """
+    nested = tmp_path / "scripts" / "deep"
+    nested.mkdir(parents=True)
+    target = nested / "reader.py"
+    target.write_text("x = date.fromisoformat(str(created))\n", encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "tracked_python_files",
+                        lambda: [target], raising=True)
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", tmp_path, raising=True)
+
+    keys = list(_old_form_sites())
+    assert keys == ["scripts/deep/reader.py"], keys
+    assert not any("\\" in k for k in keys), keys

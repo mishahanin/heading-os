@@ -191,10 +191,46 @@ def test_every_position_carrying_a_condition_is_returned(tmp_path):
     assert {r["title"] for r in out} == {"A", "B"}
 
 
+def _hygiene_result(stale_positions):
+    """The minimum `render_report` needs, with one section populated."""
+    return {
+        "memory": {"memory_dir": "/nowhere", "file_count": 0,
+                   "memory_md_lines": 10},
+        "gate": {"temporal_errors": [], "memory_orphans": [],
+                 "over_budget": False, "memory_md_lines": 10,
+                 "memory_index_readable": True},
+        "advisory": {"stale_memory": [], "temporal_warnings": [],
+                     "stale_seeds": [], "stale_positions": stale_positions,
+                     "orphan_principles": []},
+        "redundancy": {"ok": True, "pairs": []},
+        "volatile_hooks": {"flagged": [], "flagged_descriptions": []},
+        "brain_ok": True, "brain_note": "", "gate_count": 0,
+    }
+
+
 def test_the_human_facing_report_no_longer_calls_them_stale():
-    src = (ROOT / "scripts/memory-hygiene.py").read_text(encoding="utf-8")
-    assert '("stale_positions", "Odin stale positions")' not in src
-    assert "not evaluated" in src
+    """Read out of the RENDERED report, not out of the source text.
+
+    This used to be `assert "not evaluated" in src` plus a negative pinning one
+    exact spelling of the old tuple. Both halves were loose: the caveat is
+    satisfied by that phrase anywhere in the file - there is an unrelated one on
+    the brain line at `memory-hygiene.py:240` - and re-quoting the old label
+    with single quotes escaped the negative entirely. Rendering the report is
+    what answers the question the test is named for: what does the human read?
+    """
+    report = mh.render_report(
+        _hygiene_result([{"title": "P1"}, {"title": "P2"}]),
+        "2026-01-01T00:00:00+00:00")
+    headings = [ln for ln in report.splitlines()
+                if ln.startswith("### ") and "revisit condition" in ln]
+    assert len(headings) == 1, report
+    heading = headings[0]
+    assert "stale" not in heading.lower(), (
+        f"the report calls them stale again: {heading!r}")
+    assert "not evaluated" in heading, (
+        f"the count is presented with no caveat: {heading!r}")
+    assert heading.endswith(": 2"), heading
+    assert "Odin stale positions" not in report, report
 
 
 def test_the_json_key_is_unchanged_because_a_skill_documents_it():

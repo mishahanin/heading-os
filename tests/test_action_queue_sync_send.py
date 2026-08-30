@@ -98,44 +98,176 @@ def test_send_card():
     _check("empty body -> permanent", r["result"] == "send_failed" and r["classification"] == "permanent")
 
 
-# ---- Success Signal (filled in Step 2 once action-queue.py is rewritten) ----
+# ---- Success Signal: the only synchronous approve -> send end-to-end path ----
 
 def _load_aq_cli():
+    """Import scripts/action-queue.py by path. An import failure is a FAILURE.
+
+    This used to be wrapped by the caller in `except Exception: print("[SKIP]");
+    return True`, alongside `if not hasattr(aqcli, "approve_and_send"): ...
+    return True`. Those two lines were left behind by a staged rollout ("filled
+    in Step 2 once action-queue.py is rewritten") and Step 2 landed long ago.
+
+    What they bought, measured 2026-08-30 by renaming `approve_and_send` in
+    `scripts/action-queue.py`: the suite's ONLY synchronous approve-to-send test
+    printed `[SKIP]` and reported nothing wrong. `pyproject.toml`'s
+    `filterwarnings = ["error::pytest.PytestReturnNotNoneWarning"]` did turn the
+    `return True` into a failure - but one that names the return value, not the
+    missing send path, and the same run with `return True` softened to a bare
+    `return` went green with the send path gone. A guard whose teeth are an
+    unrelated warning promotion is not a guard.
+
+    `tests/test_action_queue_endpoints.py` points HERE for this coverage, so a
+    silent skip removes the coverage two files claim to have. There is nothing
+    left to be conditional about: the import either works or this test is red.
+    """
     spec = importlib.util.spec_from_file_location("aqcli", ROOT / "scripts" / "action-queue.py")
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m
 
 
+class _Sender:
+    """Records every send subprocess. `refuse=True` makes any send a failure.
+
+    Standing in for the transport is not optional here: `send_card` shells out
+    to `scripts/send-email.py`, which is a real outbound path. Every test below
+    installs one of these, and the refusal tests install one that raises, so a
+    regression that sends where it must not fails loudly instead of mailing
+    someone.
+    """
+
+    def __init__(self, returncode=0, stderr="", refuse=False):
+        self.calls = []
+        self.returncode = returncode
+        self.stderr = stderr
+        self.refuse = refuse
+
+    def __call__(self, *a, **k):
+        self.calls.append((a, k))
+        if self.refuse:
+            raise AssertionError(
+                "the sender ran on a path that must never send: "
+                f"argv={a[0] if a else None!r}")
+        return _FakeProc(self.returncode, stderr=self.stderr)
+
+
+def _queue(td, *cards):
+    """Write a queue.json under a temp DATA root and return (data_root, path)."""
+    data_root = Path(td)
+    qdir = data_root / "outputs" / "operations" / "action-queue"
+    qdir.mkdir(parents=True)
+    path = qdir / "queue.json"
+    path.write_text(json.dumps({"version": 1, "generated_at": None,
+                                "actions": list(cards)}), encoding="utf-8")
+    return data_root, path
+
+
+def _status(path, action_id):
+    q = json.loads(path.read_text(encoding="utf-8"))
+    return [c["status"] for c in q["actions"] if c["id"] == action_id]
+
+
+def test_the_cli_exposes_the_synchronous_send_entry_point():
+    """The named seam exists. Renaming it must break this file, not skip it."""
+    aqcli = _load_aq_cli()
+    _check("scripts/action-queue.py defines approve_and_send",
+           callable(getattr(aqcli, "approve_and_send", None)))
+
+
 def test_success_signal():
-    """Daemon-free list/show/approve on a temp DATA root; synchronous transition."""
-    try:
-        aqcli = _load_aq_cli()
-    except Exception as exc:  # action-queue.py not yet rewritten (Step 2)
-        print(f"  [SKIP] success-signal: action-queue.py not import-ready yet ({type(exc).__name__})")
-        return True
-    if not hasattr(aqcli, "approve_and_send"):
-        print("  [SKIP] success-signal: approve_and_send not present yet (Step 2)")
-        return True
-
+    """Daemon-free approve on a temp DATA root; synchronous transition to sent."""
+    aqcli = _load_aq_cli()
+    sender = _Sender()
     with tempfile.TemporaryDirectory() as td:
-        data_root = Path(td)
-        qdir = data_root / "outputs" / "operations" / "action-queue"
-        qdir.mkdir(parents=True)
-        card = _email_card(status="pending")
-        (qdir / "queue.json").write_text(
-            json.dumps({"version": 1, "generated_at": None, "actions": [card]}), encoding="utf-8")
-
+        data_root, path = _queue(td, _email_card(status="pending"))
         # stub the send so no real email leaves (patch the CLI's own copy of the
         # executor module, _AQX, whose send_card runs the subprocess)
         orig = aqcli._AQX.subprocess.run
         try:
-            aqcli._AQX.subprocess.run = lambda *a, **k: _FakeProc(0)
+            aqcli._AQX.subprocess.run = sender
             res = aqcli.approve_and_send(ROOT, data_root, "abc123")
         finally:
             aqcli._AQX.subprocess.run = orig
         _check("approve transitions card to sent in one call", res.get("result") == "sent")
+        _check("the send ran exactly once", len(sender.calls) == 1)
         # the queue file reflects sent
-        q = json.loads((qdir / "queue.json").read_text())
-        sent = [c for c in q["actions"] if c["id"] == "abc123" and c["status"] == "sent"]
-        _check("queue.json shows status sent", len(sent) == 1)
+        _check("queue.json shows status sent", _status(path, "abc123") == ["sent"])
+
+
+def test_a_draft_not_marked_ready_is_refused_and_nothing_is_sent():
+    """The negative case: approve must REFUSE, not send, on an unready draft.
+
+    The success test alone cannot tell a working gate from an absent one - a
+    path that sends everything passes it. This one fails the moment the
+    ready_for_review check stops running, and the sender raises rather than
+    quietly mailing the half-written draft.
+    """
+    aqcli = _load_aq_cli()
+    sender = _Sender(refuse=True)
+    with tempfile.TemporaryDirectory() as td:
+        data_root, path = _queue(
+            td, _email_card(status="pending", draft_status="draft"))
+        orig = aqcli._AQX.subprocess.run
+        try:
+            aqcli._AQX.subprocess.run = sender
+            res = aqcli.approve_and_send(ROOT, data_root, "abc123")
+        finally:
+            aqcli._AQX.subprocess.run = orig
+        _check("an unready draft is blocked", res.get("result") == "blocked")
+        _check("the refusal names the draft state",
+               "ready_for_review" in (res.get("error") or ""))
+        _check("no send was attempted", sender.calls == [])
+        _check("the claim was released back to pending",
+               _status(path, "abc123") == ["pending"])
+
+
+def test_a_type_that_does_not_resolve_gated_is_refused_and_nothing_is_sent():
+    """The send-gate invariant on the synchronous path, driven to refusal.
+
+    `.claude/rules/lethal-trifecta.md` makes this the load-bearing control:
+    anything send-capable resolves `gated` or is not sent. Forcing the resolver
+    to answer `autonomous` is the only way to observe the refusal, so the ledger
+    itself is never edited - only the CLI module's view of it, and only inside
+    this test.
+    """
+    aqcli = _load_aq_cli()
+    sender = _Sender(refuse=True)
+    with tempfile.TemporaryDirectory() as td:
+        data_root, path = _queue(td, _email_card(status="pending"))
+        orig_run = aqcli._AQX.subprocess.run
+        orig_tier = aqcli.tool_risk.tier_for
+        try:
+            aqcli._AQX.subprocess.run = sender
+            aqcli.tool_risk.tier_for = lambda t: "autonomous"
+            res = aqcli.approve_and_send(ROOT, data_root, "abc123")
+        finally:
+            aqcli._AQX.subprocess.run = orig_run
+            aqcli.tool_risk.tier_for = orig_tier
+        _check("a non-gated send type is refused", res.get("result") == "refused")
+        _check("no send was attempted", sender.calls == [])
+        _check("the card was not moved", _status(path, "abc123") == ["pending"])
+
+
+def test_approving_the_same_card_twice_sends_once():
+    """A repeat keystroke must not mail the recipient a second time."""
+    aqcli = _load_aq_cli()
+    sender = _Sender()
+    with tempfile.TemporaryDirectory() as td:
+        data_root, path = _queue(td, _email_card(status="pending"))
+        orig = aqcli._AQX.subprocess.run
+        try:
+            aqcli._AQX.subprocess.run = sender
+            first = aqcli.approve_and_send(ROOT, data_root, "abc123")
+            try:
+                second = aqcli.approve_and_send(ROOT, data_root, "abc123")
+            except SystemExit as exc:
+                # `_resolve_id` exits when the id is no longer in the active
+                # set. That is a refusal too; what must not happen is a send.
+                second = {"result": f"exit:{exc.code}"}
+        finally:
+            aqcli._AQX.subprocess.run = orig
+        _check("the first approve sent", first.get("result") == "sent")
+        _check("the second approve did not send", second.get("result") != "sent")
+        _check("the sender ran exactly once", len(sender.calls) == 1)
+        _check("the card is sent, once", _status(path, "abc123") == ["sent"])

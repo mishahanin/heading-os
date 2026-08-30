@@ -286,6 +286,57 @@ def test_the_salutation_goes_through_the_same_helper(tmp_path):
     assert not any("&amp;" in p or "<strong>" in p for p in paras), paras
 
 
+def _module_without_function(source: str, name: str) -> str:
+    """Every line of `source` except the body of the top-level function `name`.
+
+    Located by AST, so the excluded span is the real function rather than
+    "everything before/after the first place that text appears". Raises if the
+    function is gone, because a scope bound that silently stops bounding is how
+    a guard turns into a pass.
+    """
+    import ast
+
+    tree = ast.parse(source)
+    target = next(
+        (n for n in tree.body
+         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name),
+        None)
+    if target is None:
+        raise AssertionError(
+            f"{name} is no longer a top-level function in this module; the "
+            f"exemption below points at nothing and the guard's scope is wrong")
+
+    lines = source.splitlines()
+    start = (target.decorator_list[0].lineno if target.decorator_list
+             else target.lineno) - 1
+    end = target.end_lineno
+    return "\n".join(lines[:start] + lines[end:])
+
+
+def test_the_scope_helper_excludes_only_the_named_function():
+    """The case ON the line for the scope bound above.
+
+    Two probes: text before the exempt function must survive (the predecessor's
+    slice dropped it), and text inside it must not.
+    """
+    src = (
+        "BEFORE_MARKER = 1\n"
+        "def _docx_text(x):\n"
+        "    INSIDE_MARKER = 2\n"
+        "    return x\n"
+        "AFTER_MARKER = 3\n"
+    )
+    body = _module_without_function(src, "_docx_text")
+
+    assert "BEFORE_MARKER" in body, "code before the exempt function was dropped"
+    assert "AFTER_MARKER" in body
+    assert "INSIDE_MARKER" not in body
+
+    # And a missing function is an assertion, not an IndexError.
+    with pytest.raises(AssertionError):
+        _module_without_function(src, "_renamed_away")
+
+
 def test_no_tag_stripping_regex_is_hand_rolled_anywhere_in_the_module():
     """A fourth copy would not be a `def`, so the AST guard below cannot see it.
 
@@ -294,7 +345,21 @@ def test_no_tag_stripping_regex_is_hand_rolled_anywhere_in_the_module():
     share is the intent to turn markup into text without the shared parser.
     """
     source = (ROOT / "scripts" / "utils" / "doctype_renderer.py").read_text(encoding="utf-8")
-    body = source.split('def _docx_text', 1)[1]
+
+    # The WHOLE module, minus the one function that owns the conversion.
+    #
+    # Fixed 2026-08-30. This was `source.split('def _docx_text', 1)[1]`, i.e.
+    # "everything AFTER the first occurrence of `def _docx_text`". The test name
+    # promises the guard applies "anywhere in the module", and it did not: a new
+    # hand-rolled strip placed BEFORE that definition -- near the top of
+    # `build_docx`, say -- was outside the slice and invisible. The slice was
+    # also unbounded on the other side, so renaming or removing `_docx_text`
+    # raised IndexError instead of failing as an assertion.
+    #
+    # `_docx_text` itself is excluded by name rather than by position, because
+    # it IS the shared conversion and legitimately contains these shapes.
+    body = _module_without_function(source, "_docx_text")
+
     for tell in ('re.sub(r"<', "re.sub(r'<", '.replace("<p>"', '.replace("</p>"'):
         assert tell not in body, (
             f"a hand-rolled markup strip is back in the module: {tell!r}. "

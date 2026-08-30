@@ -136,17 +136,26 @@ def _git(args: list[str]) -> list[str]:
 
     Paths are NOT stripped: with `-z` the bytes between separators are the exact
     name, and a leading or trailing space is part of it.
+
+    Nor is the output read through subprocess text mode. Text mode turns on
+    universal newlines and rewrites every CR byte to LF, with no `newline=` knob
+    to switch it off, so `-z` fixes the quoting and leaves this untouched.
+    MEASURED 2026-08-30: `docs/x\\r\\ny.md` and `docs/x\\ny.md` are two tracked
+    files that `text=True` returns as one name. `ROOT / r` then resolves to
+    nothing, `is_file()` is False, and the edit is dropped without a word - the
+    same false coverage claim the paragraph above exists to prevent.
     """
     try:
         out = subprocess.run(
             ["git", *args],
-            cwd=str(ROOT), capture_output=True, text=True, timeout=20,
+            cwd=str(ROOT), capture_output=True, timeout=20,
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
     if out.returncode != 0:
         return []
-    return [path for path in out.stdout.split("\0") if path]
+    decoded = out.stdout.decode("utf-8", "surrogateescape")
+    return [path for path in decoded.split("\0") if path]
 
 
 def changed_python_files() -> list[Path]:

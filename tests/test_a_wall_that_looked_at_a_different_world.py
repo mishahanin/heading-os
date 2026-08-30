@@ -55,9 +55,31 @@ AMBIENT_MARKER = "SHARD59_AMBIENT_MARKER"
 _MARKER_VALUE = "shard59-stand-in"
 
 
-def _git(*args, cwd=None, env=None):
+def _git_probe(*args, cwd=None, env=None):
+    """Ask git a question whose non-zero exit is the ANSWER, not a failure.
+
+    `rev-parse --verify -q` on an absent ref exits 1 and prints nothing, which
+    is how `_head` reports "no such ref". Only a probe may use `check=False`.
+    """
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True,
                           text=True, env=env, timeout=60, check=False)
+
+
+def _git(*args, cwd=None, env=None):
+    """Arrange a fixture repository. A non-zero exit STOPS the test.
+
+    SPLIT FROM `_git_probe` 2026-08-30. One helper served both roles with
+    `check=False`, and no caller inspected a return code, so a failed
+    `git init -b`, `remote add`, `add` or `commit` was silently ignored: the
+    fixture carried on, and the test then reported a push or wall outcome
+    computed over a repository that was never built. In the empty-repository
+    case it could even SATISFY an assertion such as `not _head(...)` -- a pass
+    earned by the setup having failed. Now the arrangement raises
+    `CalledProcessError` naming the command, so a broken fixture reads as a
+    broken fixture.
+    """
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True,
+                          text=True, env=env, timeout=60, check=True)
 
 
 @pytest.fixture
@@ -88,6 +110,10 @@ def captured_child(monkeypatch):
     def fake(cmd, *, env=None, **kw):
         seen["cmd"] = list(cmd)
         seen["env"] = env
+        # The real `run_supervised` CALLS the postcondition; this fake does not,
+        # so it has to hand it back or the third env-carrying check is
+        # unobservable. It was swallowed by `**kw` until 2026-08-30.
+        seen["postcondition"] = kw.get("postcondition")
         return {"state": "ok", "elapsed_s": 0.0, "exit_code": 0, "tail": ""}
 
     monkeypatch.setattr(git_push, "run_supervised", fake)
@@ -165,10 +191,23 @@ def test_every_wall_receives_the_environment_the_push_will_run_with(
 
     caller_env = {"HOME": "/nowhere", "GIT_CONFIG_COUNT": "0"}
     git_push.supervised_push(tmp_path, env=caller_env)
-    # The postcondition is a closure; call it the way run_supervised would.
     assert got["root"] == caller_env
     assert got["wall"] == caller_env
     assert captured_child["env"] == caller_env
+
+    # The postcondition is a CLOSURE, so `supervised_push` returning does not
+    # mean it ran: the fake `run_supervised` never invokes it. Until 2026-08-30
+    # a comment here said "call it the way run_supervised would" and nothing
+    # called anything, so the `ahead_behind` stub was dead code, `got["after"]`
+    # was never set and never asserted, and the third of the three checks the
+    # docstring above counts was uncovered. Invoke it, then assert.
+    assert "after" not in got, (
+        "the fake run_supervised invoked the postcondition; this test no longer "
+        "proves the closure carries the env on its own")
+    postcondition = captured_child["postcondition"]
+    assert callable(postcondition), "no postcondition reached run_supervised"
+    assert postcondition() is True
+    assert got["after"] == caller_env
 
 
 def test_the_postcondition_verifies_under_the_same_environment(monkeypatch, tmp_path):
@@ -237,8 +276,13 @@ def _rewrite(target: Path, source: Path, key: str) -> dict:
 
 
 def _head(bare: Path) -> str:
-    return _git("--git-dir", str(bare), "rev-parse", "--verify", "-q",
-                "main").stdout.strip()
+    """The `main` commit in `bare`, or "" when the ref does not exist yet.
+
+    A PROBE: an absent ref is the answer several tests are asking for, so this
+    is the one caller that must not raise on a non-zero exit.
+    """
+    return _git_probe("--git-dir", str(bare), "rev-parse", "--verify", "-q",
+                      "main").stdout.strip()
 
 
 def test_a_clean_push_still_reaches_its_own_remote(world):

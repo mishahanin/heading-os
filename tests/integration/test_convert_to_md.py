@@ -166,6 +166,18 @@ def test_no_sanitize_skips_sanitization(tmp_path):
         capture_output=True,
         timeout=30,
         cwd=str(sandbox),
+        # WORKSPACE_ROOT added 2026-08-30. Without it this test could not fail.
+        # Since the engine became an installed package (F-10.1 item 4),
+        # `scripts` resolves to the REAL workspace, so `get_workspace_root()`
+        # finds the real sanitize-text.py and the missing-sanitizer branch never
+        # fires -- meaning if `--no-sanitize` were silently ignored, the
+        # sandboxed run would just sanitize and exit 0, and this test would
+        # certify the bypass while it was broken. The very next test,
+        # `test_sanitizer_missing_on_disk`, was updated for that resolution
+        # change and carries this exact pin with the same reasoning; this one,
+        # written as its pair, was not. WORKSPACE_ROOT is the first-honored
+        # override in paths.py.
+        env=dict(os.environ, WORKSPACE_ROOT=str(sandbox)),
     )
     # If --no-sanitize were silently ignored, the sandbox would trigger the missing-sanitizer
     # guard and exit 1. Exit 0 + output file existing proves the flag bypassed the guard.

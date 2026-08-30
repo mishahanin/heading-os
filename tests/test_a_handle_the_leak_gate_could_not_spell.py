@@ -87,6 +87,32 @@ def test_a_handle_that_is_a_token_is_actually_detected():
 # The air gap -- git may not hide a path behind a quote
 # ============================================================
 
+# The operator's ~/.gitconfig is not part of these fixtures.
+#
+# Added 2026-08-30. Both air-gap tests below hardened their throwaway repo
+# against a MISSING identity (`user.email`, `user.name`) but not against an
+# INHERITED global setting. On a machine with `commit.gpgsign = true` and no
+# usable signing key, the `commit` step dies with "gpg failed to sign the data",
+# `check=True` raises, and both tests error out for a reason with nothing to do
+# with the quoting behaviour under test. These two guard the highest-severity
+# behaviour in this shard -- a private path reaching a public index -- and an
+# environmental false-red on a leak-gate test is how a leak-gate test ends up
+# switched off.
+_GIT_FIXTURE_SETUP = (
+    ["init", "-q", "."],
+    ["config", "user.email", "t@example.invalid"],
+    ["config", "user.name", "t"],
+    ["config", "commit.gpgsign", "false"],
+    ["config", "tag.gpgsign", "false"],
+)
+
+
+def _init_repo(repo, message):
+    """Init `repo`, stage everything, and make one commit that cannot be signed."""
+    for args in (*_GIT_FIXTURE_SETUP, ["add", "-A"], ["commit", "-qm", message]):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+
 def test_a_vault_path_with_non_ascii_still_trips_the_air_gap(tmp_path):
     """`core.quotePath` defaults on, so git emits
     `"_secure/x/\\321\\204.md"` -- and `is_denied` matches prefixes with
@@ -96,10 +122,7 @@ def test_a_vault_path_with_non_ascii_still_trips_the_air_gap(tmp_path):
     (repo / "ok").mkdir()
     (repo / "_secure" / "x" / "файл.md").write_text("private")
     (repo / "ok" / "plain.md").write_text("public")
-    for args in (["init", "-q", "."], ["config", "user.email", "t@example.invalid"],
-                 ["config", "user.name", "t"], ["add", "-A"],
-                 ["commit", "-qm", "feat: touch the vault"]):
-        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+    _init_repo(repo, "feat: touch the vault")
 
     sha = CS._run(repo, ["rev-parse", "HEAD"]).strip()
     paths = CS._changed_paths(repo, [sha])[sha]
@@ -114,9 +137,7 @@ def test_an_ordinary_path_is_still_not_denied(tmp_path):
     repo = tmp_path / "gr2"
     (repo / "ok").mkdir(parents=True)
     (repo / "ok" / "plain.md").write_text("public")
-    for args in (["init", "-q", "."], ["config", "user.email", "t@example.invalid"],
-                 ["config", "user.name", "t"], ["add", "-A"], ["commit", "-qm", "feat: ok"]):
-        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+    _init_repo(repo, "feat: ok")
 
     sha = CS._run(repo, ["rev-parse", "HEAD"]).strip()
     paths = CS._changed_paths(repo, [sha])[sha]

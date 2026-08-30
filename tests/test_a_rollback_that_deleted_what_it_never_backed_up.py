@@ -457,3 +457,60 @@ def test_the_orphan_is_reported_by_the_scan(tmp_path, monkeypatch, capsys):
     extract.scan_and_extract(tmp_path)
     assert "pitch-extract.md" in capsys.readouterr().out, \
         "the stale file itself was never surfaced"
+
+
+# ==========================================================================
+# The docstring correction this shard claimed and nothing pinned
+# ==========================================================================
+
+def test_the_migration_docstring_does_not_promise_to_write_exec_files():
+    """Added 2026-08-30: every other defect this shard narrates has a test that
+    goes red on a revert -- the grouping, `_yaml_quote`, the three unquoted
+    fields, the backup, the rollback, the map date, the fleet reporter, the
+    config version, the glob. This one had none. Nothing in the file read
+    `mig.__doc__` or the module source, so restoring the false promise to
+    `scripts/crm_migrate_to_entity_model.py` left the whole suite green.
+
+    The claim is about a docstring, so the docstring is what is read; the
+    behaviour behind it is pinned separately by
+    `test_the_migration_has_no_write_path_into_an_exec_repository` below.
+    """
+    doc = mig.__doc__ or ""
+    assert doc.strip(), "the migration module lost its docstring entirely"
+    assert "rewrite\n     THE CEO'S contact files" in doc or \
+           "THE CEO'S contact files" in doc, (
+        "step 4 no longer says whose contact files are rewritten; the sentence "
+        "it replaced promised 'each contact file', a behaviour the code has "
+        "never had")
+    assert "no write path into another" in doc, (
+        "the docstring dropped the statement that this script cannot write "
+        "into an exec's repository")
+
+
+def test_the_migration_has_no_write_path_into_an_exec_repository():
+    """The behaviour the docstring above describes, measured on the code.
+
+    A docstring pin alone would let the sentence stay true while the code grew
+    the write path it disclaims. `apply_migration` must not write anywhere it
+    reached through the exec-record scan.
+    """
+    import ast
+    import inspect
+
+    source = inspect.getsource(mig)
+    tree = ast.parse(source)
+
+    writers = {"write_text", "write_bytes", "mkdir", "rename", "replace", "unlink"}
+    exec_writes = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr not in writers:
+            continue
+        target = ast.unparse(node.func.value).lower()
+        if "exec" in target and "staging" not in target:
+            exec_writes.append(ast.unparse(node)[:80])
+
+    assert exec_writes == [], (
+        f"a write reaches an exec-owned path, which the module docstring says "
+        f"this script has no path to do: {exec_writes}")

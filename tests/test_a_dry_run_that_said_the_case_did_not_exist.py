@@ -309,6 +309,70 @@ def test_the_docstring_does_not_point_at_the_retired_daemon(nightly):
     assert not (ROOT / "scripts" / "eval-drift-daemon.py").exists()
 
 
+def _sensitive_predicate_uses(tree: ast.AST) -> list[str]:
+    """Every route by which `is_sensitive` could be reached in this module.
+
+    The original guard tracked exactly two shapes: `from ... import
+    is_sensitive`, and a bare-name call `is_sensitive()`. Three ordinary
+    spellings walked straight past it, each leaving the forbidden predicate
+    genuinely in use:
+
+        from scripts.utils import sensitive
+        sensitive.is_sensitive(...)                 # ast.Attribute, not Name
+
+        import scripts.utils.sensitive as s
+        s.is_sensitive(...)                          # ast.Import, not ImportFrom
+
+        from scripts.utils.sensitive import is_sensitive as sens
+        sens(...)                                    # aliased away entirely
+
+    In all three `"is_sensitive" not in imported` held, the call was not a bare
+    Name, and `hasattr(nightly, "is_sensitive")` stayed False. Aliases are now
+    followed to what they were bound to, and attribute calls are read by their
+    attribute name.
+    """
+    uses: list[str] = []
+    aliases: set[str] = set()          # local names bound to the predicate
+    modules: set[str] = set()          # local names bound to the module
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "is_sensitive":
+                    aliases.add(alias.asname or alias.name)
+                    uses.append(f"import of is_sensitive as {alias.asname or alias.name}")
+                elif alias.name == "sensitive":
+                    modules.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.endswith("sensitive"):
+                    modules.add(alias.asname or alias.name.split(".")[0])
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if (isinstance(func, ast.Name) and func.id in aliases | {"is_sensitive"}) or (
+                isinstance(func, ast.Attribute) and func.attr == "is_sensitive"):
+            uses.append(f"call {ast.unparse(func)}(...)")
+    return uses
+
+
+def test_the_sensitive_predicate_detector_can_actually_fail():
+    """Drive the detector with each bypass shape the old guard let through."""
+    bypasses = [
+        "from scripts.utils import sensitive\nsensitive.is_sensitive(x)\n",
+        "import scripts.utils.sensitive as s\ns.is_sensitive(x)\n",
+        "from scripts.utils.sensitive import is_sensitive as sens\nsens(x)\n",
+        "from scripts.utils.sensitive import is_sensitive\nis_sensitive(x)\n",
+    ]
+    for src in bypasses:
+        assert _sensitive_predicate_uses(ast.parse(src)), f"missed: {src!r}"
+    clean = ("from scripts.utils.sensitive import sensitivity_is_declared\n"
+             "sensitivity_is_declared(x)\n")
+    assert _sensitive_predicate_uses(ast.parse(clean)) == []
+
+
 def test_is_sensitive_is_neither_imported_nor_called(nightly):
     """Walked from the AST, not by substring: the docstring naming the predicate
     it deliberately does NOT use is the fix, and a text search finds it there."""
@@ -317,10 +381,8 @@ def test_is_sensitive_is_neither_imported_nor_called(nightly):
     imported = {alias.asname or alias.name
                 for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
                 for alias in node.names}
-    called = {node.func.id for node in ast.walk(tree)
-              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
-    assert "is_sensitive" not in imported
-    assert "is_sensitive" not in called
+    uses = _sensitive_predicate_uses(tree)
+    assert not uses, f"router-accuracy-nightly.py reaches is_sensitive via: {uses}"
     assert "sensitivity_is_declared" in imported
     assert not hasattr(nightly, "is_sensitive")
 
@@ -430,9 +492,31 @@ def test_the_source_shape_still_carries_url_and_title(
     assert set(out["sources"][0]) == {"url", "title", "backend"}
 
 
-def test_no_backend_at_all_leaves_the_field_empty_not_missing(entity):
-    src = (ROOT / "scripts" / "resolve_entity.py").read_text(encoding="utf-8")
-    assert 'backends_used[0] if backends_used else ""' in src
+def test_no_backend_at_all_leaves_the_field_empty_not_missing(
+        entity, monkeypatch, capsys):
+    """Drive the no-backend run; do not grep for the expression that handles it.
+
+    This asserted the literal string `'backends_used[0] if backends_used
+    else ""'` was present in `scripts/resolve_entity.py`. Reformatting that
+    line, renaming the local, or hoisting it into a helper all broke the test
+    with the behaviour unchanged, and any other expression producing a missing
+    key would have passed it as long as the literal survived somewhere in the
+    file, comments included. The claim is about the emitted envelope, so the
+    envelope is what gets read.
+    """
+    def _search(query, max_results=5):
+        return ([], "")            # no backend served anything
+
+    monkeypatch.setattr(entity, "search_with_fallback", _search)
+    monkeypatch.setattr(entity, "call_anthropic",
+                        lambda *a, **k: {"canonical": {"name": "X"}})
+    monkeypatch.setattr(entity.claude_models, "latest", lambda fam: "model-x")
+
+    out = _run_entity(entity, capsys, monkeypatch)
+
+    assert "backend_used" in out, "the key vanished instead of going empty"
+    assert out["backend_used"] == "", out["backend_used"]
+    assert out["backends_used"] == []
 
 
 def test_the_osint_skill_documents_all_three_provenance_fields():

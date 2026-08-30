@@ -29,6 +29,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -108,10 +109,28 @@ def test_the_provisioner_still_gitignores_it_so_the_reader_could_not_have_worked
 
 
 def test_status_and_the_reported_field_read_the_same_key(mod):
-    """Reason 3: two names for one concept inside one module scored every row DEAD."""
-    rec = {"slug": "x", "last_commit": "2026-08-23T10:00:00+00:00"}
+    """Reason 3: two names for one concept inside one module scored every row DEAD.
+
+    The commit stamp is derived from the clock, not written down. It was the
+    fixed literal `2026-08-23T10:00:00+00:00` under the comment "a commit made
+    today", which is a sentence that is true on exactly one day: the record
+    ages past STALE_THRESHOLD (30 days) with no change to any production code,
+    and this assertion then fails against correct behaviour. The sibling file
+    already builds its fixtures with an offset from `datetime.now`.
+
+    Both bands are checked. `!= "DEAD"` alone passes on STALE, so it could not
+    tell "the two keys agree" from "the reader found the key and the row is
+    merely old"; an hour ago must read OK.
+    """
+    now = datetime.now(timezone.utc)
+    rec = {"slug": "x", "last_commit": (now - timedelta(hours=1)).isoformat()}
     status, _, ago = mod.calculate_status(rec)
-    assert status != "DEAD", f"a commit made today scored {status} ({ago})"
+    assert status == "OK", f"a commit made an hour ago scored {status} ({ago})"
+
+    # The other side of the same key: a record whose stamp the reader cannot
+    # find at all is DEAD, so the OK above is not just a default.
+    dead, _, _ = mod.calculate_status({"slug": "x"})
+    assert dead == "DEAD"
 
 
 # --- the replacement signal ---------------------------------------------------

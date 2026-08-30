@@ -118,16 +118,53 @@ def test_no_measurable_aggregate_at_all_yields_no_verdict():
 # UNMEASURABLE: the difference between "not found" and "not measured"
 # ============================================================
 
-def test_truth_larger_than_the_pool_is_unmeasurable_not_zero():
+def _measured(monkeypatch, truth_paths: int, pool: int):
+    """Run the real `measure_question` against a stubbed retrieval pool.
+
+    `query_index` is the only thing between this and a live memory-index, so
+    it is the seam: the stub returns `pool` hits and the scoring path below it
+    runs untouched.
+    """
+    from scripts.utils.census_oracles import OracleAnswer
+
+    hits = [{"path": f"p{i}.md", "collection": "c"} for i in range(pool)]
+    monkeypatch.setattr(bench, "query_index", lambda root, text: (hits, 0.01))
+    answer = OracleAnswer(kind="paths",
+                          paths={f"p{i}.md" for i in range(truth_paths)})
+    question = {"id": "agg-x", "group": "aggregate",
+                "question_class": "traversal", "question_en": "how many"}
+    return bench.measure_question(ROOT, question, answer)
+
+
+def test_truth_larger_than_the_pool_is_unmeasurable_not_zero(monkeypatch):
     """Scoring such a question 0.0 would let the instrument prove /census by
     arithmetic: the ceiling would be capped by the length of the output, not by
-    the quality of retrieval."""
-    result = bench.QuestionResult(
-        id="agg-x", group="aggregate", question_class="traversal",
-        truth_cardinality=200, truth_paths=[], truth_value=200,
-    )
-    result.retrieval_pool_size = 116
-    assert result.truth_cardinality > result.retrieval_pool_size
+    the quality of retrieval.
+
+    The scoring path is CALLED. This test used to build a `QuestionResult` by
+    hand, set `retrieval_pool_size = 116` on a `truth_cardinality=200`
+    instance, and assert `200 > 116` - a fact about its own two literals, with
+    no code from `census-bench.py` on the path. `QuestionResult` has no
+    `__slots__`, so even the attribute assignment could not have errored.
+    Removing the saturation guard entirely left the suite green.
+    """
+    result = _measured(monkeypatch, truth_paths=200, pool=116)
+    assert result.measurable is False
+    assert "200" in result.unmeasurable_reason
+    assert "116" in result.unmeasurable_reason
+
+
+def test_a_truth_the_pool_can_hold_is_measured_not_excluded(monkeypatch):
+    """The case ON the line: cardinality EQUAL to the pool is measurable.
+
+    Without it, a guard reading `>=` instead of `>` would exclude a question
+    whose truth the pool exactly covers, and the over-pool test above cannot
+    tell the two apart.
+    """
+    result = _measured(monkeypatch, truth_paths=116, pool=116)
+    assert result.measurable is True
+    assert result.unmeasurable_reason == ""
+    assert result.recall_ceiling == 1.0
 
 
 def test_ceiling_at_k_is_derived_from_ranks_not_from_a_second_query():
@@ -185,10 +222,19 @@ PINNED_UNDER_TEST = ("corpus_sha", "corpus_content_sha256", "today",
 
 
 @pytest.mark.parametrize("key", PINNED_UNDER_TEST)
-def test_any_of_the_four_pinned_values_diverging_voids_the_comparison(key):
+def test_any_pinned_value_diverging_voids_the_comparison(key):
     """The corpus SHA alone is not enough: `today` enters several oracles
     directly, the retrieved side depends on the index config, and the index is
-    rebuilt without the SHA moving."""
+    rebuilt without the SHA moving.
+
+    The name counted "four" while PINNED_UNDER_TEST holds five and pytest ran
+    five cases - and the sibling
+    `test_the_parametrised_keys_are_every_pin_the_module_declares` records
+    that a pin went missing once precisely because a stale count went
+    unnoticed. The number is out of the name rather than corrected, because
+    the set is derived from `bench.PINNED_KEYS` and a name that restates its
+    size goes stale again the next time a pin is added.
+    """
     other = dict(BASE_STATE)
     other[key] = "changed"
     ok, diverged = bench.states_comparable(BASE_STATE, other)

@@ -291,7 +291,7 @@ WATCH_STALE_DRAFT_HOURS = 24
 WATCH_LARGE_INBOX_THRESHOLD = 25
 
 
-def watch_items(data_root: Path) -> list:
+def watch_items(data_root: Path, today: date | None = None) -> list:
     """Aggregate cross-source watchpoints for the Pulse top-of-mind block.
 
     Each item: {label, count, severity ('red'|'yellow'), link}.
@@ -304,6 +304,15 @@ def watch_items(data_root: Path) -> list:
       - drafts pending >24h (yellow)   -> #/approvals
       - large unread inbox (>=25, yellow) -> #/inbox
 
+    ``today`` is the local calendar date "overdue" is measured against, and it
+    is passed straight through to the two sources that decide it. It exists
+    because the two overdue surfaces had no way in: `signals`,
+    `tribe_state_preview` and `threads_state_preview` in this same module all
+    took the parameter, so a test could pin them, while every test of these
+    two had to hardcode a due date already in the past and hope the wall clock
+    stayed on the right side of it. That is a test of the day it runs on. Both
+    sub-sources already accepted `today`; only the pass-through was missing.
+
     HEADING OS engine/data split: all watched sources are DATA, and
     the single root this takes IS the data root (it used to take a
     ``workspace_root`` too, which this module never read).
@@ -311,7 +320,7 @@ def watch_items(data_root: Path) -> list:
     from .tasks import list_active_tasks
     items: list = []
     try:
-        tasks_data = list_active_tasks(data_root)
+        tasks_data = list_active_tasks(data_root, today=today)
         overdue = tasks_data.get("overdue_count", 0)
         if overdue > 0:
             items.append({
@@ -326,7 +335,7 @@ def watch_items(data_root: Path) -> list:
     # Phase 1.74: overdue pipeline deals.
     try:
         from .pipeline import list_pipeline
-        pipe = list_pipeline(data_root)
+        pipe = list_pipeline(data_root, today=today)
         overdue_deals = pipe.get("overdue_count", 0)
         if overdue_deals > 0:
             items.append({
@@ -925,7 +934,7 @@ def _derive_mood(event_count: int) -> str:
     return "packed"
 
 
-def sea_state(data_root: Path) -> dict:
+def sea_state(data_root: Path, today: date | None = None) -> dict:
     """Derive operational state + mood for the topbar pill.
 
     The 31C operational vocabulary uses sea-state metaphors. The pill
@@ -956,6 +965,10 @@ def sea_state(data_root: Path) -> dict:
             "mood_label": str,       # e.g. "mood focused"
         }
 
+    ``today`` is the local calendar date the two overdue counts are measured
+    against; see `watch_items` for why the pass-through was added. The mood
+    half reads today's agenda and is not date-injectable here.
+
     HEADING OS engine/data split: pipeline, tasks and calendar are DATA,
     the single root this takes IS the data root (it used to take a
     ``workspace_root`` too, which this module never read).
@@ -963,12 +976,12 @@ def sea_state(data_root: Path) -> dict:
     pipe_overdue = 0
     tasks_overdue = 0
     try:
-        pipe_overdue = list_pipeline(data_root).get("overdue_count", 0) or 0
+        pipe_overdue = list_pipeline(data_root, today=today).get("overdue_count", 0) or 0
     except Exception as e:
         logging.warning("bridge.pulse.sea_state.pipeline: source unavailable, skipping: %s", e)
     try:
         from .tasks import list_active_tasks
-        tasks_overdue = list_active_tasks(data_root).get("overdue_count", 0) or 0
+        tasks_overdue = list_active_tasks(data_root, today=today).get("overdue_count", 0) or 0
     except Exception as e:
         logging.warning("bridge.pulse.sea_state.tasks: source unavailable, skipping: %s", e)
     overdue_total = int(pipe_overdue) + int(tasks_overdue)
@@ -1293,8 +1306,16 @@ def suggestions(data_root: Path, today: date | None = None) -> list[dict]:
     return out[:SUGGESTIONS_CAP]
 
 
-def pulse_data(data_root: Path, odin_5_target: str | None = None) -> dict:
+def pulse_data(data_root: Path, odin_5_target: str | None = None,
+               today: date | None = None) -> dict:
     """Top-level: assemble the /pulse payload from real workspace data.
+
+    ``today`` is threaded into every DATE-based sub-source below, so a caller
+    can assemble a payload for a stated day instead of for whatever day the
+    process happens to be running on. The TIME-based sub-sources (the two
+    meeting blocks and `next_items`) take a `now` datetime rather than a date
+    and are deliberately not folded into this one parameter; they already
+    accept injection at their own call sites.
 
     HEADING OS engine/data split: every sub-source here reads DATA, so the
     whole assembly runs against the single ``data_root`` it is given. It used
@@ -1308,7 +1329,7 @@ def pulse_data(data_root: Path, odin_5_target: str | None = None) -> dict:
     # direct index that raises KeyError on a partial return. `signals()` in
     # this same file already wraps the identical call, which is the tell.
     try:
-        pipe = list_pipeline(data_root)
+        pipe = list_pipeline(data_root, today=today)
     except Exception:
         pipe = {}
     pipe_overdue_count = pipe.get("overdue_count", 0)
@@ -1342,9 +1363,9 @@ def pulse_data(data_root: Path, odin_5_target: str | None = None) -> dict:
     }
     now_block = current_meeting(data_root)
     raise_block = raise_progress(data_root)
-    tribe_block = tribe_state_preview(data_root)
-    threads_block = threads_state_preview(data_root)
-    sea_block = sea_state(data_root)
+    tribe_block = tribe_state_preview(data_root, today=today)
+    threads_block = threads_state_preview(data_root, today=today)
+    sea_block = sea_state(data_root, today=today)
     # Phase 1.56: surface the approvals count on Pulse subhead.
     try:
         from .approvals import list_approvals
@@ -1365,7 +1386,7 @@ def pulse_data(data_root: Path, odin_5_target: str | None = None) -> dict:
         in_flight_total = 0
     # Phase 1.94: rule-based 'Suggested for now' panel.
     try:
-        suggested = suggestions(data_root)
+        suggested = suggestions(data_root, today=today)
     except Exception:
         suggested = []
     return {
@@ -1384,12 +1405,12 @@ def pulse_data(data_root: Path, odin_5_target: str | None = None) -> dict:
             "threads_state": threads_block,
             "sea_state": sea_block,
             "approvals_total": approvals_total,
-            "today_activity": today_activity(data_root),
+            "today_activity": today_activity(data_root, today=today),
         },
         "now": now_block or {"focus": None, "until": None, "minutes_remaining": None},
         "next": next_items(data_root),
-        "watch": watch_items(data_root),
-        "signals": signals(data_root),
+        "watch": watch_items(data_root, today=today),
+        "signals": signals(data_root, today=today),
         "recent_outputs": recent_outputs,
         "suggested": suggested,
     }

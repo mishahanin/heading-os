@@ -97,14 +97,72 @@ def test_the_stylesheet_carries_one_reset_for_the_hidden_attribute():
     )
 
 
+# A `display:` that is not `none` and carries `!important`. The reset is
+# `[hidden] { display: none !important }` at specificity 0-1-0, so only another
+# `!important` at 0-1-0 or above can beat it - and between equals, source order
+# decides. Anything matching this, on a selector that can reach a panel shipped
+# with the attribute, re-opens a collapsed panel.
+_IMPORTANT_DISPLAY = re.compile(r"display:\s*(?!none\b)[a-z-]+\s*!important")
+
+
+def _rules_that_can_beat_the_hidden_reset() -> list[tuple[str, str]]:
+    """Every rule whose `display` can win against `[hidden]`, with why.
+
+    Two families, and the second is the one that was missing. The old scan
+    asked only whether `[hidden]` appeared in the SELECTOR, which is the wrong
+    axis twice over: a harmless `.foo[hidden] { display: flex }` with no
+    `!important` cannot beat the reset and was flagged anyway, while
+    `.task-done-expanded { display: flex !important; }` - no `[hidden]` in the
+    selector at all - is the actual regression and was never inspected. That is
+    the bug this file exists to prevent, wearing one extra `!important`.
+    """
+    panels = _classes_shipped_hidden()
+    assert panels, "the app.js scan found no panel shipped hidden; the guard is blind"
+    out: list[tuple[str, str]] = []
+    for sel, decl in _blocks():
+        if not _IMPORTANT_DISPLAY.search(decl):
+            continue
+        for one in (s.strip() for s in sel.split(",")):
+            if "[hidden]" in one:
+                out.append((one, "an !important display on a [hidden] selector"))
+            elif any(re.search(rf"\.{re.escape(c)}\b", one) for c in panels):
+                out.append((one, "an !important display on a panel app.js ships hidden"))
+    return out
+
+
 def test_no_rule_re_enables_a_hidden_element():
     """`!important` on the reset beats an ordinary declaration, but not another
-    `!important`. Nothing may claim one."""
-    offenders = [
-        sel for sel, decl in _blocks()
-        if "[hidden]" in sel and re.search(r"display:\s*(?!none)[a-z-]+", decl)
-    ]
+    `!important`. Nothing may claim one - on either axis."""
+    offenders = _rules_that_can_beat_the_hidden_reset()
     assert not offenders, offenders
+
+
+def test_the_reset_guard_refuses_the_regression_it_is_named_for():
+    """The negative case. Nothing had ever made this guard say no.
+
+    Two synthetic sheets, each the exact shape reported: the panel-class form
+    that the old selector-only scan could not see, and an ordinary
+    (non-`!important`) declaration that cannot beat the reset and must NOT be
+    flagged. Both are checked against the same predicate the live test uses, so
+    the two cannot drift apart.
+    """
+    panel = sorted(_classes_shipped_hidden())[0]
+    regression = f".{panel} {{ display: flex !important; }}"
+    harmless = f".{panel}[hidden] {{ display: flex; }}"
+
+    def scan(sheet: str) -> list[str]:
+        blocks = [(s.strip(), d) for s, d in re.findall(r"([^{}]+)\{([^{}]*)\}", sheet)]
+        return [s for s, d in blocks
+                if _IMPORTANT_DISPLAY.search(d)
+                and ("[hidden]" in s
+                     or re.search(rf"\.{re.escape(panel)}\b", s))]
+
+    assert scan(regression) == [f".{panel}"], (
+        "the guard cannot see an !important display on a panel class, which is "
+        "the form the reported regression takes")
+    assert scan(harmless) == [], (
+        "an ordinary display declaration cannot beat an !important reset and "
+        "must not be reported")
 
 
 def test_the_per_selector_guards_did_not_come_back():
@@ -165,12 +223,61 @@ def test_each_summary_class_is_emitted_by_exactly_one_call_site():
 
 # --- the theme is followed, not assumed --------------------------------------
 
+# Any black overlay under this alpha is imperceptible on `--surface` at 0.185
+# lightness. 0.25 is the line: it is well above the 0.02 that was shipped and
+# well below an alpha dark enough to read as feedback on a dark surface.
+FAINT_BLACK_ALPHA = 0.25
+
+# `background` OR `background-color`, and the alpha captured rather than
+# spelled. The old regex demanded the `background:` shorthand and the literal
+# `0.0`, so `background-color: rgba(0, 0, 0, 0.02)` and an alpha of `0.1` both
+# walked straight past it - two spellings of one defect.
+_BLACK_TINT = re.compile(
+    r"background(?:-color)?:\s*rgba\(\s*0\s*,\s*0\s*,\s*0\s*,\s*([0-9.]+)\s*\)")
+
+
+def _faint_black_hovers(blocks: list[tuple[str, str]]) -> list[tuple[str, float]]:
+    """Hover rules painting a black tint too faint to see on the dark surface."""
+    out: list[tuple[str, float]] = []
+    for sel, decl in blocks:
+        if ":hover" not in sel:
+            continue
+        for alpha in _BLACK_TINT.findall(decl):
+            try:
+                value = float(alpha)
+            except ValueError:  # an unparseable alpha is a CSS error, not a tint
+                continue
+            if value < FAINT_BLACK_ALPHA:
+                out.append((sel, value))
+    return out
+
+
 def test_no_hover_paints_a_tint_only_the_light_theme_can_show():
     """A 2% black overlay is imperceptible on `--surface` at 0.185 lightness.
     Six clickable row types gave no hover feedback at all in dark mode."""
-    bad = [sel for sel, decl in _blocks()
-           if ":hover" in sel and re.search(r"background:\s*rgba\(0, *0, *0, *0\.0", decl)]
+    bad = _faint_black_hovers(_blocks())
     assert not bad, bad
+
+
+def test_the_hover_tint_guard_sees_both_spellings_and_holds_its_line():
+    """The negative cases, including one ON the threshold.
+
+    Three shapes the old regex missed and one it must keep passing:
+    `background-color` instead of the shorthand, an alpha of 0.1 instead of
+    0.0x, the threshold value itself (which is allowed), and a rule that is not
+    a hover at all.
+    """
+    def scan(sheet: str) -> list[tuple[str, float]]:
+        return _faint_black_hovers(
+            [(s.strip(), d) for s, d in re.findall(r"([^{}]+)\{([^{}]*)\}", sheet)])
+
+    assert scan(".r:hover { background-color: rgba(0, 0, 0, 0.02); }") == [(".r:hover", 0.02)]
+    assert scan(".r:hover { background: rgba(0, 0, 0, 0.1); }") == [(".r:hover", 0.1)]
+    # ON the line, and above it: 0.25 is deliberately allowed, 0.24 is not.
+    assert scan(f".r:hover {{ background: rgba(0, 0, 0, {FAINT_BLACK_ALPHA}); }}") == []
+    assert scan(".r:hover { background: rgba(0, 0, 0, 0.24); }") == [(".r:hover", 0.24)]
+    # A non-hover rule keeps its right to a faint shadow-like tint.
+    assert scan(".r { background: rgba(0, 0, 0, 0.02); }") == []
 
 
 def test_every_custom_property_used_without_a_fallback_is_defined():

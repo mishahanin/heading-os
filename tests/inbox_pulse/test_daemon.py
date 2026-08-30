@@ -1,7 +1,18 @@
 """Tests for scripts/inbox_pulse/daemon.py.
 
-All tests mock EWSConnection and state helpers -- no real Exchange connection
-is made and no real state files are written to the workspace.
+No real Exchange connection is made and no real state files are written to the
+workspace: every test that can reach the state directory pins
+``INBOX_PULSE_STATE_DIR`` at ``tmp_path``, and every test that can reach EWS
+mocks ``EWSConnection``.
+
+Corrected 2026-08-30. This used to read "All tests mock EWSConnection and state
+helpers", which was false of three of them: ``test_check_mode_fails_on_missing_env``
+mocked neither and ran the real ``health_check()`` against the live state
+directory, and ``test_domain_of_extracts_domain_part`` /
+``test_signal_handler_sets_shutdown_event`` mock nothing because they need
+nothing. The guarantee that actually matters — no live Exchange, no live state
+file — is now stated in the form the tests enforce, and the missing state-dir
+pin has been added.
 
 Sovereignty check: test_main_loop_writes_jsonl_per_event verifies that JSONL
 entries contain only sender_domain (not full address) and subject_length (not
@@ -152,8 +163,19 @@ def test_check_mode_fails_when_the_server_cannot_be_reached(monkeypatch, tmp_pat
 # ---------------------------------------------------------------------------
 
 
-def test_check_mode_fails_on_missing_env(monkeypatch):
-    """health_check() returns 1 and prints diagnostic when EXCHANGE_EMAIL absent."""
+def test_check_mode_fails_on_missing_env(monkeypatch, tmp_path):
+    """health_check() returns 1 and prints diagnostic when EXCHANGE_EMAIL absent.
+
+    Isolated 2026-08-30. This was the one `--check` test that set no
+    `INBOX_PULSE_STATE_DIR`, so it ran `health_check()` against the REAL
+    workspace state directory. It is safe only because `health_check` validates
+    env vars before it probes the state dir for writability, and that ordering
+    is nobody's invariant: swap the two checks — an entirely reasonable
+    refactor — and this test starts writing a probe file into the live
+    `state/email-triage/`, contradicting the module docstring's guarantee. The
+    pin costs one line and removes the dependence on check order.
+    """
+    monkeypatch.setenv("INBOX_PULSE_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("EXCHANGE_PASSWORD", "secret")  # pragma: allowlist secret
     monkeypatch.setenv("EXCHANGE_SERVER", "mail.31c.io")
     monkeypatch.delenv("EXCHANGE_EMAIL", raising=False)

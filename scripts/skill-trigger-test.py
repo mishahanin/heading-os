@@ -114,18 +114,27 @@ def _git_changed_files(base: str = "origin/main") -> set[str]:
         the repo-wide guard in
         `tests/test_a_publisher_that_could_not_see_a_non_ascii_path.py` can read
         it in the argv.
+
+        Decoded from BYTES rather than through subprocess text mode, for the
+        half of the defect `-z` does not reach: text mode turns on universal
+        newlines and rewrites every CR byte to LF, with no `newline=` knob to
+        switch it off. MEASURED 2026-08-30 - `docs/x\\r\\ny.md` and
+        `docs/x\\ny.md` are two tracked files that `text=True` reports as one. A
+        mistranslated name matches no skill directory, which is exactly the
+        silent no-test the paragraph above describes.
         """
         try:
             out = subprocess.run(
-                ["git", *args], cwd=str(ROOT), capture_output=True, text=True, timeout=30
+                ["git", *args], cwd=str(ROOT), capture_output=True, timeout=30
             )
         except (OSError, subprocess.TimeoutExpired):
             return []
         if out.returncode != 0:
             return []
+        decoded = out.stdout.decode("utf-8", "surrogateescape")
         if paths:
-            return [p for p in out.stdout.split("\0") if p]
-        return [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
+            return [p for p in decoded.split("\0") if p]
+        return [ln.strip() for ln in decoded.splitlines() if ln.strip()]
 
     # Through `_run`, not around it. This probe had no timeout and no
     # FileNotFoundError guard, so a machine without git on PATH -- or a hung

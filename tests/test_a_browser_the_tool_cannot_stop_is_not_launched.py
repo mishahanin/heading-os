@@ -266,15 +266,34 @@ def test_a_timed_out_launch_does_not_leave_the_browser_running(monkeypatch, tmp_
     monkeypatch.setattr(browser, "_pids_for_cdp_port", lambda port: [])
     monkeypatch.setattr(browser, "LAUNCH_LOG", tmp_path / "launch.log")
 
+    # `browser.subprocess` is not a per-module namespace; it IS the global
+    # `subprocess` module object, so this spy is installed process-wide for
+    # the duration of the test. It recorded EVERY child spawned anywhere in
+    # the process until 2026-08-30, and `proc = started[0]` then picked
+    # whichever came first: a pytest plugin's or a background thread's child
+    # made `_wait_gone` fail against correct production code, and the
+    # `finally: _reap(proc)` below SIGKILLed a process this test never
+    # started. The spy cannot be un-globalised (browser.py resolves
+    # `subprocess.Popen` on that same shared object), so it is made
+    # DISCRIMINATING instead: a child is recorded only when its argv names
+    # this test's own fake browser. Everything else is spawned and forgotten.
     started = []
     real_popen = subprocess.Popen
-    monkeypatch.setattr(browser.subprocess, "Popen", lambda *a, **k: started.append(
-        real_popen(*a, **k)) or started[-1])
+
+    def spy(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        argv = args[0] if args else kwargs.get("args") or []
+        if argv and str(argv[0]) == str(exe):
+            started.append(proc)
+        return proc
+
+    monkeypatch.setattr(browser.subprocess, "Popen", spy)
 
     with pytest.raises(TimeoutError):
         browser.launch_comet(port=19222, wait_timeout=1.0, browser="brave")
 
-    assert started, "the test never launched anything"
+    assert len(started) == 1, (
+        f"expected exactly one launch of {exe}, recorded {len(started)}")
     proc = started[0]
     try:
         assert _wait_gone(proc), (

@@ -139,11 +139,23 @@ def test_version_flag_prints_and_exits(entry_module, capsys):
     import importlib
     import scripts.bridge_daemon.version as ver_mod
     importlib.reload(ver_mod)  # ensure fresh import
+    # `main()` reads sys.argv via argparse, so the flag is injected there.
+    #
+    # Fixed 2026-08-30. This used to be a ternary:
+    #
+    #     entry_module.main.__wrapped__() if hasattr(main, "__wrapped__") else (
+    #         _run_main_with_args(entry_module, ["--version"]))
+    #
+    # and the `--version` injection lived only in the `else` arm. Decorating
+    # `main` with anything that uses `functools.wraps` would give it a
+    # `__wrapped__`, and the test would then call it bare: argparse would parse
+    # PYTEST'S OWN argv, exit 2 on the unrecognised arguments, and the assertion
+    # below would fail on correct code. Calling `__wrapped__` also skips
+    # whatever the decorator does, so even a green run would not be testing
+    # `main` as production invokes it. The branch was dead today and would have
+    # detonated the first time anyone decorated `main`.
     with pytest.raises(SystemExit) as exc:
-        entry_module.main.__wrapped__() if hasattr(entry_module.main, "__wrapped__") else (
-            # main() reads sys.argv via argparse; inject --version
-            _run_main_with_args(entry_module, ["--version"])
-        )
+        _run_main_with_args(entry_module, ["--version"])
     # argparse exits 0 on --version.
     assert exc.value.code == 0
     out = capsys.readouterr().out

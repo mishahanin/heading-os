@@ -95,10 +95,22 @@ def test_an_unclosed_frontmatter_is_still_minus_one():
 
 
 def test_a_dash_run_is_not_a_closing_fence():
-    """`----` is a horizontal rule, not a fence."""
+    """`----` is a horizontal rule, not a fence - and the real fence is found.
+
+    The failure return is -1, and `text[-1:3]` is the empty string, which is
+    not `"----"`. So until 2026-08-30 the single `!=` assertion here passed
+    when `frontmatter_end` found NOTHING - the exact failure this shard is
+    about - and stubbing the function to `lambda text: -1` kept it green. The
+    sibling `test_a_crlf_file_has_its_frontmatter_found` already guarded
+    against -1; this one now does too, and pins WHICH fence was chosen rather
+    than only which one was not.
+    """
     text = "---\nstatus: active\n----\nstill frontmatter?\n---\n\nBody\n"
     idx = crm.frontmatter_end(text)
+    assert idx != -1, "the real closing fence was not found at all"
     assert text[idx:idx + 4] != "----", "a four-dash rule was read as the fence"
+    assert text[idx:] == "---\n\nBody\n", (
+        f"the fence landed at {idx}, on {text[idx:idx + 10]!r}")
 
 
 # ==========================================================================

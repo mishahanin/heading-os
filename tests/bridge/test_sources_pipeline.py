@@ -1,4 +1,5 @@
 """Unit tests for /pipeline source."""
+import json
 from datetime import date
 from pathlib import Path
 
@@ -146,15 +147,39 @@ def test_mark_touched_rejects_empty_company(tmp_path):
 def test_mark_touched_strips_newlines_from_note(tmp_path):
     mark_touched(tmp_path, "Acme", note="line1\nline2\rline3")
     log = tmp_path / TOUCH_LOG_FILE
-    lines = [ln for ln in log.read_text(encoding="utf-8").splitlines() if ln]
+    text = log.read_text(encoding="utf-8")
+    lines = [ln for ln in text.splitlines() if ln]
     assert len(lines) == 1  # single-line JSON entry
+    # The `\r` in the fixture asserted nothing until 2026-08-30. A sanitiser
+    # written `note.replace("\n", " ")` alone leaves the carriage return in the
+    # stored value; `json.dumps` escapes it, so the file stays one physical
+    # line and `len(lines) == 1` still passes while the log holds a raw CR.
+    # Read the decoded value, not the encoded text.
+    assert "\\r" not in text
+    note = json.loads(lines[0])["note"]
+    assert "\r" not in note and "\n" not in note, repr(note)
 
 
 def test_company_key_normalises_parentheticals(tmp_path):
-    """'Acme (via reseller)' and 'Acme' should resolve to the same key."""
+    """'Acme (via reseller)' and 'Acme' resolve to the SAME key.
+
+    BOTH FORMS MARKED, since 2026-08-30. The docstring always claimed a two-way
+    equivalence and the body only ever marked the parenthetical one, so the
+    equality it names went untested: an implementation that strips
+    parentheticals but keys the plain form differently -- failing to lowercase,
+    say, and yielding "Acme" -- left this green, and
+    `test_list_pipeline_joins_touch_log` could not catch it either because it
+    marks with the exact string the pipeline table carries.
+    """
     mark_touched(tmp_path, "Acme (via Reseller Inc)")
-    log = read_touch_log(tmp_path)
-    assert "acme" in log  # parenthetical stripped
+    parenthetical = set(read_touch_log(tmp_path))
+    assert "acme" in parenthetical  # parenthetical stripped
+
+    mark_touched(tmp_path, "Acme")
+    plain = set(read_touch_log(tmp_path))
+    assert "acme" in plain
+    assert plain == parenthetical, (
+        f"the plain form keyed differently: {sorted(plain - parenthetical)}")
 
 
 def test_list_pipeline_joins_touch_log(tmp_path):

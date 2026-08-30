@@ -167,10 +167,16 @@ def test_a_well_formed_exec_slug_is_still_resolved(tmp_path, monkeypatch):
 pullsvc = _load("pull_service_state_cleanup", "scripts/pull-service-state.py")
 
 
-def _drive_pull(tmp_path, monkeypatch, runner):
-    """Run pull-service-state's main() against a fake VM and a temp mirror."""
+def _drive_pull(tmp_path, monkeypatch, runner, seed=None):
+    """Run pull-service-state's main() against a fake VM and a temp mirror.
+
+    `seed` runs after the mirror directory exists and before `main()`, which is
+    the only window in which a caller can put a last-good copy on disk.
+    """
     data_root = tmp_path / "data"
     (data_root / pullsvc.MIRROR_REL).mkdir(parents=True)
+    if seed is not None:
+        seed(data_root / pullsvc.MIRROR_REL)
     monkeypatch.setattr(pullsvc, "get_data_root", lambda: data_root)
     monkeypatch.setattr(pullsvc, "load_env", lambda: None)
     monkeypatch.setattr(pullsvc, "state_dirs", lambda: [("sentinel", "/srv/sentinel")])
@@ -182,21 +188,38 @@ def _drive_pull(tmp_path, monkeypatch, runner):
 def test_an_scp_timeout_leaves_the_previous_mirror_intact(tmp_path, monkeypatch, capsys):
     """The message printed on this path is a promise: "previous mirror left
     intact". Nothing checked it, and the rollback deletes a path chosen by name
-    from two that are both in scope."""
+    from two that are both in scope.
+
+    THE TIMEOUT THAT LEFT NO STAGING TREE, distinct from the sibling below
+    where scp got as far as writing a partial one. The rollback has nothing to
+    remove here, and must still not reach for the live copy.
+
+    FIXED 2026-08-30. The last-good copy is now SEEDED. A comment claimed "the
+    live mirror is written BEFORE the run"; nothing wrote it, `_drive_pull`
+    created only the mirror directory, and the closing assertion read
+    `not live.exists() or live.is_dir()` -- satisfied by the absence the test
+    was supposed to rule out. `rmtree_force(dest_abs)` in place of
+    `rmtree_force(staging_abs)` passed it.
+    """
     def _timeout(cmd, **kwargs):
         raise subprocess.TimeoutExpired(cmd, pullsvc.SCP_TIMEOUT_S)
 
-    data_root, rc = _drive_pull(tmp_path, monkeypatch, _timeout)
+    def _seed(mirror: Path) -> None:
+        (mirror / "sentinel").mkdir()
+        (mirror / "sentinel" / "state.json").write_text(
+            '{"last_good": true}', encoding="utf-8")
+
+    data_root, rc = _drive_pull(tmp_path, monkeypatch, _timeout, seed=_seed)
     mirror = data_root / pullsvc.MIRROR_REL
     live = mirror / "sentinel"
-    # The live mirror is written BEFORE the run, standing for the last good copy.
     assert rc == 1
     out = capsys.readouterr().out
     assert "previous mirror left intact" in out, out
     assert not (mirror / ".sentinel.incoming").exists(), (
         "the half-finished staging tree was kept"
     )
-    assert not live.exists() or live.is_dir()
+    assert live.is_dir(), "the rollback deleted the last good mirror"
+    assert (live / "state.json").read_text(encoding="utf-8") == '{"last_good": true}'
 
 
 def test_the_previous_mirror_really_survives_a_timeout(tmp_path, monkeypatch):

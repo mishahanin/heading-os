@@ -38,14 +38,26 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from scripts import chronicle as ch  # noqa: E402
 from scripts.utils.workspace import get_classification, matched_routing_rule  # noqa: E402
+
+# `time.tzset` is Unix-only, and the TZ environment variable it reads has no
+# effect on Windows either, so the round-the-world loop below is a POSIX test.
+# Without this it raised `AttributeError` on a platform this engine supports
+# (`test_windows_still_uses_its_own_flag` in
+# `test_a_label_that_names_the_opposite_metric.py` pins that support), which is
+# a crash where a skip belongs.
+needs_tzset = pytest.mark.skipif(
+    not hasattr(time, "tzset"), reason="time.tzset is Unix-only")
 
 
 # ---------------------------------------------------------------------------
@@ -68,9 +80,19 @@ def _selected(monkeypatch, tmp_path, cutoff: str) -> list[str]:
 
 def test_a_session_is_never_excluded_by_its_own_high_water_mark(monkeypatch,
                                                                 tmp_path):
-    """The whole guarantee, at the boundary that broke it: a session whose only
-    turns are just after midnight UTC, whose summarization failed, so the marker
-    was capped at its own UTC date."""
+    """The whole guarantee, at the boundary that broke it: a session last written
+    just after midnight UTC, whose summarization failed, so the marker was capped
+    at its own UTC date.
+
+    DOCSTRING CORRECTED 2026-08-30. It used to say "a session whose only turns
+    are just after midnight UTC", which described `_session_date` reading the
+    transcript's own ISO stamps -- a path this test never touches.
+    `select_sessions` compares the cutoff against
+    `datetime.fromtimestamp(f.stat().st_mtime, timezone.utc)`, so MTIME is the
+    clock under test and the empty `{}` body the fixture writes is correct
+    rather than a gap. A reader following the old wording would have added
+    stamped turns to the fixture and changed nothing.
+    """
     just_after_midnight_utc = datetime(2026, 8, 21, 0, 30, tzinfo=timezone.utc)
     _session_written_at(tmp_path, "abc123", just_after_midnight_utc)
     assert "abc123" in _selected(monkeypatch, tmp_path, "2026-08-21"), (
@@ -79,6 +101,7 @@ def test_a_session_is_never_excluded_by_its_own_high_water_mark(monkeypatch,
     )
 
 
+@needs_tzset
 def test_the_boundary_holds_from_either_side_of_utc(monkeypatch, tmp_path):
     """Not one host's zone. `date.fromtimestamp` follows TZ, so the defect
     appeared only west of UTC and this machine sits east of it — a test pinned
@@ -104,8 +127,7 @@ def test_the_boundary_holds_from_either_side_of_utc(monkeypatch, tmp_path):
     original_tz = os.environ.get("TZ")
     for tz in ("UTC", "America/New_York", "Asia/Dubai", "Pacific/Kiritimati"):
         monkeypatch.setenv("TZ", tz)
-        time_module = __import__("time")
-        time_module.tzset()
+        time.tzset()
         try:
             assert "abc123" in _selected(monkeypatch, tmp_path, "2026-08-21"), tz
         finally:
@@ -113,7 +135,7 @@ def test_the_boundary_holds_from_either_side_of_utc(monkeypatch, tmp_path):
                 monkeypatch.delenv("TZ", raising=False)
             else:
                 monkeypatch.setenv("TZ", original_tz)
-            time_module.tzset()
+            time.tzset()
 
 
 def test_a_genuinely_older_session_is_still_covered(monkeypatch, tmp_path):

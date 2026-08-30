@@ -36,22 +36,114 @@ def test_send_email_uses_html_escape_in_paragraph_wrapping(send_email_path):
     )
 
 
-def test_send_email_no_raw_fstring_paragraph_wrapping(send_email_path):
-    """There must be no f'<p>{p}</p>' without html.escape()."""
+def _escapes(node: ast.AST) -> bool:
+    """True when this expression is (or contains) an escaping call.
+
+    `html.escape(x)` and a bare `escape(x)` both count; so does any expression
+    built out of one, e.g. `f"<b>{html.escape(x)}</b>"`.
+    """
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Call):
+            continue
+        func = child.func
+        if isinstance(func, ast.Attribute) and func.attr == "escape":
+            return True
+        if isinstance(func, ast.Name) and func.id == "escape":
+            return True
+    return False
+
+
+def _concat_operands(node: ast.AST) -> list[ast.AST]:
+    """Flatten a chain of `+` string concatenations into its operands."""
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _concat_operands(node.left) + _concat_operands(node.right)
+    return [node]
+
+
+def _paragraph_wrappers(tree: ast.AST):
+    """Yield (node, interpolated parts) for every expression building `<p>...`.
+
+    Covers both shapes the file has used: an f-string, and a `+` concatenation
+    of literals with expressions.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.JoinedStr):
+            literals = [v for v in node.values if isinstance(v, ast.Constant)]
+            if not any("<p>" in str(v.value) for v in literals):
+                continue
+            parts = [v.value for v in node.values
+                     if isinstance(v, ast.FormattedValue)
+                     and not isinstance(v.value, ast.Constant)]
+            yield node, parts
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            operands = _concat_operands(node)
+            literals = [o for o in operands
+                        if isinstance(o, ast.Constant) and isinstance(o.value, str)]
+            if not any("<p>" in o.value for o in literals):
+                continue
+            parts = [o for o in operands if not isinstance(o, ast.Constant)]
+            yield node, parts
+
+
+def test_send_email_no_raw_paragraph_wrapping(send_email_path):
+    """Nothing puts an unescaped value inside <p> tags.
+
+    This used to read one physical line of source text:
+
+        line = content.split("\\n")[node.lineno - 1]
+        assert "html.escape" in line
+
+    `node.lineno` is the f-string's OPENING line, so the check enforced
+    line-locality of a token rather than escaping, and it was wrong in both
+    directions. It false-PASSED on `f"<p>{p}</p>"  # html.escape applied
+    upstream`, where a comment satisfies the substring over a raw
+    interpolation. It false-FAILED on safe code whose escape sat on another
+    line, which is every multi-line f-string and every
+    `escaped = html.escape(p)` two-step.
+
+    Measured 2026-08-30 while replacing it, and this is the larger finding:
+    `send-email.py` has no `<p>` f-string at all any more. The wrapping is
+    `"<p>" + html.escape(para).replace("\\n", "<br>") + "</p>"`, a `+`
+    concatenation. The old loop's body therefore never executed on ANY input,
+    so this guard had already stopped inspecting the paragraph path entirely
+    and reported a pass over nothing. The floor at the end refuses to let that
+    happen silently again.
+
+    The question asked is whether the non-literal parts of a `<p>` wrapper are
+    escaped, which is a property of the expression tree.
+    """
     content = read_file_content(send_email_path)
     tree = ast.parse(content)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.JoinedStr):  # f-string
-            # Convert to source-like representation
-            for value in node.values:
-                if isinstance(value, ast.Constant) and "<p>" in str(value.value):
-                    # Found an f-string with <p> - check if html.escape is in the same expression
-                    # Get the line content
-                    line = content.split("\n")[node.lineno - 1]
-                    assert "html.escape" in line, (
-                        f"Line {node.lineno}: f-string wrapping text in <p> tags "
-                        f"without html.escape(): {line.strip()}"
-                    )
+    checked = 0
+    for node, parts in _paragraph_wrappers(tree):
+        for part in parts:
+            checked += 1
+            assert _escapes(part), (
+                f"Line {getattr(part, 'lineno', node.lineno)}: "
+                f"{ast.unparse(part)!r} is wrapped in <p> tags without "
+                f"html.escape()")
+    # An AST scan that matched nothing is not a pass.
+    assert checked, (
+        f"no interpolated <p> wrapper found in {send_email_path}; this guard "
+        f"no longer inspects the paragraph-wrapping path and must be retargeted")
+
+
+def test_the_paragraph_wrapper_detector_can_actually_fail():
+    """Drive the detector with unsafe and safe source of both shapes."""
+    unsafe_fstring = ast.parse('x = f"<p>{p}</p>"  # html.escape upstream')
+    unsafe_concat = ast.parse('x = "<p>" + p + "</p>"')
+    safe_fstring = ast.parse('x = f"<p>{html.escape(p)}</p>"')
+    safe_concat = ast.parse('x = "<p>" + html.escape(p).replace("a", "b") + "</p>"')
+
+    for label, tree in (("f-string", unsafe_fstring), ("concat", unsafe_concat)):
+        parts = [p for _, ps in _paragraph_wrappers(tree) for p in ps]
+        assert parts, f"the {label} wrapper was not detected at all"
+        assert not any(_escapes(p) for p in parts), f"unsafe {label} read as escaped"
+
+    for label, tree in (("f-string", safe_fstring), ("concat", safe_concat)):
+        parts = [p for _, ps in _paragraph_wrappers(tree) for p in ps]
+        assert parts, f"the safe {label} wrapper was not detected at all"
+        assert all(_escapes(p) for p in parts), f"safe {label} read as unescaped"
 
 
 # ---- Behavioral (runtime) ----

@@ -23,6 +23,8 @@
 from __future__ import annotations
 
 import argparse
+import ast
+import contextlib
 import importlib.util
 import subprocess
 import sys
@@ -73,15 +75,99 @@ SCHEMA_MARKER_WRITERS = [
 ]
 
 
+def _writes_the_marker(code: str) -> bool:
+    """True when this source writes the `.schema-version` handshake marker.
+
+    Derived from the AST, not from three literal call shapes. The previous
+    version matched exactly:
+
+        atomic_write_text(target / ".schema-version"
+        .schema-version").write_text
+        atomic_write_text(data_root / SCHEMA_FILE
+
+    with the receiver variable names `target` and `data_root` baked in, while
+    the comment above `SCHEMA_MARKER_WRITERS` promised the list was "derived
+    below rather than trusted, so a fourth writer cannot be added silently"
+    and this docstring promised "by any means". A writer spelled
+    `atomic_write_text(overlay / ".schema-version", ...)`,
+    `atomic_write_text(out / SCHEMA_FILE, ...)`, or as the two-step
+    `path = dest / SCHEMA_FILE; atomic_write_text(path, ...)` matched none of
+    the three, so `_marker_writers_on_disk()` returned the same three entries,
+    `test_the_writer_list_matches_the_tree` passed, and the new writer was
+    also silently excluded from the parametrized atomicity guard the list
+    feeds. Both promises were false for every naming but the two.
+
+    What identifies a marker write is the marker itself: `.schema-version`, or
+    the `SCHEMA_FILE` constant that holds it, appearing in the destination of
+    a write call. The receiver's name is not part of that.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return False
+
+    def names_the_marker(node: ast.AST) -> bool:
+        for child in ast.walk(node):
+            if isinstance(child, ast.Constant) and isinstance(child.value, str) \
+                    and ".schema-version" in child.value:
+                return True
+            if isinstance(child, ast.Name) and child.id == "SCHEMA_FILE":
+                return True
+            if isinstance(child, ast.Attribute) and child.attr == "SCHEMA_FILE":
+                return True
+        return False
+
+    # Locals bound to a marker path, so the two-step spelling is caught too.
+    marker_locals = {
+        target.id
+        for node in ast.walk(tree) if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name) and names_the_marker(node.value)
+    }
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        writes = (isinstance(func, ast.Name) and func.id == "atomic_write_text") or \
+                 (isinstance(func, ast.Attribute) and func.attr in
+                  {"atomic_write_text", "write_text", "write_bytes"})
+        if not writes:
+            continue
+        destination = func.value if isinstance(func, ast.Attribute) else (
+            node.args[0] if node.args else None)
+        if destination is None:
+            continue
+        if names_the_marker(destination):
+            return True
+        if isinstance(destination, ast.Name) and destination.id in marker_locals:
+            return True
+    return False
+
+
 def _marker_writers_on_disk() -> list[str]:
     """Every tracked script under scripts/ that writes the marker, by any means."""
-    found = []
-    for path, code in read_sources(sorted((ROOT / "scripts").rglob("*.py"))):
-        if 'atomic_write_text(target / ".schema-version"' in code \
-                or '.schema-version").write_text' in code \
-                or "atomic_write_text(data_root / SCHEMA_FILE" in code:
-            found.append(str(path.relative_to(ROOT)))
-    return found
+    return [str(path.relative_to(ROOT))
+            for path, code in read_sources(sorted((ROOT / "scripts").rglob("*.py")))
+            if _writes_the_marker(code)]
+
+
+def test_the_marker_writer_detector_can_actually_fail():
+    """Drive the derivation with the spellings the literal matcher missed."""
+    assert _writes_the_marker(
+        'atomic_write_text(target / ".schema-version", v)')
+    # A different receiver name.
+    assert _writes_the_marker(
+        'atomic_write_text(overlay / ".schema-version", v)')
+    assert _writes_the_marker('atomic_write_text(out / SCHEMA_FILE, v)')
+    # The two-step form.
+    assert _writes_the_marker(
+        'path = dest / SCHEMA_FILE\natomic_write_text(path, v)')
+    # The plain write it also has to see.
+    assert _writes_the_marker('(root / ".schema-version").write_text(v)')
+    # And it must not fire on an unrelated write.
+    assert not _writes_the_marker('atomic_write_text(dest / "state.json", v)')
+    assert not _writes_the_marker('x = ".schema-version"  # a mention, not a write')
 
 
 def test_the_writer_list_matches_the_tree():
@@ -256,20 +342,52 @@ def test_stop_accepts_a_port(browser):
 
 
 def _stop_parser(browser) -> argparse.ArgumentParser:
-    """Rebuild just the `stop` subparser from the real `main`.
+    """Return the REAL `stop` subparser, built by `browser.build_parser`.
 
-    Calling `main()` would parse `sys.argv`, so the subparser is pulled out of
-    the constructed parser instead of being restated here - a restated copy
-    would pass while the real CLI still lacked the flag.
+    The docstring already said the right thing - "the subparser is pulled out
+    of the constructed parser instead of being restated here; a restated copy
+    would pass while the real CLI still lacked the flag" - and the body then
+    did precisely the forbidden thing: `argparse.ArgumentParser()` plus a
+    hand-written `add_argument("--port", type=int)`. So
+    `parse_args(["--port", "9333"]).port == 9333` was a fact about those two
+    lines, and it verified nothing about `browser.py`: not that the flag
+    exists, and not that it is `type=int`. A real subparser registering
+    `--port` with no `type` (handing the STRING "9333" to `stop_comet`) left
+    the test green. Only the separate substring assertion did any work.
+
+    The parser is now the constructed one. `browser.py` builds it inside
+    `main()` and parses immediately, and adding a `build_parser()` seam would
+    be a production change this shard is not making, so the parser is captured
+    at the `parse_args` call and `main()` is aborted there, before any
+    subcommand runs. Its `stop` subparser is then located through argparse's
+    own action table, so nothing about it is restated.
     """
-    src = _code(ROOT / "scripts" / "browser.py")
-    assert 'sub.add_parser("stop"' in src
-    block = src[src.index('sub.add_parser("stop"'):]
-    block = block[:block.index("set_defaults(func=cmd_stop)")]
-    assert '"--port"' in block, "the stop subcommand still takes no --port"
-    p = argparse.ArgumentParser()
-    p.add_argument("--port", type=int, default=None)
-    return p
+    class _Captured(Exception):
+        pass
+
+    captured: dict[str, argparse.ArgumentParser] = {}
+    real_parse_args = argparse.ArgumentParser.parse_args
+
+    def _capture(self, args=None, namespace=None):
+        captured.setdefault("parser", self)
+        raise _Captured
+
+    argparse.ArgumentParser.parse_args = _capture
+    try:
+        with contextlib.suppress(_Captured):
+            browser.main()
+    finally:
+        argparse.ArgumentParser.parse_args = real_parse_args
+
+    parser = captured.get("parser")
+    assert parser is not None, (
+        "browser.main() never reached parse_args, so no real parser was built")
+    subparsers = [action for action in parser._actions
+                  if isinstance(action, argparse._SubParsersAction)]
+    assert len(subparsers) == 1, "browser.py no longer has exactly one subparser set"
+    choices = subparsers[0].choices
+    assert "stop" in choices, "the stop subcommand is gone from the real CLI"
+    return choices["stop"]
 
 
 def test_cmd_stop_passes_its_port_through(browser, monkeypatch):

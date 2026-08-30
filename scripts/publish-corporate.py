@@ -107,13 +107,24 @@ def _ls_files(*extra: str) -> list[str]:
     `-z` also suppresses the quoting, and it survives a path holding a newline,
     which `splitlines()` would cut in two. `scripts/push-all.py` reads the same
     form.
+
+    Bytes plus a deliberate decode, never subprocess text mode. Text mode turns
+    on universal newlines, which rewrites every CR byte to LF, and there is no
+    `newline=` knob on `subprocess` to switch it off - so `-z` closes the quoting
+    half and leaves this half open. MEASURED 2026-08-30 on a scratch repository:
+    two tracked files named `docs/x\\r\\ny.md` and `docs/x\\ny.md` came back from
+    `ls-files -z` as two distinct names in bytes mode and as ONE name under
+    `text=True, encoding="utf-8"`. Here that is the 2026-08-27 omission again:
+    the mistranslated name matches no rule key, falls to the map's `engine`
+    default, and the file is silently never published.
     """
     result = subprocess.run(
         ["git", "ls-files", "-z", *extra],
         cwd=str(SOURCE_ROOT),
-        capture_output=True, text=True, check=True,
+        capture_output=True, check=True,
     )
-    return [path for path in result.stdout.split("\0") if path]
+    out = result.stdout.decode("utf-8", "surrogateescape")
+    return [path for path in out.split("\0") if path]
 
 
 def list_tracked_files() -> list[str]:

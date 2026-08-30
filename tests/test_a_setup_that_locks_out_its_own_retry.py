@@ -276,9 +276,17 @@ def test_setup_keeps_its_stdlib_only_import_surface():
     src = (ROOT / "scripts" / "setup.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
     top_level = [n for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))]
+    assert top_level, "setup.py has no top-level imports at all; nothing was checked"
+    # `node.module` exists only on ast.ImportFrom. The check used to be
+    # `getattr(node, "module", None) or ""`, which yields "" for every
+    # ast.Import, so plain `import scripts.utils.atomic` - the exact line this
+    # guard's docstring names as the regression - passed vacuously. The nodes
+    # were collected and then never inspected.
     for node in top_level:
-        mod = getattr(node, "module", None) or ""
-        assert not mod.startswith("scripts."), ast.unparse(node)
+        names = ([node.module or ""] if isinstance(node, ast.ImportFrom)
+                 else [alias.name for alias in node.names])
+        for name in names:
+            assert not name.startswith("scripts."), ast.unparse(node)
 
 
 def test_the_corporate_repo_name_is_still_anchored():

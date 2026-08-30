@@ -29,6 +29,8 @@ Run: python3 -m pytest tests/test_a_heading_match_that_was_never_anchored.py
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -196,49 +198,112 @@ def test_the_baseline_still_carries_over_match_entries():
 # The kind that was dropped without a word
 # ============================================================
 
-def _checkpoint(*args):
-    return subprocess.run(
-        [sys.executable, str(ROOT / "scripts" / "checkpoint-paths.py"), *args],
-        capture_output=True, text=True, timeout=120, check=False)
+@pytest.fixture
+def scratch_checkpoint(tmp_path):
+    """A `_checkpoint` runner pinned to a scratch project and data root.
+
+    Until 2026-08-30 this helper spawned `scripts/checkpoint-paths.py` with no
+    `cwd=` and no `env=`, so the child inherited the ambient environment. That
+    is the "a child process inherits the real data root" class: `collect()`
+    resolves `get_data_root()`, which reads `HEADING_OS_DATA`, and
+    `compact_history()` globs `<project>/.claude/state/checkpoint-*.json`,
+    where `project` falls back to `os.getcwd()`. On an operator machine both
+    read the live overlay and the live per-session state of every OTHER open
+    session, and the printed archive path was a fact about that operator's
+    disk rather than about the code under test.
+
+    No write was ever performed - `collect()` only computes strings and
+    `compact_history()` only reads - so the shard's "the suite compacts the
+    operator's history" is overstated. The read is defect enough: the
+    assertions below are about argument handling and must not depend on
+    whether a private overlay is mounted.
+
+    The session id is invented. A real one must never reach a fixture in a
+    public repository, and `safe_slug` keeps it out of a path traversal.
+    """
+    project = tmp_path / "project"
+    (project / ".claude" / "state").mkdir(parents=True)
+    data = tmp_path / "data"
+    data.mkdir()
+    env = dict(os.environ)
+    env.update({
+        "HEADING_OS_DATA": str(data),
+        "CLAUDE_PROJECT_DIR": str(project),
+        "WORKSPACE_ROOT": str(project),
+        "CLAUDE_CODE_SESSION_ID": "bbbbbbbb-0000-4000-8000-000000000001",
+    })
+
+    def run(*args):
+        return subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "checkpoint-paths.py"), *args],
+            capture_output=True, text=True, timeout=120, check=False,
+            cwd=str(project), env=env)
+
+    run.project = project
+    run.data = data
+    return run
 
 
-def test_a_kind_beside_an_action_flag_is_reported():
+def test_the_checkpoint_child_reads_no_path_outside_the_scratch_tree(
+        scratch_checkpoint):
+    """The isolation itself, asserted - not left as a property of the fixture.
+
+    `--json` prints the two roots the child resolved. Both must be inside the
+    scratch tree; if either names the operator's overlay or the engine clone,
+    the child is reading live state and every assertion below is a fact about
+    this machine. This is the negative case the six tests never had: delete
+    the `cwd=`/`env=` pair in `scratch_checkpoint` and this fails.
+    """
+    proc = scratch_checkpoint("--json")
+    assert proc.returncode == 0, proc.stderr
+    paths = json.loads(proc.stdout)
+    tree = str(scratch_checkpoint.project.resolve())
+    assert paths["project_root"] == tree
+    assert Path(paths["data_root"]).resolve() == scratch_checkpoint.data.resolve()
+    # `safe_slug` truncates at 32 characters, so the invented id above is cut
+    # four characters short of its tail. Pinned literally: a slug derived from
+    # the ambient session id would be the very leak this test refuses.
+    assert paths["session_slug"] == "bbbbbbbb-0000-4000-8000-00000000"
+    assert str(ROOT) not in proc.stdout
+
+
+def test_a_kind_beside_an_action_flag_is_reported(scratch_checkpoint):
     """`--json` in the identical position was warned about; `--kind` was not."""
-    proc = _checkpoint("--compact-history", "--kind", "auto")
+    proc = scratch_checkpoint("--compact-history", "--kind", "auto")
     assert "--kind" in proc.stderr
     assert "ignoring it" in proc.stderr
 
 
-def test_a_json_beside_an_action_flag_is_still_reported():
-    proc = _checkpoint("--compact-history", "--json")
+def test_a_json_beside_an_action_flag_is_still_reported(scratch_checkpoint):
+    proc = scratch_checkpoint("--compact-history", "--json")
     assert "--json" in proc.stderr
 
 
-def test_a_kind_with_no_action_flag_is_silent_and_used():
-    proc = _checkpoint("--kind", "auto")
+def test_a_kind_with_no_action_flag_is_silent_and_used(scratch_checkpoint):
+    proc = scratch_checkpoint("--kind", "auto")
     assert proc.returncode == 0, proc.stderr
     assert "ignoring it" not in proc.stderr
     assert "_handoff_auto_" in proc.stdout, "the kind names the archive file"
 
 
-def test_an_action_flag_alone_says_nothing_about_kind(monkeypatch):
+def test_an_action_flag_alone_says_nothing_about_kind(scratch_checkpoint):
     """The warning must fire on the FLAG, not on the branch.
 
     A mutation making it unconditional survived the first pass, because every
     test that reached this branch also passed --kind.
     """
-    proc = _checkpoint("--compact-history")
+    proc = scratch_checkpoint("--compact-history")
     assert "--kind" not in proc.stderr
     assert "ignoring it" not in proc.stderr
 
 
-def test_an_action_flag_alone_says_nothing_about_json():
-    proc = _checkpoint("--compact-history")
+def test_an_action_flag_alone_says_nothing_about_json(scratch_checkpoint):
+    proc = scratch_checkpoint("--compact-history")
     assert "--json" not in proc.stderr
 
 
-def test_the_dump_still_defaults_to_manual():
+def test_the_dump_still_defaults_to_manual(scratch_checkpoint):
     """Removing the argparse default must not remove the behaviour."""
-    proc = _checkpoint()
+    proc = scratch_checkpoint()
     assert proc.returncode == 0, proc.stderr
     assert "_handoff_manual_" in proc.stdout

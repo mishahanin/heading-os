@@ -66,7 +66,15 @@ jobs:
           prune-cache: true   # v9 flipped this default to false
       - run: uv sync --dev --all-extras --frozen
       - name: Leak guard (no hardcoded data paths in engine code)
-        run: git ls-files '*.py' '*.sh' | xargs uv run python scripts/leak-guard.py check-paths --files
+        # `-z` plus `xargs -0`, the shape the rest of this repo reads git paths
+        # with. Plain `git ls-files | xargs` word-splits on whitespace, so a
+        # path holding a space names two files that do not exist, and git
+        # C-quotes a path holding a non-ASCII or control byte so `xargs` strips
+        # the quotes and hands over an escaped string. Either way the file is
+        # SILENTLY skipped and the step still passes: a green leak guard over a
+        # file it never opened. Measured 2026-08-30 alongside the CR-translation
+        # sweep.
+        run: git ls-files -z '*.py' '*.sh' | xargs -0 uv run python scripts/leak-guard.py check-paths --files
       - name: Engine tree clean (no data-class artifact in the engine clone)
         run: uv run python -m pytest tests/test_engine_tree_clean.py tests/test_data_root_no_bypass.py -q
       - name: Skill router registry generated + in sync (F-5.1)

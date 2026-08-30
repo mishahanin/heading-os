@@ -46,15 +46,34 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("watchdog")
-
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from scripts.bridge_daemon.watcher import (  # noqa: E402
-    PATH_TO_COMPONENTS,
-    _Handler,
-    classify_path,
+# `watchdog` is needed by Defect 1 ONLY: `scripts.bridge_daemon.watcher` imports
+# `watchdog.observers` at module level. The Defect 2 tests drive
+# `.claude/hooks/prompt-guard.py` as a subprocess and touch nothing but stdlib.
+#
+# A module-level `pytest.importorskip("watchdog")` used to sit here, and it
+# skipped the WHOLE file: on any host without watchdog the prompt-injection
+# scanner's regression pins never ran and the suite reported green-skipped. A
+# security scanner losing its guard in exactly the minimal environment where
+# those subprocess tests are most portable is the wrong way round, so the skip
+# is now scoped to the tests that actually need the package.
+try:
+    from scripts.bridge_daemon.watcher import (  # noqa: E402
+        PATH_TO_COMPONENTS,
+        _Handler,
+        classify_path,
+    )
+    WATCHER_IMPORT_ERROR: str | None = None
+except ImportError as exc:  # pragma: no cover - exercised only on a watchdog-less host
+    PATH_TO_COMPONENTS = {}
+    _Handler = classify_path = None
+    WATCHER_IMPORT_ERROR = str(exc)
+
+needs_watcher = pytest.mark.skipif(
+    WATCHER_IMPORT_ERROR is not None,
+    reason=f"scripts.bridge_daemon.watcher is unimportable here: {WATCHER_IMPORT_ERROR}",
 )
 
 HANDLER_TEST_FILE = ROOT / "tests/bridge/test_watcher_covers_what_it_claims.py"
@@ -65,6 +84,14 @@ PROMPT_GUARD = HOOKS_DIR / "prompt-guard.py"
 MULTI_COMPONENT_KEYS = sorted(
     key for key, components in PATH_TO_COMPONENTS.items() if len(components) > 1
 )
+# `empty_parameter_set_mark = fail_at_collect` (pyproject) turns an empty
+# parametrize into a collection ERROR, which on a watchdog-less host would take
+# the Defect 2 tests down with it - the exact coupling this file just removed.
+# One skipped placeholder keeps the set non-empty without inventing coverage.
+_MULTI_COMPONENT_PARAMS = MULTI_COMPONENT_KEYS or [
+    pytest.param("<watcher unimportable>",
+                 marks=pytest.mark.skip(reason=str(WATCHER_IMPORT_ERROR)))
+]
 
 
 # --------------------------------------------------------------------------
@@ -98,6 +125,7 @@ def _live_handler(root: Path):
     return _Handler(root, bumper), scheduled
 
 
+@needs_watcher
 def test_the_set_of_multi_component_path_families_is_not_empty():
     """Anti-vacuity. A parametrisation over an empty derivation passes by
     covering nothing, and the whole defect is that these keys were uncovered."""
@@ -105,7 +133,8 @@ def test_the_set_of_multi_component_path_families_is_not_empty():
     assert "outputs/documents/" in MULTI_COMPONENT_KEYS
 
 
-@pytest.mark.parametrize("prefix", MULTI_COMPONENT_KEYS)
+@needs_watcher
+@pytest.mark.parametrize("prefix", _MULTI_COMPONENT_PARAMS)
 def test_one_write_to_a_multi_component_tree_reaches_the_live_handler(prefix, tmp_path):
     """Every fan-out family, driven through `_Handler.on_any_event` itself.
 
@@ -119,6 +148,7 @@ def test_one_write_to_a_multi_component_tree_reaches_the_live_handler(prefix, tm
     )
 
 
+@needs_watcher
 def test_a_document_write_bumps_the_inflight_count_and_the_studio_page(tmp_path):
     """The named story. One write, two pages, measured on the handler."""
     handler, scheduled = _live_handler(tmp_path)
@@ -126,12 +156,14 @@ def test_a_document_write_bumps_the_inflight_count_and_the_studio_page(tmp_path)
     assert sorted(scheduled) == ["inflight", "studio"], scheduled
 
 
+@needs_watcher
 def test_a_tribe_content_write_bumps_the_inflight_count_and_the_studio_page(tmp_path):
     handler, scheduled = _live_handler(tmp_path)
     handler.on_any_event(_Created(tmp_path / "outputs/content/tribe/monday.md"))
     assert sorted(scheduled) == ["inflight", "studio"], scheduled
 
 
+@needs_watcher
 def test_a_fundraising_write_bumps_all_three_of_the_pages_that_read_it(tmp_path):
     """The three-component families are the ones a truncation to two hides."""
     handler, scheduled = _live_handler(tmp_path)
@@ -139,6 +171,7 @@ def test_a_fundraising_write_bumps_all_three_of_the_pages_that_read_it(tmp_path)
     assert sorted(scheduled) == ["inflight", "investors", "studio"], scheduled
 
 
+@needs_watcher
 def test_an_email_intelligence_write_bumps_all_three_of_the_pages_that_read_it(tmp_path):
     handler, scheduled = _live_handler(tmp_path)
     handler.on_any_event(
@@ -146,6 +179,7 @@ def test_an_email_intelligence_write_bumps_all_three_of_the_pages_that_read_it(t
     assert sorted(scheduled) == ["inbox", "inflight", "studio"], scheduled
 
 
+@needs_watcher
 def test_a_move_into_a_multi_component_tree_bumps_every_page_it_landed_on(tmp_path):
     """A move carries two paths, and the destination is the multi-component one."""
     handler, scheduled = _live_handler(tmp_path)
@@ -154,6 +188,7 @@ def test_a_move_into_a_multi_component_tree_bumps_every_page_it_landed_on(tmp_pa
     assert sorted(scheduled) == ["inflight", "studio", "threads"], scheduled
 
 
+@needs_watcher
 def test_a_write_outside_every_mapped_tree_still_schedules_nothing(tmp_path):
     """Anchor: the fan-out must not have become "bump everything"."""
     handler, scheduled = _live_handler(tmp_path)

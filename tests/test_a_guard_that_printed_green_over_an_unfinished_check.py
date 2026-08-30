@@ -51,8 +51,31 @@ def lfs():
     return _load("check_lfs_mod", "scripts/dev/check-lfs-fixtures.py")
 
 
+# A v1 pointer as the Git LFS spec defines one. The OID was `sha256:0000` -
+# four hex characters where the spec says sixty-four - so the positive case
+# below presented the checker with a malformed file and called the answer proof
+# that a real pointer is recognised. It also quietly licensed an implementation
+# that looks at the `oid sha256:` prefix and never at the digest.
+_POINTER_OID = "0123456789abcdef" * 4
 _POINTER = (b"version https://git-lfs.github.com/spec/v1\n"
-            b"oid sha256:0000\nsize 12\n")
+            b"oid sha256:" + _POINTER_OID.encode("ascii") + b"\nsize 12\n")
+
+
+def test_the_pointer_fixture_is_the_shape_the_spec_defines():
+    """A fixture nothing checks is a fixture that drifts back.
+
+    Every positive test in this file writes `_POINTER` and then asserts the
+    guard found a pointer. If `_POINTER` stops being one, all of them keep
+    passing and none of them measures anything.
+    """
+    lines = _POINTER.decode("ascii").splitlines()
+    assert lines[0] == "version https://git-lfs.github.com/spec/v1"
+    label, _, oid = lines[1].partition(":")
+    assert label == "oid sha256"
+    assert len(oid) == 64, len(oid)
+    assert all(c in "0123456789abcdef" for c in oid), oid
+    assert lines[2].startswith("size ") and lines[2][len("size "):].isdigit()
+    assert len(_POINTER) <= 1024, "the spec caps a pointer at 1024 bytes"
 
 
 def test_a_pointer_file_is_found(lfs, tmp_path):

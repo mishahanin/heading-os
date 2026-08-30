@@ -11,6 +11,19 @@ from pathlib import Path
 HOOK = Path(__file__).resolve().parents[2] / ".claude" / "hooks" / "bridge-hook.py"
 
 
+# Every hook call is bounded. Two tests in this file exist to prove the Stop
+# hook does not hang waiting for terminal input, and until 2026-08-30 the
+# helper they run it through had no `timeout=` at all: a hook that regressed
+# into an indefinite wait made the REGRESSION TEST hang, so the run never
+# reached the `elapsed < 4` assertion and CI blocked until the outer job was
+# killed. A test for a hang must fail on the hang, not become it.
+#
+# 30s, not 4 or 9: this is the "something is badly wrong" ceiling, deliberately
+# well above the per-test elapsed bounds, so a slow machine fails on the
+# assertion that names the real contract rather than on a transport timeout.
+HOOK_CALL_CEILING_S = 30
+
+
 def _invoke(subcommand: str, payload: dict) -> subprocess.CompletedProcess:
     """Helper: run the hook with stdin payload, return CompletedProcess.
     HOME/USERPROFILE must already be set by the caller (via _setup_env)."""
@@ -19,6 +32,7 @@ def _invoke(subcommand: str, payload: dict) -> subprocess.CompletedProcess:
         input=json.dumps(payload),
         capture_output=True,
         text=True,
+        timeout=HOOK_CALL_CEILING_S,
     )
 
 
@@ -76,30 +90,54 @@ def test_session_start_dedupes_on_session_id(tmp_path, monkeypatch):
     assert len(data) == 1
 
 
-def test_session_end_removes_registry_entry(tmp_path, monkeypatch):
-    """SessionEnd hook removes the registry entry for the given cwd."""
+def test_session_end_removes_only_the_session_it_names(tmp_path, monkeypatch):
+    """SessionEnd removes the entry for the given SESSION, not for the cwd.
+
+    Two sessions in ONE directory, which is the ordinary case on this machine
+    and the reason the registry was rekeyed on 2026-08-23. Ending the first
+    must leave the second registered.
+
+    Until 2026-08-30 this registered a single session and its docstring still
+    described the retired cwd contract, so removal-by-cwd and
+    removal-by-session-id were indistinguishable here: an implementation that
+    deregistered every entry sharing the cwd - the exact regression the
+    rekeying was done to prevent - passed. The sibling
+    `test_session_start_writes_registry` already stated the current contract
+    in a comment; this one now measures it.
+    """
     _setup_env(tmp_path, monkeypatch)
     cwd = str(tmp_path / "ws")
-    start_payload = {
-        "session_id": "sid-abc", "transcript_path": "/x", "cwd": cwd,
-        "source": "startup", "hook_event_name": "SessionStart",
-    }
-    _invoke("session-start", start_payload)
-    end_payload = {"session_id": "sid-abc", "cwd": cwd,
-                   "hook_event_name": "SessionEnd"}
-    r = _invoke("session-end", end_payload)
+    for sid in ("sid-abc", "sid-def"):
+        _invoke("session-start", {
+            "session_id": sid, "transcript_path": f"/x/{sid}", "cwd": cwd,
+            "source": "startup", "hook_event_name": "SessionStart",
+        })
+    reg = tmp_path / ".claude" / "state" / "active-sessions.json"
+    assert set(json.loads(reg.read_text())) == {"sid-abc", "sid-def"}
+
+    r = _invoke("session-end", {"session_id": "sid-abc", "cwd": cwd,
+                                "hook_event_name": "SessionEnd"})
     assert r.returncode == 0
     assert r.stdout == "", f"SessionEnd hook leaked to stdout: {r.stdout!r}"
-    reg = tmp_path / ".claude" / "state" / "active-sessions.json"
     data = json.loads(reg.read_text())
     assert "sid-abc" not in data
     assert cwd not in data
+    assert "sid-def" in data, (
+        "ending one session deregistered the other live session in the same "
+        "directory; the registry is keyed by session_id, not by cwd")
 
 
-def test_session_end_is_idempotent_when_cwd_not_in_registry(tmp_path, monkeypatch):
-    """Calling SessionEnd for a cwd that was never registered is a no-op (returncode 0)."""
+def test_session_end_is_idempotent_for_an_unregistered_session(tmp_path, monkeypatch):
+    """SessionEnd for a session that was never registered is a no-op.
+
+    Named for the session, not the cwd: the registry has been keyed by
+    session_id since 2026-08-23 and the old wording described a lookup the
+    hook no longer performs.
+    """
     _setup_env(tmp_path, monkeypatch)
-    payload = {"cwd": str(tmp_path / "never-registered"), "hook_event_name": "SessionEnd"}
+    payload = {"session_id": "sid-never-registered",
+               "cwd": str(tmp_path / "never-registered"),
+               "hook_event_name": "SessionEnd"}
     r = _invoke("session-end", payload)
     assert r.returncode == 0
 
@@ -265,8 +303,16 @@ def test_find_daemon_state_returns_none_when_absent(tmp_path):
 
 
 def test_stop_handles_non_numeric_timeout_env(tmp_path, monkeypatch):
-    """A non-numeric BRIDGE_STOP_TIMEOUT falls back to the 5s default
-    without raising. The hook still completes and defaults to stay."""
+    """A non-numeric BRIDGE_STOP_TIMEOUT falls back to 5, and says so.
+
+    The fallback is asserted on the VALUE the hook resolved, not on how long
+    the process took. The old test asserted `elapsed < 9` under a comment
+    saying the expected interval was [5, 9): with no controlling tty the
+    prompt short-circuits and nothing waits at all, so the measurement could
+    never have distinguished a 5-second fallback from a 0-second one, and a
+    hook that silently fell back to zero passed. The prompt line the hook
+    prints carries the resolved number, which is the fact worth pinning.
+    """
     _setup_env(tmp_path, monkeypatch)
     monkeypatch.setenv("BRIDGE_ORIGIN", "browser")
     monkeypatch.setenv("BRIDGE_STOP_TIMEOUT", "not-a-number")
@@ -276,6 +322,22 @@ def test_stop_handles_non_numeric_timeout_env(tmp_path, monkeypatch):
     elapsed = _t.time() - started
     assert r.returncode == 0
     assert "stay" in r.stderr.lower()
-    # The fallback is 5s. With subprocess overhead, expect elapsed in [5, 9).
-    # Most importantly: must NOT crash on the bad env var.
+    assert "5s to stay" in r.stderr, (
+        f"the bad env var did not fall back to 5s: {r.stderr!r}")
     assert elapsed < 9, f"hook hung for {elapsed:.1f}s on bad timeout env"
+
+
+def test_stop_uses_a_valid_timeout_env_rather_than_the_fallback(tmp_path, monkeypatch):
+    """The anchor for the test above: a good value is not silently replaced.
+
+    Without this, a hook that ignored BRIDGE_STOP_TIMEOUT entirely and always
+    printed 5 would satisfy the fallback assertion. 7 is neither the default
+    nor a value used anywhere else in this file.
+    """
+    _setup_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("BRIDGE_ORIGIN", "browser")
+    monkeypatch.setenv("BRIDGE_STOP_TIMEOUT", "7")
+    r = _invoke("stop", {"session_id": "sid", "cwd": "/ws"})
+    assert r.returncode == 0
+    assert "7s to stay" in r.stderr, (
+        f"a valid BRIDGE_STOP_TIMEOUT was not honoured: {r.stderr!r}")

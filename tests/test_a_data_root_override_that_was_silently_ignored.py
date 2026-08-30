@@ -24,9 +24,13 @@ with no `mkdir` -- exposed a seventh that is larger than the six put together.
    the root as a side effect. Removing that scaffolding (finding 2 made it
    unnecessary) sent three generators into `.heading-os-data/outputs/` for real
    and overwrote three tracked exec-meeting documents, which were restored
-   byte-identical to HEAD. The fallback is kept -- an `.env` naming a moved path
-   should not brick a session -- but it now warns, and both test harnesses that
-   depended on the silence create their root.
+   byte-identical to HEAD. The first fix kept the fallback and added a warning;
+   the operator replaced that with a REFUSAL on 2026-08-25, because a warning
+   in a daemon or a scheduled run is read by nobody. `env_data_root()` now
+   raises `RuntimeError`, every time, and both test harnesses that depended on
+   the old silence create their root. This paragraph described the superseded
+   warn-and-fall-through design until 2026-08-30, contradicting the four
+   behavioural tests in section 1 of this same file.
 
 4. The console summary in `main()` carried a private copy of the exact counting
    the `_health_counts` docstring calls the old defect, so the rendered page and
@@ -45,6 +49,7 @@ with no `mkdir` -- exposed a seventh that is larger than the six put together.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import logging
@@ -269,10 +274,34 @@ def test_an_existing_directory_is_not_an_error(tmp_path):
     "md-to-docx-charter.py",
 ])
 def test_no_generator_calls_save_directly(script):
-    """A new `doc.save(...)` is a new FileNotFoundError on a fresh data root."""
-    src = (ROOT / "scripts" / script).read_text(encoding="utf-8")
-    assert "doc.save(" not in src, f"{script} must save through save_docx"
-    assert "save_docx(" in src
+    """A new `doc.save(...)` is a new FileNotFoundError on a fresh data root.
+
+    The check was `"doc.save(" not in src`: the literal name `doc`, and
+    nothing else. Renaming the variable to `document`, `output_doc` or
+    anything at all evaded it while keeping the exact behaviour the guard
+    exists to stop. `save_docx(` being present somewhere in the file did not
+    help either, since one file could route one save through the helper and
+    still call `.save()` directly on another.
+
+    The operation is what matters, so the check is now over the AST: ANY
+    `<something>.save(...)` call in the module, whatever the receiver is
+    called. `save_docx` itself is the one place allowed to reach the real
+    `Document.save`, and it does not live in these scripts.
+    """
+    path = ROOT / "scripts" / script
+    src = path.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    direct = [
+        f"line {node.lineno}: {ast.unparse(node)}"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "save"
+    ]
+    assert not direct, (
+        f"{script} calls .save(...) directly; it must save through save_docx, "
+        f"which creates the missing parent: {direct}")
+    assert "save_docx(" in src, f"{script} does not call save_docx at all"
 
 
 # ============================================================
@@ -301,11 +330,36 @@ def test_an_unknown_appendix_raises_rather_than_half_rendering(gcd):
 
 
 def test_no_appendix_heading_is_typed_by_hand(gcd):
-    """The drift is only impossible while both sides read APPENDICES."""
-    src = (ROOT / "scripts" / "generate-client-docx.py").read_text(encoding="utf-8")
-    body = src[src.index("def build_document"):]
-    assert "'Appendix A:" not in body
-    assert "'Appendix D:" not in body
+    """The drift is only impossible while both sides read APPENDICES.
+
+    The check was two substrings, `"'Appendix A:"` and `"'Appendix D:"`, both
+    of them single-quoted. A hand-written heading spelled with DOUBLE quotes
+    matched neither, and two of the eight appendix letters were not looked for
+    at all. The guard is now over parsed string constants, so the quote style
+    is irrelevant, and it covers every letter in `APPENDICES` rather than two
+    of them.
+    """
+    path = ROOT / "scripts" / "generate-client-docx.py"
+    src = path.read_text(encoding="utf-8")
+    letters = [letter for letter, _ in gcd.APPENDICES]
+    assert letters, "APPENDICES is empty, so this guard is checking nothing"
+
+    tree = ast.parse(src)
+    build = [n for n in tree.body
+             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+             and n.name == "build_document"]
+    assert len(build) == 1, "expected exactly one build_document in the generator"
+
+    typed = [
+        f"line {node.lineno}: {node.value!r}"
+        for node in ast.walk(build[0])
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        and any(node.value.lstrip().startswith(f"Appendix {letter}:")
+                for letter in letters)
+    ]
+    assert not typed, (
+        f"build_document types an appendix heading by hand instead of reading "
+        f"APPENDICES, so the two can drift apart again: {typed}")
 
 
 # ============================================================

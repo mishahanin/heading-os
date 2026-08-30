@@ -158,7 +158,15 @@ def test_debug_trace_env_var_writes_local_file(
     tmp_path: Path,
 ) -> None:
     """When INBOX_PULSE_DEBUG_TRACE=true, the full payload is appended to
-    state/email-triage/debug-trace.jsonl under INBOX_PULSE_STATE_DIR.
+    debug-trace.jsonl directly under INBOX_PULSE_STATE_DIR.
+
+    The docstring used to say `state/email-triage/debug-trace.jsonl under
+    INBOX_PULSE_STATE_DIR`, i.e. two directories deeper than the assertion
+    below looks. The assertion is the correct side: `INBOX_PULSE_STATE_DIR`
+    IS the `state/email-triage` directory, which is how
+    `test_heartbeat_thread_writes_periodically` in test_daemon.py finds
+    `state.json` at its root. Anyone implementing or debugging from the old
+    wording looked two levels down for a file written at the top.
     """
     monkeypatch.setenv("LANGFUSE_ENABLED", "false")  # skip real tracing
     monkeypatch.setenv("INBOX_PULSE_DEBUG_TRACE", "true")

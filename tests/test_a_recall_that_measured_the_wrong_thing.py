@@ -30,10 +30,12 @@ tool then overwrote one file and renamed another.
 Run: .venv/bin/python -m pytest tests/test_a_recall_that_measured_the_wrong_thing.py -q
 """
 
+import ast
 import contextlib
 import importlib.util
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -204,9 +206,49 @@ def test_a_configured_layer_is_not_rejected(monkeypatch, capsys):
 # 6 - the two channels are resynced even when the build dies
 # ============================================================
 def test_the_embed_failure_path_resyncs_before_returning():
+    """Every EmbeddingError handler that returns 1 must resync first.
+
+    This took `src.split("            except EmbeddingError as e:", 1)[1]`,
+    the FIRST handler at that exact indentation, and cut it at the first
+    literal `return 1` after it. Two failure directions. Adding an earlier,
+    equally-indented `except EmbeddingError` that does resync makes the test
+    inspect THAT block and pass while the build path it exists to guard still
+    returns without `resync_fts(conn)`. And re-indenting the real handler by
+    one level makes the split raise IndexError instead of failing with a
+    message. The `[1]` fails safe only when the handler is absent everywhere.
+
+    The handler is now selected by its ENCLOSING FUNCTION, which is what
+    "the build path" means, so neither source order nor indentation decides
+    which block is inspected. `cmd_query` has an EmbeddingError handler too and
+    is deliberately out of scope: it writes nothing, so there is no FTS state
+    to resync.
+    """
     src = (ROOT / "scripts" / "memory-index.py").read_text(encoding="utf-8")
-    block = src.split("            except EmbeddingError as e:", 1)[1].split("return 1", 1)[0]
-    assert "resync_fts(conn)" in block, block
+    builders = [n for n in ast.walk(ast.parse(src))
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and n.name == "_build_store"]
+    assert len(builders) == 1, (
+        f"expected exactly one _build_store in memory-index.py, found "
+        f"{len(builders)}; retarget this guard rather than leaving it green")
+
+    handlers = [h for h in ast.walk(builders[0])
+                if isinstance(h, ast.ExceptHandler) and h.type is not None
+                and "EmbeddingError" in ast.unparse(h.type)]
+    assert handlers, (
+        "_build_store no longer handles EmbeddingError; this guard is looking "
+        "at a path that has moved")
+
+    missing = [
+        f"line {h.lineno}"
+        for h in handlers
+        if any(isinstance(n, ast.Return) and isinstance(n.value, ast.Constant)
+               and n.value.value == 1 for n in ast.walk(h))
+        and not any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                    and n.func.id == "resync_fts" for n in ast.walk(h))
+    ]
+    assert not missing, (
+        f"_build_store's EmbeddingError handler returns 1 without calling "
+        f"resync_fts(conn): {missing}")
 
 
 # ============================================================
@@ -225,17 +267,37 @@ def test_open_store_sets_a_busy_timeout(tmp_path):
 
 
 def test_a_query_waits_for_a_writer_instead_of_dying(tmp_path):
-    """Held-lock proof: with the default timeout this raises immediately."""
+    """A blocked writer WAITS out its busy_timeout before it gives up.
+
+    The docstring said "with the default timeout this raises immediately",
+    which is false twice over: Python's sqlite3 default connect timeout is
+    5.0 s, and `test_open_store_sets_a_busy_timeout` below pins `open_store`
+    at MORE than 5000 ms. Nothing here ran with a default timeout, and nothing
+    raised immediately.
+
+    Worse, nothing measured elapsed time, so the test passed identically
+    whether the OperationalError came back after the 250 ms wait or on
+    contact. The "waits instead of dying" property in its own name was the one
+    thing it could not observe. It is timed now, against the timeout it sets.
+    """
     store = tmp_path / "store.db"
     holder = mi.open_store(tmp_path, "store.db")
     reader = mi.open_store(tmp_path, "store.db")
+    timeout_ms = 250
     try:
         holder.execute("BEGIN EXCLUSIVE")
         # A short explicit timeout keeps the test fast while still proving the
         # connection WAITS rather than failing on contact.
-        reader.execute("PRAGMA busy_timeout = 250")
+        reader.execute(f"PRAGMA busy_timeout = {timeout_ms}")
+        started = time.monotonic()
         with pytest.raises(sqlite3.OperationalError):
             reader.execute("CREATE TABLE probe (x)")
+        waited_ms = (time.monotonic() - started) * 1000
+        # Generous lower bound: the point is "it waited", not the exact figure.
+        assert waited_ms >= timeout_ms * 0.5, (
+            f"the writer gave up after {waited_ms:.0f} ms with a "
+            f"{timeout_ms} ms busy_timeout, so it failed on contact rather "
+            f"than waiting")
     finally:
         holder.rollback()
         holder.close()

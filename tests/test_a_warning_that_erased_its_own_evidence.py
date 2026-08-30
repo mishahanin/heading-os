@@ -471,17 +471,75 @@ def test_an_absent_store_does_not_hide_the_stores_that_do_exist(
     assert not (hermetic_query / ".nowhere").exists()
 
 
-def test_the_existing_guard_on_the_sibling_read_paths_is_still_there(tmp_path):
+@pytest.fixture
+def mirror_root(tmp_path, monkeypatch):
+    """`_mirror_access_counts` resolved against a scratch root, not the operator's.
+
+    ISOLATION, added 2026-08-30. The two tests below used to call
+    `_mirror_access_counts` with nothing pointing it anywhere. It resolves its
+    store through `_layer_store_map` -> `_store_targets` -> `get_data_root()`,
+    so on an operator machine it opened the REAL
+    `.heading-os-data/.memory-index/index.db` and committed an UPDATE against
+    it. MEASURED 2026-08-30 on this machine: the resolved root was the live data
+    overlay and the store file was present, so the write path ran. `.memory-index`
+    is on this suite's `_UNWATCHED` list in `tests/conftest.py` -- a rebuildable
+    index nobody snapshots -- so the overlay guard could not have reported it
+    either. `tmp_path` appeared in the old assertion and in no other line of the
+    test.
+    """
+    monkeypatch.setattr(mi, "get_data_root", lambda: tmp_path)
+    monkeypatch.setattr(mi, "get_workspace_root", lambda: tmp_path)
+    return tmp_path
+
+
+MIRROR_CFG = {"layers": [{"layer": "memory"}], "collections": {}}
+
+
+def test_the_existing_guard_on_the_sibling_read_paths_is_still_there(mirror_root):
     """`_mirror_access_counts` is where the convention was already written
     down. If it ever loses the guard, the fix above stands alone and the
     convention is gone."""
-    cfg = {"layers": [{"layer": "memory"}]}
-    conn_before = list(tmp_path.iterdir())
-    mi._mirror_access_counts(
-        {**cfg, "collections": {}},
-        {"auto-memory/x.md": 3}, "2026-08-25",
-    )
-    assert list(tmp_path.iterdir()) == conn_before
+    store = mirror_root / mi.STORE_REL
+    assert not store.exists(), "the premise is that nothing is built yet"
+    before = sorted(p.name for p in mirror_root.iterdir())
+
+    mi._mirror_access_counts(MIRROR_CFG, {"auto-memory/x.md": 3}, "2026-08-25")
+
+    assert sorted(p.name for p in mirror_root.iterdir()) == before
+    assert not store.exists(), (
+        "the read path CREATED the store it was only supposed to read")
+
+
+def test_the_guard_still_lets_a_built_store_be_updated(mirror_root):
+    """The negative case, without which the guard above measures nothing.
+
+    A `_mirror_access_counts` that returned unconditionally would score full
+    marks on the test above. This one proves the early return is a guard on
+    "nothing built yet" and not a blanket refusal: with the store present, the
+    count reaches the row.
+    """
+    write(mirror_root / "auto-memory/x.md", "---\ntitle: X\n---\n\nalpha beta.\n")
+    conn = mi.open_store(mirror_root, mi.STORE_REL)
+    try:
+        conn.execute(
+            "INSERT INTO notes (id, path, layer, mtime, dim, embedding, "
+            "access_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("x-0", "auto-memory/x.md", "memory", 0.0, 1, b"\x00", 0))
+        conn.commit()
+    finally:
+        conn.close()
+    assert (mirror_root / mi.STORE_REL).is_file()
+
+    mi._mirror_access_counts(MIRROR_CFG, {"auto-memory/x.md": 3}, "2026-08-25")
+
+    conn = mi.open_store(mirror_root, mi.STORE_REL)
+    try:
+        row = conn.execute(
+            "SELECT access_count, last_accessed FROM notes WHERE path = ?",
+            ("auto-memory/x.md",)).fetchone()
+    finally:
+        conn.close()
+    assert tuple(row) == (3, "2026-08-25")
 
 
 # ============================================================

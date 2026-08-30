@@ -25,11 +25,17 @@ _NBSP = " "   # non-breaking space
 
 
 def _run(text: str) -> "subprocess.CompletedProcess[str]":
+    # `timeout=` and a closed stdin. Without them a scan path that ever read
+    # from stdin, or hung, inherited the runner's stdin and blocked the whole
+    # security-tests job until the CI-level timeout killed it, with no per-test
+    # diagnosis. A hang is a failure and has to be reported as one.
     return subprocess.run(
         [sys.executable, str(_SCRIPT), "--scan", "--text", text],
         capture_output=True,
         text=True,
         cwd=str(ROOT),
+        stdin=subprocess.DEVNULL,
+        timeout=60,
     )
 
 

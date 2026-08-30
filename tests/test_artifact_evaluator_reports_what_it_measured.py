@@ -124,25 +124,49 @@ def test_text_without_frontmatter_is_still_rejected():
 
 # --- 3. detection and evaluation must anchor to the same directory -----------
 
-def test_detect_type_agrees_from_any_working_directory(tmp_path):
+def test_main_hands_detect_type_the_resolved_path_not_the_raw_argument(tmp_path):
+    """Defect 3 at its own call site: `main()` must not pass `args.path`.
+
+    `detect_type` is cwd-anchored BY CONSTRUCTION - it does `Path(path_str)`
+    and asks `p.is_dir()` - so the fix was never inside it. It was in `main()`,
+    which resolves `artifact_path = ROOT / args.path` and must then hand THAT
+    to `detect_type`.
+
+    This test used to run `detect_type(m.ROOT / '.claude/skills/dream')` in two
+    subprocesses with different cwds and assert the two agreed. An absolute
+    path never consults the cwd, so both printed `TYPE=skill` whether or not
+    the fix existed: reverting `main()` to `detect_type(args.path)` left this
+    green. The call site is the thing to pin, so it is read from the AST -
+    a name, not a substring, so a rename cannot slip past and a comment
+    quoting the old call cannot trip it.
+    """
+    import ast
+
+    tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+    calls = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Name) and n.func.id == "detect_type"]
+    assert len(calls) == 1, f"expected one detect_type call site, found {len(calls)}"
+    (arg,) = calls[0].args
+    assert isinstance(arg, ast.Name) and arg.id == "artifact_path", (
+        "main() passes "
+        f"`{ast.unparse(arg)}` to detect_type; it must pass the resolved "
+        "`artifact_path`, or a relative --path is anchored to the process cwd")
+
+    # And the behaviour the AST pin stands for, measured on the relative form
+    # the defect used: the same relative path must answer `skill` from a
+    # directory that is not the workspace root.
     probe = (
-        "import importlib.util, sys, pathlib;"
+        "import importlib.util, sys;"
         f"spec = importlib.util.spec_from_file_location('ae', {str(SCRIPT)!r});"
         "m = importlib.util.module_from_spec(spec); sys.modules['ae'] = m;"
         "spec.loader.exec_module(m);"
         "print('TYPE=' + str(m.detect_type(m.ROOT / '.claude/skills/dream')))"
     )
-    from_root = subprocess.run([sys.executable, "-c", probe], cwd=str(ROOT),
-                               capture_output=True, text=True, timeout=120)
     from_tmp = subprocess.run([sys.executable, "-c", probe], cwd=str(tmp_path),
                               capture_output=True, text=True, timeout=120)
-    assert from_root.returncode == 0, from_root.stderr[-400:]
     assert from_tmp.returncode == 0, from_tmp.stderr[-400:]
-    assert from_root.stdout.strip() == from_tmp.stdout.strip(), (
-        f"detect_type answers differently by cwd: root={from_root.stdout.strip()!r} "
-        f"tmp={from_tmp.stdout.strip()!r}"
-    )
-    assert "TYPE=skill" in from_root.stdout
+    assert "TYPE=skill" in from_tmp.stdout
 
 
 def test_the_cli_evaluates_a_relative_skill_path_from_another_directory(tmp_path):

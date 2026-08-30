@@ -168,10 +168,28 @@ def test_the_page_no_longer_dates_the_figures_instead_of_deriving_them():
     """The old paragraph carried "counted on 2026-08-03" as its warrant. A date is
     not a warrant; it is a note that the number was true once."""
     text = PAGE.read_text(encoding="utf-8")
+    # `next(...)` with no default raised StopIteration on a reworded sentence,
+    # so the one event this guard exists to catch - the wording moving out
+    # from under it, which the sibling
+    # `test_a_reworded_sentence_is_a_failure_and_not_a_pass` calls the
+    # dangerous case - surfaced as a bare generator traceback with no sentence
+    # naming what went wrong.
     sentence = next(
-        line for line in text.splitlines() if "routing-sensitive skills carry" in line
+        (line for line in text.splitlines()
+         if "routing-sensitive skills carry" in line),
+        None,
     )
-    window = text[text.index(sentence):text.index(sentence) + 600]
+    assert sentence is not None, (
+        f"the figure sentence is gone from {PAGE.name}; this guard anchors on "
+        "the phrase 'routing-sensitive skills carry' and has nothing to read")
+
+    # The paragraph, not a fixed 600 characters. A character count is a claim
+    # about layout: reflowing the page moves the warrant in or out of the
+    # window with no change in meaning, in either direction.
+    paragraphs = [p for p in text.split("\n\n") if sentence in p]
+    assert len(paragraphs) == 1, (
+        f"the figure sentence appears in {len(paragraphs)} paragraphs")
+    window = paragraphs[0]
     assert "check-readme-numbers.py" in window, (
         "the figures must name the guard that derives them")
     assert not re.search(r"counted on 20\d\d-\d\d-\d\d", window), window

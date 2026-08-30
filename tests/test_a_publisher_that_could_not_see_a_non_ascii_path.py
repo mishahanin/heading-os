@@ -230,33 +230,152 @@ def test_no_ls_files_call_in_the_publisher_omits_the_nul_separator() -> None:
 # The class, not just this instance
 # ============================================================
 
+# Git global options that sit BEFORE the subcommand. `git -C <dir> ls-files` is
+# an ordinary calling pattern in this codebase, and until 2026-08-30 the scanner
+# read `argv[0]` straight after dropping the leading `git`, saw `-C`, and
+# cleared the call. The listing subcommand was never reached.
+_GLOBAL_OPTS_WITH_VALUE = frozenset({
+    "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
+})
+_GLOBAL_FLAGS = frozenset({"-P", "--no-pager", "--literal-pathspecs",
+                           "--no-optional-locks", "--bare"})
+
+
+def _literal_argv(node: ast.Call) -> list[str] | None:
+    """The literal argv this call passes to a subprocess, or None.
+
+    Reads `args[0]` AND the `args=` keyword, and accepts a TUPLE as well as a
+    list. All three were unreadable to the old scanner, which required an
+    `ast.List` positionally -- so `subprocess.run(("git", "ls-files"))` and
+    `subprocess.run(args=["git", "ls-files"])` were invisible.
+
+    A sequence holding any non-constant element returns None rather than a
+    partial list. The old version silently DROPPED such elements, which could
+    turn `["git", flag, "ls-files"]` into a `["git", "ls-files"]` it then judged.
+    """
+    seq = None
+    if node.args and isinstance(node.args[0], (ast.List, ast.Tuple)):
+        seq = node.args[0]
+    else:
+        for kw in node.keywords:
+            if kw.arg == "args" and isinstance(kw.value, (ast.List, ast.Tuple)):
+                seq = kw.value
+                break
+    if seq is None:
+        return None
+    if not all(isinstance(el, ast.Constant) and isinstance(el.value, str)
+               for el in seq.elts):
+        return None
+    return [el.value for el in seq.elts]
+
+
+def _subcommand_argv(argv: list[str]) -> list[str]:
+    """`argv` from the subcommand onward, with `git` and its globals removed."""
+    if argv and argv[0] == "git":
+        argv = argv[1:]
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token in _GLOBAL_OPTS_WITH_VALUE:
+            index += 2
+        elif token in _GLOBAL_FLAGS or "=" in token and token.startswith("--"):
+            index += 1
+        else:
+            break
+    return argv[index:]
+
+
 def _enumerating_git_calls(tree: ast.AST):
     """Every literal argv in a tree that asks git to LIST paths.
 
     `--error-unmatch` is excluded: that form names one path and answers with an
     exit code, so quoting cannot drop anything.
+
+    WIDENED 2026-08-30. The docstring promised "every literal argv"; the
+    implementation recognised a listing subcommand only when it was the FIRST
+    token after `git`, only from a positional `ast.List`, and only for
+    `ls-files` / `diff --name-only`. Global options, tuple argv, `args=` argv
+    and `diff-tree --name-only` all walked past a scan that then reported clean.
     """
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not node.args:
+        if not isinstance(node, ast.Call):
             continue
-        first = node.args[0]
-        if not isinstance(first, ast.List):
-            continue
-        argv = [el.value for el in first.elts
-                if isinstance(el, ast.Constant) and isinstance(el.value, str)]
-        if argv and argv[0] == "git":
-            argv = argv[1:]
+        argv = _literal_argv(node)
         if not argv:
             continue
-        if "--error-unmatch" in argv:
+        sub = _subcommand_argv(argv)
+        if not sub or "--error-unmatch" in sub:
             continue
-        listing = argv[0] == "ls-files" or (
-            argv[0] == "diff" and "--name-only" in argv)
+        listing = sub[0] == "ls-files" or (
+            sub[0] in ("diff", "diff-tree") and "--name-only" in sub)
         if listing:
             yield node.lineno, argv
 
 
+def _quoting_is_disabled(argv: list[str]) -> bool:
+    """Does this argv stop git from C-quoting the paths it prints?
+
+    Two ways, and both are accepted because both close the hole this test is
+    named for:
+
+      -z                              NUL-terminated output is never quoted.
+      -c core.quotepath=false         turns off the escaping of non-ASCII bytes.
+
+    The second was added on 2026-08-30, when widening the scanner to see global
+    options first surfaced `scripts/build_data_repo.py` and
+    `scripts/build_engine_repo.py`. Those two are NOT instances of the defect
+    this test names: the publisher dropped Cyrillic filenames because git
+    escaped them, and `core.quotepath=false` is the documented switch for
+    exactly that.
+
+    RESIDUAL, recorded rather than silently accepted: `core.quotepath=false`
+    does not stop git quoting a path that holds a control character, so a
+    filename containing a newline still arrives quoted and `splitlines()` still
+    splits it. `-z` is immune to both. Those two call sites live outside this
+    audit package and were left alone; the gap is REPORTED, not fixed here.
+    """
+    if "-z" in argv:
+        return True
+    return any(tok.replace(" ", "") == "core.quotepath=false" for tok in argv)
+
+
 SEARCH_ROOTS = ("scripts", "tests", ".claude/hooks")
+
+
+@pytest.mark.parametrize("src,seen", [
+    ('subprocess.run(["git", "ls-files"])', True),
+    ('subprocess.run(["git", "-C", d, "ls-files"])', False),        # d is not literal
+    ('subprocess.run(["git", "-C", "repo", "ls-files"])', True),
+    ('subprocess.run(["git", "-c", "core.quotepath=false", "ls-files"])', True),
+    ('subprocess.run(["git", "--git-dir", "g", "ls-files"])', True),
+    ('subprocess.run(("git", "ls-files"))', True),
+    ('subprocess.run(args=["git", "ls-files"])', True),
+    ('subprocess.run(["git", "diff-tree", "--name-only", "HEAD"])', True),
+    ('subprocess.run(["git", "-C", "repo", "status"])', False),
+    ('subprocess.run(["git", "ls-files", "--error-unmatch", "a"])', False),
+    ('subprocess.run(["ls", "-l"])', False),
+])
+def test_the_argv_scanner_sees_each_calling_form(src: str, seen: bool) -> None:
+    """The negative case for the widening. NEW 2026-08-30.
+
+    Five of these were invisible to the old scanner, and it had no unit test at
+    all -- its only exercise was a sweep over a corpus with nothing to report,
+    which is green whatever the detector does. Both directions are pinned: the
+    listing forms must be found and the four non-listings must not.
+    """
+    hits = list(_enumerating_git_calls(ast.parse(src)))
+    assert bool(hits) is seen, hits
+
+
+def test_the_scanner_ignores_a_partly_dynamic_argv_rather_than_misreading_it() -> None:
+    """A sequence holding a non-literal element is UNKNOWN, not a shorter argv.
+
+    The old scanner dropped non-constant elements and judged what was left, so
+    `["git", flag, "ls-files"]` read as `git ls-files` -- a verdict about an
+    argv the code never runs.
+    """
+    assert list(_enumerating_git_calls(
+        ast.parse('subprocess.run(["git", flag, "ls-files"])'))) == []
 
 
 def test_no_engine_reader_enumerates_paths_without_the_nul_separator() -> None:
@@ -277,7 +396,7 @@ def test_no_engine_reader_enumerates_paths_without_the_nul_separator() -> None:
             except (OSError, SyntaxError):
                 continue
             for lineno, argv in _enumerating_git_calls(tree):
-                if "-z" not in argv:
+                if not _quoting_is_disabled(argv):
                     offenders.append(f"{path.relative_to(ROOT)}:{lineno} {argv}")
     assert not offenders, (
         "git C-quotes any non-ASCII path, so these readers drop files without "

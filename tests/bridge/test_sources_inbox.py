@@ -1,4 +1,15 @@
-"""Unit tests for /inbox real-data source (bands, defer, unread mirror)."""
+"""Unit tests for the /inbox real-data source.
+
+What is actually covered here: the priority bands, the dismiss workflow
+(Phase 1.62 / 1.92), the defer workflow, conversation drill-down
+(Phase 1.34 / 1.100), and the crm-logged mark (Phase 1.33).
+
+This said "bands, defer, unread mirror" until 2026-08-30. "Unread mirror"
+appeared nowhere else in the file - not in a test, a helper, a comment or a
+section header - while three of the five areas above went unmentioned. A
+contents line that names a section the file does not have sends a reader
+looking for coverage that was never written.
+"""
 import json
 from datetime import datetime, timedelta, timezone
 from scripts.utils.workspace import get_default_tz
@@ -9,6 +20,7 @@ from scripts.bridge_daemon.sources.inbox import (
     mark_dismissed,
     undo_dismissed,
     read_dismiss_log,
+    MAX_RAW_EMAILS_RETURNED,
     PROPOSED_ACTIONS_CAP,
     mark_deferred,
     undo_deferred,
@@ -304,18 +316,48 @@ def test_read_conversation_truncates_long_body(tmp_path):
 
 
 def test_read_conversation_caps_raw_email_count(tmp_path):
-    """More than MAX_RAW_EMAILS_RETURNED -> truncated flag + capped list."""
+    """More than MAX_RAW_EMAILS_RETURNED -> truncated flag + capped list.
+
+    The cap is imported, not retyped. `== 5` was the literal here until
+    2026-08-30, which turns any change to the constant into a red test on
+    correct behaviour - and the sibling
+    `test_read_conversation_does_not_flag_a_chain_at_the_cap` below has no way
+    to be right about the boundary if the two spell it differently. The same
+    file already imports PROPOSED_ACTIONS_CAP for the identical shape.
+    """
     _write_latest_fetch(tmp_path, [
         {
             "id": "abc",
             "topic": "Many messages",
-            "raw_emails": [{"from": f"a{i}@x.com"} for i in range(10)],
+            "raw_emails": [{"from": f"a{i}@x.com"}
+                           for i in range(MAX_RAW_EMAILS_RETURNED * 2)],
         },
     ])
     r = read_conversation(tmp_path, "abc")
     assert r["ok"] is True
     assert r["conversation"]["raw_emails_truncated"] is True
-    assert len(r["conversation"]["raw_emails"]) == 5
+    assert len(r["conversation"]["raw_emails"]) == MAX_RAW_EMAILS_RETURNED
+
+
+def test_read_conversation_does_not_flag_a_chain_at_the_cap(tmp_path):
+    """The case ON the line: exactly the cap is not truncation.
+
+    The test above only ever fed twice the cap, so nothing distinguished
+    "truncate above N" from "truncate at or above N", or from "always set the
+    flag". A chain of exactly MAX_RAW_EMAILS_RETURNED is complete.
+    """
+    _write_latest_fetch(tmp_path, [
+        {
+            "id": "exact",
+            "topic": "Exactly the cap",
+            "raw_emails": [{"from": f"a{i}@x.com"}
+                           for i in range(MAX_RAW_EMAILS_RETURNED)],
+        },
+    ])
+    r = read_conversation(tmp_path, "exact")
+    assert r["ok"] is True
+    assert r["conversation"]["raw_emails_truncated"] is False
+    assert len(r["conversation"]["raw_emails"]) == MAX_RAW_EMAILS_RETURNED
 
 
 def test_read_conversation_corrupt_json(tmp_path):

@@ -733,7 +733,13 @@ def test_all_idempotent(tmp_workspace):
     )
     assert result.returncode == 0
     out = json.loads(result.stdout)
-    assert out.get("files_updated", 0) == 0
+    # `out.get("files_updated", 0) == 0` could not tell "the second run changed
+    # nothing" from "the script stopped reporting the field", so dropping
+    # `files_updated` from the --all schema was a silent green. The sibling
+    # `test_question_result_includes_files_skipped` already sets the standard.
+    assert "files_updated" in out, out
+    assert isinstance(out["files_updated"], int), out
+    assert out["files_updated"] == 0, out
 
 
 def test_check_mode_single_question_writes_nothing(tmp_workspace):
@@ -993,15 +999,23 @@ def test_question_without_a_value_refuses_instead_of_erasing(tmp_workspace):
     (tmp_workspace / "config").mkdir(exist_ok=True)
     shutil.copy(REPO / "config" / "wizard-questions.yaml",
                 tmp_workspace / "config" / "wizard-questions.yaml")
-    victim = tmp_workspace / "target.md"
-    victim.write_text("owner: {{OPERATOR_NAME}}\n", encoding="utf-8")
-
     bank = yaml.safe_load(
         (tmp_workspace / "config" / "wizard-questions.yaml").read_text(encoding="utf-8"))
     questions = bank["questions"] if isinstance(bank, dict) else bank
     placeholder_q = next(q for q in questions
                          if q.get("type") == "placeholder"
                          and "public" in (q.get("audience") or []))
+
+    # The victim carries the placeholder THIS question rewrites, read off the
+    # bank. It used to be a hardcoded `{{OPERATOR_NAME}}` - double-braced, which
+    # is not the wizard's spelling at all - so the file the erasure test was
+    # named for held nothing the run could have erased, and nothing read it back
+    # afterwards either. Only the exit code and the message were ever measured,
+    # while the banner above promised "never erase".
+    placeholder = placeholder_q["target"]["placeholder"]
+    victim = tmp_workspace / "target.md"
+    before = f"owner: {placeholder}\ntrailing line\n"
+    victim.write_text(before, encoding="utf-8")
 
     result = subprocess.run(
         [sys.executable, str(REPO / "scripts" / "apply-wizard-answers.py"),
@@ -1012,3 +1026,11 @@ def test_question_without_a_value_refuses_instead_of_erasing(tmp_workspace):
     assert result.returncode != 0, f"a value-less --question succeeded: {combined}"
     assert "question bank not found" not in combined, "the test set-up is wrong, not the script"
     assert "value" in combined and "stdin" in combined
+
+    # The other half of the promise: refusing is only worth anything if the
+    # refusal happened BEFORE the write. A script that blanked the placeholder
+    # and then exited non-zero satisfied every assertion above.
+    after = victim.read_text(encoding="utf-8")
+    assert after == before, (
+        f"the run refused and still rewrote the file:\n{before!r}\n->\n{after!r}")
+    assert placeholder in after

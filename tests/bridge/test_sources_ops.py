@@ -112,8 +112,14 @@ def test_log_tail_returns_last_n_lines(tmp_path):
     assert result["lines"][0] == "line-90"
 
 
-def test_log_tail_default_50_lines(tmp_path):
-    """Default n_lines is LOG_TAIL_LINES = 50."""
+def test_log_tail_defaults_to_the_log_tail_line_count(tmp_path):
+    """The default n_lines is LOG_TAIL_LINES, whatever LOG_TAIL_LINES is.
+
+    The docstring said "= 50" and the name said "50" while the assertion
+    correctly used the constant. Changing LOG_TAIL_LINES left both sentences
+    false and the test green, which is the drift this repository keeps
+    finding; only the number is removed, the assertion is untouched.
+    """
     p = tmp_path / ".daemon-state" / "bridge.log"
     p.parent.mkdir(parents=True)
     content = "\n".join(f"line-{i}" for i in range(200)) + "\n"

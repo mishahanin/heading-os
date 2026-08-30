@@ -85,17 +85,35 @@ def test_every_file_key_is_exercised_by_the_test_above():
 # --- a superseded timer does not fire ----------------------------------------
 
 def test_a_timer_that_was_superseded_while_waking_does_not_bump():
+    """T1 must return early AND leave T2 in the registry.
+
+    The registry half used to be `assert b._timers.get("inbox") is not t2 or
+    t2 is None`, read after the settle sleep. By then T2 has fired and popped
+    itself, so the registry is empty under BOTH the correct and the buggy
+    interleaving, `None is not t2` is True, and the assertion could not report
+    the corruption its own failure message describes. Only the `calls` check
+    was doing any work, and it catches the corruption solely via the double
+    bump: a regression that popped T2 without double-bumping stayed green.
+
+    The distinction exists at exactly one instant, inside T1 after the real
+    `_fire` returns and before T2 wakes, so that is where it is read. The
+    interval carries enough margin for the read to land there; the recorded
+    value is the FIRST one, because the stub also serves T2.
+    """
     calls: list[str] = []
-    b = DebouncedBumper(calls.append, interval=0.05)
+    interval = 0.2
+    b = DebouncedBumper(calls.append, interval=interval)
 
     # Hold T1 exactly where the race lives: past expiry, before the lock.
     entered, release = threading.Event(), threading.Event()
     real_fire = b._fire
+    registry_readings: list[object] = []
 
     def slow_fire(component, generation):
         entered.set()
         release.wait(2)
         real_fire(component, generation)
+        registry_readings.append(b._timers.get("inbox"))
 
     b._fire = slow_fire
 
@@ -103,11 +121,15 @@ def test_a_timer_that_was_superseded_while_waking_does_not_bump():
     assert entered.wait(2), "T1 never reached _fire"
     b.schedule("inbox")                      # cancel() is a no-op on a running timer
     t2 = b._timers.get("inbox")
+    assert t2 is not None, (
+        "schedule() registered no successor, so the superseded-timer race was "
+        "never set up and nothing below is measuring it")
     release.set()
-    time.sleep(0.4)
+    time.sleep(interval * 4)
 
     assert calls == ["inbox"], f"one burst produced {len(calls)} bumps: {calls}"
-    assert b._timers.get("inbox") is not t2 or t2 is None, (
+    assert registry_readings, "T1 never completed, so the registry was never read"
+    assert registry_readings[0] is t2, (
         "the superseded timer popped its successor out of the registry, "
         "leaving a timer alive that no later schedule() can cancel"
     )

@@ -48,6 +48,7 @@ from scripts.utils.engine_guard import (  # noqa: E402
     engine_text_rels,
     scan_engine_repo,
 )
+from scripts.utils import push_history  # noqa: E402
 from scripts.utils.push_history import (  # noqa: E402
     HistoryBlob,
     HistoryUnavailable,
@@ -284,15 +285,43 @@ def test_a_non_ascii_path_survives_into_read_blob(repo: Path) -> None:
     assert read_blob(repo, blobs[0].sha).decode("utf-8") == "текст\n"
 
 
-def test_a_broken_git_environment_raises_rather_than_reporting_nothing(
+def test_a_directory_with_no_base_reports_nothing_rather_than_raising(
         tmp_path: Path) -> None:
-    """Fail closed. "I could not look" must not read as "there is nothing"."""
+    """No refs is a real emptiness, not a failure to look.
+
+    RENAMED 2026-08-30. The name used to read "raises rather than reporting
+    nothing" while the only assertion in the body was `== []` -- the opposite
+    claim, with no `pytest.raises` anywhere in the function. `has_base` answers
+    False for a directory with no refs, so returning `[]` is the CORRECT answer
+    and the assertion was the right side; the name and docstring were the wrong
+    one. The fail-closed half the old name promised now has its own test below,
+    where the raise can actually be observed.
+    """
     not_a_repo = tmp_path / "bare-dir"
     not_a_repo.mkdir()
-    # `has_base` answers False here, so the function returns [] rather than
-    # raising -- and that is the CORRECT answer for a directory with no refs.
-    # The raise is reserved for a base that resolves and a walk that then fails.
     assert unpushed_blobs(not_a_repo) == []
+
+
+def test_a_walk_that_fails_after_the_base_resolved_raises(
+        repo: Path, monkeypatch) -> None:
+    """Fail closed. "I could not look" must not read as "there is nothing".
+
+    The case the sibling above cannot reach: a base that DOES resolve and a git
+    call that then fails. `has_base` is satisfied, so an empty return here would
+    be a wall reading a broken git as a clean history. Only `rev-list` is made
+    to fail, so the two `rev-parse` probes still answer truthfully and the test
+    lands on the branch it names rather than on the no-base early return.
+    """
+    real_git = push_history._git
+
+    def failing(root: Path, *args: str):
+        if args and args[0] == "rev-list":
+            return subprocess.CompletedProcess([], 128, b"", b"fatal: bad revision")
+        return real_git(root, *args)
+
+    monkeypatch.setattr(push_history, "_git", failing)
+    with pytest.raises(HistoryUnavailable):
+        unpushed_blobs(repo)
 
 
 def test_a_missing_blob_raises_rather_than_returning_empty_bytes(repo: Path) -> None:
@@ -393,10 +422,19 @@ def test_scan_engine_repo_flags_an_extra_path_that_is_not_on_disk(repo: Path) ->
 
 
 def _refuses(fn, *args) -> tuple[bool, str]:
-    """Run a wall. Returns (refused, captured stdout+stderr is not available here).
+    """Run a wall. Returns (refused, the SystemExit code rendered as a string).
+
+    The second element is `str(exc.code)` -- `"2"` for every refusal this file
+    asserts on -- and NOT captured output. The docstring said "captured
+    stdout+stderr is not available here" until 2026-08-30, which invited a
+    reader to treat the second element as disposable and drop the `code == "2"`
+    assertions that distinguish a refusal from an arbitrary exit. Output is
+    captured separately, with `capsys`.
 
     The walls call `sys.exit`, which is the contract the push path relies on, so
-    the test asserts on the exception rather than on a return value.
+    the test asserts on the exception rather than on a return value. An empty
+    string is returned when nothing was raised, so `code` is only meaningful
+    when `refused` is True.
     """
     try:
         fn(*args)
@@ -644,27 +682,41 @@ def test_the_content_wall_still_passes_a_clean_history(
 # ============================================================
 
 
-def test_no_wall_reads_only_the_present(monkeypatch) -> None:
+def test_no_wall_reads_only_the_present(repo: Path, monkeypatch) -> None:
     """Each of the three walls must reach the history enumeration.
 
     Asked of the CALL, not of the import. A test that only checks that
     `push-all` imports `unpushed_blobs` passes while every wall ignores it --
     that exact gap survived three mutations in the previous shard.
+
+    HERMETICITY, fixed 2026-08-30. This test used to drive the three walls
+    against `Path(".")` -- the checkout pytest happens to run in -- with
+    `monkeypatch.setattr(push_all, "repo_carried_paths", ...)` standing in for
+    isolation. That patch was INERT: `engine_clean_scan` reaches the working
+    tree through `engine_guard.scan_engine_repo`, which resolves
+    `repo_carried_paths` from `engine_guard`'s OWN globals, so rebinding the
+    name in `push_all` changed nothing. MEASURED 2026-08-30
+    (`.tmp/pkgb_probe_wall.py`): with that exact patch applied and the cwd
+    pointed at a scratch tree carrying `outputs/operations/leak.md`, the wall
+    still refused with exit 2. The test passed only because this checkout
+    happens to be clean, so it had never once exercised a wall against a tree
+    it controlled. It now runs against the `repo` fixture, and the sibling
+    below pins that the repository argument -- not the process cwd -- is what
+    the walls read.
     """
     calls: list[str] = []
 
-    def spy_blobs(repo, *a, **k):
+    def spy_blobs(repo_arg, *a, **k):
         calls.append("blobs")
         return []
 
-    def spy_paths(repo, *a, **k):
+    def spy_paths(repo_arg, *a, **k):
         calls.append("paths")
         return []
 
     monkeypatch.setattr(push_all, "unpushed_blobs", spy_blobs)
     monkeypatch.setattr(push_all, "unpushed_paths", spy_paths)
     monkeypatch.setattr(push_all, "_push_delta_files", lambda _r: set())
-    monkeypatch.setattr(push_all, "repo_carried_paths", lambda _r: [])
 
     class FakeDenylist:
         degraded = False
@@ -675,25 +727,102 @@ def test_no_wall_reads_only_the_present(monkeypatch) -> None:
 
     monkeypatch.setattr(push_all, "build_denylist", lambda _root: FakeDenylist())
 
-    push_all.content_scan(Path("."))
+    push_all.content_scan(repo)
     assert calls, "content_scan never asked about the history"
     calls.clear()
-    push_all.engine_clean_scan(Path("."))
+    push_all.engine_clean_scan(repo)
     assert calls, "engine_clean_scan never asked about the history"
     calls.clear()
-    push_all.engine_content_scan(Path("."), Path("."))
+    push_all.engine_content_scan(repo, repo)
     assert calls, "engine_content_scan never asked about the history"
 
 
-def test_the_scratch_layout_never_writes_outside_its_own_tree() -> None:
+def test_the_routing_wall_judges_the_repository_it_is_handed_not_the_cwd(
+        repo: Path, tmp_path: Path, monkeypatch) -> None:
+    """The negative case the hermeticity fix above needs to be worth anything.
+
+    Both halves run with the process cwd pointed at a DIFFERENT tree, so a wall
+    that reads `Path.cwd()` instead of its argument gets the wrong answer in one
+    direction or the other and this test says so.
+
+      clean repo handed in, dirty cwd  -> must NOT refuse
+      dirty repo handed in, clean cwd  -> must refuse, exit 2
+
+    The planted violation lives under `tmp_path`; nothing is written into the
+    real checkout.
+    """
+    dirty = tmp_path / "dirty"
+    (dirty / "outputs" / "operations").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(dirty)], check=True)
+    (dirty / "outputs" / "operations" / "leak.md").write_text(
+        "private\n", encoding="utf-8")
+    monkeypatch.setattr(push_all, "unpushed_paths", lambda *a, **k: [])
+
+    monkeypatch.chdir(dirty)
+    refused, _ = _refuses(push_all.engine_clean_scan, repo)
+    assert not refused, (
+        "the wall refused over the cwd's leak while judging a clean repository")
+
+    monkeypatch.chdir(repo)
+    refused, code = _refuses(push_all.engine_clean_scan, dirty)
+    assert refused and code == "2", (
+        "the wall cleared a planted private-routed artifact in the repository "
+        "it was handed")
+
+
+def test_a_committed_path_that_escapes_the_scratch_tree_is_refused(
+        repo: Path, monkeypatch, capsys) -> None:
     """The one place this file writes an attacker-influenced name.
 
     git tree entries cannot hold `..`, so the guard is belt and braces -- but a
     guard with no test is a guard nobody knows is there.
+
+    REWRITTEN 2026-08-30. This was two raw substring greps over
+    `scripts/push-all.py` (`"is_relative_to(root.resolve())"` and `"a committed
+    path escapes"`), which is the technique the sibling
+    `test_the_history_pass_has_no_environment_opt_out` documents as a defect in
+    its own docstring: a substring cannot tell a live read from a mention of
+    one, and the SECOND string asserted was the guard's own error message, so
+    deleting the check while leaving the message behind kept the test green.
+    The enumeration is stubbed instead, which is the only way to hand the layout
+    code a path git itself would never produce.
     """
-    source = (ROOT / "scripts" / "push-all.py").read_text(encoding="utf-8")
-    assert "is_relative_to(root.resolve())" in source
-    assert "a committed path escapes" in source
+    escape = "../outside-the-scratch-tree.md"
+    monkeypatch.setattr(push_all, "unpushed_blobs",
+                        lambda _r: [HistoryBlob(escape, "0" * 39 + "1")])
+    monkeypatch.setattr(push_all, "read_blob", lambda _r, _sha: b"ordinary\n")
+    ran: list[str] = []
+    monkeypatch.setattr(push_all, "_run_scanner",
+                        lambda *a, **k: ran.append("scanned") or
+                        subprocess.CompletedProcess([], 0, "", ""))
+
+    refused, code = _refuses(push_all.history_content_scan, repo)
+    assert refused and code == "2"
+    assert "a committed path escapes" in capsys.readouterr().out
+    assert not ran, "the escaping path reached the scanner instead of being refused"
+    assert not (repo.parent / "outside-the-scratch-tree.md").exists()
+
+
+def test_an_ordinary_committed_path_still_reaches_the_scanner(
+        repo: Path, monkeypatch) -> None:
+    """CONTROL for the escape guard: it must not refuse every layout.
+
+    Without this, a guard that rejected `..` and everything else would score
+    full marks on the test above.
+    """
+    monkeypatch.setattr(push_all, "unpushed_blobs",
+                        lambda _r: [HistoryBlob("docs/ordinary.md", "0" * 39 + "1")])
+    monkeypatch.setattr(push_all, "read_blob", lambda _r, _sha: b"ordinary\n")
+    laid: list[str] = []
+
+    def spy(paths, cwd, context, extra_env=None):
+        laid.extend(paths)
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(push_all, "_run_scanner", spy)
+    refused, _ = _refuses(push_all.history_content_scan, repo)
+    assert not refused
+    assert laid == ["docs/ordinary.md"]
 
 
 def test_a_symlink_blob_lands_as_an_ordinary_file(repo: Path, monkeypatch) -> None:
@@ -741,6 +870,75 @@ def test_the_planted_secret_is_not_written_whole_into_this_file() -> None:
     assert base64.b64decode("c2stYW50LWFwaTAz").decode() in source
 
 
+# Every spelling of "read something out of the environment" that Python offers
+# through the two names this file can see. WIDENED 2026-08-30: the walker below
+# used to recognise exactly `os.getenv` and `os.environ.get`, so the four
+# ordinary spellings in `_ENV_READ_SPELLINGS` -- a subscript, an aliased import,
+# `setdefault`, `pop` -- each added a live opt-out surface that the assertion's
+# own message claimed could not exist.
+_ENV_CALLEES = frozenset({
+    "os.getenv", "getenv",
+    "os.environ.get", "environ.get",
+    "os.environ.setdefault", "environ.setdefault",
+    "os.environ.pop", "environ.pop",
+    "os.environb.get", "environb.get",
+})
+_ENV_SUBSCRIPT_BASES = frozenset({"os.environ", "environ", "os.environb", "environb"})
+# What a read whose key is not a literal reports instead of raising. The old
+# walker called `ast.literal_eval` on the first argument, so `os.getenv(prefix +
+# name)` made the test ERROR with a traceback rather than fail with the message
+# that explains what is wrong.
+_NON_LITERAL = "<non-literal>"
+
+
+def _env_reads(fn: ast.AST) -> list[str]:
+    """Every environment key `fn` reads, in source order. `_NON_LITERAL` for a
+    key the parser cannot resolve, which is a finding rather than an error."""
+    found: list[tuple[int, int, str]] = []
+    for node in ast.walk(fn):
+        key = None
+        if isinstance(node, ast.Call) and node.args:
+            if ast.unparse(node.func) in _ENV_CALLEES:
+                key = node.args[0]
+        elif (isinstance(node, ast.Subscript)
+                and ast.unparse(node.value) in _ENV_SUBSCRIPT_BASES):
+            key = node.slice
+        if key is None:
+            continue
+        try:
+            name = ast.literal_eval(key)
+        except (ValueError, TypeError, SyntaxError):
+            name = _NON_LITERAL
+        found.append((node.lineno, node.col_offset, name))
+    return [name for _, _, name in sorted(found)]
+
+
+@pytest.mark.parametrize("body,expected", [
+    ("os.getenv('A')", ["A"]),
+    ("os.environ.get('A')", ["A"]),
+    ("os.environ['A']", ["A"]),
+    ("environ['A']", ["A"]),
+    ("getenv('A')", ["A"]),
+    ("os.environ.setdefault('A', '1')", ["A"]),
+    ("os.environ.pop('A', None)", ["A"]),
+    ("os.getenv(prefix + 'A')", [_NON_LITERAL]),
+    ("os.path.join('A', 'B')", []),
+    ("d['A']", []),
+])
+def test_the_environment_walker_sees_each_spelling_of_a_read(
+        body: str, expected: list[str]) -> None:
+    """The negative case for the guard below. NEW 2026-08-30.
+
+    A detector with no case that makes it fire measures nothing, and this one
+    had none: the assertion below was green over a `history_content_scan` that
+    read nothing, so a walker that recognised NOTHING would have scored full
+    marks. Both directions are pinned -- the six reads must be seen, and the two
+    non-reads must not be.
+    """
+    tree = ast.parse(f"def probe():\n    {body}\n")
+    assert _env_reads(tree) == expected
+
+
 def test_the_history_pass_has_no_environment_opt_out() -> None:
     """No skip flag. An unbypassable wall with an opt-out is a bypassable wall.
 
@@ -748,20 +946,39 @@ def test_the_history_pass_has_no_environment_opt_out() -> None:
     version of this test grepped the source and went red on the word `SKIP_PATHS`
     inside a comment, which is the whole failure mode of a substring assertion:
     it cannot tell a live read from a mention of one.
+
+    SCOPE, stated rather than implied: `ast.walk` covers `history_content_scan`
+    and the nested definitions inside it, and nothing else. A read moved into a
+    module-level helper that this function calls is outside what this test can
+    see -- `test_the_helpers_the_history_pass_calls_have_no_opt_out_either`
+    below covers the helpers that exist today.
     """
     tree = ast.parse((ROOT / "scripts" / "push-all.py").read_text(encoding="utf-8"))
     fn = next(node for node in ast.walk(tree)
               if isinstance(node, ast.FunctionDef)
               and node.name == "history_content_scan")
-    read_names = []
-    for node in ast.walk(fn):
-        if isinstance(node, ast.Call):
-            callee = ast.unparse(node.func)
-            if callee in {"os.getenv", "os.environ.get"} and node.args:
-                read_names.append(ast.literal_eval(node.args[0]))
+    read_names = _env_reads(fn)
     assert read_names == ["WORKSPACE_LOG_DIR"], (
         f"the history pass reads {read_names}; the only environment value it may "
         "read is the log-directory pin, and anything else is an opt-out surface")
+
+
+def test_the_helpers_the_history_pass_calls_have_no_opt_out_either() -> None:
+    """The hole the scoping note above names, closed for the helpers on the path.
+
+    `history_content_scan` delegates the layout and the scanner launch, so a
+    skip flag read one frame down would be just as much an opt-out and the test
+    above cannot see it. `_run_scanner` legitimately reads nothing by name (it
+    copies `os.environ` wholesale to build the child environment), so the
+    allowance is empty rather than a list.
+    """
+    tree = ast.parse((ROOT / "scripts" / "push-all.py").read_text(encoding="utf-8"))
+    by_name = {node.name: node for node in ast.walk(tree)
+               if isinstance(node, ast.FunctionDef)}
+    for helper in ("_run_scanner", "_refuse_on_scanner"):
+        assert helper in by_name, f"{helper} was renamed; this guard now measures nothing"
+        assert _env_reads(by_name[helper]) == [], (
+            f"{helper} reads the environment by name: {_env_reads(by_name[helper])}")
 
 
 def test_os_is_imported_where_the_log_pin_needs_it() -> None:

@@ -219,7 +219,17 @@ def test_an_empty_verdict_no_longer_satisfies_the_reconciliation(sd, kimi, tmp_p
     defects = rec.validate(run_id="AUDIT1", report_path=report)
 
     assert defects, "a pass that judged nothing validated clean"
-    assert str(path)  # the record path is the one the fixture pinned
+    # This line used to read `assert str(path)`, with a comment claiming it
+    # pinned the record path. `str()` of any Path is truthy, so it compared
+    # nothing and could not fail. The two claims worth making are that the run
+    # really used the fixture's record, and that the record holds the state the
+    # defect above is supposed to be about: a degradation and no verdict.
+    assert path == tmp_path / "record.jsonl", (
+        f"the run recorded to {path}, not the fixture's file; the defect list "
+        f"would then describe a record this test never controlled")
+    kinds = [r["kind"] for r in _rows(path)]
+    assert "verdict" not in kinds, f"an undecided answer was filed as a verdict: {kinds}"
+    assert "degraded" in kinds, f"nothing recorded the omission: {kinds}"
 
 
 def test_the_claude_branch_still_refuses_an_omitted_verdict(sd, run_record):

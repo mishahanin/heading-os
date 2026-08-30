@@ -5,8 +5,10 @@
 argument against a literal two-segment pattern. A dot segment, a doubled
 separator and a dot-dot segment all change the spelling of a path and none of
 them change the file, so one CEO-only note had two answers depending on how it
-was written. MEASURED 2026-08-29 by driving the real hook, 4 of 9 spellings that
-name one file were allowed:
+was written. MEASURED 2026-08-29 by driving the real hook, 7 of 9 spellings that
+name one file were allowed (the prose said "4 of 9" until 2026-08-30 while the
+table below it listed seven; the table is the measurement and two BLOCK rows plus
+seven ALLOW rows is the nine):
 
     BLOCK  Read canonical              ALLOW  Read with a dot segment
     BLOCK  Bash cat canonical          ALLOW  Read with a doubled separator
@@ -93,7 +95,22 @@ dispatch = _load_dispatch()
 
 
 def _verdict(payload: dict, cwd: str | None = None, data_root: str | None = None) -> str:
-    """Run the real hook in its real process and report BLOCK or ALLOW."""
+    """Run the real hook in its real process and report BLOCK or ALLOW.
+
+    Two guards, both of which this helper lacked until 2026-08-30, and both in
+    the direction that hides a dead wall.
+
+    A CRASH IS NOT AN ALLOW. The verdict was `"BLOCK" if proc.stdout.strip()`
+    with nothing checking the exit code, so a hook that died on an ImportError
+    printed nothing to stdout and read as ALLOW. Every must-allow test in this
+    file - ordinary work, the CEO-only write, the sibling subtree - then passed
+    because the wall was not executing, which is the one failure they exist to
+    catch. The sibling `tests/test_a_wall_that_only_refused_the_literal_spelling.py`
+    already asserts `returncode == 0`; this one did not.
+
+    A HANG IS NOT A PASS. `timeout=60`, matching the sibling. Roughly twenty
+    subprocess calls in this file inherited an unbounded wait.
+    """
     payload = dict(payload)
     payload["cwd"] = cwd or str(ROOT)
     state = _RATE_DIR / f"rate-{next(_RATE_SEQ)}.json"
@@ -101,7 +118,10 @@ def _verdict(payload: dict, cwd: str | None = None, data_root: str | None = None
     if data_root:
         env["HEADING_OS_DATA"] = data_root
     proc = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
-                          capture_output=True, text=True, env=env)
+                          capture_output=True, text=True, env=env, timeout=60)
+    assert proc.returncode == 0, (
+        f"the hook exited {proc.returncode}; an empty stdout from a dead hook "
+        f"is not an ALLOW verdict.\nstderr:\n{proc.stderr[-2000:]}")
     return "BLOCK" if proc.stdout.strip() else "ALLOW"
 
 
@@ -391,15 +411,34 @@ def test_a_threads_root_that_does_not_exist_is_not_invented(tmp_path, monkeypatc
 # One collapse, not two
 # ============================================================
 
-def _mentions_dot_dot(test: ast.expr) -> bool:
+def _mentions_dot_dot(node: ast.AST) -> bool:
     return any(isinstance(n, ast.Constant) and n.value == ".."
-               for n in ast.walk(test))
+               for n in ast.walk(node))
 
 
-def _pops(body: list[ast.stmt]) -> bool:
-    return any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-               and n.func.attr == "pop"
-               for statement in body for n in ast.walk(statement))
+def _drops_a_segment(body) -> bool:
+    """True when this branch REMOVES the accumulated previous segment.
+
+    `.pop()` was the only shape recognised, and it is one of several ways to
+    write the same collapse. `del parts[-1]`, `parts[:] = parts[:-1]` and
+    `parts = parts[:-1]` all do it, and each one walked straight past the guard
+    whose stated purpose is to stop a second copy of `scripts/utils/pathnorm.py`
+    appearing - the duplicate that left the personal-threads wall broken for six
+    days.
+    """
+    for statement in body:
+        for n in ast.walk(statement):
+            if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                    and n.func.attr in {"pop", "popleft"}):
+                return True
+            if isinstance(n, ast.Delete):
+                return True
+            if isinstance(n, (ast.Assign, ast.AnnAssign)):
+                value = n.value
+                if (isinstance(value, ast.Subscript)
+                        and isinstance(value.slice, ast.Slice)):
+                    return True
+    return False
 
 
 def _spells_a_lexical_collapse(source: str) -> bool:
@@ -408,21 +447,46 @@ def _spells_a_lexical_collapse(source: str) -> bool:
     The distinction is the whole rule. Nine modules compare a segment against
     `'..'` and REJECT the path: an approvals reader, a snapshot-name check, an
     air-gap guard. Refusing a climbing path is correct and is not a second copy
-    of anything. Resolving one means walking an accumulator and popping the
+    of anything. Resolving one means walking an accumulator and dropping the
     previous segment, and that is the logic that must exist once.
 
-    So the shape asked for is a branch on `'..'` whose body pops. Asked of the
-    syntax tree, because the comments that explain such a loop quote the
-    segments they collapse.
+    So the shape asked for is a branch on `'..'` whose body drops a segment.
+    Asked of the syntax tree, because the comments that explain such a loop
+    quote the segments they collapse.
+
+    WIDENED 2026-08-30, in both halves. The carrier was `ast.If` alone, so a
+    `while` loop and a conditional expression - neither of which is an `ast.If`
+    node - carried the collapse invisibly; and the body test was `.pop()` alone,
+    so `del parts[-1]` and a slice reassignment did. The docstring already
+    claimed the general property; only the code was narrow.
+
+    STATED BOUND. This still reads syntax, not dataflow: a collapse split across
+    a helper called from the branch, or one driven by a value that merely
+    equals `".."` at runtime without the literal appearing, is not detected.
+    Every shape it does recognise is fixtured below, both directions.
     """
     try:
         tree = ast.parse(source)
     except SyntaxError:  # pragma: no cover - another test's job
         return False
     for node in ast.walk(tree):
-        if (isinstance(node, ast.If) and _mentions_dot_dot(node.test)
-                and (_pops(node.body) or _pops(node.orelse))):
-            return True
+        # `if` and `while` share a body/orelse shape, so they share a branch.
+        if (isinstance(node, (ast.If, ast.While))
+                and _mentions_dot_dot(node.test)):
+            if _drops_a_segment(node.body) or _drops_a_segment(node.orelse):
+                return True
+        elif isinstance(node, ast.IfExp) and _mentions_dot_dot(node.test):
+            # An IfExp's arms are EXPRESSIONS, so the drop is the arm itself
+            # (`parts[:-1]`) rather than a statement inside a body.
+            arms = [node.body, node.orelse]
+            if _drops_a_segment(arms) or any(
+                    isinstance(a, ast.Subscript) and isinstance(a.slice, ast.Slice)
+                    for a in arms):
+                return True
+        elif isinstance(node, ast.Match):
+            for case in node.cases:
+                if _mentions_dot_dot(case.pattern) and _drops_a_segment(case.body):
+                    return True
     return False
 
 
@@ -463,6 +527,65 @@ def test_the_detector_leaves_a_rejection_alone():
 
 def test_the_detector_leaves_a_loop_that_does_not_handle_dot_dot_alone():
     assert _spells_a_lexical_collapse(_INNOCENT_FIXTURE) is False
+
+
+# Four more spellings of the same collapse, every one of which the `.pop()`-and-
+# `ast.If` detector reported as clean.
+_DEL_COLLAPSE_FIXTURE = (
+    "for seg in p.split('/'):\n"
+    "    if seg == '..':\n"
+    "        del acc[-1]\n"
+)
+_SLICE_COLLAPSE_FIXTURE = (
+    "for seg in p.split('/'):\n"
+    "    if seg == '..':\n"
+    "        parts[:] = parts[:-1]\n"
+)
+_REBIND_COLLAPSE_FIXTURE = (
+    "for seg in p.split('/'):\n"
+    "    if seg == '..':\n"
+    "        parts = parts[:-1]\n"
+)
+_WHILE_COLLAPSE_FIXTURE = (
+    "while segs and segs[0] == '..':\n"
+    "    acc.pop()\n"
+    "    segs.pop(0)\n"
+)
+_IFEXP_COLLAPSE_FIXTURE = (
+    "parts = parts[:-1] if seg == '..' else parts + [seg]\n"
+)
+
+
+@pytest.mark.parametrize("fixture", [
+    _DEL_COLLAPSE_FIXTURE, _SLICE_COLLAPSE_FIXTURE, _REBIND_COLLAPSE_FIXTURE,
+    _WHILE_COLLAPSE_FIXTURE, _IFEXP_COLLAPSE_FIXTURE,
+])
+def test_the_detector_reads_every_spelling_of_the_drop(fixture):
+    assert _spells_a_lexical_collapse(fixture) is True, fixture
+
+
+_REJECTS_WITH_A_DELETE = (
+    "if seg == '..':\n"
+    "    raise ValueError('escaping path')\n"
+    "del scratch['tmp']\n"
+)
+_DELETES_FOR_ANOTHER_REASON = (
+    "if seg in ('', '.'):\n"
+    "    del acc[-1]\n"
+)
+
+
+@pytest.mark.parametrize("fixture", [
+    _REJECTS_WITH_A_DELETE, _DELETES_FOR_ANOTHER_REASON,
+])
+def test_the_widened_detector_still_leaves_a_non_collapse_alone(fixture):
+    """The widening must not start flagging the nine modules that REFUSE `..`.
+
+    A `del` elsewhere in the file, and a `del` in a branch that is not about
+    `..`, are both ordinary. Flagging either would get the rule turned off,
+    which is the failure mode this file's own docstring names.
+    """
+    assert _spells_a_lexical_collapse(fixture) is False, fixture
 
 
 def collapse_sites(corpus) -> list[str]:

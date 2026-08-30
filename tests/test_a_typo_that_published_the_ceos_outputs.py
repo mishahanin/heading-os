@@ -47,6 +47,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -126,8 +127,34 @@ def test_an_illegal_default_still_fails_closed(routed):
 
 
 def test_an_unreadable_map_still_fails_closed(routed):
-    routed("default: engine\nrules:\n  - this is not a mapping\n   bad indent\n")
+    """A map the YAML parser REFUSES, not one it merely dislikes the shape of.
 
+    The fixture here was:
+
+        default: engine
+        rules:
+          - this is not a mapping
+           bad indent
+
+    which parses cleanly. `   bad indent` is indented one space past the
+    sequence, so YAML folds it into the plain scalar and the document loads as
+    `{"default": "engine", "rules": ["this is not a mapping bad indent"]}`.
+    The test passed, but through the WRONG-SHAPE branch that
+    `test_a_map_of_the_wrong_shape_fails_closed` already covers; the parse
+    -error branch this test is named for was never reached. Deleting the
+    loader's `try/except` around the parse would have failed nothing, and a
+    genuinely corrupt routing-map.yaml would then raise out of the loader
+    instead of failing closed - on the loader whose failure once reclassified
+    the whole CEO deliverable tree as shareable.
+
+    The fixture is asserted unparseable in the test body rather than assumed,
+    because that is the property the whole test rests on and it is one line.
+    """
+    body = "default: engine\nrules: {unclosed\n"
+    with pytest.raises(yaml.YAMLError):
+        yaml.safe_load(body)
+
+    routed(body)
     assert ws.load_routing_map()["default"] == "private"
 
 

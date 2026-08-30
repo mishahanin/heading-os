@@ -220,7 +220,17 @@ def test_the_adversarial_step_is_separate_from_the_shipping_that_follows_it():
 
 
 # ---------------------------------------------------------------------------
-# Property 2 - position is derived, and admits what it cannot see
+# Property 1b - position is derived, and admits what it cannot see
+#
+# RENUMBERED 2026-08-30. This header said "Property 2", which the module
+# docstring defines as the skill-may-never-renumber rule; the section below is
+# about machine visibility. The docstring's own account of the 2026-08-07
+# narrowing says the position ladder "no longer exists, so the properties they
+# carried are gone with them", yet a position-derivation section survived it,
+# unnumbered by the docstring's list. It is a corollary of Property 1 -- the
+# agenda is one definition, so what can be OBSERVED of it is derived from that
+# definition rather than guessed -- and is labelled 1b rather than given a
+# number the docstring does not issue.
 # ---------------------------------------------------------------------------
 
 def test_the_machine_visible_steps_are_marked_and_are_a_minority():
@@ -279,8 +289,16 @@ def test_the_skill_no_longer_advertises_the_retired_subcommands():
 
     front = yaml.safe_load(_SKILL.read_text(encoding="utf-8").split("---")[1])
     surface = f"{front.get('argument-hint', '')} {front['x-heading-routing']['label']}"
+    # WORD MATCH, not substring, since 2026-08-30. `retired not in surface` is a
+    # raw substring test over ordinary English, so "block", "deadlock",
+    # "background", "backfill", "backward", "wherever" and "elsewhere" each
+    # failed it while advertising no retired subcommand at all. The sibling
+    # `_advertised_subcommands` in this same file already does token-level
+    # matching; this one did not.
+    advertised = _words(surface)
     for retired in ("lock", "release", "back", "where"):
-        assert retired not in surface, f"{retired} is still advertised: {surface!r}"
+        assert retired not in advertised, (
+            f"{retired} is still advertised: {surface!r}")
 
 
 def test_the_skill_carries_the_workspace_frontmatter_contract():
@@ -319,26 +337,56 @@ def test_the_skill_never_takes_an_approval_on_the_operators_behalf():
     assert "approv" in body
 
 
+def _numbered_items(body: str) -> dict:
+    """number -> [text of every numbered agenda item and `Step N` heading]."""
+    items: dict = {}
+    for match in re.finditer(r"^\s{0,3}(\d+)\.\s+(.*)$", body, re.M):
+        items.setdefault(int(match.group(1)), []).append(match.group(2))
+    for match in re.finditer(r"^#+\s*Step\s+(\d+)\s*[^\w]*\s*(.*)$", body, re.M):
+        items.setdefault(int(match.group(1)), []).append(match.group(2))
+    return items
+
+
+def _words(text: str) -> set:
+    """Lowercased alphabetic words, so `/scrutinize` matches `Scrutinize`."""
+    return set(re.findall(r"[a-z]+", text.lower()))
+
+
 def test_the_step_numbers_agree_between_the_module_and_the_skill():
     """Two files describing one process is how a standard drifts. The skill may
-    summarise, but it may not renumber."""
+    summarise, but it may not renumber.
+
+    TIGHTENED 2026-08-30. This asserted `entry["number"] in numbered`, where
+    `numbered` is an unordered SET pooled from every numbered list and every
+    `Step N` heading in the document. Membership says the integers 4 and 7
+    appear somewhere; it says nothing about WHICH item they label. A skill that
+    renumbered the operator's steps to 3 and 6 still passed, because any
+    surviving seven-item list contributes 4 and 7 to the set -- and the byte
+    budget list under "Step 3" is exactly such a list. The step's NAME is now
+    required to sit on the line carrying its number, and to sit on no other
+    number, which is what "may not renumber" means.
+    """
     from scripts.utils.canopus_steps import STEPS
 
-    import re
-
     body = _SKILL.read_text(encoding="utf-8")
-    # Anchor on a numbered-list line, not a bare substring. `str(4) in body`
-    # matched the "24,576" byte budget two sections down, and `str(7) in body`
-    # matched any date -- so deleting a step from the skill left this green.
-    numbered = {int(m.group(1))
-                for m in re.finditer(r"^\s{0,3}(\d+)\.\s", body, re.M)}
-    numbered |= {int(m.group(1))
-                 for m in re.finditer(r"^#+\s*Step\s+(\d+)\b", body, re.M)}
+    items = _numbered_items(body)
     for entry in STEPS:
-        if entry["approval"]:
-            assert entry["number"] in numbered, (
-                f"the skill does not carry the operator's step "
-                f"{entry['number']} as a numbered step; found {sorted(numbered)}")
+        if not entry["approval"]:
+            continue
+        number, name = entry["number"], entry["name"]
+        wanted = _words(name)
+        assert number in items, (
+            f"the skill does not carry the operator's step {number} as a "
+            f"numbered step; found {sorted(items)}")
+        assert any(wanted <= _words(text) for text in items[number]), (
+            f"step {number} is numbered but not NAMED {name!r} there; the "
+            f"skill's item {number} reads {items[number]}")
+        elsewhere = sorted(other for other, texts in items.items()
+                           if other != number
+                           and any(wanted <= _words(t) for t in texts))
+        assert not elsewhere, (
+            f"the skill also numbers {name!r} as step(s) {elsewhere}; the "
+            f"operator's step {number} has been renumbered")
 
 
 def test_the_plan_byte_budget_agrees_between_the_module_and_the_skill():
@@ -489,7 +537,14 @@ def test_the_documents_state_the_vacuity_direction_the_code_implements():
     for tag in ("failure", "error", "skipped", None):
         case = ElementTree.Element("testcase")
         if tag:
-            case.append(ElementTree.SubElement(case, tag))
+            # `SubElement` CREATES the child and appends it. The outer
+            # `case.append(...)` here until 2026-08-30 appended the same element
+            # a second time, so every tagged synthetic case carried two
+            # identical children -- a shape no real JUnit producer emits, in a
+            # test whose docstring says the tokens are "EXERCISED rather than
+            # retyped" precisely so they stand in for parser output.
+            ElementTree.SubElement(case, tag)
+            assert len(case) == 1, "the synthetic case is not the shape git emits"
         every_outcome.add(_outcome(case))
     assert len(every_outcome) == 4, every_outcome
     proving = every_outcome - set(UNPROVED_OUTCOMES)

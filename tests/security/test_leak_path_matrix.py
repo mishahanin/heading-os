@@ -30,6 +30,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from _pytest.outcomes import Skipped
 
 # Real workspace root (tests/security/ -> ../../). Used to load kebab-named
 # modules and to assert the sandbox never resolves under the real tree.
@@ -176,14 +177,62 @@ VECTORS = {
 }
 
 
+# The two vectors that shell out. `bash` is not on PATH on a stock Windows
+# checkout, and this repository treats Windows as a first-class target: it ships
+# a tracked `settings.local.windows.json` and SEC-017 carries cross-OS
+# normalisation tests. Until 2026-08-30 only the symlink vector had a platform
+# escape, so on such a machine these two cells raised `FileNotFoundError: bash`
+# and the placement matrix could not be run outside Linux and macOS at all. A
+# missing interpreter is a skip; a wall that fails to refuse is a failure, and
+# the two must not look alike.
+SHELL_VECTORS = frozenset({"heredoc", "append"})
+
+
 def _apply_vector(vector, engine, overlay, rel):
-    """Apply a write vector, skipping the cell if the platform cannot symlink."""
+    """Apply a write vector, skipping the cell when the platform cannot run it.
+
+    Two escapes, both narrow: no symlink support, and no `bash` on PATH. Every
+    other failure re-raises, so a vector that genuinely cannot plant its file
+    still fails the cell instead of quietly reporting a clean matrix.
+    """
+    if vector in SHELL_VECTORS and shutil.which("bash") is None:
+        pytest.skip(f"the {vector} vector needs bash, which is not on PATH")
     try:
         VECTORS[vector](engine, overlay, rel)
     except (OSError, NotImplementedError) as exc:
         if vector == "symlink":
             pytest.skip(f"symlink unsupported on this platform: {exc}")
+        if vector in SHELL_VECTORS and isinstance(exc, FileNotFoundError):
+            pytest.skip(f"the {vector} vector needs bash: {exc}")
         raise
+
+
+def test_a_shell_vector_skips_when_bash_is_absent(sandbox, monkeypatch):
+    """The escape above, measured in both directions. NEW 2026-08-30.
+
+    With bash gone the cell must SKIP, not raise; with bash present it must
+    still plant its file. A skip nobody proves is a claim, and an escape with no
+    positive case can be widened into "skip everything" without a test noticing.
+    """
+    rel = TARGETS[0]
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    with pytest.raises(Skipped):
+        _apply_vector("heredoc", sandbox.engine, sandbox.overlay, rel)
+    assert not (sandbox.engine / rel).exists()
+
+    monkeypatch.undo()
+    if shutil.which("bash") is None:
+        pytest.skip("no bash on this host, so the positive half cannot run")
+    _apply_vector("heredoc", sandbox.engine, sandbox.overlay, rel)
+    assert (sandbox.engine / rel).is_file(), "the vector planted nothing"
+
+
+def test_a_non_shell_vector_is_unaffected_by_a_missing_bash(sandbox, monkeypatch):
+    """The other jaw: the escape must not have become a blanket skip."""
+    rel = TARGETS[0]
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    _apply_vector("directwrite", sandbox.engine, sandbox.overlay, rel)
+    assert (sandbox.engine / rel).is_file()
 
 
 # ============================================================

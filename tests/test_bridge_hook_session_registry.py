@@ -25,6 +25,7 @@ byte against a deadline, so every wait is bounded.
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -115,10 +116,32 @@ def test_a_legacy_entry_belonging_to_another_session_is_left_alone(home):
 
 # --- the tty prompt must be bounded -------------------------------------------
 
+def _function_source(src: str, name: str) -> str:
+    """The source of ONE top-level function, bounded by the parser.
+
+    This was `src[src.index("def _read_user_choice"):]` then
+    `block[:block.index("\\ndef ", 1)]`. Three ways that misbehaves, all of
+    them turning a harmless refactor into a red suite or a silent hole:
+    `index` raises `ValueError: substring not found` (an ERROR, not a
+    readable failure) the day the function is last in the file or is followed
+    only by a `class` or an `if __name__` guard; the opening `index` matches
+    the first occurrence anywhere, including a docstring mention; and a
+    rename produces the same crash rather than a message naming the function.
+    `ast` knows where the function starts and ends.
+    """
+    tree = ast.parse(src)
+    matches = [n for n in tree.body
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and n.name == name]
+    assert len(matches) == 1, (
+        f"expected exactly one top-level def {name}(...) in {HOOK.name}, "
+        f"found {len(matches)}")
+    return ast.get_source_segment(src, matches[0]) or ""
+
+
 def test_the_prompt_does_not_call_blocking_readline():
     src = HOOK.read_text(encoding="utf-8")
-    block = src[src.index("def _read_user_choice"):]
-    block = block[:block.index("\ndef ", 1)]
+    block = _function_source(src, "_read_user_choice")
     # Comment lines out. The comment explaining the fix names `tty.readline()`,
     # and the first version of this test matched its own explanation. That is
     # the same trap two guard tests fell into earlier the same night.

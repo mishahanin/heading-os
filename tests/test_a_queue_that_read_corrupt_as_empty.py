@@ -32,9 +32,11 @@ Tests: this file.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import sys
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -298,13 +300,55 @@ def test_an_entity_key_cannot_collide_with_a_legacy_key():
     assert not crm_utils.contact_identity_key({"entity_ref": "x"}).startswith("legacy::")
 
 
-def test_a_nameless_record_does_not_become_everyone():
-    """Two records with no name at all must not merge into one person."""
-    key = crm_utils.contact_identity_key({})
-    assert key == "legacy::name::"
-    # Documented, not asserted as safe: the caller filters nameless records
-    # before grouping. `scan_contacts` drops a record with neither name nor
-    # entity_ref, which is what keeps this key from ever being reached.
+def test_every_nameless_record_produces_the_same_key():
+    """Renamed 2026-08-30, because the old name asserted the opposite of the code.
+
+    It was `test_a_nameless_record_does_not_become_everyone`, and its docstring
+    said "two records with no name at all must not merge into one person" -
+    while its single assertion pinned the exact value under which they DO merge.
+    Every nameless record maps to `legacy::name::`, so any two of them land in
+    one bucket in any dict or `groupby` keyed on it. The inline comment conceded
+    this; the name and docstring contradicted it, and the assertion locked the
+    hazardous value in as expected, so a future fix that disambiguated nameless
+    records would have failed this test for being correct.
+
+    The real contract, stated: the key is DETERMINISTIC, it collides for
+    nameless records, and the caller is what must filter them. That filtering is
+    no longer merely documented - `test_the_caller_drops_a_nameless_record`
+    below measures it.
+    """
+    assert crm_utils.contact_identity_key({}) == "legacy::name::"
+    assert crm_utils.contact_identity_key({}) == crm_utils.contact_identity_key({})
+    assert crm_utils.contact_identity_key({"name": ""}) == "legacy::name::", (
+        "an empty name is the same nameless state and must not fork the key")
+
+
+def test_the_caller_drops_a_nameless_record(tmp_path):
+    """The claim the comment made, measured instead of asserted.
+
+    "The caller filters nameless records before grouping" was the only thing
+    standing between the colliding key above and a phantom shared contact, and
+    nothing checked it. If `scan_contacts` ever stops dropping these, the
+    collision becomes reachable and this goes red.
+    """
+    contacts = tmp_path / "contacts"
+    contacts.mkdir()
+    (contacts / "nameless.md").write_text(
+        "---\ntype: partner\nlast_touch: 2026-08-01\n---\n\nNo name field.\n",
+        encoding="utf-8")
+    (contacts / "named.md").write_text(
+        "---\nname: Jordan Kim\ntype: partner\nlast_touch: 2026-08-01\n---\n\nBody.\n",
+        encoding="utf-8")
+
+    found, *_ = crm_utils.scan_contacts({}, today=date(2026, 8, 20),
+                                        contacts_dir=contacts,
+                                        workspace_root=tmp_path)
+
+    names = [c.get("name") for c in found]
+    assert "Jordan Kim" in names, "the readable record vanished; the fixture is wrong"
+    assert not [n for n in names if not n], (
+        f"scan_contacts kept a nameless record, so the colliding "
+        f"`legacy::name::` key is now reachable: {names}")
 
 
 def test_the_aggregator_delegates_to_the_shared_key():
@@ -368,8 +412,21 @@ def test_a_fresh_commit_reads_in_seconds():
 
 
 def test_zero_skew_is_not_special_cased():
+    """Zero is an ordinary age, not a branch.
+
+    Widened 2026-08-30. `_status_for(0)` captures `datetime.now()`, then
+    `calculate_status` captures its own "now" a few statements later, and this
+    asserted the gap between them was exactly `"0 sec ago"`. Any stall of one
+    second - a loaded CI runner, a GC pause, scheduler preemption - failed it
+    with `"1 sec ago"`, which says nothing about the property under test. The
+    sibling cases carry 30s and 120s of slack; only the zero case had none.
+
+    The property is that zero renders as a small POSITIVE age like any other:
+    not negative, not special-cased, not absent.
+    """
     _status, _label, time_ago = _status_for(0)
-    assert time_ago == "0 sec ago"
+    assert time_ago in {"0 sec ago", "1 sec ago", "2 sec ago"}, time_ago
+    assert not time_ago.startswith("-"), f"zero rendered as a negative age: {time_ago}"
 
 
 # ==========================================================================
@@ -393,10 +450,84 @@ def test_sendable_is_derived_from_active_not_typed_out():
     assert frozenset(AQ.ACTIVE_STATUSES) - {"approved", AQ.SENDING} == AQ.SENDABLE_STATUSES
 
 
-def test_the_executor_selects_only_approved_cards():
-    source = (ROOT / "scripts" / "action-queue-execute.py").read_text(encoding="utf-8")
-    assert 'if card.get("status") != "approved":' in source
-    assert "continue" in source
+_NON_APPROVED_STATUSES = ["pending", "gated", "send_failed", "dismissed",
+                          "sent", "sending", "", "APPROVED"]
+
+
+@pytest.mark.parametrize("status", _NON_APPROVED_STATUSES)
+def test_the_executor_selects_only_approved_cards(queue_at, capsys, status):
+    """The send-safety gate, driven rather than grepped.
+
+    Rewritten 2026-08-30. This was the ONLY test pinning "the batch executor
+    selects ONLY approved cards", and it was two raw substring checks over the
+    source:
+
+        assert 'if card.get("status") != "approved":' in source
+        assert "continue" in source
+
+    Both are satisfiable without the guard existing. `"continue" in source`
+    matches the word in ANY unrelated loop, so it pinned nothing; and a
+    substring check is satisfied by the guard sitting in a comment or a
+    docstring while the executable code sends every card. Paste the first line
+    into the module docstring, delete the real guard, and it stayed green while
+    non-approved cards went out.
+
+    `APPROVED` is in the list on purpose: the comparison is case-sensitive, and
+    a card whose status differs only in case is not an approved card.
+    """
+    queue_at.write_text(json.dumps({"actions": [
+        {"id": "card-1", "status": status, "action_type": "email_send",
+         "to": "nobody@example.invalid", "subject": "s", "body": "b"},
+    ]}), encoding="utf-8")
+
+    assert AQE.main() == 0
+    assert json.loads(capsys.readouterr().out) == [], (
+        f"a card with status {status!r} was selected for sending")
+
+
+def test_the_approved_status_guard_is_executable_code_not_a_comment():
+    """The other half: a guard nothing selects is also a guard that never runs.
+
+    The behavioural test above proves non-approved cards are skipped, but a
+    file that selected NOTHING would satisfy it too. This pins the guard as a
+    real `If` statement whose body is `continue`, inside the loop over the
+    cards - read by AST, so a comment or a docstring quoting the same line
+    cannot stand in for it.
+    """
+    tree = ast.parse((ROOT / "scripts" / "action-queue-execute.py")
+                     .read_text(encoding="utf-8"))
+
+    guards = []
+    for loop in ast.walk(tree):
+        if not (isinstance(loop, ast.For) and isinstance(loop.target, ast.Name)):
+            continue
+        var = loop.target.id
+        for node in ast.walk(loop):
+            if not isinstance(node, ast.If):
+                continue
+            test = node.test
+            if not (isinstance(test, ast.Compare)
+                    and len(test.ops) == 1 and isinstance(test.ops[0], ast.NotEq)):
+                continue
+            call = test.left
+            if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                    and call.func.attr == "get"
+                    and isinstance(call.func.value, ast.Name)
+                    and call.func.value.id == var
+                    and call.args
+                    and isinstance(call.args[0], ast.Constant)
+                    and call.args[0].value == "status"):
+                continue
+            right = test.comparators[0]
+            if not (isinstance(right, ast.Constant) and right.value == "approved"):
+                continue
+            if any(isinstance(b, ast.Continue) for b in node.body):
+                guards.append(loop.lineno)
+
+    assert guards, (
+        "no `if <card>.get('status') != 'approved': continue` statement exists "
+        "inside a loop over the queue's cards; the send-safety gate is gone or "
+        "has moved somewhere this test cannot see it")
 
 
 def test_the_comment_no_longer_describes_the_impossible_race():

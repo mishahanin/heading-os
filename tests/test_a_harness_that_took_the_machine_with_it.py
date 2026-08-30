@@ -85,12 +85,43 @@ def test_a_mutation_that_hangs_is_caught_on_the_clock(repo, capsys):
 @pytest.mark.skipif(os.name != "posix", reason="RLIMIT_AS is POSIX only")
 def test_a_mutation_that_allocates_without_bound_dies_inside_the_child(repo,
                                                                       capsys):
-    """The child gets MemoryError; the machine does not get an OOM-killer."""
-    mutations = [("M1", "src.py", "VALUE = 1",
-                  'VALUE = 1\nBALLAST = bytearray(3 * 1024 ** 3)')]
-    assert _run(repo, mutations, memory_limit_gb=1, timeout=60) == 0
+    """The child gets MemoryError; the machine does not get an OOM-killer.
+
+    CONTROL ADDED 2026-08-30. The assertion read `assert "caught" in out`
+    alone, and "caught" is what the harness prints for ANY failure of the
+    child, so nothing tied the catch to the ballast. The sibling hang test
+    avoids this by asserting the specific verdict `"caught (timeout)"`; there
+    is no equivalent label for a MemoryError, so a control mutation supplies
+    the discrimination instead. `S1` is a survivor: no test notices it, so its
+    child must RUN and PASS under the same 1 GB cap in the same invocation.
+    That makes M1's catch attributable to M1. The exit code is 1 because the
+    run now contains a survivor.
+
+    WHAT THIS IS *NOT* GUARDING, measured rather than assumed. The audit that
+    prompted this claimed the test could pass green over a cap so small the
+    pytest child never started. It cannot, on two counts, both verified
+    2026-08-30 against `scripts/utils/mutation_harness.py`:
+
+      - `run_mutations` runs an UNMUTATED baseline first (line 151) and returns
+        2 when it is not green, which `assert _run(...) == 1` catches;
+      - below roughly 0.5 GB the child cannot be spawned at all and
+        `subprocess.run` raises `SubprocessError` out of `preexec_fn`, so the
+        test ERRORS rather than reporting anything.
+
+    Neither path can produce a silent pass. The control is here for the
+    attribution gap, which is real, not for that one.
+    """
+    mutations = [
+        ("M1", "src.py", "VALUE = 1",
+         'VALUE = 1\nBALLAST = bytearray(3 * 1024 ** 3)'),
+        ("S1", "src.py", "VALUE = 1", "VALUE = 1\nUNUSED = 2"),
+    ]
+    assert _run(repo, mutations, memory_limit_gb=1, timeout=60) == 1
     out = capsys.readouterr().out
-    assert "caught" in out and "SURVIVED" not in out
+    assert "M1" in out and "caught" in out
+    assert "SURVIVED" in out, (
+        "no mutation survived, so the 1 GB cap may have stopped the child from "
+        "starting at all and the ballast never allocated")
 
 
 def test_the_timeout_is_reported_distinctly_from_a_failed_assertion(repo,

@@ -251,9 +251,26 @@ def test_a_lock_that_hashes_nothing_is_not_a_pass(vsl, tmp_path, monkeypatch,
 
 
 def test_the_shipped_lock_still_verifies(vsl, capsys):
-    """The regression that matters: the real lock has one hashed entry."""
+    """The regression that matters: every vendored entry in the real lock hashes.
+
+    The count is DERIVED from the shipped lock, not retyped. `"1 tree(s)
+    hashed"` was the literal here until 2026-08-30, and the moment a second
+    vendored skill is legitimately added the line reads "2 tree(s) hashed" and
+    this test fails with no defect anywhere - a pure data change flipping a
+    unit-test verdict. The floor below is what keeps the derivation from
+    turning the test vacuous: a lock that lists nothing to verify must not
+    read as a pass, which is the exact hole
+    `test_a_lock_with_nothing_to_verify_is_not_a_pass` covers.
+    """
+    lock = json.loads((ROOT / "skills-lock.json").read_text(encoding="utf-8"))
+    expected = sum(1 for entry in lock.get("skills", {}).values()
+                   if entry.get("vendored", True))
+    assert expected >= 1, (
+        "the shipped lock lists no vendored skill, so this test would assert "
+        "an integrity check that never ran")
+
     assert vsl.verify(relock=False, quiet=False) == 0
-    assert "1 tree(s) hashed" in capsys.readouterr().out
+    assert f"{expected} tree(s) hashed" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("bad", [42, ["a"], {"a": 1}, 3.5, None, ""])
@@ -307,11 +324,31 @@ def test_a_binary_that_prints_nothing_useful_yields_empty(cpu, monkeypatch,
 # ============================================================
 
 def _results(count, severity="warning"):
+    """One audit result whose summary agrees with its own findings.
+
+    The summary was hardcoded `{"errors": 0, "warnings": count}` regardless of
+    `severity` until 2026-08-30, so `_results(2, "error")` handed the
+    failing-check test two error-severity findings under a summary claiming
+    zero errors. The rc assertion survived only because `failed=True` came in
+    out of band; any part of `_cmd_baseline` that reads severity FROM the
+    summary was being measured against a payload contradicting itself.
+    """
     findings = [{"severity": severity, "rule": "r", "message": "m", "file": "f"}
                 for _ in range(count)]
+    errors = sum(1 for f in findings if f["severity"] == "error")
     return [{"source": "f", "findings": findings,
-             "summary": {"total_findings": count, "errors": 0,
-                         "warnings": count}}]
+             "summary": {"total_findings": count, "errors": errors,
+                         "warnings": count - errors}}]
+
+
+def test_the_results_fixture_agrees_with_itself():
+    """The fixture is a stand-in for real audit output; a self-contradicting
+    stand-in measures a world the code never sees."""
+    for severity, expect_errors in (("warning", 0), ("error", 2)):
+        summary = _results(2, severity)[0]["summary"]
+        assert summary["errors"] == expect_errors
+        assert summary["warnings"] == 2 - expect_errors
+        assert summary["total_findings"] == 2
 
 
 def test_findings_above_the_baseline_are_reported(vdc, monkeypatch, tmp_path,

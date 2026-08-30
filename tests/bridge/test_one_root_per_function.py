@@ -50,6 +50,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent.parent
 PKG = ROOT / "scripts" / "bridge_daemon"
 
@@ -61,8 +63,50 @@ def _dual_root_functions() -> dict[str, list[str]]:
     return out
 
 
+def _parameter_names(node) -> set[str]:
+    """Every parameter name, INCLUDING positional-only ones.
+
+    `node.args.posonlyargs` was omitted until 2026-08-30, so a function written
+    `def f(workspace_root, data_root, /)` declared both roots and the detector
+    could not see it at all -- the invariant simply did not apply to that
+    spelling.
+    """
+    args = node.args
+    return ({a.arg for a in args.posonlyargs}
+            | {a.arg for a in args.args}
+            | {a.arg for a in args.kwonlyargs})
+
+
+def _reads_of(node, name: str) -> int:
+    """How many times the BODY actually READS `name`.
+
+    Counted as Load-context `ast.Name` nodes, not as occurrences of the
+    substring. `src.count("workspace_root")` until 2026-08-30 was satisfied by
+    any identifier or string that merely CONTAINED the word, so
+
+        def example(workspace_root, data_root):
+            workspace_root_marker = data_root
+            return workspace_root_marker
+
+    counted two reads of a parameter it never touches, and the dead first slot
+    the invariant exists to catch went unreported. A Store-context binding of
+    the same name does not count either: assigning over the parameter is not
+    reading it.
+    """
+    body = node.body
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+        body = body[1:]          # the docstring: prose is not a read
+    total = 0
+    for statement in body:
+        for inner in ast.walk(statement):
+            if (isinstance(inner, ast.Name) and inner.id == name
+                    and isinstance(inner.ctx, ast.Load)):
+                total += 1
+    return total
+
+
 def _dual_root_rows() -> list[tuple[str, str, int]]:
-    """(module, function, times the BODY mentions workspace_root).
+    """(module, function, times the BODY reads workspace_root).
 
     The docstring is excluded from the count on purpose: a function that only
     names the root in prose is not reading it, and prose is exactly where the
@@ -78,15 +122,50 @@ def _dual_root_rows() -> list[tuple[str, str, int]]:
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            names = {a.arg for a in node.args.args} | {a.arg for a in node.args.kwonlyargs}
-            if not ({"workspace_root", "data_root"} <= names):
+            if not ({"workspace_root", "data_root"} <= _parameter_names(node)):
                 continue
-            body = node.body
-            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
-                body = body[1:]
-            src = "\n".join(ast.unparse(s) for s in body)
-            rows.append((rel, node.name, src.count("workspace_root")))
+            rows.append((rel, node.name, _reads_of(node, "workspace_root")))
     return rows
+
+
+_DEAD_SUBSTRING_FIXTURE = '''
+def example(workspace_root, data_root):
+    workspace_root_marker = data_root
+    return workspace_root_marker
+'''
+
+_POSONLY_FIXTURE = '''
+def example(workspace_root, data_root, /):
+    return data_root
+'''
+
+_LIVE_FIXTURE = '''
+def example(workspace_root, data_root):
+    return workspace_root / "a", data_root / "b"
+'''
+
+
+@pytest.mark.parametrize("source,expected", [
+    (_DEAD_SUBSTRING_FIXTURE, [("example", 0)]),
+    (_POSONLY_FIXTURE, [("example", 0)]),
+    (_LIVE_FIXTURE, [("example", 1)]),
+])
+def test_the_detector_counts_reads_and_sees_positional_only_parameters(
+        source: str, expected: list) -> None:
+    """The negative case for the two widenings. NEW 2026-08-30.
+
+    The sweep below runs over a clean tree, so it is green whatever the
+    detector does -- a substring counter and a read counter score the same on
+    zero offenders. These three fixtures are the only thing that tells them
+    apart: a dead parameter hidden inside a longer identifier, a dead parameter
+    declared positional-only, and a genuine read that must still count.
+    """
+    tree = ast.parse(source)
+    got = [(n.name, _reads_of(n, "workspace_root"))
+           for n in ast.walk(tree)
+           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+           and {"workspace_root", "data_root"} <= _parameter_names(n)]
+    assert got == expected
 
 
 def test_the_detector_still_sees_the_shape():

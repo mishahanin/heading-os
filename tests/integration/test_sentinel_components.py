@@ -170,15 +170,47 @@ def test_theme_alignment_keyword_path_no_llm(mock_config, mock_logger):
         cfg, ZoneInfo("Etc/GMT-4"), mock_logger, analyzer=None,
     )
 
-    # Neutral subject on Monday (Tribe theme) - may or may not flag mismatch
-    # depending on engine's keyword dictionary. Key assertion: no crash, result is str.
-    result = engine._check_theme_alignment(
-        subject="Weekly sync",
-        body="Tribe update and priorities",
+    # The keyword DECISION, not just its type. `isinstance(result, str)` was
+    # the whole outcome assertion until 2026-08-30, and an engine whose
+    # keyword branch always returned "" - or always returned a fixed sentence
+    # - satisfied it. Four cases, because the branch has two independent
+    # conditions (a different best theme, and a score at or above 2) and one
+    # of them is a threshold.
+    #
+    # 1. Two "Technical & Product" keywords on a Tribe day: a mismatch, and it
+    #    must name both themes.
+    mismatch = engine._check_theme_alignment(
+        subject="Sprint review",
+        body="Architecture walkthrough for the release",
         weekday=0,
     )
+    assert "Technical & Product" in mismatch and "Tribe" in mismatch, mismatch
 
-    assert isinstance(result, str)
+    # 2. ON the line the other way: exactly ONE keyword scores 1, below the
+    #    threshold of 2, so nothing is flagged. Without this the test cannot
+    #    tell `>= 2` from `>= 1`.
+    assert engine._check_theme_alignment(
+        subject="Sprint",
+        body="Notes and follow-ups",
+        weekday=0,
+    ) == ""
+
+    # 3. No keyword at all: silence, not a mismatch.
+    assert engine._check_theme_alignment(
+        subject="Weekly sync",
+        body="Catch up on the week",
+        weekday=0,
+    ) == ""
+
+    # 4. The winning theme IS the day's theme: also silence. This is what
+    #    stops a stub that always reports a mismatch from passing.
+    engine.config["day_themes"] = {0: "Technical & Product"}
+    assert engine._check_theme_alignment(
+        subject="Sprint review",
+        body="Architecture walkthrough for the release",
+        weekday=0,
+    ) == ""
+    engine.config["day_themes"] = {0: "Tribe", 1: "Product"}
     # No LLM fallback log should appear (LLM wasn't called)
     debug_messages = [call.args[0] for call in mock_logger.debug.call_args_list]
     assert not any(

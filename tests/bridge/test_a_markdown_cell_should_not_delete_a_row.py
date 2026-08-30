@@ -297,10 +297,27 @@ def test_today_is_the_operators_calendar_day_not_utc(tmp_path):
     tz = get_default_tz()
     now_local = datetime(2026, 8, 24, 9, 0, tzinfo=tz)
     early = (now_local.replace(hour=1)).astimezone(timezone.utc)
+
+    # The day flip is a PRECONDITION of this test, not a case to skip past.
+    #
+    # Fixed 2026-08-30. An early return sat here guarded by
+    # `if early.date() == now_local.date()`, commented "host is at or east of
+    # UTC+0 with no day flip; nothing to prove". Two things were wrong with it.
+    # The autouse `_pin_the_operator_zone` fixture in tests/bridge/conftest.py
+    # pins HEADING_OS_TZ to Etc/GMT-4 for every test in this directory, and
+    # `get_default_tz()` re-reads it per call, so `tz` is always UTC+4 here:
+    # 01:00+04:00 is 2026-08-23T21:00Z, whose UTC date can never equal
+    # 2026-08-24. The branch was unreachable. And the direction was backwards
+    # even unpinned - a 01:00-local event flips into the previous UTC day when
+    # the zone is EAST of UTC, which is precisely where the comment said the
+    # guard would fire. An assertion is the honest form: if the fixture ever
+    # stops pinning an eastern zone, this says so instead of passing silently.
+    assert early.date() != now_local.date(), (
+        f"this test needs a zone where 01:00 local falls on the previous UTC "
+        f"day; the pinned zone {tz} gives no flip, so nothing below is measured")
+
     _usage(tmp_path, ['{"ts": "%s", "event": "launch"}\n' % early.isoformat()])
     got = OPS.read_telemetry_summary(tmp_path, now=now_local.astimezone(timezone.utc))
-    if early.date() == now_local.date():
-        return    # host is at or east of UTC+0 with no day flip; nothing to prove
     assert got["today_total"] == 1, (
         "an event from this morning was counted under yesterday because "
         "'today' came from UTC"

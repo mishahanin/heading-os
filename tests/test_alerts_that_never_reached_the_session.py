@@ -120,25 +120,43 @@ def test_session_alerts_are_plain_text_not_a_json_blob(tmp_path):
     """SessionStart injects stdout; a JSON object arrives as a literal blob.
 
     Driven against a CONSTRUCTED overlay that is guaranteed to raise an alert.
-    It used to run against whatever overlay the machine happened to have and
-    assert `out.startswith("Session alerts:")`, which is a reading of live state
-    dressed as an invariant. Under CI there is no overlay, `get_data_root()`
-    falls back to the bundled `examples/`, no context file is stale, and the
-    hook's other plain-text banner - the active-threads line, which this file's
-    own docstring already acknowledges shares the stream - arrives first. The
-    test then failed on a clean checkout with nothing wrong.
+    It used to run against whatever overlay the machine happened to have. Under
+    CI there is no overlay, `get_data_root()` falls back to the bundled
+    `examples/`, no context file is stale, so there were no alerts at all and
+    the stream carried only the active-threads panel. The test then failed on a
+    clean checkout with nothing wrong.
 
     Two properties survive that, and they are the ones worth pinning: the stream
     is never a JSON document, and when there ARE alerts they arrive under their
     own heading rather than loose among the banners.
+
+    THE ASSERTION NOW MATCHES THAT SENTENCE. It was `out.startswith("Session
+    alerts:")`, which is the stronger claim that nothing may precede the
+    heading, and the docstring never said that. Read against the hook: the
+    active-threads panel prints AFTER the alert block
+    (`session-start.py`, `_thread_panel_lines` is called below the loop), but
+    `_setup_wizard_banner` prints at the top of `main` and legitimately can
+    lead. Pinning "first bytes" would fail the moment a workspace with
+    incomplete setup ran this, over behaviour the hook is entitled to.
     """
     proc = _run("session-start.py", {"cwd": str(ROOT)},
                 data_root=_stale_overlay(tmp_path))
     assert proc.returncode == 0
     out = proc.stdout.strip()
     assert out, "the constructed overlay raised no alert; the fixture is broken"
-    assert out.startswith("Session alerts:"), out[:200]
-    assert "STALE DATA" in out, out[:200]
+
+    lines = out.splitlines()
+    assert "Session alerts:" in lines, out[:200]
+    heading = lines.index("Session alerts:")
+    stale = [i for i, line in enumerate(lines) if "STALE DATA" in line]
+    assert stale, out[:200]
+    assert min(stale) > heading, (
+        f"a STALE DATA alert arrived above its own heading, loose among the "
+        f"banners:\n{out[:400]}")
+    for i in stale:
+        assert lines[i].startswith("- "), (
+            f"line {i} is not an item under the heading: {lines[i]!r}")
+
     with pytest.raises(ValueError):
         json.loads(out)
 

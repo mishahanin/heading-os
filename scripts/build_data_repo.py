@@ -30,11 +30,50 @@ from scripts.utils.paths import DATA_SCHEMA_VERSION
 from scripts.utils.workspace import get_routing_destination, get_workspace_root
 
 def _tracked_files(root: Path) -> list[str]:
+    # `-z`, because `core.quotepath=false` does not cover the class it looks
+    # like it covers. That setting suppresses quoting for NON-ASCII bytes only;
+    # git quotes and C-escapes a path holding a CONTROL character whatever it
+    # says. MEASURED 2026-08-30 in a scratch repository on this machine (ext4,
+    # git 2.43.0): a tracked `crm/contacts/leak\na.md` came back from this exact
+    # invocation as the literal `"crm/contacts/leak\\na.md"`, double quotes
+    # included, and `get_routing_destination` answered `engine` for that string
+    # where the real name answers `private`. A tab, a CR, a vertical tab, a `"`
+    # and a backslash in a filename all quote the same way. Under `-z` every one
+    # of them came back verbatim, and the flag above became a no-op (measured:
+    # byte-identical output with and without it, kept only to match
+    # `scripts/utils/commit_source.py`).
+    #
+    # Here the misread routes a private file OUT of the data overlay: it lands
+    # in the engine bucket, is never copied, and nothing reports a skip. A real
+    # newline additionally survives `.splitlines()` as two half-paths.
+    #
+    # Bytes, decoded here, rather than any form of subprocess text mode. Two
+    # separate reasons, and the second only showed up under measurement.
+    #
+    # `text=True` with no `encoding=` decodes through the host locale, so the
+    # same repository answers differently on a non-UTF-8 machine.
+    #
+    # Naming an `encoding=` does NOT fix it, because text mode also turns on
+    # UNIVERSAL NEWLINES and `subprocess` exposes no `newline=` knob to switch
+    # that off. MEASURED 2026-08-30: two tracked files, `docs/leak\rc.md` and
+    # `docs/leak\r\nd.md`, came back from `ls-files -z` as the bytes
+    # `b'docs/leak\r\nd.md\x00docs/leak\rc.md\x00'` and decoded through
+    # `encoding="utf-8", errors="surrogateescape"` to
+    # `'docs/leak\nd.md\x00docs/leak\nc.md\x00'` - every CR silently rewritten
+    # to LF, and the CRLF name a byte shorter than the file it names. That is
+    # the same failure as the quoting, arriving by another door: a path that
+    # matches no routing rule and opens no file.
+    #
+    # `surrogateescape` carries a path that is not valid UTF-8 through to
+    # `os.fsencode` intact rather than raising.
     out = subprocess.run(
-        ["git", "-c", "core.quotepath=false", "ls-files"],
-        cwd=str(root), capture_output=True, text=True, check=True,
-    ).stdout
-    return [ln for ln in out.splitlines() if ln.strip()]
+        ["git", "-c", "core.quotepath=false", "ls-files", "-z"],
+        cwd=str(root), capture_output=True, check=True,
+    ).stdout.decode("utf-8", "surrogateescape")
+    # No `.strip()` filter: a filename may legally begin or end with whitespace,
+    # and trimming it produces a path that matches neither a routing rule nor
+    # anything on disk. Only the empty trailing entry `-z` leaves is dropped.
+    return [entry for entry in out.split("\0") if entry]
 
 
 def partition(root: Path) -> dict[str, list[str]]:

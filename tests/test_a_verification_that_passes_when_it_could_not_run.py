@@ -235,6 +235,16 @@ def test_divider_identity_is_checked_not_just_the_count():
     assert "unexpected:" in src and "missing:" in src, "abort without a diff is not an abort"
 
 
+def _assign_names(node):
+    """Every Name target of an Assign, unwrapping a tuple target."""
+    import ast
+    for target in node.targets:
+        if isinstance(target, ast.Tuple):
+            yield from (e for e in target.elts if isinstance(e, ast.Name))
+        elif isinstance(target, ast.Name):
+            yield target
+
+
 def test_a_skipped_id_move_aborts_instead_of_shipping_broken_anchors():
     """`moved` must come FROM the substitution, and be compared to the total.
 
@@ -248,8 +258,35 @@ def test_a_skipped_id_move_aborts_instead_of_shipping_broken_anchors():
     import ast
     tree = ast.parse(
         (ROOT / "scripts" / "dev" / "split-skills-catalog.py").read_text(encoding="utf-8"))
-    fn = next(n for n in ast.walk(tree)
-              if isinstance(n, ast.FunctionDef) and "moved" in ast.dump(n))
+    # Anchored to the function that does the substitution, with a default.
+    #
+    # Fixed 2026-08-30. This was a bare
+    # `next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+    #       and "moved" in ast.dump(n))`
+    # -- "the first FunctionDef whose dump contains the substring `moved`
+    # anywhere", including inside a string literal in a message. Any
+    # earlier-defined function that gained the word in a message or a variable
+    # silently retargeted every assertion below onto the wrong function, and
+    # the failure was indistinguishable from a real regression. And with no
+    # default, renaming the variable raised StopIteration OUT of the test, so
+    # the suite ERRORED with no message instead of failing with the careful
+    # explanation this test carries.
+    candidates = [
+        n for n in ast.walk(tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(isinstance(t, ast.Name) and t.id == "moved"
+                for sub in ast.walk(n) if isinstance(sub, ast.Assign)
+                for t in _assign_names(sub))
+    ]
+    assert candidates, (
+        "no function in scripts/dev/split-skills-catalog.py assigns `moved`; "
+        "the id-move counter has been renamed or removed, and this test can no "
+        "longer see the substitution it exists to pin")
+    assert len(candidates) == 1, (
+        f"`moved` is assigned in {len(candidates)} functions "
+        f"({[c.name for c in candidates]}); this test cannot tell which one "
+        "carries the substitution count")
+    fn = candidates[0]
     assigns = [n for n in ast.walk(fn) if isinstance(n, ast.Assign)
                and any(isinstance(t, ast.Name) and t.id == "moved"
                        or (isinstance(t, ast.Tuple)

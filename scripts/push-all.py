@@ -142,6 +142,22 @@ class RepoNotPushable(Exception):
     """
 
 
+def _z_paths(args: list[str], repo: Path) -> list[str]:
+    """NUL-separated git path output as real names, decoded from BYTES.
+
+    The shared `run` helper below is text mode, which is correct for the commit
+    messages and refs it mostly carries and wrong for filenames: text mode turns
+    on universal newlines and rewrites every CR byte to LF. Separate helper
+    rather than a flag on `run`, so the choice is visible at the call site and a
+    new path reader has one obvious thing to copy.
+    """
+    out = subprocess.run(
+        args, cwd=str(repo), check=True, capture_output=True,
+    ).stdout.decode("utf-8", "surrogateescape")
+    # No `.strip()`: a filename may legally begin or end with whitespace.
+    return [path for path in out.split("\0") if path]
+
+
 def _push_delta_files(repo: Path) -> set[str]:
     """Files about to be pushed: the committed-but-unpushed delta, staged and
     unstaged tracked edits, and every untracked file git is not ignoring.
@@ -162,6 +178,14 @@ def _push_delta_files(repo: Path) -> set[str]:
     file - so a Cyrillic-named artifact walked through the content walls on a
     workspace whose operator writes in Russian. Same defect, same day, as
     `engine_guard.repo_carried_paths`.
+
+    `_z_paths`, not the shared `run`, for the reason recorded there on
+    2026-08-30: `run` is text mode, every subprocess text mode turns on universal
+    newlines, and that rewrites each CR byte to LF with no `newline=` knob to
+    switch it off. `-z` is no defence, because the translation happens in Python
+    after git has already emitted the bytes verbatim. These paths feed
+    `_run_scanner` and `engine_content_scan`, which open them by name, so a
+    mistranslated name is a file about to be pushed that no scanner ever reads.
     """
     have_base = run(
         ["git", "rev-parse", "--verify", "-q", "origin/main"], repo, check=False
@@ -197,15 +221,14 @@ def _push_delta_files(repo: Path) -> set[str]:
             ["git", "diff", "-z", "--no-renames", "--name-only",
              "--diff-filter=ACM"],
         ):
-            files.update(run(args, repo).stdout.split("\0"))
+            files.update(_z_paths(args, repo))
     else:
         # No base, or no HEAD: the index IS the whole delta. `git ls-files`
         # works against an unborn HEAD and lists everything staged, so this
         # branch loses no coverage in either case.
-        files.update(run(["git", "ls-files", "-z"], repo).stdout.split("\0"))
+        files.update(_z_paths(["git", "ls-files", "-z"], repo))
     files.update(
-        run(["git", "ls-files", "-z", "--others", "--exclude-standard"],
-            repo).stdout.split("\0")
+        _z_paths(["git", "ls-files", "-z", "--others", "--exclude-standard"], repo)
     )
     return {f for f in files if f}
 

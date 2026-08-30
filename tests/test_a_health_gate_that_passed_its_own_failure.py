@@ -27,6 +27,7 @@ discarding the count of entries it could not verify.
 Run: .venv/bin/python -m pytest tests/test_a_health_gate_that_passed_its_own_failure.py -q
 """
 
+import ast
 import importlib.util
 import json
 import os
@@ -239,11 +240,39 @@ def test_a_non_https_url_is_still_refused(tmp_path):
 
 
 def test_the_exit_contract_documents_every_code_the_code_returns():
-    src = (ROOT / "scripts" / "updaters" / "cliproxyapi_update.py").read_text(
-        encoding="utf-8")
+    """The codes are DERIVED from the source, not a hand-kept list of four.
+
+    This iterated the literals `("0", "1", "2", "3")`. The test's name claims
+    it documents "every code the code returns", and four literals cannot do
+    that in either direction: a new `return 4` path is undocumented and the
+    test stays green, and a dropped code 3 leaves a stale docstring entry the
+    test insists on. Both are the drift this exists to catch.
+
+    The codes now come from the integer returns of the module's own top-level
+    functions, so the docstring and the code cannot part company silently.
+    """
+    path = ROOT / "scripts" / "updaters" / "cliproxyapi_update.py"
+    src = path.read_text(encoding="utf-8")
     doc = src.split('"""', 2)[1]
-    for code in ("0", "1", "2", "3"):
-        assert f"  {code}  " in doc, (code, doc)
+
+    returned: set[str] = set()
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Return) and isinstance(node.value, ast.Constant) \
+                and isinstance(node.value.value, int) \
+                and not isinstance(node.value.value, bool):
+            returned.add(str(node.value.value))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr == "exit" and node.args \
+                and isinstance(node.args[0], ast.Constant) \
+                and isinstance(node.args[0].value, int) \
+                and not isinstance(node.args[0].value, bool):
+            returned.add(str(node.args[0].value))
+
+    assert returned, f"no integer exit paths found in {path.name}; the scan broke"
+    undocumented = sorted(c for c in returned if f"  {c}  " not in doc)
+    assert not undocumented, (
+        f"{path.name} returns exit code(s) {undocumented} that its 'Exit codes:' "
+        f"block does not document")
     assert "non-zero on rollback." not in doc
 
 

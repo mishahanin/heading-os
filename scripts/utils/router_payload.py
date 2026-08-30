@@ -228,14 +228,23 @@ def dirty_sources() -> list[str]:
     #     pathspec ever widens to a directory.
     # The `.strip()` goes with them: it would re-corrupt exactly the
     # leading/trailing-whitespace names `-z` exists to deliver intact.
+    #
+    # And the output is decoded from BYTES, not read through subprocess text
+    # mode, because `-z` reaches only the quoting half. Text mode turns on
+    # universal newlines, rewriting every CR byte to LF, and `subprocess` has no
+    # `newline=` knob to switch it off. MEASURED 2026-08-30: two tracked files
+    # differing only by that byte come back as two records in bytes mode and as
+    # one under `text=True`. The refusal has to NAME a file the operator can
+    # open, and a translated name is not that file.
     proc = subprocess.run(
         ["git", "status", "--porcelain", "-z", "--no-renames", "--", *rel],
-        cwd=str(ROOT), capture_output=True, text=True, check=False,
+        cwd=str(ROOT), capture_output=True, check=False,
     )
     if proc.returncode != 0:
         return []
+    decoded = proc.stdout.decode("utf-8", "surrogateescape")
     dirty: list[str] = []
-    for record in proc.stdout.split("\0"):
+    for record in decoded.split("\0"):
         if len(record) > 3:
             dirty.append(record[3:])
     return dirty

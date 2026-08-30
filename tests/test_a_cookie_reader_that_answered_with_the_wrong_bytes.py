@@ -423,6 +423,23 @@ def _run(monkeypatch, capsys, argv, detailed, failures=()):
     return CC._main(), capsys.readouterr()
 
 
+# POSIX mode bits are not a cross-platform concept.
+#
+# Added 2026-08-30. The two tests below assert exact `st_mode` permission bits.
+# On Windows those bits are synthesised from the read-only attribute (0o666 /
+# 0o444), `os.chmod` cannot produce 0o600, and a umask removing owner-write is
+# not reflected in `stat` at all -- so both would fail there no matter how
+# correct `_write_secret_json` is. This file already contemplates Windows (the
+# APPDATA test, the Windows-rotation comment) and its sibling skips POSIX-only
+# branches explicitly with `if os.name == "nt": pytest.skip(...)`; these two
+# were the pair that never got the guard.
+posix_mode_bits = pytest.mark.skipif(
+    os.name == "nt",
+    reason="POSIX mode bits: on Windows st_mode is synthesised from the "
+           "read-only attribute and cannot express 0o600 / 0o400")
+
+
+@posix_mode_bits
 def test_an_existing_store_is_tightened_to_0600_and_the_line_says_what_is_true(tmp_path):
     """Measured before the fix: a store pre-created at 0644 stayed 0644 while
     the success line printed "mode 0600" over live session tokens. `os.open`'s
@@ -437,6 +454,7 @@ def test_an_existing_store_is_tightened_to_0600_and_the_line_says_what_is_true(t
     assert reported == "0o600"
 
 
+@posix_mode_bits
 def test_the_reported_mode_is_measured_not_asserted(tmp_path):
     """If the file ends up as anything other than 0600, the line must say so
     rather than repeat the intention. `.claude/rules/scope-claims.md`.
@@ -787,7 +805,18 @@ def test_the_gecko_reader_still_drops_expired_and_keeps_session_cookies(tmp_path
 # ============================================================
 
 _HANDMADE_LIKE = re.compile(r"LIKE\s+\?(?!\s*ESCAPE)", re.IGNORECASE)
-_HANDMADE_SUFFIX = re.compile(r'f"%\.\{')
+
+# Both quote styles, either case, optional inner whitespace.
+#
+# Widened 2026-08-30. This was `re.compile(r'f"%\.\{')`: lowercase `f`, double
+# quote, no flags. The guard exists to stop a third reader hand-building the
+# subdomain LIKE pattern, which is the defect that leaked foreign session
+# cookies, and every one of `f'%.{domain}'`, `F"%.{domain}"` and
+# `f"%.{ domain }"` walked straight past it. Its companion `_HANDMADE_LIKE`
+# already carried `re.IGNORECASE`; this one carried no flags at all, and the
+# self-check below only ever proved the lowercase double-quoted form fires, so
+# the hole was invisible to the suite that owns it.
+_HANDMADE_SUFFIX = re.compile(r"""f["']\s*%\s*\.\s*\{""", re.IGNORECASE)
 
 
 # The one module allowed to build a LIKE pattern: it IS the rule, it quotes the
@@ -840,6 +869,33 @@ def test_the_detector_still_fires_on_the_shape_it_is_looking_for():
     assert _HANDMADE_LIKE.search('"WHERE host = ? OR host LIKE ?"')
     assert not _HANDMADE_LIKE.search("\"host LIKE ? ESCAPE '\\\\'\"")
     assert _HANDMADE_SUFFIX.search('params = (domain, f"%.{domain}")')
+
+
+@pytest.mark.parametrize("evasion", [
+    '''params = (domain, f'%.{domain}')''',       # single-quoted f-string
+    '''params = (domain, F"%.{domain}")''',       # capital F
+    '''params = (domain, f"%.{ domain }")''',     # whitespace inside the brace
+    '''params = (domain, F'%. {domain}')''',      # both, plus a space after the dot
+])
+def test_the_subdomain_detector_is_not_evadable_by_spelling(evasion):
+    """The case ON the line. Each of these used to sail past the guard.
+
+    The self-check above proves only the one spelling the author happened to
+    write. That is how a security detector keeps its hole: the shape it is
+    looking for is the shape it was tested with.
+    """
+    assert _HANDMADE_SUFFIX.search(evasion), evasion
+
+
+@pytest.mark.parametrize("innocent", [
+    'msg = f"{count} rows"',
+    'label = f"%s of %s"',
+    'pct = f"{ratio:.1%} complete"',
+    'path = f"{base}.{ext}"',
+])
+def test_the_widened_subdomain_detector_does_not_flag_ordinary_f_strings(innocent):
+    """Widening a detector must not turn it into "flag every f-string"."""
+    assert not _HANDMADE_SUFFIX.search(innocent), innocent
 
 
 def test_both_readers_actually_import_the_shared_helper():

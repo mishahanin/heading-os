@@ -281,13 +281,26 @@ def test_wt_email_respond_passes_initial_prompt():
 def test_wt_email_respond_with_unsafe_conv_id_drops_prompt():
     """An unsafe conv_id (control chars or quotes) makes _build_initial_prompt
     return empty -> session opens bare instead of injecting unsafe text."""
+    unsafe = "abc\"; rm -rf /;\""
     cmd = build_wt_command(
         "misha", "t", "/synthetic-cwd", "email-respond", None,
-        context={"conv_id": "abc\"; rm -rf /;\""},
+        context={"conv_id": unsafe},
     )
     inner = cmd[-1]
-    # No 'claude "...' suffix - bare claude only
-    assert inner.rstrip().endswith("&& claude") or "claude \"\"" not in inner
+    # STRENGTHENED 2026-08-30. This was
+    #     assert inner.rstrip().endswith("&& claude") or "claude \"\"" not in inner
+    # whose right-hand disjunct is true under BOTH correct and injected
+    # behaviour: an injected `claude "abc"; rm -rf /;"..."` contains no literal
+    # `claude ""`, so the `or` short-circuits to True and the test passes over
+    # the exact injection this file's own comments call CRITICAL. It was the
+    # only guard on that variant and it could not fail. The assertion is now the
+    # same one the sibling `..._without_conv_id_drops_prompt` uses -- the
+    # command ENDS at a bare `claude`, so there is no suffix at all -- plus an
+    # explicit absence of the unsafe payload anywhere in the command.
+    assert inner.rstrip().endswith("claude"), (
+        f"an unsafe conv_id was not dropped; the session opens with: {inner!r}")
+    assert unsafe not in inner
+    assert "rm -rf" not in inner
 
 
 def test_wt_email_respond_without_conv_id_drops_prompt():

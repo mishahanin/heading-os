@@ -34,10 +34,14 @@ not authored in this repository. It is mirrored by `scripts/sync-docs.py` from
 `templates/EMERGENCY-PROCEDURES.md`, which lives in the operator's private data
 overlay, and a PreToolUse guard (`check_protect_docs` in `.claude/hooks/_dispatch.py`)
 blocks a direct write to the engine copy because the next sync would silently
-revert it. The correction belongs in the template. The live-tree rule below is
-therefore marked `xfail(strict=True)`: it fails today, and it turns the suite RED
-the moment the template is fixed, which is the signal to delete the marker. A
-non-strict marker would let this decay into permanent invisible debt.
+revert it. The correction belonged in the template.
+
+  RESOLVED 2026-08-29, and this paragraph was left describing the outage.
+  `test_no_engine_document_claims_admin_json_carries_a_key_the_code_ignores`
+  carried `xfail(strict=True)` while the page was wrong; the corrected template
+  landed, the mirror followed, and the marker was deleted with it. The rule below
+  is an ordinary assertion and has been since. Read as written, the old sentence
+  told a maintainer that a red bar there was expected.
 """
 from __future__ import annotations
 
@@ -67,13 +71,46 @@ _FIELD_CLAIM_RE = re.compile(r"`?([A-Za-z_][A-Za-z0-9_]*)`?\s+(?:field|key)\b")
 # `config/admin.json`", and a case-sensitive negator did not see the capital,
 # so the rule reported the sentence that FIXES the defect as the defect. A rule
 # that a correct document cannot satisfy gets the document reverted.
-_NEGATOR_RE = re.compile(r"\b(?:no|not|never|nothing|without)\b[^.]{0,40}$",
+# The window stops at a CLAUSE boundary, not only at a full stop. It used to be
+# `[^.]{0,40}$`, so a negation attached to one field excused an affirmative claim
+# about a different field later in the same sentence: "There is no `expiry`
+# field; the `role` field of `config/admin.json` promotes a deputy" reported
+# nothing. That is a false negative in the one rule written to keep an
+# unsupported Deputy Admin claim out of the emergency page.
+_NEGATOR_RE = re.compile(r"\b(?:no|not|never|nothing|without)\b[^.;,]{0,40}$",
                          re.IGNORECASE)
 
 
 # ============================================================
 # Which keys the code actually reads off load_admin_config()
 # ============================================================
+
+_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+
+
+def _scope_map(tree: ast.AST) -> dict:
+    """Every node mapped to the function/class/module scope that owns it."""
+    out = {tree: tree}
+
+    def walk(node, scope):
+        for child in ast.iter_child_nodes(node):
+            out[child] = scope
+            walk(child, child if isinstance(child, _SCOPES) else scope)
+
+    walk(tree, tree)
+    return out
+
+
+def _loader_names(tree: ast.AST) -> set[str]:
+    """`load_admin_config` plus any local alias an import gave it."""
+    names = {LOADER}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                if alias.name.rsplit(".", 1)[-1] == LOADER and alias.asname:
+                    names.add(alias.asname)
+    return names
+
 
 def admin_config_keys_read(source: str) -> set[str]:
     """Every string key read off the dict `load_admin_config()` returns.
@@ -82,24 +119,60 @@ def admin_config_keys_read(source: str) -> set[str]:
     `cfg.get("k")`, `cfg["k"]`, and `"k" in cfg`. The chained
     `load_admin_config().get("k")` form is recognised too, so a caller that
     never binds the result cannot slip a key past this.
+
+    Two corrections, 2026-08-30, one in each direction.
+
+    FALSE POSITIVES. `bound` was one flat set of names for the whole module with
+    no scope tracking, so once any function wrote `cfg = load_admin_config()`,
+    every later variable spelled `cfg` was the admin config - including a local
+    in a different function holding a different dictionary. That is how `"role"`
+    could enter the "complete set" without any code reading it from
+    `config/admin.json`, which would have made the documentation rule accept the
+    false Deputy Admin claim this whole file exists to refuse. Bindings are now
+    keyed by (scope, name).
+
+    FALSE NEGATIVES. Only a bare `ast.Assign` whose value was a call spelled
+    exactly `load_admin_config()` counted, so `cfg: dict = load_admin_config()`
+    and `from ... import load_admin_config as load_cfg` were both invisible - and
+    a reader that is invisible is missing from a set the file calls complete.
+    `AnnAssign` and import aliases are read now.
+
+    STATED BOUND, because this reads less than a real dataflow pass. Binding is
+    per scope, not per statement: a name bound to the loader anywhere in a scope
+    counts as the config for that whole scope, so a rebind to something else
+    LATER IN THE SAME SCOPE still reads as config. That over-reports, which
+    surfaces as `test_admin_json_supplies_exactly_two_keys_to_the_code` failing
+    and naming the file, never as a silent gap.
     """
     tree = ast.parse(source)
-    bound: set[str] = set()
+    scope_of = _scope_map(tree)
+    loaders = _loader_names(tree)
+
+    def _is_loader_call(node) -> bool:
+        return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id in loaders)
+
+    bound: set[tuple] = set()
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
             continue
-        func = node.value.func
-        if isinstance(func, ast.Name) and func.id == LOADER:
-            bound.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        if not _is_loader_call(value):
+            continue
+        scope = scope_of[node]
+        bound.update((id(scope), t.id) for t in targets if isinstance(t, ast.Name))
 
     def _str(node) -> str | None:
         return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
 
     def _is_config(node) -> bool:
         if isinstance(node, ast.Name):
-            return node.id in bound
-        return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                and node.func.id == LOADER)
+            scope = scope_of.get(node)
+            return scope is not None and (id(scope), node.id) in bound
+        return _is_loader_call(node)
 
     found: set[str] = set()
     for node in ast.walk(tree):
@@ -148,6 +221,41 @@ def test_the_key_reader_ignores_keys_read_off_another_object():
     swept every `.get("role")` in the file would report the documented claim as
     true and leave the defect in place."""
     assert admin_config_keys_read(_READS_A_DIFFERENT_DICT) == set()
+
+
+def test_the_key_reader_does_not_follow_a_name_across_functions():
+    """The false positive that would have accepted the Deputy Admin claim.
+
+    `cfg` in `two()` is a different dictionary that happens to share a name. A
+    module-wide binding set answered `{"role"}` here, and `"role"` in the
+    complete set is exactly the evidence `test_no_code_reads_a_role_field...`
+    exists to deny.
+    """
+    source = (
+        "def one():\n"
+        "    cfg = load_admin_config()\n"
+        "    return cfg.get('admin_slugs')\n"
+        "\n"
+        "def two():\n"
+        "    cfg = {}\n"
+        "    return cfg.get('role')\n"
+    )
+    assert admin_config_keys_read(source) == {"admin_slugs"}
+
+
+def test_the_key_reader_sees_an_annotated_binding():
+    """`cfg: dict = load_admin_config()` is a reader, and it was invisible."""
+    source = ("cfg: dict = load_admin_config()\n"
+              "role = cfg.get('role')\n")
+    assert admin_config_keys_read(source) == {"role"}
+
+
+def test_the_key_reader_follows_an_imported_alias():
+    """An alias is still the loader; a set that misses it is not complete."""
+    source = ("from scripts.utils.workspace import load_admin_config as load_cfg\n"
+              "cfg = load_cfg()\n"
+              "role = cfg.get('role')\n")
+    assert admin_config_keys_read(source) == {"role"}
 
 
 # ============================================================
@@ -297,6 +405,23 @@ def test_the_doc_rule_still_fires_when_the_negation_belongs_to_another_sentence(
               "There is no problem here. The `role` field of `config/admin.json` "
               "promotes a deputy.\n")]
     assert documents_a_key_the_code_ignores(split, _KNOWN) == [
+        "docs/X.md:1  claims a 'role' field"]
+
+
+@pytest.mark.parametrize("prose", [
+    "There is no `expiry` field; the `role` field of `config/admin.json` "
+    "promotes a deputy.\n",
+    "config/admin.json carries no `expiry` field, the `role` field promotes "
+    "a deputy.\n",
+])
+def test_a_negation_about_one_field_does_not_excuse_a_claim_about_another(prose):
+    """The window used to run back to the previous full stop.
+
+    Both sentences deny `expiry` and then assert `role` in the same breath. The
+    affirmative half is the defect, and it was reported as clean because a
+    negator belonging to a different clause sat inside the 40-character window.
+    """
+    assert documents_a_key_the_code_ignores([("docs/X.md", prose)], _KNOWN) == [
         "docs/X.md:1  claims a 'role' field"]
 
 

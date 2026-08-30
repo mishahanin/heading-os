@@ -22,11 +22,17 @@ import pytest
 
 
 def _reload_paths():
-    """Re-import paths module with cleared module-level caches.
+    """Clear the paths module's caches on the already-imported module.
 
     get_state_dir() and get_workspace_root() cache their results at
     module level. Between tests that alter INBOX_PULSE_STATE_DIR we must
     reset the caches so each test sees a fresh resolution.
+
+    It said "re-import", which is what `_import_state` below does with
+    `importlib.reload`. A plain `import` hands back the module already in
+    `sys.modules` and re-executes nothing; the two assignments are the whole
+    mechanism. A reader who believed the old sentence would have expected
+    module-level state other than these two names to be reset as well.
     """
     import scripts.inbox_pulse.paths as mod
     mod._workspace_root_cache = None
@@ -113,8 +119,15 @@ def test_get_workspace_root_is_not_a_second_implementation():
 
 @pytest.fixture(autouse=True)
 def _reset_paths_cache(tmp_path, monkeypatch):
-    """For every state.py test: point INBOX_PULSE_STATE_DIR at tmp_path and
-    clear the module-level caches so each test gets a fresh state dir."""
+    """For EVERY test in this module: point INBOX_PULSE_STATE_DIR at tmp_path
+    and clear the module-level caches so each test gets a fresh state dir.
+
+    It said "every state.py test". `autouse=True` at module level does not
+    scope itself to the tests below it: the three paths.py tests defined above
+    also run inside this fixture. They are unaffected only because each of them
+    sets the variable and clears the caches again for itself, which is a
+    coincidence a reader should not have to rediscover.
+    """
     monkeypatch.setenv("INBOX_PULSE_STATE_DIR", str(tmp_path))
     _reload_paths()
     yield

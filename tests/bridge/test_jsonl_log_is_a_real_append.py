@@ -130,10 +130,27 @@ def test_two_real_processes_do_not_lose_entries(tmp_path):
 
 # --- file hygiene -------------------------------------------------------------
 
-def test_the_log_is_created_with_the_requested_mode(tmp_path):
+def test_the_log_is_created_with_its_parent_directories(tmp_path):
+    """The half of the old test that holds on every platform."""
     log = tmp_path / "sub" / "dir" / "mode.jsonl"
     append_jsonl(log, {"id": "a"})
     assert log.exists(), "parent directories were not created"
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Windows does not carry POSIX owner/group/other bits; "
+                           "os.chmod there sets the read-only attribute and "
+                           "os.stat reports a writable file as 0o666")
+def test_the_log_is_created_with_the_requested_mode(tmp_path):
+    """0o644 exactly, and this is a POSIX claim.
+
+    The bare assertion carried no platform guard until 2026-08-30, so on
+    Windows it failed on a correctly-created file - a red that says nothing
+    about the code. The mode still matters on the platforms that have one: a
+    log the group can write is a log another account can rewrite.
+    """
+    log = tmp_path / "sub" / "dir" / "mode.jsonl"
+    append_jsonl(log, {"id": "a"})
     assert oct(os.stat(log).st_mode & 0o777) == "0o644"
 
 

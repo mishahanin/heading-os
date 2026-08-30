@@ -93,6 +93,29 @@ _HOOK_UNDER_TEST = Path(os.environ.get("SEC018_HOOK_PATH") or _HOOK)
 # already exist in test_SEC_004_credential_patterns.py wherever there is one.
 # ---------------------------------------------------------------------------
 
+def test_every_aligned_prefix_has_a_description():
+    """The two lists must not drift apart in either direction.
+
+    Added 2026-08-30 alongside a docstring fix: `_samples` said "the seven
+    prefix families" while `_PREFIX_DESCRIPTIONS` defines eight. In a module
+    whose whole purpose is "no pattern silently untested", a miscounted
+    vocabulary is the exact failure mode it guards against, and nothing here
+    measured the count.
+
+    A prefix with no description would already raise `KeyError` inside
+    `_samples`; a description with no prefix is the quiet direction, because it
+    is simply never sampled and no test goes red.
+    """
+    described = set(_PREFIX_DESCRIPTIONS)
+    aligned = set(_ALIGNED_PREFIXES)
+    assert aligned, "the shared prefix list is empty; every sample below is vacuous"
+    assert aligned - described == set(), (
+        f"prefixes with no description, so _samples raises: {sorted(aligned - described)}")
+    assert described - aligned == set(), (
+        f"descriptions for prefixes nothing samples, so the gate is never "
+        f"exercised on them: {sorted(described - aligned)}")
+
+
 _PREFIX_DESCRIPTIONS = {
     "sk-ant-": "Anthropic API key",
     "pplx-": "Perplexity API key",
@@ -108,7 +131,7 @@ _PREFIX_DESCRIPTIONS = {
 def _samples() -> dict:
     """description -> one text the gate must refuse.
 
-    The seven prefix families reuse `_ALIGNED_PREFIXES` + "A" * 16 from the F-L4
+    The eight prefix families reuse `_ALIGNED_PREFIXES` + "A" * 16 from the F-L4
     tests; JWT, PEM and the connection string reuse the F-L3 helpers; the
     environment-password value is the one the existing real-value test uses.
     The five with no existing sample -- AWS, both Slack tokens, Google OAuth and

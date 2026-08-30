@@ -16,9 +16,11 @@ This archiver copies each finished transcript into the DATA overlay, compressed,
 where the normal backup already runs. It is append-only by construction: a
 finished transcript never changes, so an archived file is never rewritten.
 """
+import calendar
 import gzip
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -123,6 +125,18 @@ def test_a_transcript_that_grew_is_re_archived_in_place(tree):
 
     src.write_text(src.read_text(encoding="utf-8") + "\n" + json.dumps({"n": 99}),
                    encoding="utf-8")
+    # TIME BOMB DEFUSED 2026-08-30. `write_text` stamps the file with the REAL
+    # wall clock while `now` is pinned at 1_800_000_000.0 (2027-01-15 UTC), so
+    # the settle window (`now - mtime >= SETTLE_SECONDS`) was satisfied only
+    # because real time still trailed the fake `now`. Once the clock passes
+    # `1_800_000_000 - SETTLE_SECONDS` the grown transcript reads as "too
+    # fresh", `result["archived"]` becomes 0, and this test fails on a
+    # predictable date for a reason unrelated to any code change. Every other
+    # test in this file pins the mtime with `os.utime`; this one did not.
+    # Re-stamped to the same 2026-08-01 noon the fixture uses, so the assertion
+    # depends on the code and not on the day the suite runs.
+    grown_stamp = calendar.timegm((2026, 8, 1, 12, 0, 0, 0, 0, 0))
+    os.utime(src, (grown_stamp, grown_stamp))
     result = arch.archive(now=1_800_000_000.0)
 
     assert result["archived"] == 1

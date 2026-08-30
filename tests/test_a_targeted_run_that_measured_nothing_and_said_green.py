@@ -1,6 +1,6 @@
-"""Shard scripts-05-p3: six tools that reported a state they had not established.
+"""Shard scripts-05-p3: seven tools that reported a state they had not established.
 
-The shape repeats across all six, and it is the one `.claude/rules/scope-claims.md`
+The shape repeats across all seven, and it is the one `.claude/rules/scope-claims.md`
 names: a tool prints a sentence its method did not earn.
 
   * `run-skill-eval.py --case <typo>` matched nothing, ran nothing, and exited
@@ -23,8 +23,15 @@ names: a tool prints a sentence its method did not earn.
     where nothing matched.
   * `exchange-task.py --list` raised IndexError halfway through the listing on
     a task whose notes hold only whitespace.
+  * `eval-flag.py --skill ../evil` let `_valid_skill`'s ValueError escape, so a
+    refusal printed a raw traceback; and an unreadable staged draft fell back to
+    `{}` and listed as though it were merely untitled.
 
-Written 2026-08-24. Every test here fails against the pre-fix file.
+Written 2026-08-24, extended 2026-08-30. The docstring said "six tools ... across
+all six" while the file already carried a seventh section (`eval-flag.py`); the
+count and the enumeration are now both seven.
+
+Every test here fails against the pre-fix file.
 """
 from __future__ import annotations
 
@@ -353,7 +360,16 @@ _SET_FILE = """# Frozen set
 """
 
 
-def _wire_query_set(queryset, tmp_path, monkeypatch, text: str, hit_target: str | None):
+def _wire_query_set(queryset, tmp_path, monkeypatch, text: str,
+                    hit_target: str | None, targets_by_query: dict[str, str] | None = None):
+    """Stand a frozen set up in `tmp_path` and fake the index behind it.
+
+    `hit_target` returns ONE synthetic hit for every query, whatever was asked.
+    `targets_by_query` maps a query's exact text to the sha its row targets, so
+    a query gets a hit that `_matches` will actually accept. The second form
+    exists because the first cannot express a scoring run: see
+    `test_a_populated_set_a_still_scores`.
+    """
     data_root = tmp_path / "data"
     path = data_root / queryset.PHASES["1"]["rel"]
     path.parent.mkdir(parents=True)
@@ -361,12 +377,24 @@ def _wire_query_set(queryset, tmp_path, monkeypatch, text: str, hit_target: str 
     monkeypatch.setattr(queryset, "get_data_root", lambda: data_root)
 
     def _query(text_, layer, top_k, threshold=None):
+        if targets_by_query is not None:
+            target = targets_by_query.get(text_)
+            return [{"path": f"label@{target}", "title": "t"}] if target else []
         if hit_target is None:
             return []
         return [{"path": f"label@{hit_target}0000", "title": "t"}]
 
     monkeypatch.setattr(queryset, "query", _query)
     return path
+
+
+# The Set A rows of `_SET_FILE`, keyed the way `main()` asks for them. Derived
+# by hand from the table above rather than by re-parsing it: a lookup built with
+# the parser under test would agree with a broken parser.
+_SET_A_TARGETS = {
+    "why was the daemon disabled": "abc1234",
+    "who owns the leak wall": "def5678",
+}
 
 
 def test_an_unparsed_set_a_is_a_setup_error_not_a_zero_percent_score(
@@ -388,11 +416,51 @@ def test_an_unparsed_set_a_is_a_setup_error_not_a_zero_percent_score(
 
 
 def test_a_populated_set_a_still_scores(queryset, tmp_path, monkeypatch, capsys):
-    """The green path: a real Set A must still produce a real verdict."""
-    _wire_query_set(queryset, tmp_path, monkeypatch, _SET_FILE, hit_target="abc1")
+    """The green path: a real Set A must still produce a real verdict.
+
+    Rewritten 2026-08-30. This test could not fail. It wired `hit_target="abc1"`,
+    so every query returned the path `label@abc10000`, and `_matches` asks
+    `"abc10000".startswith(target)` against Set A's `abc1234` / `def5678` —
+    neither matches, so Set A scored 0/2, below its 80% bar. The only assertion
+    was `"Set A" in out`, and that substring appears in the FAIL line too. The
+    one test keeping a real scoring path alive passed identically whether Set A
+    scored 2/2 or 0/2; `hit_target=None` (a total miss) also passed it verbatim.
+
+    Now each query gets a hit carrying its own row's target, and the exit code
+    and the rate are both asserted.
+    """
+    _wire_query_set(queryset, tmp_path, monkeypatch, _SET_FILE,
+                    hit_target=None, targets_by_query=_SET_A_TARGETS)
     _argv(monkeypatch, "--phase", "1")
-    queryset.main()
-    assert "Set A" in capsys.readouterr().out
+
+    assert queryset.main() == 0, "a fully-hit Set A did not clear its own bar"
+
+    out = capsys.readouterr().out
+    assert "2/2 = 100%" in out
+    assert "PASS" in out
+    # Set B is deliberately left unhit: it carries no bar, and wiring it too
+    # would let a Set-B hit stand in for the Set-A scoring this test exists for.
+
+
+def test_the_set_a_green_path_goes_red_when_a_query_misses(queryset, tmp_path,
+                                                           monkeypatch, capsys):
+    """The case ON the line for the test above.
+
+    Drop one of the two Set A targets. The rate falls to 50%, under the 80%
+    bar, and the run must exit 1. Before the rewrite this state was
+    indistinguishable from the green one.
+    """
+    partial = dict(_SET_A_TARGETS)
+    partial.pop("who owns the leak wall")
+    _wire_query_set(queryset, tmp_path, monkeypatch, _SET_FILE,
+                    hit_target=None, targets_by_query=partial)
+    _argv(monkeypatch, "--phase", "1")
+
+    assert queryset.main() == 1
+
+    out = capsys.readouterr().out
+    assert "1/2 = 50%" in out
+    assert "FAIL" in out
 
 
 def test_a_below_bar_set_a_still_exits_one(queryset, tmp_path, monkeypatch):
@@ -684,21 +752,69 @@ def test_the_reminder_is_stamped_in_the_timezone_it_was_given(tasks, monkeypatch
     assert (seen["h"], seen["mi"]) == (9, 47), "the wall clock was shifted"
 
 
-def test_the_remind_at_help_names_the_exchange_timezone(tasks):
+def _declared_argument(tasks, monkeypatch, flag_name: str):
+    """The argparse Action the real parser factory built for one flag.
+
+    Reads the Action `add_argument` RETURNS, not the kwargs it was called with,
+    so the value under test is what the parser actually stored and will print.
+    """
+    recorded = []
+    real_add = tasks.argparse.ArgumentParser.add_argument
+
+    def _spy(self, *args, **kwargs):
+        action = real_add(self, *args, **kwargs)
+        if flag_name in getattr(action, "option_strings", ()):
+            recorded.append(action)
+        return action
+
+    monkeypatch.setattr(tasks.argparse.ArgumentParser, "add_argument", _spy)
+    _argv(monkeypatch, "--list")
+    tasks.parse_args()
+    assert recorded, f"{flag_name} is no longer declared on the parser"
+    return recorded[0]
+
+
+def test_the_remind_at_help_names_the_exchange_timezone(tasks, monkeypatch):
     """It said "local timezone" while the value is read in the mailbox tz.
 
     Harmless while EXCHANGE_TIMEZONE and HEADING_OS_TZ agree, and a silent hour
     shift the moment they do not.
+
+    Rewritten 2026-08-30. The comment here said the help was "re-read straight
+    off the real parser rather than trusting a copy". It was not: the code built
+    a bare `ArgumentParser()`, added nothing to it, never read it, and deleted
+    it, then grepped the whole source file. `"EXCHANGE_TIMEZONE" in text` passed
+    on the string appearing ANYWHERE — a comment, the config loader — and the
+    negative matched only one exact double-quoted spelling, so rewording or
+    single-quoting the wrong help text sailed through. It now reads the real
+    parser, and asserts on that one argument's help.
     """
-    args = tasks.parse_args.__doc__  # keep ruff from flagging an unused import path
-    del args
-    import argparse as _ap
-    parser = _ap.ArgumentParser()
-    # Re-read the help straight off the real parser rather than trusting a copy.
-    text = (ROOT / "scripts" / "exchange-task.py").read_text(encoding="utf-8")
-    assert "EXCHANGE_TIMEZONE" in text
-    assert 'help="Reminder date and time (local timezone)' not in text
-    del parser
+    help_text = _declared_argument(tasks, monkeypatch, "--remind-at").help or ""
+
+    assert "EXCHANGE_TIMEZONE" in help_text, (
+        f"--remind-at help does not name the mailbox tz variable: {help_text!r}")
+    assert "local timezone" not in help_text.lower(), (
+        f"--remind-at help still calls a mailbox-tz value local: {help_text!r}")
+
+
+def test_the_parser_reader_sees_the_wrong_help_when_it_is_planted(tasks, monkeypatch):
+    """The case ON the line: nothing above ever made the reader refuse.
+
+    Plant the pre-fix help text on the real parser and prove the reader returns
+    it, so the assertions in the test above have something that can fail them.
+    """
+    real_add = tasks.argparse.ArgumentParser.add_argument
+
+    def _regressed(self, *args, **kwargs):
+        if "--remind-at" in args:
+            kwargs["help"] = "Reminder date and time (local timezone)"
+        return real_add(self, *args, **kwargs)
+
+    monkeypatch.setattr(tasks.argparse.ArgumentParser, "add_argument", _regressed)
+    help_text = _declared_argument(tasks, monkeypatch, "--remind-at").help or ""
+
+    assert "local timezone" in help_text.lower()
+    assert "EXCHANGE_TIMEZONE" not in help_text
 
 
 def test_a_malformed_remind_at_still_exits_one(tasks, capsys):

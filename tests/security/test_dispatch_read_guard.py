@@ -58,10 +58,26 @@ def test_read_personal_thread_is_blocked(dispatch):
     assert result.get("_policy_deny") is True, "personal-threads blocks carry the policy-deny flag"
 
 
-def test_read_personal_thread_backslash_is_blocked(dispatch):
-    result = dispatch.check_protect_personal_threads(
-        _read_payload("threads\\\\personal\\\\x.md"))
-    assert result is not None and result.get("decision") == "block"
+@pytest.mark.parametrize("path", [
+    # The shape a Windows client actually sends: ONE backslash per separator.
+    r"threads\personal\x.md",
+    # The doubled form, which is what this test pinned until 2026-08-30. The
+    # literal was "threads\\\\personal\\\\x.md", which evaluates to two
+    # backslash characters per separator; the payload goes in-process with no
+    # JSON decode to collapse them, so the guard was only ever shown an input
+    # no client produces. Kept as a second case rather than swapped out - a
+    # normalisation that handles one form and not the other is exactly the
+    # regression this file exists to catch.
+    "threads\\\\personal\\\\x.md",
+    # Mixed separators, which is what a path assembled from two sources looks
+    # like.
+    r"threads\personal/x.md",
+])
+def test_read_personal_thread_with_backslashes_is_blocked(dispatch, path):
+    result = dispatch.check_protect_personal_threads(_read_payload(path))
+    assert result is not None and result.get("decision") == "block", (
+        f"a Read of {path!r} was not blocked: {result}")
+    assert result.get("_policy_deny") is True
 
 
 def test_read_business_thread_is_allowed(dispatch):

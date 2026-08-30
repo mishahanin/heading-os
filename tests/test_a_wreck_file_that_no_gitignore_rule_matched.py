@@ -62,6 +62,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _pytest.outcomes import Failed
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -97,9 +98,20 @@ def _ignored(repo: Path, path) -> bool:
     """True when git would refuse to track `path`.
 
     `check-ignore` exits 0 on a match and 1 on none; anything above that is a
-    real error (not a repository, git missing) and must NOT read as False --
-    degrading it into "nothing is ignored" is how a guard passes over a tree it
-    never looked at.
+    real error -- not a repository, a corrupt index -- and must NOT read as
+    False, because degrading it into "nothing is ignored" is how a guard passes
+    over a tree it never looked at.
+
+    "git missing" is NOT one of the cases the `> 1` branch sees, and the
+    docstring claimed it was until 2026-08-30. `subprocess.run` raises
+    `FileNotFoundError` before any return code exists when the binary is not on
+    PATH, so that error surfaces as a traceback from the line below rather than
+    through the branch. The invariant still holds -- the run errors loudly
+    either way, and nothing degrades into False -- but this is the file whose
+    whole subject is a guard that cannot pass over what it never inspected, so
+    its own error handling should not trace a path that does not exist. The
+    raise is left to propagate on purpose: it is unambiguous, and catching it to
+    re-report would only make an already-loud failure quieter.
     """
     result = subprocess.run(
         ["git", "check-ignore", "-q", str(path)],
@@ -108,6 +120,29 @@ def _ignored(repo: Path, path) -> bool:
     if result.returncode > 1:
         pytest.fail(f"git check-ignore failed in {repo}: {result.stderr.strip()}")
     return result.returncode == 0
+
+
+def test_a_broken_repository_fails_the_guard_instead_of_reading_as_unignored(
+        tmp_path):
+    """The `> 1` branch, exercised. NEW 2026-08-30.
+
+    The docstring above states an invariant that nothing measured: an error
+    must not degrade into "nothing is ignored". `git check-ignore` outside a
+    repository exits 128, so this is the branch, and it must `pytest.fail`
+    rather than return False.
+    """
+    not_a_repo = tmp_path / "bare"
+    not_a_repo.mkdir()
+    with pytest.raises(Failed, match="check-ignore failed"):
+        _ignored(not_a_repo, not_a_repo / "anything.json")
+
+
+def test_a_real_repository_still_answers_both_ways(tmp_path):
+    """The other jaw: a guard that failed on everything would pass the test
+    above while reporting nothing about any rule."""
+    repo = _temp_repo(tmp_path, "ignored.json\n")
+    assert _ignored(repo, repo / "ignored.json") is True
+    assert _ignored(repo, repo / "tracked.json") is False
 
 
 def _temp_repo(tmp_path: Path, ignore_text: str) -> Path:

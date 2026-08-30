@@ -46,6 +46,7 @@ here reaches Exchange, reads a credential, or spawns the CLI without
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import subprocess
 import sys
@@ -60,9 +61,27 @@ _SEND_EMAIL = ROOT / "scripts" / "send-email.py"
 
 def _stub_exchangelib():
     """Stub exchangelib only when genuinely absent. Mirrors the guard in
-    tests/test_send_email_contract.py, including removing the stub again."""
-    if "exchangelib" in sys.modules:
-        return False
+    tests/test_send_email_contract.py, including removing the stub again.
+
+    A module already in `sys.modules` used to be accepted on faith. A STUB left
+    behind by an earlier module that failed to clean up is also already in
+    `sys.modules`, and then `send-email.py` was exec'd against a fake this
+    fixture neither built nor controls - and the `se` fixture's teardown only
+    pops what `stubbed` says it installed, so the foreign stub travelled on. A
+    real package has a spec with an origin; a `types.ModuleType` has neither, so
+    the two are distinguishable and the ambiguous case is refused rather than
+    trusted.
+    """
+    existing = sys.modules.get("exchangelib")
+    if existing is not None:
+        spec = getattr(existing, "__spec__", None)
+        if getattr(existing, "__file__", None) or getattr(spec, "origin", None):
+            return False
+        raise AssertionError(
+            "sys.modules['exchangelib'] is a stub this fixture did not create "
+            "(no __file__, no spec origin). Some earlier test module leaked it; "
+            "exec'ing send-email.py against it would test an uncontrolled fake."
+        )
     try:
         importlib.import_module("exchangelib")
         return False
@@ -926,12 +945,47 @@ def test_an_unknown_folder_is_refused_before_a_credential_is_read():
     assert "unknown folder" in proc.stderr
 
 
+def _not_found_folder_expression(src: str) -> str:
+    """What the "No message found in ..." line interpolates, as source.
+
+    A local alias is resolved: `folder = folder_key(args.match_folder)` followed
+    by `f"... {folder} ..."` reports the same folder to the operator, and the
+    literal pin this replaces went red on that behaviour-preserving refactor
+    while a rewording of the sentence around it went undetected.
+    """
+    tree = ast.parse(src)
+    aliases = {
+        t.id: node.value
+        for node in ast.walk(tree) if isinstance(node, ast.Assign)
+        for t in node.targets if isinstance(t, ast.Name)
+    }
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.JoinedStr) or len(node.values) < 2:
+            continue
+        head = node.values[0]
+        if not (isinstance(head, ast.Constant) and isinstance(head.value, str)
+                and "No message found in " in head.value):
+            continue
+        slot = node.values[1]
+        assert isinstance(slot, ast.FormattedValue), ast.dump(node)
+        expr = slot.value
+        if isinstance(expr, ast.Name) and expr.id in aliases:
+            expr = aliases[expr.id]
+        return ast.unparse(expr)
+    raise AssertionError(
+        "no f-string beginning 'No message found in ' exists in send-email.py; "
+        "the miss path was reworded and this guard stopped covering it")
+
+
 def test_the_not_found_message_names_the_folder_that_was_searched(se):
     """It echoed the string the operator typed. Under --match-folder Drafts it
     searched the Inbox and reported "No message found in Drafts"."""
-    src = _SEND_EMAIL.read_text(encoding="utf-8")
-    assert "No message found in {args.match_folder}" not in src
-    assert "No message found in {folder_key(args.match_folder)}" in src
+    reported = _not_found_folder_expression(
+        _SEND_EMAIL.read_text(encoding="utf-8"))
+    assert reported != "args.match_folder", (
+        "the miss reports the string the operator typed, not the folder that "
+        "was opened")
+    assert reported == "folder_key(args.match_folder)", reported
 
 
 # ============================================================

@@ -161,8 +161,22 @@ def test_a_readable_exec_identity_still_blocks_corporate(dispatch, tmp_path):
     assert "read-only and managed by the CEO" in verdict["reason"]
 
 
-@pytest.mark.parametrize("identity", ["{ not json", '["exec-workspace"]', '"exec"'])
-def test_an_unreadable_identity_blocks_corporate_instead_of_allowing(
+# SPLIT 2026-08-30. All three used to be parametrized as "unreadable" and the
+# assertion required the reason to contain "cannot read". Two of them are
+# perfectly readable: `json.loads('["exec-workspace"]')` returns a list and
+# `json.loads('"exec"')` returns the string `exec`, both without error. What is
+# wrong with those two is the SHAPE, and the production code knows the
+# difference -- it sets the parenthesised cause to "the file is not a JSON
+# object" rather than a decoder error. Asserting only the shared prefix threw
+# that distinction away and enshrined a diagnostic that would send an operator
+# to chase file permissions over a file the hook read fine. This suite condemns
+# exactly that in `test_the_refusal_names_a_commit_not_a_file`.
+UNPARSEABLE = ["{ not json", "", "{"]
+WRONG_SHAPE = ['["exec-workspace"]', '"exec"', "42", "null"]
+
+
+@pytest.mark.parametrize("identity", UNPARSEABLE)
+def test_an_identity_that_does_not_parse_blocks_corporate_instead_of_allowing(
         dispatch, tmp_path, identity):
     """Present but unparseable means the type is UNKNOWN, and unknown is not CEO.
 
@@ -175,9 +189,32 @@ def test_an_unreadable_identity_blocks_corporate_instead_of_allowing(
     assert verdict and verdict["decision"] == "block"
     assert "cannot read" in verdict["reason"]
     assert ".workspace-identity.json" in verdict["reason"]
+    assert "JSONDecodeError" in verdict["reason"], (
+        "the refusal does not say the file failed to PARSE, so it reads the "
+        "same as a valid file of the wrong shape")
 
 
-@pytest.mark.parametrize("identity", ["{ not json", '["exec-workspace"]'])
+@pytest.mark.parametrize("identity", WRONG_SHAPE)
+def test_a_valid_identity_of_the_wrong_shape_blocks_corporate_and_says_so(
+        dispatch, tmp_path, identity):
+    """Readable JSON that is not an object. The type is still unknown, so the
+    wall still refuses -- but the remedy is different and the wording has to be.
+
+    `json.loads` succeeds on every one of these, so "cannot read" alone is a
+    false account of what happened.
+    """
+    json.loads(identity)          # the premise: these all parse
+    root = _exec_workspace(tmp_path, identity)
+    verdict = dispatch.check_protect_corporate(_payload(root, root / "corporate" / "a.md"))
+    assert verdict and verdict["decision"] == "block"
+    assert ".workspace-identity.json" in verdict["reason"]
+    assert "not a JSON object" in verdict["reason"], (
+        f"the refusal blames readability for a file that parsed: "
+        f"{verdict['reason']}")
+    assert "JSONDecodeError" not in verdict["reason"]
+
+
+@pytest.mark.parametrize("identity", UNPARSEABLE + WRONG_SHAPE)
 def test_an_unreadable_identity_blocks_nothing_outside_corporate(
         dispatch, tmp_path, identity):
     """The refusal asks about the WRITE, not about the environment.

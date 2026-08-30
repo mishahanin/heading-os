@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -336,12 +337,38 @@ def test_the_helper_returns_a_real_module_or_nothing_at_all():
     src = (ROOT / "scripts" / "update-manager.py").read_text(encoding="utf-8")
     fn = next(n for n in ast.walk(ast.parse(src))
               if isinstance(n, ast.FunctionDef) and n.name == "_import_fcntl")
-    returns = [n.value for n in ast.walk(fn) if isinstance(n, ast.Return)]
-    constants = [r for r in returns if isinstance(r, ast.Constant)]
-    assert constants, "the no-lock arm no longer returns a constant"
-    assert all(c.value is None for c in constants), (
-        "the no-lock arm returns something truthy, so the None check below "
-        "stops firing")
+
+    # Bound to the ARM, not to the function. This used to collect every
+    # `ast.Return` anywhere under `_import_fcntl` and assert that the constant
+    # ones were None, which says nothing about what the non-POSIX path
+    # returns: add `if False: return None` beside `return "not-a-module"` and
+    # the assertions still passed while a Windows run got a truthy string,
+    # skipped the `fcntl is None` branch and died on `.flock`.
+    posix_guard = next(
+        (n for n in fn.body
+         if isinstance(n, ast.If)
+         and any(isinstance(c, ast.Constant) and c.value == "posix"
+                 for c in ast.walk(n.test))),
+        None)
+    assert posix_guard is not None, (
+        "`_import_fcntl` no longer branches on a posix test; the arms below "
+        "cannot be told apart")
+
+    inside = {id(n) for stmt in posix_guard.body for n in ast.walk(stmt)}
+    posix_returns, other_returns = [], []
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Return):
+            (posix_returns if id(node) in inside else other_returns).append(node)
+
+    assert posix_returns, "the posix arm no longer returns anything"
+    assert all(not isinstance(r.value, ast.Constant) for r in posix_returns), (
+        "the posix arm returns a constant; it must return the fcntl module")
+    assert other_returns, "there is no non-posix arm left to degrade through"
+    assert all(isinstance(r.value, ast.Constant) and r.value.value is None
+               for r in other_returns), (
+        "the no-lock arm returns something other than None, so the "
+        "`if fcntl is None` check below stops firing: "
+        f"{[ast.unparse(r) for r in other_returns]}")
 
     got = um._import_fcntl()
     assert got is None or hasattr(got, "flock")
@@ -389,7 +416,17 @@ def test_the_lock_is_still_taken_on_this_platform(tmp_path, monkeypatch, capsys)
 
     assert um.main(["apply", "--auto"]) == 0
     assert "no advisory lock" not in capsys.readouterr().out
-    assert um._import_fcntl() is not None, "posix must still get a real lock"
+    if os.name == "posix":
+        assert um._import_fcntl() is not None, "posix must still get a real lock"
+    else:
+        # The degraded path is the CORRECT answer here, and the sibling
+        # `test_a_platform_without_fcntl_degrades_instead_of_raising` pins it.
+        # This assertion ran unconditionally until 2026-08-30, so a Windows
+        # checkout failed it on untouched, correct source - a red that says
+        # nothing about the code. The repo ships a PowerShell runner and the
+        # production helper gates on `os.name`, so Windows is in scope.
+        assert um._import_fcntl() is None, (
+            "a platform without fcntl must degrade, not produce a stand-in")
 
 
 # ============================================================
@@ -893,17 +930,31 @@ def test_every_systemd_unit_that_names_a_timezone_sets_the_tz_environment():
     tpl_dir = ROOT / "scripts" / "templates" / "systemd"
     missing = []
     scheduled = 0
+    tz_scheduled = 0
     for svc in sorted(tpl_dir.glob("*.service")):
-        if not (tpl_dir / f"{svc.stem}.timer").exists():
+        timer = tpl_dir / f"{svc.stem}.timer"
+        if not timer.exists():
             continue  # a daemon, not a scheduled task
         scheduled += 1
+        # The TIMER is read now, which is what the name and the failure
+        # message always claimed. Until 2026-08-30 only the service was
+        # opened, so a scheduled unit whose timer never names {{TZ}} - a
+        # plain `OnCalendar=daily` with no timezone in it - was reported as
+        # missing a variable it has no reason to set.
+        if "{{TZ}}" not in timer.read_text(encoding="utf-8"):
+            continue
+        tz_scheduled += 1
         text = svc.read_text(encoding="utf-8")
         if "Environment=TZ={{TZ}}" not in text:
             missing.append(svc.name)
-    # The floor counts units that SURVIVED the filter, not units on disk. A glob
-    # that still matches while every unit loses its timer would leave `missing`
-    # empty for the wrong reason. 14 of 18 services are scheduled on 2026-08-26.
+    # Two floors, because each filter can empty the set on its own. A glob that
+    # still matches while every unit loses its timer, or every timer losing its
+    # {{TZ}}, would leave `missing` empty for the wrong reason. 14 of 18
+    # services are scheduled on 2026-08-26.
     assert scheduled >= 8, f"only {scheduled} scheduled unit(s) reached the check"
+    assert tz_scheduled >= 8, (
+        f"only {tz_scheduled} scheduled unit(s) have a timer naming the "
+        "timezone; the check ran over an almost-empty set")
     assert not missing, (
         f"a scheduled unit whose timer names {{{{TZ}}}} but whose service does not "
         f"set it runs its date math on the host libc timezone: {missing}"

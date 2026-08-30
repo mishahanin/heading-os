@@ -51,6 +51,7 @@ import ast
 import importlib.util
 import re
 import sys
+import tokenize
 from pathlib import Path
 
 import pytest
@@ -171,10 +172,31 @@ def test_no_top_level_heading_is_typed_without_the_guard():
 
 
 def test_the_contents_page_is_built_from_the_list(od):
-    """Not re-typed. A second copy is the thing that drifts."""
+    """Not re-typed. A second copy is the thing that drifts.
+
+    TIGHTENED 2026-08-30. This asked `"SECTIONS" in {n.id for n in
+    ast.walk(tree) if isinstance(n, ast.Name)}`, and the `SECTIONS = (...)`
+    assignment target is itself an `ast.Name` in Store context that `ast.walk`
+    visits -- so the definition alone satisfied it and every READ of the list
+    could be deleted with the test still green. Both halves are now required:
+    a Load-context read, and one inside `contents_lines`, which is the function
+    whose output the contents page is made of.
+    """
     tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
-    names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
-    assert "SECTIONS" in names
+    loads = {n.id for n in ast.walk(tree)
+             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    assert "SECTIONS" in loads, "SECTIONS is defined and never read"
+
+    builder = next((n for n in ast.walk(tree)
+                    if isinstance(n, ast.FunctionDef) and n.name == "contents_lines"),
+                   None)
+    assert builder is not None, (
+        "contents_lines was renamed; this guard now measures nothing")
+    inner = {n.id for n in ast.walk(builder)
+             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    assert "SECTIONS" in inner, (
+        "contents_lines does not read SECTIONS, so the contents page is a "
+        "second copy of the section list")
 
 
 def test_the_numbering_lines_up_with_the_list_order(od):
@@ -415,6 +437,37 @@ def _palette_hexes() -> set[str]:
     return {m.upper() for m in re.findall(r"#([0-9A-Fa-f]{6})", table)}
 
 
+def _colours_from_calls(source: str) -> set[str]:
+    """Colours written as a three-byte constructor call, e.g.
+    `RGBColor(0xFF, 0x92, 0x35)` -- the form `generate-odunone-docx.py` uses and
+    the `#RRGGBB` regex can never match. Any callee taking exactly three int
+    constants in 0-255 counts, so `RGBColor` being renamed does not blind this.
+    """
+    out: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call) or len(node.args) != 3 or node.keywords:
+            continue
+        vals = [a.value for a in node.args
+                if isinstance(a, ast.Constant) and isinstance(a.value, int)
+                and not isinstance(a.value, bool) and 0 <= a.value <= 255]
+        if len(vals) == 3:
+            out.add("".join(f"{v:02X}" for v in vals))
+    return out
+
+
+def _colours_used(path: Path) -> set[str]:
+    """Every colour a source file names, in BOTH spellings.
+
+    WIDENED 2026-08-30. Only `#RRGGBB` was read, so the generator's real
+    assignments were invisible and the guard rested on an incidental comment.
+    """
+    text = path.read_text(encoding="utf-8")
+    found = {m.upper() for m in re.findall(r"#([0-9A-Fa-f]{6})", text)}
+    if path.suffix == ".py":
+        found |= _colours_from_calls(text)
+    return found
+
+
 def test_every_orange_the_code_uses_is_in_the_locked_palette():
     """A generator using a hex the palette does not list is brand drift.
 
@@ -426,9 +479,7 @@ def test_every_orange_the_code_uses_is_in_the_locked_palette():
     palette = _palette_hexes()
     used: dict[str, list[str]] = {}
     for rel in ("scripts/generate-odunone-docx.py", "scripts/marp_render.py"):
-        text = (ROOT / rel).read_text(encoding="utf-8")
-        for hexval in re.findall(r"#([0-9A-Fa-f]{6})", text):
-            hexval = hexval.upper()
+        for hexval in _colours_used(ROOT / rel):
             # Oranges only: red high, green mid, blue low.
             r, g, b = (int(hexval[i:i + 2], 16) for i in (0, 2, 4))
             if r > 200 and 100 < g < 190 and b < 100:
@@ -436,6 +487,42 @@ def test_every_orange_the_code_uses_is_in_the_locked_palette():
     assert used, "the orange detector matched nothing; it can no longer fail"
     missing = {h: v for h, v in used.items() if h not in palette}
     assert not missing, f"orange(s) used but not in the locked palette: {missing}"
+
+
+def test_the_orange_detector_reads_the_form_the_generator_actually_uses():
+    """The negative case for the widening above. NEW 2026-08-30.
+
+    `generate-odunone-docx.py` writes its colours as `RGBColor(0xFF, 0x92,
+    0x35)`. The detector matched `#([0-9A-Fa-f]{6})` and nothing else, so it
+    could never see that assignment: whether the generator's orange was policed
+    at all depended on an incidental `#FF9235` surviving in a COMMENT -- and a
+    sibling test in this same file pins that the old comment spelling was
+    removed. This asserts the detector sees the call form with every comment
+    and docstring stripped away, so the coverage cannot go back to resting on
+    prose.
+    """
+    text = SOURCE.read_text(encoding="utf-8")
+    assert "FF9235" in _colours_from_calls(text), (
+        "the detector cannot see RGBColor(0xFF, 0x92, 0x35), which is how the "
+        "generator spells its orange")
+
+    # And the half that shows why the AST half is needed: tokenize the file and
+    # ask where the `#RRGGBB` spelling actually occurs. Every occurrence is a
+    # COMMENT or a STRING -- prose. The regex-only detector therefore policed
+    # this generator's orange through documentation and nothing else, which a
+    # sibling test in this file is actively removing.
+    with tokenize.open(SOURCE) as fh:
+        toks = list(tokenize.generate_tokens(fh.readline))
+    in_code = [t for t in toks
+               if "FF9235" in t.string.upper()
+               and t.type not in (tokenize.COMMENT, tokenize.STRING)]
+    prose = [t for t in toks
+             if "FF9235" in t.string.upper()
+             and t.type in (tokenize.COMMENT, tokenize.STRING)]
+    assert prose, "the premise is stale: no `#FF9235` prose remains to rely on"
+    assert not in_code, (
+        f"`#FF9235` now appears in code at lines "
+        f"{[t.start[0] for t in in_code]}; re-derive this test")
 
 
 def test_the_palette_lists_all_three_oranges():

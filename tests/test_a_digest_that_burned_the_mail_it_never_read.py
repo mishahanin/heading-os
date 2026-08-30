@@ -303,23 +303,52 @@ def test_replaying_the_payload_commits_exactly_the_pruned_set(monkeypatch, tmp_p
 # 6. Every placeholder site carries the marker, not just the one that was found
 # ============================================================
 
+# (reply, why, expected_unmarked). The third field is the EXACT number of
+# conversations this reply may leave without the `analysis_failed` marker, for
+# a batch of two.
+#
+# It used to be `<= 1` for every row, which is an off-by-one written into the
+# assertion. Four of the five replies below carry no valid analysis for either
+# conversation, so their correct count is zero; `<= 1` accepted one. That is the
+# whole data-loss mode this file exists to close: one placeholder site that
+# forgets the marker leaves one unanalysed conversation looking analysed, its
+# message ids get committed as processed, and Layer 5 never looks at that mail
+# again. `<= 1` could not see it.
+#
+# The counts below are MEASURED against `analyze_conversations`, not reasoned
+# from the reply text; see the note on the bare-object row.
 _BATCH_REPLIES = [
-    ("not-json-at-all", "the vendor returned prose"),
-    ("[]", "an empty array for a one-conversation batch"),
-    ('["not an object"]', "a string where an analysis belongs"),
+    ("not-json-at-all", "the vendor returned prose", 0),
+    ("[]", "an empty array for a two-conversation batch", 0),
+    ('["not an object"]', "a string where an analysis belongs", 0),
+    # A bare JSON object, and it does NOT reach the one-object path: its own
+    # `"proposed_actions": []` is the first `[...]` in the text, so
+    # `_extract_json_array` returns that empty array and the whole batch is
+    # padded. Measured 2026-08-30. The row is kept because that is real
+    # behaviour worth pinning; the case it was WRITTEN for is the row below it,
+    # which reaches the one-object path for real.
     ('{"category": "fyi", "priority": "P2", "summary": "s", "proposed_actions": [],'
      ' "commitments": [], "relationship_signal": "stable"}',
-     "one object for a two-conversation batch"),
-    ('42', "a number"),
+     "an object whose own empty array is found first", 0),
+    ('[{"category": "fyi", "priority": "P2", "summary": "s", "proposed_actions": [],'
+     ' "commitments": [], "relationship_signal": "stable"}]',
+     "one object for a two-conversation batch", 1),
+    ('42', "a number", 0),
 ]
 
 
-@pytest.mark.parametrize("reply,why", _BATCH_REPLIES, ids=[w for _, w in _BATCH_REPLIES])
+@pytest.mark.parametrize("reply,why,expected_unmarked", _BATCH_REPLIES,
+                         ids=[w for _, w, _ in _BATCH_REPLIES])
 def test_a_conversation_the_model_did_not_answer_about_is_marked(
-        monkeypatch, offline_client, reply, why):
+        monkeypatch, offline_client, reply, why, expected_unmarked):
     """Six sites emit a placeholder. A seventh added without the marker would
     silently under-prune, so the marker is asserted per malformed reply rather
-    than only on the exception path that was originally found."""
+    than only on the exception path that was originally found.
+
+    The count is EXACT per reply. A reply that answers about one conversation
+    out of two may leave exactly one unmarked; a reply that answers about
+    neither may leave none.
+    """
     class _Result:
         vendor = "test-vendor"
         text = reply
@@ -331,8 +360,9 @@ def test_a_conversation_the_model_did_not_answer_about_is_marked(
     analyses = ei.analyze_conversations(convs, {}, "")
     assert len(analyses) == len(convs)
     unmarked = [a for a in analyses if not a.get("analysis_failed")]
-    assert len(unmarked) <= 1, (
-        f"{why}: {len(unmarked)} conversations were treated as analysed")
+    assert len(unmarked) == expected_unmarked, (
+        f"{why}: {len(unmarked)} conversations were treated as analysed, "
+        f"expected {expected_unmarked}")
 
 
 def test_a_dead_chain_marks_every_conversation_in_the_batch(monkeypatch, offline_client):

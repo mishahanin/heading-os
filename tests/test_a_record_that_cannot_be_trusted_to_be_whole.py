@@ -10,14 +10,12 @@ that never overlapped in the log's own opinion, a plan read from `/tmp`. A
 record with a hole in it is worse than a missing record, because it is still
 believed.
 
-Findings covered (numbering from `/tmp/audit_out3/scripts-07-p3.md`):
+Findings covered (numbering from the `scripts-07-p3` shard report). Each entry
+has a matching `# N - ...` section below, and the sections carry no number that
+is not listed here:
 
    1  `heading run` executed files outside the workspace
    2  a UNC input produced an unloadable file:// URL
-   3  the explicit -ing list flagged mid-sentence use as an ERROR
-   4  the title-case check promised an exemption it never implemented
-   5  the burstiness docstring and the code disagreed
-   6  an unreadable input exited 1, the code for "findings present"
    7  a short write left a truncated JSONL record and returned normally
    8  the Windows unlock targeted the wrong byte range and hid the failure
    9  two runs in one second shared a run_id
@@ -29,11 +27,27 @@ Findings covered (numbering from `/tmp/audit_out3/scripts-07-p3.md`):
   15  `?` and `[ab]` passed the literal-path check, and so did ""
   16  any common suffix counted as the same file
   17  a fixed temp name destroyed a pre-existing destination file
+  20  uniqueness lives at the call site, not only in the minter
+
+NOT covered here, and named rather than left to be inferred: findings 3, 4, 5
+and 6 of that shard (the explicit -ing list flagging mid-sentence use, the
+title-case exemption that was never implemented, the burstiness docstring
+disagreeing with its code, and an unreadable input exiting 1). They belong to
+`humanization-check.py`, not to the trajectory log, and no test in this file
+pins any of them.
+
+This list carried all four of those as covered until 2026-08-30, and omitted
+20, which HAS a section. A reader reconciling the shard report against the
+suite would have concluded four findings were pinned when nothing pinned them,
+and would not have found where the fifth was - which is the failure this
+file's own opening paragraph names: a record with a hole in it is worse than a
+missing record, because it is still believed.
 """
 
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -111,6 +125,35 @@ def _ev(event_type: str, sn=0, **payload) -> str:
 
 def _write(traj_dir: Path, run_id: str, *lines: str) -> None:
     (traj_dir / f"{run_id}.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+# ============================================================
+# The contents list and the file agree
+# ============================================================
+
+def test_the_findings_list_names_exactly_the_sections_this_file_has():
+    """The docstring's "Findings covered" list is derived-checkable, so check it.
+
+    It claimed 3, 4, 5 and 6 - none of which has a test anywhere in this file
+    - and omitted 20, which has a whole section. Both halves were invisible
+    because nothing compared the two lists. A contents page that names a
+    section the file does not have is the same defect as the log holes this
+    shard is about, one layer up.
+    """
+    text = Path(__file__).read_text(encoding="utf-8")
+    doc = __doc__ or ""
+    listed = {int(n) for n in re.findall(r"^\s{2,3}(\d+)\s{2}", doc, re.M)}
+    sections = {int(n)
+                for line in re.findall(r"^# ([\d, ]+) - ", text, re.M)
+                for n in re.findall(r"\d+", line)}
+
+    assert listed, "the Findings-covered list no longer parses"
+    assert sections, "the section banners no longer parse"
+    assert listed - sections == set(), (
+        f"the list claims findings with no section: {sorted(listed - sections)}")
+    assert sections - listed == set(), (
+        f"these sections are not in the Findings-covered list: "
+        f"{sorted(sections - listed)}")
 
 
 # ============================================================

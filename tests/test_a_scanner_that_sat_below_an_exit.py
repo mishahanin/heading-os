@@ -34,6 +34,7 @@ third faster.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import os
@@ -461,14 +462,59 @@ def test_the_linkedin_docstring_matches_the_actual_defaults():
     assert "Playwright Chromium through the Decodo residential proxy" not in doc
 
 
+def _declared_defaults(script: Path) -> dict:
+    """Map `--option` to its declared default, read from the parse tree.
+
+    The two assertions this replaces were raw substring searches over the file
+    while the docstring claimed the parser had been consulted. Both directions
+    were wrong: `default=_DEFAULT_ENGINE`, a correct parser with the default
+    behind a name, failed them, and `# default="firefox"` in a comment beside a
+    real default of `"chromium"` passed them. The parser itself is built inside
+    `main()` and cannot be obtained without running the command, so the
+    declaration is read structurally instead - which sees neither comments nor
+    unrelated arguments, and resolves a module-level constant.
+    """
+    tree = ast.parse(script.read_text(encoding="utf-8"))
+    consts = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    consts[target.id] = node.value.value
+
+    def _value(expr):
+        if isinstance(expr, ast.Constant):
+            return expr.value
+        if isinstance(expr, ast.Name) and expr.id in consts:
+            return consts[expr.id]
+        raise AssertionError(
+            f"the default is {ast.dump(expr)}, which this reader cannot "
+            f"resolve; widen it rather than falling back to a source grep")
+
+    out = {}
+    for call in ast.walk(tree):
+        if not (isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "add_argument"):
+            continue
+        flags = [a.value for a in call.args
+                 if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+        kw = {k.arg: k.value for k in call.keywords}
+        for flag in flags:
+            out[flag] = {
+                "default": _value(kw["default"]) if "default" in kw else None,
+                "type": (kw["type"].id if isinstance(kw.get("type"), ast.Name)
+                         else None),
+            }
+    return out
+
+
 def test_the_defaults_really_are_firefox_and_no_proxy():
-    """The docstring is checked against the parser, not against itself."""
-    import argparse
-    parser = argparse.ArgumentParser()
-    src = (ROOT / "scripts" / "linkedin-activity.py").read_text(encoding="utf-8")
-    assert 'default="firefox"' in src
-    assert '"--proxy-slot", type=int, default=0' in src
-    del parser, argparse
+    """The docstring is checked against the parser's declared defaults."""
+    declared = _declared_defaults(ROOT / "scripts" / "linkedin-activity.py")
+    assert declared["--engine"]["default"] == "firefox", declared["--engine"]
+    assert declared["--proxy-slot"]["default"] == 0, declared["--proxy-slot"]
+    assert declared["--proxy-slot"]["type"] == "int", declared["--proxy-slot"]
 
 
 def test_the_correction_precedes_the_note_about_what_it_replaced():

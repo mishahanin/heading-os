@@ -279,20 +279,52 @@ def test_a_real_run_records_the_skip(monkeypatch, tmp_path, chronicle_root):
 # ==========================================================================
 
 def _drift_output(findings):
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "classification_health_03p3", ROOT / "scripts" / "classification-health.py")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["classification_health_03p3"] = mod
-    spec.loader.exec_module(mod)
+    """Render `print_outputs_drift` output without leaving the module resident.
 
+    The `sys.modules` entry is required (the loader needs the name bound while
+    `exec_module` runs) but it used to be permanent: every call replaced the
+    global entry and nothing ever put back what was there. Two tests here call
+    this helper, so the interpreter kept whichever instance ran last, for the
+    rest of the session, visible to any other test that touches that name.
+    The entry is now restored to exactly its prior state, absent included.
+    """
+    import importlib.util
+    name = "classification_health_03p3"
+    spec = importlib.util.spec_from_file_location(
+        name, ROOT / "scripts" / "classification-health.py")
+    mod = importlib.util.module_from_spec(spec)
+
+    _MISSING = object()
+    previous = sys.modules.get(name, _MISSING)
+    sys.modules[name] = mod
     buf = io.StringIO()
     real_stdout, sys.stdout = sys.stdout, buf
     try:
+        spec.loader.exec_module(mod)
         mod.print_outputs_drift(findings)
     finally:
         sys.stdout = real_stdout
+        if previous is _MISSING:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = previous
     return buf.getvalue()
+
+
+def test_the_drift_helper_leaves_sys_modules_as_it_found_it():
+    """The negative case for the restore above: measure it, do not assume it."""
+    name = "classification_health_03p3"
+    assert name not in sys.modules, "a previous test left the module resident"
+    _drift_output([{"path": "outputs/alpha", "file_count": 6}])
+    assert name not in sys.modules, "_drift_output left its module in sys.modules"
+
+    sentinel = object()
+    sys.modules[name] = sentinel
+    try:
+        _drift_output([{"path": "outputs/alpha", "file_count": 6}])
+        assert sys.modules[name] is sentinel, "_drift_output clobbered a prior entry"
+    finally:
+        sys.modules.pop(name, None)
 
 
 def test_every_drifted_path_appears_in_the_pin_instruction():

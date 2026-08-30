@@ -32,9 +32,25 @@ _INJECTION_CORPUS = [
 
 @pytest.mark.parametrize("payload,forbidden,desc", _INJECTION_CORPUS)
 def test_sanitize_untrusted(payload, forbidden, desc):
+    """Every row asserts something. The benign row used to assert nothing.
+
+    `if forbidden is not None:` guarded the ONLY assertion, so the row
+    described as "benign must survive" ran `sanitize_untrusted` and then
+    checked no property of the result at all. Replacing the whole function
+    with `lambda s: ""` passed every row of this parametrize, benign
+    included. The `None` now selects a DIFFERENT assertion instead of
+    switching assertion off: the benign text has to come out intact.
+    """
     out = sanitize_untrusted(payload)
-    if forbidden is not None:
+    if forbidden is None:
+        assert out == payload, (
+            f"benign input was altered ({desc}): {payload!r} -> {out!r}")
+    else:
         assert forbidden not in out, f"not neutralised ({desc}): {payload!r} -> {out!r}"
+        # Neutralising by deleting everything is not neutralising. The output
+        # must still carry the payload's own words, or "stripped" and
+        # "emptied" are indistinguishable here.
+        assert out.strip(), f"sanitiser emptied the field ({desc}): {payload!r}"
 
 
 def test_sanitize_does_not_corrupt_clean_text():
@@ -71,7 +87,17 @@ def test_format_untrusted_emails_neutralises_and_wraps():
 
 
 def test_format_untrusted_emails_caps_at_three():
+    """The cap is 3, so indices 0-2 survive and 3-4 are dropped.
+
+    The comment already said "4th/5th (index 3,4) dropped" and the assertion
+    only checked `s4`. An off-by-one that capped at 4 kept `s3` and still
+    passed, so the number the comment states was not the number enforced.
+    Both sides of the boundary are now on the line.
+    """
     emails = [{"direction": "in", "sender_name": "a", "sender_email": "a@x.com",
                "to": [], "subject": f"s{i}", "body_preview": "b"} for i in range(5)]
     block = format_untrusted_emails(emails)
-    assert "s4" not in block  # 4th/5th (index 3,4) dropped by the cap of 3
+    assert "s0" in block and "s1" in block and "s2" in block, (
+        f"the cap dropped an email it should have kept: {block!r}")
+    assert "s3" not in block, f"cap of 3 kept a 4th email: {block!r}"
+    assert "s4" not in block, f"cap of 3 kept a 5th email: {block!r}"

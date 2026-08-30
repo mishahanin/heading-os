@@ -73,28 +73,46 @@ def _run(repo: Path, args: list[str]) -> str:
     # paths, and the commit was indexed message and all. Turning the quoting off
     # is one flag and removes the class, rather than teaching one call site to
     # un-escape.
+    # Bytes, decoded here, rather than `text=True`. That is a SECOND defect and
+    # the quoting fix above does not reach it: any subprocess text mode turns on
+    # universal newlines, which rewrites every CR byte to LF, and `subprocess`
+    # has no `newline=` knob to switch it off. MEASURED 2026-08-30 on a scratch
+    # repo holding two files whose names differ only by that byte: bytes mode
+    # returned two records, `text=True` returned one. `-z` closes the quoting
+    # half only, so a reader can carry `-z` and still be wrong.
+    #
+    # The consequence here is the smaller one in that sweep, and it is named
+    # rather than implied: the air-gap decision does not flip, because the deny
+    # prefixes and segments survive a same-length CR to LF substitution. What
+    # breaks is the indexed record, whose `Files:` line then carries a filename
+    # that names nothing on disk.
     proc = subprocess.run(
         ["git", "-c", "core.quotePath=false", *args],
-        cwd=repo, capture_output=True, text=True
+        cwd=repo, capture_output=True
     )
     if proc.returncode != 0:
-        raise RuntimeError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
-    return proc.stdout
+        stderr = proc.stderr.decode("utf-8", "surrogateescape").strip()
+        raise RuntimeError(f"git {' '.join(args)} failed: {stderr}")
+    return proc.stdout.decode("utf-8", "surrogateescape")
 
 
 def _is_repo(repo: Path) -> bool:
     if not repo.is_dir():
         return False
     proc = subprocess.run(
-        ["git", "rev-parse", "--git-dir"], cwd=repo, capture_output=True, text=True
+        # No `text=`: this reads the exit code and never looks at stdout, so a
+        # text mode here would only be a decoration that the CR-translation
+        # sweep has to stop and reason about again next time.
+        ["git", "rev-parse", "--git-dir"], cwd=repo, capture_output=True
     )
     return proc.returncode == 0
 
 
 def _known(repo: Path, sha: str) -> bool:
     proc = subprocess.run(
+        # No `text=`, same reason as `_is_repo`: only the exit code is read.
         ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
-        cwd=repo, capture_output=True, text=True,
+        cwd=repo, capture_output=True,
     )
     return proc.returncode == 0
 

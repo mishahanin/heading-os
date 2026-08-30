@@ -330,30 +330,57 @@ def test_the_crash_this_guard_stands_in_front_of_is_real(tmp_path):
     assert TypeError not in (OSError, subprocess.SubprocessError, ValueError)
 
 
-def test_a_bad_note_does_not_stop_the_notes_after_it(tmp_path, monkeypatch):
-    """The guarantee itself, through `main`: report, then keep going."""
-    calls = []
+def _write_raw_note(root, slug, **fields):
+    """Write `records/slices/{slug}.md` directly, bypassing write_note's schema.
 
-    def _fake_git(root, *argv):
-        calls.append(argv)
-        return subprocess.CompletedProcess(argv, 0, "", "")
+    A note that is MISSING a required field is the whole point here, and
+    `write_note` validates, so it cannot produce the fixture.
+    """
+    body = "\n".join(f"{k}: {v}" for k, v in fields.items())
+    path = root / "records" / "slices" / f"{slug}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"---\n{body}\n---\n\nBody.\n", encoding="utf-8")
+    return path
 
-    notes = [
-        {"slug": "bad", "approval_sha": None, "contract": "tests/contract/bad"},
-        {"slug": "good", "approval_sha": "abc", "contract": "tests/contract/good"},
-    ]
-    monkeypatch.setattr(cc, "_git", _fake_git)
-    rows = []
-    for note in notes:
-        complaint = cc._unreadable(note)
-        if complaint:
-            rows.append(cc._row(note["slug"], "note", False, complaint))
-            continue
-        rows.append(cc._row(note["slug"], "C2", *cc.C2(tmp_path, note)))
 
-    assert [r["slug"] for r in rows] == ["bad", "good"]
-    assert rows[0]["ok"] is False and "approval_sha" in rows[0]["message"]
-    assert rows[1]["ok"] is True, "the note after the bad one was never checked"
+def test_a_bad_note_does_not_stop_the_notes_after_it(tmp_path, monkeypatch, capsys):
+    """The guarantee itself, through `main`: report, then keep going.
+
+    Rewritten 2026-08-30. The docstring said "through `main`" and `main` was
+    never called. The body reimplemented a per-note loop of its own -- read
+    `_unreadable`, append a `_row`, `continue` -- and then asserted against
+    that. So the thing under test was three lines of this test file: monkeypatch
+    `cc.main` to raise on sight and the test still passed, and mutating the real
+    `main()` to stop at the first unreadable note, or to raise before reaching
+    the later ones, left it green while breaking exactly the guarantee it
+    names. `main` is now driven, and the two notes are read off disk.
+    """
+    # `aaa-bad` sorts before `zzz-good`: note_paths() is sorted, so this fixes
+    # the bad note as the FIRST one processed. Without that ordering the test
+    # could pass on a run that never had to recover.
+    _write_raw_note(tmp_path, "aaa-bad", value="v", contract="tests/contract/bad")
+    _write_raw_note(
+        tmp_path, "zzz-good", value="v", approval_sha="abc",
+        contract="tests/contract/good", plan_digest="d", scrutinize_plan="s",
+        scrutinize_built="s", undo="u")
+
+    monkeypatch.setattr(cc, "_git", lambda root, *argv: subprocess.CompletedProcess(
+        argv, 0, "", ""))
+
+    rc = cc.main(["--root", str(tmp_path), "--json"])
+
+    rows = json.loads(capsys.readouterr().out)
+    slugs = [r["slug"] for r in rows]
+
+    assert "aaa-bad" in slugs, "the unreadable note was not reported at all"
+    assert "zzz-good" in slugs, (
+        "the note AFTER the bad one was never reached; main stopped at the "
+        "first unreadable note instead of reporting and continuing")
+    assert slugs.index("aaa-bad") < slugs.index("zzz-good")
+
+    bad_rows = [r for r in rows if r["slug"] == "aaa-bad"]
+    assert any(r["ok"] is False for r in bad_rows), bad_rows
+    assert rc != 0, "an unreadable note must not exit clean"
 
 
 # ---------------------------------------------------------------------------

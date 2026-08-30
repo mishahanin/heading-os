@@ -14,13 +14,32 @@ from scripts.bridge_daemon.sources.tribe import (
 
 
 def _make_contact(workspace_root, slug, **frontmatter):
-    """Write a minimal CRM contact file."""
+    """Write a minimal CRM contact file.
+
+    `_name` is this helper's own signal for the H1 display name and is POPPED
+    before the frontmatter is built. It used to fall through into the YAML
+    block, so every fixture carried a `_name:` key that no real CRM contact has
+    - a file shape production never sees, which is not what a fixture is for.
+    """
     contacts_dir = workspace_root / "crm" / "contacts"
     contacts_dir.mkdir(parents=True, exist_ok=True)
+    display = frontmatter.pop("_name", slug.replace("-", " ").title())
     fm_lines = "\n".join(f"{k}: {v}" for k, v in frontmatter.items())
-    display = frontmatter.get("_name", slug.replace("-", " ").title())
     text = f"---\n{fm_lines}\n---\n\n# {display}\n\nBody.\n"
-    (contacts_dir / f"{slug}.md").write_text(text, encoding="utf-8")
+    path = contacts_dir / f"{slug}.md"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_the_fixture_writes_a_shape_production_can_produce(tmp_path):
+    """The helper's own sentinel must not reach the file it writes."""
+    path = _make_contact(tmp_path, "someone", relationship_type="tribe",
+                         last_touch="2026-05-15", _name="Some One")
+    text = path.read_text(encoding="utf-8")
+    front = text.split("---")[1]
+    assert "_name" not in front, front
+    assert "# Some One" in text
+    assert "relationship_type: tribe" in front
 
 
 def test_empty_when_no_contacts_dir(tmp_path):

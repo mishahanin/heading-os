@@ -41,6 +41,7 @@ import ast
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -310,10 +311,23 @@ def test_an_unanchored_sweep_is_deliberately_not_refused(dispatch):
 
     A wildcard that could itself expand to `threads` is not treated as an
     anchor. Treating it as one refuses `Glob("**/*.py")`, which is every
-    ordinary sweep in the engine. What makes the limit safe is the redirect:
-    only a `threads`-prefixed argument is re-anchored at the data root, so an
-    unanchored sweep stays inside the engine clone, and the engine clone holds
-    no threads.
+    ordinary sweep in the engine.
+
+    What makes the limit safe is `_sweep_descends_from_above`, a SECOND rule
+    that resolves the sweep's actual search root and refuses it when that root
+    sits above a threads tree. Do not delete that rule as redundant.
+
+    This docstring used to give a different reason: "only a `threads`-prefixed
+    argument is re-anchored at the data root, so an unanchored sweep stays
+    inside the engine clone, and the engine clone holds no threads." That is
+    the premise `tests/test_a_wall_that_answered_about_the_spelling.py`
+    measured FALSE and retired. A Glob with no `path` resolves against `cwd`,
+    the redirect says nothing about where `cwd` points, and with `cwd` at the
+    data root the sweep descends straight into the threads tree; that file's
+    own `test_the_root_defaults_to_cwd_when_no_path_is_given` proves it. The
+    assertions here still pass, because the sweep rule carries the load, but
+    the reasoning printed above them was the retired one, which is exactly the
+    comment that invites someone to remove the check that replaced it.
     """
     assert dispatch._search_reaches_personal(["**", "personal", "*.md"]) is False
     assert dispatch._search_reaches_personal(["*", "personal"]) is False
@@ -393,6 +407,14 @@ def test_the_dispatcher_is_registered_for_the_native_search_tools():
     A correct rule nobody calls refuses nothing, so the wiring is part of the
     guarantee and is asserted from the tracked templates, which are what a
     fresh clone actually installs.
+
+    The membership test is on TOKENS, not on the joined string. `tool in
+    joined` is a substring test, and `"Edit" in joined` is satisfied by a
+    template that dispatches only `MultiEdit` - the precise failure this test
+    exists to catch, passing silently, for every tool name that is a substring
+    of another tool name. Claude Code matchers are `|`-separated alternations,
+    so splitting on `|` and comparing whole names is what the claim actually
+    means.
     """
     for template in _SETTINGS_TEMPLATES:
         assert template.is_file(), template
@@ -403,6 +425,12 @@ def test_the_dispatcher_is_registered_for_the_native_search_tools():
             if any("_dispatch.py" in h.get("command", "")
                    for h in entry.get("hooks", []))
         ]
-        joined = " ".join(matchers)
+        assert matchers, f"{template.name} routes nothing to _dispatch.py at all"
+        dispatched = {token.strip()
+                      for matcher in matchers
+                      for token in re.split(r"[|,\s]+", matcher)
+                      if token.strip()}
         for tool in ("Read", "Grep", "Glob", "Bash", "Write", "Edit"):
-            assert tool in joined, f"{template.name} does not dispatch {tool}"
+            assert tool in dispatched, (
+                f"{template.name} does not dispatch {tool}; it dispatches "
+                f"{sorted(dispatched)}")

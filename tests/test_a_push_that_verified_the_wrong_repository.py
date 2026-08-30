@@ -124,12 +124,39 @@ def test_a_subdirectory_resolves_to_the_repository_above_it(tmp_path):
     assert enclosing_repo_root(sub) == work.resolve()
 
 
-def test_a_path_that_is_no_repository_is_unknown(tmp_path):
-    """None means "could not establish", never "this is a root". The guard
-    refuses only on positive evidence, so unknown still reaches git."""
+@pytest.fixture
+def outside_any_work_tree(tmp_path, monkeypatch):
+    """A directory git cannot resolve to any enclosing repository.
+
+    Both "not a repository" tests below used a bare `tmp_path / "plain"` and
+    assumed pytest's basetemp lies outside every git work tree. It need not.
+    Point `TMPDIR` inside this checkout and git discovery correctly walks up
+    from `plain` and finds THIS repository: `enclosing_repo_root` then returns
+    a root, and `supervised_push` returns the very refusal the second test
+    says must not happen. Measured 2026-08-30 with
+    `TMPDIR="$PWD/.tmp/..." pytest ...`: both tests failed, with no defect in
+    the guard.
+
+    `GIT_CEILING_DIRECTORIES` stops git's upward walk before it leaves
+    `tmp_path`, so the fact under test ("this path is in no repository") is
+    established by the fixture rather than borrowed from the machine. The
+    assertion below measures that it worked instead of trusting it.
+    """
     plain = tmp_path / "plain"
     plain.mkdir()
-    assert enclosing_repo_root(plain) is None
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.resolve()))
+    probe = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                           cwd=plain, capture_output=True, text=True)
+    assert probe.returncode != 0, (
+        "the ceiling did not hold: git still resolves a work tree above "
+        f"{plain} ({probe.stdout.strip()!r})")
+    return plain
+
+
+def test_a_path_that_is_no_repository_is_unknown(outside_any_work_tree):
+    """None means "could not establish", never "this is a root". The guard
+    refuses only on positive evidence, so unknown still reaches git."""
+    assert enclosing_repo_root(outside_any_work_tree) is None
 
 
 def test_a_missing_path_is_unknown(tmp_path):
@@ -285,11 +312,10 @@ def test_a_real_root_still_pushes(tmp_path):
     assert _remote_head(remote) is not None
 
 
-def test_a_path_that_is_no_repository_is_not_refused_by_this_guard(tmp_path):
+def test_a_path_that_is_no_repository_is_not_refused_by_this_guard(outside_any_work_tree):
     """Unknown is not refused here. git fails on its own, and the verdict must
     say so rather than blame a repository root that was never established."""
-    plain = tmp_path / "plain"
-    plain.mkdir()
+    plain = outside_any_work_tree
 
     v = supervised_push(plain, remote="origin", branch="main", stall_window=15)
 

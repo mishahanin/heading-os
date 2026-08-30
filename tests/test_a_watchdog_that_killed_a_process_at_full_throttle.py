@@ -330,13 +330,60 @@ def test_the_prefilter_comment_states_the_real_count():
 
 
 def test_every_pattern_without_a_prefilter_opens_with_fixed_text():
-    """The claim the comment makes, checked rather than believed."""
+    """The claim the comment makes, checked rather than believed.
+
+    Tightened 2026-08-30. The acceptance set was `head[0].isalnum() or head[0]
+    in "_-\\\\("`, and that backslash admitted exactly what the test's own name
+    and failure message say must not pass: a pattern opening with a character
+    CLASS. `\\d{16}`, `\\w+@\\w+`, `\\b...` all start with a backslash, all
+    anchor nothing, and all satisfied the guard -- so a future pattern added
+    with no `REQUIRED_SUBSTRING` entry and a `\\d` opener would be accepted
+    silently, which is the one shape that most needs a prefilter. A literal
+    escape like `\\.` or `\\$` IS fixed text, so the backslash is admitted only
+    when what follows it is not a class metacharacter.
+    """
+    classes = set("dDwWsSbBAZ")
     for pattern, description in sp.SECRET_PATTERNS:
         if description in sp.REQUIRED_SUBSTRING:
             continue
         head = pattern.pattern[:2]
-        assert head[0].isalnum() or head[0] in "_-\\(", (
+        first = head[0]
+        if first == "\\":
+            assert len(head) > 1 and head[1] not in classes, (
+                f"{description} opens with the character class {head!r}, which "
+                f"anchors nothing; give it a REQUIRED_SUBSTRING entry")
+            continue
+        assert first.isalnum() or first in "_-(", (
             f"{description} opens with {head!r}, which anchors nothing")
+
+
+@pytest.mark.parametrize("opener,anchors", [
+    ("sk-ant-", True),        # fixed text
+    ("ghp_", True),
+    ("(?:aws|AWS)", True),    # a group is a legitimate opener
+    (r"\.env", True),         # an escaped literal IS fixed text
+    (r"\d{16}", False),       # the shape the backslash used to admit
+    (r"\w+@\w+", False),
+    (r"\b[A-Z]{4}", False),
+    (r"\s+token", False),
+])
+def test_the_fixed_text_rule_separates_a_literal_escape_from_a_class(opener, anchors):
+    """The case ON the line: nothing ever made this rule refuse a `\\d` opener.
+
+    Re-runs the predicate the test above applies, over openers chosen to sit on
+    both sides of the line the old acceptance set could not draw.
+    """
+    classes = set("dDwWsSbBAZ")
+    head = opener[:2]
+    first = head[0]
+    accepted = (
+        (len(head) > 1 and head[1] not in classes) if first == "\\"
+        else (first.isalnum() or first in "_-(")
+    )
+    assert accepted is anchors, f"{opener!r} was {'accepted' if accepted else 'refused'}"
+
+    # And the predecessor accepted every one of them, which is the defect.
+    assert first.isalnum() or first in "_-\\("
 
 
 def test_every_prefilter_entry_names_a_real_pattern():

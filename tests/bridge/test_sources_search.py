@@ -146,12 +146,21 @@ def test_limit_per_category(tmp_path):
 
 
 def test_data_time_is_iso_utc(tmp_path):
-    """data_time is ISO 8601 UTC string."""
+    """data_time is ISO 8601 UTC, and UTC is what the offset has to say.
+
+    `parsed.tzinfo is not None` was the whole guard until 2026-08-30, and it
+    is true of `+04:00`, `-07:00` and every other offset. A regression to
+    local time would have kept this test green under a name that promised
+    UTC. The sibling `test_next_meeting_includes_event_utc_iso` in the pulse
+    file already asserted the offset; this one now matches it.
+    """
     _setup_workspace(tmp_path)
     from datetime import datetime
     result = search(tmp_path, "ExampleProject")
     parsed = datetime.fromisoformat(result["data_time"])
     assert parsed.tzinfo is not None
+    assert parsed.utcoffset().total_seconds() == 0, (
+        f"data_time is not UTC: {result['data_time']!r}")
 
 
 # ============================================================

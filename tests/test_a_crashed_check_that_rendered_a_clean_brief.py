@@ -49,6 +49,7 @@ Fixed 2026-08-25.
 """
 from __future__ import annotations
 
+import ast
 import datetime as dt
 import importlib.util
 import subprocess
@@ -439,12 +440,28 @@ def test_the_promoted_copy_carries_no_marker(pk, tmp_path, monkeypatch):
 
 
 def test_the_recovery_advice_names_the_flag_that_makes_it_work(pk):
-    """The target is written BEFORE the push, so a plain re-run is refused."""
+    """The target is written BEFORE the push, so a plain re-run is refused.
+
+    SCOPED TO THE HANDLER 2026-08-30. This read
+    `src.split("git commit/push failed")[1]` -- the entire remainder of the file
+    after the marker -- so ANY later `--overwrite` satisfied it, including the
+    `add_argument("--overwrite")` definition. Removing the flag from the advice
+    while leaving it anywhere below kept the test green, which is precisely the
+    defect the test exists to pin. The `except` block that prints the message is
+    located in the syntax tree and only ITS string constants are read.
+    """
     src = (ROOT / "scripts" / "promote-knowledge.py").read_text(encoding="utf-8")
-    tail = src.split("git commit/push failed")[1]
-    assert "--overwrite" in tail, (
+    handlers = [node for node in ast.walk(ast.parse(src))
+                if isinstance(node, ast.ExceptHandler)
+                and "git commit/push failed" in ast.unparse(node)]
+    assert len(handlers) == 1, (
+        f"expected exactly one push-failure handler, found {len(handlers)}")
+    printed = " ".join(
+        node.value for node in ast.walk(handlers[0])
+        if isinstance(node, ast.Constant) and isinstance(node.value, str))
+    assert "--overwrite" in printed, (
         "the push-failure message tells the operator to re-run, and a plain "
-        "re-run dies at 'Target already exists'"
+        f"re-run dies at 'Target already exists'. It says: {printed!r}"
     )
 
 

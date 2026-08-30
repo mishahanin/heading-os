@@ -298,10 +298,34 @@ def test_the_dead_filenotfound_catch_is_gone():
 # ============================================================
 # 9 - the dry-run reports the predicate the runner consults
 # ============================================================
-def test_the_dry_run_prints_the_declared_sensitivity():
+@pytest.mark.parametrize("declared", [True, False])
+def test_the_dry_run_prints_the_declared_sensitivity(tmp_path, monkeypatch,
+                                                     capsys, declared):
+    """Run the dry run and read what it printed.
+
+    It used to compute `dry = src.split("--dry-run", 1)[-1]` and then assert
+    against `src`, the whole file, so the slice was dead and the phrase
+    "sensitivity declared:" satisfied the test from a docstring or the
+    normal-run path while the dry-run branch said nothing at all. `split` also
+    degraded silently: lose the literal and `dry` becomes the entire file.
+
+    Parametrized on both values, because a branch that printed a hardcoded
+    `True` would satisfy a single-value check.
+    """
+    ran = _load("router_accuracy_nightly_p10b", "scripts/router-accuracy-nightly.py")
+    monkeypatch.setattr(ran, "out_dir", lambda: tmp_path)
+    monkeypatch.setattr(ran, "sensitivity_is_declared", lambda: declared)
+    monkeypatch.setattr(ran, "run", lambda *a, **k: pytest.fail(
+        "the dry run executed the harness"))
+
+    assert ran.main(["--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert f"sensitivity declared: {declared}" in out, out
+    assert "sensitive now:" not in out, (
+        "the dry run reports is_sensitive() again; run() stopped consulting it, "
+        "so that line predicts a mechanism that decides nothing")
+
     src = (ROOT / "scripts" / "router-accuracy-nightly.py").read_text(encoding="utf-8")
-    dry = src.split("--dry-run", 1)[-1]
-    assert "sensitivity declared:" in src
     assert 'print(f"  sensitive now:  {is_sensitive()}")' not in src
 
 

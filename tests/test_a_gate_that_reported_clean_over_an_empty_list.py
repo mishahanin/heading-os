@@ -81,6 +81,23 @@ def _dangling_gitfile_repo(path):
     return path
 
 
+def _assert_bytes_mode(kwargs):
+    """A `-z` listing stub must stand in for a BYTES-mode call, or it drifts.
+
+    `secret_scan` read its listing through `text=True` until 2026-08-30, when
+    that was corrected: every subprocess text mode turns on universal newlines
+    and rewrites each CR byte to LF, so a tracked `docs/leak\\rc.md` was handed
+    to the scanner under a name that opens nothing and was published unscanned.
+    These stubs returned `str`, matched the old mode by accident, and broke on
+    `.decode`. The assertion means the next mode change fails here loudly rather
+    than letting a str-shaped double quietly pass for the real call.
+    """
+    assert not (kwargs.get("text") or kwargs.get("encoding")
+                or kwargs.get("universal_newlines")), (
+        "the git path listing must be read as BYTES; this stub returns bytes and "
+        "cannot stand in for a text-mode call")
+
+
 # ============================================================
 # 1 - the reachability the fix rests on
 # ============================================================
@@ -90,10 +107,11 @@ def test_mains_only_guard_accepts_a_directory_git_cannot_read(tmp_path):
     assert (dest / ".git").exists(), "main()'s guard would have refused this"
     for sub in (["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
                 ["status", "--porcelain"]):
-        proc = subprocess.run(["git", "-C", str(dest), *sub],
-                              capture_output=True, text=True)
+        # Bytes, the mode `secret_scan` actually reads the listing in. A premise
+        # check measured through a different mode is measuring a different call.
+        proc = subprocess.run(["git", "-C", str(dest), *sub], capture_output=True)
         assert proc.returncode != 0, f"git {sub[0]} unexpectedly succeeded"
-        assert proc.stdout == "", (
+        assert proc.stdout == b"", (
             f"git {sub[0]} wrote to stdout on failure; the empty-output "
             "premise of this defect no longer holds")
 
@@ -135,7 +153,8 @@ def test_the_scanner_is_never_reached_when_the_listing_fails(tmp_path, monkeypat
     def recording_run(cmd, *args, **kwargs):
         calls.append(list(cmd))
         if isinstance(cmd, list) and "ls-files" in cmd:
-            return subprocess.CompletedProcess(cmd, 128, "", "fatal: forced\n")
+            _assert_bytes_mode(kwargs)
+            return subprocess.CompletedProcess(cmd, 128, b"", b"fatal: forced\n")
         return real_run(cmd, *args, **kwargs)
 
     monkeypatch.setattr(pubsvc.subprocess, "run", recording_run)
@@ -156,7 +175,9 @@ def test_a_listing_that_fails_with_partial_output_still_refuses(tmp_path, monkey
 
     def truncated_run(cmd, *args, **kwargs):
         if isinstance(cmd, list) and "ls-files" in cmd:
-            return subprocess.CompletedProcess(cmd, 128, "a.txt\0b.txt\0", "fatal: forced\n")
+            _assert_bytes_mode(kwargs)
+            return subprocess.CompletedProcess(
+                cmd, 128, b"a.txt\0b.txt\0", b"fatal: forced\n")
         return real_run(cmd, *args, **kwargs)
 
     monkeypatch.setattr(pubsvc.subprocess, "run", truncated_run)

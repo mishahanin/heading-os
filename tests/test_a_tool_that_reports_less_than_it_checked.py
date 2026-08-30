@@ -216,22 +216,42 @@ def test_the_split_did_not_change_what_routing_resolves_to():
 # ---------------------------------------------------------------------------
 
 def test_the_marker_is_cleared_from_any_directory(tmp_path):
-    marker = ROOT / ".sync" / "dep-update-pending.json"
-    assert not marker.exists(), "a real marker is pending; not clobbering it"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("{}\n")
-    try:
-        out = subprocess.run(
-            [PY, str(ROOT / "scripts" / "clear-dep-marker.py")],
-            cwd=tmp_path, capture_output=True, text=True, timeout=60)
-        assert out.returncode == 0, out.stderr
-        assert not marker.exists(), (
-            f"run from {tmp_path} the marker survived: it was resolved against "
-            f"the cwd, so the session-start banner keeps firing after a "
-            f"successful install. stdout={out.stdout!r}"
-        )
-    finally:
-        marker.unlink(missing_ok=True)
+    """The marker resolves against the WORKSPACE ROOT, never the cwd.
+
+    Both the marker and the root live in tmp_path. Until 2026-08-30 this test
+    fabricated a marker at the live `ROOT/.sync/dep-update-pending.json` and
+    removed it in a `finally`, with the write sitting ABOVE the `try` - so a
+    process killed in between left a counterfeit marker behind and the
+    operator's next session got a spurious "dependency update pending", and a
+    genuine marker created by a concurrent run after the existence check was
+    deleted by the cleanup. `get_workspace_root()` honours `WORKSPACE_ROOT`, so
+    none of the live tree needs to be involved to measure the same thing.
+    """
+    engine = tmp_path / "engine"
+    (engine / ".sync").mkdir(parents=True)
+    marker = engine / ".sync" / "dep-update-pending.json"
+    marker.write_text("{}\n", encoding="utf-8")
+
+    # A decoy at the cwd, which is where the defect looked. It must survive.
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / ".sync").mkdir(parents=True)
+    decoy = elsewhere / ".sync" / "dep-update-pending.json"
+    decoy.write_text("{}\n", encoding="utf-8")
+
+    out = subprocess.run(
+        [PY, str(ROOT / "scripts" / "clear-dep-marker.py")],
+        cwd=elsewhere, capture_output=True, text=True, timeout=60,
+        env={**os.environ, "WORKSPACE_ROOT": str(engine)})
+    assert out.returncode == 0, out.stderr
+    assert not marker.exists(), (
+        f"run from {elsewhere} the marker under the workspace root survived: it "
+        f"was resolved against the cwd, so the session-start banner keeps "
+        f"firing after a successful install. stdout={out.stdout!r}"
+    )
+    assert decoy.exists(), (
+        "the run cleared the marker beside the cwd; resolving against the "
+        "workspace root has to mean the cwd is not consulted at all"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -511,11 +531,32 @@ def test_the_documented_exit_2_exists():
 
 
 def test_the_gate_still_exits_0_on_a_clean_file():
-    """Anchor: the exit-2 wrapper must not swallow the normal codes."""
+    """Anchor: the exit-2 wrapper must not swallow the normal codes.
+
+    Exit 0 alone did not say a file was scanned. `--files` with a path the gate
+    does not select is an EMPTY selection, and an empty selection also exits 0,
+    so on a checkout without `README.md` this anchor stayed green while
+    exercising nothing. The verdict line carries the count, so the count is what
+    is asserted; the two legitimate no-scan states say "skipped" instead of
+    "clean" and are named here rather than absorbed into the pass.
+    """
+    target = ROOT / "README.md"
+    assert target.is_file(), (
+        "the anchor needs one real engine-routed file to scan; README.md is "
+        "tracked in this repository and its absence is a broken checkout, not "
+        "a reason to pass")
     proc = subprocess.run(
         [PY, str(ROOT / "scripts" / "content-guard.py"), "--files", "README.md"],
         cwd=ROOT, capture_output=True, text=True, timeout=120)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+    if "skipped" in proc.stdout:
+        # No data overlay (public clone) or data root == engine. The gate is a
+        # no-op there by design and there is no clean verdict to anchor.
+        return
+    assert "content-guard: clean" in proc.stdout, proc.stdout
+    assert "1 file(s)" in proc.stdout, (
+        f"the gate exited 0 without scanning the file it was handed; an empty "
+        f"selection exits 0 too. stdout={proc.stdout!r}")
 
 
 # ---------------------------------------------------------------------------

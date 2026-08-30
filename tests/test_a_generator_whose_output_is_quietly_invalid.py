@@ -68,6 +68,17 @@ god = _load("generate_odunone_docx_p7a", "scripts/generate-odunone-docx.py")
 
 @pytest.fixture(scope="module")
 def docx_module():
+    """python-docx or a SKIP, never an ERROR.
+
+    `_ensure_docx()` was called blind until 2026-08-30, so on an environment
+    without python-docx every test in sections 1 and 2 reported ERROR at
+    fixture setup. The sibling shard `test_a_gate_that_shipped_what_it_never_read.py`
+    guards its image tests with `pytest.importorskip("PIL.Image")`; two files
+    of one campaign should not run opposite policies on the same question,
+    and an ERROR that means "this package is not installed" buries the ones
+    that mean something.
+    """
+    pytest.importorskip("docx", reason="python-docx (extra: documents) not installed")
     god._ensure_docx()
     return god
 
@@ -400,18 +411,57 @@ def test_the_live_registry_still_renders_identically():
 # 11 - every slide coordinate is an integer
 # ============================================================
 
-def test_the_centred_row_coordinates_are_integers():
+def test_every_coordinate_the_generator_places_is_an_integer(tmp_path, monkeypatch):
     """`Emu * 0.5` returns a plain float, and OOXML's coordinate type is
-    xsd:long -- so every shape on that row serialised as `2377440.0`, which is
-    schema-invalid and can trigger PowerPoint's repair prompt."""
-    from pptx.util import Inches
+    xsd:long -- so every shape on the centred row was positioned with a
+    non-integer EMU.
 
-    cw, gap = Inches(3.7), Inches(0.3)
-    rx = Inches(0.6) + (cw + gap) // 2
-    assert isinstance(rx, int) and not isinstance(rx, float)
-    for i in range(2):
-        x = rx + i * (cw + gap)
-        assert isinstance(x, int) and not isinstance(x, float), f"{x!r} is a float"
+    Measured through the generator's own call sites: the three placement
+    helpers are wrapped, `build()` is run for real, and every left/top/width/
+    height it hands them is checked. This test used to import
+    `pptx.util.Inches`, retype `Inches(0.6) + (cw + gap) // 2` inline and
+    assert the result was an int - a fact about `//` and about python-pptx,
+    established without importing, loading or calling the generator once. The
+    script could have computed the row through any other expression and this
+    stayed green; the file's own section 9 condemns exactly that
+    ("Reproducing the logic in the test would have tested the test").
+
+    NOT read off the emitted .pptx, which was the first attempt and is a
+    guard that cannot refuse: measured 2026-08-30 against python-pptx in this
+    venv, a float offset is coerced to an integer on serialise, so
+    `ppt/slides/slideN.xml` carries `x="2377440"` whether the arithmetic was
+    `// 2` or `* 0.5`. The truncation the shard warned about happens silently
+    here, which is precisely why the check has to sit upstream of it.
+
+    OUTPUT is redirected into tmp_path first. The module-level constant
+    resolves through `get_outputs_dir()`, so calling `build()` without the
+    monkeypatch writes a real deck into the operator's data overlay.
+    """
+    pytest.importorskip("pptx", reason="python-pptx (extra: documents) not installed")
+    gtf = _load("generate_testing_framework_pptx_p7a",
+                "scripts/generate-testing-framework-pptx.py")
+    monkeypatch.setattr(gtf, "OUTPUT", str(tmp_path / "deck.pptx"))
+
+    placed: list[tuple[str, str, object]] = []
+
+    def record(helper_name, real):
+        def wrapper(slide, left, top, w, h, *args, **kwargs):
+            for label, value in (("left", left), ("top", top),
+                                 ("width", w), ("height", h)):
+                placed.append((helper_name, label, value))
+            return real(slide, left, top, w, h, *args, **kwargs)
+        return wrapper
+
+    for helper in ("add_rect", "add_bar", "txt"):
+        monkeypatch.setattr(gtf, helper, record(helper, getattr(gtf, helper)))
+
+    gtf.build()
+
+    assert len(placed) > 100, (
+        f"only {len(placed)} coordinates recorded; the wrappers did not take")
+    floats = [(h, label, v) for h, label, v in placed if isinstance(v, float)]
+    assert not floats, (
+        f"non-integer EMU coordinates reach the OOXML writer: {floats[:6]}")
 
 
 def test_the_source_no_longer_multiplies_an_emu_by_a_float():

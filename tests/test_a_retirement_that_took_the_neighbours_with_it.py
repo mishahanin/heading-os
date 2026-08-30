@@ -107,8 +107,22 @@ def test_the_separators_survive_the_removal():
     assert not out.rstrip("\n").endswith("·")
 
 
-def test_the_real_index_loses_exactly_one_pointer():
-    """Read-only against the operator's own index, which is the thing at risk."""
+def test_the_real_index_loses_exactly_the_pointers_it_should():
+    """Read-only against the operator's own index, which is the thing at risk.
+
+    Both expectations are now DERIVED from the file rather than assumed about
+    it. It used to assert a delta of exactly 1 and an unchanged newline count,
+    which is two claims about content nobody checked:
+
+      * a pointer that appears on two lines is correctly removed twice, and the
+        delta is 2;
+      * a line whose ONLY pointer is the target is correctly removed whole - the
+        behaviour `test_a_single_pointer_line_still_goes_whole` in this same
+        file mandates - and the newline count drops.
+
+    Either shape turned this red against correct code, on the operator's live
+    index, where nobody can edit the fixture to make it green.
+    """
     index = ROOT.parent / ".heading-os-data" / "auto-memory" / "MEMORY.md"
     if not index.is_file():
         pytest.skip("no data overlay on this clone")
@@ -117,17 +131,91 @@ def test_the_real_index_loses_exactly_one_pointer():
     if f"]({target})" not in before:
         pytest.skip("the sample pointer is no longer in the index")
 
+    pointer_re = re.compile(r"\]\([^)]+\)")
+    occurrences = before.count(f"]({target})")
+    # A line goes whole only when every pointer on it is the target.
+    lines_removed = sum(
+        1 for line in before.splitlines()
+        if f"]({target})" in line
+        and len(pointer_re.findall(line)) == line.count(f"]({target})")
+    )
+
     after = strip_index_pointers(before, [target])
-    count = lambda text: len(re.findall(r"\]\([^)]+\)", text))  # noqa: E731
-    assert count(before) - count(after) == 1, "a neighbour's pointer was taken too"
-    assert before.count("\n") == after.count("\n"), "a whole line was removed"
+    lost = len(pointer_re.findall(before)) - len(pointer_re.findall(after))
+    assert lost == occurrences, (
+        f"expected {occurrences} pointer(s) to go and {lost} did; a neighbour's "
+        f"pointer was taken too")
+    assert before.count("\n") - after.count("\n") == lines_removed, (
+        f"{lines_removed} line(s) carried only the target and should go whole")
+    assert f"]({target})" not in after
 
 
 # ============================================================
 # The delete that did not stick and was called retired
 # ============================================================
 
-def test_a_failed_unlink_is_returned_not_swallowed(tmp_path, capsys):
+def test_a_failed_unlink_is_returned_not_swallowed(tmp_path, capsys,
+                                                   monkeypatch):
+    """The branch, injected at the call rather than at the directory mode.
+
+    It used to `chmod(0o500)` the store and rely on the kernel to refuse the
+    unlink. That is not a refusal every runner gets: a process holding
+    CAP_DAC_OVERRIDE - root, which is the default in most CI containers -
+    deletes the file anyway, `removed` comes back non-empty, and the assertion
+    goes red against correct production code. On Windows the read-only
+    attribute on a directory does not stop a delete inside it either. A test
+    that fails for the operator's own fix pressures somebody into deleting one
+    of the two, and this is the guard over the retired-but-still-on-disk
+    orphan.
+
+    Raising from `unlink` reaches the same `except OSError` on every platform
+    and every user. The integration form is kept below, where the refusal is
+    measured before it is relied on.
+    """
+    store = tmp_path / "store"
+    store.mkdir()
+    doomed = store / "doomed.md"
+    doomed.write_text("x", encoding="utf-8")
+
+    real_unlink = Path.unlink
+
+    def _refuse(self, *args, **kwargs):
+        if self == doomed:
+            raise PermissionError(13, "Permission denied")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", _refuse)
+    removed, failed = memory_stores.retire_memory("doomed.md", stores=[store])
+
+    assert removed == []
+    assert [Path(p).name for p, _why in failed] == ["doomed.md"]
+    assert doomed.exists(), "the file was reported gone and is here"
+    assert "could not retire" in capsys.readouterr().err
+
+
+def test_a_read_only_store_is_reported_the_same_way(tmp_path, capsys):
+    """The same branch through a real permission bit, when the host has one.
+
+    The skip condition is MEASURED, not asserted: the mode is applied and an
+    unlink is actually attempted on a throwaway file. Whether this process can
+    override the mode is a fact about the runner, and `os.geteuid() == 0` is
+    only a proxy for it.
+    """
+    probe_dir = tmp_path / "probe"
+    probe_dir.mkdir()
+    probe = probe_dir / "canary.md"
+    probe.write_text("x", encoding="utf-8")
+    probe_dir.chmod(0o500)
+    try:
+        probe.unlink()
+        enforced = False
+    except OSError:
+        enforced = True
+    finally:
+        probe_dir.chmod(0o700)
+    if not enforced:
+        pytest.skip("this process deletes through mode 0o500; measured, not assumed")
+
     store = tmp_path / "store"
     store.mkdir()
     (store / "doomed.md").write_text("x", encoding="utf-8")
@@ -139,8 +227,24 @@ def test_a_failed_unlink_is_returned_not_swallowed(tmp_path, capsys):
 
     assert removed == []
     assert [Path(p).name for p, _why in failed] == ["doomed.md"]
-    assert (store / "doomed.md").exists(), "the file was reported gone and is here"
+    assert (store / "doomed.md").exists()
     assert "could not retire" in capsys.readouterr().err
+
+
+def test_a_store_that_never_held_the_memory_reports_neither_way(tmp_path):
+    """The same lie, pointing the other way, and a surviving mutation until now.
+
+    `retire_memory` is documented idempotent and missing-safe. A version that
+    appended to `removed` on the absent branch passed every test in this file:
+    the caller would then write "retired" to its audit log and strip the
+    MEMORY.md pointer for a store that never carried the file.
+    """
+    store = tmp_path / "store"
+    store.mkdir()
+    removed, failed = memory_stores.retire_memory("never-existed.md",
+                                                  stores=[store])
+    assert removed == []
+    assert failed == []
 
 
 def test_a_successful_retirement_reports_no_failures(tmp_path):
@@ -209,6 +313,15 @@ def test_a_dot_directory_keeps_its_dot(rel):
 
 
 def test_a_leading_dot_slash_is_still_removed():
+    """A relative input on purpose, and it is not a hidden cwd parameter.
+
+    An audit reported this expectation as true only from the repository root.
+    MEASURED 2026-08-30 from `/tmp`: it passes. `relative_path` resolves
+    nothing - it is `str(...)`, a separator swap, a `removeprefix` of the root
+    when the text already starts with it, and `removeprefix("./")`. No
+    `Path.resolve`, no `os.getcwd`, so the process directory cannot reach it.
+    Recorded so the claim is not chased a third time.
+    """
     assert ie.relative_path("./docs/b.html") == "docs/b.html"
 
 

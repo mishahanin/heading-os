@@ -850,35 +850,46 @@ def _git_changed_files(git_head: str) -> set[str]:
     # with a byte outside printable ASCII, and a quoted name reconciles against
     # nothing. A file the run really touched would then read as untouched.
     #
-    # `errors="replace"`, and `UnicodeError` in the except list. `text=True`
-    # alone decodes with the locale encoding and errors="strict", and a git
-    # filename is raw bytes: on a UTF-8 box a file named b'bad\xffname' made
-    # `subprocess.run` raise UnicodeDecodeError INSIDE this try, where neither
-    # OSError nor SubprocessError catches it (it is a ValueError). It travelled
-    # out of here, out of `verify_trajectory` and out of `cmd_verify` as a
-    # traceback, so an ADVISORY reconciliation killed the whole verifier: no
-    # defects printed, no scope line, no clean/dirty verdict. Measured
-    # 2026-08-30 against a real repository holding such a name. Replacing the
-    # undecodable bytes keeps every other path in the change set, and the
-    # mangled one simply reconciles against nothing and is reported unrecorded,
-    # which is the truthful advisory.
+    # Bytes plus a deliberate decode, and `UnicodeError` still in the except
+    # list. `text=True` alone decodes with the locale encoding and
+    # errors="strict", and a git filename is raw bytes: on a UTF-8 box a file
+    # named b'bad\xffname' made `subprocess.run` raise UnicodeDecodeError INSIDE
+    # this try, where neither OSError nor SubprocessError catches it (it is a
+    # ValueError). It travelled out of here, out of `verify_trajectory` and out
+    # of `cmd_verify` as a traceback, so an ADVISORY reconciliation killed the
+    # whole verifier: no defects printed, no scope line, no clean/dirty verdict.
+    # Measured 2026-08-30 against a real repository holding such a name.
+    #
+    # Naming an `encoding=` was the first fix and it was not enough. Any
+    # subprocess text mode also turns on UNIVERSAL NEWLINES, rewriting every CR
+    # byte to LF, and `subprocess` exposes no `newline=` knob to switch it off.
+    # MEASURED the same day: two tracked files `docs/x\r\ny.md` and
+    # `docs/x\ny.md` come back from `-z` as two distinct names in bytes mode and
+    # as ONE name under `text=True, encoding="utf-8"`. That is precisely the
+    # "a file the run really touched reads as untouched" failure the paragraph
+    # above says `-z` prevents; `-z` prevents only the quoting half.
+    #
+    # `errors="replace"` on the decode keeps every other path in the change set,
+    # and the mangled one simply reconciles against nothing and is reported
+    # unrecorded, which is the truthful advisory.
     changed: set[str] = set()
     try:
         diff = subprocess.run(
             ["git", "diff", "--name-only", "-z", git_head],
-            cwd=str(WORKSPACE_ROOT), capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=10,
+            cwd=str(WORKSPACE_ROOT), capture_output=True, timeout=10,
         )
         if diff.returncode != 0:
             return set()
-        changed.update(p for p in diff.stdout.split("\0") if p)
+        changed.update(
+            p for p in diff.stdout.decode("utf-8", "replace").split("\0") if p)
         untracked = subprocess.run(
             ["git", "ls-files", "-z", "--others", "--exclude-standard"],
-            cwd=str(WORKSPACE_ROOT), capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=10,
+            cwd=str(WORKSPACE_ROOT), capture_output=True, timeout=10,
         )
         if untracked.returncode == 0:
-            changed.update(p for p in untracked.stdout.split("\0") if p)
+            changed.update(
+                p for p in untracked.stdout.decode("utf-8", "replace").split("\0")
+                if p)
     except (OSError, UnicodeError, subprocess.SubprocessError):
         return set()
     return changed

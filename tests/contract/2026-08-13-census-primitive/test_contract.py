@@ -47,10 +47,24 @@ sys.path.insert(0, str(ROOT))
 
 FIXTURE = ROOT / "tests" / "fixtures" / "census_corpus"
 
-pytestmark = pytest.mark.skipif(
+# NARROWED 2026-08-30 from a module-level `pytestmark`. The gate is right for
+# every test that drives the sandbox, and wrong for the two overlay-check tests
+# below, which monkeypatch a pure predicate and touch no sandbox at all. Under
+# the module-level form those two were SKIPPED on exactly the machines where
+# they matter -- a fresh clone with no bubblewrap, which is where the demo-tree
+# false positive fires -- while one of them calls itself "machine-independent"
+# in its own docstring.
+needs_bwrap = pytest.mark.skipif(
     shutil.which("bwrap") is None,
     reason="bubblewrap absent: the primitive refuses to run at all, and this "
            "contract measures its behaviour when it can run",
+)
+
+# The tests that assert a property of pure Python and must never be gated on the
+# sandbox. Asserted below, so re-introducing a module-level gate fails loudly.
+SANDBOX_FREE_TESTS = (
+    "test_the_overlay_check_is_not_fooled_by_the_shipped_demo_tree",
+    "test_the_overlay_check_still_says_yes_to_a_real_corpus",
 )
 
 
@@ -88,6 +102,25 @@ def _has_populated_overlay() -> bool:
 needs_overlay = pytest.mark.skipif(
     not _has_populated_overlay(),
     reason="needs a populated private data overlay (bare public clone)")
+
+
+def test_the_sandbox_free_tests_carry_no_bubblewrap_gate() -> None:
+    """The narrowing above, held in place. NEW 2026-08-30.
+
+    Both directions: neither the module nor either sandbox-free test may carry a
+    skip whose reason mentions bubblewrap, and both must still be defined. A
+    reinstated `pytestmark` would otherwise skip them again on precisely the
+    machines their docstrings say they exist for.
+    """
+    assert "pytestmark" not in globals(), (
+        "a module-level gate is back; it skips the sandbox-free tests too")
+    for name in SANDBOX_FREE_TESTS:
+        fn = globals().get(name)
+        assert fn is not None, f"{name} was renamed; this guard now measures nothing"
+        reasons = [m.kwargs.get("reason", "")
+                   for m in getattr(fn, "pytestmark", [])]
+        assert not any("bwrap" in r or "bubblewrap" in r for r in reasons), (
+            f"{name} is gated on bubblewrap and asserts a property of pure Python")
 
 
 def test_the_overlay_check_is_not_fooled_by_the_shipped_demo_tree(monkeypatch):
@@ -145,6 +178,7 @@ def _write_program(tmp_path: Path, body: str) -> Path:
 # CAP-1 - an aggregating question returns a structured, cited answer
 # ============================================================
 
+@needs_bwrap
 def test_a_traversal_returns_a_schema_valid_structured_answer(tmp_path):
     from scripts.utils import census_schema, sandbox
 
@@ -182,6 +216,7 @@ def test_a_traversal_returns_a_schema_valid_structured_answer(tmp_path):
 # CAP-2 - the sandbox refuses, and refuses SPECIFICALLY
 # ============================================================
 
+@needs_bwrap
 def test_the_sandbox_has_no_network(tmp_path):
     from scripts.utils import sandbox
 
@@ -203,6 +238,7 @@ def test_the_sandbox_has_no_network(tmp_path):
     assert verdict.startswith("refused:"), verdict
 
 
+@needs_bwrap
 def test_the_sandbox_carries_no_secrets(tmp_path, monkeypatch):
     """Nothing crosses from the parent's environment into the box.
 
@@ -239,6 +275,7 @@ def test_the_sandbox_carries_no_secrets(tmp_path, monkeypatch):
     assert set(got["env_keys"]) <= {"PATH", "PWD", "LC_CTYPE"}, got["env_keys"]
 
 
+@needs_bwrap
 def test_the_corpus_is_read_only(tmp_path):
     from scripts.utils import sandbox
 
@@ -269,6 +306,7 @@ def test_the_corpus_is_read_only(tmp_path):
 # ============================================================
 
 @needs_overlay
+@needs_bwrap
 def test_the_scorer_reports_per_class_and_counts_fabrication(tmp_path):
     """The acceptance gates on the traversal class, so the scorer must emit it.
 
@@ -302,6 +340,7 @@ def test_the_scorer_reports_per_class_and_counts_fabrication(tmp_path):
     assert report["not_scored"], "a withheld class must be named in the report"
 
 
+@needs_bwrap
 def test_the_cli_exposes_score_as_a_working_mode():
     """`--score` must stop printing the step-1 deferral notice.
 
@@ -327,6 +366,7 @@ def test_the_cli_exposes_score_as_a_working_mode():
 # CAP-5 - the primitive refuses work it should not do
 # ============================================================
 
+@needs_bwrap
 def test_a_corpus_that_fits_the_window_is_refused(tmp_path):
     """SRLM: a traversal primitive on an in-window corpus hurts. So refuse it."""
     census = _load("census_contract", "census.py")

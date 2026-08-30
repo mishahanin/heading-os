@@ -2375,13 +2375,60 @@ def _loads_or_none(raw: bytes) -> dict | None:
     return rec if isinstance(rec, dict) else None
 
 
+# Commands that only LOOK at bytes. A segment led by one of these cannot
+# release anything, whatever the rest of it spells.
+_INSPECTORS = frozenset({
+    "grep", "egrep", "fgrep", "rg", "ag", "ack", "sed", "awk", "cat", "head",
+    "tail", "less", "more", "wc", "ls", "find", "file", "stat", "diff", "cmp",
+    "cut", "sort", "uniq", "tr", "nl", "basename", "dirname", "realpath",
+    "readlink", "echo", "printf", "md5sum", "sha256sum", "test", "which",
+})
+
+_SEGMENT_SPLIT_RE = re.compile(r"(?:\|\||&&|[;&|]|\$\(|\()")
+
+
+def _executable_segments(bare: str) -> list[str]:
+    """The parts of a command line that could actually run something.
+
+    A segment whose FIRST word is a pure inspector is dropped. This is the
+    negative half of the wall and it is load-bearing: three of the script
+    patterns below (`push-all.py`, `publish-*.py`, `push-updates`) match a bare
+    NAME, so before this filter existed the wall refused
+
+        grep -n "aggregate" .claude/skills/push-updates/SKILL.md
+
+    which reads a file and releases nothing. MEASURED 2026-08-30: an agent doing
+    read-only research hit that refusal repeatedly and had to reach the same
+    bytes through a `*-updates` glob. Over-friction on a wall is how the wall
+    gets switched off, and then nothing guards the real thing.
+
+    Splitting first means a compound line is still caught: `ls && push-all.py`
+    keeps its second segment.
+    """
+    out = []
+    for seg in _SEGMENT_SPLIT_RE.split(bare):
+        # Strip before returning. `_PUSH_CMD_RE` and `_COMMIT_CMD_RE` anchor on
+        # `^` or a shell operator, and a segment carved out of `a && git push`
+        # keeps its leading space, so an unstripped segment matched NOTHING.
+        # MEASURED while writing this: `grep -n x file.py && git push` returned
+        # None, which is the wall failing open on a real push. That is the
+        # direction that costs something, so it gets the comment.
+        seg = seg.strip()
+        words = seg.split()
+        if words and words[0].rsplit("/", 1)[-1] in _INSPECTORS:
+            continue
+        out.append(seg)
+    return out
+
+
 def release_action(command: str) -> str | None:
     """`"push"`, `"commit"`, or None. Pure, so both directions are measurable."""
-    bare = _strip_quoted(command)
-    if _PUSH_CMD_RE.search(bare):
-        return "push"
-    if _COMMIT_CMD_RE.search(bare):
-        return "commit"
+    for seg in _executable_segments(_strip_quoted(command)):
+        if _PUSH_CMD_RE.search(seg):
+            return "push"
+    for seg in _executable_segments(_strip_quoted(command)):
+        if _COMMIT_CMD_RE.search(seg):
+            return "commit"
     return None
 
 

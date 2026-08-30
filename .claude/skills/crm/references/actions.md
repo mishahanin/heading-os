@@ -24,7 +24,7 @@ Display the relationship health dashboard.
 3. For each RED contact, suggest a specific action (email, call, meeting)
 4. **Company-Wide Radar (admin only):** If `.workspace-identity.json` has `role: "admin"`:
    a. Run `python scripts/aggregate-crm.py` to refresh aggregated data
-   b. Read the following from `../31c-crm-central/aggregated/`:
+   b. Read the following from `<data-root>/crm/aggregated/` (the operator's own derived view, written by that script):
       - `company-radar.md` - all contacts with health status across all execs
       - `shared-contacts.md` - contacts tracked by multiple execs
       - `ownership-map.md` - who owns which relationships

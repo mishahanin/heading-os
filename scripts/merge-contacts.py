@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merge two execs' versions of the same contact in crm-central.
+"""Merge two execs' versions of the same contact, across their own per-exec data overlays.
 
 Combines YAML frontmatter, interaction logs, and strategic notes from both
 versions into a single authoritative file under the target exec's directory.

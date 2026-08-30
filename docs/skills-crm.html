@@ -98,7 +98,7 @@
 /crm log Jane Doe met at the summit, sending the proposal Monday
 /crm radar
 "check CRM contact health"</code></pre>
-<p><strong>Customize.</strong> Cadence defaults and health thresholds live in <code>crm/config.md</code>. Contact records carry YAML frontmatter (<code>relationship_type</code>, <code>cadence</code>, <code>timezone</code>). Classification rules for new contact files are appended to <code>config/routing-map.yaml</code>. Admin-only company-wide radar reads <code>../31c-crm-central/aggregated/</code>.</p>
+<p><strong>Customize.</strong> Cadence defaults and health thresholds live in <code>crm/config.md</code>. Contact records carry YAML frontmatter (<code>relationship_type</code>, <code>cadence</code>, <code>timezone</code>). Classification rules for new contact files are appended to <code>config/routing-map.yaml</code>. Admin-only company-wide radar reads the operator's own aggregate at <code>&lt;data-root&gt;/crm/aggregated/</code>, which <code>aggregate-crm.py</code> builds from each exec's own data overlay. There is no central aggregate repo.</p>
 </section>
 
 <section class="skill">

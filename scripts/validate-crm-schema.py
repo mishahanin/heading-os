@@ -5,7 +5,7 @@ Closes P2.4 from the 2026-05-14 workspace deep audit. Replaces implicit template
 enforcement (scripts/crm-health.py emitted warnings without blocking) with explicit schema-
 validator enforcement. Designed to be called from:
 
-- scripts/aggregate-crm.py before aggregation (blocks records that would corrupt crm-central)
+- scripts/aggregate-crm.py before aggregation (blocks records that would corrupt the aggregate)
 - pre-commit hook (planned) when crm/contacts/*.md files are staged
 - ad-hoc via CLI for spot-checks
 

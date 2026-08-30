@@ -2,9 +2,9 @@
 """
 31C CRM Command Center Dashboard Generator
 
-Aggregates company-wide CRM data from crm-central (company radar, ownership map,
-shared contacts, exec registry, pipeline correlation) into a single-page HTML
-dashboard. Self-contained (inline CSS, base64 logo, no external dependencies
+Aggregates company-wide CRM data from the operator's own aggregate at
+<data-root>/crm/aggregated/ (company radar, ownership map, shared contacts,
+exec roster, pipeline correlation) into a single-page HTML dashboard. Self-contained (inline CSS, base64 logo, no external dependencies
 beyond Google Fonts).
 
 Usage:
@@ -100,7 +100,7 @@ def count_files_in_dir(dirpath):
 # Data Collectors
 # ============================================================
 def refresh_aggregated_data():
-    """Run aggregate-crm.py to refresh crm-central data."""
+    """Run aggregate-crm.py to refresh the aggregated CRM data."""
     if not AGGREGATE_SCRIPT.exists():
         print(f"  {YELLOW}Warning: aggregate-crm.py not found, using cached data{RESET}",
               file=sys.stderr)

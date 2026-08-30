@@ -21,10 +21,11 @@ x-heading-orchestration:
     - sync to everyone
 x-heading-capability:
   what: >
-    The one CEO command that ships workspace changes to every executive - commits
-    ceo-main, classifies and publishes corporate-classified files to ../heading-os-corporate/
-    via publish-corporate.py, bumps BUILD.json, pushes CRM, aggregates CRM Central,
-    and triggers each active exec's sync.
+    The one CEO command that ships workspace changes to every executive. It commits
+    the engine clone and the data overlay, then classifies and publishes
+    corporate-classified files to ../heading-os-corporate/ via publish-corporate.py.
+    It bumps BUILD.json and refreshes the operator's own CRM aggregate under
+    <data-root>/crm/aggregated/. Each exec then pulls; there is no central sync driver.
   how: >
     CEO-only, explicit invocation only - type /push-updates [summary]. Verifies
     admin role, shows a publish preview, and waits for explicit confirmation before
@@ -151,7 +152,7 @@ below carry every command line and every approval gate.
      Exit `3` is a skip, not a failure: read its headline (`Partial: N of M` vs
      `NOTHING PUSHED: all M`) and report that shape per `/backup` SKILL.md.
    - `aggregate-crm.py` (next step) reads each exec's data repo directly.
-3. Refresh CRM aggregation (if crm-central exists):
+3. Refresh the operator's own CRM aggregate at `<data-root>/crm/aggregated/`:
    ```bash
    python scripts/aggregate-crm.py
    ```

@@ -163,6 +163,92 @@ def test_no_orchestrator_surface_dispatches_a_write_to_the_retired_workspace():
     )
 
 
+# --- Pattern 7: the CRM aggregate tail must not target a retired repository --
+#
+# Third instance of the same shape, found 2026-08-30. Pattern 7's Agent 2 was
+# told to "refresh ../31c-crm-central/ from the per-exec CRM repos" and then
+# "commit and push the result to the 31c-crm-central remote". Neither exists.
+# `31c-crm-central` and the per-exec `31c-crm-{slug}` repos are both retired and
+# absent from disk; `scripts/aggregate-crm.py` reads each exec's own data
+# overlay and writes `<data-root>/crm/aggregated/`, which has no remote at all.
+#
+# So the tail agent pushed nothing to a repository that was not there, and the
+# isolation guarantee above it named a directory no tail could write. Same
+# failure shape as the Sentinel scout: a dispatched instruction pointing at an
+# absent location, erroring nowhere.
+#
+# Keyword guard again, and for the same reason: no engine-side constant names a
+# retired repo, so there is nothing to derive. Lines that name it in order to
+# forbid it are allowed, otherwise the fix could not document itself.
+
+_RETIRED_CRM = ("crm-central", "31c-crm-")
+_RETIREMENT_NOTE = re.compile(
+    r"retired|legacy|is absent|does not exist|no crm-central remote|do not write",
+    re.I,
+)
+
+
+def test_no_orchestrator_surface_dispatches_a_write_to_a_retired_crm_repo():
+    bad = []
+    inspected = 0
+    for path in (PATTERNS, ORCHESTRATOR_RULE):
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if not any(token in line for token in _RETIRED_CRM):
+                continue
+            inspected += 1
+            if _RETIREMENT_NOTE.search(line):
+                continue                       # naming it to forbid it is the point
+            bad.append(f"{path.relative_to(ROOT)}:{n}: {line.strip()[:110]}")
+    # Measured 2 inspected lines on 2026-08-30: the isolation-guarantee bullet
+    # and the Agent 2 prompt, both of which name the retired repo only to say it
+    # is gone. The floor guards the same decay mode as the sibling above: if the
+    # tokens stop appearing entirely, nothing is classified and `bad` is empty
+    # for the wrong reason.
+    assert inspected >= 2, (
+        f"only {inspected} line(s) in the orchestrator surfaces were checked "
+        f"against the {_RETIRED_CRM!r} guard; the corpus or the tokens drifted "
+        "and this test is no longer reading anything"
+    )
+    assert not bad, (
+        "an orchestrator surface still names a retired CRM repository as a live "
+        "target. Both 31c-crm-central and the per-exec 31c-crm-{slug} repos are "
+        "gone; aggregate-crm.py reads each exec's own data overlay and writes "
+        "<data-root>/crm/aggregated/, which has no remote:\n" + "\n".join(bad)
+    )
+
+
+def test_pattern_7_aggregate_tail_names_the_directory_the_script_writes():
+    """The aggregate tail's target is derivable, unlike the retired repo name:
+    aggregate-crm.py documents where it writes, so read it rather than restate it."""
+    aggregate = ROOT / "scripts" / "aggregate-crm.py"
+    assert aggregate.is_file(), "scripts/aggregate-crm.py is gone; Pattern 7 names a script that does not exist"
+    doc = ast.get_docstring(ast.parse(aggregate.read_text(encoding="utf-8"))) or ""
+    assert "crm/aggregated/" in doc, (
+        "aggregate-crm.py no longer documents crm/aggregated/ as its output; "
+        "re-derive what Pattern 7's tail agent should be told to refresh"
+    )
+    text = PATTERNS.read_text(encoding="utf-8")
+    block = text[text.index("## Pattern 7"):]
+    assert "crm/aggregated/" in block, (
+        "Pattern 7 no longer names crm/aggregated/, the only location "
+        "aggregate-crm.py writes. A tail agent told to refresh anything else is "
+        "pointed at a directory that does not exist."
+    )
+
+
+def test_pattern_7_does_not_tell_the_aggregate_tail_to_push():
+    """The aggregated view has no remote. An agent told to push it will
+    improvise one, which is how the retired-repo instruction survived."""
+    text = PATTERNS.read_text(encoding="utf-8")
+    block = text[text.index("## Pattern 7"):]
+    start = block.index("Agent 2 (Haiku) prompt:")
+    prompt = block[start:block.index("\n\n", start)]
+    assert "Do NOT commit and do NOT push" in prompt, (
+        "Pattern 7's Agent 2 prompt no longer forbids committing and pushing. "
+        f"The aggregated view is local-only and has no remote. Prompt: {prompt!r}"
+    )
+
+
 def test_pattern_7_names_the_sanctioned_push_primitive():
     text = PATTERNS.read_text(encoding="utf-8")
     start = text.index("## Pattern 7")

@@ -1,20 +1,20 @@
 """Real-data source for the /contacts endpoint.
 
-Lists every CRM contact the CEO can see: the CEO's own contacts from
-crm/contacts/, plus every executive's contacts from their per-exec mirror
-repo ../31c-crm-{slug}/contacts/. Mirrors the Tribe page format - rows
-grouped by relationship_type with days-since-touch - but spans all owners,
-so each row also carries who tracks the contact.
+Lists every CRM contact the CEO can see: their own contacts from the live
+crm/contacts/ under the DATA root, plus every active executive's contacts from
+that executive's DATA overlay, cloned as a sibling of the engine at
+`../.heading-os-data-{slug}/crm/contacts/`. Mirrors the Tribe page format (rows
+grouped by relationship_type with days-since-touch) but spans all owners, so
+each row also carries who tracks the contact.
 
-The CEO's own contacts are read from the live crm/contacts/ directory.
-Executive contacts come from the per-exec mirror repos (one repo per
-executive: 31c-crm-{slug}, cloned as a sibling of the workspace root).
-Each exec's /sync pushes to their own repo. The deprecated 31c-crm-central
-aggregate is still read as a fallback for execs whose per-exec mirror is
-not present on disk; that fallback will be removed once every active exec
-has been migrated.
+One topology, one source per owner, and the exec registry is the authority on
+who counts as an executive. The 2026-08-23 migration retired both older roots:
+the per-exec `31c-crm-{slug}` repos and the `31c-crm-central` aggregate. This
+module kept reading them until 2026-08-30, which is why the /contacts page
+showed every executive as zero contacts.
 
-Tests: tests/bridge/test_two_layers_that_disagreed_about_the_same_file.py
+Tests: tests/bridge/test_sources_contacts.py,
+tests/bridge/test_two_layers_that_disagreed_about_the_same_file.py
 """
 import logging
 import re
@@ -29,12 +29,13 @@ from scripts.bridge_daemon.sources.tribe import (
     _parse_frontmatter,
 )
 from scripts.utils.paths import get_data_root
-from scripts.utils.workspace import get_all_active_exec_slugs
+from scripts.utils.workspace import (
+    get_all_active_exec_slugs,
+    per_exec_overlay_dirname,
+)
 from scripts.utils.operator_identity import get_operator, operator_slug
 from scripts.bridge_daemon._safepath import contains_symlink
 
-CRM_CENTRAL_DIRNAME = "31c-crm-central"
-PER_EXEC_REPO_PREFIX = "31c-crm-"
 CEO_OWNER = "ceo"
 _OWNER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 CONTACT_FILE_MAX_BYTES = 500_000
@@ -43,27 +44,49 @@ logger = logging.getLogger(__name__)
 
 
 def _crm_central_self_dir() -> str:
-    """The operator's own contacts folder inside the deprecated crm-central
-    mirror; it holds a stale snapshot (the live crm/contacts/ is used instead),
-    so it is skipped. Resolved through the operator seam: established instance ->
-    legacy 'misha-hanin' (byte-identical), fresh clone -> generic 'operator'."""
+    """The operator's OWN slug, the one owner this daemon never reads as an
+    executive: their live contacts come from crm/contacts/, so a registry entry
+    or overlay under that slug is a stale duplicate and is skipped.
+
+    MISNAMED, deliberately kept. The name dates from the retired crm-central
+    aggregate, but the question it answers ("which slug is the operator's own?")
+    never had anything to do with that mirror, and two files call or monkeypatch
+    it by this name. Renaming it is a separate change from the migration.
+
+    Resolved through the operator seam: established instance -> that instance's
+    configured slug, fresh clone -> generic 'operator'.
+    """
     return operator_slug()
 
 
 def _resolve_exec_contacts_dir(workspace_root: Path, owner: str) -> Path | None:
-    """Return the contacts directory for `owner`, preferring per-exec mirror.
+    """Return `owner`'s contacts directory, or None when it is not on disk.
 
-    Resolution: ../31c-crm-{owner}/contacts/ (current source of truth) if it
-    exists on disk; otherwise ../31c-crm-central/contacts/{owner}/ (deprecated
-    aggregate retained as fallback). Returns None if neither exists.
+    ONE topology, and this is it: an exec's full DATA overlay is cloned as a
+    sibling of the engine clone, `../.heading-os-data-{owner}/`, with their CRM
+    contacts inside it at `crm/contacts/`. The directory NAME comes from
+    `per_exec_overlay_dirname`, the same helper `get_per_exec_repo_path` uses,
+    so the layout is spelled once for the whole workspace.
+
+    The name is composed against the `workspace_root` ARGUMENT rather than
+    fetched from `get_per_exec_contacts_dir`, which anchors on
+    `get_workspace_root()`. This function takes its root as a parameter
+    precisely so a test can sandbox the sibling overlays under `tmp_path`;
+    importing the rooted helper would make it ignore its own argument and read
+    the operator's real siblings during the suite.
+
+    Until 2026-08-30 this read `../31c-crm-{owner}/contacts/` and fell back to
+    `../31c-crm-central/contacts/{owner}/`. Both roots were retired by the
+    2026-08-23 CRM migration and neither exists on disk, so this returned None
+    for every executive and the /contacts page rendered each of them as zero
+    contacts while their live overlays held real files. Invisible only because
+    the bridge daemon is disabled. The suite was green throughout: its fixtures
+    built the dead layout, so the tests and the code agreed with each other and
+    with no filesystem.
     """
-    per_exec = workspace_root.parent / f"{PER_EXEC_REPO_PREFIX}{owner}" / "contacts"
-    if per_exec.is_dir():
-        return per_exec
-    central = workspace_root.parent / CRM_CENTRAL_DIRNAME / "contacts" / owner
-    if central.is_dir():
-        return central
-    return None
+    per_exec = (workspace_root.parent
+                / per_exec_overlay_dirname(owner) / "crm" / "contacts")
+    return per_exec if per_exec.is_dir() else None
 
 
 def _owner_label(owner: str) -> str:
@@ -148,11 +171,10 @@ def list_contacts(workspace_root: Path, today: date | None = None,
                   data_root: "Path | None" = None) -> dict:
     """Scan the CEO's crm/contacts/ + every active exec's contacts.
 
-    Per-exec source order matches `_resolve_exec_contacts_dir`: the per-exec
-    mirror ``../31c-crm-{slug}/contacts/`` wins, and the deprecated
-    ``31c-crm-central`` aggregate is only a fallback. (This line used to say
-    the scan read "every exec's crm-central contacts", which is the source
-    that LOSES.)
+    Executives come from `_resolve_exec_contacts_dir`, one source each:
+    ``../.heading-os-data-{slug}/crm/contacts/``. Enumeration is the exec
+    registry alone, so an offboarded executive whose overlay still sits on
+    disk contributes nothing.
 
     Returns:
         {
@@ -169,7 +191,7 @@ def list_contacts(workspace_root: Path, today: date | None = None,
 
     HEADING OS engine/data split: the CEO's own crm/contacts/ is DATA, so it
     resolves under ``data_root`` (falls back to the ``get_data_root()`` seam when not
-    supplied, NOT to ``workspace_root``). Per-exec mirror repos are siblings of the engine clone and stay
+    supplied, NOT to ``workspace_root``). Per-exec DATA overlays are siblings of the engine clone and stay
     rooted at ``workspace_root.parent``.
     """
     if data_root is None:
@@ -211,23 +233,21 @@ def list_contacts(workspace_root: Path, today: date | None = None,
     # The CEO's own contacts - live directory (DATA).
     _scan(data_root / "crm" / "contacts", CEO_OWNER)
 
-    # Every active executive's contacts. Source of truth is the per-exec
-    # mirror (../31c-crm-{slug}/contacts/), with crm-central retained as a
-    # fallback for execs whose mirror is not yet cloned locally. The exec
-    # registry drives the enumeration so a stale or partial crm-central
-    # snapshot cannot mask an exec who has migrated.
-    seen_owners: set[str] = set()
+    # Every active executive's contacts, from their DATA overlay sibling.
+    # The registry is the ONLY enumeration: it is the authority on who is an
+    # executive here. Globbing `../.heading-os-data-*` instead would be one
+    # line shorter and would silently resurrect an offboarded executive whose
+    # overlay is still lying around on disk.
     self_dir = _crm_central_self_dir()  # resolve once, not per loop iteration
     try:
         registry_slugs = get_all_active_exec_slugs()
     except Exception:
         # A silent [] here is not "no executives", it is "the registry could
-        # not be read", and every exec whose contacts live ONLY in a per-exec
-        # mirror then vanishes from the page with no indication. Log it; the
-        # crm-central backstop below still runs, so the page degrades rather
-        # than empties.
-        logger.warning("exec registry unreadable; per-exec mirrors will be "
-                       "skipped and only the crm-central backstop is scanned",
+        # not be read". Nothing else enumerates executives, so this empties
+        # the exec half of the page; say so rather than render zero rows as a
+        # fact. The CEO's own contacts, scanned above, still show.
+        logger.warning("exec registry unreadable; no executive contacts will "
+                       "be listed (the CEO's own are unaffected)",
                        exc_info=True)
         registry_slugs = []
     for owner in registry_slugs:
@@ -237,27 +257,6 @@ def list_contacts(workspace_root: Path, today: date | None = None,
         if target is None:
             continue
         _scan(target, owner)
-        seen_owners.add(owner)
-
-    # Crawl crm-central for any execs not in the registry (provisional
-    # backstop while migration completes). Skip owners already scanned and
-    # the operator's own stale snapshot, named by `self_dir` and resolved
-    # through the operator seam. This line used to spell one instance's
-    # operator slug as a literal, which is wrong on every other install: a
-    # fresh clone resolves `self_dir` to the generic default, so the comment
-    # described a directory the scan there never meets. `_crm_central_self_dir`
-    # is the function that answers this, and it always was.
-    central = workspace_root.parent / CRM_CENTRAL_DIRNAME / "contacts"
-    if central.is_dir():
-        for exec_dir in sorted(central.iterdir()):
-            if not exec_dir.is_dir():
-                continue
-            owner = exec_dir.name
-            if owner == self_dir or not _OWNER_RE.match(owner):
-                continue
-            if owner in seen_owners:
-                continue
-            _scan(exec_dir, owner)
 
     # Sort days-since-touch DESC; None last (matches Tribe).
     def sort_key(r):
@@ -302,13 +301,12 @@ def _contacts_base(workspace_root: Path, owner: str,
                    data_root: "Path | None" = None) -> Path | None:
     """Resolve the directory holding `owner`'s contact files, or None.
 
-    Same resolution order as `_resolve_exec_contacts_dir`: per-exec mirror
-    wins, crm-central is the fallback. Returns None if the owner is invalid
-    or no source exists on disk.
+    Same single source as `_resolve_exec_contacts_dir`: the exec's DATA
+    overlay. Returns None if the owner is invalid or no source exists on disk.
 
     HEADING OS engine/data split: the CEO's own crm/contacts/ is DATA, so it
     resolves under ``data_root`` (falls back to the ``get_data_root()`` seam, NOT to ``workspace_root``). Per-exec
-    mirror repos are siblings of the engine clone (``workspace_root.parent``).
+    DATA overlays are siblings of the engine clone (``workspace_root.parent``).
     """
     if data_root is None:
         data_root = get_data_root()

@@ -438,6 +438,31 @@ def get_crm_central_path() -> Path:
     return root / ".crm-central-repo"
 
 
+def per_exec_overlay_dirname(slug: str) -> str:
+    """The directory NAME of an exec's DATA overlay: `.heading-os-data-{slug}`.
+
+    Name only, with no root attached, so a caller that already holds its own
+    root can compose the layout without inheriting this module's
+    `get_workspace_root()` anchor. `scripts/bridge_daemon/sources/contacts.py`
+    is exactly that caller: it takes `workspace_root` as a PARAMETER so its
+    tests can sandbox the sibling overlays under `tmp_path`, and calling
+    `get_per_exec_contacts_dir` there would make the resolver ignore its own
+    argument and read the operator's real siblings during a test run.
+
+    Exists so the layout is spelled once. Until 2026-08-30 the daemon carried
+    its own second spelling (`31c-crm-{slug}/contacts`, the model retired on
+    2026-08-23) and every executive rendered as zero contacts on the /contacts
+    page while their overlays held real files. A third spelling is how that
+    drift happened; this helper is what prevents a fourth.
+
+    Validates the same three path shapes `get_per_exec_repo_path` rejects,
+    since a directory name is about to be joined to a path.
+    """
+    if not slug or "/" in slug or "\\" in slug or ".." in slug:
+        raise ValueError(f"Invalid slug: {slug!r}")
+    return f".heading-os-data-{slug}"
+
+
 def get_per_exec_repo_path(slug: str) -> Path:
     """Return the local clone path for an exec's DATA overlay.
 
@@ -454,9 +479,7 @@ def get_per_exec_repo_path(slug: str) -> Path:
     Callers that were reading the wrong sibling: `scripts/transfer-contact.py`
     and `scripts/admin-health.py`.
     """
-    if not slug or "/" in slug or "\\" in slug or ".." in slug:
-        raise ValueError(f"Invalid slug: {slug!r}")
-    return get_workspace_root().parent / f".heading-os-data-{slug}"
+    return get_workspace_root().parent / per_exec_overlay_dirname(slug)
 
 
 def get_per_exec_contacts_dir(slug: str) -> Path:

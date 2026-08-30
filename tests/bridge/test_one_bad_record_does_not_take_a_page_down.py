@@ -145,7 +145,20 @@ def test_the_list_docstring_names_the_source_that_wins():
         f"the summary line credits the FALLBACK source as the one scanned: "
         f"{summary!r}"
     )
-    assert "mirror" in doc, "the body no longer states the real resolution order"
+    # "mirror" stood here until 2026-08-30. It was the right word while there
+    # were TWO sources and one mirrored the other: a per-exec repo with a
+    # crm-central fallback behind it. Both of those roots are retired and absent
+    # from disk, the fallback is deleted, and there is now exactly one source, so
+    # a docstring that still said "mirror" would be describing a resolution order
+    # that no longer has two sides.
+    #
+    # The agent that migrated the reader refused to put the word back to satisfy
+    # this line, which was correct: the test was pinning vocabulary, not the
+    # contract. What the contract is now is that the summary names the LIVE root,
+    # so that is what this asserts. It is strictly stronger than the word it
+    # replaces, because "mirror" could survive a rewrite that pointed at nothing.
+    assert ".heading-os-data-" in doc, (
+        "the body no longer names the live source root")
 
 
 # ============================================================

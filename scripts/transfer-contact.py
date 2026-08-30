@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Transfer a contact between execs in crm-central.
+"""Transfer a contact between execs, across their own per-exec data overlays.
 
 Moves the contact file from one exec's directory to another, updates the
 owner field, logs the transfer, and commits the change.

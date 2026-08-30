@@ -388,7 +388,12 @@ DEGRADATION: A check that errors or times out is reported inline (`status: error
   of the data overlay, through `scripts/push-all.py`. It does NOT write to
   `ceo-main`: that legacy single workspace was retired on the 2026-06-15
   cutover to the two-part topology, and this line named it until 2026-08-23.
-- CRM aggregate tail writes only to `../31c-crm-central/`.
+- CRM aggregate tail writes only to `<data-root>/crm/aggregated/`, the operator's
+  own derived view. That view has no remote: `31c-crm-central` is retired
+  (2026-08-30), so the tail refreshes files and pushes nothing.
+- Because `crm/aggregated/` sits INSIDE the data overlay, the two tails share one
+  repo even though they write disjoint paths. Order matters: if the aggregate
+  lands after the push, its refreshed files wait for the next push.
 - Tail agents do NOT touch the corporate repo, BUILD.json, or executive workspaces.
 
 **Approval:** one hard gate before corporate publish.
@@ -413,9 +418,9 @@ Run scripts/publish-corporate.py (or the equivalent). Commit + push to the corpo
 
 PARALLEL TAIL PHASE (2 background agents, both Haiku, both write-isolated):
 
-Agent 1 (Haiku) prompt: "Engine + data push tail. Run `python scripts/push-all.py` to commit and push BOTH repos — the engine clone and the data overlay — to their own `origin/main`. That script is the only sanctioned push path: it runs the pre-push secret scan and verifies each branch is level with its remote. Report its exit code and headline verbatim; exit 3 means at least one repo was skipped for a named reason. Do NOT touch the corporate repo, BUILD.json, or any executive workspace. Do NOT touch ../31c-crm-central/."
+Agent 1 (Haiku) prompt: "Engine + data push tail. Run `python scripts/push-all.py` to commit and push BOTH repos — the engine clone and the data overlay — to their own `origin/main`. That script is the only sanctioned push path: it runs the pre-push secret scan and verifies each branch is level with its remote. Report its exit code and headline verbatim; exit 3 means at least one repo was skipped for a named reason. Do NOT touch the corporate repo, BUILD.json, or any executive workspace. Do NOT touch `<data-root>/crm/aggregated/`."
 
-Agent 2 (Haiku) prompt: "CRM aggregate tail. Run scripts/aggregate-crm.py to refresh ../31c-crm-central/ from the per-exec CRM repos. Commit and push the result to the 31c-crm-central remote if there are changes. Do NOT touch the engine clone, the data overlay, the corporate repo, or any executive workspace."
+Agent 2 (Haiku) prompt: "CRM aggregate tail. Run scripts/aggregate-crm.py to refresh `<data-root>/crm/aggregated/`, the operator's own derived view, which the script builds by reading each active exec's own data overlay at ../.heading-os-data-{slug}/crm/contacts/. Do NOT commit and do NOT push: there is no crm-central remote to push to, and the engine + data push tail owns every push in this pattern. Do NOT write anywhere in the data overlay outside crm/aggregated/. Do NOT touch the engine clone, the corporate repo, or any executive workspace."
 
 WAIT for both to complete.
 

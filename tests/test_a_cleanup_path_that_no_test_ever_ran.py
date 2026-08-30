@@ -7,12 +7,16 @@ matters. Found by a coverage sweep on 2026-08-27; every claim below was
 re-verified against current source before the test was written.
 
   1. `list_contacts`' exec-registry filter. An autouse fixture empties the
-     registry for all 20 tests in tests/bridge/test_sources_contacts.py, and the
-     three that override it inject one well-formed non-operator slug. So the
+     registry for every test in tests/bridge/test_sources_contacts.py, and the
+     few that override it inject one well-formed non-operator slug. So the
      `owner == self_dir` and malformed-slug guards in the REGISTRY loop never
-     ran. The crm-central backstop below carries a second, independent copy of
-     the same filter, and that copy is the one the suite covered - so the module
+     ran. The crm-central backstop carried a second, independent copy of the
+     same filter, and that copy is the one the suite covered - so the module
      looked tested while one of the two copies was free.
+
+     Updated 2026-08-30: the backstop and its duplicate filter were deleted
+     along with the retired root they read, so the registry loop's copy is now
+     the only one and these tests are its only coverage.
 
   2. `pull-service-state`'s scp-timeout rollback. The whole of `main()` was
      unexecuted. The staging-and-swap exists because "this mirror is the only
@@ -81,20 +85,39 @@ def _ws(tmp_path: Path) -> Path:
     return ws
 
 
+def _exec_overlay(tmp_path: Path, exec_slug: str) -> Path:
+    return tmp_path / f".heading-os-data-{exec_slug}" / "crm" / "contacts"
+
+
 def _per_exec_contact(tmp_path: Path, exec_slug: str, slug: str, name: str, **fm):
-    d = tmp_path / f"31c-crm-{exec_slug}" / "contacts"
+    """Write into the exec's DATA overlay, the one live source.
+
+    Was `31c-crm-{slug}/contacts` until 2026-08-30. That root had been retired
+    since 2026-08-23 and is absent from disk, so both tests below were building
+    their fixtures in a layout no filesystem has.
+    """
+    d = _exec_overlay(tmp_path, exec_slug)
     d.mkdir(parents=True, exist_ok=True)
     (d / f"{slug}.md").write_text(_contact_md(name, **fm), encoding="utf-8")
 
 
 def test_the_registry_loop_skips_the_operators_own_stale_snapshot(tmp_path, monkeypatch):
     """The registry may list the operator's own slug; their live contacts come
-    from crm/contacts/, and the mirror under that slug is a stale copy.
+    from crm/contacts/, and the overlay under that slug is a stale copy.
 
     Mutation-confirmed before this test existed: deleting `or owner == self_dir`
     from the registry loop left the whole bridge suite green (1199 passed),
     because the empty-registry fixture meant the loop never ran with a self
     slug in it.
+
+    Re-confirmed 2026-08-30, and it had gone vacuous in the meantime. The
+    fixture below seeded `31c-crm-{slug}/contacts`, a root the migration
+    retired, so once the resolver stopped reading it the stale copy could not
+    have appeared whatever the guard did: with `or owner == self_dir` deleted,
+    this test still passed. The guard is now the ONLY copy of that filter (the
+    crm-central backstop that carried the second copy was deleted with the root
+    it crawled), so this assertion is the whole of its coverage. Re-mutated
+    after the fixture moved: dropping the guard fails here.
     """
     ws = _ws(tmp_path)
     self_slug = contacts_src._crm_central_self_dir()
@@ -103,6 +126,7 @@ def test_the_registry_loop_skips_the_operators_own_stale_snapshot(tmp_path, monk
         _contact_md("Dana Osei", relationship_type="prospect"), encoding="utf-8")
     _per_exec_contact(tmp_path, self_slug, "dana-osei", "Dana Osei STALE COPY",
                       relationship_type="prospect")
+    assert _exec_overlay(tmp_path, self_slug).is_dir()  # the guard's target exists
     monkeypatch.setattr(contacts_src, "get_all_active_exec_slugs",
                         lambda: [self_slug])
 

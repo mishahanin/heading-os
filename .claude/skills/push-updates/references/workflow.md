@@ -153,14 +153,18 @@ Last Updated: 2026-08-20
      Exit `3` is a skip, not a failure: read its headline (`Partial: N of M` vs
      `NOTHING PUSHED: all M`) and report that shape per `/backup` SKILL.md.
    - `aggregate-crm.py` (next step) reads each exec's data repo directly.
-3. Optionally refresh CRM aggregation: `python scripts/aggregate-crm.py` (if crm-central exists)
-4. Refresh CRM aggregation (if crm-central exists):
+3. Optionally refresh the operator's own CRM aggregate:
    ```bash
    python scripts/aggregate-crm.py
    ```
-   This regenerates the company-wide radar, ownership map, shared contacts, and by-company views.
+   This reads each active exec's own data overlay at
+   `../.heading-os-data-{slug}/crm/contacts/` and regenerates the company-wide
+   radar, ownership map, shared contacts, and by-company views into
+   `<data-root>/crm/aggregated/`. That output is the operator's own derived view,
+   not a shared repo, so nothing is pushed. Pass `--skip-clone` to skip cloning
+   any missing exec overlay.
 
-5. Executive workspaces:
+4. Executive workspaces:
    - Central CEO-driven exec sync is **retired** as of 2026-06-26 (the destructive
      `workspace-sync.py` and the `sync-all-execs.py` driver are gone). The no-op stub that
      stood in for `sync-all-execs.py` was deleted on 2026-08-20; four of its five
@@ -181,8 +185,8 @@ PUSH COMPLETE
   Categories: {skills} skills, {rules} rules, {scripts} scripts, {context} context files
   Corporate repo: pushed to origin/main
   ceo-main: backed up to GitHub
-  CRM Central: {synced|no changes}
+  CRM aggregate: {refreshed|no changes}
 
-  Executives will receive this update on their next hourly sync.
-  Active executives: {list from exec-registry.json}
+  Each executive receives this update when they next pull.
+  Active executives: {list from admin/executives.json under the DATA root}
 ```

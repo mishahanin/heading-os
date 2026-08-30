@@ -255,7 +255,7 @@ The `_secure/` vault was removed in Plan 5. A sensitive session is now a fail-cl
 
 ## Multi-Executive Architecture
 
-Hub-and-spoke. CEO workspace (this one) is the master. A corporate repo at `../heading-os-corporate/` holds content shared with all execs. Executive workspaces (one per provisioned executive) pull from corporate on sync. `config/routing-map.yaml` decides what is ceo-only vs corporate (the single classification input). Skills published via `/publish-corporate` or `/push-updates`. CRM aggregated across execs via `../31c-crm-central/`. Full admin workflow in `docs/CEO-ADMIN-GUIDE.md` (CEO-only).
+Hub-and-spoke. CEO workspace (this one) is the master. A corporate repo at `../heading-os-corporate/` holds content shared with all execs. Executive workspaces (one per provisioned executive) pull from corporate on sync. `config/routing-map.yaml` decides what is ceo-only vs corporate (the single classification input). Skills published via `/publish-corporate` or `/push-updates`. There is no central CRM aggregate repo: `scripts/aggregate-crm.py` reads each exec's own data overlay and writes the operator's own local view into `<data-root>/crm/aggregated/`. Full admin workflow in `docs/CEO-ADMIN-GUIDE.md` (CEO-only).
 
 ### Corporate publishing: one stage, not two
 

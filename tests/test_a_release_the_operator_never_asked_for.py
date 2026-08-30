@@ -319,3 +319,48 @@ def test_a_non_bash_payload_is_none():
     """Write and Read payloads reach every check in this dispatcher."""
     assert D.check_release_gate(
         {"tool_name": "Write", "tool_input": {"file_path": "x.py"}}) is None
+
+
+# ==========================================================================
+# The negative half, widened: reading a file is not releasing it
+# ==========================================================================
+
+@pytest.mark.parametrize("command", [
+    'grep -n "aggregate" .claude/skills/push-updates/SKILL.md',
+    'sed -n "1,20p" scripts/push-all.py',
+    "cat scripts/publish-corporate.py",
+    "ls .claude/skills/push-updates/",
+    "wc -l scripts/push-all.py",
+    "rg push-all scripts/",
+])
+def test_inspecting_a_release_script_is_not_a_release(command):
+    """Three of the patterns match a bare NAME, so the wall used to refuse a
+    plain read of any file whose path spelled one.
+
+    MEASURED 2026-08-30: an agent doing read-only documentation research was
+    refused repeatedly on `.claude/skills/push-updates/SKILL.md` and had to
+    reach the same bytes through a `*-updates` glob. Nothing was being released.
+
+    This is not cosmetic. `WALL_REASONS` records the loss function for this
+    wall in both directions, and over-friction is the side that ends with the
+    wall switched off, after which nothing guards the real thing at all.
+    """
+    assert D.release_action(command) is None
+
+
+@pytest.mark.parametrize("command,expected", [
+    ("grep -n x file.py && git push", "push"),
+    ("cat a.txt; git push --force", "push"),
+    ("ls && .venv/bin/python scripts/push-all.py", "push"),
+    ("grep foo bar | git commit -F -", "commit"),
+])
+def test_an_inspector_in_front_does_not_hide_a_release_behind_it(command, expected):
+    """The dangerous direction of the same change, and it caught a real bug.
+
+    The filter drops a segment whose first word only looks at bytes. The first
+    version returned the segments unstripped, so ` git push` carved out of
+    `... && git push` kept its leading space, `^` did not match, and
+    `release_action` returned None. That is the wall failing OPEN on a real
+    push, produced by the fix for the harmless direction.
+    """
+    assert D.release_action(command) == expected

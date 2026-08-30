@@ -235,3 +235,66 @@ def test_bound_summary_states_where_the_rest_lives(length, cut):
         assert "handoff-archive/x.md" in out
     else:
         assert out == text
+
+
+# The case above asserts the trailing NOTE and nothing else, because a run of
+# identical "x" cannot tell one retained prefix from another. So the retained
+# text itself was unbound: `text[:limit].rstrip()` could be replaced by `""` and
+# the parametrised case above still passed. That is not a cosmetic gap. This
+# return value is interpolated straight into the `## Summary` section of the
+# pointer that `.claude/hooks/checkpoint-save.py` writes, and the pointer is what
+# gets injected into the resumed session. Losing the prefix leaves the next
+# session a heading, a note, and no handoff at all - while the note it kept
+# still promises the reader that a summary was written.
+#
+# Distinct words, not a run of one character, so an assertion can name what
+# survived and what did not.
+KEPT = "alpha bravo charlie delta echo foxtrot golf hotel india juliett"
+DROPPED = "kilo lima mike november oscar papa quebec"
+ARCHIVE = "outputs/operations/handoff-archive/2026-01-01-example.md"
+
+
+def test_bound_summary_keeps_the_text_it_retained():
+    """The cut branch must return the retained CONTENT, then the note.
+
+    `limit` is the length of KEPT, so the retained prefix is exactly that phrase
+    and the assertion compares against a literal rather than re-running the
+    slice the code under test performs.
+    """
+    out = CP.bound_summary(KEPT + " " + DROPPED, ARCHIVE, limit=len(KEPT))
+
+    assert out.startswith(KEPT), "the retained summary was lost, only the note survived"
+    assert "quebec" not in out, "text past the limit came through"
+    # The note still has to be there. It names where the rest went.
+    assert f"Cut at {len(KEPT)} characters" in out
+    assert ARCHIVE in out
+
+
+def test_bound_summary_cuts_at_the_limit_not_somewhere_short_of_it():
+    """A prefix shorter than `limit` keeps the note honest and the summary wrong.
+
+    `startswith` above already refuses a short slice, but only because KEEP is
+    one phrase. This states the length directly: everything before the note is
+    the full budget, and the first dropped word is the one that sat past it.
+    """
+    text = KEPT + " " + DROPPED
+    out = CP.bound_summary(text, ARCHIVE, limit=len(KEPT))
+    retained = out.split("\n\n[Cut at")[0]
+
+    assert len(retained) == len(KEPT)
+    assert retained.endswith("juliett")
+    assert text[len(KEPT):].split()[0] == "kilo"
+    assert "kilo" not in out
+
+
+def test_bound_summary_does_not_leave_the_cut_sitting_on_whitespace():
+    """`.rstrip()` in the retained expression, which nothing exercised either.
+
+    Every existing case cuts mid-word, so the strip never had anything to do and
+    could be deleted unnoticed. Here the limit lands on a run of spaces.
+    """
+    text = KEPT + "     " + DROPPED
+    out = CP.bound_summary(text, ARCHIVE, limit=len(KEPT) + 3)
+
+    assert out.startswith(KEPT + "\n\n[Cut at"), "the cut kept trailing whitespace"
+

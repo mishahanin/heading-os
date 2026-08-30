@@ -28,12 +28,20 @@ GATE: `len(output.split())` decided `min_words` and `max_words`, so a bare `-`
 bullet, a `|` table rule and a `---` separator each cleared one word of a length
 floor. A floor a list of bullets satisfies on punctuation is not a floor.
 
-Two counters were deliberately left alone, and this file pins that decision so a
-later audit finds the answer instead of re-opening it:
+Two counters were deliberately left alone. The operator reversed half of that on
+2026-08-30 and folded `ste-check` into the shared counter as well, so only one
+private definition survives. Both states are recorded here, because a file that
+still described the old decision would send the next audit hunting a counter
+that no longer exists:
 
-- `scripts/ste-check.py:word_count` counts `[\w'-]+`, so "well-known" is one
-  word. For a sentence-length limit that is arguably the right answer, and the
-  number never leaves the tool.
+- `scripts/ste-check.py:word_count` USED TO count `[\w'-]+`, which reads `.` `/`
+  `=` `{` `}` as word boundaries and scored `outputs/.../{version}.md` as seven
+  words. It now calls the shared counter. The swap can only lower a count, so it
+  loosened the 20/25 sentence limits rather than tightening them: measured over
+  the gated corpus, 8644 sentences, no verdict moved and 572 sentences gained
+  margin. The convergence is pinned by
+  `tests/test_two_private_counters_that_outvoted_the_shared_one.py`, which also
+  holds the loosening at the exact boundary word.
 - `scripts/humanization-check.py:word_count` counts `\b\w+\b`, so "well-known"
   is two and "state-of-the-art" is four. Every one of that tool's sentence and
   paragraph thresholds is calibrated against it; swapping the definition would
@@ -285,10 +293,20 @@ def test_the_humanisation_report_carries_the_label_when_it_has_findings():
     assert "Word count:" not in out
 
 
-def test_the_ste_counter_still_has_its_own_definition():
+def test_the_ste_counter_no_longer_has_its_own_definition():
+    """This file's subject is the 55% spread across five counters. One arm of
+    that spread closed on 2026-08-30, so the assertion is inverted rather than
+    deleted: the spread is what this file measures, and a closed arm is a
+    result, not an absence.
+
+    The old assertions (`well-known` is 1, `50%` is 1) are not proof of anything
+    any more. Both hold under the shared counter too, so they would have gone on
+    passing while the claim in their name became false.
+    """
     ste = _load("ste_wc", "scripts/ste-check.py")
-    assert ste.word_count("well-known") == 1
-    assert ste.word_count("50%") == 1
+    assert ste.word_count(SPREAD) == word_count(SPREAD), (
+        "ste-check disagrees with the shared counter again; the 2026-08-30 "
+        "convergence has been undone")
 
 
 def test_the_newsletter_cli_reports_an_exact_count_not_an_estimate():

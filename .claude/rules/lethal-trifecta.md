@@ -15,4 +15,10 @@ Every outbound send is drafted, never auto-sent. Across every surface:
 - A skill or daemon that produces an outbound message produces a **draft** for review - it does not call the send transport itself as an autonomous step.
 - New automation that gains a send capability inherits this control by default. If you add a new `action_type` that can send anything outbound, add it to `send_capable` in `config/tool-risk.json` so it floors at `gated`. Forgetting also fails safe: an unclassified type resolves `gated`.
 
+## The one exception: self-notification
+
+A system notification to the operator's OWN sink is not a leg-3 send, so the six timer-driven notifiers and the checkpoint hook fire without a click. Leg 3 is reach to a third party; a message that can only arrive at the operator is the machine telling the human who already holds the data. Gating it would mean asking him to approve being told.
+
+The boundary is mechanical, not a promise. `scripts/utils/telegram_notify.py` resolves an allowlist of the operator's own sinks from the gitignored `.env` (pinned by `HEADING_OS_SELF_TELEGRAM_TARGET`, else the per-feature `*_TELEGRAM_TARGET` set) and REFUSES any other recipient with a logged `REFUSED` line and no send. Absent, blank or unrecognised configuration refuses; it never falls back to sending somewhere. Nothing may widen that transport to carry a recipient that arrived through the running process rather than from the operator's own file, and no other send path inherits this exception.
+
 Advisory layers may inspect a queued draft and attach a second opinion (see the R5b pre-approval critique, `scripts/utils/draft_critique.py`), but an advisory layer can only annotate - it can never approve, dismiss, or send. The mandatory human click is the only path from draft to sent.

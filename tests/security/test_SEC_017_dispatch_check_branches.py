@@ -351,13 +351,26 @@ def test_checks_list_has_ten_branches(dispatch):
     to ask the graph, because that is the cheaper of the two answers and often
     removes the need for the other.
 
+    `check_release_gate` joined on 2026-08-30, SECOND. It refuses a `git commit`
+    or a push the operator did not ask for in this turn, reading their verbatim
+    `lastPrompt` out of the session transcript rather than trusting the model's
+    belief that permission exists. It sits second for the reason the paragraph
+    above gives `check_prevent_secrets` the first slot: a command that both
+    releases AND carries a credential must be refused for the credential, whose
+    message must not be buried under a permission complaint. Second and not
+    lower because an unauthorised release should not depend on eight later
+    checks happening to have no opinion, and because the thing it guards
+    (something irreversible leaving the machine) outranks every working-method
+    rule below it.
+
     The tripwire is the point. This assertion does not drift with the list; a
     new check fails it until its author writes down where in the order it
     belongs and why."""
-    assert len(dispatch.CHECKS) == 10
+    assert len(dispatch.CHECKS) == 11
     names = [c.__name__ for c in dispatch.CHECKS]
     assert names == [
         "check_prevent_secrets",
+        "check_release_gate",
         "check_protect_personal_threads",
         "check_protect_corporate",
         "check_protect_docs",

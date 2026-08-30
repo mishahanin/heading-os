@@ -19,6 +19,7 @@ translated on your behalf. See `_build_generate_input`.
 
 Tests: tests/test_a_retry_that_promised_a_longer_timeout.py
        tests/test_the_flags_a_tool_accepted_and_never_sent.py
+       tests/test_a_budget_one_hung_request_could_spend.py
 """
 
 import argparse
@@ -80,7 +81,56 @@ MODELS = {
 
 REPLICATE_API = "https://api.replicate.com/v1"
 POLL_INTERVAL = 2
+
+# A socket timeout answers "how long may ONE call block?". A budget answers
+# "how long may ALL of them together?". Those are different questions, and
+# `POLL_TIMEOUT` used to be the answer to both: it was handed to `urlopen` AND
+# compared against total elapsed. So one connection that hung spent the entire
+# budget inside a single call, and the loop's first check (which only runs once
+# that call has returned) found nothing left. The poll made exactly one
+# attempt and reported a timeout, with one socket hung and the service
+# perfectly healthy. Two roles, two numbers, and one function tying them.
+
+# The whole prediction's wall-clock budget, measured from before the POST.
 POLL_TIMEOUT = 120
+# The creating POST carries `Prefer: wait`, which Replicate holds open for up
+# to a minute. It gets the longer socket timeout: that documented minute plus
+# 30s of margin for connection setup and the response body.
+CREATE_TIMEOUT = 90
+# A status GET answers from a lookup and returns at once, so a poll that blocks
+# is a poll that has hung. Derived rather than chosen, so the property outlives
+# an edit to any one number: at most a quarter of the budget, which leaves a
+# hung poll three further attempts inside the same run.
+HUNG_POLLS_PER_BUDGET = 4
+POLL_REQUEST_TIMEOUT = POLL_TIMEOUT // HUNG_POLLS_PER_BUDGET
+
+
+def _validated_budget(budget: int, create: int, interval: int) -> int:
+    """Return `budget`, or refuse a pair one request could spend on its own.
+
+    The relationship between the two timeouts, written down where it can be
+    executed instead of remembered. The budget has to outlast the longest
+    single request by at least one poll interval; below that line the slowest
+    legitimate POST is the whole budget again and the loop never reaches its
+    first GET. Raised rather than asserted, so `python -O` cannot switch the
+    check off.
+    """
+    if budget <= create + interval:
+        raise RuntimeError(
+            f"polling budget ({budget}s) must exceed the longest single "
+            f"request ({create}s) plus one poll interval ({interval}s): a "
+            f"budget one request can spend leaves the poll loop no attempts."
+        )
+    return budget
+
+
+POLL_TIMEOUT = _validated_budget(POLL_TIMEOUT, CREATE_TIMEOUT, POLL_INTERVAL)
+
+# Which socket timeout each call gets. Selected by method rather than passed at
+# the call site, so the two callers in `_create_prediction` keep the signature
+# every test and reader already knows, and the mapping lives in one place.
+_REQUEST_TIMEOUTS = {"POST": CREATE_TIMEOUT, "GET": POLL_REQUEST_TIMEOUT}
+
 # A generated image is single-digit MB; this is a runaway guard, not a fit.
 MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024
 
@@ -177,8 +227,17 @@ def _sniff_ext(data: bytes) -> str | None:
     return None
 
 
-def _api_request(method: str, url: str, token: str, data: dict = None) -> dict:
-    """Authenticated JSON request to Replicate API."""
+def _api_request(method: str, url: str, token: str, data: dict = None,
+                 timeout: float | None = None) -> dict:
+    """Authenticated JSON request to Replicate API.
+
+    `timeout` is this ONE call's socket timeout, never the polling budget. Left
+    at None it comes from `_REQUEST_TIMEOUTS`, which gives the creating POST the
+    minute Replicate may hold `Prefer: wait` open and gives a status GET a
+    quarter of the budget.
+    """
+    if timeout is None:
+        timeout = _REQUEST_TIMEOUTS.get(method, POLL_REQUEST_TIMEOUT)
     if not url.startswith("http"):
         url = f"{REPLICATE_API}{url}"
     headers = {
@@ -189,7 +248,7 @@ def _api_request(method: str, url: str, token: str, data: dict = None) -> dict:
     body = json.dumps(data).encode("utf-8") if data else None
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=POLL_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8") if e.readable() else str(e)
@@ -306,11 +365,12 @@ def _create_prediction(token: str, model_id: str, input_params: dict) -> dict:
     """Create a prediction and poll until completion."""
     owner, name = model_id.split("/", 1)
     # The clock starts BEFORE the POST. That request carries `Prefer: wait`,
-    # which Replicate holds open for up to a minute, and it runs with its own
-    # `urlopen(timeout=POLL_TIMEOUT)` -- so starting the clock after it
-    # returned put the single longest wait outside the budget the timeout
-    # message advertises, and "budget 120s" could be printed after 240s of
-    # real blocking. The earlier fix made the LOOP honest and left this.
+    # which Replicate holds open for up to a minute, so starting the clock
+    # after it returned put the single longest wait outside the budget the
+    # timeout message advertises, and "budget 120s" could be printed after 240s
+    # of real blocking. It now runs under `CREATE_TIMEOUT`, which the budget is
+    # required to outlast, so the worst case is a POST that spends 90 of the
+    # 120 seconds and a loop that still gets its remaining fifteen attempts.
     started = time.monotonic()
     prediction = _api_request("POST", f"/models/{owner}/{name}/predictions", token, {"input": input_params})
 

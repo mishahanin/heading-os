@@ -30,11 +30,41 @@ DEFAULT_FORMAT = "%(asctime)s %(levelname)s [%(trace_id)s] %(message)s"
 _factory_installed = False
 
 
+def _trace_id() -> str:
+    """The current trace id, or `"-"`. NEVER raises, and that is the point.
+
+    This runs inside the log-record factory, so it runs on EVERY record every
+    logger in the process ever creates. An exception here does not lose a trace
+    id; it propagates out of `logging.warning(...)` and into whatever was
+    logging, which is routinely an error handler that has just promised its
+    caller a value instead of a raise.
+
+    MEASURED 2026-08-30. `daemon_heartbeat.beat()` documents that it never
+    raises: it catches the write failure and logs a warning. With the factory
+    installed and `tracing.get` failing, the warning ITSELF raised, straight out
+    of `beat()`. The test that pins the promise passed alone and failed once any
+    earlier test in the same process had installed the factory, which is the
+    state every daemon runs in. So the promise held only where the factory was
+    absent, and the factory is present in production.
+
+    A trace id is decoration on a log line. Losing one is nothing. Turning every
+    log call in the process into a possible raise is the opposite of nothing,
+    and it is invisible until the day something logs from inside a handler.
+
+    `BaseException` is not caught: a `KeyboardInterrupt` or a `SystemExit`
+    arriving here belongs to the caller, not to a decoration.
+    """
+    try:
+        return tracing.get() or "-"
+    except Exception:
+        return "-"
+
+
 class TraceFilter(logging.Filter):
     """Inject the current trace ID onto each record as ``trace_id``."""
 
     def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
-        record.trace_id = tracing.get() or "-"
+        record.trace_id = _trace_id()
         return True
 
 
@@ -55,7 +85,7 @@ def install_log_factory() -> None:
         record = existing(*args, **kwargs)
         # Only set when absent so an explicit TraceFilter or adapter can win.
         if not hasattr(record, "trace_id"):
-            record.trace_id = tracing.get() or "-"
+            record.trace_id = _trace_id()
         return record
 
     logging.setLogRecordFactory(_factory)

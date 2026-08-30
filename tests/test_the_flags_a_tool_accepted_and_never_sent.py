@@ -629,16 +629,35 @@ def test_the_upload_still_declares_the_content_type(monkeypatch, tmp_path):
 # 9 - what this shard deliberately did NOT change
 # ==========================================================================
 
-def test_the_poll_timeout_is_still_both_the_socket_budget_and_the_total():
-    """Surfaced, not fixed. `POLL_TIMEOUT` is passed to `urlopen` AND compared
-    against total elapsed, so one slow request can consume the whole budget
-    inside a single call. Splitting it changes the timeout contract every
-    caller reads, which is a design decision and not a defect fix. Pinned so
-    the next audit finds the answer instead of re-deriving the question.
+def test_the_poll_timeout_no_longer_does_two_jobs():
+    """This slot used to hold a "surfaced, not fixed" pin: `POLL_TIMEOUT` was
+    handed to `urlopen` AND compared against total elapsed, so one hung request
+    spent the whole budget inside a single call and the loop asked for status
+    zero times. The pin asserted the two source lines were still present, and
+    it existed to be retired on the day the split landed. It landed 2026-08-30,
+    so the pin is retired here rather than deleted, and the claim is inverted.
+
+    The pin was also a source-text grep, which this workspace forbids: it
+    punishes a file for documenting its own trap, and it would have gone green
+    on a comment that merely quoted the old line. The replacement reads the
+    module, not the file.
+
+    What is bound now is the RELATIONSHIP, not three numbers. The budget must
+    outlast the longest single request by at least one poll interval, or a hung
+    request reproduces the original defect. `_validated_budget` enforces that at
+    import, and it raises rather than asserting, so `python -O` cannot switch
+    the check off.
     """
-    src = (ROOT / "scripts" / "design-engine.py").read_text(encoding="utf-8")
-    assert "urlopen(req, timeout=POLL_TIMEOUT)" in src
-    assert "if elapsed > POLL_TIMEOUT:" in src
+    assert de.POLL_REQUEST_TIMEOUT < de.POLL_TIMEOUT, (
+        "a single status request may not be allowed to spend the whole budget")
+    assert de.CREATE_TIMEOUT + de.POLL_INTERVAL <= de.POLL_TIMEOUT, (
+        "the budget must leave room for at least one poll after a slow create")
+
+    with pytest.raises(RuntimeError, match="leaves the poll loop no attempts"):
+        de._validated_budget(budget=100, create=100, interval=2)
+
+    assert de._validated_budget(120, 90, 2) == 120, (
+        "the validator must return the budget it approved, not a substitute")
 
 
 def test_no_flag_is_translated_into_a_parameter_the_tool_cannot_verify():

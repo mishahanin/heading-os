@@ -86,6 +86,13 @@ DENIAL_MECHANISMS = (
     # list exists to tell apart from absent-entirely.
     "check_graph_first",
     "check_fanout_first",
+    # Added 2026-08-30 with the wall itself. Same shape as the two above and
+    # one difference worth naming: this one guards something IRREVERSIBLE. A
+    # long run of zero catches here reads as "the operator was asked every
+    # time", which is the intended state; absent-entirely would read the same
+    # and mean the wall is gone. Telling those two apart is the whole reason
+    # this list exists.
+    "check_release_gate",
 )
 
 # ============================================================
@@ -146,6 +153,12 @@ WALL_REASONS = {
         "what the whole fleet then pulls",
     "check_protect_docs":
         "protects the published documentation surface from an unreviewed write",
+    "check_release_gate":
+        "a push the operator did not ask for is irreversible the moment it "
+        "lands on a public remote, and no layer sits behind it; the two "
+        "directions are not comparable, since over-friction costs the operator "
+        "one typed word and under-friction cost this workspace an unauthorised "
+        "commit and push on 2026-08-30",
 }
 
 WALLS = tuple(WALL_REASONS)

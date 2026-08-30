@@ -63,6 +63,7 @@ def test_unresolvable_targets_return_false_no_call(
 
 def test_success_returns_true(monkeypatch):
     monkeypatch.setenv("TELEGRAM_NOTIFY_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("ODIN_CADENCE_TELEGRAM_TARGET", "-100123")
     monkeypatch.setattr(TelegramBot, "send_message", lambda self, *a, **kw: {"message_id": 1})
     assert notify_mod.notify("-100123", "hi") is True
 
@@ -72,6 +73,7 @@ def test_notify_sends_as_plain_text(monkeypatch):
     unbalanced Markdown char (a file path's _) cannot 400. Guards the live bug
     found against '@headingos_bot' / '..._odin-reflect-proposal.md'."""
     monkeypatch.setenv("TELEGRAM_NOTIFY_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("ODIN_CADENCE_TELEGRAM_TARGET", "-100123")
     captured = {}
 
     def capture(self, target, message, **kwargs):
@@ -84,13 +86,26 @@ def test_notify_sends_as_plain_text(monkeypatch):
 
 
 def test_telegram_api_error_returns_false_not_raised(monkeypatch):
+    """The `reached` recorder is the load-bearing half of this test.
+
+    On 2026-08-30 `notify()` gained a recipient allowlist, and an undeclared
+    target now refuses before the transport is ever built. That turned this
+    case green for the wrong reason: it still returned False, but it had
+    stopped exercising the transport-error contract it exists to hold. A
+    `False` that never reached the transport proves nothing here, so the
+    target is declared above and the arrival is asserted below.
+    """
     monkeypatch.setenv("TELEGRAM_NOTIFY_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("ODIN_CADENCE_TELEGRAM_TARGET", "-100123")
+    reached = []
 
     def raise_api_error(self, *a, **kw):
+        reached.append(True)
         raise TelegramAPIError("boom", status_code=500)
 
     monkeypatch.setattr(TelegramBot, "send_message", raise_api_error)
     assert notify_mod.notify("-100123", "hi") is False
+    assert reached, "the allowlist refused first; the transport error was never raised"
 
 
 def _string_const(node):
@@ -146,24 +161,34 @@ def test_notify_never_raises_on_any_requests_error(monkeypatch, err_name):
     exc_cls = getattr(requests.exceptions, err_name)
 
     monkeypatch.setenv("TELEGRAM_NOTIFY_BOT_TOKEN", "1234567:AAtest-token")
+    monkeypatch.setenv("ODIN_CADENCE_TELEGRAM_TARGET", "12345")
+    reached = []
 
     def _boom(*a, **k):
+        reached.append(True)
         raise exc_cls("simulated")
     monkeypatch.setattr(requests, "post", _boom)
 
     assert notify_mod.notify("12345", "hello") is False
+    assert reached, "the allowlist refused first; requests.post was never called"
 
 
 def test_a_raised_requests_error_does_not_leak_the_token(monkeypatch, caplog):
     import logging
     import requests
     monkeypatch.setenv("TELEGRAM_NOTIFY_BOT_TOKEN", "1234567:AAsecret-value-xyz")
+    monkeypatch.setenv("ODIN_CADENCE_TELEGRAM_TARGET", "12345")
+    reached = []
 
     def _boom(*a, **k):
+        reached.append(True)
         raise requests.exceptions.TooManyRedirects(
             "https://api.telegram.org/bot1234567:AAsecret-value-xyz/sendMessage")
     monkeypatch.setattr(requests, "post", _boom)
 
     with caplog.at_level(logging.DEBUG):
         assert notify_mod.notify("12345", "hello") is False
+    assert reached, (
+        "the allowlist refused first, so no URL carrying the token was ever built; "
+        "an empty log would then pass this test while proving nothing about redaction")
     assert "AAsecret-value-xyz" not in caplog.text

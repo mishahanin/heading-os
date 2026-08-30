@@ -53,8 +53,14 @@ def helper():
     return 1
 '''
 
-SLOW_FIXTURE = ROOT / "tests" / "test_turn_check_empty_masked_slow_fixture.py"
-EMPTY_FIXTURE = ROOT / "tests" / "test_turn_check_empty_masked_empty_fixture.py"
+# Names only. These used to be paths into the LIVE `tests/` directory, and the
+# real-fixture case below records why that shape is a defect. The morning of
+# 2026-08-30 moved that one file and left these two, so the full suite failed
+# again the same day: `1 engine-routed file(s) could not be scanned`, with the
+# two paths named in a vanished-mid-walk warning. One planted file is enough to
+# break a repository-wide walk, so a partial move fixes nothing.
+SLOW_FIXTURE_NAME = "test_turn_check_empty_masked_slow_fixture.py"
+EMPTY_FIXTURE_NAME = "test_turn_check_empty_masked_empty_fixture.py"
 
 
 @pytest.fixture(scope="module")
@@ -68,14 +74,30 @@ def tc():
 
 
 @pytest.fixture
-def both_fixtures():
-    SLOW_FIXTURE.write_text(SLOW_ONLY, encoding="utf-8")
-    EMPTY_FIXTURE.write_text(NO_TESTS_AT_ALL, encoding="utf-8")
-    try:
-        yield [SLOW_FIXTURE, EMPTY_FIXTURE]
-    finally:
-        SLOW_FIXTURE.unlink(missing_ok=True)
-        EMPTY_FIXTURE.unlink(missing_ok=True)
+def both_fixtures(tc, tmp_path, monkeypatch):
+    """Both probe files live under `tmp_path`, never in the real tree.
+
+    `tc.ROOT` moves with them for the reason spelled out in
+    `test_a_lane_that_actually_ran_a_test_reports_no_empties`: `_rel` measures
+    against the module global, so a `tmp_path` file under the real ROOT would
+    fall through to stem matching and run some unrelated file.
+
+    There is no `finally` unlink any more, and that is the point. The old shape
+    could not be made safe by cleaning up faster, because the window it opened
+    was the whole pytest subprocess. `tmp_path` closes the window instead.
+    """
+    monkeypatch.setattr(tc, "ROOT", tmp_path)
+    (tmp_path / "tests").mkdir()
+    slow = tmp_path / "tests" / SLOW_FIXTURE_NAME
+    empty = tmp_path / "tests" / EMPTY_FIXTURE_NAME
+    slow.write_text(SLOW_ONLY, encoding="utf-8")
+    empty.write_text(NO_TESTS_AT_ALL, encoding="utf-8")
+    # Set comparison: `matching_tests` sorts, and the order it returns is not
+    # what this assertion is about.
+    assert set(tc.matching_tests([slow, empty])) == {slow, empty}, (
+        "the lane did not pick the fixtures, so the counts would be about "
+        "some other file")
+    return [slow, empty]
 
 
 def test_no_other_test_owns_these_fixture_names():
@@ -83,7 +105,7 @@ def test_no_other_test_owns_these_fixture_names():
     others = [p for p in (ROOT / "tests").rglob("test_*.py")
               if p.name != Path(__file__).name]
     assert others, "empty corpus proves nothing"
-    for name in (SLOW_FIXTURE.name, EMPTY_FIXTURE.name):
+    for name in (SLOW_FIXTURE_NAME, EMPTY_FIXTURE_NAME):
         clashes = [p.name for p in others
                    if name in p.read_text(encoding="utf-8", errors="replace")]
         assert not clashes, clashes
@@ -123,20 +145,22 @@ def test_the_render_names_the_file_that_ran_nothing(tc, both_fixtures):
     assert "1 slow test(s) not run here" in text
 
 
-def test_an_all_slow_file_alone_is_still_not_called_empty(tc):
+def test_an_all_slow_file_alone_is_still_not_called_empty(tc, tmp_path,
+                                                          monkeypatch):
     """The case the old guard got right, pinned here too.
 
     Widening `collected_nothing` to every target on exit 5 would have satisfied
     the finding and broken this. The file holds a test; the lane declined to run
     it. That is a deselection, and `_slow_note` is where it belongs.
     """
-    SLOW_FIXTURE.write_text(SLOW_ONLY, encoding="utf-8")
-    try:
-        (failures, _ran, _skipped, dropped,
-         collected_nothing, _unmeasured) = tc.lane_tests([SLOW_FIXTURE],
-                                                         timeout=120)
-    finally:
-        SLOW_FIXTURE.unlink(missing_ok=True)
+    monkeypatch.setattr(tc, "ROOT", tmp_path)
+    (tmp_path / "tests").mkdir()
+    slow = tmp_path / "tests" / SLOW_FIXTURE_NAME
+    slow.write_text(SLOW_ONLY, encoding="utf-8")
+    assert tc.matching_tests([slow]) == [slow]
+
+    (failures, _ran, _skipped, dropped,
+     collected_nothing, _unmeasured) = tc.lane_tests([slow], timeout=120)
 
     assert failures == []
     assert dropped == 1
@@ -155,19 +179,47 @@ def test_a_collection_probe_that_could_not_run_widens_to_every_file(tc,
     assert tc._files_holding_no_test(targets, 60) == 3
 
 
-def test_a_lane_that_actually_ran_a_test_reports_no_empties(tc):
+def test_a_lane_that_actually_ran_a_test_reports_no_empties(tc, tmp_path,
+                                                            monkeypatch):
     """The negative direction: the fix must not report every clean run as empty.
 
     Without this, `collected_nothing = len(targets)` unconditionally, outside the
     exit-5 branch, would satisfy the tests above.
+
+    The fixture file lives under `tmp_path`, and `tc.ROOT` is moved to point at
+    it. It used to be written into the LIVE `tests/` directory as
+    `test_turn_check_empty_masked_real_fixture.py` and unlinked in a `finally`,
+    which made it a real file in the real tree for the length of one pytest
+    subprocess. MEASURED 2026-08-30: two separate full-suite runs failed naming
+    that exact path, once as
+    `FileNotFoundError: .../tests/test_turn_check_empty_masked_real_fixture.py`
+    out of another test's repository-wide walk, and once out of the overlay
+    snapshot in `tests/conftest.py`. Neither had anything to do with the code
+    under test. Under `-n auto` another worker lists `tests/` while this one is
+    mid-`finally`, so the file exists at listing time and not at read time.
+
+    Moving the file is the fix rather than teaching each walker to tolerate a
+    vanishing path: a test that plants a file in the live tree is the defect,
+    and the walkers are entitled to assume `tests/` holds only tests.
+
+    `tc.ROOT` has to move with it. `matching_tests` picks a path directly only
+    when `_rel(p)` starts with `tests/`, `_rel` measures against the module
+    global `ROOT`, and `lane_tests` runs pytest with `cwd=str(ROOT)`. A
+    `tmp_path` file under the real ROOT would fall through to stem matching and
+    run some unrelated file instead, which is the silent-wrong-coverage shape
+    this whole module exists to refuse.
     """
-    real = ROOT / "tests" / "test_turn_check_empty_masked_real_fixture.py"
+    monkeypatch.setattr(tc, "ROOT", tmp_path)
+    (tmp_path / "tests").mkdir()
+    real = tmp_path / "tests" / "test_a_lane_can_see_a_green_file.py"
     real.write_text('def test_green():\n    assert True\n', encoding="utf-8")
-    try:
-        (failures, ran, _skipped, dropped,
-         collected_nothing, unmeasured) = tc.lane_tests([real], timeout=120)
-    finally:
-        real.unlink(missing_ok=True)
+
+    assert tc.matching_tests([real]) == [real], (
+        "the lane did not pick the fixture, so the counts below would be "
+        "about some other file")
+
+    (failures, ran, _skipped, dropped,
+     collected_nothing, unmeasured) = tc.lane_tests([real], timeout=120)
 
     assert failures == []
     assert ran == 1

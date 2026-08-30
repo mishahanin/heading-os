@@ -2271,10 +2271,262 @@ def check_fanout_first(payload: dict):
 
 
 # ============================================================
+# Release gate: no commit and no push without a fresh operator word
+# ============================================================
+#
+# WHY THIS IS A WALL AND NOT A RULE.
+#
+# "Commit or push only when the user asks" has been written down twice: in
+# `~/.claude/CLAUDE.md` and in the operator's auto-memory as
+# `commit-and-push-only-when-asked`, whose own text records the first breach on
+# 2026-08-20. It happened again on 2026-08-30, and the mechanism is worth
+# stating exactly, because it is not forgetfulness and a third copy of the
+# sentence would not have stopped it:
+#
+#   The operator authorised ONE push. That authorisation was then written into
+#   a handoff summary as "the operator's approval is already given", survived a
+#   context compaction, and was read back on the other side as a STANDING FACT
+#   about the world rather than as a spent event. Every later decision cited the
+#   summary, not the operator. An approval had been promoted from an event into
+#   a state.
+#
+# A rule cannot defend against that, because the rule was never contradicted in
+# the moment: at the point of the second push the model sincerely believed
+# permission existed. What is needed is a check that re-reads the operator's
+# ACTUAL most recent words at the instant of the action, so belief is replaced
+# by evidence and a stale belief cannot survive a single turn.
+#
+# `last-prompt` records in the session transcript carry `lastPrompt`, the
+# operator's typed text verbatim, re-emitted at every leaf. Task notifications,
+# Stop-hook feedback and tool results are NOT last-prompts, so a synthetic
+# message cannot authorise anything. The model does not write the transcript.
+#
+# Fail-closed everywhere: an unreadable transcript, a missing field or an
+# unrecognised command shape all refuse. A gate that opens when it cannot see is
+# not a gate.
+
+_RELEASE_STATE_DIR = WORKSPACE / ".claude" / "state" / "release"
+
+# Quoted spans are stripped before matching, so `grep "git commit" file` is not
+# read as a commit. Without this the wall blocks ordinary searches, and a wall
+# that blocks ordinary work is a wall somebody routes around.
+_QUOTED_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
+
+# Two shapes, and they need different anchoring. A `git` invocation is anchored
+# at a command boundary so `grep git push` in prose is not a push. A SCRIPT is
+# matched by its filename anywhere, because it arrives with a path in front of
+# it: the first version of this wall anchored both, and MEASURED 2026-08-30 it
+# did not catch `.venv/bin/python scripts/push-all.py`, which is the exact
+# command this workspace pushes with. A wall that misses the only door is
+# decoration.
+_PUSH_CMD_RE = re.compile(
+    r"(?:(?:^|[;&|]\s*|\(\s*)git(?:\s+-\S+|\s+-c\s+\S+)*\s+push\b)"
+    r"|(?:^|[;&|]\s*|\(\s*)gh\s+release\s+create\b"
+    r"|(?:^|[;&|]\s*|\(\s*)gh\s+pr\s+merge\b"
+    r"|push-all\.py"
+    r"|publish-corporate\.py"
+    r"|publish-service\.py"
+    r"|push-updates")
+
+_COMMIT_CMD_RE = re.compile(
+    r"(?:^|[;&|]\s*|\(\s*)git(?:\s+-\S+|\s+-c\s+\S+)*\s+(?:commit|tag\s+-)\b")
+
+# Authorising words. A PUSH word also authorises the commit that carries it:
+# asking for the push is asking for the work to leave the machine, and refusing
+# the commit underneath it would only teach the operator to type two words.
+_PUSH_WORDS = (
+    "push", "пуш", "запуш", "отправь", "backup", "бэкап", "бекап",
+    "publish", "опубликуй", "выложи", "залей",
+)
+_COMMIT_WORDS = (
+    "commit", "коммит", "закоммить", "зафиксируй",
+)
+
+# Any of these anywhere in the prompt refuses, whatever else it says. Deliberately
+# blunt: "не пушь пока" and "push" differ by one token, and a wall that has to
+# parse intent is a wall that gets it wrong in the expensive direction.
+_NEGATIONS = (
+    "не пуш", "не коммить", "не комить", "не отправляй", "не заливай",
+    "не публикуй", "без пуша", "без коммита",
+    "don't push", "dont push", "do not push", "no push",
+    "don't commit", "dont commit", "do not commit", "no commit",
+)
+
+
+def _strip_quoted(cmd: str) -> str:
+    """The command with quoted spans blanked, for matching only."""
+    return _QUOTED_RE.sub(" ", cmd or "")
+
+
+def _loads_or_none(raw: bytes) -> dict | None:
+    """One transcript line as a dict, or None.
+
+    A partly-written or truncated line is ORDINARY here: the transcript is
+    appended to by the harness while this hook reads it, so the last line is
+    routinely half a record. It is skipped, not logged, because this runs on
+    every release command and a warning per torn line would be noise the
+    operator learns to scroll past. The consequence of skipping is covered: if
+    no `last-prompt` is found at all, the caller REFUSES.
+    """
+    try:
+        rec = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return rec if isinstance(rec, dict) else None
+
+
+def release_action(command: str) -> str | None:
+    """`"push"`, `"commit"`, or None. Pure, so both directions are measurable."""
+    bare = _strip_quoted(command)
+    if _PUSH_CMD_RE.search(bare):
+        return "push"
+    if _COMMIT_CMD_RE.search(bare):
+        return "commit"
+    return None
+
+
+def prompt_authorises(prompt: str, action: str) -> bool:
+    """Whether the operator's own most recent words authorise this action.
+
+    Pure. `prompt` is the verbatim `lastPrompt`; `action` is from
+    `release_action`. A negation anywhere refuses.
+    """
+    if not prompt or not action:
+        return False
+    low = prompt.lower()
+    if any(n in low for n in _NEGATIONS):
+        return False
+    if any(w in low for w in _PUSH_WORDS):
+        return True
+    return action == "commit" and any(w in low for w in _COMMIT_WORDS)
+
+
+def _last_operator_prompt(transcript_path: str) -> str | None:
+    """The operator's verbatim most recent typed prompt, or None.
+
+    Reads the tail first, because the transcript reached 127,337 lines in the
+    session this wall was written in and this runs inside a synchronous hook.
+    Falls back to the whole file when the tail holds no `last-prompt`, which
+    happens after a very long single turn. None on any failure, and the caller
+    treats None as a refusal.
+    """
+    if not transcript_path:
+        return None
+    p = Path(transcript_path)
+    if not p.is_file():
+        return None
+
+    def _scan(blob: bytes, partial_first: bool) -> str | None:
+        lines = blob.splitlines()
+        if partial_first and lines:
+            lines = lines[1:]
+        for raw in reversed(lines):
+            if b'"last-prompt"' not in raw:
+                continue
+            rec = _loads_or_none(raw)
+            if rec is None or rec.get("type") != "last-prompt":
+                continue
+            val = rec.get("lastPrompt")
+            if isinstance(val, str):
+                return val
+        return None
+
+    try:
+        size = p.stat().st_size
+        window = 1 << 18  # 256 KiB
+        with p.open("rb") as fh:
+            if size > window:
+                fh.seek(size - window)
+                found = _scan(fh.read(), partial_first=True)
+                if found is not None:
+                    return found
+                fh.seek(0)
+                return _scan(fh.read(), partial_first=False)
+            return _scan(fh.read(), partial_first=False)
+    except OSError:
+        return None
+
+
+def _record_release(action: str, command: str, prompt: str) -> None:
+    """Append one authorised release to a log the operator can audit.
+
+    Telemetry only; it can never change a decision. The point is that every
+    commit and push this workspace makes can be traced back to the exact words
+    that authorised it, which is the thing that was missing when the rule was
+    broken.
+    """
+    try:
+        import datetime as _dt
+
+        _RELEASE_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        rec = {
+            "at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+            "action": action,
+            "command": (command or "")[:400],
+            "authorised_by": (prompt or "")[:400],
+        }
+        with (_RELEASE_STATE_DIR / "authorised.jsonl").open(
+                "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[_dispatch] release log unavailable ({type(exc).__name__}): {exc}",
+              file=sys.stderr)
+
+
+def check_release_gate(payload: dict) -> dict | None:
+    """Refuse a commit or a push the operator did not ask for in this turn."""
+    if payload.get("tool_name") != "Bash":
+        return None
+    command = (payload.get("tool_input") or {}).get("command") or ""
+    action = release_action(command)
+    if action is None:
+        return None
+
+    prompt = _last_operator_prompt(payload.get("transcript_path") or "")
+    if prompt is None:
+        return {
+            "decision": "block",
+            "_policy_deny": True,
+            "reason": (
+                "RELEASE GATE: cannot read the operator's most recent prompt, so "
+                "this "f"{action} is refused.\n\n"
+                "This wall reads `last-prompt` from the session transcript to "
+                "confirm the operator asked for this, in this turn. It could not, "
+                "and it fails closed: a gate that opens when it cannot see is not "
+                "a gate.\n\n"
+                "Report this to the operator rather than working around it."
+            ),
+        }
+
+    if prompt_authorises(prompt, action):
+        _record_release(action, command, prompt)
+        return None
+
+    return {
+        "decision": "block",
+        "_policy_deny": True,
+        "reason": (
+            f"RELEASE GATE: the operator did not ask for a {action} in this turn.\n\n"
+            f"Their most recent words were:\n  {prompt.strip()[:300]!r}\n\n"
+            "Approval of the WORK is never approval of the commit or the push. "
+            "This wall exists because that boundary was crossed twice, and both "
+            "times the model sincerely believed permission existed: an "
+            "authorisation given once was carried forward in a summary and read "
+            "back later as a standing fact.\n\n"
+            "Finish the work, run the gates, report the state of the tree, and "
+            "STOP. Do not restate this refusal as a question and then act on your "
+            "own reading of the answer. The operator types the word, or nothing "
+            "is released."
+        ),
+    }
+
+
+# ============================================================
 # Dispatcher main
 # ============================================================
 CHECKS = [
     check_prevent_secrets,
+    check_release_gate,
     check_protect_personal_threads,
     check_protect_corporate,
     check_protect_docs,

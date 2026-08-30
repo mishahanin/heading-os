@@ -51,6 +51,7 @@ except ImportError:
     GREEN = YELLOW = RED = GRAY = BOLD = RESET = ""
 
 from scripts.utils.workspace import get_workspace_root
+from scripts.utils.sanitize_text import word_count
 
 
 # ============================================================
@@ -301,8 +302,28 @@ def strip_noise(text):
     return text
 
 
-def word_count(text):
-    return len(re.findall(r"\b[\w'-]+\b", text))
+# `word_count` is imported from `scripts.utils.sanitize_text`. It used to be a
+# private copy here, `len(re.findall(r"\b[\w'-]+\b", text))`, and that regex
+# reads `.` `,` `/` `=` `>` `{` `}` as word boundaries, so one token a reader
+# parses as one thing inflated into several. MEASURED 2026-08-30 over the 108
+# gated files (14 pages plus 94 skill bodies), 8644 sentences: 573 of them
+# counted higher under the private regex, by 1 to 7 words. The worst was
+# `.venv/bin/python scripts/canopus.py tests/contract/{date}-{slug}/`, seven
+# words over. `e.g.,` scored 2, `1.0.0` scored 3, `outputs/.../{version}.md`
+# scored 7.
+#
+# This is a THRESHOLD input: `check_sentence_length` compares it against
+# STEP_WORD_LIMIT and PROSE_WORD_LIMIT, and the result gates CI and pre-commit.
+# The shared counter is never HIGHER than the old one (every whitespace token
+# holding an alnum yields at least one `[\w'-]+` match), so the swap can only
+# LOOSEN this gate, never tighten it. On the corpus as it stands, no verdict
+# moves: 0 errors before, 0 errors after, and zero sentences change side of
+# their limit. What did change is the margin. Eight sentences sat exactly ON
+# their limit and now sit 1 to 2 words under it, and a path-dense sentence can
+# now carry up to 7 more counted words before the limit refuses it.
+#
+# That direction is the intended one. The 20/25 limits are ASD-STE100 reader-load
+# limits, and a file path is one thing a reader parses, not seven words.
 
 
 def split_sentences(text):

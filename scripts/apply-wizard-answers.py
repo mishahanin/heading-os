@@ -26,6 +26,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # workspace this script was pointed at.
 from scripts.utils.paths import parse_env_line  # noqa: E402
 
+# The workspace's one definition of a word (`.claude/rules/hidden-chars.md`).
+# `_display_value` counted `len(draft.split())`, which has no alnum filter, so
+# every bare `-` bullet, `|` table rule and `---` separator in an approved draft
+# counted as a word. MEASURED 2026-08-30 on `"- \n- \n- \nalpha beta"`: 5 by the
+# old count, 2 by this one. The figure is a display label only, so nothing
+# downstream moves - see the comment at its call site.
+from scripts.utils.sanitize_text import word_count  # noqa: E402
+
 __version__ = "0.1.0"
 
 # ============================================================
@@ -903,8 +911,12 @@ def _display_value(q: dict, entry: dict) -> str:
         return "****"
     if q["type"] == "rich":
         draft = entry.get("draft", "")
-        word_count = len(draft.split())
-        return f"[approved draft, ~{word_count} words]"
+        # The shared counter, not a local `word_count = len(draft.split())`,
+        # which also shadowed the import for the rest of this function. The
+        # number reaches only this dashboard row - `cmd_status` puts it in
+        # `display_value` and nothing reads it back, compares it, or gates on
+        # it - so the swap changes a label and no behaviour.
+        return f"[approved draft, ~{word_count(draft)} words]"
     if q["type"] == "list":
         items = entry.get("value", [])
         if isinstance(items, list):

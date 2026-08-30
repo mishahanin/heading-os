@@ -22,12 +22,43 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 _SRC = Path(__file__).resolve().parent.parent / "scripts" / "memory-index.py"
 _spec = importlib.util.spec_from_file_location("memory_index", _SRC)
 mi = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mi)
+
+
+@pytest.fixture(autouse=True)
+def _no_embedder_probe(monkeypatch):
+    """Read the shipped YAML without asking the network which host answers.
+
+    Same defect, same fix, same shape as `tests/test_per_layer_threshold.py`:
+    `load_config` resolves the embedder pin through `resolve_pinned_host`, which
+    OPENS A SOCKET to each candidate. Measured here 2026-08-30 by wrapping
+    `socket.socket.connect` around a run of this file:
+    `test_the_shipped_config_routes_each_commit_layer_to_its_own_side` connected
+    once to the operator's Ollama daemon, which runs on a separate Windows host
+    that is neither in WSL nor in CI. That test asks which store each commit
+    layer is routed to. It reads two lists out of a YAML file, so the probe
+    bought it nothing and made a routing assertion depend on whether a daemon on
+    another operating system happened to be up; with that host down it blocks for
+    the whole probe timeout and exercises a code path CI never takes.
+
+    Every other test in this file stubs the embedder and never calls
+    `load_config`, so the fixture is a floor for them rather than a change: it
+    keeps the file honest when the next test added here reads the shipped config.
+
+    The assertion below is the point of the fixture: patching a name the module
+    does not read would restore the network in silence.
+    """
+    assert hasattr(mi, "_resolve_embed_host"), (
+        "memory-index.py no longer resolves the host under this name; the patch "
+        "below is aimed at nothing and these tests are back on the network")
+    monkeypatch.setattr(mi, "_resolve_embed_host", lambda preferred, **kw: preferred)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -317,6 +348,38 @@ def test_a_missing_codegraph_index_keeps_the_symbol_corpus(tmp_path, monkeypatch
 # carries the risk: `.memory-index-code/index.db` lives inside the PUBLIC engine
 # clone, so a routing slip there puts private commit subjects in a public tree.
 # The store is gitignored, which is one guard, and a gitignore is not the seam.
+
+def test_reading_the_shipped_config_opens_no_socket_off_this_machine(tmp_path, monkeypatch):
+    """The fixture above is only as good as something that notices it is gone.
+
+    Without this, deleting `_no_embedder_probe` puts the routing test below back
+    on the network and it still passes, which is how the defect survived here
+    after the identical one was closed in `tests/test_per_layer_threshold.py`.
+    Loopback is left alone: a local stub server is a legitimate test double, an
+    address on the LAN is not.
+    """
+    import socket
+
+    monkeypatch.setattr(mi, "get_data_root", lambda: tmp_path / "data-root")
+
+    original = socket.socket.connect
+    off_machine = []
+
+    def _watch(self, address):
+        host = address[0] if isinstance(address, tuple) else str(address)
+        if host in ("127.0.0.1", "::1", "localhost"):
+            return original(self, address)
+        off_machine.append(address)
+        raise OSError(f"this test does not use the network: {address}")
+
+    socket.socket.connect = _watch
+    try:
+        mi.load_config(mi.get_workspace_root())
+    finally:
+        socket.socket.connect = original
+    assert off_machine == [], (
+        f"reading a YAML file reached {off_machine}; the embedder probe is back")
+
 
 def test_the_shipped_config_routes_each_commit_layer_to_its_own_side(tmp_path, monkeypatch):
     """Read the REAL config, not a fixture: this is a claim about what ships."""

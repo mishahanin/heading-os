@@ -7,6 +7,8 @@ are a distinct, low-priority RECORD CLASS - never a belief, never the brain.
 A business/personal flag routes each entry:
 
 Tests: tests/test_a_topic_list_shredded_into_single_letters.py
+       tests/test_a_since_flag_that_backfilled_everything.py
+       tests/test_a_negative_limit_that_truncated_and_said_nothing.py
 
   chronicle/business/  -> indexed, recallable via /recall, ranked BELOW the brain
   chronicle/personal/  -> tagged "Личное", air-gapped by the `personal` segment
@@ -96,7 +98,14 @@ def ollama_url() -> str:
 # HEADING_OS_OLLAMA_HOST "lifts prefill to ~220 tok/s, which is what this budget
 # would have to be re-tuned against before raising it." Measured 2026-08-22 on
 # the Windows-side instance: 198.7 tok/s against 74.6 on the WSL CPU daemon, so
-# the claim held and the host now points there (see OLLAMA_HOST below).
+# the claim held and the host now points there.
+#
+# Which host that is, is resolved by `ollama_url()` ABOVE (line 67) through
+# `generation_host()` in scripts/utils/ollama_host.py, reading `generate:` in
+# the machine file config/ollama-hosts.yaml, with HEADING_OS_OLLAMA_HOST as the
+# override. This line used to end "see <name> below" and sent the reader two
+# directions at once: the name it gave has never been defined in this module,
+# and the two HEADING_OS_OLLAMA_HOST mentions that do exist are both above it.
 #
 # At 198.7 tok/s a full 120,000-character envelope costs ~150 s of prefill. The
 # build runs unattended at 03:00 over the one to three sessions a day produces,
@@ -360,6 +369,17 @@ def select_sessions(sessions_dir: Path, since: str | None, backfill: bool, limit
             # mtime is the session's LAST write, so its UTC day is never earlier
             # than the UTC day of its first turn: a cutoff equal to a session's
             # own date can no longer exclude that session, in any zone.
+            #
+            # The compare stays lexicographic on purpose. Both operands are
+            # canonical zero-padded YYYY-MM-DD -- `mday` because
+            # `.date().isoformat()` emits nothing else, and `cutoff` because
+            # `--since` now goes through `iso_date_arg` and the marker is a
+            # date this module wrote -- and for that form ISO 8601 makes string
+            # order and chronological order the same thing. Parsing both back
+            # into `date` would buy nothing and would change `cutoff`'s type
+            # under `mode`, the marker, and `capped_marker`. The coupling is the
+            # point: relax `iso_date_arg` to a bare `date.fromisoformat` and
+            # this line silently starts mis-ordering `20260801`.
             mday = datetime.fromtimestamp(f.stat().st_mtime, timezone.utc).date().isoformat()
             if mday < cutoff:
                 continue
@@ -842,7 +862,17 @@ def cmd_build(args: argparse.Namespace) -> int:
     # say '3 written ... (dry-run, nothing saved)' in one breath, and a
     # reader skimming a log -- or a wrapper parsing 'N written' -- was told
     # entries existed on disk that did not.
-    written = planned = skipped = failed = 0
+    # `trivial` and `no_content` are both skips and are counted apart, because
+    # they cost different things and the persistence policy turns on exactly
+    # that difference. A trivial skip is decided from `len(body)` before any
+    # model call and costs nothing, so it is re-decided free on every run and
+    # deliberately leaves no trace. A no-content skip is the model's verdict,
+    # returned only AFTER a full prefill -- up to 120,000 characters, ~150 s --
+    # which is why `record_skipped` exists to stop it being paid twice. Summing
+    # them into one "N trivial" reported a night that spent minutes of model
+    # time as a night that spent none, and hid the one number that says whether
+    # the skip ledger is doing its job.
+    written = planned = trivial = no_content = failed = 0
     newest_processed: str | None = None
     failed_dates: list[str] = []
     for i, path in enumerate(selected, 1):
@@ -854,7 +884,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 
         if len(body) < TRIVIAL_TEXT_CHARS:
             print(f"  {GRAY}{label}  skip (trivial/empty){RESET}")
-            skipped += 1
+            trivial += 1
             newest_processed = max(newest_processed or sdate, sdate)
             continue
 
@@ -868,7 +898,7 @@ def cmd_build(args: argparse.Namespace) -> int:
             print(f"  {GRAY}{label}  skip (no substantive content){RESET}")
             if not args.dry_run:
                 record_skipped(path.stem)
-            skipped += 1
+            no_content += 1
             newest_processed = max(newest_processed or sdate, sdate)
             continue
 
@@ -905,12 +935,16 @@ def cmd_build(args: argparse.Namespace) -> int:
         if prev is None or newest_processed > prev:
             write_marker(newest_processed)
 
+    # The two skip counts are named the way their per-session lines are, so a
+    # reader can reconcile the summary against the log above it line for line.
     if args.dry_run:
         print(f"{BOLD}done:{RESET} {GREEN}{planned} would be written{RESET}, "
-              f"{skipped} trivial, {failed} failed (dry-run, nothing saved)")
+              f"{trivial} trivial, {no_content} no substantive content, "
+              f"{failed} failed (dry-run, nothing saved)")
     else:
         print(f"{BOLD}done:{RESET} {GREEN}{written} written{RESET}, "
-              f"{skipped} trivial, {failed} failed")
+              f"{trivial} trivial, {no_content} no substantive content, "
+              f"{failed} failed")
     return 0
 
 
@@ -1095,6 +1129,115 @@ def cmd_personal_recall(args: argparse.Namespace) -> int:
 # CLI
 # ============================================================
 
+def iso_date_arg(value: str) -> str:
+    """argparse type for `--since`: a canonical ISO date, or a usage error.
+
+    `--since` was `type=str` with no validation anywhere, and `select_sessions`
+    hands it straight to `mday < cutoff` as a raw string compare. Two measured
+    consequences, both silent, both exit 0:
+
+      --since 1         `"2026-08-30" < "1"` is False for every date, so EVERY
+                        session was selected. That is an unrequested full
+                        backfill at ~150 s of model prefill per session, writing
+                        entries that `already_chronicled` then makes permanent.
+      --since 2026-8-1  an unpadded month sorts AFTER every `2026-MM-DD`, so
+                        nothing was selected: "0 session(s) to process", exit 0,
+                        and no word about why.
+
+    Rejected, never repaired. `2026-8-1` is NOT quietly read as `2026-08-01`,
+    because an operator who learns that spelling here will carry it somewhere
+    that does not repair it.
+
+    The round-trip is the whole check, and it is load-bearing well past `1`:
+    `date.fromisoformat` also accepts the basic form `20260801` and week dates
+    like `2026-W31-1`, and BOTH sort wrong against the `YYYY-MM-DD` that
+    `.date().isoformat()` produces on the other side of that comparison.
+    `"2026-08-28" < "20260801"` is True, so `--since 20260801` would select
+    nothing at all: defect two again, this time blessed by a validator.
+    Demanding that the value survive fromisoformat -> isoformat UNCHANGED
+    admits the canonical zero-padded form and nothing else.
+
+    `ArgumentTypeError` makes argparse print usage and exit 2, which is what the
+    sibling `--limit` already returns for `--limit abc`. No new exit code.
+    """
+    hint = ("expected a canonical ISO date: YYYY-MM-DD, with a zero-padded "
+            "month and day, e.g. 2026-07-01")
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid ISO date: {value!r} ({hint})") from None
+    canonical = parsed.isoformat()
+    if canonical != value:
+        # Named as a correction, never applied as one. Telling the operator the
+        # spelling is help; accepting theirs is the coercion this refuses.
+        raise argparse.ArgumentTypeError(
+            f"invalid ISO date: {value!r} ({hint}); did you mean {canonical!r}?"
+        )
+    return value
+
+
+def _bounded_int(value: str, minimum: int, meaning: str) -> int:
+    """Shared body of the two `--limit` types below. Refuses, never clamps.
+
+    A clamp would be the same defect wearing a fix: the operator asked for a
+    cap this tool cannot honour, and silently substituting one keeps the run
+    going under a number nobody typed. `ArgumentTypeError` makes argparse print
+    usage and exit 2 -- the code `--limit abc` already returns, so no new exit
+    code enters the contract (same reasoning as `iso_date_arg` above).
+    """
+    try:
+        n = int(value)
+    except ValueError:
+        # argparse's own wording for `type=int`, preserved verbatim so
+        # replacing `type=int` with this changes no existing message.
+        raise argparse.ArgumentTypeError(f"invalid int value: {value!r}") from None
+    if n < minimum:
+        raise argparse.ArgumentTypeError(
+            f"invalid --limit: {value!r} (expected an integer >= {minimum}; {meaning})"
+        )
+    return n
+
+
+def nonneg_int_arg(value: str) -> int:
+    """argparse type for `build --limit`: 0 (no cap) or a positive count.
+
+    `--limit` was `type=int` and a negative sailed through into
+    `select_sessions`, where the cap is spelled `if limit and len(selected) >=
+    limit`. A negative is truthy and every non-negative length is >= it, so the
+    loop broke on its FIRST append: measured on a three-session fixture,
+    `--backfill --limit=-5` processed exactly one session and said nothing about
+    the other two. Not a refusal and not the requested run -- a silent
+    truncation to one, reported as a completed build.
+
+    Refused rather than read as "no cap". 0 already means no cap and is
+    documented; a negative is a value that cannot mean anything here, which
+    makes it a typo (`--limit -5` where `--limit 5` was meant, or a shell
+    variable that expanded wrong), and a typo is worth an exit code. Reading it
+    as 0 would run the FULL backfill the operator was trying to bound, which is
+    the most expensive possible reading of a mistake.
+    """
+    return _bounded_int(value, 0, "0 = no cap")
+
+
+def positive_int_arg(value: str) -> int:
+    """argparse type for `personal-recall --limit`: at least 1.
+
+    Same `type=int`, different expression: `hits[:args.limit]`. `--limit=-1`
+    over two matching entries dropped the last one and then printed "1 hit(s)"
+    -- the truncation is invisible in the very count that reports it, so there
+    is no surface anywhere in the output from which the operator could tell a
+    hit was withheld.
+
+    The floor is 1, not 0, because 0 is a wrong answer here too and reachable
+    through the same slice. There is no "no cap" meaning on this subcommand:
+    `hits[:0]` is empty, and `cmd_personal_recall` then takes its `if not hits`
+    branch and prints "no match (best 0.812 < 0.34)" -- asserting that nothing
+    matched while naming a score above its own floor. One integer away from the
+    measured defect, produced by the same expression, so it is fixed with it.
+    """
+    return _bounded_int(value, 1, "1 = one hit; there is no no-cap value here")
+
+
 def main(argv: list[str] | None = None) -> int:
     # First, before anything reads the clock. `select_sessions` derives the
     # catch-up window from `get_default_tz()`, which reads HEADING_OS_TZ from
@@ -1107,8 +1250,10 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     b = sub.add_parser("build", help="summarize in-scope sessions into chronicle entries")
-    b.add_argument("--since", type=str, help="only sessions on/after this ISO date")
-    b.add_argument("--limit", type=int, default=0, help="max sessions this run (0 = no cap)")
+    b.add_argument("--since", type=iso_date_arg, metavar="YYYY-MM-DD",
+                   help="only sessions on/after this ISO date (canonical YYYY-MM-DD)")
+    b.add_argument("--limit", type=nonneg_int_arg, default=0, metavar="N",
+                   help="max sessions this run (0 = no cap; a negative is refused, not read as 0)")
     b.add_argument("--backfill", action="store_true", help="process the full in-scope history")
     b.add_argument("--dry-run", action="store_true", help="print planned entries; write nothing")
     b.add_argument("--sessions-dir", type=Path, default=None, help="override the sessions dir (tests)")
@@ -1124,7 +1269,8 @@ def main(argv: list[str] | None = None) -> int:
     pr = sub.add_parser("personal-recall",
                         help="OPT-IN on-the-fly search over personal chronicle (nothing indexed)")
     pr.add_argument("text", help="query text")
-    pr.add_argument("--limit", type=int, default=5, help="max hits (default 5)")
+    pr.add_argument("--limit", type=positive_int_arg, default=5, metavar="N",
+                    help="max hits, at least 1 (default 5; there is no no-cap value)")
     pr.set_defaults(func=cmd_personal_recall)
 
     args = parser.parse_args(argv)

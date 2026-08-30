@@ -1215,6 +1215,24 @@ def main():
                         help="Re-run prerequisite checks even if already passed")
     args = parser.parse_args()
 
+    # An unresolved org is a refusal, not a warning. `load_github_org()` answers
+    # '' rather than raising (see its docstring) so that --help survives a
+    # missing data overlay; the empty string therefore reaches here, and this
+    # script CREATES repositories and grants collaborators. `{GITHUB_ORG}/{name}`
+    # would be `/{name}`, so a provisioning run would half-build a workspace on
+    # disk against repos that were never created, and the exec would be told
+    # they are set up.
+    #
+    # Before validate_admin(), deliberately: that reaches admin.json and so the
+    # same unreachable overlay, which is where the traceback used to come from.
+    if not GITHUB_ORG:
+        print(f"{RED}[STOP]{RESET} the GitHub org could not be resolved, so no "
+              f"repo path here is real. Refusing to provision against guessed "
+              f"paths.", file=sys.stderr)
+        print(f"  Set github_org in your operator.yaml or admin.json, or point "
+              f"HEADING_OS_DATA at your data overlay.", file=sys.stderr)
+        sys.exit(2)
+
     # Admin gate
     validate_admin()
 

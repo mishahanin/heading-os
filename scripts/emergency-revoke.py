@@ -21,7 +21,13 @@ Usage:
     python emergency-revoke.py --exec "marlow-carter" --reason "laptop stolen"
     -> prints the manual checklist, exits 2, revokes nothing
 
-Tests: tests/test_a_revocation_that_reported_clear_for_the_dangerous_case.py
+Exit codes: 0 for `--help`, 2 for the disabled run that prints the checklist.
+Both hold with NO private data overlay -- a missing, unmounted or dead-pathed
+overlay is a normal shape of the incident this file serves, so nothing on the
+`--help` or checklist path may need one. See `github_org()` below.
+
+Tests: tests/test_a_revocation_that_reported_clear_for_the_dangerous_case.py,
+tests/test_the_incident_tool_died_of_the_incident.py
 """
 
 import argparse
@@ -40,8 +46,37 @@ from scripts.utils.workspace import (
 )
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
 from scripts.utils.atomic import atomic_write_text
+from scripts.utils.paths import DataRootError
 
-GITHUB_ORG = load_github_org()
+
+def github_org() -> str:
+    """The GitHub org, resolved LAZILY, or '' when it cannot be resolved.
+
+    This was `GITHUB_ORG = load_github_org()` at module scope until 2026-08-30,
+    and that one line broke the only thing this file is for. Measured with
+    `HEADING_OS_DATA=/nonexistent-xyz`: a `DataRootError` traceback at the import
+    line and exit 1, so `--help` printed nothing, argparse never ran, and the
+    urgent manual checklist below was unreachable. A missing, unmounted or
+    dead-pathed private overlay is not an exotic state here -- it is a normal
+    shape of the very incident this script exists to serve.
+
+    `scripts/utils/operator_identity.py` now honours its "never raises" promise,
+    which removes half of it. The other half is `load_github_org()` itself: when
+    the operator seam answers '' it falls through to `load_admin_config()`, which
+    reaches `get_data_config_dir()` and raises again. That resolver is not this
+    agent's file to change, so the refusal is absorbed here, at the caller, and
+    reported in plain words instead of a traceback.
+
+    Callers must treat '' as "unknown", never as a real org.
+    """
+    try:
+        return load_github_org()
+    except (DataRootError, ValueError) as exc:
+        print(f"{YELLOW}[warn]{RESET} could not resolve the GitHub org "
+              f"({type(exc).__name__}: {exc}). Treating it as unknown; every "
+              f"repo path below is incomplete and must be checked by hand.",
+              file=sys.stderr)
+        return ""
 
 
 def run_cmd(cmd: list, cwd: str = None, check: bool = True) -> subprocess.CompletedProcess:
@@ -78,10 +113,23 @@ def revoke_all_github_access(slug: str, exec_info: dict) -> None:
     print(f"{YELLOW}  Org-team access is NOT touched by this step. Verify it by "
           f"hand.{RESET}")
 
+    org = github_org()
+    if not org:
+        # Fail closed, exactly as the github_username branch below does. With an
+        # empty org every repo path is "/heading-os-corporate", every `gh api`
+        # call 404s, and the loop prints "[not a direct collaborator]" three
+        # times -- a reassuring report for a revocation that addressed nothing.
+        print(f"  {RED}[STOP]{RESET} the GitHub org could not be resolved, so "
+              f"no repo path here is real. Refusing to call the API against "
+              f"guessed paths.")
+        print(f"    {RED}MANUAL ACTION REQUIRED: revoke this exec via the GitHub "
+              f"UI, at the org level as well as per repo.{RESET}")
+        return
+
     repos = [
-        f"{GITHUB_ORG}/heading-os-corporate",
-        f"{GITHUB_ORG}/31c-crm-central",
-        f"{GITHUB_ORG}/31c-workspace-{slug}",
+        f"{org}/heading-os-corporate",
+        f"{org}/31c-crm-central",
+        f"{org}/31c-workspace-{slug}",
     ]
 
     # Fail closed. `.get("github_username", slug)` fell back to the exec SLUG,
@@ -126,48 +174,62 @@ def audit_recent_commits(slug: str) -> list:
     print(f"\n{BOLD}Step 2: Auditing recent commits{RESET}")
     suspicious = []
 
+    # A path RESOLVED is fine; a path CREATED is not. `get_crm_central_path()`
+    # names a RETIRED repository that lives OUTSIDE the workspace, and until
+    # 2026-08-30 this branch cloned it back onto the admin's disk as a side
+    # effect of an audit. The org guard directly above (added the same day)
+    # made the clone honest about WHERE it pointed; it never asked whether the
+    # clone should happen at all, and it should not. Nothing in the current
+    # two-part topology (engine + private data overlay) maintains
+    # 31c-crm-central, so a fresh clone produces a tree that is stale the
+    # moment it lands and that nobody will ever prune. `github_org()` is no
+    # longer called here because there is no longer a remote path to build;
+    # the guard is not lost, it is unreachable by construction.
+    #
+    # An EXISTING legacy clone is still read, because reading is not creating
+    # and an incident is the wrong moment to throw away evidence the operator
+    # already has on disk.
     crm_central = get_crm_central_path()
     if not crm_central.exists():
-        try:
-            run_cmd(["gh", "repo", "clone", f"{GITHUB_ORG}/31c-crm-central", str(crm_central)])
-        except subprocess.CalledProcessError:
-            print(f"  {RED}[error]{RESET} Could not clone crm-central for audit")
-            return suspicious
+        print(f"  {YELLOW}[skip]{RESET} {crm_central} is not on disk. That "
+              f"repository was retired; refusing to clone it back just to read "
+              f"its log. crm-central commit audit NOT PERFORMED - if a legacy "
+              f"clone exists elsewhere, audit it by hand.")
     else:
         run_cmd(["git", "pull"], cwd=str(crm_central), check=False)
 
-    # Check recent commits (last 48 hours)
-    try:
-        result = run_cmd([
-            "git", "log", "--since=48 hours ago",
-            "--format=%H%x1f%an%x1f%ae%x1f%s%x1f%ci",
-        ], cwd=str(crm_central))
+        # Check recent commits (last 48 hours)
+        try:
+            result = run_cmd([
+                "git", "log", "--since=48 hours ago",
+                "--format=%H%x1f%an%x1f%ae%x1f%s%x1f%ci",
+            ], cwd=str(crm_central))
 
-        if result.stdout.strip():
-            commits = result.stdout.strip().split("\n")
-            print(f"  Reviewing {len(commits)} commits from last 48 hours...")
+            if result.stdout.strip():
+                commits = result.stdout.strip().split("\n")
+                print(f"  Reviewing {len(commits)} commits from last 48 hours...")
 
-            for line in commits:
-                parts = line.split("\x1f", 4)
-                if len(parts) >= 5:
-                    commit_hash, author, email, subject, date = parts
-                    # Flag commits from the revoked exec
-                    if slug in author.lower() or slug in email.lower():
-                        suspicious.append({
-                            "hash": commit_hash[:8],
-                            "author": author,
-                            "email": email,
-                            "subject": subject,
-                            "date": date,
-                        })
-                        print(f"  {RED}[SUSPICIOUS]{RESET} {commit_hash[:8]} by {author}: {subject}")
+                for line in commits:
+                    parts = line.split("\x1f", 4)
+                    if len(parts) >= 5:
+                        commit_hash, author, email, subject, date = parts
+                        # Flag commits from the revoked exec
+                        if slug in author.lower() or slug in email.lower():
+                            suspicious.append({
+                                "hash": commit_hash[:8],
+                                "author": author,
+                                "email": email,
+                                "subject": subject,
+                                "date": date,
+                            })
+                            print(f"  {RED}[SUSPICIOUS]{RESET} {commit_hash[:8]} by {author}: {subject}")
 
-            if not suspicious:
-                print(f"  {GREEN}[clean]{RESET} No suspicious commits found")
-        else:
-            print(f"  {GREEN}[clean]{RESET} No commits in last 48 hours")
-    except subprocess.CalledProcessError as e:
-        print(f"  {RED}[error]{RESET} Could not audit git log: {e.stderr}")
+                if not suspicious:
+                    print(f"  {GREEN}[clean]{RESET} No suspicious commits found")
+            else:
+                print(f"  {GREEN}[clean]{RESET} No commits in last 48 hours")
+        except subprocess.CalledProcessError as e:
+            print(f"  {RED}[error]{RESET} Could not audit git log: {e.stderr}")
 
     # Also check corporate repo
     corp_repo = get_corporate_repo_path()
@@ -253,9 +315,27 @@ def update_registry_status(slug: str) -> None:
 def log_security_event(slug: str, reason: str, suspicious: list) -> None:
     """Log event to crm-central/audit/security-events.jsonl."""
     print(f"\n{BOLD}Step 4: Logging security event{RESET}")
+    # `mkdir(parents=True)` stood here until 2026-08-30 and was the worst of the
+    # three: it CREATED `<workspace-parent>/31c-crm-central/audit/` outside the
+    # workspace, on a path belonging to a retired repository, from a function
+    # whose whole job is to append one line to a log. It needed no network, no
+    # gh auth and no clone to fire - one accidental import-and-call was enough,
+    # and that is exactly how the directory got made once already. Nothing may
+    # create a directory outside the workspace as a side effect.
+    #
+    # Refuse instead. A security event with nowhere durable to go is reported
+    # to the operator in full, on stdout, rather than filed into a tree that
+    # this call invented and nothing will ever read.
     crm_central = get_crm_central_path()
     audit_dir = crm_central / "audit"
-    audit_dir.mkdir(parents=True, exist_ok=True)
+    if not audit_dir.is_dir():
+        print(f"  {RED}[STOP]{RESET} {audit_dir} does not exist. That repository "
+              f"was retired; refusing to create it outside the workspace just to "
+              f"hold a log line.")
+        print(f"  {YELLOW}The event was NOT persisted. Record it by hand:{RESET}")
+        print(f"    exec_slug={slug!r} reason={reason!r} "
+              f"suspicious_commits={len(suspicious)}")
+        return
 
     event = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -324,6 +404,13 @@ def main():
     #   2. The urgent MANUAL checklist is printed. It was already written, in
     #      `print_manual_checklist`, and sat unreachable below this exit — the
     #      exact information someone needs at 3am, behind the wall.
+    #
+    # Extended 2026-08-30, because both of those fixes were still unreachable on
+    # a machine with no private data overlay: `GITHUB_ORG = load_github_org()` at
+    # import scope raised `DataRootError` before argparse existed. Nothing in
+    # THIS function needs the overlay, so nothing in this function may die for
+    # want of it. `--help`, the disabled banner and the manual checklist now run
+    # with the overlay absent, unmounted or pointing at a dead path.
     parser = argparse.ArgumentParser(
         description="DISABLED. Emergency access revocation for a 31C executive.",
         epilog=("This script does NOT revoke anything. It prints the manual "
@@ -344,7 +431,20 @@ def main():
           f"below, now.{RESET}")
     print(f"{YELLOW}Tracking: scrutinize H4.{RESET}")
     slug = args.exec_slug or "<exec-slug>"
-    exec_info = get_exec_info(slug) if args.exec_slug else None
+    exec_info = None
+    if args.exec_slug:
+        # The registry lives in the private overlay. Looking the exec up only
+        # personalises two lines of the checklist (their name and their email),
+        # so an unreachable overlay must degrade to the generic checklist rather
+        # than take the whole run down with it. Moving the import-time crash to
+        # here would have been no fix at all.
+        try:
+            exec_info = get_exec_info(slug)
+        except (DataRootError, ValueError, OSError) as exc:
+            print(f"{YELLOW}[warn]{RESET} the exec registry could not be read "
+                  f"({type(exc).__name__}: {exc}); printing the checklist "
+                  f"WITHOUT this exec's name and email. Look them up by hand.",
+                  file=sys.stderr)
     print_manual_checklist(slug, exec_info)
     sys.exit(2)
     # Original code below — kept for reference; do not execute until refactored.

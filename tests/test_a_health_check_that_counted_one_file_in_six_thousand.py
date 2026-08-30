@@ -190,50 +190,26 @@ def test_a_file_that_vanishes_mid_walk_does_not_abort_the_section(
 
 
 # ============================================================
-# Reference validation -- a green over zero paths is not a green
+# Reference validation -- retired 2026-08-30, see below
 # ============================================================
-
-def test_a_missing_reference_section_is_reported_not_passed(wh, tmp_path, monkeypatch, capsys):
-    """The live engine CLAUDE.md has no such heading, so this ran zero times and
-    printed the unconditional success line underneath."""
-    claude_md = tmp_path / "CLAUDE.md"
-    claude_md.write_text("# Project\n\nNo reference table here.\n")
-    monkeypatch.setattr(wh, "CLAUDE_MD", claude_md)
-
-    issues = wh.check_reference_validation()
-
-    out = _plain(capsys.readouterr().out)
-    assert issues == 0
-    assert "0 paths checked" in out
-    assert "All reference paths resolve" not in out
-
-
-def test_a_present_reference_section_still_passes_and_says_how_many(
-        wh, tmp_path, monkeypatch, capsys):
-    claude_md = tmp_path / "CLAUDE.md"
-    (tmp_path / "here.md").write_text("x")
-    claude_md.write_text(
-        "## Reference Resources\n\n| Doc | Path |\n|---|---|\n| A | `here.md` |\n")
-    monkeypatch.setattr(wh, "CLAUDE_MD", claude_md)
-    monkeypatch.setattr(wh, "WORKSPACE", tmp_path)
-
-    issues = wh.check_reference_validation()
-
-    assert issues == 0
-    assert "All 1 reference path(s) resolve" in _plain(capsys.readouterr().out)
-
-
-def test_a_broken_reference_still_fails(wh, tmp_path, monkeypatch, capsys):
-    claude_md = tmp_path / "CLAUDE.md"
-    claude_md.write_text(
-        "## Reference Resources\n\n| A | `nowhere.md` |\n")
-    monkeypatch.setattr(wh, "CLAUDE_MD", claude_md)
-    monkeypatch.setattr(wh, "WORKSPACE", tmp_path)
-
-    assert wh.check_reference_validation() == 1
-    assert "Missing: nowhere.md" in _plain(capsys.readouterr().out)
-
-
+#
+# Three tests stood here. They monkeypatched `wh.CLAUDE_MD` and drove the
+# `## Reference Resources` heading scan, and all three passed for months while
+# measuring nothing that existed: that heading is in no file in either repo, and
+# `git log -S "Reference Resources" -- CLAUDE.md` finds it was never there. The
+# check was a survivor of the pre-split single workspace, and these tests kept
+# its fixture alive rather than its subject.
+#
+# On 2026-08-30 the check was pointed at the reference index that does exist,
+# `<data-root>/reference/workspace-overview.md`, and it now examines 697 paths.
+# `wh.CLAUDE_MD` is gone, so these three could not be repaired in place; the
+# fixture they patched no longer has anything to patch.
+#
+# Their one real claim, that a run examining zero paths must never read as a
+# pass, is carried forward by
+# `tests/test_a_reference_check_that_verified_nothing_for_months.py`, along with
+# the absent-overlay case they never had.
+#
 # ============================================================
 # DataStore -- a directory is not a document
 # ============================================================

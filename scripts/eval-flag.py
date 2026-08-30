@@ -23,9 +23,11 @@ up into ``evals/outcomes/`` and ``git add``s it (plain ``mv`` + ``git add``, not
 Console-first and offline-first: the loopback is used ONLY to resolve a live
 card's content; the offline path always works with the browser/daemon down.
 
-Exit codes: 0 ok, 1 usage error, 2 daemon not reachable (only on the <id> path).
+Exit codes: 0 ok, 1 usage error, 2 daemon not reachable OR answering off the
+Action Queue contract (both only on the <id> path).
 
 Tests: tests/test_a_revocation_that_reported_clear_for_the_dangerous_case.py
+       tests/test_three_parsed_values_trusted_without_a_shape_check.py
 """
 from __future__ import annotations
 
@@ -75,6 +77,22 @@ def _die_no_daemon() -> None:
     sys.exit(2)
 
 
+def _die_off_contract(what: str) -> None:
+    """Something answered on the loopback port, but not as the Action Queue.
+
+    Exit 2, the same code as an absent daemon, because it is the same class of
+    fact from the operator's side: the daemon this tool needs is not what is
+    answering. The reachable path to it is a STALE `.daemon-state/port` -- the
+    daemon dies, the file survives, and the OS hands that port to the next
+    process that asks. Whatever that process replies, it is not this contract.
+    """
+    print(f"{RED}the bridge loopback did not answer with the Action Queue "
+          f"contract{RESET}: {what}\n"
+          f"  (a stale .daemon-state/port can point at another process; "
+          f"re-check with scripts/bridge-daemon.py --health)", file=sys.stderr)
+    sys.exit(2)
+
+
 def _request(method: str, path: str, token: str, port: str, body: dict | None = None) -> dict:
     url = f"http://127.0.0.1:{port}{path}"
     data = json.dumps(body).encode("utf-8") if body is not None else None
@@ -84,7 +102,23 @@ def _request(method: str, path: str, token: str, port: str, body: dict | None = 
         req.add_header("Content-Type", "application/json")
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
-            return json.loads(r.read().decode("utf-8"))
+            raw = r.read().decode("utf-8")
+        # The `-> dict` annotation was a claim the body never checked. A JSON
+        # list, string or number decodes cleanly and is returned as-is, and the
+        # caller's `d.get("items", [])` then raised AttributeError -- a
+        # traceback out of a tool whose documented failure mode for an
+        # unreachable daemon is a one-line message and exit 2. A body that is
+        # not JSON at all took the same route out of `json.loads`, uncaught by
+        # either handler below.
+        try:
+            payload = json.loads(raw)
+        except ValueError as e:
+            _die_off_contract(f"the response body is not JSON ({e})")
+        if not isinstance(payload, dict):
+            _die_off_contract(
+                f"expected a JSON object, got {type(payload).__name__}"
+            )
+        return payload
     except urllib.error.HTTPError as e:  # subclass of URLError - catch first
         detail = ""
         try:
@@ -98,6 +132,22 @@ def _request(method: str, path: str, token: str, port: str, body: dict | None = 
 
 
 def _resolve_id(items: list[dict], prefix: str) -> str:
+    # `list[dict]` was an annotation, not a check. Every branch below calls
+    # `c.get(...)`, so one non-dict element -- a list of bare id strings is the
+    # obvious shape a different server would send -- raised AttributeError from
+    # inside a comprehension. Not redundant with the `_request` check above:
+    # that one establishes the top-level object, this one the ELEMENTS, and
+    # `d.get("items", [])` can hand back a string or a list of anything with
+    # the top level perfectly well-formed.
+    #
+    # Refused whole, never filtered. Dropping the non-dict elements and
+    # resolving against the rest would answer "no active card matches" over a
+    # queue this tool could not read, which is the wrong-answer version of the
+    # same bug.
+    if not isinstance(items, list) or not all(isinstance(c, dict) for c in items):
+        kinds = type(items).__name__ if not isinstance(items, list) else \
+            sorted({type(c).__name__ for c in items})
+        _die_off_contract(f"'items' must be a list of card objects, got {kinds}")
     exact = [c for c in items if c.get("id") == prefix]
     if exact:
         return exact[0]["id"]
@@ -218,10 +268,24 @@ def cmd_list(as_json: bool) -> int:
             # an empty description - indistinguishable from an untitled draft
             # the operator simply had not filled in. The one file that needs
             # attention looked like the ones that do not.
+            #
+            # Caught BY CATEGORY, not by enumeration. The tuple used to name
+            # `json.JSONDecodeError` and `OSError`, and a draft holding invalid
+            # UTF-8 raises `UnicodeDecodeError`, disjoint from both, so it
+            # escaped this handler, reached `main`'s `except ValueError`, and
+            # printed a raw codec message having listed NOTHING. The one bad
+            # file hid every good one: the precise inversion of the feature.
+            # `ValueError` is the category of "the bytes are not JSON text":
+            # `json.JSONDecodeError` and `UnicodeDecodeError` both subclass it,
+            # and it is disjoint from `OSError`, which is "the file would not
+            # open". Together they are complete over `read_text` + `loads` and
+            # still refuse TypeError, KeyError and every unrelated bug, so a
+            # later defect here surfaces instead of being swallowed. Adding the
+            # next sibling by name would have left the one after it out.
             unreadable = ""
             try:
                 d = json.loads(f.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError) as e:
+            except (ValueError, OSError) as e:
                 d, unreadable = {}, f"UNREADABLE ({type(e).__name__}: {e})"
             if isinstance(d, dict):
                 desc = d.get("description", "")

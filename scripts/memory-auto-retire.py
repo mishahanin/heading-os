@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import GRAY, GREEN, RED, RESET, YELLOW
-from scripts.utils.memory_expiry import find_expired, strip_index_pointers
+from scripts.utils.memory_expiry import find_expired, index_link_targets, strip_index_pointers
 from scripts.utils.memory_stores import retire_memory
 from scripts.utils.workspace import get_auto_memory_dir, get_default_tz
 from scripts.utils.paths import load_env, log_dir
@@ -36,6 +36,34 @@ INDEX_NAME = "MEMORY.md"
 # trail recorded nothing from 2026-07-06 until this was found on 2026-08-29.
 # Directory from the helper, filename here, as every other caller does.
 LOG_PATH = log_dir() / "memory-auto-retire.log"
+
+
+def _pointers_removed(before: str, after: str) -> int:
+    """How many index pointers the rewrite actually took out.
+
+    Measured from the two texts, never assumed from the retire list. This line
+    used to print `len(names)`, the number of MEMORIES retired, under the words
+    "removed N pointer(s)", and the two are different numbers by design: a
+    pointer that names a PATH rather than a bare top-level filename is left
+    alone (`memory_expiry.strip_index_pointers`), so a retired memory can
+    perfectly well have no pointer taken out for it. MEASURED 2026-08-30,
+    `strip_index_pointers("- Group: [x](threads/foo.md) · [y](bar.md)",
+    ["foo.md", "bar.md"])` removes one pointer and the old line called it two.
+
+    Overstating a deletion is the worst direction for this particular sentence
+    to be wrong in. It is the audit trail of a destructive edit to an
+    operator-curated index that nothing else records, and an operator reading
+    "removed 2" has been told the second index entry is gone when it is still
+    sitting there.
+
+    Targets come from `index_link_targets`, the module's own reader for the
+    grammar `strip_index_pointers` writes with, so this counts a link the same
+    way the remover does rather than growing a second copy of that pattern.
+    Occurrences, not distinct targets: a name pointed at from two groups is two
+    pointers gone.
+    """
+    gone = index_link_targets(before) - index_link_targets(after)
+    return sum(before.count(f"]({target})") for target in gone)
 
 
 def _log_line(msg: str) -> None:
@@ -103,7 +131,9 @@ def main() -> int:
         if after != before:
             index.write_text(after, encoding="utf-8")
             print(f"{GREEN}updated{RESET} {INDEX_NAME} "
-                  f"(removed {len(names)} pointer(s))")
+                  f"(removed {_pointers_removed(before, after)} pointer(s) "
+                  f"for {len(names)} retired memor"
+                  f"{'y' if len(names) == 1 else 'ies'})")
 
     return 0
 

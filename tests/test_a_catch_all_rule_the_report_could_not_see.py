@@ -29,6 +29,7 @@ thread raised ValueError before any daemon existed.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import logging
 import signal
@@ -510,13 +511,82 @@ def test_the_module_docstring_records_where_the_handlers_go_now():
     assert "never at import" in doc
 
 
+def _installs_at_import(source: str, filename: str = "<probe>") -> list[int]:
+    """Line numbers where `signal.signal(...)` runs on IMPORT, not on call.
+
+    The text scan this replaced could not enforce its own name. It used
+    `glob("*.py")`, which is not recursive, and `line.startswith("signal.signal(")`,
+    which sees a call only when it carries no indentation at all. Both real
+    calls today live inside `install_signal_handlers`, indented, so the scan
+    already found zero hits and could not tell "no import-time handler" from
+    "one it cannot see". A regression written as
+
+        if sys.platform != "win32":
+            signal.signal(signal.SIGTERM, _handle_signal)
+
+    at module level would have shipped green, and so would anything added under
+    a new subdirectory of the package.
+
+    Descent stops at a function or lambda body, because code there runs when it
+    is called. It continues through `if`, `try`, `with` and class bodies,
+    because those DO run on import.
+    """
+    tree = ast.parse(source, filename=filename)
+    direct = {
+        alias.asname or alias.name
+        for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+        and node.module == "signal"
+        for alias in node.names if alias.name == "signal"
+    }
+    found: list[int] = []
+
+    def _is_target(func: ast.expr) -> bool:
+        if (isinstance(func, ast.Attribute) and func.attr == "signal"
+                and isinstance(func.value, ast.Name) and func.value.id == "signal"):
+            return True
+        return isinstance(func, ast.Name) and func.id in direct
+
+    def _descend(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                continue
+            if isinstance(child, ast.Call) and _is_target(child.func):
+                found.append(child.lineno)
+            _descend(child)
+
+    _descend(tree)
+    return sorted(found)
+
+
 def test_nothing_else_installs_a_handler_at_import_time():
     """The whole package, not just the one module the finding named."""
-    walked = sorted((ROOT / "scripts" / "inbox_pulse").glob("*.py"))
+    walked = sorted((ROOT / "scripts" / "inbox_pulse").rglob("*.py"))
+    assert walked, "empty corpus proves nothing"
     for path, source in read_sources(walked):
-        for lineno, line in enumerate(source.splitlines(), 1):
-            if line.startswith("signal.signal("):
-                pytest.fail(f"{path.name}:{lineno} installs a handler at import")
+        offending = _installs_at_import(source, str(path))
+        assert not offending, (
+            f"{path.name}:{offending} installs a handler at import")
+
+
+@pytest.mark.parametrize("body,expected", [
+    ("import signal\nsignal.signal(signal.SIGTERM, h)\n", True),
+    ("import signal\nif True:\n    signal.signal(signal.SIGTERM, h)\n", True),
+    ("import signal\ntry:\n    signal.signal(signal.SIGTERM, h)\nexcept Exception:\n"
+     "    raise\n", True),
+    ("from signal import signal\nsignal(15, h)\n", True),
+    ("import signal\ndef install():\n    signal.signal(signal.SIGTERM, h)\n", False),
+    ("import signal\nclass C:\n    def m(self):\n        signal.signal(15, h)\n", False),
+    ("import signal\nprint('signal.signal(' )\n", False),
+])
+def test_the_import_time_detector_sees_what_the_text_scan_could_not(body, expected):
+    """The guard above is only worth its name if this discriminates.
+
+    Rows two and three are the regressions the old `startswith` scan was blind
+    to. The last three are the shape the package actually uses, plus a string
+    that merely mentions the call, which a text scan would have to special-case
+    and an AST never sees as a call at all.
+    """
+    assert bool(_installs_at_import(body)) is expected
 
 
 def test_the_probe_would_notice_a_regression():

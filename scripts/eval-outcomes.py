@@ -33,6 +33,7 @@ Exit codes: 0 all checks passed, 1 one or more checks failed, 2 setup error
 (a malformed case, an unknown outcome type, or an assertor that could not run).
 
 Tests: tests/test_a_revocation_that_reported_clear_for_the_dangerous_case.py
+       tests/test_three_parsed_values_trusted_without_a_shape_check.py
 """
 from __future__ import annotations
 
@@ -97,10 +98,24 @@ def load_outcome_cases(skill_dir: Path) -> list[dict]:
         return []
     cases: list[dict] = []
     for path in sorted(out_dir.glob("*.json")):
+        # Caught BY CATEGORY, not by enumeration. The tuple used to name
+        # `json.JSONDecodeError` and `OSError`, and a case file holding invalid
+        # UTF-8 raises `UnicodeDecodeError`, disjoint from both. It escaped
+        # here, and nothing upstream catches it either: `run_skill` calls this
+        # bare and so does `main`, while the `except Exception` in
+        # `run_one_case` sits DOWNSTREAM and never sees it. One unreadable byte
+        # took the whole grading run down with a traceback, where the module
+        # docstring promises a setup error and exit 2. `ValueError` is the
+        # category of "the bytes are not JSON text" (both decoders subclass it)
+        # and is disjoint from `OSError`, "the file would not open". Complete
+        # over `read_text` + `loads`, and still refusing TypeError, KeyError and
+        # every unrelated bug, so the next defect here surfaces rather than
+        # being swallowed.
         try:
             case = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as e:
-            cases.append({"id": path.stem, "_path": str(path), "_load_error": str(e)})
+        except (ValueError, OSError) as e:
+            cases.append({"id": path.stem, "_path": str(path),
+                          "_load_error": f"{type(e).__name__}: {e}"})
             continue
         # A case file that parses is not yet a case. `[]`, `null` and a bare
         # string all decode cleanly, and the next line then raised TypeError
@@ -245,6 +260,34 @@ def _assert_doctype_render(case: dict, sandbox_root: Path, render: bool) -> list
     doctype = o["doctype"]
     data = o["data"]
     expect_missing = o.get("expect_missing", [])
+    # A LIST of field names, checked before `sorted()` sees it. A JSON string
+    # is a sequence too, so `expect_missing: "recipient"` sorted into
+    # ['c','e','e','i','i','n','p','r','t'] and was compared, character by
+    # character, against a list of field names. Nothing raised: the case simply
+    # graded, wrongly, and `run_one_case`'s `except Exception` -- the one place
+    # a malformed fixture is supposed to surface -- never fired, because there
+    # was no exception to catch. A quiet wrong verdict on the tool whose whole
+    # job is verdicts.
+    #
+    # It fails BOTH ways, which is why neither direction is safe to leave. A
+    # negative fixture that should have asserted one missing field asserts nine
+    # characters and reports FAIL on a renderer that was correct; and the
+    # `if render and not expect_missing` branch below reads a non-empty string
+    # as "this is a negative fixture", so the real-render assertion is skipped
+    # without a word and `--render` grades a case it never rendered.
+    #
+    # Raised, not appended as a failing check: an unusable fixture is a SETUP
+    # error, and `run_one_case` turns an assertor raise into exactly that, the
+    # same route `_render_formats` above already takes for an unrenderable
+    # doctype. A failing check would report the operator's own fixture as a
+    # defect in the code under test.
+    if not isinstance(expect_missing, list) or not all(
+            isinstance(f, str) for f in expect_missing):
+        raise ValueError(
+            f"outcome.expect_missing must be a list of field-name strings, got "
+            f"{type(expect_missing).__name__} {expect_missing!r}; a bare string "
+            f"would be compared one character at a time"
+        )
     results: list[dict] = []
 
     missing = validate_required_fields(doctype, data)
@@ -387,9 +430,29 @@ def _write_benchmark(skill_dir: Path, passed: int, total: int, cases: list[dict]
     path.parent.mkdir(parents=True, exist_ok=True)
     existing: dict = {}
     if path.exists():
+        # Same category tuple as `load_outcome_cases`, for the same reason: an
+        # invalid-UTF-8 sidecar raised `UnicodeDecodeError` straight out of a
+        # function that runs AFTER the entire grading loop, discarding a
+        # completed run.
         try:
-            existing = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError) as e:
+            print(f"  {YELLOW}benchmark-outcomes.json unreadable, starting a new "
+                  f"one (previous baseline lost): {type(e).__name__}: {e}{RESET}")
+            parsed = {}
+        # A sidecar that PARSES is not yet a sidecar. `[]`, `null` and a bare
+        # string all decode cleanly, the handler above never fires, and
+        # `existing["last_run"] = ...` then raised TypeError, at the last
+        # write of the run, so every graded case was thrown away and the
+        # process died on a traceback instead of a documented exit code. The
+        # sibling check in `load_outcome_cases` already existed; it was simply
+        # never applied here.
+        if isinstance(parsed, dict):
+            existing = parsed
+        else:
+            print(f"  {YELLOW}benchmark-outcomes.json is not a JSON object (got "
+                  f"{type(parsed).__name__}), starting a new one "
+                  f"(previous baseline lost){RESET}")
             existing = {}
     last_run = {
         # A SERIALIZED timestamp, so UTC with an offset (dtz-datetime-convention).

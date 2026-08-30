@@ -54,6 +54,11 @@ Commands:
   append --workspace DIR --text STR [--type T] [--by W]  append one entry at the end
   set    --workspace DIR --key K --value V              set/replace a frontmatter field
 
+`append` and `set` exit 2 when the memlog does not exist, the mirror of init's
+guard. A frontmatter key may not be empty, and may not carry a newline, a colon,
+or surrounding whitespace, because any of those rewrites the file's shape from
+inside the fence; a value is free text and is neutralized on render.
+
 The workspace is the run folder; the memlog is always {workspace}/.memlog.md.
 """
 import argparse
@@ -102,6 +107,33 @@ def render(meta: dict, body: str) -> str:
     return "---\n" + fm + "\n---\n\n" + body.rstrip("\n") + "\n"
 
 
+def bad_key(key: str) -> str | None:
+    """Why `key` cannot be a frontmatter key, or None when it can.
+
+    `render` neutralizes newlines in VALUES, which leaves the KEY as the one
+    field that can still rewrite the file's shape from the inside. Measured
+    2026-08-30: `set --key $'note\nstatus' --value done` on an active memlog
+    wrote a `note` line and a `status: done` line into the frontmatter, and the
+    next `split` read the goal-tracking `status` as `done` while the ack the
+    command had just printed still said `active`. A `:` does the same thing on
+    one line, since `split` breaks on the first one and files the tail under a
+    shorter key.
+
+    Refused at the two doors that accept a key, `init --field` and `set --key`,
+    rather than escaped on the way out: a key that cannot be typed back at the
+    tool is not a key worth keeping.
+    """
+    if not key:
+        return "must not be empty"
+    if key != key.strip():
+        return "must not start or end with whitespace"
+    if "\n" in key or "\r" in key:
+        return "must not contain a newline"
+    if ":" in key:
+        return "must not contain ':'"
+    return None
+
+
 def touch(meta: dict) -> None:
     """Stamp `updated` and keep it last so the field order stays predictable."""
     meta.pop("updated", None)
@@ -140,7 +172,12 @@ def cmd_init(args) -> int:
             print(f"error: --field expects key=value, got {pair!r}", file=sys.stderr)
             return 2
         k, v = pair.split("=", 1)
-        meta[k.strip()] = v.strip()
+        k = k.strip()
+        why = bad_key(k)
+        if why:
+            print(f"error: --field key {k!r} {why}", file=sys.stderr)
+            return 2
+        meta[k] = v.strip()
     meta.setdefault("status", "active")
     touch(meta)
     write_atomic(path, render(meta, ""))
@@ -150,6 +187,13 @@ def cmd_init(args) -> int:
 
 def cmd_append(args) -> int:
     path = memlog_path(args.workspace)
+    # `cmd_init`'s guard from the other side, and the same exit code: init
+    # refuses a memlog that is already there, append and set refuse one that is
+    # not. Both used to meet the absence as a raw FileNotFoundError traceback,
+    # in a script whose every other refusal is a printed line and exit 2.
+    if not path.exists():
+        print(f"error: {path} does not exist; run init first", file=sys.stderr)
+        return 2
     meta, body = split(path.read_text(encoding="utf-8"))
     text = " ".join(args.text.split())  # collapse newlines/runs → one-line entry, no prose bloat
     label = args.type or ""
@@ -166,6 +210,13 @@ def cmd_append(args) -> int:
 
 def cmd_set(args) -> int:
     path = memlog_path(args.workspace)
+    if not path.exists():
+        print(f"error: {path} does not exist; run init first", file=sys.stderr)
+        return 2
+    why = bad_key(args.key)
+    if why:
+        print(f"error: --key {args.key!r} {why}", file=sys.stderr)
+        return 2
     meta, body = split(path.read_text(encoding="utf-8"))
     meta[args.key] = args.value
     touch(meta)

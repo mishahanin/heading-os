@@ -748,6 +748,25 @@ def main():
 
     args = parser.parse_args()
 
+    # An unresolved org is a refusal, not a warning. `load_github_org()` answers
+    # '' rather than raising (see its docstring) so that --help survives a
+    # missing data overlay; the empty string therefore reaches here. Every entry
+    # `exec_repos()` builds would be `/{name}`, every `gh api` call would 404,
+    # and `revoke_github_access` would print "[skip] Not a direct collaborator"
+    # for all of them -- a reassuring report for a revocation that removed
+    # nothing, from a tool whose entire purpose is that someone has left. Same
+    # refusal `scripts/emergency-revoke.py` makes, for the same reason.
+    #
+    # Before validate_admin(), deliberately: that reaches admin.json and so the
+    # same unreachable overlay, which is where the traceback used to come from.
+    if not GITHUB_ORG:
+        print(f"{RED}[STOP]{RESET} the GitHub org could not be resolved, so no "
+              f"repo or org path here is real. Refusing to run a revocation "
+              f"against guessed paths.", file=sys.stderr)
+        print(f"  {RED}MANUAL ACTION REQUIRED: revoke this exec via the GitHub "
+              f"UI, at the org level as well as per repo.{RESET}", file=sys.stderr)
+        sys.exit(1)
+
     # Admin gate
     validate_admin()
 

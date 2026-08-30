@@ -32,7 +32,11 @@ the health run that said more than they measured.
 * `check_reference_validation` asserted "CLAUDE.md has no 'Reference Resources'
   section" from `checked == 0`, which is also what a present section with no
   backticked paths produces. The function already tracked section presence and
-  never read it, so the operator got the wrong remediation.
+  never read it, so the operator got the wrong remediation. SUPERSEDED
+  2026-08-30: the check was pointed at the reference index that exists, in the
+  data overlay, and `CLAUDE_MD` was deleted from the module. The fixture and
+  four tests this paragraph describes were retired in place at the foot of the
+  file, with the reason recorded there.
 
 Nothing here contacts api.anthropic.com. The header rejection is reproduced
 against `http.client` directly, with no socket.
@@ -360,61 +364,27 @@ def test_the_two_siblings_agree_about_a_missing_overlay(wh, tmp_path,
     assert wh.check_doc_versions() == 0
 
 
+
 # ============================================================
 # The remediation that was wrong whenever the section existed
 # ============================================================
-
-@pytest.fixture
-def claude_md(wh, tmp_path, monkeypatch):
-    path = tmp_path / "CLAUDE.md"
-    monkeypatch.setattr(wh, "CLAUDE_MD", path)
-    monkeypatch.setattr(wh, "WORKSPACE", tmp_path)
-    return path
-
-
-def test_a_present_section_with_no_backticks_is_named_as_such(wh, claude_md,
-                                                               capsys):
-    """`checked == 0` cannot tell this from a missing section, and the operator
-    was told to add a section that was already there."""
-    claude_md.write_text(
-        "## Reference Resources\n\n| File | Why |\n|---|---|\n"
-        "| reference/voice.md | voice |\n", encoding="utf-8")
-
-    wh.check_reference_validation()
-
-    out = capsys.readouterr().out
-    assert "has a 'Reference Resources' section but no" in out
-    assert "has no 'Reference Resources' section" not in out
-
-
-def test_a_genuinely_absent_section_still_says_absent(wh, claude_md, capsys):
-    claude_md.write_text("# CLAUDE.md\n\nNothing here.\n", encoding="utf-8")
-
-    wh.check_reference_validation()
-
-    assert "has no 'Reference Resources' section" in capsys.readouterr().out
-
-
-def test_a_section_with_backticked_paths_is_still_checked(wh, claude_md,
-                                                           tmp_path, capsys):
-    (tmp_path / "reference").mkdir()
-    (tmp_path / "reference" / "voice.md").write_text("x", encoding="utf-8")
-    claude_md.write_text(
-        "## Reference Resources\n\n| File | Why |\n|---|---|\n"
-        "| `reference/voice.md` | voice |\n", encoding="utf-8")
-
-    issues = wh.check_reference_validation()
-
-    assert issues == 0
-    assert "All 1 reference path(s) resolve" in capsys.readouterr().out
-
-
-def test_a_missing_backticked_path_is_still_an_action(wh, claude_md, capsys):
-    claude_md.write_text(
-        "## Reference Resources\n\n| File | Why |\n|---|---|\n"
-        "| `reference/gone.md` | voice |\n", encoding="utf-8")
-
-    issues = wh.check_reference_validation()
-
-    assert issues == 1
-    assert "Missing: reference/gone.md" in capsys.readouterr().out
+#
+# A fixture and four tests stood here. They patched `wh.CLAUDE_MD` at a
+# `tmp_path` file and pinned the difference between "no Reference Resources
+# section" and "a section whose paths are not in backticks", because `checked
+# == 0` could not tell those apart and the operator was told to add a section
+# that was already there.
+#
+# All four passed for months over a heading that exists in no file in either
+# repo. On 2026-08-30 `check_reference_validation` was pointed at
+# `<data-root>/reference/workspace-overview.md`, the index that actually holds
+# the paths, and `wh.CLAUDE_MD` was deleted, so the fixture had nothing left to
+# patch.
+#
+# The distinction they protected survives, in a form that now matters: the new
+# check counts path-shaped tokens it SKIPPED and prints that count beside the
+# examined count, so "nothing to check" and "checked and clean" still read
+# differently. See
+# `tests/test_a_reference_check_that_verified_nothing_for_months.py`.
+#
+# ============================================================

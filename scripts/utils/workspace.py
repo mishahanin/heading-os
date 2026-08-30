@@ -406,7 +406,32 @@ def resolve_config_with_example(filename: str, example: Path) -> Path:
 
 
 def get_crm_central_path() -> Path:
-    """Get the local clone path for crm-central repo (CEO only)."""
+    """RESOLVE the local path of the RETIRED crm-central repo. Creates nothing.
+
+    Kept, deliberately, rather than deleted with its callers. `31c-crm-central`
+    was retired when the fleet seam was hard-cut to per-exec repos: aggregation
+    reads the per-exec data repos (`scripts/aggregate-crm.py`), execs push their
+    own contacts, and `scripts/setup.py` steps 7 and 9 are no-ops that clone and
+    create nothing. One live reader of the same path survives -
+    `scripts/bridge_daemon/sources/contacts.py` scans
+    `../31c-crm-central/contacts/{owner}/` as a documented last-resort fallback
+    behind the per-exec mirror - so the path is not a dead concept and a single
+    named resolver is better than a second literal.
+
+    THE CONTRACT, and it is the whole reason this docstring exists. On the CEO
+    workspace the returned path is OUTSIDE the workspace, a sibling of the
+    engine root. Callers may `.exists()` it, read it, and `git pull` an existing
+    clone. Callers may NOT `mkdir()` it, `mkdir(parents=True)` it, or
+    `git clone` into it. On 2026-08-30 `emergency-revoke.py` did both: a
+    `gh repo clone` in `audit_recent_commits` and an unconditional
+    `audit_dir.mkdir(parents=True, exist_ok=True)` in `log_security_event`,
+    which had already materialised `<parent>/31c-crm-central/audit/` on the
+    operator's disk once, from a stray import, with no network involved. Both
+    now refuse and say so. Resolving a retired path is free; rebuilding a
+    retired tree outside the workspace is a side effect nothing asked for.
+
+    Regression lock: tests/test_a_wizard_that_cloned_a_retired_repository.py.
+    """
     root = get_workspace_root()
     if is_ceo_workspace():
         return root.parent / "31c-crm-central"
@@ -902,14 +927,57 @@ def get_admin_slugs() -> list:
     return ADMIN_SLUGS
 
 
+_ORG_OVERLAY_FALLBACK_ANNOUNCED = False
+
+
 def load_github_org() -> str:
     """Load the GitHub org: the operator seam (operator.yaml/env) first, then
-    admin.json's github_org, else the seam's value ('' on a fresh clone)."""
+    admin.json's github_org, else the seam's value ('' on a fresh clone).
+
+    Never raises, and returns '' when nothing could answer. `load_admin_config()`
+    resolves through `get_data_config_dir()` and so through `get_data_root()`,
+    which raises `DataRootError` when `HEADING_OS_DATA` names a path that is not
+    a directory (and `ValueError` on a corrupt `.workspace-identity.json`, via
+    `is_ceo_workspace()`). Three engine scripts bind this at MODULE scope --
+    `admin-health.py:43`, `offboard-exec.py:42`, `provision-exec.py:55` -- so on
+    2026-08-30 the exception arrived during import, before argparse ran, and
+    `--help` died with a traceback and exit 1 on any machine whose overlay is
+    missing. That is the same machine state a fleet incident produces, which is
+    when these three are wanted most.
+
+    Absorbing it here is the call `scripts/utils/operator_identity._resolve_file`
+    already makes one tier up, for the same stated reason. The `DataRootError`
+    guard exists to stop a WRITE landing on the live overlay by accident, and
+    nothing on this path writes: it is a READ whose resolution order already
+    documents a lower tier to read instead, the operator seam, whose documented
+    answer on an unresolvable instance is the empty string. Falling to it costs
+    nothing and unblocks all three callers at once.
+
+    Deliberately narrow, and that boundary is the justification. This absorbs the
+    refusal for THIS read only. It does not widen `get_data_root()`, it does not
+    touch `require_writable_data_root()`, and it leaves every write path refusing
+    exactly as before. A caller that needs a REAL org must test for the empty
+    string -- `operator_org()` already documents that, and it is now true one
+    layer down as well: no exception arriving is not evidence that an org exists.
+
+    The fall is announced once per process on stderr, never taken in silence.
+    """
+    global _ORG_OVERLAY_FALLBACK_ANNOUNCED
     from scripts.utils.operator_identity import operator_org
     org = operator_org()
     if org:
         return org
-    config = load_admin_config()
+    try:
+        config = load_admin_config()
+    except (DataRootError, ValueError, OSError) as exc:
+        if not _ORG_OVERLAY_FALLBACK_ANNOUNCED:
+            _ORG_OVERLAY_FALLBACK_ANNOUNCED = True
+            print(f"[workspace] the private data overlay could not be resolved "
+                  f"({type(exc).__name__}: {exc}); admin.json was NOT read, so "
+                  f"the GitHub org falls back to the operator seam and resolves "
+                  f"to {org!r}. Any command that needs a real org must refuse.",
+                  file=sys.stderr)
+        return org
     if config.get("github_org"):
         return config["github_org"]
     return org

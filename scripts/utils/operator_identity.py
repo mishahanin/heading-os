@@ -10,13 +10,39 @@ Resolution precedence (highest wins):
     3. engine-local config/operator.yaml   (gitignored; for a data-less clone)
     4. the shipped example scripts/operator.example.yaml (generic defaults)
 
-Never raises: on any read/parse error it returns the generic dict. Composes the
-existing scripts.utils.workspace.resolve_config_with_example() helper for the
+Never raises, and that is now true. Every read/parse error, and every failure to
+RESOLVE tier 2 at all, degrades to the next tier down and finally to the generic
+dict at tier 4. Composes the existing
+scripts.utils.workspace.resolve_config_with_example() helper for the
 overlay->example decision and layers the engine-local + env tiers on top.
+
+The documented sentinel. When nothing above tier 4 could be read, `get_operator()`
+returns a copy of `_GENERIC`: name "Operator", slug "operator", github_org "",
+email "". `operator_org()` and `operator_email_domain()` therefore answer `""`,
+`operator_slug()` answers `"operator"`, and `operator_is_default()` answers True.
+A caller that needs a REAL org must test the empty string; it must not assume the
+value is real merely because no exception arrived.
+
+Why this is the read that degrades rather than the read that refuses. Until
+2026-08-30 the promise above was false through tier 2: `get_data_config_dir()`
+reaches `get_data_root()`, which raises `DataRootError` when `HEADING_OS_DATA`
+names a path that is not a directory, and `get_workspace_identity()` raises
+`ValueError` on a corrupt `.workspace-identity.json`. Five modules call into this
+seam at MODULE scope, so the exception arrived during import, before argparse:
+`scripts/emergency-revoke.py` (the incident tool) died at its import line with a
+traceback and exit 1 on `--help`, on a machine whose overlay is missing, which is
+the same machine state the incident it serves produces. The `DataRootError` guard
+exists to stop a WRITE landing on the live overlay by accident. Nothing here
+writes; it reads an identity file, and the resolution chain already documents two
+lower tiers to read instead. Falling to them costs nothing and unblocks every
+caller at once, where correcting the docstring instead would have needed a
+handler at each of the twenty-odd call sites. The degradation is announced once
+per process on stderr, so it is never silent.
 """
 from __future__ import annotations
 
 import os
+import sys
 from functools import lru_cache
 from pathlib import Path
 
@@ -51,10 +77,29 @@ def _resolve_file() -> tuple[Path | None, bool]:
     inserts the engine-local config/operator.yaml tier between them: if the overlay
     file is absent (helper fell back to the example) but an engine-local file
     exists, prefer it.
+
+    A tier 2 that cannot even be RESOLVED (no usable data root, corrupt workspace
+    identity) is treated exactly like a tier 2 that is absent: skip it and carry
+    on down. That is what makes the module docstring's "never raises" true. The
+    reason is stated there and the fall is announced on stderr, never taken in
+    silence.
     """
+    from scripts.utils.paths import DataRootError
     from scripts.utils.workspace import resolve_config_with_example, get_workspace_root
 
-    resolved = resolve_config_with_example(OPERATOR_FILENAME, _EXAMPLE_PATH)
+    try:
+        resolved = resolve_config_with_example(OPERATOR_FILENAME, _EXAMPLE_PATH)
+    except (DataRootError, ValueError, OSError) as exc:
+        # ValueError as well as DataRootError, for the same reason
+        # scripts.utils.workspace.display_path() catches both: the resolution
+        # chain runs through get_workspace_identity(), which raises ValueError by
+        # design on a corrupt .workspace-identity.json.
+        print(f"[operator-identity] the private data overlay could not be "
+              f"resolved ({type(exc).__name__}: {exc}); reading the operator "
+              f"identity from the engine-local config/operator.yaml or the "
+              f"shipped example instead. github_org may be empty.",
+              file=sys.stderr)
+        resolved = _EXAMPLE_PATH
     if resolved == _EXAMPLE_PATH:
         engine_local = get_workspace_root() / "config" / OPERATOR_FILENAME
         if engine_local.exists():
@@ -102,7 +147,9 @@ def _cached() -> tuple[dict, bool]:
 def get_operator() -> dict:
     """Resolved operator identity dict (name/slug/github_org/voice_reference/email).
 
-    Never raises; returns generic defaults on a fresh clone. Cached; call
+    Never raises. Returns the documented sentinel -- a copy of _GENERIC, so
+    github_org "" and slug "operator" -- on a fresh clone AND whenever the data
+    overlay cannot be resolved or read (see the module docstring). Cached; call
     _reset_cache() in tests after mutating env or files.
     """
     return dict(_cached()[0])
@@ -119,7 +166,9 @@ def operator_slug() -> str:
 
 
 def operator_org() -> str:
-    """Operator GitHub org/owner. '' on an unconfigured clone."""
+    """Operator GitHub org/owner. '' on an unconfigured clone, and '' when the
+    data overlay is unreachable. Never raises. A caller that needs a real org
+    must test for the empty string rather than trust that no exception arrived."""
     return get_operator()["github_org"]
 
 

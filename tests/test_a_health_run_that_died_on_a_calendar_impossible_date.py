@@ -20,7 +20,10 @@ names a contract nothing enforces.
 flipped into "in the Reference Resources table" on any line containing that
 phrase, prose included, and stayed there until the next `## `. Every following
 table row with a backticked dotted token was then existence-checked and failed
-the run over paths nobody claimed were references.
+the run over paths nobody claimed were references. SUPERSEDED 2026-08-30: the
+check no longer reads `CLAUDE.md`, and the heading it anchored to exists in no
+file in either repo. Its two tests were retired in place, with the reasoning
+kept where they stood.
 
 *A title promising a comparison nobody wrote.* `check_agent_counts` printed
 under "Agent Count Verification" and its docstring said "compare to CLAUDE.md".
@@ -156,54 +159,26 @@ def test_a_marker_on_line_two_passes_and_says_so(wh, tmp_path, monkeypatch,
 
 
 # ============================================================
-# check_reference_validation - a heading, not a substring
+# check_reference_validation - retired 2026-08-30
 # ============================================================
-
-def test_prose_naming_the_section_does_not_open_it(wh, tmp_path, monkeypatch,
-                                                   capsys):
-    """The measured defect: a sentence flipped the flag and an unrelated table
-    row was existence-checked and failed the run."""
-    claude_md = tmp_path / "CLAUDE.md"
-    claude_md.write_text(
-        "# Guide\n\n"
-        "See the Reference Resources section for paths.\n\n"
-        "| Setting | Value |\n|---|---|\n"
-        "| cfg | `config/does-not-exist.yaml` |\n\n"
-        "## Real heading\n",
-        encoding="utf-8")
-    monkeypatch.setattr(wh, "CLAUDE_MD", claude_md)
-    monkeypatch.setattr(wh, "WORKSPACE", tmp_path)
-
-    assert wh.check_reference_validation() == 0
-    body = capsys.readouterr().out
-    assert "config/does-not-exist.yaml" not in body
-
-
-def test_a_real_heading_still_checks_its_table(wh, tmp_path, monkeypatch,
-                                               capsys):
-    """The negative direction: anchoring must not disarm the check.
-
-    Without this, `return 0` would satisfy the test above.
-    """
-    (tmp_path / "present.md").write_text("here\n", encoding="utf-8")
-    claude_md = tmp_path / "CLAUDE.md"
-    claude_md.write_text(
-        "# Guide\n\n"
-        "## Reference Resources\n\n"
-        "| Item | Path |\n|---|---|\n"
-        "| ok | `present.md` |\n"
-        "| gone | `config/does-not-exist.yaml` |\n\n"
-        "## Next\n",
-        encoding="utf-8")
-    monkeypatch.setattr(wh, "CLAUDE_MD", claude_md)
-    monkeypatch.setattr(wh, "WORKSPACE", tmp_path)
-
-    assert wh.check_reference_validation() == 1
-    body = capsys.readouterr().out
-    assert "Missing: config/does-not-exist.yaml" in body
-    assert "present.md" in body
-
-
+#
+# Two tests stood here, pinning that the section flag opened on a markdown
+# HEADING and not on any prose sentence carrying the phrase. The finding behind
+# them was real when written: a sentence flipped the flag and an unrelated table
+# row was existence-checked and failed the run.
+#
+# It cannot recur, and not because the anchoring was kept. On 2026-08-30 the
+# check stopped reading `CLAUDE.md` at all. It reads
+# `<data-root>/reference/workspace-overview.md`, the index that actually holds
+# the paths, and the WHOLE file is the reference section, so there is no heading
+# to anchor to and no flag to flip. `wh.CLAUDE_MD` no longer exists, so these
+# two could not be repaired in place.
+#
+# The reasoning is not lost: it is recorded in the new docstring of
+# `check_reference_validation`, together with why it does not apply any more.
+# The live behaviour is covered by
+# `tests/test_a_reference_check_that_verified_nothing_for_months.py`.
+#
 # ============================================================
 # check_agent_counts - the title matches the method
 # ============================================================

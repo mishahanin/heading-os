@@ -36,6 +36,7 @@ from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 ensure_venv()
 from scripts.utils.operator_identity import operator_email_domain  # noqa: E402
 from scripts.utils.workspace import (
+    DataRootError,
     get_datastore_dir,
     get_default_tz,
     get_outputs_dir,
@@ -52,9 +53,26 @@ WS = get_workspace_root()
 # the engine ships scripts/bootcamp-org-chart.example.json as the generic fallback.
 # Schema: chart = email_local -> {title, function, reports_to}.
 # ============================================================
-_ORG_CHART_FILE = resolve_config_with_example(
-    "bootcamp-org-chart.json", WS / "scripts" / "bootcamp-org-chart.example.json"
-)
+_ORG_CHART_EXAMPLE = WS / "scripts" / "bootcamp-org-chart.example.json"
+try:
+    _ORG_CHART_FILE = resolve_config_with_example(
+        "bootcamp-org-chart.json", _ORG_CHART_EXAMPLE
+    )
+except (DataRootError, ValueError, OSError) as _exc:
+    # Same call the operator seam makes in operator_identity._resolve_file, and
+    # for the same reason. resolve_config_with_example() reaches get_data_root(),
+    # which REFUSES when HEADING_OS_DATA names a path that is not a directory --
+    # a guard against a WRITE landing on the live overlay. This is a READ, and
+    # the banner above already documents the lower tier: the shipped example.
+    # Until 2026-08-30 the refusal arrived at module scope, so importing this
+    # module at all died with a traceback and exit 1 on a machine with no
+    # overlay. Fall to the example and say so; the paths that genuinely need the
+    # overlay refuse separately, below.
+    print(f"[bootcamp-roster] the private data overlay could not be resolved "
+          f"({type(_exc).__name__}: {_exc}); reading the org chart from the "
+          f"shipped example {_ORG_CHART_EXAMPLE.name} instead. Its names and "
+          f"titles are generic placeholders, not your Tribe.", file=sys.stderr)
+    _ORG_CHART_FILE = _ORG_CHART_EXAMPLE
 _org_data = json.loads(_ORG_CHART_FILE.read_text(encoding="utf-8"))
 SHARED_MAILBOXES = set(_org_data["shared_mailboxes"])
 NON_TRIBE = set(_org_data["non_tribe"])  # dict email -> reason; membership uses keys
@@ -70,14 +88,28 @@ _GAL_ALIASES = _org_data["aliases"]
 # fallback so a workspace that never edited the org chart still lines up with
 # what `gal-export.py` produced.
 _GAL_DOMAIN = _org_data.get("gal_domain") or operator_email_domain() or "example.com"
-GAL_JSON = get_outputs_dir() / "_sync" / f"gal-{_GAL_DOMAIN}.json"
 
 # Event-specific paths/title are instance DATA resolved from the (private) config;
 # the engine example ships generic placeholders.
 _EVENT = _org_data.get("event", {})
 _EVENT_DIR = _EVENT.get("dir", "Example Bootcamp")
-PRELIM_XLSX = get_datastore_dir() / "events" / _EVENT_DIR / _EVENT.get("prelim_xlsx", "prelim.xlsx")
-OUT_XLSX = get_datastore_dir() / "events" / _EVENT_DIR / _EVENT.get("out_xlsx", "roster.xlsx")
+
+# These three name real overlay data: the GAL export this reads, the preliminary
+# attendee list, and the roster it writes. Unlike the org chart above there is no
+# lower tier to fall to -- an engine example cannot stand in for the operator's
+# attendee list -- so an unresolvable overlay is a REFUSAL here, not a
+# degradation. What it must not be is a traceback at module scope: fixing the
+# org-chart line alone simply moved the same crash from line 55 to this one, and
+# a crash during import happens before any argument is parsed or any message is
+# chosen. Resolve them once, remember the refusal, and let main() state it.
+_OVERLAY_ERROR: str | None = None
+try:
+    GAL_JSON = get_outputs_dir() / "_sync" / f"gal-{_GAL_DOMAIN}.json"
+    PRELIM_XLSX = get_datastore_dir() / "events" / _EVENT_DIR / _EVENT.get("prelim_xlsx", "prelim.xlsx")
+    OUT_XLSX = get_datastore_dir() / "events" / _EVENT_DIR / _EVENT.get("out_xlsx", "roster.xlsx")
+except (DataRootError, ValueError, OSError) as _exc:
+    GAL_JSON = PRELIM_XLSX = OUT_XLSX = None
+    _OVERLAY_ERROR = f"{type(_exc).__name__}: {_exc}"
 
 # ============================================================
 # Track recommendation logic
@@ -450,6 +482,16 @@ def write_excel(rows: list[dict], excluded: dict):
 
 
 def main() -> int:
+    if _OVERLAY_ERROR is not None:
+        # Loud, and with the same exit code the other refusal below uses. A
+        # partial run is the danger this closes: every path this tool reads and
+        # writes lives in the overlay, so without one there is no roster to
+        # build and nothing that could look complete.
+        print(f"[ERROR] the private data overlay is unreachable "
+              f"({_OVERLAY_ERROR})", file=sys.stderr)
+        print("        The GAL export, the preliminary attendee list and the "
+              "roster output all live there. Refusing to run.", file=sys.stderr)
+        return 1
     _ensure_openpyxl()
     try:
         rows, excluded = build_roster()

@@ -49,6 +49,11 @@ def _ensure_docx():
 TABLE_HEADER_BG = "007ACC"
 TABLE_ALT_BG = "F2F7FC"
 
+# Markdown heading depth -> Word outline level, one to one. `setup_styles`
+# brands Heading 1 through Heading 4, which is every level `parse_markdown`
+# emits.
+HEADING_LEVELS = {'h1': 1, 'h2': 2, 'h3': 3, 'h4': 4}
+
 
 def setup_styles(doc):
     """Configure document styles."""
@@ -90,6 +95,21 @@ def setup_styles(doc):
     h3.paragraph_format.space_before = Pt(12)
     h3.paragraph_format.space_after = Pt(6)
     h3.paragraph_format.keep_with_next = True
+
+    # Heading 4. Added with the heading-level remap in `build_document`: `####`
+    # used to render as Heading 3 (styled here), and mapping it to its true
+    # level 4 would otherwise have dropped it onto Word's unbranded default --
+    # 11pt Calibri Light in the theme's accent blue, next to nothing else in
+    # this document. Fixing the outline must not cost the brand.
+    h4 = doc.styles['Heading 4']
+    h4.font.name = 'Calibri'
+    h4.font.size = Pt(11)
+    h4.font.color.rgb = BRAND_LIGHT
+    h4.font.bold = True
+    h4.font.italic = False
+    h4.paragraph_format.space_before = Pt(10)
+    h4.paragraph_format.space_after = Pt(4)
+    h4.paragraph_format.keep_with_next = True
 
     return doc
 
@@ -234,6 +254,77 @@ def add_cover_page(doc):
     doc.add_page_break()
 
 
+_SEPARATOR_CELL = re.compile(r':?-+:?')
+
+
+def _split_row(line):
+    """Split one markdown table row into cells on its UNESCAPED pipes.
+
+    `line.split('|')[1:-1]` was wrong twice over. It treated `\\|` -- the only
+    way GFM gives you of putting a literal pipe inside a cell -- as a
+    delimiter, so `| cost model \\| fixed | 100 | 200 |` yielded FOUR cells
+    against a three-column header, every value shifted one column left and the
+    renderer dropped the overflow: a priced row reached the client missing a
+    number. And it discarded the first and last field unconditionally, which is
+    only right when the row carries outer pipes. On the legal borderless form
+    (`Phase | Weeks`) it deleted both edge columns, and on a lone `a | b` it
+    returned nothing at all.
+
+    An outer empty is dropped only where an outer pipe actually stands.
+    """
+    text = line.strip()
+    cells, buf = [], []
+    escaped = False
+    ends_on_delimiter = False
+    for ch in text:
+        if escaped:
+            # A backslash before anything GFM defines no escape for is literal
+            # text, so a cell reading `C:\reports` survives intact.
+            buf.append(ch if ch in '|\\' else '\\' + ch)
+            escaped = False
+            ends_on_delimiter = False
+        elif ch == '\\':
+            escaped = True
+        elif ch == '|':
+            cells.append(''.join(buf).strip())
+            buf = []
+            ends_on_delimiter = True
+        else:
+            buf.append(ch)
+            ends_on_delimiter = False
+    if escaped:
+        buf.append('\\')
+    cells.append(''.join(buf).strip())
+
+    if text.startswith('|'):
+        cells = cells[1:]
+    if ends_on_delimiter and cells and cells[-1] == '':
+        cells = cells[:-1]
+    return cells
+
+
+def _is_separator_row(line, expected_cells=None):
+    """True when `line` is a table's header separator, judged by SHAPE.
+
+    The detector used to be `'---' in lines[i + 1]`, a substring search over
+    the whole next line. Any body line holding a pipe whose successor carried
+    three hyphens ANYWHERE -- an em dash typed as `---`, a horizontal rule, a
+    phrase like `rehost --- replatform` -- was read as a table header, and the
+    prose line was rewritten into a mangled one-cell table or dropped from the
+    document with nothing said. A separator has a shape instead: between the
+    pipes sit dashes, optional alignment colons, and nothing else.
+
+    `expected_cells` applies GFM's other requirement, that the separator match
+    the header's column count. Without it a bare `---` (one cell) would still
+    capture a three-column prose line, since a horizontal rule and a
+    single-column separator are spelled identically.
+    """
+    cells = _split_row(line)
+    if not cells or not all(_SEPARATOR_CELL.fullmatch(c) for c in cells):
+        return False
+    return expected_cells is None or len(cells) == expected_cells
+
+
 def parse_markdown(md_text):
     """Parse markdown into structured blocks."""
     blocks = []
@@ -286,7 +377,8 @@ def parse_markdown(md_text):
             continue
 
         # Tables
-        if '|' in line and i + 1 < len(lines) and '---' in lines[i + 1]:
+        if ('|' in line and i + 1 < len(lines)
+                and _is_separator_row(lines[i + 1], len(_split_row(line)))):
             table_lines = []
             while i < len(lines) and '|' in lines[i]:
                 table_lines.append(lines[i])
@@ -294,15 +386,16 @@ def parse_markdown(md_text):
             # Parse table
             rows = []
             for tl in table_lines:
-                cells = [c.strip() for c in tl.split('|')[1:-1]]
                 # A separator row is one whose EVERY cell is dashes and colons.
                 # The test used to be `'---' in tl` against the whole raw line,
                 # so a data row holding an em dash written as `---`, or a value
                 # like `rehost --- replatform`, was dropped from the proposal
-                # without a word. This matches what md-to-docx-competitive.py
-                # already does.
-                if cells and all(re.match(r'^[-:]+$', c) for c in cells):
+                # without a word. No column count here: the block is already
+                # established as a table, and a ragged separator is still a
+                # separator.
+                if _is_separator_row(tl):
                     continue
+                cells = _split_row(tl)
                 if cells:
                     rows.append(cells)
             if rows:
@@ -352,26 +445,66 @@ def parse_markdown(md_text):
     return blocks
 
 
-def add_rich_text(paragraph, text):
-    """Add text with inline bold/italic formatting."""
-    # Split on bold markers
-    parts = re.split(r'(\*\*.*?\*\*)', text)
-    for part in parts:
-        if part.startswith('**') and part.endswith('**'):
-            run = paragraph.add_run(part[2:-2])
-            run.bold = True
+_INLINE_TOKEN = re.compile(
+    r'\[([^\]]+)\]\([^)]*\)'    # 1: link -> keep the text, drop the target
+    r'|\*\*\*(.+?)\*\*\*'       # 2: bold italic -- MUST precede the `**` case
+    r'|\*\*(.+?)\*\*'           # 3: bold
+    r'|\*(.+?)\*'               # 4: italic
+)
+
+
+def _add_run(paragraph, text, bold, italic):
+    """One run, with the emphasis its enclosing markers asked for."""
+    if not text:
+        return
+    run = paragraph.add_run(text)
+    if bold:
+        run.bold = True
+    if italic:
+        run.italic = True
+
+
+def add_rich_text(paragraph, text, bold=False, italic=False):
+    """Render inline markdown into `paragraph` as formatted runs.
+
+    ONE routine for every path that emits text -- headings, paragraphs,
+    bullets and table cells. The four used to disagree about what "inline
+    markdown" even means. Headings ran the link regex alone, so a heading
+    written `## **Scope**` reached the client with its asterisks showing.
+    Table cells stripped `**bold**` but not `*italic*`, and stripped rather
+    than rendered it, so a cell lost its emphasis entirely. Only body
+    paragraphs produced real runs. Every path was some author's idea of
+    "clean up the markdown", and each new one arrived with a new subset;
+    sharing the routine retires the whole class rather than the three
+    instances of it that were measured.
+
+    Ordering `***` ahead of `**` is the second fix. `re.split` on
+    `(\\*\\*.*?\\*\\*)` matched `***critical***` as `***critical**` plus a
+    stray `*`: `part[2:-2]` then bolded a LEADING ASTERISK, and the closing
+    pair either migrated into the following text or, at the end of a line,
+    became an empty italic run and was deleted outright.
+
+    `bold` and `italic` carry an enclosing marker's state into the recursive
+    call, which is what makes `**bold with *emphasis* inside**` and a link
+    inside emphasis come out right. Each recursion consumes its delimiters,
+    so the text strictly shrinks and the descent terminates.
+    """
+    pos = 0
+    for match in _INLINE_TOKEN.finditer(text):
+        if match.start() > pos:
+            _add_run(paragraph, text[pos:match.start()], bold, italic)
+        link, bold_italic, strong, emphasis = match.groups()
+        if link is not None:
+            add_rich_text(paragraph, link, bold, italic)
+        elif bold_italic is not None:
+            add_rich_text(paragraph, bold_italic, True, True)
+        elif strong is not None:
+            add_rich_text(paragraph, strong, True, italic)
         else:
-            # Handle italic
-            sub_parts = re.split(r'(\*.*?\*)', part)
-            for sp in sub_parts:
-                if sp.startswith('*') and sp.endswith('*') and not sp.startswith('**'):
-                    run = paragraph.add_run(sp[1:-1])
-                    run.italic = True
-                else:
-                    # Clean up markdown links [text](url) -> text
-                    cleaned = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', sp)
-                    if cleaned:
-                        paragraph.add_run(cleaned)
+            add_rich_text(paragraph, emphasis, bold, True)
+        pos = match.end()
+    if pos < len(text):
+        _add_run(paragraph, text[pos:], bold, italic)
 
 
 def build_document():
@@ -399,41 +532,46 @@ def build_document():
     blocks = parse_markdown(md_text)
 
     for block_type, content in blocks:
-        if block_type == 'h1':
-            clean = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', content)
-            doc.add_heading(clean, level=1)
-
-        elif block_type == 'h2':
-            # Clean any anchor links
-            clean = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', content)
-            doc.add_heading(clean, level=1)
-
-        elif block_type == 'h3':
-            clean = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', content)
-            doc.add_heading(clean, level=2)
-
-        elif block_type == 'h4':
-            clean = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', content)
-            doc.add_heading(clean, level=3)
+        if block_type in HEADING_LEVELS:
+            # One markdown level, one Word outline level. The four branches
+            # here used to map h1->1, h2->1, h3->2, h4->3, so `#` and `##`
+            # rendered as the SAME Heading 1: two distinct structural levels
+            # collapsed into one, and Word's navigation pane and any generated
+            # TOC lost the distinction with nothing said. The skew came from
+            # this document's own shape -- its `#` title and `## National
+            # Programme` subtitle are consumed by the cover page and skipped in
+            # `parse_markdown`, which left `##` as the de-facto top level -- but
+            # encoding one document's accidents into the converter is what made
+            # every other heading level wrong.
+            # Empty text, then the shared inline routine: `add_heading(text)`
+            # would have dropped the raw markdown in as one literal run, which
+            # is how the asterisks in `## **Scope**` reached the client.
+            heading = doc.add_heading('', level=HEADING_LEVELS[block_type])
+            add_rich_text(heading, content)
 
         elif block_type == 'table':
             rows = content
             if len(rows) < 1:
                 continue
-            num_cols = len(rows[0])
+            # WIDEN, never drop. `num_cols` was `len(rows[0])` and the loop
+            # below guarded with `if c_idx < num_cols`, so any row with more
+            # cells than the header declared lost its tail cells in silence --
+            # the exact failure `_split_row` was mis-splitting rows into.
+            # With the splitter fixed a wider row now means a genuinely
+            # malformed table, and the two honest options are to widen or to
+            # report. Widening wins: this converter runs unattended on a
+            # document bound for a client, so an empty cell in a header row is
+            # a visible defect the operator can see and fix, while a deleted
+            # price is not visible at all.
+            num_cols = max(len(r) for r in rows)
             table = doc.add_table(rows=len(rows), cols=num_cols)
             for r_idx, row in enumerate(rows):
                 for c_idx, cell_text in enumerate(row):
-                    if c_idx < num_cols:
-                        cell = table.cell(r_idx, c_idx)
-                        cell.text = ''
-                        p = cell.paragraphs[0]
-                        # Clean markdown formatting for table cells
-                        cleaned = re.sub(r'\*\*([^*]+)\*\*', r'\1', cell_text)
-                        cleaned = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', cleaned)
-                        p.text = cleaned
-                        p.paragraph_format.space_after = Pt(2)
-                        p.paragraph_format.space_before = Pt(2)
+                    cell = table.cell(r_idx, c_idx)
+                    p = cell.paragraphs[0]
+                    add_rich_text(p, cell_text)
+                    p.paragraph_format.space_after = Pt(2)
+                    p.paragraph_format.space_before = Pt(2)
             format_table(table)
             doc.add_paragraph()  # Space after table
 

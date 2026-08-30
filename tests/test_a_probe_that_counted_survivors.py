@@ -206,9 +206,36 @@ def test_the_unread_mode_comment_no_longer_claims_read_only():
 # ============================================================
 
 def test_the_exit_code_line_names_every_exit_two_condition():
+    """The exit-2 entry must name all three conditions AND their scope.
+
+    This assertion used to read `assert "missing or unreadable" in doc`, and on
+    2026-08-30 a later wave established that the phrase was itself the defect:
+    missing and unreadable are not one condition. `cmd_list` and `cmd_pending`
+    print "no sweep for <date>" and return 0 for a MISSING file, because a query
+    about a day nobody has swept has an answer. Only the unreadable half reaches
+    exit 2 there. So the code was right and this test was pinning the wrong
+    sentence.
+
+    The phrase still occurs in the docstring, inside the quotation of the wording
+    that was corrected. That is the trap: the old assertion failed only because
+    the quotation happens to wrap between "missing or" and "unreadable". One word
+    earlier in the line and it would have gone GREEN while measuring a recorded
+    historical error rather than the live contract.
+
+    So this asserts the SCOPE instead, which cannot be satisfied by a quotation
+    of the old text. `tests/test_a_sweep_that_promised_an_exit_code_it_never_returned.py`
+    carries the stronger form: it derives the command set from the exit codes
+    those commands actually return.
+    """
     doc = sweep.__doc__
-    assert "missing or unreadable" in doc
-    assert "--date is not an" in doc and "exact YYYY-MM-DD" in doc
+    entry = doc[doc.index("  2  "):doc.index("That block has now been wrong")]
+    for command in ("approve", "skip", "edit", "set"):
+        assert f"`{command}`" in entry, (
+            f"the exit-2 entry no longer names the mutating command {command}")
+    assert "MUTATE only" in entry, "the exit-2 entry lost its command scope"
+    assert "except `propose`" in entry, (
+        "the unreadable-file condition lost the one command it excludes")
+    assert "--date is not an" in entry and "exact YYYY-MM-DD" in entry
     # The correction quotes the sentence it replaced, so pin the order.
     assert doc.index("exact YYYY-MM-DD") < doc.index(
         'used to read "2 state file missing for a mutate"')

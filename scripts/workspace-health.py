@@ -37,7 +37,11 @@ OUTPUTS_DIR = get_outputs_dir()
 COMMANDS_DIR = WORKSPACE / ".claude" / "commands"
 SKILLS_DIR = WORKSPACE / ".claude" / "skills"
 DATASTORE_DIR = get_datastore_dir()
-CLAUDE_MD = WORKSPACE / "CLAUDE.md"
+
+# The runtime catalog of every script, reference file and system. It lives in
+# the private data overlay, so it is absent on a public engine clone; resolved
+# through the data-root seam, never as a literal.
+REFERENCE_INDEX_RELPATH = Path("reference") / "workspace-overview.md"
 
 
 def ok(msg):
@@ -56,72 +60,132 @@ def header(title):
     print(f"\n{BOLD}{CYAN}=== {title} ==={RESET}")
 
 
-def check_reference_validation():
-    """Check that all paths in CLAUDE.md Reference Resources table exist.
+# One backticked token. The index writes paths inline in prose and bullets, not
+# in a table, so nothing here may key off `|`.
+_BACKTICK_TOKEN = re.compile(r"`([^`\s]+)`")
 
-    Reports how many paths it actually examined. The engine CLAUDE.md has
-    carried no "Reference Resources" heading for some time, so the loop below
-    never ran and the section printed an unconditional green -- "All reference
-    paths resolve to existing files" over zero paths, which is the vacuous-pass
-    shape `.claude/rules/scope-claims.md` names.
+# A workspace-relative file: at least one directory component, a dotted suffix,
+# and only characters a real path uses. The leading class excludes `/`, `~`,
+# `<` and `{`, which is what drops absolute paths, home paths and the
+# `<data-root>/...` documentation form.
+_RELATIVE_FILE = re.compile(
+    r"^[A-Za-z0-9_.][A-Za-z0-9._/-]*/[A-Za-z0-9._-]+\.[A-Za-z0-9]{1,5}$")
+
+# Path-shaped but not a literal path: a parent traversal in an example, or a
+# date stamp standing in for the run that will produce the file.
+_NOT_A_LITERAL_PATH = re.compile(r"\.\.|YYYY|MM-DD|HH-MM")
+
+
+# Sections that RAN but verified nothing: an absent target, an empty corpus. A
+# zero from one of these means "no answer", not "clean". Without this the
+# summary folds the two together and prints "Section 'refs' passed." one line
+# under the section saying it checked 0 paths, which is the vacuous-pass shape
+# `.claude/rules/scope-claims.md` names, one level up from the section itself.
+INCONCLUSIVE: list[str] = []
+
+
+def inconclusive(section: str, why: str) -> None:
+    """Record that `section` produced no verdict. Never an issue count."""
+    INCONCLUSIVE.append(f"{section}: {why}")
+
+
+def _reference_index_paths(text: str):
+    """Split the index's backticked tokens into literal paths and skips.
+
+    Returns (paths, skipped). `skipped` is the count of tokens that look like a
+    path but cannot be existence-checked, so the report can say what it left
+    out rather than imply it covered everything (`.claude/rules/scope-claims.md`).
+    """
+    literal, skipped = set(), set()
+    for token in _BACKTICK_TOKEN.findall(text):
+        tail = token.rsplit("/", 1)[-1]
+        if "/" not in token or "." not in tail:
+            # A bare filename, a flag, a config key, ordinary code prose. The
+            # index is full of these (`.env`, `SKILL.md`, `push-all.py`); they
+            # name no directory, so no root can resolve them.
+            continue
+        if _RELATIVE_FILE.match(token) and not _NOT_A_LITERAL_PATH.search(token):
+            literal.add(token)
+        else:
+            skipped.add(token)
+    return sorted(literal), len(skipped)
+
+
+def check_reference_validation():
+    """Check that the paths named in the reference index exist.
+
+    The index is the data overlay's runtime catalog of every script, reference
+    file and system, resolved through the data-root seam.
+
+    History, because the previous target is a trap worth not re-entering. This
+    check read the ENGINE CLAUDE.md, looking for a "Reference Resources" table
+    that file has never carried (`git log -S` finds no commit that added one),
+    so the loop ran zero times and the section printed an unconditional green,
+    "All reference paths resolve to existing files", over zero paths. Anchoring
+    that scan at a markdown HEADING rather than a bare substring was itself a
+    fix: `"Reference Resources" in line` fired on any prose sentence carrying
+    the phrase, and the flag then stayed on until the next `## `, so unrelated
+    table rows were existence-checked and failed the run. That reasoning still
+    binds anything that scans for a named section, and it is why nothing below
+    matches a heading or a phrase: the whole index file IS the reference
+    section, so there is no section to find and no substring to guess at.
+
+    Zero is never a pass. Both zero-path outcomes say "verified nothing" and
+    print no OK line.
     """
     header("Reference Validation")
-    issues = 0
-    checked = 0
 
-    if not CLAUDE_MD.exists():
-        action("CLAUDE.md not found!")
-        return 1
+    data_root = get_data_root()
+    index = data_root / REFERENCE_INDEX_RELPATH
+    if not index.exists():
+        # First-class outcome, not an edge case: a public engine clone has no
+        # data overlay, so the index is simply absent. A missing overlay is not
+        # a missing file (the sibling `check_docs_sync` treats templates/ the
+        # same way).
+        warn(f"reference index not present at "
+             f"<data-root>/{REFERENCE_INDEX_RELPATH.as_posix()}; "
+             f"0 paths checked (this section verified nothing)")
+        inconclusive("refs", "no reference index (no data overlay on this clone)")
+        return 0
 
-    content = CLAUDE_MD.read_text(encoding="utf-8")
+    paths, skipped = _reference_index_paths(index.read_text(encoding="utf-8"))
 
-    # Extract paths from markdown table rows with backtick-wrapped paths
-    path_pattern = re.compile(r"`([^`]+\.[a-z]+)`")
-    # Anchored at a markdown HEADING, not a bare substring. `"Reference
-    # Resources" in line` fired on any prose sentence carrying the phrase -- a
-    # pointer, a changelog note, this check's own documentation quoted back --
-    # and the flag then stayed on until the next `## `, so every table row after
-    # it with a backticked dotted token was existence-checked as a reference
-    # path. Rows from unrelated tables were flagged "Missing:" and failed the
-    # run over paths nothing had claimed were references, while the docstring
-    # scopes this to one table.
-    heading_pattern = re.compile(r"^#{1,6}\s+.*Reference Resources")
-    in_ref_section = False
-    section_seen = False
-    for line in content.split("\n"):
-        if heading_pattern.match(line):
-            in_ref_section = True
-            section_seen = True
-            continue
-        if in_ref_section and line.startswith("## "):
-            break
-        if in_ref_section and "|" in line:
-            matches = path_pattern.findall(line)
-            for path_str in matches:
-                checked += 1
-                full_path = WORKSPACE / path_str
-                if full_path.exists():
-                    ok(f"{path_str}")
-                else:
-                    action(f"Missing: {path_str}")
-                    issues += 1
+    # Which root each path is relative to. The workspace is two layered roots,
+    # and the index names files in both: `scripts/send-email.py` is engine,
+    # `context/pipeline.md` is data overlay. A path resolves if EITHER root
+    # holds it; it is missing only when neither does. Deriving the root from
+    # `get_routing_destination()` instead was measured and rejected: routing is
+    # a sharing decision, not a location, so `corporate` files such as
+    # `docs/GETTING-STARTED.md` physically sit in the overlay and 11 real index
+    # paths resolved in the root opposite the one routing named. Those 11 would
+    # print as "Missing:" every run, which is how a useful check gets switched
+    # off. The cost of the union rule is that it cannot detect a file filed
+    # under the wrong root; that is `scripts/classification-health.py`'s job.
+    roots = [WORKSPACE]
+    if data_root != WORKSPACE:
+        roots.append(data_root)
 
-    if checked == 0:
-        # `checked` counts backticked paths, not sections, so it cannot tell
-        # "no section" from "a section whose paths are not in backticks". The
-        # loop already tracks section presence; it simply was not read here, and
-        # the operator was handed the wrong remediation whenever the section
-        # existed. Say which of the two it is.
-        if section_seen:
-            warn("CLAUDE.md has a 'Reference Resources' section but no "
-                 "backtick-wrapped paths in it; 0 paths checked "
-                 "(this section verified nothing)")
-        else:
-            warn("CLAUDE.md has no 'Reference Resources' section; 0 paths checked "
-                 "(this section verified nothing)")
-    elif issues == 0:
-        ok(f"All {checked} reference path(s) resolve to existing files")
-    return issues
+    if not paths:
+        warn("the reference index names no workspace-relative file paths; "
+             "0 paths checked (this section verified nothing)")
+        inconclusive("refs", "the reference index names no paths")
+        return 0
+
+    missing = [p for p in paths if not any((root / p).exists() for root in roots)]
+    for path_str in missing:
+        action(f"Missing: {path_str}")
+
+    if skipped:
+        ok(f"{skipped} path-shaped token(s) skipped as globs, placeholders, "
+           f"absolute or home-relative; not checked")
+    if missing:
+        warn(f"{len(paths) - len(missing)} of {len(paths)} reference path(s) "
+             f"resolve; {len(missing)} named by the index exist under neither "
+             f"the engine root nor the data overlay")
+    else:
+        ok(f"All {len(paths)} reference path(s) resolve under the engine root "
+           f"or the data overlay")
+    return len(missing)
 
 
 def check_context_freshness(max_days=30):
@@ -755,6 +819,7 @@ def main():
     print(f"Date: {datetime.now(get_default_tz()).strftime('%Y-%m-%d %H:%M')}")
 
     total_issues = 0
+    INCONCLUSIVE.clear()
     checks = {
         "refs": check_reference_validation,
         "context": lambda: check_context_freshness(args.max_days),
@@ -784,7 +849,19 @@ def main():
     # always returns 0. The summary now names the coverage it had.
     header("Summary")
     skipped = len(checks) - len(ran)
-    if total_issues == 0 and skipped:
+    # A section that verified nothing is named before any pass line is printed.
+    # "0 paths checked (this section verified nothing)" followed by "Section
+    # 'refs' passed." told the operator two opposite things four lines apart,
+    # and only the second one survives being skim-read.
+    for note in INCONCLUSIVE:
+        print(f"  {YELLOW}INCONCLUSIVE{RESET}  {note}")
+    if total_issues == 0 and INCONCLUSIVE:
+        ran_word = f"Section '{ran[0]}'" if skipped else f"All {len(ran)} checks"
+        print(f"  {YELLOW}{BOLD}{ran_word} found no issues, but "
+              f"{len(INCONCLUSIVE)} section(s) above verified nothing.{RESET}")
+        if skipped:
+            print(f"  {YELLOW}The other {skipped} section(s) did not run.{RESET}")
+    elif total_issues == 0 and skipped:
         print(f"  {GREEN}{BOLD}Section '{ran[0]}' passed.{RESET} "
               f"{YELLOW}The other {skipped} section(s) did not run.{RESET}")
     elif total_issues == 0:

@@ -35,14 +35,36 @@ Usage:
 ``status`` are assigned here.
 
 Exit codes:
-  0  ok
-  1  usage error, or a payload/state file this command refuses
-  2  the sweep file for that date is missing or unreadable, OR --date is not an
-     exact YYYY-MM-DD
+  0  ok. A read-only `list` or `pending` against a date with no sweep file is
+     also 0: "there is no sweep yet" answers that query, it does not fail it.
+  1  usage error, or a payload/state file this command refuses (`propose` meets
+     an unreadable sweep here, being the one command that would otherwise
+     write over it).
+  2  no sweep file for that date, on a MUTATE only: `approve`, `skip`, `edit`,
+     `set`; or a sweep file that is present and cannot be read, on every
+     command except `propose`; or --date is not an exact YYYY-MM-DD.
 
-That last line used to read "2 state file missing for a mutate", which named
-one of the three conditions and assigned the date check to exit 1. A wrapper
-reading "exit 2 => run propose first" mis-handled both of the others.
+That block has now been wrong in both directions, and both corrections are kept
+here because each one answers a question the other invites.
+
+It used to read "2 state file missing for a mutate", which named one of the
+three conditions and assigned the date check to exit 1. A wrapper reading "exit
+2 => run propose first" mis-handled both of the others.
+
+The rewrite that fixed that dropped the words "for a mutate" along with
+everything else and promised exit 2 whenever the file was "missing or
+unreadable", on any command. Missing and unreadable are not one condition and
+they never were: `cmd_list` and `cmd_pending` print "no sweep for <date>" and
+return 0 for a missing file, and only the unreadable half reaches exit 2 on
+them. The CODE is right and is unchanged. A query about a day nobody has swept
+has an answer, "nothing", and a wrapper told the read had failed would go
+hunting a fault that is not there. Exit 2 belongs to the commands that cannot
+proceed without the file, which are the four that mutate it. Only the scope
+came back.
+
+`tests/test_a_sweep_that_promised_an_exit_code_it_never_returned.py` derives the
+command list in that exit-2 clause from the exit codes those commands actually
+return, so the two cannot drift apart again in silence.
 
 Tests: tests/test_a_probe_that_counted_survivors.py
 """
@@ -119,6 +141,26 @@ TERMINAL = {"done", "skipped"}
 
 def _tier_for(action_type: str) -> tuple[str, str]:
     return TYPE_TIERS.get(action_type, ("gated", "send-gated"))
+
+
+def _has_int_id(action) -> bool:
+    """True when `action` is an object carrying a real integer `id`.
+
+    The bool exclusion is the whole point of this being one function. Every
+    shape guard in this file wrote `isinstance(a.get("id"), int)` separately,
+    and `bool` is a subclass of `int`, so a hand-edited `"id": true` satisfied
+    all of them. `hash(True) == hash(1)`, so it then collided with action #1 in
+    `_mutate_ids`'s `by_id` map and, being later in the list, WON the key:
+    `approve 1` moved the boolean-keyed entry to approved and left the real #1
+    at proposed, reporting "approved 1 action(s): #1" over the wrong action.
+    An approval pointed at an entry the operator did not read is the one
+    outcome these guards exist to stop, and a hand-edited sweep file is exactly
+    the scenario they are written for.
+    """
+    if not isinstance(action, dict):
+        return False
+    value = action.get("id")
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 # ============================================================
@@ -260,7 +302,7 @@ def cmd_propose(root: Path, args) -> int:
     # `max` return a string and `+ 1` a TypeError — a crash where a clean
     # state error belongs.
     bad_ids = [a.get("id") for a in data["actions"]
-               if isinstance(a, dict) and not isinstance(a.get("id"), int)]
+               if isinstance(a, dict) and not _has_int_id(a)]
     if bad_ids:
         print(f"{RED}sweep state has non-numeric action id(s): {bad_ids}. "
               f"Repair the file before proposing.{RESET}", file=sys.stderr)
@@ -309,7 +351,7 @@ def _render(data: dict) -> None:
         # operator reaches for when something looks wrong. A malformed entry
         # used to meet `a['id']` as a KeyError, so the ONE command that could
         # show which entry is broken was the command that could not run.
-        if not isinstance(a, dict) or not isinstance(a.get("id"), int):
+        if not _has_int_id(a):
             print(f"  {RED}[?] malformed entry (needs an object with an integer "
                   f"id): {str(a)[:80]}{RESET}")
             continue
@@ -364,7 +406,7 @@ def cmd_pending(root: Path, args) -> int:
         return 0
     print(f"{BOLD}{len(pending)} pending{RESET} in sweep {date}:")
     for a in pending:
-        if not isinstance(a, dict) or not isinstance(a.get("id"), int):
+        if not _has_int_id(a):
             print(f"  {RED} ?. [malformed] {str(a)[:80]}{RESET}")
             continue
         print(f"  {a['id']:>2}. [{a.get('status')}] {a.get('title')}  [{_tag(a)}]")
@@ -383,8 +425,7 @@ def _mutate_ids(root: Path, date: str, ids: list[int], target_status: str,
     # KeyError or a TypeError - a traceback out of the command an operator runs
     # to approve a send, where this file has a clean exit code for everything
     # else. `cmd_propose` grew this check and the mutate path never did.
-    malformed = [a for a in data["actions"]
-                 if not isinstance(a, dict) or not isinstance(a.get("id"), int)]
+    malformed = [a for a in data["actions"] if not _has_int_id(a)]
     if malformed:
         print(f"{RED}sweep {date} has {len(malformed)} malformed action entr(ies) "
               f"(each needs an object with an integer id). Repair the file "

@@ -324,7 +324,7 @@ def test_the_registry_step_does_not_claim_the_corporate_repo(px):
 def pc(tmp_path, monkeypatch):
     mod = _load("pc_11p3", "scripts/publish-corporate.py")
     monkeypatch.setattr(mod, "CORPORATE_ROOT", tmp_path / "corp")
-    monkeypatch.setattr(mod, "SOURCE_ROOT", tmp_path / "src")
+    monkeypatch.setattr(mod, "source_root", lambda p=tmp_path / "src": p)
     (tmp_path / "corp").mkdir()
     (tmp_path / "src").mkdir()
     monkeypatch.setattr(mod, "operator_slug", lambda: "misha-hanin")
@@ -387,7 +387,7 @@ def _corp_tree(pc, monkeypatch, files: dict[str, tuple[str | None, str | None]])
     """files: rel -> (source text or None, corporate text or None)."""
     for rel, (src_text, dst_text) in files.items():
         if src_text is not None:
-            p = pc.SOURCE_ROOT / rel
+            p = pc.source_root() / rel
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(src_text, encoding="utf-8")
         if dst_text is not None:

@@ -69,7 +69,14 @@ the bridge spec, section 4) when called with `--gate`.
   for a single grep-friendly line (port + pid + uptime + version +
   config_v + sessions + errors + last_hb). Designed for cron + shell
   pipelines.
-- Triggering refresh: use the dashboard's sync-pill (top right) instead.
+- Triggering refresh: there is no `--refresh` CLI flag. The terminal path is a
+  POST to the loopback endpoint. Read the port and bearer token from
+  `.daemon-state/port` and `.daemon-state/token`, the way step 3 below reads
+  them for `/telemetry/summary`. Then run:
+  `curl -sS -X POST "http://127.0.0.1:$PORT/refresh" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"component":"pulse"}'`.
+  The dashboard's sync-pill calls that same endpoint. It is a convenience, not
+  the only way in. The daemon also refreshes on its own interval, so force a
+  refresh only to get one early.
 - Tweaking config: edit `corporate/daemon/config.yaml`, commit, run
   /push-updates. /bridge-health is read-only.
 
@@ -129,10 +136,10 @@ the bridge spec, section 4) when called with `--gate`.
 
 - `stale` -> heartbeat older than `--stale` seconds. Daemon likely crashed.
   Remedy: restart via `python scripts/bridge-daemon.py --start` (CEO) or
-  the platform installer (`install-bridge-service.ps1` on Win,
-  `install-bridge-service-mac.py` on macOS, `install-bridge-service.sh`
-  + systemd user unit on Linux when Phase 3 of the cross-platform plan
-  lands).
+  the platform installer. Windows uses `install-bridge-service.ps1`, macOS
+  uses `install-bridge-service-mac.py`, and Linux/WSL2 uses
+  `install-bridge-service.sh`. That last one installs the systemd user unit.
+  It is the canonical Linux installer today, not future work.
 - `version-mismatch` -> exec daemon CODE is older than CEO's daemon code.
   Remedy: redeploy the bridge daemon code to that exec workspace
   (`git pull` the engine clone, daemon restart).

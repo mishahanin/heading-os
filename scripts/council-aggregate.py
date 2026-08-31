@@ -41,9 +41,26 @@ from scripts.utils.colors import CYAN, GRAY, GREEN, RESET, YELLOW  # noqa: E402
 from scripts.utils.markdown import FM_OK, split_frontmatter  # noqa: E402
 from scripts.utils.workspace import display_path, get_default_tz, get_outputs_dir  # noqa: E402
 
-COUNCIL_DIR = get_outputs_dir() / "operations" / "council"
-AGGREGATE_PATH = COUNCIL_DIR / "_aggregate.md"
-VERDICTS_PATH = COUNCIL_DIR / "_verdicts.jsonl"
+def council_dir() -> Path:
+    """Resolved at call time, never at import.
+
+    `get_outputs_dir()` reads `HEADING_OS_DATA` on every call, so it follows
+    the environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the root
+    still got the operator's real overlay. The `mkdir` below is not among the
+    primitives `tests/conftest.py` wraps, so a stray directory in that overlay
+    drew no refusal.
+    """
+    return get_outputs_dir() / "operations" / "council"
+
+
+def aggregate_path() -> Path:
+    return council_dir() / "_aggregate.md"
+
+
+def verdicts_path() -> Path:
+    return council_dir() / "_verdicts.jsonl"
 
 _H1_TOPIC_RE = re.compile(r"^# (?:Council Consultation\s*-\s*)?(.*?)$", re.MULTILINE)
 _SECTION_RES = {
@@ -175,10 +192,10 @@ def parse_transcript(path: Path) -> Transcript | None:
 
 
 def collect_transcripts() -> list[Transcript]:
-    if not COUNCIL_DIR.exists():
+    if not council_dir().exists():
         return []
     files = sorted(
-        [p for p in COUNCIL_DIR.glob("*.md")
+        [p for p in council_dir().glob("*.md")
          if not p.name.startswith("_") and not p.name.startswith(".")],
         reverse=True,  # newest first
     )
@@ -195,10 +212,10 @@ def load_verdicts() -> dict[str, dict]:
     The JSONL is append-only - last record per id wins. CEO can revise a
     verdict by recording again via scripts/council-record-verdict.py.
     """
-    if not VERDICTS_PATH.exists():
+    if not verdicts_path().exists():
         return {}
     out: dict[str, dict] = {}
-    for line in VERDICTS_PATH.read_text(encoding="utf-8").splitlines():
+    for line in verdicts_path().read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -322,7 +339,7 @@ def main(argv: list[str] | None = None) -> int:
     transcripts = collect_transcripts()
     verdicts = load_verdicts()
     print(f"{CYAN}Parsed {len(transcripts)} transcripts, {len(verdicts)} verdicts from "
-          f"{COUNCIL_DIR}{RESET}", file=sys.stderr)
+          f"{council_dir()}{RESET}", file=sys.stderr)
 
     if args.json:
         out = []
@@ -345,9 +362,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     md = render(transcripts, verdicts)
-    AGGREGATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    AGGREGATE_PATH.write_text(md, encoding="utf-8")
-    print(f"{GREEN}Aggregate written: {AGGREGATE_PATH}{RESET}")
+    out = aggregate_path()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(md, encoding="utf-8")
+    print(f"{GREEN}Aggregate written: {out}{RESET}")
     return 0
 
 

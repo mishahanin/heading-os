@@ -31,7 +31,7 @@ def _isolate(tmp_path: Path, monkeypatch):
     d = tmp_path / "scrutiny"
     d.mkdir()
     monkeypatch.setattr(rec, "record_path", lambda: d / "runs.jsonl")
-    monkeypatch.setattr(flag_fp, "SCRUTINY_DIR", d)
+    monkeypatch.setattr(flag_fp, "scrutiny_dir", lambda p=d: p)
     return d / "runs.jsonl"
 
 

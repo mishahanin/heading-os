@@ -3,6 +3,8 @@
 # Emergency Procedures
 
 > What to do when the normal sync/push/update chain is broken. For routine operations, see `GETTING-STARTED.md` (execs) or `CEO-ADMIN-GUIDE.md` (CEO).
+>
+> Those two guides and everything under `docs/security/` are operator-only. They route `private` and live in the private data overlay, not in the public engine clone. If you read this from a public clone, they are not missing. They were never yours to have.
 
 ---
 
@@ -56,7 +58,13 @@ and only one of them lives in `config/admin.json`:
 
 `config/admin.json` supplies exactly two keys that code reads: `admin_slugs` and
 `github_org`. It carries no role field, no deputy, and no expiry. Nothing revokes a grant
-on a timer either. The CEO removes it by hand, or with `scripts/emergency-revoke.py`.
+on a timer either. The CEO removes it by hand. `scripts/emergency-revoke.py` does NOT revoke
+anything. It prints a manual checklist and exits 2. That is deliberate: the
+CEO decided an automated revoke is too dangerous to leave armed. A human does the three steps it prints:
+
+1. Remove the slug from `admin_slugs` in `config/admin.json`.
+2. Revoke the executive's GitHub access on the corporate repository.
+3. Rotate any shared credential they held.
 
 **Do NOT:**
 - Elect an unofficial deputy. Admin authority needs all three grants above, never group consensus.
@@ -106,7 +114,9 @@ on a timer either. The CEO removes it by hand, or with `scripts/emergency-revoke
    - Windows: `schtasks /Query /TN "31C-Sentinel-{slug}" /V /FO LIST` and look at `Task To Run`
    - macOS: `cat ~/Library/LaunchAgents/io.31c.sentinel.{slug}.plist`
 3. If the path is stale (e.g., after Python upgrade), reinstall via `scripts/setup.py --reinstall-schedule`.
-4. If still failing, run `python scripts/utils/schedule.py` directly to see the diagnostic output.
+4. If still failing, read the scheduler's own log. Do not run
+   `scripts/utils/schedule.py` directly. It is a library module. It has no
+   `__main__` block and no argument parser, so it prints nothing.
 
 > Reminder: to refresh corporate content or engine code, just run `/sync` (a plain `git pull`) -- there is no sync schedule to repair.
 
@@ -138,7 +148,9 @@ Symptoms: browser dashboard at `http://127.0.0.1:<port>/` is unreachable, sync-p
    - Exit 2: daemon never started, no on-disk state either.
 
 2. Restart the daemon:
-   - **Windows:** `& scripts\launch-bridge-daemon.bat`
+   - **Windows:** `& scripts\restart-bridge-daemon.ps1`
+     (`launch-bridge-daemon.bat` only LAUNCHES. The installer writes that file,
+     and git does not track it, so it is absent before a first install.)
    - **macOS:** `launchctl kickstart -k gui/$UID/com.31c.bridge-daemon`
 
 3. If restart fails repeatedly, tail the log to find the crash cause:

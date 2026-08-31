@@ -61,7 +61,18 @@ from scripts.utils.scrutinize_record import rows_for, rows_of_kind  # noqa: E402
 from scripts.utils.colors import CYAN, GREEN, RED, RESET, YELLOW  # noqa: E402
 from scripts.utils.workspace import get_default_tz, get_outputs_dir  # noqa: E402
 
-SCRUTINY_DIR = get_outputs_dir() / "operations" / "scrutiny"
+def scrutiny_dir() -> Path:
+    """Resolved at call time, never at import.
+
+    `get_outputs_dir()` reads `HEADING_OS_DATA` on every call, so it follows
+    the environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the root
+    still got the operator's real overlay. The `mkdir` below is not among the
+    primitives `tests/conftest.py` wraps, so a stray directory in that overlay
+    drew no refusal.
+    """
+    return get_outputs_dir() / "operations" / "scrutiny"
 
 _DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
 _FINDING_RE = re.compile(
@@ -97,10 +108,10 @@ def _parse_report_date(stem: str) -> datetime | None:
 
 
 def list_reports_in_range(date_from: datetime, date_to: datetime) -> list[Path]:
-    if not SCRUTINY_DIR.exists():
+    if not scrutiny_dir().exists():
         return []
     out: list[Path] = []
-    for report in SCRUTINY_DIR.glob("*.md"):
+    for report in scrutiny_dir().glob("*.md"):
         if report.name.startswith("_"):
             continue
         d = _parse_report_date(report.stem)
@@ -495,7 +506,7 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     out_path = Path(args.out) if args.out else (
-        SCRUTINY_DIR / f"_human_agreement_{quarter_label(date_to)}.md")
+        scrutiny_dir() / f"_human_agreement_{quarter_label(date_to)}.md")
     md = render_scoring_sheet(picked, date_from, date_to)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(md, encoding="utf-8")

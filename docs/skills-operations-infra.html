@@ -115,8 +115,8 @@ python scripts/push-all.py --dry-run    # show what would happen, change nothing
 <h3 id="s-push-updates"><code>/push-updates [summary]</code><span class="badge">Operations 🔒</span></h3>
 <p class="skill-meta">Explicit invocation only (🔒), CEO-only (admin role) · writes to <code>../heading-os-corporate/</code>, <code>crm/</code>, <code>config/</code></p>
 <p><strong>What it is.</strong> The single CEO command that ships all workspace changes to every executive through the corporate repo, with build versioning.</p>
-<p><strong>What it does.</strong> It verifies the admin role, runs a routing-regression soft gate, then commits ceo-main; publishes corporate-classified files via <code>scripts/publish-corporate.py --copy</code> (classification from <code>config/routing-map.yaml</code>, content-only, never engine code); bumps <code>BUILD.json</code> and updates <code>VERSION</code>/<code>CHANGELOG.md</code>; pushes the corporate repo and ceo-main to <code>origin/main</code>; rides CRM changes on the data overlay via <code>push-all.py</code>; and refreshes the operator's own CRM aggregate at <code>&lt;data-root&gt;/crm/aggregated/</code> via <code>aggregate-crm.py</code>. The hand-typed file list is forbidden (a broken build shipped that way); the script is the single source of truth. Execs receive updates on their next plain <code>git pull</code>.</p>
-<p><strong>How to use it.</strong> Use to propagate shared updates to the whole fleet. For a personal GitHub backup of ceo-main only use <code>/backup</code>; to publish corporate files without the full CRM and versioning tail use <code>/publish-corporate</code>.</p>
+<p><strong>What it does.</strong> It verifies the admin role, runs a routing-regression soft gate, then commits both the engine clone and the private data overlay; publishes corporate-classified files via <code>scripts/publish-corporate.py --copy</code> (classification from <code>config/routing-map.yaml</code>, content-only, never engine code); bumps <code>BUILD.json</code> and updates <code>VERSION</code>/<code>CHANGELOG.md</code>; pushes the corporate repo directly, then pushes the engine clone and the data overlay through <code>push-all.py</code>, which is the only path carrying the engine's unbypassable leak and secret walls; and refreshes the operator's own CRM aggregate at <code>&lt;data-root&gt;/crm/aggregated/</code> via <code>aggregate-crm.py</code>. The hand-typed file list is forbidden (a broken build shipped that way); the script is the single source of truth. Execs receive updates on their next plain <code>git pull</code>.</p>
+<p><strong>How to use it.</strong> Use to propagate shared updates to the whole fleet. For a personal GitHub backup of your own two repositories only, with nothing published to the fleet, use <code>/backup</code>; to publish corporate files without the full CRM and versioning tail use <code>/publish-corporate</code>.</p>
 <pre><code>/push-updates "New competitor-intel skill, updated Q2 strategy"</code></pre>
 <p><strong>Customize.</strong> File classification lives in <code>config/routing-map.yaml</code> (add a rule rather than working around the script). CEO-only via the admin role in <code>.workspace-identity.json</code>; <code>disable-model-invocation: true</code>. Version bump (PATCH vs MINOR) is confirmed interactively.</p>
 </section>
@@ -253,7 +253,7 @@ connect 2</code></pre>
 </section>
 
   <footer class="foot">
-    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="skills-mcp-plugins.html">Skill catalog</a></p>
+    <p>HEADING OS: operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="skills-mcp-plugins.html">Skill catalog</a></p>
   </footer>
 </main>
 </div>

@@ -68,7 +68,7 @@ def test_a_truncated_file_is_reported(cf):
     after = _snap(**{"auto-memory index": {"MEMORY.md": 20}})
     complaints = cf.watch_complaints(before, after)
     assert len(complaints) == 1
-    assert "rewrote 1 file(s)" in complaints[0]
+    assert "1 file(s) rewrote" in complaints[0]
     assert "MEMORY.md" in complaints[0]
 
 
@@ -89,7 +89,7 @@ def test_a_new_file_is_reported(cf):
     before = _snap(**{"handoff archive": {}})
     after = _snap(**{"handoff archive": {"2026-08-27_probe.md": None}})
     (complaint,) = cf.watch_complaints(before, after)
-    assert "wrote 1 file(s)" in complaint
+    assert "1 file(s) appeared" in complaint
     assert "2026-08-27_probe.md" in complaint
 
 
@@ -97,7 +97,7 @@ def test_a_deleted_file_is_reported(cf):
     before = _snap(**{"auto-memory index": {"MEMORY.md": 20828}})
     after = _snap(**{"auto-memory index": {}})
     (complaint,) = cf.watch_complaints(before, after)
-    assert "deleted 1 file(s)" in complaint
+    assert "1 file(s) vanished" in complaint
 
 
 def test_a_directory_that_vanishes_is_reported(cf):
@@ -156,10 +156,11 @@ def test_only_rebuildable_or_runtime_trees_are_left_out(cf, name):
 ])
 def test_a_write_anywhere_in_the_overlay_is_reported(cf, monkeypatch, tmp_path, rel):
     """Drive the real snapshot over a fake overlay, one write at a time."""
-    from scripts.utils import paths, workspace
-
-    monkeypatch.setattr(paths, "data_overlay_present", lambda: True)
-    monkeypatch.setattr(workspace, "get_data_root", lambda: tmp_path)
+    # One knob. `_watched_roots()` is the single place the snapshot asks which
+    # roots exist, so faking it drives the real walk over a pretend overlay
+    # without faking the two resolvers behind it -- and without the structural
+    # root (the operator's actual data) joining the result.
+    monkeypatch.setattr(cf, "_watched_roots", lambda: {"operator overlay": tmp_path})
     target = tmp_path / rel
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("original\n", encoding="utf-8")
@@ -168,16 +169,17 @@ def test_a_write_anywhere_in_the_overlay_is_reported(cf, monkeypatch, tmp_path, 
     target.write_text("REWRITTEN BY A TEST RUN\n" * 4, encoding="utf-8")
     complaints = cf.watch_complaints(before, cf._watch_snapshot())
 
-    assert complaints, f"a test rewrote {rel} and nothing said so"
+    assert complaints, f"{rel} was rewritten and nothing said so"
     assert rel in complaints[0]
 
 
 def test_the_snapshot_records_a_size_for_every_file(cf, monkeypatch, tmp_path):
     """A name-only watch is how the memory index was lost: same name, 20 bytes."""
-    from scripts.utils import paths, workspace
-
-    monkeypatch.setattr(paths, "data_overlay_present", lambda: True)
-    monkeypatch.setattr(workspace, "get_data_root", lambda: tmp_path)
+    # One knob. `_watched_roots()` is the single place the snapshot asks which
+    # roots exist, so faking it drives the real walk over a pretend overlay
+    # without faking the two resolvers behind it -- and without the structural
+    # root (the operator's actual data) joining the result.
+    monkeypatch.setattr(cf, "_watched_roots", lambda: {"operator overlay": tmp_path})
     (tmp_path / "auto-memory").mkdir()
     (tmp_path / "auto-memory" / "MEMORY.md").write_text("x" * 500, encoding="utf-8")
 
@@ -189,10 +191,11 @@ def test_the_snapshot_records_a_size_for_every_file(cf, monkeypatch, tmp_path):
 
 def test_an_excluded_tree_is_not_snapshotted(cf, monkeypatch, tmp_path):
     """Otherwise a rebuilt index fails an honest run and the guard gets removed."""
-    from scripts.utils import paths, workspace
-
-    monkeypatch.setattr(paths, "data_overlay_present", lambda: True)
-    monkeypatch.setattr(workspace, "get_data_root", lambda: tmp_path)
+    # One knob. `_watched_roots()` is the single place the snapshot asks which
+    # roots exist, so faking it drives the real walk over a pretend overlay
+    # without faking the two resolvers behind it -- and without the structural
+    # root (the operator's actual data) joining the result.
+    monkeypatch.setattr(cf, "_watched_roots", lambda: {"operator overlay": tmp_path})
     (tmp_path / ".memory-index").mkdir()
     (tmp_path / ".memory-index" / "index.db").write_bytes(b"0" * 10)
 
@@ -202,9 +205,7 @@ def test_an_excluded_tree_is_not_snapshotted(cf, monkeypatch, tmp_path):
 
 def test_a_clone_with_no_overlay_watches_nothing(cf, monkeypatch, tmp_path):
     """CI has no data overlay, so the guard must cost nothing and claim nothing."""
-    from scripts.utils import paths
-
-    monkeypatch.setattr(paths, "data_overlay_present", lambda: False)
+    monkeypatch.setattr(cf, "_watched_roots", dict)
     assert cf._watch_snapshot() == {}
     assert cf.watch_complaints({}, {}) == []
 

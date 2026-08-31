@@ -1,21 +1,28 @@
 # Calibrate - Patch-application protocol templates
 
 Consumed by: `.claude/skills/calibrate/SKILL.md` Phase 5 (Steps 5.4 and 5.5).
-Last Updated: 2026-05-15
+Last Updated: 2026-08-31
 
 Static templates for the atomic commit message and the final state report.
-The orchestration around them (staging order, ceo-only vs corporate routing,
-sanitisation, rollback policy) stays in SKILL.md.
+The orchestration around them (the commit approval gate, staging order, ceo-only
+vs corporate routing, sanitisation, rollback policy) stays in SKILL.md.
 
 ## Stage + commit (Step 5.4 template)
 
+Step 5.4 asks for the commit separately from the Phase 4 patch approval. Do not
+run either command below until that answer is an explicit yes.
+
+Stage the files this run wrote, by name. No directory argument, no wildcard, no
+`-A`, no `.` - any of those sweep in unrelated edits that are sitting in the
+tree, which is what this template used to do:
+
 ```bash
-git add .claude/ outputs/operations/calibrate/ <any-other-modified-workspace-files>
+git add -- <file-1> <file-2> <file-N>
 ```
 
-Memory files at `~/.claude/projects/.../memory/` are outside the workspace
-tree - NOT staged. Settings file at `.claude/settings.local.json` is gitignored
-- staged but git will not include it.
+Memory files under the canonical `auto-memory/` store live in the DATA
+repository, a separate git repo - NOT staged. Settings file at
+`.claude/settings.local.json` is gitignored - git will not include it.
 
 Compose the commit message:
 
@@ -56,6 +63,6 @@ Single atomic commit: chore(calibrate): apply {N} session-end calibrations (HEAD
 
 Rollback:
   - Workspace files: git revert HEAD
-  - Memory files: edit manually at ~/.claude/projects/.../memory/
+  - Memory files: edit manually in the canonical auto-memory store
   - settings.local.json: edit manually (gitignored)
 ```

@@ -287,7 +287,7 @@ For each conversation, enrich with workspace context before presenting:
 ## Voice Rules
 
 - Use maritime/navigation vocabulary where natural (matching 31C operational language)
-- Use hyphens (--) not em dashes
+- Use single hyphens, never double dashes or em dashes
 - Refer to the company as "31C" or "31 Concept" (never "31 Concept GmbH")
 - Use "Tribe" not "team"
 - Product: ODUN.ONE, DPI+

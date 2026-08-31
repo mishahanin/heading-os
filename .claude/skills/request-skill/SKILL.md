@@ -89,4 +89,13 @@ Body (HTML):
 - Always get a clear description before sending. Don't send vague requests.
 - Include the exec's context (role, title) so the CEO knows who is asking and why.
 - The email goes to ceo@31c.io only.
+- NEVER auto-send. Step 5's confirmation is the lethal-trifecta human gate.
+  Show the drafted request in full, and wait for the user to say go before
+  `send-email.py` runs. **This gate is procedural.** This skill honours step 5.
+  The Action-Queue code gate (`tool_risk.py`) does not enforce it. This skill
+  calls the send transport directly instead of depositing a queue card.
+  Two facts make the procedural gate sufficient here. The recipient is
+  hardcoded to the operator's own organisation address. The body is the user's
+  own text. Do not widen the recipient. Do not send on silence, and do not
+  send on a vague "ok fine".
 - If the exec describes something that an EXISTING skill already does, tell them: "This is already available as /[skill-name]. Try it!" and do NOT send the email.

@@ -1,5 +1,7 @@
 # Platform-Specific Parameters
 
+Consumed by: `.claude/skills/image-prompt/SKILL.md`, at the "Platform Suffix" step of the output template, when the target platform is not Midjourney.
+
 ## Midjourney
 
 Append to prompt:

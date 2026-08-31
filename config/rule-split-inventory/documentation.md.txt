@@ -4,14 +4,14 @@ For the router registry, do NOT hand-edit the generated layers (`.claude/rules/s
 **Always run the docs drift guard before committing anything under `docs/`:** `python scripts/regenerate-docs-html.py --all && git diff --exit-code docs/`.
 Run the generator from the repo `.venv` so its pygments matches the pinned toolchain the `docs-html-drift` pre-commit hook uses, avoiding false drift from an ambient interpreter.
 **Commit + classify** changed files per `config/routing-map.yaml` (private/engine stays CEO-side; corporate is prepared for publish).
-### CEO-only (stays in ceo-main only -- NEVER publish to corporate or exec workspaces):
+### CEO-only (stays in the operator's private data overlay -- NEVER publish to corporate or exec workspaces):
 CEO-ADMIN-GUIDE files must NEVER be placed in the corporate repo or any exec workspace.
 - **PATCH** - typo fixes, clarifications that don't change meaning
 When editing a template, always update both fields.
 A plan is active while its work is in progress; `plans/` root should hold only plans currently being executed or about to be executed.
 Move it to `plans/archive/{YYYY}/`: `git mv plans/{filename} plans/archive/{year}/`
 Never delete a plan; archive it.
-Some cleanup cannot land immediately because it depends on the whole fleet reaching a state, not just ceo-main.
+Some cleanup cannot land immediately because it depends on the whole fleet reaching a state, not on the operator workspace alone.
 When an item clears, delete its row and the corresponding files in the same change so this table never carries stale entries.
 ## Never Deliver Barebones Documentation
 All documentation presented to executives must be:

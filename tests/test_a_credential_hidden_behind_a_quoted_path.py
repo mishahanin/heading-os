@@ -26,7 +26,7 @@ The rest of the shard:
     commit, so a clone that has fetched a remote but committed nothing of its
     own met this on an ordinary run.
   - `regenerate-docs-html.py` resolved every relative `.md` link against the
-    hardcoded SITE_DIR, while `TRACKED_DIRS` also renders `templates/` and the
+    hardcoded SITE_DIR, while `tracked_dirs()` also renders `templates/` and the
     DATA overlay's `docs/` and `templates/`. The dangerous half is not the link
     left alone: it is the coincidence, where a `templates/X.md` link rewrites to
     `X.html` because `docs/X.html` exists.

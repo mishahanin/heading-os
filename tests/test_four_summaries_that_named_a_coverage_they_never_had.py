@@ -123,8 +123,25 @@ def test_the_budget_boundary_is_over_not_at(tmp_path, monkeypatch):
 def test_the_printed_budget_is_the_constant_not_a_literal(tmp_path, monkeypatch):
     """A hardcoded `/200` beside a flag computed from the constant is how the
     number and the verdict came apart. Moving the constant must move the line."""
+    # There used to be a second patch here:
+    #
+    #     monkeypatch.setattr(prime, "MEMORY_BUDGET_LINES", 3, raising=False)
+    #
+    # It bound a stranger. `scripts/prime-health-parallel.py` imports the
+    # constant INSIDE `run_memory_health` (`from scripts.utils.memory_health
+    # import MEMORY_BUDGET_LINES, ...`), so the module carries no attribute of
+    # that name -- MEASURED 2026-08-31: `hasattr(prime, "MEMORY_BUDGET_LINES")`
+    # is False. `raising=False` turned "this name does not exist" into a silent
+    # new attribute nothing reads. The single patch below is what actually
+    # reaches the function-local import, and the assertion at the bottom of this
+    # test is what proves it: `/3 lines` can only appear if the panel resolved
+    # the constant at call time.
     monkeypatch.setattr("scripts.utils.memory_health.MEMORY_BUDGET_LINES", 3)
-    monkeypatch.setattr(prime, "MEMORY_BUDGET_LINES", 3, raising=False)
+    assert not hasattr(prime, "MEMORY_BUDGET_LINES"), (
+        "prime-health-parallel gained a module-level MEMORY_BUDGET_LINES. It "
+        "would shadow the function-local import this test patches, and the "
+        "patch above would stop reaching the code under test."
+    )
     d = _memory_dir(tmp_path, index_lines=10)
 
     out = _run_memory(monkeypatch, d)["output"]

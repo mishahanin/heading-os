@@ -204,7 +204,8 @@ scheduled sync on the exec side — the auto-sync that used to provide one was
 retired with <code>workspace-sync.py</code>. This sentence claimed the opposite until
 2026-08-23, two headings above the paragraph that retires it.</p>
 <h3 id="ceo-side-manual-initiated-by-push-updates-or-equivalent">CEO side (manual, initiated by <code>/push-updates</code> or equivalent)</h3>
-<p>When Misha updates any shared content in ceo-main:</p>
+<p>When Misha updates any shared content in the operator workspace, which means the
+engine clone and the private data overlay together:</p>
 <ol>
 <li><strong>Commit + classify</strong> changed files per <code>config/routing-map.yaml</code> (private/engine stays CEO-side; corporate is prepared for publish).</li>
 <li><strong>Publish to <code>../heading-os-corporate/</code></strong> via <code>/publish-corporate</code> or <code>/push-updates</code> (corporate-classified files + BUILD.json bump).</li>
@@ -236,7 +237,7 @@ syncs with plain git:</p>
 <p>Up to whenever the exec next runs <code>git pull</code> on their clones. There is no fixed
 1-hour cadence anymore; an online exec sees published changes the moment they
 pull (or run <code>/sync</code>). Offline execs catch up on their next pull.</p>
-<h3 id="what-this-means-for-a-change-in-ceo-main">What this means for a change in ceo-main</h3>
+<h3 id="what-this-means-for-a-change-in-the-operator-workspace">What this means for a change in the operator workspace</h3>
 <ul>
 <li>Same session: visible to CEO immediately (file on disk).</li>
 <li>+minutes: visible in corporate GitHub (once CEO runs <code>/publish-corporate</code> + <code>git push</code>).</li>
@@ -260,7 +261,7 @@ not in the templates -&gt; docs synced set), with <code>docs/QUICKSTART.md</code
 one-page short form. Neither is exec-distributed via this sync chain.
 - <code>QUICKSTART.md</code> &ndash; one-page genericized public reference, not a hand-authored CEO guide.</p>
 </blockquote>
-<h3 id="ceo-only-stays-in-ceo-main-only-never-publish-to-corporate-or-exec-workspaces">CEO-only (stays in ceo-main only &ndash; NEVER publish to corporate or exec workspaces):</h3>
+<h3 id="ceo-only-stays-in-the-operators-private-data-overlay-never-publish-to-corporate-or-exec-workspaces">CEO-only (stays in the operator&rsquo;s private data overlay &ndash; NEVER publish to corporate or exec workspaces):</h3>
 <ul>
 <li><code>CEO-ADMIN-GUIDE.md</code> &ndash; Admin workflows, provisioning, offboarding, emergency revocation</li>
 <li><code>CEO-ADMIN-GUIDE.html</code> &ndash; Branded HTML version</li>
@@ -270,7 +271,7 @@ one-page short form. Neither is exec-distributed via this sync chain.
 waits on the whole fleet to reach a state. That is a propagation concern, not an
 authoring one.</p>
 <h2 id="migration-cruft-milestones">Migration Cruft Milestones</h2>
-<p>Some cleanup cannot land immediately because it depends on the whole fleet reaching a state, not just ceo-main. Track those here so they are not forgotten (2026-06-09 audit #62).</p>
+<p>Some cleanup cannot land immediately because it depends on the whole fleet reaching a state, not on the operator workspace alone. Track those here so they are not forgotten (2026-06-09 audit #62).</p>
 <table>
 <thead>
 <tr>
@@ -291,7 +292,7 @@ authoring one.</p>
 </table>
 <p>When an item clears, delete its row and the corresponding files in the same change so this table never carries stale entries.</p>
   <footer class="foot">
-    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+    <p>HEADING OS: operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
   </footer>
 </main>
 </div>

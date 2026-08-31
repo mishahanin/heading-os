@@ -78,7 +78,7 @@
 <main class="content">
   <h1>Design check</h1>
   <p class="page-meta">Two engines decide whether an artifact this engine produces reads as designed or as generated.</p>
-  <!-- version: 1.0.0 | last-updated: 2026-08-09 -->
+  <!-- version: 1.1.0 | last-updated: 2026-08-31 -->
 
 <p>Two engines decide whether an artifact this engine produces reads as designed or
 as generated. This page explains what each can see, what the calibration
@@ -170,13 +170,17 @@ file.</p>
 <h2 id="the-baseline-is-a-ratchet">The baseline is a ratchet</h2>
 <div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/visual-discipline-check.py<span class="w"> </span>baseline<span class="w"> </span>record<span class="w"> </span>--deep<span class="w"> </span>docs/
 python<span class="w"> </span>scripts/visual-discipline-check.py<span class="w"> </span>baseline<span class="w"> </span>check<span class="w"> </span>--deep<span class="w"> </span>docs/
+python<span class="w"> </span>scripts/visual-discipline-check.py<span class="w"> </span>baseline<span class="w"> </span>stats
 </code></pre></div>
 <p><code>.visual-baseline.json</code> records a count per file and per rule, the same shape as
 <code>.lint-baseline.json</code> does for lint debt. <code>record</code> freezes what exists. <code>check</code>
 fails only on findings <strong>above</strong> those counts, and never rewrites the file.</p>
 <p>This is deliberate and it is the whole reason the integration was possible
-without a rewrite. Measured on first run, the documentation site carried 390
-findings and the branded document family carried thousands. Demanding zero would
+without a rewrite. On first run the documentation site carried hundreds of
+findings and the branded document family carried thousands. For the current size
+of the freeze run <code>baseline stats</code>, which derives it from the file; the count
+used to be typed into this page, the CI step comment and the rule, and all three
+had drifted. Demanding zero would
 have meant either rebuilding every existing artifact before the tool could be
 used at all, or turning the gate off. Freezing means existing work is left alone
 while new work is held to the standard, and each frozen finding surfaces the
@@ -219,8 +223,13 @@ was skipped would block the very edit that fixes it.</p>
 <hr />
 <h2 id="honest-limits">Honest limits</h2>
 <p>Four, stated plainly so a clean result is not over-read.</p>
-<p><strong>PPTX, DOCX and PDF are not covered by the deep engine.</strong> It reads HTML, SVG and
-source text. Decks stay on the regex path. This is the largest remaining gap.</p>
+<p><strong>PDF and DOCX are covered by neither engine.</strong> The deep engine reads HTML and
+SVG. The regex walk visits the suffixes in <code>SCAN_EXTENSIONS</code>, which is <code>.html</code>,
+<code>.htm</code>, <code>.svg</code> and <code>.pptx</code>, so PPTX decks stay on the regex path but PDF and
+DOCX are read by nothing at all. This page previously said the three &ldquo;are not
+covered by the deep engine&rdquo;, which implied a regex path for all three; only
+PPTX has one. The gap lands hardest on the five locked corporate doctypes, whose
+only renders are PDF and DOCX. This is the largest remaining gap.</p>
 <p><strong>An unused CSS rule is not a finding.</strong> The cascade is resolved against real
 elements, so a declaration no element uses is correctly invisible. A clean result
 is not proof that a stylesheet is clean.</p>
@@ -252,7 +261,7 @@ to nothing while looking like an environment problem.</p>
 <p><em>HEADING OS · Design check · see also <a href="EXTENDING.html">Extending the engine</a> and
 <a href="ARCHITECTURE.html">Architecture</a>.</em></p>
   <footer class="foot">
-    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+    <p>HEADING OS: operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
   </footer>
 </main>
 </div>

@@ -54,6 +54,22 @@ sys.path.insert(0, str(ROOT))
 
 HOOKS = ROOT / ".claude" / "hooks"
 
+
+@pytest.fixture(autouse=True)
+def _sys_path_restored():
+    """The hooks here are executed IN-PROCESS, and a hook resolves its own
+    workspace root onto `sys.path` (`.claude/hooks/_dispatch.py:60`). In a real
+    child that entry dies with the process; here it outlives the test and holds
+    for the rest of the xdist worker, one stale tmp directory per test. Correct
+    in the hook, so restore it on this side.
+    """
+    saved = sys.path[:]
+    try:
+        yield
+    finally:
+        sys.path[:] = saved
+
+
 # The literal is assembled, never written out: this test file is read by the
 # very Bash guard it exercises, and a bare spelling of the guarded path makes
 # the guard refuse the command that runs the suite.

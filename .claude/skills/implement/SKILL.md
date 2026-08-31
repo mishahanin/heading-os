@@ -6,7 +6,7 @@ allowed-tools: "Read, Write, Edit, Bash(python3:*), Bash(python:*), Glob, Grep"
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
-  version: "1.7"
+  version: "1.8"
 x-heading-orchestration:
   parallel_safe: false
   shared_state: []
@@ -39,7 +39,7 @@ x-heading-routing:
 
 Execute an implementation plan created by `/create-plan`. Read the plan thoroughly, execute each step in order, emit a structured trajectory for every phase boundary, and report on the completed work.
 
-**Version history (v1.3-v1.7):** the emission discipline changed over several versions. Version 1.6 added typed flags (one `Bash` call per event, no temp file). Version 1.7 added the emit-time sequencing guard (exit `5`) and the run-level `--verify` files reconciliation. The **Trajectory emission contract** below carries the authoritative invariants, restated in Phase 2, Phase 5, and the NEVER list. The full per-version changelog is in `references/implement-details.md`.
+**Version history (v1.3-v1.8):** the emission discipline changed over several versions. Version 1.6 added typed flags (one `Bash` call per event, no temp file). Version 1.7 added the emit-time sequencing guard (exit `5`) and the run-level `--verify` files reconciliation. Version 1.8 fixed `--verify`'s blindness to bracketing defects (orphan `wave_end` reconciliation, out-of-bracket `step_end` detection, advisory flags for a `wave_start` missing its declared shape). The **Trajectory emission contract** below carries the authoritative invariants, restated in Phase 2, Phase 5, and the NEVER list. The full per-version changelog is in `references/implement-details.md`.
 
 ## Trajectory emission contract
 

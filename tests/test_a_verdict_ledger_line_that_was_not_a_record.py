@@ -48,7 +48,7 @@ GOOD_AFTER = '{"verdict_id": "2026-08-29_council_beta", "choice": "claude"}'
 def _ledger(tmp_path, monkeypatch, lines):
     path = tmp_path / "_verdicts.jsonl"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    monkeypatch.setattr(ca, "VERDICTS_PATH", path)
+    monkeypatch.setattr(ca, "verdicts_path", lambda p=path: p)
     return path
 
 
@@ -89,8 +89,8 @@ def test_the_aggregate_is_still_written_after_a_bad_ledger_line(tmp_path, monkey
         monkeypatch,
         ['{"verdict_id": "2026-08-29_council_alpha", "choice": "kimi"}', "null"],
     )
-    monkeypatch.setattr(ca, "COUNCIL_DIR", council)
-    monkeypatch.setattr(ca, "AGGREGATE_PATH", council / "_aggregate.md")
+    monkeypatch.setattr(ca, "council_dir", lambda p=council: p)
+    monkeypatch.setattr(ca, "aggregate_path", lambda p=council / "_aggregate.md": p)
 
     assert ca.collect_transcripts(), "empty corpus: this test would pass proving nothing"
 

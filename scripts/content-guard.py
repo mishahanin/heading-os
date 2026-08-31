@@ -17,8 +17,14 @@ Usage:
   python scripts/content-guard.py --files a.py b.md      # scan specific files
   python scripts/content-guard.py --stdin               # newline-delimited paths on stdin
 
-Exit: 0 clean, 1 leak(s) found OR a file that could not be scanned OR the
-denylist was empty at scan time, 2 internal error.
+Exit: 0 clean, 1 leak(s) found OR a file that could not be scanned, 2 internal error.
+An EMPTY denylist also exits 0, printing "denylist unavailable; skipped." That is
+the public-clone / CI state described above; this line used to claim it exited 1,
+contradicting both the paragraph above it and the code.
+
+Keep "2 internal error." on one line. `tests/test_a_tool_that_reports_less_than_it_checked.py`
+asserts that literal substring, and wrapping it across a newline made the test red
+while every word survived -- the same shape as a substring that outlives a re-wrap.
 
 An unreadable engine-routed file used to be warned about on stderr and then
 exit 0. The exit code is the contract CI consumes, so "clean" shipped over a

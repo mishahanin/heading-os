@@ -357,3 +357,13 @@ config/skill-custom/*.user.toml
 .canopus/
 
 .claude/worktrees/
+
+# Scratch slash-commands minted by the /skill-creator eval harness. They MUST be
+# written into the real, tracked `.claude/commands/` because that is the only
+# place `claude -p` discovers a project command; a temp dir outside the repo
+# would measure nothing. run_eval.py unlinks each one in a `finally` and sweeps
+# survivors at the next start, but a SIGKILL runs neither. This is the belt: the
+# name shape is minted in exactly one place (SCRATCH_COMMAND_RE in
+# .claude/skills/skill-creator/scripts/run_eval.py) and matches nothing a human
+# would author.
+.claude/commands/*-skill-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].md

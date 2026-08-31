@@ -430,7 +430,7 @@ def _load_flag_fp(tmp_path, monkeypatch):
         "scrutinize_flag_fp", root / "scripts" / "scrutinize-flag-fp.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    monkeypatch.setattr(mod, "SCRUTINY_DIR", tmp_path)
+    monkeypatch.setattr(mod, "scrutiny_dir", lambda p=tmp_path: p)
     return mod
 
 

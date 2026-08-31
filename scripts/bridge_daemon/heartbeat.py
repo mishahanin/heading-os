@@ -1,10 +1,19 @@
 """Heartbeat writer for fleet observability.
 
 Per the bridge architecture spec section 3.7, each daemon writes a
-`<workspace>/.daemon-state/heartbeat.json` file every 60 seconds. The
-existing per-exec workspace sync mirrors the file to CEO-side, where
-`scripts/daemon-fleet-health.py` (Phase 3) aggregates them into the
-11-cell status grid.
+`<workspace>/.daemon-state/heartbeat.json` file every 60 seconds.
+`scripts/daemon-fleet-health.py` aggregates the files it can reach into an
+N-cell status grid.
+
+**Nothing transports this file between machines, and this paragraph used to say
+something did.** It claimed the per-exec workspace sync mirrored it CEO-side;
+`workspace-sync.py` was retired on 2026-06-26. A later claim said the exec's
+`push-all.py` carried it into their data repo as `bridge-heartbeat.json`;
+measured 2026-08-30, `push-all.py` contains no reference to a heartbeat of any
+name, and `.gitignore` excludes `.daemon-state/`, so no push can carry it under
+any name. The reader therefore only ever sees workspaces on its OWN filesystem:
+this one, siblings of it, and `~/exec-workspaces/<slug>/`. A remote exec's
+daemon is invisible to it, and the grid does not pretend otherwise.
 
 The heartbeat carries:
 - pid: process id

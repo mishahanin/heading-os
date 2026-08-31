@@ -153,11 +153,16 @@ def approve_and_send(engine_root: Path, data_root: Path, id_or_prefix: str) -> d
     """Approve a card and, for a gated send card, SEND it synchronously.
 
     Resolves the id against the active set, then:
-      - email_send/telegram_send (gated): refuse if not gated; require
-        draft_status == ready_for_review (email_send); call send_card(engine_root)
-        and route the transition through apply_status(data_root, sent|send_failed,
+      - a send type (the ledger's ``send_capable`` set, or anything resolving
+        ``gated``): refuse if not gated; require draft_status ==
+        ready_for_review (email_send); call send_card(engine_root) and route the
+        transition through apply_status(data_root, sent|send_failed,
         classification=None) - audit via the helper, NO auto-DLQ (the CEO retries).
-      - note/pipeline_update/alert: record the non-send disposition (approve_card).
+      - everything the ledger positively classifies autonomous or notify
+        (note/pipeline_update/alert/...): record the non-send disposition
+        (approve_card).
+
+    Which types are sends is DERIVED from ``tool_risk``, never listed here.
 
     Returns a small result dict for the caller to print.
     """
@@ -167,8 +172,29 @@ def approve_and_send(engine_root: Path, data_root: Path, id_or_prefix: str) -> d
     card = next(c for c in items if c["id"] == aid)
     atype = card.get("action_type")
 
-    if atype in ("email_send", "telegram_send"):
-        if tool_risk.tier_for(atype) != tool_risk.GATED:
+    # THE GATE, and the tier is resolved for EVERY card, above any branch on the
+    # type. A card is on the send path here when the ledger calls its type
+    # send-capable OR it resolves `gated` - never because a tuple in this file
+    # names it.
+    #
+    # A hardcoded `("email_send", "telegram_send")` tuple keyed this branch
+    # until 2026-08-31, with the tier check inside it. A send-capable type the
+    # ledger knew and the tuple did not fell straight through to the non-send
+    # disposition below, with the check never reached - and `approve_card` marks
+    # the card `approved`, which is exactly the status the batch executor
+    # selects for sending. Skipped, not failed.
+    #
+    # The `or tier == GATED` half is what an emptied `send_capable` cannot
+    # switch off: `tier_for` is total over action_types, so a type the ledger
+    # stops calling send-capable still reaches this branch as long as anything
+    # resolves it `gated` - including the unclassified-type fail-safe. And if
+    # BOTH halves of the ledger are lowered, the branch is not taken and the
+    # card is disposed rather than sent, which is the safe direction: nothing
+    # here sends outside this branch, and `send_card` re-asserts the same gate
+    # unconditionally before any transport runs.
+    tier = tool_risk.tier_for(atype)
+    if atype in tool_risk.send_capable_types() or tier == tool_risk.GATED:
+        if tier != tool_risk.GATED:
             return {"result": "refused", "action_id": aid,
                     "error": f"{atype} does not resolve gated - refusing to send"}
         # A STATUS guard, which `cmd_retry` has and this did not, and it is a
@@ -213,6 +239,14 @@ def approve_and_send(engine_root: Path, data_root: Path, id_or_prefix: str) -> d
             # `approve` and no `retry` can move for the next five minutes.
             release_claim(data_root, aid, prev_status)
             raise
+        if res.get("result") in ("skipped", "refused"):
+            # A gated type with no executor, or one the executor's own gate
+            # refused. Nothing was attempted and nothing left the workspace, so
+            # put the claim back rather than record a send_failed for a send
+            # that never ran - `retry` would then offer to repeat it.
+            release_claim(data_root, aid, prev_status)
+            return {"result": res["result"], "action_id": aid,
+                    "error": res.get("error", "")}
         if res.get("result") == "sent":
             # The mail is GONE from here on. Everything below records that fact,
             # and the return value of the recorder used to be discarded.

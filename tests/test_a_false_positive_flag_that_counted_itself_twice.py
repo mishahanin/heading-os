@@ -58,7 +58,7 @@ def record(tmp_path, monkeypatch):
     d.mkdir()
     path = d / "runs.jsonl"
     monkeypatch.setattr(rec, "record_path", lambda: path)
-    monkeypatch.setattr(flag_fp, "SCRUTINY_DIR", d)
+    monkeypatch.setattr(flag_fp, "scrutiny_dir", lambda p=d: p)
     (d / f"{_SID}.md").write_text(_REPORT, encoding="utf-8")
     assert flag_fp.parse_findings_from_report(d / f"{_SID}.md"), \
         "the report this test flags against must parse to a non-empty finding set"

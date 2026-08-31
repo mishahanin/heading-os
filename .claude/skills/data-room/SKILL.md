@@ -109,7 +109,8 @@ Executive summary for the data room front page:
 - ODUN.ONE architecture: 4 modules, API-first, Kubernetes-native
 - Key differentiators: AI-native, clean-slate, encrypted traffic classification
 - Patent portfolio: 1 filed, 2nd in progress
-- Xynthor AI acquisition integration
+- Acquisition integration (read the acquired company name from the private
+  overlay; this engine file must not carry it)
 - Deployment model: standard x86/ARM, on-premises, sovereign
 
 ### Competitive Landscape

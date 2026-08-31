@@ -43,8 +43,22 @@ sys.path.insert(0, str(WORKSPACE_ROOT))
 from scripts.utils.colors import GREEN, RESET, YELLOW  # noqa: E402
 from scripts.utils.workspace import get_outputs_dir  # noqa: E402
 
-COUNCIL_DIR = get_outputs_dir() / "operations" / "council"
-VERDICTS_PATH = COUNCIL_DIR / "_verdicts.jsonl"
+def council_dir() -> Path:
+    """Resolved at call time, never at import.
+
+    `get_outputs_dir()` reads `HEADING_OS_DATA` on every call, so it follows
+    the environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the root
+    still got the operator's real overlay. The `mkdir` below is not among the
+    primitives `tests/conftest.py` wraps, so a stray directory in that overlay
+    drew no refusal.
+    """
+    return get_outputs_dir() / "operations" / "council"
+
+
+def verdicts_path() -> Path:
+    return council_dir() / "_verdicts.jsonl"
 # Ordered, so the tally below reads the same way every time AND is derived from
 # the same set argparse validates against. A second hand-written tuple lived in
 # `render_tally`; a seventh choice added here would have been accepted on the
@@ -90,8 +104,8 @@ def append(verdict_id: str, choice: str, notes: str) -> dict:
         "notes": notes or "",
         "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
-    COUNCIL_DIR.mkdir(parents=True, exist_ok=True)
-    with VERDICTS_PATH.open("a", encoding="utf-8") as f:
+    council_dir().mkdir(parents=True, exist_ok=True)
+    with verdicts_path().open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     return rec
 
@@ -121,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     # Soft-warn if the transcript file doesn't exist - the verdict is still
     # recorded (CEO might be backfilling from memory before the file lands),
     # but flag it so a typo'd id doesn't silently rot in the JSONL.
-    transcript = COUNCIL_DIR / f"{args.id}.md"
+    transcript = council_dir() / f"{args.id}.md"
     missing = not transcript.exists()
     if missing:
         print(f"{YELLOW}WARN: no transcript at {transcript}. Verdict still recorded; "
@@ -130,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
     rec = append(args.id, args.choice, args.notes)
     print(f"{GREEN}recorded: id={rec['verdict_id']} choice={rec['choice']} "
           f"notes={(rec['notes'][:60] + '...') if len(rec['notes']) > 60 else rec['notes']}{RESET}")
-    print(render_tally(latest_verdicts(VERDICTS_PATH)))
+    print(render_tally(latest_verdicts(verdicts_path())))
     # Exit 3, as the docstring has always contracted: "transcript file for --id
     # not found (verdict still written; warning)". It returned 0, so a wrapper
     # using the exit code to catch a typo'd id — precisely the failure the

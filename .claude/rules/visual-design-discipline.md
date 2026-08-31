@@ -1,5 +1,7 @@
 ---
 paths:
+  - "docs/**"
+  - "scripts/bridge_daemon/web/index.html"
   - "outputs/**/*.html"
   - "outputs/**/*.pdf"
   - "outputs/**/*.pptx"
@@ -10,11 +12,19 @@ paths:
 
 # Visual Design Discipline - Design All Visuals As Made By a Person
 
-> Always-active rule. Applies to every visual artifact 31C ships where 31C identity is implied. Decks (investor, product, keynote, sales), dashboards (bridge daemon, Pulse, briefings, status pages), ODUN.ONE customer-facing surfaces, briefing HTML/PDF, investor materials, the public web. Does NOT apply to internal admin/utility surfaces nobody outside the Tribe sees, code, structured machine output, or third-party content displayed verbatim.
+> **Path-scoped rule, not always-on.** It loads when the session touches one of the `paths:` globs above; nothing injects it on a bare "make me a deck". That is a deliberate trade, not an oversight: this is the largest rule file in the tree, and putting it on the always-on floor would spend roughly 7,000 tokens of every turn on a rule most turns never need. `scripts/context-floor-audit.py` reports it under "path-scoped rules, NOT in the total", which is the classification this frontmatter asks for. A skill that produces a visual artifact therefore has to reach for this rule; nothing hands it over.
 >
-> Last Updated: 2026-08-09 (second engine: impeccable deep detection, profiles, baseline ratchet, three craft-floor reflexes)
-> Last Verified: 2026-08-09
-> Background and citations: `outputs/research/2026-05-25_design_visual-design-discipline-research.md` (Pass 5 synthesis, 5 research passes, 30 captured screenshots, 20 Odin principles cross-referenced).
+> **Six of the eight globs are rooted in the private data overlay, not in this repo.** `outputs/` and `datastore/` exist only in the operator's data overlay; the engine tree has neither, so on a public clone, and on any session whose paths resolve against the engine root, those six can never match. They are kept because they state the surfaces the rule governs and because the sibling rule `.claude/rules/datastore.md` is scoped the same way, from the same pre-split layout. They should not be read as a guarantee that the rule loads when an artifact is written.
+>
+> The two globs that provably CAN fire from this repo are `docs/**` and `scripts/bridge_daemon/web/index.html`, and both were missing until 2026-08-31. `docs/**` is the only surface the CI ratchet gates and the entire content of `.visual-baseline.json`; the bridge dashboard is named below as the canonical 31C implementation. The rule governed both and loaded for neither.
+>
+> `tests/test_a_coverage_table_that_outran_its_scan_extensions.py` re-derives which globs are overlay-rooted from disk and fails if the count above stops matching.
+>
+> Applies to every visual artifact 31C ships where 31C identity is implied. Decks (investor, product, keynote, sales), dashboards (bridge daemon, Pulse, briefings, status pages), ODUN.ONE customer-facing surfaces, briefing HTML/PDF, investor materials, the public web. Does NOT apply to internal admin/utility surfaces nobody outside the Tribe sees, code, structured machine output, or third-party content displayed verbatim.
+>
+> Last Updated: 2026-08-31 (coverage claims reconciled with what the checker and CI actually do)
+> Last Verified: 2026-08-31
+> Background and citations: `outputs/research/2026-05-25_design_visual-design-discipline-research.md` (Pass 5 synthesis, 5 research passes, 30 captured screenshots, and an Odin brain audit that found 20 non-contradicting entries: principles plus 6 positions, of which the synthesis names 13).
 > Empirical anchors: `outputs/research/_drafts/exemplars/manifest.json` (Pass 4 visual capture), the embedded screenshot evidence in `reference/visual-design-discipline.md`, Anthropic's own Frontend Design cookbook at platform.claude.com.
 > Companion catalog: `reference/visual-design-discipline.md` (exemplar shelf, anti-pattern catalog, audit checklists, vocabulary expansion).
 
@@ -24,7 +34,7 @@ Claude is not asked to be a designer. Claude is asked to produce visual artifact
 
 The principle behind this rule is that good design and human-reading design are the same thing measured from two ends. AI-default design is the statistical median of the training distribution made visible. It is locally inoffensive at every axis and globally unmistakable when stacked. The cure is parametric: measurable deviation at every axis where defaults exist, with concrete values named and audit gates that count deviations. This is the visual counterpart of `.claude/rules/humanization.md` for prose. The same shape, a different medium.
 
-Rule architecture: parametric leads, identity supplies the specifics. The mechanical fundamentals are constant. The concrete values (brand palette, typeface, spacing tokens) come from 31C's brand authority. The brand authority for 31C is the ODUN.ONE Product Presentation (Master, 12-Apr-2026) at `datastore/products/odun-one/presentations/`. The canonical 31C dashboard implementation is Heading OS v8, scoped in `reference_heading_os_v8_design` and `reference_heading_os_v8_pulse`.
+Rule architecture: parametric leads, identity supplies the specifics. The mechanical fundamentals are constant. The concrete values (brand palette, typeface, spacing tokens) come from 31C's brand authority. The brand authority for 31C is the ODUN.ONE Product Presentation (Master, 12-Apr-2026) at `datastore/products/odun-one/presentations/`, in the private data overlay. The canonical 31C dashboard implementation is Heading OS v8, whose source is `scripts/bridge_daemon/web/index.html` in this repo. Read the file, not a description of it: the bridge daemon has been stopped and disabled since 2026-08-22, so the pages cannot be viewed running.
 
 ## Step 0 - Test before redesigning (calibration gate, mandatory)
 
@@ -71,7 +81,7 @@ Tabler's "light/dark parity treated as equal parents, not parent/child" is the s
 **Concrete moves the rule enforces:**
 
 - **One primary surface mode per artifact.** Dark or light. If both are required, declare one canonical and treat the other as derived, not co-equal. Heading OS v8 is the canonical 31C dashboard pattern for this commitment.
-- **One signature interaction or visual move per surface.** Linear's collapsible sidebar. Plausible's single-page layout. The bridge dashboard's sync-pill. The 31C orange corner block (per `feedback_design_standards`). Refuse to multiply signatures.
+- **One signature interaction or visual move per surface.** Linear's collapsible sidebar. Plausible's single-page layout. The bridge dashboard's sync-pill. The 31C orange corner block (auto-memory `31c-deck-design-system-and-masters`, in the data overlay). Refuse to multiply signatures.
 - **Refused symmetry.** When the artifact admits a both-sides framing, take one side anyway and name it. Misha's voice rule already enforces this for prose; the visual rule extends it.
 
 ### 3. Hierarchy by intent (not uniform grid)
@@ -80,27 +90,27 @@ AI dashboards fail at hierarchy because RLHF rewards "balanced." Every metric ca
 
 **Slide-level: the money slide.** One chart or number anchors the argument, gets full bleed, no decoration. Every other slide is supporting context. Stripe's keynote register does this aggressively: three data points centered on a slide, the speaker carries the rest, one Patrick Collison opener with no title at all because the audience already knows what they came to hear. <!-- content-guard: ok public figure cited as a design reference, not a workspace contact -->
 
-**Parametric rule (auditable):**
+**Parametric rules, all four human-judged.** They are written as numbers so two people reading the same artifact reach the same verdict, not because anything measures them: no engine computes a type-size ratio, a canvas-height fraction, a tile area, or an element count. Checking them is eyes on the artifact against the exemplar shelf.
 
 - Heading-to-body type-size ratio ≥3.5x. If the headline is 56px, body cannot exceed 16px.
 - Exactly one element per slide above 60% canvas height. Two equal-weight focal elements = no focal element.
 - Bento tiles with equal sizes are a card layout in disguise. Mandate at least one tile at 2x the area of the smallest tile in any bento view.
-- Above-fold cap: at most 4 discrete elements (Pass 4 audit confirmed Linear, Vercel, Stripe, Resend, Plausible all stay under 4).
+- Above-fold cap: at most 4 discrete elements. The Pass 4 capture (Linear, Vercel, Stripe, Resend, Plausible) is the shelf this bound was read off, but it recorded screenshots and no element counts, so treat it as the reference set to compare against rather than as a measurement that proves the bound.
 
 ### 4. Restricted palette, signature accent
 
 **One brand base. One strong accent. Three to five greys tinted toward the brand hue.** No two saturated colors at hero density. No gradient hero text. No purple-to-pink hero gradient (the single most-cited tell across every source - Anthropic's own cookbook bans it as the "AI slop signature").
 
-**Parametric rule:**
+**Parametric rule.** Two of these four are mechanised; two are not, and the difference is marked on each.
 
-- Delta-E ≥12 between non-adjacent elements (Grok's measurable contrast rule from the council pass).
-- One saturated accent per surface. If the brand has two (31C orange + ODUN blue per `feedback_design_standards`), one leads per surface; the other is supporting.
-- Gradient backgrounds are permitted only when the gradient is a commissioned brand asset, not a CSS template. Stripe's purple-magenta-coral ribbon (commissioned) is permitted in spirit. Vercel's brand-orange radial (commissioned) is permitted in spirit. `bg-gradient-to-r from-purple-500 to-pink-500` (Tailwind default) is forbidden.
-- Pastel violet-pink-lavender at hero density is forbidden. Material 3's `~#E8DDF4`, Gamma's `~#D0E4F5`, Tabler's `~#F5EEF8` are the captured tells. If a pastel in this band sits at hero density, the artifact fails.
+- **(human-judged)** Delta-E ≥12 between non-adjacent elements (Grok's measurable contrast rule from the council pass). It reads as a threshold and is written as one, but nothing computes Delta-E: `grep -ci "delta.e" scripts/visual-discipline-check.py scripts/utils/impeccable_engine.py` returns 0 in both engines. Judge it by eye, or measure it by hand.
+- **(human-judged)** One saturated accent per surface. If the brand has two (31C orange + ODUN blue, auto-memory `31c-deck-design-system-and-masters`), one leads per surface; the other is supporting. No engine counts accents.
+- **(mechanised, error)** Gradient backgrounds are permitted only when the gradient is a commissioned brand asset, not a CSS template. Stripe's purple-magenta-coral ribbon (commissioned) is permitted in spirit. Vercel's brand-orange radial (commissioned) is permitted in spirit. `bg-gradient-to-r from-purple-500 to-pink-500` (Tailwind default) is forbidden. The regex engine catches the Tailwind and CSS forms; whether a gradient is genuinely commissioned it cannot know.
+- **(mechanised, error)** Pastel violet-pink-lavender at hero density is forbidden. Material 3's `~#E8DDF4`, Gamma's `~#D0E4F5`, Tabler's `~#F5EEF8` are the captured tells. The regex engine matches those three literal hexes and legacy ChatGPT emerald `#10A37F`; "at hero density" is the human half of the judgement, since a hex match says nothing about where the colour sits.
 
 ### 5. Typography chosen with intent
 
-Anthropic's frontend cookbook explicitly bans Inter, Roboto, Open Sans, Lato, and default system fonts. The 31C workspace already commits to GT Standard for documents (per `feedback_corporate_fonts_always` and `reference_brand_assets`). The new rule extends commitment to interface design.
+Anthropic's frontend cookbook explicitly bans Inter, Roboto, Open Sans, Lato, and default system fonts. The 31C workspace already commits to GT Standard for documents; the commitment is written down in `reference/corporate-style-guide.md` in this repo, and the font files and their family-name mapping are in the data overlay under `datastore/brand/fonts/` (auto-memory `pencil-deck-fonts-and-master-template`). The new rule extends commitment to interface design.
 
 **Permitted as primary:**
 
@@ -115,7 +125,9 @@ Anthropic's frontend cookbook explicitly bans Inter, Roboto, Open Sans, Lato, an
 - Roboto, Open Sans, Lato, Poppins, Montserrat (the budget-tier defaults).
 - Default system fonts when the artifact has 31C identity.
 
-**Permitted patterns:**
+The forbidden-as-primary list above is the one part of this fundamental a machine enforces: the regex engine matches those seven family names inside `font-family`, a Google Fonts `family=` URL, an OOXML `typeface=` attribute, or a CSS font variable, and reports each as an error.
+
+**Permitted patterns. All four are human-judged; no engine measures weight, size ratio, tracking, or typeface count.**
 
 - Weight extremes per Anthropic: 100/200 vs 800/900, not 400 vs 600.
 - Size jumps of 3x or more between hierarchy levels, not 1.5x.
@@ -185,16 +197,25 @@ This rule is register-conditional. Internal admin and utility surfaces are exemp
 
 This rule **adds to** the existing visual stack. It does not replace anything.
 
-- `reference/corporate-style-guide.md` - locked colors, typography, letterhead, signature, footer, file naming, authoring checklist for the five locked corporate doctypes. Brand authority cited from `reference_brand_authority`.
+Eight `reference_*` / `feedback_*` "(memory)" keys used to appear in this section and in the fundamentals above. None of them ever resolved: the auto-memory store is entirely kebab-case and holds no filename containing an underscore, so every one of the eight was a pointer to nothing, including the two that carried the GT Standard commitment and the brand-authority routing. They are replaced below by pointers that resolve, and deleted where nothing on disk answers to them.
+
+In this repo:
+
+- `reference/corporate-style-guide.md` - locked colors, typography, letterhead, signature, footer, file naming, authoring checklist for the five locked corporate doctypes.
+- `reference/visual-design-discipline.md` - the companion catalog: exemplar shelf, anti-pattern catalog, audit checklists.
+- `scripts/bridge_daemon/web/index.html` - the Heading OS v8 dashboard source, the canonical 31C dashboard implementation (Pulse, Day, Inbox, Conversations). The daemon is stopped and disabled by operator decision, so this file is the artifact, not a running page.
 - `.claude/rules/corporate-docs.md` - guardrail and trigger protocol for the five locked doctypes.
 - `.claude/rules/humanization.md` - prose-level humanisation rule. The visual rule is its sibling.
 - `.claude/rules/voice.md` and `.claude/rules/terminology.md` - cross-cutting voice and terminology.
 - `.claude/rules/hidden-chars.md` - zero invisible Unicode policy.
-- `reference_design_standards` (memory) - dual-mode (light + dark), GT Standard, orange corner block, blue accents.
-- `reference_brand_authority` (memory) - ODUN.ONE Product Presentation (Master, 12-Apr-2026) as the brand reference for visual identity.
-- `reference_brand_assets` (memory) - locations of logos, fonts, primary PowerPoint template, inspiration deck, production examples.
-- `reference_heading_os_v8_design` and `reference_heading_os_v8_pulse` (memory) - canonical 31C dashboard implementation. Bridge dashboard, Pulse page, Day page, Inbox page, Conversations page.
-- `feedback_pdf_document_design` (memory) - validated multi-page branded PDF layout, typography, spacing, pipeline.
+
+In the private data overlay, so a public clone will not have them:
+
+- `datastore/products/odun-one/presentations/` - the ODUN.ONE Product Presentation (Master, 12-Apr-2026), the brand authority for visual identity. Replaces the dead `reference_brand_authority`.
+- Auto-memory `31c-deck-design-system-and-masters` - the 31C deck design system: palette, GT Standard L/M assignment, orange corner tab, footer, layout archetypes. Replaces the dead `reference_design_standards` and `feedback_design_standards`.
+- Auto-memory `pencil-deck-fonts-and-master-template` - where the fonts, logos and the master deck template live, and how family names resolve. Replaces the dead `reference_brand_assets`.
+
+Deleted with no replacement, because nothing on disk answers to them: `feedback_pdf_document_design` (no record of a validated multi-page branded PDF layout exists in auto-memory; `scripts/render-doctype.py` and the locked templates are the actual pipeline), and `reference_heading_os_v8_design` / `reference_heading_os_v8_pulse` (superseded by the source file named above).
 
 When in doubt about visual register specifics (which orange? which font weight?), consult the brand authority deck. When in doubt about whether an artifact reads as designed or generated, apply this rule.
 
@@ -208,7 +229,22 @@ The mechanical tells are audited by `scripts/visual-discipline-check.py`, which 
 
 **The regex engine** (default, always runs, shipped 2026-06-26) scans HTML/SVG/PPTX for forbidden fonts, the purple->pink gradient, oversized Tailwind radii (`rounded-2xl`/`3xl`), Lucide/Heroicons defaults, and the banned hero colors (ChatGPT emerald, captured pastels) as errors, plus advisory layout/copy heuristics (neutral-stack pairing, indigo-violet primary, three-up cards, centered hero, Title Case headings). It sees what is WRITTEN DOWN.
 
-**The deep engine** (`--deep`, added 2026-08-09) is the impeccable CLI (`pbakaus/impeccable`, Apache 2.0, pinned in `scripts/.impeccable-version`). It parses the HTML, resolves the CSS cascade, and computes real values: text contrast against the surface actually behind it, heading hierarchy, accent stripes on rounded corners, type floors, kickers, buzzword and cadence tells in copy. It sees what RENDERS. Deep findings carry an `impeccable:` type prefix so a reader can tell, per finding, which engine made the claim. It reads HTML and SVG only - **PPTX, DOCX and PDF stay regex-only, which is the largest remaining coverage gap.**
+**The deep engine** (`--deep`, added 2026-08-09) is the impeccable CLI (`pbakaus/impeccable`, Apache 2.0, pinned in `scripts/.impeccable-version`). It parses the HTML, resolves the CSS cascade, and computes real values: text contrast against the surface actually behind it, heading hierarchy, accent stripes on rounded corners, type floors, kickers, buzzword and cadence tells in copy. It sees what RENDERS. Deep findings carry an `impeccable:` type prefix so a reader can tell, per finding, which engine made the claim. It reads HTML and SVG only.
+
+**What is actually scanned, and what is not.** The regex walk visits exactly the suffixes in `SCAN_EXTENSIONS` in `scripts/visual-discipline-check.py`, which is `.html`, `.htm`, `.svg`, `.pptx`. The deep engine adds nothing to that set; it narrows it to HTML and SVG. So:
+
+| Format | Regex engine | Deep engine |
+|---|---|---|
+| HTML / HTM | yes | yes |
+| SVG | yes | yes |
+| PPTX | yes (OOXML parts unzipped: fonts and colors only) | no |
+| **PDF** | **no** | **no** |
+| **DOCX** | **no** | **no** |
+| PNG and every other raster | no | no |
+
+**PDF and DOCX are read by nothing.** This rule used to say they "stay regex-only", which implied a scan that has never existed for either. That matters most where the rule is strictest: `## The carve-out` below puts all five locked corporate doctypes in scope, and every one of them renders to PDF and four of them to DOCX. Those renders are audited by no engine at all, and the only check on them is a person looking at the page.
+
+PNG is in this rule's `paths:` globs and in no engine either. The globs decide when the rule loads for whoever is working; they are not a claim that anything scans the file.
 
 ```bash
 python scripts/visual-discipline-check.py <file-or-dir>              # regex only
@@ -217,17 +253,50 @@ python scripts/visual-discipline-check.py --deep --profile doctype <file>
 python scripts/visual-discipline-check.py baseline check --deep docs/
 ```
 
-Three things sit between the deep engine and a finding anyone acts on, all declared in `config/visual-check-profiles.json`:
+Three things sit between the deep engine and a finding anyone acts on. The first two are declared in `config/visual-check-profiles.json`; the third is a separate file, and calling all three config-declared was wrong.
 
-- **Profiles.** An A4 document is judged by print rules and a screen surface by screen rules; the 11px type floor is a screen floor and says nothing true about a printed page. Where a locked corporate template and a detector rule disagree, **the template wins** - the xPager kicker is approved brand, and `.claude/rules/corporate-docs.md` puts changes to it behind CEO approval.
-- **Plausibility bounds.** The parser emits impossible readings on some of our CSS (an h1 at 2856px, a line-height of 0.11x). Those are filtered on VALUE, never by disabling the rule, so genuine hits on the same rule still land.
-- **The baseline.** `.visual-baseline.json` freezes what existed on 2026-08-09 (390 findings across 37 files in `docs/`). The gate fires on findings ABOVE that line. Existing artifacts are recorded, not remediated; the real defects that were found and left unfixed are listed in the calibration report under `outputs/operations/design-check/`.
+- **Profiles** (`config/visual-check-profiles.json`). An A4 document is judged by print rules and a screen surface by screen rules; the 11px type floor is a screen floor and says nothing true about a printed page. Where a locked corporate template and a detector rule disagree, **the template wins** - the xPager kicker is approved brand, and `.claude/rules/corporate-docs.md` puts changes to it behind CEO approval.
+- **Plausibility bounds** (`config/visual-check-profiles.json`). The parser emits impossible readings on some of our CSS (an h1 at 2856px, a line-height of 0.11x). Those are filtered on VALUE, never by disabling the rule, so genuine hits on the same rule still land.
+- **The baseline** (`.visual-baseline.json`, at the repo root, not in the profiles config). It freezes what existed on 2026-08-09. The gate fires on findings ABOVE that line. Existing artifacts are recorded, not remediated; the real defects that were found and left unfixed are listed in the calibration report under `outputs/operations/design-check/`. **Do not quote the size of that freeze from memory** - a number typed into prose rots the moment anyone re-records. Derive it:
+
+  ```bash
+  python scripts/visual-discipline-check.py baseline stats
+  ```
 
 Two honest limits on a clean deep result. An **unused CSS rule is not a finding** - the cascade is resolved against real elements, so dead styles are invisible. And `npx --yes` **fetches and executes third-party code** at call time; the exact version pin is the only mitigation claimed, matching what the workspace already accepts for marp-cli, and it is weaker than a hash-verified install.
 
-The first three fundamentals - specificity density, committed stance, hierarchy by intent - are not mechanically checkable by either engine and remain human-judged against the exemplar shelf. The CEO can request the audit at any time during a session.
+### What is mechanised, and what is a person reading
 
-For artifacts produced by skills (`/design`, `/pptx-generator`, `/keynote-deck`, `/dashboard`, `/marp`, `/xpager`, `/intel-briefing-newsletter`, `/market-brief`, `/proposal`, `/corporate-letter`, `/partnership-doc`, `/official-doc`, `/investor-pitch`, `/data-room`, `/docparse`), the producing skill is responsible for running the audit before declaring the artifact done. Skills must invoke this rule's checklist as part of their phased execution.
+Neither engine judges the first three fundamentals - specificity density, committed stance, hierarchy by intent. Those are human, against the exemplar shelf. Fundamentals 4 and 5 are **partly** mechanised, and this rule used to imply they were fully so by scoping the human-judged carve-out to "the first three".
+
+Everything an engine reports at **error** severity comes from four sources, and that is the whole mechanised set:
+
+| Mechanised check | Where it is defined |
+|---|---|
+| Forbidden primary fonts (7 families) | `FORBIDDEN_FONTS` in `scripts/visual-discipline-check.py` |
+| Banned hero hexes (4) | `BANNED_COLORS` in the same file |
+| The purple-to-pink gradient, Tailwind and CSS forms | `_GRAD_FROM` / `_GRAD_TO` / `_CSS_GRADIENT` in the same file |
+| Rendered contrast, heading hierarchy, type floors, kickers, cadence | the impeccable CLI, on HTML and SVG only |
+
+Everything else this rule states as a number - Delta-E ≥12, the 3.5x type ratio, the 60% canvas share, the 2x bento tile, the 4-element above-fold cap, negative tracking, the two-typeface ceiling, "one saturated accent", "at hero density" - is **human-judged**. Each is marked as such where it appears above.
+
+### What enforces this rule
+
+One thing, and it is narrower than the rule used to claim.
+
+**The CI ratchet on `docs/` is the only enforcement.** `.github/workflows/ci.yml` runs `visual-discipline-check.py baseline check --deep docs/` on every push. Nothing else in this repo fails on a visual finding.
+
+**No skill runs the audit.** This rule previously named fifteen skills and said "the producing skill is responsible for running the audit before declaring the artifact done", and `scripts/visual-discipline-check.py` said the same about itself, calling them "the fifteen skills that already call it". Both were false and had been from the day they were written. Verify in one command:
+
+```bash
+grep -rl "visual-discipline-check" .claude/skills/    # no matches
+```
+
+The skill-side step is therefore an **unenforced convention**: a skill that renders an HTML or SVG artifact SHOULD run the checker on it before declaring done, and if it does not, nothing notices. Wiring it in was considered and deliberately not done in one pass, because for the four locked-doctype skills whose only renders are PDF and DOCX the checker would read nothing and return clean, which replaces a missing check with a false one. Wiring the audit into a skill is a change to workspace infrastructure and needs the operator's approval; the honest state until then is written here rather than papered over.
+
+`tests/test_a_rule_that_claimed_a_coverage_no_skill_had.py` holds both halves of this: it fails if this rule claims skill-side enforcement while no skill calls the checker, and it fails again if a skill starts calling the checker while this rule still says none does.
+
+The CEO can request the audit at any time during a session.
 
 ## Failure modes to watch
 

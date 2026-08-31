@@ -33,10 +33,15 @@ deliberately left as templates and defaults.
 
 ## 2. The fast path: `/setup-wizard`
 
-The wizard is the intended way to personalize a clone. It asks about 22 questions for
-a public HEADING OS clone. It enriches your short answers into full voice, personal,
-and business documents, and captures any API keys into `.env` as it goes. It refuses to
-run on the original maintainer's master workspace, so it is safe on any clone.
+The wizard is the intended way to personalize a clone. Its questions live in
+`config/wizard-questions.yaml`, and each one carries the audiences it applies to. The
+wizard detects your audience and then asks only that subset, so a public clone sees
+fewer questions than an executive workspace. Run `python scripts/apply-wizard-answers.py --status`
+to see the exact list for your workspace, and the answers you have given already.
+
+The wizard enriches your short answers into full voice, personal, and business
+documents. It captures any API keys into `.env` as it goes. It refuses to run on the
+original maintainer's master workspace, so it is safe on any clone.
 
 ```bash
 # in a Claude Code session, from the engine

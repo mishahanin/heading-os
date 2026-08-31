@@ -109,12 +109,13 @@ Wait for explicit approval before rendering. Hard stop.
 
 ## Phase 4: Render
 
-Assemble the JSON payload for the `official` schema. Write to `outputs/documents/{sender-slug}/official/_work/data.json`. Invoke:
+Assemble the JSON payload for the `official` schema. Write it with the Write tool to `outputs/documents/{sender-slug}/official/_work/data.json`. The path redirect sends that write to the DATA overlay. Bash gets no redirect, so resolve the root before you render:
 
 ```bash
+OUTPUTS_DIR="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import get_outputs_dir; print(get_outputs_dir())")"
 python scripts/render-doctype.py --type official \
-  --data outputs/documents/{sender-slug}/official/_work/data.json \
-  --out outputs/documents/{sender-slug}/official/
+  --data "$OUTPUTS_DIR/documents/{sender-slug}/official/_work/data.json" \
+  --out "$OUTPUTS_DIR/documents/{sender-slug}/official/"
 ```
 
 Outputs: PDF + DOCX.

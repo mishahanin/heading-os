@@ -5,6 +5,7 @@
 #     "python-pptx==1.0.2",
 # ]
 # ///
+
 # /// layout
 # name = "carousel-numbered-point-slide"
 # format = "carousel"
@@ -42,6 +43,7 @@ CUSTOMIZE:
 - SUPPORTING_TEXT: Optional explanation (max 100 chars)
 """
 
+import os
 from pathlib import Path
 
 from pptx import Presentation
@@ -57,6 +59,18 @@ def hex_to_rgb(hex_color: str) -> RGBColor:
 
 
 def main() -> None:
+    # === OUTPUT DIRECTORY ===
+    # $DECK_DIR is the data-overlay deck directory, resolved and exported by the
+    # caller (SKILL.md Step 5). Resolved FIRST so a misconfigured run fails
+    # before it renders anything. A bare relative filename here would write the
+    # deck into the engine clone, which is public.
+    deck_dir = os.environ.get("DECK_DIR")
+    if not deck_dir:
+        raise SystemExit(
+            "DECK_DIR is not set. Export the data-overlay deck directory "
+            "first; see SKILL.md Step 5."
+        )
+
     # === BRAND COLORS ===
     BRAND_BG = "1e1e2e"
     BRAND_BG_ALT = "181825"
@@ -143,7 +157,7 @@ def main() -> None:
         p.font.color.rgb = hex_to_rgb(BRAND_TEXT_SECONDARY)
 
     # Save
-    output = Path("carousel-numbered-point-slide.pptx")
+    output = Path(deck_dir) / "carousel-numbered-point-slide.pptx"
     prs.save(output)
     print(f"Created {output}")
 

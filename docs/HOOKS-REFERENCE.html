@@ -107,10 +107,132 @@
 </tr>
 <tr>
 <td><code>_dispatch.py</code></td>
-<td>The consolidated PreToolUse guard, registered on three matchers: the write tools, <code>Bash</code>, and <code>Read</code>, <code>Grep</code> and <code>Glob</code> together. It runs, in one process, the secret-detection block (API-key and credential patterns), the corporate-boundary block (no writes to read-only corporate content), the docs-protection block, the personal-threads protection (it covers the live CEO-only subtree and the archived copies of it under a closed year, and for <code>Grep</code> and <code>Glob</code> it refuses any expression that can EXPAND into either, so a wildcard sweep of the whole threads tree and a bare <code>Grep</code> at its root are both refused; name a business subtree instead), and the slow-shell block (a <code>Bash</code> call that runs the whole test suite in one process, or waits in the foreground, is refused and pointed at <code>scripts/run-tests.py</code> or <code>run_in_background</code>).</td>
+<td>The consolidated PreToolUse guard. It runs eleven checks in one process, on five matchers. The next section names every one.</td>
 </tr>
 </tbody>
 </table>
+<h3 id="the-dispatcher-and-its-eleven-checks">The dispatcher and its eleven checks</h3>
+<p>All three platform templates (<code>.claude/settings.local.{linux,macos,windows}.json</code>) register <code>_dispatch.py</code> on the same five PreToolUse matchers:</p>
+<table>
+<thead>
+<tr>
+<th>Matcher</th>
+<th>Covers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Write\|Edit\|MultiEdit\|NotebookEdit</code></td>
+<td>the write family</td>
+</tr>
+<tr>
+<td><code>Bash</code></td>
+<td>every shell command</td>
+</tr>
+<tr>
+<td><code>Read\|Grep\|Glob</code></td>
+<td>the read family</td>
+</tr>
+<tr>
+<td><code>mcp__codegraph__.*</code></td>
+<td>the CodeGraph MCP tools</td>
+</tr>
+<tr>
+<td><code>Agent\|Task\|Workflow</code></td>
+<td>agent and workflow dispatch</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>CHECKS</code> registry in <code>.claude/hooks/_dispatch.py</code> holds eleven entries, and the dispatcher runs them in this order. The first check that returns a block decision stops the tool call.</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Check</th>
+<th>Blocks</th>
+<th>What it refuses</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>check_prevent_secrets</code></td>
+<td>always</td>
+<td>A write that carries an API key or another credential pattern.</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>check_release_gate</code></td>
+<td>always</td>
+<td>A commit or a push the operator did not ask for in this turn. The next section covers it.</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>check_protect_personal_threads</code></td>
+<td>always</td>
+<td>A read of the CEO-only thread subtree, live or archived under a closed year. For <code>Grep</code> and <code>Glob</code> it also refuses an expression that can EXPAND into either. Name a business subtree instead.</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>check_protect_corporate</code></td>
+<td>always</td>
+<td>A write to read-only corporate content.</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>check_protect_docs</code></td>
+<td>always</td>
+<td>A direct edit to a <code>docs/</code> page that <code>sync-docs.py</code> overwrites from its template.</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>check_cwd_anchor</code></td>
+<td>always</td>
+<td>A workspace script started by a root-relative path from a drifted shell directory. It fires only when the path resolves from the root and not from that directory, and it answers with the anchored command.</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>check_slow_shell</code></td>
+<td>always</td>
+<td>A <code>Bash</code> call that runs the whole test suite in one process, or that waits in the foreground. It points at <code>scripts/run-tests.py</code> or at <code>run_in_background</code>.</td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>check_rate_limit</code></td>
+<td>at the hard cap</td>
+<td>A daily <code>Write</code> and <code>Edit</code> cap. The soft cap warns. Loop detection (same tool, same file, short window) stays advisory and never blocks. <code>Bash</code> is excluded.</td>
+</tr>
+<tr>
+<td>9</td>
+<td><code>check_graph_first</code></td>
+<td>always</td>
+<td>The session&rsquo;s first lookup into source code, until a CodeGraph query is attempted. Any attempt unlocks the session, including one that errors or returns nothing.</td>
+</tr>
+<tr>
+<td>10</td>
+<td><code>check_fanout_first</code></td>
+<td>always</td>
+<td>More hand-reading past the distinct-file budget, when the session has dispatched no agent and no workflow. <code>scripts/fanout-note.py</code> records a reason and resets the budget.</td>
+</tr>
+<tr>
+<td>11</td>
+<td><code>check_tool_budget</code></td>
+<td>at the hard cap</td>
+<td>A total-tool-call cap in a 30-minute rolling window. It counts only the calls these five matchers deliver, so a loop built out of other tools stays invisible here.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="the-release-gate">The release gate</h3>
+<p><code>check_release_gate</code> (entry 2 above) refuses a commit or a push the operator did not ask for in this turn. It is the workspace&rsquo;s control against an unauthorised release. It exists because the model crossed that boundary twice, and believed both times that permission existed.</p>
+<p>The check reads the <code>Bash</code> command and classifies it with <code>release_action()</code>:</p>
+<ul>
+<li><strong><code>push</code></strong> for a <code>git push</code> in any command segment, and for <code>gh release create</code> or <code>gh pr merge</code>. It also returns <code>push</code> for any of the eleven release scripts in <code>_PUSH_SCRIPTS</code>, among them <code>push-all.py</code>, <code>safe-push.py</code>, and <code>publish-corporate.py</code>.</li>
+<li><strong><code>commit</code></strong> for a <code>git commit</code>, and for an annotated <code>git tag</code>. A bare <code>git tag</code> lists tags and passes.</li>
+<li><strong><code>None</code></strong> for everything else, which returns control to the next check.</li>
+</ul>
+<p>The check then reads the operator&rsquo;s most recent typed prompt from the session transcript. <code>prompt_authorises()</code> accepts the action when that prompt carries an authorising word in English or Russian, and refuses when it carries a negation anywhere. The check appends each authorised release to a log the operator can audit.</p>
+<p><strong>The gate fails closed.</strong> It refuses the release when it cannot read the transcript. A gate that opens when it cannot see is not a gate.</p>
+<p><strong>Its coverage, stated exactly.</strong> The gate sees <code>Bash</code> tool calls in a session that wires <code>_dispatch.py</code> on the <code>Bash</code> matcher. It does not see a commit or a push the operator types in their own terminal, and no claim here says otherwise. It is also not the push-time secret scan, which is separate code inside <code>scripts/push-all.py</code>. Read the <a href="SECURITY-MODEL.html">security model</a> for how the two compose.</p>
 <h2 id="posttooluse-observe-and-correct">PostToolUse (observe and correct)</h2>
 <table>
 <thead>
@@ -237,7 +359,7 @@
 <li><a href="CONFIGURATION.html">Configuration</a>: the config files the hooks and guards read.</li>
 </ul>
   <footer class="foot">
-    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+    <p>HEADING OS: operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
   </footer>
 </main>
 </div>

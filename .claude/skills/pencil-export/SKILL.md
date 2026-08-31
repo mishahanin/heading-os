@@ -85,8 +85,10 @@ Background and full diagnosis: auto-memory `pencil-export-nodes-broken-wsl`.
 - The first `get_app_state` after a cold start can return no active editor. Retry
   it before you report a failure.
 - Locate the deck directory. Output lands in `<deck-dir>/export/`.
-- Brand fonts: `datastore/brand/fonts/` on the CEO workspace (GT Standard + 31C
-  Horizontal). Pass this via `--fonts-dir`.
+- Brand fonts: GT Standard and 31C Horizontal. They live in the DATA overlay,
+  under `brand/fonts/` inside the datastore. Resolve that path in Phase 2. Never
+  pass a bare `datastore/brand/fonts` to Bash. Bash resolves it against the
+  engine root, where the datastore does not exist.
 
 ## Phase 1 - Select the slides and export
 
@@ -135,11 +137,24 @@ Run the renderer. It resolves and embeds fonts, then renders each `Slide-*` fram
 in isolation. It hides siblings so overlapping absolutely-positioned frames cannot
 bleed, a real failure mode. Last it builds the formats:
 
+First resolve the fonts directory. The `data-path-redirect` hook rewrites a data
+path for the Read and Write tools. It does NOT cover Bash. A bare
+`datastore/brand/fonts` therefore resolves under the engine root and the run
+fails. Resolve an absolute path instead, and reuse `$FONTS_DIR` in every command
+below:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+FONTS_DIR="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import get_datastore_dir; print(get_datastore_dir() / 'brand' / 'fonts')")"
+```
+
+Use an absolute `<deck-dir>` for the same reason.
+
 ```bash
 python scripts/pencil-export.py \
   --html <deck-dir>/pencil/deck.html \
   --out-dir <deck-dir>/export \
-  --fonts-dir <path>/datastore/brand/fonts \
+  --fonts-dir "$FONTS_DIR" \
   --stem <deck-slug> \
   --formats png,pdf,pptx,html
 ```
@@ -178,7 +193,7 @@ into the file** so it renders identically on a machine without the fonts install
 python scripts/pencil-export.py \
   --html <deck-dir>/pencil/deck.html \
   --out-dir <deck-dir>/export \
-  --fonts-dir <path>/datastore/brand/fonts \
+  --fonts-dir "$FONTS_DIR" \
   --stem <deck-slug> \
   --formats pptx \
   --image-format jpeg --quality 82 --scale 1

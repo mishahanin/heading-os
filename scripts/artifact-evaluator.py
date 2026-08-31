@@ -61,6 +61,47 @@ def check(name, passed, detail="", warn=False):
     return {"name": name, "status": status, "detail": detail}
 
 
+def has_consumed_by_pointer(text):
+    """True when the text carries a "Consumed by:" pointer as a LINE LABEL.
+
+    `.claude/rules/development-standards.md` § Reference File Standards requires
+    a skill reference file to name the skill that reads it. The requirement is a
+    labelled pointer, so this splits each line on its first colon and compares
+    the label. It used to be `"consumed by" not in text.lower()`, a substring
+    scan that any prose sentence satisfies: MEASURED 2026-08-31 on a fixture
+    whose only occurrence was "This data is consumed by downstream tooling
+    somewhere", and this evaluator stamped the file `pass`. That is worse than
+    the missing warning it sits beside, because a false OK is read as coverage.
+
+    The corpus-wide gate for this rule is
+    tests/test_two_skill_contracts_that_were_declared_and_never_measured.py,
+    which runs in CI over every reference file. This function exists so the
+    single-artifact advisory report agrees with that gate instead of
+    contradicting it; `test_the_evaluator_agrees_with_the_corpus_gate`, in that
+    same file, pins the two together on the live corpus. That name was
+    `test_artifact_evaluator_consumed_by.py` until 2026-08-31, a file which has
+    never existed in this repository -- a citation to a nonexistent proof reads
+    as coverage exactly like the substring scan this function replaced.
+
+    `lstrip("-*")` below is a character SET on purpose, and is declared as such
+    in `tests/test_a_quote_marker_that_ate_the_claim.py`.
+    """
+    body = text
+    if body.startswith("---\n"):
+        end = body.find("\n---", 4)
+        if end != -1:
+            body = body[end + 4:]
+    for raw in body.splitlines():
+        line = raw.strip().lstrip(">").strip().lstrip("-*").strip()
+        if ":" not in line:
+            continue
+        label = line.split(":", 1)[0]
+        label = label.replace("*", "").replace("_", "").replace("`", "").strip()
+        if label.lower() == "consumed by":
+            return True
+    return False
+
+
 def load_accepted_warnings(artifact_path):
     """Load .eval-accept.json from the artifact's directory.
 
@@ -343,7 +384,7 @@ def evaluate_skill(skill_path):
             issues = []
             if not ref_lines or not ref_lines[0].startswith("# "):
                 issues.append("missing H1 title")
-            if "consumed by" not in ref_content.lower():
+            if not has_consumed_by_pointer(ref_content):
                 issues.append("missing 'Consumed by' pointer")
             if "last updated" not in ref_content.lower():
                 issues.append("missing 'Last Updated' date")

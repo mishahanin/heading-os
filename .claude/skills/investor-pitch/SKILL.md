@@ -17,7 +17,7 @@ x-heading-orchestration:
 x-heading-capability:
   what: >
     Produces full investor pitch deck content - the investment narrative arc,
-    a 14-slide structure with key messages and speaker notes, and a data
+    a 15-slide structure with key messages and speaker notes, and a data
     appendix - tuned to the investor type (strategic, venture, sovereign fund,
     angel, corporate VC).
   how: >
@@ -97,11 +97,11 @@ For each slide provide: slide title, key message (one sentence), content bullets
 8. **Go-to-Market** — Phase 1 (home region) → Phase 2 (adjacent regions) → Phase 3 (expansion regions); channel-led
 9. **Competitive Landscape** — 31C against the Chinese-aligned and Russian-aligned state vendors, and against a competing vendor that is pivoting away.
 10. **The 31C position** — the only non-aligned sovereign choice
-10. **Business Model** — Perpetual [$ per Gb/s] license + recurring support; land-and-expand NRR; ARR path
-11. **The Milestones** — Year 1 is [$X]M ARR / [$Y]M. Year 2 is [$X]M / [$Y]M. Year 3 is [$X]M / [$Y]B
-12. **The Team** — founder/CEO, CTO, CSO, SVP Product, Research Lab (PhDs) — name the principals and tenure
-13. **The Ask** — Amount, use of funds, what this milestone achieves
-14. **Why Now, Why 31C** — Closing: the moment is now, the team is built, the product is live
+11. **Business Model** — Perpetual [$ per Gb/s] license + recurring support; land-and-expand NRR; ARR path
+12. **The Milestones** — Year 1 is [$X]M ARR / [$Y]M. Year 2 is [$X]M / [$Y]M. Year 3 is [$X]M / [$Y]B
+13. **The Team** — founder/CEO, CTO, CSO, SVP Product, Research Lab (PhDs) — name the principals and tenure
+14. **The Ask** — Amount, use of funds, what this milestone achieves
+15. **Why Now, Why 31C** — Closing: the moment is now, the team is built, the product is live
 
 ---
 

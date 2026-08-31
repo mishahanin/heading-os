@@ -60,6 +60,20 @@ rules:
   # transcript can leak via the engine default. (2026-06-13 CEO audit: caught a
   # personal auto-memory file shipping in the engine.)
   ".claude/projects/": private
+  # The rule above was written FOR the auto-memory store and named the wrong path.
+  # Live auto-memory has never sat under `.claude/projects/`: it is `auto-memory/`
+  # at the DATA root, and until 2026-08-30 that directory matched no key at all, so
+  # every file in it resolved to the `engine` default — the public one. The intent
+  # was recorded and the enforcement was not, which is worse than an omission,
+  # because the comment above reads as coverage. Same class as crm/ and threads/,
+  # fail-closed wholesale: MEMORY.md, every memory file, and anything a future
+  # memory feature drops beside them.
+  "auto-memory/": private
+  # The private operational overlay: the operator's own CLAUDE.md, loaded into the
+  # engine's CLAUDE.md by the import at its foot. It lives at the DATA root and is
+  # named differently from the engine's own CLAUDE.md precisely so the two can
+  # coexist — which also meant no rule reached it.
+  "CLAUDE.operational.md": private
   "config/x-pulse-accounts.yaml": private    # decision: CEO's monitored-account list; engine ships an EXAMPLE instead
   # 2026-06-13 CEO audit: these config files carry real identity / contacts / deal
   # intelligence and must never ship in a public engine. Engine ships examples at cutover.
@@ -75,7 +89,34 @@ rules:
   "config/email-triage-rules.yaml": private  # real internal sender addresses + deal-keyword overrides
   "config/service-manifest.json": private     # this instance's service-host publish allowlist (integration topology + tribe roster path)
   "config/sentinel_config.yaml": private       # real VIP-sender list (real partners + internal contacts); data-config (engine ships scripts/sentinel_config.example.yaml)
+  # A STALE DUPLICATE of the file above, at a path no code reads. `sentinel.py` and
+  # `email-intelligence.py` both resolve the live config through
+  # resolve_config_with_example("sentinel_config.yaml", ...) -> <data-root>/config/,
+  # so the rule above governs the file the daemons load and this one governed
+  # nothing. The duplicate still carries the same real-contact content and still
+  # resolved `engine`. Routed private; whether it is deleted is the operator's call.
+  "scripts/sentinel_config.yaml": private
   "config/fireside-schedule.json": private     # real Tribe speaker roster (54 names) + cycle dates; data-config (engine ships scripts/fireside-schedule.example.json)
+  # A DATED ARCHIVE of the roster above, holding the same names. The key above is an
+  # exact filename, and the resolver matches only `norm == key` or a `key + "/"`
+  # directory prefix — no globbing — so `fireside-schedule.<cycle>.json` matched
+  # nothing and resolved `engine`. This key closes the archive that exists.
+  #
+  # It CANNOT close the next one: the map has no shape that spans a filename
+  # pattern. Two belts stand behind it instead — the `config/fireside-schedule.`
+  # token in `_DATA_TOKENS` (scripts/build_engine_repo.py) refuses the build, and
+  # tests/test_a_routing_rule_that_named_the_wrong_path.py fails the suite the day
+  # a second dated archive appears with no rule. Adding pattern keys to the
+  # resolver is the real fix and is the operator's call, not a workaround's.
+  "config/fireside-schedule.2026-05-11-cycle1.json": private
+  # Real counterparty organisation names as pipeline flags; the content gate scores
+  # it four real-entity tokens. Same unmatched-path defect as its neighbours above,
+  # found while fixing them (2026-08-30).
+  "config/telco-pipeline-flags.json": private
+  # A personal keyword list steering the Conversation Chronicle's personal/business
+  # split. `chronicle/` (the output) was already private; the config that defines
+  # what counts as personal was not.
+  "config/chronicle-personal-keywords.txt": private
   "config/bootcamp-org-chart.json": private    # real org chart (50+ names/titles) + internal mailboxes; data-config (engine ships scripts/bootcamp-org-chart.example.json)
   "config/exec-meeting-attendees.json": private # real exec attendee roster; data-config (engine ships scripts/exec-meeting-attendees.example.json)
   "config/modem.json": private                 # CEO travel-router device identity (TAC + factory IMEI); data-config (engine ships scripts/modem.example.json)

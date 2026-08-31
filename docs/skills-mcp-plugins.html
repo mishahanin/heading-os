@@ -246,24 +246,28 @@
   </table></div>
 
   <h2>Plugins</h2>
-  <p>Plugins are <em>enabled</em> via <code>enabledPlugins</code> in <code>.claude/settings.json</code> (travels in git) but <em>installed</em> per project path (machine-local, never synced — see <a href="prerequisites.html">Prerequisites §8</a>). All come from the <code>claude-plugins-official</code> marketplace.</p>
+  <p>Plugins are <em>enabled</em> via <code>enabledPlugins</code> in <code>.claude/settings.json</code> (travels in git) but <em>installed</em> per project path (machine-local, never synced — see <a href="prerequisites.html">Prerequisites §8</a>). All come from the <code>claude-plugins-official</code> marketplace. The seven rows below are exactly the entries that file sets to <code>true</code>; <a href="DEPLOYMENT.html">Deployment §8</a> carries the matching install line for each.</p>
   <div class="table-wrap"><table>
     <thead><tr><th>Plugin</th><th>Provides</th></tr></thead>
     <tbody>
-      <tr><td><strong>superpowers</strong> (v5.1.0)</td><td>14 process skills: brainstorming, writing-plans, executing-plans, subagent-driven-development, using-git-worktrees, test-driven-development, systematic-debugging, verification-before-completion, code-review send/receive, finishing-a-development-branch, writing-skills, using-superpowers, dispatching-parallel-agents. Bootstraps at session start via its own hook.</td></tr>
+      <tr><td><strong>superpowers</strong></td><td>14 process skills: brainstorming, writing-plans, executing-plans, subagent-driven-development, using-git-worktrees, test-driven-development, systematic-debugging, verification-before-completion, code-review send/receive, finishing-a-development-branch, writing-skills, using-superpowers, dispatching-parallel-agents. Bootstraps at session start via its own hook.</td></tr>
       <tr><td><strong>skill-creator</strong></td><td>Scaffolds / improves skills. A local <code>/skill-creator</code> also exists; bare-name lookup resolves to the local skill, the namespaced form forces the plugin.</td></tr>
       <tr><td><strong>claude-md-management</strong></td><td><code>revise-claude-md</code> and <code>claude-md-improver</code> — maintain CLAUDE.md.</td></tr>
       <tr><td><strong>frontend-design</strong></td><td>Distinctive UI / visual-design guidance.</td></tr>
-      <tr><td><strong>security-guidance</strong></td><td>Security-guidance prompts (e.g. GitHub Actions injection warnings).</td></tr>
+      <tr><td><strong>mattpocock-skills</strong></td><td>The largest plugin here by skill count: diagnosing-bugs, tdd, prototype, research, domain-modeling, codebase-design, code-review, resolving-merge-conflicts, wizard, grilling, writing-for-agents, and more, plus its own agent definitions.</td></tr>
+      <tr><td><strong>code-review</strong></td><td>One slash command, no agent and no hook. A review pass over the active branch or the pending changes. Invoke it explicitly when a major step is finished.</td></tr>
+      <tr><td><strong>code-simplifier</strong></td><td>One agent definition, no hook. Refines code for clarity while preserving behaviour. Invoke it explicitly after a non-trivial change.</td></tr>
     </tbody>
   </table></div>
+  <p><strong>Deliberately off.</strong> Three entries in the same file are set to <code>false</code>, and the <code>false</code> is a decision rather than an oversight. <strong>security-guidance</strong> was disabled on measurement: it cost 333&nbsp;ms per write against this workspace's own 71&nbsp;ms, its own log across 12,308 lines held zero findings, and everything it duplicates is already gated three times over. <strong>playwright</strong> and <strong>context7</strong> each duplicate a local skill (<code>/playwright</code>, <code>/context7</code>), and the context7 plugin would start a redundant MCP server on top of that. Reasoning for every entry: <code>reference/plugin-roster.md</code>.</p>
+  <p>This table listed <code>security-guidance</code> as provided until 2026-08-31, and omitted the last three enabled rows above it. Verify enablement with <code>python scripts/harness-audit.py</code> rather than by reading any list, this one included. A machine-local <code>.claude/settings.local.json</code> can enable a plugin the tracked file never mentions, which is how <code>claude-security</code> runs here.</p>
   <div class="callout note">
     <span class="ttl">Plugin skills are never auto-routed</span>
     Plugin-namespaced skills (e.g. <code>superpowers:brainstorming</code>) require an explicit slash command, the plugin's own metadata firing it, or another skill invoking them. Local skills win on bare-name collisions; use the namespaced form to force the plugin variant.
   </div>
 
   <footer class="foot">
-    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a></p>
+    <p>HEADING OS: operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a></p>
   </footer>
 </main>
 </div>

@@ -76,8 +76,25 @@ def test_one_known_name_pairs_with_whatever_else_is_there():
     assert agg.split_configs(["with_skill", "mystery"]) == ("with_skill", "mystery")
 
 
-def test_a_single_config_reports_its_own_value_as_the_delta():
-    assert _delta({"with_skill": _runs(0.65)}) == 0.65
+def test_a_single_config_reports_no_delta_at_all():
+    """CHANGED 2026-08-31, and the change is the point.
+
+    This test used to read::
+
+        assert _delta({"with_skill": _runs(0.65)}) == 0.65
+
+    which is the F10 defect written down as an expectation. With one
+    configuration there IS no baseline, and 0.65 is `0.65 - 0`: it asserts that
+    the primary beat a baseline scoring zero, when no baseline ran at all. The
+    old assertion carried no docstring and no rationale - it characterised the
+    arithmetic rather than defending an invariant.
+
+    A delta over a missing operand is not a small delta. It is not a delta.
+    Full reasoning: `tests/test_skill_creator_eval_scratch_and_absence.py`.
+    """
+    delta = agg.aggregate_results({"with_skill": _runs(0.65)})["delta"]
+    assert delta["pass_rate"] == agg.NOT_MEASURED
+    assert delta["unmeasured"] == ["baseline"]
 
 
 def test_the_markdown_table_puts_the_primary_in_the_first_column():

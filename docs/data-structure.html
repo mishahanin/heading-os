@@ -77,16 +77,16 @@
 
 <main class="content">
   <h1>Data overlay structure</h1>
-  <p class="page-meta">An annotated template of the private <code>.heading-os-data</code> repository — the partner of the engine (code-only) clone. Everything below is a generic structure a new operator recreates; no real private content is shown.</p>
+  <p class="page-meta">An annotated template of the private <code>.heading-os-data</code> repository, the partner of the engine (code-only) clone. Everything below is a generic structure a new operator recreates; no real private content is shown.</p>
 
   <h2>Engine / data separation</h2>
   <p>HEADING OS splits one operator workspace into two git repositories:</p>
   <ul>
-    <li><strong>Engine</strong> (<code>.heading-os</code>) — <strong>code only</strong>: skills, rules, scripts, daemons, config templates, docs. Shareable, eventually public. No real data, secrets, or PII.</li>
-    <li><strong>Data overlay</strong> (<code>.heading-os-data</code>, documented here) — <strong>all real data plus every generated artifact</strong>: CRM, knowledge, context, threads, plans, outputs, datastore. Private forever.</li>
+    <li><strong>Engine</strong> (<code>.heading-os</code>) is <strong>code only</strong>: skills, rules, scripts, daemons, config templates, docs. Shareable, eventually public. No real data, secrets, or PII.</li>
+    <li><strong>Data overlay</strong> (<code>.heading-os-data</code>, documented here) holds <strong>all real data plus every generated artifact</strong>: CRM, knowledge, context, threads, plans, outputs, datastore. Private forever.</li>
   </ul>
-  <p>Routing between the two is declared once in the engine's <code>config/routing-map.yaml</code> and resolved at runtime by the <strong>data-root seam</strong> in <code>scripts/utils/workspace.py</code>. Code never joins an engine root to a data directory — it calls helpers (<code>get_data_root()</code>, <code>get_outputs_dir()</code>, <code>get_crm_contacts_dir()</code>, <code>get_knowledge_dir()</code>, …) that all resolve <strong>under the data overlay</strong>. A guard test plus a pre-commit hook forbid the bypass, so new data always lands here, never in the engine clone.</p>
-  <p>Routing has three destinations: <strong>engine</strong> (code, public), <strong>private</strong> (operator-only data — this overlay's default for real data), and <strong>corporate</strong> (content shared down to a fleet of executives). The map default is <code>engine</code>, so code-ish paths fall through to shareable; every real-data directory carries an explicit <code>private</code> rule to fail closed.</p>
+  <p>Routing between the two is declared once in the engine's <code>config/routing-map.yaml</code> and resolved at runtime by the <strong>data-root seam</strong> in <code>scripts/utils/workspace.py</code>. Code never joins an engine root to a data directory; it calls helpers (<code>get_data_root()</code>, <code>get_outputs_dir()</code>, <code>get_crm_contacts_dir()</code>, <code>get_knowledge_dir()</code>, …) that all resolve <strong>under the data overlay</strong>. A guard test plus a pre-commit hook forbid the bypass, so new data always lands here, never in the engine clone.</p>
+  <p>Routing has three destinations: <strong>engine</strong> (code, public), <strong>private</strong> (operator-only data, this overlay's default for real data), and <strong>corporate</strong> (content shared down to a fleet of executives). The map default is <code>engine</code>, so code-ish paths fall through to shareable; every real-data directory carries an explicit <code>private</code> rule to fail closed.</p>
 
   <h2>Annotated directory tree</h2>
   <pre><code>.heading-os-data/
@@ -173,10 +173,10 @@
       <tr><td><code>context/</code></td><td>The operator's operating context: who they are, the business, strategy, key people, pipeline, current metrics.</td></tr>
       <tr><td><code>threads/</code></td><td>Operational registry of ongoing situations, opened / logged / closed as work in flight.</td></tr>
       <tr><td><code>plans/</code></td><td>Active implementation plans; completed plans move to <code>archive/</code>, never deleted.</td></tr>
-      <tr><td><code>outputs/</code></td><td>Every artifact the assistant generates — the single sink for generated work, organized by type.</td></tr>
+      <tr><td><code>outputs/</code></td><td>Every artifact the assistant generates: the single sink for generated work, organized by type.</td></tr>
       <tr><td><code>datastore/</code></td><td>Authoritative original documents (PDFs, decks, contracts) used as source-of-truth for factual claims.</td></tr>
       <tr><td><code>auto-memory/</code></td><td>Persistent cross-session memory: the <code>MEMORY.md</code> index plus one file per durable observation.</td></tr>
-      <tr><td><code>admin/</code></td><td>Fleet administration: <code>executives.json</code> (the roster of HEADING OS users), provisioning tooling, admin guides. Needed only if you run HEADING OS for a team — see <a href="CONFIGURATION.html#running-heading-os-for-a-team-the-two-fleet-files">the two fleet files</a>.</td></tr>
+      <tr><td><code>admin/</code></td><td>Fleet administration: <code>executives.json</code> (the roster of HEADING OS users), provisioning tooling, admin guides. Needed only if you run HEADING OS for a team (see <a href="CONFIGURATION.html#running-heading-os-for-a-team-the-two-fleet-files">the two fleet files</a>).</td></tr>
       <tr><td><code>reference/</code></td><td>Operator reference content: workspace catalogue, voice files, operating rhythm, market/strategy reference.</td></tr>
       <tr><td><code>config/</code></td><td>Per-instance configuration carrying real identity, rosters, and topology (the engine ships <code>*.example.*</code> stand-ins).</td></tr>
       <tr><td><code>corporate/</code></td><td>Base daemon/config content shared down to an executive fleet.</td></tr>
@@ -187,13 +187,13 @@
   <h2>Privacy classification</h2>
   <p>Per the engine's classification rule, every path resolves to one of three routing destinations:</p>
   <ul>
-    <li><strong>PRIVATE (operator-only — never shared):</strong> <code>crm/contacts/</code>, <code>knowledge/</code> (incl. <code>odin-brain/</code>), <code>context/</code>, <code>threads/</code>, <code>plans/</code>, <code>outputs/</code>, <code>auto-memory/</code>, <code>admin/</code>, <code>templates/</code>, <code>_archive/</code>; <code>docs/superpowers/</code>, <code>docs/security/</code>; <code>config/</code> and most of <code>reference/</code>; within datastore, <code>intelligence/</code> and <code>investment/</code>.</li>
+    <li><strong>PRIVATE (operator-only, never shared):</strong> <code>crm/contacts/</code>, <code>knowledge/</code> (incl. <code>odin-brain/</code>), <code>context/</code>, <code>threads/</code>, <code>plans/</code>, <code>outputs/</code>, <code>auto-memory/</code>, <code>admin/</code>, <code>templates/</code>, <code>_archive/</code>; <code>docs/superpowers/</code>, <code>docs/security/</code>; <code>config/</code> and most of <code>reference/</code>; within datastore, <code>intelligence/</code> and <code>investment/</code>.</li>
     <li><strong>CORPORATE (shared down to a fleet, not public):</strong> <code>corporate/</code>, <code>datastore/</code> (general default), <code>knowledge/shared/</code>, and named carve-outs (<code>context/business-info.md</code>, <code>context/strategy.md</code>, <code>crm/config.md</code>, <code>crm/aliases.md</code>, <code>crm/address-book/</code>).</li>
-    <li><strong>ENGINE (code, public):</strong> lives in the <em>other</em> repo (<code>.heading-os</code>), not this overlay. The routing default of <code>engine</code> means anything unmatched is treated as shareable code — which is exactly why every real-data directory above carries an explicit <code>private</code> rule, so operator data fails closed rather than leaking into the public engine.</li>
+    <li><strong>ENGINE (code, public):</strong> lives in the <em>other</em> repo (<code>.heading-os</code>), not this overlay. The routing default of <code>engine</code> means anything unmatched is treated as shareable code. That is exactly why every real-data directory above carries an explicit <code>private</code> rule, so operator data fails closed rather than leaking into the public engine.</li>
   </ul>
 
   <footer class="foot">
-    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a></p>
+    <p>HEADING OS: operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a></p>
   </footer>
 </main>
 </div>

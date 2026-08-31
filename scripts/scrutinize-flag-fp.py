@@ -40,7 +40,18 @@ from scripts.utils.scrutinize_record import append_row, rows_of_kind  # noqa: E4
 from scripts.utils.colors import GREEN, RED, RESET, YELLOW  # noqa: E402
 from scripts.utils.workspace import get_outputs_dir  # noqa: E402
 
-SCRUTINY_DIR = get_outputs_dir() / "operations" / "scrutiny"
+def scrutiny_dir() -> Path:
+    """Resolved at call time, never at import.
+
+    `get_outputs_dir()` reads `HEADING_OS_DATA` on every call, so it follows
+    the environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the root
+    still got the operator's real overlay. The `mkdir` below is not among the
+    primitives `tests/conftest.py` wraps, so a stray directory in that overlay
+    drew no refusal.
+    """
+    return get_outputs_dir() / "operations" / "scrutiny"
 
 # Finding line pattern in saved scrutiny reports.
 # Matches: [B1] (conf: 92) <statement>
@@ -122,7 +133,7 @@ def append_records(records: list[dict]) -> None:
     is stored beside the verdicts it disagrees with rather than in a file nothing
     else joins.
     """
-    SCRUTINY_DIR.mkdir(parents=True, exist_ok=True)
+    scrutiny_dir().mkdir(parents=True, exist_ok=True)
     for rec in records:
         append_row(
             run_id=rec["scrutiny_id"],
@@ -196,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="Optional CEO note explaining WHY these are FPs.")
     args = parser.parse_args(argv)
 
-    report_path = SCRUTINY_DIR / f"{args.scrutiny_id}.md"
+    report_path = scrutiny_dir() / f"{args.scrutiny_id}.md"
     if not report_path.exists():
         print(f"{RED}ERROR: scrutiny report not found: {report_path}{RESET}",
               file=sys.stderr)

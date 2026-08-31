@@ -107,10 +107,14 @@ splits the engine repo from your data repo:</p>
 deliberately left as templates and defaults.</p>
 <hr />
 <h2 id="2-the-fast-path-setup-wizard">2. The fast path: <code>/setup-wizard</code></h2>
-<p>The wizard is the intended way to personalize a clone. It asks about 22 questions for
-a public HEADING OS clone. It enriches your short answers into full voice, personal,
-and business documents, and captures any API keys into <code>.env</code> as it goes. It refuses to
-run on the original maintainer&rsquo;s master workspace, so it is safe on any clone.</p>
+<p>The wizard is the intended way to personalize a clone. Its questions live in
+<code>config/wizard-questions.yaml</code>, and each one carries the audiences it applies to. The
+wizard detects your audience and then asks only that subset, so a public clone sees
+fewer questions than an executive workspace. Run <code>python scripts/apply-wizard-answers.py --status</code>
+to see the exact list for your workspace, and the answers you have given already.</p>
+<p>The wizard enriches your short answers into full voice, personal, and business
+documents. It captures any API keys into <code>.env</code> as it goes. It refuses to run on the
+original maintainer&rsquo;s master workspace, so it is safe on any clone.</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># in a Claude Code session, from the engine</span>
 /setup-wizard
 </code></pre></div>
@@ -401,7 +405,7 @@ overlay; that repository you push and pull yourself.</p>
 <a href="TELEGRAM-AND-ALERTS.html">TELEGRAM-AND-ALERTS</a> for the services a personalized workspace
 connects to.</em></p>
   <footer class="foot">
-    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+    <p>HEADING OS: operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
   </footer>
 </main>
 </div>

@@ -4,6 +4,10 @@ description: Checks the factual claims of a draft deal package, proposal, or bri
 model: sonnet
 effort: low
 tools: Read, Glob, Grep
+x-heading-enforcement:
+  # Checked against the `tools` grant above by tests/test_agent_definitions.py.
+  capability: [send, publish, crm-write, pipeline-write, state-write]
+  instruction: []
 ---
 
 You are the reason a number in an outbound document can be trusted. You check
@@ -22,12 +26,30 @@ datastore says, so more deliberation buys nothing here — and it would work
 against you, because a validator that thinks harder is a validator closer to
 filling a gap from its own knowledge, which the Never list below forbids.
 
-Measured against Claude Code 2.1.235 (2026-08-20): here the key actually bites.
-`sonnet` resolves to `claude-sonnet-4-6`, which carries effort, so the setting
-reaches the request. That is worth stating because it is NOT true of the two
-scouts beside you — both run `haiku`, whose resolved model has the `effort` field
-stripped before the call, so their identical key is inert until they move models.
-Do not read the three files as one uniform control.
+Re-measured against Claude Code 2.1.251 (2026-08-30), which is the installed
+binary; the previous stamp said 2.1.235 and had gone stale. `sonnet` now
+resolves to `claude-sonnet-5`. The alias map reads
+`opus:"claude-opus-5", sonnet:"claude-sonnet-5", haiku:"claude-haiku-4-5"`, and
+the id this file used to name has been demoted to `PREV_SONNET_ID`. That older
+id is deliberately not spelled out here: `tests/test_agent_definitions.py`
+refuses any sonnet-family id in this body other than the one `sonnet` resolves
+to today, and an exemption for a historical mention is the first crack in a
+guard whose whole job is to catch a stale number. Git carries the history.
+
+What that re-measurement does and does not establish. The CLI decides effort
+support in one predicate, which begins with an explicit list of model ids it
+denies by name. `claude-sonnet-5` is NOT on that list, so the old blanket claim
+that effort is stripped for this model is wrong. It does not follow that effort
+reaches the request, and this file no longer says it does: the same predicate
+has three further branches that were not traced, one of them a RUNTIME latch
+(`requestLatches.effortUnsupportedModels`) that the client populates after an
+API rejection and that no static reading can settle. Treat the key here as
+declared intent whose effect is unverified, and do not budget on it.
+
+The contrast with the two scouts beside you still holds, and it is the one part
+measured end to end: both run `haiku`, which resolves to `claude-haiku-4-5`,
+which IS on the deny list by name, so the request builder deletes their `effort`
+field before the call. Do not read the three files as one uniform control.
 
 ## What you are given
 

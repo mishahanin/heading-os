@@ -51,7 +51,7 @@ def scrutiny(tmp_path, monkeypatch):
     d = tmp_path / "scrutiny"
     d.mkdir()
     monkeypatch.setattr(rec, "record_path", lambda: d / "runs.jsonl")
-    monkeypatch.setattr(replay, "SCRUTINY_DIR", d)
+    monkeypatch.setattr(replay, "scrutiny_dir", lambda p=d: p)
     (d / "2026-03-15_execution.md").write_text(
         "[B1] (conf: 90) the sweep reads a path it never resolved\n"
         "Location: scripts/example.py:41\n"

@@ -74,7 +74,9 @@ Either:
 Run from the workspace root (the script path is root-relative). The image is a DATA artifact. It
 must land in the DATA overlay, never the engine tree. `generate_image.py` writes `--output` literally
 relative to the current directory, which is the engine root after the `cd`. A bare `outputs/...`
-would create a stray image inside the engine. Resolve the data outputs dir first and pass an absolute path:
+would create a stray image inside the engine. An omitted `--output` now resolves the data outputs dir
+itself, and refuses when it cannot. Still resolve the dir here and pass an absolute path, so the
+filename is descriptive:
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
@@ -96,7 +98,7 @@ Tell the user the file path of the generated image. Use the Read tool to display
 | Parameter | Default | Options | Description |
 |-----------|---------|---------|-------------|
 | `--prompt` | Required | Any text | The image generation prompt |
-| `--output` | `generated_image.png` | Any path | Where to save the image |
+| `--output` | DATA `outputs/content/images/generated_image.png` | Any path | Where to save the image. The default resolves through the data-root helper, so an omitted flag never writes into the public engine clone. Pass an absolute path anyway, per step 2. |
 | `--aspect-ratio` | `16:9` | `1:1`, `16:9`, `21:9`, `2:3`, `3:2`, `4:5`, `5:4`, `9:16`, `9:21` | Image dimensions |
 | `--model` | `banana` | `banana`, `flux-max` | Model: Nano Banana 2 (default) or FLUX.2 max |
 | `--num-outputs` | `1` | `1`-`4` | Number of variations |

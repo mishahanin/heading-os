@@ -65,6 +65,23 @@ route to a separate review queue, never auto-applied.
 Design spec: `docs/superpowers/specs/2026-05-13-calibrate-skill-design.md` (data overlay: `.heading-os-data/docs/superpowers/specs/2026-05-13-calibrate-skill-design.md`).
 Detection prompts: `references/detection-prompts.md`.
 
+## Memory store
+
+Memory patches target the canonical auto-memory store in the DATA overlay, the
+same store `/dream`, `/memory-hygiene` and the memory index read. Resolve it:
+
+```bash
+python3 -c "from scripts.utils.workspace import get_auto_memory_dir; print(get_auto_memory_dir())"
+```
+
+Do NOT write to the native harness store at
+`~/.claude/projects/<project-slug>/memory/`. That store is a per-launch runtime
+cache, keyed to the directory the session started in. A patch written there is
+invisible to a session that launched from any other path. The SessionStart hook
+`.claude/hooks/memory-reconcile.py` bridges the two stores. It syncs both
+directions, newest-wins, and never deletes, so the patch is not lost. It does
+not reach the canonical store or the memory index until the next session starts.
+
 ## Phase 0 - Pre-flight + mode dispatch
 
 Run these checks before any other work. Each failure has a specific recovery
@@ -77,9 +94,11 @@ message; never abort silently.
 2. **Working tree state.** Run `git status --porcelain`. The typical transient
    set is `outputs/`, `crm/aggregated/`, `.sessions/` and
    `datastore/operations/tribe/fireside-state/`. If any modified file sits
-   outside it, warn: "Working tree has uncommitted changes that aren't typical transients.
-   /calibrate's auto-commit will include them. Stage and commit first, or
-   confirm to proceed? (proceed / cancel)". Wait for explicit answer.
+   outside it, warn: "Working tree has uncommitted changes that aren't typical
+   transients. Step 5.1 may collide with them, and a failed Edit aborts the run.
+   Proceed? (proceed / cancel)". Wait for explicit answer. Record the list: a
+   file already dirty here is NOT this run's work and is never staged in
+   Step 5.4.
 
 3. **Mode dispatch.** Parse `$ARGUMENTS`:
    - Empty / no flag -> full mode
@@ -153,23 +172,37 @@ CLAUDE.md). V1 scope is per-project memory only.
 
 ## Phase 3 - Classification filter
 
-For each candidate, resolve the target file's classification:
+For each candidate, resolve the target file's classification. Give the path
+relative to its own repository root: `auto-memory/...` under the data root,
+`.claude/...` under the engine root. An absolute path matches no routing rule.
 
 ```bash
-python scripts/utils/workspace.py get_classification <target-path>
+python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import get_classification; print(get_classification('<target-path>'))"
 ```
 
-Returns "ceo-only" or "corporate". On any error from the resolver, treat as
-**corporate** (fail-closed - never auto-apply on doubt).
+`scripts/utils/workspace.py` is a library. It declares no argument parser and no
+`__main__` block, so running it as a script reads no argument, prints nothing,
+and exits 0. Call the function, as the one-liner above does.
 
-Routing:
-- `ceo-only` -> proceeds to Phase 4 numbered list
-- `corporate` -> moves to the corporate review queue (Phase 5 step 5)
+Read the result as a table. Silence is not an answer:
 
-For new-file candidates (proposed target does not yet exist):
-- Path starts with `~/.claude/projects/.../memory/` -> ceo-only
-- Path starts with `outputs/` -> ceo-only
-- Otherwise -> corporate (fail-closed)
+| Command result | Read as | Routing |
+|---|---|---|
+| exit 0, stdout `ceo-only` | resolved | Phase 4 numbered list |
+| exit 0, stdout `corporate` | resolved | corporate review queue (Step 5.2) |
+| exit 0, stdout empty or any other text | UNRESOLVED | corporate (fail-closed) |
+| exit != 0 | UNRESOLVED | corporate (fail-closed) |
+
+Name every fail-closed candidate in the Phase 4 preamble, with the reason. A
+candidate you queue in silence looks the same to the reader as a genuinely
+corporate one.
+
+The resolver reads the path, not the disk, so a candidate whose target file does
+not exist yet resolves the same way. This needs no separate new-file rule.
+
+Expect most `.claude/skills/` and `.claude/rules/` targets to resolve
+**corporate**: they are engine code, which is the most-shared thing in the
+workspace. A queued skill or rule patch is the gate working, not a fault.
 
 ## Phase 4 - Grouped numbered presentation
 
@@ -212,7 +245,7 @@ After user approval, in this exact order:
 ### Step 5.1: Apply ceo-only patches
 
 For each approved candidate (in sorted order):
-- **Memory files (`~/.claude/projects/.../memory/`):**
+- **Memory files (the canonical `auto-memory/` store, resolved above):**
   - If patch is "append": Edit to add the new bullet under the body's main rule
   - If patch is "update": Edit to replace the affected section
   - If patch is "create new": Write the new `feedback_{slug}.md` file with
@@ -249,15 +282,32 @@ that was modified or created by Steps 5.1 and 5.2. If hidden Unicode is
 detected, auto-run with `--fix` to clean. Note in commit body if cleanup
 happened.
 
-### Step 5.4: Stage + commit
+### Step 5.4: Ask for the commit, then stage exactly what this run wrote
 
-Stage `.claude/`, `outputs/operations/calibrate/`, and any other modified
-workspace files. Memory files at `~/.claude/projects/.../memory/` are outside
-the workspace tree - NOT staged. Settings file at
-`.claude/settings.local.json` is gitignored - staged but git ignores it.
+**HARD STOP. Phase 4 approved the patches. It did not approve a commit.**
+The two approvals are separate here, always. Print the list of files Steps 5.1
+and 5.2 wrote, then ask: "Commit these N file(s)? (commit / leave uncommitted)".
+Wait for an explicit answer. On anything other than an explicit yes, skip the
+commit, keep the changes in the working tree, and go to Step 5.5.
+
+Stage by explicit path, one path per file this run wrote. Never a directory,
+never a wildcard, never `-A` or `.`:
+
+```bash
+git add -- <file-1> <file-2> <file-N>
+```
+
+A directory argument sweeps in every unrelated edit sitting in the tree,
+including work another session or another agent has not finished. Phase 0 step 2
+warns about those files. It does not stop a commit from taking them. Build the
+staging list from this run's own writes instead.
+
+Memory files under the canonical `auto-memory/` store live in the DATA
+repository, a separate git repo - NOT staged by this commit. Settings file at
+`.claude/settings.local.json` is gitignored - git ignores it even if named.
 
 Commit message template + behaviour on pre-commit hook rejection:
-`references/patch-application-protocol.md`.
+`references/patch-application-protocol.md`. This skill never pushes.
 
 ### Step 5.5: Report final state
 
@@ -277,7 +327,14 @@ Final state report template: `references/patch-application-protocol.md`.
    re-prompt rather than guess.
 6. **Never propose duplicate patches.** Idempotency check before every
    candidate goes into the numbered list.
-7. **Never propagate to execs.** This skill is ceo-only. Not in
+7. **Never commit on the Phase 4 approval.** The commit is its own ask, at
+   Step 5.4. Never stage a directory or a wildcard; stage the files this run
+   wrote, by name. Never push.
+8. **Never write to the native harness memory store.** Memory patches go to the
+   canonical `auto-memory/` store only.
+9. **Never read an empty resolver result as a classification.** Empty stdout and
+   a non-zero exit both mean corporate.
+10. **Never propagate to execs.** This skill is ceo-only. Not in
    `templates/GETTING-STARTED.md`, not in the corporate repo, not in
    `corporate/` sync.
 

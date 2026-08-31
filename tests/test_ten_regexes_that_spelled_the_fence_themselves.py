@@ -659,11 +659,14 @@ def test_split_frontmatter_raw_gives_the_whole_text_as_body_when_there_is_none()
 # ============================================================
 
 
-def test_the_shard_55_registry_lost_the_eight_readers_fixed_here():
+def test_the_shard_55_registry_lost_the_eight_readers_fixed_here(monkeypatch):
     """A site that needs fixing gets FIXED, not relabelled. The eight are gone
     from `KNOWN_REGEX_DIVERGENCE`; the two that remain are the CRLF-only pair
     whose reachability is pinned above."""
-    sys.path.insert(0, str(ROOT / "tests"))
+    # `monkeypatch.syspath_prepend`, never a bare insert: a bare one leaves
+    # `<repo>/tests` on the path for the rest of the xdist worker, where every
+    # test module becomes a top-level importable name for whatever runs later.
+    monkeypatch.syspath_prepend(str(ROOT / "tests"))
     module = importlib.import_module(
         "test_nine_readers_that_looked_for_three_characters")
     assert set(module.KNOWN_REGEX_DIVERGENCE) == set(CRLF_ONLY_READERS)
@@ -671,12 +674,12 @@ def test_the_shard_55_registry_lost_the_eight_readers_fixed_here():
         assert set(documents) == {"CRLF throughout"}, rel
 
 
-def test_no_new_regex_frontmatter_splitter_appeared():
+def test_no_new_regex_frontmatter_splitter_appeared(monkeypatch):
     """The behaviour-keyed sweep, run from here too. Shard 52's detector keyed
     on function NAMES and missed a copy spelled differently; shard 54's keyed on
     the call SHAPE and missed one written as a REGEX. This one compiles every
     frontmatter-shaped pattern in the tree and runs it."""
-    sys.path.insert(0, str(ROOT / "tests"))
+    monkeypatch.syspath_prepend(str(ROOT / "tests"))
     module = importlib.import_module(
         "test_nine_readers_that_looked_for_three_characters")
     seen = {}

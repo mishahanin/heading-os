@@ -49,8 +49,9 @@ not try. It reaches the same end from outside. Once a handoff is on disk above
 the hard threshold, `main()` submits the literal text `/compact` to the terminal
 that hosts this session, through HERDR (`scripts/utils/herdr_agent.py`), and the
 harness parses it exactly as it would from the keyboard. That path is proven, not
-assumed: session 10f49ae5 on 2026-08-19 produced a real `compact_boundary` this
-way. It also depends entirely on HERDR hosting the session, and it degrades in
+assumed: an operator session on 2026-08-19 produced a real `compact_boundary`
+this way (the session id is deliberately not recorded here - it is a live
+pointer into the operator's own machine, and this repository is public). It also depends entirely on HERDR hosting the session, and it degrades in
 silence when it does not - which is why the harness's own auto-compact stays
 armed behind it.
 """

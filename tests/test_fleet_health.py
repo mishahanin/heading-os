@@ -130,7 +130,14 @@ def test_non_fleet_siblings_excluded(fh, name):
 
 @pytest.mark.parametrize("name", [
     ".heading-os",                   # the live engine itself
-    "31c-exec-alice", "31c-crm-bob", "exec-bob",
+    "31c-exec-alpha", "exec-bravo",
+    # A per-exec DATA overlay. The `-data` SUFFIX rule above does not reach it,
+    # because the slug follows the suffix: `.heading-os-data-alpha` ends in
+    # `-alpha`. It therefore falls through to the generic local-style check and
+    # is skipped there for want of a heartbeat, which is the correct outcome by
+    # a different route than the exclusion list. Pinned so a future widening of
+    # the suffix rule to `-data-*` has to argue with a test.
+    ".heading-os-data-alpha",
 ])
 def test_fleet_siblings_kept(fh, name):
     assert fh._is_non_fleet_sibling(name) is False
@@ -195,3 +202,246 @@ def test_a_broken_daemon_beside_a_healthy_workspace(fh):
 
     assert text == "Fleet broken: 1 daemon error or missing (this machine only)."
     assert color == fh.RED
+
+
+# ============================================================
+# `_candidate_workspaces` discovery (2026-08-30)
+#
+# Until this section existed, `_candidate_workspaces` had NO test at all: the
+# three tests in tests/bridge/test_fleet_health.py that mention it monkeypatch
+# it away with a lambda. So the loop kept a branch keyed on `31c-crm-<slug>`,
+# a repo name retired on 2026-08-23, for a week after the last such directory
+# left the disk, and nothing went red.
+#
+# Every fixture below builds its OWN sibling tree under tmp_path and rebinds
+# both discovery roots (`get_workspace_root` and `Path.home`). Reading the
+# operator's real siblings from a test would make the result depend on which
+# executives happen to be provisioned on the machine running the suite.
+# ============================================================
+
+def _fake_fleet(fh, monkeypatch, tmp_path):
+    """Sandbox both discovery roots under tmp_path. Returns (parent, ceo, home).
+
+    `_candidate_workspaces` reads exactly two roots: `get_workspace_root()`,
+    whose PARENT it scans for siblings, and `Path.home() / "exec-workspaces"`.
+    Both are rebound here, so no test in this file can see a real sibling.
+    """
+    parent = tmp_path / "fleet"
+    ceo = parent / ".heading-os"
+    ceo.mkdir(parents=True)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(fh, "get_workspace_root", lambda: ceo)
+    monkeypatch.setattr(fh.Path, "home", staticmethod(lambda: home))
+    return parent, ceo, home
+
+
+def _with_local_heartbeat(path: Path) -> Path:
+    """Give `path` the heartbeat the live daemon writes: .daemon-state/heartbeat.json."""
+    path.mkdir(parents=True, exist_ok=True)
+    (path / ".daemon-state").mkdir(exist_ok=True)
+    (path / ".daemon-state" / "heartbeat.json").write_text("{}", encoding="utf-8")
+    return path
+
+
+def _with_root_bridge_heartbeat(path: Path) -> Path:
+    """Give `path` a root `bridge-heartbeat.json`.
+
+    Nothing in this repository writes this file. `scripts/bridge_daemon/heartbeat.py`
+    is the only heartbeat writer and it writes `.daemon-state/heartbeat.json`,
+    which `.gitignore` excludes, so no push can carry it into a sibling repo
+    under any name. The fixture exists to prove discovery does NOT invent a
+    fleet member from a file with no writer.
+    """
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "bridge-heartbeat.json").write_text("{}", encoding="utf-8")
+    return path
+
+
+def _found(fh):
+    return [(p.name, kind) for p, kind in fh._candidate_workspaces()]
+
+
+def test_a_retired_crm_sibling_is_not_discovered(fh, monkeypatch, tmp_path):
+    """`31c-crm-<slug>` is the retired per-exec CRM repo name. A directory with
+    that name is an artefact, not a fleet member, and must not enter the grid."""
+    parent, _, _ = _fake_fleet(fh, monkeypatch, tmp_path)
+    _with_root_bridge_heartbeat(parent / "31c-crm-alpha")
+
+    assert _found(fh) == [(".heading-os", "local")]
+
+
+def test_a_live_exec_overlay_yields_no_crm_mirror(fh, monkeypatch, tmp_path):
+    """The live layout is `.heading-os-data-<slug>`. Moving the retired branch
+    onto that name instead of deleting it would have been wrong for the same
+    reason the branch was wrong: no writer produces the file it looks for.
+
+    If a writer is ever added, this test is the one to argue with.
+    """
+    parent, _, _ = _fake_fleet(fh, monkeypatch, tmp_path)
+    _with_root_bridge_heartbeat(parent / ".heading-os-data-alpha")
+
+    found = _found(fh)
+    assert found == [(".heading-os", "local")]
+    assert all(kind != "crm-mirror" for _, kind in found)
+
+
+def test_discovery_produces_only_the_local_kind(fh, monkeypatch, tmp_path):
+    """Whole-surface pin: across every shape a sibling can take, the only kind
+    the loop emits is `local`. The docstring says so; this makes it measurable."""
+    parent, _, home = _fake_fleet(fh, monkeypatch, tmp_path)
+    _with_local_heartbeat(parent / "31c-exec-alpha")
+    _with_root_bridge_heartbeat(parent / "31c-crm-bravo")
+    _with_root_bridge_heartbeat(parent / ".heading-os-data-charlie")
+    _with_local_heartbeat(home / "exec-workspaces" / "delta")
+
+    assert {kind for _, kind in fh._candidate_workspaces()} == {"local"}
+
+
+def test_the_ceo_workspace_is_first_and_appears_once(fh, monkeypatch, tmp_path):
+    """The CEO root is seeded before the sibling scan, so the scan must skip it
+    rather than add a second entry for the same path.
+
+    The CEO root is given a heartbeat here deliberately. Without one the sibling
+    scan would drop it at the heartbeat check anyway and the `child == ceo`
+    dedupe would be doing nothing this test could see.
+    """
+    _, ceo, _ = _fake_fleet(fh, monkeypatch, tmp_path)
+    _with_local_heartbeat(ceo)
+
+    found = _found(fh)
+    assert found[0] == (".heading-os", "local")
+    assert found.count((".heading-os", "local")) == 1
+
+
+def test_a_sibling_with_a_heartbeat_is_a_fleet_member(fh, monkeypatch, tmp_path):
+    parent, _, _ = _fake_fleet(fh, monkeypatch, tmp_path)
+    _with_local_heartbeat(parent / "31c-exec-alpha")
+
+    assert _found(fh) == [(".heading-os", "local"), ("31c-exec-alpha", "local")]
+
+
+def test_a_sibling_without_a_heartbeat_is_not_a_fleet_member(fh, monkeypatch, tmp_path):
+    parent, _, _ = _fake_fleet(fh, monkeypatch, tmp_path)
+    (parent / "31c-exec-alpha").mkdir()
+
+    assert _found(fh) == [(".heading-os", "local")]
+
+
+def test_a_plain_file_beside_the_workspace_is_skipped(fh, monkeypatch, tmp_path):
+    """Behaviour coverage, not a guard proof, and the difference is stated so
+    nobody counts it as one. Deleting the `child.is_dir()` clause leaves this
+    test green: a regular file cannot hold `.daemon-state/heartbeat.json`, so
+    the heartbeat check below rejects it a second time. The clause is a cheap
+    pre-filter with no independently observable effect, and no test in this file
+    can make it refuse.
+    """
+    parent, _, _ = _fake_fleet(fh, monkeypatch, tmp_path)
+    (parent / "notes.md").write_text("x", encoding="utf-8")
+
+    assert _found(fh) == [(".heading-os", "local")]
+
+
+@pytest.mark.parametrize("name", ["ceo-main", ".heading-os-data"])
+def test_a_non_fleet_sibling_is_excluded_even_holding_a_heartbeat(
+    fh, monkeypatch, tmp_path, name
+):
+    """The exclusion is belt-and-braces: a stale heartbeat in a retired clone or
+    in the engine's own data sibling must not resurrect it as a fleet member."""
+    parent, _, _ = _fake_fleet(fh, monkeypatch, tmp_path)
+    _with_local_heartbeat(parent / name)
+
+    assert _found(fh) == [(".heading-os", "local")]
+
+
+def test_the_exec_workspaces_home_directory_is_discovered(fh, monkeypatch, tmp_path):
+    _, _, home = _fake_fleet(fh, monkeypatch, tmp_path)
+    _with_local_heartbeat(home / "exec-workspaces" / "alpha")
+    (home / "exec-workspaces" / "bravo").mkdir()  # no heartbeat -> not a member
+
+    assert _found(fh) == [(".heading-os", "local"), ("alpha", "local")]
+
+
+# ============================================================
+# The docstring is the contract, so it is asserted like one
+# ============================================================
+
+SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "daemon-fleet-health.py"
+
+RETIRED_REPO_NAME = "31c-crm-"
+
+
+def _discovery_contract_bullets(doc: str) -> str:
+    """The bulleted discovery contract from the module docstring.
+
+    Scoped to the bullet list rather than the whole docstring on purpose. A
+    blanket ban on the retired name would also ban the paragraph that records
+    WHY the branch went, and that paragraph is what stops it being re-added.
+    What must stay false is narrower and sharper: the retired surface may not
+    appear as a bullet in the list a reader audits the loop against.
+    """
+    prefix = doc.split("Usage:")[0]
+    paragraphs = [p for p in prefix.split("\n\n") if p.lstrip().startswith("- ")]
+    assert len(paragraphs) == 1, (
+        f"expected exactly one bulleted discovery contract, found {len(paragraphs)}"
+    )
+    return paragraphs[0]
+
+
+def test_the_module_docstring_advertises_no_retired_discovery_surface(fh):
+    """The contract list carried a `31c-crm-<slug>` -> `crm-mirror` bullet for a
+    surface `_candidate_workspaces` no longer has. A docstring describing a
+    discovery surface the loop does not implement is what hid the dead branch:
+    a reader auditing the contract read the claim instead of the code."""
+    bullets = _discovery_contract_bullets(fh.__doc__)
+
+    assert RETIRED_REPO_NAME not in bullets
+    assert "crm-mirror" not in bullets
+    # Every bullet in the list names the one kind discovery emits.
+    assert bullets.count("(kind `local`)") == bullets.count("(kind ")
+
+
+def test_the_module_docstring_records_the_deletion(fh):
+    """The removal note is load-bearing. Without it the next reader finds a
+    discovery loop with no mirror branch, no explanation, and a live-looking
+    `crm-mirror` arm still in `_read_heartbeat`, and re-adds the branch."""
+    doc = fh.__doc__
+
+    assert RETIRED_REPO_NAME in doc, "the docstring no longer says which name was retired"
+    assert "2026-08-30" in doc
+    assert "bridge-heartbeat.json" in doc
+
+
+def test_the_discovery_docstring_lists_only_the_kind_it_returns(fh):
+    doc = fh._candidate_workspaces.__doc__
+    assert RETIRED_REPO_NAME not in doc
+    assert "crm-mirror" not in doc
+
+
+def test_no_retired_repo_name_survives_in_executable_code(fh):
+    """AST, not grep: a comment may record the history, but no string the code
+    actually evaluates may name the retired repo. A `continue` on a name that
+    can never occur is not a safety net, it is a false claim about the disk."""
+    import ast
+
+    tree = ast.parse(SCRIPT_PATH.read_text(encoding="utf-8"))
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            body = getattr(node, "body", None)
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+                docstrings.add(id(body[0].value))
+
+    offenders = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in docstrings
+        and RETIRED_REPO_NAME in node.value
+    ]
+    assert offenders == [], (
+        f"daemon-fleet-health.py evaluates a retired repo name: {offenders}. "
+        "The per-exec CRM repos were retired on 2026-08-23; the live layout is "
+        "the sibling data overlay."
+    )

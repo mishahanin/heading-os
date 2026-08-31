@@ -73,7 +73,7 @@ def source_repo(tmp_path, publisher, monkeypatch):
     _git(repo, "init", "-q")
     _git(repo, "config", "user.email", "test@example.invalid")
     _git(repo, "config", "user.name", "Test")
-    monkeypatch.setattr(publisher, "SOURCE_ROOT", repo)
+    monkeypatch.setattr(publisher, "source_root", lambda p=repo: p)
     return repo
 
 

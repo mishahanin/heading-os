@@ -37,19 +37,47 @@ from scripts.utils.workspace import get_data_root, get_workspace_root  # noqa: E
 ROOT = get_workspace_root()
 CSS_PATH = ROOT / "reference" / "31c-docs-light-theme.css"
 
-# Tracked HTML/MD pairs -- only these get regenerated. Post engine/data split the
-# CEO-only guides (CEO-ADMIN-GUIDE) and ALL templates live in the
-# DATA overlay, not the engine clone; include its docs/ + templates/ so --all and
-# --check don't blind-spot them (an edited guide whose HTML was never regenerated
-# would otherwise read fresh to the health check). Engine-only layouts (data root
-# == engine root) keep the original two dirs.
-TRACKED_DIRS = [ROOT / "docs", ROOT / "templates"]
-try:
-    _DATA_ROOT = get_data_root()
-    if _DATA_ROOT != ROOT:
-        TRACKED_DIRS += [_DATA_ROOT / "docs", _DATA_ROOT / "templates"]
-except Exception as exc:  # noqa: BLE001 — never let path resolution break the renderer
-    print(f"regenerate-docs-html: data-overlay scan skipped ({exc})", file=sys.stderr)
+def tracked_dirs() -> list[Path]:
+    """The directories whose HTML/MD pairs get regenerated, resolved NOW.
+
+    Post engine/data split the CEO-only guides (CEO-ADMIN-GUIDE) and ALL
+    templates live in the DATA overlay, not the engine clone; its docs/ +
+    templates/ are included so --all and --check don't blind-spot them (an
+    edited guide whose HTML was never regenerated would otherwise read fresh to
+    the health check). Engine-only layouts (data root == engine root) get the
+    original two dirs.
+
+    A FUNCTION, not the module-level `TRACKED_DIRS` list this replaced. That
+    list called `get_data_root()` at import time and froze the answer, which is
+    the recorded "a module default argument froze the real data path" shape:
+    `get_data_root()` reads HEADING_OS_DATA on every call (scripts/utils/paths.py),
+    so the value follows the environment, but only for a caller that asks after
+    the environment changed. A test that imports this module and THEN does
+    `monkeypatch.setenv("HEADING_OS_DATA", tmp_path)` was redirecting nothing:
+    the list already held the operator's real overlay. Measured 2026-08-31 with
+    the constant still in place: after repointing the variable at a scratch
+    directory, `find_tracked_pairs()` still named six markdown files under the
+    operator's live overlay, and `regenerate()` writes the `.html` sibling of
+    every file it is handed. None of the ten test files that reference this
+    generator reached that write path, so nothing was damaged; the surface was
+    open, not used.
+
+    Fail-soft is preserved and deliberate: a data root that cannot be resolved
+    (`HEADING_OS_DATA` set to a path that does not exist raises `DataRootError`)
+    must not stop the engine's own docs/ and templates/ from rendering. The
+    handler LOGS to stderr and returns the engine pair; it never swallows
+    silently, which `.claude/rules/security.md` forbids.
+    """
+    dirs = [ROOT / "docs", ROOT / "templates"]
+    try:
+        data_root = get_data_root()
+    except Exception as exc:  # noqa: BLE001 — never let path resolution break the renderer
+        print(f"regenerate-docs-html: data-overlay scan skipped ({exc})", file=sys.stderr)
+        return dirs
+    if data_root != ROOT:
+        dirs += [data_root / "docs", data_root / "templates"]
+    return dirs
+
 
 # Stems with a DEDICATED renderer that must not be clobbered by this generic
 # renderer. Empty since 2026-06-27: the old SETUP-GUIDE light builder and the
@@ -365,7 +393,7 @@ SITE_SHELL = """<!DOCTYPE html>
   {subtitle_block}
   {body}
   <footer class="foot">
-    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+    <p>HEADING OS: operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
   </footer>
 </main>
 </div>
@@ -745,7 +773,7 @@ def _point_md_links_at_the_rendered_page(html: str, link_base: Path) -> tuple[st
 
     `link_base` is the directory of the page being rendered, NOT the site
     directory. It used to be the module-level SITE_DIR for every page, while
-    `TRACKED_DIRS` also renders `templates/` and the DATA overlay's `docs/` and
+    `tracked_dirs()` also renders `templates/` and the DATA overlay's `docs/` and
     `templates/`: a relative link in one of those was resolved against a
     directory it has nothing to do with. The dangerous half is not the link left
     unrewritten, it is the coincidence -- a `templates/X.md` link where
@@ -844,7 +872,7 @@ def _display_path(p: Path) -> str:
 
 def find_tracked_pairs() -> list[Path]:
     pairs = []
-    for d in TRACKED_DIRS:
+    for d in tracked_dirs():
         if not d.exists():
             continue
         for md in d.glob("*.md"):

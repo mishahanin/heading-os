@@ -47,12 +47,17 @@ from __future__ import annotations
 import argparse
 import copy
 import glob
+import re
 import shutil
 import sys
 from pathlib import Path
 
 RELS_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 BLANK_LAYOUT = 6
+
+# The LAST run of digits in the stem. `(?!.*\d)` rejects any match with another
+# digit after it, so `2026-08-31-deck-part12` reads 12 and not 2026.
+_TRAILING_NUMBER_RE = re.compile(r"(\d+)(?!.*\d)")
 
 # python-pptx is an optional extra (`x-heading-requires: ["documents"]`), so it
 # is imported inside the functions that need it. tests/test_import_purity.py
@@ -108,6 +113,36 @@ def copy_slide(src_slide, dst_prs, background: str | None) -> int:
     return remapped
 
 
+def sort_part_files(paths: list[Path]) -> list[Path]:
+    """Order part files by the number in their name, not lexically.
+
+    `references/generation-workflow.md` prescribes the UNPADDED name
+    ``{name}-part1.pptx``. Batches cap at 5 slides, so any deck over 45 slides
+    reaches ten parts and `sorted()` returns::
+
+        part1, part10, part11, part2, part3, ... part9
+
+    `combine` promises to merge "in the given order" and was handed that one, so
+    a 55-slide deck shipped with slides 46-55 between slide 5 and slide 6.
+
+    Natural sort rather than zero-padding the prescribed name: padding would fix
+    only decks generated after the change, and every part file already on disk
+    is unpadded. This orders both, so no transition window exists.
+
+    A name carrying no digits is NOT dropped and does not raise -- `--parts` is a
+    glob, so an operator's `deck-partial.pptx` can match it. Those sort after
+    every numbered part, among themselves by name, which is stable and visible
+    rather than silent.
+    """
+    def key(path: Path) -> tuple[int, int, str]:
+        match = _TRAILING_NUMBER_RE.search(path.stem)
+        if match is None:
+            return (1, 0, path.name)
+        return (0, int(match.group(1)), path.name)
+
+    return sorted(paths, key=key)
+
+
 def combine(part_files: list[Path], out_path: Path,
             background: str | None = None) -> Path:
     """Merge parts in the given order into out_path. Returns out_path."""
@@ -141,7 +176,7 @@ def main() -> int:
                         help="remove the part files after a successful combine")
     args = parser.parse_args()
 
-    part_files = [Path(p) for p in sorted(glob.glob(args.parts))]
+    part_files = sort_part_files([Path(p) for p in glob.glob(args.parts)])
     if not part_files:
         print(f"Error: no files matched {args.parts}", file=sys.stderr)
         return 2

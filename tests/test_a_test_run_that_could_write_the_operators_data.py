@@ -69,7 +69,7 @@ def armed(cf, monkeypatch, tmp_path):
     (overlay / "outputs" / "operations").mkdir(parents=True)
     # Seeded before the guard arms, so a read test has something real to read.
     (overlay / "outputs" / "readable.md").write_text("operator data\n", encoding="utf-8")
-    monkeypatch.setattr(cf, "_OVERLAY_PREFIX", f"{overlay}{os.sep}")
+    monkeypatch.setattr(cf, "_OVERLAY_PREFIXES", (f"{overlay}{os.sep}",))
     restore = cf._install_overlay_write_guard()
     try:
         yield overlay
@@ -148,7 +148,7 @@ def test_writing_outside_the_overlay_is_allowed(armed, tmp_path):
 
 def test_a_clone_with_no_overlay_arms_nothing(cf, monkeypatch, tmp_path):
     """CI has no overlay. The guard must cost nothing and claim nothing there."""
-    monkeypatch.setattr(cf, "_OVERLAY_PREFIX", None)
+    monkeypatch.setattr(cf, "_OVERLAY_PREFIXES", ())
     cf._refuse_overlay_path(tmp_path / "anything.md", "write")   # must not raise
 
 
@@ -169,7 +169,7 @@ def test_the_refusal_names_the_path_and_the_fix(cf, armed):
 # ============================================================
 
 def test_the_guard_restores_every_primitive_it_wrapped(cf, monkeypatch, tmp_path):
-    monkeypatch.setattr(cf, "_OVERLAY_PREFIX", f"{tmp_path}{os.sep}")
+    monkeypatch.setattr(cf, "_OVERLAY_PREFIXES", (f"{tmp_path}{os.sep}",))
     before = (builtins.open, io.open, os.replace, os.rename, os.remove, os.unlink)
     restore = cf._install_overlay_write_guard()
     assert builtins.open is not before[0], "the guard did not arm"
@@ -180,7 +180,7 @@ def test_the_guard_restores_every_primitive_it_wrapped(cf, monkeypatch, tmp_path
 
 def test_builtins_open_and_io_open_stay_the_same_object(cf, monkeypatch, tmp_path):
     """If they diverge, one of the two routes to a file is unguarded."""
-    monkeypatch.setattr(cf, "_OVERLAY_PREFIX", f"{tmp_path}{os.sep}")
+    monkeypatch.setattr(cf, "_OVERLAY_PREFIXES", (f"{tmp_path}{os.sep}",))
     restore = cf._install_overlay_write_guard()
     try:
         assert builtins.open is io.open
@@ -199,12 +199,13 @@ def test_the_running_session_has_the_guard_armed_when_an_overlay_exists():
     assert live is not None, (
         "the root conftest is not in sys.modules under either name pytest uses; "
         "this test cannot see the live guard and must not pass quietly")
-    if live._overlay_root() is None:
+    if not live._watched_roots():
         pytest.skip("this clone has no private overlay, so nothing to guard")
-    assert live._OVERLAY_PREFIX, "an overlay is present and the guard is not armed"
-    with pytest.raises(live.OverlayWriteRefused):
-        live._refuse_overlay_path(
-            Path(live._OVERLAY_PREFIX) / "outputs" / "never-written.md", "write")
+    assert live._OVERLAY_PREFIXES, "an overlay is present and the guard is not armed"
+    for prefix in live._OVERLAY_PREFIXES:
+        with pytest.raises(live.OverlayWriteRefused):
+            live._refuse_overlay_path(
+                Path(prefix) / "outputs" / "never-written.md", "write")
 
     # A refusal function nobody wrapped the primitives with refuses nothing, and
     # that is the shape the whole file is about: the rule existed, and the place

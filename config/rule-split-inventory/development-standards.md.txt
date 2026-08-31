@@ -47,6 +47,7 @@ Never hand-edit either layer: edit the skill's `x-heading-routing` frontmatter, 
 "Auto-routable" means `x-heading-routing.router: auto` AND NOT `disable-model-invocation: true`; a `router: manual` or `disable-model-invocation: true` skill is EXEMPT (it never auto-routes, so a routing corpus is meaningless).
 Pre-F-6.1 uncovered skills are grandfathered by the committed, only-shrinks `config/triggers-coverage-baseline.json` (regenerated shrink-only via `--write-baseline`: it removes now-covered skills, never adds a newly-shipped one), so a NEW auto-routable skill must ship a corpus.
 Any skill that produces a synthesized answer over a source set MUST invoke `/brain-audit` at the end of its synthesis phase and append the returned footer to its output.
+For the live set of composers, ask the tree, never this paragraph: `grep -rl "brain-audit" .claude/skills/ --include=SKILL.md`.
 New synthesis skills MUST adopt the same pattern.
 Every Python script in `scripts/` must follow:
 - `snake_case.py` for (a) anything in `scripts/utils/` (library modules always), and (b) any script imported as a Python module from elsewhere in the workspace.
@@ -56,8 +57,12 @@ If any Python file imports it, it must stay snake_case.
 - Use `from scripts.utils.api import load_api_key` for single API keys; `load_env()` for multi-variable `.env` reads (Exchange credentials, OAuth configs)
 - Use `pathlib.Path` objects, not string paths
 - Catch `HTTPError` before `URLError` (HTTPError is a subclass -- Context7 validated)
-**Scheduled tasks (systemd-user timers) MUST survive reboot.** Every scheduled task in this workspace -- every existing timer and every future one -- ships as a systemd-user timer built to fire after an unattended reboot, never as a session-scoped `CronCreate` task (those are NOT durable -- see `.claude/rules/skill-router.md` § Scheduled & Background Tasks).
+**Scheduled tasks (systemd-user timers) MUST survive reboot.** Every scheduled task in this workspace -- every existing timer and every future one -- ships as a systemd-user timer built to fire after an unattended reboot, never as a session-scoped `CronCreate` task (those are NOT durable -- see `reference/scheduled-tasks.md`, which took this content out of `.claude/rules/skill-router.md` on 2026-08-20).
 Reboot survival requires all THREE mechanisms, and an installer must include every one (copy an existing sibling installer such as `scripts/install-router-accuracy-timer.sh`, which already bakes them in -- do not hand-roll a partial one):
+**In-process APScheduler jobs MUST NOT be dropped for lateness.** The reboot rule above governs OS-level timers.
+Construct every scheduler with the shared defaults, never per job:
+A scheduler-level default is inherited by jobs registered later, by authors who never read this rule; a per-job argument is not.
+Its stated limit: a spread, a call, or an unrecognised name (`job_defaults=build()`, `{**base}`) passes unexamined, because source inspection cannot settle it.
 Every file in `reference/` must include:
 **Frontmatter validation:** Verify YAML parses correctly, all required fields present
 Use `/implement --evaluate` to integrate the feedback loop into implementation

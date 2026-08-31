@@ -20,9 +20,14 @@ Usage:
   python telegram_client.py delete <chat> <msg_id>         # Delete message
 
 Environment:
-  TELEGRAM_API_ID     - from my.telegram.org
-  TELEGRAM_API_HASH   - from my.telegram.org
-  TELEGRAM_PHONE      - phone number for auth
+  TELEGRAM_API_ID       - from my.telegram.org
+  TELEGRAM_API_HASH     - from my.telegram.org
+  TELEGRAM_PHONE        - phone number for auth
+  TELEGRAM_2FA_PASSWORD - two-step verification password, when the account has
+                          one. Read in-process from the gitignored .env; verify
+                          REFUSES a password given as a --password argv value,
+                          which would land in the process table, the shell
+                          history, and the session transcript.
 
 Session stored in: .sessions/telegram/telegram.session
 """
@@ -52,7 +57,8 @@ SESSION_PATH = os.path.join(SESSION_DIR, 'telegram')
 sys.path.insert(0, WORKSPACE_ROOT)
 try:
     from pathlib import Path
-    from scripts.utils.workspace import get_outputs_dir, load_env
+    from scripts.utils.atomic import atomic_write_text
+    from scripts.utils.workspace import get_data_root, get_outputs_dir, load_env
     load_env(Path(WORKSPACE_ROOT))
 except ImportError:
     pass
@@ -121,12 +127,39 @@ def _configure_session_wal(client, busy_timeout_ms=30000):
         conn.execute('PRAGMA journal_mode = WAL')
 
 
+def ensure_session_dir():
+    """Create SESSION_DIR owner-only, and tighten it when it already exists.
+
+    Telethon writes `telegram.session` here, the sqlite file holding the
+    account's auth key: whoever reads it holds the account. Until 2026-08-31
+    this was a bare `os.makedirs(exist_ok=True)`, so the directory took the
+    umask default and the key sat in a world-traversable directory. The engine's
+    own equivalent is `scripts/utils/gmail_auth.py`, which creates its token
+    directory at 0o700.
+
+    Two traps, and the unconditional chmod answers both. `makedirs(mode=...)`
+    is masked by the umask, so the mode argument alone is not a guarantee; and
+    it does NOT touch a directory that already exists, which on any workspace
+    that has ever authenticated is the case that matters. A refused chmod (some
+    network and Windows-backed filesystems) warns and continues -- a locked-down
+    directory is the goal, not a reason to break every command.
+    """
+    os.makedirs(SESSION_DIR, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(SESSION_DIR, 0o700)
+    except OSError as exc:
+        print(f"{YELLOW}[WARN] could not restrict {SESSION_DIR} to 0700 "
+              f"({type(exc).__name__}: {exc}); the session file may be readable "
+              f"by other local users.{RESET}", file=sys.stderr)
+    return SESSION_DIR
+
+
 def create_client():
     """Create a Telethon client with persistent session."""
     from telethon import TelegramClient
 
     api_id, api_hash, _ = get_credentials()
-    os.makedirs(SESSION_DIR, exist_ok=True)
+    ensure_session_dir()
     client = TelegramClient(SESSION_PATH, api_id, api_hash)
     _configure_session_wal(client)
     return client
@@ -174,8 +207,90 @@ async def get_sender_name(msg):
     try:
         sender = await msg.get_sender()
         return get_entity_name(sender)
-    except Exception:
+    except Exception as exc:
+        # Degrading to the numeric id is right; doing it silently is not. A
+        # cache miss and a revoked session both land here and used to be
+        # indistinguishable from an ordinary anonymous sender.
+        print(f"{YELLOW}[WARN] sender lookup for #{msg.sender_id} failed "
+              f"({type(exc).__name__}: {exc}); showing the numeric id.{RESET}",
+              file=sys.stderr)
         return f"User#{msg.sender_id}"
+
+
+def refuse_password_on_command_line(password):
+    """Refuse a 2FA password handed over as an argv value.
+
+    An argv value is in the process table for every local user to read, in the
+    shell history, and in this session's transcript. The engine already named
+    this exact pattern a defect and fixed it once, in
+    `.claude/skills/osint-advanced/scripts/osint_api.py`, where an API key
+    interpolated into a `curl` command line was replaced by an in-process read.
+    The same remedy applies here: `read_2fa_password()` reads the value inside
+    the process and it never reaches a command line.
+
+    Refusing rather than ignoring is deliberate. A silently ignored `--password`
+    would leave the operator believing the value was consumed, with no signal
+    that it now needs changing.
+    """
+    if password is None:
+        return
+    print(f"{RED}[ERROR] verify refuses a 2FA password passed as --password.{RESET}",
+          file=sys.stderr)
+    print(f"        An argv value is in the process table, the shell history, and "
+          f"this session's transcript.", file=sys.stderr)
+    print(f"        Treat the value you just typed as exposed and change it in "
+          f"Telegram.", file=sys.stderr)
+    print(f"        Then put the new one in the gitignored .env as "
+          f"TELEGRAM_2FA_PASSWORD, or run verify from an interactive terminal "
+          f"for a hidden prompt.", file=sys.stderr)
+    sys.exit(2)
+
+
+def read_2fa_password():
+    """Read the 2FA password in-process. Returns None when unavailable.
+
+    Env first (the gitignored .env, loaded above by `load_env`), then a hidden
+    prompt when a terminal is attached. `getpass`, not `input`: a value typed at
+    `input()` is echoed and scrolls into the terminal buffer -- the same reason
+    `scripts/setup.py` uses it for the Anthropic key.
+    """
+    password = os.environ.get('TELEGRAM_2FA_PASSWORD')
+    if password:
+        return password
+    if sys.stdin.isatty():
+        import getpass
+        return getpass.getpass('Telegram 2FA password (hidden, not echoed): ') or None
+    return None
+
+
+def resolve_send_path(raw_path):
+    """Resolve a send-file source path. Relative means DATA overlay, not engine.
+
+    Until 2026-08-31 one file gave two answers about where the workspace is:
+    `cmd_download` resolved through the data seam while `cmd_send_file` joined a
+    relative path to WORKSPACE_ROOT, the ENGINE clone. So the path shape every
+    other skill produces (`outputs/content/images/x.png`) reported "File not
+    found" -- and a same-named stray inside the engine tree would have been sent
+    to a third party instead.
+
+    An ABSOLUTE path passes through unchanged. That is the operator naming a
+    file outside the overlay on purpose, which is legitimate (a download, a
+    scratch file), and confining it would be theatre: the caller already holds a
+    shell that can read any of those paths directly. A RELATIVE path is confined
+    to the data root, because a relative path that climbs out with `..` is a
+    caller who meant the overlay and would silently get somewhere else.
+    """
+    if os.path.isabs(raw_path):
+        return raw_path
+    data_root = Path(get_data_root()).resolve()
+    resolved = (data_root / raw_path).resolve()
+    if not resolved.is_relative_to(data_root):
+        raise ValueError(
+            f"refusing the relative path {raw_path!r}: it resolves to {resolved}, "
+            f"outside the data root {data_root}. Pass an absolute path if you "
+            f"really mean a file elsewhere."
+        )
+    return str(resolved)
 
 
 async def resolve_chat(client, identifier):
@@ -259,10 +374,13 @@ async def cmd_setup(client, args):
     from telethon.errors import FloodWaitError
     try:
         sent = await client.send_code_request(phone)
-        # Save phone_code_hash for verify step
-        hash_path = os.path.join(SESSION_DIR, '.code_hash')
-        with open(hash_path, 'w') as f:
-            f.write(sent.phone_code_hash)
+        # Save phone_code_hash for verify step. tmp + os.replace at 0o600, not
+        # a plain open("w"): the workspace convention for persistent state, and
+        # this file is one half of a login. A truncating write leaves an empty
+        # or half-written hash if the process dies mid-write, which sends the
+        # operator back for a fresh OTP.
+        hash_path = os.path.join(ensure_session_dir(), '.code_hash')
+        atomic_write_text(Path(hash_path), sent.phone_code_hash, mode=0o600)
         print()
         print(f"{GREEN}{BOLD}Code sent!{RESET}")
         print(f"{YELLOW}Check your Telegram app for the verification code.{RESET}")
@@ -277,6 +395,7 @@ async def cmd_setup(client, args):
 
 async def cmd_verify(client, args):
     """Step 2: Verify OTP code and complete authentication."""
+    refuse_password_on_command_line(getattr(args, 'password', None))
     _, _, phone = get_credentials()
     from telethon.errors import SessionPasswordNeededError
 
@@ -292,12 +411,14 @@ async def cmd_verify(client, args):
     try:
         await client.sign_in(phone, args.code, phone_code_hash=phone_code_hash)
     except SessionPasswordNeededError:
-        if not args.password:
+        password = read_2fa_password()
+        if not password:
             print(f"{YELLOW}This account has two-step verification enabled.{RESET}")
-            print(f"Re-run with your 2FA password:")
-            print(f"  python telegram_client.py verify {args.code} --password YOUR_PASSWORD")
+            print(f"Add the 2FA password to the gitignored .env, then run verify again:")
+            print(f"  TELEGRAM_2FA_PASSWORD=<the account's 2FA password>")
+            print(f"Or run verify from an interactive terminal for a hidden prompt.")
             sys.exit(1)
-        await client.sign_in(password=args.password)
+        await client.sign_in(password=password)
 
     # Clean up hash file
     try:
@@ -467,9 +588,11 @@ async def cmd_send_file(client, args):
     """Send a file to a chat."""
     entity = await resolve_chat(client, args.chat)
 
-    file_path = args.path
-    if not os.path.isabs(file_path):
-        file_path = os.path.join(WORKSPACE_ROOT, file_path)
+    try:
+        file_path = resolve_send_path(args.path)
+    except ValueError as e:
+        print(f"{RED}[ERROR] {e}{RESET}", file=sys.stderr)
+        sys.exit(1)
 
     if not os.path.exists(file_path):
         print(f"{RED}[ERROR] File not found: {file_path}{RESET}", file=sys.stderr)
@@ -675,7 +798,11 @@ def build_parser():
     # verify
     p_verify = subparsers.add_parser('verify', help='Verify OTP code')
     p_verify.add_argument('code', help='The verification code from Telegram')
-    p_verify.add_argument('--password', help='2FA password (if enabled)')
+    # Still accepted by the parser, and then REFUSED by cmd_verify. Dropping it
+    # would give an operator who reaches for the old form an argparse error
+    # instead of the message telling them the value is now exposed.
+    p_verify.add_argument('--password',
+                          help='REFUSED. Set TELEGRAM_2FA_PASSWORD in .env instead')
 
     # send
     p_send = subparsers.add_parser('send', help='Send a message')

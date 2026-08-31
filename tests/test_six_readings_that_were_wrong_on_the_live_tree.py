@@ -116,7 +116,7 @@ def test_the_outputs_report_counts_the_whole_tree(tmp_path, monkeypatch, capsys)
     (root / "top.md").write_text("x\n", encoding="utf-8")
     (root / "images" / "a.png").write_bytes(b"x")
     (root / "documents" / "b.pdf").write_bytes(b"x")
-    monkeypatch.setattr(mod, "OUTPUTS_DIR", root)
+    monkeypatch.setattr(mod, "outputs_dir", lambda p=root: p)
 
     mod.report()
     out = capsys.readouterr().out
@@ -131,7 +131,7 @@ def test_an_organised_tree_is_not_called_empty(tmp_path, monkeypatch, capsys):
     root = tmp_path / "outputs"
     (root / "images").mkdir(parents=True)
     (root / "images" / "a.png").write_bytes(b"x")
-    monkeypatch.setattr(mod, "OUTPUTS_DIR", root)
+    monkeypatch.setattr(mod, "outputs_dir", lambda p=root: p)
 
     mod.report()
     out = capsys.readouterr().out
@@ -143,7 +143,7 @@ def test_a_genuinely_empty_tree_is_still_called_empty(tmp_path, monkeypatch, cap
     mod = _load("output_organizer_probe3", "scripts/output-organizer.py")
     root = tmp_path / "outputs"
     root.mkdir()
-    monkeypatch.setattr(mod, "OUTPUTS_DIR", root)
+    monkeypatch.setattr(mod, "outputs_dir", lambda p=root: p)
     mod.report()
     assert "is empty" in capsys.readouterr().out
 
@@ -154,8 +154,8 @@ def test_organize_still_scans_only_the_top_level():
     a sweep that changed both would look like a tidier fix and be wrong."""
     source = (ROOT / "scripts" / "output-organizer.py").read_text(encoding="utf-8")
     body = source.split("def organize(")[1].split("\ndef ")[0]
-    assert "OUTPUTS_DIR.iterdir()" in body
-    assert "OUTPUTS_DIR.rglob(" not in body
+    assert "outputs_dir().iterdir()" in body
+    assert "outputs_dir().rglob(" not in body
 
 
 # ============================================================

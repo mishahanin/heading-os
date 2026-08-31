@@ -128,7 +128,8 @@ claude            # pick a theme, then "Claude account with subscription"</code>
   <pre><code>cd &lt;engine&gt;
 uv sync               # Python + all dependencies into the project environment</code></pre>
 
-  <p>Runtime stack of note (exact pins in <code>pyproject.toml</code>): <code>anthropic</code>, <code>exchangelib</code> (Exchange mail), <code>Telethon</code> (Telegram), <code>playwright</code>, <code>weasyprint</code> + <code>liteparse</code> + <code>markitdown</code> (documents/PDF), the Google API clients, <code>fastapi</code> + <code>uvicorn</code> + <code>watchdog</code> + <code>apscheduler</code> (bridge daemon), plus <code>firecrawl-py</code>, <code>youtube-transcript-api</code>, <code>yt-dlp</code>, <code>replicate</code>, <code>openai</code>, <code>google-genai</code>, <code>langfuse</code>. Dev tooling: <code>pytest</code>, <code>bandit</code>, <code>ruff</code>, <code>pre-commit</code>, <code>detect-secrets</code>, <code>pip-audit</code>.</p>
+  <p>Runtime stack of note (exact pins in <code>pyproject.toml</code>): <code>anthropic</code>, <code>exchangelib</code> (Exchange mail), <code>Telethon</code> (Telegram), <code>playwright</code>, <code>liteparse</code> + <code>markitdown</code> (documents/PDF), the Google API clients, <code>fastapi</code> + <code>uvicorn</code> + <code>watchdog</code> + <code>apscheduler</code> (bridge daemon), plus <code>firecrawl-py</code>, <code>youtube-transcript-api</code>, <code>yt-dlp</code>, <code>openai</code>, <code>langfuse</code>. Dev tooling: <code>pytest</code>, <code>bandit</code>, <code>ruff</code>, <code>pre-commit</code>, <code>detect-secrets</code>, <code>pip-audit</code>.</p>
+  <p>This sentence named <code>weasyprint</code>, <code>replicate</code> and <code>google-genai</code> as pinned until 2026-08-31. None of the three is declared in <code>pyproject.toml</code> or <code>requirements.txt</code>, and <code>uv sync</code> does not install them. Nothing in the tree imports any of the three either, so the engine does not need them: PDF rendering goes through <code>playwright</code> (<code>scripts/html-to-pdf.py</code>), and the image skills call the Replicate REST API over plain HTTP rather than through its SDK. They are listed here only so a reader who saw the old sentence knows why the packages are absent.</p>
 
   <h2>3. <code>.env</code> configuration</h2>
   <p>Create your env file from the template at the engine root — it is gitignored and never committed:</p>
@@ -202,7 +203,7 @@ xdg-mime default wslview.desktop x-scheme-handler/http x-scheme-handler/https</c
   </div>
 
   <h2>6. VPN preflight (browsing skills)</h2>
-  <p>A runtime gate (<code>.claude/rules/vpn-preflight.md</code>) fires before browsing skills that hit services blacklisting datacenter IPs — YouTube transcripts (<code>/yt-pulse</code>), Google/LinkedIn scraping, some OSINT sources. Datacenter exits (e.g. Mullvad) get blocked; a residential-friendly exit like Proton passes. On Linux the gate can switch directly:</p>
+  <p>A runtime gate (<code>reference/vpn-preflight.md</code>, held resident by one line in <code>.claude/rules/skill-router.md</code>) fires before browsing skills that hit services blacklisting datacenter IPs — YouTube transcripts (<code>/yt-pulse</code>), Google/LinkedIn scraping, some OSINT sources. Datacenter exits (e.g. Mullvad) get blocked; a residential-friendly exit like Proton passes. On Linux the gate can switch directly:</p>
   <pre><code>protonvpn-cli connect --cc NL     # residential-friendly exit for YouTube/Google
 protonvpn-cli status</code></pre>
   <p>On Windows/macOS you switch manually in the GUI. This is a runtime gate, not an install step — it exists so users of browsing skills understand why a run pauses.</p>
@@ -271,7 +272,7 @@ pip install -r requirements-dev.txt      # dev tooling
 pytest -q                                # verify the suite</code></pre>
 
   <footer class="foot">
-    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a></p>
+    <p>HEADING OS: operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a></p>
   </footer>
 </main>
 </div>

@@ -37,10 +37,10 @@ itl = _load()
 
 @pytest.fixture
 def traj_dir(tmp_path, monkeypatch):
-    """Redirect TRAJECTORY_DIR to a tmp dir so nothing touches real outputs."""
+    """Redirect trajectory_dir() to a tmp dir so nothing touches real outputs."""
     d = tmp_path / "impl"
     d.mkdir()
-    monkeypatch.setattr(itl, "TRAJECTORY_DIR", d)
+    monkeypatch.setattr(itl, "trajectory_dir", lambda d=d: d)
     return d
 
 

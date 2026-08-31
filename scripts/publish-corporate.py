@@ -66,7 +66,17 @@ WORKSPACE_ROOT = get_workspace_root()
 # corporate/ daemon config) lives in the DATA overlay, NOT the engine tree. The
 # publish source is therefore the data root; reading from the engine root would
 # enumerate zero corporate files post-split (the build-? cutover gap).
-SOURCE_ROOT = get_data_root()
+def source_root() -> Path:
+    """Resolved at call time, never at import.
+
+    `get_data_root()` reads `HEADING_OS_DATA` on every call. As a module-level
+    constant it asked once, during its own import, so a test that imported this
+    module and then repointed the root still had `copy_files()` reading the
+    operator's real overlay and creating destination directories under it. The
+    `mkdir` on the destination is not among the primitives `tests/conftest.py`
+    wraps.
+    """
+    return get_data_root()
 # Destination resolves via the canonical resolver -> ../heading-os-corporate for
 # the CEO workspace (was a hardcoded literal; centralised here).
 CORPORATE_ROOT = get_corporate_repo_path()
@@ -120,7 +130,7 @@ def _ls_files(*extra: str) -> list[str]:
     """
     result = subprocess.run(
         ["git", "ls-files", "-z", *extra],
-        cwd=str(SOURCE_ROOT),
+        cwd=str(source_root()),
         capture_output=True, check=True,
     )
     out = result.stdout.decode("utf-8", "surrogateescape")
@@ -159,7 +169,7 @@ def diff_corporate(corporate_files: list[str]) -> tuple[list[str], list[str], li
     unchanged: list[str] = []
     missing_in_source: list[str] = []
     for rel in corporate_files:
-        src = SOURCE_ROOT / rel
+        src = source_root() / rel
         dst = CORPORATE_ROOT / rel
         if not src.exists():
             missing_in_source.append(rel)
@@ -179,7 +189,7 @@ def diff_corporate(corporate_files: list[str]) -> tuple[list[str], list[str], li
 def copy_files(files: list[str]) -> int:
     copied = 0
     for rel in files:
-        src = SOURCE_ROOT / rel
+        src = source_root() / rel
         dst = CORPORATE_ROOT / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -195,7 +205,7 @@ def verify_files(files: list[str]) -> tuple[int, list[str]]:
     matched = 0
     mismatches: list[str] = []
     for rel in files:
-        src = SOURCE_ROOT / rel
+        src = source_root() / rel
         dst = CORPORATE_ROOT / rel
         if not dst.exists():
             mismatches.append(f"{rel} (missing in corporate)")

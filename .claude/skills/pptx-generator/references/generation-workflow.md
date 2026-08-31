@@ -1,5 +1,7 @@
 # Generation & Combining Workflow
 
+Consumed by: `.claude/skills/pptx-generator/SKILL.md`, section "Step 5: Generate, Validate & Combine".
+
 > Reference for batch generation, quality validation, output handling, and combining PPTX batches.
 
 ---
@@ -52,6 +54,20 @@ mkdir -p "$DECK_DIR"
 
 Inside the heredoc read it with `os.environ["DECK_DIR"]` (keeps the heredoc body quoted so brand
 values are not shell-expanded).
+
+**The cookbook templates enforce this.** Each one resolves `$DECK_DIR` at the top of `main()` and
+exits non-zero when it is unset. Until 2026-08-31 each ended with `output = Path("title-slide.pptx")`,
+a bare relative name that resolves against the CWD. A run from the engine clone dropped a `.pptx`
+into the root of a public repository, and `config/routing-map.yaml` routes a root-level `.pptx` as
+`engine`, so `tests/test_engine_tree_clean.py` did not flag it. Keep the `deck_dir` block when you
+copy a layout; the trap lived in the template, not in the caller.
+
+Every template also runs standalone through its `uv run` shebang. It could not before the same date:
+PEP 723's reference regex is greedy over its content group and `# ///` matches that group's `# .*`
+alternative, so the `# /// script` block ran past its terminator into the `# /// layout` block below
+it. Twenty-one of twenty-two files failed with `TOML parse error at line 5, column 4 | ///`. A blank
+line between the two blocks fixes it, because the content group needs every line to begin with `#`.
+Keep that blank line when you add a layout.
 
 **PREFERRED: Use heredoc (no files created):**
 ```bash
@@ -136,6 +152,14 @@ python3 .claude/skills/pptx-generator/scripts/combine_decks.py \
 `--background` is the brand background hex from `brand.json`, without the `#`.
 `--delete-parts` performs step 4 of the batched workflow. A single part file is
 copied straight through.
+
+*Part order.* The script sorts by the number in each filename, not lexically.
+The names above are unpadded, batches cap at 5 slides, and a deck over 45 slides
+therefore reaches ten parts, where `sorted()` returns `part1, part10, part11,
+part2 ...`. Until 2026-08-31 that was the order the merge received, so a
+55-slide deck shipped with slides 46 to 55 sitting between slide 5 and slide 6.
+A part file whose name carries no number sorts after every numbered one; it is
+never dropped and never raises.
 
 **Two things a naive combine loses, both of them silently.**
 

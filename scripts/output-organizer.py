@@ -24,7 +24,18 @@ from scripts.utils.workspace import get_workspace_root, get_outputs_dir, get_def
 
 WORKSPACE = get_workspace_root()
 
-OUTPUTS_DIR = get_outputs_dir()
+def outputs_dir() -> Path:
+    """Resolved at call time, never at import.
+
+    `get_outputs_dir()` reads `HEADING_OS_DATA` on every call, so it follows the
+    environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the root kept
+    enumerating (and `archive --execute` kept moving) the operator's real
+    outputs tree. `mkdir` and `shutil.move` are not among the primitives
+    `tests/conftest.py` wraps, so nothing refused it.
+    """
+    return get_outputs_dir()
 
 # Extension to subdirectory mapping
 EXT_MAP = {
@@ -44,7 +55,7 @@ EXT_MAP = {
 
 def report():
     """List every file under outputs/, by type and size."""
-    if not OUTPUTS_DIR.exists():
+    if not outputs_dir().exists():
         print(f"{RED}outputs/ directory not found{RESET}")
         return
 
@@ -56,7 +67,7 @@ def report():
     # `archive()` below already carries a comment about having fixed.
     # `organize()` keeps `iterdir` on purpose: it MOVES top-level files
     # into subdirectories, so recursing would re-move what it organised.
-    files = [f for f in OUTPUTS_DIR.rglob("*") if f.is_file()]
+    files = [f for f in outputs_dir().rglob("*") if f.is_file()]
     if not files:
         print(f"{YELLOW}outputs/ is empty{RESET}")
         return
@@ -71,7 +82,7 @@ def report():
         total_size += f.stat().st_size
 
     print(f"\n{BOLD}Outputs Directory Report{RESET}")
-    print(f"Directory: {OUTPUTS_DIR}")
+    print(f"Directory: {outputs_dir()}")
     print(f"Total files: {len(files)}")
     print(f"Total size: {total_size / (1024*1024):.1f} MB\n")
 
@@ -106,18 +117,18 @@ def _free_name(dst: Path) -> Path:
 
 def organize(execute=False):
     """Move files into subdirectories by type."""
-    if not OUTPUTS_DIR.exists():
+    if not outputs_dir().exists():
         print(f"{RED}outputs/ directory not found{RESET}")
         return
 
-    files = [f for f in OUTPUTS_DIR.iterdir() if f.is_file()]
+    files = [f for f in outputs_dir().iterdir() if f.is_file()]
     moves = []
 
     for f in files:
         ext = f.suffix.lower()
         category = EXT_MAP.get(ext)
         if category:
-            target_dir = OUTPUTS_DIR / category
+            target_dir = outputs_dir() / category
             target = target_dir / f.name
             moves.append((f, target, target_dir))
 
@@ -145,21 +156,22 @@ def organize(execute=False):
 
 def archive(days, execute=False):
     """Move files older than N days to outputs/archive/."""
-    if not OUTPUTS_DIR.exists():
+    if not outputs_dir().exists():
         print(f"{RED}outputs/ directory not found{RESET}")
         return
 
     cutoff = datetime.now(get_default_tz()) - timedelta(days=days)
-    # `relative_to(OUTPUTS_DIR).parts`, never `f.parts`. `rglob` yields ABSOLUTE
+    # `relative_to(outputs_dir()).parts`, never `f.parts`. `rglob` yields ABSOLUTE
     # paths, so `f.parts` is the whole filesystem path from `/` -- and one
     # directory called `archive` anywhere in the workspace's ancestry excluded
     # every file in the tree. The command then printed, in green, "No files
     # older than N days found.", which reads as a clean result while the archive
     # silently did nothing. It enumerated a filtered set and reported on the
     # outputs tree.
+    root = outputs_dir()
     files = [
-        f for f in OUTPUTS_DIR.rglob("*")
-        if f.is_file() and "archive" not in f.relative_to(OUTPUTS_DIR).parts
+        f for f in root.rglob("*")
+        if f.is_file() and "archive" not in f.relative_to(root).parts
     ]
     old_files = []
 
@@ -172,13 +184,13 @@ def archive(days, execute=False):
         print(f"{GREEN}No files older than {days} days found.{RESET}")
         return
 
-    archive_dir = OUTPUTS_DIR / "archive"
+    archive_dir = root / "archive"
 
     print(f"\n{BOLD}{'Archiving' if execute else 'Dry Run - Would archive'} {len(old_files)} file(s) older than {days} days:{RESET}\n")
 
     for f in sorted(old_files):
         mtime = datetime.fromtimestamp(f.stat().st_mtime, tz=get_default_tz())
-        rel = f.relative_to(OUTPUTS_DIR)
+        rel = f.relative_to(root)
         target = archive_dir / rel
         print(f"  {rel} (modified {mtime.strftime('%Y-%m-%d')})")
 

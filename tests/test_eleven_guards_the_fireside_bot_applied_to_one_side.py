@@ -659,30 +659,76 @@ def test_a_member_who_lost_authorization_can_still_remove_their_opt_in(
 # 11. the monitor that went quiet where the evidence was worst
 # ============================================================
 
+# `_health` used to carry a fourth patch:
+#
+#     monkeypatch.setattr(fb, "_webhook_status_line", lambda *a, **k: "",
+#                         raising=False)
+#
+# `_webhook_status_line` exists NOWHERE in this repository -- `grep -rn` over
+# every .py and .md returned that one line and nothing else. `cmd_health_check`
+# reads its two webhook fields inline off `last_tick`; there is no helper to
+# neutralise. `raising=False` is precisely what kept that invisible: it turns
+# "the name you aimed at does not exist" into a silent new attribute nobody
+# reads. MEASURED 2026-08-31: deleting the two lines changed no result (3
+# passed, identical to baseline), which is the definition of a patch that binds
+# a stranger. It is gone rather than repointed, and the webhook fields it was
+# gesturing at are asserted for real in
+# `test_a_fresh_tick_reports_the_webhook_evidence_it_has` below.
+#
+# `hc_ping` stays. Unlike the above it IS a real module attribute (imported at
+# the top of fireside-bot.py) and neutralising it is what stops a unit test
+# reaching the network if `cmd_health_check` ever gains a ping.
+
 def _health(fb, monkeypatch):
+    """Run cmd_health_check and return the (chat_id, message) tuples it SENT.
+
+    Returning the arguments, not a count. The previous version appended the
+    argument tuple and every caller then asserted bare list truthiness, so the
+    tests measured only that SOME message left the process. MEASURED 2026-08-31:
+    replacing the whole alert string with `XXXX MUTATED XXXX` in a scratch copy
+    of scripts/fireside-bot.py left all three tests passing. A monitor whose
+    test cannot tell "the daemon is down" from arbitrary text is not testing the
+    monitor.
+    """
     alerts = []
     monkeypatch.setattr(fb, "misha_user_id", lambda: 42)
     monkeypatch.setattr(fb, "get_bot", lambda: SimpleNamespace(
         send_message=lambda *a, **k: alerts.append(a)))
     monkeypatch.setattr(fb, "hc_ping", lambda *a, **k: None)
-    monkeypatch.setattr(fb, "_webhook_status_line", lambda *a, **k: "",
-                        raising=False)
     fb.cmd_health_check(SimpleNamespace())
     return alerts
+
+
+def _sole_alert(alerts):
+    """The one alert, unpacked. Asserts the count before reading the content."""
+    assert len(alerts) == 1, (
+        f"expected exactly one alert DM, got {len(alerts)}: {alerts!r}")
+    chat_id, message = alerts[0][0], alerts[0][1]
+    assert chat_id == 42, f"the alert went to {chat_id!r}, not to Misha"
+    return message
 
 
 def test_an_absent_dm_log_alerts(fb, state, monkeypatch):
     """The strongest evidence that nothing is alive used to print a line to
     stdout and return, while the weaker case - a file with no ticks - alerted."""
     assert not (state / fb.DM_LOG).exists()
-    assert _health(fb, monkeypatch), "no alert on a missing dm-log"
+
+    msg = _sole_alert(_health(fb, monkeypatch))
+
+    assert "no liveness tick ever recorded" in msg, (
+        f"the alert does not say the daemon may be down: {msg!r}")
+    assert "Bot may not be running" in msg
 
 
 def test_a_dm_log_with_no_tick_still_alerts(fb, state, monkeypatch):
     (state / fb.DM_LOG).write_text(
         json.dumps({"dm_type": "2wk", "ts": "2026-08-01T10:00:00+04:00"}) + "\n",
         encoding="utf-8")
-    assert _health(fb, monkeypatch)
+
+    msg = _sole_alert(_health(fb, monkeypatch))
+
+    assert "no liveness tick ever recorded" in msg, (
+        f"a dm-log carrying only non-tick rows must read as no tick: {msg!r}")
 
 
 def test_a_fresh_tick_does_not_alert(fb, state, monkeypatch):
@@ -692,3 +738,77 @@ def test_a_fresh_tick_does_not_alert(fb, state, monkeypatch):
         json.dumps({"dm_type": "poll-tick", "ts": now}) + "\n",
         encoding="utf-8")
     assert _health(fb, monkeypatch) == []
+
+
+def _tick(state, fb, when, **extra):
+    (state / fb.DM_LOG).write_text(
+        json.dumps({"dm_type": "poll-tick", "ts": when.isoformat(), **extra}) + "\n",
+        encoding="utf-8")
+
+
+def test_the_thirty_minute_threshold_is_over_not_at(fb, state, monkeypatch):
+    """The case ON the line. `cmd_health_check` computes `age > 30 min`, so a
+    tick exactly 30 minutes old is healthy and one second older is not.
+
+    The clock is frozen for this: reading the host clock would make the boundary
+    a race, and a boundary that can only be approached from one side is not a
+    boundary test.
+    """
+    from datetime import timedelta
+
+    frozen = fb.local_now()
+    monkeypatch.setattr(fb, "local_now", lambda: frozen)
+
+    _tick(state, fb, frozen - timedelta(minutes=30))
+    assert _health(fb, monkeypatch) == [], (
+        "a tick exactly at the 30-minute threshold alerted; the check is "
+        "`age > 30 min`, so the boundary value itself is healthy")
+
+    _tick(state, fb, frozen - timedelta(minutes=30, seconds=1))
+    msg = _sole_alert(_health(fb, monkeypatch))
+    assert "threshold 30 min" in msg, (
+        f"one second past the threshold must alert and name it: {msg!r}")
+    assert "30 min ago" in msg
+
+
+def test_an_unreadable_timestamp_alerts_as_unknown_not_healthy(
+        fb, state, monkeypatch):
+    """The third branch. A tick whose `ts` cannot be parsed means liveness is
+    UNKNOWN; reporting that as healthy is the same silence this shard is about.
+    """
+    (state / fb.DM_LOG).write_text(
+        json.dumps({"dm_type": "poll-tick", "ts": "not-a-timestamp"}) + "\n",
+        encoding="utf-8")
+
+    msg = _sole_alert(_health(fb, monkeypatch))
+
+    assert "unreadable timestamp" in msg, (
+        f"an unparseable tick must be reported, not swallowed: {msg!r}")
+    assert "not the same as healthy" in msg
+
+
+def test_a_fresh_tick_reports_the_webhook_evidence_it_has(
+        fb, state, monkeypatch, capsys):
+    """What the deleted `_webhook_status_line` patch was gesturing at.
+
+    A fresh tick proves a process reached Telegram and nothing more; in webhook
+    mode the handler is a DIFFERENT process. The command therefore prints the
+    pending count and last webhook error rather than implying it checked the
+    handler. Asserting the values, not merely that something printed.
+    """
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    _tick(state, fb, now, pending_update_count=17,
+          webhook_last_error="Wrong response from the webhook: 502")
+
+    assert _health(fb, monkeypatch) == [], "a fresh tick must not alert"
+
+    out = capsys.readouterr().out
+    assert "pending_update_count=17" in out, (
+        f"the pending count is the only signal that the webhook handler died "
+        f"under a healthy heartbeat, and it was not printed: {out!r}")
+    assert "Wrong response from the webhook: 502" in out, (
+        f"the last webhook error was not printed: {out!r}")
+    assert "does not prove the webhook handler is" in out, (
+        f"the caveat that a tick is not handler liveness was not printed: {out!r}")

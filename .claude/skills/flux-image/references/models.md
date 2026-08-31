@@ -1,5 +1,7 @@
 # Image Generation Model Reference
 
+Consumed by: `.claude/skills/flux-image/SKILL.md`, section "Model Selection", when choosing between `--model banana` and `--model flux-max`.
+
 ## Available Models on Replicate
 
 ### Nano Banana 2 (Default)

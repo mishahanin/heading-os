@@ -4,7 +4,11 @@ CRM Aggregation Script for 31C Multi-User HEADING OS Ecosystem (per-exec model).
 
 Reads CEO own CRM from <data-root>/crm/contacts/ plus each active exec's data
 overlay at ../.heading-os-data-{slug}/crm/contacts/, parallelizes git pulls, and
-generates company-wide views in <data-root>/crm/aggregated/ (CEO local, gitignored).
+generates company-wide views in <data-root>/crm/aggregated/ (CEO local, and
+git-tracked in the private data repo, not gitignored: measured 2026-08-30, five
+tracked files and no matching .gitignore rule). The output is derived, so it can
+drift from the exec overlays it was built from; the run date in each view is what
+says how far.
 
 Fleet source of truth is admin/executives.json under the DATA root (new HEADING OS
 two-part topology); the legacy config/exec-registry.json + 31c-crm-{slug} model is

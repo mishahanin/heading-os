@@ -25,6 +25,36 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils import parse_skill_md
 
 
+class ImproveDescriptionError(RuntimeError):
+    """The model returned no description. Not a description that is short."""
+
+
+def _require_description(text: str, description: str, stage: str) -> str:
+    """Refuse an empty parse instead of handing it back as a result.
+
+    `text` is assigned only from a `text` content block. A response truncated
+    inside extended thinking - max_tokens reached mid-`thinking`, which a
+    10,000-token thinking budget under a 16,000-token cap invites - carries no
+    text block at all, so `text` stays "", the regex misses, the fallback
+    returns "", and `run_loop` assigns that to `current_description`. The next
+    iteration then evaluates the empty string, scores it, and can select it as
+    "best".
+
+    Same shape as the guard `run_eval.py` already carries one subprocess over: a
+    call that produced nothing is not a measurement of anything. See that
+    module's docstring.
+    """
+    if description.strip():
+        return description
+    raise ImproveDescriptionError(
+        f"the model returned an empty description at the {stage} stage "
+        f"(response text was {len(text)} chars). This is a broken call, not a "
+        "worse description: an empty string would be scored, fed back as the "
+        "next candidate, and can win the loop. Check whether the response was "
+        "truncated inside its thinking block, then re-run."
+    )
+
+
 def improve_description(
     client: anthropic.Anthropic,
     skill_name: str,
@@ -142,6 +172,7 @@ Please respond with only the new description text in <new_description> tags, not
     # Parse out the <new_description> tags
     match = re.search(r"<new_description>(.*?)</new_description>", text, re.DOTALL)
     description = match.group(1).strip().strip('"') if match else text.strip().strip('"')
+    description = _require_description(text, description, "initial")
 
     # Log the transcript
     transcript: dict = {
@@ -181,6 +212,10 @@ Please respond with only the new description text in <new_description> tags, not
 
         match = re.search(r"<new_description>(.*?)</new_description>", shorten_text, re.DOTALL)
         shortened = match.group(1).strip().strip('"') if match else shorten_text.strip().strip('"')
+        # The second parse site. A fix that lands in one of two copies is a half
+        # fix, and this one is likelier to truncate: it carries the full prior
+        # exchange into the same 16,000-token cap.
+        shortened = _require_description(shorten_text, shortened, "shortening")
 
         transcript["rewrite_prompt"] = shorten_prompt
         transcript["rewrite_thinking"] = shorten_thinking

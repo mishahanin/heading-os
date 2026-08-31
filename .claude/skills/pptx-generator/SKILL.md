@@ -220,6 +220,7 @@ Map brand.json values to layout placeholders:
 
 **Key rules (always apply):**
 - **Output lands in the DATA overlay, never the engine** -- resolve `$DECK_DIR` (`get_outputs_dir()/content/decks/{brand}`) before any heredoc and save there (see `references/generation-workflow.md` § Execution Methods). A bare `output/{brand}` resolves into the engine tree.
+- **Keep the `$DECK_DIR` line when you copy a cookbook layout.** Every template reads that variable and exits non-zero when it is unset. Do not replace it with a bare filename.
 - **Max 5 slides per batch** -- stop and validate after each
 - **EVERY slide MUST have background explicitly set** -- `slide.background.fill.solid()` + `slide.background.fill.fore_color.rgb = hex_to_rgb(BRAND_BG)` -- this prevents white slides on dark brands
 - **Combining batches also requires background setting** -- `add_slide()` defaults to white

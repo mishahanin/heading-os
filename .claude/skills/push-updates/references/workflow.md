@@ -10,7 +10,33 @@ The command lines and the approval gates are duplicated in SKILL.md on purpose.
 SKILL.md is authoritative for those. This file is authoritative for the formats
 and the reasoning.
 
-Last Updated: 2026-08-20
+Last Updated: 2026-08-30
+
+## Which tree is which
+
+Three repositories are in play and this document used to name a fourth that no
+longer exists.
+
+- **Engine clone** (`.heading-os`, the workspace root). Code only, PUBLIC. Every
+  command in this workflow runs from here.
+- **Data overlay** (`../.heading-os-data`). All content, private forever. It is
+  the publish SOURCE: `publish-corporate.py` sets `SOURCE_ROOT = get_data_root()`,
+  so the corporate-routed files it enumerates, copies and verifies live here.
+- **Corporate repo** (`../heading-os-corporate`). The publish DESTINATION, shared
+  down to executives.
+
+Until 2026-08-30 six lines of this workflow and four of the SKILL.md named
+`ceo-main`, the single pre-cutover workspace retired at the 2026-06-15 two-part
+cutover. It is absent from disk and must not be written to, so instructions like
+"run `git status` in ceo-main" could not be carried out at all. The occurrences
+did not all resolve to the same tree, which is why the fix was not a rename: the
+Phase 0 check, the Phase 1 commit and the Phase 4 push mean both writable trees,
+while the orphan and verify notes in Phases 2 and 3 mean the data overlay alone.
+
+Two other rules follow from the list above. **No step changes the working
+directory**; a command acting on another repository names it with `git -C
+<path>`. And **no step hand-runs `git push` on the engine clone or the data
+overlay**: that is `scripts/push-all.py`, for the reason Phase 4 gives.
 
 ---
 
@@ -20,8 +46,12 @@ Last Updated: 2026-08-20
 2. Check for unclassified files: `python scripts/classification-health.py --unclassified`
    - If any found: prompt CEO for classification of each file
    - Add a rule to `config/routing-map.yaml` for any newly classified files
-3. Run `git status` in ceo-main - check for uncommitted changes
-4. If uncommitted changes exist, show summary and ask: "Commit these changes before pushing? (yes/no)"
+3. Check both writable trees for uncommitted changes:
+   ```bash
+   git status --short
+   git -C ../.heading-os-data status --short
+   ```
+4. If uncommitted changes exist, show a summary and ask: "Commit these changes before pushing? (yes/no)"
 5. **Routing-regression gate (soft).** Run:
    ```bash
    python scripts/skill-trigger-test.py --changed --strict --threshold 0.85
@@ -34,11 +64,12 @@ Last Updated: 2026-08-20
 
    > Soft gate (advisory + CEO override) per audit #63-2. The judge is non-deterministic; promote to a hard block only once its false-positive rate is characterized over several weeks of soft runs.
 
-### Phase 1: Commit ceo-main
+### Phase 1: Commit the engine clone and the data overlay
 
-1. Stage all relevant workspace files (respect .gitignore)
+1. Stage the relevant files in BOTH trees (respect .gitignore): the engine clone
+   for code, rules, skills and config; the data overlay for content.
    - **DO NOT stage:** `.env`, `.workspace-identity.json`, `.sync/`, `.sentinel/`, `__pycache__/`
-2. Commit with message: "Workspace update: {summary from $ARGUMENTS or auto-generated}"
+2. Commit each tree with message: "Workspace update: {summary from $ARGUMENTS or auto-generated}"
 3. Check if any knowledge files are classified as corporate (via a corporate rule in `config/routing-map.yaml`)
    - If yes: run `python scripts/promote-knowledge.py --note "{path}" --type "{type}"` for each
    - Commit promotions: "Promote knowledge to shared for corporate distribution"
@@ -85,7 +116,7 @@ Last Updated: 2026-08-20
    - Copies every NEW + MODIFIED corporate file via `shutil.copy2` preserving metadata.
    - Runs a post-copy `filecmp.cmp` verify on every copied file.
    - Exits non-zero with diagnostic on any mismatch (exit 7).
-   - Surfaces orphan files (corporate-classified files missing from ceo-main) as a warning - never auto-deletes from corporate.
+   - Surfaces orphan files (corporate-classified files missing from the data overlay, which is the publish source) as a warning - never auto-deletes from corporate.
 
 5. **NEVER hand-type the file list** or write ad-hoc Python inline. Use the script as the single source of truth. If the script's classification logic is wrong for a specific case, add a rule to `config/routing-map.yaml`. Never work around the script.
 
@@ -131,29 +162,62 @@ Last Updated: 2026-08-20
    python scripts/publish-corporate.py --verify
    ```
 
-   This re-runs `filecmp.cmp` between every git-tracked corporate-classified file in ceo-main and its corporate-repo counterpart. Exit 0 = all clean. Exit 7 = mismatches detected (list printed). If the verify fails, halt before the corporate commit, surface the mismatched files to the CEO, and fix before proceeding.
+   This re-runs `filecmp.cmp` between every git-tracked corporate-classified file in the data overlay and its corporate-repo counterpart. Exit 0 = all clean. Exit 7 = mismatches detected (list printed). If the verify fails, halt before the corporate commit, surface the mismatched files to the CEO, and fix before proceeding.
 
-8. In the corporate repo:
+8. Commit and push the corporate repo. Each command names the repository with
+   `git -C`, so the working directory stays on the engine clone and Phase 4
+   inherits no directory this phase moved to:
 
    ```bash
-   git add -A
-   git commit -m "Release v{version} (build {build}): {summary}"
-   git push origin main
+   git -C ../heading-os-corporate add -A
+   git -C ../heading-os-corporate commit -m "Release v{version} (build {build}): {summary}"
+   git -C ../heading-os-corporate push origin main
    ```
+
+   The corporate repo is a private third repository, outside the engine leak
+   wall, so `push-all.py` neither covers it nor should be pointed at it. Until
+   2026-08-30 this step read "In the corporate repo:" with no `git -C` and no
+   `cd`, and Phase 4 step 1 below then ran a bare `git push` with the corporate
+   repo as the plausible working directory. `/publish-corporate` step 3 has
+   always carried an explicit `cd`; this workflow did not.
 
 ### Phase 4: Ancillary
 
-1. Push ceo-main to GitHub:
+1. Push the engine clone and the data overlay through the supervised primitive:
+
    ```bash
-   git push origin main
+   python scripts/push-all.py -m "Workspace update: {summary from $ARGUMENTS}"
    ```
-2. Check if CRM contacts were modified (any changes in `crm/contacts/`):
-   - If yes, they ride the data repo: `python scripts/push-all.py` commits and
-     pushes the data overlay (which holds `crm/contacts/`) to its private origin.
-     Exit `3` is a skip, not a failure: read its headline (`Partial: N of M` vs
-     `NOTHING PUSHED: all M`) and report that shape per `/backup` SKILL.md.
-   - `aggregate-crm.py` (next step) reads each exec's data repo directly.
-3. Optionally refresh the operator's own CRM aggregate:
+
+   **NEVER hand-run a bare `git push` on the engine clone.** The engine repo is
+   public and `push-all.py` is the only path that carries its unbypassable
+   walls: `engine_clean_scan()` refuses the push when any file in the engine
+   clone routes private or corporate, `content_scan()` reads the working tree
+   AND the unpushed commits for secrets, `engine_content_scan()` reads them for
+   real-entity tokens, and `supervised_push()` verifies ahead/behind `[0 0]`
+   rather than trusting an exit code. None of them has a skip flag, and a
+   hand-run `git push` reaches none of them. The layer-6 row of
+   `docs/engine-data-segregation-contract.md` names exactly this: "Someone
+   hand-running `git push` outside `push-all` bypasses it." That was the
+   instruction this file carried from its first version until 2026-08-30.
+
+   `scripts/safe-push.py --repo engine` is NOT the substitute. It is the
+   supervised-push primitive alone: it drives the push through a watchdog and
+   verifies `[0 0]`, and it runs no content scan and no routing scan. It solves
+   the hang problem, not the leak problem.
+
+   One run covers both repositories, so `crm/contacts/` rides the data overlay
+   here and needs no push of its own. That also removes the old step 2, which
+   pushed the data overlay only when CRM contacts happened to change; a push
+   that is conditional on one directory leaves every other content change of the
+   session sitting unpushed. The DATA overlay goes FIRST inside `push-all.py`,
+   because the engine's pre-push hook runs the full suite inside its push and
+   the overlay is the half that cannot be reconstructed.
+
+   Exit `3` is a skip, not a failure: read its headline (`Partial: N of M` vs
+   `NOTHING PUSHED: all M`) and report that shape per `/backup` SKILL.md.
+
+2. Refresh the operator's own CRM aggregate:
    ```bash
    python scripts/aggregate-crm.py
    ```
@@ -164,7 +228,7 @@ Last Updated: 2026-08-20
    not a shared repo, so nothing is pushed. Pass `--skip-clone` to skip cloning
    any missing exec overlay.
 
-4. Executive workspaces:
+3. Executive workspaces:
    - Central CEO-driven exec sync is **retired** as of 2026-06-26 (the destructive
      `workspace-sync.py` and the `sync-all-execs.py` driver are gone). The no-op stub that
      stood in for `sync-all-execs.py` was deleted on 2026-08-20; four of its five
@@ -184,7 +248,7 @@ PUSH COMPLETE
   Published: {new_count} new, {modified_count} modified files
   Categories: {skills} skills, {rules} rules, {scripts} scripts, {context} context files
   Corporate repo: pushed to origin/main
-  ceo-main: backed up to GitHub
+  Engine clone + data overlay: pushed via push-all.py, verified [0 0]
   CRM aggregate: {refreshed|no changes}
 
   Each executive receives this update when they next pull.

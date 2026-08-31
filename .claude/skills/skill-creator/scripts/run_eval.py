@@ -30,6 +30,7 @@ Guarded by tests/test_skill_creator_run_eval_reports_a_dead_cli.py.
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -100,6 +101,45 @@ def find_project_root() -> Path:
         if (parent / ".claude").is_dir():
             return parent
     return current
+
+
+# The scratch command file `run_single_query` mints, expressed once so the
+# sweep below cannot drift away from the minting side. uuid4().hex[:8] is
+# lowercase hex, always eight characters.
+SCRATCH_COMMAND_RE = re.compile(r"^.+-skill-[0-9a-f]{8}\.md$")
+
+
+def sweep_stale_command_files(project_root: Path) -> list[str]:
+    """Remove scratch command files an earlier crashed run left behind.
+
+    `run_single_query` must write its command file into the REAL project's
+    `.claude/commands/`: that is where `claude -p` discovers project commands,
+    so a temp directory outside the repository would measure nothing. Its
+    `finally` unlinks the file on every normal path.
+
+    A SIGKILL or a machine crash is not a normal path, and `.claude/commands/`
+    is a tracked directory here - litter left in it is litter in a committed
+    tree, one `git add` away from shipping. Sweep at the start of a run.
+
+    Return the names removed, and let the caller SAY them. Silent cleanup would
+    throw away the one signal that a previous run died.
+    """
+    commands_dir = Path(project_root) / ".claude" / "commands"
+    if not commands_dir.is_dir():
+        return []
+
+    removed = []
+    for candidate in sorted(commands_dir.iterdir()):
+        if not candidate.is_file() or not SCRATCH_COMMAND_RE.match(candidate.name):
+            continue
+        try:
+            candidate.unlink()
+        except OSError as exc:
+            print(f"Warning: could not remove stale scratch command {candidate}: {exc}",
+                  file=sys.stderr)
+            continue
+        removed.append(candidate.name)
+    return removed
 
 
 def run_single_query(
@@ -291,6 +331,18 @@ def run_eval(
 ) -> dict:
     """Run the full eval set and return results."""
     require_claude_cli()
+
+    # Before scoring anything, clear scratch command files a crashed earlier run
+    # left in the project tree, and name them. See sweep_stale_command_files.
+    stale = sweep_stale_command_files(project_root)
+    if stale:
+        print(
+            f"Note: removed {len(stale)} stale scratch command file(s) from "
+            f"{Path(project_root) / '.claude' / 'commands'} ({', '.join(stale)}). "
+            "An earlier run did not exit cleanly.",
+            file=sys.stderr,
+        )
+
     results = []
 
     with ProcessPoolExecutor(max_workers=num_workers) as executor:

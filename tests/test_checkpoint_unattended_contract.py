@@ -67,8 +67,8 @@ OFFER_HOOK = ROOT / ".claude" / "hooks" / "checkpoint-offer.py"
 PRECOMPACT_HOOK = ROOT / ".claude" / "hooks" / "checkpoint-precompact.py"
 SWITCH = ROOT / "scripts" / "checkpoint-paths.py"
 
-SESSION = "8c765efb-81ea-4397-a80c-620d7b9fc4c3"
-SLUG = "8c765efb-81ea-4397-a80c-620d7b9f"
+SESSION = "1a2b3c4d-5e6f-4708-8912-a3b4c5d6e7f8"
+SLUG = "1a2b3c4d-5e6f-4708-8912-a3b4c5d6"
 
 # The shape of a mid-turn operator message, copied from this workspace's own
 # transcript on 2026-08-17: enqueue at 13:00:18.072Z, remove at 13:01:12.952Z.

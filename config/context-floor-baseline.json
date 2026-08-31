@@ -1,12 +1,12 @@
 {
   "components": {
-    "skill_descriptions": 49218,
-    "skill_other_frontmatter": 135049,
-    "always_on_rules": 119655,
-    "memory_index": 17673,
-    "claude_md": 11140
+    "skill_descriptions": 46470,
+    "skill_other_frontmatter": 134225,
+    "always_on_rules": 76501,
+    "memory_index": 17352,
+    "claude_md": 12646
   },
-  "total_bytes": 332735,
-  "skill_count": 96,
+  "total_bytes": 287194,
+  "skill_count": 94,
   "bytes_per_token": 4
 }

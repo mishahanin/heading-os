@@ -185,7 +185,7 @@ in lockstep.
 
 ### The commit hook is bypassable; the push scan is not
 
-`git commit --no-verify` (or `-n`) skips every pre-commit hook, and git offers no setting to forbid that flag — the hook file can also simply be deleted. So the commit-time gate can never be made truly mandatory on its own. **Never pass `--no-verify`.** The guarantee that secrets never reach a remote lives at the push layer (layer 6, pure code, both repos) and, for a server-side guarantee, in GitHub push protection / secret scanning enabled on both private repos. Treat the commit hook as a fast local warning, not the wall. Do NOT set `core.hooksPath` (a literal path value once silently bypassed every hook — see `reference/workspace-overview.md`).
+`git commit --no-verify` (or `-n`) skips every pre-commit hook, and git offers no setting to forbid that flag — the hook file can also simply be deleted. So the commit-time gate can never be made truly mandatory on its own. **Never pass `--no-verify`.** The guarantee that secrets never reach a remote lives at the push layer (layer 6, pure code, both repos) and, for a server-side guarantee, in GitHub push protection / secret scanning enabled on both private repos. Treat the commit hook as a fast local warning, not the wall. Do NOT set `core.hooksPath` — a literal path value once silently bypassed every hook on the maintainer's own workspace. (The incident write-up lives in `reference/workspace-overview.md`, which is operator-only: it is a live catalogue of one instance's internals, routes `private`, and is not part of a public clone.)
 
 ### The security-critical files, and what guards a change to them
 

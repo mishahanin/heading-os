@@ -173,14 +173,18 @@ Write these sections:
    - Regional columns: flex layout, 3 equal columns
    - Section titles: 11pt, 800 weight, uppercase, letter-spacing 1.5px
 
+   Bash gets no path redirect, so each block below resolves the outputs root first.
+
 2. **Convert to PDF:**
    ```bash
-   python scripts/html-to-pdf.py outputs/intel/briefs/world-intel-YYYY-MM-DD.html
+   OUTPUTS_DIR="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import get_outputs_dir; print(get_outputs_dir())")"
+   python scripts/html-to-pdf.py "$OUTPUTS_DIR/intel/briefs/world-intel-YYYY-MM-DD.html"
    ```
 
 3. **Validate:**
    ```bash
-   python scripts/sanitize-text.py outputs/intel/briefs/world-intel-YYYY-MM-DD.html --scan
+   OUTPUTS_DIR="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import get_outputs_dir; print(get_outputs_dir())")"
+   python scripts/sanitize-text.py "$OUTPUTS_DIR/intel/briefs/world-intel-YYYY-MM-DD.html" --scan
    ```
 
 4. Report both file paths (HTML + PDF), and hidden character status.

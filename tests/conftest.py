@@ -9,6 +9,7 @@ See scripts.utils.workspace.get_default_tz().
 This file also holds the re-exec guard for the whole suite; see below.
 """
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -247,9 +248,61 @@ _UNWATCHED = {
 
 _WATCH_BEFORE = None
 
+# Wall-clock moment `_WATCH_BEFORE` was taken. Recorded because the overlay is a
+# LIVE tree: a concurrent agent, a daemon or the operator can create a file in it
+# while the suite runs, and a reader comparing the snapshot against a later walk
+# of the disk would call that file "missed by the snapshot". It was not missed;
+# it did not exist yet. Anything wanting to audit the snapshot's coverage must
+# ignore files younger than this.
+_WATCH_BEFORE_AT = None
+
+
+_LIVE_OVERLAY_LABEL = "operator overlay"
+_ENV_ROOT_LABEL = "data root in use"
+
+
+def _structural_overlay_root():
+    """The operator's real overlay, derived from THIS FILE's location alone.
+
+    NOT `get_data_root()`, and that is the entire point of this function.
+    `get_data_root()` honours `HEADING_OS_DATA` (scripts/utils/paths.py), so
+    until 2026-08-31 the guard asked the environment where the operator's data
+    was — and the environment is the one thing a test session can change.
+
+    Measured that day, with nothing written: launched plainly, the snapshot
+    watched 10,919 real files and `_OVERLAY_PREFIXES` named the real overlay.
+    Launched as `HEADING_OS_DATA=<scratch> pytest`, which is the remedy every
+    isolation fix in this repository recommends and what a careful operator and
+    CI both do, the snapshot watched 0 files and the prefix named the scratch
+    directory. Both halves of the protection moved off the operator's data at
+    once, for the whole session, silently. A guard has to ask about the WRITE,
+    not about the environment.
+
+    Structural, like `_FALLBACK_ROOT` in scripts/utils/paths.py: this file is
+    `<engine>/tests/conftest.py`, so the sibling data repo is two parents up.
+    No environment variable reaches it. A clone with no sibling overlay (a fresh
+    public clone, CI) gets None and the guard stays off, exactly as before.
+
+    Only `.heading-os-data` is returned. The four `.heading-os-data-<slug>` exec
+    overlays alongside it are equally real private data and are equally
+    unwatched; that is a known gap, reported rather than silently widened here,
+    because bringing them in changes which writes a run is allowed to make.
+    """
+    engine = Path(__file__).resolve().parent.parent
+    sibling = engine.parent / ".heading-os-data"
+    try:
+        return sibling.resolve() if sibling.is_dir() else None
+    except OSError:
+        return None
+
 
 def _overlay_root():
-    """The live overlay root, or None when this clone has no private overlay."""
+    """The overlay THIS SESSION's data root points at, or None.
+
+    Still environment-sensitive on purpose: it answers "where is this run
+    writing", which is a different question from "where is the operator's data".
+    The guard unions both — see `_watched_roots()`.
+    """
     try:
         from scripts.utils.paths import data_overlay_present
         from scripts.utils.workspace import get_data_root
@@ -264,6 +317,32 @@ def _overlay_root():
     return root if root.is_dir() else None
 
 
+def _watched_roots():
+    """{label: root} — every root this run must not write without saying so.
+
+    The union of the two questions above. In the ordinary case they are the same
+    directory and there is one label, which is what every earlier run saw.
+
+    When they differ, both are watched. The structural one because it is the
+    operator's data and no `HEADING_OS_DATA` may move the guard off it. The
+    session one because a run pointed at a scratch root still must not scatter
+    private records into it unnoticed: those are exactly the writes that would
+    have hit the real overlay had the variable been absent, and reporting them
+    is how the scratch remedy stays honest instead of merely quiet.
+
+    One function, so a test can drive the real snapshot over a fake overlay by
+    replacing this and nothing else.
+    """
+    roots = {}
+    structural = _structural_overlay_root()
+    if structural is not None:
+        roots[_LIVE_OVERLAY_LABEL] = structural
+    session = _overlay_root()
+    if session is not None and session != structural:
+        roots[_ENV_ROOT_LABEL] = session
+    return roots
+
+
 def _overlay_dir(parts):
     """One directory inside the live overlay, or None. Kept for callers that
     want a single subtree rather than the whole walk."""
@@ -274,16 +353,8 @@ def _overlay_dir(parts):
     return directory if directory.is_dir() else None
 
 
-def _watch_snapshot():
-    """{label: (directory, {relpath: size})} for the whole overlay.
-
-    One label, because the unit being protected is the overlay, not a list of
-    interesting places in it. Sizes are always taken: a truncation in place adds
-    no file and removes none, which is how the memory index was lost in 2026-08.
-    """
-    root = _overlay_root()
-    if root is None:
-        return {}
+def _snapshot_one(root):
+    """{relpath: size} for one root, minus the _UNWATCHED subtrees."""
     entries = {}
     for path in root.rglob("*"):
         try:
@@ -298,7 +369,21 @@ def _watch_snapshot():
             entries[rel.as_posix()] = path.stat().st_size
         except OSError:
             continue
-    return {"operator overlay": (root, entries)}
+    return entries
+
+
+def _watch_snapshot():
+    """{label: (directory, {relpath: size})} for every watched root.
+
+    One label per root, because the unit being protected is a whole overlay, not
+    a list of interesting places in it. Sizes are always taken: a truncation in
+    place adds no file and removes none, which is how the memory index was lost
+    in 2026-08.
+    """
+    return {
+        label: (root, _snapshot_one(root))
+        for label, root in _watched_roots().items()
+    }
 
 
 # The snapshot above is a post-mortem: it says the overlay changed, after the
@@ -313,7 +398,11 @@ def _watch_snapshot():
 # against an accident, and the accidents all look like an absolute path built
 # from `get_data_root()`. The snapshot is what covers the rest.
 
-_OVERLAY_PREFIX = None          # set in pytest_sessionstart
+# A TUPLE, and renamed from the singular `_OVERLAY_PREFIX` it replaced on
+# 2026-08-31. Renamed rather than widened in place so that a caller still setting
+# the old name arms nothing and fails, instead of handing a bare string to code
+# that iterates it and silently guarding twenty-six single characters.
+_OVERLAY_PREFIXES = ()          # set in pytest_sessionstart
 _WRITE_MODE_CHARS = frozenset("wxa+")
 
 
@@ -322,7 +411,7 @@ class OverlayWriteRefused(RuntimeError):
 
 
 def _refuse_overlay_path(target, verb):
-    if _OVERLAY_PREFIX is None:
+    if not _OVERLAY_PREFIXES:
         return
     try:
         text = os.fspath(target)
@@ -330,7 +419,7 @@ def _refuse_overlay_path(target, verb):
         return
     if isinstance(text, bytes):
         text = os.fsdecode(text)
-    if _OVERLAY_PREFIX not in text:
+    if not any(prefix in text for prefix in _OVERLAY_PREFIXES):
         return
     raise OverlayWriteRefused(
         f"a test tried to {verb} the operator's live data at {text}. "
@@ -347,6 +436,22 @@ def _install_overlay_write_guard():
     real_open = builtins.open
     real_replace, real_rename = os.replace, os.rename
     real_remove, real_unlink = os.remove, os.unlink
+    # MEASURED 2026-08-31: the guard wrapped the file primitives and NOT the
+    # directory ones, so a test reaching `write_text` failed loudly while one
+    # reaching `mkdir` or `touch` planted a stray directory in the operator's
+    # real private data in total silence. `git status` does not show an empty
+    # directory either, so nothing downstream would have shown it. An audit of
+    # the 31 test-reachable modules that resolve the data root at import time
+    # found 17 of them bite through exactly this gap.
+    real_mkdir, real_makedirs, real_rmdir = os.mkdir, os.makedirs, os.rmdir
+    # `os.open`, separately from `builtins.open`. MEASURED the same day, by
+    # driving the guard by hand: with the three directory calls wrapped and this
+    # one not, `Path.touch()` was still ALLOWED and left a real file in the
+    # operator's overlay. `Path.touch` does not go through `builtins.open` at
+    # all - it calls `os.open` with O_CREAT directly. Wrapping the pretty name
+    # and missing the primitive under it is how a guard reads complete and is
+    # not. Only creating flags are refused, so an ordinary read still works.
+    real_os_open = os.open
 
     def guarded_open(file, mode="r", *args, **kwargs):
         if _WRITE_MODE_CHARS & set(mode):
@@ -369,6 +474,34 @@ def _install_overlay_write_guard():
         _refuse_overlay_path(path, "delete")
         return real_unlink(path, *args, **kwargs)
 
+    def guarded_mkdir(path, *args, **kwargs):
+        # Only refuse a call that would actually CREATE something. `Path.mkdir(
+        # exist_ok=True)` still reaches `os.mkdir` and lets the resulting
+        # FileExistsError through its own handler, so refusing unconditionally
+        # rejected five tests that were creating nothing at all. Over-friction
+        # is how a guard gets switched off, after which nothing guards the real
+        # thing - so the test is "would this bring a new path into existence?",
+        # not "does this call look like a write?".
+        if not os.path.exists(path):
+            _refuse_overlay_path(path, "create a directory in")
+        return real_mkdir(path, *args, **kwargs)
+
+    def guarded_makedirs(name, *args, **kwargs):
+        if not os.path.exists(name):
+            _refuse_overlay_path(name, "create a directory tree in")
+        return real_makedirs(name, *args, **kwargs)
+
+    def guarded_rmdir(path, *args, **kwargs):
+        _refuse_overlay_path(path, "remove a directory from")
+        return real_rmdir(path, *args, **kwargs)
+
+    _CREATING_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC
+
+    def guarded_os_open(path, flags, *args, **kwargs):
+        if flags & _CREATING_FLAGS:
+            _refuse_overlay_path(path, "open for writing")
+        return real_os_open(path, flags, *args, **kwargs)
+
     # `io.open` and `builtins.open` are the same object, and pathlib reaches the
     # one on `io`. Both names are rebound or `Path.write_text` walks straight
     # past the guard.
@@ -376,12 +509,19 @@ def _install_overlay_write_guard():
     io.open = guarded_open
     os.replace, os.rename = guarded_replace, guarded_rename
     os.remove, os.unlink = guarded_remove, guarded_unlink
+    # `Path.mkdir` and `Path.touch` reach `os.mkdir` and `os.open`; the latter is
+    # already covered through `builtins.open`/`io.open` above, so wrapping the
+    # three directory calls closes the pair.
+    os.mkdir, os.makedirs, os.rmdir = guarded_mkdir, guarded_makedirs, guarded_rmdir
+    os.open = guarded_os_open
 
     def restore():
         builtins.open = real_open
         io.open = real_open
         os.replace, os.rename = real_replace, real_rename
         os.remove, os.unlink = real_remove, real_unlink
+        os.mkdir, os.makedirs, os.rmdir = real_mkdir, real_makedirs, real_rmdir
+        os.open = real_os_open
 
     return restore
 
@@ -389,13 +529,200 @@ def _install_overlay_write_guard():
 _RESTORE_WRITE_GUARD = None
 
 
-def pytest_sessionstart(session):
-    global _WATCH_BEFORE, _OVERLAY_PREFIX, _RESTORE_WRITE_GUARD
-    _WATCH_BEFORE = _watch_snapshot()
-    root = _overlay_root()
-    if root is None:
+# ============================================================
+# Egress: a unit test does not reach the internet
+# ============================================================
+#
+# The lesson was written and the guard was never installed. The workspace's own
+# record says "block `socket.connect`; one POSTed a token to Google", and on
+# 2026-08-31 a sweep found no `socket` handling in any conftest at any level and
+# no `pytest-socket` in the dependency set. So the rule existed in prose and the
+# place it had to be applied did not have it — the same shape as the overlay
+# guard above.
+#
+# Stdlib only, and deliberately narrow. What is refused is EGRESS: a connect to
+# an address that is not loopback. What is not refused:
+#
+#   * loopback and AF_UNIX, always. That is local IPC — the bridge daemon, a
+#     scratch HTTP server, a socketpair — and it carries nothing off the machine,
+#     which is the thing this guard is about. Refusing it would break real tests
+#     to buy nothing.
+#   * anything under the `integration`, `acceptance` or `network` markers. The
+#     first two are applied by path in `pytest_collection_modifyitems` and are
+#     excluded from the per-push unit job; the third is the explicit opt-in for a
+#     unit test that genuinely has to leave the machine.
+#
+# `connect` is the choke point rather than `getaddrinfo`: a name lookup carries
+# no payload, and blocking it would turn "no network" into a DNS error a long way
+# from the call that wanted the network.
+
+_NETWORK_MARKERS = ("network", "integration", "acceptance")
+_NETWORK_ALLOWED = False        # flipped per test by _no_egress below
+_RESTORE_SOCKET_GUARD = None
+
+
+class NetworkAccessRefused(RuntimeError):
+    """A test tried to reach a non-loopback address."""
+
+
+_WSL_GATEWAY = ...          # computed once, lazily; `...` means "not yet asked"
+
+
+def wsl_host_gateway():
+    """The Windows side of THIS machine on WSL2, or None anywhere else.
+
+    Under WSL2 the host is reachable only through the default-route gateway, and
+    this workspace's local models live there: no ollama runs inside WSL, every
+    model is pinned to the Windows host, so the embedder is a connect to
+    `<gateway>:11434`. That address is not loopback, but it is not egress
+    either — it is the other half of the same physical machine, and nothing
+    sent to it leaves the box.
+
+    Found by the guard rather than reasoned in advance: installing the egress
+    block turned tests/test_recall_cross_lingual.py red with
+    `connect to ('172.30.48.1', 11434)`.
+
+    Derived, never hardcoded. The gateway changes on every WSL boot, so a
+    literal would rot within a day. Narrowed to the single gateway ADDRESS and
+    not to its subnet, and not to RFC1918 in general: the machine sits on a real
+    LAN, other hosts on it are third parties, and "private address" is not a
+    synonym for "this computer".
+    """
+    global _WSL_GATEWAY
+    if _WSL_GATEWAY is not ...:
+        return _WSL_GATEWAY
+    _WSL_GATEWAY = None
+    try:
+        release = Path("/proc/sys/kernel/osrelease").read_text(encoding="utf-8")
+    except OSError:
+        return _WSL_GATEWAY
+    if "microsoft" not in release.lower():
+        return _WSL_GATEWAY
+    import socket
+    import struct
+    try:
+        rows = Path("/proc/net/route").read_text(encoding="utf-8").splitlines()[1:]
+    except OSError:
+        return _WSL_GATEWAY
+    for row in rows:
+        fields = row.split()
+        if len(fields) > 2 and fields[1] == "00000000":
+            try:
+                _WSL_GATEWAY = socket.inet_ntoa(struct.pack("<L", int(fields[2], 16)))
+            except (ValueError, struct.error, OSError):
+                _WSL_GATEWAY = None
+            break
+    return _WSL_GATEWAY
+
+
+def address_is_local(address) -> bool:
+    """True for loopback, AF_UNIX, the unspecified address, and the WSL2 host.
+
+    Public so a test can drive it without opening a socket. Unparseable is
+    treated as NOT local: a guard that fails open on a shape it does not
+    recognise is the kind that reports clean while a token leaves the machine.
+    """
+    import ipaddress
+
+    if isinstance(address, (str, bytes, os.PathLike)):
+        return True                              # AF_UNIX path
+    if not isinstance(address, tuple) or not address:
+        return False
+    host = address[0]
+    if host in (None, "", "localhost"):
+        return True
+    try:
+        text = os.fsdecode(host) if isinstance(host, bytes) else str(host)
+    except (TypeError, ValueError):
+        return False
+    bare = text.split("%", 1)[0]
+    if bare == wsl_host_gateway():
+        return True
+    try:
+        ip = ipaddress.ip_address(bare)
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_unspecified
+
+
+def _refuse_egress(address, verb):
+    if _NETWORK_ALLOWED:
         return
-    _OVERLAY_PREFIX = f"{root}{os.sep}"
+    if address_is_local(address):
+        return
+    raise NetworkAccessRefused(
+        f"a test tried to {verb} {address!r}, which is not loopback. A unit test "
+        f"must not reach the network: mock the client, or mark the test "
+        f"`@pytest.mark.network` if it genuinely has to leave this machine."
+    )
+
+
+def _install_socket_guard():
+    """Wrap the two connect primitives. Returns a callable that puts them back."""
+    import socket
+
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+
+    def guarded_connect(self, address, *args, **kwargs):
+        _refuse_egress(address, "connect to")
+        return real_connect(self, address, *args, **kwargs)
+
+    def guarded_connect_ex(self, address, *args, **kwargs):
+        _refuse_egress(address, "connect_ex to")
+        return real_connect_ex(self, address, *args, **kwargs)
+
+    # Set on `socket.socket`, the Python subclass, which shadows the inherited
+    # `_socket.socket` methods for it and for every subclass — including
+    # `ssl.SSLSocket`. `socket.create_connection`, and therefore http.client,
+    # urllib, requests and urllib3, all call `sock.connect(sa)` and land here.
+    socket.socket.connect = guarded_connect
+    socket.socket.connect_ex = guarded_connect_ex
+
+    def restore():
+        socket.socket.connect = real_connect
+        socket.socket.connect_ex = real_connect_ex
+
+    return restore
+
+
+def pytest_configure(config):
+    """Register the opt-in marker here, not in pyproject.
+
+    `--strict-markers` is on, so `network` has to be declared somewhere. It is
+    declared beside the guard that honours it, so the two cannot drift apart.
+    """
+    config.addinivalue_line(
+        "markers",
+        "network: this test genuinely reaches a non-loopback address "
+        "(the egress guard in tests/conftest.py stands aside for it)",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _no_egress(request):
+    """Open the gate only for a test that has asked for it, then close it again."""
+    global _NETWORK_ALLOWED
+    previous = _NETWORK_ALLOWED
+    _NETWORK_ALLOWED = any(
+        request.node.get_closest_marker(name) is not None for name in _NETWORK_MARKERS
+    )
+    try:
+        yield
+    finally:
+        _NETWORK_ALLOWED = previous
+
+
+def pytest_sessionstart(session):
+    global _WATCH_BEFORE, _WATCH_BEFORE_AT, _OVERLAY_PREFIXES, _RESTORE_WRITE_GUARD
+    global _RESTORE_SOCKET_GUARD
+    _RESTORE_SOCKET_GUARD = _install_socket_guard()
+    _WATCH_BEFORE_AT = time.time()
+    _WATCH_BEFORE = _watch_snapshot()
+    roots = _watched_roots()
+    if not roots:
+        return
+    _OVERLAY_PREFIXES = tuple(f"{root}{os.sep}" for root in roots.values())
     _RESTORE_WRITE_GUARD = _install_overlay_write_guard()
 
 
@@ -404,6 +731,20 @@ def watch_complaints(before, after):
 
     A directory present in `before` and absent from `after` is itself reported:
     a run that removed the whole archive must not read as a clean pass.
+
+    The wording says the overlay CHANGED, never that "a test wrote" it, and the
+    difference is not pedantry. This is a whole-session before/after diff: it
+    knows the tree moved between two instants and it knows nothing whatever
+    about who moved it. On 2026-08-31 a run of this suite reported four rewritten
+    files under docs/ and templates/; the cause was a second agent editing those
+    documents and running the doc regenerator at 05:00:47, inside the window.
+    The earlier wording had already cost one investigation that day: a complaint
+    reading "a test wrote" sent an agent hunting a test that had written nothing,
+    and it took an audit hook to establish the negative.
+
+    So the message reports the observation, and the reader draws the inference.
+    The in-process guard above is the half that CAN name a culprit, because it
+    refuses at the moment of the write and the traceback carries the test.
     """
     complaints = []
     for label, (directory, snapshot) in before.items():
@@ -417,11 +758,11 @@ def watch_complaints(before, after):
             n for n in set(snapshot) & set(now)
             if snapshot[n] is not None and snapshot[n] != now[n]
         )
-        for what, names in (("wrote", added), ("deleted", removed), ("rewrote", resized)):
+        for what, names in (("appeared", added), ("vanished", removed), ("rewrote", resized)):
             if names:
                 complaints.append(
-                    f"a test {what} {len(names)} file(s) in the operator's live "
-                    f"{label} at {directory}: {names[:5]}"
+                    f"{len(names)} file(s) {what} in the operator's live {label} "
+                    f"at {directory} during the run: {names[:5]}"
                 )
     return complaints
 

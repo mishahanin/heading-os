@@ -364,7 +364,7 @@ def outputs(tmp_path, monkeypatch):
     """An outputs tree under an ancestor directory literally named `archive`."""
     root = tmp_path / "archive" / "workspace" / "outputs"
     root.mkdir(parents=True)
-    monkeypatch.setattr(oo, "OUTPUTS_DIR", root)
+    monkeypatch.setattr(oo, "outputs_dir", lambda p=root: p)
     return root
 
 

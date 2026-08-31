@@ -1,4 +1,4 @@
-<!-- version: 1.0.0 | last-updated: 2026-08-09 -->
+<!-- version: 1.1.0 | last-updated: 2026-08-31 -->
 # Design check
 
 Two engines decide whether an artifact this engine produces reads as designed or
@@ -93,6 +93,7 @@ file.
 ```bash
 python scripts/visual-discipline-check.py baseline record --deep docs/
 python scripts/visual-discipline-check.py baseline check --deep docs/
+python scripts/visual-discipline-check.py baseline stats
 ```
 
 `.visual-baseline.json` records a count per file and per rule, the same shape as
@@ -100,8 +101,11 @@ python scripts/visual-discipline-check.py baseline check --deep docs/
 fails only on findings **above** those counts, and never rewrites the file.
 
 This is deliberate and it is the whole reason the integration was possible
-without a rewrite. Measured on first run, the documentation site carried 390
-findings and the branded document family carried thousands. Demanding zero would
+without a rewrite. On first run the documentation site carried hundreds of
+findings and the branded document family carried thousands. For the current size
+of the freeze run `baseline stats`, which derives it from the file; the count
+used to be typed into this page, the CI step comment and the rule, and all three
+had drifted. Demanding zero would
 have meant either rebuilding every existing artifact before the tool could be
 used at all, or turning the gate off. Freezing means existing work is left alone
 while new work is held to the standard, and each frozen finding surfaces the
@@ -134,8 +138,13 @@ was skipped would block the very edit that fixes it.
 
 Four, stated plainly so a clean result is not over-read.
 
-**PPTX, DOCX and PDF are not covered by the deep engine.** It reads HTML, SVG and
-source text. Decks stay on the regex path. This is the largest remaining gap.
+**PDF and DOCX are covered by neither engine.** The deep engine reads HTML and
+SVG. The regex walk visits the suffixes in `SCAN_EXTENSIONS`, which is `.html`,
+`.htm`, `.svg` and `.pptx`, so PPTX decks stay on the regex path but PDF and
+DOCX are read by nothing at all. This page previously said the three "are not
+covered by the deep engine", which implied a regex path for all three; only
+PPTX has one. The gap lands hardest on the five locked corporate doctypes, whose
+only renders are PDF and DOCX. This is the largest remaining gap.
 
 **An unused CSS rule is not a finding.** The cascade is resolved against real
 elements, so a declaration no element uses is correctly invisible. A clean result

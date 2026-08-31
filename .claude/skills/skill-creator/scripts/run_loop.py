@@ -32,6 +32,26 @@ from scripts.run_eval import EvalRunError, find_project_root, run_eval
 from scripts.utils import parse_skill_md
 
 
+def default_report_path(skill_name: str) -> Path:
+    """Return a private path for the live HTML report.
+
+    Until 2026-08-31 this was::
+
+        Path(tempfile.gettempdir()) / f"skill_description_report_{skill}_{timestamp}.html"
+
+    written with `write_text`. The name is fully derivable from the skill and
+    the clock, and it lands in the shared temp directory at the default 0644.
+    On a multi-user box that is a disclosure, and worse, a pre-created-symlink
+    target: `write_text` follows symlinks, so whoever creates that name first
+    chooses which file this process overwrites.
+
+    `mkdtemp` gives an unguessable 0700 directory for one line. The report keeps
+    a stable name INSIDE it, so the browser's auto-refresh still works.
+    """
+    report_dir = tempfile.mkdtemp(prefix=f"skill_report_{skill_name}_")
+    return Path(report_dir) / "report.html"
+
+
 def split_eval_set(eval_set: list[dict], holdout: float, seed: int = 42) -> tuple[list[dict], list[dict]]:
     """Split eval set into train and test sets, stratified by should_trigger."""
     random.seed(seed)
@@ -293,11 +313,10 @@ def main():
 
     # Set up live report path
     if args.report != "none":
-        if args.report == "auto":
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            live_report_path = Path(tempfile.gettempdir()) / f"skill_description_report_{skill_path.name}_{timestamp}.html"
-        else:
-            live_report_path = Path(args.report)
+        live_report_path = (
+            default_report_path(skill_path.name) if args.report == "auto"
+            else Path(args.report)
+        )
         # Open the report immediately so the user can watch
         live_report_path.write_text("<html><body><h1>Starting optimization loop...</h1><meta http-equiv='refresh' content='5'></body></html>")
         webbrowser.open(str(live_report_path))

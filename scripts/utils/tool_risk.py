@@ -22,6 +22,7 @@ Usage::
     tool_risk.tier_for("note")            # -> "autonomous"
     tool_risk.tier_for("pipeline_update") # -> "notify"
     tool_risk.tier_for("unknown_type")    # -> "gated" (safe default)
+    tool_risk.send_capable_types()        # -> frozenset({"email_send", ...})
 """
 from __future__ import annotations
 
@@ -62,6 +63,32 @@ def load(*, force: bool = False) -> dict:
     return data
 
 
+def send_capable_types() -> frozenset[str]:
+    """The ledger's ``send_capable`` set - every ``action_type`` that can reach
+    a third party.
+
+    The ONE place a consumer asks "which action_types are sends". Consumers
+    must not keep their own copy: a second list is a list that can fall out of
+    step with this one, and the copy is the one that stops being updated.
+    ``scripts/action-queue.py`` and ``scripts/action-queue-execute.py`` each
+    carried a hardcoded ``("email_send", "telegram_send")`` tuple until
+    2026-08-31, and each had its tier check INSIDE the branch that tuple keyed,
+    so a type registered here but absent from the tuple never reached the
+    check.
+
+    A missing or malformed ``send_capable`` yields an EMPTY set. That is why
+    membership here must never be the only gate: a consumer pairs this with an
+    unconditional ``tier_for`` check, which is total over all action_types and
+    answers ``gated`` for one it does not know, so an emptied or tampered
+    ledger cannot switch a consumer's gate OFF - only widen or narrow which
+    refusal it reports.
+    """
+    raw = load().get("send_capable")
+    if not isinstance(raw, list):
+        return frozenset()
+    return frozenset(x for x in raw if isinstance(x, str))
+
+
 def tier_for(action_type: str) -> str:
     """Resolve an ``action_type`` to ``autonomous`` / ``notify`` / ``gated``.
 
@@ -72,8 +99,7 @@ def tier_for(action_type: str) -> str:
     ledger = load()
 
     # Invariant first: send-capable types floor at gated, regardless of tiers.
-    send_capable = ledger.get("send_capable") or []
-    if action_type in send_capable:
+    if action_type in send_capable_types():
         return GATED
 
     entry = (ledger.get("tiers") or {}).get(action_type)

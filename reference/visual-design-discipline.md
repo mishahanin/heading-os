@@ -311,7 +311,7 @@ Reference exemplars: status.stripe.com (navy canvas, brand-green wordmark, singl
 ### 5.7 Public web / marketing site
 
 - 31C brand identity visible above the fold without needing the logo to identify the company. If the site without the logo could be from any sovereign-tech vendor in the category, the visual register has failed.
-- One hero element per page. Maximum 4 discrete elements above the fold (Pass 4 empirical: Linear, Vercel, Stripe, Plausible all stay under 4).
+- One hero element per page. Maximum 4 discrete elements above the fold. The Pass 4 exemplars (Linear, Vercel, Stripe, Resend, Plausible) were cited as evidence for this, and they cannot carry it: the pass recorded screenshot paths and no element counts at all, so neither "at most 4" nor "under 4" is derivable from it. Treat the 4 as a judgement, not a measurement. The bound is at-most-4; earlier text here said the exemplars "all stay under 4", which is a stricter claim than the rule makes and than the evidence supports.
 - "Trusted by" logo strip is permitted but it must be real customers with cleared distribution. No fake logos.
 - Footer construction: 31C-specific, not the universal four-column-link-grid pattern.
 
@@ -327,7 +327,9 @@ When invoked by a producing skill, the skill is responsible for the audit before
 
 For artifacts produced outside a skill (direct CEO request, manual production by Claude in conversation), Claude is responsible for applying the audit before presenting.
 
-Companion script status: `scripts/visual-discipline-check.py` is a planned follow-up. Until it lands, the audit is manual against the checklists in §5.
+Companion script status: `scripts/visual-discipline-check.py` SHIPPED on 2026-06-26. This paragraph said it was "a planned follow-up" until 2026-08-31, more than two months after it landed, which is a reader being told to do by hand what a command already does.
+
+What it actually covers, so the manual half is not guessed at either. It scans `.html`, `.htm`, `.svg` and `.pptx`; **PDF and DOCX are read by neither of its engines**, so every rendered corporate doctype is unaudited and stays a human reading. Mechanised: the banned-hex list, the purple-to-pink gradient, and the font blocklist. NOT mechanised, whatever the numbers in §5 suggest: the Delta-E threshold, tracking, letter-spacing, and the above-fold element count. The only place it runs automatically is the CI ratchet over `docs/`; no skill invokes it. Run it by hand with `python scripts/visual-discipline-check.py baseline check --deep <path>`, and read §5 for everything the command cannot see.
 
 ---
 

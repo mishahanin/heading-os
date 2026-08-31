@@ -21,7 +21,51 @@ Some hook events can block work by protocol; the rest can only observe, enrich, 
 | Hook | Purpose |
 |------|---------|
 | `data-path-redirect.py` | Redirects data-relative tool paths to the resolved data root, so a `Read`/`Write`/`Edit`/`Grep`/`Glob` aimed at a data path lands in the private overlay, not the engine tree. The one hook wired in the portable `settings.json`. |
-| `_dispatch.py` | The consolidated PreToolUse guard, registered on three matchers: the write tools, `Bash`, and `Read`, `Grep` and `Glob` together. It runs, in one process, the secret-detection block (API-key and credential patterns), the corporate-boundary block (no writes to read-only corporate content), the docs-protection block, the personal-threads protection (it covers the live CEO-only subtree and the archived copies of it under a closed year, and for `Grep` and `Glob` it refuses any expression that can EXPAND into either, so a wildcard sweep of the whole threads tree and a bare `Grep` at its root are both refused; name a business subtree instead), and the slow-shell block (a `Bash` call that runs the whole test suite in one process, or waits in the foreground, is refused and pointed at `scripts/run-tests.py` or `run_in_background`). |
+| `_dispatch.py` | The consolidated PreToolUse guard. It runs eleven checks in one process, on five matchers. The next section names every one. |
+
+### The dispatcher and its eleven checks
+
+All three platform templates (`.claude/settings.local.{linux,macos,windows}.json`) register `_dispatch.py` on the same five PreToolUse matchers:
+
+| Matcher | Covers |
+|---|---|
+| `Write\|Edit\|MultiEdit\|NotebookEdit` | the write family |
+| `Bash` | every shell command |
+| `Read\|Grep\|Glob` | the read family |
+| `mcp__codegraph__.*` | the CodeGraph MCP tools |
+| `Agent\|Task\|Workflow` | agent and workflow dispatch |
+
+The `CHECKS` registry in `.claude/hooks/_dispatch.py` holds eleven entries, and the dispatcher runs them in this order. The first check that returns a block decision stops the tool call.
+
+| # | Check | Blocks | What it refuses |
+|---|---|---|---|
+| 1 | `check_prevent_secrets` | always | A write that carries an API key or another credential pattern. |
+| 2 | `check_release_gate` | always | A commit or a push the operator did not ask for in this turn. The next section covers it. |
+| 3 | `check_protect_personal_threads` | always | A read of the CEO-only thread subtree, live or archived under a closed year. For `Grep` and `Glob` it also refuses an expression that can EXPAND into either. Name a business subtree instead. |
+| 4 | `check_protect_corporate` | always | A write to read-only corporate content. |
+| 5 | `check_protect_docs` | always | A direct edit to a `docs/` page that `sync-docs.py` overwrites from its template. |
+| 6 | `check_cwd_anchor` | always | A workspace script started by a root-relative path from a drifted shell directory. It fires only when the path resolves from the root and not from that directory, and it answers with the anchored command. |
+| 7 | `check_slow_shell` | always | A `Bash` call that runs the whole test suite in one process, or that waits in the foreground. It points at `scripts/run-tests.py` or at `run_in_background`. |
+| 8 | `check_rate_limit` | at the hard cap | A daily `Write` and `Edit` cap. The soft cap warns. Loop detection (same tool, same file, short window) stays advisory and never blocks. `Bash` is excluded. |
+| 9 | `check_graph_first` | always | The session's first lookup into source code, until a CodeGraph query is attempted. Any attempt unlocks the session, including one that errors or returns nothing. |
+| 10 | `check_fanout_first` | always | More hand-reading past the distinct-file budget, when the session has dispatched no agent and no workflow. `scripts/fanout-note.py` records a reason and resets the budget. |
+| 11 | `check_tool_budget` | at the hard cap | A total-tool-call cap in a 30-minute rolling window. It counts only the calls these five matchers deliver, so a loop built out of other tools stays invisible here. |
+
+### The release gate
+
+`check_release_gate` (entry 2 above) refuses a commit or a push the operator did not ask for in this turn. It is the workspace's control against an unauthorised release. It exists because the model crossed that boundary twice, and believed both times that permission existed.
+
+The check reads the `Bash` command and classifies it with `release_action()`:
+
+- **`push`** for a `git push` in any command segment, and for `gh release create` or `gh pr merge`. It also returns `push` for any of the eleven release scripts in `_PUSH_SCRIPTS`, among them `push-all.py`, `safe-push.py`, and `publish-corporate.py`.
+- **`commit`** for a `git commit`, and for an annotated `git tag`. A bare `git tag` lists tags and passes.
+- **`None`** for everything else, which returns control to the next check.
+
+The check then reads the operator's most recent typed prompt from the session transcript. `prompt_authorises()` accepts the action when that prompt carries an authorising word in English or Russian, and refuses when it carries a negation anywhere. The check appends each authorised release to a log the operator can audit.
+
+**The gate fails closed.** It refuses the release when it cannot read the transcript. A gate that opens when it cannot see is not a gate.
+
+**Its coverage, stated exactly.** The gate sees `Bash` tool calls in a session that wires `_dispatch.py` on the `Bash` matcher. It does not see a commit or a push the operator types in their own terminal, and no claim here says otherwise. It is also not the push-time secret scan, which is separate code inside `scripts/push-all.py`. Read the [security model](SECURITY-MODEL.html) for how the two compose.
 
 ## PostToolUse (observe and correct)
 

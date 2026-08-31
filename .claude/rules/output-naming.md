@@ -11,7 +11,9 @@ paths:
 
 Last Verified: 2026-05-15
 
-Always-active rule. Governs how skills name files they produce in `outputs/`. Keeps the directory searchable, sortable, and traceable as it grows past several thousand files.
+Path-scoped rule, loading on `outputs/**`, `threads/**` and `plans/**` as its frontmatter declares. Governs how skills name the files they produce there. Keeps those trees searchable, sortable, and traceable as they grow past several thousand files.
+
+The prose said "always-active rule" until 2026-08-31, which the frontmatter has never delivered: a write to `datastore/` or `reference/` does not load this file. The prose was the thing that was wrong. Every naming form this rule defines is a form for `outputs/`, `threads/` or `plans/` (see "When the standard does not fit" below, whose exceptions are all inside those three trees), so it has nothing to say on a `datastore/` or `reference/` write and widening the scope would buy nothing but resident context on every session. If a future naming standard genuinely covers a fourth tree, widen the `paths:` list then. To make it load everywhere, the shape is `paths: []` plus `always_active: true`, as in `.claude/rules/skill-router.md`.
 
 ## Standard form
 

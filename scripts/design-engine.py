@@ -17,6 +17,12 @@ Note: each model family accepts a different set of the generate flags. Pass one
 the family does not take and `generate` prints a [WARN] naming it; nothing is
 translated on your behalf. See `_build_generate_input`.
 
+Note: `-o` OVERRIDES the `_default_output_dir()` seam and is resolved LITERALLY
+against the current directory. Omitting it lands the file under
+`get_outputs_dir()`, in the DATA overlay. Passing a relative `outputs/...`
+instead writes a private artifact into the engine clone, where `.gitignore`
+hides it from the push wall. Pass an absolute path, or omit the flag.
+
 Tests: tests/test_a_retry_that_promised_a_longer_timeout.py
        tests/test_the_flags_a_tool_accepted_and_never_sent.py
        tests/test_a_budget_one_hung_request_could_spend.py

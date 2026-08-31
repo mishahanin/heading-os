@@ -41,7 +41,7 @@ human click.
 | Threat / attack class | Control | Test / guard |
 |---|---|---|
 | Private/corporate content leaves in the public engine repo | Engine/data segregation + push-time content scan + leak guard | `pytest tests/test_engine_tree_clean.py tests/test_data_root_no_bypass.py tests/security/test_leak_path_matrix.py`; CI guard `Leak guard`, `Engine tree clean` |
-| A data directory is joined onto an engine root (path bypass) | Data-root seam refuses engine-root joins | `pytest tests/test_data_root_no_bypass.py`; CI guard `HEADING OS data-root guard` |
+| A data directory is joined onto an engine root (path bypass) | Data-root seam refuses engine-root joins | `pytest tests/test_data_root_no_bypass.py`; CI guard `Engine tree clean` |
 | Read of CEO-only personal thread files by a subagent | PreToolUse dispatch read-guard blocks the read | `pytest tests/security/test_dispatch_read_guard.py` |
 | A private commit subject reaches a searchable memory-index store | Commit air gap: private paths never enter the index | SEC-019 `pytest tests/security/test_SEC_019_commit_air_gap.py` |
 

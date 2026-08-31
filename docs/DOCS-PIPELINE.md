@@ -130,7 +130,8 @@ retired with `workspace-sync.py`. This sentence claimed the opposite until
 
 ### CEO side (manual, initiated by `/push-updates` or equivalent)
 
-When Misha updates any shared content in ceo-main:
+When Misha updates any shared content in the operator workspace, which means the
+engine clone and the private data overlay together:
 
 1. **Commit + classify** changed files per `config/routing-map.yaml` (private/engine stays CEO-side; corporate is prepared for publish).
 2. **Publish to `../heading-os-corporate/`** via `/publish-corporate` or `/push-updates` (corporate-classified files + BUILD.json bump).
@@ -167,7 +168,7 @@ Up to whenever the exec next runs `git pull` on their clones. There is no fixed
 1-hour cadence anymore; an online exec sees published changes the moment they
 pull (or run `/sync`). Offline execs catch up on their next pull.
 
-### What this means for a change in ceo-main
+### What this means for a change in the operator workspace
 
 - Same session: visible to CEO immediately (file on disk).
 - +minutes: visible in corporate GitHub (once CEO runs `/publish-corporate` + `git push`).
@@ -190,7 +191,7 @@ pull (or run `/sync`). Offline execs catch up on their next pull.
 > one-page short form. Neither is exec-distributed via this sync chain.
 - `QUICKSTART.md` -- one-page genericized public reference, not a hand-authored CEO guide.
 
-### CEO-only (stays in ceo-main only -- NEVER publish to corporate or exec workspaces):
+### CEO-only (stays in the operator's private data overlay -- NEVER publish to corporate or exec workspaces):
 - `CEO-ADMIN-GUIDE.md` -- Admin workflows, provisioning, offboarding, emergency revocation
 - `CEO-ADMIN-GUIDE.html` -- Branded HTML version
 
@@ -202,7 +203,7 @@ authoring one.
 
 ## Migration Cruft Milestones
 
-Some cleanup cannot land immediately because it depends on the whole fleet reaching a state, not just ceo-main. Track those here so they are not forgotten (2026-06-09 audit #62).
+Some cleanup cannot land immediately because it depends on the whole fleet reaching a state, not on the operator workspace alone. Track those here so they are not forgotten (2026-06-09 audit #62).
 
 | Item | Blocked on | Remove when | Status |
 |---|---|---|---|

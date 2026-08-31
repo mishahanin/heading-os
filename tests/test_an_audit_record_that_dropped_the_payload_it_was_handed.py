@@ -56,7 +56,7 @@ itl = _load()
 def traj_dir(tmp_path, monkeypatch):
     d = tmp_path / "implement"
     d.mkdir()
-    monkeypatch.setattr(itl, "TRAJECTORY_DIR", d)
+    monkeypatch.setattr(itl, "trajectory_dir", lambda d=d: d)
     return d
 
 

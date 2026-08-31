@@ -25,8 +25,8 @@ x-heading-capability:
     cards marked ready_for_review for one-click CEO approval.
   how: >
     Run /cold-sweep (or /cold-sweep --dry-run to preview routing only). It fills
-    needs_draft cards via scripts/action-queue.py through the daemon; the CEO
-    then approves on the bridge Action Queue page or with
+    needs_draft cards with scripts/action-queue.py, which mutates the queue file
+    in-process; the CEO then approves in the terminal with
     scripts/action-queue.py approve <id>. CEO-only, not synced to executives.
   when: >
     Use to drain the whole overdue-CRM backlog into ready drafts. For a single
@@ -82,10 +82,10 @@ For each `needs_draft` email_send card (cap at the cards present; do not invent 
 2. Draft a ~150-word nudge in Misha's voice: direct opening, one concrete specific from the contact's history, one clear ask. Hyphens, never em-dashes. No banned vocabulary. Do not fabricate facts - if the contact file lacks a hook, keep it short and honest rather than inventing one.
 3. Write the body to a temp file (e.g. `outputs/documents/_work/cold-sweep-<id>.txt`).
 4. Validate the draft: `python scripts/sanitize-text.py <tmp> --scan` and `python scripts/humanization-check.py <tmp>`. Fix any findings before finalizing.
-5. Finalize the card through the daemon (single-writer; flips `draft_status` to `ready_for_review`):
+5. Finalize the card in-process (flips `draft_status` to `ready_for_review`):
    `python3 scripts/action-queue.py edit <id> --subject "<subject>" --body-file <tmp>`
 
-Draft cards sequentially (the queue is shared state; the daemon serialises writes, but sequential drafting keeps the run legible).
+Draft cards sequentially. The queue is shared state, and the queue lock in `scripts/bridge_daemon/sources/action_queue.py` already serialises the writes across processes. Sequential drafting keeps the run legible.
 
 ## Phase 3 - Report
 
@@ -104,7 +104,7 @@ Then run `/brain-audit --sources crm/contacts --entity cold-sweep` if a synthesi
 ## NEVER
 
 - NEVER send email. This skill drafts into the queue only; the human approves and the executor sends.
-- NEVER write `queue.json` directly. All card mutations go through `scripts/action-queue.py` (the daemon is the single writer).
+- NEVER write `queue.json` directly. All card mutations go through `scripts/action-queue.py`, which takes the queue lock and writes atomically. The CEO-in-terminal is the single writer; the bridge daemon is not required and its web page is read-only.
 - NEVER invent contacts, interactions, or specifics not present in the contact file.
 - NEVER fabricate a hook to hit ~150 words - a shorter honest draft beats a padded one.
 - NEVER mark a card sent or approved on the CEO's behalf.

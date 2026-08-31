@@ -1,5 +1,7 @@
 # JSON Schemas
 
+Consumed by: `.claude/skills/skill-creator/SKILL.md`, section "Test Cases" (and listed again under "Reference files"), for the full `evals.json` and `grading.json` structures.
+
 This document defines the JSON schemas used by skill-creator.
 
 Last Updated: 2026-06-10

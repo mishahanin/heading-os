@@ -42,7 +42,30 @@ from scripts.utils.workspace import (
 
 # Data-path tokens (mirror leak-guard) used only for a belt-and-braces assertion
 # that nothing engine-routed is real private data (examples/ is the allowed exception).
-_DATA_TOKENS = ("crm/contacts", "knowledge/odin-brain", "threads/", "outputs/")  # leak-guard: ok (audit token list, not path construction)
+#
+# Matched by `_suspicious_engine` with a plain string `startswith`, NOT by path
+# segment, so a token may end mid-filename. That is what makes the last entry
+# possible and is why it is here rather than in the routing map: the map's resolver
+# compares whole path segments and has no way to span `fireside-schedule.<cycle>.json`.
+#
+# `auto-memory/` joined the list on 2026-08-30 alongside its routing rule. The two
+# are deliberate duplicates: the map is the classification, this is the refusal that
+# still fires if a future edit drops the rule.
+# The annotation is repeated on EVERY line, not written once above the tuple.
+# `leak-guard: ok` suppresses the LINE it sits on. This was a one-line tuple with
+# one trailing annotation until 2026-08-30; splitting it for readability moved
+# each token onto its own line and left four of them uncovered, which blocked a
+# commit. A suppression that does not survive a re-wrap is a suppression that
+# expires on the next reformat.
+_DATA_TOKENS = (
+    "crm/contacts",                # leak-guard: ok (audit token, not a path)
+    "knowledge/odin-brain",        # leak-guard: ok (audit token, not a path)
+    "threads/",                    # leak-guard: ok (audit token, not a path)
+    "outputs/",                    # leak-guard: ok (audit token, not a path)
+    "auto-memory/",                # leak-guard: ok (audit token, not a path)
+    # every dated roster archive, not just today's
+    "config/fireside-schedule.",   # leak-guard: ok (audit token, not a path)
+)
 
 
 def _tracked_files(root: Path) -> list[str]:

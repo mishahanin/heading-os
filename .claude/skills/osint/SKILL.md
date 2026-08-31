@@ -209,10 +209,11 @@ Every factual claim must be tagged with its source. If a claim cannot be sourced
    - PERSON mode, CRM file exists: suggest updating with new intelligence
    - COMPANY mode, key contacts discovered: list for CRM consideration
 
-6. **Validate:**
+6. **Validate:** Bash gets no path redirect, so resolve the outputs root first.
    ```bash
-   python scripts/sanitize-text.py outputs/intel/osint/YYYY-MM-DD-[target-slug]/brief.md --scan
-   python scripts/sanitize-text.py outputs/intel/osint/YYYY-MM-DD-[target-slug]/report.html --scan
+   OUTPUTS_DIR="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import get_outputs_dir; print(get_outputs_dir())")"
+   python scripts/sanitize-text.py "$OUTPUTS_DIR/intel/osint/YYYY-MM-DD-[target-slug]/brief.md" --scan
+   python scripts/sanitize-text.py "$OUTPUTS_DIR/intel/osint/YYYY-MM-DD-[target-slug]/report.html" --scan
    ```
 
 7. **Report:** File paths, word count, hidden character status, skill chain recommendations.

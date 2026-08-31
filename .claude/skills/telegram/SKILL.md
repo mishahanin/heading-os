@@ -109,10 +109,12 @@ python ".claude/skills/telegram/scripts/telegram_client.py" search "project upda
 
 ### Files & Media
 
-Files sent and downloaded are DATA artifacts in the DATA overlay, not the engine tree. The send-file
-source path and the download `--output` dir reach the script verbatim, relative to cwd, which is the
-engine root. So resolve them under the data outputs dir first. A bare `outputs/...` would point at
-the empty engine tree:
+Files sent and downloaded are DATA artifacts in the DATA overlay, not the engine tree.
+
+`send-file` resolves a RELATIVE path under the data root, and refuses one that climbs out of the
+data root with `..`. The script sends an ABSOLUTE path as given. The download `--output` dir reaches
+the script verbatim, relative to cwd, which is the engine root. Resolve both under the data outputs
+dir, so the destination stays obvious:
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
@@ -122,8 +124,7 @@ python ".claude/skills/telegram/scripts/telegram_client.py" download "@username"
 ```
 
 When `--output` is OMITTED, `telegram_client.py` defaults the download dir to
-`get_outputs_dir()/downloads`, in the data overlay. The default is safe too. Passing an
-explicit `$OUTPUTS_DIR/...` keeps the destination obvious.
+`get_outputs_dir()/downloads`, in the data overlay. The default is safe too.
 
 ## Full Command Reference
 
@@ -143,7 +144,7 @@ For detailed usage of all 15 commands, see [references/commands.md](references/c
 
 ## Important Notes
 
-- **First use:** If not authenticated, run `setup` (requests OTP code) then `verify <code>` (completes auth). If 2FA is enabled, pass `--password` to verify.
+- **First use:** If not authenticated, run `setup` (requests OTP code) then `verify <code>` (completes auth). If the account has 2FA, put the password in `.env` as `TELEGRAM_2FA_PASSWORD`, or run `verify` in a terminal for a hidden prompt. `verify` REFUSES a `--password` argv value, because argv reaches the process table, the shell history, and the session transcript.
 - **Session recovery:** If the session expires or becomes corrupted, re-run `setup` and `verify` with a fresh OTP code.
 - **Chat resolution:** The script fuzzy-matches display names against the dialog list (30% similarity threshold). If resolution fails or is ambiguous, use @username or chat ID for precision.
 - **Rate limits:** Telegram throttles rapid automated requests. If you hit a `FloodWaitError`, wait the indicated seconds before retrying. For bulk operations (multiple sends, mass reads), add 1-2 second delays between calls.

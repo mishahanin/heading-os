@@ -197,16 +197,26 @@ Produce the artifact at `outputs/operations/workspace/{YYYY-MM-DD}_audit_workspa
 - Subsequent same-date audits: append `-v2`, `-v3` etc.
 - Post-rollout / delta audits: append `-post-rollout` or `-vs-{baseline-date}`
 
+Resolve the output root first. The `data-path-redirect` hook does NOT cover Bash.
+A bare `outputs/...` in a shell command resolves under the ENGINE clone. That
+writes a CEO deliverable into the public repository:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+OUTPUTS_DIR="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import get_outputs_dir; print(get_outputs_dir())")"
+AUDIT="$OUTPUTS_DIR/operations/workspace/{file}.md"
+```
+
 Render to HTML:
 
 ```bash
-python scripts/regenerate-docs-html.py "outputs/operations/workspace/{file}.md"
+python scripts/regenerate-docs-html.py "$AUDIT"
 ```
 
 Sanitize:
 
 ```bash
-python scripts/sanitize-text.py "outputs/operations/workspace/{file}.md" --scan
+python scripts/sanitize-text.py "$AUDIT" --scan
 ```
 
 Verify both `.md` and `.html` files exist before declaring done.

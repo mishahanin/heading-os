@@ -1,5 +1,7 @@
 # LinkedIn Carousel Workflow
 
+Consumed by: `.claude/skills/pptx-generator/SKILL.md`, section "Mode 2: Generate LinkedIn Carousels".
+
 LinkedIn carousels are multi-page PDFs in square (1:1) format. Each page is a swipeable slide.
 
 ## Carousel vs Presentation

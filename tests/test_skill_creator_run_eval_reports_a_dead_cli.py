@@ -51,6 +51,12 @@ def _load_run_eval():
              if k == "scripts" or k.startswith("scripts.")}
     for key in saved:
         del sys.modules[key]
+    # Snapshot and restore the WHOLE path, not one `remove`. `run_eval.py` runs
+    # its own `sys.path.insert(0, <skill-creator>)` at import, so a single
+    # `remove` of that string takes one of the two copies and leaves the other on
+    # the path for the rest of the xdist worker - where the skill's own
+    # `scripts/` package shadows this repo's for every later test.
+    saved_path = sys.path[:]
     sys.path.insert(0, str(SKILL_CREATOR))
     try:
         spec = importlib.util.spec_from_file_location(
@@ -60,7 +66,7 @@ def _load_run_eval():
         spec.loader.exec_module(module)
         return module
     finally:
-        sys.path.remove(str(SKILL_CREATOR))
+        sys.path[:] = saved_path
         for key in [k for k in sys.modules
                     if k == "scripts" or k.startswith("scripts.")]:
             del sys.modules[key]

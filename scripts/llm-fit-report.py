@@ -37,7 +37,17 @@ sys.path.insert(0, str(WORKSPACE_ROOT))
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RESET, YELLOW  # noqa: E402
 from scripts.utils.workspace import get_default_tz, get_default_tz_name, get_outputs_dir, load_env  # noqa: E402
 
-REPORT_DIR = get_outputs_dir() / "operations" / "llm-fit"
+def report_dir() -> Path:
+    """Resolved at call time, never at import.
+
+    As a module-level constant this froze the operator's data root the moment
+    the module was imported. A caller that set `HEADING_OS_DATA` afterwards (any
+    test that imports this module and then repoints the root) redirected
+    nothing, and `write_report()` still created
+    `<real overlay>/outputs/operations/llm-fit`. `mkdir` is not one of the
+    primitives `tests/conftest.py` wraps, so that directory landed silently.
+    """
+    return get_outputs_dir() / "operations" / "llm-fit"
 
 
 def _local_today_iso() -> str:
@@ -269,8 +279,9 @@ def render_markdown(agg: dict, window_days: int, run_iso: str, total_traces: int
 
 
 def write_report(content: str) -> Path:
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    path = REPORT_DIR / f"{_local_today_iso()}_llm-fit-report.md"
+    target = report_dir()
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / f"{_local_today_iso()}_llm-fit-report.md"
     path.write_text(content, encoding="utf-8")
     return path
 

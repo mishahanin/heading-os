@@ -1,5 +1,7 @@
 # Technical Reference
 
+Consumed by: `.claude/skills/pptx-generator/SKILL.md`, listed in section "Reference Files" for python-pptx imports, chart types, dimensions, and editing an existing PPTX.
+
 python-pptx technical reference for slide generation.
 
 ## Slide Dimensions

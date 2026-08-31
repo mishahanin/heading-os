@@ -355,6 +355,39 @@ def check_skill(skill_dir: Path, baseline: frozenset = frozenset()) -> dict:
             value = orch["shared_state"]
             if not isinstance(value, list):
                 result["invalid_values"].append(f"{ORCHESTRATION_BLOCK}.shared_state must be a list, got {type(value).__name__}")
+            else:
+                # Each ENTRY, not just the container. The consumer is the
+                # orchestrator's step-4 conflict detection
+                # (.claude/rules/skill-orchestrator.md), which intersects these
+                # lists by substring. A None, a mapping, or a blank string is a
+                # list element that satisfies the container check above and can
+                # never match a sibling's path, so it declares a conflict the
+                # orchestrator will not see. That is the same failure as an
+                # empty list, one layer down, and it became reachable the day
+                # skills started filling this field.
+                #
+                # Deliberately NOT checked here: whether a non-empty list is
+                # non-empty ENOUGH - that is, whether a skill that writes files
+                # declared them. Frontmatter cannot answer it. `allowed-tools`
+                # is a grant, not a limit, and most writing in this workspace
+                # happens inside a script reached through `Bash(python3:*)`,
+                # so any frontmatter-only heuristic either under-detects
+                # (Write/Edit only: 5 of dozens) or over-detects (`Bash` counts:
+                # /next, /state-check and /validate run read-only scripts).
+                # A rule needing a hand-kept exemption list to avoid firing on
+                # correct skills does not belong in the gate that runs on every
+                # commit. It lives in
+                # tests/test_two_skill_contracts_that_were_declared_and_never_measured.py,
+                # which can carry a per-skill reason and shrink over time.
+                for i, entry in enumerate(value):
+                    if not isinstance(entry, str):
+                        result["invalid_values"].append(
+                            f"{ORCHESTRATION_BLOCK}.shared_state[{i}] must be a string, "
+                            f"got {type(entry).__name__}")
+                    elif not entry.strip():
+                        result["invalid_values"].append(
+                            f"{ORCHESTRATION_BLOCK}.shared_state[{i}] is blank; an entry "
+                            f"that names no path never intersects a sibling's")
 
         if "triggers" in orch:
             value = orch["triggers"]

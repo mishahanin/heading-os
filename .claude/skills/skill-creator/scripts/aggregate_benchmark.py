@@ -206,11 +206,30 @@ def split_configs(configs: list[str]) -> tuple[str | None, str | None]:
     return primary, baseline
 
 
+# What a metric prints when nobody measured it. It must NOT parse as a number:
+# until 2026-08-31 an unmeasured configuration produced `{}`, `0 - 0` formatted
+# as "+0.00", and "this configuration was never run" rendered identically to
+# "these two performed identically". The distinction is the whole point of the
+# benchmark - it supports exactly one keep-or-discard decision.
+#
+# `run_eval.py`'s module docstring already carries the lesson in its first line:
+# a run that never happened is not a negative result. It was learned there and
+# never applied here, in the module that consumes its output.
+NOT_MEASURED = "not measured"
+
+
+def _empty_stats() -> None:
+    """The statistics of a configuration nobody ran. Deliberately not zeros."""
+    return None
+
+
 def aggregate_results(results: dict) -> dict:
     """
     Aggregate run results into summary statistics.
 
-    Returns run_summary with stats for each configuration and delta.
+    Returns run_summary with stats for each configuration and delta. A
+    configuration with no runs carries `measured: False` and null statistics,
+    never a zeroed set that reads as a measurement.
     """
     run_summary = {}
     configs = list(results.keys())
@@ -220,9 +239,11 @@ def aggregate_results(results: dict) -> dict:
 
         if not runs:
             run_summary[config] = {
-                "pass_rate": {"mean": 0.0, "stddev": 0.0, "min": 0.0, "max": 0.0},
-                "time_seconds": {"mean": 0.0, "stddev": 0.0, "min": 0.0, "max": 0.0},
-                "tokens": {"mean": 0, "stddev": 0, "min": 0, "max": 0}
+                "measured": False,
+                "runs": 0,
+                "pass_rate": _empty_stats(),
+                "time_seconds": _empty_stats(),
+                "tokens": _empty_stats(),
             }
             continue
 
@@ -231,6 +252,8 @@ def aggregate_results(results: dict) -> dict:
         tokens = [r.get("tokens", 0) for r in runs]
 
         run_summary[config] = {
+            "measured": True,
+            "runs": len(runs),
             "pass_rate": calculate_stats(pass_rates),
             "time_seconds": calculate_stats(times),
             "tokens": calculate_stats(tokens)
@@ -242,9 +265,27 @@ def aggregate_results(results: dict) -> dict:
     primary = run_summary.get(primary_name, {}) if primary_name else {}
     baseline = run_summary.get(baseline_name, {}) if baseline_name else {}
 
-    delta_pass_rate = primary.get("pass_rate", {}).get("mean", 0) - baseline.get("pass_rate", {}).get("mean", 0)
-    delta_time = primary.get("time_seconds", {}).get("mean", 0) - baseline.get("time_seconds", {}).get("mean", 0)
-    delta_tokens = primary.get("tokens", {}).get("mean", 0) - baseline.get("tokens", {}).get("mean", 0)
+    missing = [
+        label
+        for label, name, summary in (
+            ("primary", primary_name, primary),
+            ("baseline", baseline_name, baseline),
+        )
+        if name is None or not summary.get("measured")
+    ]
+
+    if missing:
+        run_summary["delta"] = {
+            "pass_rate": NOT_MEASURED,
+            "time_seconds": NOT_MEASURED,
+            "tokens": NOT_MEASURED,
+            "unmeasured": missing,
+        }
+        return run_summary
+
+    delta_pass_rate = primary["pass_rate"]["mean"] - baseline["pass_rate"]["mean"]
+    delta_time = primary["time_seconds"]["mean"] - baseline["time_seconds"]["mean"]
+    delta_tokens = primary["tokens"]["mean"] - baseline["tokens"]["mean"]
 
     run_summary["delta"] = {
         "pass_rate": f"{delta_pass_rate:+.2f}",
@@ -257,9 +298,21 @@ def aggregate_results(results: dict) -> dict:
 
 def generate_benchmark(benchmark_dir: Path, skill_name: str = "", skill_path: str = "") -> dict:
     """
-    Generate complete benchmark.json from run results.
+    Generate complete benchmark.json from a benchmark directory on disk.
     """
-    results = load_run_results(benchmark_dir)
+    return generate_benchmark_from_results(
+        load_run_results(benchmark_dir), skill_name, skill_path
+    )
+
+
+def generate_benchmark_from_results(results: dict, skill_name: str = "", skill_path: str = "") -> dict:
+    """
+    Generate complete benchmark.json from already-loaded run results.
+
+    Split out from `generate_benchmark` so the reporting path can be exercised
+    without laying a directory tree, and so a caller that already holds the
+    results does not re-read them.
+    """
     run_summary = aggregate_results(results)
 
     # Build runs array for benchmark.json
@@ -342,20 +395,38 @@ def generate_markdown(benchmark: dict) -> str:
     b_summary = run_summary.get(config_b, {})
     delta = run_summary.get("delta", {})
 
-    # Format pass rate
-    a_pr = a_summary.get("pass_rate", {})
-    b_pr = b_summary.get("pass_rate", {})
-    lines.append(f"| Pass Rate | {a_pr.get('mean', 0)*100:.0f}% +/- {a_pr.get('stddev', 0)*100:.0f}% | {b_pr.get('mean', 0)*100:.0f}% +/- {b_pr.get('stddev', 0)*100:.0f}% | {delta.get('pass_rate', '--')} |")
+    def cell(summary: dict, metric: str, fmt: str, scale: float = 1.0, unit: str = "") -> str:
+        """Render one mean +/- stddev cell, or say the run never happened.
 
-    # Format time
-    a_time = a_summary.get("time_seconds", {})
-    b_time = b_summary.get("time_seconds", {})
-    lines.append(f"| Time | {a_time.get('mean', 0):.1f}s +/- {a_time.get('stddev', 0):.1f}s | {b_time.get('mean', 0):.1f}s +/- {b_time.get('stddev', 0):.1f}s | {delta.get('time_seconds', '--')}s |")
+        `.get('mean', 0)` was the defect in table form: an absent metric printed
+        `0% +/- 0%`, which is a claim about a measurement nobody took.
+        """
+        stat = summary.get(metric)
+        if not stat or stat.get("mean") is None:
+            return NOT_MEASURED
+        mean = format(stat["mean"] * scale, fmt)
+        stddev = format(stat.get("stddev", 0) * scale, fmt)
+        return f"{mean}{unit} +/- {stddev}{unit}"
 
-    # Format tokens
-    a_tokens = a_summary.get("tokens", {})
-    b_tokens = b_summary.get("tokens", {})
-    lines.append(f"| Tokens | {a_tokens.get('mean', 0):.0f} +/- {a_tokens.get('stddev', 0):.0f} | {b_tokens.get('mean', 0):.0f} +/- {b_tokens.get('stddev', 0):.0f} | {delta.get('tokens', '--')} |")
+    def delta_cell(metric: str, unit: str = "") -> str:
+        value = delta.get(metric, "--")
+        return value if value in (NOT_MEASURED, "--") else f"{value}{unit}"
+
+    lines.append(
+        f"| Pass Rate | {cell(a_summary, 'pass_rate', '.0f', 100, '%')} "
+        f"| {cell(b_summary, 'pass_rate', '.0f', 100, '%')} "
+        f"| {delta_cell('pass_rate')} |"
+    )
+    lines.append(
+        f"| Time | {cell(a_summary, 'time_seconds', '.1f', 1.0, 's')} "
+        f"| {cell(b_summary, 'time_seconds', '.1f', 1.0, 's')} "
+        f"| {delta_cell('time_seconds', 's')} |"
+    )
+    lines.append(
+        f"| Tokens | {cell(a_summary, 'tokens', '.0f')} "
+        f"| {cell(b_summary, 'tokens', '.0f')} "
+        f"| {delta_cell('tokens')} |"
+    )
 
     # Notes section
     if benchmark.get("notes"):
@@ -424,12 +495,18 @@ def main():
     configs = [k for k in run_summary if k != "delta"]
     delta = run_summary.get("delta", {})
 
-    print(f"\nSummary:")
+    print("\nSummary:")
     for config in configs:
-        pr = run_summary[config]["pass_rate"]["mean"]
         label = config.replace("_", " ").title()
-        print(f"  {label}: {pr*100:.1f}% pass rate")
+        stat = run_summary[config].get("pass_rate")
+        if not stat or stat.get("mean") is None:
+            # Never "0.0% pass rate" for a configuration nobody ran.
+            print(f"  {label}: {NOT_MEASURED} (no runs found)")
+            continue
+        print(f"  {label}: {stat['mean']*100:.1f}% pass rate")
     print(f"  Delta:         {delta.get('pass_rate', '--')}")
+    if delta.get("unmeasured"):
+        print(f"  (delta unavailable: {', '.join(delta['unmeasured'])} never ran)")
 
 
 if __name__ == "__main__":

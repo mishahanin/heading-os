@@ -49,7 +49,7 @@ def scrutiny(tmp_path, monkeypatch):
     d = tmp_path / "scrutiny"
     d.mkdir()
     monkeypatch.setattr(rec, "record_path", lambda: d / "runs.jsonl")
-    monkeypatch.setattr(replay, "SCRUTINY_DIR", d)
+    monkeypatch.setattr(replay, "scrutiny_dir", lambda p=d: p)
     return d
 
 

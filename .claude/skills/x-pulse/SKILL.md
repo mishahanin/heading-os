@@ -240,8 +240,10 @@ python scripts/sanitize-text.py "$out_dir/x-pulse-brief.md" --scan
 python scripts/sanitize-text.py "$out_dir/x-pulse-brief.html" --scan
 ```
 
-2. Report to user (per always-show-full-paths rule):
-   - Full absolute Windows paths for all 5 output files (MD, HTML, PDF, raw JSON, filtered JSON)
+2. Report to user:
+   - Full absolute paths for all 5 output files (MD, HTML, PDF, raw JSON, filtered JSON),
+     exactly as `$out_dir` resolved them in Phase 0. Never abbreviate to a relative path,
+     and never rewrite them into another platform's path syntax.
    - Word count + hidden character status
    - Top handle by engagement
    - Highest 31C relevance level on any single post

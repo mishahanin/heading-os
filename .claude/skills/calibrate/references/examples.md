@@ -19,13 +19,13 @@ Light mode active. Categories 3 and 4 (repeated patterns, errors) skipped.
 ═══ MEMORY (2 items, low blast radius) ═══
 
 1. [CORRECTION]  Save: skill files cannot use em-dashes
-   -> ~/.claude/projects/.../memory/feedback_em_dash_rolling_clause.md
+   -> auto-memory/feedback_em_dash_rolling_clause.md
    You caught me using em-dashes in /devil and /burst SKILL.md today.
    The rule exists. Update the memory body so the next session avoids
    the same edit pass.
 
 2. [PREFERENCE]  Save: full file reads on SKILL.md
-   -> ~/.claude/projects/.../memory/reference_workspace_coding_style.md
+   -> auto-memory/reference_workspace_coding_style.md
    You asked for full file reads instead of partial reads when
    editing skill files. Worth saving so I default to that next time.
 

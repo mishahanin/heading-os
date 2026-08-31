@@ -224,7 +224,7 @@ If the question is not entity-scoped (e.g. a regulatory or market topic), omit
 ## Voice
 
 Match `reference/misha-voice.md` and the humanisation rule. Committed stance,
-specific, no hedging. Plain hyphens -- not double dashes. ODUN.ONE, DPI+, Tribe
+specific, no hedging. Plain hyphens, not double dashes. ODUN.ONE, DPI+, Tribe
 per `.claude/rules/terminology.md`.
 
 ## NEVER

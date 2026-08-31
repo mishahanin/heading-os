@@ -253,7 +253,7 @@ on purpose, because a guarded import in the blocking PreToolUse gate would be
 fail-open, and <code>tests/security/test_SEC_004_credential_patterns.py</code> holds the two
 in lockstep.</p>
 <h3 id="the-commit-hook-is-bypassable-the-push-scan-is-not">The commit hook is bypassable; the push scan is not</h3>
-<p><code>git commit --no-verify</code> (or <code>-n</code>) skips every pre-commit hook, and git offers no setting to forbid that flag — the hook file can also simply be deleted. So the commit-time gate can never be made truly mandatory on its own. <strong>Never pass <code>--no-verify</code>.</strong> The guarantee that secrets never reach a remote lives at the push layer (layer 6, pure code, both repos) and, for a server-side guarantee, in GitHub push protection / secret scanning enabled on both private repos. Treat the commit hook as a fast local warning, not the wall. Do NOT set <code>core.hooksPath</code> (a literal path value once silently bypassed every hook — see <code>reference/workspace-overview.md</code>).</p>
+<p><code>git commit --no-verify</code> (or <code>-n</code>) skips every pre-commit hook, and git offers no setting to forbid that flag — the hook file can also simply be deleted. So the commit-time gate can never be made truly mandatory on its own. <strong>Never pass <code>--no-verify</code>.</strong> The guarantee that secrets never reach a remote lives at the push layer (layer 6, pure code, both repos) and, for a server-side guarantee, in GitHub push protection / secret scanning enabled on both private repos. Treat the commit hook as a fast local warning, not the wall. Do NOT set <code>core.hooksPath</code> — a literal path value once silently bypassed every hook on the maintainer&rsquo;s own workspace. (The incident write-up lives in <code>reference/workspace-overview.md</code>, which is operator-only: it is a live catalogue of one instance&rsquo;s internals, routes <code>private</code>, and is not part of a public clone.)</p>
 <h3 id="the-security-critical-files-and-what-guards-a-change-to-them">The security-critical files, and what guards a change to them</h3>
 <p>The layers above are themselves code, and the files that implement them are the
 ones where a wrong edit costs more than a bug: the hooks, the pattern vocabulary
@@ -386,7 +386,7 @@ clone; the engine tree remains code-only.</p>
 <a href="EXTENDING.html">Extending the engine</a> for the developer-side gates and
 <a href="ARCHITECTURE.html">Architecture</a> for how the controls sit in the whole.</em></p>
   <footer class="foot">
-    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+    <p>HEADING OS: operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
   </footer>
 </main>
 </div>

@@ -175,7 +175,7 @@ For detailed CSS selector patterns and Playwright locator strategies, see [refer
 
 ## Authenticated Browsing (Cookie Integration)
 
-Playwright auto-loads cookies from `outputs/browser/cookies.json` if present. This file is populated by `/setup-browser-cookies` (gstack browse cookie importer). Once cookies are imported, all Playwright commands get authenticated sessions automatically.
+Playwright auto-loads cookies from `outputs/browser/cookies.json` if present. This file is populated by `/setup-browser-cookies`, which decrypts the local Chromium-family profile through the workspace-native reader `scripts/utils/chromium_cookies.py` (no external binaries). Once cookies are imported, all Playwright commands get authenticated sessions automatically.
 
 ### Authentication Fallback Flow
 
@@ -183,8 +183,8 @@ When a browser task hits a login page, 403, or CAPTCHA:
 
 1. **Check if `outputs/browser/cookies.json` exists** and contains cookies for the target domain
 2. **If no cookies:** prompt user to run `/setup-browser-cookies` to import from their real browser
-3. **If cookies exist but page still blocks:** try `--cookies-json` pointing to a fresh export. Or fall back to gstack browse directly (`$B navigate <url>`), which may succeed on a different browser fingerprint
-4. **If both fail:** report failure with diagnostics (page title, screenshot of what loaded)
+3. **If cookies exist but page still blocks:** the stored session has probably expired. Log in again in the real browser, re-run `/setup-browser-cookies`, and retry. There is no automatic fallback importer in this workspace, so do not reach for one.
+4. **If that still fails:** report failure with diagnostics (page title, screenshot of what loaded)
 
 ### Manual cookie override
 
@@ -204,7 +204,7 @@ python ".claude/skills/playwright/scripts/pw.py" screenshot "https://dashboard.e
 | PDF from web page | **This skill** (`pdf` command) |
 | Competitive site monitoring | **This skill** (`monitor` + `batch-screenshots`) |
 | Import browser cookies for auth | `/setup-browser-cookies` (then this skill uses them) |
-| Auth page after Playwright fails | gstack browse (fallback) |
+| Auth page after Playwright fails | Re-run `/setup-browser-cookies`, then retry (no automatic fallback) |
 
 ## Voice
 

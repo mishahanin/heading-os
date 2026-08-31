@@ -27,8 +27,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 HOOK = ROOT / ".claude" / "hooks" / "unattended-resume.py"
-SESSION = "8c765efb-81ea-4397-a80c-620d7b9fc4c3"
-SLUG = "8c765efb-81ea-4397-a80c-620d7b9f"
+SESSION = "1a2b3c4d-5e6f-4708-8912-a3b4c5d6e7f8"
+SLUG = "1a2b3c4d-5e6f-4708-8912-a3b4c5d6"
 
 PAUSED = {
     "session_unattended": True,

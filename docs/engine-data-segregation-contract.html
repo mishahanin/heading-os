@@ -90,14 +90,14 @@ the sibling <strong>data</strong> overlay (<code>.heading-os-data</code>), reach
 data-root seam (<code>get_data_root()</code> / <code>get_*_dir()</code> in <code>scripts/utils/workspace.py</code> +
 <code>paths.py</code>). Routing per file is decided by <code>config/routing-map.yaml</code> and resolved by
 <code>get_routing_destination()</code> → <code>engine | private | corporate</code>.</p>
-<p>This document is the single contract for how that invariant is enforced: the six
+<p>This document is the single contract for how that invariant is enforced: the seven
 layers, what each covers, where each stops, and how the guarantee is <em>proven</em> rather
 than merely asserted. It exists because a single static check is not enough — finding
 #3 (2026-06-16) showed a regex guard silently missing an entire misroute class (five
 document generators writing artifacts into the engine clone) for an extended period;
 the 2026-06-22 <code>docs/superpowers/</code> leak (post-mortem below) showed that catching the
 <em>outcome</em> only at <strong>bypassable</strong> layers is also not enough.</p>
-<h2 id="why-six-layers-not-one">Why six layers, not one</h2>
+<h2 id="why-seven-layers-not-one">Why seven layers, not one</h2>
 <p>The threat is a data artifact landing inside the engine clone. It can arrive three
 ways: (a) code that joins an engine root to a data dir, (b) a SKILL handing a bare
 data path to a Bash-invoked script, (c) any process — including a third-party plugin —
@@ -107,7 +107,13 @@ cheaply; the runtime tree check catches the outcome no matter the cause) and
 <em>bypassable vs unbypassable</em> (commit/pre-push gates are skippable with <code>--no-verify</code>
 or a deleted hook, so the outcome check must ALSO exist as pure code on the sanctioned
 push path, where no flag can skip it — layer 6).</p>
-<h2 id="the-six-layers">The six layers</h2>
+<p>There is a third axis, and it took a real miss to find it: <em>where the file goes</em> vs
+<em>what is inside it</em>. Layers 1-6 all answer the routing question. A file whose routing
+destination is correct passes every one of them, however private its CONTENTS are —
+an engine-routed script that embeds a real person&rsquo;s name and e-mail is, to layers 1-6,
+a clean engine file. Layer 7 is the only one that opens the file and reads it, and it
+is the layer that caught a category of private content the routing map had missed.</p>
+<h2 id="the-seven-layers">The seven layers</h2>
 <table>
 <thead>
 <tr>
@@ -161,8 +167,30 @@ push path, where no flag can skip it — layer 6).</p>
 <td>The SAME outcome as layer 5 — any private/corporate-routed file in the engine clone — but enforced in <strong>pure code on the sanctioned push path</strong> (<code>/backup</code> → <code>push-all</code>), with <strong>no skip flag</strong>. A <code>--no-verify</code> commit and an un-armed pre-push hook still cannot ship a data artifact out of the engine</td>
 <td>Only the engine repo (the DATA repo legitimately carries private files). Someone hand-running <code>git push</code> outside <code>push-all</code> bypasses it — the sanctioned path + GitHub-side controls are the answer there, same model as the secret content_scan</td>
 </tr>
+<tr>
+<td>7</td>
+<td><strong>Content guard</strong></td>
+<td><code>scripts/content-guard.py</code> (pre-commit <code>content-guard-31c</code>) <strong>and</strong> <code>scripts/push-all.py</code> <code>engine_content_scan()</code>, at step 0 of <code>push_repo</code></td>
+<td><strong>WHAT is inside an engine-routed file</strong>, not where the file goes: a real person slug or name, a handle, an e-mail, a Telegram ID, or a curated company / event / codename. The denylist is harvested from the private DATA overlay by <code>scripts/utils/content_denylist.py</code>. Layers 1-6 all pass such a file, because its routing destination is correct</td>
+<td><strong>Inert where the DATA overlay is absent</strong> (a public clone, CI): the denylist has no tokens and the gate returns 0. Only the operator&rsquo;s machine both authors and pushes engine content, so that is the machine on which it must hold. The pre-commit half is bypassable with <code>--no-verify</code>; the <code>engine_content_scan()</code> half is pure code on the sanctioned push path with no skip flag, like layer 6. A file it cannot read counts as a leak, not as clean</td>
+</tr>
 </tbody>
 </table>
+<h3 id="why-layer-7-is-a-guarantee-layer-and-not-an-advisory-companion">Why layer 7 is a guarantee layer and not an advisory companion</h3>
+<p>Three properties put it in the table rather than in the section below.</p>
+<ol>
+<li><strong>It is unbypassable on the sanctioned push path.</strong> <code>engine_content_scan()</code> runs at
+   step 0 of <code>push_repo</code> in <code>scripts/push-all.py</code>, in pure code with no skip flag. That
+   is the same criterion that makes layer 6 a guarantee rather than a warning.</li>
+<li><strong>It answers a question no other layer answers.</strong> Every routing layer waved through
+   the content it caught, and it earned its place by catching that content.</li>
+<li><strong>It fails closed.</strong> An engine-routed file it could not open exits 1 exactly as a
+   leak does. Unverified is not clean, which is the property the advisory companion
+   below deliberately does not have.</li>
+</ol>
+<p>Its honest bound is the one stated in the table: no DATA overlay means no denylist and
+no verdict. That is a scope, not a hole, and it is the same shape as layer 6&rsquo;s bound
+(someone hand-running <code>git push</code> outside <code>push-all</code> is outside the wall).</p>
 <h3 id="advisory-companion-not-a-guarantee-layer">Advisory companion (not a guarantee layer)</h3>
 <p><code>scripts/audit-skill-bash-paths.py</code> (pre-commit <code>skill-bash-paths</code>,
 <code>tests/test_skill_bash_paths.py</code>) is a baseline-ratchet over SKILL.md bash blocks:
@@ -280,11 +308,11 @@ safe direction — the guard ensures the first write lands <code>private</code> 
 through to the engine default. A rule key with no current on-disk directory is expected,
 not a defect; do not re-flag it as a broken reference.</p>
 <h2 id="change-control">Change control</h2>
-<p>Changes to this contract or any weakening of the six layers require Misha&rsquo;s explicit
+<p>Changes to this contract or any weakening of the seven layers require Misha&rsquo;s explicit
 approval. Classification: engine (this is public-shippable documentation of the public
 mechanism; it lives at <code>docs/</code> root, not <code>docs/security/</code> which routes private).</p>
   <footer class="foot">
-    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+    <p>HEADING OS: operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
   </footer>
 </main>
 </div>

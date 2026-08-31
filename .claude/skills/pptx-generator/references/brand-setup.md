@@ -1,5 +1,7 @@
 # Brand Setup Guide
 
+Consumed by: `.claude/skills/pptx-generator/SKILL.md`, section "PREREQUISITE: Brand Check", when no brand exists yet and one must be created first.
+
 How to create a new brand configuration for the PPTX generator.
 
 ## Step 1: Read the Template

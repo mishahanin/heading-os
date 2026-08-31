@@ -12,16 +12,27 @@ otherwise (`../31c-exec-*/` only). `_candidate_workspaces` accepts, in order:
   `.daemon-state/heartbeat.json`, whatever it is called, minus the retired
   clones and `*-data` siblings in `_NON_FLEET_SIBLINGS` / `_is_non_fleet_sibling`
   (kind `local`);
-- any sibling named `31c-crm-<slug>` (except `31c-crm-central`) holding
-  `bridge-heartbeat.json` at its repo ROOT, which is where an exec's
-  `push-all.py` puts it because the exec's `.daemon-state/` never ships
-  (kind `crm-mirror`);
 - `~/exec-workspaces/<slug>/` holding `.daemon-state/heartbeat.json`
   (kind `local`).
 
+`local` is the only kind discovery emits. A third bullet used to sit in the
+middle of that list: any sibling named `31c-crm-<slug>` holding a root
+`bridge-heartbeat.json`, discovered as a separate mirror kind. Those per-exec
+CRM repos were retired on 2026-08-23 in favour of the sibling data overlays.
+Measured on 2026-08-30, at that revision and on the operator's machine: no
+sibling of either naming carries a `bridge-heartbeat.json`, and no file in this
+tree writes one. The only heartbeat writer, `scripts/bridge_daemon/heartbeat.py`,
+writes `.daemon-state/heartbeat.json`, which `.gitignore` excludes from every
+push, so no push can deliver it to a sibling repo under any name. (What an
+older revision did is not part of that measurement.) The branch was therefore
+matching a name that cannot occur, looking for a file with no writer. It was
+deleted rather than moved onto the live overlay name, because moving it would
+have carried both halves of that mistake to a new address.
+
 A name-pattern description of a discovery loop that matches no name pattern
 hides the surface a reader is trying to audit, so the list above is the
-contract; `tests/test_fleet_health.py` pins it.
+contract; `tests/test_fleet_health.py` pins it, including the absence of the
+deleted surface.
 
 Usage:
   python scripts/daemon-fleet-health.py
@@ -71,8 +82,12 @@ STALE_DEFAULT_S = 120
 # - `ceo-main` retired at the 2026-06-15 two-part engine/data cutover.
 # - `ceo-main-kimi` / `odin-heading-os` are dev scratch trees.
 # The engine's own data sibling (`*-data`) is excluded by suffix: it holds no
-# fleet daemon worth surfacing. Genuine execs use `31c-exec-*` / `31c-crm-*` /
-# `~/exec-workspaces/<slug>` and are unaffected.
+# fleet daemon worth surfacing. Note the suffix does NOT reach a per-exec data
+# overlay (`.heading-os-data-<slug>` ends in the slug, not in `-data`); those
+# fall through to the generic heartbeat check below and are skipped there for
+# want of a heartbeat, which is the same answer by a sounder route. Genuine
+# execs are any sibling, or `~/exec-workspaces/<slug>`, carrying
+# `.daemon-state/heartbeat.json`; they are unaffected.
 _NON_FLEET_SIBLINGS = frozenset({"ceo-main", "ceo-main-kimi", "odin-heading-os"})
 
 
@@ -86,12 +101,11 @@ def _is_non_fleet_sibling(name: str) -> bool:
 
 
 def _candidate_workspaces() -> list[tuple[Path, str]]:
-    """Return [(path, kind), ...] for the CEO workspace + exec mirrors.
+    """Return [(path, kind), ...] for the CEO workspace + any exec workspace.
 
-    kind:
-    - 'local': direct workspace path (heartbeat at <path>/.daemon-state/heartbeat.json)
-    - 'crm-mirror': per-exec CRM repo (heartbeat at <path>/bridge-heartbeat.json,
-      pushed by the exec's push-all.py)
+    Emits exactly one kind, 'local': a workspace path whose heartbeat sits at
+    <path>/.daemon-state/heartbeat.json. See the module docstring for the full
+    discovery contract and for the mirror kind this loop used to emit.
 
     Conservative: doesn't recurse arbitrary directories.
     """
@@ -107,14 +121,6 @@ def _candidate_workspaces() -> list[tuple[Path, str]]:
             # heartbeat lingers (belt-and-braces; the file is also cleaned up).
             if _is_non_fleet_sibling(name):
                 continue
-            # Phase 1.162: per-exec CRM repos carry bridge-heartbeat.json
-            # at the repo root (NOT inside .daemon-state/) because the
-            # exec workspace's .daemon-state/ doesn't ship; only the
-            # CRM repo does.
-            if name.startswith("31c-crm-") and name != "31c-crm-central":
-                if (child / "bridge-heartbeat.json").exists():
-                    out.append((child, "crm-mirror"))
-                continue
             # Local-style: an exec workspace cloned under the same parent.
             if (child / ".daemon-state" / "heartbeat.json").exists():
                 out.append((child, "local"))
@@ -127,7 +133,19 @@ def _candidate_workspaces() -> list[tuple[Path, str]]:
 
 
 def _read_heartbeat(workspace: Path, kind: str = "local") -> dict:
-    """Return the heartbeat dict or a synthetic 'missing'/'error' record."""
+    """Return the heartbeat dict or a synthetic 'missing'/'error' record.
+
+    `kind` selects the file: 'crm-mirror' reads a root `bridge-heartbeat.json`,
+    anything else reads `.daemon-state/heartbeat.json`.
+
+    No production caller passes 'crm-mirror' any more. `_candidate_workspaces`
+    stopped emitting that kind on 2026-08-30 when the retired discovery branch
+    behind it was deleted, so the first branch below is reached only from
+    tests/bridge/test_fleet_health.py and
+    tests/test_a_fleet_report_that_died_on_one_undecodable_heartbeat.py. It is
+    stated here rather than left to be inferred: a reader who takes the branch
+    as evidence that mirrors are still read would be wrong.
+    """
     if kind == "crm-mirror":
         hb = workspace / "bridge-heartbeat.json"
     else:
@@ -157,10 +175,10 @@ def _read_heartbeat(workspace: Path, kind: str = "local") -> dict:
     # below raised TypeError on a bare `null`, `[]`, a string or a number, past
     # a handler that catches only OSError and JSONDecodeError, from a function
     # whose docstring promises a synthetic 'error' record. These files are
-    # written by OTHER machines - exec workspaces and the CRM mirrors an exec's
-    # push-all.py pushes - so a version skew or a torn write is somebody else's
-    # event, and one of them took down the whole fleet report: the tool whose
-    # only job is to say which daemons are down.
+    # written by OTHER machines - the exec workspaces cloned beside this one -
+    # so a version skew or a torn write is somebody else's event, and one of
+    # them took down the whole fleet report: the tool whose only job is to say
+    # which daemons are down.
     if not isinstance(data, dict):
         return {
             "workspace": str(workspace),
@@ -309,8 +327,9 @@ def _classify_beat(record: dict, stale_threshold_s: int) -> str:
 
 def _collect_daemon_beats(workspace: Path, kind: str = "local") -> list[dict]:
     """Read the per-daemon liveness beats for a workspace, newest dir-listing
-    order. Returns [] when ``heartbeats/`` is absent (back-compat) or for
-    crm-mirror workspaces (mirrors carry only the rich bridge heartbeat)."""
+    order. Returns [] when ``heartbeats/`` is absent (back-compat) or for any
+    kind other than 'local'. Discovery emits only 'local', so the kind guard is
+    defensive against a caller that constructs its own pair."""
     if kind != "local":
         return []
     beats_dir = workspace / ".daemon-state" / "heartbeats"

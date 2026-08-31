@@ -40,6 +40,20 @@ ROOT = Path(__file__).resolve().parent.parent
 HOOK = ROOT / ".claude" / "hooks" / "session-start.py"
 
 
+@pytest.fixture(autouse=True)
+def _sys_path_restored():
+    """`session-start.py` puts the workspace it resolves onto `sys.path`
+    (line 310). Run as a real child that entry dies with the process; run
+    in-process from here it outlives the test and holds for the rest of the
+    xdist worker. Correct in the hook, so restore it on this side.
+    """
+    saved = sys.path[:]
+    try:
+        yield
+    finally:
+        sys.path[:] = saved
+
+
 @pytest.fixture(scope="module")
 def hook():
     spec = importlib.util.spec_from_file_location("session_start_under_test", HOOK)

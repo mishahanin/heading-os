@@ -392,8 +392,8 @@ def test_an_unconfigured_target_never_reaches_the_transport():
 
 def test_a_missing_transcript_exits_three(tmp_path, monkeypatch):
     verdict = _load("verdict_mod", "council-record-verdict.py")
-    monkeypatch.setattr(verdict, "COUNCIL_DIR", tmp_path)
-    monkeypatch.setattr(verdict, "VERDICTS_PATH", tmp_path / "verdicts.jsonl")
+    monkeypatch.setattr(verdict, "council_dir", lambda p=tmp_path: p)
+    monkeypatch.setattr(verdict, "verdicts_path", lambda p=tmp_path / "verdicts.jsonl": p)
     rc = verdict.main(["--id", "no-such-transcript", "--choice", "mix"])
     assert rc == 3, (
         "the docstring contracts exit 3 for exactly this, and a wrapper using "
@@ -406,8 +406,8 @@ def test_a_missing_transcript_exits_three(tmp_path, monkeypatch):
 
 def test_a_present_transcript_exits_zero(tmp_path, monkeypatch):
     verdict = _load("verdict_mod2", "council-record-verdict.py")
-    monkeypatch.setattr(verdict, "COUNCIL_DIR", tmp_path)
-    monkeypatch.setattr(verdict, "VERDICTS_PATH", tmp_path / "verdicts.jsonl")
+    monkeypatch.setattr(verdict, "council_dir", lambda p=tmp_path: p)
+    monkeypatch.setattr(verdict, "verdicts_path", lambda p=tmp_path / "verdicts.jsonl": p)
     (tmp_path / "real-id.md").write_text("# t\n", encoding="utf-8")
     assert verdict.main(["--id", "real-id", "--choice", "mix"]) == 0
 

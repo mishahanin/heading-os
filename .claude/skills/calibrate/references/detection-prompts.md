@@ -31,7 +31,7 @@ writing in title case" is a behaviour correction - include.
 
 - Source quote: "stop using em-dashes in my drafts"
 - Category: correction
-- Proposed target: `~/.claude/projects/.../memory/feedback_em_dash_rolling_clause.md`
+- Proposed target: `auto-memory/feedback_em_dash_rolling_clause.md`
 - Proposed diff: append `- 2026-05-13: confirmed again - session-end calibration capture` under the main "Why" block.
 - Blast radius: low (memory only).
 
@@ -57,7 +57,7 @@ prose" is a preference - include.
 - Source quote: "always present clarifying questions as a numbered list with
   lettered options and a Моя рекомендация footer"
 - Category: preference
-- Proposed target: `~/.claude/projects/.../memory/feedback_question_format.md` (existing - append reinforcement bullet)
+- Proposed target: `auto-memory/feedback_question_format.md` (existing - append reinforcement bullet)
 - Blast radius: low.
 
 ## 3. Repeated patterns
@@ -142,7 +142,7 @@ worked - lock it in."
   footer plus a summary table.
 - Next user turn: "C" (accepted option C without pushback on format).
 - Category: success pattern
-- Proposed target: `~/.claude/projects/.../memory/feedback_question_format.md` (reinforcement) OR new memory if no existing covers it.
+- Proposed target: `auto-memory/feedback_question_format.md` (reinforcement) OR new memory if no existing covers it.
 
 ## 6. Voice violations
 

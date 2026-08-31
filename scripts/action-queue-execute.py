@@ -92,6 +92,36 @@ def send_card(engine_root: Path, card: dict, now: datetime | None = None) -> dic
     attempt = card.get("attempt") or 0
     if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 0:
         attempt = 0
+    # THE GATE, and it is UNCONDITIONAL: it runs for every card that reaches
+    # this function, above every branch on `action_type`. This function is the
+    # only code in the tree that can send anything, and both callers - the
+    # terminal `action-queue.py approve` and this file's batch `main()` - come
+    # through it, so nothing below can send without `tier_for` having answered
+    # `gated` for the card in hand.
+    #
+    # It used to sit BELOW the two type branches, inside the region keyed on the
+    # literal `email_send`. A send-capable type registered in the ledger but
+    # missing from those branches returned `skipped` before ever reaching it:
+    # the guard was skipped, not failed. The exposure was latent (no executor
+    # exists for any other type) and would have opened the day one was added,
+    # because a new branch goes where the others are - above the old check.
+    #
+    # An emptied or tampered `send_capable` cannot switch this off. `tier_for`
+    # is total over action_types and answers `gated` for one it does not know,
+    # so the condition below is evaluated for every card whatever the ledger
+    # says. `send_capable_types()` is consulted only to tell the two refusals
+    # apart - never to decide whether to check.
+    tier = tool_risk.tier_for(action_type)
+    if tier != tool_risk.GATED:
+        if action_type in tool_risk.send_capable_types():
+            # The ledger calls it a sender and the resolver disagrees. Only a
+            # tampered resolver can produce this; refuse loudly.
+            return {"action_id": aid, "result": "refused",
+                    "error": f"{action_type} does not resolve gated - refusing to send",
+                    "classification": "none"}
+        # Positively classified as a non-send type (autonomous / notify).
+        return {"action_id": aid, "result": "skipped",
+                "error": f"not a send type ({action_type})", "classification": "none"}
     # telegram_send is reserved-and-gated but has no executor yet (F-L6): explicit
     # 501, never a silent skip. A gated send that cannot send.
     if action_type == "telegram_send":
@@ -102,12 +132,10 @@ def send_card(engine_root: Path, card: dict, now: datetime | None = None) -> dic
                 "error": "telegram executor not implemented (501)",
                 "classification": "permanent", "attempt": attempt}
     if action_type != "email_send":
+        # Gated, but no executor here knows how to send it - an unclassified
+        # type, or a send type registered before its executor landed.
         return {"action_id": aid, "result": "skipped",
-                "error": f"not a send type ({action_type})", "classification": "none"}
-    # Send-capable types always resolve gated; refuse anything that does not.
-    if tool_risk.tier_for(action_type) != tool_risk.GATED:
-        return {"action_id": aid, "result": "refused",
-                "error": f"{action_type} does not resolve gated - refusing to send",
+                "error": f"no executor for send type ({action_type})",
                 "classification": "none"}
 
     to = (card.get("to") or "").strip()

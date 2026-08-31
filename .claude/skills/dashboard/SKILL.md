@@ -66,8 +66,11 @@ This reads all workspace data sources and produces:
 
 ### Step 2: Validate hidden characters
 
+Bash gets no path redirect, so resolve the outputs root first.
+
 ```bash
-python scripts/sanitize-text.py outputs/operations/dashboard/YYYY-MM-DD/morning-dashboard.html
+OUTPUTS_DIR="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import get_outputs_dir; print(get_outputs_dir())")"
+python scripts/sanitize-text.py "$OUTPUTS_DIR/operations/dashboard/YYYY-MM-DD/morning-dashboard.html" --scan
 ```
 
 ### Step 3: Report to Misha

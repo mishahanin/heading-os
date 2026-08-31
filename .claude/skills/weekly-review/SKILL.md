@@ -289,4 +289,4 @@ NEVER auto-invoke `/odin reflect` without an explicit CEO go-ahead. NEVER run th
 - Skip the continuity check. Week-over-week tracking is the backbone.
 - Produce more than 3 pages. Compress ruthlessly.
 - Use "team" instead of "Tribe."
-- Use em dashes. Use hyphens.
+- Use em dashes or double dashes anywhere. Single hyphens only.

@@ -13,6 +13,7 @@ Usage:
     uv run generate-cookbook-preview.py
 """
 
+import os
 from pathlib import Path
 import math
 
@@ -30,7 +31,7 @@ def hex_to_rgb(hex_color: str) -> RGBColor:
     return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
 
-# Brand colors (Rasmus brand for preview)
+# Brand colors (invented sample values for preview)
 BRAND_BG = "1e1e2e"
 BRAND_BG_ALT = "181825"
 BRAND_TEXT = "cdd6f4"
@@ -231,7 +232,7 @@ def create_quote_slide(prs):
     # Attribution
     attr_box = slide.shapes.add_textbox(Inches(1.5), Inches(5.5), Inches(10.5), Inches(0.6))
     p = attr_box.text_frame.paragraphs[0]
-    p.text = "— Rasmus Widing"
+    p.text = "— Ada Marlowe"
     p.font.name = BRAND_HEADING_FONT
     p.font.size = Pt(18)
     p.font.color.rgb = hex_to_rgb(BRAND_ACCENT)
@@ -503,6 +504,19 @@ def create_floating_cards_slide(prs):
         p.font.bold = True
         p.font.color.rgb = hex_to_rgb(BRAND_TEXT)
 
+        # Description. `desc` was unpacked from `cards` and never rendered, so
+        # the preview advertised this layout as title-only while
+        # `cookbook/floating-cards-slide.py` ships a card_desc box. Geometry
+        # copied from that template.
+        d = slide.shapes.add_textbox(Inches(x + 0.3), Inches(y + 2.6), Inches(3.4), Inches(1.1))
+        tf = d.text_frame
+        tf.word_wrap = True
+        p = tf.paragraphs[0]
+        p.text = desc
+        p.font.name = BRAND_BODY_FONT
+        p.font.size = Pt(16)
+        p.font.color.rgb = hex_to_rgb(BRAND_TEXT_SECONDARY)
+
     add_slide_label(slide, "floating-cards-slide")
 
 
@@ -546,6 +560,29 @@ def create_circular_hero_slide(prs):
         dot.fill.solid()
         dot.fill.fore_color.rgb = hex_to_rgb(BRAND_ACCENT_SECONDARY)
         dot.line.fill.background()
+
+        # Orbit label. Same omission as the floating-cards `desc` above: `item`
+        # was bound by the loop and never drawn, so the preview showed six
+        # unlabelled dots while `cookbook/circular-hero-slide.py` line 193 sets
+        # `p.text = item`. Side-aware placement copied from that template.
+        text_width = 1.8
+        if x < center_x - 1:
+            text_x, align = x - text_width - 0.2, PP_ALIGN.RIGHT
+        elif x > center_x + 1:
+            text_x, align = x + 0.3, PP_ALIGN.LEFT
+        else:
+            text_x, align = x - text_width / 2, PP_ALIGN.CENTER
+        text_y = y - 0.2 if y < center_y else y - 0.1
+
+        item_box = slide.shapes.add_textbox(
+            Inches(text_x), Inches(text_y), Inches(text_width), Inches(0.5))
+        p = item_box.text_frame.paragraphs[0]
+        p.text = item
+        p.font.name = BRAND_BODY_FONT
+        p.font.size = Pt(16)
+        p.font.bold = True
+        p.font.color.rgb = hex_to_rgb(BRAND_TEXT)
+        p.alignment = align
 
     add_slide_label(slide, "circular-hero-slide")
 
@@ -754,7 +791,11 @@ def main():
     create_closing_slide(prs)
     create_image_caption_slide(prs)
 
-    output = Path("cookbook-preview.pptx")
+    # This preview is a TRACKED engine artifact and lives beside this script, so
+    # the script's own directory is its home rather than whatever the CWD is.
+    # `$DECK_DIR` still overrides, for a throwaway render somewhere else.
+    out_dir = Path(os.environ.get("DECK_DIR") or Path(__file__).resolve().parent)
+    output = out_dir / "cookbook-preview.pptx"
     prs.save(output)
     print(f"Created {output} with {len(prs.slides)} slides")
 

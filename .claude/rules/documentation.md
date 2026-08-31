@@ -21,7 +21,14 @@ Documentation lives in two coexisting systems, and one change may touch both:
 - **Public docs site** (`docs/*.md`, engine, public). Authored directly under
   `docs/` and rendered to `.html` by the single generator
   `scripts/regenerate-docs-html.py` (full map: `docs/DOCS-PIPELINE.md`). Markdown
-  pages regenerate to `.html`; the skills-catalog pages are hand-authored HTML.
+  pages regenerate to `.html`. The hand-authored pages are the ones with no `.md`
+  source at all, and the skills catalogue is only part of that set: measured
+  2026-08-31, `docs/` held 14 `.html` files with no sibling `.md`, of which 9 were
+  `skills-*.html` and the other 5 were `index.html`, `prerequisites.html`,
+  `daemons.html`, `memory-odin.html` and `data-structure.html`. Editing any of the
+  14 means editing the HTML; the generator only nav-syncs them. Derive the current
+  set the same way (an `.html` under `docs/` with no matching `.md`) rather than
+  trusting this count, which is a dated measurement and will drift.
 - **Operator private templates and overview** (`templates/` and
   `reference/workspace-overview.md`, both in the private DATA overlay, so absent in
   a bare public engine clone but present on the operator workspace). `templates/`
@@ -68,7 +75,7 @@ CEO-ADMIN-GUIDE files must NEVER be placed in the corporate repo or any exec wor
 
 ## Version Tracking
 
-Every shared doc in `templates/` and its auto-synced counterpart in `docs/` carries an HTML-comment version marker. For `.md` and `.template` files the marker sits on line 1. For `.html` files the marker is embedded at the top of the `<main>` body during markdown-to-HTML rendering, not on line 1 (which is `<!DOCTYPE html>`).
+Every shared doc in `templates/` and its auto-synced counterpart in `docs/` carries an HTML-comment version marker. For `.md` and `.template` files the marker sits in the first three lines (usually line 1). For `.html` files the marker is embedded at the top of the `<main>` body during markdown-to-HTML rendering, not on line 1 (which is `<!DOCTYPE html>`).
 
 ```
 <!-- version: MAJOR.MINOR.PATCH | last-updated: YYYY-MM-DD -->
@@ -79,7 +86,15 @@ Bump semantics:
 - **MINOR** - new sections, meaningful content additions, reworded guidance
 - **MAJOR** - structural reorganization, removal of sections, breaking changes for anyone following the doc
 
-When editing a template, always update both fields. `workspace-health.py` verifies both markers are present and the date is not older than 90 days (implemented in `check_doc_versions`, with the marker regex and 90-day threshold); it runs as part of the standard health check before `/push-updates`.
+When editing a template, always update both fields.
+
+What `workspace-health.py` actually enforces, stated narrowly because the rule used to claim more than the code does. `check_doc_versions` opens exactly four files, all of them `.md`/`.template` under `templates/`: `GETTING-STARTED.md`, `CEO-ADMIN-GUIDE.md`, `EMERGENCY-PROCEDURES.md`, `CLAUDE.md.template`. It opens nothing under `docs/` and no `.html` file at all. For each of the four, a missing file, a missing or unparseable marker, and a malformed date each count as an issue and fail the check.
+
+**Age is reported, never enforced.** A `last-updated` older than the 90-day threshold prints a warning and increments a separate `stale` counter that is deliberately excluded from the returned issue count, so a stale marker does not block `/push-updates`. Staleness is a refresh signal here, not a gate. Anything that needs to be a gate has to be written as one; do not read the 90 days as enforcement.
+
+The `docs/` copies are covered from the other side: `check_docs_sync` byte-compares the six synced files (`GETTING-STARTED`, `CEO-ADMIN-GUIDE`, `EMERGENCY-PROCEDURES`, each as `.md` and `.html`) between `templates/` and `docs/`, so a marker that drifted in a `docs/` copy fails there instead. Every other page under `docs/` carries a version marker by convention only, checked by no code.
+
+Both checks no-op with a warning when `templates/` is absent, which is the normal state of a public engine clone with no data overlay. Both run as part of the standard health check before `/push-updates`.
 
 ## Plans Lifecycle
 

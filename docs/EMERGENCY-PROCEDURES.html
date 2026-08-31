@@ -82,6 +82,7 @@
 
 <blockquote>
 <p>What to do when the normal sync/push/update chain is broken. For routine operations, see <code>GETTING-STARTED.md</code> (execs) or <code>CEO-ADMIN-GUIDE.md</code> (CEO).</p>
+<p>Those two guides and everything under <code>docs/security/</code> are operator-only. They route <code>private</code> and live in the private data overlay, not in the public engine clone. If you read this from a public clone, they are not missing. They were never yours to have.</p>
 </blockquote>
 <hr />
 <h2 id="scenario-1-corporate-repo-inaccessible-github-outage-credentials-revoked-repo-deleted">Scenario 1: Corporate repo inaccessible (GitHub outage, credentials revoked, repo deleted)</h2>
@@ -126,7 +127,14 @@ and only one of them lives in <code>config/admin.json</code>:</p>
 </ol>
 <p><code>config/admin.json</code> supplies exactly two keys that code reads: <code>admin_slugs</code> and
 <code>github_org</code>. It carries no role field, no deputy, and no expiry. Nothing revokes a grant
-on a timer either. The CEO removes it by hand, or with <code>scripts/emergency-revoke.py</code>.</p>
+on a timer either. The CEO removes it by hand. <code>scripts/emergency-revoke.py</code> does NOT revoke
+anything. It prints a manual checklist and exits 2. That is deliberate: the
+CEO decided an automated revoke is too dangerous to leave armed. A human does the three steps it prints:</p>
+<ol>
+<li>Remove the slug from <code>admin_slugs</code> in <code>config/admin.json</code>.</li>
+<li>Revoke the executive&rsquo;s GitHub access on the corporate repository.</li>
+<li>Rotate any shared credential they held.</li>
+</ol>
 <p><strong>Do NOT:</strong>
 - Elect an unofficial deputy. Admin authority needs all three grants above, never group consensus.
 - Edit <code>config/admin.json</code> and expect a promotion. Grant 1 lives in a different file.
@@ -166,7 +174,9 @@ on a timer either. The CEO removes it by hand, or with <code>scripts/emergency-r
    - Windows: <code>schtasks /Query /TN "31C-Sentinel-{slug}" /V /FO LIST</code> and look at <code>Task To Run</code>
    - macOS: <code>cat ~/Library/LaunchAgents/io.31c.sentinel.{slug}.plist</code></li>
 <li>If the path is stale (e.g., after Python upgrade), reinstall via <code>scripts/setup.py --reinstall-schedule</code>.</li>
-<li>If still failing, run <code>python scripts/utils/schedule.py</code> directly to see the diagnostic output.</li>
+<li>If still failing, read the scheduler&rsquo;s own log. Do not run
+   <code>scripts/utils/schedule.py</code> directly. It is a library module. It has no
+   <code>__main__</code> block and no argument parser, so it prints nothing.</li>
 </ol>
 <blockquote>
 <p>Reminder: to refresh corporate content or engine code, just run <code>/sync</code> (a plain <code>git pull</code>) &ndash; there is no sync schedule to repair.</p>
@@ -196,7 +206,9 @@ on a timer either. The CEO removes it by hand, or with <code>scripts/emergency-r
 <ol start="2">
 <li>
 <p>Restart the daemon:
-   - <strong>Windows:</strong> <code>&amp; scripts\launch-bridge-daemon.bat</code>
+   - <strong>Windows:</strong> <code>&amp; scripts\restart-bridge-daemon.ps1</code>
+     (<code>launch-bridge-daemon.bat</code> only LAUNCHES. The installer writes that file,
+     and git does not track it, so it is absent before a first install.)
    - <strong>macOS:</strong> <code>launchctl kickstart -k gui/$UID/com.31c.bridge-daemon</code></p>
 </li>
 <li>
@@ -308,7 +320,7 @@ git<span class="w"> </span>push<span class="w"> </span>origin<span class="w"> </
 </ul>
 <p>For routine workflow: <code>GETTING-STARTED.md</code>. For admin procedures: <code>CEO-ADMIN-GUIDE.md</code>. For deeper security policy: <code>docs/security/SECURITY-CONSTITUTION.md</code>.</p>
   <footer class="foot">
-    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+    <p>HEADING OS: operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
   </footer>
 </main>
 </div>

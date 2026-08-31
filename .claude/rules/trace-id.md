@@ -25,7 +25,9 @@ A fresh UUID4 per boot means no cross-restart contamination.
 
 ## Environment propagation
 
-The ID lives in `os.environ["X31C_TRACE_ID"]`. Every `subprocess.run([...])` a daemon issues inherits it automatically because none of the daemons pass an `env=` override. **If you add a `subprocess` call with an explicit `env=` dict, build it from `os.environ` (`dict(os.environ, ...)`) or add `"X31C_TRACE_ID": os.environ.get("X31C_TRACE_ID", "")`** so inheritance is preserved. (Audit: `grep -rn "subprocess\.\(run\|Popen\)" scripts/ | grep env=` - the only hit, `modem-tune.py`, already copies `os.environ`.)
+The ID lives in `os.environ["X31C_TRACE_ID"]`. Every `subprocess.run([...])` a daemon issues inherits it automatically because none of the daemons pass an `env=` override. **If you add a `subprocess` call with an explicit `env=` dict, build it from `os.environ` (`dict(os.environ, ...)`) or add `"X31C_TRACE_ID": os.environ.get("X31C_TRACE_ID", "")`** so inheritance is preserved.
+
+Audit it with `grep -rn "subprocess\.\(run\|Popen\)" scripts/ | grep env=`, then read every hit and check the one thing that matters: is that `env` built from `os.environ`, or assembled from scratch? A from-scratch dict drops the ID. This rule deliberately does NOT record how many hits there are or which files they are in, because that number is a measurement of a moving tree and the previously published one ("the only hit, `modem-tune.py`") had already rotted: the call it named moved into `scripts/utils/modem_ssh.py` and the hit count grew. Re-run the grep and judge the hits; do not trust a count written down here or anywhere else. The invariant to preserve is the one in bold above, not a tally.
 
 ## Log format
 

@@ -11,7 +11,8 @@ metadata:
   version: "1.0"
 x-heading-orchestration:
   parallel_safe: true
-  shared_state: []
+  shared_state:
+    - "outputs/deliverables/presentations/"
   triggers:
     - "marp"
     - "render as slides"

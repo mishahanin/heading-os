@@ -5,6 +5,7 @@
 #     "python-pptx==1.0.2",
 # ]
 # ///
+
 # /// layout
 # name = "carousel-cta-slide"
 # format = "carousel"
@@ -43,6 +44,7 @@ CUSTOMIZE:
 - HANDLE: Your social handle (max 20 chars)
 """
 
+import os
 from pathlib import Path
 
 from pptx import Presentation
@@ -58,6 +60,18 @@ def hex_to_rgb(hex_color: str) -> RGBColor:
 
 
 def main() -> None:
+    # === OUTPUT DIRECTORY ===
+    # $DECK_DIR is the data-overlay deck directory, resolved and exported by the
+    # caller (SKILL.md Step 5). Resolved FIRST so a misconfigured run fails
+    # before it renders anything. A bare relative filename here would write the
+    # deck into the engine clone, which is public.
+    deck_dir = os.environ.get("DECK_DIR")
+    if not deck_dir:
+        raise SystemExit(
+            "DECK_DIR is not set. Export the data-overlay deck directory "
+            "first; see SKILL.md Step 5."
+        )
+
     # === BRAND COLORS ===
     BRAND_BG = "1e1e2e"
     BRAND_BG_ALT = "181825"
@@ -70,7 +84,7 @@ def main() -> None:
     # === CONTENT ===
     HEADLINE = "REPLACE"  # Max 30 chars
     CTA_TEXT = "REPLACE"  # Max 25 chars
-    HANDLE = "@RasmusWiding"  # Max 20 chars
+    HANDLE = "@AdaMarlowe"  # Max 20 chars
 
     # === SLIDE SETUP (Square 1:1) ===
     prs = Presentation()
@@ -145,7 +159,7 @@ def main() -> None:
     p.alignment = PP_ALIGN.CENTER
 
     # Save
-    output = Path("carousel-cta-slide.pptx")
+    output = Path(deck_dir) / "carousel-cta-slide.pptx"
     prs.save(output)
     print(f"Created {output}")
 

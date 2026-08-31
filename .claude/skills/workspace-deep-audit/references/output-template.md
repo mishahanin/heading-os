@@ -17,7 +17,7 @@ Substitute `{placeholders}` with computed values from Phases 1-6. Sections marke
 **Дата:** {YYYY-MM-DD}
 **Версия:** {v1 / v2 / vN — auto-incremented if same-date audit exists}
 {if --vs: **Companion:** [previous audit]({prev_audit_path}) · explicit delta tables in each section}
-**Автор:** Claude Opus 4.7 (1M context)
+**Автор:** {the model that ran the audit — read the running model id, never hardcode a generation}
 **Объём:** {Полная инвентаризация / quick / focus on X}, Context7-валидация всех зависимостей, gap-анализ против {N}-best-practice пунктов 2026 года, конкурентный анализ {M} платформ, приоритизированные рекомендации.
 **Классификация:** CEO-only.
 
@@ -303,7 +303,7 @@ Substitute `{placeholders}` with computed values from Phases 1-6. Sections marke
 ---
 
 **Word count:** {N}
-**Hidden characters:** clean (sanitizer-verified)
+**Hidden characters:** {what `scripts/sanitize-text.py --scan` reported — copy it, never pre-fill an outcome}
 **Classification:** CEO-only
 **Companion file (HTML):** `{file}.html`
 **Status:** Final {version} — {one-line summary}

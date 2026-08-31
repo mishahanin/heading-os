@@ -64,7 +64,31 @@ def main() -> int:
     out = get_outputs_dir() / "clipboard" / "clip.png"
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    img = ImageGrab.grabclipboard()
+    # `grabclipboard()` does not return None when the platform has no clipboard
+    # grabber. It RAISES, and the raise happens before `img` is ever bound, so
+    # every branch below it — including the Linux fallback, the one part of this
+    # file that could still find an image — was unreachable BY CONSTRUCTION on
+    # such a host. Measured 2026-08-30 on WSL2 with Pillow 12.3.0 and neither
+    # binary installed:
+    #     NotImplementedError: wl-paste or xclip is required for
+    #     ImageGrab.grabclipboard() on Linux
+    # The operator saw a raw traceback. Catching it HERE, at the entry, is what
+    # lets the rest of the function run at all; patching a later branch could
+    # not, because control never reached one.
+    #
+    # It is not only the "nothing installed" host. PIL takes wl-paste only for a
+    # wayland session and xclip only for an x11 one (PIL/ImageGrab.py), so a host
+    # with WAYLAND_DISPLAY set and ONLY xclip installed also lands here — and for
+    # that host `_grab_via_xclip` below succeeds where PIL refused to try.
+    #
+    # NotImplementedError alone. Anything else from PIL is genuinely unexpected
+    # and must keep its traceback.
+    no_grabber = ""
+    try:
+        img = ImageGrab.grabclipboard()
+    except NotImplementedError as exc:
+        img = None
+        no_grabber = str(exc)
     # `grabclipboard()` returns THREE shapes: an Image, a LIST of file paths
     # (documented behaviour on Windows and macOS when files rather than image
     # data are on the clipboard), or None. `is not None` accepted the list and
@@ -83,8 +107,8 @@ def main() -> int:
         print(str(out))
         return 0
 
-    # PIL returned None. On Linux try direct CLI fallbacks before giving up;
-    # older Pillow versions (<9.0) lack Linux clipboard support entirely.
+    # PIL found nothing, or refused to look. On Linux try the direct CLI
+    # fallbacks before giving up.
     if sys.platform.startswith("linux"):
         for grabber in (_grab_via_wlpaste, _grab_via_xclip):
             if grabber(out):
@@ -94,7 +118,14 @@ def main() -> int:
         if out.exists() and out.stat().st_size == 0:
             out.unlink()
 
-    print("No image on clipboard.", file=sys.stderr)
+    if no_grabber:
+        # PIL's own words for the reason, so this sentence cannot drift away from
+        # what the library actually checked.
+        print(f"Cannot read the clipboard: {no_grabber}; install wl-clipboard "
+              f"or xclip, then copy the image and run this again.",
+              file=sys.stderr)
+    else:
+        print("No image on clipboard.", file=sys.stderr)
     return 1
 
 

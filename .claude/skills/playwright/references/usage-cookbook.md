@@ -46,7 +46,7 @@ python ".claude/skills/playwright/scripts/pw.py" extract "https://app.example.co
 ```bash
 # Fill and submit a contact form
 python ".claude/skills/playwright/scripts/pw.py" fill "https://example.com/contact" \
-  --fields '{"#name": "Misha Hanin", "#email": "misha@31c.co", "#message": "Test"}' \
+  --fields '{"#name": "Jane Roe", "#email": "jane.roe@example.com", "#message": "Test"}' \
   --submit-selector "button[type=submit]" \
   --screenshot-after "$OUTPUTS_DIR/browser/screenshots/form-submitted.png"
 ```

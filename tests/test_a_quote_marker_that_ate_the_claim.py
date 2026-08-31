@@ -179,6 +179,29 @@ DECLARED_DIRECTIONAL_STRIPS = {
         "this file's own anti-vacuity test, which must keep spelling the broken "
         "form to prove the replacement disagrees with it; declared rather than "
         "skipped, because a rule that exempts its own file is a rule with a hole",
+    ("scripts/artifact-evaluator.py", "lstrip", "-*"):
+        "a 'Consumed by:' label may open its line behind a markdown list marker "
+        "of unknown length ('-', '*', '**', '- **'), and the label cleanup two "
+        "lines below removes '*', '_' and backtick but NOT '-'. So the '-' has "
+        "to come off here or '- Consumed by: /design' never matches. MEASURED "
+        "2026-08-31 by narrowing the set each way: dropping '-' reddens "
+        "test_the_evaluator_accepts_a_real_pointer[- Consumed by: /design]; "
+        "dropping '*' reddens no behavioural test at all, because "
+        ".replace('*', '') already absorbs it. The '*' is therefore recorded as "
+        "redundancy, not claimed as load-bearing. A prefix slice is the wrong "
+        "shape either way: the marker run has no fixed length, and slicing a "
+        "fixed count off a line that carries no marker eats the label instead "
+        "-- rewriting this as [1:] reddens five tests",
+    ("tests/test_two_skill_contracts_that_were_declared_and_never_measured.py",
+     "lstrip", "-*"):
+        "the CI gate's copy of the line above, deliberately spelled identically "
+        "so the advisory single-artifact evaluator and the corpus-wide gate "
+        "cannot drift into disagreeing about what counts as a pointer; "
+        "test_the_evaluator_agrees_with_the_corpus_gate, in "
+        "tests/test_two_gates_that_could_not_see_what_they_checked.py, pins the "
+        "two together on the live corpus, so the duplication is held rather "
+        "than merely hoped for. Both sites accept '- Consumed by:' and "
+        "'**Consumed by:**', which that file's _POINTER_SHAPES pins",
 }
 
 

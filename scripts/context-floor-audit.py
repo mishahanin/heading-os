@@ -28,6 +28,29 @@ Usage:
     python scripts/context-floor-audit.py --write-baseline
     python scripts/context-floor-audit.py --baseline          # exit 1 on growth
 
+THE BASELINE IS A RATCHET, AND SOMEONE HAS TO TURN IT. `--baseline` fails only
+upward, so every byte the floor loses becomes permanent slack the floor may
+regrow for free. Nothing re-tightens it automatically, by design: an
+auto-shrinking baseline would silently redefine the target between two runs and
+no diff would ever show it. Re-baselining is therefore a deliberate, reviewable
+commit, in BOTH directions:
+
+    - after a reduction, re-run `--write-baseline` to bank the win, or the next
+      author inherits the slack rather than the gain;
+    - after a legitimate addition (a new skill, a new always-on rule) that
+      pushes the floor up, `--write-baseline` is how you raise it on purpose.
+      Raising it is not cheating the gate; failing to say you raised it is. The
+      committed diff to config/context-floor-baseline.json IS the disclosure.
+
+NOT REPRODUCIBLE OFF THE OPERATOR WORKSPACE, which is why no CI job or
+pre-commit hook consumes `--baseline` today. Two of the five components
+(`memory_index`, and the operational half of `claude_md`) live in the private
+data overlay, so a clone without one measures ~25 KB lower. A baseline written
+here fails open in CI (always a shrink); one written in CI fires spuriously
+here (always growth). Wiring a blocking gate needs an engine-only subtotal
+first - the three components that ARE reproducible anywhere are
+`skill_descriptions`, `skill_other_frontmatter` and `always_on_rules`.
+
 Tests: tests/test_a_gate_that_shipped_what_it_never_read.py
 """
 
@@ -288,11 +311,20 @@ def main() -> int:
         description="Measure the always-loaded context floor by component."
     )
     parser.add_argument("--json", action="store_true")
-    parser.add_argument("--write-baseline", action="store_true")
+    parser.add_argument(
+        "--write-baseline",
+        action="store_true",
+        help="overwrite the committed baseline with the current measurement. "
+             "Use it to bank a reduction, and to RAISE the floor deliberately "
+             "when a new skill or always-on rule legitimately grows it. The "
+             "diff to " + BASELINE_PATH + " is the disclosure that it moved.",
+    )
     parser.add_argument(
         "--baseline",
         action="store_true",
-        help="compare against the committed baseline and exit 1 on growth",
+        help="compare against the committed baseline and exit 1 on growth "
+             "beyond the tolerance. Never fails on a shrink, so the recorded "
+             "number only ratchets when someone runs --write-baseline.",
     )
     args = parser.parse_args()
 
@@ -341,6 +373,18 @@ def main() -> int:
                     f"(tolerance {int(GROWTH_TOLERANCE * 100)}%).{RESET}")
             return 1
         verdict(f"\n{GREEN}Floor within tolerance: {was} -> {now} bytes.{RESET}")
+        # A pass is not the whole story. The gate only fails upward, so every
+        # byte between the live figure and the ceiling is room the floor may
+        # regrow unnoticed. Printing the slack is what makes a stale baseline
+        # visible; without it "within tolerance" reads as "tight" and the
+        # ratchet quietly stops ratcheting.
+        slack = int(ceiling) - now
+        if slack > 0:
+            verdict(f"{YELLOW}Slack: {slack} bytes (~{_tokens(slack)} tokens) "
+                    f"before this gate fires - the baseline is {was} and the "
+                    f"ceiling is {int(ceiling)} at {int(GROWTH_TOLERANCE * 100)}% "
+                    f"tolerance. Re-run with --write-baseline to bank the "
+                    f"reduction, or the next author inherits the slack.{RESET}")
     return 0
 
 

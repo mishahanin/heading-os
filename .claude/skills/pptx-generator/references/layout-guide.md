@@ -1,5 +1,7 @@
 # Layout Selection Guide
 
+Consumed by: `.claude/skills/pptx-generator/SKILL.md`, section "Step 2: Layout Discovery & Selection", and by the Quick Checklist item that reads every cookbook layout frontmatter.
+
 > Reference for selecting and using cookbook layouts. Read this when generating presentation slides.
 
 ---

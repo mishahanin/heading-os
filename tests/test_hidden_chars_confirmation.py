@@ -17,6 +17,7 @@ nudge, in sixteen places, in the exact spot where honesty is being asserted.
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -25,6 +26,26 @@ sys.path.insert(0, str(ROOT))
 
 CANONICAL = ROOT / ".claude" / "rules" / "hidden-chars.md"
 LITERAL = "Hidden characters: clean"
+
+# The 2026-08-29 audit found the guard was a plain substring test, so the
+# BOLDED form `**Hidden characters:** clean` walked straight through it: the
+# markdown emphasis sits between the words the literal joins. The matcher now
+# tolerates emphasis and code runs anywhere inside the phrase and around the
+# colon, which is the only difference.
+#
+# What it deliberately still does NOT match, and why the files that document
+# this trap keep passing: the pattern requires the word "clean" to be the
+# value, immediately after the colon. `.claude/rules/hidden-chars.md` and
+# `.claude/rules/humanization.md` both write a PLACEHOLDER there
+# (`<what the scan reported>`), and only mention "clean" later in the sentence
+# as one possible value. The guard hunts a pre-written outcome, never the
+# phrase, so documenting the trap is not the same as committing it. Widening
+# it to "any line naming the phrase near the word clean" would fail exactly
+# the rule files that define the correct behaviour.
+EMPH = r"[\s*_`]"
+PREWRITTEN = re.compile(
+    rf"hidden{EMPH}+characters{EMPH}*:{EMPH}*clean", re.IGNORECASE
+)
 
 SEARCHED = (
     ROOT / ".claude" / "rules",
@@ -43,7 +64,7 @@ def _sites() -> dict[str, list[int]]:
         for path in sorted(base.rglob("*.md")):
             lines = [n for n, line in
                      enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
-                     if LITERAL in line]
+                     if PREWRITTEN.search(line)]
             if lines:
                 found[path.relative_to(ROOT).as_posix()] = lines
     return found
@@ -69,9 +90,49 @@ def test_the_canonical_rule_still_defines_the_line():
 def test_the_canonical_rule_does_not_present_clean_as_the_template():
     """It is one possible value the scan can report, not the shape to copy."""
     text = CANONICAL.read_text(encoding="utf-8")
-    assert LITERAL not in text, (
-        "the canonical rule now hands the writer a pre-filled outcome too"
+    for n, line in enumerate(text.splitlines(), 1):
+        assert not PREWRITTEN.search(line), (
+            f"the canonical rule now hands the writer a pre-filled outcome too, "
+            f"at {CANONICAL.name}:{n}"
+        )
+
+
+def test_the_matcher_sees_through_markdown_emphasis():
+    """The hole this guard had until 2026-08-29.
+
+    A plain `LITERAL in line` test cannot see `**Hidden characters:** clean`,
+    because the emphasis markers sit inside the phrase. One such line lived in
+    `workspace-deep-audit/references/output-template.md` for the guard's whole
+    life. Without this positive control, a future edit could quietly narrow the
+    matcher back to a substring test and every file would still pass.
+    """
+    must_match = (
+        LITERAL,
+        "**Hidden characters:** clean (sanitizer-verified)",
+        "*Hidden characters*: clean",
+        "`Hidden characters: clean`",
+        "__Hidden characters:__  clean",
+        "**Hidden** **characters:** clean",
+        "- **hidden characters:**clean",
     )
+    for sample in must_match:
+        assert PREWRITTEN.search(sample), f"matcher missed the pre-filled outcome: {sample!r}"
+
+    # The other direction. These DOCUMENT the trap instead of committing it,
+    # and a matcher that fails them would fail the rules that define the
+    # correct behaviour. Both are real lines from the tree.
+    must_not_match = (
+        "run the sanitizer and carry its result: `Word count: X. Hidden characters: "
+        '<what the scan reported>.` "clean" is one possible value, not the template.',
+        "> Word count: X. Hidden characters: <what the scan found>. "
+        "Humanisation audit: clean / N findings (one-line summary of fixes if any).",
+        "**Hidden characters:** {what `scripts/sanitize-text.py --scan` reported}",
+        "Hidden characters: 3 zero-width spaces removed",
+    )
+    for sample in must_not_match:
+        assert not PREWRITTEN.search(sample), (
+            f"matcher punishes a file for documenting the trap: {sample!r}"
+        )
 
 
 def test_the_detector_reads_real_files():

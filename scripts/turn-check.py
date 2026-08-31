@@ -40,11 +40,20 @@ Three lanes, cheapest first, each bounded:
            sleep for real, they belong to the once-per-push suite, and a lane
            that takes a minute is a lane the operator learns to dread.
 
+Every lane that spawns a child runs it under `PYTHON` below, never under
+`sys.executable`. MEASURED 2026-08-31: run as the documented `python
+scripts/turn-check.py`, `python` is `/usr/bin/python` 3.12 on this machine while
+the project pins `.venv` 3.11, so the tests lane collected under the SYSTEM
+interpreter and a Playwright test errored on a `~/.local` copy of the SDK that
+the pinned environment does not use. The failure was the interpreter, not the
+code, and the same run under `.venv/bin/python` was clean. `sys.executable` is
+whatever launched this script; it is not the environment the suite is pinned to.
+
 Usage:
-    python scripts/turn-check.py                # human output, exit 1 on failure
-    python scripts/turn-check.py --json         # machine output for the Stop hook
-    python scripts/turn-check.py --no-cache     # ignore the pass cache
-    python scripts/turn-check.py --timeout 60   # cap the test lane (default 120s)
+    .venv/bin/python scripts/turn-check.py         # human output, exit 1 on failure
+    .venv/bin/python scripts/turn-check.py --json  # machine output for the Stop hook
+    .venv/bin/python scripts/turn-check.py --no-cache    # ignore the pass cache
+    .venv/bin/python scripts/turn-check.py --timeout 60  # cap the test lane (default 120s)
 
 Exit codes: 0 clean or nothing to check, 1 a lane failed, 2 bad arguments.
 """
@@ -62,7 +71,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
 from scripts.utils.session_scope import current_transcript, narrow  # noqa: E402
+from scripts.utils.venv_guard import venv_python  # noqa: E402
 from scripts.utils.workspace import get_workspace_root  # noqa: E402
+
+# The interpreter every child lane runs under. Falls back to `sys.executable`
+# only when the venv is genuinely absent (a fresh clone before `uv sync`), which
+# is the one case where refusing would be worse than reporting under whatever is
+# available. `.claude/hooks/turn-check.py` already resolves the same path for the
+# automatic run; this makes the by-hand invocation behave identically.
+_VENV = venv_python()
+PYTHON = str(_VENV) if _VENV.exists() else sys.executable
 
 ROOT = get_workspace_root()
 STATE_PATH = ROOT / ".claude" / "state" / "turn-check.json"
@@ -278,7 +296,7 @@ def lane_import(paths: list[Path]) -> list[str]:
     )
     try:
         out = subprocess.run(
-            [sys.executable, "-c", probe],
+            [PYTHON, "-c", probe],
             cwd=str(ROOT), capture_output=True, text=True, timeout=60,
         )
     except subprocess.TimeoutExpired:
@@ -418,7 +436,7 @@ def _files_holding_no_test(targets: list[Path], timeout: int) -> int:
     the whole answer unknown rather than an arbitrary pick.
     """
     args = [
-        sys.executable, "-m", "pytest", "-q", "-p", "no:randomly",
+        PYTHON, "-m", "pytest", "-q", "-p", "no:randomly",
         "--collect-only", "--no-header", *[str(t) for t in targets],
     ]
     try:
@@ -478,7 +496,7 @@ def lane_tests(paths: list[Path],
     if not targets:
         return [], 0, skipped, 0, 0, 0
     args = [
-        sys.executable, "-m", "pytest", "-q", "-p", "no:randomly",
+        PYTHON, "-m", "pytest", "-q", "-p", "no:randomly",
         "-m", "not slow", "--no-header", "-x", *[str(t) for t in targets],
     ]
     try:

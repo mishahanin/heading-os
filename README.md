@@ -21,7 +21,7 @@
 
 ---
 
-HEADING OS runs on one guarantee: your data cannot ship with the code. The engine is a shareable, public repository; your data is a private one the engine never contains and never leaks. That separation is enforced by six mechanical layers and a security suite that runs on every commit, not just intended. On top of it sits the workspace an executive actually runs their work from: research, communications, CRM, content, and operations, with Claude Code as the agent.
+HEADING OS runs on one guarantee: your data cannot ship with the code. The engine is a shareable, public repository; your data is a private one the engine never contains and never leaks. That separation is enforced by seven mechanical layers and a security suite that runs on every commit, not just intended. On top of it sits the workspace an executive actually runs their work from: research, communications, CRM, content, and operations, with Claude Code as the agent.
 
 It is named after its operating philosophy: the **[Navigation Principle](docs/GLOSSARY.md)** — you set a heading and hold it, correcting course as conditions change, rather than steering toward a fixed point and hoping. The same idea runs through the system: durable state over one-shot prompts, verified completion over hopeful timeouts, operational states over rigid targets. New to the house vocabulary (heading, drift, operational state, engine vs data)? The **[glossary](docs/GLOSSARY.md)** defines every term in a line.
 
@@ -59,7 +59,7 @@ You clone the engine; you create your own private data repository ([one command]
 - **Hooks** — `PreToolUse` / `PostToolUse` / `SessionStart` guards that enforce the rules below before a write ever lands.
 - **Daemons** — optional always-on background services (a loopback dashboard, mail/calendar sync) that are driven from the CLI, never required through a browser.
 - **A security model with teeth** — not policy prose alone:
-  - **Engine ⟂ data separation** is proven by six enforcement layers (a bypass guard, a leak guard, a data-path redirect, a build partition, a runtime tree-clean check, and an unbypassable push-time wall in pure code), so the engine clone cannot carry private data regardless of how a file was written — and the data cannot leave on the push, on any path.
+  - **Engine ⟂ data separation** is proven by seven enforcement layers (a bypass guard, a leak guard, a data-path redirect, a build partition, a runtime tree-clean check, an unbypassable push-time wall in pure code, and a content guard), so the engine clone cannot carry private data regardless of how a file was written — and the data cannot leave on the push, on any path. The first six ask where a file goes; the content guard is the one that opens an engine-routed file and reads what is inside it.
   - **Outbound send is always human-gated** — the lethal-trifecta control. An agent can draft and queue a message; a human clicks before anything leaves.
   - **Secrets never reach a remote** — a content scan on the sanctioned push path is pure code with no skip flag, behind a bypassable commit-time hook.
   - **No "hope-based" waiting** — every must-complete step (every push) runs under a progress watchdog that declares a hang only on real inactivity and verifies the postcondition, never trusting a wall-clock timeout or a bare exit code.
@@ -69,8 +69,8 @@ You clone the engine; you create your own private data repository ([one command]
 
 Every figure here is produced by CI, not asserted by hand. Counts as of `v0.13.0`, kept honest by `scripts/dev/check-readme-numbers.py`.
 
-- **538 security tests**, run on every commit by the [`security-tests`](.github/workflows/ci.yml) job over [`tests/security/`](tests/security). This is the suite that proves the guarantees below.
-- **6 enforcement layers** hold the engine and data apart: a [bypass guard](tests/test_data_root_no_bypass.py), a [leak guard](scripts/leak-guard.py), a data-path redirect hook, a build partition, a [runtime tree-clean check](tests/test_engine_tree_clean.py), and an [unbypassable push-time wall](scripts/push-all.py).
+- **544 security tests**, run on every commit by the [`security-tests`](.github/workflows/ci.yml) job over [`tests/security/`](tests/security). This is the suite that proves the guarantees below.
+- **7 enforcement layers** hold the engine and data apart: a [bypass guard](tests/test_data_root_no_bypass.py), a [leak guard](scripts/leak-guard.py), a data-path redirect hook, a build partition, a [runtime tree-clean check](tests/test_engine_tree_clean.py), an [unbypassable push-time wall](scripts/push-all.py), and a [content guard](scripts/content-guard.py).
 - **Router accuracy**: pending. The nightly router-accuracy trend (F-6.2) needs a week of data before a number is published here.
 
 ## Quickstart

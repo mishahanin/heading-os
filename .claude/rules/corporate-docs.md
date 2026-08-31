@@ -97,12 +97,32 @@ Senders without an explicit slug default to `misha-hanin`.
 
 ## Classification
 
-- `reference/corporate-style-guide.md` - corporate (shared with all execs via `reference/` directory default).
-- `.claude/rules/corporate-docs.md` (this file) - corporate.
+Resolved by `get_routing_destination()` over `config/routing-map.yaml`, the single
+classification input (`.claude/rules/classification.md`). Called on 2026-08-31:
+
+- `reference/corporate-style-guide.md` - engine.
+- `.claude/rules/corporate-docs.md` - engine.
+- `scripts/render-doctype.py` - engine.
+- `.claude/skills/corporate-letter/` - engine.
+- `.claude/skills/proposal/` - engine.
+- `.claude/skills/partnership-doc/` - engine.
+- `.claude/skills/official-doc/` - engine.
+- `.claude/skills/xpager/` - engine.
 - `datastore/brand/templates/doctypes/` - corporate.
-- `scripts/render-doctype.py` - corporate.
-- `.claude/skills/corporate-letter/`, `.claude/skills/partnership-doc/`, `.claude/skills/official-doc/`, `.claude/skills/xpager/` - corporate.
-- Rendered outputs (`outputs/documents/`) - ceo-only (local to each exec).
+- `outputs/documents/` - private.
+
+Five of those lines read `corporate` until 2026-08-31, one of them crediting
+`reference/` with a `corporate` directory default that has never existed (the
+directory resolves `engine`; the CEO files in it are per-file `private` carve-outs).
+The map's header records why: code directories that were `corporate` (shared down to
+executives) became `engine` (shared to everyone), because code is not data. Only the
+brand templates, which are content, stayed `corporate`.
+
+`engine` is the WIDER destination. The engine repo is public, so the stale text was
+wrong in the dangerous direction: it said a `scripts/` file and four skill
+directories were held back from the public when they already ship in the public
+clone. `tests/test_a_rule_that_classified_its_own_files_by_hand.py` now resolves
+every claim above, so this section cannot drift from the map again unnoticed.
 
 ## Change Control
 

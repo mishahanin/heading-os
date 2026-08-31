@@ -22,8 +22,23 @@ to say:
       scripts/.impeccable-version). Parses the HTML, resolves the CSS cascade,
       and computes real values: text contrast against the surface actually
       behind it, heading hierarchy, accent stripes on rounded corners, type
-      floors. Reads HTML and SVG only - PPTX and PDF stay regex-only. It sees
-      what RENDERS.
+      floors. Reads HTML and SVG only. It sees what RENDERS.
+
+Coverage, stated once. `tests/test_a_coverage_table_that_outran_its_scan_extensions.py`
+parses this block and fails if it disagrees with SCAN_EXTENSIONS below, so the
+two cannot drift apart again:
+
+      .html .htm   both engines
+      .svg         both engines
+      .pptx        regex only (OOXML parts unzipped; fonts and colors)
+      .pdf         neither
+      .docx        neither
+      .png         neither
+
+PDF and DOCX are read by no engine here. This docstring used to say "PPTX and
+PDF stay regex-only", which named a PDF scan that has never existed. The gap
+lands hardest on the five locked corporate doctypes, whose only renders are PDF
+and DOCX: nothing in this repo audits them.
 
 Deep findings carry an `impeccable:` type prefix so a reader can always tell
 which engine made a claim. Calibration (print vs screen vs locked doctype),
@@ -46,6 +61,7 @@ Usage:
 
   python scripts/visual-discipline-check.py baseline record --deep docs/  # freeze what exists
   python scripts/visual-discipline-check.py baseline check --deep docs/   # fail on regressions only
+  python scripts/visual-discipline-check.py baseline stats                # how big the freeze is
 
 The baseline is a ratchet, same shape as .lint-baseline.json: `record` freezes
 the findings present on existing artifacts, `check` fails only on findings ABOVE
@@ -579,6 +595,32 @@ def _run_audit(root, *, strict, deep, profile, use_baseline, include_internal,
     return results, any_fail, deep_note
 
 
+def baseline_totals(baseline=None):
+    """Return (entry_count, finding_count) for the frozen baseline.
+
+    Exists so no prose anywhere has to carry the size of the freeze as a typed
+    number. `.claude/rules/visual-design-discipline.md`, `docs/DESIGN-CHECK.md`
+    and the CI step comment all said "390 findings across 37 files" long after
+    the file held 399 across 38, because three copies of a hand-maintained
+    count is three chances to rot. They now name `baseline stats` instead.
+    """
+    files = impeccable_engine.load_baseline() if baseline is None else baseline
+    entries = len(files)
+    findings = sum(
+        sum(rules.values()) for rules in files.values() if isinstance(rules, dict)
+    )
+    return entries, findings
+
+
+def _cmd_baseline_stats():
+    """Print the size of the frozen baseline, derived from the file itself."""
+    entries, findings = baseline_totals()
+    print(f"  {impeccable_engine.BASELINE_FILE}: {findings} frozen finding(s) "
+          f"across {entries} entr{'y' if entries == 1 else 'ies'}.")
+    print(f"  {GRAY}Frozen, not fixed. The gate fires only above these counts.{RESET}")
+    return 0
+
+
 def _cmd_baseline(args):
     """`baseline record` freezes what exists; `baseline check` gates regressions."""
     root = Path(args.path)
@@ -706,13 +748,20 @@ def main():
     # has consumed an option it treats the remaining positionals as one closed
     # group, so `baseline record --deep docs/` loses the path. Peeling keeps the
     # long-standing `visual-discipline-check.py <path>` form byte-identical for
-    # the fifteen skills that already call it.
+    # every existing caller. It used to say "the fifteen skills that already
+    # call it"; no skill has ever called it (`grep -rl visual-discipline-check
+    # .claude/skills/` is empty), and the callers that do exist are the CI step
+    # in .github/workflows/ci.yml and a human at a terminal.
     argv = sys.argv[1:]
     baseline_action = None
     if argv and argv[0] == "baseline":
-        if len(argv) < 2 or argv[1] not in ("record", "check"):
-            print("Error: baseline takes 'record' or 'check'", file=sys.stderr)
+        if len(argv) < 2 or argv[1] not in ("record", "check", "stats"):
+            print("Error: baseline takes 'record', 'check' or 'stats'", file=sys.stderr)
             sys.exit(2)
+        # `stats` reads the frozen file and takes no path, so it never reaches
+        # the required `path` positional below.
+        if argv[1] == "stats":
+            sys.exit(_cmd_baseline_stats())
         baseline_action = argv[1]
         argv = argv[2:]
 

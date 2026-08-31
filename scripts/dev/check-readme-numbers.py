@@ -58,9 +58,48 @@ from scripts.utils.workspace import get_workspace_root  # noqa: E402
 
 ROOT = get_workspace_root()
 
-# The six engine/data enforcement layers enumerated in docs/SECURITY-MODEL.md and the
-# README security bullet. A fixed architectural constant, not a fluctuating count.
-EXPECTED_LAYERS = 6
+# The engine/data enforcement layers, COUNTED from the numbered table in
+# docs/engine-data-segregation-contract.md, which is the only page that
+# enumerates them rather than quoting a numeral.
+#
+# This was `EXPECTED_LAYERS = 6`, described in the docstring below as "a fixed
+# architectural constant, not a fluctuating count". It fluctuated: the content
+# guard became layer 7 on 2026-08-31, the contract and SECURITY.md were updated,
+# and this guard went on asserting 6 against the two front doors that still said
+# 6 -- so the guard reported "in sync" across a set that disagreed with the
+# authority. A count a human must remember to update in two places is the defect.
+_LAYER_ROW_RE = re.compile(r"^\|\s*(\d+)\s*\|", re.MULTILINE)
+
+
+def derive_layer_count() -> int:
+    """Count the numbered rows of the contract's enforcement-layer table.
+
+    Refuses rather than guesses: the rows must be numbered 1..N with no gap, and
+    there must be at least the six that existed in 2026-06. A table that stops
+    parsing (a reformat, a blank line orphaning a row) collapses the count, and a
+    silent low number here would quietly demand that every front door shrink.
+    """
+    contract = ROOT / "docs" / "engine-data-segregation-contract.md"
+    text = contract.read_text(encoding="utf-8")
+    heading = text.find("## The ")
+    body = text[heading:] if heading != -1 else text
+    numbers = [int(m) for m in _LAYER_ROW_RE.findall(body)]
+    if numbers != list(range(1, len(numbers) + 1)):
+        raise SystemExit(
+            f"{contract.relative_to(ROOT)}: enforcement-layer rows are not numbered "
+            f"1..N with no gap: {numbers}. Fix the table; this guard reads it as the "
+            f"authority for every other page's numeral."
+        )
+    if len(numbers) < 6:
+        raise SystemExit(
+            f"{contract.relative_to(ROOT)}: parsed only {len(numbers)} enforcement-layer "
+            f"rows; the contract has held at least 6 since 2026-06. The table almost "
+            f"certainly stopped parsing rather than shrinking."
+        )
+    return len(numbers)
+
+
+EXPECTED_LAYERS = derive_layer_count()
 
 # Front-door pages that must carry matching figures.
 #
@@ -71,7 +110,22 @@ EXPECTED_LAYERS = 6
 FRONT_DOORS = [ROOT / "README.md", ROOT / "docs" / "index.html", ROOT / "ROADMAP.md"]
 
 _SEC_RE = re.compile(r"(\d+)\s+security tests", re.IGNORECASE)
-_LAYER_RE = re.compile(r"(\d+)\s+enforcement layers", re.IGNORECASE)
+# Digits OR the spelled word. README.md:62 wrote "six enforcement layers" in
+# prose while README.md:73 wrote "6" in a bullet, and a digits-only pattern read
+# only the bullet -- so the same page could carry two different counts and pass.
+_LAYER_WORDS = {
+    "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+# The NOUN varies too. Measured 2026-08-31: with the pattern pinned to
+# "enforcement layers", three pages carried a stale six in wordings it could not
+# see -- "six mechanical layers" on README.md and docs/index.html, and "the six
+# layers" in the contract's own change-control clause. All three sat beside a
+# corrected seven and the guard reported the set in sync. An adjective is the
+# cheapest thing for a writer to vary, so it must be the cheapest thing for the
+# pattern to allow.
+_LAYER_RE = re.compile(
+    r"(\d+|" + "|".join(_LAYER_WORDS) + r")\s+(?:\w+\s+)?layers", re.IGNORECASE
+)
 _COLLECTED_RE = re.compile(r"(\d+)\s+tests?\s+collected")
 
 # The two sentences on docs/EXTENDING.md that carry the trigger-corpus figures.
@@ -209,7 +263,7 @@ def _extract(pattern: re.Pattern[str], text: str, path: Path, label: str) -> int
     matches = pattern.findall(text)
     if not matches:
         return None
-    values = {int(m) for m in matches}
+    values = {_LAYER_WORDS.get(m.lower()) or int(m) for m in matches}
     if len(values) > 1:
         raise SystemExit(
             f"{RED}{path.relative_to(ROOT)}: inconsistent '{label}' figures {sorted(values)} "

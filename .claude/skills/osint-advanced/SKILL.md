@@ -164,10 +164,11 @@ The canonical brief structure - section order, classification banner, sanctions 
    - No external dependencies (all CSS inline)
    - Footer: "31C Intelligence Division -- OSINT-Advanced Engine"
 
-5. **Validate:**
+5. **Validate:** Bash gets no path redirect, so resolve the outputs root first.
    ```bash
-   python scripts/sanitize-text.py outputs/intel/osint-advanced/YYYY-MM-DD-[target-slug]/brief.md --scan
-   python scripts/sanitize-text.py outputs/intel/osint-advanced/YYYY-MM-DD-[target-slug]/report.html --scan
+   OUTPUTS_DIR="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import get_outputs_dir; print(get_outputs_dir())")"
+   python scripts/sanitize-text.py "$OUTPUTS_DIR/intel/osint-advanced/YYYY-MM-DD-[target-slug]/brief.md" --scan
+   python scripts/sanitize-text.py "$OUTPUTS_DIR/intel/osint-advanced/YYYY-MM-DD-[target-slug]/report.html" --scan
    ```
 
 6. **Report:** File paths, word count, hidden character status, streams executed, tools queried, sanctions status.

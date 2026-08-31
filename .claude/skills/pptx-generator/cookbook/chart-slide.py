@@ -5,6 +5,7 @@
 #     "python-pptx==1.0.2",
 # ]
 # ///
+
 # /// layout
 # name = "chart-slide"
 # purpose = "Data visualization, metrics breakdown, distribution charts"
@@ -41,6 +42,7 @@ CUSTOMIZE:
 - INSIGHT: Key takeaway from the data
 """
 
+import os
 from pathlib import Path
 
 from pptx import Presentation
@@ -58,6 +60,18 @@ def hex_to_rgb(hex_color: str) -> RGBColor:
 
 
 def main() -> None:
+    # === OUTPUT DIRECTORY ===
+    # $DECK_DIR is the data-overlay deck directory, resolved and exported by the
+    # caller (SKILL.md Step 5). Resolved FIRST so a misconfigured run fails
+    # before it renders anything. A bare relative filename here would write the
+    # deck into the engine clone, which is public.
+    deck_dir = os.environ.get("DECK_DIR")
+    if not deck_dir:
+        raise SystemExit(
+            "DECK_DIR is not set. Export the data-overlay deck directory "
+            "first; see SKILL.md Step 5."
+        )
+
     # === BRAND COLORS (get from brands/{name}/brand-system.md) ===
     BRAND_BG = "REPLACE"              # background color
     BRAND_TEXT = "REPLACE"            # primary text color
@@ -188,7 +202,7 @@ def main() -> None:
     bottom_bar.line.fill.background()
 
     # Save
-    output = Path("chart-slide.pptx")
+    output = Path(deck_dir) / "chart-slide.pptx"
     prs.save(output)
     print(f"Created {output}")
 

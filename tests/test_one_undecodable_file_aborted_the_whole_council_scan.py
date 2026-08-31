@@ -53,7 +53,7 @@ def test_the_transcripts_beside_it_still_get_collected(tmp_path, monkeypatch):
     good = tmp_path / "2026-08-29_council_acme.md"
     good.write_text(VALID, encoding="utf-8")
     (tmp_path / "note.md").write_bytes(LATIN1_NOTE)
-    monkeypatch.setattr(ca, "COUNCIL_DIR", tmp_path)
+    monkeypatch.setattr(ca, "council_dir", lambda p=tmp_path: p)
 
     assert len(list(tmp_path.glob("*.md"))) == 2, "the corpus must hold both files"
 
@@ -68,9 +68,9 @@ def test_the_aggregate_is_written_despite_the_undecodable_file(tmp_path, monkeyp
     good = tmp_path / "2026-08-29_council_acme.md"
     good.write_text(VALID, encoding="utf-8")
     (tmp_path / "note.md").write_bytes(LATIN1_NOTE)
-    monkeypatch.setattr(ca, "COUNCIL_DIR", tmp_path)
-    monkeypatch.setattr(ca, "VERDICTS_PATH", tmp_path / "_verdicts.jsonl")
-    monkeypatch.setattr(ca, "AGGREGATE_PATH", tmp_path / "_aggregate.md")
+    monkeypatch.setattr(ca, "council_dir", lambda p=tmp_path: p)
+    monkeypatch.setattr(ca, "verdicts_path", lambda p=tmp_path / "_verdicts.jsonl": p)
+    monkeypatch.setattr(ca, "aggregate_path", lambda p=tmp_path / "_aggregate.md": p)
 
     assert ca.main([]) == 0
 

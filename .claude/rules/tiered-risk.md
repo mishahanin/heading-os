@@ -23,7 +23,7 @@ Every Action Queue card carries an `action_type`. The reversibility ledger `conf
 
 The tier is stamped on the card at append time (`append_cards`) and the daemon's `_sweep_non_gated_cards` routes by it: autonomous display types stay surfaced for the CEO to read and dismiss, notify cards auto-apply, gated sends wait for approval.
 
-> **`telegram_send` is reserved-and-gated but not yet wired.** It is pre-registered in `send_capable` (floors to `gated`) and shown in the UI, but `scripts/action-queue-execute.py` has no telegram executor branch — an approved telegram card cannot actually fire. This is the safe direction (a gated send that cannot send), but do not assume approved telegram cards deliver until the executor branch lands.
+> **`telegram_send` is reserved-and-gated but not yet wired.** It is pre-registered in `send_capable` (floors to `gated`) and shown in the UI, but no transport is attached. `scripts/action-queue-execute.py` now carries an explicit refusal branch for it: an approved telegram card returns `send_failed` with `"telegram executor not implemented (501)"` and `classification: "permanent"`, so it fails loudly rather than skipping silently. Approved telegram cards therefore do NOT deliver. Do not read the presence of that branch as the transport having landed; it is the placeholder that refuses in the safe direction (a gated send that cannot send).
 
 ## The invariant (non-negotiable)
 
@@ -38,7 +38,23 @@ When adding a new `action_type`:
 
 ## Classification
 
-This rule is corporate — the tier taxonomy and the send invariant apply to every workspace's executor. The fleet-safe primitives (`tool_risk.py`, `config/tool-risk.json`) are corporate. The CEO-only spine pieces that consume the gate during prove-out (the alert router, the watchdog, the dead-letter CLI) are pinned private in `config/routing-map.yaml` and are not synced to executives.
+Resolved by `get_routing_destination()` over `config/routing-map.yaml`, the single
+classification input (`.claude/rules/classification.md`). Called on 2026-08-31:
+
+- `.claude/rules/tiered-risk.md` - engine.
+- `scripts/utils/tool_risk.py` - engine.
+- `config/tool-risk.json` - engine.
+
+All three read `corporate` until 2026-08-31. `engine` is the wider destination: the
+engine repo is public, so these ship to everyone rather than only down to
+executives. The reasoning in the old text still holds and is in fact why they are
+public: the tier taxonomy and the send invariant apply to every workspace's
+executor. The CEO-only spine pieces that consume the gate during prove-out (the
+alert router, the watchdog, the dead-letter CLI) carry their own `private` rules in
+`config/routing-map.yaml` and are not synced to executives.
+
+`tests/test_a_rule_that_classified_its_own_files_by_hand.py` resolves each claim
+above through the resolver.
 
 ## Change control
 

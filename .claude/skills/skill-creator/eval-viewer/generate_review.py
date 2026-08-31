@@ -14,14 +14,14 @@ No dependencies beyond the Python stdlib are required.
 
 import argparse
 import base64
+import contextlib
 import json
 import mimetypes
 import os
 import re
-import signal
 import subprocess
 import sys
-import time
+import tempfile
 import webbrowser
 from functools import partial
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -283,25 +283,79 @@ def generate_html(
     return template.replace("/*__EMBEDDED_DATA__*/", f"const EMBEDDED_DATA = {data_json};")
 
 
-def _kill_port(port: int) -> None:
-    """Kill any process listening on the given port."""
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write *text* to *path* via a same-directory tempfile, then os.replace().
+
+    A plain ``path.write_text()`` opens the destination in mode ``w``, which
+    truncates it before one byte of the new content is written. `feedback.json`
+    holds every review the operator has typed, and this runs from an HTTP POST
+    handler, so a crash in that window costs the lot.
+
+    The workspace ships `scripts/utils/atomic.py::atomic_write_text`, and it is
+    NOT reachable from here. This file runs as ``python generate_review.py
+    <workspace>``, which puts the eval-viewer directory on ``sys.path[0]`` and
+    no repository root anywhere on the path; measured 2026-08-31, ``import
+    scripts.utils.atomic`` raises ModuleNotFoundError under a bare ``python3``.
+    The module docstring's stdlib-only promise says the same thing from the
+    other side. So the pattern is reimplemented rather than reused, and this
+    note exists so the next reader does not re-derive that.
+    """
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def check_port_holder(port: int) -> list[int]:
+    """Report which PIDs hold *port*. Signal nothing.
+
+    Until 2026-08-31 this function was `_kill_port`: it ran ``lsof -ti :PORT``
+    and sent SIGTERM to every PID returned, unconditionally, with no check that
+    the process was a previous instance of this viewer. On a developer machine
+    port 3117 can be anything.
+
+    Refusing, rather than identifying. An identification heuristic that is wrong
+    once has already killed something, and `main()` needs nothing from the kill:
+    it already falls back to an ephemeral port when the bind fails. So this
+    reports and returns.
+    """
     try:
         result = subprocess.run(
             ["lsof", "-ti", f":{port}"],
             capture_output=True, text=True, timeout=5,
         )
-        for pid_str in result.stdout.strip().split("\n"):
-            if pid_str.strip():
-                try:
-                    os.kill(int(pid_str.strip()), signal.SIGTERM)
-                except (ProcessLookupError, ValueError):
-                    pass
-        if result.stdout.strip():
-            time.sleep(0.5)
     except subprocess.TimeoutExpired:
-        pass
+        print(f"Note: lsof timed out; cannot tell whether port {port} is in use", file=sys.stderr)
+        return []
     except FileNotFoundError:
         print("Note: lsof not found, cannot check if port is in use", file=sys.stderr)
+        return []
+
+    holders = []
+    for pid_str in result.stdout.strip().split("\n"):
+        pid_str = pid_str.strip()
+        if not pid_str:
+            continue
+        try:
+            holders.append(int(pid_str))
+        except ValueError:
+            continue
+
+    if holders:
+        pids = ", ".join(str(p) for p in holders)
+        print(
+            f"Note: port {port} is already held by PID(s) {pids}. Not touching them - "
+            "this viewer cannot tell a previous instance of itself from anything else "
+            "listening there. Falling back to a free port.",
+            file=sys.stderr,
+        )
+    return holders
+
 
 class ReviewHandler(BaseHTTPRequestHandler):
     """Serves the review HTML and handles feedback saves."""
@@ -359,7 +413,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 data = json.loads(body)
                 if not isinstance(data, dict) or "reviews" not in data:
                     raise ValueError("Expected JSON object with 'reviews' key")
-                self.feedback_path.write_text(json.dumps(data, indent=2) + "\n")
+                atomic_write_text(self.feedback_path, json.dumps(data, indent=2) + "\n")
                 resp = b'{"ok":true}'
                 self.send_response(200)
             except (json.JSONDecodeError, OSError, ValueError) as e:
@@ -428,7 +482,7 @@ def main() -> None:
         sys.exit(0)
 
     port = args.port
-    _kill_port(port)
+    check_port_holder(port)
     handler = partial(ReviewHandler, workspace, skill_name, feedback_path, previous, benchmark_path)
     try:
         server = HTTPServer(("127.0.0.1", port), handler)

@@ -7,10 +7,10 @@ paths:
   - "templates/**"
 ---
 
-<!-- version: 1.3.2 | last-updated: 2026-07-20 -->
+<!-- version: 1.3.3 | last-updated: 2026-08-31 -->
 # Development Standards
 
-Last Verified: 2026-07-08
+Last Verified: 2026-08-31
 
 Quality gates for every workspace artifact (skills, scripts, reference files, rules) and all development work, not just specific features.
 
@@ -199,7 +199,7 @@ Invocation pattern:
 
 If the skill is not entity-scoped (e.g., a multi-section dashboard), omit the entity flag. The audit gracefully degrades to a no-entity footer.
 
-Skills currently composing `/brain-audit`: `/meeting-prep`, `/odin` (consult mode), `/deal-strategy`. New synthesis skills MUST adopt the same pattern. A future `scripts/artifact-evaluator.py` check will flag missing composition.
+For the live set of composers, ask the tree, never this paragraph: `grep -rl "brain-audit" .claude/skills/ --include=SKILL.md`. A hand-written list here named three (`/meeting-prep`, `/odin`, `/deal-strategy`) while nine skills composed it, six of them citing this very rule as the reason, and it had been wrong since the initial import. New synthesis skills MUST adopt the same pattern. A future `scripts/artifact-evaluator.py` check will flag missing composition; until it exists, the grep is the only current answer.
 
 ## Script Standards
 
@@ -239,7 +239,7 @@ class Config: ...
 class StateManager: ...
 ```
 
-**Scheduled tasks (systemd-user timers) MUST survive reboot.** Every scheduled task in this workspace -- every existing timer and every future one -- ships as a systemd-user timer built to fire after an unattended reboot, never as a session-scoped `CronCreate` task (those are NOT durable -- see `.claude/rules/skill-router.md` § Scheduled & Background Tasks). Reboot survival requires all THREE mechanisms, and an installer must include every one (copy an existing sibling installer such as `scripts/install-router-accuracy-timer.sh`, which already bakes them in -- do not hand-roll a partial one):
+**Scheduled tasks (systemd-user timers) MUST survive reboot.** Every scheduled task in this workspace -- every existing timer and every future one -- ships as a systemd-user timer built to fire after an unattended reboot, never as a session-scoped `CronCreate` task (those are NOT durable -- see `reference/scheduled-tasks.md`, which took this content out of `.claude/rules/skill-router.md` on 2026-08-20). Reboot survival requires all THREE mechanisms, and an installer must include every one (copy an existing sibling installer such as `scripts/install-router-accuracy-timer.sh`, which already bakes them in -- do not hand-roll a partial one):
 
 1. **`Persistent=true`** in the `.timer` unit -- runs a fire missed while the machine was off, on the next boot.
 2. **`systemctl --user enable`** with `WantedBy=timers.target` in the unit -- the timer starts at boot.
@@ -256,7 +256,7 @@ from scripts.utils.scheduler_defaults import JOB_DEFAULTS
 scheduler = AsyncIOScheduler(timezone=get_default_tz(), job_defaults=JOB_DEFAULTS)
 ```
 
-Passing the options to `add_job` instead is what failed the first time: the safe values sat on one `add_job` call in `scripts/bridge_daemon/scheduler.py` while the five jobs `scripts/bridge-daemon.py` adds to that same scheduler silently kept the 1 second default, two lines below a comment that diagnosed the bug. A scheduler-level default is inherited by jobs registered later, by authors who never read this rule; a per-job argument is not. `tests/test_scheduler_misfire_guard.py` fails any scheduler under `scripts/` built without `job_defaults`, or with a `job_defaults` that omits `misfire_grace_time`.
+Passing the options to `add_job` instead is what failed the first time: the safe values sat on one `add_job` call in `scripts/bridge_daemon/scheduler.py` while the five jobs `scripts/bridge-daemon.py` adds to that same scheduler silently kept the 1 second default, two lines below a comment that diagnosed the bug. A scheduler-level default is inherited by jobs registered later, by authors who never read this rule; a per-job argument is not. `tests/test_scheduler_misfire_guard.py` fails any scheduler under `scripts/` built without `job_defaults`, and any whose `job_defaults` is a dict LITERAL omitting `misfire_grace_time`. Its stated limit: a spread, a call, or an unrecognised name (`job_defaults=build()`, `{**base}`) passes unexamined, because source inspection cannot settle it. So pass the constant by name and nothing else.
 
 ## Reference File Standards
 

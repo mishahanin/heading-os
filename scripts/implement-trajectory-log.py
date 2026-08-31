@@ -140,7 +140,21 @@ from scripts.utils.workspace import (  # noqa: E402
 )
 
 WORKSPACE_ROOT = get_workspace_root()
-TRAJECTORY_DIR = get_outputs_dir() / "operations" / "implement"
+
+
+def trajectory_dir() -> Path:
+    """Resolved at call time, never at import.
+
+    `get_outputs_dir()` reads `HEADING_OS_DATA` on every call, so it follows the
+    environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer: a test that imported this module and then repointed the root got the
+    operator's real overlay back out of `trajectory_path()`. Both writers below
+    reach `mkdir` and `touch`, and neither is among the primitives
+    `tests/conftest.py` wraps, so the stray directory landed without a refusal.
+    """
+    return get_outputs_dir() / "operations" / "implement"
+
 
 EVENT_TYPES = {
     "run_start",
@@ -326,7 +340,7 @@ def validate_run_id(run_id: str) -> str:
     separator in the middle: with `--run-id 'x/../../victimdir/victim'` and the
     `_trajectory_x` directory in place (which `mint_unique_run_id`'s
     `mkdir(parents=True)` creates for any run_id carrying a slash), `--event`
-    appended an audit record to a file two levels outside TRAJECTORY_DIR and
+    appended an audit record to a file two levels outside trajectory_dir() and
     exited 0. Measured 2026-08-30.
 
     There is no privilege boundary here - the operator runs this as themselves -
@@ -354,7 +368,7 @@ def validate_run_id(run_id: str) -> str:
 
 
 def trajectory_path(run_id: str) -> Path:
-    return TRAJECTORY_DIR / f"_trajectory_{validate_run_id(run_id)}.jsonl"
+    return trajectory_dir() / f"_trajectory_{validate_run_id(run_id)}.jsonl"
 
 
 # ============================================================

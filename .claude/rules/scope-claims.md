@@ -6,8 +6,8 @@ paths:
 
 # A Tool Says Only What Its Method Established
 
-Last Updated: 2026-08-12
-Last Verified: 2026-08-12
+Last Updated: 2026-08-31
+Last Verified: 2026-08-31
 
 Path-scoped rule. Loads when work touches a script or a hook. Governs the
 sentence a tool prints about its own coverage.
@@ -63,13 +63,46 @@ Three obligations, in order of preference:
 ## Enforcement
 
 `tests/test_scope_claims.py` scans every user-facing string literal under
-`scripts/` and `.claude/hooks/` for phrases that assert session membership or
-live execution, and requires each match to be classified exactly once: either it
-names the identifier that resolves it (`DECLARED_CLAIMANTS`) or it states why it
-is not a coverage claim (`NON_SCOPE_CLAIMS`). A new claim fails the suite until
-its author answers "what establishes this?".
+`scripts/` and `.claude/hooks/` (docstrings excluded, because they explain
+rather than assert) for phrases that assert session membership or live
+execution. Each MATCH is classified once, on its own:
+
+- `DECLARED_CLAIMANTS` names the identifier that resolves that claim. The test
+  then requires that identifier to still be a name the file's code binds, calls
+  or reads, asked of the AST. A mention in a comment or a docstring is not
+  evidence, and neither is a longer name that merely starts with it.
+- `NON_SCOPE_CLAIMS` states why that string is not a coverage claim, in more
+  than a fragment.
+- `INHERITED_UNREVIEWED` is the honest parking space for a claim whose resolver
+  nobody has established. It is currently empty, and when it is not, the failure
+  message prints every entry so its real size is visible rather than inferred.
+
+The key is the claim, never the file holding it: `(path, sha256 of the claim
+text with whitespace collapsed and case folded)`. Three consequences, all
+intended. A new sentence in a file that already declared one fails until its
+author answers "what establishes this?". A re-wrap, a re-indent, or a change of
+quote style leaves the classification alone. A REWORD retires it, because
+different words are a different claim. A registered key with no live claim under
+it fails too, so the registry cannot accumulate entries guarding nothing.
+
+Until 2026-08-31 the registries were keyed by PATH while this section claimed
+the per-match behaviour above, which is this rule over-claiming its own
+coverage. Measured before the fix: a fresh "running in this session" literal
+appended to `scripts/harness-audit.py` left the suite green at 19 passed, and
+the same literal in an unregistered file failed. Every claim after a file's
+first one inherited a classification in silence, and 28 of the tree's 43 claims
+had never been looked at one at a time. A whole-file entry in `NON_SCOPE_CLAIMS`
+was the sharper edge: `scripts/fireside-bot.py` was exempt over one string in
+which "session" means a fireside meeting.
 
 The detector is deliberately wide and its false positives are a feature: a
 defect of this shape is written in whatever words the author reached for, not in
-a fixed phrase. The registry also pins the detector against decay, since a
-phrase list that matches nothing passes everything.
+a fixed phrase. Floors on the walk pin it against decay, since a phrase list
+that matches nothing passes everything.
+
+**What the gate does not establish**, stated here rather than dropped. It checks
+that a resolver is named and still bound; it cannot check that the named
+resolver actually resolves THAT sentence, which stays the author's judgement and
+is why every registry entry carries prose. It sees only the phrases on its list,
+so a claim worded outside them is invisible. And it reads literals from the AST,
+so a sentence assembled at runtime from two strings arrives as two claims.

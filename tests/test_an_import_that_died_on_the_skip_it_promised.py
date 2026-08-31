@@ -226,7 +226,7 @@ def test_a_second_run_over_the_symlink_stays_idempotent(importer, old_root, caps
 def traj_dir(tmp_path, monkeypatch):
     d = tmp_path / "impl"
     d.mkdir()
-    monkeypatch.setattr(itl, "TRAJECTORY_DIR", d)
+    monkeypatch.setattr(itl, "trajectory_dir", lambda d=d: d)
     return d
 
 
@@ -234,7 +234,7 @@ def test_an_unwritable_outputs_tree_returns_the_documented_exit_code(tmp_path, m
     locked = tmp_path / "locked"
     locked.mkdir()
     locked.chmod(0o500)
-    monkeypatch.setattr(itl, "TRAJECTORY_DIR", locked / "implement")
+    monkeypatch.setattr(itl, "trajectory_dir", lambda p=locked / "implement": p)
     plan = tmp_path / "plan.md"
     plan.write_text("# plan\n", encoding="utf-8")
     try:
@@ -249,7 +249,7 @@ def test_the_filesystem_error_is_reported_on_stderr_not_stdout(tmp_path, monkeyp
     locked = tmp_path / "locked2"
     locked.mkdir()
     locked.chmod(0o500)
-    monkeypatch.setattr(itl, "TRAJECTORY_DIR", locked / "implement")
+    monkeypatch.setattr(itl, "trajectory_dir", lambda p=locked / "implement": p)
     plan = tmp_path / "plan.md"
     plan.write_text("# plan\n", encoding="utf-8")
     try:

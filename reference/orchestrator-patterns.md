@@ -175,6 +175,8 @@ DEGRADATION: If Exchange fetch fails, present Viraid results alone (and vice ver
 
 **Approval:** one hard gate before any sends or CRM writes.
 
+**Validation phase (orchestrator, before the approval gate):** the `draft-writer` agent has no `Bash`, so it cannot run the two shell checks and is told not to claim it did. For each returned draft file the orchestrator runs `python scripts/sanitize-text.py <path> --scan` and `python scripts/humanization-check.py <path>` (steps 5 and 6 of `.claude/rules/humanization.md` § Fundamental 6), and carries the confirmation line defined in `.claude/rules/hidden-chars.md` with both numbers copied from the scan output. Never estimate the word count.
+
 **Write phase:** sequential per approved contact — send via scripts/send-email.py, then write CRM interaction log, then confirm. If >5 contacts, batch in groups of 5.
 
 **Agents dispatched:** up to 5 (concurrency cap). Global concurrency cap of 5 applies per Principle 5.
@@ -225,6 +227,8 @@ CONCURRENCY LIMIT: Maximum 5 parallel agents. If >5 contacts, batch in groups of
 - DO NOT send anything externally.
 
 **Approval:** two hard gates — Gate 1 approves the 3-post plan before drafting; Gate 2 approves individual posts before any publish or image generation.
+
+**Validation phase (orchestrator, before Gate 2):** same obligation as Pattern 3. The `draft-writer` agent has no `Bash` and returns no word count. For each of the three post files the orchestrator runs `python scripts/sanitize-text.py <path> --scan` and `python scripts/humanization-check.py <path>`, and carries the confirmation line from `.claude/rules/hidden-chars.md` with both numbers copied from the scan output.
 
 **Write phase:** draft files written during parallel phase. Publishing and image generation only after Gate 2 approval.
 

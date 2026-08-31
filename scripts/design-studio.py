@@ -5,13 +5,18 @@ design-studio.py -- HTML-to-image renderer using Playwright.
 Renders HTML designs at exact pixel dimensions with optional 31C brand CSS
 injection. Supports PNG screenshots, multi-format export, and PDF output.
 
+`-o` is resolved LITERALLY against the current directory, so a relative
+`outputs/...` writes into the engine clone rather than the DATA overlay. Omit it
+and the default lands under `get_outputs_dir()`; pass it and pass an absolute
+path. `$OUTPUTS_DIR` below is `get_outputs_dir()`, resolved by the caller.
+
 Usage:
   python scripts/design-studio.py render --html "<div>Hello</div>" --width 1080 --height 1080
   python scripts/design-studio.py render --file design.html --width 1920 --height 1080 --brand 31c
-  python scripts/design-studio.py render --html "<h1>Post</h1>" -o outputs/design/post.png --scale 3
+  python scripts/design-studio.py render --html "<h1>Post</h1>" -o "$OUTPUTS_DIR/design/post.png" --scale 3
   python scripts/design-studio.py export --file design.html --formats "1080x1080,1200x628,1920x1080"
   python scripts/design-studio.py pdf --html "<div>Report</div>" --brand 31c
-  python scripts/design-studio.py pdf --file report.html -o outputs/design/report.pdf
+  python scripts/design-studio.py pdf --file report.html -o "$OUTPUTS_DIR/design/report.pdf"
 
 Commands:
   render  - Screenshot HTML at exact viewport dimensions (PNG)

@@ -58,6 +58,21 @@ HOOKS = ROOT / ".claude" / "hooks"
 PY = shutil.which("python3") or sys.executable
 
 
+@pytest.fixture(autouse=True)
+def _sys_path_restored():
+    """The hooks here are executed IN-PROCESS, and a hook resolves its own
+    workspace root onto `sys.path` (`.claude/hooks/session-start.py:310`,
+    `_dispatch.py:60`). In a real child that entry dies with the process; here
+    it outlives the test and holds for the rest of the xdist worker, one stale
+    tmp directory per test. Correct in the hook, so restore it on this side.
+    """
+    saved = sys.path[:]
+    try:
+        yield
+    finally:
+        sys.path[:] = saved
+
+
 def _load(name: str, rel: str):
     spec = importlib.util.spec_from_file_location(name, ROOT / rel)
     module = importlib.util.module_from_spec(spec)

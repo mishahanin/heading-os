@@ -10,7 +10,9 @@ metadata:
   version: "1.0"
 x-heading-orchestration:
   parallel_safe: true
-  shared_state: []
+  shared_state:
+    - outputs/design/
+    - outputs/content/images/
   triggers:
     - design social
     - design infographic
@@ -73,17 +75,29 @@ Professional design studio with three rendering pipelines: HTML Studio (free, de
 Routes: `social`, `infographic`, `mockup`, `card`, brochure layouts.
 
 **Workflow:**
+
+Resolve the data outputs dir before any Bash command. Renders are DATA artifacts and
+must land in the DATA overlay, never the engine tree. The `data-path-redirect`
+PreToolUse hook rewrites a bare `outputs/...` for the Write tool, but it does NOT
+cover Bash. So the step-4 Write lands in the overlay. A bare `outputs/...` in step 5
+resolves against the engine root, and writes the render into the public clone.
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+OUTPUTS_DIR="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import get_outputs_dir; print(get_outputs_dir())")"
+```
+
 1. Generate a complete, self-contained HTML file with inline CSS
 2. Read `references/brand.css` for the 31C design system variables
 3. Apply brand design: dark backgrounds (#000000), Inter font, accent colors (#5B5FFF blue-purple, #FF8C00 orange)
-4. Save HTML to `outputs/design/source/` for version control
-5. Run the renderer:
+4. Save the HTML with the Write tool to `outputs/design/source/{name}.html`. The hook redirects it into the overlay.
+5. Run the renderer against the resolved absolute path:
 ```bash
 python3 scripts/design-studio.py render \
-  --file outputs/design/source/{name}.html \
+  --file "$OUTPUTS_DIR/design/source/{name}.html" \
   --width {W} --height {H} \
   --brand 31c \
-  -o outputs/design/{name}.png
+  -o "$OUTPUTS_DIR/design/{name}.png"
 ```
 6. Read the generated image to show the user
 7. If user wants changes, edit the HTML and re-render
@@ -127,21 +141,28 @@ pair is not an error: the model never sees them. `design-engine.py` prints a
 | flux | `flux-2-pro`, `flux-schnell` | `--aspect` | `--count --format --seed` |
 | banana | `banana`, `banana-pro` | `--aspect` | `--count --format --seed` |
 
+Resolve `$OUTPUTS_DIR` first, as in Pipeline 1. `design-engine.py` writes `-o`
+literally relative to the current directory.
+
 ```bash
 # recraft / ideogram
 python3 scripts/design-engine.py generate --model {model} --prompt "{prompt}" \
-  --width {W} --height {H} -o outputs/content/images/{name}.png
+  --width {W} --height {H} -o "$OUTPUTS_DIR/content/images/{name}.png"
 
 # flux / banana
 python3 scripts/design-engine.py generate --model {model} --prompt "{prompt}" \
-  --aspect {W}:{H} -o outputs/content/images/{name}.png
+  --aspect {W}:{H} -o "$OUTPUTS_DIR/content/images/{name}.png"
 ```
 
 Omit `-o` and the engine names the file from the returned bytes, which is the
-only place the real format is knowable. Pass `-o` and the engine keeps your
-name, then prints a `[WARN]` when the contents disagree with the extension.
+only place the real format is knowable. Its default directory resolves through
+`get_outputs_dir()`, so an omitted `-o` is also overlay-safe. Pass `-o` and the
+engine keeps your name, then prints a `[WARN]` when the contents disagree with
+the extension.
 
-**Edit/upscale/remove-bg:**
+**Edit/upscale/remove-bg.** Every `{path}` and `{output}` below is an absolute
+path under `$OUTPUTS_DIR`.
+
 ```bash
 python3 scripts/design-engine.py edit --model kontext --image {path} --prompt "{instruction}" -o {output}
 python3 scripts/design-engine.py upscale --image {path} -o {output}
@@ -157,7 +178,8 @@ When generating images for 31C, append to prompt: "Dark background, professional
 
 Redirect: "For presentation slides, use `/pptx-generator` directly - it has the full 16-layout system with 31C branding."
 
-For PDF from HTML, use the design studio:
+For PDF from HTML, use the design studio. Both paths are absolute, under
+`$OUTPUTS_DIR`:
 ```bash
 python3 scripts/design-studio.py pdf --file {html_path} --brand 31c -o {output}.pdf
 ```
@@ -177,10 +199,13 @@ python3 scripts/design-studio.py pdf --file {html_path} --brand 31c -o {output}.
 
 ## Output Locations
 
-- HTML Studio renders: `outputs/design/{name}.png` + source `outputs/design/source/{name}.html`
-- AI-generated images: `outputs/content/images/{name}.png` (consistent with /flux-image)
-- Project work (brochures, campaigns): `outputs/design/{project-name}/`
-- Multi-format exports: `outputs/design/{name}-{W}x{H}.png`
+Every asset lives under the DATA overlay. `$OUTPUTS_DIR` below is the value
+resolved in Pipeline 1, never the literal string `outputs`:
+
+- HTML Studio renders: `$OUTPUTS_DIR/design/{name}.png` + source `$OUTPUTS_DIR/design/source/{name}.html`
+- AI-generated images: `$OUTPUTS_DIR/content/images/{name}.png` (consistent with /flux-image)
+- Project work (brochures, campaigns): `$OUTPUTS_DIR/design/{project-name}/`
+- Multi-format exports: `$OUTPUTS_DIR/design/{name}-{W}x{H}.png`
 
 ## Model Reference
 
@@ -218,6 +243,7 @@ query goes external. This replaces the removed `secure-design` vault wrapper.
 
 ## NEVER
 
+- Never pass a bare cwd-relative `outputs/...` to a Bash command; resolve `$OUTPUTS_DIR` first
 - Never use MCP servers for design work
 - Never call external APIs besides Replicate
 - Never hardcode API tokens in any file

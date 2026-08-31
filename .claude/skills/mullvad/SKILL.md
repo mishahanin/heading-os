@@ -130,7 +130,7 @@ Once resolved:
 
 ## Voice Rules
 
-- Use single hyphens in all output, never double dashes (workspace `hidden-chars.md` rule).
+- Use single hyphens in all output, never double dashes (canonical rule: `.claude/rules/voice.md`).
 - Call it "Mullvad", not "the VPN" — the user asked specifically.
 - Precise numbers in latency reporting: `89 ms`, not "about 90".
 

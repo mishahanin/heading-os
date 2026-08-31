@@ -17,7 +17,11 @@ metadata:
   version: "1.0"
 x-heading-orchestration:
   parallel_safe: true
-  shared_state: []
+  shared_state:
+    - "outputs/intel/docparse/"
+    - ".cache/docparse/"
+    - "/tmp/docparse_parsed.json"
+    - "/tmp/docparse_citations.json"
   triggers:
     - parse this document
     - docparse

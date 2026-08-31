@@ -15,7 +15,7 @@ data-root seam (`get_data_root()` / `get_*_dir()` in `scripts/utils/workspace.py
 `paths.py`). Routing per file is decided by `config/routing-map.yaml` and resolved by
 `get_routing_destination()` → `engine | private | corporate`.
 
-This document is the single contract for how that invariant is enforced: the six
+This document is the single contract for how that invariant is enforced: the seven
 layers, what each covers, where each stops, and how the guarantee is *proven* rather
 than merely asserted. It exists because a single static check is not enough — finding
 \#3 (2026-06-16) showed a regex guard silently missing an entire misroute class (five
@@ -23,7 +23,7 @@ document generators writing artifacts into the engine clone) for an extended per
 the 2026-06-22 `docs/superpowers/` leak (post-mortem below) showed that catching the
 *outcome* only at **bypassable** layers is also not enough.
 
-## Why six layers, not one
+## Why seven layers, not one
 
 The threat is a data artifact landing inside the engine clone. It can arrive three
 ways: (a) code that joins an engine root to a data dir, (b) a SKILL handing a bare
@@ -35,7 +35,14 @@ cheaply; the runtime tree check catches the outcome no matter the cause) and
 or a deleted hook, so the outcome check must ALSO exist as pure code on the sanctioned
 push path, where no flag can skip it — layer 6).
 
-## The six layers
+There is a third axis, and it took a real miss to find it: *where the file goes* vs
+*what is inside it*. Layers 1-6 all answer the routing question. A file whose routing
+destination is correct passes every one of them, however private its CONTENTS are —
+an engine-routed script that embeds a real person's name and e-mail is, to layers 1-6,
+a clean engine file. Layer 7 is the only one that opens the file and reads it, and it
+is the layer that caught a category of private content the routing map had missed.
+
+## The seven layers
 
 | # | Layer | Mechanism | Catches | Stops at |
 |---|---|---|---|---|
@@ -45,6 +52,24 @@ push path, where no flag can skip it — layer 6).
 | 4 | Build partition | `scripts/build_engine_repo.py` `_suspicious_engine()` | Build-time post-condition: refuses if any non-engine-routed file lands in the engine partition when materialising the public repo | Only runs at engine-build time, not during daily work |
 | 5 | Runtime tree-clean | `tests/test_engine_tree_clean.py` (pre-commit `engine-tree-clean` + run-tests), detector in `scripts/utils/engine_guard.py` | **The outcome:** any file in the engine clone (tracked or untracked-not-ignored) whose routing destination is private/corporate — regardless of how it was written (script, SKILL Bash, or plugin) | Routing-filtered, so engine carve-outs (e.g. `datastore/brand/` if it ever appears) are not flagged. Bypassable with `--no-verify` / un-armed pre-push hook → layer 6 is the belt to this |
 | 6 | **Unbypassable push wall** | `scripts/push-all.py` `engine_clean_scan()` (shares the layer-5 detector in `scripts/utils/engine_guard.py`) | The SAME outcome as layer 5 — any private/corporate-routed file in the engine clone — but enforced in **pure code on the sanctioned push path** (`/backup` → `push-all`), with **no skip flag**. A `--no-verify` commit and an un-armed pre-push hook still cannot ship a data artifact out of the engine | Only the engine repo (the DATA repo legitimately carries private files). Someone hand-running `git push` outside `push-all` bypasses it — the sanctioned path + GitHub-side controls are the answer there, same model as the secret content_scan |
+| 7 | **Content guard** | `scripts/content-guard.py` (pre-commit `content-guard-31c`) **and** `scripts/push-all.py` `engine_content_scan()`, at step 0 of `push_repo` | **WHAT is inside an engine-routed file**, not where the file goes: a real person slug or name, a handle, an e-mail, a Telegram ID, or a curated company / event / codename. The denylist is harvested from the private DATA overlay by `scripts/utils/content_denylist.py`. Layers 1-6 all pass such a file, because its routing destination is correct | **Inert where the DATA overlay is absent** (a public clone, CI): the denylist has no tokens and the gate returns 0. Only the operator's machine both authors and pushes engine content, so that is the machine on which it must hold. The pre-commit half is bypassable with `--no-verify`; the `engine_content_scan()` half is pure code on the sanctioned push path with no skip flag, like layer 6. A file it cannot read counts as a leak, not as clean |
+
+### Why layer 7 is a guarantee layer and not an advisory companion
+
+Three properties put it in the table rather than in the section below.
+
+1. **It is unbypassable on the sanctioned push path.** `engine_content_scan()` runs at
+   step 0 of `push_repo` in `scripts/push-all.py`, in pure code with no skip flag. That
+   is the same criterion that makes layer 6 a guarantee rather than a warning.
+2. **It answers a question no other layer answers.** Every routing layer waved through
+   the content it caught, and it earned its place by catching that content.
+3. **It fails closed.** An engine-routed file it could not open exits 1 exactly as a
+   leak does. Unverified is not clean, which is the property the advisory companion
+   below deliberately does not have.
+
+Its honest bound is the one stated in the table: no DATA overlay means no denylist and
+no verdict. That is a scope, not a hole, and it is the same shape as layer 6's bound
+(someone hand-running `git push` outside `push-all` is outside the wall).
 
 ### Advisory companion (not a guarantee layer)
 
@@ -183,6 +208,6 @@ not a defect; do not re-flag it as a broken reference.
 
 ## Change control
 
-Changes to this contract or any weakening of the six layers require Misha's explicit
+Changes to this contract or any weakening of the seven layers require Misha's explicit
 approval. Classification: engine (this is public-shippable documentation of the public
 mechanism; it lives at `docs/` root, not `docs/security/` which routes private).

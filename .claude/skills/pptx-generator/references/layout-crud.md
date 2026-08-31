@@ -1,5 +1,7 @@
 # Layout CRUD Operations
 
+Consumed by: `.claude/skills/pptx-generator/SKILL.md`, section "Mode 3: Manage Cookbook Layouts".
+
 Create, edit, update, and delete cookbook layout templates.
 
 ## Creating New Layouts

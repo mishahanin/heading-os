@@ -4,6 +4,10 @@ description: Read-only reader of CRM contact files and the pipeline entry for a 
 model: haiku
 effort: low
 tools: Read, Glob, Grep
+x-heading-enforcement:
+  # Checked against the `tools` grant above by tests/test_agent_definitions.py.
+  capability: [send, publish, crm-write, pipeline-write, state-write]
+  instruction: []
 ---
 
 You read relationship context and return it. You never change it.

@@ -16,12 +16,16 @@ The cap is applied AFTER engagement scoring, BEFORE the final ranking output. Su
 
 **Migration note:** v1.3 introduces this default cap=3 to prevent any single channel from dominating the trending list. Existing /yt-pulse runs will produce diversified rankings starting v1.3. To reproduce a v1.2 baseline ranking, pass `--per-channel-cap 0`.
 
+Every example below uses the full path, the same form SKILL.md uses. A bare
+`pulse.py` resolves against the working directory, and four different files in
+this repo carry that name.
+
 ```bash
 # New default: cap=3
-python pulse.py -q "AI agents" -t 72h -m 50 -o results.json
+python ".claude/skills/yt-pulse/scripts/pulse.py" -q "AI agents" -t 72h -m 50 -o results.json
 
 # Legacy uncapped behaviour
-python pulse.py -q "AI agents" -t 72h -m 50 --per-channel-cap 0 -o results.json
+python ".claude/skills/yt-pulse/scripts/pulse.py" -q "AI agents" -t 72h -m 50 --per-channel-cap 0 -o results.json
 ```
 
 Channel grouping uses `channel_id` if available in yt-dlp metadata, with normalised `channel_name` as the fallback (lowercase, trimmed).
@@ -41,13 +45,13 @@ To override or disable:
 
 ```bash
 # Use a different browser:profile
-python pulse.py -q "query" --browser "chrome:Default"
+python ".claude/skills/yt-pulse/scripts/pulse.py" -q "query" --browser "chrome:Default"
 
 # Use a Netscape cookie file instead (overrides --browser)
-python pulse.py -q "query" --cookies path/to/cookies.txt
+python ".claude/skills/yt-pulse/scripts/pulse.py" -q "query" --cookies path/to/cookies.txt
 
 # Disable entirely
-python pulse.py -q "query" --browser none
+python ".claude/skills/yt-pulse/scripts/pulse.py" -q "query" --browser none
 ```
 
 Caveat: Chromium-based browsers (Brave, Chrome, Edge, Vivaldi) lock their cookie
@@ -71,8 +75,11 @@ If transcript extraction fails due to IP blocking AND the VPN pre-flight cannot
 provide a working exit, fall back to a residential proxy:
 
 1. Get a residential proxy (Webshare, BrightData, or any SOCKS5/HTTP proxy)
-2. Pass to pw.py:
+2. Pass the proxy to `pw.py`, which lives in the playwright skill. Use the same
+   full path SKILL.md uses; a bare `pw.py` resolves against the working
+   directory and fails.
 
    ```bash
-   python pw.py youtube "[id]" --proxy "http://user:pass@host:port" -f json -o output.json  # pragma: allowlist secret
+   cd "$(git rev-parse --show-toplevel)" && python ".claude/skills/playwright/scripts/pw.py" youtube "[id]" \
+     --proxy "http://user:pass@host:port" -f json -o output.json  # pragma: allowlist secret
    ```

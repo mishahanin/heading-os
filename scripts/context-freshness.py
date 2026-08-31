@@ -24,7 +24,11 @@ from scripts.utils.workspace import get_workspace_root, get_context_dir, get_def
 
 WORKSPACE = get_workspace_root()
 
-CONTEXT_DIR = get_context_dir()
+def context_dir() -> Path:
+    """Resolved at call time, never at import: `get_context_dir()` reads
+    HEADING_OS_DATA on every call, and a module-level constant asked once
+    during its own import and stored the answer."""
+    return get_context_dir()
 
 
 def get_freshness(filepath):
@@ -77,13 +81,14 @@ def stamp_file(filepath, date_str=None):
 
 def check_all():
     """Show freshness status of all context files."""
-    context_files = sorted(CONTEXT_DIR.glob("*.md"))
+    ctx = context_dir()
+    context_files = sorted(ctx.glob("*.md"))
     if not context_files:
-        print(f"{RED}No context files found in {CONTEXT_DIR}{RESET}")
+        print(f"{RED}No context files found in {ctx}{RESET}")
         return
 
     print(f"\n{BOLD}Context File Freshness{RESET}")
-    print(f"Directory: {CONTEXT_DIR}\n")
+    print(f"Directory: {ctx}\n")
 
     for f in context_files:
         date_str, age_days = get_freshness(f)
@@ -158,7 +163,7 @@ def main():
         print(f"{GREEN}Stamped{RESET} {filepath.name} with: > Last verified: {date_str}")
 
     elif command == "stamp-all":
-        context_files = sorted(CONTEXT_DIR.glob("*.md"))
+        context_files = sorted(context_dir().glob("*.md"))
         for f in context_files:
             date_str = stamp_file(f)
             print(f"{GREEN}Stamped{RESET} {f.name} with: > Last verified: {date_str}")

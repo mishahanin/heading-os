@@ -267,8 +267,8 @@ def test_a_real_crashed_child_reaches_the_collector_as_an_error(dash, tmp_path, 
         "print('ValueError: cadence store unreadable', file=sys.stderr)\n"
         "sys.exit(1)\n"
     ))
-    dash.ODIN_BRAIN_DIR = brain
-    dash.KNOWLEDGE_DIR = knowledge
+    dash.odin_brain_dir = lambda p=brain: p
+    dash.knowledge_dir = lambda p=knowledge: p
     dash.ODIN_CADENCE_SCRIPT = crasher
     dash.TODAY = __import__("datetime").date(2026, 8, 29)
 
@@ -290,8 +290,8 @@ def test_a_real_healthy_child_still_fills_the_collector(dash, tmp_path):
         "print(json.dumps({'reflect_clusters': 3, 'last_collect': '2026-08-20',\n"
         "                  'days_since': 9}))\n"
     ))
-    dash.ODIN_BRAIN_DIR = brain
-    dash.KNOWLEDGE_DIR = knowledge
+    dash.odin_brain_dir = lambda p=brain: p
+    dash.knowledge_dir = lambda p=knowledge: p
     dash.ODIN_CADENCE_SCRIPT = healthy
     dash.TODAY = __import__("datetime").date(2026, 8, 29)
 

@@ -33,7 +33,9 @@ def sandbox_data_root(tmp_path, monkeypatch):
     operator's live data -- and `transform_workspace_md` writes its MARP
     intermediate into `source.parent`, deliberately, so relative image paths
     resolve from the document's own directory. Both cases therefore tried to
-    write the live overlay and were refused by the conftest write guard:
+    write the live overlay and were refused by the overlay write guard, which
+    then lived in `tests/conftest.py` and now lives in
+    `scripts/utils/overlay_write_guard.py`:
 
         OverlayWriteRefused: a test tried to write the operator's live data at
         /home/.../.heading-os-data/outputs/intel/briefs

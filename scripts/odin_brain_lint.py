@@ -54,7 +54,25 @@ from scripts.odin_pagerank import (  # noqa: E402
 
 # DATA-root relative (get_knowledge_dir -> get_data_root): resolves to the data
 # sibling when run from the engine clone, not a fixed engine-relative path.
-BRAIN_ROOT = get_knowledge_dir() / "odin-brain"
+
+
+def default_brain_root():
+    """Resolved at call time, never at import.
+
+    `get_knowledge_dir()` reads `HEADING_OS_DATA` on every call, so it follows
+    the environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the root
+    still linted the operator's real overlay.
+
+    Named `default_brain_root` rather than `brain_root`: five functions below
+    already take a `brain_root=None` argument, and reusing the name would let a
+    caller's parameter shadow the resolver inside the very bodies that fall back
+    to it.
+    """
+    return get_knowledge_dir() / "odin-brain"
+
+
 SUBDIRS = ["sources", "principles", "positions", "episodes", "conflicts", "reference"]
 
 # Cross-namespace wiki-link targets that point OUT of the brain (the recall
@@ -127,7 +145,7 @@ def _frontmatter(path: Path):
 def collect_brain_files(brain_root=None):
     """Return (files_by_subdir, id_to_file, slug_to_file). ``brain_root`` defaults
     to the real brain; tests pass a temp dir."""
-    root = Path(brain_root) if brain_root else BRAIN_ROOT
+    root = Path(brain_root) if brain_root else default_brain_root()
     files_by_subdir = {d: {} for d in SUBDIRS}
     id_to_file: dict[str, Path] = {}
     slug_to_file: dict[str, Path] = {}
@@ -333,7 +351,7 @@ def check_dangling_wikilinks(files_by_subdir, brain_root):
 def lint(brain_root=None):
     """Run all checks and return the list of issues."""
     files_by_subdir, _id, slug_to_file = collect_brain_files(brain_root)
-    root = Path(brain_root) if brain_root else BRAIN_ROOT
+    root = Path(brain_root) if brain_root else default_brain_root()
     issues = []
     issues += check_dangling_references(files_by_subdir, slug_to_file)
     issues += check_circular_chains(files_by_subdir)
@@ -343,7 +361,7 @@ def lint(brain_root=None):
 
 
 def run_all_checks(brain_root=None, json_output=False):
-    root = Path(brain_root) if brain_root else BRAIN_ROOT
+    root = Path(brain_root) if brain_root else default_brain_root()
     if not root.exists():
         # No brain on this machine (e.g. an exec workspace) -- nothing to lint.
         if json_output:

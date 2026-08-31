@@ -238,7 +238,7 @@ def test_the_demote_summary_counts_writes_not_candidates(health, monkeypatch,
     bad = tmp_path / "bad.md"
     bad.write_text("# no frontmatter here\n\nbody\n", encoding="utf-8")
 
-    monkeypatch.setattr(health, "CONTACTS_DIR", tmp_path)
+    monkeypatch.setattr(health, "contacts_dir", lambda p=tmp_path: p)
     monkeypatch.setattr(health, "parse_config", lambda path: {})
     # One contact so `main` does not take its "no contacts" early exit; the
     # report is not what is under test here, so it is stubbed too.

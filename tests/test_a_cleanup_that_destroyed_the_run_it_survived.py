@@ -125,7 +125,7 @@ def test_a_browser_that_dies_before_close_still_leaves_a_manifest(
         main_mod, tmp_path, monkeypatch):
     """The whole point of `return_exceptions=True` two lines above: every
     target degraded to a row, and then the cleanup threw all of them away."""
-    monkeypatch.setattr(main_mod, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(main_mod, "output_dir", lambda p=tmp_path: p)
     monkeypatch.setattr(main_mod, "_ensure_playwright", lambda: None)
     monkeypatch.setattr(main_mod, "TARGETS", [("a", "https://a", "cat", 0)])
     browser = _DeadBrowser()
@@ -148,7 +148,7 @@ def test_a_browser_that_dies_before_close_still_leaves_a_manifest(
 def test_a_failing_browser_close_is_printed_not_swallowed(
         main_mod, tmp_path, monkeypatch, capsys):
     """`suppress(Exception)` would pass the test above. Never silent."""
-    monkeypatch.setattr(main_mod, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(main_mod, "output_dir", lambda p=tmp_path: p)
     monkeypatch.setattr(main_mod, "_ensure_playwright", lambda: None)
     monkeypatch.setattr(main_mod, "TARGETS", [])
     monkeypatch.setattr(main_mod, "async_playwright",
@@ -163,8 +163,8 @@ def test_the_retry_script_survives_the_same_dead_browser(
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(json.dumps(
         {"results": [_ok_row("raycast")], "total": 1, "ok": 1, "errors": 0}))
-    monkeypatch.setattr(retry_mod, "OUTPUT_DIR", tmp_path)
-    monkeypatch.setattr(retry_mod, "MANIFEST_PATH", manifest_path)
+    monkeypatch.setattr(retry_mod, "output_dir", lambda p=tmp_path: p)
+    monkeypatch.setattr(retry_mod, "manifest_path", lambda p=manifest_path: p)
     monkeypatch.setattr(retry_mod, "_ensure_playwright", lambda: None)
     monkeypatch.setattr(retry_mod, "RETRIES", [])
     monkeypatch.setattr(retry_mod, "async_playwright",
@@ -249,8 +249,8 @@ def test_the_merge_keeps_the_full_page_row_and_says_so(retry_mod, tmp_path,
     manifest_path.write_text(json.dumps(
         {"results": [_ok_row("mercury", full_page="mercury-full.png")],
          "total": 1, "ok": 1, "errors": 0}))
-    monkeypatch.setattr(retry_mod, "OUTPUT_DIR", tmp_path)
-    monkeypatch.setattr(retry_mod, "MANIFEST_PATH", manifest_path)
+    monkeypatch.setattr(retry_mod, "output_dir", lambda p=tmp_path: p)
+    monkeypatch.setattr(retry_mod, "manifest_path", lambda p=manifest_path: p)
     monkeypatch.setattr(retry_mod, "_ensure_playwright", lambda: None)
     monkeypatch.setattr(retry_mod, "RETRIES",
                         [("mercury", "https://mercury.com", "p", 0, True)])

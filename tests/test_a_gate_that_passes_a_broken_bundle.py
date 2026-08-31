@@ -301,8 +301,8 @@ def test_index_rows_go_before_the_LAST_comment_not_the_first(dse, tmp_path,
         "> Last updated: 2026-01-01\n\n"
         "| Path | Domain |\n|---|---|\n"
         "<!-- end of table -->\n", encoding="utf-8")
-    monkeypatch.setattr(dse, "INDEX_FILE", index)
-    monkeypatch.setattr(dse, "DATASTORE_DIR", tmp_path)
+    monkeypatch.setattr(dse, "index_file", lambda p=index: p)
+    monkeypatch.setattr(dse, "datastore_dir", lambda p=tmp_path: p)
     orig = tmp_path / "deals" / "x.xlsx"
     orig.parent.mkdir()
     orig.write_bytes(b"x")
@@ -321,8 +321,9 @@ def test_a_target_outside_the_datastore_does_not_crash_the_index(dse, tmp_path,
                                                                  capsys):
     index = tmp_path / "INDEX.md"
     index.write_text("> Last updated: 2026-01-01\n\n<!-- end -->\n", encoding="utf-8")
-    monkeypatch.setattr(dse, "INDEX_FILE", index)
-    monkeypatch.setattr(dse, "DATASTORE_DIR", tmp_path / "datastore")
+    monkeypatch.setattr(dse, "index_file", lambda p=index: p)
+    datastore = tmp_path / "datastore"
+    monkeypatch.setattr(dse, "datastore_dir", lambda p=datastore: p)
     (tmp_path / "datastore").mkdir()
     outside = tmp_path / "elsewhere" / "y.xlsx"
     outside.parent.mkdir()
@@ -337,8 +338,8 @@ def test_a_target_outside_the_datastore_does_not_crash_the_index(dse, tmp_path,
 def test_the_previous_date_does_not_accumulate(dse, tmp_path, monkeypatch):
     index = tmp_path / "INDEX.md"
     index.write_text("> Last updated: 2026-01-01\n\n<!-- end -->\n", encoding="utf-8")
-    monkeypatch.setattr(dse, "INDEX_FILE", index)
-    monkeypatch.setattr(dse, "DATASTORE_DIR", tmp_path)
+    monkeypatch.setattr(dse, "index_file", lambda p=index: p)
+    monkeypatch.setattr(dse, "datastore_dir", lambda p=tmp_path: p)
     (tmp_path / "deals").mkdir()
 
     for n in (1, 2, 3):

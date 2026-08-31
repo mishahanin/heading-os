@@ -29,8 +29,22 @@ from scripts.utils.workspace import get_workspace_root, get_datastore_dir, get_d
 
 WORKSPACE = get_workspace_root()
 
-DATASTORE_DIR = get_datastore_dir()
-INDEX_FILE = DATASTORE_DIR / "INDEX.md"
+
+def datastore_dir():
+    """Resolved at call time, never at import.
+
+    `get_datastore_dir()` reads `HEADING_OS_DATA` on every call, so it follows
+    the environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the data
+    root still read and wrote the operator's real overlay. `index_file()` below
+    derived from it, so freezing the first froze the second too.
+    """
+    return get_datastore_dir()
+
+
+def index_file():
+    return datastore_dir() / "INDEX.md"
 
 
 def extract_xlsx(filepath):
@@ -211,7 +225,7 @@ def orphaned_companions(ambiguous: set) -> list:
 
 def scan_and_extract(target_dir=None, force=False):
     """Scan for binary files and create companion extracts."""
-    scan_dir = Path(target_dir) if target_dir else DATASTORE_DIR
+    scan_dir = Path(target_dir) if target_dir else datastore_dir()
 
     if not scan_dir.exists():
         print(f"{RED}Directory not found: {scan_dir}{RESET}")
@@ -297,11 +311,13 @@ def scan_and_extract(target_dir=None, force=False):
 
 def update_index(extracted_files):
     """Add newly extracted files to INDEX.md."""
-    if not INDEX_FILE.exists():
+    index = index_file()
+    datastore = datastore_dir()
+    if not index.exists():
         print(f"{YELLOW}INDEX.md not found - skipping index update{RESET}")
         return
 
-    content = INDEX_FILE.read_text(encoding="utf-8")
+    content = index.read_text(encoding="utf-8")
     today = datetime.now(get_default_tz()).strftime("%Y-%m-%d")
 
     new_rows = []
@@ -310,10 +326,10 @@ def update_index(extracted_files):
         # `relative_to` raised ValueError for it — AFTER every file had already
         # been extracted, so the work was done and the index update died.
         try:
-            rel_path = orig.relative_to(DATASTORE_DIR)
+            rel_path = orig.relative_to(datastore)
         except ValueError:
             print(f"{YELLOW}Skipping index row for {orig}: it is outside "
-                  f"{DATASTORE_DIR}, which INDEX.md rows are relative to.{RESET}")
+                  f"{datastore}, which INDEX.md rows are relative to.{RESET}")
             continue
         domain = rel_path.parts[0] if rel_path.parts else "unknown"
         # Check if already in index
@@ -350,7 +366,7 @@ def update_index(extracted_files):
         flags=re.MULTILINE,
     )
 
-    INDEX_FILE.write_text(content, encoding="utf-8")
+    index.write_text(content, encoding="utf-8")
     print(f"{GREEN}Added {len(new_rows)} entries to INDEX.md{RESET}")
 
 
@@ -365,7 +381,7 @@ def main():
     args = parser.parse_args()
 
     print(f"\n{BOLD}31C DataStore Extraction{RESET}")
-    print(f"DataStore: {DATASTORE_DIR}\n")
+    print(f"DataStore: {datastore_dir()}\n")
 
     extracted = scan_and_extract(args.target, force=args.force)
 

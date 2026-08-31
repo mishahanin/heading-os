@@ -199,7 +199,7 @@ def test_a_repaired_skill_still_names_its_output_root(skill, expected):
     """Guards the specific paths, not just non-emptiness.
 
     Established by reading the writers: `get_outputs_dir() / "intel" /
-    "docparse"` in scripts/docparse.py, `DEFAULT_OUTPUT_DIR` in
+    "docparse"` in scripts/docparse.py, `default_output_dir()` in
     scripts/marp_render.py, and the `nlm ... -o` targets in
     .claude/skills/notebooklm/references/mode-catalog.md.
 

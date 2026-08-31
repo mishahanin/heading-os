@@ -116,12 +116,12 @@ class _Model:
 def feed(monkeypatch, tmp_path):
     """Drive `run_unread_mode` with Exchange, the CRM and the model replaced.
 
-    `STATE_FILE` is redirected onto tmp_path. `StateManager` resolves it at call
+    `state_file()` is redirected onto tmp_path. `StateManager` resolves it at call
     time, so this genuinely isolates the run - nothing here can reach the
     operator's real data overlay.
     """
     state_file = tmp_path / "outputs" / "operations" / "email-intelligence" / "state.json"
-    monkeypatch.setattr(ei, "STATE_FILE", state_file)
+    monkeypatch.setattr(ei, "state_file", lambda p=state_file: p)
     monkeypatch.setattr(ei, "_connect_with_retries", lambda: object())
     monkeypatch.setattr(ei, "_load_ignore_patterns", list)
     monkeypatch.setattr(ei, "load_crm_contacts", dict)

@@ -23,6 +23,15 @@ All eight now read the same way:
     def __init__(self, path: Path | None = None):
         self.path = STATE_FILE if path is None else path
 
+That fixed the default. The module constant on the right of it was the SAME
+freeze one level up - `STATE_FILE = get_outputs_dir() / ...` also asked the
+data root once, during import - so the constants that a data-root resolver
+produced have since become call-time resolvers of their own
+(`state_file()`, `config_file()`), and the tests below patch the resolver
+rather than a constant. Where a constant is anchored to the workspace root and
+not the data root, it stays a constant: `scripts/sentinel.py`'s `STATE_FILE`
+is still one, and is still patched as one here.
+
 This file pins two things. Per fixed site, that patching the module global now
 redirects a no-argument call, that an explicit argument still wins, that a
 positional caller still works, and that `__defaults__` holds no path. Then the
@@ -284,14 +293,14 @@ def test_patching_the_email_intelligence_state_file_now_redirects_a_no_argument_
     email_intel, monkeypatch, tmp_path
 ):
     redirected = tmp_path / "redirected-state.json"
-    monkeypatch.setattr(email_intel, "STATE_FILE", redirected)
+    monkeypatch.setattr(email_intel, "state_file", lambda p=redirected: p)
     assert email_intel.StateManager().path == redirected
 
 
 def test_an_explicit_path_still_beats_the_email_intelligence_module_global(
     email_intel, monkeypatch, tmp_path
 ):
-    monkeypatch.setattr(email_intel, "STATE_FILE", tmp_path / "ignored.json")
+    monkeypatch.setattr(email_intel, "state_file", lambda p=tmp_path / "ignored.json": p)
     explicit = tmp_path / "explicit.json"
     assert email_intel.StateManager(path=explicit).path == explicit
 
@@ -350,7 +359,7 @@ def test_patching_the_sentinel_config_file_now_redirects_a_no_argument_sentinel_
     sentinel, monkeypatch, tmp_path
 ):
     config = _write_minimal_sentinel_config(tmp_path)
-    monkeypatch.setattr(sentinel, "CONFIG_FILE", config)
+    monkeypatch.setattr(sentinel, "config_file", lambda p=config: p)
     assert sentinel.SentinelConfig() is not None
 
 
@@ -358,7 +367,7 @@ def test_a_missing_patched_sentinel_config_is_reported_against_the_patched_path(
     sentinel, monkeypatch, tmp_path
 ):
     absent = tmp_path / "absent.yaml"
-    monkeypatch.setattr(sentinel, "CONFIG_FILE", absent)
+    monkeypatch.setattr(sentinel, "config_file", lambda p=absent: p)
     with pytest.raises(FileNotFoundError) as excinfo:
         sentinel.SentinelConfig()
     assert str(absent) in str(excinfo.value)
@@ -384,7 +393,7 @@ def test_the_sentinel_orchestrator_reads_the_patched_config_file_when_given_none
     override.
     """
     config = _write_minimal_sentinel_config(tmp_path)
-    monkeypatch.setattr(sentinel, "CONFIG_FILE", config)
+    monkeypatch.setattr(sentinel, "config_file", lambda p=config: p)
     seen: list[Path] = []
 
     class Recorder:

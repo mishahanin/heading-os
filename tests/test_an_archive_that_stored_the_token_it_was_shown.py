@@ -219,7 +219,7 @@ class FakeAccount:
 def test_sync_exchange_writes_a_redacted_mail_body(tmp_path, monkeypatch):
     """The exact path that refused the backup, driven end to end to a file."""
     sync = _load("sync_exchange_shard60", "sync-exchange.py")
-    monkeypatch.setattr(sync, "EMAIL_DIR", tmp_path)
+    monkeypatch.setattr(sync, "email_dir", lambda p=tmp_path: p)
     monkeypatch.setattr(sync, "_display_path", lambda p: str(p))
     account = FakeAccount([FakeEmail(text_body=f"Your code is 041627.\n[{TRACKER}]")])
 

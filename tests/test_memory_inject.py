@@ -1,7 +1,7 @@
 """Session-start memory injection hook (point 4).
 
 Verifies .claude/hooks/memory-inject.py: builds a tiny temp index with the
-memory-index engine (mock embedder, no ollama), points the hook's DB_PATH /
+memory-index engine (mock embedder, no ollama), points the hook's db_path() /
 CONFIG_PATH at it, and checks:
   - disabled (default) emits nothing;
   - enabled emits a capped additionalContext block;
@@ -103,7 +103,7 @@ def run_hook(monkeypatch, root, capsys, db_exists=True):
     db = root / ".memory-index" / "index.db"
     if not db_exists:
         db = root / ".memory-index" / "nonexistent.db"
-    monkeypatch.setattr(hook, "DB_PATH", db)
+    monkeypatch.setattr(hook, "db_path", lambda p=db: p)
     with pytest.raises(SystemExit) as e:
         hook.main()
     assert e.value.code in (0, None)

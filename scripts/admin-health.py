@@ -40,7 +40,16 @@ from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
 from scripts.utils.crm import contact_identity_key, is_contact_file
 from scripts.utils.markdown import parse_frontmatter_str
 
-GITHUB_ORG = load_github_org()
+def github_org() -> str:
+    """Resolved at call time, never at import.
+
+    `load_github_org()` reads `HEADING_OS_DATA` on every call, so it follows the
+    environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the data root
+    still got the operator's real overlay.
+    """
+    return load_github_org()
 
 # Thresholds in seconds, sized for a HUMAN commit cadence. The old values (2h /
 # 24h) were written for a per-minute heartbeat; against commits they painted an
@@ -92,11 +101,12 @@ def ensure_per_exec_repos() -> list:
             pairs.append((slug, repo_path))
         else:
             repo = repo_name_for(slug)
+            org = github_org()
             try:
-                run_cmd(["gh", "repo", "clone", f"{GITHUB_ORG}/{repo}", str(repo_path)])
+                run_cmd(["gh", "repo", "clone", f"{org}/{repo}", str(repo_path)])
                 pairs.append((slug, repo_path))
             except (subprocess.CalledProcessError, FileNotFoundError):
-                print(f"{YELLOW}[warn] Could not clone {GITHUB_ORG}/{repo}{RESET}")
+                print(f"{YELLOW}[warn] Could not clone {org}/{repo}{RESET}")
     return pairs
 
 
@@ -378,7 +388,7 @@ def main():
     #
     # Before validate_admin(), deliberately: that reaches admin.json and so the
     # same unreachable overlay, which is where the traceback used to come from.
-    if not GITHUB_ORG:
+    if not github_org():
         print(f"{RED}[STOP]{RESET} the GitHub org could not be resolved, so no "
               f"exec repo path here is real. Refusing to report fleet health "
               f"from paths that cannot be cloned.", file=sys.stderr)

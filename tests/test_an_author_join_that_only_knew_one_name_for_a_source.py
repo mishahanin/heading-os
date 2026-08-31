@@ -93,7 +93,7 @@ def test_a_slug_linked_source_contributes_its_author_to_the_cluster(bh, tmp_path
     _principle(root, "p-two", sid="2", sources=["20260101100000"], keywords=["creativity"])
     # The slug form, which the id-only join could never resolve.
     _principle(root, "p-three", sid="3", sources=["bond-dpi-review"], keywords=["creativity"])
-    monkeypatch.setattr(bh, "BRAIN_ROOT", root)
+    monkeypatch.setattr(bh, "brain_root", lambda p=root: p)
 
     clusters = bh.find_domain_clusters(bh.collect_brain_files())
     assert len(clusters) == 1, (
@@ -113,7 +113,7 @@ def test_a_genuinely_single_author_cluster_is_still_not_reported(bh, tmp_path, m
     _principle(root, "p-one", sid="1", sources=["20260101100000"], keywords=["dpi"])
     _principle(root, "p-two", sid="2", sources=["bond-dpi-review"], keywords=["dpi"])
     _principle(root, "p-three", sid="3", sources=["bond-dpi-review"], keywords=["dpi"])
-    monkeypatch.setattr(bh, "BRAIN_ROOT", root)
+    monkeypatch.setattr(bh, "brain_root", lambda p=root: p)
 
     assert bh.find_domain_clusters(bh.collect_brain_files()) == []
 
@@ -127,7 +127,7 @@ def test_two_sources_without_ids_do_not_collide_into_one_author(bh, tmp_path, mo
     _principle(root, "p-one", sid="1", sources=["acme-telecom-whitepaper"], keywords=["dpi"])
     _principle(root, "p-two", sid="2", sources=["bond-dpi-review"], keywords=["dpi"])
     _principle(root, "p-three", sid="3", sources=["bond-dpi-review"], keywords=["dpi"])
-    monkeypatch.setattr(bh, "BRAIN_ROOT", root)
+    monkeypatch.setattr(bh, "brain_root", lambda p=root: p)
 
     clusters = bh.find_domain_clusters(bh.collect_brain_files())
     assert len(clusters) == 1
@@ -147,7 +147,7 @@ def test_a_reference_to_a_missing_source_is_counted_out_loud(bh, tmp_path, monke
     _principle(root, "p-two", sid="2", sources=["20260101100000"], keywords=["dpi"])
     # Names a source that was never ingested.
     _principle(root, "p-three", sid="3", sources=["20260101109999"], keywords=["dpi"])
-    monkeypatch.setattr(bh, "BRAIN_ROOT", root)
+    monkeypatch.setattr(bh, "brain_root", lambda p=root: p)
 
     clusters = bh.find_domain_clusters(bh.collect_brain_files())
     # One resolvable author only, so no cluster -- and the report must say why.
@@ -169,7 +169,7 @@ def test_a_brain_with_every_source_present_says_nothing(bh, tmp_path, monkeypatc
     _principle(root, "p-one", sid="1", sources=["20260101100000"], keywords=["dpi"])
     _principle(root, "p-two", sid="2", sources=["bond-dpi-review"], keywords=["dpi"])
     _principle(root, "p-three", sid="3", sources=["20260101100001"], keywords=["dpi"])
-    monkeypatch.setattr(bh, "BRAIN_ROOT", root)
+    monkeypatch.setattr(bh, "brain_root", lambda p=root: p)
 
     assert len(bh.find_domain_clusters(bh.collect_brain_files())) == 1
     assert capsys.readouterr().err == ""
@@ -184,7 +184,7 @@ def test_a_slug_linked_pair_is_not_reported_as_an_unlinked_overlap(bh, tmp_path,
             author="James Bond", keywords=("dpi", "sovereignty"))
     _principle(root, "p-one", sid="1", sources=["acme-telecom-whitepaper"],
                keywords=["dpi", "sovereignty"])
-    monkeypatch.setattr(bh, "BRAIN_ROOT", root)
+    monkeypatch.setattr(bh, "brain_root", lambda p=root: p)
 
     assert bh.find_keyword_overlaps(bh.collect_brain_files()) == []
 
@@ -196,7 +196,7 @@ def test_a_genuinely_unlinked_overlap_is_still_reported(bh, tmp_path, monkeypatc
             author="James Bond", keywords=("dpi", "sovereignty"))
     _principle(root, "p-one", sid="1", sources=["20260101100099"],
                keywords=["dpi", "sovereignty"])
-    monkeypatch.setattr(bh, "BRAIN_ROOT", root)
+    monkeypatch.setattr(bh, "brain_root", lambda p=root: p)
 
     overlaps = bh.find_keyword_overlaps(bh.collect_brain_files())
     assert len(overlaps) == 1
@@ -212,7 +212,7 @@ def test_a_source_seed_dated_only_by_ingested_ages(bh, tmp_path, monkeypatch):
     root = _brain(tmp_path)
     _source(root, "acme-telecom-whitepaper", sid="20260101100000",
             author="James Bond", status="seed")
-    monkeypatch.setattr(bh, "BRAIN_ROOT", root)
+    monkeypatch.setattr(bh, "brain_root", lambda p=root: p)
 
     stale = bh.find_stale_seeds(bh.collect_brain_files())
     assert len(stale) == 1, f"an ingested-only source seed was never aged; got {stale!r}"
@@ -226,7 +226,7 @@ def test_a_fresh_source_seed_is_not_stale(bh, tmp_path, monkeypatch):
     today = bh.datetime.now(bh.get_default_tz()).date().isoformat()
     _source(root, "acme-telecom-whitepaper", sid="20260101100000",
             author="James Bond", status="seed", ingested=today)
-    monkeypatch.setattr(bh, "BRAIN_ROOT", root)
+    monkeypatch.setattr(bh, "brain_root", lambda p=root: p)
 
     assert bh.find_stale_seeds(bh.collect_brain_files()) == []
 
@@ -239,7 +239,7 @@ def test_a_principle_seed_is_still_dated_by_created(bh, tmp_path, monkeypatch):
     path = root / "principles" / "p-one.md"
     path.write_text(path.read_text(encoding="utf-8").replace(
         "created: 2026-02-01", "created: 2026-02-01\nstatus: seed"), encoding="utf-8")
-    monkeypatch.setattr(bh, "BRAIN_ROOT", root)
+    monkeypatch.setattr(bh, "brain_root", lambda p=root: p)
 
     stale = bh.find_stale_seeds(bh.collect_brain_files())
     assert len(stale) == 1
@@ -253,7 +253,7 @@ def test_an_unreadable_ingested_value_warns_and_names_that_field(bh, tmp_path, m
     root = _brain(tmp_path)
     _source(root, "acme-telecom-whitepaper", sid="20260101100000",
             author="James Bond", status="seed", ingested="not-a-date")
-    monkeypatch.setattr(bh, "BRAIN_ROOT", root)
+    monkeypatch.setattr(bh, "brain_root", lambda p=root: p)
 
     assert bh.find_stale_seeds(bh.collect_brain_files()) == []
     err = capsys.readouterr().err
@@ -267,7 +267,7 @@ def test_the_live_brain_reports_no_slug_linked_false_positives(bh):
     """Read-only over the operator's real brain, counts only. Skipped where the
     corpus is absent (a bare public clone has no data overlay); where it is
     present, an empty corpus would prove nothing, so that is asserted first."""
-    if not bh.BRAIN_ROOT.is_dir():
+    if not bh.brain_root().is_dir():
         pytest.skip("no data overlay on this machine; nothing to measure")
     files = bh.collect_brain_files()
     assert len(files["sources"]) > 0 and len(files["principles"]) > 0, (

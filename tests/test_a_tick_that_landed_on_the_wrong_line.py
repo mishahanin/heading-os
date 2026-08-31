@@ -547,7 +547,7 @@ def test_a_real_datetime_renders_its_local_time():
 # ============================================================
 
 def test_a_day_file_inside_the_window_that_we_did_not_write_is_pruned(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(sx, "CALENDAR_DIR", tmp_path)
+    monkeypatch.setattr(sx, "calendar_dir", lambda p=tmp_path: p)
     stale = tmp_path / "2026-08-25.md"
     stale.write_text("old meeting", encoding="utf-8")
     kept = tmp_path / "2026-08-24.md"
@@ -559,7 +559,7 @@ def test_a_day_file_inside_the_window_that_we_did_not_write_is_pruned(tmp_path, 
 
 
 def test_a_day_file_outside_the_window_is_left_alone(tmp_path, monkeypatch):
-    monkeypatch.setattr(sx, "CALENDAR_DIR", tmp_path)
+    monkeypatch.setattr(sx, "calendar_dir", lambda p=tmp_path: p)
     older = tmp_path / "2026-07-01.md"
     older.write_text("last month", encoding="utf-8")
     sx._prune_stale_day_files(set(), date(2026, 8, 24), date(2026, 8, 31))
@@ -567,7 +567,7 @@ def test_a_day_file_outside_the_window_is_left_alone(tmp_path, monkeypatch):
 
 
 def test_upcoming_md_is_never_pruned(tmp_path, monkeypatch):
-    monkeypatch.setattr(sx, "CALENDAR_DIR", tmp_path)
+    monkeypatch.setattr(sx, "calendar_dir", lambda p=tmp_path: p)
     combined = tmp_path / "upcoming.md"
     combined.write_text("the combined file", encoding="utf-8")
     sx._prune_stale_day_files(set(), date(2026, 8, 24), date(2026, 8, 31))
@@ -581,7 +581,7 @@ def test_a_compact_iso_name_we_never_write_is_left_alone(tmp_path, monkeypatch):
     a `20260825.md` that this script never created. The `YYYY-MM-DD.md` pattern
     is what confines the delete to our own output.
     """
-    monkeypatch.setattr(sx, "CALENDAR_DIR", tmp_path)
+    monkeypatch.setattr(sx, "calendar_dir", lambda p=tmp_path: p)
     foreign = tmp_path / "20260825.md"
     foreign.write_text("not ours", encoding="utf-8")
     sx._prune_stale_day_files(set(), date(2026, 8, 24), date(2026, 8, 31))
@@ -589,7 +589,7 @@ def test_a_compact_iso_name_we_never_write_is_left_alone(tmp_path, monkeypatch):
 
 
 def test_a_hand_named_note_is_never_pruned(tmp_path, monkeypatch):
-    monkeypatch.setattr(sx, "CALENDAR_DIR", tmp_path)
+    monkeypatch.setattr(sx, "calendar_dir", lambda p=tmp_path: p)
     note = tmp_path / "2026-08-25-notes.md"
     note.write_text("mine", encoding="utf-8")
     sx._prune_stale_day_files(set(), date(2026, 8, 24), date(2026, 8, 31))
@@ -632,7 +632,7 @@ def calendar_sandbox(tmp_path, monkeypatch):
 
     cal = tmp_path / "calendar"
     cal.mkdir()
-    monkeypatch.setattr(sx, "CALENDAR_DIR", cal)
+    monkeypatch.setattr(sx, "calendar_dir", lambda p=cal: p)
     monkeypatch.setattr(sx, "get_data_root", lambda: tmp_path)
     # `Account` FIRST, and it is not decoration. `sync_calendar`'s first
     # statement is `_ensure_exchangelib()`, which returns early only on

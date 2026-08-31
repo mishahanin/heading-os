@@ -40,7 +40,18 @@ def _ensure_playwright():
     from playwright.async_api import async_playwright
 
 
-OUTPUT_DIR = get_outputs_dir() / "research" / "_drafts" / "exemplars"
+def output_dir() -> Path:
+    """Resolved at call time, never at import.
+
+    `get_outputs_dir()` reads `HEADING_OS_DATA` on every call, so it follows the
+    environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the root
+    still got the operator's real overlay. The `mkdir` below is not among the
+    primitives `tests/conftest.py` wraps, so a stray directory in that overlay
+    drew no refusal.
+    """
+    return get_outputs_dir() / "research" / "_drafts" / "exemplars"
 
 
 def prepare_output_dir() -> Path:
@@ -60,12 +71,13 @@ def prepare_output_dir() -> Path:
     playwright binding two functions up. `main()` calls this.
 
     The refusal asks where the write is going, not whether the machine has an
-    overlay. The capture suites redirect `OUTPUT_DIR` to a `tmp_path` before
+    overlay. The capture suites redirect `output_dir` to a `tmp_path` before
     calling anything, and an environment-shaped guard refused those runs too.
     """
-    require_outside_engine_clone(OUTPUT_DIR, "the design-exemplar capture directory")
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    return OUTPUT_DIR
+    target = output_dir()
+    require_outside_engine_clone(target, "the design-exemplar capture directory")
+    target.mkdir(parents=True, exist_ok=True)
+    return target
 
 
 # (slug, url, category, settle_ms)
@@ -185,10 +197,10 @@ async def capture_one(browser, semaphore, slug, url, category, settle_ms):
                 print(f"capture-design-exemplars: {slug} title unreadable: {exc}",
                       file=sys.stderr)
                 result["title"] = "(no title)"
-            above_path = OUTPUT_DIR / f"{slug}-above.png"
+            above_path = output_dir() / f"{slug}-above.png"
             await page.screenshot(path=str(above_path), full_page=False)
             result["above_fold"] = display_path(above_path)
-            full_path = OUTPUT_DIR / f"{slug}-full.png"
+            full_path = output_dir() / f"{slug}-full.png"
             await page.screenshot(path=str(full_path), full_page=True, timeout=15000)
             result["full_page"] = display_path(full_path)
             print(f"{GREEN}OK {RESET}{slug:<20} {result['title']}")
@@ -220,7 +232,7 @@ async def main():
     _ensure_playwright()
     prepare_output_dir()
     print(f"{CYAN}Capturing {len(TARGETS)} targets at {VIEWPORT['width']}x{VIEWPORT['height']}, concurrency={CONCURRENCY}{RESET}")
-    print(f"Output dir: {OUTPUT_DIR}\n")
+    print(f"Output dir: {output_dir()}\n")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -247,7 +259,7 @@ async def main():
         "errors": sum(1 for r in results if r["error"]),
         "results": results,
     }
-    manifest_path = OUTPUT_DIR / "manifest.json"
+    manifest_path = output_dir() / "manifest.json"
     # Atomic: the retry script reads this file, and a truncated write made its
     # json.loads raise after every retry capture had already run.
     atomic_write_text(manifest_path, json.dumps(manifest, indent=2) + "\n")

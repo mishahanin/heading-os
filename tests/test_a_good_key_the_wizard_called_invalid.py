@@ -274,7 +274,7 @@ def test_a_missing_build_json_is_still_only_information(wh, corporate):
 def pipeline(wh, tmp_path, monkeypatch):
     context = tmp_path / "context"
     context.mkdir()
-    monkeypatch.setattr(wh, "CONTEXT_DIR", context)
+    monkeypatch.setattr(wh, "context_dir", lambda p=context: p)
     return context / "pipeline.md"
 
 

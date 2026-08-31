@@ -37,12 +37,25 @@ def _ensure_docx():
     DARK_GRAY = RGBColor(0x33, 0x33, 0x33)
     MED_GRAY = RGBColor(0x66, 0x66, 0x66)
 
-# Resolved at call time, never at import: the lookup touches the datastore and
-# raises when nothing matches, and this module must import pure (F-2.1). The
-# version used to be a literal here, and it said v1.00 after the master became
-# v1.01, so every run of this script died on the first `copy2` below.
-OUTPUT = str(get_outputs_dir() / "documents"
-             / "ODUN.ONE - AI Monetization Use Cases for Telco Operators v2.docx")
+# The brand master template is resolved at call time inside `load_template()`,
+# never at import: the lookup touches the datastore and raises when nothing
+# matches, and this module must import pure (F-2.1). The version used to be a
+# literal here, and it said v1.00 after the master became v1.01, so every run of
+# this script died on the first `copy2` below.
+
+
+def output() -> str:
+    """Resolved at call time, never at import.
+
+    `get_outputs_dir()` reads `HEADING_OS_DATA` on every call, so it follows
+    the environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the root
+    still had `build()` makedirs and save its .docx into the operator's real
+    overlay.
+    """
+    return str(get_outputs_dir() / "documents"
+               / "ODUN.ONE - AI Monetization Use Cases for Telco Operators v2.docx")
 
 
 # ============================================================
@@ -590,9 +603,10 @@ def build():
     p.paragraph_format.space_after = Pt(24)
 
     # Save
-    os.makedirs(os.path.dirname(OUTPUT), exist_ok=True)
-    save_docx(doc, OUTPUT)
-    print(f"Saved: {OUTPUT}")
+    out = output()
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    save_docx(doc, out)
+    print(f"Saved: {out}")
 
 
 # ============================================================

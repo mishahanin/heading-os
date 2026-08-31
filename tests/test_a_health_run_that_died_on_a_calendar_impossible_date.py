@@ -65,7 +65,7 @@ def test_a_calendar_impossible_date_does_not_kill_the_run(wh, tmp_path,
     ctx.mkdir()
     (ctx / "strategy.md").write_text(
         "# Strategy\n> Last verified: 2026-02-31\n\nbody\n", encoding="utf-8")
-    monkeypatch.setattr(wh, "CONTEXT_DIR", ctx)
+    monkeypatch.setattr(wh, "context_dir", lambda p=ctx: p)
 
     assert list(ctx.glob("*.md")), "empty corpus proves nothing"
 
@@ -79,7 +79,7 @@ def test_the_malformed_date_is_named_not_swallowed(wh, tmp_path, monkeypatch,
     ctx.mkdir()
     (ctx / "pipeline.md").write_text(
         "# Pipeline\n> Last verified: 2026-13-01\n", encoding="utf-8")
-    monkeypatch.setattr(wh, "CONTEXT_DIR", ctx)
+    monkeypatch.setattr(wh, "context_dir", lambda p=ctx: p)
 
     wh.check_context_freshness(30)
     out = capsys.readouterr()
@@ -107,7 +107,7 @@ def test_a_valid_date_is_still_measured(wh, tmp_path, monkeypatch, capsys):
     ctx.mkdir()
     (ctx / "people.md").write_text(
         f"# People\n> Last verified: {pinned}\n", encoding="utf-8")
-    monkeypatch.setattr(wh, "CONTEXT_DIR", ctx)
+    monkeypatch.setattr(wh, "context_dir", lambda p=ctx: p)
 
     assert wh.check_context_freshness(30) == 1
     body = capsys.readouterr().out

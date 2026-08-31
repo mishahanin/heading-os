@@ -32,14 +32,14 @@ def fb():
 
 @pytest.fixture
 def state_dir(fb, tmp_path, monkeypatch):
-    """Redirect STATE_DIR to a temp path and seed a minimal roster.
+    """Redirect `state_dir` to a temp path and seed a minimal roster.
 
     bob: active member, NOT yet bound (telegram_user_id=None) -- the
         handle-takeover target.
     alice: active member, bound to a real user_id.
     carol:     excluded member, unbound.
     """
-    monkeypatch.setattr(fb, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(fb, "state_dir", lambda p=tmp_path: p)
     roster = {
         "bob": {
             "name": "Bob Member",

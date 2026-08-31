@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -25,7 +26,19 @@ ensure_venv()
 from scripts.utils.docx_helpers import load_docx  # noqa: E402
 from scripts.utils.workspace import get_outputs_dir, resolve_config_with_example  # noqa: E402
 
-OUT_DIR = get_outputs_dir() / "operations" / "exec-meeting"
+
+def out_dir() -> Path:
+    """Resolved at call time, never at import.
+
+    `get_outputs_dir()` reads `HEADING_OS_DATA` on every call, so it follows
+    the environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the root
+    still got the operator's real overlay -- and `main()` below `mkdir`s this
+    path and saves thirteen agendas into it.
+    """
+    return get_outputs_dir() / "operations" / "exec-meeting"
+
 
 # docx names + brand colours are bound lazily (F-2.1: import stays pure).
 Document = Pt = RGBColor = WD_ALIGN_PARAGRAPH = None
@@ -45,11 +58,32 @@ def _ensure_docx():
 # Attendee roster is per-instance DATA (real exec names): lives in the data overlay
 # at <data-root>/config/exec-meeting-attendees.json; the engine ships
 # scripts/exec-meeting-attendees.example.json as the generic fallback.
-_ATTENDEES_FILE = resolve_config_with_example(
-    "exec-meeting-attendees.json",
-    Path(__file__).resolve().parent / "exec-meeting-attendees.example.json",
-)
-ATTENDEES = [tuple(a) for a in json.loads(_ATTENDEES_FILE.read_text(encoding="utf-8"))["attendees"]]
+def _attendees_file():
+    return resolve_config_with_example(
+        "exec-meeting-attendees.json",
+        Path(__file__).resolve().parent / "exec-meeting-attendees.example.json",
+    )
+
+
+_ATTENDEES_CACHE = {}
+
+
+def attendees():
+    """The parsed roster, read on demand and cached per data root.
+
+    `build()` reads it twice and runs once per agenda, so a bare re-read would
+    reopen the file twenty-six times for the default run. The cache key is
+    `HEADING_OS_DATA` itself, so repointing the root gets a fresh read of the
+    new overlay rather than the previous root's roster.
+    """
+    key = os.environ.get("HEADING_OS_DATA", "")
+    roster = _ATTENDEES_CACHE.get(key)
+    if roster is None:
+        roster = _ATTENDEES_CACHE[key] = [
+            tuple(a) for a in
+            json.loads(_attendees_file().read_text(encoding="utf-8"))["attendees"]
+        ]
+    return roster
 
 SECTIONS = [
     ("1. Quick Roundtable — 5–10 min",
@@ -129,9 +163,11 @@ def build(doc, meeting_date_label):
     srun.font.color.rgb = GRAY
     _note(doc, "Cadence: Mondays, 16:00 (the configured timezone). Total budget: ~90 min.")
 
+    roster = attendees()
+
     # Meeting block
     _heading(doc, "Meeting", size=12)
-    _chair = next((name for role, name in ATTENDEES if role == "CEO"), "")
+    _chair = next((name for role, name in roster if role == "CEO"), "")
     for label in ("Time: 16:00 local", f"Chair: {_chair} (CEO)", "Note-taker: ____________"):
         doc.add_paragraph(label, style="List Bullet")
 
@@ -144,7 +180,7 @@ def build(doc, meeting_date_label):
         hdr[i].text = ""
         r = hdr[i].paragraphs[0].add_run(h)
         r.bold = True
-    for role, person in ATTENDEES:
+    for role, person in roster:
         row = t.add_row().cells
         row[0].text = "☐"
         row[1].text = role
@@ -196,12 +232,13 @@ def main():
     args = ap.parse_args()
     _ensure_docx()
 
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    out = out_dir()
+    out.mkdir(parents=True, exist_ok=True)
 
     # Master template
-    master = OUT_DIR / "weekly-exec-meeting-template.docx"
+    master = out / "weekly-exec-meeting-template.docx"
     build(Document(), "Master template — copy per week. Date: ____________").save(master)
-    print(f"  master   {master.relative_to(OUT_DIR.parent.parent.parent)}")
+    print(f"  master   {master.relative_to(out.parent.parent.parent)}")
 
     if args.master_only:
         return
@@ -209,9 +246,9 @@ def main():
     start = date.fromisoformat(args.start)
     for m in mondays(start, args.weeks):
         label = f"{m.isoformat()} (Monday)"
-        path = OUT_DIR / f"{m.isoformat()}_exec-meeting_weekly.docx"
+        path = out / f"{m.isoformat()}_exec-meeting_weekly.docx"
         build(Document(), label).save(path)
-        print(f"  week     {path.relative_to(OUT_DIR.parent.parent.parent)}")
+        print(f"  week     {path.relative_to(out.parent.parent.parent)}")
 
 
 if __name__ == "__main__":

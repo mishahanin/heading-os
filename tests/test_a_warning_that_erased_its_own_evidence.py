@@ -482,7 +482,8 @@ def mirror_root(tmp_path, monkeypatch):
     `.heading-os-data/.memory-index/index.db` and committed an UPDATE against
     it. MEASURED 2026-08-30 on this machine: the resolved root was the live data
     overlay and the store file was present, so the write path ran. `.memory-index`
-    is on this suite's `_UNWATCHED` list in `tests/conftest.py` -- a rebuildable
+    is on this suite's `_UNWATCHED` list in
+    `scripts/utils/overlay_write_guard.py` -- a rebuildable
     index nobody snapshots -- so the overlay guard could not have reported it
     either. `tmp_path` appeared in the old assertion and in no other line of the
     test.

@@ -52,7 +52,16 @@ from scripts.utils.knowledge import KNOWLEDGE_TYPES
 # Constants
 # ============================================================
 
-GITHUB_ORG = load_github_org()
+def github_org() -> str:
+    """Resolved at call time, never at import.
+
+    `load_github_org()` reads `HEADING_OS_DATA` on every call, so it follows the
+    environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the data root
+    still got the operator's real overlay.
+    """
+    return load_github_org()
 
 PROVISION_STEPS = [
     "validate_prerequisites",
@@ -671,15 +680,15 @@ def create_github_repo(state: dict, args, workspace_dir: Path, slug: str) -> boo
     repo_name = f"31c-workspace-{slug}"
     try:
         # Check if repo already exists
-        check = run_cmd(["gh", "repo", "view", f"{GITHUB_ORG}/{repo_name}"], check=False)
+        check = run_cmd(["gh", "repo", "view", f"{github_org()}/{repo_name}"], check=False)
         if check.returncode == 0:
-            print(f"  {YELLOW}[exists]{RESET} Repo {GITHUB_ORG}/{repo_name} already exists")
+            print(f"  {YELLOW}[exists]{RESET} Repo {github_org()}/{repo_name} already exists")
         else:
             run_cmd([
-                "gh", "repo", "create", f"{GITHUB_ORG}/{repo_name}",
+                "gh", "repo", "create", f"{github_org()}/{repo_name}",
                 "--private", "--description", f"31C exec workspace for {args.name}",
             ])
-            print(f"  {GREEN}[ok]{RESET} Created repo: {GITHUB_ORG}/{repo_name}")
+            print(f"  {GREEN}[ok]{RESET} Created repo: {github_org()}/{repo_name}")
     except subprocess.CalledProcessError as e:
         print(f"  {RED}[error]{RESET} Failed to create repo: {e.stderr}")
         return False
@@ -696,7 +705,7 @@ def add_github_collaborator(state: dict, args, workspace_dir: Path, slug: str) -
 
     if not args.github_user:
         print(f"  {YELLOW}[skip]{RESET} No --github-user provided, skipping collaborator setup")
-        print(f"         Add manually: gh api repos/{GITHUB_ORG}/31c-workspace-{slug}/collaborators/USERNAME -X PUT")
+        print(f"         Add manually: gh api repos/{github_org()}/31c-workspace-{slug}/collaborators/USERNAME -X PUT")
         mark_step_done(workspace_dir, state, "add_github_collaborator")
         return True
 
@@ -717,14 +726,14 @@ def add_github_collaborator(state: dict, args, workspace_dir: Path, slug: str) -
         try:
             run_cmd([
                 "gh", "api",
-                f"repos/{GITHUB_ORG}/{repo_name}/collaborators/{args.github_user}",
+                f"repos/{github_org()}/{repo_name}/collaborators/{args.github_user}",
                 "-X", "PUT",
                 "-f", f"permission={perm}",
             ])
-            print(f"  {GREEN}[ok]{RESET} Added {args.github_user} to {GITHUB_ORG}/{repo_name} ({perm})")
+            print(f"  {GREEN}[ok]{RESET} Added {args.github_user} to {github_org()}/{repo_name} ({perm})")
         except subprocess.CalledProcessError as e:
             print(f"  {RED}[error]{RESET} Failed to add to {repo_name}: {e.stderr}")
-            print(f"         Retry manually: gh api repos/{GITHUB_ORG}/{repo_name}/collaborators/{args.github_user} -X PUT -f permission={perm}")
+            print(f"         Retry manually: gh api repos/{github_org()}/{repo_name}/collaborators/{args.github_user} -X PUT -f permission={perm}")
             failures.append(repo_name)
 
     if failures:
@@ -779,8 +788,8 @@ def init_git(state: dict, args, workspace_dir: Path, slug: str) -> bool:
         # Add remote
         result = run_cmd(["git", "remote", "get-url", "origin"], cwd=ws, check=False)
         if result.returncode != 0:
-            run_cmd(["git", "remote", "add", "origin", f"https://github.com/{GITHUB_ORG}/{repo_name}.git"], cwd=ws)
-            print(f"  {GREEN}[ok]{RESET} Remote added: origin -> {GITHUB_ORG}/{repo_name}")
+            run_cmd(["git", "remote", "add", "origin", f"https://github.com/{github_org()}/{repo_name}.git"], cwd=ws)
+            print(f"  {GREEN}[ok]{RESET} Remote added: origin -> {github_org()}/{repo_name}")
 
         # Initial commit
         run_cmd(["git", "add", "-A"], cwd=ws)
@@ -809,7 +818,7 @@ def clone_corporate(state: dict, args, workspace_dir: Path) -> bool:
     else:
         try:
             run_cmd([
-                "gh", "repo", "clone", f"{GITHUB_ORG}/31c-corporate",
+                "gh", "repo", "clone", f"{github_org()}/31c-corporate",
                 str(corp_dir),
             ])
             print(f"  {GREEN}[ok]{RESET} Cloned 31c-corporate to .corporate-repo/")
@@ -910,7 +919,7 @@ def create_crm_repo(state: dict, args, workspace_dir: Path, slug: str) -> bool:
     print(f"\n{BOLD}Creating per-exec CRM repository{RESET}")
 
     repo_name = f"31c-crm-{slug}"
-    full_repo = f"{GITHUB_ORG}/{repo_name}"
+    full_repo = f"{github_org()}/{repo_name}"
     description = f"Personal CRM for {args.name}"
 
     # Verify github_user is present
@@ -1218,14 +1227,14 @@ def main():
     # An unresolved org is a refusal, not a warning. `load_github_org()` answers
     # '' rather than raising (see its docstring) so that --help survives a
     # missing data overlay; the empty string therefore reaches here, and this
-    # script CREATES repositories and grants collaborators. `{GITHUB_ORG}/{name}`
+    # script CREATES repositories and grants collaborators. `{github_org()}/{name}`
     # would be `/{name}`, so a provisioning run would half-build a workspace on
     # disk against repos that were never created, and the exec would be told
     # they are set up.
     #
     # Before validate_admin(), deliberately: that reaches admin.json and so the
     # same unreachable overlay, which is where the traceback used to come from.
-    if not GITHUB_ORG:
+    if not github_org():
         print(f"{RED}[STOP]{RESET} the GitHub org could not be resolved, so no "
               f"repo path here is real. Refusing to provision against guessed "
               f"paths.", file=sys.stderr)
@@ -1303,7 +1312,7 @@ def main():
     print(f"{'=' * 50}")
     print(f"\n{BOLD}Summary:{RESET}")
     print(f"  Workspace:   {workspace_dir}")
-    print(f"  GitHub repo: {GITHUB_ORG}/31c-workspace-{slug}")
+    print(f"  GitHub repo: {github_org()}/31c-workspace-{slug}")
     if args.github_user:
         print(f"  GitHub user: {args.github_user} (collaborator invite sent)")
     print(f"  Sync:        git pull (corporate down) / push-all.py (own work up)")
@@ -1312,7 +1321,7 @@ def main():
     print(f"\n{BOLD}Next steps for {args.name}:{RESET}")
     if args.github_user:
         print(f"  0. {args.name} must accept the GitHub repo invite")
-    print(f"  1. Clone: git clone https://github.com/{GITHUB_ORG}/31c-workspace-{slug}.git")
+    print(f"  1. Clone: git clone https://github.com/{github_org()}/31c-workspace-{slug}.git")
     print(f"  2. cd 31c-workspace-{slug}")
     # Not optional. `.claude/settings.local.json` is gitignored, so the clone
     # carries only the platform TEMPLATE; without this step the workspace starts

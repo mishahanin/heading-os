@@ -22,8 +22,21 @@ from scripts.utils.docx_helpers import (
 )
 from scripts.utils.workspace import get_outputs_dir
 
-INPUT_PATH = str(get_outputs_dir() / 'proposals' / '31C-National-Programme-DPI-Proposal-v1.md')
-OUTPUT_PATH = str(get_outputs_dir() / 'proposals' / '31C-National-Programme-DPI-Proposal-v1.docx')
+def input_path():
+    """Resolved at call time, never at import.
+
+    `get_outputs_dir()` reads `HEADING_OS_DATA` on every call, so it follows the
+    environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the root
+    still read from -- and `save_docx` still wrote into -- the operator's real
+    overlay.
+    """
+    return str(get_outputs_dir() / 'proposals' / '31C-National-Programme-DPI-Proposal-v1.md')
+
+
+def output_path():
+    return str(get_outputs_dir() / 'proposals' / '31C-National-Programme-DPI-Proposal-v1.docx')
 
 # docx names + brand colours are bound lazily (F-2.1: import stays pure).
 Document = Pt = Inches = Cm = RGBColor = None
@@ -510,7 +523,7 @@ def add_rich_text(paragraph, text, bold=False, italic=False):
 def build_document():
     """Build the Word document from the markdown source."""
     _ensure_docx()
-    with open(INPUT_PATH, 'r', encoding='utf-8') as f:
+    with open(input_path(), 'r', encoding='utf-8') as f:
         md_text = f.read()
 
     doc = Document()
@@ -615,8 +628,9 @@ def build_document():
     run.font.color.rgb = BRAND_ACCENT
     run.font.italic = True
 
-    save_docx(doc, OUTPUT_PATH)
-    print(f"Word document saved to: {OUTPUT_PATH}")
+    out = output_path()
+    save_docx(doc, out)
+    print(f"Word document saved to: {out}")
 
 
 if __name__ == '__main__':

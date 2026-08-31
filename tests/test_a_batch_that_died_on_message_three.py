@@ -525,8 +525,8 @@ def test_only_the_first_matching_pattern_strips(se):
 def test_a_missing_signature_asset_only_warns(se, capsys, monkeypatch):
     """The comment claimed a missing asset "fails once rather than N times".
     It fails zero times: both branches print a WARN and fall through."""
-    monkeypatch.setattr(se, "LOGO_PATH", Path("/nonexistent/logo.png"))
-    monkeypatch.setattr(se, "DIVIDER_PATH", Path("/nonexistent/divider.png"))
+    monkeypatch.setattr(se, "logo_path", lambda p=Path("/nonexistent/logo.png"): p)
+    monkeypatch.setattr(se, "divider_path", lambda p=Path("/nonexistent/divider.png"): p)
     monkeypatch.setattr(se, "_ensure_exchangelib", lambda: None)
     assert se.build_signature_attachments() == []
     out = capsys.readouterr().out
@@ -566,7 +566,7 @@ def test_an_unreadable_signature_asset_really_does_raise(se, tmp_path, monkeypat
     else:
         logo.chmod(0o600)
         pytest.skip("this user can read a 000 file, so the branch is unreachable")
-    monkeypatch.setattr(se, "LOGO_PATH", logo)
+    monkeypatch.setattr(se, "logo_path", lambda p=logo: p)
     monkeypatch.setattr(se, "_ensure_exchangelib", lambda: None)
     try:
         with pytest.raises(OSError):

@@ -39,7 +39,16 @@ from scripts.utils.workspace import (
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
 from scripts.utils.git_push import current_branch, supervised_push
 
-GITHUB_ORG = load_github_org()
+def github_org() -> str:
+    """Resolved at call time, never at import.
+
+    `load_github_org()` reads `HEADING_OS_DATA` on every call, so it follows the
+    environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the data root
+    still got the operator's real overlay.
+    """
+    return load_github_org()
 
 
 def run_cmd(cmd: list, cwd: str = None, check: bool = True) -> subprocess.CompletedProcess:
@@ -60,7 +69,7 @@ def safety_gate(slug: str) -> bool:
     """Require the user to type the exec slug to confirm offboarding."""
     print(f"\n{RED}{BOLD}WARNING: You are about to offboard '{slug}'.{RESET}")
     print(f"This will remove their direct collaborator grants, their TEAM")
-    print(f"memberships, and their MEMBERSHIP OF THE {GITHUB_ORG} ORGANISATION,")
+    print(f"memberships, and their MEMBERSHIP OF THE {github_org()} ORGANISATION,")
     print(f"archive their workspace repo, and preserve their CRM contacts.")
     print(f"Org removal reaches every repo in the org, not only this workspace.\n")
     confirmation = input(f"Type the exec slug to confirm [{slug}]: ").strip()
@@ -98,7 +107,7 @@ def exec_repos(slug: str) -> list[str]:
     for name in names:
         if name not in seen:
             seen.add(name)
-            out.append(f"{GITHUB_ORG}/{name}")
+            out.append(f"{github_org()}/{name}")
     return out
 
 
@@ -200,26 +209,26 @@ def check_residual_access(slug: str, exec_info: dict) -> list[str]:
 
     try:
         member = run_cmd(
-            ["gh", "api", f"orgs/{GITHUB_ORG}/memberships/{github_username}"],
+            ["gh", "api", f"orgs/{github_org()}/memberships/{github_username}"],
             check=False)
         if member.returncode == 0:
-            residual.append(f"org membership in {GITHUB_ORG}")
+            residual.append(f"org membership in {github_org()}")
         elif "404" not in (member.stderr or ""):
             residual.append(
-                f"org membership in {GITHUB_ORG} COULD NOT BE CHECKED: "
+                f"org membership in {github_org()} COULD NOT BE CHECKED: "
                 f"{(member.stderr or '').strip()}")
 
         teams = run_cmd(
-            ["gh", "api", f"orgs/{GITHUB_ORG}/teams", "--jq", ".[].slug"],
+            ["gh", "api", f"orgs/{github_org()}/teams", "--jq", ".[].slug"],
             check=False)
         if teams.returncode == 0:
             for team in (teams.stdout or "").split():
                 got = run_cmd(
                     ["gh", "api",
-                     f"orgs/{GITHUB_ORG}/teams/{team}/memberships/{github_username}"],
+                     f"orgs/{github_org()}/teams/{team}/memberships/{github_username}"],
                     check=False)
                 if got.returncode == 0:
-                    residual.append(f"team membership in {GITHUB_ORG}/{team}")
+                    residual.append(f"team membership in {github_org()}/{team}")
                 elif "404" not in (got.stderr or ""):
                     # Only a 404 means "not a member". A 403 (token without
                     # `read:org`), a 429 or a 5xx used to read the same way, so
@@ -229,7 +238,7 @@ def check_residual_access(slug: str, exec_info: dict) -> list[str]:
                     # blind in exactly the same place and the verdict went
                     # green.
                     residual.append(
-                        f"team membership in {GITHUB_ORG}/{team} COULD NOT BE "
+                        f"team membership in {github_org()}/{team} COULD NOT BE "
                         f"CHECKED: {(got.stderr or '').strip()}")
         else:
             residual.append(
@@ -269,13 +278,13 @@ def remove_residual_access(slug: str, exec_info: dict) -> list[str]:
 
     try:
         teams = run_cmd(
-            ["gh", "api", f"orgs/{GITHUB_ORG}/teams", "--jq", ".[].slug"],
+            ["gh", "api", f"orgs/{github_org()}/teams", "--jq", ".[].slug"],
             check=False)
         if teams.returncode == 0:
             for team in (teams.stdout or "").split():
                 got = run_cmd(
                     ["gh", "api",
-                     f"orgs/{GITHUB_ORG}/teams/{team}/memberships/{github_username}"],
+                     f"orgs/{github_org()}/teams/{team}/memberships/{github_username}"],
                     check=False)
                 if got.returncode != 0:
                     if "404" not in (got.stderr or ""):
@@ -283,30 +292,30 @@ def remove_residual_access(slug: str, exec_info: dict) -> list[str]:
                         # Skipping silently meant the DELETE was never even
                         # attempted on a team that may still grant access.
                         print(f"  {RED}[error]{RESET} Could not check membership "
-                              f"of {GITHUB_ORG}/{team}: {(got.stderr or '').strip()}")
+                              f"of {github_org()}/{team}: {(got.stderr or '').strip()}")
                     continue
                 gone = run_cmd(
                     ["gh", "api",
-                     f"orgs/{GITHUB_ORG}/teams/{team}/memberships/{github_username}",
+                     f"orgs/{github_org()}/teams/{team}/memberships/{github_username}",
                      "-X", "DELETE"], check=False)
                 if gone.returncode == 0:
-                    print(f"  {GREEN}[ok]{RESET} Removed from team {GITHUB_ORG}/{team}")
+                    print(f"  {GREEN}[ok]{RESET} Removed from team {github_org()}/{team}")
                 else:
                     print(f"  {RED}[error]{RESET} Could not remove from team "
-                          f"{GITHUB_ORG}/{team}: {(gone.stderr or '').strip()}")
+                          f"{github_org()}/{team}: {(gone.stderr or '').strip()}")
         else:
             print(f"  {RED}[error]{RESET} Could not list teams: "
                   f"{(teams.stderr or '').strip()}")
 
         member = run_cmd(
-            ["gh", "api", f"orgs/{GITHUB_ORG}/memberships/{github_username}"],
+            ["gh", "api", f"orgs/{github_org()}/memberships/{github_username}"],
             check=False)
         if member.returncode == 0:
             gone = run_cmd(
-                ["gh", "api", f"orgs/{GITHUB_ORG}/memberships/{github_username}",
+                ["gh", "api", f"orgs/{github_org()}/memberships/{github_username}",
                  "-X", "DELETE"], check=False)
             if gone.returncode == 0:
-                print(f"  {GREEN}[ok]{RESET} Removed org membership in {GITHUB_ORG}")
+                print(f"  {GREEN}[ok]{RESET} Removed org membership in {github_org()}")
             else:
                 print(f"  {RED}[error]{RESET} Could not remove org membership: "
                       f"{(gone.stderr or '').strip()}")
@@ -372,7 +381,7 @@ def archive_workspace_repo(slug: str) -> bool:
     """
     print(f"\n{BOLD}Step 2: Archiving the exec's data-overlay repo{RESET}")
     results = [
-        _archive_repo(f"{GITHUB_ORG}/{name}")
+        _archive_repo(f"{github_org()}/{name}")
         for name in (repo_name_for(slug), f"31c-workspace-{slug}")
     ]
     if all(r is None for r in results):
@@ -389,7 +398,7 @@ def archive_per_exec_crm_repo(slug: str) -> bool:
     answers 404 and skips. Returns False only on a real failure.
     """
     print(f"\n{BOLD}Step 2b: Archiving per-exec CRM repo (retired model){RESET}")
-    return _archive_repo(f"{GITHUB_ORG}/31c-crm-{slug}") is not False
+    return _archive_repo(f"{github_org()}/31c-crm-{slug}") is not False
 
 
 # Where an exec's contacts live, newest model first. `(repo, subpath)`.
@@ -436,7 +445,7 @@ def _find_exec_contacts(slug: str) -> tuple[Path | None, bool]:
         local = workspace_root.parent / repo_name
         if not local.exists():
             try:
-                run_cmd(["gh", "repo", "clone", f"{GITHUB_ORG}/{repo_name}", str(local)])
+                run_cmd(["gh", "repo", "clone", f"{github_org()}/{repo_name}", str(local)])
             except (subprocess.CalledProcessError, FileNotFoundError) as exc:
                 # FileNotFoundError = no `gh` on PATH. Catching only
                 # CalledProcessError let that crash the run partway through an
@@ -715,9 +724,9 @@ def print_manual_checklist(slug: str, exec_info: dict) -> None:
     print(f"\n{BOLD}{YELLOW}Manual Checklist (requires human action):{RESET}")
     print(f"  {BOLD}Org and team access is now removed by this script.{RESET} Run "
           f"these ONLY if a step above reported an error:")
-    print(f"       gh api orgs/{GITHUB_ORG}/memberships/{github_username} -X DELETE")
-    print(f"       gh api orgs/{GITHUB_ORG}/teams --jq '.[].slug' | while read t; do \\")
-    print(f"         gh api orgs/{GITHUB_ORG}/teams/$t/memberships/{github_username} -X DELETE; done")
+    print(f"       gh api orgs/{github_org()}/memberships/{github_username} -X DELETE")
+    print(f"       gh api orgs/{github_org()}/teams --jq '.[].slug' | while read t; do \\")
+    print(f"         gh api orgs/{github_org()}/teams/$t/memberships/{github_username} -X DELETE; done")
     print(f"       An organisation OWNER cannot be removed by API. Demote first.")
     print(f"  [ ] Revoke API keys (Anthropic, Firecrawl, Telegram, etc.)")
     print(f"  [ ] Disable email account: {email}")
@@ -759,7 +768,7 @@ def main():
     #
     # Before validate_admin(), deliberately: that reaches admin.json and so the
     # same unreachable overlay, which is where the traceback used to come from.
-    if not GITHUB_ORG:
+    if not github_org():
         print(f"{RED}[STOP]{RESET} the GitHub org could not be resolved, so no "
               f"repo or org path here is real. Refusing to run a revocation "
               f"against guessed paths.", file=sys.stderr)

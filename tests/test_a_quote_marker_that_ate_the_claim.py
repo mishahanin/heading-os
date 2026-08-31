@@ -70,8 +70,8 @@ def _render(callout: str, tmp_path, monkeypatch) -> list[str]:
     src = tmp_path / "in.md"
     src.write_text(f"{body}## Throughput\n\n{callout}\n", encoding="utf-8")
     out = tmp_path / "out.docx"
-    monkeypatch.setattr(comp, "INPUT", str(src))
-    monkeypatch.setattr(comp, "OUTPUT", str(out))
+    monkeypatch.setattr(comp, "input_path", lambda p=str(src): p)
+    monkeypatch.setattr(comp, "output_path", lambda p=str(out): p)
     comp.build_docx()
     return [p.text for p in docx.Document(str(out)).paragraphs]
 

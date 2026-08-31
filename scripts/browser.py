@@ -113,11 +113,31 @@ _BROWSER_CONFIGS = {
 DEFAULT_BROWSER = "brave"
 COMET_PROFILE_FOLDER = "Default"  # display name "ClaudeCode" lives in this folder
 DEFAULT_PORT = 9222
-LOCK_FILE = get_outputs_dir() / "browser" / "browser-cdp.json"
-_LEGACY_LOCK_FILE = get_outputs_dir() / "browser" / "comet-cdp.json"
-# Browser stdout/stderr goes here instead of the caller's streams. Truncated on
-# every launch, so it holds the current session only and cannot grow unbounded.
-LAUNCH_LOG = get_outputs_dir() / "browser" / "browser-launch.log"
+
+
+def lock_file() -> Path:
+    """Resolved at call time, never at import.
+
+    `get_outputs_dir()` reads `HEADING_OS_DATA` on every call, so it follows the
+    environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the data root
+    still governed a lock and a log inside the operator's real overlay. The
+    `mkdir` in `launch_comet` is not among the primitives `tests/conftest.py`
+    wraps, so a stray directory there drew no refusal.
+    """
+    return get_outputs_dir() / "browser" / "browser-cdp.json"
+
+
+def _legacy_lock_file() -> Path:
+    return get_outputs_dir() / "browser" / "comet-cdp.json"
+
+
+def launch_log() -> Path:
+    # Browser stdout/stderr goes here instead of the caller's streams. Truncated
+    # on every launch, so it holds the current session only and cannot grow
+    # unbounded.
+    return get_outputs_dir() / "browser" / "browser-launch.log"
 
 
 def _active_lock_file() -> Optional[Path]:
@@ -127,10 +147,10 @@ def _active_lock_file() -> Optional[Path]:
     running when the comet-cdp.json -> browser-cdp.json rename landed
     keeps the legacy name until that session stops.
     """
-    if LOCK_FILE.exists():
-        return LOCK_FILE
-    if _LEGACY_LOCK_FILE.exists():
-        return _LEGACY_LOCK_FILE
+    if lock_file().exists():
+        return lock_file()
+    if _legacy_lock_file().exists():
+        return _legacy_lock_file()
     return None
 
 
@@ -229,7 +249,7 @@ def _write_lock(port: int, pid: int, browser: str) -> None:
     the session can never be stopped through this tool again.
     """
     atomic_write_text(
-        LOCK_FILE,
+        lock_file(),
         json.dumps({"port": port, "pid": pid, "browser": browser}, indent=2) + "\n",
     )
 
@@ -355,12 +375,13 @@ def launch_comet(
     # after `timeout 90` had already killed python, because /usr/bin/brave-browser
     # is a shell wrapper whose `cat` helpers keep that write end open long after
     # the launcher itself exits. Writing to a file gives the child its own fds.
-    LAUNCH_LOG.parent.mkdir(parents=True, exist_ok=True)
-    with open(LAUNCH_LOG, "wb") as log:
+    log_path = launch_log()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "wb") as log:
         proc = subprocess.Popen(
             cmd, stdin=subprocess.DEVNULL, stdout=log, stderr=log
         )
-    _log(f"{browser} PID: {proc.pid} (output -> {LAUNCH_LOG})", GREEN)
+    _log(f"{browser} PID: {proc.pid} (output -> {log_path})", GREEN)
 
     deadline = time.time() + wait_timeout
     while time.time() < deadline and not _cdp_ready(port):

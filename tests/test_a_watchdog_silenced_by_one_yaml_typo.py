@@ -427,7 +427,8 @@ def test_dir_is_honoured_in_contact_mode(crm, monkeypatch, tmp_path, capsys):
     staged = tmp_path / "staged" / "contacts"
     staged.mkdir(parents=True)
     (staged / "example-person.md").write_text(CONTACT_MD, encoding="utf-8")
-    monkeypatch.setattr(crm, "CONTACTS_DIR", tmp_path / "live" / "contacts")
+    live_contacts = tmp_path / "live" / "contacts"
+    monkeypatch.setattr(crm, "contacts_root", lambda p=live_contacts: p)
     monkeypatch.setattr(sys, "argv", [
         "validate-crm-schema.py", "--dir", str(tmp_path / "staged"),
         "--contact", "example-person"])
@@ -445,7 +446,7 @@ def test_a_missing_staged_record_names_the_staged_path(crm, monkeypatch,
     live = tmp_path / "live" / "contacts"
     live.mkdir(parents=True)
     (live / "example-person.md").write_text(CONTACT_MD, encoding="utf-8")
-    monkeypatch.setattr(crm, "CONTACTS_DIR", live)
+    monkeypatch.setattr(crm, "contacts_root", lambda p=live: p)
     monkeypatch.setattr(sys, "argv", [
         "validate-crm-schema.py", "--dir", str(tmp_path / "staged"),
         "--contact", "example-person"])
@@ -462,7 +463,7 @@ def test_contact_mode_without_dir_still_uses_the_live_tree(crm, monkeypatch,
     live = tmp_path / "live" / "contacts"
     live.mkdir(parents=True)
     (live / "example-person.md").write_text(CONTACT_MD, encoding="utf-8")
-    monkeypatch.setattr(crm, "CONTACTS_DIR", live)
+    monkeypatch.setattr(crm, "contacts_root", lambda p=live: p)
     monkeypatch.setattr(sys, "argv", [
         "validate-crm-schema.py", "--contact", "example-person"])
 

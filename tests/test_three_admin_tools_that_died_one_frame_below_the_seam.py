@@ -7,12 +7,18 @@ treatment: it calls `load_admin_config()` -> `get_data_config_dir()` ->
 `get_data_root()`, which raises `DataRootError` when `HEADING_OS_DATA` names a
 path that is not a directory.
 
-Three engine scripts bind it at MODULE scope, so the exception arrived during
+Three engine scripts bound it at MODULE scope, so the exception arrived during
 import, before argparse:
 
     scripts/admin-health.py:43     GITHUB_ORG = load_github_org()
     scripts/offboard-exec.py:42    GITHUB_ORG = load_github_org()
     scripts/provision-exec.py:55   GITHUB_ORG = load_github_org()
+
+All three now resolve it through a module-level `github_org()` called at use
+time instead, so the constant no longer freezes an answer at import. The
+degradation absorbed below is still what keeps `--help` alive on a missing
+overlay; the call-time resolution moved WHEN the question is asked, not what it
+answers.
 
 All three answered `--help` with a traceback and exit 1. `scripts/bootcamp-roster.py`
 died the same way at its own module-scope `resolve_config_with_example` call, and

@@ -180,13 +180,13 @@ def test_the_exit_code_line_names_the_caller_error(calibrate):
 @pytest.fixture
 def retry_mod(tmp_path, monkeypatch):
     mod = _load("retry_under_test", "scripts/capture-design-exemplars-retry.py")
-    monkeypatch.setattr(mod, "MANIFEST_PATH", tmp_path / "manifest.json")
+    monkeypatch.setattr(mod, "manifest_path", lambda p=tmp_path / "manifest.json": p)
     return mod
 
 
 def _manifest(mod, payload) -> None:
-    mod.MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
-    mod.MANIFEST_PATH.write_text(json.dumps(payload), encoding="utf-8")
+    mod.manifest_path().parent.mkdir(parents=True, exist_ok=True)
+    mod.manifest_path().write_text(json.dumps(payload), encoding="utf-8")
 
 
 def test_a_row_without_a_slug_is_dropped_not_raised(retry_mod, capsys):
@@ -231,15 +231,15 @@ def test_a_clean_manifest_is_unchanged(retry_mod, capsys):
 
 def test_a_corrupt_manifest_still_refuses_to_merge(retry_mod, capsys):
     """The outer guard must survive the inner one being added."""
-    retry_mod.MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
-    retry_mod.MANIFEST_PATH.write_text("{not json", encoding="utf-8")
+    retry_mod.manifest_path().parent.mkdir(parents=True, exist_ok=True)
+    retry_mod.manifest_path().write_text("{not json", encoding="utf-8")
     assert retry_mod._load_manifest() is None
 
 
 @pytest.mark.parametrize("payload", ['[]', '{"results": "a string"}', '"text"', '7'])
 def test_a_wrong_container_shape_still_refuses_to_merge(retry_mod, payload):
-    retry_mod.MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
-    retry_mod.MANIFEST_PATH.write_text(payload, encoding="utf-8")
+    retry_mod.manifest_path().parent.mkdir(parents=True, exist_ok=True)
+    retry_mod.manifest_path().write_text(payload, encoding="utf-8")
     assert retry_mod._load_manifest() is None
 
 

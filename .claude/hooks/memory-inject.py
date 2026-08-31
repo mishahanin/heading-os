@@ -36,15 +36,27 @@ if hasattr(sys.stdout, "reconfigure"):
 
 WORKSPACE = Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = WORKSPACE / "config" / "memory-index.yaml"  # engine config
-# The index lives under the DATA root, not the engine clone (HEADING OS split).
-# Resolve via get_data_root() so a session launched from the engine clone reads
-# the real .heading-os-data/.memory-index/index.db, not an empty engine path.
-try:
-    sys.path.insert(0, str(WORKSPACE))
-    from scripts.utils.workspace import get_data_root
-    DB_PATH = get_data_root() / ".memory-index" / "index.db"
-except Exception:  # noqa: BLE001 -- never break SessionStart over a path resolve
-    DB_PATH = WORKSPACE / ".memory-index" / "index.db"  # in-tree fallback
+sys.path.insert(0, str(WORKSPACE))
+
+
+def db_path() -> Path:
+    """The index path, resolved at call time and never at import.
+
+    The index lives under the DATA root, not the engine clone (HEADING OS
+    split), so a session launched from the engine clone reads the real
+    .heading-os-data/.memory-index/index.db rather than an empty engine path.
+    `get_data_root()` reads HEADING_OS_DATA on every call; as a module-level
+    constant this asked once during its own import and stored the answer, so a
+    caller that repointed the root afterwards still got the first one.
+
+    Fail-soft is deliberate and unchanged: SessionStart must never die over a
+    path resolve, so an unresolvable root falls back in-tree.
+    """
+    try:
+        from scripts.utils.workspace import get_data_root
+        return get_data_root() / ".memory-index" / "index.db"
+    except Exception:  # noqa: BLE001 -- never break SessionStart over a path resolve
+        return WORKSPACE / ".memory-index" / "index.db"  # in-tree fallback
 
 try:
     from scripts.utils.sqlite_uri import read_only_uri
@@ -73,7 +85,8 @@ def main() -> None:
     except Exception as exc:
         print(f"memory-inject: stdin read failed: {exc}", file=sys.stderr)
 
-    if not DB_PATH.is_file() or not CONFIG_PATH.is_file():
+    db = db_path()
+    if not db.is_file() or not CONFIG_PATH.is_file():
         _emit("")
 
     try:
@@ -123,7 +136,7 @@ def main() -> None:
             return True
 
     try:
-        conn = sqlite3.connect(read_only_uri(DB_PATH), uri=True)
+        conn = sqlite3.connect(read_only_uri(db), uri=True)
     except Exception:
         _emit("")
 

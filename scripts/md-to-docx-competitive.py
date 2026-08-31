@@ -25,8 +25,24 @@ from scripts.utils.workspace import get_outputs_dir
 
 import os
 
-INPUT = str(get_outputs_dir() / "documents" / "competitive-analysis-example.md")
-OUTPUT = str(get_outputs_dir() / "documents" / "competitive-analysis-example.docx")
+def input_path():
+    """Resolved at call time, never at import.
+
+    `get_outputs_dir()` reads `HEADING_OS_DATA` on every call, so it follows the
+    environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the root
+    still read from -- and `save_docx` still wrote into -- the operator's real
+    overlay.
+
+    Named `input_path`/`output_path` rather than `input`/`output`: the plain
+    lowercase of `INPUT` shadows the `input` builtin.
+    """
+    return str(get_outputs_dir() / "documents" / "competitive-analysis-example.md")
+
+
+def output_path():
+    return str(get_outputs_dir() / "documents" / "competitive-analysis-example.docx")
 
 # docx names + brand colours are bound lazily (F-2.1: import stays pure).
 Document = Inches = Pt = Cm = RGBColor = None
@@ -118,7 +134,7 @@ def build_docx():
         hs.paragraph_format.space_after = Pt(6)
 
     # Read the markdown
-    with open(INPUT, 'r', encoding='utf-8') as f:
+    with open(input_path(), 'r', encoding='utf-8') as f:
         lines = f.readlines()
 
     # --- COVER PAGE ---
@@ -372,9 +388,10 @@ def build_docx():
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     add_formatted_text(p, "Example Company - Confidential", italic=True, color=MED_GRAY, size=8)
 
-    save_docx(doc, OUTPUT)
-    print(f"DOCX saved to: {OUTPUT}")
-    print(f"File size: {os.path.getsize(OUTPUT) / 1024:.0f} KB")
+    out = output_path()
+    save_docx(doc, out)
+    print(f"DOCX saved to: {out}")
+    print(f"File size: {os.path.getsize(out) / 1024:.0f} KB")
 
 if __name__ == "__main__":
     build_docx()

@@ -44,8 +44,26 @@ from scripts.utils.workspace import (  # noqa: E402
 )
 
 ROOT = get_workspace_root()
-CONTACTS_DIR = get_crm_contacts_dir()
-ADDRESS_BOOK_DIR = get_corporate_root() / "crm" / "address-book"
+
+
+def contacts_root() -> Path:
+    """Resolved at call time, never at import.
+
+    `get_crm_contacts_dir()` reads `HEADING_OS_DATA` on every call, so it
+    follows the environment for a caller that asks after the environment
+    moved. As a module-level constant it asked once, during its own import,
+    and stored the answer, so a test that imported this module and then
+    repointed the data root still validated the operator's real overlay.
+
+    Named `contacts_root`, not `contacts_dir`: `main()` already binds a local
+    `contacts_dir` (and an `address_book_dir`) for the `--dir` override, and a
+    lowercase constant of the same name would have been shadowed there.
+    """
+    return get_crm_contacts_dir()
+
+
+def address_book_root() -> Path:
+    return get_corporate_root() / "crm" / "address-book"
 
 
 def pick_schema(frontmatter: dict) -> str:
@@ -256,7 +274,7 @@ def main() -> int:
 
     searched: list[Path] = []
     if args.contact:
-        # A CONTACT SLUG, not a path fragment. `CONTACTS_DIR / f"{arg}.md"` with
+        # A CONTACT SLUG, not a path fragment. `contacts_root() / f"{arg}.md"` with
         # `../../somewhere/thing` resolved outside the contacts directory and
         # validated an arbitrary .md file. The user already has a shell, so this
         # is not a privilege boundary -- the path handling was simply wrong.
@@ -270,7 +288,7 @@ def main() -> int:
         # `--dir staged --contact x` validated the LIVE tree: either exiting 2
         # against a path the caller never named, or, when a same-named record
         # existed live, reporting a pass over a corpus that was never opened.
-        base_contacts = (Path(args.dir) / "contacts") if args.dir else CONTACTS_DIR
+        base_contacts = (Path(args.dir) / "contacts") if args.dir else contacts_root()
         searched = [base_contacts]
         paths = [base_contacts / f"{args.contact}.md"]
         if not paths[0].exists():
@@ -285,8 +303,8 @@ def main() -> int:
             contacts_dir = base / "contacts"
             address_book_dir = base / "address-book"
         else:
-            contacts_dir = CONTACTS_DIR
-            address_book_dir = ADDRESS_BOOK_DIR
+            contacts_dir = contacts_root()
+            address_book_dir = address_book_root()
         searched = [contacts_dir, address_book_dir]
         paths = sorted(contacts_dir.glob("*.md")) if contacts_dir.exists() else []
         if address_book_dir.exists():

@@ -22,6 +22,10 @@ underneath is how a guard reads complete and is not.
 This file is the regression test for both rounds. It drives the guard by hand
 rather than relying on the session-installed one, so it measures the mechanism
 instead of the environment.
+
+The guard itself moved out of `tests/conftest.py` into
+`scripts/utils/overlay_write_guard.py` on the same day, with no change to what it
+refuses. The account above is of where it lived when it was measured.
 """
 from __future__ import annotations
 
@@ -33,7 +37,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import tests.conftest as cf  # noqa: E402
+from scripts.utils import overlay_write_guard as cf  # noqa: E402
 
 # Every primitive that can bring a path into existence, or take one out. Named
 # individually rather than as a count, so a reader can see what is covered.
@@ -58,6 +62,10 @@ def armed(tmp_path, monkeypatch):
     (pretend / "auto-memory" / "MEMORY.md").write_text("index\n", encoding="utf-8")
     (pretend / "spare-dir").mkdir()
     (pretend / "spare-file").write_text("x\n", encoding="utf-8")
+    # Built BEFORE the guard arms, because building it afterwards is itself a
+    # refused write. The read-only case below needs a database that exists.
+    import sqlite3
+    sqlite3.connect(pretend / "existing.db").close()
 
     monkeypatch.setattr(cf, "_OVERLAY_PREFIXES", (str(pretend) + os.sep,))
     restore = cf._install_overlay_write_guard()
@@ -146,9 +154,105 @@ def test_writes_outside_the_overlay_still_work(armed, tmp_path):
     assert not elsewhere.exists()
 
 
+def test_a_write_only_database_connection_is_refused(armed):
+    """`sqlite3.connect` opens its file in C and never reaches `os.open`.
+
+    MEASURED 2026-08-31: with every other primitive wrapped, it created a real
+    database in the operator's overlay and reported ALLOWED.
+    """
+    import sqlite3
+
+    with pytest.raises(cf.OverlayWriteRefused):
+        sqlite3.connect(armed / "new.db")
+    assert not (armed / "new.db").exists(), "refused, and yet the file appeared"
+
+    existing = armed / "auto-memory" / "MEMORY.md"
+    with pytest.raises(cf.OverlayWriteRefused):
+        sqlite3.connect(existing)
+
+
+def test_a_read_only_database_connection_is_allowed(armed):
+    """The negative case, and it is load-bearing rather than decorative.
+
+    `.claude/hooks/memory-inject.py` opens the operator's memory index with
+    `?mode=ro` and `uri=True` on purpose. Refusing that would be the
+    over-friction that gets a guard switched off, so the guard reads the mode.
+    """
+    import sqlite3
+
+    db = armed / "existing.db"
+    conn = sqlite3.connect(f"{db.absolute().as_uri()}?mode=ro", uri=True)
+    conn.close()
+    assert sqlite3.connect(":memory:") is not None
+
+
+def test_a_child_process_that_could_reach_the_overlay_is_recorded_not_refused(
+        monkeypatch, tmp_path):
+    """A child writes outside this interpreter, so nothing here can stop it.
+
+    Recording is the whole point: it turns "the overlay changed and nothing can
+    say who" into a named suspect. Refusing instead would change what a run is
+    permitted to do, and could hide a real defect behind a harness error.
+
+    Deliberately WITHOUT the `armed` fixture. The recorder is session-level and
+    production installs exactly one guard; `armed` would install a second whose
+    `_GuardedPopen` subclasses the first, so every spawn records twice. Measured:
+    one `run` produced two records under the nested fixture. Testing the nested
+    shape would measure the fixture, not the code that ships.
+    """
+    import subprocess
+    import sys
+
+    monkeypatch.setattr(cf, "_CHILD_SPAWNS", [])
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/test_x.py::test_y (call)")
+    # The suite pins HEADING_OS_DATA at the real overlay, and `armed` aims the
+    # guard at a pretend one, so an inheriting child would look SAFE under this
+    # fixture. Removing the variable is what makes it a genuine suspect: a child
+    # with nothing pinned resolves the operator's own tree.
+    monkeypatch.delenv("HEADING_OS_DATA", raising=False)
+
+    subprocess.run([sys.executable, "-c", "pass"], check=True)
+    assert len(cf._CHILD_SPAWNS) == 1, "an inheriting child was not recorded"
+    assert cf._CHILD_SPAWNS[0][0] == "tests/test_x.py::test_y", (
+        "the record does not name the test that spawned it, which is the only "
+        "thing it exists to add")
+
+    # A real directory the test owns, not a literal under /tmp: the point is
+    # only that the pin resolves somewhere OTHER than an overlay prefix.
+    elsewhere = tmp_path / "pinned-elsewhere"
+    elsewhere.mkdir()
+    subprocess.run([sys.executable, "-c", "pass"], check=True,
+                   env={**os.environ, "HEADING_OS_DATA": str(elsewhere)})
+    assert len(cf._CHILD_SPAWNS) == 1, (
+        "a child pinned away from the live overlay was recorded as a suspect; "
+        "a suspect list that names everything names nothing")
+
+    subprocess.Popen([sys.executable, "-c", "pass"]).wait()
+    assert len(cf._CHILD_SPAWNS) == 2, "a direct Popen was not recorded"
+
+
+def test_run_and_popen_do_not_double_count(monkeypatch):
+    """`subprocess.run` builds a `Popen`, so wrapping both counted every run
+    twice. Measured: four spawns produced five records.
+
+    No `armed` fixture, for the reason given above: nesting two guards
+    reintroduces the double count this test exists to forbid."""
+    import subprocess
+    import sys
+
+    monkeypatch.setattr(cf, "_CHILD_SPAWNS", [])
+    monkeypatch.delenv("HEADING_OS_DATA", raising=False)
+    subprocess.run([sys.executable, "-c", "pass"], check=True)
+    assert len(cf._CHILD_SPAWNS) == 1, (
+        f"one `run` produced {len(cf._CHILD_SPAWNS)} records; only the Popen "
+        f"primitive should be wrapped, never the wrapper over it")
+
+
 def _primitive_table():
     import builtins
     import io
+    import sqlite3
+    import subprocess
 
     return {
         "builtins.open": builtins.open, "io.open": io.open,
@@ -156,6 +260,7 @@ def _primitive_table():
         "os.remove": os.remove, "os.unlink": os.unlink,
         "os.mkdir": os.mkdir, "os.makedirs": os.makedirs,
         "os.rmdir": os.rmdir, "os.open": os.open,
+        "sqlite3.connect": sqlite3.connect, "subprocess.Popen": subprocess.Popen,
     }
 
 

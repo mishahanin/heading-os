@@ -69,8 +69,8 @@ def _launch_with_stdout_on_a_pipe(monkeypatch, tmp_path: Path) -> int:
     )
     monkeypatch.setattr(browser, "is_running", lambda b=browser.DEFAULT_BROWSER: False)
     monkeypatch.setattr(browser, "_pids_for_cdp_port", lambda port: [])
-    monkeypatch.setattr(browser, "LOCK_FILE", tmp_path / "lock.json")
-    monkeypatch.setattr(browser, "LAUNCH_LOG", tmp_path / "launch.log")
+    monkeypatch.setattr(browser, "lock_file", lambda p=tmp_path / "lock.json": p)
+    monkeypatch.setattr(browser, "launch_log", lambda p=tmp_path / "launch.log": p)
 
     calls = {"n": 0}
 

@@ -127,7 +127,7 @@ def _state_in_tmp(fb, tmp_path, monkeypatch):
     """
     state = tmp_path / "fireside-state"
     state.mkdir()
-    monkeypatch.setattr(fb, "STATE_DIR", state)
+    monkeypatch.setattr(fb, "state_dir", lambda p=state: p)
     return state
 
 
@@ -782,7 +782,7 @@ def test_a_corrupt_sheet_writes_the_placeholder_instead_of_crashing(
         else InvalidFileException("not a .xlsx file")
 
     saved: dict = {}
-    monkeypatch.setattr(fb, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(fb, "state_dir", lambda p=tmp_path: p)
     monkeypatch.setattr(fb, "state_path", lambda n: tmp_path / n)
     monkeypatch.setattr(fb, "load_tribe_metadata",
                         lambda: (_ for _ in ()).throw(exc))
@@ -798,7 +798,7 @@ def test_a_corrupt_sheet_writes_the_placeholder_instead_of_crashing(
 
 def test_a_readable_sheet_still_heals_the_roster(fb, tmp_path, monkeypatch):
     saved: dict = {}
-    monkeypatch.setattr(fb, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(fb, "state_dir", lambda p=tmp_path: p)
     monkeypatch.setattr(fb, "state_path", lambda n: tmp_path / n)
     monkeypatch.setattr(fb, "load_tribe_metadata",
                         lambda: {"alpha": {"name": "Alpha One", "active": True}})

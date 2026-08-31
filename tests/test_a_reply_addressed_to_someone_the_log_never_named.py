@@ -80,10 +80,10 @@ def test_real_html_is_still_recognised(se, body):
 def test_the_shipped_signature_is_recognised_as_html(se):
     """The one HTML this script always appends. A regression here escapes the
     signature into the body as literal source."""
-    if not se.SIGNATURE_PATH.exists():
+    if not se.signature_path().exists():
         pytest.skip("no signature on this clone")
 
-    assert se.is_html(se.SIGNATURE_PATH.read_text(encoding="utf-8")) is True
+    assert se.is_html(se.signature_path().read_text(encoding="utf-8")) is True
 
 
 def test_prose_survives_the_round_trip_into_the_body(se):

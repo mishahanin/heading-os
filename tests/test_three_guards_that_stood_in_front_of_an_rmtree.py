@@ -198,13 +198,17 @@ def test_a_non_string_vm_root_is_also_named(pull):
 def test_a_non_utf8_service_config_does_not_kill_the_import(pull, tmp_path,
                                                             monkeypatch):
     """`UnicodeDecodeError` is a ValueError, not an OSError, and this reader
-    runs at import, so a config saved as UTF-16 tracebacked before `main`
-    could print the named message the docstring promises."""
+    ran at import, so a config saved as UTF-16 tracebacked before `main`
+    could print the named message the docstring promises.
+
+    The reader is `service_config()`, resolved on call, since 2026-08-31; the
+    never-raises promise it is tested for here is unchanged.
+    """
     cfg = tmp_path / "service-host.json"
     cfg.write_bytes(b'{"vm_engine_root": "\xff\xfe/srv"}')
     # The function resolves its own path, so the seam is the resolver.
     monkeypatch.setattr(pull, "resolve_config_with_example", lambda *a, **k: cfg)
-    data, error = pull._load_service_config()
+    data, error = pull.service_config()
     assert data == {}
     assert error and "could not be read" in error
 
@@ -215,6 +219,6 @@ def test_a_good_service_config_still_loads(pull, tmp_path, monkeypatch):
     cfg = tmp_path / "service-host.json"
     cfg.write_text('{"vm_engine_root": "/srv/heading"}', encoding="utf-8")
     monkeypatch.setattr(pull, "resolve_config_with_example", lambda *a, **k: cfg)
-    data, error = pull._load_service_config()
+    data, error = pull.service_config()
     assert error is None
     assert data == {"vm_engine_root": "/srv/heading"}

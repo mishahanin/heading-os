@@ -173,7 +173,7 @@ def _utc_event(sx, hour, subject="Synthetic standup", body="Agenda body text"):
 
 def _run_calendar(sx, monkeypatch, tmp_path, events, tz="Asia/Dubai", days=2):
     cal = tmp_path / "calendar"
-    monkeypatch.setattr(sx, "CALENDAR_DIR", cal)
+    monkeypatch.setattr(sx, "calendar_dir", lambda p=cal: p)
     _roots(sx, monkeypatch, tmp_path, tmp_path, tmp_path)
     total = sx.sync_calendar(_Account(events), days=days, timezone_str=tz)
     return total, (cal / "upcoming.md").read_text(encoding="utf-8"), cal
@@ -207,7 +207,7 @@ def test_a_sync_on_an_exec_workspace_writes_the_per_day_files(sx, monkeypatch,
     _roots(sx, monkeypatch, tmp_path / "data-bond", tmp_path / "data",
            tmp_path / "engine")
     cal = tmp_path / "data-bond" / "outputs" / "_sync" / "calendar"
-    monkeypatch.setattr(sx, "CALENDAR_DIR", cal)
+    monkeypatch.setattr(sx, "calendar_dir", lambda p=cal: p)
 
     sx.sync_calendar(_Account([_utc_event(sx, 9)]), days=2,
                      timezone_str="Asia/Dubai")
@@ -227,7 +227,7 @@ def test_a_sync_on_an_exec_workspace_prunes_stale_day_files(sx, monkeypatch,
     today = _dt.now(ZoneInfo("Asia/Dubai")).date()
     stale = cal / f"{today.isoformat()}.md"
     stale.write_text("# cancelled meeting from an earlier run\n", encoding="utf-8")
-    monkeypatch.setattr(sx, "CALENDAR_DIR", cal)
+    monkeypatch.setattr(sx, "calendar_dir", lambda p=cal: p)
 
     sx.sync_calendar(_Account([]), days=2, timezone_str="Asia/Dubai")
 
@@ -346,7 +346,7 @@ def test_the_email_lane_survives_an_exec_workspace(sx, monkeypatch, tmp_path):
     _roots(sx, monkeypatch, tmp_path / "data-bond", tmp_path / "data",
            tmp_path / "engine")
     mail = tmp_path / "data-bond" / "outputs" / "_sync" / "emails"
-    monkeypatch.setattr(sx, "EMAIL_DIR", mail)
+    monkeypatch.setattr(sx, "email_dir", lambda p=mail: p)
 
     count = sx.sync_emails(_MailAccount([_Email("Hello")]), count=5)
 
@@ -362,8 +362,9 @@ def test_the_email_lane_prints_the_shortened_path(sx, monkeypatch, tmp_path,
     monkeypatch.setitem(sys.modules, "scripts.utils.crm_autolog", stub)
     _roots(sx, monkeypatch, tmp_path / "data-bond", tmp_path / "data",
            tmp_path / "engine")
-    monkeypatch.setattr(sx, "EMAIL_DIR",
-                        tmp_path / "data-bond" / "outputs" / "_sync" / "emails")
+    monkeypatch.setattr(
+        sx, "email_dir",
+        lambda p=tmp_path / "data-bond" / "outputs" / "_sync" / "emails": p)
 
     sx.sync_emails(_MailAccount([_Email("Hello")]), count=5)
 
@@ -589,7 +590,7 @@ class _Account:
     calendar = _Cal()
 
 with tempfile.TemporaryDirectory() as td:
-    sx.CALENDAR_DIR = Path(td) / "cal"
+    sx.calendar_dir = lambda p=Path(td) / "cal": p
     sx.sync_calendar(_Account(), days=1, timezone_str="UTC")
 print("COLD_OK")
 '''

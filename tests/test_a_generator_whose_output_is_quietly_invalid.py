@@ -433,14 +433,15 @@ def test_every_coordinate_the_generator_places_is_an_integer(tmp_path, monkeypat
     `// 2` or `* 0.5`. The truncation the shard warned about happens silently
     here, which is precisely why the check has to sit upstream of it.
 
-    OUTPUT is redirected into tmp_path first. The module-level constant
-    resolves through `get_outputs_dir()`, so calling `build()` without the
-    monkeypatch writes a real deck into the operator's data overlay.
+    `output()` is redirected into tmp_path first. It resolves through
+    `get_outputs_dir()`, so calling `build()` without the monkeypatch writes a
+    real deck into the operator's data overlay.
     """
     pytest.importorskip("pptx", reason="python-pptx (extra: documents) not installed")
     gtf = _load("generate_testing_framework_pptx_p7a",
                 "scripts/generate-testing-framework-pptx.py")
-    monkeypatch.setattr(gtf, "OUTPUT", str(tmp_path / "deck.pptx"))
+    deck = str(tmp_path / "deck.pptx")
+    monkeypatch.setattr(gtf, "output", lambda p=deck: p)
 
     placed: list[tuple[str, str, object]] = []
 

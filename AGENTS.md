@@ -148,7 +148,10 @@ whether anything leaves for a third party) and `scripts/utils/egress_proof.py`
 becoming an instruction to the parent, `scripts/utils/census_schema.py`; the
 classifier input
 `config/routing-map.yaml`, which decides what counts as private; the test gate
-`scripts/run-tests.py` and `tests/conftest.py`; and the rules those controls
+`scripts/run-tests.py` and `tests/conftest.py`; the guard that refuses a write to
+the operator's private overlay, `scripts/utils/overlay_write_guard.py`, which was
+409 lines of that conftest until 2026-08-31 and is on this list for the same
+reason the conftest is; and the rules those controls
 implement in prose — `.claude/rules/security.md`,
 `.claude/rules/lethal-trifecta.md`, `.claude/rules/tiered-risk.md`,
 `.claude/rules/generated-code-execution.md` — because

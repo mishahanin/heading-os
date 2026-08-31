@@ -36,15 +36,23 @@ from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
 # clone (vm_engine_root) and the data overlay (vm_data_root) — each overridable
 # per-instance via .env (SERVICE_VM_ENGINE_ROOT / SERVICE_VM_DATA_ROOT). The host
 # ADDRESS is always SERVICE_VM_HOST in .env.
-def _load_service_config() -> tuple[dict, str | None]:
+def service_config() -> tuple[dict, str | None]:
     """Read service-host.json. Returns (config, error); NEVER raises.
 
-    This load runs at IMPORT, where no handler is in scope: an unparseable
-    config raised json.JSONDecodeError and a top-level JSON list raised
-    AttributeError from the `.get` below, both killing the run with a raw
-    traceback before `main` -- and its named, actionable message -- existed.
-    Carrying the error as a value lets `state_dirs` raise the ValueError that
-    `main` already catches and prints properly.
+    Resolved on CALL, never at import. `resolve_config_with_example` reaches the
+    data root, which is read out of `HEADING_OS_DATA` on every call, so a
+    module-level `_SVC, _SVC_ERROR = ...` stored one answer for the life of the
+    process: a caller that repointed the root afterwards still got whatever the
+    root was during this module's import.
+
+    The pair is returned from ONE read so the config and its error can never
+    come from two different loads. It never raises: this used to run at import,
+    where no handler was in scope, and an unparseable config raised
+    json.JSONDecodeError while a top-level JSON list raised AttributeError from
+    the `.get` in the callers, both killing the run with a raw traceback before
+    `main` -- and its named, actionable message -- existed. Carrying the error as
+    a value lets `state_dirs` raise the ValueError that `main` already catches
+    and prints properly.
     """
     try:
         path = resolve_config_with_example(
@@ -54,7 +62,7 @@ def _load_service_config() -> tuple[dict, str | None]:
         raw = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         # UnicodeDecodeError is a ValueError, NOT an OSError, and this
-        # function runs at import. A `config/service-host.json` saved as
+        # function used to run at import. A `config/service-host.json` saved as
         # UTF-16 therefore killed the process with a raw traceback before
         # `main` could print the named message this docstring promises.
         return {}, f"could not be read: {exc}"
@@ -67,11 +75,20 @@ def _load_service_config() -> tuple[dict, str | None]:
     return data, None
 
 
-_SVC, _SVC_ERROR = _load_service_config()
-MIRROR_REL = _SVC.get("mirror_dir", "datastore/operations/service-mirror")
 # scp over a slow or half-open link hung the run indefinitely; this is a
 # per-directory ceiling, not a whole-run one.
 SCP_TIMEOUT_S = 600
+
+
+def mirror_rel() -> str:
+    """The mirror directory, relative to the data root. Call time, not import.
+
+    This was `MIRROR_REL = _SVC.get(...)` at module scope, which is frozen for
+    the same reason `service_config` above is: it is derived from a value that
+    resolved the data root once, during import.
+    """
+    svc, _ = service_config()
+    return svc.get("mirror_dir", "datastore/operations/service-mirror")
 
 
 def vm_roots() -> dict:
@@ -83,9 +100,10 @@ def vm_roots() -> dict:
     every run silently used the config-file values instead. Resolving on call is
     what makes the promise true.
     """
+    svc, _ = service_config()
     return {
-        "engine": os.environ.get("SERVICE_VM_ENGINE_ROOT") or _SVC.get("vm_engine_root", ""),
-        "data": os.environ.get("SERVICE_VM_DATA_ROOT") or _SVC.get("vm_data_root", ""),
+        "engine": os.environ.get("SERVICE_VM_ENGINE_ROOT") or svc.get("vm_engine_root", ""),
+        "data": os.environ.get("SERVICE_VM_DATA_ROOT") or svc.get("vm_data_root", ""),
     }
 
 
@@ -142,9 +160,10 @@ def state_dirs() -> list:
     a ValueError, so `main`'s handler could not catch it and the run ended in a
     traceback instead of the one-line reason.
     """
-    if _SVC_ERROR:
-        raise ValueError(_SVC_ERROR)
-    entries = _SVC.get("state_dirs")
+    svc, error = service_config()
+    if error:
+        raise ValueError(error)
+    entries = svc.get("state_dirs")
     if entries is None:
         raise ValueError(
             "no 'state_dirs' key, so there is nothing to pull; copy the list "
@@ -181,7 +200,11 @@ def main() -> int:
         print(f"{GRAY}Add a line:  SERVICE_VM_HOST=<vm-ip-or-hostname>{RESET}")
         return 1
 
-    mirror = data_root / MIRROR_REL
+    # Bound once, not re-read per entry: `mirror` below and `dest_rel` inside
+    # the loop must name the same directory, or the staging swap writes one
+    # tree and renames another.
+    mirror_rel_dir = mirror_rel()
+    mirror = data_root / mirror_rel_dir
     mirror.mkdir(parents=True, exist_ok=True)
     print(f"{BOLD}Pulling service-host state from {host}{RESET}")
 
@@ -197,7 +220,7 @@ def main() -> int:
             rmtree_force(staging_abs)
         # Relative dest (resolved against cwd=data_root below) avoids the
         # Windows-drive-letter colon issue in scp.
-        dest_rel = f"{MIRROR_REL}/.{name}.incoming"
+        dest_rel = f"{mirror_rel_dir}/.{name}.incoming"
         cmd = ["scp", "-r", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
                f"root@{host}:{vm_path}", dest_rel]
         try:

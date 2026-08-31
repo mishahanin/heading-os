@@ -29,10 +29,10 @@ ENGINE = Path(__file__).resolve().parent.parent
 
 # (script, the identifier whose write must be atomic)
 STATE_WRITERS = [
-    ("scripts/crm-health.py", "PEOPLE_FILE"),
+    ("scripts/crm-health.py", "people_file"),
     ("scripts/offboard-exec.py", "registry_file"),
     # Found by the 2026-08-23/24 engine audit, shards scripts-03-p2 / p3.
-    ("scripts/browser.py", "LOCK_FILE"),
+    ("scripts/browser.py", "lock_file"),
     ("scripts/build_engine_repo.py", "src_manifest"),
     # Found by the third defect-class fan-out, 2026-08-27. offboard-exec.py was
     # already on this list and writes the SAME file; emergency-revoke.py rewrote

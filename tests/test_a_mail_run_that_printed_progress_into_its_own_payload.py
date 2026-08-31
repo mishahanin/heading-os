@@ -138,7 +138,7 @@ def unread(monkeypatch, tmp_path):
     Returns a small controller: set `.convs` to the conversation list the
     grouping step should yield, then call `.run()` and read `.stdout`.
     """
-    monkeypatch.setattr(ei, "STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(ei, "state_file", lambda p=tmp_path / "state.json": p)
     monkeypatch.setattr(ei, "StateManager", _FakeState)
     monkeypatch.setattr(ei, "_load_ignore_patterns", list)
     monkeypatch.setattr(ei, "_connect_with_retries", lambda: _Account([]))
@@ -320,7 +320,7 @@ def test_an_unreadable_pipeline_file_degrades_the_digest_it_does_not_end_it(
     OSError. Deterministic at any uid, unlike a chmod that root ignores."""
     trap = tmp_path / "pipeline.md"
     trap.mkdir()
-    monkeypatch.setattr(ei, "PIPELINE_FILE", trap)
+    monkeypatch.setattr(ei, "pipeline_file", lambda p=trap: p)
 
     assert ei.load_pipeline_context() == ""
     assert "pipeline context unreadable" in capsys.readouterr().err
@@ -330,7 +330,7 @@ def test_a_readable_pipeline_file_is_still_returned_whole(monkeypatch, tmp_path)
     """The handler must not have swallowed the happy path with it."""
     src = tmp_path / "pipeline.md"
     src.write_text("| Acme Telecom | pilot | 90k |\n" * 200, encoding="utf-8")
-    monkeypatch.setattr(ei, "PIPELINE_FILE", src)
+    monkeypatch.setattr(ei, "pipeline_file", lambda p=src: p)
     assert ei.load_pipeline_context() == src.read_text(encoding="utf-8")
 
 
@@ -347,7 +347,7 @@ def test_a_scalar_ignore_patterns_is_refused_not_spelled_out(
     """
     cfg = tmp_path / "sentinel_config.yaml"
     cfg.write_text('email:\n  ignore_patterns: "noreply@*"\n', encoding="utf-8")
-    monkeypatch.setattr(ei, "SENTINEL_CONFIG", cfg)
+    monkeypatch.setattr(ei, "sentinel_config", lambda p=cfg: p)
 
     patterns = ei._load_ignore_patterns()
     assert set(ei.DEFAULT_IGNORE_PATTERNS), "the default corpus is empty"
@@ -362,7 +362,7 @@ def test_a_list_of_ignore_patterns_is_still_loaded(monkeypatch, tmp_path):
     cfg = tmp_path / "sentinel_config.yaml"
     cfg.write_text("email:\n  ignore_patterns:\n    - '*@spam.example'\n",
                    encoding="utf-8")
-    monkeypatch.setattr(ei, "SENTINEL_CONFIG", cfg)
+    monkeypatch.setattr(ei, "sentinel_config", lambda p=cfg: p)
     assert "*@spam.example" in ei._load_ignore_patterns()
 
 

@@ -234,7 +234,18 @@ def add_formatted_text(paragraph, text):
         run.font.name = 'Times New Roman'
 
 
-if __name__ == '__main__':
+def main():
+    """The demo paths resolve here rather than in the `__main__` block.
+
+    A `__name__ == '__main__'` body is skipped by a normal import, so this was
+    never the import-time freeze the sweep is named for. It IS executed by
+    `runpy.run_path(..., run_name='__main__')`, which this suite uses, and the
+    repo's script standard puts the entry body in `main()` regardless.
+    """
     md_path = str(get_outputs_dir() / 'documents' / 'example-support-letter.md')
     docx_path = str(get_outputs_dir() / 'documents' / 'example-support-letter.docx')
     create_letter_docx(md_path, docx_path)
+
+
+if __name__ == '__main__':
+    main()

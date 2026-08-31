@@ -174,9 +174,26 @@ def _resolve_asset(rel_path: str) -> Path:
     return get_data_root() / rel_path
 
 
-SIGNATURE_PATH = _resolve_asset("reference/email-signature.html")
-LOGO_PATH = _resolve_asset("datastore/brand/assets/email-signature/logo-email-signature.png")
-DIVIDER_PATH = _resolve_asset("datastore/brand/assets/email-signature/divider.png")
+def signature_path() -> Path:
+    """The three signature assets, resolved at call time and never at import.
+
+    `_resolve_asset()` above reaches `get_data_root()`, which reads
+    HEADING_OS_DATA on EVERY call. As module-level constants these asked once,
+    during this module's own import, and stored the answer -- so a test that
+    imported this module and THEN repointed the root still read the operator's
+    real signature and brand images. The original sweep for this defect looked
+    for a resolver called at module scope and was blind to these three, because
+    the resolver they reach is one frame down inside `_resolve_asset()`.
+    """
+    return _resolve_asset("reference/email-signature.html")
+
+
+def logo_path() -> Path:
+    return _resolve_asset("datastore/brand/assets/email-signature/logo-email-signature.png")
+
+
+def divider_path() -> Path:
+    return _resolve_asset("datastore/brand/assets/email-signature/divider.png")
 
 
 def load_config():
@@ -280,8 +297,9 @@ def build_signature_attachments():
     _ensure_exchangelib()
     attachments = []
 
-    if LOGO_PATH.exists():
-        logo_data = LOGO_PATH.read_bytes()
+    logo = logo_path()
+    if logo.exists():
+        logo_data = logo.read_bytes()
         attachments.append(FileAttachment(
             name="logo31c.png",
             content=logo_data,
@@ -290,10 +308,11 @@ def build_signature_attachments():
             content_type="image/png",
         ))
     else:
-        print(f"[WARN] Logo not found: {LOGO_PATH}")
+        print(f"[WARN] Logo not found: {logo}")
 
-    if DIVIDER_PATH.exists():
-        divider_data = DIVIDER_PATH.read_bytes()
+    divider = divider_path()
+    if divider.exists():
+        divider_data = divider.read_bytes()
         # Two divider instances side by side in the signature
         attachments.append(FileAttachment(
             name="divider31c.png",
@@ -310,17 +329,18 @@ def build_signature_attachments():
             content_type="image/png",
         ))
     else:
-        print(f"[WARN] Divider not found: {DIVIDER_PATH}")
+        print(f"[WARN] Divider not found: {divider}")
 
     return attachments
 
 
 def load_signature():
     """Load HTML signature from file."""
-    if not SIGNATURE_PATH.exists():
-        print(f"[WARN] Signature not found: {SIGNATURE_PATH}")
+    path = signature_path()
+    if not path.exists():
+        print(f"[WARN] Signature not found: {path}")
         return ""
-    return SIGNATURE_PATH.read_text(encoding="utf-8")
+    return path.read_text(encoding="utf-8")
 
 
 # The tags a body actually uses. Kept explicit because the decision this list

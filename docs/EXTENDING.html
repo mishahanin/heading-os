@@ -196,6 +196,12 @@ rules freely. Leave the security ones in place.</p>
   reads. Never hardcode paths; use <code>pathlib.Path</code> and the workspace helpers.</li>
 <li><strong>Data goes through the seam.</strong> Write artifacts via the data-root helpers
   (<code>get_data_root()</code> / <code>get_*_dir()</code>), never into the engine tree.</li>
+<li><strong>Resolve a data path when you call, never at import.</strong> <code>get_data_root()</code> reads
+  <code>HEADING_OS_DATA</code> on every call. A module-level constant asks once, during its own
+  import, and keeps that answer. A test that imports your module and then repoints
+  the root still reads the operator&rsquo;s real data. Write a function instead:
+  <code>def out_dir() -&gt; Path: return get_outputs_dir() / "reports"</code>. The gate is
+  <code>tests/test_a_tracked_dir_list_frozen_before_any_test_could_move_it.py</code>.</li>
 <li><strong>Catch <code>HTTPError</code> before <code>URLError</code></strong> (the former is a subclass).</li>
 </ul>
 <hr />

@@ -83,7 +83,7 @@ def sx():
 def cal_dir(sx, tmp_path, monkeypatch):
     """Every calendar write goes to tmp_path, never the operator's overlay."""
     target = tmp_path / "calendar"
-    monkeypatch.setattr(sx, "CALENDAR_DIR", target)
+    monkeypatch.setattr(sx, "calendar_dir", lambda p=target: p)
     return target
 
 
@@ -181,7 +181,7 @@ def test_the_order_events_arrive_in_does_not_change_the_file(sx, tmp_path,
     """
     def render(label, order):
         target = tmp_path / f"cal-{label}"
-        monkeypatch.setattr(sx, "CALENDAR_DIR", target)
+        monkeypatch.setattr(sx, "calendar_dir", lambda p=target: p)
         _run_calendar(sx, order)
         return _times_in((target / "upcoming.md").read_text(encoding="utf-8"))
 
@@ -338,7 +338,7 @@ def mail_dir(sx, tmp_path, monkeypatch):
     touching the operator's real contact files.
     """
     bumped = []
-    monkeypatch.setattr(sx, "EMAIL_DIR", tmp_path / "emails")
+    monkeypatch.setattr(sx, "email_dir", lambda p=tmp_path / "emails": p)
     monkeypatch.setitem(
         sys.modules, "scripts.utils.crm_autolog",
         types.SimpleNamespace(bump_inbound=lambda **kw: bumped.append(kw)))

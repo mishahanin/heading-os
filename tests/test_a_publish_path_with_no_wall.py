@@ -198,7 +198,8 @@ def test_the_env_override_beats_the_config_file(monkeypatch):
 
 def test_the_config_value_stands_when_no_override_is_set(monkeypatch):
     monkeypatch.delenv("SERVICE_VM_ENGINE_ROOT", raising=False)
-    assert pullsvc.vm_roots()["engine"] == pullsvc._SVC.get("vm_engine_root", "")
+    assert pullsvc.vm_roots()["engine"] == pullsvc.service_config()[0].get(
+        "vm_engine_root", "")
 
 
 def test_an_empty_vm_root_is_named_not_turned_into_a_root_path():

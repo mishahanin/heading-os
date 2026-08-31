@@ -44,15 +44,20 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-CONFTEST = ROOT / "tests" / "conftest.py"
+GUARD = ROOT / "scripts" / "utils" / "overlay_write_guard.py"
 
 
 @pytest.fixture(scope="module")
 def cf():
-    """conftest.py as a plain module, under a name pytest is not using."""
-    spec = importlib.util.spec_from_file_location("conftest_write_guard", CONFTEST)
+    """The guard as a FRESH module, not the one this session armed.
+
+    A fresh copy is the point. These tests replace `_OVERLAY_PREFIXES` to aim
+    the guard at a tmp_path; doing that to the live module would take the real
+    overlay out of guard for the length of the test.
+    """
+    spec = importlib.util.spec_from_file_location("overlay_guard_write_copy", GUARD)
     module = importlib.util.module_from_spec(spec)
-    sys.modules["conftest_write_guard"] = module
+    sys.modules["overlay_guard_write_copy"] = module
     spec.loader.exec_module(module)
     return module
 
@@ -193,12 +198,17 @@ def test_builtins_open_and_io_open_stay_the_same_object(cf, monkeypatch, tmp_pat
 # ============================================================
 
 def test_the_running_session_has_the_guard_armed_when_an_overlay_exists():
-    """A guard nobody installs refuses nothing. This reads the LIVE conftest
-    that pytest loaded, not a fresh copy of it."""
-    live = sys.modules.get("tests.conftest") or sys.modules.get("conftest")
+    """A guard nobody installs refuses nothing. This reads the LIVE
+    `scripts/utils/overlay_write_guard.py` that pytest's conftest armed, not a
+    fresh copy of it."""
+    live = sys.modules.get("scripts.utils.overlay_write_guard")
     assert live is not None, (
-        "the root conftest is not in sys.modules under either name pytest uses; "
-        "this test cannot see the live guard and must not pass quietly")
+        "the guard module is not in sys.modules, so this test cannot see the "
+        "guard this session armed and must not pass quietly")
+    conftest = sys.modules.get("tests.conftest") or sys.modules.get("conftest")
+    assert conftest is not None and conftest._guard is live, (
+        "the root conftest holds a DIFFERENT guard object than the one imported "
+        "here, so every assertion below would be about a module nobody armed")
     if not live._watched_roots():
         pytest.skip("this clone has no private overlay, so nothing to guard")
     assert live._OVERLAY_PREFIXES, "an overlay is present and the guard is not armed"

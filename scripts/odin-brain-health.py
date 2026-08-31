@@ -35,7 +35,20 @@ except Exception:  # pragma: no cover - exec workspace without the ceo-only lint
 # ============================================================
 # Resolve under the DATA root (get_knowledge_dir -> get_data_root), so this works
 # from the engine clone against the data sibling. Not a fixed engine-relative path.
-BRAIN_ROOT = get_knowledge_dir() / "odin-brain"
+
+
+def brain_root():
+    """Resolved at call time, never at import.
+
+    `get_knowledge_dir()` reads `HEADING_OS_DATA` on every call, so it follows
+    the environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the root
+    still read (and `--update-index` still wrote) the operator's real overlay.
+    """
+    return get_knowledge_dir() / "odin-brain"
+
+
 SUBDIRS = ["sources", "principles", "positions", "episodes", "conflicts", "reference"]
 # Temporal-validity fields are OPTIONAL (not in REQUIRED_FIELDS):
 #   superseded_by   -- slug of the note that supersedes this one (never deleted)
@@ -140,7 +153,7 @@ def collect_brain_files():
     """Collect all .md files from brain subdirectories."""
     files = {"sources": [], "principles": [], "positions": [], "episodes": [], "conflicts": [], "reference": []}
     for subdir in SUBDIRS:
-        dirpath = BRAIN_ROOT / subdir
+        dirpath = brain_root() / subdir
         if dirpath.exists():
             files[subdir] = sorted(
                 [f for f in dirpath.glob("*.md")],
@@ -534,7 +547,7 @@ def run_compile(files):
     # R11: temporal-validity lint (superseded_by). Omitted when the ceo-only
     # lint module is absent (exec workspace) so compile never crashes there.
     if _temporal_lint is not None:
-        issues = _temporal_lint(BRAIN_ROOT)
+        issues = _temporal_lint(brain_root())
         report["temporal_validity"] = {
             "total_issues": len(issues),
             "errors": [i for i in issues if i.get("severity") == "error"],
@@ -694,8 +707,8 @@ def main():
                         help="Run full compile analysis, output JSON for LLM semantic layer")
     args = parser.parse_args()
 
-    if not BRAIN_ROOT.exists():
-        print(f"Brain root not found: {BRAIN_ROOT}", file=sys.stderr)
+    if not brain_root().exists():
+        print(f"Brain root not found: {brain_root()}", file=sys.stderr)
         sys.exit(1)
 
     files = collect_brain_files()
@@ -713,7 +726,7 @@ def main():
 
     if args.update_index:
         index_content = generate_index(files)
-        index_path = BRAIN_ROOT / "INDEX.md"
+        index_path = brain_root() / "INDEX.md"
         index_path.write_text(index_content, encoding="utf-8")
         print(f"INDEX.md regenerated: {index_path}")
         return

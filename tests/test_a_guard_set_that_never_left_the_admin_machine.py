@@ -50,8 +50,10 @@ The rest of the shard:
     publish into a directory `copy_includes` rmtree's and overwrites.
   - `pull-service-state.py` read `_SVC["state_dirs"]` by subscript, so a config
     missing the key raised KeyError past `main`'s ValueError-only handler. Its
-    config load also runs at import, where a malformed file could raise
-    JSONDecodeError or AttributeError with no handler in scope at all.
+    config load also ran at import, where a malformed file could raise
+    JSONDecodeError or AttributeError with no handler in scope at all. That load
+    is `service_config()`, resolved on call, since 2026-08-31; `_SVC` and
+    `_SVC_ERROR` are gone, and the tests below drive the function instead.
 
 Fixed 2026-08-25.
 """
@@ -581,16 +583,15 @@ def pss():
 
 def test_a_config_without_state_dirs_is_named_not_a_traceback(pss, monkeypatch):
     """KeyError is not a ValueError, so `main`'s handler could not catch it."""
-    monkeypatch.setattr(pss, "_SVC", {"vm_engine_root": "/srv"})
-    monkeypatch.setattr(pss, "_SVC_ERROR", None)
+    monkeypatch.setattr(pss, "service_config",
+                        lambda: ({"vm_engine_root": "/srv"}, None))
     with pytest.raises(ValueError, match="state_dirs"):
         pss.state_dirs()
 
 
 def test_the_missing_key_reaches_the_operator_as_one_line(pss, monkeypatch, capsys):
     """End to end through `main`'s handler, which is what the fix is for."""
-    monkeypatch.setattr(pss, "_SVC", {})
-    monkeypatch.setattr(pss, "_SVC_ERROR", None)
+    monkeypatch.setattr(pss, "service_config", lambda: ({}, None))
     monkeypatch.setattr(pss, "load_env", lambda: None)
     monkeypatch.setattr(pss, "get_data_root", lambda: Path("/nonexistent"))
     assert pss.main() == 1
@@ -598,19 +599,25 @@ def test_the_missing_key_reaches_the_operator_as_one_line(pss, monkeypatch, caps
 
 
 def test_a_non_list_state_dirs_is_named(pss, monkeypatch):
-    monkeypatch.setattr(pss, "_SVC", {"state_dirs": {"a": "b"}})
-    monkeypatch.setattr(pss, "_SVC_ERROR", None)
+    monkeypatch.setattr(pss, "service_config",
+                        lambda: ({"state_dirs": {"a": "b"}}, None))
     with pytest.raises(ValueError, match="must be a list"):
         pss.state_dirs()
 
 
 def test_unparseable_json_is_carried_not_raised_at_import(pss, tmp_path,
                                                           monkeypatch):
-    """The load runs at IMPORT, where no handler exists at all."""
+    """The load ran at IMPORT, where no handler exists at all.
+
+    It is a call-time load since 2026-08-31 (`service_config`), which removes
+    the no-handler-in-scope window but not the reason for carrying the error as
+    a value: `main` catches ValueError only, and `state_dirs` is where it is
+    raised.
+    """
     bad = tmp_path / "service-host.json"
     bad.write_text("{ not json", encoding="utf-8")
     monkeypatch.setattr(pss, "resolve_config_with_example", lambda *a, **k: bad)
-    cfg, err = pss._load_service_config()
+    cfg, err = pss.service_config()
     assert cfg == {}
     assert "not valid JSON" in err
 
@@ -620,7 +627,7 @@ def test_a_json_list_config_is_carried_not_raised(pss, tmp_path, monkeypatch):
     bad = tmp_path / "service-host.json"
     bad.write_text("[1, 2]", encoding="utf-8")
     monkeypatch.setattr(pss, "resolve_config_with_example", lambda *a, **k: bad)
-    cfg, err = pss._load_service_config()
+    cfg, err = pss.service_config()
     assert cfg == {}
     assert "JSON object" in err
 
@@ -628,28 +635,38 @@ def test_a_json_list_config_is_carried_not_raised(pss, tmp_path, monkeypatch):
 def test_an_unreadable_config_is_carried_not_raised(pss, tmp_path, monkeypatch):
     missing = tmp_path / "does-not-exist.json"
     monkeypatch.setattr(pss, "resolve_config_with_example", lambda *a, **k: missing)
-    cfg, err = pss._load_service_config()
+    cfg, err = pss.service_config()
     assert cfg == {}
     assert "could not be read" in err
 
 
 def test_a_carried_error_surfaces_at_the_first_use(pss, monkeypatch):
     """The error must not sit silently until something else fails oddly."""
-    monkeypatch.setattr(pss, "_SVC", {})
-    monkeypatch.setattr(pss, "_SVC_ERROR", "is not valid JSON (x): boom")
+    monkeypatch.setattr(pss, "service_config",
+                        lambda: ({}, "is not valid JSON (x): boom"))
     with pytest.raises(ValueError, match="not valid JSON"):
         pss.state_dirs()
 
 
 def test_the_config_object_is_still_a_plain_dict(pss):
-    """Anchor: tests/test_a_publish_path_with_no_wall.py reads `_SVC.get`."""
-    assert isinstance(pss._SVC, dict)
+    """Anchor: tests/test_a_publish_path_with_no_wall.py reads
+    `service_config()[0].get(...)`, so the first element of the returned pair
+    must stay a plain dict and the second must stay the error slot.
+
+    The name it anchors changed on 2026-08-31 -- `_SVC` / `_SVC_ERROR` were a
+    module-level pair that froze the data root at import, and became this one
+    call-time function -- but the cross-file assumption is the same one, and
+    the sibling file still reads the config through this seam.
+    """
+    cfg, error = pss.service_config()
+    assert isinstance(cfg, dict)
+    assert error is None or isinstance(error, str)
 
 
 def test_a_good_config_still_resolves(pss, monkeypatch):
     """Anchor: the guards must not refuse the working configuration."""
-    monkeypatch.setattr(pss, "_SVC", {"state_dirs": [["m", "data", "state/x"]],
-                                      "vm_data_root": "/srv/data"})
-    monkeypatch.setattr(pss, "_SVC_ERROR", None)
+    monkeypatch.setattr(pss, "service_config",
+                        lambda: ({"state_dirs": [["m", "data", "state/x"]],
+                                  "vm_data_root": "/srv/data"}, None))
     monkeypatch.delenv("SERVICE_VM_DATA_ROOT", raising=False)
     assert pss.state_dirs() == [("m", "/srv/data/state/x")]

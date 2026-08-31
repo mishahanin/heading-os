@@ -28,8 +28,23 @@ from scripts.utils.workspace import get_outputs_dir
 # ============================================================
 # Configuration / Paths
 # ============================================================
-IMAGES_DIR = str(get_outputs_dir() / 'images' / 'client')
-OUTPUT_PATH = str(get_outputs_dir() / 'documents' / 'ODUN-ONE-Conceptual-Design-Template.docx')
+def images_dir() -> str:
+    """Resolved at call time, never at import.
+
+    `get_outputs_dir()` reads `HEADING_OS_DATA` on every call, so it follows
+    the environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the root
+    still read images from -- and, through `output_path()` below, wrote a
+    finished .docx into -- the operator's real overlay.
+    """
+    return str(get_outputs_dir() / 'images' / 'client')
+
+
+def output_path() -> str:
+    return str(get_outputs_dir() / 'documents' / 'ODUN-ONE-Conceptual-Design-Template.docx')
+
+
 
 # The appendices this builder actually emits, in document order. The contents
 # page and the body headings both read this, so the two cannot drift apart
@@ -123,7 +138,7 @@ def add_image_safe(doc, image_name, width=None):
     """Add an image if it exists, skip gracefully if not."""
     if width is None:
         width = Inches(6.5)
-    path = str(Path(IMAGES_DIR) / image_name)
+    path = str(Path(images_dir()) / image_name)
     if os.path.exists(path):
         doc.add_picture(path, width=width)
         last_paragraph = doc.paragraphs[-1]
@@ -1207,9 +1222,10 @@ def build_document():
     run.font.color.rgb = MEDIUM_GRAY
 
     # ── Save ──
-    save_docx(doc, OUTPUT_PATH)
-    print(f'[OK] Document saved: {OUTPUT_PATH}')
-    print(f'[INFO] File size: {os.path.getsize(OUTPUT_PATH) / 1024:.0f} KB')
+    out_path = output_path()
+    save_docx(doc, out_path)
+    print(f'[OK] Document saved: {out_path}')
+    print(f'[INFO] File size: {os.path.getsize(out_path) / 1024:.0f} KB')
 
 
 # ============================================================

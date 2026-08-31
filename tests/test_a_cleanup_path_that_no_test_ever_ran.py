@@ -198,9 +198,9 @@ def _drive_pull(tmp_path, monkeypatch, runner, seed=None):
     the only window in which a caller can put a last-good copy on disk.
     """
     data_root = tmp_path / "data"
-    (data_root / pullsvc.MIRROR_REL).mkdir(parents=True)
+    (data_root / pullsvc.mirror_rel()).mkdir(parents=True)
     if seed is not None:
-        seed(data_root / pullsvc.MIRROR_REL)
+        seed(data_root / pullsvc.mirror_rel())
     monkeypatch.setattr(pullsvc, "get_data_root", lambda: data_root)
     monkeypatch.setattr(pullsvc, "load_env", lambda: None)
     monkeypatch.setattr(pullsvc, "state_dirs", lambda: [("sentinel", "/srv/sentinel")])
@@ -234,7 +234,7 @@ def test_an_scp_timeout_leaves_the_previous_mirror_intact(tmp_path, monkeypatch,
             '{"last_good": true}', encoding="utf-8")
 
     data_root, rc = _drive_pull(tmp_path, monkeypatch, _timeout, seed=_seed)
-    mirror = data_root / pullsvc.MIRROR_REL
+    mirror = data_root / pullsvc.mirror_rel()
     live = mirror / "sentinel"
     assert rc == 1
     out = capsys.readouterr().out
@@ -256,13 +256,13 @@ def test_the_previous_mirror_really_survives_a_timeout(tmp_path, monkeypatch):
     """
     def _timeout(cmd, **kwargs):
         # Simulate a partial transfer: scp created the staging tree, then hung.
-        staging = tmp_path / "data" / pullsvc.MIRROR_REL / ".sentinel.incoming"
+        staging = tmp_path / "data" / pullsvc.mirror_rel() / ".sentinel.incoming"
         staging.mkdir(parents=True, exist_ok=True)
         (staging / "half.json").write_text("{partial", encoding="utf-8")
         raise subprocess.TimeoutExpired(cmd, pullsvc.SCP_TIMEOUT_S)
 
     data_root = tmp_path / "data"
-    live = data_root / pullsvc.MIRROR_REL / "sentinel"
+    live = data_root / pullsvc.mirror_rel() / "sentinel"
     live.mkdir(parents=True)
     (live / "state.json").write_text('{"last_good": true}', encoding="utf-8")
 
@@ -276,20 +276,20 @@ def test_the_previous_mirror_really_survives_a_timeout(tmp_path, monkeypatch):
     assert (live / "state.json").read_text(encoding="utf-8") == '{"last_good": true}', (
         "the only local record of the VM's state was deleted by the rollback"
     )
-    assert not (data_root / pullsvc.MIRROR_REL / ".sentinel.incoming").exists()
+    assert not (data_root / pullsvc.mirror_rel() / ".sentinel.incoming").exists()
 
 
 def test_a_successful_pull_swaps_the_staging_tree_in(tmp_path, monkeypatch):
     """Anchor. Every assertion above is satisfied by a main() that does nothing
     at all; this one proves the success path still replaces the mirror."""
     def _ok(cmd, **kwargs):
-        staging = tmp_path / "data" / pullsvc.MIRROR_REL / ".sentinel.incoming"
+        staging = tmp_path / "data" / pullsvc.mirror_rel() / ".sentinel.incoming"
         staging.mkdir(parents=True, exist_ok=True)
         (staging / "state.json").write_text('{"fresh": true}', encoding="utf-8")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     data_root = tmp_path / "data"
-    live = data_root / pullsvc.MIRROR_REL / "sentinel"
+    live = data_root / pullsvc.mirror_rel() / "sentinel"
     live.mkdir(parents=True)
     (live / "state.json").write_text('{"stale": true}', encoding="utf-8")
 
@@ -301,7 +301,7 @@ def test_a_successful_pull_swaps_the_staging_tree_in(tmp_path, monkeypatch):
 
     assert pullsvc.main() == 0
     assert (live / "state.json").read_text(encoding="utf-8") == '{"fresh": true}'
-    assert not (data_root / pullsvc.MIRROR_REL / ".sentinel.incoming").exists()
+    assert not (data_root / pullsvc.mirror_rel() / ".sentinel.incoming").exists()
 
 
 # ============================================================

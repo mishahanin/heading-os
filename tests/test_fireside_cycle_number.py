@@ -43,7 +43,7 @@ def bot():
 
 @pytest.fixture(autouse=True)
 def _state_in_tmp(bot, tmp_path, monkeypatch):
-    """Point `STATE_DIR` at a tmp_path for every test in the module.
+    """Point `state_dir` at a tmp_path for every test in the module.
 
     One test below redirects it by hand and four do not. A pure-arithmetic test
     needs no state directory today, but the module-level constant it inherits
@@ -53,7 +53,7 @@ def _state_in_tmp(bot, tmp_path, monkeypatch):
     """
     state = tmp_path / "fireside-state"
     state.mkdir(exist_ok=True)
-    monkeypatch.setattr(bot, "STATE_DIR", state)
+    monkeypatch.setattr(bot, "state_dir", lambda p=state: p)
     return state
 
 
@@ -111,7 +111,7 @@ def test_a_rollover_produces_a_schedule_in_the_next_cycle(bot, tmp_path, monkeyp
         json.dumps({"alice": {"name": "Alice Example"}}), encoding="utf-8")
 
     monkeypatch.setattr(bot, "state_path", _state_path)
-    monkeypatch.setattr(bot, "STATE_DIR", state)
+    monkeypatch.setattr(bot, "state_dir", lambda p=state: p)
     monkeypatch.setattr(bot, "_load_fireside_config_fresh",
                         lambda: (new_monday, WEEKS))
     monkeypatch.setattr(bot, "_today_local_date", lambda: new_monday)

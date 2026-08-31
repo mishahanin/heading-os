@@ -131,8 +131,9 @@ def test_pid_is_browser_still_says_yes_to_the_real_binary(monkeypatch):
 
 def _lock_at(monkeypatch, tmp_path: Path) -> Path:
     lock = tmp_path / "browser-cdp.json"
-    monkeypatch.setattr(browser, "LOCK_FILE", lock)
-    monkeypatch.setattr(browser, "_LEGACY_LOCK_FILE", tmp_path / "comet-cdp.json")
+    monkeypatch.setattr(browser, "lock_file", lambda p=lock: p)
+    monkeypatch.setattr(browser, "_legacy_lock_file",
+                        lambda p=tmp_path / "comet-cdp.json": p)
     return lock
 
 
@@ -264,7 +265,7 @@ def test_a_timed_out_launch_does_not_leave_the_browser_running(monkeypatch, tmp_
     monkeypatch.setattr(browser, "is_running", lambda b=browser.DEFAULT_BROWSER: False)
     monkeypatch.setattr(browser, "_cdp_ready", lambda port, timeout=1.0: False)
     monkeypatch.setattr(browser, "_pids_for_cdp_port", lambda port: [])
-    monkeypatch.setattr(browser, "LAUNCH_LOG", tmp_path / "launch.log")
+    monkeypatch.setattr(browser, "launch_log", lambda p=tmp_path / "launch.log": p)
 
     # `browser.subprocess` is not a per-module namespace; it IS the global
     # `subprocess` module object, so this spy is installed process-wide for
@@ -312,7 +313,7 @@ def test_a_timed_out_launch_does_not_leave_the_browser_running(monkeypatch, tmp_
 def test_the_lock_is_never_written_non_atomically():
     """A truncated lock is unrecoverable on Windows, where `ps` cannot help."""
     src = Path(browser.__file__).read_text(encoding="utf-8")
-    assert "LOCK_FILE.write_text" not in src, (
+    assert "lock_file().write_text" not in src, (
         "the lock file is state; write it through atomic_write_text (tmp + "
         "os.replace), per the workspace no-non-atomic-state-writes rule"
     )

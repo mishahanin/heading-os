@@ -61,7 +61,7 @@ def fb():
 
 @pytest.fixture(autouse=True)
 def _state_in_tmp(fb, tmp_path, monkeypatch):
-    """Point `STATE_DIR` at a tmp_path for every test in the module.
+    """Point `state_dir` at a tmp_path for every test in the module.
 
     Nine tests below redirect it by hand and twenty-seven do not, which is the
     defect this file's own title is about, applied to its own fixtures.
@@ -71,7 +71,7 @@ def _state_in_tmp(fb, tmp_path, monkeypatch):
     """
     state = tmp_path / "fireside-state"
     state.mkdir(exist_ok=True)
-    monkeypatch.setattr(fb, "STATE_DIR", state)
+    monkeypatch.setattr(fb, "state_dir", lambda p=state: p)
     return state
 
 
@@ -625,11 +625,11 @@ def test_log_session_matches_display_names_not_handles(fb, tmp_path, monkeypatch
                  "speaker_name": "Vesper Lynd", "speaker_username": "vlynd",
                  "no_show": False, "completed": False}]
     saved = {}
-    # The lock this command now takes resolves STATE_DIR for real, so patching
+    # The lock this command now takes resolves `state_dir` for real, so patching
     # load_state and save_state alone is no longer enough to keep the test off
     # disk. Unpatched it reads the ambient data root, which is why this passed on
     # a workstation with an overlay and refused under CI without one.
-    monkeypatch.setattr(fb, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(fb, "state_dir", lambda p=tmp_path: p)
     monkeypatch.setattr(fb, "load_state", lambda n: schedule)
     monkeypatch.setattr(fb, "save_state", lambda n, d: saved.update({n: d}))
     monkeypatch.setattr(fb, "_log_event", lambda *a, **k: None)
@@ -645,7 +645,7 @@ def test_log_session_refuses_a_handle_where_a_name_belongs(fb, tmp_path, monkeyp
     schedule = [{"session_date": "2026-05-12", "day": "Mon", "slot": 1,
                  "speaker_name": "Vesper Lynd", "speaker_username": "vlynd",
                  "no_show": False, "completed": False}]
-    monkeypatch.setattr(fb, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(fb, "state_dir", lambda p=tmp_path: p)
     monkeypatch.setattr(fb, "load_state", lambda n: schedule)
     monkeypatch.setattr(fb, "save_state", lambda n, d: None)
     monkeypatch.setattr(fb, "_log_event", lambda *a, **k: None)
@@ -675,7 +675,7 @@ def test_a_duplicate_handle_in_the_sheet_is_not_swallowed(fb, tmp_path, monkeypa
     silence -- and an empty roster is the state the self-heal exists to prevent,
     because the bot then refuses every DM as an outsider.
     """
-    monkeypatch.setattr(fb, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(fb, "state_dir", lambda p=tmp_path: p)
     monkeypatch.setattr(fb, "state_path", lambda name: tmp_path / name)
 
     def _boom():
@@ -698,7 +698,7 @@ def test_a_duplicate_handle_in_the_sheet_is_not_swallowed(fb, tmp_path, monkeypa
 
 def test_a_missing_sheet_also_says_the_roster_came_back_empty(fb, tmp_path,
                                                               monkeypatch, capsys):
-    monkeypatch.setattr(fb, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(fb, "state_dir", lambda p=tmp_path: p)
     monkeypatch.setattr(fb, "state_path", lambda name: tmp_path / name)
 
     def _missing():

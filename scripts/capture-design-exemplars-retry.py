@@ -38,12 +38,32 @@ def _ensure_playwright():
     from playwright.async_api import async_playwright
 
 
-OUTPUT_DIR = get_outputs_dir() / "research" / "_drafts" / "exemplars"
-MANIFEST_PATH = OUTPUT_DIR / "manifest.json"
-# Where retry results go when there is no manifest to merge into. Without this
-# the script captured everything and then wrote NOTHING: no manifest, no
-# fallback, no summary, exit 0 — a completely silent successful no-op.
-FALLBACK_RESULTS_PATH = OUTPUT_DIR / "retry-results.json"
+def output_dir() -> Path:
+    """Resolved at call time, never at import.
+
+    `get_outputs_dir()` reads `HEADING_OS_DATA` on every call, so it follows the
+    environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the root
+    still got the operator's real overlay. The `mkdir` in `prepare_output_dir`
+    is not among the primitives `tests/conftest.py` wraps, so a stray directory
+    in that overlay drew no refusal.
+    """
+    return get_outputs_dir() / "research" / "_drafts" / "exemplars"
+
+
+def manifest_path() -> Path:
+    return output_dir() / "manifest.json"
+
+
+def fallback_results_path() -> Path:
+    """Where retry results go when there is no manifest to merge into.
+
+    Without this the script captured everything and then wrote NOTHING: no
+    manifest, no fallback, no summary, exit 0 — a completely silent successful
+    no-op.
+    """
+    return output_dir() / "retry-results.json"
 
 # (slug, url, category, settle_ms, full_page)
 RETRIES = [
@@ -75,10 +95,11 @@ def _load_manifest():
     had run, so the whole retry was discarded over a file this script was about
     to rewrite anyway. Refuse to merge into it, keep it, and fall back.
     """
-    if not MANIFEST_PATH.exists():
+    path = manifest_path()
+    if not path.exists():
         return None
     try:
-        manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        manifest = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         print(f"{YELLOW}Existing manifest is unreadable ({exc}); leaving it in "
               f"place.{RESET}", file=sys.stderr)
@@ -167,11 +188,11 @@ async def capture_one(browser, slug, url, category, settle_ms, full_page):
             print(f"capture-design-exemplars-retry: {slug} title unreadable: "
                   f"{exc}", file=sys.stderr)
             result["title"] = "(no title)"
-        above_path = OUTPUT_DIR / f"{slug}-above.png"
+        above_path = output_dir() / f"{slug}-above.png"
         await page.screenshot(path=str(above_path), full_page=False, timeout=20000)
         result["above_fold"] = display_path(above_path)
         if full_page:
-            full_path = OUTPUT_DIR / f"{slug}-full.png"
+            full_path = output_dir() / f"{slug}-full.png"
             try:
                 await page.screenshot(path=str(full_path), full_page=True, timeout=25000)
                 result["full_page"] = display_path(full_path)
@@ -218,9 +239,10 @@ def prepare_output_dir() -> Path:
     now create it from `main()`, and both refuse when the data root is the demo
     tree.
     """
-    require_outside_engine_clone(OUTPUT_DIR, "the design-exemplar capture directory")
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    return OUTPUT_DIR
+    target = output_dir()
+    require_outside_engine_clone(target, "the design-exemplar capture directory")
+    target.mkdir(parents=True, exist_ok=True)
+    return target
 
 
 async def main():
@@ -247,11 +269,11 @@ async def main():
     if manifest is None:
         # No manifest to merge into. Writing nothing here meant every retry
         # outcome existed only in stdout scrollback.
-        atomic_write_text(FALLBACK_RESULTS_PATH,
+        atomic_write_text(fallback_results_path(),
                           json.dumps({"retried_at_utc": _now(), "results": results},
                                      indent=2) + "\n")
-        print(f"\n{YELLOW}No manifest at {display_path(MANIFEST_PATH)}.{RESET} "
-              f"Results written to {display_path(FALLBACK_RESULTS_PATH)}; run "
+        print(f"\n{YELLOW}No manifest at {display_path(manifest_path())}.{RESET} "
+              f"Results written to {display_path(fallback_results_path())}; run "
               f"capture-design-exemplars.py to build the manifest.")
         return
 
@@ -278,7 +300,7 @@ async def main():
     # at all raised KeyError on the summary line — after the file had already
     # been overwritten.
     manifest["total"] = len(manifest["results"])
-    atomic_write_text(MANIFEST_PATH, json.dumps(manifest, indent=2) + "\n")
+    atomic_write_text(manifest_path(), json.dumps(manifest, indent=2) + "\n")
     print(f"\n{GREEN}Manifest updated.{RESET} "
           f"{manifest['ok']}/{manifest['total']} captured")
 

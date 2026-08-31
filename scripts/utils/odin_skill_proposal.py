@@ -219,7 +219,19 @@ def build_proposal(
     }
 
 
-if __name__ == "__main__":  # smoke
+def main():
+    """The smoke run resolves here rather than in the `__main__` block.
+
+    A `__name__ == '__main__'` body is skipped by a normal import, so this was
+    never the import-time freeze the sweep is named for. It IS executed by
+    `runpy.run_path(..., run_name='__main__')`, which this suite uses, and
+    `build_proposal` reaches `get_workspace_root`/`get_knowledge_dir` - so under
+    runpy the demo bound a module-level name off a resolved data root.
+    """
     import json as _json
     r = build_proposal("gate-product-exposure-on-signed-mnda", "proposal")
     print(_json.dumps({k: (v[:200] if isinstance(v, str) else v) for k, v in r.items()}, indent=2))
+
+
+if __name__ == "__main__":  # smoke
+    main()

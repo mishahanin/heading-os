@@ -162,7 +162,7 @@ class _FakeBrowser:
 
 def test_a_dead_browser_becomes_an_error_row_not_an_escape(main_mod, tmp_path,
                                                            monkeypatch):
-    monkeypatch.setattr(main_mod, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(main_mod, "output_dir", lambda p=tmp_path: p)
     browser = _FakeBrowser(fail_on=1)
     sem = asyncio.Semaphore(1)
     result = asyncio.run(
@@ -178,7 +178,7 @@ def test_a_dead_browser_becomes_an_error_row_not_an_escape(main_mod, tmp_path,
 def test_a_page_that_cannot_open_still_closes_its_context(main_mod, tmp_path,
                                                           monkeypatch):
     """`new_page` failing after `new_context` succeeded used to leak the ctx."""
-    monkeypatch.setattr(main_mod, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(main_mod, "output_dir", lambda p=tmp_path: p)
     seen = []
 
     class _Tracking(_FakeBrowser):
@@ -196,7 +196,7 @@ def test_a_page_that_cannot_open_still_closes_its_context(main_mod, tmp_path,
 def test_a_close_that_raises_does_not_replace_a_good_result(main_mod, tmp_path,
                                                             monkeypatch):
     """A `finally` exception used to overwrite a capture that had succeeded."""
-    monkeypatch.setattr(main_mod, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(main_mod, "output_dir", lambda p=tmp_path: p)
     browser = _FakeBrowser(close_raises=True)
     result = asyncio.run(
         main_mod.capture_one(browser, asyncio.Semaphore(1), "linear",
@@ -238,7 +238,7 @@ def test_one_escaping_capture_does_not_lose_the_other_targets(main_mod, tmp_path
     """The whole shape, end to end: a bare `gather` cancelled the siblings,
     skipped `browser.close()` and wrote no manifest; a filtered result list
     would instead make the failure vanish from the report."""
-    monkeypatch.setattr(main_mod, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(main_mod, "output_dir", lambda p=tmp_path: p)
     monkeypatch.setattr(main_mod, "CONCURRENCY", 3)
     monkeypatch.setattr(main_mod, "TARGETS", [
         ("a", "https://a", "cat", 0),
@@ -331,7 +331,7 @@ def test_the_retry_script_creates_its_output_directory(retry_mod, tmp_path,
     swallowed into result['error'], and the script exited 0.
     """
     target = tmp_path / "exemplars"
-    monkeypatch.setattr(retry_mod, "OUTPUT_DIR", target)
+    monkeypatch.setattr(retry_mod, "output_dir", lambda p=target: p)
     retry_mod.prepare_output_dir()
     assert target.is_dir(), (
         "prepare_output_dir() did not create the capture directory; on a fresh "
@@ -342,10 +342,10 @@ def test_the_retry_script_creates_its_output_directory(retry_mod, tmp_path,
 
 def test_a_missing_manifest_does_not_discard_the_work(retry_mod, tmp_path,
                                                       monkeypatch, capsys):
-    monkeypatch.setattr(retry_mod, "OUTPUT_DIR", tmp_path)
-    monkeypatch.setattr(retry_mod, "MANIFEST_PATH", tmp_path / "manifest.json")
+    monkeypatch.setattr(retry_mod, "output_dir", lambda p=tmp_path: p)
+    monkeypatch.setattr(retry_mod, "manifest_path", lambda p=tmp_path / "manifest.json": p)
     fallback = tmp_path / "retry-results.json"
-    monkeypatch.setattr(retry_mod, "FALLBACK_RESULTS_PATH", fallback)
+    monkeypatch.setattr(retry_mod, "fallback_results_path", lambda p=fallback: p)
     monkeypatch.setattr(retry_mod, "_ensure_playwright", lambda: None)
     monkeypatch.setattr(retry_mod, "RETRIES",
                         [("raycast", "https://www.raycast.com", "p", 0, False)])
@@ -364,7 +364,7 @@ def test_a_corrupt_manifest_is_refused_not_crashed_into(retry_mod, tmp_path,
                                                         monkeypatch):
     manifest = tmp_path / "manifest.json"
     manifest.write_text('{"results": [')  # the truncated-write outcome
-    monkeypatch.setattr(retry_mod, "MANIFEST_PATH", manifest)
+    monkeypatch.setattr(retry_mod, "manifest_path", lambda p=manifest: p)
     assert retry_mod._load_manifest() is None, (
         "json.loads raised AFTER every capture had run, so the whole retry was "
         "thrown away over a file this script was about to rewrite"
@@ -375,7 +375,7 @@ def test_a_corrupt_manifest_is_refused_not_crashed_into(retry_mod, tmp_path,
 def test_a_manifest_of_the_wrong_shape_is_refused(retry_mod, tmp_path, monkeypatch):
     manifest = tmp_path / "manifest.json"
     manifest.write_text('{"results": "not a list"}')
-    monkeypatch.setattr(retry_mod, "MANIFEST_PATH", manifest)
+    monkeypatch.setattr(retry_mod, "manifest_path", lambda p=manifest: p)
     assert retry_mod._load_manifest() is None
 
 
@@ -383,7 +383,7 @@ def test_a_good_manifest_is_loaded(retry_mod, tmp_path, monkeypatch):
     """Anchor: a loader that refuses everything would pass the two above."""
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({"results": [], "total": 0}))
-    monkeypatch.setattr(retry_mod, "MANIFEST_PATH", manifest)
+    monkeypatch.setattr(retry_mod, "manifest_path", lambda p=manifest: p)
     assert retry_mod._load_manifest() == {"results": [], "total": 0}
 
 
@@ -418,8 +418,8 @@ def test_the_merge_recomputes_total(retry_mod, tmp_path, monkeypatch):
     manifest.write_text(json.dumps(
         {"results": [{"slug": "vercel", "error": None}], "total": 1,
          "ok": 1, "errors": 0}))
-    monkeypatch.setattr(retry_mod, "OUTPUT_DIR", tmp_path)
-    monkeypatch.setattr(retry_mod, "MANIFEST_PATH", manifest)
+    monkeypatch.setattr(retry_mod, "output_dir", lambda p=tmp_path: p)
+    monkeypatch.setattr(retry_mod, "manifest_path", lambda p=manifest: p)
     monkeypatch.setattr(retry_mod, "_ensure_playwright", lambda: None)
     monkeypatch.setattr(retry_mod, "RETRIES",
                         [("raycast", "https://www.raycast.com", "p", 0, False)])
@@ -434,8 +434,8 @@ def test_a_manifest_with_no_total_key_does_not_crash(retry_mod, tmp_path,
     """The summary line raised KeyError AFTER the file had been overwritten."""
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({"results": []}))
-    monkeypatch.setattr(retry_mod, "OUTPUT_DIR", tmp_path)
-    monkeypatch.setattr(retry_mod, "MANIFEST_PATH", manifest)
+    monkeypatch.setattr(retry_mod, "output_dir", lambda p=tmp_path: p)
+    monkeypatch.setattr(retry_mod, "manifest_path", lambda p=manifest: p)
     monkeypatch.setattr(retry_mod, "_ensure_playwright", lambda: None)
     monkeypatch.setattr(retry_mod, "RETRIES",
                         [("raycast", "https://www.raycast.com", "p", 0, False)])
@@ -447,7 +447,7 @@ def test_a_partial_capture_is_visible(retry_mod, tmp_path, monkeypatch, capsys):
     """`full_page_error` was written to a key absent from the schema and read by
     nothing: the merge and both counts inspect only `error`, so a retry that
     lost its full-page shot was recorded as fully OK."""
-    monkeypatch.setattr(retry_mod, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(retry_mod, "output_dir", lambda p=tmp_path: p)
 
     class _HalfPage(_FakePage):
         async def screenshot(self, path, **k):
@@ -479,7 +479,7 @@ def test_a_successful_retry_still_carries_the_partial_key(retry_mod, tmp_path,
     and `r.get(...)` could not tell "no partial failure" from "this producer
     does not report them".
     """
-    monkeypatch.setattr(retry_mod, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(retry_mod, "output_dir", lambda p=tmp_path: p)
     result = asyncio.run(retry_mod.capture_one(
         _FakeBrowser(), "raycast", "https://www.raycast.com", "p", 0, True))
     assert result["error"] is None
@@ -491,7 +491,7 @@ def test_a_dead_browser_is_an_error_row_in_the_retry_too(retry_mod, tmp_path,
     """Same hole as the main script: `new_context` sat above the try, so the
     exception aborted the sequential loop, leaked the browser, and threw away
     the retries that had already succeeded."""
-    monkeypatch.setattr(retry_mod, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(retry_mod, "output_dir", lambda p=tmp_path: p)
     result = asyncio.run(retry_mod.capture_one(
         _FakeBrowser(fail_on=1), "raycast", "https://www.raycast.com", "p", 0, False))
     assert isinstance(result, dict) and result["error"]
@@ -501,7 +501,7 @@ def test_a_dead_browser_is_an_error_row_in_the_retry_too(retry_mod, tmp_path,
 def test_a_retry_page_that_cannot_open_still_closes_its_context(retry_mod,
                                                                 tmp_path,
                                                                 monkeypatch):
-    monkeypatch.setattr(retry_mod, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(retry_mod, "output_dir", lambda p=tmp_path: p)
     seen = []
 
     class _Tracking(_FakeBrowser):
@@ -521,7 +521,7 @@ def test_the_retry_title_has_the_same_fallback_as_the_main_script(retry_mod,
                                                                   monkeypatch):
     """A crashed renderer marked the WHOLE capture failed, even though the
     screenshots it was retried for were obtainable."""
-    monkeypatch.setattr(retry_mod, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(retry_mod, "output_dir", lambda p=tmp_path: p)
 
     class _NoTitlePage(_FakePage):
         async def title(self):

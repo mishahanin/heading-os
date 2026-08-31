@@ -30,7 +30,8 @@ cycle since it was written. This is the second copy of that rule, and it was
 missing.
 
 A fourth defect is pinned here because it is what let the measurement damage
-the operator's own data: `StateManager.__init__` captured `STATE_FILE` as a
+the operator's own data: `StateManager.__init__` captured the then-constant
+`STATE_FILE` (now the `state_file()` resolver) as a
 DEFAULT ARGUMENT, evaluated once at import, so patching the module global
 redirected nothing and a no-argument construction wrote the real overlay.
 """
@@ -100,7 +101,7 @@ class _Run:
 
     def __init__(self, monkeypatch, tmp_path, inbox, analyse):
         self.state_file = tmp_path / "state.json"
-        monkeypatch.setattr(ei, "STATE_FILE", self.state_file)
+        monkeypatch.setattr(ei, "state_file", lambda p=self.state_file: p)
         monkeypatch.setattr(ei, "connect_exchange", lambda *a, **kw: object())
         monkeypatch.setattr(ei, "_connect_with_retries", lambda *a, **kw: object())
         monkeypatch.setattr(ei, "_load_ignore_patterns", list)
@@ -395,7 +396,7 @@ def test_a_dead_chain_is_announced_without_the_verbose_flag(
 def test_patching_the_module_state_file_actually_redirects(monkeypatch, tmp_path):
     """A default argument evaluated at import froze the operator's real path."""
     target = tmp_path / "redirected.json"
-    monkeypatch.setattr(ei, "STATE_FILE", target)
+    monkeypatch.setattr(ei, "state_file", lambda p=target: p)
     assert ei.StateManager().path == target
 
 

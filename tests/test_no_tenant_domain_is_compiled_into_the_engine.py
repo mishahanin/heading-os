@@ -124,9 +124,9 @@ def test_the_shipped_example_config_is_generic():
 
 def test_the_roster_reads_the_file_the_export_would_write():
     roster = _load("scripts/bootcamp-roster.py", "bootcamp_roster_domain")
-    domain = roster._GAL_DOMAIN
+    domain = roster._gal_domain()
     assert domain, "the roster resolved an empty domain"
-    assert roster.GAL_JSON.name == f"gal-{domain}.json", roster.GAL_JSON
+    assert roster.gal_json().name == f"gal-{domain}.json", roster.gal_json()
     # And that is the shape gal-export builds, read out of its own source.
     export_src = (ROOT / "scripts" / "gal-export.py").read_text(encoding="utf-8")
     assert 'f"gal-{args.domain}.json"' in export_src, (

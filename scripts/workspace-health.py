@@ -32,11 +32,23 @@ from scripts.utils.workspace import (
 
 WORKSPACE = get_workspace_root()
 
-CONTEXT_DIR = get_context_dir()
-OUTPUTS_DIR = get_outputs_dir()
 COMMANDS_DIR = WORKSPACE / ".claude" / "commands"
 SKILLS_DIR = WORKSPACE / ".claude" / "skills"
-DATASTORE_DIR = get_datastore_dir()
+
+
+def context_dir() -> Path:
+    """Resolved at call time, never at import: `get_context_dir()` reads
+    HEADING_OS_DATA on every call, and a module-level constant asked once
+    during its own import and stored the answer."""
+    return get_context_dir()
+
+
+def outputs_dir() -> Path:
+    return get_outputs_dir()
+
+
+def datastore_dir() -> Path:
+    return get_datastore_dir()
 
 # The runtime catalog of every script, reference file and system. It lives in
 # the private data overlay, so it is absent on a public engine clone; resolved
@@ -194,7 +206,7 @@ def check_context_freshness(max_days=30):
     issues = 0
     today = datetime.now(get_default_tz())
 
-    context_files = list(CONTEXT_DIR.glob("*.md"))
+    context_files = list(context_dir().glob("*.md"))
     if not context_files:
         action("No context files found!")
         return 1
@@ -293,7 +305,7 @@ def check_pipeline_health():
     header("Pipeline Health")
     issues = 0
 
-    pipeline_file = CONTEXT_DIR / "pipeline.md"
+    pipeline_file = context_dir() / "pipeline.md"
     if not pipeline_file.exists():
         action("pipeline.md not found!")
         return 1
@@ -352,7 +364,7 @@ def check_people_completeness():
     header("People Completeness")
     issues = 0
 
-    people_file = CONTEXT_DIR / "people.md"
+    people_file = context_dir() / "people.md"
     if not people_file.exists():
         action("people.md not found!")
         return 1
@@ -386,7 +398,8 @@ def check_outputs_inventory():
     header("Outputs Inventory")
     issues = 0
 
-    if not OUTPUTS_DIR.exists():
+    out = outputs_dir()
+    if not out.exists():
         action("outputs/ directory not found!")  # leak-guard: ok (string in a message/log, not a path)
         return 1
 
@@ -394,8 +407,8 @@ def check_outputs_inventory():
     # On the operator convention of one subdirectory per deliverable that meant
     # 1 file / 0.0 MB reported over a tree holding thousands. Two numbers now,
     # each labelled with the scope its method actually covers.
-    files = [f for f in OUTPUTS_DIR.rglob("*") if f.is_file()]
-    loose = [f for f in OUTPUTS_DIR.glob("*") if f.is_file()]
+    files = [f for f in out.rglob("*") if f.is_file()]
+    loose = [f for f in out.glob("*") if f.is_file()]
 
     # Categorize by extension
     by_ext = {}
@@ -438,11 +451,12 @@ def check_datastore():
     header("DataStore Status")
     issues = 0
 
-    if not DATASTORE_DIR.exists():
+    store = datastore_dir()
+    if not store.exists():
         action("datastore/ directory not found!")
         return 1
 
-    index_file = DATASTORE_DIR / "INDEX.md"
+    index_file = store / "INDEX.md"
     if not index_file.exists():
         action("datastore/INDEX.md not found!")
         issues += 1
@@ -452,7 +466,7 @@ def check_datastore():
     # Check subdirectories
     expected_dirs = ["brand", "content", "corporate", "events", "intelligence", "investment", "operations", "products"]
     for d in expected_dirs:
-        dir_path = DATASTORE_DIR / d
+        dir_path = store / d
         if dir_path.exists():
             # `glob("*")` counted DIRECTORIES as files, so `brand/` reported
             # "5 file(s)" for five subfolders holding 192 documents -- a number
@@ -469,7 +483,7 @@ def check_datastore():
             issues += 1
 
     # Count total documents
-    total_docs = sum(1 for _ in DATASTORE_DIR.rglob("*") if _.is_file() and _.name != "INDEX.md")
+    total_docs = sum(1 for _ in store.rglob("*") if _.is_file() and _.name != "INDEX.md")
     if total_docs == 0:
         warn("DataStore has no documents yet - add source-of-truth files")
         issues += 1

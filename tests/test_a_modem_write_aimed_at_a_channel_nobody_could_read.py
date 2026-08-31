@@ -101,7 +101,8 @@ class _Live:
 @pytest.fixture()
 def ledger(tmp_path, monkeypatch):
     """A ledger under tmp_path, so no test can write the operator's real one."""
-    monkeypatch.setattr(MT, "LEDGER_PATH", tmp_path / "modem-ledger.json")
+    path = tmp_path / "modem-ledger.json"
+    monkeypatch.setattr(MT, "ledger_path", lambda p=path: p)
     return {"used": [], "devices": {}}
 
 
@@ -146,7 +147,7 @@ def test_the_ledger_is_not_spent_by_a_refused_write(ledger):
     assert ledger["used"] == []
     assert ledger["devices"][DEVICE].get("current") is None
     assert ledger["devices"][DEVICE].get("history") == []
-    assert not MT.LEDGER_PATH.exists(), "a refused write still saved the ledger"
+    assert not MT.ledger_path().exists(), "a refused write still saved the ledger"
 
 
 def test_a_readable_modem_is_still_written_and_recorded(ledger):

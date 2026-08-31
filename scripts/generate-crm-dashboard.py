@@ -45,20 +45,50 @@ from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
 SCRIPT_DIR = Path(__file__).resolve().parent
 WORKSPACE = SCRIPT_DIR.parent
 
-AGGREGATED_DIR = get_crm_contacts_dir().parent / "aggregated"
 AGGREGATE_SCRIPT = SCRIPT_DIR / "aggregate-crm.py"
 HTML_TO_PDF_SCRIPT = SCRIPT_DIR / "html-to-pdf.py"
 
-COMPANY_RADAR_FILE = AGGREGATED_DIR / "company-radar.md"
-OWNERSHIP_MAP_FILE = AGGREGATED_DIR / "ownership-map.md"
-SHARED_CONTACTS_FILE = AGGREGATED_DIR / "shared-contacts.md"
-EXEC_REGISTRY_FILE = get_data_config_dir() / "exec-registry.json"
-PIPELINE_FILE = get_context_dir() / "pipeline.md"
 
-LOGO_PATH = (
-    get_datastore_dir() / "brand" / "assets"
-    / "logos" / "31C_Logo_White_Color.png"
-)
+def aggregated_dir():
+    """Resolved at call time, never at import.
+
+    `get_crm_contacts_dir()` reads `HEADING_OS_DATA` on every call, so it
+    follows the environment for a caller that asks after the environment
+    moved. As a module-level constant it asked once, during its own import,
+    and stored the answer, so a test that imported this module and then
+    repointed the data root still read the operator's real overlay. The same
+    applies to every path below, including the three derived from this one:
+    a constant built from a frozen constant is just as frozen.
+    """
+    return get_crm_contacts_dir().parent / "aggregated"
+
+
+def company_radar_file():
+    return aggregated_dir() / "company-radar.md"
+
+
+def ownership_map_file():
+    return aggregated_dir() / "ownership-map.md"
+
+
+def shared_contacts_file():
+    return aggregated_dir() / "shared-contacts.md"
+
+
+def exec_registry_file():
+    return get_data_config_dir() / "exec-registry.json"
+
+
+def pipeline_file():
+    return get_context_dir() / "pipeline.md"
+
+
+def logo_path():
+    return (
+        get_datastore_dir() / "brand" / "assets"
+        / "logos" / "31C_Logo_White_Color.png"
+    )
+
 
 TODAY = datetime.now(get_default_tz()).date()
 NOW = datetime.now(get_default_tz())
@@ -124,10 +154,11 @@ def refresh_aggregated_data():
 
 def collect_radar():
     """Parse company-radar.md for all contacts with health status."""
-    content = read_file(COMPANY_RADAR_FILE)
+    radar_file = company_radar_file()
+    content = read_file(radar_file)
     if not content:
         return []
-    rows = parse_md_table(content, source=str(COMPANY_RADAR_FILE))
+    rows = parse_md_table(content, source=str(radar_file))
     contacts = []
     for r in rows:
         health = r.get("Health", "GRAY").strip().upper()
@@ -161,7 +192,7 @@ def collect_radar():
 
 def collect_ownership(exec_registry):
     """Parse ownership-map.md for per-exec stats."""
-    content = read_file(OWNERSHIP_MAP_FILE)
+    content = read_file(ownership_map_file())
     execs = []
 
     if not content:
@@ -217,20 +248,22 @@ def collect_ownership(exec_registry):
 
 def collect_shared_contacts():
     """Parse shared-contacts.md for contacts tracked by multiple execs."""
-    content = read_file(SHARED_CONTACTS_FILE)
+    shared_file = shared_contacts_file()
+    content = read_file(shared_file)
     if not content:
         return []
     if "No shared contacts detected" in content:
         return []
-    return parse_md_table(content, source=str(SHARED_CONTACTS_FILE))
+    return parse_md_table(content, source=str(shared_file))
 
 
 def collect_exec_registry():
     """Load exec registry JSON."""
-    if not EXEC_REGISTRY_FILE.exists():
+    registry_file = exec_registry_file()
+    if not registry_file.exists():
         return {"version": "1.0", "executives": []}
     try:
-        return json.loads(EXEC_REGISTRY_FILE.read_text(encoding="utf-8"))
+        return json.loads(registry_file.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as e:
         # Named, not swallowed. A trailing comma in exec-registry.json used to
         # produce the perfectly legitimate-looking line "Registry: 0 active
@@ -239,7 +272,7 @@ def collect_exec_registry():
         # file from a company that has no executives. Both sibling collectors
         # in this module print on failure; this one did not.
         print(f"[generate-crm-dashboard] exec registry unreadable "
-              f"({EXEC_REGISTRY_FILE}): {e}. Continuing with an EMPTY registry "
+              f"({registry_file}): {e}. Continuing with an EMPTY registry "
               f"-- titles and exec counts below are not to be trusted.",
               file=sys.stderr)
         return {"version": "1.0", "executives": []}
@@ -270,10 +303,11 @@ def collect_heartbeat():
 
 def collect_pipeline_companies():
     """Parse pipeline.md to extract company names for correlation."""
-    content = read_file(PIPELINE_FILE)
+    pipeline = pipeline_file()
+    content = read_file(pipeline)
     if not content:
         return []
-    deals = parse_md_table(content, r"##\s*Active Deals", source=str(PIPELINE_FILE))
+    deals = parse_md_table(content, r"##\s*Active Deals", source=str(pipeline))
     companies = []
     for d in deals:
         company = d.get("Company", "").strip()
@@ -724,7 +758,7 @@ def build_footer():
 def generate_html(radar_contacts, ownership_data, shared, heartbeat,
                   exec_registry, pipeline_correlations):
     css = build_css()
-    logo_b64 = load_logo_base64(LOGO_PATH)
+    logo_b64 = load_logo_base64(logo_path())
 
     exec_count = active_exec_count(exec_registry)
     total_contacts = len(radar_contacts)
@@ -792,8 +826,9 @@ def main():
     args = parser.parse_args()
 
     # Preflight: check aggregated data directory exists (created by aggregate-crm.py)
-    if not AGGREGATED_DIR.exists():
-        print(f"{YELLOW}Warning: Aggregated CRM data not found at {AGGREGATED_DIR}{RESET}",
+    aggregated = aggregated_dir()
+    if not aggregated.exists():
+        print(f"{YELLOW}Warning: Aggregated CRM data not found at {aggregated}{RESET}",
               file=sys.stderr)
         print("Run aggregate-crm.py first to generate aggregated data.", file=sys.stderr)
 

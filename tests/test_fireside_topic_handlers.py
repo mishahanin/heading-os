@@ -1,7 +1,7 @@
 """Handler/wrapper tests for the topic feature in fireside-bot.py.
 
 Loads the hyphenated module via importlib (same fixture style as
-test_fireside_bot_auth.py), redirects STATE_DIR to tmp_path, and uses a fake
+test_fireside_bot_auth.py), redirects `state_dir` to tmp_path, and uses a fake
 TelegramBot that records calls instead of hitting the network.
 """
 from __future__ import annotations
@@ -67,8 +67,8 @@ class FakeBot:
 
 @pytest.fixture
 def authd(fb, tmp_path, monkeypatch):
-    """STATE_DIR -> tmp_path; one authorized bound member; force authorization on."""
-    monkeypatch.setattr(fb, "STATE_DIR", tmp_path)
+    """`state_dir` -> tmp_path; one authorized bound member; force authorization on."""
+    monkeypatch.setattr(fb, "state_dir", lambda p=tmp_path: p)
     monkeypatch.setattr(fb, "_is_authorized_user", lambda uid, username=None: True)
     monkeypatch.setattr(fb, "_resolve_my_username", lambda uid: "alice")
     return fb

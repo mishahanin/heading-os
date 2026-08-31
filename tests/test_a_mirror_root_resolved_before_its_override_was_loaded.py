@@ -95,7 +95,7 @@ def test_the_mirror_lands_under_the_root_that_dot_env_names(pull, scratch,
     capsys.readouterr()
 
     assert rc == 0
-    expected = overlay / pull.MIRROR_REL
+    expected = overlay / pull.mirror_rel()
     assert expected.is_dir(), (
         f"the mirror was not created under the .env root; the tree under "
         f"{workspace} holds "
@@ -111,7 +111,7 @@ def test_no_mirror_is_created_under_the_fallback_root(pull, scratch, monkeypatch
     pull.main()
     capsys.readouterr()
 
-    stray = workspace / "examples" / pull.MIRROR_REL
+    stray = workspace / "examples" / pull.mirror_rel()
     assert not stray.exists(), (
         f"the mirror was written under the examples fallback at {stray}")
 
@@ -142,5 +142,5 @@ def test_an_explicit_environment_value_still_beats_dot_env(pull, scratch,
     pull.main()
     capsys.readouterr()
 
-    assert (explicit / pull.MIRROR_REL).is_dir()
-    assert not (overlay / pull.MIRROR_REL).exists()
+    assert (explicit / pull.mirror_rel()).is_dir()
+    assert not (overlay / pull.mirror_rel()).exists()

@@ -1,8 +1,8 @@
 """The overlay guard asked the environment where the operator's data was.
 
-`tests/conftest.py` protects the operator's private overlay two ways: an
-in-process refusal on every write primitive (`_OVERLAY_PREFIXES`) and a
-whole-tree before/after snapshot (`_WATCH_BEFORE`). Until 2026-08-31 both were
+`scripts/utils/overlay_write_guard.py` protects the operator's private overlay
+two ways: an in-process refusal on every write primitive (`_OVERLAY_PREFIXES`)
+and a whole-tree before/after snapshot (`_WATCH_BEFORE`). Until 2026-08-31 both were
 aimed by `_overlay_root()`, which called `get_data_root()`, which honours
 `HEADING_OS_DATA`.
 
@@ -38,16 +38,22 @@ import pytest
 
 @pytest.fixture
 def cf():
-    """The LIVE root conftest pytest loaded, not a fresh copy of it.
+    """The LIVE guard module this session armed, not a fresh copy of it.
 
     A fresh copy has its own module globals, so its `_OVERLAY_PREFIXES` is empty
     and every assertion about "the guard is armed in THIS session" would pass
-    over a module nobody installed.
+    over a module nobody installed. The identity check against the root
+    conftest's own reference is what pins that: an ordinary import cannot be a
+    second copy, but the conftest importing something else could.
     """
-    live = sys.modules.get("tests.conftest") or sys.modules.get("conftest")
+    live = sys.modules.get("scripts.utils.overlay_write_guard")
     assert live is not None, (
-        "the root conftest is not in sys.modules under either name pytest uses; "
-        "this file cannot see the live guard and must not pass quietly")
+        "the guard module is not in sys.modules, so this test cannot see the "
+        "guard this session armed and must not pass quietly")
+    conftest = sys.modules.get("tests.conftest") or sys.modules.get("conftest")
+    assert conftest is not None and conftest._guard is live, (
+        "the root conftest holds a DIFFERENT guard object than the one imported "
+        "here, so every assertion below would be about a module nobody armed")
     return live
 
 
@@ -57,6 +63,43 @@ def structural(cf):
     if root is None:
         pytest.skip("this clone has no sibling private overlay, so nothing to guard")
     return root
+
+
+# ============================================================
+# 0. The resolver counts the right number of parents
+# ============================================================
+
+def test_the_structural_root_is_derived_from_the_real_engine_root(cf):
+    """The one number the 2026-08-31 move out of `tests/conftest.py` changed.
+
+    `_structural_overlay_root()` walks up from its own `__file__` to the engine
+    root. In a conftest at `<engine>/tests/` that was two parents; in
+    `<engine>/scripts/utils/` it is three. Off by one and the function returns
+    None (nothing is guarded) or a stranger (the wrong tree is guarded), and
+    EVERY other test in this file still passes: they all drive the guard against
+    a tmp_path they built themselves, so none of them ever asks whether the
+    real root was found.
+
+    Derived here from this test file's own location, which is an independent
+    path, rather than from any constant the guard exports.
+    """
+    engine = Path(__file__).resolve().parent.parent
+    assert (engine / "pyproject.toml").is_file(), "this test mislocated the engine root"
+
+    guard_file = Path(cf.__file__).resolve()
+    assert guard_file.parents[2] == engine, (
+        f"the guard at {guard_file} is {len(guard_file.relative_to(engine).parts)} "
+        f"levels below {engine}; `_structural_overlay_root()` counts parents by "
+        f"hand and must be updated in the same change that moves this file")
+
+    root = cf._structural_overlay_root()
+    sibling = engine.parent / ".heading-os-data"
+    if sibling.is_dir():
+        assert root == sibling.resolve(), (
+            "the guard derived a different overlay than the sibling data repo "
+            "beside the engine; it is guarding the wrong tree")
+    else:
+        assert root is None, "no sibling overlay exists, so nothing may be returned"
 
 
 # ============================================================
@@ -215,10 +258,12 @@ def test_the_session_snapshot_covers_the_real_overlay(cf, structural):
     # `pytest_sessionstart` and this assertion. Those files were not "missed" by
     # the snapshot; they did not exist when it was taken. `exists()` alone does
     # not cover this - it filters files that VANISHED, not files that ARRIVED.
-    # `_WATCH_BEFORE_AT` is recorded in conftest for exactly this comparison.
+    # `_WATCH_BEFORE_AT` is recorded by the guard's `arm()` for exactly this
+    # comparison.
     born_after = cf._WATCH_BEFORE_AT
     assert born_after is not None, (
-        "conftest recorded no snapshot time, so this test cannot tell a file the "
+        "the guard's arm() recorded no snapshot time, so this test cannot tell a "
+        "file the "
         "snapshot missed from one that was created after it. Without that, the "
         "assertion below is a race and would be red on a busy machine.")
 

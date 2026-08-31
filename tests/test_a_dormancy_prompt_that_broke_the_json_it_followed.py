@@ -77,7 +77,7 @@ def tree(health, monkeypatch, tmp_path):
          "health": "red", "days_since": 400, "cadence": 30, "status": "active",
          "email": "jane.moneypenny@example.com", "commitments": []},
     ]
-    monkeypatch.setattr(health, "CONTACTS_DIR", tmp_path)
+    monkeypatch.setattr(health, "contacts_dir", lambda p=tmp_path: p)
     monkeypatch.setattr(health, "parse_config", lambda path: {})
     monkeypatch.setattr(health, "scan_contacts", lambda cfg: (contacts, [], [], {}, {}))
     monkeypatch.setattr(health, "format_terminal_report",

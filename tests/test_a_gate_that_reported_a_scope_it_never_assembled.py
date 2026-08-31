@@ -253,7 +253,7 @@ def prelim(roster, monkeypatch):
     roster._ensure_openpyxl()
 
     def _use(path: Path):
-        monkeypatch.setattr(roster, "PRELIM_XLSX", path)
+        monkeypatch.setattr(roster, "prelim_xlsx", lambda p=path: p)
     return _use
 
 

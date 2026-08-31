@@ -356,6 +356,16 @@ def create_charter_docx(docx_path):
     print(f'DOCX created: {docx_path}')
 
 
-if __name__ == '__main__':
+def main():
+    """The demo path resolves here rather than in the `__main__` block.
+
+    See `scripts/md-to-docx-letter.py:main` for why: a `__main__` body is
+    skipped by a normal import but IS run by
+    `runpy.run_path(..., run_name='__main__')`.
+    """
     docx_path = str(get_outputs_dir() / 'documents' / 'example-charter-confirmation.docx')
     create_charter_docx(docx_path)
+
+
+if __name__ == '__main__':
+    main()

@@ -39,9 +39,26 @@ from scripts.utils.crm import (
 
 WORKSPACE = get_workspace_root()
 
-CONTACTS_DIR = get_crm_contacts_dir()
-CONFIG_FILE = get_crm_config_path()
-PEOPLE_FILE = get_people_file()
+
+def contacts_dir() -> Path:
+    """Resolved at call time, never at import.
+
+    These resolvers read `HEADING_OS_DATA` on every call, so they follow the
+    environment for a caller that asks after the environment moved. As
+    module-level constants they asked once, during their own import, and stored
+    the answer, so a test that imported this module and then repointed the data
+    root still read and wrote the operator's real overlay.
+    """
+    return get_crm_contacts_dir()
+
+
+def config_file() -> Path:
+    return get_crm_config_path()
+
+
+def people_file() -> Path:
+    return get_people_file()
+
 
 TODAY = datetime.now(get_default_tz()).date()
 
@@ -200,11 +217,11 @@ def generate_radar_table(contacts):
 
 def update_people_md(contacts):
     """Update the Contact Radar table in context/people.md."""
-    if not PEOPLE_FILE.exists():
-        print(f"{RED}Error: {PEOPLE_FILE} not found{RESET}")
+    if not people_file().exists():
+        print(f"{RED}Error: {people_file()} not found{RESET}")
         return False
 
-    content = PEOPLE_FILE.read_text(encoding="utf-8")
+    content = people_file().read_text(encoding="utf-8")
     radar_table = generate_radar_table(contacts)
 
     # Remove the existing radar table. The old lookahead was
@@ -232,7 +249,7 @@ def update_people_md(contacts):
     insert_pos = _radar_insert_pos(content)
     content = content[:insert_pos] + "\n" + radar_table + "\n" + content[insert_pos:]
 
-    atomic_write_text(PEOPLE_FILE, content)
+    atomic_write_text(people_file(), content)
     return True
 
 
@@ -282,7 +299,7 @@ def main():
                         help="Days silent before a contact qualifies for demotion (default 90)")
     args = parser.parse_args()
 
-    config = parse_config(CONFIG_FILE)
+    config = parse_config(config_file())
     contacts, tribe_warnings, dangling_refs, _stages, _aliases = scan_contacts(config)
 
     # Phase 2.4: log pipeline.md companies with no matching CRM contact.
@@ -329,7 +346,7 @@ def main():
         if args.json:
             print("[]")
         else:
-            print(f"{YELLOW}No contact files found in {CONTACTS_DIR}{RESET}")
+            print(f"{YELLOW}No contact files found in {contacts_dir()}{RESET}")
         print("Add contacts with: /crm add [name] [company] [type]",
               file=sys.stderr)
         sys.exit(0)
@@ -346,10 +363,10 @@ def main():
         # to parse. The comment twenty lines up already knew stdout must stay
         # clean for crm_next.py; the flags were simply never made exclusive.
         if update_people_md(contacts):
-            print(f"{GREEN}Radar table updated in {PEOPLE_FILE.name}{RESET}",
+            print(f"{GREEN}Radar table updated in {people_file().name}{RESET}",
                   file=sys.stderr)
         else:
-            print(f"{RED}Failed to update {PEOPLE_FILE.name}{RESET}",
+            print(f"{RED}Failed to update {people_file().name}{RESET}",
                   file=sys.stderr)
 
     if args.demote_candidates:
@@ -391,7 +408,7 @@ def main():
             if resp == "yes":
                 demoted = 0
                 for c in candidates:
-                    path = CONTACTS_DIR / c["file"]
+                    path = contacts_dir() / c["file"]
                     text = path.read_text(encoding="utf-8")
                     # Scope the status:-check to the frontmatter slice (text before
                     # the closing ---). Whole-file check would match body content

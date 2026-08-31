@@ -53,36 +53,64 @@ Reachability was taken from the path expression handed to a loader call
 (`spec_from_file_location`, `runpy.run_path`, `SourceFileLoader`), with
 interprocedural substitution from each helper's own call sites, so a path that
 only ever appears in a `subprocess` argv is excluded by construction rather than
-by a blacklist. 40 of the 43 are reachable. The three that are not are
-`gen-exec-meeting-docx.py`, `generate-usecases-docx.py` and `md-to-docx-charter.py`:
-`tests/test_docx_helpers.py` drives all eight generators through `subprocess.run`
-with `HEADING_OS_DATA` already in the child's environment, which is immune.
+by a blacklist. 40 of the 43 were reachable; 31 of the 40 could reach a write.
 
-Of the 40, 31 can reach a write derived from the frozen constant and 9 only read.
-But the severity splits again, and this is the part that decided which eight were
-fixed first: `tests/conftest.py` installs a session-wide guard that wraps
-`builtins.open`, `io.open`, `os.replace`, `os.rename`, `os.remove` and `os.unlink`
-and refuses any of them into the operator's overlay, keyed on a STRUCTURAL root no
-`HEADING_OS_DATA` can move. It does not wrap `os.mkdir`, `os.makedirs`,
-`Path.touch` or `os.rmdir`. So a frozen root that reaches `write_text` fails
-LOUDLY with `OverlayWriteRefused`, while one that reaches `mkdir` or `touch` lands
-a stray directory in real private data in silence, which `git status` does not
-show either. 17 of the 31 reach an unwrapped primitive; those are the ones that
-bite.
+The severity split again on which PRIMITIVE the write used, and that decided the
+order of work: the overlay write guard (`scripts/utils/overlay_write_guard.py`,
+then part of `tests/conftest.py`) refuses `open`, `os.replace`, `os.rename`,
+`os.remove` and `os.unlink` into the operator's overlay but did not, at the time,
+wrap `os.mkdir`, `os.makedirs`, `Path.touch` or `os.rmdir`. A frozen root that
+reached `write_text` failed LOUDLY; one that reached `mkdir` or `touch` landed a
+stray directory in real private data in silence, invisible to `git status` as
+well. 17 of the 31 reached an unwrapped primitive. Those eight went first.
 
-THE EIGHT THAT CAME OFF, all of them in that unwrapped-primitive set:
-`council-aggregate.py`, `council-record-verdict.py`, `implement-trajectory-log.py`
-(the only `touch`), `llm-fit-report.py`, `output-organizer.py`,
-`publish-corporate.py`, `scrutinize-flag-fp.py`, `scrutinize-replay.py`. Each
-module-level constant became a function resolved at call time and every caller
-was updated; where a test redirected the constant with
-`monkeypatch.setattr(mod, "CONST", tmp)` it now patches the function instead.
+ALL OF THEM ARE NOW OFF, on the same day, and the count below is zero. The rest
+came off in eight parallel batches partitioned so no two batches shared a test
+file. Three things are worth carrying forward, because none was in the plan:
 
-WHY THE REST ARE STILL HERE, and it is not that they are safe. Roughly 250 of the
-301 test references to these constants ARE `monkeypatch.setattr(mod, "CONST", ...)`,
-the suite's working redirect seam, so converting the remaining constants churns
-about sixty test files. That is a scope decision for the operator, not a change to
-make quietly inside a fix for eight.
+  * THE SWEEP UNDER-REPORTED, and by a lot. It asks "is a resolver CALLED at
+    module scope?" and is blind to `LOGO_PATH = BRAND_DIR / "logo.png"` and to
+    `SIGNATURE = _resolve_asset(...)`, where the resolver sits one frame down
+    inside the module's own function. 18 derived names across 6 of the 35
+    modules were found by hand, one of them a WRITE target one CLI flag away
+    from the operator's overlay (`knowledge-health.INDEX_FILE`). Then the rule
+    written to catch that shape -- `frozen_module_names()` -- immediately named
+    three modules that had never appeared on any list, including
+    `scripts/send-email.py`, the workspace's only outbound mail path. The narrow
+    rule is kept beside the wide one because it localises a hit to a line; the
+    WIDE one is the gate.
+
+  * A `__name__ == "__main__"` BODY COUNTS. It is skipped by a normal import,
+    so it is not the freeze this file is named for, but `runpy.run_path(...,
+    run_name="__main__")` is a loader this suite uses and it executes that block.
+    Four files were fixed by moving the body into `main()`, which is the repo's
+    own script standard anyway.
+
+  * CONVERTING A CONSTANT CAN DROP A SIDE EFFECT. `bootcamp-roster.py` printed
+    "reading the org chart from the shipped example" during its import; moving
+    the resolution to call time meant main() refused before anything asked, and
+    the notice vanished. A sibling test caught it. The lesson is that an
+    import-time constant is sometimes doing two jobs, and only one of them is
+    the path.
+
+WHAT THE STRUCTURAL RULES DO NOT ESTABLISH, stated rather than left implied.
+Absence of an import-time freeze does not prove a resolver FOLLOWS the
+environment: a cache one layer down pins the value just as hard, which is the
+shape `operator_identity._cached()` has. That is why the behavioural section
+imports every module and calls every pure resolver before and after a repoint.
+And that probe is narrow on purpose -- it calls only `def f(): return <expr>`
+functions whose NAME is not an entry point, because the first version called
+every zero-argument resolver. That version did two things, and this file recorded
+only the first until 2026-08-31: it hung the run on `fireside-pulse._probe()`,
+which reaches a subprocess, and it DESTROYED REAL DATA. At 09:46:37 +0400 that
+day a scratch derivation of this selector (`.tmp/frozen/behaviour.py`, run as a
+plain `.venv/bin/python` invocation -- no pytest, so no `tests/conftest.py`
+overlay write guard was armed) selected `scripts/bootcamp-roster.py:main`, called
+it blind against the operator's live `HEADING_OS_DATA`, and the run replaced an
+18,857-byte private roster workbook with a 13,060-byte generated one. Restored
+from git, byte-identical to HEAD. Both halves of the bound now have their own
+failing case in `test_the_body_shape_bound_and_the_name_bound_are_independent`,
+because a combined assertion stays green when either half is deleted.
 
 WHY AST AND NOT GREP. A source-text search cannot tell a call at module scope
 from the same call three lines lower inside a function, cannot see through
@@ -237,11 +265,214 @@ def import_time_resolver_calls(source: str, resolvers: frozenset[str],
     return sorted(set(found))
 
 
+def _module_functions_reaching(tree: ast.AST, resolvers: frozenset[str],
+                               alias: dict[str, str]) -> frozenset[str]:
+    """This module's own functions that transitively reach a dangerous resolver."""
+    local: dict[str, set[str]] = {}
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        named = set()
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Call):
+                called = _called_name(sub)
+                if called:
+                    named.add(alias.get(called, called))
+        local[node.name] = named
+    reached = {f for f, named in local.items() if named & resolvers}
+    changed = True
+    while changed:
+        changed = False
+        for func, named in local.items():
+            if func not in reached and (named & reached):
+                reached.add(func)
+                changed = True
+    return frozenset(reached)
+
+
+def frozen_module_names(source: str, resolvers: frozenset[str],
+                        label: str = "<source>") -> dict[str, int]:
+    """Every module-level NAME whose value is frozen at import. name -> line.
+
+    `import_time_resolver_calls()` above finds the CALL. This finds what the
+    call was stored in, and then everything built from that. Three shapes, and
+    the first is the only one the call sweep can see::
+
+        BRAND_DIR = get_datastore_dir() / "brand"    # direct
+        LOGO_PATH = BRAND_DIR / "logo.png"           # derived from a frozen name
+        SIGNATURE  = _resolve_asset("sig.html")      # via this module's OWN function
+
+    Converting only `BRAND_DIR` leaves `LOGO_PATH` frozen while every structural
+    check prints clean, which is exactly how the 2026-08-31 campaign nearly
+    shipped half a fix. Measured during it: 18 derived names across 6 of the 35
+    modules, found by an agent checking by hand rather than by this rule, which
+    did not exist yet. One was a WRITE target (`knowledge-health.INDEX_FILE`,
+    written by `--update-index`), one flag away from writing to the operator's
+    real overlay. The third shape then found three more modules nobody had
+    listed at all, including `scripts/send-email.py` -- the only outbound mail
+    path in the workspace, whose signature and brand-image paths resolved one
+    frame down inside `_resolve_asset()`.
+
+    This also subsumes the back-compat-alias check: `COUNCIL_DIR = council_dir()`
+    re-freezes a converted module through its own new resolver, and the third
+    shape catches it.
+    """
+    tree = ast.parse(source, filename=label)
+    alias = _local_aliases(tree, resolvers)
+    local_resolvers = _module_functions_reaching(tree, resolvers, alias)
+    frozen: dict[str, int] = {}
+
+    def reaches(expr: ast.AST) -> bool:
+        for sub in ast.walk(expr):
+            if isinstance(sub, ast.Call):
+                called = _called_name(sub)
+                if called and (alias.get(called, called) in resolvers
+                               or called in local_resolvers):
+                    return True
+            if isinstance(sub, ast.Name) and sub.id in frozen:
+                return True
+        return False
+
+    def scan(body) -> None:
+        for node in body:
+            # Module scope includes a module-level try/if/for/with body; the
+            # incident shape was inside a `try`.
+            if isinstance(node, (ast.Try, ast.If, ast.For, ast.While, ast.With)):
+                scan(node.body)
+                scan(getattr(node, "orelse", []) or [])
+                scan(getattr(node, "finalbody", []) or [])
+                for handler in getattr(node, "handlers", []) or []:
+                    scan(handler.body)
+                continue
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+                continue
+            if not reaches(node.value):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                for sub in ast.walk(target):
+                    if isinstance(sub, ast.Name):
+                        frozen.setdefault(sub.id, node.lineno)
+
+    scan(tree.body)
+    return frozen
+
+
+# Names that mean "this function IS the program". Refused by name, on top of
+# the body-shape bound below, because the shape bound is syntactic and the
+# danger is semantic: `def main(): return _run_everything()` is a lone return
+# with a zero-argument signature, so the shape bound passes it and
+# `_snapshot()` then CALLS it -- with the operator's real `HEADING_OS_DATA`
+# still live, because the `before` half of the repoint comparison runs before
+# anything is monkeypatched.
+#
+# MEASURED 2026-08-31 09:46:37 +0400, from the session transcript and the
+# `dcterms:created` stamp inside the wreckage. A scratch derivation of this
+# selector (`.tmp/frozen/behaviour.py`, run as a plain `.venv/bin/python`
+# invocation, so NO pytest and therefore no `tests/conftest.py` overlay write
+# guard was armed) kept the zero-argument rule and dropped the lone-return
+# rule. It selected `scripts/bootcamp-roster.py:main`, called it blind, and
+# `main()` ran to completion: `write_excel()` reached `wb.save(out_xlsx())` and
+# replaced a real 18,857-byte operator workbook with a
+# 13,060-byte generated one. Restored from git; byte-identical to HEAD.
+#
+# The write guard is not the backstop it looks like here. It refuses WRITES,
+# and it only exists inside a pytest session. An entry point called blind can
+# also send mail, push a branch, or post to Telegram, and no wrapped primitive
+# in that guard covers any of those. So the bound belongs on the CALLER: never
+# blind-call something named like the program.
+_ENTRY_POINT_NAMES = frozenset({"main", "run", "cli", "entry", "execute"})
+
+
+def _safe_to_call_blind(node) -> bool:
+    """True when this function may be invoked with no arguments and no consent.
+
+    Two independent bounds, because each alone has been measured insufficient:
+
+    * the NAME must not be an entry point (see `_ENTRY_POINT_NAMES` above);
+    * the BODY must be a lone `return`, with a docstring allowed above it. The
+      first version of this selector took every zero-argument function that
+      reached a resolver and HUNG the run -- `scripts/fireside-pulse.py`'s
+      `_probe()` qualifies and reaches a subprocess.
+
+    Cost, stated rather than hidden: a legitimate `def run(): return
+    get_outputs_dir()` loses its behavioural probe, as does a resolver with a
+    try/except body or a cache (`bootcamp-roster._org_data()`). The structural
+    rules above still cover all of those. Measured on 2026-08-31, the name
+    bound removes nothing from the current population: no selected name in any
+    of the 58 swept modules is entry-point-shaped, so this adds zero friction
+    today and refuses the shape that destroyed real data.
+    """
+    if node.name.lower() in _ENTRY_POINT_NAMES:
+        return False
+    args = node.args
+    required = len(args.posonlyargs) + len(args.args) - len(args.defaults)
+    if required > 0 or args.kwonlyargs:
+        return False
+    body = [n for n in node.body
+            if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)
+                    and isinstance(n.value.value, str))]
+    return len(body) == 1 and isinstance(body[0], ast.Return)
+
+
+def call_time_resolvers(source: str, resolvers: frozenset[str],
+                        label: str = "<source>") -> list[str]:
+    """Module-level `def f(): return <expr>` functions that reach a resolver.
+
+    The shape this campaign produced, and the only shape safe to call blind.
+    What "safe" means, and the two measured incidents behind each half of it,
+    live in `_safe_to_call_blind` -- every caller of this function invokes the
+    names it returns, so that predicate is the whole safety argument.
+    """
+    tree = ast.parse(source, filename=label)
+    alias = _local_aliases(tree, resolvers)
+    reaching = _module_functions_reaching(tree, resolvers, alias)
+    pure: list[str] = []
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name not in reaching:
+            continue
+        if _safe_to_call_blind(node):
+            pure.append(node.name)
+    return pure
+
+
 def swept_modules() -> list[Path]:
     files: list[Path] = []
     for root in SWEPT_ROOTS:
         files += sorted(p for p in root.rglob("*.py") if "__pycache__" not in p.parts)
     return files
+
+
+def sweep_frozen_names() -> dict[str, dict[str, int]]:
+    """relative path -> {frozen module-level name: line} over the swept roots."""
+    resolvers = derived_resolvers()
+    tally: dict[str, dict[str, int]] = {}
+    for path in swept_modules():
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+            names = frozen_module_names(source, resolvers, str(path))
+        except (OSError, SyntaxError):
+            continue
+        if names:
+            tally[str(path.relative_to(ROOT))] = names
+    return tally
+
+
+def modules_with_call_time_resolvers() -> dict[str, list[str]]:
+    """relative path -> the pure call-time resolvers it defines."""
+    resolvers = derived_resolvers()
+    found: dict[str, list[str]] = {}
+    for path in swept_modules():
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+            names = call_time_resolvers(source, resolvers, str(path))
+        except (OSError, SyntaxError):
+            continue
+        if names:
+            found[str(path.relative_to(ROOT))] = names
+    return found
 
 
 def sweep() -> dict[tuple[str, str], list[tuple[int, str]]]:
@@ -263,83 +494,31 @@ def sweep() -> dict[tuple[str, str], list[tuple[int, str]]]:
 
 
 # ============================================================
-# The pinned set
+# The pinned set -- EMPTY, and that is the point
 # ============================================================
 #
-# Every import-time resolver call still on disk: 57 (file, resolver) keys over 35
-# files, 79 call sites, all at module scope. This is a RATCHET, not an approval.
-# A new entry fails the sweep below until someone reads this docstring and
-# decides -- deliberately, in a commit -- that the new one is acceptable. An
-# entry whose count has DROPPED also fails, so fixing a site forces the number
-# down and the ratchet cannot be left slack.
+# Every import-time resolver call still on disk. It is now NONE: the sweep finds
+# zero call sites over the two swept roots.
 #
-# The count started at 65 keys over 43 files (2026-08-31, once
-# `scripts/regenerate-docs-html.py` was fixed) and its header said 86 sites while
-# the tuple summed to 87. Both halves are now recomputed from the sweep itself
-# and agree: 57 / 35 / 79.
+# The tuple exists so a future exception can be recorded with a reason rather
+# than by weakening the gate. It is a RATCHET, not an approval: a new entry fails
+# `test_no_module_under_scripts_or_hooks_calls_a_new_resolver_at_import_time`
+# until someone reads this and decides, in a commit, that the new one is
+# acceptable. An entry whose count has DROPPED also fails, so the ratchet cannot
+# be left slack.
 #
-# Eight entries came off on 2026-08-31, listed in the module docstring above
-# under "the eight that came off". Removing entries from this tuple is the work;
-# the count is the score.
-BASELINE: tuple[tuple[str, str, int], ...] = (
-    (".claude/hooks/memory-inject.py", "get_data_root", 1),
-    ("scripts/admin-health.py", "load_github_org", 1),
-    ("scripts/bootcamp-roster.py", "get_datastore_dir", 2),
-    ("scripts/bootcamp-roster.py", "get_outputs_dir", 1),
-    ("scripts/bootcamp-roster.py", "resolve_config_with_example", 1),
-    ("scripts/browser.py", "get_outputs_dir", 3),
-    ("scripts/capture-design-exemplars-retry.py", "get_outputs_dir", 1),
-    ("scripts/capture-design-exemplars.py", "get_outputs_dir", 1),
-    ("scripts/context-freshness.py", "get_context_dir", 1),
-    ("scripts/crm-health.py", "get_crm_config_path", 1),
-    ("scripts/crm-health.py", "get_crm_contacts_dir", 1),
-    ("scripts/crm-health.py", "get_people_file", 1),
-    ("scripts/datastore-extract.py", "get_datastore_dir", 1),
-    ("scripts/email-intelligence.py", "get_context_dir", 1),
-    ("scripts/email-intelligence.py", "get_crm_contacts_dir", 1),
-    ("scripts/email-intelligence.py", "get_outputs_dir", 2),
-    ("scripts/email-intelligence.py", "resolve_config_with_example", 1),
-    ("scripts/fireside-bot.py", "get_datastore_dir", 2),
-    ("scripts/fireside-bot.py", "get_outputs_dir", 1),
-    ("scripts/fireside-bot.py", "resolve_config_with_example", 1),
-    ("scripts/fireside-pulse.py", "get_datastore_dir", 1),
-    ("scripts/fireside-pulse.py", "get_outputs_dir", 1),
-    ("scripts/fireside-pulse.py", "resolve_config_with_example", 1),
-    ("scripts/gen-exec-meeting-docx.py", "get_outputs_dir", 1),
-    ("scripts/gen-exec-meeting-docx.py", "resolve_config_with_example", 1),
-    ("scripts/generate-client-docx.py", "get_outputs_dir", 2),
-    ("scripts/generate-crm-dashboard.py", "get_context_dir", 1),
-    ("scripts/generate-crm-dashboard.py", "get_crm_contacts_dir", 1),
-    ("scripts/generate-crm-dashboard.py", "get_data_config_dir", 1),
-    ("scripts/generate-crm-dashboard.py", "get_datastore_dir", 1),
-    ("scripts/generate-dashboard.py", "get_context_dir", 5),
-    ("scripts/generate-dashboard.py", "get_datastore_dir", 2),
-    ("scripts/generate-dashboard.py", "get_knowledge_dir", 2),
-    ("scripts/generate-dashboard.py", "get_outputs_dir", 7),
-    ("scripts/generate-odunone-docx.py", "get_outputs_dir", 1),
-    ("scripts/generate-testing-framework-pptx.py", "get_outputs_dir", 1),
-    ("scripts/generate-usecases-docx.py", "get_outputs_dir", 1),
-    ("scripts/knowledge-health.py", "get_knowledge_dir", 1),
-    ("scripts/knowledge-health.py", "get_shared_knowledge_dir", 1),
-    ("scripts/marp_render.py", "get_outputs_dir", 1),
-    ("scripts/md-to-docx-charter.py", "get_outputs_dir", 1),
-    ("scripts/md-to-docx-competitive.py", "get_outputs_dir", 2),
-    ("scripts/md-to-docx-letter.py", "get_outputs_dir", 2),
-    ("scripts/md-to-docx-proposal.py", "get_outputs_dir", 2),
-    ("scripts/modem-tune.py", "get_outputs_dir", 1),
-    ("scripts/odin-brain-health.py", "get_knowledge_dir", 1),
-    ("scripts/odin_brain_lint.py", "get_knowledge_dir", 1),
-    ("scripts/offboard-exec.py", "load_github_org", 1),
-    ("scripts/pipeline-summary.py", "get_context_dir", 1),
-    ("scripts/provision-exec.py", "load_github_org", 1),
-    ("scripts/sentinel.py", "resolve_config_with_example", 1),
-    ("scripts/sync-exchange.py", "get_outputs_dir", 2),
-    ("scripts/validate-crm-schema.py", "get_corporate_root", 1),
-    ("scripts/validate-crm-schema.py", "get_crm_contacts_dir", 1),
-    ("scripts/workspace-health.py", "get_context_dir", 1),
-    ("scripts/workspace-health.py", "get_datastore_dir", 1),
-    ("scripts/workspace-health.py", "get_outputs_dir", 1),
-)
+# The arc, all of it on 2026-08-31: 65 keys over 43 files at the start (once
+# `scripts/regenerate-docs-html.py` was fixed), then 57 keys over 35 files and 79
+# call sites once eight came off, then zero. An empty tuple is not evidence that
+# the sweep is working -- `MIN_MODULES_SWEPT` and the two negative-case tests
+# below are what stop this file passing over a corpus it never read.
+BASELINE: tuple[tuple[str, str, int], ...] = ()
+
+# The derived-name half, same shape and same purpose. `frozen_module_names()`
+# catches what the call sweep cannot: a name built from a frozen name, and a name
+# built by calling one of this module's own resolvers. Also empty, also a place
+# to record a deliberate exception rather than widen the rule.
+FROZEN_NAME_BASELINE: tuple[tuple[str, str], ...] = ()
 
 
 def baseline_map() -> dict[tuple[str, str], int]:
@@ -447,101 +626,218 @@ def test_the_sweep_finds_nothing_in_the_generator():
     assert import_time_resolver_calls(source, derived_resolvers()) == []
 
 
-# The eight fixed on 2026-08-31, every one of them a module whose frozen root
-# reached `mkdir`, `makedirs` or `touch` -- the primitives `tests/conftest.py`
-# does NOT wrap, so the write landed in the operator's overlay without a refusal.
-FIXED_2026_08_31 = (
-    "scripts/council-aggregate.py",
-    "scripts/council-record-verdict.py",
-    "scripts/implement-trajectory-log.py",
-    "scripts/llm-fit-report.py",
-    "scripts/output-organizer.py",
-    "scripts/publish-corporate.py",
-    "scripts/scrutinize-flag-fp.py",
-    "scripts/scrutinize-replay.py",
-)
+# ============================================================
+# Every call-time resolver actually follows a repoint
+# ============================================================
+#
+# Derived, never enumerated. Until 2026-08-31 this section named eight files and
+# hand-mapped ONE resolver each; the map is gone, because a hand-written map of
+# what to check is the same defect as a hand-written list of what is dangerous.
+# The set below is recomputed from the tree, so a resolver written tomorrow is
+# covered the same second.
+#
+# Computed once at import. It reads SOURCE files and never a data root, so it is
+# not the freeze this file forbids -- but it IS a module-level computed value in
+# the file that bans them, which is worth saying out loud rather than leaving for
+# a reader to wonder about.
+CALL_TIME_RESOLVERS = modules_with_call_time_resolvers()
+
+# A derived set that silently collapses to nothing passes every test under it.
+# 58 modules and 145 resolvers on 2026-08-31; the floors sit below that so
+# ordinary churn does not trip them, and well above zero so a broken walk does.
+MIN_RESOLVER_MODULES = 40
+MIN_RESOLVERS = 100
 
 
-@pytest.mark.parametrize("rel", FIXED_2026_08_31)
-def test_a_fixed_module_resolves_nothing_at_import_time(rel):
-    """Not "the baseline no longer lists it" -- that is only bookkeeping, and a
-    re-added constant under a resolver the tuple never named would satisfy it.
-    This asks the rule directly, of the file on disk."""
-    source = (ROOT / rel).read_text(encoding="utf-8")
-    assert import_time_resolver_calls(source, derived_resolvers()) == []
+def _original_data_root() -> str:
+    from scripts.utils.workspace import get_data_root
+    try:
+        return str(get_data_root())
+    except Exception as exc:                      # noqa: BLE001
+        print(f"[pin] data root unresolvable: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+        return ""
 
 
-# The resolver each of the eight grew, so the behavioural case below asks the
-# function rather than the source text.
-FIXED_RESOLVERS = {
-    "scripts/council-aggregate.py": "council_dir",
-    "scripts/council-record-verdict.py": "council_dir",
-    "scripts/implement-trajectory-log.py": "trajectory_dir",
-    "scripts/llm-fit-report.py": "report_dir",
-    "scripts/output-organizer.py": "outputs_dir",
-    "scripts/publish-corporate.py": "source_root",
-    "scripts/scrutinize-flag-fp.py": "scrutiny_dir",
-    "scripts/scrutinize-replay.py": "scrutiny_dir",
-}
+def _snapshot(module, names: list[str]) -> dict[str, tuple[str, str]]:
+    out: dict[str, tuple[str, str]] = {}
+    for name in names:
+        fn = getattr(module, name, None)
+        if not callable(fn):
+            continue
+        try:
+            out[name] = ("ok", str(fn()))
+        except Exception as exc:                  # noqa: BLE001
+            out[name] = ("raised", type(exc).__name__)
+    return out
 
 
-@pytest.mark.parametrize("rel", FIXED_2026_08_31)
-def test_a_fixed_module_follows_a_repoint_that_happened_after_its_import(rel, tmp_path,
-                                                                        monkeypatch):
-    """The regression in one line, for each of the eight.
+def frozen_after_repoint(before: dict, after: dict, old_root: str) -> list[str]:
+    """The resolvers that did not follow. Separated so a test can drive it.
+
+    An UNCHANGED value is not automatically a freeze, and calling it one would be
+    this gate over-claiming. `github_org()` returns an org name and
+    `_fireside_config_error()` returns None; neither should move when the data
+    root moves. The signal that distinguishes them is whether the OLD data root
+    is still sitting inside the value.
+    """
+    frozen = []
+    for name, was in before.items():
+        now = after.get(name)
+        if now is None or was != now or was[0] != "ok":
+            continue
+        if old_root and old_root in was[1]:
+            frozen.append(f"{name}() = {was[1]}")
+    return frozen
+
+
+def test_the_derived_resolver_population_is_not_empty():
+    assert len(CALL_TIME_RESOLVERS) >= MIN_RESOLVER_MODULES, len(CALL_TIME_RESOLVERS)
+    total = sum(len(v) for v in CALL_TIME_RESOLVERS.values())
+    assert total >= MIN_RESOLVERS, total
+
+
+@pytest.mark.parametrize("rel", sorted(CALL_TIME_RESOLVERS))
+def test_a_call_time_resolver_follows_a_repoint_after_its_import(rel, tmp_path,
+                                                                 monkeypatch):
+    """The regression in one line, for every resolver in the tree.
 
     The module is imported FIRST, exactly as a test module-scope `_load(...)`
     does, and the environment moves after. Structural absence of an import-time
-    call (the test above) is necessary and not sufficient: this is the property
-    that absence is FOR.
+    call is necessary and NOT sufficient: a value can still be pinned one layer
+    down by a cache, which is the shape `operator_identity._cached()` has and
+    the reason this test is not redundant with the sweeps above.
     """
-    name = "frozen_probe_" + Path(rel).stem.replace("-", "_")
+    old_root = _original_data_root()
+    name = "repoint_probe_" + Path(rel).stem.replace("-", "_").replace(".", "_")
     spec = importlib.util.spec_from_file_location(name, str(ROOT / rel))
     module = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, name, module)   # some of the eight use @dataclass
+    monkeypatch.setitem(sys.modules, name, module)   # some modules use @dataclass
     spec.loader.exec_module(module)
-    resolve = getattr(module, FIXED_RESOLVERS[rel])
 
-    before = resolve()
+    names = CALL_TIME_RESOLVERS[rel]
+    before = _snapshot(module, names)
     overlay = tmp_path / "overlay"
     overlay.mkdir()
     monkeypatch.setenv("HEADING_OS_DATA", str(overlay))
-    after = resolve()
+    after = _snapshot(module, names)
 
-    assert after != before, f"{rel}: {FIXED_RESOLVERS[rel]}() ignored the repoint"
-    assert str(after).startswith(str(overlay)), \
-        f"{rel}: {FIXED_RESOLVERS[rel]}() resolved to {after}, outside the scratch overlay"
-
-
-@pytest.mark.parametrize("rel", FIXED_2026_08_31)
-def test_a_fixed_module_is_absent_from_the_pinned_set(rel):
-    assert not [key for key in baseline_map() if key[0] == rel], \
-        f"{rel} was fixed on 2026-08-31 and is back in the pinned set"
+    frozen = frozen_after_repoint(before, after, old_root)
+    assert not frozen, (
+        f"{rel}: these resolvers still answered with the OLD data root after a "
+        f"repoint, so something below them cached the first answer:\n  "
+        + "\n  ".join(frozen))
 
 
-@pytest.mark.parametrize("rel", FIXED_2026_08_31)
-def test_a_fixed_module_exposes_no_frozen_constant_where_its_function_now_is(rel):
-    """The back-compat alias is the way this regresses while everything above
-    still passes: `COUNCIL_DIR = council_dir()` at module scope restores the
-    exact defect. Any module-scope ALL-CAPS name bound from a call to one of the
-    module's own new resolver functions is that shape."""
-    tree = ast.parse((ROOT / rel).read_text(encoding="utf-8"), filename=rel)
-    resolvers = {n.name for n in tree.body
-                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    offenders = []
-    for node in tree.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        called = {c.func.id for c in ast.walk(node.value)
-                  if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
-        if not (called & resolvers):
-            continue
-        for target in node.targets:
-            for sub in ast.walk(target):
-                if isinstance(sub, ast.Name) and sub.id.isupper():
-                    offenders.append(f"{rel}:{node.lineno} {sub.id}")
-    assert not offenders, "a call-time resolver was frozen back into a constant: " \
-                          + ", ".join(offenders)
+def test_an_entry_point_is_never_selected_for_a_blind_call(tmp_path):
+    """The 2026-08-31 09:46:37 roster overwrite, in one assertion.
+
+    `def main(): return _write_everything()` satisfies every BODY-shape bound
+    this selector has ever had: zero required arguments, one lone `return`, a
+    docstring above it. Only the name bound stops it. `_snapshot()` calls what
+    this returns, and the `before` half of that comparison runs with the
+    operator's real `HEADING_OS_DATA` still in place, so a selected `main()`
+    executes against live private data.
+
+    The pretend module is written under `tmp_path`. Nothing here imports it and
+    nothing calls anything -- the assertion is over the AST alone, which is the
+    only way to test this property without reproducing the incident.
+    """
+    resolvers = derived_resolvers()
+    pretend = tmp_path / "overlay_writer.py"
+    pretend.write_text(
+        "from scripts.utils.workspace import get_datastore_dir\n"
+        "\n"
+        "\n"
+        "def out_xlsx():\n"
+        "    return get_datastore_dir() / 'roster.xlsx'\n"
+        "\n"
+        "\n"
+        "def _write_everything():\n"
+        "    path = out_xlsx()\n"
+        "    path.write_bytes(b'wreckage')\n"
+        "    return path\n"
+        "\n"
+        "\n"
+        "def main():\n"
+        '    """Zero args, one lone return. The shape bound cannot see this."""\n'
+        "    return _write_everything()\n",
+        encoding="utf-8",
+    )
+    names = call_time_resolvers(pretend.read_text(encoding="utf-8"), resolvers,
+                                str(pretend))
+    # The positive half, so the gate is not passing by selecting nothing at all.
+    assert "out_xlsx" in names, (
+        f"the resolver this gate exists for stopped being selected: {names}")
+    assert "main" not in names, (
+        "`main` was selected for a blind call. This is the exact selection that "
+        "overwrote a real operator workbook on 2026-08-31 at "
+        f"09:46:37 +0400. Selected: {names}")
+
+
+def test_the_body_shape_bound_and_the_name_bound_are_independent():
+    """Each bound alone lets a caller through, so both are asserted separately.
+
+    Dropping either one has happened: the lone-return rule was the fix for the
+    hung `_probe()` run, and its absence is what selected `bootcamp-roster.main`.
+    A single combined assertion would stay green with one of them deleted.
+    """
+    def _fn(src):
+        return ast.parse(src).body[0]
+
+    # Refused on NAME alone: perfect body shape.
+    assert not _safe_to_call_blind(_fn("def main():\n    return _run()\n"))
+    assert not _safe_to_call_blind(_fn("def run():\n    return _go()\n"))
+    assert not _safe_to_call_blind(_fn("def CLI():\n    return _go()\n"))
+    # Refused on BODY alone: harmless name, multi-statement body that could do
+    # anything at all (this is the `_probe()` shape that hung the run).
+    assert not _safe_to_call_blind(
+        _fn("def _probe():\n    x = 1\n    return x\n"))
+    # Refused on SIGNATURE: a required argument means the caller must decide.
+    assert not _safe_to_call_blind(_fn("def f(a):\n    return a\n"))
+    assert not _safe_to_call_blind(_fn("def f(*, a):\n    return a\n"))
+    # Allowed: the shape this whole campaign produces.
+    assert _safe_to_call_blind(_fn("def out_dir():\n    return get_outputs_dir()\n"))
+    assert _safe_to_call_blind(
+        _fn('def out_dir():\n    """Doc."""\n    return get_outputs_dir()\n'))
+
+
+def test_no_entry_point_reached_the_live_blind_call_population():
+    """The bound above, asserted over the real tree rather than a fixture.
+
+    `CALL_TIME_RESOLVERS` is what `_snapshot()` actually calls, module by
+    module, against the operator's live data root. Nothing entry-point-shaped
+    may be in it, and the population floors below cannot see this: widening the
+    selector RAISES the count, so every floor in this file stays green while the
+    set fills up with programs.
+    """
+    offenders = {
+        rel: [n for n in names if n.lower() in _ENTRY_POINT_NAMES]
+        for rel, names in CALL_TIME_RESOLVERS.items()
+    }
+    offenders = {rel: names for rel, names in offenders.items() if names}
+    assert not offenders, (
+        "these entry points are in the set that gets called blind against the "
+        f"operator's live data root: {offenders}")
+
+
+def test_the_repoint_check_fires_for_a_resolver_that_did_not_move():
+    """The negative case for the check above. A comparison nobody has ever seen
+    report a freeze is not a check."""
+    old = "/home/op/.heading-os-data"
+    stuck = {"out_dir": ("ok", f"{old}/outputs")}
+    moved = {"out_dir": ("ok", "/scratch/overlay/outputs")}
+    assert frozen_after_repoint(stuck, dict(stuck), old) == [f"out_dir() = {old}/outputs"]
+    assert frozen_after_repoint(stuck, moved, old) == []
+
+
+def test_an_unchanged_value_with_no_data_root_in_it_is_not_called_frozen():
+    """The other direction, and it is the one that keeps the gate honest.
+    `github_org()` returns the same string under any data root; reporting it
+    would be the gate claiming more than its method establishes."""
+    same = {"github_org": ("ok", "someorg"), "config_error": ("ok", "None")}
+    assert frozen_after_repoint(same, dict(same), "/home/op/.heading-os-data") == []
+
 
 
 # ============================================================
@@ -703,11 +999,108 @@ def test_both_swept_roots_contribute_modules():
         assert any(p.suffix == ".py" for p in root.rglob("*.py")), root
 
 
-def test_the_sweep_finds_the_known_population_at_all():
-    """If the rule silently stopped matching, every assertion below would pass on
-    an empty result. The baseline is non-empty, so the sweep must be too."""
-    assert BASELINE, "the pinned set is empty; that is a bug in this file"
-    assert sweep(), "the sweep found nothing while the baseline names 43 files"
+def test_the_sweep_reads_a_real_corpus_even_though_it_now_finds_nothing():
+    """The floor that replaced "the baseline is non-empty".
+
+    Until 2026-08-31 this test asserted `BASELINE` and `sweep()` were both
+    non-empty, which was a fine proof of life while 79 call sites were still on
+    disk and became a LIE the moment the last one came off. An empty result now
+    means success, so the proof of life has to come from somewhere else: the
+    walk must have read a real corpus, and the rule must still fire on the
+    incident shape (pinned separately, below). Those two together are what stop
+    this file passing over a directory it never opened.
+    """
+    modules = swept_modules()
+    assert len(modules) >= MIN_MODULES_SWEPT, (
+        f"the walk found {len(modules)} modules; the floor is {MIN_MODULES_SWEPT}. "
+        "A sweep over nothing is green forever.")
+    assert import_time_resolver_calls(_INCIDENT, derived_resolvers()), (
+        "the rule no longer fires on the incident shape it was written for")
+
+
+def test_no_module_under_scripts_or_hooks_freezes_a_name_at_import():
+    """The stricter half of the ratchet, and the one that found the stragglers.
+
+    The call sweep below asks "is a resolver CALLED at module scope?".  This asks
+    "is any module-level NAME frozen?", which is the question that actually
+    matters and covers two shapes the call sweep cannot see. On the day it was
+    written it immediately named three modules nobody had listed, one of them
+    `scripts/send-email.py`.
+    """
+    pinned = {(rel, name) for rel, name in FROZEN_NAME_BASELINE}
+    novel = []
+    for rel, names in sorted(sweep_frozen_names().items()):
+        for name, lineno in sorted(names.items(), key=lambda kv: kv[1]):
+            if (rel, name) not in pinned:
+                novel.append(f"{rel}:{lineno} {name}")
+    assert not novel, (
+        "these module-level names are frozen when the module is imported, so a "
+        "caller that repoints HEADING_OS_DATA afterwards still gets the first "
+        "answer. Resolve at CALL time (a function), or add (path, name) to "
+        "FROZEN_NAME_BASELINE with a reason:\n  " + "\n  ".join(novel))
+
+
+def test_the_frozen_name_baseline_carries_no_entry_that_has_already_been_fixed():
+    """The other direction, so this ratchet cannot be left slack either."""
+    found = {(rel, name) for rel, names in sweep_frozen_names().items() for name in names}
+    stale = [f"{rel}:{name}" for rel, name in FROZEN_NAME_BASELINE
+             if (rel, name) not in found]
+    assert not stale, ("the frozen-name baseline is behind the tree; drop:\n  "
+                       + "\n  ".join(stale))
+
+
+_DERIVED_INCIDENT = '''
+from scripts.utils.workspace import get_datastore_dir, get_data_root
+
+def _resolve_asset(rel):
+    return get_data_root() / rel
+
+BRAND_DIR = get_datastore_dir() / "brand"
+LOGO_PATH = BRAND_DIR / "logo.png"
+SIGNATURE = _resolve_asset("reference/signature.html")
+SAFE = "datastore/brand"
+'''
+
+
+def test_the_frozen_name_rule_sees_all_three_shapes():
+    """The positive case, and it is the whole reason this rule exists.
+
+    `BRAND_DIR` is what the call sweep already found. `LOGO_PATH` names no
+    resolver at all. `SIGNATURE` reaches one a frame down inside a function of
+    the same module. `SAFE` is a plain string and must NOT be reported -- a rule
+    that flags everything is a rule nobody keeps.
+    """
+    names = frozen_module_names(_DERIVED_INCIDENT, derived_resolvers(), "synthetic")
+    assert sorted(names) == ["BRAND_DIR", "LOGO_PATH", "SIGNATURE"]
+
+
+def test_the_call_sweep_alone_is_blind_to_two_of_those_three():
+    """States the gap in measurable form, so nobody deletes the derived rule as
+    a duplicate of the call sweep."""
+    hits = import_time_resolver_calls(_DERIVED_INCIDENT, derived_resolvers(), "synthetic")
+    seen = {name for _, name, _ in hits}
+    assert seen == {"get_datastore_dir"}, seen
+
+
+def test_the_frozen_name_rule_ignores_a_call_inside_a_function_body():
+    """Same distinction the call sweep draws, and for the same reason: a name
+    bound INSIDE a function is bound when the function runs."""
+    source = ('from scripts.utils.workspace import get_data_root\n'
+              'def f():\n'
+              '    LATER = get_data_root() / "x"\n'
+              '    return LATER\n')
+    assert frozen_module_names(source, derived_resolvers(), "synthetic") == {}
+
+
+def test_the_frozen_name_rule_catches_the_back_compat_alias():
+    """`COUNCIL_DIR = council_dir()` restores the exact defect in a module that
+    was already converted, and every other structural check still passes."""
+    source = ('from scripts.utils.workspace import get_outputs_dir\n'
+              'def council_dir():\n'
+              '    return get_outputs_dir() / "council"\n'
+              'COUNCIL_DIR = council_dir()\n')
+    assert sorted(frozen_module_names(source, derived_resolvers(), "synthetic")) \
+        == ["COUNCIL_DIR"]
 
 
 def test_no_module_under_scripts_or_hooks_calls_a_new_resolver_at_import_time():

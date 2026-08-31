@@ -64,7 +64,7 @@ def state(fb, tmp_path, monkeypatch):
     three in `test_eleven_guards_the_fireside_bot_applied_to_one_side.py`, where
     an error path nobody expected to reach disk called `log_error`.
     """
-    monkeypatch.setattr(fb, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(fb, "state_dir", lambda p=tmp_path: p)
     return tmp_path
 
 
@@ -155,7 +155,7 @@ def test_the_xlsx_reader_refuses_a_repeated_telegram_username(fb, tmp_path, monk
     downstream count agreed with the short version."""
     sheet = tmp_path / "31C_Tribe.xlsx"
     _write_tribe_sheet(sheet, [("Alex Kim", "akim"), ("Dana Reid", "akim")])
-    monkeypatch.setattr(fb, "TRIBE_XLSX", sheet)
+    monkeypatch.setattr(fb, "tribe_xlsx", lambda p=sheet: p)
     with pytest.raises(ValueError) as exc:
         fb.load_tribe_metadata()
     assert "appears twice" in str(exc.value)
@@ -165,7 +165,7 @@ def test_the_xlsx_reader_refuses_a_repeated_telegram_username(fb, tmp_path, monk
 def test_a_clean_sheet_still_loads(fb, tmp_path, monkeypatch):
     sheet = tmp_path / "31C_Tribe.xlsx"
     _write_tribe_sheet(sheet, [("Alex Kim", "akim"), ("Dana Reid", "dreid")])
-    monkeypatch.setattr(fb, "TRIBE_XLSX", sheet)
+    monkeypatch.setattr(fb, "tribe_xlsx", lambda p=sheet: p)
     roster = fb.load_tribe_metadata()
     assert set(roster) == {"akim", "dreid"}
     assert roster["akim"]["name"] == "Alex Kim"
@@ -175,7 +175,7 @@ def test_the_duplicate_check_is_case_insensitive(fb, tmp_path, monkeypatch):
     """Telegram handles are case-insensitive; @Akim and @akim are one account."""
     sheet = tmp_path / "31C_Tribe.xlsx"
     _write_tribe_sheet(sheet, [("Alex Kim", "Akim"), ("Dana Reid", "akim")])
-    monkeypatch.setattr(fb, "TRIBE_XLSX", sheet)
+    monkeypatch.setattr(fb, "tribe_xlsx", lambda p=sheet: p)
     with pytest.raises(ValueError):
         fb.load_tribe_metadata()
 
@@ -189,7 +189,7 @@ def test_the_first_column_title_survives_the_read(fb, tmp_path, monkeypatch):
     ws.append(["Title (reconciled)", "Name", "Telegram Username"])
     ws.append(["Chief Engineer", "Alex Kim", "akim"])
     wb.save(sheet)
-    monkeypatch.setattr(fb, "TRIBE_XLSX", sheet)
+    monkeypatch.setattr(fb, "tribe_xlsx", lambda p=sheet: p)
     roster = fb.load_tribe_metadata()
     assert roster["akim"]["title"] == "Chief Engineer"
     assert roster["akim"]["is_vp"] is True
@@ -696,25 +696,25 @@ def test_a_broken_cycle_config_does_not_stop_the_module_importing():
     """`--help` used to die before argparse ran, so the operator got a
     traceback instead of the usage text naming the file to fix."""
     code = _code_only()
-    assert "_FIRESIDE_CONFIG_ERROR" in code
+    assert "def _fireside_config_error()" in code
     assert "def require_fireside_config()" in code
     # All four, named. A missing file is OSError, malformed JSON is ValueError,
     # a missing key is KeyError; narrowing the tuple re-opens the crash for
     # whichever one was dropped.
-    assert "except (OSError, ValueError, KeyError, TypeError) as _exc:" in code
+    assert "except (OSError, ValueError, KeyError, TypeError) as exc:" in code
 
 
 def test_build_schedule_refuses_rather_than_building_a_zero_week_cycle(fb, monkeypatch):
-    monkeypatch.setattr(fb, "_FIRESIDE_CONFIG_ERROR", "config.json: boom")
-    monkeypatch.setattr(fb, "CYCLE_1_START_MONDAY", None)
-    monkeypatch.setattr(fb, "WEEK_1_TO_9_SCHEDULE", [])
+    monkeypatch.setattr(fb, "_fireside_config_error", lambda p="config.json: boom": p)
+    monkeypatch.setattr(fb, "cycle_1_start_monday", lambda p=None: p)
+    monkeypatch.setattr(fb, "week_1_to_9_schedule", lambda p=[]: p)
     with pytest.raises(SystemExit) as exc:
         fb.build_schedule({})
     assert "could not be read" in str(exc.value)
 
 
 def test_require_fireside_config_is_silent_when_the_config_loaded(fb, monkeypatch):
-    monkeypatch.setattr(fb, "_FIRESIDE_CONFIG_ERROR", None)
+    monkeypatch.setattr(fb, "_fireside_config_error", lambda p=None: p)
     fb.require_fireside_config()          # must not raise
 
 
@@ -787,7 +787,7 @@ def test_a_corrupt_pulse_checkpoint_rebaselines_instead_of_crashing(tmp_path, mo
     pulse = _load("fireside_pulse_probe", PULSE_SRC)
     bad = tmp_path / "pulse-checkpoint.json"
     bad.write_text("{", encoding="utf-8")
-    monkeypatch.setattr(pulse, "CHECKPOINT", bad)
+    monkeypatch.setattr(pulse, "checkpoint", lambda p=bad: p)
     assert pulse.load_checkpoint() is None
     assert "re-baselining" in capsys.readouterr().err
 
@@ -796,7 +796,7 @@ def test_a_checkpoint_of_the_wrong_type_also_rebaselines(tmp_path, monkeypatch, 
     pulse = _load("fireside_pulse_probe2", PULSE_SRC)
     bad = tmp_path / "pulse-checkpoint.json"
     bad.write_text("[1, 2, 3]", encoding="utf-8")
-    monkeypatch.setattr(pulse, "CHECKPOINT", bad)
+    monkeypatch.setattr(pulse, "checkpoint", lambda p=bad: p)
     assert pulse.load_checkpoint() is None
     assert "not an object" in capsys.readouterr().err
 
@@ -805,13 +805,13 @@ def test_a_good_checkpoint_still_loads(tmp_path, monkeypatch):
     pulse = _load("fireside_pulse_probe3", PULSE_SRC)
     good = tmp_path / "pulse-checkpoint.json"
     good.write_text(json.dumps({"session_count": 4}), encoding="utf-8")
-    monkeypatch.setattr(pulse, "CHECKPOINT", good)
+    monkeypatch.setattr(pulse, "checkpoint", lambda p=good: p)
     assert pulse.load_checkpoint() == {"session_count": 4}
 
 
 def test_an_absent_checkpoint_is_none(tmp_path, monkeypatch):
     pulse = _load("fireside_pulse_probe4", PULSE_SRC)
-    monkeypatch.setattr(pulse, "CHECKPOINT", tmp_path / "nothing.json")
+    monkeypatch.setattr(pulse, "checkpoint", lambda p=tmp_path / "nothing.json": p)
     assert pulse.load_checkpoint() is None
 
 
@@ -833,7 +833,7 @@ def test_an_unknown_tribe_size_prints_a_question_mark_not_a_number():
 def test_a_bad_webhook_port_does_not_replace_unknown_with_a_traceback():
     code = _no_comments(PULSE_SRC)
     assert "except (TypeError, ValueError):" in code
-    assert 'raw_port = _SVC.get("webhook_port", 8443)' in code
+    assert 'raw_port = _svc().get("webhook_port", 8443)' in code
 
 
 def test_the_windows_spawn_waits_for_a_real_pid_file():

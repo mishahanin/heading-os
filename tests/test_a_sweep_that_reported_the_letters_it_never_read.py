@@ -114,7 +114,7 @@ def test_a_naive_stamp_is_still_measurable(fp):
 def test_the_checkpoint_scratch_path_is_not_a_fixed_name(fp, tmp_path, monkeypatch):
     """Two writers must never be handed the same scratch path."""
     target = tmp_path / "pulse-checkpoint.json"
-    monkeypatch.setattr(fp, "CHECKPOINT", target)
+    monkeypatch.setattr(fp, "checkpoint", lambda p=target: p)
     seen = []
     real_mkstemp = tempfile.mkstemp
 
@@ -133,7 +133,7 @@ def test_the_checkpoint_scratch_path_is_not_a_fixed_name(fp, tmp_path, monkeypat
 
 def test_the_checkpoint_still_lands_and_reads_back(fp, tmp_path, monkeypatch):
     target = tmp_path / "pulse-checkpoint.json"
-    monkeypatch.setattr(fp, "CHECKPOINT", target)
+    monkeypatch.setattr(fp, "checkpoint", lambda p=target: p)
     fp.save_checkpoint({"started_uids": [1, 2], "session_count": 3})
     assert json.loads(target.read_text(encoding="utf-8"))["session_count"] == 3
 
@@ -141,7 +141,7 @@ def test_the_checkpoint_still_lands_and_reads_back(fp, tmp_path, monkeypatch):
 def test_the_scratch_file_shares_the_targets_directory(fp, tmp_path, monkeypatch):
     """os.replace is only atomic within one filesystem."""
     target = tmp_path / "nested" / "pulse-checkpoint.json"
-    monkeypatch.setattr(fp, "CHECKPOINT", target)
+    monkeypatch.setattr(fp, "checkpoint", lambda p=target: p)
     seen = []
     real_mkstemp = tempfile.mkstemp
 
@@ -157,14 +157,14 @@ def test_the_scratch_file_shares_the_targets_directory(fp, tmp_path, monkeypatch
 
 def test_no_scratch_file_survives_a_successful_write(fp, tmp_path, monkeypatch):
     target = tmp_path / "pulse-checkpoint.json"
-    monkeypatch.setattr(fp, "CHECKPOINT", target)
+    monkeypatch.setattr(fp, "checkpoint", lambda p=target: p)
     fp.save_checkpoint({"a": 1})
     assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_no_scratch_file_survives_a_failed_write(fp, tmp_path, monkeypatch):
     target = tmp_path / "pulse-checkpoint.json"
-    monkeypatch.setattr(fp, "CHECKPOINT", target)
+    monkeypatch.setattr(fp, "checkpoint", lambda p=target: p)
 
     class _Unserialisable:
         pass
@@ -180,7 +180,7 @@ def test_no_scratch_file_survives_a_failed_write(fp, tmp_path, monkeypatch):
 # ============================================================
 
 def _roster_dir(fp, tmp_path, monkeypatch, body: str):
-    monkeypatch.setattr(fp, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(fp, "state_dir", lambda p=tmp_path: p)
     (tmp_path / "tribe-roster.json").write_text(body, encoding="utf-8")
 
 
@@ -211,7 +211,7 @@ def test_a_healthy_roster_still_maps_ids_to_names(fp, tmp_path, monkeypatch):
 
 def test_a_missing_roster_is_silent_because_it_is_not_a_failure(fp, tmp_path,
                                                                 monkeypatch, capsys):
-    monkeypatch.setattr(fp, "STATE_DIR", tmp_path / "nothing-here")
+    monkeypatch.setattr(fp, "state_dir", lambda p=tmp_path / "nothing-here": p)
     assert fp.load_roster_names() == {}
     assert capsys.readouterr().err == ""
 
@@ -410,7 +410,7 @@ def test_read_sources_still_ignores_the_root_it_is_handed(tmp_path, monkeypatch)
 
 def _remote(fp, monkeypatch, svc, listening=True):
     """Drive _print_remote_status down the SSH-probe-failed branch."""
-    monkeypatch.setattr(fp, "_SVC", svc)
+    monkeypatch.setattr(fp, "_svc", lambda p=svc: p)
     monkeypatch.setattr(fp, "_query_service_host", lambda host: None)
     seen = []
 

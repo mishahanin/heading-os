@@ -229,9 +229,9 @@ def test_no_copy_of_the_cell_deleting_line_survives(script):
 def test_an_impossible_last_verified_date_degrades_one_row(tmp_path, monkeypatch,
                                                            capsys):
     dash = _load("generate-dashboard.py")
-    monkeypatch.setattr(dash, "CONTEXT_DIR", tmp_path)
+    monkeypatch.setattr(dash, "context_dir", lambda p=tmp_path: p)
     # people.md comes from the identity seam now, not from a second literal
-    # under CONTEXT_DIR, so the seam is what a test has to redirect.
+    # under `context_dir()`, so the seam is what a test has to redirect.
     monkeypatch.setattr(dash, "get_people_file", lambda: tmp_path / "people.md")
     good = dash.TODAY.isoformat()
     (tmp_path / "pipeline.md").write_text(f"Last verified: {good}\n", encoding="utf-8")

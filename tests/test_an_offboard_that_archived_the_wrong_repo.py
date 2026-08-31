@@ -100,14 +100,14 @@ def _archived(calls):
 
 def test_the_current_data_overlay_is_the_repo_that_gets_archived(gh, capsys):
     assert ofb.archive_workspace_repo("marlow-carter") is True
-    assert f"{ofb.GITHUB_ORG}/heading-os-data-marlow-carter" in _archived(gh.calls)
+    assert f"{ofb.github_org()}/heading-os-data-marlow-carter" in _archived(gh.calls)
 
 
 def test_the_retired_name_is_still_attempted(gh, capsys):
     """Same reasoning `exec_repos` records: a 404 on a retired name costs one
     request; missing a repo the exec still holds costs their access to it."""
     ofb.archive_workspace_repo("marlow-carter")
-    assert f"{ofb.GITHUB_ORG}/31c-workspace-marlow-carter" in _archived(gh.calls)
+    assert f"{ofb.github_org()}/31c-workspace-marlow-carter" in _archived(gh.calls)
 
 
 def test_a_missing_retired_name_is_a_skip_not_a_red_error(gh, capsys):
@@ -146,7 +146,7 @@ def test_the_per_exec_crm_repo_still_uses_the_retired_name_only(gh, capsys):
     a 404 there is the expected answer."""
     gh.table[("archive",)] = _cp(1, stderr="HTTP 404: Not Found")
     assert ofb.archive_per_exec_crm_repo("marlow-carter") is True
-    assert _archived(gh.calls) == [f"{ofb.GITHUB_ORG}/31c-crm-marlow-carter"]
+    assert _archived(gh.calls) == [f"{ofb.github_org()}/31c-crm-marlow-carter"]
 
 
 def test_a_failed_archive_reaches_the_verdict(gh):
@@ -340,7 +340,7 @@ def test_a_genuine_404_still_reads_as_not_a_member(gh, capsys):
 def test_a_real_membership_is_still_reported(gh):
     _teams_env(gh, _cp(0, stdout='{"state":"active"}'))
     residual = ofb.check_residual_access("marlow-carter", {})
-    assert any(r == f"team membership in {ofb.GITHUB_ORG}/leadership"
+    assert any(r == f"team membership in {ofb.github_org()}/leadership"
                for r in residual)
 
 

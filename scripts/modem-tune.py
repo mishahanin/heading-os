@@ -53,7 +53,17 @@ from scripts.utils import modem_core as mc
 from scripts.utils.modem_ssh import ssh
 from scripts.utils.modem_drivers import ModemReadError, driver_for
 
-LEDGER_PATH = get_outputs_dir() / "operations/reference/modem-imei-ledger.json"
+
+def ledger_path():
+    """Resolved at call time, never at import.
+
+    `get_outputs_dir()` reads `HEADING_OS_DATA` on every call, so it follows
+    the environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the data
+    root still saved the ledger into the operator's real overlay.
+    """
+    return get_outputs_dir() / "operations/reference/modem-imei-ledger.json"
 
 
 def load_config() -> dict:
@@ -176,7 +186,7 @@ def _device_ctx(args):
     cfg = load_config()
     device, host = resolve_device(getattr(args, "device", None), cfg)
     drv = driver_for(device, _ssh_for(host))
-    led = mc.load_ledger(LEDGER_PATH)
+    led = mc.load_ledger(ledger_path())
     return device, host, drv, led
 
 
@@ -238,7 +248,7 @@ def cmd_generate(args) -> int:
     # this command touches neither. See `resolve_device_offline`.
     device = resolve_device_offline(getattr(args, "device", None), load_config())
     cfg = _require_cfg(device)
-    led = mc.load_ledger(LEDGER_PATH)
+    led = mc.load_ledger(ledger_path())
     print(f"{CYAN}Device:{RESET} {BOLD}{device}{RESET} {GRAY}(from config; "
           f"generate does not contact the router){RESET}", file=sys.stderr)
     used = set(led.get("used", []))
@@ -291,13 +301,13 @@ def _apply_imei(device, drv, led, cfg, target: str, allow_used: bool) -> int:
     ok, raw = drv.send_egmr(target)
     if not ok:
         print(f"{RED}AT+EGMR did not return OK:{RESET}\n{raw}", file=sys.stderr)
-        mc.save_ledger(LEDGER_PATH, led)
+        mc.save_ledger(ledger_path(), led)
         return 1
     dled["current"] = {"imei": target, "applied_at": ts,
                        "luhn_valid": mc.luhn_valid(target), "verified": False}
     if target not in led.setdefault("used", []):
         led["used"].append(target)
-    mc.save_ledger(LEDGER_PATH, led)
+    mc.save_ledger(ledger_path(), led)
     print(f"{GREEN}AT+EGMR OK.{RESET} IMEI staged. Reset required.")
     return 0
 
@@ -366,7 +376,7 @@ def cmd_verify(args) -> int:
         # below.
         if (dled.get("current") or {}).get("imei") == expect:
             dled["current"]["verified"] = True
-            mc.save_ledger(LEDGER_PATH, led)
+            mc.save_ledger(ledger_path(), led)
         print(f"{GREEN}Verified: live IMEI is {live}.{RESET}")
         return 0
     print(f"{RED}Mismatch: expected {expect}, modem reports {live or '(unreadable)'}.{RESET}",

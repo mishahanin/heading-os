@@ -25,6 +25,7 @@ from __future__ import annotations
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -54,45 +55,97 @@ WS = get_workspace_root()
 # Schema: chart = email_local -> {title, function, reports_to}.
 # ============================================================
 _ORG_CHART_EXAMPLE = WS / "scripts" / "bootcamp-org-chart.example.json"
-try:
-    _ORG_CHART_FILE = resolve_config_with_example(
-        "bootcamp-org-chart.json", _ORG_CHART_EXAMPLE
-    )
-except (DataRootError, ValueError, OSError) as _exc:
-    # Same call the operator seam makes in operator_identity._resolve_file, and
-    # for the same reason. resolve_config_with_example() reaches get_data_root(),
-    # which REFUSES when HEADING_OS_DATA names a path that is not a directory --
-    # a guard against a WRITE landing on the live overlay. This is a READ, and
-    # the banner above already documents the lower tier: the shipped example.
-    # Until 2026-08-30 the refusal arrived at module scope, so importing this
-    # module at all died with a traceback and exit 1 on a machine with no
-    # overlay. Fall to the example and say so; the paths that genuinely need the
-    # overlay refuse separately, below.
-    print(f"[bootcamp-roster] the private data overlay could not be resolved "
-          f"({type(_exc).__name__}: {_exc}); reading the org chart from the "
-          f"shipped example {_ORG_CHART_EXAMPLE.name} instead. Its names and "
-          f"titles are generic placeholders, not your Tribe.", file=sys.stderr)
-    _ORG_CHART_FILE = _ORG_CHART_EXAMPLE
-_org_data = json.loads(_ORG_CHART_FILE.read_text(encoding="utf-8"))
-SHARED_MAILBOXES = set(_org_data["shared_mailboxes"])
-NON_TRIBE = set(_org_data["non_tribe"])  # dict email -> reason; membership uses keys
-CHART = _org_data["chart"]
-_LEADER_EMAILS = set(_org_data["leader_emails"])
-_GAL_ALIASES = _org_data["aliases"]
 
-# The GAL export filename carries the tenant domain, and `gal-export.py` writes
-# `gal-<domain>.json`. This module hardcoded one company's domain until
-# 2026-08-23, so on any other deployment the writer and the reader named
-# different files and `build_roster()` died on a missing path. The domain is
-# instance data like everything else here; `operator_email_domain()` is the
-# fallback so a workspace that never edited the org chart still lines up with
-# what `gal-export.py` produced.
-_GAL_DOMAIN = _org_data.get("gal_domain") or operator_email_domain() or "example.com"
 
-# Event-specific paths/title are instance DATA resolved from the (private) config;
-# the engine example ships generic placeholders.
-_EVENT = _org_data.get("event", {})
-_EVENT_DIR = _EVENT.get("dir", "Example Bootcamp")
+def _org_chart_file() -> Path:
+    """The org-chart path, resolved at call time and never at import.
+
+    Every resolver below reaches `get_data_root()`, which reads HEADING_OS_DATA
+    on EVERY call. Asking at module scope asked once, during this module's own
+    import, and stored the answer -- so a caller that repointed the root
+    afterwards still read the first overlay, and `out_xlsx()` below reaches a
+    `mkdir` that `tests/conftest.py` does not wrap.
+    """
+    try:
+        return resolve_config_with_example(
+            "bootcamp-org-chart.json", _ORG_CHART_EXAMPLE
+        )
+    except (DataRootError, ValueError, OSError) as exc:
+        # Same call the operator seam makes in operator_identity._resolve_file,
+        # and for the same reason. resolve_config_with_example() reaches
+        # get_data_root(), which REFUSES when HEADING_OS_DATA names a path that
+        # is not a directory -- a guard against a WRITE landing on the live
+        # overlay. This is a READ, and the banner above already documents the
+        # lower tier: the shipped example. Until 2026-08-30 the refusal arrived
+        # at module scope, so importing this module at all died with a traceback
+        # and exit 1 on a machine with no overlay. Fall to the example and say
+        # so; the paths that genuinely need the overlay refuse separately, below.
+        print(f"[bootcamp-roster] the private data overlay could not be resolved "
+              f"({type(exc).__name__}: {exc}); reading the org chart from the "
+              f"shipped example {_ORG_CHART_EXAMPLE.name} instead. Its names and "
+              f"titles are generic placeholders, not your Tribe.", file=sys.stderr)
+        return _ORG_CHART_EXAMPLE
+
+
+# Parsed on first use and cached per data root. The key is the HEADING_OS_DATA
+# value itself, so a caller that repoints the root MISSES the cache and reloads
+# rather than being served the first overlay's chart for the life of the
+# process. A plain module-level parse had no key and could not do that.
+_ORG_CACHE: dict[str, dict] = {}
+
+
+def _org_data() -> dict:
+    key = os.environ.get("HEADING_OS_DATA", "")
+    data = _ORG_CACHE.get(key)
+    if data is None:
+        data = _ORG_CACHE[key] = json.loads(
+            _org_chart_file().read_text(encoding="utf-8"))
+    return data
+
+
+def shared_mailboxes() -> set[str]:
+    return set(_org_data()["shared_mailboxes"])
+
+
+def non_tribe() -> set[str]:
+    # dict email -> reason; membership uses keys
+    return set(_org_data()["non_tribe"])
+
+
+def chart() -> dict:
+    return _org_data()["chart"]
+
+
+def _leader_emails() -> set[str]:
+    return set(_org_data()["leader_emails"])
+
+
+def _gal_aliases() -> dict:
+    return _org_data()["aliases"]
+
+
+def _gal_domain() -> str:
+    """The tenant domain the GAL export filename carries.
+
+    `gal-export.py` writes `gal-<domain>.json`. This module hardcoded one
+    company's domain until 2026-08-23, so on any other deployment the writer and
+    the reader named different files and `build_roster()` died on a missing
+    path. The domain is instance data like everything else here;
+    `operator_email_domain()` is the fallback so a workspace that never edited
+    the org chart still lines up with what `gal-export.py` produced.
+    """
+    return _org_data().get("gal_domain") or operator_email_domain() or "example.com"
+
+
+def _event() -> dict:
+    # Event-specific paths/title are instance DATA resolved from the (private)
+    # config; the engine example ships generic placeholders.
+    return _org_data().get("event", {})
+
+
+def _event_dir() -> str:
+    return _event().get("dir", "Example Bootcamp")
+
 
 # These three name real overlay data: the GAL export this reads, the preliminary
 # attendee list, and the roster it writes. Unlike the org chart above there is no
@@ -101,15 +154,29 @@ _EVENT_DIR = _EVENT.get("dir", "Example Bootcamp")
 # degradation. What it must not be is a traceback at module scope: fixing the
 # org-chart line alone simply moved the same crash from line 55 to this one, and
 # a crash during import happens before any argument is parsed or any message is
-# chosen. Resolve them once, remember the refusal, and let main() state it.
-_OVERLAY_ERROR: str | None = None
-try:
-    GAL_JSON = get_outputs_dir() / "_sync" / f"gal-{_GAL_DOMAIN}.json"
-    PRELIM_XLSX = get_datastore_dir() / "events" / _EVENT_DIR / _EVENT.get("prelim_xlsx", "prelim.xlsx")
-    OUT_XLSX = get_datastore_dir() / "events" / _EVENT_DIR / _EVENT.get("out_xlsx", "roster.xlsx")
-except (DataRootError, ValueError, OSError) as _exc:
-    GAL_JSON = PRELIM_XLSX = OUT_XLSX = None
-    _OVERLAY_ERROR = f"{type(_exc).__name__}: {_exc}"
+# chosen. main() asks overlay_error() and states it.
+def gal_json() -> Path:
+    return get_outputs_dir() / "_sync" / f"gal-{_gal_domain()}.json"
+
+
+def prelim_xlsx() -> Path:
+    return (get_datastore_dir() / "events" / _event_dir()
+            / _event().get("prelim_xlsx", "prelim.xlsx"))
+
+
+def out_xlsx() -> Path:
+    return (get_datastore_dir() / "events" / _event_dir()
+            / _event().get("out_xlsx", "roster.xlsx"))
+
+
+def overlay_error() -> str | None:
+    """The refusal message for main(), or None when all three paths resolve."""
+    try:
+        for resolve in (gal_json, prelim_xlsx, out_xlsx):
+            resolve()
+    except (DataRootError, ValueError, OSError) as exc:
+        return f"{type(exc).__name__}: {exc}"
+    return None
 
 # ============================================================
 # Track recommendation logic
@@ -119,8 +186,8 @@ def recommend_tracks(email_local: str, function: str, title: str) -> tuple[str, 
     f = (function or "").lower()
     t = (title or "").lower()
 
-    # CEO + executives that touch both - go to BOTH (data-driven; see _LEADER_EMAILS)
-    if email_local in _LEADER_EMAILS:
+    # CEO + executives that touch both - go to BOTH (data-driven; see _leader_emails)
+    if email_local in _leader_emails():
         return "Y", "Y", "Leadership with technical authority — attend both passes"
 
     # InfoSec sits between - attend both.
@@ -217,7 +284,7 @@ def load_prelim() -> set[str]:
         raise PrelimUnavailable(
             "openpyxl is not bound; call _ensure_openpyxl() before build_roster()")
     try:
-        wb = openpyxl.load_workbook(PRELIM_XLSX, data_only=True)
+        wb = openpyxl.load_workbook(prelim_xlsx(), data_only=True)
     except Exception as e:                    # noqa: BLE001 - re-raised, see below
         # Broad on purpose, and RE-RAISED, never swallowed. A .xlsx is a zip
         # container, so a truncated download surfaces as `zipfile.BadZipFile`,
@@ -226,12 +293,12 @@ def load_prelim() -> set[str]:
         # KeyError from deep inside the reader. Enumerating that list means
         # missing the next member of it, and the one thing this must never do
         # again is turn an unreadable file into an empty attendee set.
-        raise PrelimUnavailable(f"cannot read {PRELIM_XLSX}: {e}") from e
+        raise PrelimUnavailable(f"cannot read {prelim_xlsx()}: {e}") from e
     ws = wb.active
 
     found = _prelim_column(ws)
     if found is None:
-        print(f"[WARN] no name column found in {PRELIM_XLSX} "
+        print(f"[WARN] no name column found in {prelim_xlsx()} "
               f"(looked for {', '.join(_NAME_HEADERS)}). Falling back to every "
               f"cell in the sheet, which over-reports: any cell equal to "
               f"someone's name marks them present.")
@@ -272,8 +339,8 @@ def in_prelim(display_name: str, email_local: str, prelim: set[str]) -> bool:
     # Last name only
     if last_name and last_name in prelim:
         return True
-    # Special aliases (data-driven; see _GAL_ALIASES)
-    for k, v in _GAL_ALIASES.items():
+    # Special aliases (data-driven; see _gal_aliases)
+    for k, v in _gal_aliases().items():
         if first_name == k and any(a in prelim for a in v):
             return True
     return False
@@ -283,12 +350,18 @@ def in_prelim(display_name: str, email_local: str, prelim: set[str]) -> bool:
 # Build roster
 # ============================================================
 def build_roster() -> tuple[list[dict], dict]:
-    with GAL_JSON.open(encoding="utf-8") as f:
+    with gal_json().open(encoding="utf-8") as f:
         gal = json.load(f)
     prelim = load_prelim()
 
     rows = []
     excluded = {"public_dl": [], "shared_mailbox": [], "non_tribe": []}
+
+    # Resolved once for the whole sweep rather than per row: each of these
+    # rebuilds a set from the cached chart, and the chart cannot move mid-loop.
+    shared = shared_mailboxes()
+    excluded_non_tribe = non_tribe()
+    org_chart = chart()
 
     for r in gal:
         email = r.get("email") or ""
@@ -297,15 +370,15 @@ def build_roster() -> tuple[list[dict], dict]:
         if r.get("mailbox_type") == "PublicDL":
             excluded["public_dl"].append(email)
             continue
-        if email in SHARED_MAILBOXES:
+        if email in shared:
             excluded["shared_mailbox"].append(email)
             continue
-        if email in NON_TRIBE:
+        if email in excluded_non_tribe:
             excluded["non_tribe"].append(email)
             continue
 
         local = email.split("@")[0]
-        chart_entry = CHART.get(local)
+        chart_entry = org_chart.get(local)
         gal_title = r.get("job_title") or ""
         if chart_entry:
             title = chart_entry["title"]
@@ -384,7 +457,7 @@ def write_excel(rows: list[dict], excluded: dict):
     ws.title = "Tribe Roster"
 
     # Title row
-    ws["A1"] = _EVENT.get("title", "Bootcamp - Tribe Roster & Track Recommendations")
+    ws["A1"] = _event().get("title", "Bootcamp - Tribe Roster & Track Recommendations")
     ws["A1"].font = Font(bold=True, size=14)
     # A:L, not A:K -- `headers` carries 12 entries, so the table runs to
     # column L ("Rationale", the widest at width 50) and the banner used
@@ -475,20 +548,30 @@ def write_excel(rows: list[dict], excluded: dict):
     ws3.column_dimensions["A"].width = 22
     ws3.column_dimensions["B"].width = 40
 
-    OUT_XLSX.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(OUT_XLSX)
-    print(f"[OK] Wrote {OUT_XLSX}")
+    out_path = out_xlsx()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(out_path)
+    print(f"[OK] Wrote {out_path}")
     print(f"     Tribe roster: {len(rows)} | Tech: {tech_count} | Ops/Exec: {ops_count} | Both: {both_count} | Unknown: {unknown_count}")
 
 
 def main() -> int:
-    if _OVERLAY_ERROR is not None:
+    # Resolve the org chart BEFORE the refusal below, and discard the result.
+    # It looks like a pointless call and it is not: on an unresolvable overlay
+    # `_org_chart_file()` degrades to the shipped example and SAYS so on stderr,
+    # and that notice used to be printed during this module's import, ahead of
+    # the refusal. Moving the resolution to call time silently dropped it --
+    # `tests/test_three_admin_tools_that_died_one_frame_below_the_seam.py`
+    # caught the loss. Asking here keeps both messages and their original order.
+    _org_data()
+    overlay_refusal = overlay_error()
+    if overlay_refusal is not None:
         # Loud, and with the same exit code the other refusal below uses. A
         # partial run is the danger this closes: every path this tool reads and
         # writes lives in the overlay, so without one there is no roster to
         # build and nothing that could look complete.
         print(f"[ERROR] the private data overlay is unreachable "
-              f"({_OVERLAY_ERROR})", file=sys.stderr)
+              f"({overlay_refusal})", file=sys.stderr)
         print("        The GAL export, the preliminary attendee list and the "
               "roster output all live there. Refusing to run.", file=sys.stderr)
         return 1

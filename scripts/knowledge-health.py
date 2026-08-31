@@ -44,9 +44,28 @@ from scripts.utils.workspace import display_path, get_default_tz, get_knowledge_
 from scripts.utils.markdown import frontmatter_date, frontmatter_list
 from scripts.utils.markdown import parse_frontmatter as _parse_frontmatter
 
-KNOWLEDGE_DIR = get_knowledge_dir()
-INDEX_FILE = KNOWLEDGE_DIR / "INDEX.md"
-SHARED_KNOWLEDGE_DIR = get_shared_knowledge_dir()
+
+def knowledge_root() -> Path:
+    """Resolved at call time, never at import: `get_knowledge_dir()` reads
+    HEADING_OS_DATA on every call, and a module-level constant asked once
+    during its own import and stored the answer, so a test that imported this
+    module and then repointed the root still scanned the operator's real
+    overlay.
+
+    Named `knowledge_root` and not `knowledge_dir` because three functions
+    below already take a `knowledge_dir` parameter.
+    """
+    return get_knowledge_dir()
+
+
+def index_file() -> Path:
+    return knowledge_root() / "INDEX.md"
+
+
+def shared_knowledge_dir() -> Path:
+    return get_shared_knowledge_dir()
+
+
 TODAY = datetime.now(get_default_tz()).date()
 
 VALID_TYPES = {"fleeting", "signal", "decision", "meeting", "research", "strategy", "people", "technology"}
@@ -104,7 +123,7 @@ def note_subdirs(knowledge_dir=None):
     not name was not skipped-with-a-note; it was invisible, and the report's
     totals were quietly smaller than the tree.
     """
-    root = KNOWLEDGE_DIR if knowledge_dir is None else knowledge_dir
+    root = knowledge_root() if knowledge_dir is None else knowledge_dir
     if not root.exists():
         return []
     found = sorted(
@@ -123,7 +142,7 @@ def scanned_note_files(knowledge_dir=None):
     second thing to keep in step, and the pair would drift the way every other
     duplicated rule in this repo has.
     """
-    root = KNOWLEDGE_DIR if knowledge_dir is None else knowledge_dir
+    root = knowledge_root() if knowledge_dir is None else knowledge_dir
     files = []
     for subdir in note_subdirs(root):
         dir_path = root / subdir
@@ -148,7 +167,7 @@ def unread_note_files(knowledge_dir=None):
     Anything else -- a note one directory deeper than this engine looks, a
     directory added after the reader was written -- is reported by name.
     """
-    root = KNOWLEDGE_DIR if knowledge_dir is None else knowledge_dir
+    root = knowledge_root() if knowledge_dir is None else knowledge_dir
     if not root.exists():
         return []
     seen = {str(p) for _subdir, p in scanned_note_files(root)}
@@ -288,7 +307,7 @@ def scan_shared_notes():
     by neither, and the count printed as "Corporate Shared Knowledge: N notes".
     """
     notes = []
-    shared_dir = SHARED_KNOWLEDGE_DIR
+    shared_dir = shared_knowledge_dir()
     if not shared_dir.exists():
         return notes
 
@@ -411,7 +430,7 @@ def format_terminal_report(notes):
                      f"child directories of the knowledge root.{RESET}")
         lines.append("")
 
-    odin_brain_dir = KNOWLEDGE_DIR / "odin-brain"
+    odin_brain_dir = knowledge_root() / "odin-brain"
     if odin_brain_dir.exists():
         lines.append(f"{GRAY}Note: knowledge/odin-brain/ uses a separate schema - run scripts/odin-brain-health.py for its report.{RESET}")
         lines.append("")
@@ -550,7 +569,7 @@ def regenerate_index(notes):
                 lines.append("")
 
     content = "\n".join(lines) + "\n"
-    INDEX_FILE.write_text(content, encoding="utf-8")
+    index_file().write_text(content, encoding="utf-8")
     return True
 
 
@@ -560,8 +579,9 @@ def main():
     parser.add_argument("--update-index", action="store_true", help="Regenerate INDEX.md")
     args = parser.parse_args()
 
-    if not KNOWLEDGE_DIR.exists():
-        print(f"{RED}Knowledge directory not found: {KNOWLEDGE_DIR}{RESET}")
+    root = knowledge_root()
+    if not root.exists():
+        print(f"{RED}Knowledge directory not found: {root}{RESET}")
         sys.exit(1)
 
     notes = scan_notes()

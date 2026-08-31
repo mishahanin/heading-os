@@ -83,7 +83,7 @@ def state(fb, tmp_path, monkeypatch):
     The behaviour under test was fine; the isolation was missing. That is the
     same one-side-only shape this file's docstring is about.
     """
-    monkeypatch.setattr(fb, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(fb, "state_dir", lambda p=tmp_path: p)
     return tmp_path
 
 
@@ -243,7 +243,7 @@ def test_the_stats_writer_refuses_a_path_inside_the_engine_clone(fb, monkeypatch
     """`python scripts/fireside-bot.py stats` on a clone with no data overlay
     resolved STATS_DIR into the repository and created the tree."""
     inside = ROOT / "examples" / "outputs" / "operations" / "tribe-fireside" / "stats"
-    monkeypatch.setattr(fb, "STATS_DIR", inside)
+    monkeypatch.setattr(fb, "stats_dir", lambda p=inside: p)
 
     try:
         with pytest.raises(Exception) as caught:
@@ -269,7 +269,7 @@ def test_the_stats_writer_refuses_a_path_inside_the_engine_clone(fb, monkeypatch
 def test_the_stats_writer_accepts_a_path_outside_the_clone(fb, tmp_path,
                                                            monkeypatch):
     target = tmp_path / "outputs" / "stats"
-    monkeypatch.setattr(fb, "STATS_DIR", target)
+    monkeypatch.setattr(fb, "stats_dir", lambda p=target: p)
     assert fb.require_writable_stats_dir() == target
     assert target.is_dir()
 
@@ -280,9 +280,9 @@ def test_cmd_stats_goes_through_the_funnel_not_a_bare_mkdir():
                      if not ln.lstrip().startswith("#"))
     # Once, inside the funnel. The point is that `cmd_stats` no longer has
     # its own; a second occurrence anywhere is a writer that skipped it.
-    assert code.count("STATS_DIR.mkdir(") == 1
+    assert code.count("stats_dir().mkdir(") == 1
     funnel = code[code.index("def require_writable_stats_dir"):]
-    assert "STATS_DIR.mkdir(" in funnel[:funnel.index("\ndef ")]
+    assert "stats_dir().mkdir(" in funnel[:funnel.index("\ndef ")]
     assert "require_writable_stats_dir()" in code
 
 
@@ -406,7 +406,7 @@ def test_a_healthy_backup_run_reports_no_failures(fb, state, monkeypatch,
 # ============================================================
 
 def _stats_fixture(fb, state, tmp_path, monkeypatch, weeks):
-    monkeypatch.setattr(fb, "STATS_DIR", tmp_path / "stats")
+    monkeypatch.setattr(fb, "stats_dir", lambda p=tmp_path / "stats": p)
     rows = []
     for w in range(1, weeks + 1):
         rows.append({"session_date": f"2026-09-{w:02d}", "speaker_name": f"S{w}",

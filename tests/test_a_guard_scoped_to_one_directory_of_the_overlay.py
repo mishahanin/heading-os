@@ -25,6 +25,10 @@ Two things were wrong, and both are fixed:
 The per-test fix is in the fixtures: every thread test now pins
 `HEADING_OS_DATA` at a tmp directory, whether or not today's code reaches it.
 This file covers the backstop.
+
+The guard moved out of `tests/conftest.py` into
+`scripts/utils/overlay_write_guard.py` on 2026-08-31, with no change to what it
+refuses. The dates above are of where it lived at the time.
 """
 from __future__ import annotations
 
@@ -37,15 +41,16 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-CONFTEST = ROOT / "tests" / "conftest.py"
+GUARD = ROOT / "scripts" / "utils" / "overlay_write_guard.py"
 
 
 @pytest.fixture(scope="module")
 def cf():
-    """Load conftest.py as a plain module, under a name pytest is not using."""
-    spec = importlib.util.spec_from_file_location("conftest_under_test", CONFTEST)
+    """The guard as a FRESH module, so replacing `_watched_roots` cannot
+    repoint the copy this session armed over the operator's real overlay."""
+    spec = importlib.util.spec_from_file_location("overlay_guard_scope_copy", GUARD)
     module = importlib.util.module_from_spec(spec)
-    sys.modules["conftest_under_test"] = module
+    sys.modules["overlay_guard_scope_copy"] = module
     spec.loader.exec_module(module)
     return module
 

@@ -36,8 +36,20 @@ import re
 # touches the datastore and raises when nothing matches, and this module must
 # import pure (F-2.1). It was a version literal, which is how its sibling
 # generator ended up pinned to a v1.00 that no longer exists.
-OUTPUT = str(get_outputs_dir() / "deliverables" / "documents" /
-             "ODUN.ONE - AI-Powered Sovereign Intelligence Platform - Complete Capability Document.docx")
+
+
+def output() -> str:
+    """Resolved at call time, never at import.
+
+    `get_outputs_dir()` reads `HEADING_OS_DATA` on every call, so it follows
+    the environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the data
+    root still wrote into the operator's real overlay.
+    """
+    return str(get_outputs_dir() / "deliverables" / "documents" /
+               "ODUN.ONE - AI-Powered Sovereign Intelligence Platform - Complete Capability Document.docx")
+
 
 # Brand colors from template analysis
 # Heading 1: GT Standard M Medium, 18pt, #747DBE (purple-blue)
@@ -1413,8 +1425,9 @@ def build_document():
 
     # Save. `save_docx` creates the parent itself, so the `os.makedirs` that
     # used to sit here is gone with it.
-    save_docx(doc, OUTPUT)
-    print(f"DOCX generated successfully: {OUTPUT}")
+    out = output()
+    save_docx(doc, out)
+    print(f"DOCX generated successfully: {out}")
     report_placeholders(doc)
 
 

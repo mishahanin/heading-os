@@ -102,7 +102,7 @@ def test_the_capture_dir_is_still_created_when_the_script_actually_runs(
     printed ERR three times and exited 0."""
     target = tmp_path / "exemplars"
     mod = _load(script, f"cap_{script.replace('-', '_').removesuffix('.py')}")
-    monkeypatch.setattr(mod, "OUTPUT_DIR", target)
+    monkeypatch.setattr(mod, "output_dir", lambda p=target: p)
 
     got = mod.prepare_output_dir()
     assert got.is_dir(), f"{script}: prepare_output_dir() did not create {got}"
@@ -116,11 +116,11 @@ def test_a_capture_refuses_a_directory_inside_the_engine_clone(
     script, tmp_path, monkeypatch
 ):
     """The guard asks where the write is going, not whether this machine has an
-    overlay. Pointing OUTPUT_DIR at the demo tree is the exact resolution a clone
+    overlay. Pointing `output_dir` at the demo tree is the exact resolution a clone
     with no overlay produces, and nothing may be created there."""
     mod = _load(script, f"capdemo_{script.replace('-', '_').removesuffix('.py')}")
     doomed = ENGINE / "examples" / "outputs" / "research" / "_drafts" / "exemplars"
-    monkeypatch.setattr(mod, "OUTPUT_DIR", doomed)
+    monkeypatch.setattr(mod, "output_dir", lambda p=doomed: p)
     # Swept before AND after. A leftover from an earlier run turns this into a
     # test that reports the wrong thing: it would fail with "refused, but only
     # after creating" over a directory it never touched. A mutation run that
@@ -140,14 +140,14 @@ def test_a_capture_refuses_a_directory_inside_the_engine_clone(
 # 2. Fireside state never lands in the engine clone
 # ---------------------------------------------------------------------------
 #
-# Five writers shared one `STATE_DIR` and four of them carried their own
+# Five writers share one `state_dir()` and four of them carried their own
 # `path.parent.mkdir(parents=True, exist_ok=True)`. They now share one funnel,
 # `require_writable_state_dir()`, because a guard added to some writers is a
 # guard the next writer will not have.
 
 
 def _fireside(monkeypatch, state_dir: Path, tag: str):
-    """Load the bot with STATE_DIR pointed wherever the caller needs it.
+    """Load the bot with `state_dir` pointed wherever the caller needs it.
 
     Redirecting the module constant is how the whole fireside suite already
     works, and it is what an environment-shaped guard got wrong: those runs were
@@ -155,7 +155,7 @@ def _fireside(monkeypatch, state_dir: Path, tag: str):
     `data_overlay_present()` refused fifty of them.
     """
     bot = _load("fireside-bot.py", f"fireside_state_{tag}")
-    monkeypatch.setattr(bot, "STATE_DIR", state_dir)
+    monkeypatch.setattr(bot, "state_dir", lambda p=state_dir: p)
     return bot
 
 

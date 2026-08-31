@@ -183,7 +183,7 @@ def test_missing_pyyaml_falls_back_instead_of_raising_nameerror(monkeypatch, tmp
     """
     cfg = tmp_path / "sentinel_config.yaml"
     cfg.write_text("email:\n  ignore_patterns:\n    - '*@spam.test'\n", encoding="utf-8")
-    monkeypatch.setattr(ei, "SENTINEL_CONFIG", cfg)
+    monkeypatch.setattr(ei, "sentinel_config", lambda p=cfg: p)
 
     real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__
 
@@ -201,7 +201,7 @@ def test_with_pyyaml_the_config_patterns_are_still_added(monkeypatch, tmp_path):
     """The fallback must not have become the only path."""
     cfg = tmp_path / "sentinel_config.yaml"
     cfg.write_text("email:\n  ignore_patterns:\n    - '*@spam.test'\n", encoding="utf-8")
-    monkeypatch.setattr(ei, "SENTINEL_CONFIG", cfg)
+    monkeypatch.setattr(ei, "sentinel_config", lambda p=cfg: p)
     assert "*@spam.test" in ei._load_ignore_patterns()
 
 
@@ -520,7 +520,7 @@ def test_the_undo_command_still_reports_ok_when_it_did_the_work(monkeypatch, cap
 def unread_run(monkeypatch, tmp_path):
     """run_unread_mode() with Exchange, the LLM and the CRM all replaced."""
     state_file = tmp_path / "nested" / "deeper" / "state.json"
-    monkeypatch.setattr(ei, "STATE_FILE", state_file)
+    monkeypatch.setattr(ei, "state_file", lambda p=state_file: p)
     monkeypatch.setattr(ei, "_connect_with_retries", lambda: _Account())
     monkeypatch.setattr(ei, "_load_ignore_patterns", list)
     monkeypatch.setattr(ei, "load_crm_contacts", dict)
@@ -570,7 +570,7 @@ def test_an_interrupted_feed_write_leaves_the_last_good_feed_intact(unread_run, 
 @pytest.fixture
 def offline_run(monkeypatch, tmp_path):
     """Run main() end to end with Exchange and the LLM replaced."""
-    monkeypatch.setattr(ei, "STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(ei, "state_file", lambda p=tmp_path / "state.json": p)
     monkeypatch.setattr(ei, "connect_exchange", lambda: _Account())
     monkeypatch.setattr(ei, "load_crm_contacts", dict)
     monkeypatch.setattr(ei, "load_pipeline_context", lambda: "")

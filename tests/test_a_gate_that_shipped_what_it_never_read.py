@@ -323,7 +323,7 @@ def test_the_listing_names_the_bad_marker_and_keeps_going(tmp_path, monkeypatch,
     (ctx / "broken.md").write_text("> Last verified: 2026-13-40\n", encoding="utf-8")
     today = datetime.now(fresh.get_default_tz()).date().isoformat()
     (ctx / "good.md").write_text(f"> Last verified: {today}\n", encoding="utf-8")
-    monkeypatch.setattr(fresh, "CONTEXT_DIR", ctx)
+    monkeypatch.setattr(fresh, "context_dir", lambda p=ctx: p)
 
     fresh.check_all()
     out = capsys.readouterr().out
@@ -337,7 +337,7 @@ def test_a_bad_marker_is_not_folded_into_no_marker(tmp_path, monkeypatch, capsys
     ctx = tmp_path / "context"
     ctx.mkdir()
     (ctx / "broken.md").write_text("> Last verified: 2026-02-30\n", encoding="utf-8")
-    monkeypatch.setattr(fresh, "CONTEXT_DIR", ctx)
+    monkeypatch.setattr(fresh, "context_dir", lambda p=ctx: p)
 
     fresh.check_all()
     out = capsys.readouterr().out

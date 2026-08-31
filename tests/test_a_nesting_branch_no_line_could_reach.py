@@ -66,8 +66,8 @@ def _render_proposal(md: str, tmp_path, monkeypatch):
     src = tmp_path / "in.md"
     src.write_text(md, encoding="utf-8")
     out = tmp_path / "out.docx"
-    monkeypatch.setattr(prop, "INPUT_PATH", str(src))
-    monkeypatch.setattr(prop, "OUTPUT_PATH", str(out))
+    monkeypatch.setattr(prop, "input_path", lambda p=str(src): p)
+    monkeypatch.setattr(prop, "output_path", lambda p=str(out): p)
     prop.build_document()
     return docx.Document(str(out))
 
@@ -367,8 +367,8 @@ def _render_competitive(md: str, tmp_path, monkeypatch):
     src = tmp_path / "in.md"
     src.write_text(md, encoding="utf-8")
     out = tmp_path / "out.docx"
-    monkeypatch.setattr(comp, "INPUT", str(src))
-    monkeypatch.setattr(comp, "OUTPUT", str(out))
+    monkeypatch.setattr(comp, "input_path", lambda p=str(src): p)
+    monkeypatch.setattr(comp, "output_path", lambda p=str(out): p)
     comp.build_docx()
     return docx.Document(str(out))
 

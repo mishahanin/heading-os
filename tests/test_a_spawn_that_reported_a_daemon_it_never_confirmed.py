@@ -171,8 +171,8 @@ def test_a_checkpoint_missing_started_uids_does_not_raise(fp, tmp_path, monkeypa
     # WORKSPACE too: without it `main()` finds the REAL `.fireside/remote-host`
     # in this workspace and takes the remote path instead of the local one.
     monkeypatch.setattr(fp, "WORKSPACE", tmp_path / "ws")
-    monkeypatch.setattr(fp, "STATE_DIR", tmp_path / "state")
-    monkeypatch.setattr(fp, "CHECKPOINT", tmp_path / "cp.json")
+    monkeypatch.setattr(fp, "state_dir", lambda p=tmp_path / "state": p)
+    monkeypatch.setattr(fp, "checkpoint", lambda p=tmp_path / "cp.json": p)
     monkeypatch.setattr(fp, "load_checkpoint", lambda: {"swap_events": []})
     monkeypatch.setattr(fp, "_daemon_alive", lambda: (True, 7))
     monkeypatch.setattr(fp, "save_checkpoint", lambda s: None)
@@ -184,8 +184,8 @@ def test_an_empty_checkpoint_dict_does_not_raise(fp, tmp_path, monkeypatch, caps
     # WORKSPACE too: without it `main()` finds the REAL `.fireside/remote-host`
     # in this workspace and takes the remote path instead of the local one.
     monkeypatch.setattr(fp, "WORKSPACE", tmp_path / "ws")
-    monkeypatch.setattr(fp, "STATE_DIR", tmp_path / "state")
-    monkeypatch.setattr(fp, "CHECKPOINT", tmp_path / "cp.json")
+    monkeypatch.setattr(fp, "state_dir", lambda p=tmp_path / "state": p)
+    monkeypatch.setattr(fp, "checkpoint", lambda p=tmp_path / "cp.json": p)
     monkeypatch.setattr(fp, "load_checkpoint", dict)   # a checkpoint with no keys
     monkeypatch.setattr(fp, "_daemon_alive", lambda: (True, 7))
     monkeypatch.setattr(fp, "save_checkpoint", lambda s: None)
@@ -201,8 +201,8 @@ def test_a_populated_prior_still_produces_a_delta(fp, tmp_path, monkeypatch, cap
         json.dumps({"event_type": "start_received", "user_id": 11,
                     "ts": "2026-08-25T00:00:00+00:00"}) + "\n", encoding="utf-8")
     monkeypatch.setattr(fp, "WORKSPACE", tmp_path / "ws")
-    monkeypatch.setattr(fp, "STATE_DIR", state)
-    monkeypatch.setattr(fp, "CHECKPOINT", tmp_path / "cp.json")
+    monkeypatch.setattr(fp, "state_dir", lambda p=state: p)
+    monkeypatch.setattr(fp, "checkpoint", lambda p=tmp_path / "cp.json": p)
     monkeypatch.setattr(fp, "load_checkpoint", lambda: {"started_uids": []})
     monkeypatch.setattr(fp, "_daemon_alive", lambda: (True, 7))
     monkeypatch.setattr(fp, "save_checkpoint", lambda s: None)
@@ -226,8 +226,8 @@ def test_a_uid_already_in_the_prior_is_not_reported_as_new_again(
         json.dumps({"event_type": "start_received", "user_id": 11,
                     "ts": "2026-08-25T00:00:00+00:00"}) + "\n", encoding="utf-8")
     monkeypatch.setattr(fp, "WORKSPACE", tmp_path / "ws")
-    monkeypatch.setattr(fp, "STATE_DIR", state)
-    monkeypatch.setattr(fp, "CHECKPOINT", tmp_path / "cp.json")
+    monkeypatch.setattr(fp, "state_dir", lambda p=state: p)
+    monkeypatch.setattr(fp, "checkpoint", lambda p=tmp_path / "cp.json": p)
     monkeypatch.setattr(fp, "load_checkpoint", lambda: {"started_uids": [11]})
     monkeypatch.setattr(fp, "_daemon_alive", lambda: (True, 7))
     monkeypatch.setattr(fp, "save_checkpoint", lambda s: None)

@@ -576,7 +576,7 @@ def test_at_most_three_overdue_names_are_listed(cd):
 def test_a_corrupt_registry_is_named_on_stderr(cd, tmp_path, monkeypatch, capsys):
     bad = tmp_path / "exec-registry.json"
     bad.write_text('{"executives": [],}', encoding="utf-8")
-    monkeypatch.setattr(cd, "EXEC_REGISTRY_FILE", bad)
+    monkeypatch.setattr(cd, "exec_registry_file", lambda p=bad: p)
     cd.collect_exec_registry()
     assert "unreadable" in capsys.readouterr().err
 
@@ -585,7 +585,7 @@ def test_the_corrupt_registry_warning_names_the_file(cd, tmp_path, monkeypatch,
                                                       capsys):
     bad = tmp_path / "exec-registry.json"
     bad.write_text("not json at all", encoding="utf-8")
-    monkeypatch.setattr(cd, "EXEC_REGISTRY_FILE", bad)
+    monkeypatch.setattr(cd, "exec_registry_file", lambda p=bad: p)
     cd.collect_exec_registry()
     assert str(bad) in capsys.readouterr().err
 
@@ -593,13 +593,14 @@ def test_the_corrupt_registry_warning_names_the_file(cd, tmp_path, monkeypatch,
 def test_a_corrupt_registry_still_degrades_to_empty(cd, tmp_path, monkeypatch):
     bad = tmp_path / "exec-registry.json"
     bad.write_text("{[}", encoding="utf-8")
-    monkeypatch.setattr(cd, "EXEC_REGISTRY_FILE", bad)
+    monkeypatch.setattr(cd, "exec_registry_file", lambda p=bad: p)
     assert cd.collect_exec_registry()["executives"] == []
 
 
 def test_an_absent_registry_is_not_an_error(cd, tmp_path, monkeypatch, capsys):
     """Missing and corrupt are different facts; only one is a fault."""
-    monkeypatch.setattr(cd, "EXEC_REGISTRY_FILE", tmp_path / "nope.json")
+    absent = tmp_path / "nope.json"
+    monkeypatch.setattr(cd, "exec_registry_file", lambda p=absent: p)
     assert cd.collect_exec_registry()["executives"] == []
     assert "unreadable" not in capsys.readouterr().err
 
@@ -610,6 +611,6 @@ def test_a_good_registry_is_returned_unchanged(cd, tmp_path, monkeypatch, capsys
         {"version": "1.0",
          "executives": [{"slug": "vlynd", "status": "active", "title": "CFO"}]}),
         encoding="utf-8")
-    monkeypatch.setattr(cd, "EXEC_REGISTRY_FILE", good)
+    monkeypatch.setattr(cd, "exec_registry_file", lambda p=good: p)
     assert cd.collect_exec_registry()["executives"][0]["slug"] == "vlynd"
     assert capsys.readouterr().err == ""

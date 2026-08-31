@@ -43,8 +43,18 @@ def _ensure_pptx():
     SLIDE_W = Inches(13.333)
     SLIDE_H = Inches(7.5)
 
-OUTPUT = str(get_outputs_dir() / "deliverables" / "presentations"
-             / "MIB - Testing Framework (31C Style).pptx")
+
+def output() -> str:
+    """Resolved at call time, never at import.
+
+    `get_outputs_dir()` reads `HEADING_OS_DATA` on every call, so it follows
+    the environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the data
+    root still wrote into the operator's real overlay.
+    """
+    return str(get_outputs_dir() / "deliverables" / "presentations"
+               / "MIB - Testing Framework (31C Style).pptx")
 
 
 def set_bg(slide, color):
@@ -282,9 +292,10 @@ def build():
         "31 Concept  |  31c.io  |  Proprietary & Confidential", size=10, color=MED_GRAY)
 
     # Save
-    os.makedirs(os.path.dirname(OUTPUT), exist_ok=True)
-    prs.save(OUTPUT)
-    print(f"Saved: {OUTPUT}")
+    out = output()
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    prs.save(out)
+    print(f"Saved: {out}")
 
 
 if __name__ == "__main__":

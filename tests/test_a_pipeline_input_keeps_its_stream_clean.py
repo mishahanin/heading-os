@@ -501,7 +501,7 @@ def test_a_radar_table_at_end_of_file_is_replaced_not_duplicated(health, tmp_pat
     body = ("> Last verified: 2026-08-01\n\n# People\n\n"
             "## Contact Radar\n\nold table\n")
     path = _people(tmp_path, body)
-    monkeypatch.setattr(health, "PEOPLE_FILE", path)
+    monkeypatch.setattr(health, "people_file", lambda p=path: p)
     health.update_people_md(CONTACT)
     health.update_people_md(CONTACT)
     text = path.read_text(encoding="utf-8")
@@ -515,7 +515,7 @@ def test_a_radar_table_before_a_c_heading_is_replaced(health, tmp_path, monkeypa
     body = ("> Last verified: 2026-08-01\n\n# People\n\n"
             "## Contact Radar\n\nold table\n\n## CRM Pipeline\n\nrows\n")
     path = _people(tmp_path, body)
-    monkeypatch.setattr(health, "PEOPLE_FILE", path)
+    monkeypatch.setattr(health, "people_file", lambda p=path: p)
     health.update_people_md(CONTACT)
     health.update_people_md(CONTACT)
     text = path.read_text(encoding="utf-8")
@@ -527,7 +527,7 @@ def test_the_last_verified_marker_stays_on_line_one(health, tmp_path, monkeypatc
     """No `---` anywhere: the old else-branch wrote the table at byte 0."""
     body = "> Last verified: 2026-08-01\n\n# People\n\nsome prose\n"
     path = _people(tmp_path, body)
-    monkeypatch.setattr(health, "PEOPLE_FILE", path)
+    monkeypatch.setattr(health, "people_file", lambda p=path: p)
     health.update_people_md(CONTACT)
     first = path.read_text(encoding="utf-8").splitlines()[0]
     assert first.startswith("> Last verified:"), (
@@ -539,7 +539,7 @@ def test_the_last_verified_marker_stays_on_line_one(health, tmp_path, monkeypatc
 def test_frontmatter_is_not_displaced_either(health, tmp_path, monkeypatch):
     body = "---\ntitle: People\n---\n\n# People\n\nprose\n"
     path = _people(tmp_path, body)
-    monkeypatch.setattr(health, "PEOPLE_FILE", path)
+    monkeypatch.setattr(health, "people_file", lambda p=path: p)
     health.update_people_md(CONTACT)
     text = path.read_text(encoding="utf-8")
     assert text.startswith("---\ntitle: People\n---\n")
@@ -549,7 +549,7 @@ def test_frontmatter_is_not_displaced_either(health, tmp_path, monkeypatch):
 def test_the_table_is_actually_written(health, tmp_path, monkeypatch):
     """Anchor: a removal that also removed the new table would pass the counts."""
     path = _people(tmp_path, "> Last verified: 2026-08-01\n\n# People\n")
-    monkeypatch.setattr(health, "PEOPLE_FILE", path)
+    monkeypatch.setattr(health, "people_file", lambda p=path: p)
     assert health.update_people_md(CONTACT) is True
     assert "James Bond" in path.read_text(encoding="utf-8")
 

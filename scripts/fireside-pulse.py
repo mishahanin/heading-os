@@ -44,17 +44,40 @@ from scripts.utils.workspace import (  # noqa: E402
 )
 
 WORKSPACE = Path(__file__).resolve().parent.parent
-STATE_DIR = get_datastore_dir() / "operations" / "tribe" / "fireside-state"
-CHECKPOINT = get_outputs_dir() / "operations" / "tribe-fireside" / "pulse-checkpoint.json"
 
-# The managed service-host VM's fireside unit name is private instance topology
-# (engine ships scripts/service-host.example.json with a generic default).
-_SVC = json.loads(
-    resolve_config_with_example(
-        "service-host.json", Path(__file__).resolve().parent / "service-host.example.json"
-    ).read_text(encoding="utf-8")
-)
-_FIRESIDE_UNIT = _SVC.get("fireside_unit", "fireside.service")
+
+def state_dir() -> Path:
+    """Resolved at call time, never at import.
+
+    `get_datastore_dir()` reads `HEADING_OS_DATA` on every call, so it follows
+    the environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the root
+    still read the operator's real overlay.
+    """
+    return get_datastore_dir() / "operations" / "tribe" / "fireside-state"
+
+
+def checkpoint() -> Path:
+    return get_outputs_dir() / "operations" / "tribe-fireside" / "pulse-checkpoint.json"
+
+
+def _svc() -> dict:
+    """The managed service-host VM's private instance topology.
+
+    The engine ships scripts/service-host.example.json with a generic default;
+    `resolve_config_with_example` reaches the data root, so this is read at call
+    time for the same reason the two paths above are.
+    """
+    return json.loads(
+        resolve_config_with_example(
+            "service-host.json", Path(__file__).resolve().parent / "service-host.example.json"
+        ).read_text(encoding="utf-8")
+    )
+
+
+def _fireside_unit() -> str:
+    return _svc().get("fireside_unit", "fireside.service")
 
 def _force_utf8_stdout() -> None:
     """Re-wrap stdout as UTF-8, but only when it needs it and can take it.
@@ -150,7 +173,8 @@ print(json.dumps({
 '''.strip()
 
 # Substitute the instance's real unit name (from private config) into the probe.
-_PROBE = _PROBE_TEMPLATE.replace("__FIRESIDE_UNIT__", _FIRESIDE_UNIT)
+def _probe() -> str:
+    return _PROBE_TEMPLATE.replace("__FIRESIDE_UNIT__", _fireside_unit())
 
 
 def _query_service_host(host: str, ssh_timeout: int = 5, run_timeout: int = 12) -> dict | None:
@@ -167,7 +191,7 @@ def _query_service_host(host: str, ssh_timeout: int = 5, run_timeout: int = 12) 
                 host,
                 "python3 -",
             ],
-            input=_PROBE,
+            input=_probe(),
             capture_output=True,
             text=True,
             timeout=run_timeout,
@@ -223,7 +247,7 @@ def _print_remote_status(host: str) -> None:
         # UNKNOWN" after an SSH probe failed. A bad `webhook_port` in the
         # private config turned that careful report into a stack trace, which
         # is a worse answer than the unknown it was about to give.
-        raw_port = _SVC.get("webhook_port", 8443)
+        raw_port = _svc().get("webhook_port", 8443)
         try:
             port = int(raw_port)
         except (TypeError, ValueError):
@@ -450,8 +474,8 @@ def load_jsonl(path: Path):
 
 def derive_state():
     """Compute the current state snapshot from the live files."""
-    sessions = load_jsonl(STATE_DIR / "sessions.jsonl")
-    dm_log = load_jsonl(STATE_DIR / "dm-log.jsonl")
+    sessions = load_jsonl(state_dir() / "sessions.jsonl")
+    dm_log = load_jsonl(state_dir() / "dm-log.jsonl")
 
     # Started: union of start_received uids + delivered DMs
     started_uids = set()
@@ -489,7 +513,7 @@ def derive_state():
             break
 
     # Non-transient errors (exclude ConnectionResetError, NameResolutionError, WinError 10013 noise)
-    errors_path = STATE_DIR / "errors.log"
+    errors_path = state_dir() / "errors.log"
     non_transient = 0
     if errors_path.exists():
         with errors_path.open(encoding="utf-8", errors="replace") as f:
@@ -523,17 +547,18 @@ def load_checkpoint():
     run, so the operator got no status at all -- from the tool whose entire job
     is to report status -- until they deleted the file by hand.
     """
-    if not CHECKPOINT.exists():
+    path = checkpoint()
+    if not path.exists():
         return None
     try:
-        with CHECKPOINT.open(encoding="utf-8") as f:
+        with path.open(encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"pulse: checkpoint at {CHECKPOINT} is unreadable ({exc}); "
+        print(f"pulse: checkpoint at {path} is unreadable ({exc}); "
               f"re-baselining", file=sys.stderr)
         return None
     if not isinstance(data, dict):
-        print(f"pulse: checkpoint at {CHECKPOINT} is a {type(data).__name__}, "
+        print(f"pulse: checkpoint at {path} is a {type(data).__name__}, "
               f"not an object; re-baselining", file=sys.stderr)
         return None
     return data
@@ -550,14 +575,15 @@ def save_checkpoint(state):
     `mkstemp` gives each writer its own name in the same directory, which is all
     `os.replace` needs to stay atomic.
     """
-    CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=str(CHECKPOINT.parent),
-                                    prefix=CHECKPOINT.name + ".", suffix=".tmp")
+    path = checkpoint()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent),
+                                    prefix=path.name + ".", suffix=".tmp")
     tmp = Path(tmp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
-        os.replace(tmp, CHECKPOINT)
+        os.replace(tmp, path)
     except Exception:
         tmp.unlink(missing_ok=True)
         raise
@@ -572,7 +598,7 @@ def load_roster_names():
     all. The roster is decoration here -- names instead of raw ids, and the
     denominator -- so its absence degrades the line rather than the run.
     """
-    path = STATE_DIR / "tribe-roster.json"
+    path = state_dir() / "tribe-roster.json"
     if not path.exists():
         return {}
     try:

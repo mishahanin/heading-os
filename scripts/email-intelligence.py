@@ -56,13 +56,38 @@ from scripts.utils.untrusted_input import format_untrusted_emails
 # ============================================================
 
 WORKSPACE = get_workspace_root()
-STATE_FILE = get_outputs_dir() / "operations" / "email-intelligence" / "state.json"
-CRM_DIR = get_crm_contacts_dir()
-PIPELINE_FILE = get_context_dir() / "pipeline.md"
-VIRAID_STATE = get_outputs_dir() / "operations" / "viraid" / "state.json"
-SENTINEL_CONFIG = resolve_config_with_example(
-    "sentinel_config.yaml", WORKSPACE / "scripts" / "sentinel_config.example.yaml"
-)
+
+
+def state_file() -> Path:
+    """Resolved at call time, never at import.
+
+    `get_outputs_dir()` and its siblings read `HEADING_OS_DATA` on every call,
+    so they follow the environment for a caller that asks after the environment
+    moved. As module-level constants these five paths asked once, during this
+    module's own import, and stored the answer - so a test that imported this
+    module and then repointed the root still resolved the operator's real
+    overlay.
+    """
+    return get_outputs_dir() / "operations" / "email-intelligence" / "state.json"
+
+
+def crm_dir() -> Path:
+    return get_crm_contacts_dir()
+
+
+def pipeline_file() -> Path:
+    return get_context_dir() / "pipeline.md"
+
+
+def viraid_state() -> Path:
+    return get_outputs_dir() / "operations" / "viraid" / "state.json"
+
+
+def sentinel_config() -> Path:
+    return resolve_config_with_example(
+        "sentinel_config.yaml", WORKSPACE / "scripts" / "sentinel_config.example.yaml"
+    )
+
 
 INTERNAL_DOMAIN = "31c.io"
 
@@ -197,8 +222,10 @@ class StateManager:
         # seven more of the same shape, `scripts/sentinel.py` worst among them;
         # all eight are fixed, and
         # `tests/test_defaults_that_froze_a_path_at_import.py` now refuses a
-        # ninth.
-        self.path = STATE_FILE if path is None else path
+        # ninth. The module global it named is itself gone: `STATE_FILE` was a
+        # second copy of the same freeze one level up, resolved during import,
+        # and is now the `state_file()` call below.
+        self.path = state_file() if path is None else path
         self.data = self._load()
 
     def _load(self) -> dict:
@@ -423,7 +450,8 @@ def commit_state_from_file(path: Path, state: "StateManager | None" = None) -> d
 def _load_ignore_patterns() -> list[str]:
     """Load ignore patterns from sentinel_config.yaml, fallback to defaults."""
     patterns = list(DEFAULT_IGNORE_PATTERNS)
-    if not SENTINEL_CONFIG.exists():
+    cfg_path = sentinel_config()
+    if not cfg_path.exists():
         return patterns
     # The import is its OWN try. It used to sit inside the block below, whose
     # `except` tuple names `yaml.YAMLError` — so on a machine without PyYAML the
@@ -437,7 +465,7 @@ def _load_ignore_patterns() -> list[str]:
               file=sys.stderr)
         return patterns
     try:
-        cfg = yaml.safe_load(SENTINEL_CONFIG.read_text(encoding="utf-8"))
+        cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
         extra = cfg.get("email", {}).get("ignore_patterns", [])
         # A string is iterable, and this loop consumed it one CHARACTER at a
         # time. Measured 2026-08-30 on `ignore_patterns: "noreply@*"` written as
@@ -818,7 +846,7 @@ def load_crm_contacts() -> dict[str, dict]:
     `email:` line would have been loaded as a contact.
     """
     email_map: dict[str, dict] = {}
-    if not CRM_DIR.exists():
+    if not crm_dir().exists():
         return email_map
 
     config = crm_parse_config(get_crm_config_path())
@@ -847,10 +875,11 @@ def load_pipeline_context() -> str:
     it builds the prompt. So the prompt is still bounded and the lookup now sees
     every row.
     """
-    if not PIPELINE_FILE.exists():
+    path = pipeline_file()
+    if not path.exists():
         return ""
     try:
-        return PIPELINE_FILE.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8")
     except OSError as e:
         # `load_viraid_state`, directly below, wraps the identical read. This
         # one did not, and it is called on BOTH the time-window path and the
@@ -866,10 +895,11 @@ def load_pipeline_context() -> str:
 
 def load_viraid_state() -> dict:
     """Load viraid state for cross-reference."""
-    if not VIRAID_STATE.exists():
+    path = viraid_state()
+    if not path.exists():
         return {}
     try:
-        return json.loads(VIRAID_STATE.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {}
 
@@ -1389,7 +1419,7 @@ def run_unread_mode(verbose: bool = False) -> None:
     - but both call-site comments kept describing the defect as if it were the
     design. A reader trusting them would have "restored" the bug.
     """
-    fetch_path = STATE_FILE.parent / "_latest-fetch.json"
+    fetch_path = state_file().parent / "_latest-fetch.json"
     # Passed to `filter_noise` below, which is this mode's only use of it.
     #
     # The comment here read "read-only here - used only for learned-ignore
@@ -1846,7 +1876,7 @@ def main():
         commit_state(state, commit_payload)
         state.save()
         if args.verbose:
-            print(f"{GREEN}  State saved to {STATE_FILE}{RESET}", file=sys.stderr)
+            print(f"{GREEN}  State saved to {state_file()}{RESET}", file=sys.stderr)
         # Note: the bridge dashboard's _latest-fetch.json is produced by
         # --unread mode (run_unread_mode), not by this time-window path.
 

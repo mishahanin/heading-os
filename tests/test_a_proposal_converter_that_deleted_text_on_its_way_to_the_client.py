@@ -61,8 +61,8 @@ def render(markdown, tmp_path, name="proposal"):
     dst = tmp_path / f"{name}.docx"
 
     mod = _load()
-    mod.INPUT_PATH = str(src)
-    mod.OUTPUT_PATH = str(dst)
+    mod.input_path = lambda p=str(src): p
+    mod.output_path = lambda p=str(dst): p
     with contextlib.redirect_stdout(io.StringIO()):
         mod.build_document()
 

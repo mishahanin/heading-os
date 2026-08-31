@@ -410,7 +410,7 @@ def test_the_colour_itself_is_unchanged(od):
 
 def test_the_generator_saves_through_the_shared_helper():
     src = SOURCE.read_text(encoding="utf-8")
-    assert "save_docx(doc, OUTPUT)" in src
+    assert "save_docx(doc, out)" in src
     assert "doc.save(" not in src
 
 

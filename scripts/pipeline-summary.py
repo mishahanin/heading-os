@@ -24,7 +24,17 @@ from scripts.utils.workspace import get_workspace_root, get_context_dir, get_def
 
 WORKSPACE = get_workspace_root()
 
-PIPELINE_FILE = get_context_dir() / "pipeline.md"
+
+def pipeline_file() -> Path:
+    """Resolved at call time, never at import.
+
+    `get_context_dir()` reads `HEADING_OS_DATA` on every call, so it follows
+    the environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the root
+    still had `--update` rewrite the operator's real pipeline.md in place.
+    """
+    return get_context_dir() / "pipeline.md"
 
 # Canonical deal stages with probability weights
 STAGE_WEIGHTS = {
@@ -436,19 +446,20 @@ def main():
     parser.add_argument("--verbose", action="store_true", help="Show per-deal breakdown")
     args = parser.parse_args()
 
-    if not PIPELINE_FILE.exists():
-        print(f"{RED}Error: {PIPELINE_FILE} not found{RESET}")
+    path = pipeline_file()
+    if not path.exists():
+        print(f"{RED}Error: {path} not found{RESET}")
         sys.exit(1)
 
-    content = PIPELINE_FILE.read_text(encoding="utf-8")
+    content = path.read_text(encoding="utf-8")
     summary_text, metrics = generate_summary(content)
 
     if args.update:
         updated = replace_summary_block(content, summary_text)
         # Atomic: this rewrites the whole pipeline file in place, and a crash
         # part-way through would truncate every deal below the summary block.
-        atomic_write_text(PIPELINE_FILE, updated)
-        print(f"{GREEN}Pipeline summary written to {PIPELINE_FILE.name}{RESET}")
+        atomic_write_text(path, updated)
+        print(f"{GREEN}Pipeline summary written to {path.name}{RESET}")
 
     # Print terminal output
     print_terminal_summary(metrics)

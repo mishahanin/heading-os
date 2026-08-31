@@ -119,6 +119,12 @@ if __name__ == "__main__":
   reads. Never hardcode paths; use `pathlib.Path` and the workspace helpers.
 - **Data goes through the seam.** Write artifacts via the data-root helpers
   (`get_data_root()` / `get_*_dir()`), never into the engine tree.
+- **Resolve a data path when you call, never at import.** `get_data_root()` reads
+  `HEADING_OS_DATA` on every call. A module-level constant asks once, during its own
+  import, and keeps that answer. A test that imports your module and then repoints
+  the root still reads the operator's real data. Write a function instead:
+  `def out_dir() -> Path: return get_outputs_dir() / "reports"`. The gate is
+  `tests/test_a_tracked_dir_list_frozen_before_any_test_could_move_it.py`.
 - **Catch `HTTPError` before `URLError`** (the former is a subclass).
 
 ---

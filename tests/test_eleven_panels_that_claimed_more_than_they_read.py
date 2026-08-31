@@ -64,14 +64,14 @@ def test_an_impossible_stamp_degrades_instead_of_raising(gd):
 
 
 def test_an_absent_calendar_file_is_not_a_read_one(gd, tmp_path, monkeypatch):
-    monkeypatch.setattr(gd, "CALENDAR_FILE", tmp_path / "nothing-here.md")
+    monkeypatch.setattr(gd, "calendar_file", lambda p=tmp_path / "nothing-here.md": p)
     result = gd.collect_calendar()
     assert result["source_read"] is False
     assert result["meetings"] == []
 
 
 def test_an_absent_email_file_is_not_an_empty_inbox(gd, tmp_path, monkeypatch):
-    monkeypatch.setattr(gd, "EMAIL_FILE", tmp_path / "nothing-here.md")
+    monkeypatch.setattr(gd, "email_file", lambda p=tmp_path / "nothing-here.md": p)
     assert gd.collect_emails()["source_read"] is False
 
 
@@ -79,7 +79,7 @@ def test_a_read_calendar_says_so(gd, tmp_path, monkeypatch):
     f = tmp_path / "upcoming.md"
     f.write_text("> Synced: 2026-05-12 09:00 (Asia/Dubai)\n\n## 2026-05-12\n",
                  encoding="utf-8")
-    monkeypatch.setattr(gd, "CALENDAR_FILE", f)
+    monkeypatch.setattr(gd, "calendar_file", lambda p=f: p)
     monkeypatch.setattr(gd, "NOW", datetime(2026, 5, 12, 10, 0, tzinfo=gd.get_default_tz()))
     result = gd.collect_calendar()
     assert result["source_read"] is True
@@ -166,7 +166,7 @@ def test_the_market_panel_follows_its_source_file(gd, tmp_path, monkeypatch):
     """Editing current-data.md used to produce byte-identical output."""
     f = tmp_path / "current-data.md"
     f.write_text(FIXTURE_METRICS, encoding="utf-8")
-    monkeypatch.setattr(gd, "METRICS_FILE", f)
+    monkeypatch.setattr(gd, "metrics_file", lambda p=f: p)
     m = gd.collect_metrics()
     assert m["headcount"] == "61"
     assert m["hiring_target"] == "250"
@@ -180,7 +180,7 @@ def test_the_rendered_panel_carries_the_file_values_not_the_constants(gd, tmp_pa
                                                                      monkeypatch):
     f = tmp_path / "current-data.md"
     f.write_text(FIXTURE_METRICS, encoding="utf-8")
-    monkeypatch.setattr(gd, "METRICS_FILE", f)
+    monkeypatch.setattr(gd, "metrics_file", lambda p=f: p)
     html = gd.build_market(gd.collect_metrics())
     assert "$91.00B" in html
     assert "$78.04B" not in html
@@ -199,7 +199,7 @@ def test_the_country_pattern_does_not_match_the_headcount_row(gd):
 def test_a_figure_that_cannot_be_found_says_so_by_name(gd, tmp_path, monkeypatch, capsys):
     f = tmp_path / "current-data.md"
     f.write_text("# Nothing this page needs\n", encoding="utf-8")
-    monkeypatch.setattr(gd, "METRICS_FILE", f)
+    monkeypatch.setattr(gd, "metrics_file", lambda p=f: p)
     m = gd.collect_metrics()
     err = capsys.readouterr().err
     for field in gd._METRIC_PATTERNS:
@@ -211,7 +211,7 @@ def test_a_figure_that_cannot_be_found_says_so_by_name(gd, tmp_path, monkeypatch
 def test_an_absent_metrics_file_stays_silent(gd, tmp_path, monkeypatch, capsys):
     """No overlay is not a drifted file. A public clone must not print seven
     warnings about figures it was never going to have."""
-    monkeypatch.setattr(gd, "METRICS_FILE", tmp_path / "absent.md")
+    monkeypatch.setattr(gd, "metrics_file", lambda p=tmp_path / "absent.md": p)
     gd.collect_metrics()
     assert capsys.readouterr().err == ""
 
@@ -314,10 +314,10 @@ def _cadence_dirs(gd, tmp_path, monkeypatch):
     live = tmp_path / "linkedin"
     drafts = tmp_path / "linkedin-drafts"
     archive = tmp_path / "linkedin-archive"
-    monkeypatch.setattr(gd, "LINKEDIN_DIR", live)
-    monkeypatch.setattr(gd, "LINKEDIN_DRAFTS_DIR", drafts)
-    monkeypatch.setattr(gd, "LINKEDIN_ARCHIVE_DIR", archive)
-    monkeypatch.setattr(gd, "NEWSLETTERS_DIR", tmp_path / "newsletters")
+    monkeypatch.setattr(gd, "linkedin_dir", lambda p=live: p)
+    monkeypatch.setattr(gd, "linkedin_drafts_dir", lambda p=drafts: p)
+    monkeypatch.setattr(gd, "linkedin_archive_dir", lambda p=archive: p)
+    monkeypatch.setattr(gd, "newsletters_dir", lambda p=tmp_path / "newsletters": p)
     return live, drafts, archive
 
 
@@ -396,8 +396,8 @@ def test_a_measured_linkedin_week_still_reports_its_count(gd):
 def _viraid_files(gd, tmp_path, monkeypatch):
     tasks = tmp_path / "tasks.md"
     state = tmp_path / "state.json"
-    monkeypatch.setattr(gd, "VIRAID_TASKS_FILE", tasks)
-    monkeypatch.setattr(gd, "VIRAID_STATE_FILE", state)
+    monkeypatch.setattr(gd, "viraid_tasks_file", lambda p=tasks: p)
+    monkeypatch.setattr(gd, "viraid_state_file", lambda p=state: p)
     return tasks, state
 
 
@@ -514,7 +514,7 @@ def test_an_off_list_stage_is_named_on_stderr(gd, tmp_path, monkeypatch, capsys)
     an unreadable stage, which costs up to 95% of the deal's weight."""
     f = tmp_path / "pipeline.md"
     f.write_text(PIPELINE_FIXTURE, encoding="utf-8")
-    monkeypatch.setattr(gd, "PIPELINE_FILE", f)
+    monkeypatch.setattr(gd, "pipeline_file", lambda p=f: p)
     result = gd.collect_pipeline()
     err = capsys.readouterr().err
     assert "Demo/PoC" in err
@@ -525,7 +525,7 @@ def test_an_off_list_stage_is_named_on_stderr(gd, tmp_path, monkeypatch, capsys)
 def test_a_canonical_stage_stays_quiet(gd, tmp_path, monkeypatch, capsys):
     f = tmp_path / "pipeline.md"
     f.write_text(PIPELINE_FIXTURE.replace("Demo/PoC", "Negotiation"), encoding="utf-8")
-    monkeypatch.setattr(gd, "PIPELINE_FILE", f)
+    monkeypatch.setattr(gd, "pipeline_file", lambda p=f: p)
     result = gd.collect_pipeline()
     assert "not a canonical stage" not in capsys.readouterr().err
     assert result["off_stages"] == {}

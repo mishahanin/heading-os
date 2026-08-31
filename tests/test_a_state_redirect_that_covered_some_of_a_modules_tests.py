@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """A fireside test module redirected its state root per test, and missed seven.
 
-`scripts/fireside-bot.py` resolves `STATE_DIR` once, at import, through
-`get_datastore_dir()`. On the operator's machine that is the live data overlay.
+`scripts/fireside-bot.py` resolves `state_dir()` through `get_datastore_dir()`.
+On the operator's machine that is the live data overlay.
 Every writer in the file reaches it: `save_state`, `append_jsonl`, `_log_event`,
 `ensure_state_dir`, and `log_error`. A test that loads the module and does not
-redirect the constant therefore writes the operator's real data, and the two
+redirect the resolver therefore writes the operator's real data, and the two
 error paths do it from inside an `except` block where nobody was expecting a
 write at all.
 
@@ -22,7 +22,7 @@ write guard. Seven tests in two modules were refused:
       out of the handler
 
 Neither test was wrong about the behaviour it pinned. Both modules already
-redirected `STATE_DIR` somewhere: one in two fixtures near the end of the file,
+redirected `state_dir` somewhere: one in two fixtures near the end of the file,
 the other in an opt-in `state` fixture these tests did not ask for. The redirect
 had landed in some of the module's tests and not the rest, which is the shape
 the two modules' own docstrings catalogue in the code they cover.
@@ -62,10 +62,10 @@ from tests.repo_files import read_sources, tracked_paths  # noqa: E402
 BOT = "fireside-bot.py"
 
 # The three ways a test in this repository points a fireside writer somewhere
-# safe. `STATE_DIR` is the constant the writers read; `state_path` is the helper
+# safe. `state_dir` is the resolver the writers call; `state_path` is the helper
 # over it; `HEADING_OS_DATA` is the environment name the whole seam resolves
 # from, used by the modules that drive a child process.
-REDIRECT_NAMES = ("STATE_DIR", "state_path", "HEADING_OS_DATA")
+REDIRECT_NAMES = ("state_dir", "state_path", "HEADING_OS_DATA")
 
 
 # ============================================================
@@ -169,14 +169,14 @@ def fb():
 _OPT_IN_FIXTURE = '''
 @pytest.fixture
 def state(fb, tmp_path, monkeypatch):
-    monkeypatch.setattr(fb, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(fb, "state_dir", lambda p=tmp_path: p)
     return tmp_path
 '''
 
 _AUTOUSE_FIXTURE = '''
 @pytest.fixture(autouse=True)
 def state(fb, tmp_path, monkeypatch):
-    monkeypatch.setattr(fb, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(fb, "state_dir", lambda p=tmp_path: p)
     return tmp_path
 '''
 
@@ -231,7 +231,7 @@ def test_a_redirect_written_inside_the_test_body_counts():
     """A test that does the work itself needs no fixture to be covered."""
     source = _LOADER + _OPT_IN_FIXTURE + _COVERED_TEST + '''
 def test_it_redirects_itself(fb, tmp_path, monkeypatch):
-    monkeypatch.setattr(fb, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(fb, "state_dir", lambda p=tmp_path: p)
     assert fb.something()
 '''
     assert uncovered_tests(source) == []
@@ -342,7 +342,7 @@ def test_no_fireside_module_redirects_its_state_root_for_only_some_tests():
             findings.append(f"{path.name}::{name}")
     assert findings == [], (
         "these tests hold the fireside module in a file that redirects "
-        "STATE_DIR elsewhere, so they resolve at the operator's live overlay "
+        "state_dir elsewhere, so they resolve at the operator's live overlay "
         "and the first error path they touch writes it. Move the redirect into "
         "an autouse fixture:\n  " + "\n  ".join(findings)
     )

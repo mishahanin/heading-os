@@ -146,7 +146,8 @@ def _pipeline(tmp_path: Path, rows: int) -> Path:
 def test_the_deal_row_really_sits_past_the_old_cap(tmp_path, monkeypatch):
     """Pins the fixture. If the row landed inside the first 80 lines, the
     lookup test below would pass against the old truncating version too."""
-    monkeypatch.setattr(intel, "PIPELINE_FILE", _pipeline(tmp_path, 100))
+    src = _pipeline(tmp_path, 100)
+    monkeypatch.setattr(intel, "pipeline_file", lambda p=src: p)
     lines = intel.load_pipeline_context().splitlines()
 
     assert len(lines) > 80
@@ -156,7 +157,7 @@ def test_the_deal_row_really_sits_past_the_old_cap(tmp_path, monkeypatch):
 
 def test_the_whole_file_is_returned(tmp_path, monkeypatch):
     src = _pipeline(tmp_path, 100)
-    monkeypatch.setattr(intel, "PIPELINE_FILE", src)
+    monkeypatch.setattr(intel, "pipeline_file", lambda p=src: p)
 
     assert intel.load_pipeline_context() == src.read_text(encoding="utf-8")
 
@@ -165,13 +166,13 @@ def test_a_short_pipeline_is_unchanged(tmp_path, monkeypatch):
     """The negative case: a file under the old cap must read exactly the same as
     before, so this change moves nothing for the common corpus."""
     src = _pipeline(tmp_path, 3)
-    monkeypatch.setattr(intel, "PIPELINE_FILE", src)
+    monkeypatch.setattr(intel, "pipeline_file", lambda p=src: p)
 
     assert intel.load_pipeline_context() == src.read_text(encoding="utf-8")
 
 
 def test_an_absent_pipeline_is_still_the_empty_string(tmp_path, monkeypatch):
-    monkeypatch.setattr(intel, "PIPELINE_FILE", tmp_path / "nope.md")
+    monkeypatch.setattr(intel, "pipeline_file", lambda p=tmp_path / "nope.md": p)
 
     assert intel.load_pipeline_context() == ""
 
@@ -203,7 +204,8 @@ def test_the_prompt_is_still_bounded():
 def test_the_deal_lookup_reads_every_line_it_was_given(tmp_path, monkeypatch):
     """Drives `enrich_conversation` for real over a contact whose deal row is
     the last line of a long file."""
-    monkeypatch.setattr(intel, "PIPELINE_FILE", _pipeline(tmp_path, 100))
+    src = _pipeline(tmp_path, 100)
+    monkeypatch.setattr(intel, "pipeline_file", lambda p=src: p)
     text = intel.load_pipeline_context()
     crm_map = {"lena@vantooren.example": {"name": "Lena Voss",
                                           "company": "Vantooren Systems"}}
@@ -220,7 +222,8 @@ def test_the_deal_lookup_reads_every_line_it_was_given(tmp_path, monkeypatch):
 def test_a_company_with_no_row_is_still_none(tmp_path, monkeypatch):
     """The negative case. A lookup that matched anything would pass the test
     above while telling the CEO every thread has a deal."""
-    monkeypatch.setattr(intel, "PIPELINE_FILE", _pipeline(tmp_path, 100))
+    src = _pipeline(tmp_path, 100)
+    monkeypatch.setattr(intel, "pipeline_file", lambda p=src: p)
     text = intel.load_pipeline_context()
     crm_map = {"x@absent.example": {"name": "X", "company": "Absent Holdings"}}
     conv = {"topic": "t", "participants": [{"email": "x@absent.example"}],

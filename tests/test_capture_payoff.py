@@ -40,8 +40,8 @@ def _note(path: Path, slug: str, day: str):
 
 
 def test_no_brain_degrades(mod, tmp_path, monkeypatch):
-    monkeypatch.setattr(mod, "ODIN_BRAIN_DIR", tmp_path / "nope" / "odin-brain")
-    monkeypatch.setattr(mod, "KNOWLEDGE_DIR", tmp_path / "nope")
+    monkeypatch.setattr(mod, "odin_brain_dir", lambda p=tmp_path / "nope" / "odin-brain": p)
+    monkeypatch.setattr(mod, "knowledge_dir", lambda p=tmp_path / "nope": p)
     payoff = mod.collect_capture_payoff()
     assert payoff == {"available": False}
     # the panel hides entirely
@@ -59,8 +59,8 @@ def test_counts_signals_in_7d_window(mod, tmp_path, monkeypatch):
     _note(brain / "principles", "old-principle", old)
     _note(knowledge / "signal", "recent-signal", recent)
 
-    monkeypatch.setattr(mod, "ODIN_BRAIN_DIR", brain)
-    monkeypatch.setattr(mod, "KNOWLEDGE_DIR", knowledge)
+    monkeypatch.setattr(mod, "odin_brain_dir", lambda p=brain: p)
+    monkeypatch.setattr(mod, "knowledge_dir", lambda p=knowledge: p)
     monkeypatch.setattr(mod, "ODIN_CADENCE_SCRIPT", tmp_path / "no-cadence.py")
     monkeypatch.setattr(mod, "TODAY", today)
 
@@ -84,8 +84,8 @@ def test_excludes_index_and_template_files(mod, tmp_path, monkeypatch):
     _note(brain, "templates", recent)      # must be ignored
     _note(brain / "episodes", "real-note", recent)
 
-    monkeypatch.setattr(mod, "ODIN_BRAIN_DIR", brain)
-    monkeypatch.setattr(mod, "KNOWLEDGE_DIR", knowledge)
+    monkeypatch.setattr(mod, "odin_brain_dir", lambda p=brain: p)
+    monkeypatch.setattr(mod, "knowledge_dir", lambda p=knowledge: p)
     monkeypatch.setattr(mod, "ODIN_CADENCE_SCRIPT", tmp_path / "no-cadence.py")
     monkeypatch.setattr(mod, "TODAY", today)
 

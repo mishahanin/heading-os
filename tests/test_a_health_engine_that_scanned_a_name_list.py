@@ -478,7 +478,7 @@ def test_both_health_engines_age_the_same_shapes(tmp_path):
 # ============================================================
 
 def _point_at(monkeypatch, root: Path):
-    monkeypatch.setattr(kh, "KNOWLEDGE_DIR", root)
+    monkeypatch.setattr(kh, "knowledge_root", lambda p=root: p)
 
 
 def test_a_directory_absent_from_the_order_list_is_still_scanned(monkeypatch, tmp_path):
@@ -692,8 +692,8 @@ def test_shared_notes_are_not_bounded_by_a_four_name_list(monkeypatch, tmp_path)
     _write(shared, "signals/20200101000002-y.md",
            ZK_NOTE.format(nid="20200101000002", title="Shared signal",
                           ntype="signal", created="2020-01-02"))
-    monkeypatch.setattr(kh, "SHARED_KNOWLEDGE_DIR", shared)
-    monkeypatch.setattr(kh, "KNOWLEDGE_DIR", tmp_path)
+    monkeypatch.setattr(kh, "shared_knowledge_dir", lambda p=shared: p)
+    monkeypatch.setattr(kh, "knowledge_root", lambda p=tmp_path: p)
     titles = {n["title"] for n in kh.scan_shared_notes()}
     assert titles == {"Shared decision", "Shared signal"}
 

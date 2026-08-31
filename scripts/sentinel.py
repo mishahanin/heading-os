@@ -84,18 +84,34 @@ def _configure_session_wal(client, busy_timeout_ms=30000):
 # --- Paths ---
 WORKSPACE_ROOT = get_workspace_root()
 ENV_FILE = WORKSPACE_ROOT / ".env"
-# Config-DATA: the real config lives in the data overlay (config/sentinel_config.yaml,
-# resolved via get_data_config_dir()); the engine ships sentinel_config.example.yaml
-# as the fallback so a data-less clone runs out of the box.
-CONFIG_FILE = resolve_config_with_example(
-    "sentinel_config.yaml", WORKSPACE_ROOT / "scripts" / "sentinel_config.example.yaml"
-)
 RUNTIME_DIR = WORKSPACE_ROOT / ".sentinel"
 STATE_FILE = RUNTIME_DIR / "state.json"
 LOG_FILE = RUNTIME_DIR / "sentinel.log"
 PID_FILE = RUNTIME_DIR / "sentinel.pid"
 TELEGRAM_SESSION_DIR = WORKSPACE_ROOT / ".sessions" / "telegram"
 TELEGRAM_SESSION_PATH = TELEGRAM_SESSION_DIR / "telegram"
+
+
+# Config-DATA: the real config lives in the data overlay (config/sentinel_config.yaml,
+# resolved via get_data_config_dir()); the engine ships sentinel_config.example.yaml
+# as the fallback so a data-less clone runs out of the box.
+def config_file() -> Path:
+    """Resolved at call time, never at import.
+
+    `resolve_config_with_example()` reads `HEADING_OS_DATA` on every call, so it
+    follows the environment for a caller that asks after the environment moved.
+    As a module-level constant it asked once, during this module's own import,
+    and stored the answer, so a test that imported this module and then
+    repointed the root still resolved the operator's real overlay. Only the
+    config path moves: the runtime paths above are anchored to the workspace
+    root, not the data root, so a running daemon's state, log, pid and session
+    files are untouched by this - and every caller resolves the config once, at
+    construction, so a long-running cycle cannot see it change mid-run either.
+    """
+    return resolve_config_with_example(
+        "sentinel_config.yaml", WORKSPACE_ROOT / "scripts" / "sentinel_config.example.yaml"
+    )
+
 
 # --- Fix Windows console encoding ---
 if sys.platform == "win32":
@@ -121,7 +137,7 @@ class SentinelConfig:
     """Load and validate sentinel_config.yaml."""
 
     def __init__(self, config_path: Path | None = None):
-        config_path = CONFIG_FILE if config_path is None else config_path
+        config_path = config_file() if config_path is None else config_path
         if not config_path.exists():
             raise FileNotFoundError(f"Config not found: {config_path}")
         with open(config_path, "r", encoding="utf-8") as f:
@@ -2203,7 +2219,7 @@ class Sentinel:
 
     def __init__(self, config_path: Path | None = None, dry_run: bool = False,
                  once: bool = False):
-        config_path = CONFIG_FILE if config_path is None else config_path
+        config_path = config_file() if config_path is None else config_path
         self.config = SentinelConfig(config_path)
         self.dry_run = dry_run
         # `once` is a LIVE single cycle, which is not the same thing as
@@ -3260,7 +3276,7 @@ def main():
     parser.add_argument("--status", action="store_true", help="Check if Sentinel is running")
     parser.add_argument("--stop", action="store_true", help="Stop running Sentinel daemon")
     parser.add_argument("--daemon", action="store_true", help="Launch as detached background process (cross-platform; on Linux, prefer systemd user unit)")
-    parser.add_argument("--config", type=str, default=str(CONFIG_FILE), help="Path to config file")
+    parser.add_argument("--config", type=str, default=str(config_file()), help="Path to config file")
     args = parser.parse_args()
 
     if args.status:

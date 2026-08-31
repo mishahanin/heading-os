@@ -83,8 +83,17 @@ from scripts.utils.workspace import get_data_root, get_default_tz, get_default_t
 # --- Constants ---
 WORKSPACE_ROOT = get_workspace_root()
 ENV_FILE = WORKSPACE_ROOT / ".env"
-CALENDAR_DIR = get_outputs_dir() / "_sync" / "calendar"
-EMAIL_DIR = get_outputs_dir() / "_sync" / "emails"
+
+
+def calendar_dir() -> Path:
+    """Resolved at call time, never at import: `get_outputs_dir()` reads
+    HEADING_OS_DATA on every call, and a module-level constant asked once
+    during its own import and stored the answer."""
+    return get_outputs_dir() / "_sync" / "calendar"
+
+
+def email_dir() -> Path:
+    return get_outputs_dir() / "_sync" / "emails"
 
 
 def _display_path(path):
@@ -281,7 +290,8 @@ def sync_calendar(account, days=7, timezone_str=None):
 
     if timezone_str is None:
         timezone_str = get_default_tz_name()
-    CALENDAR_DIR.mkdir(parents=True, exist_ok=True)
+    cal_dir = calendar_dir()
+    cal_dir.mkdir(parents=True, exist_ok=True)
 
     local_tz = ZoneInfo(timezone_str)
     tz = EWSTimeZone.from_timezone(local_tz)
@@ -318,7 +328,7 @@ def sync_calendar(account, days=7, timezone_str=None):
         by_date[date_str].append(event)
 
     # Write combined file
-    output_file = CALENDAR_DIR / "upcoming.md"
+    output_file = cal_dir / "upcoming.md"
     lines = []
     lines.append(f"# Calendar - Next {days} Days")
     lines.append(f"")
@@ -411,7 +421,7 @@ def sync_calendar(account, days=7, timezone_str=None):
         # The undated bucket is still listed in upcoming.md above.
         if not DAY_FILE_RE.match(f"{date_str}.md"):
             continue
-        day_file = CALENDAR_DIR / f"{date_str}.md"
+        day_file = cal_dir / f"{date_str}.md"
         written_days.add(day_file.name)
         day_lines = [f"# Calendar - {date_str}", "",
                      f"> Synced: {datetime.now(local_tz).strftime('%Y-%m-%d %H:%M')} ({timezone_str})", ""]
@@ -444,7 +454,7 @@ def _prune_stale_day_files(written_days, window_start, window_end):
     `upcoming.md` and any hand-made note are untouched, because the name has to
     match the date pattern exactly.
     """
-    for existing in CALENDAR_DIR.glob("*.md"):
+    for existing in calendar_dir().glob("*.md"):
         if not DAY_FILE_RE.match(existing.name) or existing.name in written_days:
             continue
         try:
@@ -466,7 +476,8 @@ def _prune_stale_day_files(written_days, window_start, window_end):
 
 def sync_emails(account, count=30, unread_only=False, folder_name="Inbox"):
     """Pull emails and save as markdown."""
-    EMAIL_DIR.mkdir(parents=True, exist_ok=True)
+    mail_dir = email_dir()
+    mail_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"[INFO] Fetching emails from {folder_name}" +
           (f" (unread only)" if unread_only else f" (last {count})") + "...")
@@ -493,14 +504,14 @@ def sync_emails(account, count=30, unread_only=False, folder_name="Inbox"):
         # from the LAST successful run stayed on disk carrying its own older
         # `> Synced:` stamp: MEASURED 2026-08-29, a second sync over an emptied
         # mailbox left `inbox-latest.md` still saying "Count: 1 emails" and
-        # still listing that message, and any reader globbing EMAIL_DIR served
+        # still listing that message, and any reader globbing the email dir served
         # it as current. That is the same defect `_prune_stale_day_files` names
         # on the calendar side, where a zero-event range still writes its file.
         print(f"[INFO] No emails found in {folder_name}.")
 
     # Write combined file
     suffix = "unread" if unread_only else "latest"
-    output_file = EMAIL_DIR / f"{folder_name.lower()}-{suffix}.md"
+    output_file = mail_dir / f"{folder_name.lower()}-{suffix}.md"
 
     lines = []
     lines.append(f"# {folder_name} - {'Unread' if unread_only else f'Last {count}'}")

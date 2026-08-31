@@ -63,7 +63,6 @@ THEME_VARIANTS = {
 FONTS_DIR = SKILL_DIR / "themes" / "fonts"
 SAMPLE_DECK = SKILL_DIR / "examples" / "sample-deck.md"
 VERSION_PIN_FILE = WORKSPACE_ROOT / "scripts" / ".marp-version"
-DEFAULT_OUTPUT_DIR = get_outputs_dir() / "deliverables" / "presentations"
 WATCH_STATE_FILE = Path.home() / ".marp" / "watch.json"
 WORD_OVERFLOW_THRESHOLD = 150
 DEFAULT_FOOTER = "(C) 2025-2026 - 31 Concept - 31C.io - Proprietary & Confidential"
@@ -77,6 +76,18 @@ WORKSPACE_DEFAULTS = {
     "outputs/operations/": {"mode": "dark", "subtitle": "Operations - 31 Concept"},  # leak-guard: ok (workspace-path prefix-match key)
     "outputs/proposals/": {"mode": "mixed", "subtitle": "{filename} - Proposal"},  # leak-guard: ok (workspace-path prefix-match key)
 }
+
+
+def default_output_dir() -> Path:
+    """Resolved at call time, never at import.
+
+    `get_outputs_dir()` reads `HEADING_OS_DATA` on every call, so it follows
+    the environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the data
+    root still rendered decks into the operator's real overlay.
+    """
+    return get_outputs_dir() / "deliverables" / "presentations"
 
 
 # ============================================================
@@ -957,7 +968,7 @@ def transform_workspace_md(source: Path, break_at: str = "h2", mode: str = None,
         title_slug = generate_slug(doc_title)
         meaningful_stem = f"31C-{title_slug}-{date_str}"
 
-        result = render(tmp_path, output_dir=output_dir or DEFAULT_OUTPUT_DIR,
+        result = render(tmp_path, output_dir=output_dir or default_output_dir(),
                         verbose=verbose, output_stem=meaningful_stem)
         result["source_title"] = doc_title
         result["source_mode"] = slide_mode

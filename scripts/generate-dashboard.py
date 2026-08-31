@@ -48,35 +48,109 @@ from scripts.utils.odin_cadence import read_cadence_json
 SCRIPT_DIR = Path(__file__).resolve().parent
 WORKSPACE = SCRIPT_DIR.parent
 
-PIPELINE_FILE = get_context_dir() / "pipeline.md"
-STRATEGY_FILE = get_context_dir() / "strategy.md"
-METRICS_FILE = get_context_dir() / "current-data.md"
-CALENDAR_FILE = get_outputs_dir() / "_sync" / "calendar" / "upcoming.md"
-EMAIL_FILE = get_outputs_dir() / "_sync" / "emails" / "inbox-latest.md"
 HTML_TO_PDF_SCRIPT = SCRIPT_DIR / "html-to-pdf.py"
-CONTEXT_DIR = get_context_dir()
-HIRING_FILE = get_context_dir() / "hiring-pipeline.md"
-VIRAID_TASKS_FILE = get_outputs_dir() / "operations" / "viraid" / "tasks.md"
-VIRAID_STATE_FILE = get_outputs_dir() / "operations" / "viraid" / "state.json"
-NEWSLETTERS_DIR = get_outputs_dir() / "intel" / "newsletters"
-LINKEDIN_DIR = get_outputs_dir() / "content" / "linkedin"
-LINKEDIN_DRAFTS_DIR = get_outputs_dir() / "content" / "linkedin-drafts"
-# Where a PUBLISHED post ends up. `scripts/linkedin-archive.py` `git mv`s the
-# staged .md out of LINKEDIN_DIR into here, under {posts|articles|comments}/
-# {slug}/, so a post counted while it sat unpublished stopped being counted the
-# moment it went live.
-LINKEDIN_ARCHIVE_DIR = get_datastore_dir() / "content" / "linkedin-archive"
-# R10 capture-payoff: Odin brain + zk captures, and the ceo-only cadence script.
-KNOWLEDGE_DIR = get_knowledge_dir()
-ODIN_BRAIN_DIR = get_knowledge_dir() / "odin-brain"
+# R10 capture-payoff: the ceo-only cadence script.
 ODIN_CADENCE_SCRIPT = SCRIPT_DIR / "odin-cadence.py"
 
+
+# ============================================================
+# Data-root paths - functions, never constants
+# ============================================================
+def pipeline_file() -> Path:
+    """Resolved at call time, never at import.
+
+    Every path below reaches `get_context_dir()`, `get_outputs_dir()`,
+    `get_knowledge_dir()` or `get_datastore_dir()`, and each of those reads
+    HEADING_OS_DATA on every call, so it follows the environment for a caller
+    that asks after the environment moved. As module-level constants they asked
+    once, during this module's import, and stored the answer -- so a test that
+    imported this module and then repointed the root still read the operator's
+    real overlay. Sixteen one-line functions is the honest shape of sixteen
+    paths; the docstring is here once rather than sixteen times.
+    """
+    return get_context_dir() / "pipeline.md"
+
+
+def strategy_file() -> Path:
+    return get_context_dir() / "strategy.md"
+
+
+def metrics_file() -> Path:
+    return get_context_dir() / "current-data.md"
+
+
+def calendar_file() -> Path:
+    return get_outputs_dir() / "_sync" / "calendar" / "upcoming.md"
+
+
+def email_file() -> Path:
+    return get_outputs_dir() / "_sync" / "emails" / "inbox-latest.md"
+
+
+def context_dir() -> Path:
+    return get_context_dir()
+
+
+def hiring_file() -> Path:
+    return get_context_dir() / "hiring-pipeline.md"
+
+
+def viraid_tasks_file() -> Path:
+    return get_outputs_dir() / "operations" / "viraid" / "tasks.md"
+
+
+def viraid_state_file() -> Path:
+    return get_outputs_dir() / "operations" / "viraid" / "state.json"
+
+
+def newsletters_dir() -> Path:
+    return get_outputs_dir() / "intel" / "newsletters"
+
+
+def linkedin_dir() -> Path:
+    return get_outputs_dir() / "content" / "linkedin"
+
+
+def linkedin_drafts_dir() -> Path:
+    return get_outputs_dir() / "content" / "linkedin-drafts"
+
+
+def linkedin_archive_dir() -> Path:
+    """Where a PUBLISHED post ends up. `scripts/linkedin-archive.py` `git mv`s
+    the staged .md out of `linkedin_dir()` into here, under
+    {posts|articles|comments}/{slug}/, so a post counted while it sat
+    unpublished stopped being counted the moment it went live.
+    """
+    return get_datastore_dir() / "content" / "linkedin-archive"
+
+
+def knowledge_dir() -> Path:
+    return get_knowledge_dir()
+
+
+def odin_brain_dir() -> Path:
+    return get_knowledge_dir() / "odin-brain"
+
+
 # Canonical brand assets (per reference/corporate-style-guide.md)
-BRAND_DIR = get_datastore_dir() / "brand"
-LOGO_BLUE_PATH = BRAND_DIR / "assets" / "logos" / "31C_Logo_Palantinate_Blue_Color.png"
-LOGO_WHITE_PATH = BRAND_DIR / "assets" / "logos" / "31C_Logo_White_Color.png"
-GT_LIGHT_FONT = BRAND_DIR / "fonts" / "GT Standard" / "GT-Standard-L-Standard-Light.woff2"
-GT_MEDIUM_FONT = BRAND_DIR / "fonts" / "GT Standard" / "GT-Standard-L-Standard-Medium.woff2"
+def brand_dir() -> Path:
+    return get_datastore_dir() / "brand"
+
+
+def logo_blue_path() -> Path:
+    return brand_dir() / "assets" / "logos" / "31C_Logo_Palantinate_Blue_Color.png"
+
+
+def logo_white_path() -> Path:
+    return brand_dir() / "assets" / "logos" / "31C_Logo_White_Color.png"
+
+
+def gt_light_font() -> Path:
+    return brand_dir() / "fonts" / "GT Standard" / "GT-Standard-L-Standard-Light.woff2"
+
+
+def gt_medium_font() -> Path:
+    return brand_dir() / "fonts" / "GT Standard" / "GT-Standard-L-Standard-Medium.woff2"
 
 
 def load_font_b64(path):
@@ -237,7 +311,7 @@ def collect_crm_health():
 
 def collect_pipeline():
     """Parse pipeline.md for deals, investors, partnerships, won."""
-    content = read_file(PIPELINE_FILE)
+    content = read_file(pipeline_file())
     result = {
         "deals": [], "investors": [], "partnerships": [], "won": [],
         "stages": {}, "off_stages": {}, "total_deals": 0, "total_investors": 0,
@@ -261,7 +335,7 @@ def collect_pipeline():
     # table to throw it away is not a fallback either way.
 
     # Active Deals table
-    deals = parse_md_table(content, r"##\s*Active Deals", source=str(PIPELINE_FILE))
+    deals = parse_md_table(content, r"##\s*Active Deals", source=str(pipeline_file()))
     result["deals"] = deals
     result["total_deals"] = len(deals)
 
@@ -275,7 +349,7 @@ def collect_pipeline():
         result["stages"][stage] = result["stages"].get(stage, 0) + 1
 
         val = parse_money(d.get("Est. Value", ""),
-                          where=f"{PIPELINE_FILE} deal {d.get('Company', '?')!r}")
+                          where=f"{pipeline_file()} deal {d.get('Company', '?')!r}")
         total_value += val
 
         # A stage spelled anything other than the six canonical strings was
@@ -316,17 +390,17 @@ def collect_pipeline():
     result["top_deals"] = [(d, w) for d, w in deal_weighted[:3]]
 
     # Investor Conversations
-    investors = parse_md_table(content, r"##\s*Investor Conversations", source=str(PIPELINE_FILE))
+    investors = parse_md_table(content, r"##\s*Investor Conversations", source=str(pipeline_file()))
     result["investors"] = investors
     result["total_investors"] = len(investors)
 
     # Partnership Discussions
-    partnerships = parse_md_table(content, r"##\s*Partnership Discussions", source=str(PIPELINE_FILE))
+    partnerships = parse_md_table(content, r"##\s*Partnership Discussions", source=str(pipeline_file()))
     result["partnerships"] = partnerships
     result["total_partnerships"] = len(partnerships)
 
     # Won / Closed
-    won = parse_md_table(content, r"##\s*Won\s*/\s*Closed", source=str(PIPELINE_FILE))
+    won = parse_md_table(content, r"##\s*Won\s*/\s*Closed", source=str(pipeline_file()))
     result["won"] = won
     result["total_won"] = len(won)
 
@@ -480,7 +554,7 @@ def sync_age_hours(sync_time):
 
 def collect_calendar():
     """Parse upcoming.md for today's meetings."""
-    content = read_file(CALENDAR_FILE)
+    content = read_file(calendar_file())
     result = {"meetings": [], "sync_time": "", "date_str": TODAY.strftime("%Y-%m-%d"),
               "source_read": False, "age_hours": None}
 
@@ -532,7 +606,7 @@ def collect_calendar():
         rest = content[sec.start():]
         nxt = re.search(r"\n##\s*\d{4}-\d{2}-\d{2}", rest[3:])
         section = rest[:nxt.start() + 3] if nxt else rest
-        for m in parse_md_table(section, source=str(CALENDAR_FILE)):
+        for m in parse_md_table(section, source=str(calendar_file())):
             raw_time = m.get("Time", "").strip()
             clock = _parse_clock(raw_time)
             if clock is None:
@@ -555,7 +629,7 @@ def collect_calendar():
 
 def collect_emails():
     """Parse inbox-latest.md for email summary."""
-    content = read_file(EMAIL_FILE)
+    content = read_file(email_file())
     result = {"emails": [], "sync_time": "", "count": 0,
               "source_read": False, "age_hours": None}
 
@@ -574,14 +648,14 @@ def collect_emails():
     if count_match:
         result["count"] = int(count_match.group(1))
 
-    emails = parse_md_table(content, source=str(EMAIL_FILE))
+    emails = parse_md_table(content, source=str(email_file()))
     result["emails"] = emails
     return result
 
 
 def collect_strategy():
     """Extract key strategic context."""
-    content = read_file(STRATEGY_FILE)
+    content = read_file(strategy_file())
     result = {"priorities": [], "heading": "", "year": "", "phase": ""}
 
     if not content:
@@ -671,7 +745,7 @@ def collect_metrics():
     nowhere in current-data.md, and the rest are pre-existing keys that no
     builder on this page reads.
     """
-    content = read_file(METRICS_FILE)
+    content = read_file(metrics_file())
     result = {
         "headcount": "50+", "countries": "14", "hiring_target": "200",
         "modules_live": "4/4", "processing": "1.2 Tbps",
@@ -690,7 +764,7 @@ def collect_metrics():
         if m:
             result[field] = m.group(1)
         else:
-            print(f"  Warning: {field} not found in {METRICS_FILE.name}; "
+            print(f"  Warning: {field} not found in {metrics_file().name}; "
                   f"showing the last known reading {result[field]!r}",
                   file=sys.stderr)
 
@@ -700,9 +774,9 @@ def collect_metrics():
 def collect_freshness():
     """Check freshness markers on context files."""
     files_to_check = [
-        ("pipeline.md", CONTEXT_DIR / "pipeline.md"),
-        ("current-data.md", CONTEXT_DIR / "current-data.md"),
-        ("strategy.md", CONTEXT_DIR / "strategy.md"),
+        ("pipeline.md", context_dir() / "pipeline.md"),
+        ("current-data.md", context_dir() / "current-data.md"),
+        ("strategy.md", context_dir() / "strategy.md"),
         # get_people_file() is the seam; a second literal here checked a
         # different file whenever the two disagreed, and PEOPLE_FILE (which
         # held the seam value) was assigned at import and read nowhere.
@@ -769,7 +843,7 @@ def freshness_summary(freshness) -> str:
 
 def collect_hiring():
     """Parse hiring-pipeline.md for open roles and urgency."""
-    content = read_file(HIRING_FILE)
+    content = read_file(hiring_file())
     result = {"p1": [], "p2": [], "p3": [], "urgent": [], "total": 0}
 
     if not content:
@@ -780,9 +854,9 @@ def collect_hiring():
     # parse_md_table calls below are what actually reads the sections.
 
     # Parse tables for each priority section
-    p1 = parse_md_table(content, r"###\s*P1", source=str(HIRING_FILE))
-    p2 = parse_md_table(content, r"###\s*P2", source=str(HIRING_FILE))
-    p3 = parse_md_table(content, r"###\s*P3", source=str(HIRING_FILE))
+    p1 = parse_md_table(content, r"###\s*P1", source=str(hiring_file()))
+    p2 = parse_md_table(content, r"###\s*P2", source=str(hiring_file()))
+    p3 = parse_md_table(content, r"###\s*P3", source=str(hiring_file()))
 
     result["p1"] = p1
     result["p2"] = p2
@@ -807,9 +881,9 @@ def collect_content_cadence():
     }
 
     # Newsletter: check most recent dated directory in outputs/intel/newsletters/
-    if NEWSLETTERS_DIR.exists():
+    if newsletters_dir().exists():
         dated_dirs = []
-        for d in NEWSLETTERS_DIR.iterdir():
+        for d in newsletters_dir().iterdir():
             if d.is_dir() and re.match(r"\d{4}-\d{2}-\d{2}", d.name):
                 try:
                     dt = date.fromisoformat(d.name)
@@ -827,15 +901,15 @@ def collect_content_cadence():
     #
     # The archive is counted too, and it is the half that matters. The panel's
     # target is "2+/week" PUBLISHED, and `/linkedin-archive` `git mv`s a post out
-    # of LINKEDIN_DIR the moment it goes live. So this counted staged drafts and
+    # of linkedin_dir() the moment it goes live. So this counted staged drafts and
     # nothing else: publishing two posts moved the indicator from ON TRACK to
     # BEHIND, and the way to stay green was to leave work unpublished. `git mv`
     # is a rename, so the file keeps the mtime this window is measured against.
     week_ago = TODAY - timedelta(days=7)
     linkedin_count = 0
     any_source = False
-    for ldir, files in ((LINKEDIN_DIR, "flat"), (LINKEDIN_DRAFTS_DIR, "flat"),
-                        (LINKEDIN_ARCHIVE_DIR, "deep")):
+    for ldir, files in ((linkedin_dir(), "flat"), (linkedin_drafts_dir(), "flat"),
+                        (linkedin_archive_dir(), "deep")):
         if not ldir.exists():
             continue
         any_source = True
@@ -854,7 +928,7 @@ def collect_content_cadence():
     # unreachable for LinkedIn and a workspace with no content directory at all
     # reported BEHIND - a verdict on a cadence nothing had looked at. The
     # newsletter half of this same function has always guarded its own status
-    # behind `if NEWSLETTERS_DIR.exists()`.
+    # behind `if newsletters_dir().exists()`.
     if any_source:
         result["linkedin_status"] = "ON TRACK" if linkedin_count >= 2 else "BEHIND"
 
@@ -874,7 +948,7 @@ def collect_viraid():
     }
 
     # Parse tasks.md for active items
-    tasks_content = read_file(VIRAID_TASKS_FILE)
+    tasks_content = read_file(viraid_tasks_file())
     if tasks_content:
         result["tasks_read"] = True
         in_active = False
@@ -914,9 +988,9 @@ def collect_viraid():
                     result["tasks"].append(text_match.group(1).strip())
 
     # Parse state.json for completion rate
-    if VIRAID_STATE_FILE.exists():
+    if viraid_state_file().exists():
         try:
-            state = json.loads(VIRAID_STATE_FILE.read_text(encoding="utf-8"))
+            state = json.loads(viraid_state_file().read_text(encoding="utf-8"))
             stats = state.get("stats", {})
             result["completion_rate"] = _as_percent(stats.get("completion_rate"))
             result["rate_known"] = True
@@ -944,7 +1018,7 @@ def collect_capture_payoff():
 
     Degrades to {"available": False} when there is no Odin brain (e.g. an exec
     workspace), so the panel hides rather than erroring."""
-    if not ODIN_BRAIN_DIR.exists():
+    if not odin_brain_dir().exists():
         return {"available": False}
 
     cutoff = TODAY - timedelta(days=7)
@@ -988,7 +1062,7 @@ def collect_capture_payoff():
 
     signals = 0
     recent_titles = []
-    for md in KNOWLEDGE_DIR.rglob("*.md"):
+    for md in knowledge_dir().rglob("*.md"):
         if md.name.lower() in ("index.md", "readme.md", "templates.md"):
             continue
         if _recent(md):
@@ -1861,12 +1935,12 @@ def build_footer():
 # ============================================================
 def generate_html(crm, pipeline, calendar, emails, strategy, metrics, freshness,
                    hiring, content_cadence, viraid, capture_payoff=None):
-    # blue_logo_b64 = load_logo_base64(LOGO_BLUE_PATH) used to be read here.
+    # blue_logo_b64 = load_logo_base64(logo_blue_path()) used to be read here.
     # Only the white logo is rendered, so this was a file read per run for a
     # value nothing used.
-    white_logo_b64 = load_logo_base64(LOGO_WHITE_PATH)
-    gt_light_b64 = load_font_b64(GT_LIGHT_FONT)
-    gt_medium_b64 = load_font_b64(GT_MEDIUM_FONT)
+    white_logo_b64 = load_logo_base64(logo_white_path())
+    gt_light_b64 = load_font_b64(gt_light_font())
+    gt_medium_b64 = load_font_b64(gt_medium_font())
     css = build_css(gt_light_b64, gt_medium_b64)
 
     cover = build_cover(white_logo_b64)

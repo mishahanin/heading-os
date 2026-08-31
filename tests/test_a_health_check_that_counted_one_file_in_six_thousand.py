@@ -111,7 +111,7 @@ def test_the_outputs_total_counts_the_whole_tree(wh, tmp_path, monkeypatch, caps
     nested.mkdir(parents=True)
     for i in range(3):
         (nested / f"doc{i}.md").write_text("y" * 1000)
-    monkeypatch.setattr(wh, "OUTPUTS_DIR", tmp_path)
+    monkeypatch.setattr(wh, "outputs_dir", lambda p=tmp_path: p)
 
     wh.check_outputs_inventory()
 
@@ -131,7 +131,7 @@ def test_the_organise_nag_fires_on_loose_files_not_on_the_whole_tree(
     for i in range(40):
         (tmp_path / f"sub{i}").mkdir()
         (tmp_path / f"sub{i}" / "a.md").write_text("x")
-    monkeypatch.setattr(wh, "OUTPUTS_DIR", tmp_path)
+    monkeypatch.setattr(wh, "outputs_dir", lambda p=tmp_path: p)
 
     issues = wh.check_outputs_inventory()
 
@@ -145,7 +145,7 @@ def test_the_organise_nag_still_fires_on_real_clutter(wh, tmp_path, monkeypatch,
     """The fix must not have removed the warning it re-scoped."""
     for i in range(31):
         (tmp_path / f"f{i}.md").write_text("x")
-    monkeypatch.setattr(wh, "OUTPUTS_DIR", tmp_path)
+    monkeypatch.setattr(wh, "outputs_dir", lambda p=tmp_path: p)
 
     issues = wh.check_outputs_inventory()
 
@@ -164,7 +164,7 @@ def test_a_file_that_vanishes_mid_walk_does_not_abort_the_section(
     """
     (tmp_path / "gone.md").write_text("z" * 50)
     (tmp_path / "real.md").write_text("z" * 50)
-    monkeypatch.setattr(wh, "OUTPUTS_DIR", tmp_path)
+    monkeypatch.setattr(wh, "outputs_dir", lambda p=tmp_path: p)
 
     real_stat = Path.stat
     seen = {"gone.md": 0}
@@ -225,7 +225,7 @@ def test_a_datastore_subdir_of_folders_reports_its_documents(wh, tmp_path, monke
         sub = tmp_path / "brand" / f"kit{i}"
         sub.mkdir()
         (sub / "logo.svg").write_text("<svg/>")
-    monkeypatch.setattr(wh, "DATASTORE_DIR", tmp_path)
+    monkeypatch.setattr(wh, "datastore_dir", lambda p=tmp_path: p)
 
     wh.check_datastore()
 
@@ -242,7 +242,7 @@ def test_a_subdir_holding_only_empty_folders_is_reported_empty(wh, tmp_path, mon
         (tmp_path / d).mkdir()
     (tmp_path / "events" / "placeholder").mkdir()
     (tmp_path / "brand" / "a.svg").write_text("x")
-    monkeypatch.setattr(wh, "DATASTORE_DIR", tmp_path)
+    monkeypatch.setattr(wh, "datastore_dir", lambda p=tmp_path: p)
 
     wh.check_datastore()
 
@@ -476,7 +476,7 @@ def test_a_tbd_outside_an_email_column_is_not_called_a_missing_email(
     ctx.mkdir()
     (ctx / "people.md").write_text(
         "| Name | Role | Email |\n|---|---|---|\n| A | TBD | a@example.com |\n")
-    monkeypatch.setattr(wh, "CONTEXT_DIR", ctx)
+    monkeypatch.setattr(wh, "context_dir", lambda p=ctx: p)
 
     wh.check_people_completeness()
 

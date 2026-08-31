@@ -109,7 +109,7 @@ def test_the_list_has_no_duplicates(ob, monkeypatch):
 
 def test_every_entry_is_org_qualified(ob):
     for repo in ob.exec_repos("jane-doe"):
-        assert repo.startswith(f"{ob.GITHUB_ORG}/")
+        assert repo.startswith(f"{ob.github_org()}/")
 
 
 def test_the_public_engine_repo_is_absent(ob):
@@ -263,7 +263,7 @@ def test_the_org_membership_is_removed(ob, monkeypatch):
     stub = _residual_router()
     monkeypatch.setattr(ob, "run_cmd", stub)
     ob.remove_residual_access("jane-doe", {"github_user": "jd"})
-    assert any(c[-3].endswith(f"orgs/{ob.GITHUB_ORG}/memberships/jd") and "DELETE" in c
+    assert any(c[-3].endswith(f"orgs/{ob.github_org()}/memberships/jd") and "DELETE" in c
                for c in stub.calls if len(c) >= 3), "the org membership survived"
 
 

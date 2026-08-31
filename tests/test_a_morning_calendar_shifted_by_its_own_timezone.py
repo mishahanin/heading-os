@@ -106,8 +106,8 @@ def test_a_morning_meeting_shows_the_time_the_file_says(gd, tmp_path, monkeypatc
     On Asia/Dubai this rendered 13:00 for a 09:00 meeting, every day, since
     the engine's first commit.
     """
-    monkeypatch.setattr(gd, "CALENDAR_FILE",
-                        _calendar(gd, tmp_path, [("09:00", "Board sync")]))
+    cal = _calendar(gd, tmp_path, [("09:00", "Board sync")])
+    monkeypatch.setattr(gd, "calendar_file", lambda p=cal: p)
     assert [m["Time"] for m in gd.collect_calendar()["meetings"]] == ["09:00"]
 
 
@@ -117,31 +117,30 @@ def test_an_evening_meeting_does_not_vanish(gd, tmp_path, monkeypatch):
     Converted forward, 21:00 became tomorrow, and the "is it today" filter
     then removed it. The CEO's page simply had no evening.
     """
-    monkeypatch.setattr(gd, "CALENDAR_FILE",
-                        _calendar(gd, tmp_path, [("21:00", "Late call")]))
+    cal = _calendar(gd, tmp_path, [("21:00", "Late call")])
+    monkeypatch.setattr(gd, "calendar_file", lambda p=cal: p)
     got = gd.collect_calendar()["meetings"]
     assert [m["Time"] for m in got] == ["21:00"]
 
 
 def test_a_full_day_survives_end_to_end(gd, tmp_path, monkeypatch):
-    monkeypatch.setattr(gd, "CALENDAR_FILE", _calendar(
-        gd, tmp_path, [("08:15", "Standup"), ("13:30", "Partner"),
-                       ("22:45", "US call")]))
+    cal = _calendar(gd, tmp_path, [("08:15", "Standup"), ("13:30", "Partner"),
+                                   ("22:45", "US call")])
+    monkeypatch.setattr(gd, "calendar_file", lambda p=cal: p)
     assert [m["Time"] for m in gd.collect_calendar()["meetings"]] == [
         "08:15", "13:30", "22:45"]
 
 
 def test_another_days_section_is_not_shown_as_today(gd, tmp_path, monkeypatch):
     tomorrow = gd.TODAY + timedelta(days=1)
-    monkeypatch.setattr(gd, "CALENDAR_FILE",
-                        _calendar(gd, tmp_path, [("09:00", "Tomorrow")],
-                                  day=tomorrow))
+    cal = _calendar(gd, tmp_path, [("09:00", "Tomorrow")], day=tomorrow)
+    monkeypatch.setattr(gd, "calendar_file", lambda p=cal: p)
     assert gd.collect_calendar()["meetings"] == []
 
 
 def test_midnight_is_not_lost(gd, tmp_path, monkeypatch):
-    monkeypatch.setattr(gd, "CALENDAR_FILE",
-                        _calendar(gd, tmp_path, [("00:05", "Overnight")]))
+    cal = _calendar(gd, tmp_path, [("00:05", "Overnight")])
+    monkeypatch.setattr(gd, "calendar_file", lambda p=cal: p)
     assert [m["Time"] for m in gd.collect_calendar()["meetings"]] == ["00:05"]
 
 
@@ -230,8 +229,8 @@ def test_a_missing_time_cell_is_not_a_time(gd):
 def test_an_unparsed_row_is_kept_and_flagged_not_dropped(gd, tmp_path,
                                                           monkeypatch, capsys):
     """On this panel, a silent drop is the worst available outcome."""
-    monkeypatch.setattr(gd, "CALENDAR_FILE",
-                        _calendar(gd, tmp_path, [("TBC", "Unscheduled")]))
+    cal = _calendar(gd, tmp_path, [("TBC", "Unscheduled")])
+    monkeypatch.setattr(gd, "calendar_file", lambda p=cal: p)
     got = gd.collect_calendar()["meetings"]
     assert len(got) == 1
     assert got[0]["Time"] == "TBC"
@@ -239,8 +238,8 @@ def test_an_unparsed_row_is_kept_and_flagged_not_dropped(gd, tmp_path,
 
 
 def test_a_row_with_no_time_at_all_is_not_kept(gd, tmp_path, monkeypatch):
-    monkeypatch.setattr(gd, "CALENDAR_FILE",
-                        _calendar(gd, tmp_path, [("", "Blank")]))
+    cal = _calendar(gd, tmp_path, [("", "Blank")])
+    monkeypatch.setattr(gd, "calendar_file", lambda p=cal: p)
     assert gd.collect_calendar()["meetings"] == []
 
 
@@ -463,8 +462,8 @@ def _note(tmp_path, name, **fm):
 def test_a_note_ingested_this_week_counts_however_old_its_date(gd, tmp_path,
                                                                 monkeypatch):
     """The finding: an old `date` returned False and `ingested` never ran."""
-    monkeypatch.setattr(gd, "KNOWLEDGE_DIR", tmp_path)
-    monkeypatch.setattr(gd, "ODIN_BRAIN_DIR", tmp_path / "odin-brain")
+    monkeypatch.setattr(gd, "knowledge_dir", lambda p=tmp_path: p)
+    monkeypatch.setattr(gd, "odin_brain_dir", lambda p=tmp_path / "odin-brain": p)
     (tmp_path / "odin-brain").mkdir()
     _note(tmp_path, "n.md", title="Old source", date="2020-01-01",
           ingested=str(gd.TODAY))
@@ -473,24 +472,24 @@ def test_a_note_ingested_this_week_counts_however_old_its_date(gd, tmp_path,
 
 
 def test_a_note_old_in_every_field_does_not_count(gd, tmp_path, monkeypatch):
-    monkeypatch.setattr(gd, "KNOWLEDGE_DIR", tmp_path)
-    monkeypatch.setattr(gd, "ODIN_BRAIN_DIR", tmp_path / "odin-brain")
+    monkeypatch.setattr(gd, "knowledge_dir", lambda p=tmp_path: p)
+    monkeypatch.setattr(gd, "odin_brain_dir", lambda p=tmp_path / "odin-brain": p)
     (tmp_path / "odin-brain").mkdir()
     _note(tmp_path, "n.md", title="Old", date="2020-01-01", ingested="2020-01-02")
     assert gd.collect_capture_payoff()["signals_week"] == 0
 
 
 def test_a_note_recent_in_the_first_field_still_counts(gd, tmp_path, monkeypatch):
-    monkeypatch.setattr(gd, "KNOWLEDGE_DIR", tmp_path)
-    monkeypatch.setattr(gd, "ODIN_BRAIN_DIR", tmp_path / "odin-brain")
+    monkeypatch.setattr(gd, "knowledge_dir", lambda p=tmp_path: p)
+    monkeypatch.setattr(gd, "odin_brain_dir", lambda p=tmp_path / "odin-brain": p)
     (tmp_path / "odin-brain").mkdir()
     _note(tmp_path, "n.md", title="Fresh", updated=str(gd.TODAY))
     assert gd.collect_capture_payoff()["signals_week"] >= 1
 
 
 def test_an_unparseable_field_does_not_end_the_search(gd, tmp_path, monkeypatch):
-    monkeypatch.setattr(gd, "KNOWLEDGE_DIR", tmp_path)
-    monkeypatch.setattr(gd, "ODIN_BRAIN_DIR", tmp_path / "odin-brain")
+    monkeypatch.setattr(gd, "knowledge_dir", lambda p=tmp_path: p)
+    monkeypatch.setattr(gd, "odin_brain_dir", lambda p=tmp_path / "odin-brain": p)
     (tmp_path / "odin-brain").mkdir()
     _note(tmp_path, "n.md", title="Fresh", updated="sometime",
           ingested=str(gd.TODAY))

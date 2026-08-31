@@ -87,13 +87,33 @@ from scripts import fireside_topics as ft
 # ============================================================
 
 WORKSPACE_ROOT = get_workspace_root()
-STATE_DIR = get_datastore_dir() / "operations" / "tribe" / "fireside-state"
-STATS_DIR = get_outputs_dir() / "operations" / "tribe-fireside" / "stats"
-TRIBE_XLSX = get_datastore_dir() / "operations" / "tribe" / "31C_Tribe.xlsx"
+
+
+def state_dir() -> Path:
+    """Resolved at call time, never at import.
+
+    `get_datastore_dir()` reads `HEADING_OS_DATA` on every call, so it follows
+    the environment for a caller that asks after the environment moved. As a
+    module-level constant it asked once, during its own import, and stored the
+    answer, so a test that imported this module and then repointed the root
+    still wrote into the operator's real overlay. The `mkdir` in
+    `require_writable_state_dir` is not among the primitives `tests/conftest.py`
+    wraps, so that write drew no refusal.
+    """
+    return get_datastore_dir() / "operations" / "tribe" / "fireside-state"
+
+
+def stats_dir() -> Path:
+    return get_outputs_dir() / "operations" / "tribe-fireside" / "stats"
+
+
+def tribe_xlsx() -> Path:
+    return get_datastore_dir() / "operations" / "tribe" / "31C_Tribe.xlsx"
+
 
 TELEGRAM_API_BASE = "https://api.telegram.org"
 
-# State file names (relative to STATE_DIR)
+# State file names (relative to state_dir())
 TRIBE_ROSTER = "tribe-roster.json"
 SCHEDULE = "schedule.json"
 HELMSMEN = "helmsmen.json"
@@ -132,53 +152,68 @@ VP_TITLE_FRAGMENTS = (
 # scripts/fireside-schedule.example.json as the generic template/fallback, so a
 # data-less clone bootstraps cleanly. Speakers are identified by full name (the
 # join to telegram_username happens at bootstrap).
-_FIRESIDE_SCHEDULE_FILE = resolve_config_with_example(
-    "fireside-schedule.json", WORKSPACE_ROOT / "scripts" / "fireside-schedule.example.json"
-)
-# Guarded, and non-fatal. This parse runs at IMPORT, so a missing or malformed
-# `fireside-schedule.json` used to kill every invocation of the file before
-# argparse ran -- `--help` included, and every subcommand that never touches the
-# cycle config. An operator whose config was broken got a traceback instead of
-# the usage text that would have told them which file to fix. The constants fall
-# back to empty and the commands that need them fail with a sentence.
-try:
-    _fireside_schedule = json.loads(_FIRESIDE_SCHEDULE_FILE.read_text(encoding="utf-8"))
-    CYCLE_1_START_MONDAY = datetime.fromisoformat(
-        _fireside_schedule["cycle_1_start_monday"]).date()
-    WEEK_1_TO_9_SCHEDULE = _fireside_schedule["weeks"]
-    _FIRESIDE_CONFIG_ERROR = None
-except (OSError, ValueError, KeyError, TypeError) as _exc:
-    _fireside_schedule = {}
-    CYCLE_1_START_MONDAY = None
-    WEEK_1_TO_9_SCHEDULE = []
-    _FIRESIDE_CONFIG_ERROR = f"{_FIRESIDE_SCHEDULE_FILE}: {type(_exc).__name__}: {_exc}"
+def _fireside_schedule_file() -> Path:
+    return resolve_config_with_example(
+        "fireside-schedule.json", WORKSPACE_ROOT / "scripts" / "fireside-schedule.example.json"
+    )
+
+
+# Guarded, and non-fatal. A missing or malformed `fireside-schedule.json` used
+# to kill every invocation of the file before argparse ran -- `--help` included,
+# and every subcommand that never touches the cycle config. An operator whose
+# config was broken got a traceback instead of the usage text that would have
+# told them which file to fix. The accessors fall back to empty and the commands
+# that need them fail with a sentence.
+def _fireside_config() -> tuple:
+    """(cycle_1_start_monday, weeks, error) read from disk on every call.
+
+    This parse used to run at IMPORT, off a path `resolve_config_with_example()`
+    had already frozen at import too, so a test that repointed the data root
+    afterwards still read the operator's real config.
+    """
+    path = _fireside_schedule_file()
+    try:
+        schedule = json.loads(path.read_text(encoding="utf-8"))
+        return (datetime.fromisoformat(schedule["cycle_1_start_monday"]).date(),
+                schedule["weeks"], None)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return None, [], f"{path}: {type(exc).__name__}: {exc}"
+
+
+def cycle_1_start_monday():
+    return _fireside_config()[0]
+
+
+def week_1_to_9_schedule():
+    return _fireside_config()[1]
+
+
+def _fireside_config_error():
+    return _fireside_config()[2]
 
 
 def require_fireside_config() -> None:
     """Refuse a command that needs the cycle config when it did not load.
 
-    Called by the subcommands that read `CYCLE_1_START_MONDAY` or
-    `WEEK_1_TO_9_SCHEDULE`. Everything else -- `--help`, `health-check`,
+    Called by the subcommands that read `cycle_1_start_monday()` or
+    `week_1_to_9_schedule()`. Everything else -- `--help`, `health-check`,
     `xlsx-check` -- runs without it, which is the point of not raising at import.
     """
-    if _FIRESIDE_CONFIG_ERROR:
+    error = _fireside_config_error()
+    if error:
         raise SystemExit(
-            f"fireside schedule config could not be read: {_FIRESIDE_CONFIG_ERROR}"
+            f"fireside schedule config could not be read: {error}"
         )
 
 
 def _load_fireside_config_fresh() -> tuple:
     """Re-read the cycle config from disk, returning (start_monday, weeks).
 
-    A long-running daemon freezes CYCLE_1_START_MONDAY / WEEK_1_TO_9_SCHEDULE at
-    import. Cycle rollover must see config edits that landed after the daemon
-    started (e.g. a git pull), so it re-reads the file each call rather than
-    trusting the frozen constants.
+    Distinct from `_fireside_config()` above only in raising rather than
+    reporting: cycle rollover wants the failure, not an empty schedule it would
+    silently roll over on top of.
     """
-    path = resolve_config_with_example(
-        "fireside-schedule.json",
-        WORKSPACE_ROOT / "scripts" / "fireside-schedule.example.json",
-    )
+    path = _fireside_schedule_file()
     cfg = json.loads(path.read_text(encoding="utf-8"))
     start = datetime.fromisoformat(cfg["cycle_1_start_monday"]).date()
     return start, cfg["weeks"]
@@ -198,15 +233,15 @@ def local_now() -> datetime:
 # ============================================================
 
 def state_path(filename: str) -> Path:
-    """Return absolute path to a state file under STATE_DIR."""
-    return STATE_DIR / filename
+    """Return absolute path to a state file under `state_dir()`."""
+    return state_dir() / filename
 
 
 def require_writable_state_dir() -> Path:
-    """STATE_DIR, but only when a private data overlay actually backs it.
+    """`state_dir()`, but only when a private data overlay actually backs it.
 
     Operator law, 2026-08-26: no data from the DATA repository may ever sit in
-    the engine. `STATE_DIR` is resolved at import through `get_datastore_dir()`,
+    the engine. `state_dir()` resolves through `get_datastore_dir()`,
     and with no overlay `get_data_root()` falls to its documented last resort
     `<workspace_root>/examples`. So on a public clone every writer below resolved
     to `examples/datastore/operations/tribe/fireside-state/` inside the clone and
@@ -218,11 +253,11 @@ def require_writable_state_dir() -> Path:
     `path.parent.mkdir(parents=True, exist_ok=True)` line, and a guard added to
     some of them is a guard the next writer will not have.
 
-    Reads `STATE_DIR` fresh on every call rather than closing over the import-time
-    value, so a caller that redirects the constant is honoured. The whole fireside
-    suite does exactly that, and an earlier version of this guard asked whether an
-    overlay existed instead of where the write was going: it refused fifty writes
-    aimed at a `tmp_path` and never near the clone.
+    Calls `state_dir()` fresh on every call rather than closing over one
+    import-time value, so a caller that redirects the resolver is honoured. The
+    whole fireside suite does exactly that, and an earlier version of this guard
+    asked whether an overlay existed instead of where the write was going: it
+    refused fifty writes aimed at a `tmp_path` and never near the clone.
 
     Raises rather than redirects: fireside state is the bot's memory of who is in
     the Tribe and which session ran, so a write that silently lands somewhere
@@ -231,16 +266,16 @@ def require_writable_state_dir() -> Path:
     """
     from scripts.utils.paths import require_outside_engine_clone
 
-    require_outside_engine_clone(STATE_DIR, "the fireside state directory")
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    return STATE_DIR
+    require_outside_engine_clone(state_dir(), "the fireside state directory")
+    state_dir().mkdir(parents=True, exist_ok=True)
+    return state_dir()
 
 
 def require_writable_stats_dir() -> Path:
-    """STATS_DIR, under the same law as the state funnel above.
+    """`stats_dir()`, under the same law as the state funnel above.
 
-    `STATS_DIR` resolves through `get_outputs_dir()`, which reaches
-    `get_data_root()` the same way `STATE_DIR` does and falls to
+    `stats_dir()` resolves through `get_outputs_dir()`, which reaches
+    `get_data_root()` the same way `state_dir()` does and falls to
     `<workspace_root>/examples` when no overlay backs it. `cmd_stats` carried
     the bare `mkdir(parents=True, exist_ok=True)` that the funnel above exists
     to replace, so `python scripts/fireside-bot.py stats` on a clone with no
@@ -254,9 +289,9 @@ def require_writable_stats_dir() -> Path:
     """
     from scripts.utils.paths import require_outside_engine_clone
 
-    require_outside_engine_clone(STATS_DIR, "the fireside stats directory")
-    STATS_DIR.mkdir(parents=True, exist_ok=True)
-    return STATS_DIR
+    require_outside_engine_clone(stats_dir(), "the fireside stats directory")
+    stats_dir().mkdir(parents=True, exist_ok=True)
+    return stats_dir()
 
 
 def _unreadable_sheet_errors() -> tuple:
@@ -321,7 +356,7 @@ def ensure_state_dir() -> None:
         except FileNotFoundError as exc:
             # No sheet to heal from. An empty placeholder is the honest state.
             log_error(f"self-heal wrote an EMPTY tribe-roster.json: {exc}")
-            print(f"{YELLOW}init-state: tribe-roster.json is EMPTY - {TRIBE_XLSX} "
+            print(f"{YELLOW}init-state: tribe-roster.json is EMPTY - {tribe_xlsx()} "
                   f"was not found. Every DM will be refused as an outsider until "
                   f"`bootstrap` runs.{RESET}", file=sys.stderr)
             save_state(TRIBE_ROSTER, {})
@@ -579,12 +614,12 @@ def load_tribe_metadata() -> dict:
     """
     import openpyxl  # local import - openpyxl is heavy
 
-    if not TRIBE_XLSX.exists():
-        msg = f"Tribe xlsx not found at {TRIBE_XLSX}"
+    if not tribe_xlsx().exists():
+        msg = f"Tribe xlsx not found at {tribe_xlsx()}"
         log_error(msg)
         raise FileNotFoundError(msg)
 
-    wb = openpyxl.load_workbook(TRIBE_XLSX, data_only=True)
+    wb = openpyxl.load_workbook(tribe_xlsx(), data_only=True)
     ws = wb.active
 
     # Find header row by looking for "Name" column
@@ -602,7 +637,7 @@ def load_tribe_metadata() -> dict:
             break
 
     if header_row_idx is None:
-        raise ValueError(f"Could not find header row (no 'Name' column) in {TRIBE_XLSX}")
+        raise ValueError(f"Could not find header row (no 'Name' column) in {tribe_xlsx()}")
 
     name_col = headers.get("Name")
     email_col = headers.get("Email")
@@ -615,12 +650,12 @@ def load_tribe_metadata() -> dict:
     function_col = _first_present(headers, "Function / Department", "Function")
 
     if name_col is None:
-        raise ValueError(f"'Name' column not found in {TRIBE_XLSX}")
+        raise ValueError(f"'Name' column not found in {tribe_xlsx()}")
 
     if tg_username_col is None:
         # Friendly error - this is Phase 0 task 0.5 (Misha-side)
         raise ValueError(
-            f"'Telegram Username' column not found in {TRIBE_XLSX}. "
+            f"'Telegram Username' column not found in {tribe_xlsx()}. "
             f"Add this column and populate it for all 54 Tribe members "
             f"(Phase 0 task 0.5) before running this command."
         )
@@ -663,7 +698,7 @@ def load_tribe_metadata() -> dict:
 
         if username.lower() in seen_usernames:
             raise ValueError(
-                f"{TRIBE_XLSX}: Telegram username @{username} appears twice "
+                f"{tribe_xlsx()}: Telegram username @{username} appears twice "
                 f"({seen_usernames[username.lower()]} and {name}). One username "
                 f"is one member; fix the sheet before the roster is rebuilt."
             )
@@ -705,11 +740,11 @@ def build_schedule(roster_by_name: dict, start_monday=None,
 
     Args:
         roster_by_name: dict[full_name -> {telegram_username, ...}] for username lookup.
-        start_monday: Week-1 Monday date. Defaults to the module constant
-            CYCLE_1_START_MONDAY (frozen at import). Pass a fresh value when a
-            long-running daemon rebuilds from an updated config file.
+        start_monday: Week-1 Monday date. Defaults to `cycle_1_start_monday()`.
+            Pass a fresh value when a long-running daemon rebuilds from an
+            updated config file.
         weeks: the week calendar (list of {week, theme, mon, wed}). Defaults to
-            the module constant WEEK_1_TO_9_SCHEDULE.
+            `week_1_to_9_schedule()`.
         cycle: the cycle number stamped on every entry. Until 2026-08-23 this
             was hardcoded to 1, so `cmd_cycle_rollover` produced a cycle-2
             calendar that called itself cycle 1 -- and since
@@ -726,14 +761,14 @@ def build_schedule(roster_by_name: dict, start_monday=None,
     from datetime import timedelta
 
     if start_monday is None or weeks is None:
-        # The module constants are the fallback and they are empty when the
-        # cycle config failed to load at import. Say which file, once, instead
-        # of building a zero-week schedule and reporting success.
+        # The config accessors are the fallback and they are empty when the
+        # cycle config failed to load. Say which file, once, instead of building
+        # a zero-week schedule and reporting success.
         require_fireside_config()
     if start_monday is None:
-        start_monday = CYCLE_1_START_MONDAY
+        start_monday = cycle_1_start_monday()
     if weeks is None:
-        weeks = WEEK_1_TO_9_SCHEDULE
+        weeks = week_1_to_9_schedule()
 
     entries = []
     missing = []
@@ -1159,7 +1194,7 @@ def cmd_bootstrap(args) -> None:
         # Don't clobber the live schedule on re-bootstrap. Manual swaps and
         # exclusions are recorded directly in schedule.json (e.g. a mid-cycle
         # speaker swap and a member exclusion); rebuilding from the
-        # WEEK_1_TO_9_SCHEDULE constant would wipe both. Compute missing-
+        # week_1_to_9_schedule() calendar would wipe both. Compute missing-
         # speaker stats for the discrepancy report but do not save.
         _, missing_in_schedule = build_schedule(roster_by_name)
         print(f"     {len(existing_schedule)} schedule entries already populated; not overwriting "
@@ -1189,7 +1224,7 @@ def cmd_bootstrap(args) -> None:
     print_discrepancy_report(discrepancy, missing_in_schedule)
 
     print()
-    print(f"{GREEN}OK{RESET}  Bootstrap complete. State files written to {STATE_DIR}")
+    print(f"{GREEN}OK{RESET}  Bootstrap complete. State files written to {state_dir()}")
 
 
 # ============================================================
@@ -1283,7 +1318,7 @@ def cmd_xlsx_check(args) -> None:
 def cmd_init_state(args) -> None:
     """Initialise state directory + empty state files. Idempotent."""
     ensure_state_dir()
-    print(f"{GREEN}OK{RESET}  State directory ready: {STATE_DIR}")
+    print(f"{GREEN}OK{RESET}  State directory ready: {state_dir()}")
     files = [TRIBE_ROSTER, SCHEDULE, HELMSMEN, OPT_INS,
              DM_LOG, SESSIONS_LOG, LAST_UPDATE_ID, LAST_PINNED, ERRORS_LOG]
     for name in files:
@@ -2482,7 +2517,7 @@ def _handle_cycle_invite_tap(bot: TelegramBot, cq_id, data: str,
                 pass
         return
 
-    state = ft.load_topic_state(STATE_DIR)
+    state = ft.load_topic_state(state_dir())
     pending = state.get("pending_cycle_invite")
     if not pending:
         if cq_id:
@@ -2497,7 +2532,7 @@ def _handle_cycle_invite_tap(bot: TelegramBot, cq_id, data: str,
     choice = data.split(":", 1)[1]
     if choice == "cancel":
         state["pending_cycle_invite"] = None
-        ft.save_topic_state(STATE_DIR, state)
+        ft.save_topic_state(state_dir(), state)
         _log_event("cycle_end_invite_cancelled", cycle=pending.get("cycle"))
         try:
             bot.answer_callback_query(cq_id, text="Cancelled.")
@@ -2523,7 +2558,7 @@ def _handle_cycle_invite_tap(bot: TelegramBot, cq_id, data: str,
             return
         # Post succeeded — clear pending immediately so a re-tap cannot double-post.
         state["pending_cycle_invite"] = None
-        ft.save_topic_state(STATE_DIR, state)
+        ft.save_topic_state(state_dir(), state)
         # Pin is best-effort; a pin failure must not revert the cleared state.
         # But best-effort is not the same as unreported. The failure was
         # swallowed by a bare `pass` and the CEO's card was then rewritten to
@@ -3006,7 +3041,7 @@ def _handle_message(bot: TelegramBot, message: dict) -> None:
         roster = load_state(TRIBE_ROSTER) or {}
         name = (roster.get(_resolve_my_username(user_id) or "", {}) or {}).get("name", "")
         ft.append_idea(
-            STATE_DIR,
+            state_dir(),
             now_iso=local_now().isoformat(),
             user_id=user_id, username=username, name=name,
             text=body, cycle=ft.current_cycle(schedule, _today_local_date()),
@@ -3360,9 +3395,9 @@ def cmd_topic_digest(args) -> None:
     Silent no-op when there are no new ideas. Advances the digest cursor only
     after a successful send so a failed DM is retried next run.
     """
-    state = ft.load_topic_state(STATE_DIR)
+    state = ft.load_topic_state(state_dir())
     cursor = state.get("last_digest_idea_id")
-    new, new_cursor = ft.new_ideas_since(STATE_DIR, cursor)
+    new, new_cursor = ft.new_ideas_since(state_dir(), cursor)
     if not new:
         print(f"{GRAY}topic-digest: no new ideas since last digest{RESET}")
         return
@@ -3386,7 +3421,7 @@ def cmd_topic_digest(args) -> None:
         print(f"{RED}topic-digest DM failed: {e}{RESET}", file=sys.stderr)
         return
     state["last_digest_idea_id"] = new_cursor
-    ft.save_topic_state(STATE_DIR, state)
+    ft.save_topic_state(state_dir(), state)
     _log_event("topic_digest_sent", count=len(new), cursor=new_cursor)
     print(f"{GREEN}topic-digest{RESET}: DMed {len(new)} new idea(s) to CEO")
 
@@ -3411,14 +3446,14 @@ def cmd_cycle_end_invite(args) -> None:
         return
 
     cycle = ft.current_cycle(schedule, today)
-    state = ft.load_topic_state(STATE_DIR)
+    state = ft.load_topic_state(state_dir())
     pending = state.get("pending_cycle_invite")
     if pending and pending.get("cycle") == cycle:
         print(f"{GRAY}cycle-end-invite: draft already pending for cycle {cycle}; skip{RESET}")
         return
 
     invite = ft.render_cycle_end_invite()
-    backlog = ft.render_backlog_summary(ft.load_ideas(STATE_DIR, cycle=cycle))
+    backlog = ft.render_backlog_summary(ft.load_ideas(state_dir(), cycle=cycle))
     ceo_text = (
         "*Draft — cycle-end topic invite (your approval needed before it posts to the Tribe)*\n\n"
         "————— message preview —————\n"
@@ -3455,7 +3490,7 @@ def cmd_cycle_end_invite(args) -> None:
         "drafted_at": local_now().isoformat(),
         "cycle": cycle,
     }
-    ft.save_topic_state(STATE_DIR, state)
+    ft.save_topic_state(state_dir(), state)
     _log_event("cycle_end_invite_drafted", cycle=cycle,
                approval_msg_id=result.get("message_id"))
     print(f"{GREEN}cycle-end-invite{RESET}: drafted to CEO for approval (cycle {cycle})")
@@ -3556,8 +3591,8 @@ def cmd_topic_ideas(args) -> None:
     cycle = getattr(args, "cycle", None)
     since = None
     if getattr(args, "new", False):
-        since = ft.load_topic_state(STATE_DIR).get("last_digest_idea_id")
-    ideas = ft.load_ideas(STATE_DIR, cycle=cycle, since_id=since)
+        since = ft.load_topic_state(state_dir()).get("last_digest_idea_id")
+    ideas = ft.load_ideas(state_dir(), cycle=cycle, since_id=since)
     if not ideas:
         print(f"{GRAY}No topic ideas{' since last digest' if since else ''}.{RESET}")
         return

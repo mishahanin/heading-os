@@ -76,6 +76,55 @@ def test_shipped_data_hook_still_delegates_to_git_lfs():
     )
 
 
+def test_the_gate_does_not_ask_to_write_into_the_overlay_it_guards():
+    """The gate ran pytest INSIDE the operator's data, and pytest writes.
+
+    `scripts/utils/overlay_write_guard.py` refuses any write into the overlay
+    from an untracked caller. pytest is untracked: it lives in the engine's
+    `.venv`. Collecting a test tree makes it write two things into that tree -
+    assertion-rewritten `.pyc` files under `__pycache__/`, and its own
+    `.pytest_cache/`.
+
+    So this gate passed only while the bytecode cache was both present and
+    current. MEASURED 2026-09-01: editing two files under the overlay's
+    `tests/admin/` made the very next push fail at COLLECTION with
+    `OverlayWriteRefused`, on a repository whose tests all passed. The gate was
+    not failing the tests; it could not reach them.
+
+    That failure mode is worse than a flaky gate. A gate that breaks every time
+    somebody edits the thing it guards is a gate that teaches its operator to
+    reach for `--no-verify`, which is the one habit this repository cannot
+    afford.
+
+    Refusing the write is correct and is not what changed. The gate stopped
+    asking for it.
+
+    Asked of the CODE line rather than of the file, because the comment block
+    above it explains both switches by name, and a `in text` check would be
+    satisfied by the explanation of the very thing it is meant to require. Six
+    findings in the 2026-08-31 audit were assertions satisfied by the comment
+    describing the defect they guarded.
+    """
+    lines = [
+        line.strip() for line in SHIPPED_HOOK.read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("if !") and "pytest" in line
+    ]
+    assert len(lines) == 1, (
+        f"expected exactly one pytest invocation line in the shipped data hook, "
+        f"found {len(lines)}: {lines}")
+    invocation = lines[0]
+
+    assert "PYTHONDONTWRITEBYTECODE=1" in invocation, (
+        f"the data-overlay gate runs pytest without PYTHONDONTWRITEBYTECODE, so "
+        f"it writes .pyc files into the operator's data and the overlay write "
+        f"guard refuses them. The gate then fails at collection on a healthy "
+        f"repository. Line: {invocation}")
+    assert "-p no:cacheprovider" in invocation, (
+        f"the data-overlay gate lets pytest write .pytest_cache/ into the "
+        f"operator's data, which the overlay write guard refuses. "
+        f"Line: {invocation}")
+
+
 def test_shipped_data_hook_carries_the_gate_marker():
     assert push_all.DATA_GATE_MARKER in SHIPPED_HOOK.read_text(encoding="utf-8")
 

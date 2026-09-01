@@ -39,7 +39,23 @@ if [ -d "$ROOT/tests" ]; then
              "toolchain. Re-arm with: python scripts/install-git-hooks.py" >&2
     fi
     echo "data overlay test gate: $ROOT/tests"
-    if ! "$PY" -m pytest "$ROOT/tests" -q; then
+    # PYTHONDONTWRITEBYTECODE and no:cacheprovider are load-bearing, not tidiness.
+    #
+    # This gate runs pytest INSIDE the operator's data overlay, and the overlay
+    # write guard refuses any write there from an untracked caller. pytest is
+    # untracked (it lives in the engine's .venv), and it writes two things into
+    # the tree it collects from: assertion-rewritten `.pyc` files under
+    # `__pycache__/`, and its own `.pytest_cache/`.
+    #
+    # So the gate passed only while the bytecode cache was warm AND current.
+    # Measured 2026-09-01: editing two files under `tests/admin/` made the very
+    # next push fail at COLLECTION with OverlayWriteRefused, on a repository whose
+    # tests all pass. The gate was not failing on the tests; it could not reach
+    # them. A gate that breaks whenever the thing it guards is edited is a gate
+    # that trains its operator to bypass it.
+    #
+    # Refusing the write is correct and stays. The gate stops asking for it.
+    if ! PYTHONDONTWRITEBYTECODE=1 "$PY" -m pytest "$ROOT/tests" -q -p no:cacheprovider; then
         echo "data overlay tests failed - push blocked" >&2
         exit 1
     fi

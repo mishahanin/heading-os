@@ -101,6 +101,39 @@ if _OWNS_RATE_STATE:
     except OSError as exc:  # pragma: no cover - reported, never fatal to the run
         print(f"[conftest] could not reset the test rate-limit state: {exc}")
 
+# The same isolation, one directory wider, and the one that was missing.
+#
+# `.claude/state/` sits under the ENGINE root, not the data overlay, so the
+# `HEADING_OS_DATA` pin every isolated test in this suite relies on does not
+# redirect it and never did. The evidence was on disk on 2026-09-01, written by
+# this suite into the operator's live tree: `checkpoint-True.json` and
+# `checkpoint-3.json` from the malformed-payload sweep's BAD_FIELD_VALUES,
+# `checkpoint-sweep-session.json` from that file's own base payload, and
+# `checkpoint-session.json` from its `[]` and `{}` cases collapsing onto a
+# shared bucket.
+#
+# `CLAUDE_PROJECT_DIR` looked like the seam and is not. `project_root()` reads
+# `payload["cwd"]` BEFORE it reads any environment variable, and that sweep
+# sends `"cwd": <the engine root>` in every payload, so the pin those tests
+# thought they held was beaten before it was read. `HEADING_OS_STATE_DIR` is a
+# separate question asked ahead of the payload; `checkpoint_paths.state_root()`
+# carries the full reasoning.
+#
+# Assignment, not setdefault, for the reason given two guards up. The owner
+# check is the same one `WS_RATE_LIMIT_STATE` needs and for the same measured
+# reason: this suite spawns pytest CHILDREN, each imports this file, and an
+# unconditional reset would wipe a parent's state mid-run.
+#
+# A directory under `.logs/_pytest/` rather than a per-test `tmp_path`, matching
+# `WS_RATE_LIMIT_STATE`: checkpoint state is session-scoped and several tests
+# drive a hook in one subprocess and read the result in another, so a store that
+# emptied between tests would break them. It is inside the clone, so it must
+# stay gitignored - `.logs/` is, and `tests/test_a_state_directory_the_data_pin_
+# never_redirected.py` asserts that, because an untracked-and-not-ignored write
+# here is what makes the push wall start refusing.
+_TEST_STATE_DIR = _ENGINE_ROOT / ".logs" / "_pytest" / "claude-state"
+os.environ["HEADING_OS_STATE_DIR"] = str(_TEST_STATE_DIR)
+
 
 # The same isolation, applied to the one instrument the suite could falsify from
 # the outside. A Healthchecks deadman answers "is that daemon alive?", and this
@@ -230,6 +263,7 @@ def _isolate_runtime_logs():
     """
     os.environ["WORKSPACE_LOG_DIR"] = _TEST_LOG_DIR
     os.environ["WS_RATE_LIMIT_STATE"] = str(_TEST_RATE_STATE)
+    os.environ["HEADING_OS_STATE_DIR"] = str(_TEST_STATE_DIR)
     _mute_telegram_targets()
     yield
 

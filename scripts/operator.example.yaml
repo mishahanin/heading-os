@@ -31,3 +31,22 @@ voice_reference: "reference/voice.md"
 
 # Operator email used in generated correspondence, e.g. "ada@example.com".
 email: ""
+
+# Your organisation's CORPORATE mail domain, BARE and with no "@", e.g.
+# "example.com". Not the domain half of `email` above: the two are routinely
+# different, and this one is the company's, not yours. It decides which mail
+# threads count as internal and which CRM contacts hold a company mailbox
+# without being typed as Tribe. Leave empty and both checks stay silent, which
+# is the correct behaviour for a clone that has no corporate domain.
+corporate_email_domain: ""
+
+# The inbox that reaches whoever ADMINISTERS this fleet. A whole address, not a
+# domain. This is NOT `email` above: `email` is whoever runs this clone, and on
+# an executive's workspace that is the executive, so a skill request routed to
+# it would mail them their own request. On a single-operator workspace the two
+# are the same person, which is exactly why the difference is easy to miss.
+#
+# Read by `/request-skill` (where an executive asks for a new capability) and by
+# the fireside bot's backup email, which offers it as "reach a human". Leave it
+# empty and both fall back to `email`, then refuse rather than send to nobody.
+admin_email: ""

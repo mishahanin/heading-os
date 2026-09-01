@@ -10,10 +10,11 @@ read as connection parameters; `#` does the same via the fragment; a space is
 not legal in a URI; a Windows path carries a colon and backslashes the grammar
 does not accept.
 
-Found by the 2026-08-23 audit on `.claude/hooks/memory-inject.py`, where the
-failure is silent: the connect error is caught and the hook calls `_emit("")`,
-so a data root under a directory with `?` in its name turns memory injection off
-forever with no diagnostic. Sweeping the tree found five more.
+Found by the 2026-08-23 audit on `.claude/hooks/memory-inject.py` (retired
+2026-09-01), where the failure was silent: the connect error was caught and the
+hook called `_emit("")`, so a data root under a directory with `?` in its name
+turned memory injection off forever with no diagnostic. Sweeping the tree found
+five more, and those are what this file still guards.
 
 `scripts/utils/sqlite_uri.read_only_uri()` is now the one way. This file pins
 both halves: the helper quotes correctly, and no caller has gone back to the
@@ -45,10 +46,11 @@ _PASTE = re.compile(r"""f(?:'''|\"\"\"|['"])file:\{[^}]+\}""")
 _SCAN_DIRS = [ROOT / "scripts", ROOT / ".claude" / "hooks"]
 _SKIP = {"__pycache__", ".venv"}
 # A floor PER TREE, not over the union. Measured 2026-09-01: `scripts/` holds
-# 386 files and `.claude/hooks/` holds 17, so the union floor of 250 below was
+# 386 files and `.claude/hooks/` holds 16, so the union floor of 250 below was
 # carried by `scripts/` alone and the hooks tree could have contributed nothing.
-# `.claude/hooks/memory-inject.py` is where this defect was FOUND, so that is
-# precisely the tree that must not fall out of the walk unnoticed.
+# `.claude/hooks/` is where this defect was FOUND (in `memory-inject.py`, since
+# retired), so that is precisely the tree that must not fall out of the walk
+# unnoticed.
 _MIN_PER_DIR = {"scripts": 250, "hooks": 10}
 
 

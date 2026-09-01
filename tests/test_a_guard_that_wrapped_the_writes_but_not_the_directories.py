@@ -174,9 +174,12 @@ def test_a_write_only_database_connection_is_refused(armed):
 def test_a_read_only_database_connection_is_allowed(armed):
     """The negative case, and it is load-bearing rather than decorative.
 
-    `.claude/hooks/memory-inject.py` opens the operator's memory index with
-    `?mode=ro` and `uri=True` on purpose. Refusing that would be the
-    over-friction that gets a guard switched off, so the guard reads the mode.
+    `scripts/utils/sqlite_uri.read_only_uri()` opens databases with `?mode=ro`
+    and `uri=True` on purpose, and its callers (the Chromium and Firefox cookie
+    readers, the CodeGraph symbol source, and the retired
+    `.claude/hooks/memory-inject.py` before them) depend on that working.
+    Refusing it would be the over-friction that gets a guard switched off, so
+    the guard reads the mode.
     """
     import sqlite3
 

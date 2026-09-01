@@ -78,6 +78,7 @@ _urllib3_connection.allowed_gai_family = lambda: socket.AF_INET
 
 from scripts.utils.colors import GREEN, YELLOW, RED, GRAY, CYAN, BOLD, RESET
 from scripts.utils.healthchecks import ping as hc_ping
+from scripts.utils.operator_identity import admin_email, get_operator
 from scripts.utils.telegram_bot import TelegramAPIError, TelegramBot
 from scripts.utils.workspace import get_datastore_dir, get_default_tz, get_default_tz_name, get_outputs_dir, get_workspace_root, load_env, resolve_config_with_example
 from scripts import fireside_topics as ft
@@ -1437,8 +1438,7 @@ Theme that week: {theme}
 
 If the date doesn't work, reply to this email and we'll find a swap.
 
-— 31C Fireside Bot
-(via ceo@31c.io if you need to reach a human)"""
+— 31C Fireside Bot{human_contact}"""
 
 SUNDAY_PREVIEW = """🔥 **Tribe fireside this week**
 
@@ -4240,11 +4240,26 @@ def cmd_email_backup(args) -> None:
         raw_name = str(roster_entry.get("name") or "").strip()
         name = raw_name.split()[0] if raw_name else f"@{username}"
         subject = EMAIL_BACKUP_SUBJECT.format(session_date=entry["session_date"])
+        # The "reach a human" line used to be a tenant mailbox literal, in a
+        # template that goes OUT as email. On any other deployment that invites
+        # a stranger's Tribe to write to this operator. Resolved from the
+        # operator seam instead, and OMITTED ENTIRELY when unconfigured: an
+        # empty address in an outbound message is worse than no offer of help,
+        # because the reader tries it.
+        #
+        # `admin_email` first, because the human who fields "my fireside slot
+        # is wrong" is whoever administers the fleet, not necessarily whoever
+        # the daemon runs as. `email` is the fallback rather than the primary
+        # for the same reason. On a single-operator workspace they are the same
+        # person and the order never shows; on an exec workspace it does.
+        _human = admin_email() or (get_operator().get("email") or "").strip()
         body_text = EMAIL_BACKUP_BODY.format(
             name=name,
             session_date=entry["session_date"],
             session_day=d.strftime("%A"),
             theme=entry["theme"],
+            human_contact=(f"\n(via {_human} if you need to reach a human)"
+                           if _human else ""),
         )
         body_html = "<p>" + body_text.replace("\n\n", "</p><p>").replace("\n", "<br/>") + "</p>"
 

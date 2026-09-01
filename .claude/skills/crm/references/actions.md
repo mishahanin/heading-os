@@ -78,7 +78,13 @@ Create a new contact. Two-tier model: address book entity (corporate) + relation
    - **Relevant principles (CEO workspace only, brain-gated):** three conditions must hold. You are on the CEO workspace, `knowledge/odin-brain/` exists, and `relationship_type` is a deal-bearing external type, NOT `tribe`, `tribe-leadership`, or `inactive`. Then stamp an optional `relevant_principles:` YAML list. Run `python scripts/odin-principles.py --type {relationship_type} [--stage {stage}] --json` and take the top slugs. For internal types and exec workspaces (no brain), skip silently, never write the field, and never error.
    - Empty Active Commitments + Interaction Log sections.
 6. **Tribe member case:** if `type` is `tribe` or `tribe-leadership`, also add a `corporate` rule for the file to `config/routing-map.yaml` (CEO only; execs surface a note).
-7. **@31c.io warning:** if `email` contains `@31c.io` AND type is NOT tribe or tribe-leadership, surface a warning. The text is "This contact has a @31c.io email but is not classified as tribe. Update type to 'tribe' if they are a Tribe member."
+7. **Corporate-domain warning:** resolve the instance's corporate mail domain first. It is configuration, never a literal: `corporate_email_domain()` in `scripts/utils/operator_identity.py`, backed by `corporate_email_domain` in the operator config.
+
+   ```bash
+   CORP="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.operator_identity import corporate_email_domain; print(corporate_email_domain())")"
+   ```
+
+   An empty `$CORP` means this clone has no corporate domain. Skip the warning entirely. Never test for a bare `@`, which matches every address ever written. Otherwise, if `email` ends with `@$CORP` AND type is NOT tribe or tribe-leadership, surface a warning. The text is "This contact has a @$CORP email but is not classified as tribe. Update type to 'tribe' if they are a Tribe member."
 8. Add to `context/people.md` radar table.
 9. Confirm creation with summary including the entity_ref slug.
 

@@ -1,18 +1,16 @@
-"""Three fail-toward-the-wrong-side defects in the two memory hooks.
+"""Two fail-toward-the-wrong-side defects in `memory-reconcile.py`.
 
-All three found by the 2026-08-23 engine audit, all three cases where the code
-did the opposite of what its own comment or docstring said.
+Both found by the 2026-08-23 engine audit, both cases where the code did the
+opposite of what its own comment or docstring said.
 
-1. `memory-inject.py` — the air-gap fallback was fail-OPEN.
+A third defect of the same shape lived in `.claude/hooks/memory-inject.py` (an
+air-gap fallback that returned False for everything, denying nothing, under a
+docstring promising air-gapped paths were skipped). That hook was retired on
+2026-09-01 — registered in no settings file, superseded 2026-08-07 by
+`recall-inject.py` — so its guard was deleted with it rather than left to
+measure a file that no longer exists.
 
-   The module docstring promises the hook "defensively skips any air-gapped
-   path". When `scripts.utils.air_gap` failed to import, the fallback returned
-   `False` for everything, meaning nothing is denied, under an inline comment
-   calling itself "fail-closed-ish". Closed is the cheap direction: denying
-   every path means the hook injects nothing, which costs one turn of context
-   and breaks no workflow, while injecting an air-gapped path costs the air gap.
-
-2. `memory-reconcile.py` — one bad entry aborted the whole reconcile.
+1. `memory-reconcile.py` — one bad entry aborted the whole reconcile.
 
    The sync loop had no per-entry guard. A directory named `*.md`, an unreadable
    file, or a file that vanished between `exists()` and `read_bytes()` raised
@@ -20,7 +18,7 @@ did the opposite of what its own comment or docstring said.
    memory went unsynced because of one entry. Skipping the entry syncs the other
    N-1.
 
-3. `memory-reconcile.py` — the cwd-slug fallback was wrong on Windows.
+2. `memory-reconcile.py` — the cwd-slug fallback was wrong on Windows.
 
    The docstring says the slug is derived "the way Claude Code does (each '/'
    and '.' becomes '-')". On Windows `Path(cwd).resolve()` gives `C:\\Users\\...`,
@@ -31,7 +29,6 @@ did the opposite of what its own comment or docstring said.
 """
 from __future__ import annotations
 
-import ast
 import importlib.util
 import json
 import os  # noqa: F401  # kept: used by the POSIX skipif below
@@ -54,64 +51,7 @@ def _load(name: str):
     return mod
 
 
-# --- 1. the air-gap fallback --------------------------------------------------
-
-def _fallback_is_denied():
-    """The `def is_denied` defined inside an ImportError handler, as an AST node.
-
-    Located structurally rather than by slicing the source between a literal
-    import line and the next `\\n    try:`, which is how this was done until
-    2026-09-01. Two things were wrong with the slice. Its start and end are
-    prose, so a re-indent or a moved `try:` silently changes which region is
-    read (cross-shard finding 22), and its `"return True" in block` question was
-    asked of a text window that also contains the comments explaining the fix
-    (finding 19) - a comment mentioning the words would answer it.
-
-    Structure instead: the handler that catches the failed import, the function
-    it defines, and what that function's `return` statements are. A behavioural
-    probe is not available here, because reaching the fallback means breaking
-    the import for the whole interpreter, and the enclosing hook is registered
-    in no settings file so there is no end-to-end run to drive it from either.
-    That limit is why the assertion is on the AST rather than on an outcome.
-    """
-    tree = ast.parse((HOOKS / "memory-inject.py").read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Try):
-            continue
-        imports_air_gap = any(
-            isinstance(stmt, ast.ImportFrom) and stmt.module == "scripts.utils.air_gap"
-            for stmt in ast.walk(ast.Module(body=node.body, type_ignores=[])))
-        if not imports_air_gap:
-            continue
-        for handler in node.handlers:
-            for stmt in handler.body:
-                if isinstance(stmt, ast.FunctionDef) and stmt.name == "is_denied":
-                    return stmt
-    return None
-
-
-def test_the_air_gap_fallback_denies_rather_than_allows():
-    fallback = _fallback_is_denied()
-    assert fallback is not None, (
-        "no `def is_denied` inside the handler for a failed "
-        "`from scripts.utils.air_gap import ...`; the fallback moved or is gone")
-    returns = [n for n in ast.walk(fallback) if isinstance(n, ast.Return)]
-    assert returns, "the fallback returns nothing, which is None, which is falsy"
-    for ret in returns:
-        assert isinstance(ret.value, ast.Constant) and ret.value.value is True, (
-            "the air-gap fallback returns something other than True, meaning "
-            "not everything is denied, while the module docstring promises "
-            f"air-gapped paths are skipped (line {ret.lineno})")
-
-
-def test_the_docstring_promise_is_still_made():
-    """If the promise is deleted, the fallback direction stops being anchored to
-    anything and this test guards a preference rather than a contract."""
-    src = (HOOKS / "memory-inject.py").read_text(encoding="utf-8")
-    assert "skips any air-gapped path" in src
-
-
-# --- 2. one bad entry must not abort the reconcile ----------------------------
+# --- 1. one bad entry must not abort the reconcile ----------------------------
 
 @pytest.fixture
 def reconcile():
@@ -151,7 +91,7 @@ def test_a_clean_pair_still_syncs_both_ways(reconcile, tmp_path):
     assert (a_upd, b_upd) == (1, 1)
 
 
-# --- 3. the POSIX-only slug fallback ------------------------------------------
+# --- 2. the POSIX-only slug fallback ------------------------------------------
 
 def test_transcript_path_wins_and_is_platform_independent(reconcile):
     got = reconcile._native_from_hook(
@@ -238,7 +178,7 @@ def test_the_caller_treats_none_as_nothing_to_do(reconcile, tmp_path):
     assert "Traceback" not in out.stderr
 
 
-# --- 4. the hook runs as a hook: the session still starts ---------------------
+# --- 3. the hook runs as a hook: the session still starts ---------------------
 #
 # Everything above calls `reconcile()` and `_native_from_hook()` in process. A
 # SessionStart hook's actual promise is narrower and is not any of those: on

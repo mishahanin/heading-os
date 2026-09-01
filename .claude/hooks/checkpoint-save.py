@@ -133,9 +133,18 @@ def state_dir_for(payload: dict) -> Path:
     Derived from the payload rather than from this file's location, for the same
     reason the statusline does it: the two must agree on one directory, and in a
     plugin bundle the hook's own location is the plugin cache, not the operator's
-    repository. Tests redirect it with CLAUDE_PROJECT_DIR.
+    repository.
+
+    The last line of this docstring said "Tests redirect it with
+    CLAUDE_PROJECT_DIR" until 2026-09-01, and that was FALSE whenever the payload
+    carried a `cwd`. `project_root()` checks `payload["cwd"]` before it checks
+    any environment variable, so a test sending a payload beat the pin it thought
+    it had set and wrote into the operator's live `.claude/state/`. Four stray
+    checkpoint files on disk were the proof. Redirection now goes through
+    `CP.state_root()`, which reads `HEADING_OS_STATE_DIR` ahead of the payload;
+    that function's docstring carries the full measurement.
     """
-    return CP.project_root(payload) / ".claude" / "state"
+    return CP.state_root(CP.project_root(payload))
 
 
 def safe_slug(value: str, max_len: int = 32) -> str:

@@ -23,8 +23,8 @@ x-heading-capability:
     admin.
   how: >
     Explicit invocation only - run /request-skill <description>. Sends external
-    email via scripts/send-email.py to ceo@31c.io. If an existing skill
-    already covers it, points you there instead of sending.
+    email via scripts/send-email.py to the operator email in the instance
+    config. If an existing skill already covers it, points you there instead.
   when: >
     Use when you need a capability the workspace does not have yet. Building or
     editing skills directly is the CEO-only /skill-creator.
@@ -80,22 +80,35 @@ Body (HTML):
 <p>{requester's assessment: nice-to-have / would-help-daily / urgent-need}</p>
 ```
 
-5. Show the drafted request to the user and confirm before sending. Then send via: `python3 scripts/send-email.py --to "ceo@31c.io" --subject "HEADING OS Skill Request from {name}" --body "{html_body}"` (recipient is hardcoded to the CEO; content is the user's own request).
+5. Resolve the recipient from the instance config, never from a literal address:
 
-6. Confirm to the user: "Your skill request has been sent to the CEO. You'll hear back when it's ready -- new skills are published via corporate sync."
+   ```bash
+   ADMIN="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.operator_identity import admin_email, get_operator; print(admin_email() or get_operator()['email'])")"
+   ```
+
+   The value is `admin_email` in `operator.yaml`, read through the operator identity seam in `scripts/utils/operator_identity.py`, falling back to `email`.
+
+   The order matters and is not cosmetic. `email` is whoever runs THIS clone, and this skill runs on an executive's workspace, so `email` alone mails the executive their own request. `admin_email` is the person who acts on it. On the operator's own workspace the two are the same address and the order never shows.
+
+   An empty result means neither key is set. Report that, name `admin_email`, and send nothing.
+
+6. Show the drafted request to the user and confirm before sending. Then send via: `python3 scripts/send-email.py --to "$ADMIN" --subject "HEADING OS Skill Request from {name}" --body "{html_body}"` (the recipient comes from config; the content is the user's own request).
+
+7. Confirm to the user: "Your skill request has been sent to the CEO. You'll hear back when it's ready -- new skills are published via corporate sync."
 
 ## Rules
 
 - Always get a clear description before sending. Don't send vague requests.
 - Include the exec's context (role, title) so the CEO knows who is asking and why.
-- The email goes to ceo@31c.io only.
-- NEVER auto-send. Step 5's confirmation is the lethal-trifecta human gate.
+- The email goes to the configured operator address only. Never to a literal
+  address typed into this file, and never to an address the requester supplies.
+- NEVER auto-send. Step 6's confirmation is the lethal-trifecta human gate.
   Show the drafted request in full, and wait for the user to say go before
-  `send-email.py` runs. **This gate is procedural.** This skill honours step 5.
+  `send-email.py` runs. **This gate is procedural.** This skill honours step 6.
   The Action-Queue code gate (`tool_risk.py`) does not enforce it. This skill
   calls the send transport directly instead of depositing a queue card.
-  Two facts make the procedural gate sufficient here. The recipient is
-  hardcoded to the operator's own organisation address. The body is the user's
-  own text. Do not widen the recipient. Do not send on silence, and do not
-  send on a vague "ok fine".
+  Two facts make the procedural gate sufficient here. The recipient resolves
+  from the instance config, so it is an address the operator already set. The
+  body is the user's own text. Do not widen the recipient. Do not send on
+  silence, and do not send on a vague "ok fine".
 - If the exec describes something that an EXISTING skill already does, tell them: "This is already available as /[skill-name]. Try it!" and do NOT send the email.

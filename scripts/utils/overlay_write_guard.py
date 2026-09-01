@@ -680,9 +680,10 @@ def _install_overlay_write_guard():
     # `sqlite3.connect` opens its file in C and never reaches `os.open`, so it
     # walked straight past every wrapper above. MEASURED 2026-08-31 by driving
     # the guard by hand: it created a real database in the operator's overlay and
-    # reported ALLOWED. Two of the 35 modules that resolve the data root at
-    # import time reach it (`scripts/sentinel.py`, read-write, and
-    # `.claude/hooks/memory-inject.py`, read-only).
+    # reported ALLOWED. Two of the 35 modules that resolved the data root at
+    # import time reached it when this was measured (`scripts/sentinel.py`,
+    # read-write, and `.claude/hooks/memory-inject.py`, read-only; the second was
+    # retired on 2026-09-01, which narrows the caller set and not the defect).
     import sqlite3 as _sqlite3
 
     real_sqlite_connect = _sqlite3.connect
@@ -768,11 +769,13 @@ def _install_overlay_write_guard():
 
     def guarded_sqlite_connect(database, *args, **kwargs):
         # A READ-ONLY connection is allowed, and that is not a softening. It
-        # creates nothing and writes nothing, and `.claude/hooks/memory-inject.py`
-        # opens the operator's memory index exactly that way on purpose
-        # (`?mode=ro`, `uri=True`). Refusing it would be the over-friction that
-        # gets a guard switched off. Everything else can create or write, so it
-        # is refused.
+        # creates nothing and writes nothing, and this workspace opens databases
+        # exactly that way on purpose: `scripts/utils/sqlite_uri.read_only_uri()`
+        # is the one sanctioned spelling (`?mode=ro`, `uri=True`), used by the
+        # cookie readers and the CodeGraph symbol source, and it was how the
+        # retired `.claude/hooks/memory-inject.py` read the operator's memory
+        # index. Refusing it would be the over-friction that gets a guard
+        # switched off. Everything else can create or write, so it is refused.
         target = database
         read_only = False
         if kwargs.get("uri") and isinstance(database, str):

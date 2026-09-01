@@ -30,7 +30,7 @@ the read-compare-write span under a real overlap; it proves the lock is taken ov
 the SHARED store, that a second holder is detected and reported, and that its
 absence degrades rather than blocks.
 
-Two more defects in the same file and its neighbour, both found the same day:
+One more defect in the same file, found the same day:
 
   * A `transcript_path` of the wrong TYPE killed the hook.
     `Path(tp)` sat OUTSIDE main()'s try. MEASURED against the live hook:
@@ -41,14 +41,16 @@ Two more defects in the same file and its neighbour, both found the same day:
     `[]` and `{}` slipped past the old truthiness test only because they are
     falsy, which is luck rather than a guard.
 
-  * `.claude/hooks/memory-inject.py` claimed to be a live SessionStart hook.
-    MEASURED 2026-08-31: it is named in NO settings file, live or per-OS template,
-    while its own line 3 read "Claude Code SessionStart hook (matcher: startup)"
-    and `config/memory-index.yaml` said the snapshot "stays behind the flag". The
-    supersession was recorded in a third place, `recall-inject.py`, so one file
-    told the truth and two contradicted it. Of 17 hooks on disk it is the ONLY
-    unregistered one, so the reverse-direction check below has exactly one
-    declared exemption rather than a list.
+A third defect lived next door and is now gone. `.claude/hooks/memory-inject.py`
+claimed to be a live SessionStart hook while being named in NO settings file
+(measured 2026-08-31), and of the 17 hooks then on disk it was the ONLY
+unregistered one. The operator retired the file on 2026-09-01 rather than keep
+wiring a hook `recall-inject.py` had superseded on 2026-08-07. The two checks it
+motivated stay, and they are the reason it is worth naming here: every hook on
+disk must be wired or declared, and a declaration must not outlive its hook.
+Those two now run over 16 hooks and an EMPTY declared-unregistered registry, so
+each carries its own anti-vacuity floor rather than leaning on the one exemption
+that used to make them non-trivial.
 
 Run: .venv/bin/python -m pytest tests/test_two_sessions_that_synced_one_memory_store.py
 """
@@ -71,8 +73,6 @@ sys.path.insert(0, str(ROOT))
 
 HOOKS = ROOT / ".claude" / "hooks"
 HOOK = HOOKS / "memory-reconcile.py"
-INJECT = HOOKS / "memory-inject.py"
-CONFIG = ROOT / "config" / "memory-index.yaml"
 
 # 4000 bytes: measured above, and inside the size range of the live store.
 BODY = ("y" * 79 + "\n") * 50
@@ -471,13 +471,22 @@ SETTINGS_FILES = [
 # inside a self-locating launcher command.
 HOOK_NAME_RE = re.compile(r"'([A-Za-z0-9_][A-Za-z0-9_.-]*\.py)'")
 
-# The one hook on disk that is deliberately wired nowhere. MEASURED 2026-08-31:
-# 17 hooks on disk, 16 named across the settings files, and this is the
-# difference. An entry here is a claim that the file's own docstring explains why.
-DECLARED_UNREGISTERED = {
-    "memory-inject.py": "superseded by recall-inject.py; wiring both would "
-                        "inject memory twice per session, one of them by date",
-}
+# Hooks on disk that are deliberately wired nowhere. An entry here is a claim
+# that the file's own docstring explains why it ships dead.
+#
+# EMPTY since 2026-09-01, and that is the intended steady state. It held exactly
+# one name, `memory-inject.py`, from 2026-08-31 until the operator retired that
+# file; there were 17 hooks on disk and 16 named across the settings files, and
+# it was the difference. MEASURED 2026-09-01 after the deletion: 16 on disk, 16
+# named, difference zero.
+#
+# An empty registry makes `test_the_declaration_does_not_outlive_its_hook` below
+# unfalsifiable — it loops over this dict, so with nothing in it there is nothing
+# it can report. That is stated rather than hidden: it is a dormant guard that
+# arms itself the instant a name is added here, and the check that still MEASURES
+# something every run is `test_every_hook_on_disk_is_wired_or_declared`, which
+# carries its own floor on the corpus it reads.
+DECLARED_UNREGISTERED: dict[str, str] = {}
 
 
 def hooks_named_in(rel: str) -> set[str]:
@@ -558,11 +567,25 @@ def test_every_hook_on_disk_is_wired_or_declared():
     """The direction `tests/test_settings_hook_targets.py` does not check.
 
     It asks that every hook NAMED in settings exists on disk. The reverse
-    question is the one that went unanswered for memory-inject.py: a file that
-    calls itself a live hook, that nothing runs, whose flag the operator can set
-    with no effect and no explanation.
+    question is the one that went unanswered for memory-inject.py until it was
+    retired on 2026-09-01: a file that called itself a live hook, that nothing
+    ran, whose flag the operator could set with no effect and no explanation.
+
+    The floor on `on_disk` is load-bearing now that DECLARED_UNREGISTERED is
+    empty. Every exemption this test grants comes from `named_hooks()`, which
+    `test_the_extraction_reaches_a_real_registry` floors at 12; the other side
+    of the subtraction was floored by nothing. A renamed hooks directory, a glob
+    that stopped matching, or a `HOOKS` constant pointed at the wrong tree would
+    make `on_disk` empty and `unwired` trivially `[]`, and this test would pass
+    having read no hooks at all. MEASURED 2026-09-01: 16 hooks on disk, all 16
+    named across the settings files. Floored at 14 so retiring one or two more
+    does not fail an unrelated test.
     """
     on_disk = {p.name for p in HOOKS.glob("*.py")}
+    assert len(on_disk) >= 14, (
+        f"only {len(on_disk)} hook files found under {HOOKS}: {sorted(on_disk)}. "
+        "The corpus this test subtracts from is empty or nearly so, which makes "
+        "the assertion below green without reading anything.")
     unwired = sorted(on_disk - named_hooks() - set(DECLARED_UNREGISTERED))
     assert unwired == [], (
         f"hooks on disk that no settings file wires: {unwired}. Either register "
@@ -572,41 +595,19 @@ def test_every_hook_on_disk_is_wired_or_declared():
 
 def test_the_declaration_does_not_outlive_its_hook():
     """A registry entry guarding nothing is the same stale claim wearing the
-    other hat: if memory-inject.py is ever wired, or deleted, this fails instead
-    of silently exempting a file that no longer needs it."""
+    other hat: a declared-unregistered hook that is later wired, or deleted,
+    fails here instead of silently exempting a file that no longer needs it.
+
+    DORMANT while DECLARED_UNREGISTERED is empty, which it has been since
+    2026-09-01. It loops over that dict, so an empty registry means it reads
+    nothing and cannot fail; it is kept because the registry is expected to take
+    entries again, and it arms itself the moment one is added. It is deliberately
+    NOT given an anti-vacuity floor: a floor here would assert that some hook
+    ships dead, which is the opposite of what this workspace wants to be true.
+    The measuring guard over this corpus is the test above.
+    """
     on_disk = {p.name for p in HOOKS.glob("*.py")}
     named = named_hooks()
     stale = sorted(n for n in DECLARED_UNREGISTERED
                    if n not in on_disk or n in named)
     assert stale == [], f"declared-unregistered hooks that are gone or wired: {stale}"
-
-
-def test_memory_inject_says_it_is_registered_nowhere():
-    """The claim and the fact, pinned together.
-
-    Line 3 read "Claude Code SessionStart hook (matcher: startup)" until
-    2026-08-31 while the grep returned zero hits, and a reader who believed it
-    would have gone looking for a hook that never fires.
-    """
-    doc = INJECT.read_text(encoding="utf-8")
-    head = doc[:doc.index('"""', doc.index('"""') + 3)]
-    assert "recall-inject.py" in head, (
-        "the docstring no longer names the successor")
-    assert re.search(r"registered in NO settings file|registered in no settings",
-                     head, re.IGNORECASE), (
-        "the docstring does not say the hook is unregistered")
-    assert "SessionStart hook (matcher: startup)." not in head, (
-        "the docstring claims to be a live SessionStart hook again")
-
-
-def test_the_config_comment_does_not_promise_a_working_flag():
-    """`inject.enabled` switches on nothing while the hook is unwired, and the
-    comment beside it said the snapshot "stays behind the flag"."""
-    text = CONFIG.read_text(encoding="utf-8")
-    at = text.index("\ninject:")
-    inject_block = text[max(0, at - 900):at + 400]
-    assert "behind the flag" not in inject_block, (
-        "the config describes the snapshot as held back by a flag, which reads "
-        "as a switch that does something")
-    assert "registered in no settings file" in inject_block, (
-        "the config does not say why enabled: true has no effect")

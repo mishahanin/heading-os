@@ -5,7 +5,8 @@ public clone is operator-agnostic. A real deployment supplies its own identity i
 one place; every load-bearing default in the codebase resolves through here.
 
 Resolution precedence (highest wins):
-    1. environment  HEADING_OS_OPERATOR_{NAME,SLUG,GITHUB_ORG,VOICE_REFERENCE,EMAIL}
+    1. environment  HEADING_OS_OPERATOR_{NAME,SLUG,GITHUB_ORG,VOICE_REFERENCE,
+                                         EMAIL,CORPORATE_EMAIL_DOMAIN}
     2. data overlay <data-root>/config/operator.yaml
     3. engine-local config/operator.yaml   (gitignored; for a data-less clone)
     4. the shipped example scripts/operator.example.yaml (generic defaults)
@@ -18,8 +19,9 @@ overlay->example decision and layers the engine-local + env tiers on top.
 
 The documented sentinel. When nothing above tier 4 could be read, `get_operator()`
 returns a copy of `_GENERIC`: name "Operator", slug "operator", github_org "",
-email "". `operator_org()` and `operator_email_domain()` therefore answer `""`,
-`operator_slug()` answers `"operator"`, and `operator_is_default()` answers True.
+email "", corporate_email_domain "". `operator_org()`, `operator_email_domain()`
+and `corporate_email_domain()` therefore answer `""`, `operator_slug()` answers
+`"operator"`, and `operator_is_default()` answers True.
 A caller that needs a REAL org must test the empty string; it must not assume the
 value is real merely because no exception arrived.
 
@@ -58,6 +60,8 @@ _GENERIC: dict[str, str] = {
     "github_org": "",
     "voice_reference": "reference/voice.md",
     "email": "",
+    "corporate_email_domain": "",
+    "admin_email": "",
 }
 
 # field -> environment variable (highest-precedence tier).
@@ -67,6 +71,8 @@ _ENV_KEYS: dict[str, str] = {
     "github_org": "HEADING_OS_OPERATOR_GITHUB_ORG",
     "voice_reference": "HEADING_OS_OPERATOR_VOICE_REFERENCE",
     "email": "HEADING_OS_OPERATOR_EMAIL",
+    "corporate_email_domain": "HEADING_OS_OPERATOR_CORPORATE_EMAIL_DOMAIN",
+    "admin_email": "HEADING_OS_OPERATOR_ADMIN_EMAIL",
 }
 
 
@@ -198,6 +204,69 @@ def operator_email_domain() -> str:
     email = (get_operator().get("email") or "").strip()
     _, _, domain = email.partition("@")
     return domain.lower()
+
+
+def corporate_email_domain() -> str:
+    """The instance's CORPORATE mail domain, bare, or '' when unconfigured.
+
+    Added 2026-09-01. Three engine scripts had a tenant mail domain compiled in
+    and each used it to decide BEHAVIOUR, not branding: `INTERNAL_DOMAIN` in
+    `scripts/email-intelligence.py` classified a conversation internal or
+    external, `scripts/utils/crm.py` flagged a contact holding a company
+    mailbox but not typed tribe, and `scripts/crm-health.py` printed the
+    result. On any other deployment all three were dead code that never fired.
+
+    Deliberately NOT `operator_email_domain()`. That answers "where does the
+    operator's own mail live", and the two are routinely different -- measured
+    on the operator's machine, the personal address is on one domain and the
+    company mail on another. It is the same split that made `_gal_domain()` in
+    `scripts/bootcamp-roster.py` put the org chart's `gal_domain` ahead of the
+    operator email rather than reuse it.
+
+    Bare, with no leading '@', because the callers prepend their own. A caller
+    that builds a match out of this MUST test the empty string first: an unset
+    domain turns `f"@{d}" in address` into `"@" in address`, which is true of
+    every address ever written, so the guard that warned about nobody would
+    warn about everybody.
+    """
+    return (get_operator().get("corporate_email_domain") or "").strip().lstrip("@").lower()
+
+
+def admin_email() -> str:
+    """The inbox that reaches whoever ADMINISTERS this fleet. '' when unset.
+
+    Added 2026-09-01, on the operator's decision, after two engine sites were
+    found naming one tenant's mailbox as a literal:
+
+      - `.claude/skills/request-skill/SKILL.md` sent a skill request to a
+        hardcoded address. That skill runs on an EXECUTIVE's workspace, so on
+        any other deployment it mailed a stranger's request to this operator.
+      - `scripts/fireside-bot.py` offered the same literal as "reach a human"
+        at the foot of an outbound Tribe email, inviting somebody else's people
+        to write to this operator's mailbox.
+
+    ## Why this is not `email`, and not `corporate_email_domain`
+
+    `email` is "whoever runs THIS clone". On an exec workspace that is the
+    exec, so `/request-skill` would mail them their own request. This field is
+    the fleet's administrator, which on an exec workspace is somebody else
+    entirely and on the operator's own workspace happens to be the same person.
+    The two coincide here and must not be conflated: the coincidence is what
+    makes the bug invisible on the machine where it is written.
+
+    `corporate_email_domain` is a DOMAIN and answers a membership question. This
+    is a whole ADDRESS and answers a routing question. Neither derives from the
+    other: there is no rule that says the admin's mailbox sits on the corporate
+    domain, and inventing a local part to bolt onto it would be a guess.
+
+    ## Callers
+
+    Fall back to `email` when this is empty, then refuse. An empty address in an
+    outbound message is worse than no address at all, because the reader tries
+    it. `scripts/fireside-bot.py` omits its whole "reach a human" line rather
+    than ship a blank one.
+    """
+    return (get_operator().get("admin_email") or "").strip()
 
 
 def _reset_cache() -> None:

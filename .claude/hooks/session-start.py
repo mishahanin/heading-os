@@ -840,9 +840,12 @@ def main():
         #
         # Plain text is what the evidence supports: `checkpoint-inject.py` is a
         # registered SessionStart hook in this same directory, it prints raw
-        # text, and its output demonstrably reaches the session. The one hook
-        # here that uses the `hookSpecificOutput` wrapper, `memory-inject.py`, is
-        # disabled and registered nowhere, so it is not evidence of a live path.
+        # text, and its output demonstrably reaches the session. No registered
+        # SessionStart hook here uses the `hookSpecificOutput` wrapper: the only
+        # one that ever did, `memory-inject.py`, was wired nowhere and was
+        # retired on 2026-09-01, so it was never evidence of a live path. The
+        # hooks that do use the wrapper are on other events (UserPromptSubmit,
+        # PreToolUse, PostToolUse), whose schemas are not this one.
         print("Session alerts:")
         for alert in alerts:
             print(f"- {alert}")

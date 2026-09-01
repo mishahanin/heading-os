@@ -1,7 +1,8 @@
 """UserPromptSubmit recall hook.
 
 Surfaces memory relevant to what the CEO just typed, instead of the
-date-ordered snapshot memory-inject.py emits at session start.
+date-ordered snapshot memory-inject.py emitted at session start (that hook was
+superseded by this one on 2026-08-07 and deleted on 2026-09-01).
 
 Guarantees under test:
   - a substantive prompt yields an additionalContext block naming the hit;

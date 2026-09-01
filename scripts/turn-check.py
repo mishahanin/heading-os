@@ -69,6 +69,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.utils.checkpoint_paths import state_root  # noqa: E402
 from scripts.utils.colors import GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
 from scripts.utils.session_scope import (current_transcript,  # noqa: E402
                                          narrow_with_scope)
@@ -84,7 +85,7 @@ _VENV = venv_python()
 PYTHON = str(_VENV) if _VENV.exists() else sys.executable
 
 ROOT = get_workspace_root()
-STATE_PATH = ROOT / ".claude" / "state" / "turn-check.json"
+STATE_PATH = state_root(ROOT) / "turn-check.json"
 
 # Packages safe to import without side effects. A module outside these is still
 # compiled and still gets its tests run; it is only spared the import probe.

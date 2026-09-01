@@ -38,9 +38,24 @@ Relationship: [WARMING/STABLE/COOLING]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
+## The Corporate Mail Domain
+
+INTERNAL means every participant sits on the instance's corporate mail domain.
+That domain is configuration, never a literal in this file or in the skill body.
+It resolves from `corporate_email_domain()` in `scripts/utils/operator_identity.py`,
+backed by `corporate_email_domain` in the operator config. Read the value with:
+
+```bash
+CORP="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.operator_identity import corporate_email_domain; print(corporate_email_domain())")"
+```
+
+An empty `$CORP` means this clone has no corporate domain. Classify every thread
+as EXTERNAL then, and render no internal-skipped block. Never fall back to a
+substring test on a bare `@`, which matches every address ever written.
+
 ## Internal-Skipped Block
 
-For INTERNAL emails (all @31c.io) that were skipped:
+For INTERNAL emails (every participant on `@$CORP`) that were skipped:
 
 ```
 INTERNAL (skipped): [N] conversations between Tribe members. No CRM action.

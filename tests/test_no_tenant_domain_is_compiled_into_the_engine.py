@@ -34,21 +34,44 @@ service addresses (`github.com`, `googleapis.com`, `anthropic.com`) that belong
 in engine code. `_DOMAINISH` over that corpus is 260 findings of noise around
 one real class.
 
-What the wider sweep WOULD have caught, measured the same day and still open:
+What the wider sweep WOULD have caught, measured the same day:
 
   scripts/email-intelligence.py:92   INTERNAL_DOMAIN = "31c.io"
   scripts/utils/crm.py:561           '"@31c.io" in email.lower()'
   scripts/crm-health.py:82           the warning line that reports it
 
 Each is a tenant mail domain deciding BEHAVIOUR, not branding: on any other
-deployment `is_internal` classifies nothing and the tribe-email warning never
-fires. They are not fixed here, and the reason is not scope: the right value is
-the instance's CORPORATE mail domain, which is not the same field as
+deployment `is_internal` classified nothing and the tribe-email warning never
+fired. They were left open that day, and the reason was not scope: the right
+value is the instance's CORPORATE mail domain, which is not the same field as
 `operator_email_domain()` (measured on this machine: the operator email is on
 one domain and the corporate mail on another, the same split that made
 `_gal_domain()` put the org chart's `gal_domain` ahead of the operator email).
-Closing them needs a new instance-config key and the operator's word on where it
-lives, which is a decision, not a repair. Reported up rather than silently left.
+Closing them needed a new instance-config key and the operator's word on where
+it lives, which is a decision, not a repair.
+
+CLOSED 2026-09-01. The operator settled it: a fifth field on the same identity
+seam, `corporate_email_domain` in `scripts/utils/operator_identity.py`, env
+override `HEADING_OS_OPERATOR_CORPORATE_EMAIL_DOMAIN`, value form the BARE
+domain because two of the three sites prepend the `@` themselves. The engine
+ships `corporate_email_domain: ""` in `scripts/operator.example.yaml` and the
+real value lives only in the private data overlay. All three files join
+`WATCHED` below, so a re-introduction fails here.
+
+They are named one at a time, never by a glob over `scripts/**` -- the
+measurement four paragraphs up is why. Adding them cost one widening of
+`_ALLOWED`: `scripts/email-intelligence.py` ships `"*@expensify.com"` and
+`"*@linkedin.com"` in `DEFAULT_IGNORE_PATTERNS`, which are third-party senders
+every deployment wants filtered, exactly like the `github.com` class already
+listed there. One further hit was a real defect and was fixed rather than
+allowed: the Exchange-unreachable `hint` string named the operator's own mail
+HOST, so it now names the failure without the hostname.
+
+The behavioural coverage the three sites never had is in
+`tests/test_a_corporate_domain_that_only_one_deployment_could_match.py`. This
+file only proves no tenant domain is written back in; that one proves the
+resolved domain still decides what it used to decide, and that an unconfigured
+clone warns about nobody rather than everybody.
 """
 from __future__ import annotations
 
@@ -101,17 +124,93 @@ _ALLOWED = {
     # Public project identity, not a tenant filter: these name where the engine
     # itself lives, and they are the same on every deployment.
     "mishahanin.github.io", "github.io", "pypi.org", "docs.astral.sh",
+    # Third-party senders every deployment filters, shipped in
+    # `DEFAULT_IGNORE_PATTERNS`. Same class as `github.com` above: a service
+    # address, not a tenant. Added 2026-09-01 with email-intelligence.py.
+    "expensify.com", "linkedin.com",
 }
+
+# The `email:` key of a SKILL.md frontmatter block, and only there.
+# `.claude/rules/development-standards.md` REQUIRES `metadata.email` of every
+# skill, so all three watched markdown skills carry the author address. It is
+# upstream authorship, identical on every deployment, and it decides nothing.
+#
+# Skipping that ONE key is narrower than putting its domain in `_ALLOWED`, which
+# would also blind the five watched scripts -- and an author address compiled
+# into `scripts/email-intelligence.py` as a mail filter is the precise defect
+# this file exists for. It is narrower than skipping the frontmatter block too:
+# `description` lives there, and `email-intel`'s description is one of the four
+# sites the 2026-09-01 skills sweep had to clean.
+_FRONTMATTER_AUTHOR_EMAIL = re.compile(r"^\s*email:\s*\S+@\S+\s*$")
+
+
+def scannable_lines(rel: str, text: str):
+    """The (lineno, line) pairs this sweep judges in one file.
+
+    Python: `#` opens a comment, and prose there may legitimately name the old
+    default, so a `#` line is skipped.
+
+    Markdown: `#` opens a HEADING, not a comment. The same skip would drop
+    section titles for no reason and would exempt no prose at all, so every line
+    is judged except the frontmatter author address above. These are instruction
+    files a model executes: a paragraph naming a tenant domain IS the defect,
+    not a note about one. A future mention of the old rule gets reworded rather
+    than exempted.
+    """
+    markdown = rel.endswith(".md")
+    in_frontmatter = False
+    for n, line in enumerate(text.splitlines(), 1):
+        if markdown:
+            if line.rstrip() == "---" and (n == 1 or in_frontmatter):
+                in_frontmatter = n == 1
+                continue
+            if in_frontmatter and _FRONTMATTER_AUTHOR_EMAIL.match(line):
+                continue
+        elif line.lstrip().startswith("#"):
+            continue
+        yield n, line
+
 
 # Per file, not over the union. The old floor was `inspected >= 400` across
 # both, and `scripts/bootcamp-roster.py` alone contributes 496 non-comment
 # lines, so `scripts/gal-export.py` could shrink to nothing and the gate would
 # still report green over a file it had stopped reading. Counts measured
-# 2026-09-01 (gal-export 228, bootcamp-roster 496); the floors sit well under
-# them so retiring a chunk of either script does not fail this test.
+# 2026-09-01 (gal-export 228, bootcamp-roster 496, email-intelligence 1560,
+# crm 905, crm-health 371); the floors sit well under them so retiring a chunk
+# of any of these scripts does not fail this test.
+#
+# The last three joined on 2026-09-01 when `corporate_email_domain` closed
+# them; see the module docstring. Named individually and deliberately: a glob
+# over `scripts/**` is 260 findings of third-party noise.
+#
+# The five `.claude/skills/` entries joined on 2026-09-01, after the same class
+# of defect was found there and fixed: `/request-skill` mailed every deployment's
+# skill requests to ONE tenant's role address, and `/email-intel` and `/crm`
+# stated the internal-versus-external and tribe-mailbox rules as a literal that
+# only one deployment could ever match -- while the code behind them had already
+# moved to `corporate_email_domain()`.
+#
+# Named one at a time here for the same reason the scripts are. Measured
+# 2026-09-01 over all 418 tracked files under `.claude/skills/`: 309 findings
+# across 135 files, 97 distinct tokens, almost all of them OSINT source sites
+# and third-party APIs a skill legitimately names (`github.com`, `youtube.com`,
+# `opensanctions.org`). That is worse than the 260 that ruled out a
+# `scripts/**` glob, so the same answer holds: name the files, never the tree.
+#
+# Cost of admitting these five: exactly one exemption, `_FRONTMATTER_AUTHOR_EMAIL`
+# above, for the three findings the required `metadata.email` key contributes.
+# The two reference files contribute none.
 WATCHED = {
     "scripts/gal-export.py": 120,
     "scripts/bootcamp-roster.py": 300,
+    "scripts/email-intelligence.py": 1200,
+    "scripts/utils/crm.py": 700,
+    "scripts/crm-health.py": 280,
+    ".claude/skills/request-skill/SKILL.md": 70,
+    ".claude/skills/email-intel/SKILL.md": 200,
+    ".claude/skills/email-intel/references/digest-format.md": 110,
+    ".claude/skills/crm/SKILL.md": 70,
+    ".claude/skills/crm/references/actions.md": 80,
 }
 
 
@@ -168,6 +267,41 @@ def test_the_detector_leaves_placeholders_and_project_identity_alone():
         assert domain_hits(line) == [], line
 
 
+_SKILL_MD = (
+    "---\n"
+    "name: email-intel\n"
+    "description: Scans the mailbox at ceo@tenant-corp.io via EWS\n"
+    "metadata:\n"
+    "  email: author@upstream-project.dev\n"
+    "---\n"
+    "# Heading naming acme-tenant.com\n"
+    "- All participants @acme-tenant.com -> INTERNAL\n"
+)
+
+
+def test_the_frontmatter_exemption_covers_the_author_key_and_nothing_else():
+    """The `email:` key is exempt; `description:` in the same block is not.
+
+    `email-intel`'s frontmatter description carried a tenant mailbox until
+    2026-09-01, so exempting the whole block would have skipped the defect.
+    """
+    seen = dict(scannable_lines("a/SKILL.md", _SKILL_MD))
+    assert 5 not in seen, "the frontmatter author email should be exempt"
+    assert 3 in seen, "the frontmatter description must still be scanned"
+    hits = [h for line in seen.values() for h in domain_hits(line)]
+    assert hits == ["tenant-corp.io", "acme-tenant.com", "acme-tenant.com"], hits
+
+
+def test_a_markdown_heading_is_scanned_rather_than_skipped_as_a_comment():
+    """`#` is a comment in Python and a heading in markdown.
+
+    Reusing the Python skip on a `.md` file would drop every section title,
+    which exempts no prose and hides any domain written into a heading.
+    """
+    assert [n for n, _ in scannable_lines("a/SKILL.md", _SKILL_MD) if n == 7]
+    assert not [n for n, _ in scannable_lines("a/x.py", "# INTERNAL = 'acme.io'\n")]
+
+
 def test_the_sweep_has_something_to_read():
     for rel in WATCHED:
         assert (ROOT / rel).is_file(), rel
@@ -179,19 +313,16 @@ def test_the_sweep_still_reads_each_watched_file(rel, floor):
     nothing is scanned, `bad` is empty, and the assertion below passes while
     guarding nothing. One floor per file, so neither can hide behind the other.
     """
-    inspected = sum(
-        1 for line in (ROOT / rel).read_text(encoding="utf-8").splitlines()
-        if not line.lstrip().startswith("#")
-    )
+    text = (ROOT / rel).read_text(encoding="utf-8")
+    inspected = sum(1 for _ in scannable_lines(rel, text))
     assert inspected >= floor, f"only {inspected} code lines scanned in {rel}"
 
 
 def test_no_watched_script_hardcodes_a_tenant_domain():
     bad = []
     for rel in WATCHED:
-        for n, line in enumerate((ROOT / rel).read_text(encoding="utf-8").splitlines(), 1):
-            if line.lstrip().startswith("#"):
-                continue                     # prose may name the old default
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        for n, line in scannable_lines(rel, text):
             bad += [f"{rel}:{n}: {hit!r}" for hit in domain_hits(line)]
     assert not bad, (
         "a tenant domain is compiled into engine code; it belongs in "

@@ -297,11 +297,24 @@ def summarise(*, denials, since: dict, now) -> dict:
     for name, entry in caught.items():
         days = windows.get(entry["source"], 0)
         entry["days"] = days
-        # Carried explicitly rather than inferred from the verdict, because the
-        # verdict loses it: a wall that HAS caught something reads CATCHING like
-        # any gate, so `--json` would give a consumer no way to tell that this
-        # mechanism must never be judged by that count.
-        entry["wall"] = is_wall(name)
+        # An `entry["wall"] = is_wall(name)` line stood here until 2026-09-01. It
+        # was written for a `--json` consumer, and the audit that swept this tree
+        # established there has never been one: `scripts/gate-yield.py --json`
+        # prints to stdout and nothing in the repository captures, pipes or parses
+        # that output. Operator decision, 2026-09-01: drop the field rather than
+        # keep a row nobody reads.
+        #
+        # What the field was FOR is worth keeping in view, because it is the
+        # reason not to reintroduce it casually. The verdict loses the split: a
+        # wall that HAS caught something reads CATCHING exactly like an ordinary
+        # gate, so a consumer reading verdicts alone cannot tell that this
+        # mechanism must never be judged by its catch count. That property is
+        # unaffected here. It is enforced in `_verdict` itself, through
+        # `is_wall`, and pinned by `test_a_wall_never_reaches_the_no_yield_
+        # verdict_at_any_window`. Only the EXPORT went.
+        #
+        # A future consumer that needs the split calls `is_wall(name)`, which is
+        # public and stays.
         entry["verdict"] = _verdict(name, entry["caught"], days)
 
     return {"mechanisms": caught, "windows": windows,

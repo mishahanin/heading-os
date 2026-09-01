@@ -33,10 +33,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.argtypes import positive_int  # noqa: E402
 from scripts.utils.atomic import atomic_write_text  # noqa: E402
 from scripts.utils.colors import GRAY, GREEN, RESET, YELLOW  # noqa: E402
+from scripts.utils.checkpoint_paths import state_root  # noqa: E402
 from scripts.utils.workspace import get_workspace_root  # noqa: E402
 
 ROOT = get_workspace_root()
-STATE_DIR = ROOT / ".claude" / "state" / "fanout"
+# Through `state_root` because `.claude/hooks/_dispatch.py` writes the SAME
+# directory and reads the same pin. Two writers that disagree about where the
+# fanout ledger lives is a ledger with a hole in it.
+STATE_DIR = state_root(ROOT) / "fanout"
 LOG = STATE_DIR / "serial-claims.jsonl"
 
 # A reason has to say something. Refusing a blank keeps the escape from

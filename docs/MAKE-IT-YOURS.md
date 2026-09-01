@@ -92,16 +92,44 @@ example into your private data overlay and fill it in:
 
 ```bash
 cp scripts/operator.example.yaml <data-root>/config/operator.yaml
-# then edit name / slug / github_org / voice_reference / email
+# then edit name / slug / github_org / voice_reference / email / corporate_email_domain / admin_email
 ```
 
 `operator.yaml` is routed private and gitignored. Every identity default in the code
 reads from it through one seam, so you set your identity in exactly one place. Those
 defaults are the bridge user slug, the GitHub org, the publisher, and the email-reply
 voice clause. You can also override
-any field per-shell with `HEADING_OS_OPERATOR_{NAME,SLUG,GITHUB_ORG,VOICE_REFERENCE,EMAIL}`.
+any field per-shell with
+`HEADING_OS_OPERATOR_{NAME,SLUG,GITHUB_ORG,VOICE_REFERENCE,EMAIL,CORPORATE_EMAIL_DOMAIN,ADMIN_EMAIL}`.
 Until you write it, an established instance keeps its historical defaults with a
 one-time deprecation notice; a brand-new clone is generic.
+
+Two of those fields are easy to confuse with `email`, so they are worth spelling out.
+
+`corporate_email_domain` is your COMPANY's mail domain. Write it bare, with no `@`.
+
+It is not the domain half of `email`. The two are often different. Your own address can
+sit on a personal or founder domain. The company mailboxes can sit somewhere else.
+
+Three things read this field. It decides whether a mail thread is internal. It decides
+whether a CRM contact holds a company mailbox but has no Tribe type. It also supplies
+the wording of that warning.
+
+Leave it blank and all three stay quiet. They answer "no" for everybody rather than
+guess. Set it and they start to work.
+
+`admin_email` is the inbox that reaches whoever ADMINISTERS the fleet. It is a whole
+address, not a domain.
+
+This is not `email` either. `email` is whoever runs this clone. On an executive's
+workspace that is the executive. A skill request sent there would reach the person who
+wrote it.
+
+Two things read this field. `/request-skill` sends the request to it. The fireside bot
+offers it as "reach a human" at the foot of a backup email.
+
+Both fall back to `email` when it is blank. If both are blank, both refuse to send. A
+message that names no address is worse than one that offers no help.
 
 ### 3.2 Your facts and voice
 

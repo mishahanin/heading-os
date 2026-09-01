@@ -292,7 +292,7 @@ HEALTHLESS = """
 components:
   demo:
     tier: auto
-    current: {via: cmd, cmd: "echo 1"}
+    current: {via: shell, cmd: "echo 1"}
     latest: {via: pypi, package: demo}
     apply:
       cmd: "true"
@@ -318,7 +318,7 @@ def test_a_script_apply_is_still_exempt(tmp_path):
 components:
   demo:
     tier: notify
-    current: {via: cmd, cmd: "echo 1"}
+    current: {via: shell, cmd: "echo 1"}
     latest: {via: pypi, package: demo}
     apply:
       script: "scripts/x.py"

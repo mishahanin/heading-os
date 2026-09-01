@@ -3,7 +3,7 @@ name: email-intel
 x-heading-requires: ["email", "ai-extra"]   # F-7.1: optional-dependency extras this skill needs
 description: >
   Daily email intelligence processor. Scans incoming + outgoing 31C Exchange emails
-  (ceo@31c.io via exchangelib/EWS), groups by conversation thread, categorizes
+  (via exchangelib/EWS), groups by conversation thread, categorizes
   for CRM actions, tasks, pipeline updates, knowledge capture, and relationship signals.
   Presents digest for approval before executing. Integrates with /prime for morning briefing.
   Trigger: '/email-intel', 'process emails', 'email digest', 'check my email'.
@@ -53,7 +53,7 @@ x-heading-routing:
 ---
 # Email Intelligence -- Exchange Inbox Processor
 
-Scans 31C Exchange email (ceo@31c.io), groups conversations, categorizes actionable items, and proposes CRM logs, tasks, pipeline updates, knowledge notes, and new contacts. Nothing ships without Misha's approval.
+Scans the configured 31C Exchange mailbox, groups conversations, categorizes actionable items, and proposes CRM logs, tasks, pipeline updates, knowledge notes, and new contacts. Nothing ships without Misha's approval.
 
 ## State Files
 
@@ -251,7 +251,10 @@ For each conversation, enrich with workspace context before presenting:
 - Flag overlaps: "Active Viraid task: [description]"
 
 **Internal vs. External classification:**
-- All participants @31c.io -> INTERNAL (skip CRM, summarize only)
+
+The corporate mail domain is configuration, never a literal: `corporate_email_domain()` in `scripts/utils/operator_identity.py`. It is empty on a clone that has none, which makes no thread internal. Resolve it per `references/digest-format.md`.
+
+- All participants on that domain -> INTERNAL (skip CRM, summarize only)
 - Mixed (internal + external) -> EXTERNAL (process normally, focus on external participants)
 - All external -> EXTERNAL (process normally)
 - Exception: internal emails referencing external deals/contacts -> process for CRM context
@@ -277,7 +280,7 @@ For each conversation, enrich with workspace context before presenting:
 
 - NEVER use Gmail, Google Calendar MCP, or `scripts/gmail-reader.py` -- Exchange ONLY
 - NEVER auto-execute actions without Misha's explicit approval
-- NEVER log CRM interactions for internal @31c.io emails unless they reference external deals/contacts
+- NEVER log CRM interactions for internal corporate-domain emails unless they reference external deals/contacts
 - NEVER process calendar invites (handled by Sentinel)
 - NEVER create duplicate CRM entries for the same conversation thread on the same day
 - NEVER auto-send. `[send-gated]` actions send only after their specific number is approved in Phase 3 (lethal-trifecta human gate); silence or "approve all crm" never sends. The processor proposes sends; the CEO's per-number approval is the gate, and the send goes through `scripts/send-email.py`. **This gate is procedural** -- enforced by this skill honouring the per-number approval, NOT by the Action-Queue code gate (`tool_risk.py`). No daemon consumes `sweep-actions-*.json`; the protection is the skill following this rule. (Pipeline `[notify]` cards, by contrast, ride the code-enforced Action Queue.)

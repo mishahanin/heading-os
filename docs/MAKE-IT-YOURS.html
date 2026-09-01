@@ -172,15 +172,34 @@ single-user master workspace. A <strong>managed</strong> (multi-person) deployme
 operator-agnostic (a fresh clone resolves to a neutral &ldquo;operator&rdquo;). Copy the shipped
 example into your private data overlay and fill it in:</p>
 <div class="highlight"><pre><span></span><code>cp<span class="w"> </span>scripts/operator.example.yaml<span class="w"> </span>&lt;data-root&gt;/config/operator.yaml
-<span class="c1"># then edit name / slug / github_org / voice_reference / email</span>
+<span class="c1"># then edit name / slug / github_org / voice_reference / email / corporate_email_domain / admin_email</span>
 </code></pre></div>
 <p><code>operator.yaml</code> is routed private and gitignored. Every identity default in the code
 reads from it through one seam, so you set your identity in exactly one place. Those
 defaults are the bridge user slug, the GitHub org, the publisher, and the email-reply
 voice clause. You can also override
-any field per-shell with <code>HEADING_OS_OPERATOR_{NAME,SLUG,GITHUB_ORG,VOICE_REFERENCE,EMAIL}</code>.
+any field per-shell with
+<code>HEADING_OS_OPERATOR_{NAME,SLUG,GITHUB_ORG,VOICE_REFERENCE,EMAIL,CORPORATE_EMAIL_DOMAIN,ADMIN_EMAIL}</code>.
 Until you write it, an established instance keeps its historical defaults with a
 one-time deprecation notice; a brand-new clone is generic.</p>
+<p>Two of those fields are easy to confuse with <code>email</code>, so they are worth spelling out.</p>
+<p><code>corporate_email_domain</code> is your COMPANY&rsquo;s mail domain. Write it bare, with no <code>@</code>.</p>
+<p>It is not the domain half of <code>email</code>. The two are often different. Your own address can
+sit on a personal or founder domain. The company mailboxes can sit somewhere else.</p>
+<p>Three things read this field. It decides whether a mail thread is internal. It decides
+whether a CRM contact holds a company mailbox but has no Tribe type. It also supplies
+the wording of that warning.</p>
+<p>Leave it blank and all three stay quiet. They answer &ldquo;no&rdquo; for everybody rather than
+guess. Set it and they start to work.</p>
+<p><code>admin_email</code> is the inbox that reaches whoever ADMINISTERS the fleet. It is a whole
+address, not a domain.</p>
+<p>This is not <code>email</code> either. <code>email</code> is whoever runs this clone. On an executive&rsquo;s
+workspace that is the executive. A skill request sent there would reach the person who
+wrote it.</p>
+<p>Two things read this field. <code>/request-skill</code> sends the request to it. The fireside bot
+offers it as &ldquo;reach a human&rdquo; at the foot of a backup email.</p>
+<p>Both fall back to <code>email</code> when it is blank. If both are blank, both refuse to send. A
+message that names no address is worse than one that offers no help.</p>
 <h3 id="32-your-facts-and-voice">3.2 Your facts and voice</h3>
 <p>The documents the wizard generates are plain markdown you can keep editing:</p>
 <ul>

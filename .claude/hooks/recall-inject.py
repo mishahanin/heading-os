@@ -3,9 +3,10 @@
 recall-inject.py - Claude Code UserPromptSubmit hook.
 
 Surfaces memory RELEVANT TO WHAT WAS JUST TYPED, before the model starts to
-think. Replaces the date-ordered session-start snapshot (memory-inject.py),
-which surfaced the four most recent threads regardless of the subject and, in
-practice, missed.
+think. Replaced the date-ordered session-start snapshot (memory-inject.py) on
+2026-08-07, which surfaced the four most recent threads regardless of the
+subject and, in practice, missed; that hook was deleted on 2026-09-01, so this
+is the only memory injection the engine runs.
 
 Design:
   - Shells out to the recall CLI (`scripts/memory-index.py query --json`) rather
@@ -64,7 +65,7 @@ def _log(msg: str, exc: BaseException | None = None) -> None:
     """Record why the hook stayed silent. stderr is free here: the hook always
     exits 0, so writing to it cannot block the prompt. Without this, a
     permanently broken hook is indistinguishable from one correctly finding
-    nothing. Mirrors memory-inject.py, which logs its stdin failure the same way.
+    nothing. The retired memory-inject.py logged its stdin failure the same way.
     """
     tail = f": {exc}" if exc is not None else ""
     print(f"recall-inject: {msg}{tail}", file=sys.stderr)

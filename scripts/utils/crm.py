@@ -51,6 +51,7 @@ from scripts.utils.workspace import (  # noqa: E402
     get_corporate_root,
     is_exec_workspace,
 )
+from scripts.utils.operator_identity import corporate_email_domain  # noqa: E402
 from scripts.utils.markdown import parse_frontmatter_str as _parse_frontmatter  # noqa: E402
 from scripts.utils.markdown import frontmatter_list
 
@@ -432,7 +433,8 @@ def scan_contacts(config: dict, today=None, contacts_dir: Path | None = None,
         ``contacts`` is a list of contact dicts (each with ``name``,
         ``company``, ``type``, ``last_touch``, ``cadence``, ``health``,
         ``days_since``, ``commitments``, ``file``), ``tribe_warnings`` is a
-        list of @31c.io emails not typed as tribe, and ``dangling_refs`` is a
+        list of corporate-domain emails not typed as tribe (empty on an
+        instance with no configured corporate domain), and ``dangling_refs`` is a
         list of dicts with ``file`` and ``entity_ref`` for relationship records
         whose address-book entity could not be resolved.  Also returns the
         parsed pipeline-stage and alias maps so callers can reuse them without
@@ -479,6 +481,10 @@ def scan_contacts(config: dict, today=None, contacts_dir: Path | None = None,
         _aliases_file = get_crm_contacts_dir().parent / "aliases.md"
     _stages = parse_pipeline_stages(_pipeline_file)
     _aliases = parse_aliases(_aliases_file)
+
+    # Resolved once per scan, not per card: the identity seam is cached, but the
+    # loop below runs over every contact file and this is a pure lookup.
+    _corp_domain = corporate_email_domain()
 
     contacts: list = []
     tribe_warnings: list = []
@@ -553,12 +559,19 @@ def scan_contacts(config: dict, today=None, contacts_dir: Path | None = None,
         _pc_canonical = _aliases.get(_pc_norm, _pc_norm)
         stage = _stages.get(_pc_canonical) or _stages.get(_pc_norm) or ""
 
-        # Detect @31c.io emails not typed as tribe/tribe-leadership.
-        # Opt-out: contacts who legitimately hold a @31c.io address while not
+        # Detect corporate-mailbox emails not typed as tribe/tribe-leadership.
+        # Opt-out: contacts who legitimately hold a company address while not
         # being Tribe (e.g. resellers/advisors issued a company mailbox) carry
         # tribe_email_ok: true on their relationship record to suppress this.
+        #
+        # `_corp_domain` first, and that ordering is the whole point. The domain
+        # was a tenant literal until 2026-09-01; resolving it without the guard
+        # turns the match into `"@" in email.lower()` on any clone that has not
+        # configured one, which is true of every address ever written. The check
+        # that warned about nobody would then warn about everybody. No domain,
+        # no check.
         _tribe_email_ok = str(fm.get("tribe_email_ok", "")).strip().lower() in ("true", "yes", "1")
-        if (email and "@31c.io" in email.lower()
+        if (_corp_domain and email and f"@{_corp_domain}" in email.lower()
                 and rel_type not in NO_CADENCE_TYPES and not _tribe_email_ok):
             tribe_warnings.append({
                 "name": name,
@@ -897,7 +910,7 @@ def merge_entity_and_relationship(entity: dict, relationship: dict) -> dict:
     merged["radar_freeze_until"] = relationship.get("radar_freeze_until", "")
     merged["owner"] = relationship.get("owner", "")
     # Carry the tribe-warning opt-out through the merge (relationship wins, then
-    # entity) so entity_ref contacts can suppress the @31c.io false positive.
+    # entity) so entity_ref contacts can suppress the corporate-domain warning.
     merged["tribe_email_ok"] = relationship.get("tribe_email_ok", "") or (
         entity.get("tribe_email_ok", "") if entity else "")
     return merged

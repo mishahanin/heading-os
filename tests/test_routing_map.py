@@ -88,7 +88,7 @@ def test_leading_slash_and_backslash_normalized():
 def test_code_dirs_that_were_corporate_are_now_engine():
     # OLD model: these were 'corporate' (shared to execs). NEW model: code = engine.
     assert get_routing_destination("scripts/email-intelligence.py") == "engine"
-    assert get_routing_destination(".claude/hooks/memory-inject.py") == "engine"
+    assert get_routing_destination(".claude/hooks/recall-inject.py") == "engine"
     assert get_routing_destination("reference/corporate-style-guide.md") == "engine"
     assert get_routing_destination("docs/QUICKSTART.md") == "engine"
 

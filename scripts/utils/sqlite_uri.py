@@ -11,10 +11,11 @@ parameters and the filename is truncated. A `#` starts a fragment, with the same
 result. A space is not legal in a URI at all, and a Windows path (`C:\\Users\\...`)
 has both a colon and backslashes where the URI grammar expects neither.
 
-The failure is silent where it matters most. `.claude/hooks/memory-inject.py`
-catches the connect error and calls `_emit("")`, so a data root under a
-directory with a `?` in its name turns memory injection off permanently with no
-diagnostic anywhere. Found by the 2026-08-23 audit.
+The failure is silent where it matters most. The 2026-08-23 audit found it in
+`.claude/hooks/memory-inject.py` (retired 2026-09-01): the hook caught the
+connect error and called `_emit("")`, so a data root under a directory with a
+`?` in its name turned memory injection off permanently with no diagnostic
+anywhere. The callers below inherit the same shape.
 
 `Path.as_uri()` does the quoting the standard library way, including the Windows
 drive form, and it requires an absolute path, which is what these callers have.

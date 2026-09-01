@@ -79,7 +79,7 @@ def format_terminal_report(contacts, tribe_warnings=None):
         for w in tribe_warnings:
             lines.append(
                 f"  {YELLOW}{w['name']}{RESET} ({w['company']}) - type: {w['type']} - "
-                f"has @31c.io email ({w['email']}) but is NOT typed as tribe/tribe-leadership"
+                f"has a corporate-domain email ({w['email']}) but is NOT typed as tribe/tribe-leadership"
             )
         lines.append("")
 

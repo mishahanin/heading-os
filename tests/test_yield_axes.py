@@ -123,28 +123,46 @@ def test_a_session_gate_is_NOT_a_wall_and_can_still_be_judged():
 # SC-2 -- an unclassified mechanism fails SAFE
 # ============================================================
 
-def test_the_json_row_carries_the_split_the_verdict_loses():
-    """SC-1e. The machine-readable half of the axis, which nothing pinned.
+def test_the_json_row_does_not_carry_a_field_nobody_reads():
+    """SC-1e, inverted on 2026-09-01. The field was dropped; this pins that.
 
-    `summarise` stamps `entry["wall"]`, and its own comment says why: a wall
-    that HAS caught something reads CATCHING exactly like a gate, so the verdict
-    alone gives a `--json` consumer no way to tell that this mechanism must
-    never be judged by that count. MEASURED 2026-09-01 by replacing that line
-    with `entry["wall"] = False`: this file, `tests/test_gate_yield.py` and
-    `tests/test_gate_yield_render.py` all stayed green. The field is written for
-    a consumer and read by nothing in the tree, so the only thing standing
-    between it and silent inversion is this test.
+    `summarise` used to stamp `entry["wall"] = is_wall(name)` for a `--json`
+    consumer. The 2026-09-01 audit established there has never been such a
+    consumer: `scripts/gate-yield.py --json` prints to stdout, and nothing in
+    `scripts/`, `.claude/`, `tests/`, `docs/` or `config/` captures, pipes or
+    parses that output. Operator decision the same day: drop it.
 
-    Both halves are asserted, over a summary that includes a wall with a catch
-    and a gate with none, because a constant `True` and a constant `False` are
-    equally wrong and a one-sided check catches only one of them.
+    This test replaces the one that pinned the field's PRESENCE. It is written
+    as an absence check rather than simply deleted, because an unread field is
+    exactly the kind of thing that gets re-added by someone who reads the
+    comment explaining what it was for and mistakes it for a requirement. If it
+    is being restored deliberately, restore a READER in the same commit and say
+    where the output goes.
+
+    ## Why the removal is safe
+
+    The property the field carried is untouched. A wall that HAS caught
+    something reads CATCHING exactly like an ordinary gate, so a consumer
+    reading verdicts alone cannot tell that a wall must never be judged by its
+    catch count. That rule lives in `_verdict`, through `is_wall`, and is pinned
+    by `test_a_wall_never_reaches_the_no_yield_verdict_at_any_window` two
+    functions above. `is_wall` stays public for any future consumer. Only the
+    export went.
+
+    ## The anti-vacuity jaw
+
+    An absence assertion is satisfied by a summary with no rows at all, by a
+    `summarise` that raised and returned nothing, and by a row shape that lost
+    every field. So the fields that MUST still be there are asserted first, over
+    the same wall-with-a-catch and gate-without-one fixture the old test used.
+    Without those three lines this test passes over an empty dict, which is the
+    single most common defect the 2026-08-31 audit found across this suite.
     """
     from scripts.utils.gate_yield import (
         CATCHING,
         GATES,
         SOURCE_DENIALS,
         WALLS,
-        is_wall,
         summarise,
     )
 
@@ -156,19 +174,20 @@ def test_the_json_row_carries_the_split_the_verdict_loses():
         now="2026-08-03T00:00:00+00:00")
 
     rows = summary["mechanisms"]
+    # The jaw: this test means nothing over an empty or gutted summary.
     assert rows, "the summary named no mechanism at all"
-    for name, entry in rows.items():
-        assert entry["wall"] is is_wall(name), (
-            f"the JSON row for {name} says wall={entry['wall']} while the "
-            f"classifier says {is_wall(name)}")
+    assert rows[a_wall]["verdict"] == CATCHING, (
+        "the wall fixture did not reach CATCHING, so this is no longer the "
+        "case in which the verdict loses the wall/gate split, and the absence "
+        "check below is being made over the wrong scenario")
+    assert a_gate in rows, f"the gate fixture {a_gate} produced no row"
 
-    # The case the comment names: the verdict has lost the distinction here and
-    # the field is the only thing still carrying it.
-    assert rows[a_wall]["verdict"] == CATCHING
-    assert rows[a_wall]["wall"] is True
-    assert rows[a_gate]["wall"] is False
-    assert {r["wall"] for r in rows.values()} == {True, False}, (
-        "every row answered the same way, so a constant would satisfy this")
+    offenders = sorted(name for name, entry in rows.items() if "wall" in entry)
+    assert not offenders, (
+        f"row(s) {offenders} carry a `wall` key again. It was removed on "
+        f"2026-09-01 because no consumer in the tree reads `--json` output at "
+        f"all. If a reader now exists, name it here and restore the field with "
+        f"a test that exercises the reader, not the writer.")
 
 
 def test_an_unknown_mechanism_is_treated_as_a_wall_not_as_a_gate():

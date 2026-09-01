@@ -270,10 +270,6 @@
 <td>Surfaces urgent CRM contacts and data-freshness alerts at the start of a session. Also prints the active-threads panel, computed from the thread files.</td>
 </tr>
 <tr>
-<td><code>memory-inject.py</code></td>
-<td>Loads the auto-memory index (<code>MEMORY.md</code> pointers) into context on startup. <strong>Dormant by default</strong> &ndash; <code>inject.enabled</code> is <code>false</code> in <code>config/memory-index.yaml</code>, superseded 2026-08-07 by <code>recall-inject.py</code> below. Wiring it as well gives you two memory injections per session, one of them date-ordered rather than relevance-ranked.</td>
-</tr>
-<tr>
 <td><code>memory-reconcile.py</code></td>
 <td>Reconciles the native harness memory store with the workspace auto-memory files.</td>
 </tr>
@@ -294,7 +290,7 @@
 <tbody>
 <tr>
 <td><code>recall-inject.py</code></td>
-<td>Surfaces pointers (title, layer, path) to memory relevant to what the CEO just typed, ranked by the <a href="CONFIGURATION.html">recall</a> index rather than by date. It does NOT block the prompt, does NOT read file content, and on any error, timeout, or missing index it stays silent and exits 0. Its internal 3.5-second timeout sits under the harness&rsquo;s own 8-second timeout for the hook, so it gives up on a cold model load rather than stall the prompt. Toggled off entirely via <code>recall_inject.enabled</code> in <code>config/memory-index.yaml</code>; a config it cannot read is treated as an unconfirmed switch, so it stays silent then too. Short conversational prompts (under <code>recall_inject.min_prompt_chars</code>, 25 by default) skip the backend entirely, and a below-threshold result is capped at three pointers. Supersedes the date-ordered <code>inject</code> snapshot (<code>memory-inject.py</code>, <code>SessionStart</code>), which stays in the codebase behind its own flag but defaults off.</td>
+<td>Surfaces pointers (title, layer, path) to memory relevant to what the CEO just typed, ranked by the <a href="CONFIGURATION.html">recall</a> index rather than by date. It does NOT block the prompt, does NOT read file content, and on any error, timeout, or missing index it stays silent and exits 0. Its internal 3.5-second timeout sits under the harness&rsquo;s own 8-second timeout for the hook, so it gives up on a cold model load rather than stall the prompt. Toggled off entirely via <code>recall_inject.enabled</code> in <code>config/memory-index.yaml</code>; a config it cannot read is treated as an unconfirmed switch, so it stays silent then too. Short conversational prompts (under <code>recall_inject.min_prompt_chars</code>, 25 by default) skip the backend entirely, and a below-threshold result is capped at three pointers. It replaced a date-ordered <code>SessionStart</code> snapshot (<code>memory-inject.py</code>, configured by an <code>inject</code> block in <code>config/memory-index.yaml</code>) on 2026-08-07; that hook was wired in no settings file and was retired on 2026-09-01, hook and config block together, so this is the only memory injection the engine ships.</td>
 </tr>
 <tr>
 <td><code>unattended-resume.py</code></td>

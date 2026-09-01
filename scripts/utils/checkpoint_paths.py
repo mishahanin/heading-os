@@ -200,7 +200,11 @@ def handoff_dir(project: Path, root: Path | None = None) -> Path:
             print(f"checkpoint: cannot resolve the data overlay ({exc}); "
                   "filing the handoff under .claude/state/handoff",
                   file=sys.stderr)
-        return project / ".claude" / "state" / "handoff"
+        # Through `state_root` and not spelled out, so a pinned state directory
+        # carries the handoff archive with it. Without that, an isolated test
+        # that redirects state still files handoffs into the operator's live
+        # tree, which is the same leak one level down.
+        return state_root(project) / "handoff"
     return project / ".claude" / "handoff"
 
 
@@ -213,8 +217,122 @@ def latest_dir(handoff: Path, slug: str) -> Path:
     return latest_root(handoff) / slug
 
 
+STATE_DIR_ENV = "HEADING_OS_STATE_DIR"
+
+
+def state_root(project: Path) -> Path:
+    """Where `.claude/state/` writes actually land. The test-isolation seam.
+
+    ## The defect this closes
+
+    `.claude/state/` sits under the ENGINE root, and the engine root is not the
+    data overlay. So `HEADING_OS_DATA`, which every isolated test in this suite
+    pins, does not redirect it and never did. Tests drove hooks that wrote into
+    the OPERATOR'S LIVE state directory, and the evidence sat on disk until
+    2026-09-01: `checkpoint-True.json` and `checkpoint-3.json` from the
+    malformed-payload sweep's `BAD_FIELD_VALUES`, `checkpoint-sweep-session.json`
+    from its own base payload, and `checkpoint-session.json` from the `[]` and
+    `{}` cases collapsing onto a shared bucket.
+
+    ## Why it has to sit ABOVE the payload, and not be another candidate
+
+    `project_root()` already consults `CLAUDE_PROJECT_DIR`, and that is exactly
+    why a fifth entry in its candidate list would not have worked. The payload
+    wins there by design: `payload["cwd"]` is checked at candidate 3 and the
+    environment only at candidate 4. `tests/test_every_hook_survives_a_malformed_
+    payload.py` sends `"cwd": <the engine root>` in its base payload, so it beats
+    `CLAUDE_PROJECT_DIR` before that variable is ever read, and every test in it
+    wrote to the live tree while looking perfectly well isolated.
+
+    So this is a SEPARATE question from the one `project_root()` answers.
+    `project_root()` asks "which tree is this session working in", which the
+    payload is genuinely the authority on. This asks "where does state go", which
+    the payload has no business deciding. The same split fixed
+    `overlay_write_guard._structural_overlay_root()` on 2026-08-31, for the same
+    reason: it had asked the environment where the operator's data was, and the
+    environment is the one thing a test session can change.
+
+    ## Why a relative value is refused rather than joined
+
+    A relative path resolves against the process CWD, which for a hook is
+    wherever the harness happened to launch. Two consequences, both bad. It could
+    land anywhere on disk; and if it lands inside the engine clone anywhere other
+    than `.claude/state/`, those writes are untracked-and-not-ignored, so the
+    pre-commit wall and the push wall both start refusing (`.gitignore` covers
+    `.claude/state/` whole, and nothing else). `private_cache_dir` in
+    `scripts/utils/paths.py` records the same failure.
+
+    ## Why it warns and falls back rather than raising
+
+    `HEADING_OS_DATA` raises when it is set to a missing directory, and that is
+    right for a tool about to write the operator's data. It is wrong here. A
+    checkpoint hook runs AFTER the session context is discarded, so a refusal
+    that propagates costs a handoff nobody can regenerate - the rule stated at
+    length in `handoff_dir()` above. A relative value is a developer's typo, it
+    is announced on stderr, and `tests/test_a_state_directory_the_data_pin_never_
+    redirected.py` pins both the announcement and the fallback. Losing a handoff
+    to be strict about a typo is the worse trade.
+
+    Unset is not an error and never will be: it means the structural default,
+    which is the production path and must stay untouched.
+
+    ## The pin redirects THIS clone's state and nothing else
+
+    A blanket redirect was the first version and it was wrong, measured within
+    the hour: 14 tests failed, and every one of them was a test that had already
+    isolated itself properly. `test_state_lands_in_the_consumers_repository`
+    builds a fake "someone else's repository", drives the hook against it, and
+    asserts the state landed THERE - which is the entire plugin-bundle contract.
+    A global pin overrode the destination those tests exist to verify.
+
+    That is the same shape as the mistake this suite already made once with
+    `HEADING_OS_DATA`: a global scratch pin does not create a sandbox, it MOVES
+    the thing being guarded onto the sandbox.
+
+    So the question is narrowed to the one this seam actually needs to answer.
+    The harm is a write into the OPERATOR'S OWN `.claude/state/`. A project root
+    that already points somewhere else is already safe, and re-aiming it can
+    only break a caller that chose that destination deliberately. The pin
+    therefore applies only when the default would land in this clone.
+
+    Each case, stated so the condition can be checked rather than trusted:
+
+      production, no pin              -> default, unchanged
+      production, pin set             -> redirected (nothing sets it in production)
+      test, payload cwd = this clone  -> redirected; THE DEFECT, now closed
+      test, project root elsewhere    -> default; the 14 tests keep working
+      plugin bundle in a consumer repo-> default; `engine_root()` is the bundle,
+                                         the consumer's tree is not it
+    """
+    default = project / ".claude" / "state"
+
+    # Already pointing outside this clone: nothing to protect, and overriding a
+    # deliberate destination is a behaviour change, not isolation.
+    try:
+        if project.resolve() != engine_root():
+            return default
+    except OSError as exc:  # pragma: no cover - an unresolvable root is not fatal
+        print(f"checkpoint: cannot resolve {project} ({exc}); "
+              f"leaving the state directory at its default", file=sys.stderr)
+        return default
+
+    env = os.environ.get(STATE_DIR_ENV)
+    if env:
+        candidate = Path(env).expanduser()
+        if candidate.is_absolute():
+            return candidate
+        print(
+            f"checkpoint: {STATE_DIR_ENV}={env!r} is relative and is being "
+            f"ignored; state falls back to {default}. "
+            f"A relative value resolves against whatever directory the harness "
+            f"launched the hook in, and if that lands inside the engine clone "
+            f"the push wall refuses the untracked writes.",
+            file=sys.stderr)
+    return default
+
+
 def state_path(project: Path, slug: str) -> Path:
-    return project / ".claude" / "state" / f"checkpoint-{slug}.json"
+    return state_root(project) / f"checkpoint-{slug}.json"
 
 
 def session_id(payload: dict | None = None) -> str:

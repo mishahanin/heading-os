@@ -1,28 +1,26 @@
-"""Four documentation claims, each derived from the thing it describes.
+"""Three documentation claims, each derived from the thing it describes.
 
-All four found by the 2026-08-23 engine audit, all four the same shape: a
+All three found by the 2026-08-23 engine audit, all three the same shape: a
 sentence in a document restating a fact that lives in code or config, with
 nothing comparing the two. The durable fix is never to correct the sentence --
 it is to derive one side from the other, so the next change moves both.
 
-1. `docs/DOCS-PIPELINE.md` said the generator "has four modes" above a
-   five-row table. Five is right (`<md>`, `--all`, `--nav-sync`,
-   `--search-index`, `--check`); `--quiet` is a modifier, not a mode.
+A fourth claim of the same shape has been retired rather than fixed.
+`docs/HOOKS-REFERENCE.md` listed `memory-inject.py` in the SessionStart table as
+a wired hook while the `recall-inject.py` row three lines down said it "defaults
+off", and the guard here derived the caveat from `inject.enabled` in
+`config/memory-index.yaml`. On 2026-09-01 the operator deleted the hook, the
+config block, and the table row, so there is no longer a claim on either side to
+compare. The guard went with them: a doc-versus-config check over two things
+that no longer exist measures nothing.
 
-2. `docs/HOOKS-REFERENCE.md` listed `memory-inject.py` in the SessionStart
-   table as a wired hook, while the `recall-inject.py` row three lines down
-   said it "defaults off". The page tells operators to hand-merge hook blocks
-   into their gitignored `settings.local.json`, so the uncaveated row invites
-   wiring a hook the engine intends to be dormant -- two memory injections per
-   session, one of them the superseded date-ordered snapshot.
-
-3. `docs/PLUGINS.md` referred to "the `heading-crm` skills" in code
+2. `docs/PLUGINS.md` referred to "the `heading-crm` skills" in code
    formatting, next to a list of four real bundles. `heading-crm` is declared
    in `config/plugin-bundles.yaml` with `skills: []`, and
    `scripts/dev/build-plugins.py --all` skips placeholders, so nothing by that
    name is installable. A reader searches the marketplace and finds nothing.
 
-4. `docs/DESIGN-CHECK.md` closed an `audit-skip` region with live prose on the
+3. `docs/DESIGN-CHECK.md` closed an `audit-skip` region with live prose on the
    same line as `-->`. Under CommonMark an HTML comment BLOCK runs to the end
    of the line carrying `-->`, so that sentence was emitted as raw text
    OUTSIDE the paragraph and the paragraph split in two. Verified with
@@ -90,36 +88,7 @@ def test_the_mode_table_matches_the_generator_cli():
     )
 
 
-# --- 2. memory-inject is dormant, and the page must say so -------------------
-
-def _inject_enabled() -> bool:
-    cfg = yaml.safe_load((ROOT / "config" / "memory-index.yaml").read_text(encoding="utf-8"))
-    return bool(cfg.get("inject", {}).get("enabled"))
-
-
-def _hooks_reference_row(hook: str) -> str:
-    for line in (DOCS / "HOOKS-REFERENCE.md").read_text(encoding="utf-8").splitlines():
-        if line.startswith("|") and f"`{hook}`" in line.split("|")[1]:
-            return line
-    raise AssertionError(f"no HOOKS-REFERENCE row for {hook}")
-
-
-def test_the_hooks_page_says_memory_inject_is_off_while_it_is_off():
-    row = _hooks_reference_row("memory-inject.py").lower()
-    if _inject_enabled():
-        assert "dormant" not in row, (
-            "inject.enabled is true in config/memory-index.yaml but the hooks page "
-            "still calls memory-inject dormant"
-        )
-    else:
-        assert "dormant" in row, (
-            "inject.enabled is false in config/memory-index.yaml, yet the SessionStart "
-            "table presents memory-inject.py as a wired hook with no caveat. An "
-            "operator hand-merging that block gets two memory injections per session."
-        )
-
-
-# --- 3. no docs page names a plugin bundle that is not built -----------------
+# --- 2. no docs page names a plugin bundle that is not built -----------------
 
 def _shipped_bundles() -> set[str]:
     cfg = yaml.safe_load((ROOT / "config" / "plugin-bundles.yaml").read_text(encoding="utf-8"))
@@ -165,7 +134,7 @@ def test_plugins_page_does_not_present_a_placeholder_as_installable():
     )
 
 
-# --- 4. a block-level audit-skip marker owns its line ------------------------
+# --- 3. a block-level audit-skip marker owns its line ------------------------
 
 _MARKER = re.compile(r"<!--\s*audit-skip-(?:start|end)\s*-->")
 

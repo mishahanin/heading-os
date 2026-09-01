@@ -40,6 +40,7 @@ from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.crm import parse_config as crm_parse_config, scan_contacts
 from scripts.utils.html_text import email_body_text
 from scripts.utils.markdown import frontmatter_date
+from scripts.utils.operator_identity import corporate_email_domain
 from scripts.utils.llm_fallback import call_anthropic_with_fallback
 from scripts.utils.observability import observe
 from scripts.utils.workspace import get_workspace_root, load_env, resolve_config_with_example, get_outputs_dir, get_crm_config_path, get_crm_contacts_dir, get_context_dir, get_default_tz
@@ -89,7 +90,15 @@ def sentinel_config() -> Path:
     )
 
 
-INTERNAL_DOMAIN = "31c.io"
+# The instance's corporate mail domain, bare. A tenant literal until
+# 2026-09-01, which meant `is_internal` below classified nothing on any other
+# deployment. Resolved at import rather than at the use site because the name
+# itself is public: four tests in
+# `tests/test_a_mail_run_that_reports_what_it_missed.py` build addresses out of
+# `INTERNAL_DOMAIN`, and the seam caches, so a per-call read would buy nothing.
+# Empty on an unconfigured clone, and that degrades safely: no real address
+# ends with a bare "@", so nothing is called internal.
+INTERNAL_DOMAIN = corporate_email_domain()
 
 FIELDS = (
     "message_id", "conversation_id", "conversation_topic",
@@ -1473,7 +1482,7 @@ def run_unread_mode(verbose: bool = False) -> None:
             print(json.dumps({
                 "error": "exchange_unreachable",
                 "detail": str(e)[:200],
-                "hint": "WSL→Exchange (mail.31c.io) on CGNAT not routed; see thread 2026-05-27-bridge-email-refresher-wsl-failure",
+                "hint": "WSL→Exchange host on CGNAT not routed; see thread 2026-05-27-bridge-email-refresher-wsl-failure",
             }))
             sys.exit(2)
         raise

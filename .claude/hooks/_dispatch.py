@@ -54,6 +54,38 @@ from pathlib import Path
 
 WORKSPACE = Path(__file__).resolve().parent.parent.parent
 
+# `HEADING_OS_STATE_DIR` is read here as well as in
+# `scripts/utils/checkpoint_paths.state_root()`, and the duplication is
+# deliberate rather than an oversight. This hook runs on EVERY Write, Edit,
+# MultiEdit, NotebookEdit, Bash and Read, and importing that module at module
+# scope to reach one five-line resolver would charge the import to all of them;
+# the comment on the absent `typing` import twelve lines up is the same
+# reasoning. `tests/test_a_state_directory_the_data_pin_never_redirected.py`
+# asserts the two copies agree, on the exact value AND on the relative-path
+# refusal, so the copy that stops being fixed fails rather than drifts. That
+# test exists because "a fix that landed in one of two copies" is a defect this
+# repository has already shipped once.
+#
+# Frozen at import, like `RATE_LIMIT_STATE_FILE` below, and that is correct for
+# what reads it: every consumer is a hook the harness starts as a fresh
+# subprocess, so the environment is fixed before this line runs. An IN-PROCESS
+# test that sets the variable after import will not move these constants and
+# must `monkeypatch.setattr` the constant itself, which is what the three
+# existing tests over these directories already do.
+def _state_dir() -> Path:
+    """`.claude/state/`, honouring the pin. See `state_root()` for the why."""
+    env = os.environ.get("HEADING_OS_STATE_DIR")
+    if env:
+        candidate = Path(env).expanduser()
+        if candidate.is_absolute():
+            return candidate
+        print(
+            f"dispatch: HEADING_OS_STATE_DIR={env!r} is relative and is being "
+            f"ignored; a relative value resolves against whatever directory the "
+            f"harness launched the hook in.",
+            file=sys.stderr)
+    return WORKSPACE / ".claude" / "state"
+
 # One lexical path collapse, shared with `data-path-redirect.py`. Measured cost
 # of the import: inside the run-to-run noise of this hook (12 runs each way,
 # 2026-08-29), so it is at module scope rather than deferred.
@@ -1716,7 +1748,7 @@ from datetime import datetime
 # the state file, so a redirected path is not a new way to reset the count.
 RATE_LIMIT_STATE_FILE = Path(
     os.environ.get("WS_RATE_LIMIT_STATE")
-    or WORKSPACE / ".claude" / "state" / "dispatch-rate.json"
+    or _state_dir() / "dispatch-rate.json"
 )
 RATE_LIMIT_SOFT = int(os.environ.get("WS_RATE_LIMIT_SOFT", "200"))   # advisory at N writes/day
 RATE_LIMIT_HARD = int(os.environ.get("WS_RATE_LIMIT_HARD", "1000"))  # block at N writes/day
@@ -2040,7 +2072,7 @@ def check_tool_budget(payload: dict) -> dict | None:
 #     explore still unlocks, because the rule is "ask the graph first", not
 #     "the graph must answer". A graph that is down must not wedge the session.
 
-_GRAPH_STATE_DIR = WORKSPACE / ".claude" / "state" / "graph-first"
+_GRAPH_STATE_DIR = _state_dir() / "graph-first"
 
 # Bash utilities that reach source code. Two groups, one list.
 #
@@ -2331,7 +2363,7 @@ def check_graph_first(payload: dict):
 # so "I decided this was serial" becomes auditable rather than assumed. A wall
 # whose only escape is invisible teaches nothing.
 
-_FANOUT_STATE_DIR = WORKSPACE / ".claude" / "state" / "fanout"
+_FANOUT_STATE_DIR = _state_dir() / "fanout"
 
 # The tools that ARE fanning out. `Agent` is this harness's name; `Task` is the
 # older one and `Workflow` the orchestrated form. All three clear the budget.
@@ -2649,7 +2681,7 @@ def check_fanout_first(payload: dict):
 # unrecognised command shape all refuse. A gate that opens when it cannot see is
 # not a gate.
 
-_RELEASE_STATE_DIR = WORKSPACE / ".claude" / "state" / "release"
+_RELEASE_STATE_DIR = _state_dir() / "release"
 
 # Quoted spans are stripped before matching, so `grep "git commit" file` is not
 # read as a commit. Without this the wall blocks ordinary searches, and a wall

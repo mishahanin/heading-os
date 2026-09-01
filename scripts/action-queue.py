@@ -416,9 +416,14 @@ def cmd_edit(engine_root: Path, data_root: Path, args) -> int:
 
 
 def cmd_deposit(engine_root: Path, data_root: Path, args) -> int:
+    # `UnicodeDecodeError` is a sibling of `json.JSONDecodeError` under
+    # `ValueError`, not a subclass, and the decode fails inside `read_text`
+    # before any parse. Without it a cards file holding one non-UTF-8 byte
+    # raised a raw traceback out of a module whose contract is
+    # `Exit codes: 0 ok, 1 request/usage error`. MEASURED 2026-09-01.
     try:
         cards = json.loads(Path(args.file).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         print(f"{RED}cannot read cards file{RESET}: {exc}", file=sys.stderr)
         return 1
     if not isinstance(cards, list):

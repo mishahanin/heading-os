@@ -51,18 +51,61 @@ def test_the_file_parses(platform):
 
 # --- nothing may grant a home-directory .claude tree --------------------------
 
-HOME_CLAUDE = re.compile(r"\((?:~|//[a-z]/Users/[^/]+|/home/[^/]+|/Users/[^/]+)/\.claude/")
+HOME_CLAUDE = re.compile(
+    r"\((?:~|(?://)?[a-z]:?/users/[^/]+|/home/[^/]+|/users/[^/]+)/\.claude/")
+
+
+def _normalise(rule: str) -> str:
+    """Lower-cased, forward slashes.
+
+    The pattern was `//[a-z]/Users/...` against the raw rule, so it matched the
+    exact spelling the defect happened to be written in and nothing else.
+    MEASURED 2026-09-01 with the mutation harness: adding
+    `Read(//C/Users/Someone/.claude/**)` to the Windows allow list, one
+    uppercase letter away from the rule that leaked, left this file GREEN.
+
+    An uppercase drive letter is not a contrived near-miss. Windows writes
+    `C:\\Users\\...` everywhere, so it is the spelling a person copying a real
+    path into a permission rule produces. `C:/Users/...` and a backslash form
+    slipped past for the same reason, and normalising covers all three at once.
+    """
+    return rule.replace("\\", "/").lower()
 
 
 @pytest.mark.parametrize("platform", PLATFORMS)
 def test_no_allow_rule_reaches_a_home_claude_directory(platform):
     offenders = [rule for rule in _perms(platform).get("allow", [])
-                 if HOME_CLAUDE.search(rule)]
+                 if HOME_CLAUDE.search(_normalise(rule))]
     assert not offenders, (
         f"{platform} grants access to a home .claude tree: {offenders}. That "
         "directory holds .credentials.json and the full session transcripts. "
         "Drop the rule; an absent allow means ASK, not blocked."
     )
+
+
+@pytest.mark.parametrize("spelling", [
+    "Read(//c/Users/Someone/.claude/**)",
+    "Read(//C/Users/Someone/.claude/**)",
+    "Read(C:/Users/Someone/.claude/**)",
+    "Read(C:\\Users\\Someone\\.claude\\**)",
+    "Read(/home/someone/.claude/**)",
+    "Read(/Users/someone/.claude/**)",
+    "Read(~/.claude/**)",
+])
+def test_the_detector_catches_every_spelling_of_the_rule_that_leaked(spelling):
+    """A guard with no negative case is not a guard, and this one had six
+    near-misses it could not see."""
+    assert HOME_CLAUDE.search(_normalise(spelling)), spelling
+
+
+@pytest.mark.parametrize("innocent", [
+    "Edit(.claude/skills/**)",
+    "Read(//c/Users/Someone/claude-workspaces/**)",
+    "Bash(claude doctor:*)",
+])
+def test_the_detector_does_not_fire_on_the_workspace_itself(innocent):
+    """Widening a pattern is only safe if it still says no to something."""
+    assert not HOME_CLAUDE.search(_normalise(innocent)), innocent
 
 
 @pytest.mark.parametrize("platform", PLATFORMS)

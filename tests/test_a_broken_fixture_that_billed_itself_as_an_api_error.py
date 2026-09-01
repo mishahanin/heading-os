@@ -235,15 +235,42 @@ def test_an_unparseable_benchmark_still_takes_the_same_route(runner, graded_run,
     assert "unparseable" in _plain(capsys.readouterr().err)
 
 
+@pytest.mark.parametrize("baseline", [None, [], ["promoted"], "seeded-from-first-run",
+                                      42, True])
 def test_a_baseline_that_is_not_an_object_does_not_kill_the_write(runner,
-                                                                  graded_run):
+                                                                  graded_run,
+                                                                  baseline):
     """`existing["baseline"].get(...)` raised AttributeError one line before the
-    write, losing a run that had already been paid for."""
-    graded_run.write_text(json.dumps({"baseline": None}), encoding="utf-8")
+    write, losing a run that had already been paid for.
+
+    Parametrized on 2026-09-01, and `None` alone was the reason. The guard is
+    `isinstance(baseline, dict)`; the case list was the single value `None`,
+    which is the ONE non-object for which the strictly weaker
+    `baseline is not None` behaves identically. So the test named for "a
+    baseline that is not an object" bound only the one non-object that needed
+    no isinstance check at all.
+
+    Measured 2026-09-01 in a copy of this tree, with `isinstance(baseline,
+    dict)` in `scripts/run-skill-eval.py` replaced by `baseline is not None`:
+
+        .venv/bin/python -m pytest -q tests/test_a_broken_fixture_that_billed_\\
+            itself_as_an_api_error.py
+        23 passed
+
+    and green across every other file in `tests/` that names run-skill-eval.
+    A hand-edited `"baseline": []` or `"baseline": "promoted"` would still
+    reach `.get` on a list or a string and raise AttributeError one line before
+    the write, losing a run that had already been graded and paid for. That is
+    verbatim the defect in the first line of this docstring.
+
+    `True` is here because `isinstance(True, dict)` is False while `bool` is
+    the type most likely to slip through a check written against `int`.
+    """
+    graded_run.write_text(json.dumps({"baseline": baseline}), encoding="utf-8")
     assert runner.main() == 0
     written = json.loads(graded_run.read_text(encoding="utf-8"))
     assert written["baseline_is_self_seed"] is False
-    assert written["baseline"] is None
+    assert written["baseline"] == baseline, "the operator's file was rewritten"
 
 
 def test_a_good_benchmark_is_still_updated_in_place(runner, graded_run):

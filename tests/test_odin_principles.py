@@ -10,7 +10,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scripts.utils.odin_principles import principles_for_domains, relevant_principles_for
+from scripts.utils.odin_principles import (
+    INTERNAL_TYPES,
+    principles_for_domains,
+    relevant_principles_for,
+)
 
 
 def _write_principle(pdir: Path, slug: str, keywords: list[str], confidence: str) -> None:
@@ -57,6 +61,46 @@ def test_internal_type_returns_empty(tmp_path):
     brain = _brain(tmp_path)
     assert relevant_principles_for("tribe", brain_root=brain) == []
     assert relevant_principles_for("inactive", brain_root=brain) == []
+
+
+def test_internal_type_returns_empty_whatever_stage_is_passed(tmp_path):
+    """The documented fix, which had no witness until 2026-09-01.
+
+    `relevant_principles_for`'s docstring says internal types resolve to []
+    "WHATEVER stage is passed", and names the defect: the suppression used to be
+    a side effect of the type's domain list being empty, and STAGE_DOMAINS was
+    then unioned onto that empty list, so `("tribe", "Negotiation")` returned
+    deal-side citations for a Tribe member. The test above passes no stage at
+    all, so deleting the `if relationship_type in INTERNAL_TYPES: return []`
+    clause left it green: with no stage, an empty domain list produces [] by
+    either route. MEASURED: with the clause replaced by `if False:`, this file
+    and its neighbours all stayed green.
+    """
+    brain = _brain(tmp_path)
+    for internal in sorted(INTERNAL_TYPES):
+        for stage in ("Negotiation", "Proposal", "Demo/POC", "Qualified", "Lead"):
+            assert relevant_principles_for(internal, stage, brain_root=brain) == [], (
+                f"{internal!r} at stage {stage!r} produced deal-side citations")
+    assert INTERNAL_TYPES, "the internal-type set is empty; this test guards nothing"
+
+
+def test_the_stage_union_is_load_bearing(tmp_path):
+    """A stage must be able to ADD a domain the relationship type does not carry.
+
+    Every stage in the file until now was paired with a relationship type whose
+    own domains already contained the stage's domain, so `domains +=
+    STAGE_DOMAINS.get(stage, [])` could be replaced by `domains += []` with the
+    whole file green. A `partner` carries {partnerships, channel} and no
+    negotiation domain, so at stage Negotiation the union is the only thing that
+    can surface p-negotiation.
+    """
+    brain = _brain(tmp_path)
+    without = {x["slug"] for x in relevant_principles_for("partner", brain_root=brain)}
+    with_stage = {x["slug"] for x in relevant_principles_for("partner", "Negotiation",
+                                                            brain_root=brain)}
+    assert "p-negotiation" not in without
+    assert "p-negotiation" in with_stage, (
+        "the pipeline stage added no domain; STAGE_DOMAINS is not reaching the query")
 
 
 def test_unknown_type_falls_to_default(tmp_path):

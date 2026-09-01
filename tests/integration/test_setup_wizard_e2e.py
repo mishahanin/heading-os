@@ -51,7 +51,17 @@ def test_pristine_heading_os_full_run(tmp_path):
         cwd=dest, capture_output=True, text=True,
     )
     payload = json.loads(status.stdout)
-    assert payload["completion_pct"] >= 80
+    # `>= 80` until 2026-09-01, over a run that measures 100. This test's own
+    # name is "full run", and the bound let two of the thirteen REQUIRED
+    # questions go unanswered without a word. Asserted as the equality it
+    # actually is, with the two components that produce it named so a failure
+    # says which side moved, and a floor under the bank so a shrunken
+    # question set cannot make the equality vacuous.
+    required = payload["required"]
+    assert required["total"] >= 13, f"the question bank collapsed to {required}"
+    assert required["pending"] == 0 and required["skipped"] == 0, required
+    assert required["answered"] == required["total"], required
+    assert payload["completion_pct"] == 100, payload["completion_pct"]
 
 
 import hashlib

@@ -279,6 +279,59 @@ def test_the_average_is_taken_over_all_seven_past_days():
         "the seventh day back is not entering the average"
 
 
+# The non-empty filter is the other half of what hid the seventh-day defect: the
+# unfetched day resolved to `[]`, `past_7_non_empty` dropped it, and the mean was
+# taken over six days while the column said seven. Only one of its two cases was
+# decided anywhere.
+#
+# MEASURED 2026-09-01 in a scratch copy. `past_7_non_empty = past_7` (count every
+# day, empty or not) is CAUGHT, by `test_the_averages_note_renders_when_there_is
+# _no_average` in tests/test_a_day_that_could_not_be_read_and_was_called_quiet.py:
+# with every past day empty that mutation turns `avg` from None into a dict of
+# zeros, and the report's "7-day averages not available" note stops rendering.
+# So the all-empty case has an owner and is not re-asserted here.
+#
+# The PARTIAL window has none. `past_7_non_empty = past_7 if any(past_7) else []`
+# counts silent days whenever at least one day carried mail, which is the shape a
+# real regression takes, and it left that file green at 34 passed. It fails the
+# test below. That is the whole reason this pair exists.
+
+
+def test_a_silent_day_inside_a_working_window_does_not_enter_the_divisor():
+    """A day the daemon logged nothing for is absent data, not a measured zero.
+
+    Averaging it in halves every reported figure after one quiet weekend, and
+    the operator reads that as a drop in volume.
+    """
+    today = date(2026, 8, 25)
+    by_date = {today - timedelta(days=i): [_entry("x", "MAYBE")] for i in range(1, 8)}
+    by_date[today] = []
+    full = report._compute_daily_distribution(by_date, today)
+    assert full["avg"]["MAYBE"] == pytest.approx(1.0), full
+
+    by_date[today - timedelta(days=3)] = []
+    by_date[today - timedelta(days=5)] = []
+    thinned = report._compute_daily_distribution(by_date, today)
+
+    assert thinned["avg"]["MAYBE"] == pytest.approx(1.0), (
+        f"two silent days entered the divisor and dragged the mean to "
+        f"{thinned['avg']['MAYBE']}; a quiet weekend would read as a drop in "
+        f"volume"
+    )
+
+
+def test_a_day_with_fewer_entries_does_enter_the_divisor():
+    """The other direction. 'Ignore days that look small' would also pass the
+    test above and would then hide a real drop in volume."""
+    today = date(2026, 8, 25)
+    by_date = {today - timedelta(days=i): [_entry("x", "MAYBE")] * 2 for i in range(1, 8)}
+    by_date[today - timedelta(days=3)] = [_entry("x", "MAYBE")]
+
+    dist = report._compute_daily_distribution(by_date, today)
+
+    assert dist["avg"]["MAYBE"] == pytest.approx(13 / 7), dist
+
+
 def test_an_unreadable_seventh_day_is_an_average_gap_not_a_window_gap(drive_main, capsys):
     today = date(2026, 8, 25)
     rc, asked, _ = drive_main(1, unreachable_days={today - timedelta(days=7)})

@@ -100,6 +100,46 @@ def test_the_ordinary_five_tier_sampling_is_unchanged():
     assert severities <= set(KNOWN)
 
 
+def test_the_cap_holds_when_the_tiers_outnumber_it():
+    """The `picked[:n]` slice, with a case ON the line rather than beside it.
+
+    Every other case here lands on exactly `n` before the slice runs, so the cap
+    was asserted (`len(picked) == 5`, "the cap stopped being a cap") by tests
+    that never reached it: deleting the slice left the whole file green. The
+    first loop takes `quota` per tier, so once the corpus carries more distinct
+    severities than `n`, that loop alone overshoots and only the slice brings it
+    back. Seven severities, one finding each, `--sample 5` returned 7 without it.
+    """
+    severities = ["BLOCKER", "HIGH", "MEDIUM", "LOW", "NIT", "UNKNOWN", "CRITICAL"]
+    corpus = [_sample(i, sev) for i, sev in enumerate(severities)]
+    assert len(corpus) > 5, "the corpus must exceed the cap or this proves nothing"
+
+    picked = RP.stratified_sample(corpus, 5)
+
+    assert len(picked) == 5, (
+        f"asked for 5, got {len(picked)}: {[s.severity for s in picked]}")
+
+
+def test_a_thin_tier_keeps_its_slot_below_a_sample_of_five():
+    """`max(1, n // 5)`, with a case ON the `max`.
+
+    `n // 5` alone is 0 for every `--sample` under 5, which empties the
+    per-tier loop and leaves the whole draw to the leftover pass. That pass
+    walks the tiers in order and takes the head of the list, so a fat MEDIUM
+    tier consumes the entire sample and the one NIT finding, which the
+    stratification exists to surface, is never drawn. Dropping the `max` left
+    the rest of this file green.
+    """
+    corpus = [_sample(i, "MEDIUM") for i in range(50)] + [_sample(99, "NIT")]
+
+    picked = RP.stratified_sample(corpus, 3)
+
+    assert len(picked) == 3
+    assert "NIT" in {s.severity for s in picked}, (
+        "the thin tier lost its guaranteed slot below n=5: "
+        f"{[s.severity for s in picked]}")
+
+
 def test_the_sampler_is_still_deterministic():
     """The sheet is a benchmark; two runs over one corpus must agree."""
     corpus = [_sample(i, sev) for i, sev in

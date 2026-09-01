@@ -16,12 +16,26 @@ walks scripts/ only. These shapes pass here while behaving differently, and none
 of them exists in the tree today:
 
   - a scheduler built correctly and then mutated at runtime;
-  - defaults assembled dynamically, so the keyword's value is a call or a spread
-    rather than a name or a dict literal;
+  - the keyword's value is a CALL (``job_defaults=build()``, ``dict()``), which
+    syntax cannot settle;
+  - the keyword's value is a NAME this guard does not recognise
+    (``job_defaults=SAFE``), for the same reason;
   - the class bound to a local variable first (``Cls = BackgroundScheduler`` then
-    ``Cls()``), which needs dataflow rather than syntax to resolve and is pinned
-    as a known limit by test_a_class_held_in_a_variable_is_a_known_blind_spot;
+    ``Cls()``), which needs dataflow rather than syntax to resolve;
   - a daemon that lands outside ``scripts/``.
+
+Each of the middle three is pinned by a test below, so a future author who
+closes one has to change an assertion deliberately rather than discover the gap
+in production.
+
+This list said "a call OR A SPREAD" until 2026-09-01, and the spread half was
+false in both of its spellings. MEASURED: ``job_defaults={**base}`` is REFUSED,
+because a ``**`` entry gives `ast.Dict` a None key that contributes no literal
+key, so the required one is absent; and ``BackgroundScheduler(**opts)`` is
+REFUSED, because a ``**`` argument has ``kw.arg is None`` and the keyword is
+therefore simply missing. Both fail closed, which is the safe direction, but a
+section written so a reader is not misled may not describe the guard as blinder
+than it is. Both are pinned below too.
 
 An ALIASED import (``import BackgroundScheduler as BS`` then ``BS()``) used to
 evade this guard and no longer does: aliases are resolved per file from the
@@ -30,6 +44,8 @@ it was written, which is the only way this kind of hole is ever found.
 """
 import ast
 from pathlib import Path
+
+import pytest
 
 ENGINE = Path(__file__).resolve().parent.parent
 
@@ -176,6 +192,55 @@ def test_a_class_held_in_a_variable_is_a_known_blind_spot():
     instead of discovering the gap in production.
     """
     assert _objections("Cls = BackgroundScheduler\ns = Cls()\n") == []
+
+
+@pytest.mark.parametrize("value", ["build()", "dict()", "make_defaults(base)"])
+def test_defaults_produced_by_a_call_are_a_known_blind_spot(value):
+    """The second stated limit, made measurable.
+
+    It was stated and unpinned until 2026-09-01: a mutation replacing the
+    constant with ``job_defaults=dict()`` survived the whole suite, which is
+    correct behaviour and exactly why it needs an assertion beside it. Syntax
+    cannot say what a call returns, so the guard declines rather than guesses.
+    """
+    assert _objections(f"s = BackgroundScheduler(job_defaults={value})\n") == []
+
+
+def test_an_unrecognised_name_is_a_known_blind_spot():
+    """The third. `scheduler_objection` accepts any Name that is not
+    CONSTANT_NAME without inspecting it, so the rule "pass the constant by name
+    and nothing else" is a convention this guard cannot enforce."""
+    assert _objections("s = BackgroundScheduler(job_defaults=SAFE_DEFAULTS)\n") == []
+
+
+def test_a_spread_inside_job_defaults_is_refused_not_waved_through():
+    """The docstring claimed this passed. It does not.
+
+    A ``**`` entry gives `ast.Dict` a key of None, which contributes no literal
+    key, so `misfire_grace_time` reads as absent and the construction is
+    refused. Failing closed is the right direction; describing it as a blind
+    spot sent the next reader looking for a hole that is not there.
+    """
+    objections = _objections("s = BackgroundScheduler(job_defaults={**base})\n")
+    assert len(objections) == 1
+    assert f"no {REQUIRED_KEY}" in objections[0]
+
+
+def test_a_spread_carrying_the_key_explicitly_is_still_accepted():
+    """Positive twin: the refusal above is about the absent key, not about the
+    spread, so a spread that also names the key is fine."""
+    assert _objections(
+        "s = BackgroundScheduler(job_defaults={**base, 'misfire_grace_time': None})\n"
+    ) == []
+
+
+def test_kwargs_spread_on_the_constructor_is_refused_too():
+    """`BackgroundScheduler(**opts)` has `kw.arg is None`, so `job_defaults` is
+    simply missing and the first branch fires. The other spelling of the same
+    corrected claim."""
+    objections = _objections("s = BackgroundScheduler(**opts)\n")
+    assert len(objections) == 1
+    assert "without job_defaults" in objections[0]
 
 
 def test_an_unrelated_call_is_not_flagged():

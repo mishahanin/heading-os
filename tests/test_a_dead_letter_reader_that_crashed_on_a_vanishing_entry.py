@@ -87,3 +87,46 @@ def test_a_full_directory_still_sorts_newest_first(dlq):
     entries = dead_letter.list_entries(workspace_root=dlq.parent.parent.parent)
 
     assert [p.name for p in entries] == ["newest.json", "middle.json", "oldest.json"]
+
+
+class _FrozenClock:
+    """A stand-in for the `time` module holding one instant.
+
+    Bound onto `dead_letter.time`, not onto the stdlib module object, so no
+    other importer sees a moved clock.
+    """
+
+    def __init__(self, now):
+        self._now = now
+
+    def time(self):
+        return self._now
+
+
+def test_an_entry_exactly_on_the_purge_cutoff_is_kept(tmp_path, monkeypatch):
+    """`purge`'s docstring draws the line and no case ever sat on it.
+
+    "An entry exactly at the cutoff is kept; only strictly older entries are
+    removed." Measured 2026-09-01 over 188 tests reaching this module: relaxing
+    `<` to `<=` changed no result anywhere, because every entry any test builds
+    is either plainly older or plainly newer than the cutoff. A bound with no
+    case on the line is a bound nothing holds.
+    """
+    now = 1_800_000_000.0
+    cutoff = now - 30 * 86400
+    directory = dead_letter.dead_letter_dir(tmp_path)
+    directory.mkdir(parents=True, exist_ok=True)
+    for name, stamp in (("on-the-line.json", cutoff),
+                        ("one-second-older.json", cutoff - 1),
+                        ("one-second-newer.json", cutoff + 1)):
+        path = directory / name
+        path.write_text('{"kind": "email_send"}', encoding="utf-8")
+        os.utime(path, (stamp, stamp))
+    assert len(list(directory.glob("*.json"))) == 3, "empty corpus proves nothing"
+
+    monkeypatch.setattr(dead_letter, "time", _FrozenClock(now))
+    removed = dead_letter.purge(older_than_days=30, workspace_root=tmp_path)
+
+    assert removed == 1
+    assert sorted(p.name for p in directory.glob("*.json")) == [
+        "on-the-line.json", "one-second-newer.json"]

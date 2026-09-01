@@ -92,3 +92,76 @@ def test_reasoning_contains_overdue_and_cadence():
     c = csc.build_cards([_row(days_overdue=21, cadence=14)], now=NOW)[0]
     assert "21d overdue" in c["reasoning"]
     assert "cadence 14d" in c["reasoning"]
+
+
+# --- the producer boundary -------------------------------------------------
+#
+# `_fetch_rows` is the other half of this module and had no test of any kind.
+# Its docstring makes one promise: every way `crm-health.py --json` can fail
+# comes back as a RuntimeError that NAMES the producer, because a raw traceback
+# "says nothing about which of the two scripts is at fault" and an empty card
+# list "reads to the caller as 'no one is overdue'". Each case below is one way
+# through that promise, driven with a real child process rather than a stub -
+# a stub that raises unconditionally would measure the handler, not the read.
+
+import pytest  # noqa: E402
+
+
+def _fake_producer(tmp_path, body: str):
+    """A scratch workspace whose crm-health.py is whatever this test needs."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    (scripts / "crm-health.py").write_text(body, encoding="utf-8")
+    return tmp_path
+
+
+def test_a_healthy_producer_is_read_through(tmp_path):
+    """Anchor. Without it, every refusal below could be a function that only refuses."""
+    root = _fake_producer(tmp_path, "print('[{\"name\": \"Jane Doe\"}]')\n")
+    assert csc._fetch_rows(root) == [{"name": "Jane Doe"}]
+
+
+def test_a_producer_that_cannot_be_run_names_itself(tmp_path):
+    root = tmp_path / "empty-workspace"
+    root.mkdir()
+    with pytest.raises(RuntimeError, match="crm-health.py --json could not be run"):
+        csc._fetch_rows(root)
+
+
+def test_a_producer_that_answers_with_prose_names_itself(tmp_path):
+    root = _fake_producer(tmp_path, "print('no contacts configured')\n")
+    with pytest.raises(RuntimeError, match="is not JSON"):
+        csc._fetch_rows(root)
+
+
+def test_a_producer_that_answers_with_an_object_is_refused_not_iterated(tmp_path):
+    """A dict is valid JSON and iterates - over its KEYS. Silently building
+    cards from that is worse than refusing."""
+    root = _fake_producer(tmp_path, "print('{\"contacts\": []}')\n")
+    with pytest.raises(RuntimeError, match="returned dict, expected a list"):
+        csc._fetch_rows(root)
+
+
+def test_undecodable_producer_output_is_refused_by_name_not_a_raw_traceback(tmp_path):
+    """The decode class, at the one boundary in this module that can meet it.
+
+    `subprocess.run(..., text=True)` with no `errors=` decodes STRICTLY, and the
+    failure happens inside the read, before `json.loads` is ever reached. A
+    `UnicodeDecodeError` is a `ValueError`, a sibling of `JSONDecodeError` and
+    no relation to `OSError` or `SubprocessError`, so it walked past BOTH
+    handlers here and out of `run()` as the bare traceback this function's own
+    docstring exists to prevent. MEASURED 2026-09-01: this test raised
+    `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff` before the fix.
+
+    The child writes to its file descriptor rather than through `print`, because
+    a lone byte is only reachable below the text layer - which is exactly how it
+    reaches the parent in production too.
+    """
+    root = _fake_producer(
+        tmp_path,
+        "import os, sys\n"
+        "os.write(sys.stdout.fileno(), b'[{\"name\": \"J\\xff\\xfeane\"}]')\n",
+    )
+    with pytest.raises(RuntimeError) as exc:
+        csc._fetch_rows(root)
+    assert "crm-health.py" in str(exc.value), str(exc.value)

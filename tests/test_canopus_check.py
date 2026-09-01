@@ -442,6 +442,131 @@ def test_a_push_range_that_names_no_push_scopes_to_nothing_and_does_not_error(
     assert {row["clause"] for row in rows} == {"C1", "C2"}
 
 
+def test_without_a_range_main_runs_all_four_clauses_over_every_note(tmp_path, capsys):
+    """The whole-history local reading, which nothing asserted.
+
+    `test_the_range_keeps_the_expensive_clauses_off_untouched_notes` and its
+    parametrised sibling both pin the NEGATIVE: an empty or unresolvable
+    `--range` leaves C3 and C4 off. Neither has a positive control, so
+    `_in_range` answering False for the no-range case (`scope is None`) was
+    invisible: MEASURED 2026-09-01, flipping that one `return True` to
+    `return False` left all 27 tests in this file green while every local run
+    and every clean CI run silently dropped the two clauses that spawn a
+    worktree and a test run. The module docstring calls this reading
+    "deliberately the slow one"; a check that got quietly fast is a check that
+    stopped being taken.
+    """
+    repo, _note = _clean_slice(tmp_path)
+
+    status = cc.main(["--root", str(repo), "--json"])
+
+    assert status == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert {row["clause"] for row in rows} == {"C1", "C2", "C3", "C4"}, (
+        "a run with no --range did not weigh the expensive clauses, so the "
+        "local whole-history reading measured less than the CI one")
+
+
+def test_C4_reports_a_target_whose_run_exited_non_zero_with_every_test_green(
+    tmp_path,
+):
+    """`red or code != 0`, and nothing ever reached the second half.
+
+    MEASURED 2026-09-01: cutting C4 down to `if red:` left this file and
+    `tests/test_canopus_cli.py` green over 61 tests. The exit code is not
+    belt-and-braces here, and this repository is the proof: its own root
+    `conftest.py` sets a non-zero `exitstatus` in `pytest_sessionfinish` when the
+    operator's live overlay moved during a run. A session hook, a plugin, or a
+    `-W error` teardown can all end a run non-zero while every testcase in the
+    report says `passed`, and a target whose RUN failed has not certified
+    anything, whatever its individual cases say.
+
+    The conftest below is the same shape, planted in the contract's own
+    directory so `_pytest` picks it up from the target's parent.
+    """
+    repo = _init(tmp_path)
+    _write(repo, CONTRACT, GREEN_CONTRACT)
+    _write(repo, "tests/contract/conftest.py",
+           "def pytest_sessionfinish(session, exitstatus):\n"
+           "    session.exitstatus = 1\n")
+    approval = _commit(repo, "approval: a contract whose RUN fails while its tests pass")
+
+    ok, message = cc.C4(repo, _fields(approval))
+
+    assert not ok, (
+        "a run that exited non-zero certified the target because every "
+        "individual testcase was green")
+    assert "not green at HEAD" in message, message
+
+
+def test_C4_measures_a_contract_recorded_as_a_DIRECTORY(tmp_path):
+    """`_ran`'s prefix branch, which is the only thing that reads a directory.
+
+    A note's `contract` is a directory in this repository's own convention --
+    `tests/contract/2026-01-02-sample-slice/` is what `valid()` carries in
+    `tests/test_canopus_note.py`. Every clause test here used a FILE, so
+    `rel == target` answered them all and the `rel.startswith(prefix)` branch
+    was never taken: MEASURED 2026-09-01, deleting it left 61 tests green.
+
+    The consequence is a false report, not a missed one. With no prefix match
+    `_ran` returns 0 for a directory target, and C4's first branch then says
+    "ran no tests at HEAD" about a directory whose tests all ran and passed --
+    the clause reporting against a slice that is behaving perfectly, which is
+    exactly the forever-reporting failure C1's retirement window exists to
+    remove.
+    """
+    repo = _init(tmp_path)
+    _write(repo, CONTRACT, GREEN_CONTRACT)
+    approval = _commit(repo, "approval: a contract recorded as a directory")
+
+    directory = _fields(approval)
+    directory["contract"] = "tests/contract/"
+
+    ok, message = cc.C4(repo, directory)
+
+    assert ok, message
+    assert "ran 1 test(s) green at HEAD" in message, message
+
+
+def test_a_note_this_repository_cannot_decode_is_reported_not_raised(tmp_path, capsys):
+    """One unreadable note is one report, never the end of the run.
+
+    `main` takes `note_paths()` as its ENTIRE population and catches exactly
+    `(NoteError, CheckError)`. Until 2026-09-01 `read_note` let
+    `UnicodeDecodeError` (a `ValueError`, a SIBLING of the `OSError` it caught)
+    and `yaml.YAMLError` (caught nowhere) escape, so a single hand-edited note
+    in the wrong encoding did not get reported -- it ended the check for every
+    OTHER note, on a traceback naming a codec and an offset but no path.
+
+    The good note is committed alongside, and its clause verdicts are asserted,
+    because "the run survived" is not the property: the property is that the
+    remaining notes were still weighed.
+    """
+    repo, _note = _clean_slice(tmp_path)
+    (repo / "records" / "slices" / "undecodable.md").write_bytes(
+        b"---\nslug: undecodable\nvalue: caf\xe9 latte\n---\n")
+    (repo / "records" / "slices" / "unparseable.md").write_text(
+        "---\nslug: unparseable\nvalue: [unclosed\n---\n", encoding="utf-8")
+    _commit(repo, "two notes nobody can read, beside one that is fine")
+
+    status = cc.main(["--root", str(repo), "--json"])
+
+    assert status == 1
+    rows = json.loads(capsys.readouterr().out)
+    by_slug: dict = {}
+    for row in rows:
+        by_slug.setdefault(row["slug"], []).append(row)
+
+    for broken in ("undecodable", "unparseable"):
+        assert [r["clause"] for r in by_slug.get(broken, [])] == ["note"], (
+            f"{broken} was not reported as one unreadable note: {by_slug}")
+        assert broken in by_slug[broken][0]["message"]
+
+    # The property: the OTHER notes were still weighed, all four clauses each.
+    assert {r["clause"] for r in by_slug.get(SLUG, [])} == {"C1", "C2", "C3", "C4"}
+    assert all(r["ok"] for r in by_slug[SLUG]), by_slug[SLUG]
+
+
 def test_a_note_missing_the_fields_the_clauses_read_is_reported_not_raised(tmp_path):
     repo = _init(tmp_path)
     (repo / "records" / "slices").mkdir(parents=True)

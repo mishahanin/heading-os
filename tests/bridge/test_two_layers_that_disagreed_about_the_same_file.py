@@ -383,3 +383,129 @@ def test_a_lowercase_md_directory_scan_is_unchanged(tmp_path):
     (ws / "crm" / "contacts" / "notes.txt").write_text("x", encoding="utf-8")
     slugs = sorted(c["slug"] for c in list_contacts(ws, data_root=ws)["contacts"])
     assert slugs == ["alice", "bob"]
+
+
+# ============================================================
+# Finding 4 - the degraded return that one unreadable state never reached
+# ============================================================
+#
+# Same shape as the three above, at the decode layer. `UnicodeDecodeError` is a
+# `ValueError`; it is NOT an `OSError` and NOT a `json.JSONDecodeError`, so an
+# `except (json.JSONDecodeError, OSError)` reads as "the file would not read"
+# and is not. Both readers of `_latest-fetch.json` carried the gap, which is
+# this repository's recurring "a fix that landed in one of two copies" with
+# neither copy having it.
+#
+# MEASURED 2026-09-01, one 0xe9 byte inside a conversation topic in an
+# otherwise well-formed fetch file:
+#
+#     inbox.read_inbox                 -> RAISED UnicodeDecodeError
+#     conversations.list_conversations -> RAISED UnicodeDecodeError
+#     approvals.list_approvals         -> RAISED UnicodeDecodeError
+#
+# The raise leaves the endpoint at HTTP 500 rather than at the degraded payload
+# both functions already return for a missing file, an unparseable one and a
+# wrong-shaped one. `test_every_degraded_return_carries_the_truncated_key`
+# above is named for exactly this contract and its "unparseable" case writes
+# `"{not json"`, which is ASCII, so the decode axis walked past it. Every
+# fixture in this file writes with `write_text(..., encoding="utf-8")`;
+# `write_bytes` is the whole trick.
+#
+# `approvals.list_approvals` is here rather than in a file of its own because
+# it is the same seam, found in the same scan and fixed in the same pass. It
+# differs in kind from the two above and the difference is the point: it is a
+# WALK, so its documented behaviour is to skip the one bad draft and log it,
+# never to drop the queue.
+
+# Valid latin-1 (an accented e), an invalid UTF-8 continuation byte. Written as
+# an escape so this file stays pure ASCII on disk.
+_LATIN1_BYTE = b"\xe9"
+
+
+def _write_undecodable_fetch(root: Path) -> Path:
+    p = root / FETCH_REL
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b'{"conversations": [{"id": "c1", "topic": "caf'
+                  + _LATIN1_BYTE + b'"}]}')
+    return p
+
+
+def test_a_fetch_file_that_is_not_utf8_degrades_instead_of_raising(tmp_path):
+    """Both readers of the one file, in one test, because the defect was in
+    both and a fix landing in one of two is how it got here."""
+    _write_undecodable_fetch(tmp_path)
+
+    inbox = read_inbox(tmp_path)
+    assert inbox["counts"] == {"needs-you": 0, "fyi": 0, "noise": 0}
+    assert inbox["data_time"] is None
+
+    conv = list_conversations(tmp_path)
+    assert conv["total"] == 0
+    assert conv["truncated"] is False
+    assert conv["conversations"] == []
+
+
+@pytest.mark.parametrize("setup", ["missing", "unparseable", "wrong-shape",
+                                   "not-utf8"])
+def test_every_degraded_return_still_carries_the_truncated_key(tmp_path, setup):
+    """The same contract as its sibling above, with the decode case added.
+
+    Kept as a separate function rather than a fourth id on that one: this file
+    is a record of which cases were checked when, and folding the new case into
+    the old parametrize would erase the fact that three of the four were the
+    original coverage and the fourth is what it missed.
+    """
+    if setup == "unparseable":
+        p = tmp_path / FETCH_REL
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("{not json", encoding="utf-8")
+    elif setup == "wrong-shape":
+        _write_fetch(tmp_path, {"conversations": "a string"})
+    elif setup == "not-utf8":
+        _write_undecodable_fetch(tmp_path)
+    got = list_conversations(tmp_path)
+    assert got["truncated"] is False
+    assert got["total"] == 0
+
+
+def test_a_readable_fetch_with_non_ascii_is_still_read(tmp_path):
+    """Anchor. Catching the decode error must not become "refuse anything over
+    0x7F". A Cyrillic or accented subject line is ordinary here and its
+    conversation must still band."""
+    topic = "caf\u00e9 \u0431\u044e\u0434\u0436\u0435\u0442"
+    p = tmp_path / FETCH_REL
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(json.dumps({"conversations": [_conv("c1", topic=topic)]},
+                             ensure_ascii=False).encode("utf-8"))
+
+    assert [r["id"] for r in read_inbox(tmp_path)["bands"]["needs-you"]] == ["c1"]
+    assert list_conversations(tmp_path)["total"] == 1
+
+
+def test_a_draft_that_is_not_utf8_loses_only_itself(tmp_path, caplog):
+    """The walk, whose contract is different: skip the one, keep the rest.
+
+    `list_approvals` already skips-and-logs a draft it cannot read, and the
+    comment on that branch says why in full: the approvals queue is where the
+    operator decides what to send, so a draft present on disk and absent from
+    the page has to say why. A raise instead lost every OTHER pending draft.
+    """
+    from scripts.bridge_daemon.sources import approvals as approvals_src
+
+    drafts = tmp_path / approvals_src.EMAIL_DRAFTS_DIR
+    drafts.mkdir(parents=True)
+    (drafts / "aaa-good.md").write_text(
+        "**To:** a@b.test\n**Subject:** keep me\n\nbody\n", encoding="utf-8")
+    (drafts / "zzz-broken.md").write_bytes(
+        b"**To:** a@b.test\n**Subject:** caf" + _LATIN1_BYTE + b"\n\nbody\n")
+
+    with caplog.at_level(logging.WARNING, logger=approvals_src.__name__):
+        got = approvals_src.list_approvals(tmp_path)
+
+    names = [i["filename"] for i in got["items"]]
+    assert names == ["aaa-good.md"], (
+        f"one undecodable draft changed which OTHER drafts the queue shows: "
+        f"{names}")
+    assert any("zzz-broken.md" in r.getMessage() for r in caplog.records), (
+        f"the draft was dropped from the send queue with no log line naming "
+        f"it: {caplog.text}")

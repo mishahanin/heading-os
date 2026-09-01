@@ -158,14 +158,115 @@ def _is_opus(model: str) -> bool:
     return "opus" in model.lower()
 
 
-def _load_state(path: Path) -> dict:
+class LedgerUnreadableError(Exception):
+    """The spend ledger exists but could not be read back.
+
+    Distinct from the ledger being ABSENT, which is a real and honest zero. A
+    reader that cannot tell those two apart reads a corrupt file as "no spend
+    today", which is the direction `check_daily_cap` must never fail in.
+    """
+
+
+def _load_state(path: Path, strict: bool = False) -> dict:
+    """The ledger, or an empty day. `strict=True` refuses to invent the empty day.
+
+    Measured 2026-08-31 on one ledger file in two states: with
+    `{"daily_totals": {<today>: {"spend_usd": 9.99}}}` on disk
+    `check_daily_cap()` answered True, and after overwriting the same file with
+    `not json at all` it answered False on nothing but a log line, after which
+    the next `record_call` rewrote the file from near zero. So a corrupt ledger
+    RAISED the cap instead of holding it, and the docstring on `check_daily_cap`
+    argues the opposite case two lines above the read: "Spend that cannot be
+    recorded is spend that must not happen."
+
+    `record_call` still asks non-strict on purpose. It is a WRITE, it holds the
+    only copy of the call it was handed, and re-founding the day from zero loses
+    less than dropping that call entirely.
+
+    A ledger that PARSES and is not an object is refused the same way, and that
+    half arrived on 2026-08-31 after the first. `json.loads("[1, 2, 3]")` raises
+    nothing, so the list went straight back to `check_daily_cap`, whose
+    `state.get(...)` then died with `AttributeError: 'list' object has no
+    attribute 'get'` - a guard that neither answered nor held.
+
+    `UnicodeDecodeError` joined the caught set on 2026-09-01, and it is the
+    third spelling of one defect rather than a new one. It is a `ValueError`,
+    NOT an `OSError`, and it is not a `json.JSONDecodeError` either, so bytes
+    that are not valid UTF-8 sailed past a two-name except clause that reads as
+    though it covers "the file would not read". Measured that day on one ledger
+    file in six byte states, `check_daily_cap()` then `record_call()` on each:
+
+        valid utf-8, over cap      -> True                  / recorded
+        lone continuation byte     -> RAISED UnicodeDecodeError / RAISED
+        truncated JSON             -> True                  / recorded
+        latin-1 encoded            -> RAISED UnicodeDecodeError / RAISED
+        utf-16 with BOM            -> RAISED UnicodeDecodeError / RAISED
+        a NUL-padded short write   -> True                  / recorded
+
+    Three of six crashed BOTH entry points. A ledger reaches those states the
+    ordinary way: a partial write that lands mid-codepoint, a file restored
+    through a tool that re-encoded it, or an editor that saved as latin-1.
+    """
     if not path.exists():
         return {"daily_totals": {}}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
         logger.warning("cost-tracker: could not read state file %s: %s", path, exc)
+        if strict:
+            raise LedgerUnreadableError(str(exc)) from exc
         return {"daily_totals": {}}
+    if not isinstance(state, dict):
+        reason = f"top-level value is {type(state).__name__}, not an object"
+        logger.warning("cost-tracker: state file %s is not a ledger: %s",
+                       path, reason)
+        if strict:
+            raise LedgerUnreadableError(reason)
+        return {"daily_totals": {}}
+    return state
+
+
+def _today_spend(state: dict, today: str) -> float:
+    """Today's recorded spend, or `LedgerUnreadableError` when it cannot be read.
+
+    Every hop is shape-checked, because each one used to be a bare `.get` chain
+    ending in a `>=` against a float. Measured 2026-08-31 against
+    `check_daily_cap()` on nine ledger states, one file, one call each:
+
+        absent                           -> False
+        not json at all                  -> True
+        daily_totals is a string         -> RAISED AttributeError
+        daily_totals is a list           -> RAISED AttributeError
+        the day entry is a string        -> RAISED AttributeError
+        spend_usd is a string            -> RAISED TypeError
+        spend_usd is None                -> RAISED TypeError
+        top level is a list              -> RAISED AttributeError
+        over cap, well formed            -> True
+
+    Six of nine raised out of a function whose own docstring says a guard "must
+    not raise in place of answering". The unparseable case had been closed
+    earlier the same day; the neighbouring branch carried the identical shape
+    one layer in, where the bytes are valid JSON and the OBJECT is wrong.
+
+    An absent `daily_totals`, an absent day and an absent `spend_usd` stay a
+    real zero: nothing was recorded, which is honest. Only a value that is
+    PRESENT and of the wrong type is unreadable.
+    """
+    daily = state.get("daily_totals", {})
+    if not isinstance(daily, dict):
+        raise LedgerUnreadableError(
+            f"daily_totals is {type(daily).__name__}, not an object")
+    day = daily.get(today, {})
+    if not isinstance(day, dict):
+        raise LedgerUnreadableError(
+            f"the entry for {today} is {type(day).__name__}, not an object")
+    spend = day.get("spend_usd", 0.0)
+    # `bool` is an `int` subclass and `True >= 5.0` is a silent False, so a
+    # ledger reading `"spend_usd": true` would have turned the cap off.
+    if isinstance(spend, bool) or not isinstance(spend, (int, float)):
+        raise LedgerUnreadableError(
+            f"spend_usd for {today} is {type(spend).__name__}, not a number")
+    return float(spend)
 
 
 def _save_state(path: Path, state: dict) -> None:
@@ -235,12 +336,42 @@ def record_call(model: str, input_tokens: int, output_tokens: int) -> None:
     today = _today_str()
     path = _state_path()
     state = _load_state(path)
-    daily = state.setdefault("daily_totals", {})
+    # Re-found anything the shape check cannot use, rather than raising. This is
+    # the same trade `_load_state` already makes for a ledger that will not
+    # parse: this function is a WRITE holding the only copy of the call it was
+    # handed, so losing a day's history costs less than dropping the call and
+    # every call after it. Before 2026-08-31 a `daily_totals` that arrived as a
+    # string reached `daily[today] = _empty_day()` and raised TypeError, and it
+    # would have raised on every subsequent call too, because nothing rewrites a
+    # file the writer refuses to touch.
+    daily = state.get("daily_totals")
+    if not isinstance(daily, dict):
+        if daily is not None:
+            logger.warning("cost-tracker: daily_totals was %s, not an object; "
+                           "re-founding it", type(daily).__name__)
+        daily = {}
+    state["daily_totals"] = daily
 
-    if today not in daily:
-        daily[today] = _empty_day()
+    day = daily.get(today)
+    if not isinstance(day, dict):
+        if day is not None:
+            logger.warning("cost-tracker: the entry for %s was %s, not an "
+                           "object; re-founding the day", today,
+                           type(day).__name__)
+        day = _empty_day()
+    else:
+        # A day missing a counter, or holding a string where a number belongs,
+        # is the same class one level down: `day["spend_usd"] + call_cost` on a
+        # str is a TypeError out of a write path that must not have one.
+        for key, default in _empty_day().items():
+            value = day.get(key, default)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                logger.warning("cost-tracker: %s for %s was %r; re-founding "
+                               "that counter", key, today, value)
+                value = default
+            day[key] = value
+    daily[today] = day
 
-    day = daily[today]
     day[f"{bucket}_input_tokens"] += input_tokens
     day[f"{bucket}_output_tokens"] += output_tokens
     day[f"calls_{bucket}"] += 1
@@ -265,6 +396,22 @@ def check_daily_cap() -> bool:
     "cap reached". Spend that cannot be recorded is spend that must not happen.
     `record_call()` does the opposite on purpose: it is a WRITE, and a write
     that cannot land is a loud failure, not a quiet True.
+
+    Fails CLOSED on a corrupt ledger too, for the same stated reason and since
+    2026-08-31. A ledger that will not parse is spend that cannot be READ, which
+    is the same standing as spend that cannot be recorded: the day's real total
+    could be anything, including well past the cap. Until that date the corrupt
+    path returned False on a log line, so a truncated or half-written file
+    turned the hard cap off and let the day start again from zero.
+
+    "Corrupt" means BOTH shapes, and the second half landed later the same day.
+    Unparseable bytes were closed first; a file whose bytes are valid JSON and
+    whose OBJECT is wrong still went through a bare `.get` chain and raised
+    `AttributeError` or `TypeError` out of this function. Six of nine probed
+    ledger states raised - the measurement is in `_today_spend`. Raising is not
+    failing closed: this function answers a question, and an exception is the
+    caller's problem to handle, on the one path where the caller handling it
+    badly means spending money nobody is counting.
     """
     today = _today_str()
     try:
@@ -275,6 +422,13 @@ def check_daily_cap() -> bool:
             "as reached, because spend cannot be recorded anywhere.", exc,
         )
         return True
-    state = _load_state(path)
-    today_spend = state.get("daily_totals", {}).get(today, {}).get("spend_usd", 0.0)
+    try:
+        state = _load_state(path, strict=True)
+        today_spend = _today_spend(state, today)
+    except LedgerUnreadableError as exc:
+        logger.warning(
+            "cost-tracker: ledger %s is unreadable (%s); reporting the daily "
+            "cap as reached, because today's spend cannot be read.", path, exc,
+        )
+        return True
     return today_spend >= DAILY_CAP_USD

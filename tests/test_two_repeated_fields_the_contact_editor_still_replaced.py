@@ -78,9 +78,16 @@ TWO_ENTRY_CONTACT = {
 }
 
 
-def _edit_body(contacts, **kwargs) -> dict:
-    """Run `cmd_edit` against a fake service and return the submitted body."""
+def _edit_body(contacts, _contact=None, **kwargs) -> dict:
+    """Run `cmd_edit` against a fake service and return the submitted body.
+
+    `_contact` is the person document the fake `people().get()` hands back. It
+    defaults to `TWO_ENTRY_CONTACT` so the two named cases below read as before;
+    the per-field cases pass their own, because a field the fetched contact does
+    not carry cannot demonstrate a dropped tail.
+    """
     captured: dict = {}
+    fetched = TWO_ENTRY_CONTACT if _contact is None else _contact
 
     class _Call:
         def __init__(self, result):
@@ -91,7 +98,7 @@ def _edit_body(contacts, **kwargs) -> dict:
 
     class _People:
         def get(self, **_kw):
-            return _Call({"etag": "e1", **TWO_ENTRY_CONTACT})
+            return _Call({"etag": "e1", **fetched})
 
         def updateContact(self, **kw):  # noqa: N802 - the API's own spelling
             captured.update(kw)
@@ -153,22 +160,67 @@ def test_a_single_word_name_still_clears_the_family_name(contacts, capsys):
     assert body["body"]["names"][0] == {"givenName": "Cher", "familyName": ""}
 
 
-def test_every_repeated_field_now_routes_through_the_shared_helper(contacts, capsys):
+# Each case is (field, cmd_edit kwargs, the fetched contact's entries, the
+# entry the edit must put first). The fetched list carries TWO entries so a
+# dropped tail is visible; `TWO_ENTRY_CONTACT` only carries `biographies` and
+# `names`, which is why the other five bring their own.
+_TAIL_CASES = [
+    ("emailAddresses", {"email": "second@example.invalid"},
+     [{"value": "first@example.invalid"}, {"value": "kept@example.invalid"}],
+     {"value": "second@example.invalid"}),
+    ("phoneNumbers", {"phone": "+15550002"},
+     [{"value": "+15550001"}, {"value": "+15550009"}],
+     {"value": "+15550002"}),
+    ("addresses", {"address": "1 Harbour Road"},
+     [{"formattedValue": "2 Quay Lane"}, {"formattedValue": "3 Dock Way"}],
+     {"formattedValue": "1 Harbour Road"}),
+    ("urls", {"url": "https://new.example.invalid"},
+     [{"value": "https://old.example.invalid"},
+      {"value": "https://kept.example.invalid"}],
+     {"value": "https://new.example.invalid"}),
+    ("organizations", {"company": "Vantooren Holdings"},
+     [{"name": "Placeholder Ltd", "title": "Chief Agent"},
+      {"name": "Second Board", "title": "Director"}],
+     {"name": "Vantooren Holdings", "title": "Chief Agent"}),
+    ("biographies", {"notes": "updated"},
+     TWO_ENTRY_CONTACT["biographies"],
+     {"value": "updated", "contentType": "TEXT_PLAIN"}),
+    ("names", {"name": "New Name"},
+     TWO_ENTRY_CONTACT["names"],
+     {"givenName": "New", "familyName": "Name"}),
+]
+
+
+@pytest.mark.parametrize("field,kwargs,existing,edited", _TAIL_CASES,
+                         ids=[c[0] for c in _TAIL_CASES])
+def test_every_repeated_field_keeps_the_entries_it_was_not_asked_about(
+        contacts, capsys, field, kwargs, existing, edited):
     """The rule, not one more instance of it. Five fields were fixed and two
-    were missed, so the next reader needs a list rather than a habit."""
-    for field, kwargs in (
-        ("emailAddresses", {"email": "a@b.c"}),
-        ("phoneNumbers", {"phone": "+1"}),
-        ("addresses", {"address": "1 Road"}),
-        ("urls", {"url": "https://x.test"}),
-        ("biographies", {"notes": "n"}),
-        ("names", {"name": "New Name"}),
-    ):
-        contact = dict(TWO_ENTRY_CONTACT)
-        contact.setdefault(field, [{"value": "one"}, {"value": "two"}])
-        body = _edit_body(contacts, **kwargs)
-        capsys.readouterr()
-        assert len(body["body"][field]) >= 1, field
+    were missed, so the next reader needs a list rather than a habit.
+
+    This asserted `len(body["body"][field]) >= 1` until 2026-09-01, over a
+    fetched contact that carried no entries for five of the six fields it named.
+    A floor of one is satisfied by the exact defect the file exists to pin: the
+    one-element list the server then treats as a deletion. MEASURED that day by
+    reverting each branch of `cmd_edit` to `body[field] = [entry]` in turn:
+    `urls` survived the whole tree (the email, phone and address branches are
+    caught by `test_an_add_that_could_never_have_run.py` and
+    `test_an_edit_that_deleted_the_addresses_it_promised_to_keep.py`), so the
+    only field this loop was the sole guard for was the one it could not see.
+    `organizations` is included even though it does not route through
+    `_replace_first`: it is repeated, it is edited here, and the tail is the
+    property, not the helper.
+    """
+    body = _edit_body(contacts, {field: existing}, **kwargs)
+    capsys.readouterr()
+
+    submitted = body["body"][field]
+    assert submitted[0] == edited, (
+        f"{field}: the edited value is not element [0], which the People API "
+        f"treats as primary")
+    assert submitted[1:] == existing[1:], (
+        f"{field}: the tail entry was dropped, and updatePersonFields replaces "
+        f"the whole list, so the server deletes it")
 
 
 # ============================================================

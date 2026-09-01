@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -192,6 +193,97 @@ def test_the_parser_reads_the_shape_this_machine_actually_writes():
         )
         return
     pytest.skip("no recent transcript on this machine carries a failed tool call")
+
+
+# ---------- a byte that is not UTF-8 ----------
+
+def test_a_transcript_with_one_bad_byte_is_still_parsed(tmp_path):
+    """`parse_jsonl` promises to tolerate malformed lines; one byte killed it.
+
+    MEASURED 2026-09-01 against the unfixed parser: a transcript whose second
+    line carries a single 0xff exited 1 with a `UnicodeDecodeError` traceback
+    raised out of `for lineno, line in enumerate(fh)` - the decode happens inside
+    the READ, so it never reaches the `json.JSONDecodeError` handler two lines
+    down, and `main`'s `except (PermissionError, FileNotFoundError)` is not on
+    its ancestry either. `UnicodeDecodeError` is a `ValueError`.
+
+    A transcript is the whole input to /calibrate. Losing every turn of a session
+    over one byte, with a traceback rather than the documented exit 3, is the
+    worst of the available answers; the parser already knows how to carry on past
+    a line it cannot use.
+    """
+    fixture = tmp_path / "one-bad-byte.jsonl"
+    fixture.write_bytes(
+        b'{"type":"user","timestamp":"2026-01-01T00:00:00Z",'
+        b'"message":{"role":"user","content":"first turn"}}\n'
+        b'{"type":"user","timestamp":"2026-01-01T00:00:01Z",'
+        b'"message":{"role":"user","content":"' + b"\xff" + b'"}}\n'
+        b'{"type":"user","timestamp":"2026-01-01T00:00:02Z",'
+        b'"message":{"role":"user","content":"third turn"}}\n'
+    )
+    rc, out, err = run_parser("--session", str(fixture))
+    assert "UnicodeDecodeError" not in err, err
+    assert rc == 0, err
+    env = json.loads(out)
+    texts = [t["text"] for t in env["user_turns"]]
+    assert "first turn" in texts and "third turn" in texts, (
+        f"turns on the clean lines were lost with the bad byte: {texts}"
+    )
+
+
+def test_a_bad_byte_costs_at_most_its_own_line(tmp_path):
+    """The bound, stated. Salvage is not "some of it survived": every line the
+    file holds is still accounted for, as an event or as a skipped line."""
+    fixture = tmp_path / "one-bad-byte.jsonl"
+    fixture.write_bytes(
+        b'{"type":"user","timestamp":"2026-01-01T00:00:00Z",'
+        b'"message":{"role":"user","content":"first turn"}}\n'
+        b'{"type":"user","timestamp":"2026-01-01T00:00:01Z",'
+        b'"message":{"role":"user","content":"' + b"\xff" + b'"}}\n'
+    )
+    rc, out, err = run_parser("--session", str(fixture))
+    assert rc == 0, err
+    env = json.loads(out)
+    skipped = 0
+    if "skipped" in err:
+        skipped = int(re.search(r"skipped (\d+) malformed", err).group(1))
+    assert env["event_count"] + skipped == 2, (
+        f"{env['event_count']} events plus {skipped} skipped does not account "
+        "for the file's 2 lines"
+    )
+
+
+def test_a_clean_transcript_is_unaffected_by_the_decode_tolerance(tmp_path):
+    """The negative case. A reader that replaced bytes it should not would
+    corrupt every ordinary run, and no test above would notice."""
+    fixture = tmp_path / "clean.jsonl"
+    text = "русский текст and an em-dash — kept verbatim"
+    fixture.write_text(
+        json.dumps({"type": "user", "timestamp": "2026-01-01T00:00:00Z",
+                    "message": {"role": "user", "content": text}},
+                   ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    rc, out, err = run_parser("--session", str(fixture))
+    assert rc == 0, err
+    env = json.loads(out)
+    assert env["user_turns"][0]["text"] == text
+    assert "�" not in out, "a clean transcript came back with replacement chars"
+
+
+def test_a_directory_passed_as_a_session_is_reported_not_traced(tmp_path):
+    """The same exit-code contract, through the other uncaught OSError.
+
+    `main` caught `PermissionError` and `FileNotFoundError` by name. Every other
+    `OSError` - `IsADirectoryError` is the one a fat-fingered `--session` reaches
+    first - came out as a traceback under an exit code that means nothing.
+    """
+    target = tmp_path / "a-directory"
+    target.mkdir()
+    rc, out, err = run_parser("--session", str(target))
+    assert rc == 3, f"exit {rc}; stderr: {err}"
+    assert "unreadable" in err.lower()
+    assert "Traceback" not in err, err
 
 
 def test_nonexistent_session_exits_code_3(tmp_path):

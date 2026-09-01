@@ -42,6 +42,51 @@ def test_empty_or_blank_value_falls_back(tmp_config):
     assert cm.get_model("kimi") == cm.FALLBACKS["kimi"]
 
 
+def test_a_padded_value_resolves_stripped(tmp_config):
+    """The pin is handed to the proxy as a model id, so surrounding whitespace
+    from a hand-edited config is not a cosmetic difference: the id stops
+    matching the catalog and `council_freshness` reports the pin as broken.
+    `get_model` strips, and nothing measured that it still does: removing the
+    `.strip()` from the return left the whole repository green (2026-09-01),
+    because the only blank-value case in this file uses `"   "`, which falls
+    back before it can reach the return."""
+    _write(tmp_config, {"grok": "  grok-9.9\n", "gemini": "\tgemini-x "})
+    assert cm.get_model("grok") == "grok-9.9"
+    assert cm.get_model("gemini") == "gemini-x"
+
+
+def test_set_model_stores_the_stripped_value(tmp_config):
+    """The other end of the same contract: a padded id must not be persisted."""
+    cm.set_model("kimi", "  kimi-fresh  ")
+    assert json.loads(tmp_config.read_text(encoding="utf-8"))["kimi"] == "kimi-fresh"
+
+
+def test_set_model_writes_atomically(tmp_config, monkeypatch):
+    """`config/council-models.json` is persistent state, so the workspace rule
+    is write-to-tmp then `os.replace`. A direct `open(path, "w")` truncates the
+    real file first, and a crash between truncate and write leaves every council
+    pin gone rather than stale. The docstring says "atomic write"; nothing
+    checked it, and replacing the tmp+replace pair with a plain write left the
+    whole repository green (measured 2026-09-01)."""
+    _write(tmp_config, {"grok": "grok-old", "gemini": "gemini-keep"})
+    replaced = []
+    real_replace = cm.os.replace
+
+    def tracking_replace(src, dst):
+        replaced.append((str(src), str(dst)))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(cm.os, "replace", tracking_replace)
+    cm.set_model("grok", "grok-new")
+
+    assert replaced, "set_model did not go through os.replace"
+    src, dst = replaced[0]
+    assert src.endswith(".tmp") and dst == str(tmp_config)
+    # And no scratch file is left behind next to the config.
+    assert [p.name for p in tmp_config.parent.glob("*.tmp")] == []
+    assert cm.get_model("gemini") == "gemini-keep"
+
+
 def test_malformed_config_falls_back(tmp_config, capsys):
     tmp_config.write_text("not json{", encoding="utf-8")
     assert cm.get_model("grok") == cm.FALLBACKS["grok"]

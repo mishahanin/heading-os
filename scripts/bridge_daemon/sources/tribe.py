@@ -295,7 +295,19 @@ def list_tribe(data_root: "Path | None" = None, today: date | None = None) -> di
             try:
                 text = p.read_text(encoding="utf-8")
                 mtime = p.stat().st_mtime
-            except OSError:
+            except (OSError, UnicodeDecodeError):
+                # UnicodeDecodeError is a ValueError, NOT an OSError, so ONE
+                # contact file saved in anything but UTF-8 aborted this walk and
+                # 500'd /tribe. `read_contact` at the bottom of this same module
+                # already catches both, which is the tell: the fix landed in the
+                # single-file reader and never in the walker. MEASURED
+                # 2026-08-31 on two tribe contacts, one carrying a Latin-1
+                # display name: `list_tribe` raised `UnicodeDecodeError: 'utf-8'
+                # codec can't decode byte 0xe9` rather than returning the other.
+                logger.warning(
+                    "tribe: skipping %s from the /tribe listing; it is not "
+                    "readable as UTF-8 text. Re-save it as UTF-8.", p,
+                    exc_info=True)
                 continue
             fm = _parse_frontmatter(text)
             rel_type = fm.get("relationship_type", "")

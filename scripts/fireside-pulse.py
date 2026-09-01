@@ -397,6 +397,20 @@ def _spawn_detached_daemon() -> int | None:
             venv_py = venv_dir / "python3"  # some venvs ship python3 symlink only
     daemon = WORKSPACE / "scripts" / "fireside-bot-daemon.py"
     if not venv_py.exists():
+        # The silent path that actually fires. An audit named the `except`
+        # below as this function's silent swallow and this return, one block
+        # ABOVE the try, was the one a probe actually reached: with no fireside
+        # venv on the machine the function answered None having printed
+        # nothing, and `main()` reported the daemon down without ever saying
+        # the interpreter was missing. Widening the handler alone left it, which
+        # is the shape this campaign has now found sixteen times.
+        print(f"[warn] the fireside venv interpreter is missing at {venv_py}; "
+              f"the daemon cannot be started (run the fireside venv setup)",
+              file=sys.stderr)
+        return None
+    if not daemon.exists():
+        print(f"[warn] the fireside daemon script is missing at {daemon}; "
+              f"nothing to start", file=sys.stderr)
         return None
     try:
         if sys.platform == "win32":
@@ -451,24 +465,77 @@ def _spawn_detached_daemon() -> int | None:
             alive, real_pid = _daemon_alive()
             if alive and real_pid:
                 return real_pid
+        print("[warn] the daemon did not report a live pid within ~4s of the "
+              "spawn; it is NOT running", file=sys.stderr)
         return None
-    except Exception:
+    except Exception as exc:
+        # `except Exception` stays: the caller's contract is a pid or None, and
+        # a pulse that cannot start its daemon must not take the pulse down
+        # with it. What changes is the SILENCE. This returned None for a
+        # missing interpreter, a permission error, an OSError and a genuine
+        # bug, all identically, so the operator learned the daemon was down and
+        # never which of those to fix. Swallowing without logging is what the
+        # workspace security rule forbids, and the reason it forbids it is
+        # exactly this.
+        print(f"[warn] could not spawn the fireside daemon: "
+              f"{type(exc).__name__}: {exc}", file=sys.stderr)
         return None
 
 
 def load_jsonl(path: Path):
+    """Every record the file yields, skipping and NAMING what it cannot read.
+
+    A JSONL log is append-only, so a torn tail is its ordinary corruption and a
+    line that will not parse was always skipped here. The DECODE was not: the
+    iteration decodes each line as it comes, and `UnicodeDecodeError` is a
+    `ValueError`, a SIBLING of `json.JSONDecodeError` rather than a subclass, so
+    one non-UTF-8 byte anywhere in the file raised out of the whole walk. It
+    feeds `derive_state()` and therefore `main()`.
+
+    Its sibling `load_roster_names`, in this same file, was given exactly this
+    treatment on 2026-09-01 and this one was left, which is the one-of-N shape
+    the same day found ten times over. The docstring is new: there was no stated
+    contract here, and the absence of one is why widening the handler looked
+    like a judgement call rather than a fix. It is stated now, so the next
+    reader inherits the decision instead of re-deciding it.
+
+    Skipping is NAMED, never silent. A dropped record that nothing reports turns
+    a count into a lower bound that reads as a total.
+    """
     if not path.exists():
         return []
     out = []
-    with path.open(encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                out.append(json.loads(line))
-            except json.JSONDecodeError:
-                pass
+    skipped = 0
+    try:
+        with path.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    skipped += 1
+    except (OSError, UnicodeDecodeError) as exc:
+        # `out` holds whatever was yielded before the read stopped, and the
+        # message states that count rather than describing it, because HOW MUCH
+        # survives is a property of buffering and not of the data.
+        #
+        # MEASURED 2026-09-01 on a four-line file whose third line held one
+        # 0xff: this returns ZERO records, not two. Iterating a text handle
+        # decodes a whole buffer before it yields the first line, so on any file
+        # smaller than the buffer the decode fails before line one arrives. On a
+        # large file the same call would return the leading records instead.
+        #
+        # That is exactly why the count is printed and not assumed. A caller
+        # reading "3 records" cannot tell a complete file from a truncated one
+        # unless the truncation says so, and this line is what says so.
+        print(f"[warn] {path}: stopped after {len(out)} record(s), "
+              f"could not read further: {exc}", file=sys.stderr)
+        return out
+    if skipped:
+        print(f"[warn] {path}: skipped {skipped} unparseable line(s)",
+              file=sys.stderr)
     return out
 
 
@@ -546,6 +613,18 @@ def load_checkpoint():
     truncated or hand-edited `pulse-checkpoint.json` used to raise out of every
     run, so the operator got no status at all -- from the tool whose entire job
     is to report status -- until they deleted the file by hand.
+
+    `UnicodeError` belongs in the handler for the same reason the non-dict
+    branch below exists, and it was missing until 2026-09-01. Reading the file
+    as UTF-8 raises `UnicodeDecodeError` on undecodable bytes, and that is a
+    `ValueError`: neither an `OSError` nor a `json.JSONDecodeError`, which only
+    fires on text that DECODED and then failed to parse. So the one corruption
+    this docstring names first (a truncated write, which can cut a multi-byte
+    character in half) escaped the handler and raised out of every run, which
+    is exactly the outcome the handler exists to prevent. Measured 2026-09-01
+    against `b"\\xff\\xfe\\x00{"`: `UnicodeDecodeError: invalid start byte`.
+    `scripts/watchdog_core.py::_read_beat` carries the same widening for the
+    same reason.
     """
     path = checkpoint()
     if not path.exists():
@@ -553,7 +632,7 @@ def load_checkpoint():
     try:
         with path.open(encoding="utf-8") as f:
             data = json.load(f)
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         print(f"pulse: checkpoint at {path} is unreadable ({exc}); "
               f"re-baselining", file=sys.stderr)
         return None
@@ -597,6 +676,12 @@ def load_roster_names():
     `main()`, so the tool whose only job is to report status reported nothing at
     all. The roster is decoration here -- names instead of raw ids, and the
     denominator -- so its absence degrades the line rather than the run.
+
+    Degrades in the REFUSING direction, and that is deliberate. `{}` costs the
+    caller its `tribe_size`, which `main()` then prints as "started 12/?"
+    rather than inventing a denominator; it never widens who counts as on the
+    roster. A reader that guessed a size, or fell back to a previous roster,
+    would answer a membership question from a file it could not read.
     """
     path = state_dir() / "tribe-roster.json"
     if not path.exists():
@@ -604,7 +689,16 @@ def load_roster_names():
     try:
         with path.open(encoding="utf-8") as f:
             roster = json.load(f)
-    except (OSError, json.JSONDecodeError) as exc:
+    # `UnicodeError` (the parent of `UnicodeDecodeError`) belongs in this tuple
+    # and was missing: a decode error is a `ValueError`, so a SIBLING of
+    # `json.JSONDecodeError`, and it is not an `OSError` either. `json.load`
+    # over a TEXT handle decodes during its own `f.read()`, before any parse,
+    # so neither name here could see it. MEASURED 2026-09-01 against a roster
+    # holding one 0xe9 byte: `UnicodeDecodeError: invalid continuation byte`
+    # raised straight out of `main()` -- the exact crash the paragraph above
+    # says this guard exists to prevent. `load_checkpoint` above already
+    # carries this widening for the same reason.
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         print(f"pulse: roster at {path} is unreadable ({exc}); "
               f"names and the tribe total are unavailable", file=sys.stderr)
         return {}

@@ -146,6 +146,43 @@ def test_a_dotted_reference_to_a_bundled_module_passes(bp, fake_repo):
     assert bp.completeness_gate(SPEC, fake_repo) == []
 
 
+def test_a_skill_that_is_not_utf8_is_reported_on_not_crashed_into(bp, fake_repo):
+    """One stray byte in one SKILL.md took the whole bundle build down.
+
+    `src.read_text(encoding="utf-8")` raises UnicodeDecodeError, which is a
+    ValueError and is caught by nothing between here and `main`. MEASURED
+    2026-09-01: the gate died on a traceback naming no file, in a function whose
+    entire output is a list of named files.
+
+    Both halves are asserted. The undecodable skill must not stop the scan, and
+    the reference inside it must still be FOUND - a fix that swallowed the file
+    would turn a crash into a silent unscanned skill, which is the worse of the
+    two and passes any test that only checks "did not raise".
+    """
+    (fake_repo / ".claude" / "skills" / "demo" / "SKILL.md").write_bytes(
+        b"---\nname: demo\n---\n\ncaf\xe9\n\nRun `python scripts/b/tool.py`.\n")
+
+    missing = bp.completeness_gate(SPEC, fake_repo)
+    assert missing == [".claude/skills/demo/SKILL.md -> scripts/b/tool.py"], missing
+
+
+def test_a_prose_file_that_is_not_utf8_is_read_too(bp, fake_repo):
+    """The second reader, which has the same corpus and had the same hole."""
+    _skill(fake_repo, "Nothing here.")
+    (fake_repo / ".claude" / "skills" / "demo" / "references").mkdir()
+    (fake_repo / ".claude" / "skills" / "demo" / "references" / "howto.md"
+     ).write_bytes(b"# How to\n\ncaf\xe9\n\nRun `python scripts/b/tool.py` first.\n")
+
+    missing = bp.completeness_gate(SPEC, fake_repo)
+    assert any("scripts/b/tool.py" in m for m in missing), missing
+
+
+def test_a_decodable_skill_is_unchanged_by_the_replacement(bp, fake_repo):
+    """Anchor: `errors="replace"` must not alter what an ordinary file scans as."""
+    _skill(fake_repo, "Run `python scripts/a/tool.py`.")
+    assert bp.completeness_gate(SPEC, fake_repo) == []
+
+
 def test_the_gate_writes_down_what_it_cannot_see(bp):
     """scope-claims: the report says "no missing targets", not "no broken
     references", and the difference has to be recorded where the scanner is."""

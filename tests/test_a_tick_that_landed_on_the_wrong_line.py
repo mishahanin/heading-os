@@ -784,7 +784,15 @@ def test_a_deletion_busts_the_pass_cache(monkeypatch, tmp_path):
     live = tmp_path / "still_here.py"
     live.write_text("x = 1\n", encoding="utf-8")
     monkeypatch.setattr(tc, "changed_python_files", lambda: [live])
-    monkeypatch.setattr(tc, "narrow", lambda paths, _t: (paths, 0))
+    # `narrow_with_scope`, not `narrow`. `scripts/turn-check.py` stopped
+    # binding `narrow` on 2026-08-31, when it needed the third value
+    # (whether session scope was established at all) to satisfy obligation 3
+    # of `.claude/rules/scope-claims.md`. The rename is what makes this line
+    # honest: with the old name absent, `monkeypatch.setattr` RAISES. Had the
+    # module kept a re-exported `narrow` beside it, this patch would have
+    # bound a name nobody reads and the test would have passed over nothing.
+    monkeypatch.setattr(tc, "narrow_with_scope",
+                        lambda paths, _t: (paths, 0, True))
     monkeypatch.setattr(tc, "deleted_python_files", list)
     clean_fp = tc.fingerprint([live])
     monkeypatch.setattr(tc, "read_state", lambda: {"last_pass": clean_fp})
@@ -797,7 +805,8 @@ def test_a_deletion_busts_the_pass_cache(monkeypatch, tmp_path):
 
 def test_a_turn_that_only_deletes_is_idle_and_says_how_many(monkeypatch):
     monkeypatch.setattr(tc, "changed_python_files", list)
-    monkeypatch.setattr(tc, "narrow", lambda paths, _t: (paths, 0))
+    monkeypatch.setattr(tc, "narrow_with_scope",
+                        lambda paths, _t: (paths, 0, True))
     monkeypatch.setattr(tc, "deleted_python_files", lambda: ["scripts/gone.py"])
     result = tc.run(timeout=30, use_cache=True)
     assert result["status"] == "idle"

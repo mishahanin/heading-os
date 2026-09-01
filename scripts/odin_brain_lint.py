@@ -43,12 +43,22 @@ from scripts.utils.workspace import (  # noqa: E402
     get_plans_dir,
     get_threads_dir,
 )
-# Reuse the PageRank resolver primitives so "what counts as resolvable" is
-# defined in exactly one place -- a wiki-link the lint flags is precisely one
-# the recall graph (scripts/odin_pagerank.py) would also fail to wire an edge for.
+# Reuse the PageRank resolver so "what counts as resolvable" is defined in
+# exactly one place: a wiki-link this lint flags is precisely one the recall
+# graph (scripts/odin_pagerank.py) would also fail to wire an edge for.
+#
+# That sentence was FALSE from the day it was written until 2026-08-31. It
+# imported the resolver PRIMITIVES and then rebuilt the note universe by hand,
+# narrower: `collect_brain_files` uses a non-recursive `glob("*.md")` over the
+# six SUBDIRS and drops any note without frontmatter, while `build_graph` walks
+# the whole brain root with `rglob` and registers a node regardless. Measured on
+# a four-note fixture: graph 4 tokens, lint 1. The fix is `build_graph` itself
+# plus its public `resolve()`, so the claim is now structural rather than
+# aspirational, and `tests/test_odin_brain_lint_parity.py` fails if it drifts.
 from scripts.odin_pagerank import (  # noqa: E402
     FRONTMATTER_RE,
     _slug,
+    build_graph,
     parse_wikilinks,
 )
 
@@ -136,7 +146,14 @@ BRAIN_TYPE_PREFIXES = {"source", "principle", "position", "episode", "conflict",
 def _frontmatter(path: Path):
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # `UnicodeDecodeError` is a `ValueError`, so `except OSError` never
+        # caught it: the decode fails inside `read_text` before any parsing
+        # runs. MEASURED 2026-09-01 through `odin-brain-health.py --compile`
+        # over one brain source carrying a lone 0xe9 -- the engine printed its
+        # warn line for the note, then died in `run_compile` at the temporal
+        # lint with a traceback and no report, so hardening the engine alone
+        # left the crash exactly where it was.
         return None
     data, _ = _parse_fm(text)
     return data or None
@@ -296,21 +313,38 @@ def check_dangling_wikilinks(files_by_subdir, brain_root):
     (by id, stem, or slugified stem/title, matching the PageRank resolver) or,
     when namespaced, to an existing crm:/thread: entity. Unresolved links are
     warnings, not errors: a [[name]] with no target yet is a legitimate marker,
-    but surfacing it keeps the backlog from accumulating unseen."""
-    resolver = set()
-    for _subdir, slug, info in _iter_files(files_by_subdir):
-        fm = info["frontmatter"]
-        for tok in (str(fm.get("id") or "").strip(), slug,
-                    _slug(slug), _slug(str(fm.get("title") or ""))):
-            if tok:
-                resolver.add(tok)
+    but surfacing it keeps the backlog from accumulating unseen.
+
+    "matching the PageRank resolver" is now literal. It used to be a claim.
+    Until 2026-08-31 this function rebuilt its own token set from
+    `files_by_subdir`, which `collect_brain_files` fills with a NON-recursive
+    `glob("*.md")` over six named subdirs, dropping every note that has no
+    frontmatter. `scripts/odin_pagerank.build_graph` walks the whole brain root
+    with `rglob` and registers a node whether or not frontmatter is present.
+
+    MEASURED that day on a four-note fixture (one nested a level deeper, two
+    with no frontmatter): the graph resolved 4 tokens, this lint resolved 1. The
+    other three would have been reported as dangling links that the recall graph
+    happily wires edges for. The divergence ran one way only, which is why it
+    produced FALSE warnings rather than missed ones, and why nothing had caught
+    it: no note in the live brain links to one of the affected files yet.
+
+    So the graph is now built once and asked, through its public `resolve()`.
+    Both the note universe and the resolution rule come from one place, and the
+    docstring above cannot drift from the code again without the parity test
+    failing.
+    """
+    graph = build_graph(brain_root, brain_root)
 
     ext = _external_entities(brain_root)
     issues = []
     for subdir, slug, info in _iter_files(files_by_subdir):
         try:
             text = info["path"].read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # The second half of the same defect, in the wikilink sweep. This is
+            # the one that actually raised: `_frontmatter` above is reached
+            # through `build_graph`, and this loop then re-reads each file.
             continue
         body = FRONTMATTER_RE.sub("", text, count=1)
         for target in parse_wikilinks(body):
@@ -331,7 +365,9 @@ def check_dangling_wikilinks(files_by_subdir, brain_root):
                     "message": f"wiki-link [[{target}]] points to no {ns} entity '{rest}'",
                 })
                 continue
-            if resolve_key in resolver or _slug(resolve_key) in resolver:
+            # ONE rule, in `BrainGraph.resolve`, which also applies the
+            # `_slug` fallback. Reproducing it here is how the two drifted.
+            if graph.resolve(resolve_key):
                 continue
             hint = ""
             for ns2, entities in ext.items():

@@ -298,7 +298,29 @@ def _apply_imei(device, drv, led, cfg, target: str, allow_used: bool) -> int:
             {"imei": old, "applied_at": prev.get("applied_at"), "replaced_at": ts})
         if old not in led.setdefault("used", []):
             led["used"].append(old)
-    ok, raw = drv.send_egmr(target)
+    # The WRITE half of the same guard. The read above refuses a modem that
+    # could not be reached, and then the write reached for it with no handler
+    # at all: `E5800Driver.send_egmr` calls `_at`, which raises ModemReadError
+    # on an unreadable reply, and the XE300 driver does the same since
+    # 2026-09-01. A router that drops between the read and the write is the
+    # ordinary case, not an exotic one. MEASURED 2026-09-01 with a driver whose
+    # `send_egmr` raises: ModemReadError propagated out of `_apply_imei`, out of
+    # a file whose every other exit is a code, and the caller saw a traceback
+    # where the read half of the same function prints one line and returns 2.
+    #
+    # Exit 1, not 2: 2 means refused before acting, and by here AT+EGMR has been
+    # attempted and may well have landed. The ledger is saved for the same
+    # reason the "did not return OK" branch below saves it: `old` was taken
+    # out of circulation the moment the write was attempted, and `verify` is the
+    # command that settles what actually happened.
+    try:
+        ok, raw = drv.send_egmr(target)
+    except ModemReadError as exc:
+        print(f"{RED}AT+EGMR was sent but the modem's reply could not be read, "
+              f"so whether it landed is unknown; run `verify --expect {target}` "
+              f"once the router answers again:{RESET} {exc}", file=sys.stderr)
+        mc.save_ledger(ledger_path(), led)
+        return 1
     if not ok:
         print(f"{RED}AT+EGMR did not return OK:{RESET}\n{raw}", file=sys.stderr)
         mc.save_ledger(ledger_path(), led)

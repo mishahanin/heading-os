@@ -129,7 +129,21 @@ def main() -> int:
     state = CP.read_json(CP.state_path(project, slug))
     auto = CP.config(state)["auto"]
 
-    if (payload.get("source") or "").strip() == "compact":
+    # `x or ""` guards the FALSY non-strings and admits every truthy one, so a
+    # `source` of `3` or `true` reached `.strip()` and raised. Measured
+    # 2026-09-01 driving the real hook: both exited 1 with an uncaught
+    # AttributeError. That is the identical defect this file's own comment,
+    # fourteen lines up, records fixing for the PAYLOAD on 2026-08-20 - the
+    # container was guarded and the field inside it was not.
+    #
+    # SessionStart is where the handoff is replayed, so the cost is the same one
+    # that comment names: the whole injection, lost. An `isinstance` rather than
+    # `str(...)`, because a non-string source is not a source this hook knows,
+    # and coercing it would let `"3"` be compared as if the harness had sent it.
+    source = payload.get("source")
+    if not isinstance(source, str):
+        source = ""
+    if source.strip() == "compact":
         if auto:
             print(AUTO_AFTER_COMPACT)
         return 0

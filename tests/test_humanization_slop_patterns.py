@@ -80,18 +80,35 @@ def test_theres_this_does_not_match_heres_this():
     ("We rewrote it. It turns out the cache was cold.", 1),
     ("If it turns out well, I'll share it in the channel.", 0),
     ("Let us see how it turns out next quarter.", 0),
+    # The two above are lowercase, and SLOP_REGEXES is compiled WITHOUT
+    # re.IGNORECASE, so they were refused by the letter case and said nothing
+    # about the `(?:^|[.!?]\s+|\n)` anchor the test's own name is about.
+    # Measured 2026-09-01: deleting that anchor left all 44 tests in this file
+    # green. These two are the realistic near-miss - a capitalised occurrence
+    # that is not an opener, which is what quoted speech and a mid-sentence
+    # clause produce.
+    ('Marlow wrote: "It turns out the cache was cold." Nobody replied.', 0),
+    ("Whether the relay holds is a question of how It turns out.", 0),
 ])
 def test_it_turns_out_only_fires_as_an_opener(text, expected):
     findings = [f for f in hc.check_slop_phrases(text) if f["phrase"] == "it turns out"]
     assert len(findings) == expected
 
 
-def test_reporting_period_is_not_emphasis():
+@pytest.mark.parametrize("text", [
+    # Lowercase, so the case-sensitive pattern refuses it whatever the anchor is.
+    "We closed the books for the reporting period. Next quarter starts Monday.",
+    # Capitalised and mid-sentence, which is the case the `[.!?]\s+` anchor
+    # exists for: title-cased prose and headings write "Reporting Period."
+    # routinely, and without the anchor every one of them reads as manufactured
+    # emphasis. Measured 2026-09-01: with the anchor deleted the file stayed
+    # green at 44 passed, because the only negative case was the lowercase one.
+    "We closed the books for the Reporting Period. Next quarter starts Monday.",
+    "The heading read Q3 Reporting Period. Nobody objected.",
+])
+def test_reporting_period_is_not_emphasis(text):
     """'Period.' as a common noun at sentence end must not fire."""
-    findings = hc.check_slop_phrases(
-        "We closed the books for the reporting period. Next quarter starts Monday."
-    )
-    assert findings == []
+    assert hc.check_slop_phrases(text) == []
 
 
 def test_clean_prose_yields_no_slop_findings():

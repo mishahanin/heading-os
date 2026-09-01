@@ -97,8 +97,43 @@ def _load_baseline() -> Counter:
     return Counter(json.loads(BASELINE.read_text(encoding="utf-8")))
 
 
+def _refuse_a_vanished_corpus(cur: Counter, base: Counter) -> None:
+    """Zero findings over a tree whose baseline records hundreds is not a clean tree.
+
+    The refusal at the top of `_current()` tells "ruff found nothing" apart from
+    "ruff never ran" by looking at the exit status. It cannot tell either of
+    those from the third answer: ruff RAN, exited 0, printed `[]`, and inspected
+    nothing: an `exclude` widened in pyproject.toml, an `extend-exclude` typo,
+    a `.gitignore`-driven walk that stopped finding files. MEASURED 2026-09-01
+    against the committed 143-bucket baseline, with ruff stubbed to return
+    exit 0 and `[]`: `check` printed "OK - 0 findings, at or below baseline (245
+    fewer; run `update` to tighten the ratchet)" and returned 0.
+
+    The destructive half is the same one the file's header describes: `update`
+    would then write `{}` and forgive every recorded finding for good. The door
+    is different; the room behind it is identical, so the refusal sits where
+    both commands pass through.
+
+    Not a percentage and not a floor on the count: only the collapse to exactly
+    zero, which is the shape a vanished corpus produces and which a day of real
+    fixes does not reach from 245 in one step. A tree that genuinely has no
+    findings left is recorded by deleting `.lint-baseline.json` deliberately.
+    """
+    if cur or not base:
+        return
+    raise SystemExit(
+        f"lint-ratchet: ruff ran and reported ZERO findings over a tree whose "
+        f"baseline records {sum(base.values())} across {len(base)} (file, rule) "
+        f"buckets.\nThat is a corpus that vanished, not lint that was fixed: "
+        f"check `exclude` / `extend-exclude` in pyproject.toml and that `ruff "
+        f"check .` still walks the tree.\nIf the tree really is clean, delete "
+        f".lint-baseline.json deliberately and commit that."
+    )
+
+
 def cmd_update() -> int:
     cur = _current()
+    _refuse_a_vanished_corpus(cur, _load_baseline())
     BASELINE.write_text(
         json.dumps(dict(sorted(cur.items())), indent=2) + "\n", encoding="utf-8"
     )
@@ -112,6 +147,7 @@ def cmd_update() -> int:
 def cmd_check() -> int:
     cur = _current()
     base = _load_baseline()
+    _refuse_a_vanished_corpus(cur, base)
     regressions = [
         (key, base.get(key, 0), n) for key, n in cur.items() if n > base.get(key, 0)
     ]

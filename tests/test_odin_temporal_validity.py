@@ -190,6 +190,32 @@ def test_thread_ref_to_archived_personal_thread_still_warns(tmp_path):
     assert dangling[0]["target"] == "thread:2026-04-30-private-matter"
 
 
+def test_a_namespaced_ref_into_an_absent_tree_is_not_flagged(tmp_path):
+    """`if entities is None or rest in entities` -- the `entities is None` half.
+
+    `_external_entities` returns None for a tree that does not exist on this
+    machine, and that None is what makes the lint usable on an EXEC workspace,
+    which has a brain and no CRM or threads tree at all. Nothing asserted it:
+    dropping the `entities is None or` short-circuit left every test in this
+    file and its parity neighbour green, because each of the three namespaced
+    cases above writes `threads/business/` first. On an exec workspace the
+    mutated form would have raised `TypeError: argument of type 'NoneType' is
+    not iterable` out of the lint, on every brain that cites a crm: or thread:
+    entity.
+
+    The point is un-verifiable, not verified-absent: an absent tree cannot say
+    whether the target exists, and a warning would be a claim the lint has no
+    basis for.
+    """
+    brain = _rooted_brain(tmp_path)
+    # No threads/, no crm/, no plans/ anywhere under the data root.
+    _write(brain, "episodes", "ep", _base("Ep", type="episode"),
+           body="Cites [[crm:nobody-here]] and [[thread:nothing-here]].")
+    assert not (tmp_path / "threads").exists()
+    assert not (tmp_path / "crm").exists()
+    assert [i for i in lint(brain) if i["check"] == "dangling_wikilink"] == []
+
+
 def test_thread_ref_to_active_thread_is_clean_at_real_depth(tmp_path):
     """Guards the harness itself: at the real brain depth an ACTIVE thread must
     resolve. If this ever fails, the two tests above are measuring absence."""

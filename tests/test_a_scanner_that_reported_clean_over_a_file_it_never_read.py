@@ -23,6 +23,7 @@ pre-commit hook, push-all.py, publish-service.py) see no verdict change; the
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import re
 import subprocess
@@ -33,6 +34,17 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCANNER = ROOT / "scripts" / "secret-scanner.py"
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+
+def _scanner_module():
+    """Import the hyphenated script by path (not a legal module name)."""
+    spec = importlib.util.spec_from_file_location("heading_secret_scanner", SCANNER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 # Split so this file is not itself a secret-scanner hit; it is the documented
 # AWS example key, which `scripts/utils/secret_patterns.py` matches.
@@ -140,6 +152,88 @@ def test_a_fully_scanned_clean_tree_still_exits_zero_with_the_green_line(tmp_pat
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "No secrets detected." in proc.stdout
     assert "incomplete" not in proc.stdout.lower()
+
+
+# --- the floor: a verdict is only worth the corpus it was read over ---
+
+# One of every ordinary shape a repository tree holds, including a name with no
+# extension at all. None of them is in SKIP_EXTENSIONS, so every one of them is
+# a file the walk is obliged to hand to `scan_files`.
+_ORDINARY = ("notes.md", "a.txt", "mod.py", "conf.json", "creds.env",
+             "ci.yaml", "Makefile", "deep/nested/inner.md")
+
+
+def test_the_walk_yields_every_ordinary_file_it_was_pointed_at(tmp_path):
+    """The count the green line rests on, asserted rather than assumed.
+
+    `test_a_fully_scanned_clean_tree_still_exits_zero_with_the_green_line`
+    asserts exit 0 and the unqualified green sentence, and a walk that silently
+    drops a whole class of file produces exactly that: no findings, no
+    `oversized`, no `unreadable`, so `covered` stays True. MEASURED 2026-09-01
+    by inserting `if name.endswith(".md"): continue` at the top of
+    `_walk_scannable`'s inner loop -- all eight cases in this file stayed green
+    while a live AWS key in a `.md` under `--scan-dir` went unreported and the
+    run exited 0.
+
+    Set equality, not a count alone: a count is satisfied by yielding the wrong
+    eight paths. The floor assertion below is what fails when the corpus
+    shrinks, and it is checkable that it CAN fail, because the .md mutation
+    takes it from 8 to 6.
+    """
+    module = _scanner_module()
+    tree = tmp_path / "tree"
+    for name in _ORDINARY:
+        path = tree / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("nothing interesting\n", encoding="utf-8")
+
+    oversized: list = []
+    yielded = {p.relative_to(tree).as_posix() for p in
+               module._walk_scannable(tree, oversized)}
+
+    assert len(_ORDINARY) >= 8, "the corpus must be wide or this proves nothing"
+    assert yielded == set(_ORDINARY), (
+        f"the walk lost coverage: missing {set(_ORDINARY) - yielded}, "
+        f"unexpected {yielded - set(_ORDINARY)}")
+    assert oversized == []
+
+
+def test_the_walk_still_prunes_the_directories_it_is_meant_to(tmp_path):
+    """The other direction, or the floor above is satisfied by yielding all.
+
+    Without this, "yield every path under root" passes the coverage floor and
+    the pruning that keeps `.git` packfiles out of the pattern set is free to
+    disappear.
+    """
+    module = _scanner_module()
+    tree = tmp_path / "tree"
+    (tree / "src").mkdir(parents=True)
+    (tree / "src" / "keep.py").write_text("x = 1\n", encoding="utf-8")
+    assert module.WALK_SKIP_DIRS, "an empty skip set would make this vacuous"
+    for skipped in sorted(module.WALK_SKIP_DIRS):
+        (tree / skipped).mkdir()
+        (tree / skipped / "buried.txt").write_text("x\n", encoding="utf-8")
+
+    yielded = {p.relative_to(tree).as_posix() for p in module._walk_scannable(tree)}
+
+    assert yielded == {"src/keep.py"}, f"pruning was lost: {sorted(yielded)}"
+
+
+def test_a_key_in_a_markdown_file_is_reported_by_scan_dir(tmp_path):
+    """The floor above, restated as the verdict a caller actually reads.
+
+    The extension is deliberately one no other case here uses, so a walk that
+    drops it is invisible to every other assertion in this file.
+    """
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "runbook.md").write_text(f"aws_secret_access_key = {PLANTED_KEY}\n",
+                                     encoding="utf-8")
+
+    proc = _run(tmp_path, "--scan-dir", str(tree))
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "runbook.md" in proc.stdout
 
 
 def test_a_detected_secret_still_outranks_an_oversized_skip(tmp_path):

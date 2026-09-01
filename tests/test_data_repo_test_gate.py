@@ -46,8 +46,34 @@ def test_shipped_data_hook_exists():
 
 
 def test_shipped_data_hook_still_delegates_to_git_lfs():
-    """The data repo tracks LFS objects. A gate that drops this breaks pushes."""
-    assert "git lfs pre-push" in SHIPPED_HOOK.read_text(encoding="utf-8")
+    """The data repo tracks LFS objects. A gate that drops this breaks pushes.
+
+    Asked of the CODE, not of the file. This read
+
+        assert "git lfs pre-push" in SHIPPED_HOOK.read_text(...)
+
+    and the hook carries a comment block that explains the delegation in those
+    exact words, five lines above the line that performs it. Measured
+    2026-09-01: replacing `exec git lfs pre-push "$@"` with `exec true "$@"`
+    left this assertion GREEN, because the phrase it looks for was still
+    sitting in the prose describing the thing that had just been deleted. So
+    the one test standing between an LFS-tracking overlay and pushes that
+    silently stop uploading content was satisfied by a comment.
+
+    Comment lines are therefore stripped before the search. A shell comment is
+    everything from an unquoted `#` to end of line; the hook has no `#` inside a
+    string, and if one ever appears this test over-strips and goes red, which is
+    the safe direction for a check about LFS delivery.
+    """
+    body = SHIPPED_HOOK.read_text(encoding="utf-8")
+    code = "\n".join(
+        line for line in body.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert "git lfs pre-push" in code, (
+        "the hook no longer delegates to git-lfs in any executable line; the "
+        "phrase survives only in comments, so an overlay that tracks LFS "
+        "objects would push without uploading them:\n" + body
+    )
 
 
 def test_shipped_data_hook_carries_the_gate_marker():
@@ -63,6 +89,155 @@ def test_shipped_data_hook_passes_when_the_repo_has_no_tests(tmp_path):
                             capture_output=True, text=True)
 
     assert result.returncode == 0, result.stderr
+
+
+# --- the gate BLOCKS, which nothing above ever asked it to do ---------------
+#
+# Until 2026-09-01 the shipped hook had exactly one behavioural test, the one
+# directly above, and it asserts the hook PASSES. Everything else in this file
+# reads the hook as TEXT (does it carry the marker, does it mention git-lfs) or
+# exercises the installer around it. So the one thing the gate exists to do had
+# no case at all, and three separate mutations of the hook left the whole
+# 133-test neighbourhood green:
+#
+#   `exit 1`               -> `exit 0`     failing overlay tests stop blocking
+#   `if ! "$PY" -m pytest` -> `if false`   the suite is never run
+#   the `-x $ENGINE/.venv` branch removed  the pinned interpreter is never used
+#
+# That third one is the failure the hook's own comment block describes at
+# length: falling through to a bare `python3` runs the overlay's tests under
+# none of the pinned dependencies and calls them green. The comment argued the
+# case; no test held it.
+#
+# The fixtures below stub the interpreter rather than run a real pytest, so the
+# cases are hermetic: they need no pytest on PATH, no engine venv, and they work
+# on a fresh public clone with no data overlay. The stub also RECORDS that it
+# ran, which is what makes "the suite is never run" distinguishable from "the
+# suite ran and passed".
+
+def _engine_with_stub_interpreter(path: Path, exit_code: int, witness: Path) -> Path:
+    """An engine tree whose `.venv/bin/python` is a recording stub.
+
+    A real file with a shebang, not a symlink. It touches `witness` and exits
+    with `exit_code`, ignoring its arguments -- so a test can tell whether the
+    hook invoked THE STAMPED INTERPRETER, as opposed to invoking nothing or
+    falling through to whatever `python3` the machine happens to carry.
+    """
+    venv_bin = path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    stub = venv_bin / "python"
+    stub.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$*\" >> {witness}\n"
+        f"exit {exit_code}\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    return path
+
+
+def _overlay_with_tests(tmp_path) -> Path:
+    repo = _init_repo(tmp_path)
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_placeholder.py").write_text(
+        "def test_placeholder():\n    assert True\n", encoding="utf-8")
+    return repo
+
+
+def _run_installed_hook(repo: Path):
+    return subprocess.run(["bash", str(repo / ".git" / "hooks" / "pre-push")],
+                          cwd=str(repo), capture_output=True, text=True)
+
+
+def test_the_gate_blocks_the_push_when_the_overlay_tests_fail(tmp_path):
+    """The whole point of the gate, and it had no case.
+
+    A non-zero suite must end the hook non-zero. `exit 1` -> `exit 0` in the
+    shipped hook is a one-character edit that turns the data overlay's push gate
+    into a decoration, and it survived every test in the repository.
+    """
+    repo = _overlay_with_tests(tmp_path)
+    witness = tmp_path / "interpreter-ran"
+    engine = _engine_with_stub_interpreter(tmp_path / "engine", 1, witness)
+    install_git_hooks.install_pre_push_data(repo, SHIPPED_HOOK, engine)
+
+    result = _run_installed_hook(repo)
+
+    assert witness.exists(), (
+        "the stamped interpreter was never invoked, so the gate ran no tests "
+        f"at all; stdout={result.stdout!r} stderr={result.stderr!r}")
+    assert result.returncode != 0, (
+        "the overlay's test suite failed and the hook still let the push "
+        f"through; stdout={result.stdout!r} stderr={result.stderr!r}")
+    assert "push blocked" in result.stderr, result.stderr
+
+
+def test_the_gate_lets_the_push_through_when_the_overlay_tests_pass(tmp_path):
+    """The other side of the same branch.
+
+    Without this, a hook hard-wired to `exit 1` would satisfy the test above and
+    block every data-overlay push forever. A refusal that fires on the passing
+    case is not a gate either.
+    """
+    repo = _overlay_with_tests(tmp_path)
+    witness = tmp_path / "interpreter-ran"
+    engine = _engine_with_stub_interpreter(tmp_path / "engine", 0, witness)
+    install_git_hooks.install_pre_push_data(repo, SHIPPED_HOOK, engine)
+
+    result = _run_installed_hook(repo)
+
+    assert witness.exists(), "the gate did not run the suite it just passed"
+    assert result.returncode == 0, (
+        f"stdout={result.stdout!r} stderr={result.stderr!r}")
+
+
+def test_the_gate_runs_the_stamped_interpreter_not_a_bare_python3(tmp_path):
+    """Named because the hook's own comment says this is the quiet failure.
+
+    A wrong engine path falls through to `python3`, which on a machine with
+    pytest on PATH runs the overlay's tests under none of the pinned
+    dependencies and reports green. The stub interpreter exits 1, so if the hook
+    reaches it the push is blocked; if the hook ignored the stamp and used the
+    system python3 the placeholder test would PASS and the push would go
+    through. The two outcomes are opposite, which is what makes this readable.
+    """
+    repo = _overlay_with_tests(tmp_path)
+    witness = tmp_path / "interpreter-ran"
+    engine = _engine_with_stub_interpreter(tmp_path / "engine", 1, witness)
+    install_git_hooks.install_pre_push_data(repo, SHIPPED_HOOK, engine)
+
+    result = _run_installed_hook(repo)
+
+    assert witness.exists(), (
+        "the hook did not invoke the interpreter stamped in at install time")
+    invocation = witness.read_text(encoding="utf-8")
+    assert "-m pytest" in invocation, (
+        f"the stamped interpreter was invoked, but not to run pytest: "
+        f"{invocation!r}")
+    assert result.returncode != 0, (
+        "the hook ignored the stamped interpreter's verdict, which is what a "
+        "silent fall back to a bare python3 looks like from the outside")
+
+
+def test_a_missing_engine_venv_says_so_rather_than_falling_through_quietly(tmp_path):
+    """The documented degradation, held to its documented loudness.
+
+    The hook is allowed to fall back to `python3`; it is not allowed to do it in
+    silence, because a green run under an unpinned interpreter is worse than no
+    run at all. Only the warning is asserted here: what the fallback
+    interpreter then decides is the machine's business, not this gate's.
+    """
+    repo = _overlay_with_tests(tmp_path)
+    engine = tmp_path / "engine-that-has-no-venv"
+    engine.mkdir()
+    install_git_hooks.install_pre_push_data(repo, SHIPPED_HOOK, engine)
+
+    result = _run_installed_hook(repo)
+
+    assert "NOT the pinned" in result.stderr, (
+        f"the gate fell back to an unpinned interpreter without saying so: "
+        f"{result.stderr!r}")
 
 
 # --- the installer ----------------------------------------------------------

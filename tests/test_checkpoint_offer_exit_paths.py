@@ -504,6 +504,60 @@ def test_the_unattended_boundaries_land_on_the_configured_numbers(env, used, exp
 # 3. The operator gets the turn back the moment they type
 # --------------------------------------------------------------------------
 
+def _write_transcript(path, records):
+    path.write_text(
+        "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8"
+    )
+    return path
+
+
+def _q(operation, **extra):
+    return {"type": "queue-operation", "operation": operation,
+            "sessionId": SESSION, **extra}
+
+
+def test_a_transcript_that_begins_mid_queue_cannot_go_deaf(env):
+    """`pending = max(pending, 0)`, which nothing exercised in either direction.
+
+    The counter walks the WHOLE transcript, so a session resumed from a
+    transcript whose opening records consume entries queued before it starts -
+    and any record shape this parser has not met - drives the balance below
+    zero. A negative count is deaf rather than merely wrong: the operator's next
+    real message brings it back to -1, `_queue_pending` answers False, and the
+    hook continues over an instruction he has already sent, which is the one
+    outcome this whole section exists to prevent.
+
+    Mutation-confirmed 2026-09-01: deleting the floor was green across all
+    twelve checkpoint test files and green again across the wider seventeen-file
+    set that names this module. Both directions are asserted, because a floor
+    that simply pinned the answer True would satisfy the first case alone.
+    """
+    mod = _offer_module()
+
+    deaf = _write_transcript(env["project"] / "deaf.jsonl", [
+        # Two consumptions with nothing queued ahead of them: the shape a
+        # resumed or truncated transcript opens with.
+        _q("remove", content="queued before this transcript starts"),
+        _q("dequeue"),
+        # And then the operator types.
+        _q("enqueue", content="hold on"),
+    ])
+    assert mod._queue_pending(deaf, SESSION) is True, (
+        "the balance went negative before the operator's message, so his "
+        "instruction only lifted it back toward zero and the hook would have "
+        "continued over him"
+    )
+
+    balanced = _write_transcript(env["project"] / "balanced.jsonl", [
+        _q("enqueue", content="hold on"),
+        _q("remove", content="hold on"),
+    ])
+    assert mod._queue_pending(balanced, SESSION) is False, (
+        "a message that was queued and then consumed still reads as pending, "
+        "so every later pause would hand the turn back for good"
+    )
+
+
 def _append_after(path, entry, delay=1.0):
     def later():
         time.sleep(delay)

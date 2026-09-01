@@ -191,6 +191,80 @@ def test_the_background_task_is_held_by_a_strong_reference():
     )
 
 
+def test_an_empty_secret_token_is_refused_at_construction():
+    """SECURITY. The refusal is the only thing between a misconfigured daemon
+    and a fully open endpoint.
+
+    `secrets.compare_digest("", "")` is True, so with an empty `secret_token`
+    the header check passes for a request carrying NO header at all, and
+    /telegram-webhook accepts anything that finds the public URL. That is not a
+    degraded mode; it is the authorization removed. MEASURED 2026-09-01:
+    `compare_digest("", "")` returned True, and with this guard deleted
+    `create_app(fb, "", logger)` was accepted.
+
+    `FIRESIDE_WEBHOOK_SECRET` unset in the daemon's environment is exactly how
+    an empty string arrives here, so this is a configuration slip rather than an
+    attack, which is why it must fail loudly at construction rather than serve.
+    """
+    import secrets as _secrets
+    assert _secrets.compare_digest("", "") is True, (
+        "if this ever stops being true the reasoning above has changed")
+
+    for empty in ("", None):
+        with pytest.raises(ValueError, match="non-empty secret_token"):
+            fw.create_app(_fb_module({}, lambda *a: None), empty, LOGGER)
+
+
+def test_a_non_empty_secret_token_still_builds_the_app():
+    """Anchor. The refusal must not have become a refusal of everything."""
+    app = fw.create_app(_fb_module({}, lambda *a: None), "s3cret", LOGGER)
+    assert _post_handler(app) is not None
+
+
+@pytest.mark.asyncio
+async def test_a_request_with_no_secret_header_is_rejected():
+    """The behaviour the constructor guard protects, asserted directly."""
+    app = fw.create_app(_fb_module({}, lambda *a: None), "s3cret", LOGGER)
+    handler = _post_handler(app)
+    with pytest.raises(Exception) as exc:
+        await handler(_Request({"update_id": 1, "message": {}}), None)
+    assert getattr(exc.value, "status_code", None) == 401, exc.value
+
+
+def test_the_secret_comparison_is_constant_time():
+    """Structural, because a timing side channel is not observable from a unit
+    test and saying so is better than a test that cannot bind.
+
+    The header is the ONLY authorization on a publicly reachable endpoint, and
+    `!=` short-circuits at the first differing byte. Swapping `compare_digest`
+    for `!=` is behaviourally identical, so every other test in this file stays
+    green; MEASURED 2026-09-01. Reading the code is the only way to notice, so
+    the code is what is read: the comparison must be a call to
+    `secrets.compare_digest`, and the token must not also be compared with `==`
+    or `!=` anywhere in the handler.
+    """
+    tree = ast.parse(textwrap.dedent(inspect.getsource(fw.create_app)))
+
+    digest_calls = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "compare_digest"
+    ]
+    assert digest_calls, (
+        "the webhook secret is no longer compared with secrets.compare_digest")
+
+    token_names = {"secret_token", "x_telegram_bot_api_secret_token"}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        if not any(isinstance(op, (ast.Eq, ast.NotEq)) for op in node.ops):
+            continue
+        used = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+        assert not (used & token_names), (
+            "the secret token is compared with == or != somewhere in the "
+            f"handler, which short-circuits: {ast.unparse(node)}")
+
+
 @pytest.mark.asyncio
 async def test_a_handler_that_raises_does_not_hold_the_lock():
     """One bad update must not wedge every later one."""

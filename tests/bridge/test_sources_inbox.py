@@ -12,6 +12,9 @@ looking for coverage that was never written.
 """
 import json
 from datetime import datetime, timedelta, timezone
+
+import pytest
+
 from scripts.utils.workspace import get_default_tz
 
 from scripts.bridge_daemon.sources.inbox import (
@@ -153,6 +156,79 @@ def test_read_inbox_corrupt_fetch_returns_empty(tmp_path):
     assert result["counts"] == {"needs-you": 0, "fyi": 0, "noise": 0}
 
 
+# ============================================================
+# The fetch file is hand-editable, so its SHAPE is untrusted
+# ============================================================
+# `_latest-fetch.json` is written by `scripts/email-intelligence.py` and edited
+# by hand often enough that `read_inbox`, `_inbox_row` and `read_conversation`
+# each carry a shape guard, every one of them added after a 500. Until
+# 2026-08-31 not one of those guards had a negative case: every fixture in this
+# file goes through `_write_fetch`, which always hands them a list of dicts.
+# MEASURED the same day by deleting the container guard
+# (`sources/inbox.py:490`, `if not isinstance(conversations, list)`) and running
+# the whole directory: 1349 passed, 1 skipped. Nothing in `tests/bridge/` moved.
+# A guard nothing ever made refuse is not a guard.
+
+@pytest.mark.parametrize("conversations", [None, {"c1": {}}, "a string", 7])
+def test_a_fetch_whose_conversations_are_not_a_list_degrades(tmp_path, conversations):
+    """Valid JSON of the wrong shape is the case `json.JSONDecodeError` cannot
+    see, and iterating it would be `TypeError` at best and a per-character walk
+    at worst."""
+    _write_fetch(tmp_path, conversations)
+
+    result = read_inbox(tmp_path)
+
+    assert result["bands"] == {"needs-you": [], "fyi": [], "noise": []}
+    assert result["counts"] == {"needs-you": 0, "fyi": 0, "noise": 0}
+    # Every documented key is still present: a consumer indexing the degraded
+    # payload must not hit a KeyError either.
+    for key in ("dismissed_count", "dismiss_log_count", "deferred_count",
+                "defer_log_count", "data_time"):
+        assert key in result
+
+
+@pytest.mark.parametrize("conversations", [None, {"c1": {}}, "a string", 7])
+def test_the_drill_down_refuses_the_same_shape(tmp_path, conversations):
+    """`read_conversation` reads the same list and needs the same answer."""
+    _write_fetch(tmp_path, conversations)
+
+    r = read_conversation(tmp_path, "c1")
+
+    assert r["ok"] is False
+    assert "schema" in r["error"]
+
+
+def test_a_non_mapping_run_info_does_not_take_the_page_down(tmp_path):
+    """`run_info` is read for `data_time`. `or {}` only replaces a FALSY value,
+    so a string ran straight into `.get` and raised AttributeError, which no
+    `except (json.JSONDecodeError, OSError)` catches."""
+    fetch_dir = tmp_path / "outputs" / "operations" / "email-intelligence"
+    fetch_dir.mkdir(parents=True, exist_ok=True)
+    (fetch_dir / "_latest-fetch.json").write_text(
+        json.dumps({"run_info": "2026-05-20T10:00:00+00:00",
+                    "conversations": [_conv("c1", "P1")]}),
+        encoding="utf-8")
+
+    result = read_inbox(tmp_path)
+
+    assert [r["id"] for r in result["bands"]["needs-you"]] == ["c1"]
+    assert result["data_time"] is None
+
+
+@pytest.mark.parametrize("analysis", ["oops", ["a", "b"], 3])
+def test_a_conversation_whose_analysis_is_not_a_dict_still_bands(tmp_path, analysis):
+    """One malformed conversation must not take every band down with it."""
+    _write_fetch(tmp_path, [_conv("good", "P1"),
+                            {"id": "bad", "priority": "P1", "analysis": analysis}])
+
+    result = read_inbox(tmp_path)
+
+    rows = {r["id"]: r for r in result["bands"]["needs-you"]}
+    assert set(rows) == {"good", "bad"}
+    assert rows["bad"]["summary"] == ""
+    assert rows["bad"]["proposed_actions"] == []
+
+
 def test_read_inbox_skips_non_dict_and_idless(tmp_path):
     """Conversation entries that aren't dicts, or lack an id, are skipped
     cleanly - no AttributeError, no crash."""
@@ -180,6 +256,56 @@ def test_mark_dismissed_rejects_empty(tmp_path):
     assert mark_dismissed(tmp_path, "")["ok"] is False
     assert mark_dismissed(tmp_path, "   ")["ok"] is False
     assert mark_dismissed(tmp_path, "x" * 600)["ok"] is False
+
+
+def test_a_dismiss_log_line_with_no_usable_id_is_skipped(tmp_path):
+    """The dismiss log is append-only JSONL on disk, so a hand-edited or
+    partially-restored line reaches `read_dismiss_log` as valid JSON of the
+    wrong shape.
+
+    MEASURED 2026-08-31 by deleting the `isinstance(conv_id, str)` guard at
+    `sources/inbox.py:62` and running `tests/bridge`: 1349 passed, 1 skipped.
+    Nothing fed it a bad id, so an entry keyed `null` or `7` would have entered
+    the dismissed SET and been compared against real conversation ids.
+    """
+    from scripts.bridge_daemon.sources.inbox import DISMISS_LOG_FILE
+    log = tmp_path / DISMISS_LOG_FILE
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(
+        json.dumps({"conv_id": "real-one", "ts": "2026-08-31T10:00:00+00:00"}) + "\n"
+        + json.dumps({"conv_id": None, "ts": "x"}) + "\n"
+        + json.dumps({"conv_id": 7, "ts": "x"}) + "\n"
+        + json.dumps({"conv_id": "", "ts": "x"}) + "\n"
+        + json.dumps({"ts": "x"}) + "\n",
+        encoding="utf-8")
+
+    assert read_dismiss_log(tmp_path) == {"real-one"}
+
+    from scripts.bridge_daemon.sources.inbox import dismiss_log_recent
+    assert [r["conv_id"] for r in dismiss_log_recent(tmp_path)] == ["real-one"]
+
+
+def test_undo_dismissed_rejects_what_mark_dismissed_rejects(tmp_path):
+    """The two halves of one workflow have to agree on what an id is.
+
+    `mark_dismissed` has had this negative case since it was written;
+    `undo_dismissed` never did. MEASURED 2026-08-31 by deleting its guard
+    (`sources/inbox.py:156`): the whole directory stayed green, so an empty
+    conv_id would have been written as a tombstone line nothing can ever match.
+    """
+    assert undo_dismissed(tmp_path, "")["ok"] is False
+    assert undo_dismissed(tmp_path, "   ")["ok"] is False
+    assert undo_dismissed(tmp_path, None)["ok"] is False  # type: ignore[arg-type]
+    from scripts.bridge_daemon.sources.inbox import DISMISS_LOG_FILE
+    assert not (tmp_path / DISMISS_LOG_FILE).exists(), "a refused undo must write nothing"
+
+
+def test_mark_deferred_rejects_an_oversized_id(tmp_path):
+    """The same 500-character bound `mark_dismissed` enforces, on the defer
+    half, where nothing had ever exercised it (measured 2026-08-31:
+    `sources/inbox.py:263` deleted, directory still green)."""
+    assert mark_deferred(tmp_path, "x" * 501, _future())["ok"] is False
+    assert mark_deferred(tmp_path, "x" * 500, _future())["ok"] is True
 
 
 def test_undo_dismissed_cancels(tmp_path):
@@ -587,6 +713,53 @@ def test_defer_log_recent_lists_active(tmp_path):
     assert rows[0]["conv_id"] == "c1"
     assert rows[0]["defer_until"] == _future(3)
     assert rows[0]["note"] == "later"
+
+
+def test_defer_log_recent_drops_a_defer_whose_date_has_arrived(tmp_path):
+    """The footer lists what is STILL deferred, not what was ever deferred.
+
+    `read_defer_log` has this case (`test_read_defer_log_excludes_expired`);
+    the footer's own copy of the predicate did not, so an expired defer would
+    have sat in the 'Deferred' list beside conversations that really are
+    hidden. MEASURED 2026-08-31 by deleting the `until is None or until <=
+    today` skip at `sources/inbox.py:310`: the whole directory stayed green.
+    """
+    mark_deferred(tmp_path, "expiring", _future(2), note="short hold")
+    mark_deferred(tmp_path, "still-held", _future(9))
+
+    far = datetime.now(get_default_tz()).date() + timedelta(days=5)
+    rows = defer_log_recent(tmp_path, today=far)
+
+    assert [r["conv_id"] for r in rows] == ["still-held"]
+
+
+def test_undo_deferred_rejects_what_mark_deferred_rejects(tmp_path):
+    """The defer half of the same writer/undo symmetry as the dismiss log."""
+    from scripts.bridge_daemon.sources.inbox import DEFER_LOG_FILE
+    assert undo_deferred(tmp_path, "")["ok"] is False
+    assert undo_deferred(tmp_path, "   ")["ok"] is False
+    assert undo_deferred(tmp_path, None)["ok"] is False  # type: ignore[arg-type]
+    assert not (tmp_path / DEFER_LOG_FILE).exists(), "a refused undo must write nothing"
+
+
+def test_a_state_file_whose_conversations_are_not_a_dict_degrades(tmp_path):
+    """The drill-down's state.json fallback reads a MAPPING, and state.json is
+    hand-editable too. A list there would have reached `.get` on a list.
+
+    MEASURED 2026-08-31 by deleting the `isinstance(convs, dict)` guard at
+    `sources/inbox.py:573`: `tests/bridge` stayed green, so nothing had ever
+    handed the fallback anything but a dict.
+    """
+    state_dir = tmp_path / "outputs" / "operations" / "email-intelligence"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "state.json").write_text(
+        json.dumps({"conversations": [{"id": "c1"}], "last_run": "2026-05-18T10:00:00+00:00"}),
+        encoding="utf-8")
+
+    r = read_conversation(tmp_path, "c1")
+
+    assert r["ok"] is False
+    assert "fetch" in r["error"]
 
 
 # ============================================================

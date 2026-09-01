@@ -88,3 +88,31 @@ def test_a_fresh_thread_is_not_proposed_for_anything(tmp_path):
     root = _roots(tmp_path)
     _thread(root / "business", "the-golden-gun-deal", "active", "2026-08-29")
     assert scan_for_archive(root, today=TODAY) == []
+
+
+def test_both_age_bars_sit_where_the_reasons_say_they_do(tmp_path):
+    """The two thresholds, ON the day rather than near it.
+
+    Every case above and in `tests/test_threads_lib.py` picks an age far from
+    the bar: 10 and 100 days for the closed bar, 70 for the active one.
+    MEASURED 2026-09-01 by mutation, `age > 90` could be changed to `age >= 90`
+    and the whole suite stayed green, so the reason strings this function writes
+    ("threshold 90", "threshold 60") were claims no test could check. The
+    comparison is strict, so a thread on its 90th quiet day is not yet due.
+    """
+    root = _roots(tmp_path)
+    # 90 days before TODAY (2026-08-30) is 2026-06-01; 91 is 2026-05-31.
+    _thread(root / "business", "on-the-closed-bar", "closed", "2026-06-01")
+    _thread(root / "business", "past-the-closed-bar", "closed", "2026-05-31")
+    # 60 days before TODAY is 2026-07-01; 61 is 2026-06-30.
+    _thread(root / "personal", "on-the-active-bar", "active", "2026-07-01",
+            type_="personal")
+    _thread(root / "personal", "past-the-active-bar", "active", "2026-06-30",
+            type_="personal")
+
+    found = {c.path.stem: c.action for c in scan_for_archive(root, today=TODAY)}
+
+    assert found == {"past-the-closed-bar": "archive",
+                     "past-the-active-bar": "propose-on-hold"}, (
+        "the bars are strict: a thread ON its 90th (or 60th) day is not due yet"
+    )

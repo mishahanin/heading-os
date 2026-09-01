@@ -88,16 +88,37 @@ def test_aggregate_reads_new_data_repo_model(tmp_path):
 
 
 def test_aggregate_ceo_only_flag_skips_exec_clones(tmp_path):
-    """--ceo-only aggregates only CEO own contacts, no exec pulls."""
+    """--ceo-only aggregates only CEO own contacts, and the exec is REALLY there.
+
+    This registered an EMPTY fleet and asserted only that the CEO's own contact
+    appeared. With no executives in the roster and no exec overlay on disk, both
+    halves of the flag - `exec_slugs = []` in `main` and the early return in
+    `scan_all_contacts` - changed nothing that could be observed, so a
+    `--ceo-only` that was silently ignored passed. MEASURED 2026-09-01: turning
+    both halves into no-ops left all 361 tests that name aggregate-crm green.
+
+    So the fleet here is the same shape as the test above: one active exec, one
+    overlay, one contact in it. The flag now has something to suppress, and its
+    other direction is the first test in this file, where the identical fixture
+    WITHOUT `--ceo-only` reports Bob.
+    """
     workspace = tmp_path / "main-workspace"
     workspace.mkdir()
     (workspace / "crm" / "contacts").mkdir(parents=True)
     _write_contact(workspace / "crm" / "contacts" / "ceo-only.md", "Carol", "GammaCo")
 
+    exec_repo = tmp_path / ".heading-os-data-test-exec"
+    (exec_repo / "crm" / "contacts").mkdir(parents=True)
+    _write_contact(exec_repo / "crm" / "contacts" / "exec-contact.md", "Bob", "BetaCo")
+
     admin_dir = workspace / "admin"
     admin_dir.mkdir()
     (admin_dir / "executives.json").write_text(json.dumps({
-        "version": 1, "executives": [],
+        "version": 1,
+        "executives": [
+            {"slug": "test-exec", "role": "exec", "status": "active",
+             "github_user": "test-exec", "data_repo": "heading-os-data-test-exec"},
+        ],
     }), encoding="utf-8")
 
     config_dir = workspace / "config"
@@ -114,13 +135,19 @@ def test_aggregate_ceo_only_flag_skips_exec_clones(tmp_path):
 
     env = dict(os.environ, WORKSPACE_ROOT=str(workspace), HEADING_OS_DATA=str(workspace))
     proc = subprocess.run(
-        [sys.executable, str(script), "--ceo-only", "--workspace-root", str(workspace)],
-        capture_output=True, text=True, timeout=15, env=env,
+        [sys.executable, str(script), "--ceo-only", "--skip-clone",
+         "--workspace-root", str(workspace)],
+        capture_output=True, text=True, timeout=30, env=env,
     )
     assert proc.returncode == 0, f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
 
     radar = (workspace / "crm" / "aggregated" / "company-radar.md").read_text()
-    assert "Carol" in radar
+    assert "Carol" in radar, "CEO own contact missing"
+    assert "Bob" not in radar, (
+        "--ceo-only pulled the exec overlay anyway; the flag exists to keep "
+        "the aggregate off every other repository on the machine")
+    ownership = (workspace / "crm" / "aggregated" / "ownership-map.md").read_text()
+    assert "test-exec" not in ownership, ownership
 
 
 if __name__ == "__main__":

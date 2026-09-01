@@ -312,7 +312,7 @@ class StateManager:
                     candidate = json.loads(self.path.read_text(encoding="utf-8"))
                     if isinstance(candidate, dict):
                         on_disk = candidate
-                except (json.JSONDecodeError, OSError):
+                except (json.JSONDecodeError, UnicodeError, OSError):
                     on_disk = None  # already reported at load time; do not lose this run
             merged = merge_state(on_disk, self.data) if on_disk is not None else self.data
             self.data = merged
@@ -483,7 +483,13 @@ def _load_ignore_patterns() -> list[str]:
         for p in extra:
             if isinstance(p, str) and p and p not in patterns:
                 patterns.append(p)
-    except (yaml.YAMLError, OSError, AttributeError) as e:
+    except (yaml.YAMLError, UnicodeError, OSError, AttributeError) as e:
+        # UnicodeError, because `read_text(encoding="utf-8")` raises
+        # UnicodeDecodeError on undecodable bytes and that is a ValueError:
+        # neither yaml.YAMLError nor OSError is its parent, so a
+        # sentinel_config.yaml saved in cp1251 (or half-written) ended the whole
+        # digest run instead of taking the documented fallback to
+        # DEFAULT_IGNORE_PATTERNS one line below.
         print(f"{GRAY}[debug] sentinel config ignore_patterns fallback: {e}{RESET}", file=sys.stderr)
     return patterns
 
@@ -880,7 +886,13 @@ def load_pipeline_context() -> str:
         return ""
     try:
         return path.read_text(encoding="utf-8")
-    except OSError as e:
+    except (OSError, UnicodeError) as e:
+        # UnicodeError alongside it, and for the reason the paragraph below
+        # already gives: `read_text(encoding="utf-8")` raises UnicodeDecodeError
+        # on undecodable bytes, that is a ValueError, and OSError is not its
+        # parent. The widening below closed the permissions case and left the
+        # torn-write case open on both the same paths.
+        #
         # `load_viraid_state`, directly below, wraps the identical read. This
         # one did not, and it is called on BOTH the time-window path and the
         # `--unread` bridge path: measured 2026-08-30, an unreadable
@@ -900,7 +912,11 @@ def load_viraid_state() -> dict:
         return {}
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, UnicodeError, OSError):
+        # UnicodeError: the decode happens in `read_text`, before `json.loads`
+        # ever sees a string, so a viraid state file with a corrupt byte raised
+        # UnicodeDecodeError past both named clauses and ended a run over an
+        # optional cross-reference.
         return {}
 
 

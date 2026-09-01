@@ -50,8 +50,23 @@ def _roster(*entries):
 
 
 def _schedule(*names):
+    """Rows `build_schedule` could NOT bind: a speaker name, no handle.
+
+    Every row here is deliberately unbound, which is the fallback branch of
+    `speaker_gaps`. The bound branch has its own cases below, because until
+    2026-09-01 nothing in this file produced a row carrying a
+    `speaker_username` at all and the whole username-matching half of the
+    function was unmeasured.
+    """
     return [{"session_date": "2026-09-21", "day": "Mon", "slot": i, "speaker_name": n}
             for i, n in enumerate(names, start=1)]
+
+
+def _bound_schedule(*pairs):
+    """Rows as `build_schedule` writes them when the roster matched: (name, handle)."""
+    return [{"session_date": "2026-09-21", "day": "Mon", "slot": i,
+             "speaker_name": n, "speaker_username": u}
+            for i, (n, u) in enumerate(pairs, start=1)]
 
 
 def test_member_with_no_slot_is_reported(fb):
@@ -105,6 +120,64 @@ def test_member_without_a_name_is_skipped(fb):
     """A roster record with no Name cannot be matched against a lineup at all."""
     roster = {"nameless": {"active": True, "name": ""}}
     assert fb.speaker_gaps(roster, []) == []
+
+
+# ------------------------------------------- the slot is credited by HANDLE
+
+def test_a_bound_slot_is_credited_to_the_handle_that_holds_it(fb):
+    """The branch the docstring calls the whole point, and nothing reached it.
+
+    Every other case in this file builds rows with no `speaker_username`, so
+    they all land in the unbound fallback and the username lookup above it was
+    never executed. MEASURED 2026-09-01: deleting the handle branch outright
+    left this file, and every fireside neighbour, green.
+    """
+    roster = _roster(("vlynd", "Vesper Lynd"), ("fleiter", "Felix Leiter"))
+    gaps = fb.speaker_gaps(roster, _bound_schedule(("Felix Leiter", "fleiter")))
+    assert gaps == ["Vesper Lynd (@vlynd)"]
+
+
+def test_two_members_sharing_a_name_are_told_apart_by_handle(fb):
+    """The regression the handle branch exists for, stated as its own case.
+
+    `build_roster_by_name` refuses to guess between two active members with the
+    same display name and logs the ambiguity, so only one of them ever gets a
+    bound row. Matching on the display name alone counted BOTH as covered, and
+    the one with no slot sat out the cycle with nothing anywhere saying so.
+    """
+    roster = _roster(("jbond", "James Bond"), ("jbond2", "James Bond"))
+    gaps = fb.speaker_gaps(roster, _bound_schedule(("James Bond", "jbond")))
+    assert gaps == ["James Bond (@jbond2)"], (
+        "the member holding no slot is the one without the bound handle")
+
+
+@pytest.mark.parametrize("roster_key,schedule_handle", [
+    ("fleiter", "FLeiter"),   # the schedule row carries the odd case
+    ("FLeiter", "fleiter"),   # the roster key carries it
+    ("FLeiter", "fLEITER"),   # both do, differently
+])
+def test_a_handle_is_matched_case_insensitively(fb, roster_key, schedule_handle):
+    """Telegram hands back whatever case the member typed; the roster key is
+    whatever `bootstrap` wrote. A case difference must not read as a missing
+    speaker.
+
+    Both sides get a case, because a first version of this case used a
+    lowercase roster key and only varied the schedule. Dropping `.lower()` from
+    the roster side then changed nothing and the test stayed green: the
+    comparison has two halves and a case has to reach each of them.
+    """
+    roster = _roster((roster_key, "Felix Leiter"))
+    assert fb.speaker_gaps(
+        roster, _bound_schedule(("Felix Leiter", schedule_handle))) == []
+
+
+def test_a_bound_row_does_not_credit_a_different_member_of_the_same_name(fb):
+    """The negative direction of the three above: a bound row naming someone
+    else's handle credits nobody by display name."""
+    roster = _roster(("vlynd", "Vesper Lynd"))
+    assert fb.speaker_gaps(
+        roster, _bound_schedule(("Vesper Lynd", "an-imposter"))) == [
+            "Vesper Lynd (@vlynd)"]
 
 
 # ------------------------------------------------------- the CLI check

@@ -73,9 +73,27 @@ def main():
         try:
             with open(args.file, "r", encoding="utf-8") as f:
                 text = f.read()
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             # A hook chain surfaces a traceback as "the hook failed", with
             # nothing naming the path that was wrong.
+            #
+            # `UnicodeDecodeError` is a `ValueError` and NOT an `OSError`, so
+            # until 2026-09-01 the handler could not catch it and this gate
+            # died on the one input a hidden-character scanner is most likely
+            # to meet: a file that is not valid UTF-8. MEASURED that day on
+            # `hello \xe9 world`, the same shape `scripts/leak-guard.py` was
+            # fixed for hours earlier:
+            #
+            #     mode 0o000   -> exit 2, "error: cannot read <path>"
+            #     not UTF-8    -> UnicodeDecodeError traceback, exit 1
+            #
+            # Exit 1 is the code this script's own contract reserves for
+            # "hidden characters WERE found", so `render-doctype.py` printed a
+            # stack trace under `[WARN] Hidden-character scan:` and
+            # `artifact-evaluator.py` filed a codec message as the reason a
+            # hidden-character check failed. Neither is true: the file was
+            # never scanned. Exit 2 is UNKNOWN coverage, which is what an
+            # undecodable file is.
             print(f"error: cannot read {args.file}: {exc}", file=sys.stderr)
             return 2
         source = args.file

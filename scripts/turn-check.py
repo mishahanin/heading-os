@@ -70,7 +70,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
-from scripts.utils.session_scope import current_transcript, narrow  # noqa: E402
+from scripts.utils.session_scope import (current_transcript,  # noqa: E402
+                                         narrow_with_scope)
 from scripts.utils.venv_guard import venv_python  # noqa: E402
 from scripts.utils.workspace import get_workspace_root  # noqa: E402
 
@@ -107,9 +108,35 @@ CONTRACT_PREFIX = "tests/contract/"
 
 DEFAULT_TEST_TIMEOUT = 120
 
+# Matched-file count at which the lane switches to `-n auto`.
+#
+# DERIVED from two measurements, not chosen. xdist costs about 7s to start its
+# workers (a 2-test file: 0.04s serial, 7.41s parallel), and it repays that
+# somewhere below 40 files (40 files: 25.95s serial, 18.90s parallel). 20 sits
+# clear of the crossover in both directions, so an ordinary turn stays serial
+# and exact while a fix campaign gets the parallelism it needs to finish inside
+# the hook's budget at all.
+PARALLEL_FILE_THRESHOLD = 20
+
+# What `_deselected` returns when the count cannot be read at all.
+#
+# NOT zero. Under `-n auto` pytest stops printing "N deselected" in its summary
+# entirely: measured on a fixture holding one fast and one slow test, the serial
+# run says "1 passed, 1 deselected" and the parallel run says "1 passed". Zero
+# would be a claim that nothing was excluded, and `.claude/rules/scope-claims.md`
+# is explicit that silence about an exclusion reads as coverage. So the renderer
+# gets a value it can tell apart from a real zero and says the count is unknown.
+DESELECTED_UNKNOWN = -1
+
 # Pytest's exit code for "no tests were collected". Ordinary here, because the
 # test lane deselects the slow marker and a matched file can hold nothing else.
 NO_TESTS_COLLECTED = 5
+
+# xdist's own wording when two workers collected different suites. Matched as a
+# literal on purpose: the retry it gates must fire for THIS cause and nothing
+# else, so a substring loose enough to catch a second kind of failure would be
+# a bug, not a convenience. See the retry in `lane_tests` for the measurement.
+_COLLECTION_RACE = "Different tests were collected between"
 
 # A module naming its own fast contract, for when the stem rule finds nothing.
 # Repeatable, because six paths do not fit on one line.
@@ -240,7 +267,13 @@ def fingerprint(paths: list[Path], deleted: "list[str] | tuple[str, ...]" = ()) 
 def read_state() -> dict:
     try:
         return json.loads(STATE_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    # UnicodeDecodeError is the gap between the two named here. The decode runs
+    # inside `read_text`, so `json.loads` is never reached, and it is a
+    # ValueError -- a sibling of `json.JSONDecodeError`, not a subclass of
+    # OSError. A torn state file therefore took this whole lane down from
+    # inside the Stop hook, where a raise is not a failed check but a failed
+    # turn.
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}
 
 
@@ -297,7 +330,8 @@ def lane_import(paths: list[Path]) -> list[str]:
     try:
         out = subprocess.run(
             [PYTHON, "-c", probe],
-            cwd=str(ROOT), capture_output=True, text=True, timeout=60,
+            cwd=str(ROOT), capture_output=True, text=True,
+            errors="replace", timeout=60,
         )
     except subprocess.TimeoutExpired:
         return [f"import probe timed out over {len(modules)} module(s)"]
@@ -395,7 +429,7 @@ def is_contract(path: Path) -> bool:
     return _rel(path).replace("\\", "/").startswith(CONTRACT_PREFIX)
 
 
-def _deselected(body: str) -> int:
+def _deselected(body: str, parallel: bool = False) -> int:
     """How many tests pytest dropped for the marker expression.
 
     Read back from pytest's own summary rather than counted here, because this
@@ -404,7 +438,14 @@ def _deselected(body: str) -> int:
     inventing one.
     """
     match = re.search(r"(\d+) deselected", body)
-    return int(match.group(1)) if match else 0
+    if match:
+        return int(match.group(1))
+    if parallel:
+        # xdist prints no deselection summary at all, so "no match" here means
+        # "cannot tell", not "none". Returning 0 would print nothing and read as
+        # full coverage over tests that really were dropped.
+        return DESELECTED_UNKNOWN
+    return 0
 
 
 def _files_holding_no_test(targets: list[Path], timeout: int) -> int:
@@ -441,7 +482,8 @@ def _files_holding_no_test(targets: list[Path], timeout: int) -> int:
     ]
     try:
         out = subprocess.run(
-            args, cwd=str(ROOT), capture_output=True, text=True, timeout=timeout
+            args, cwd=str(ROOT), capture_output=True, text=True,
+            errors="replace", timeout=timeout
         )
     except (subprocess.TimeoutExpired, OSError):
         return len(targets)
@@ -495,14 +537,90 @@ def lane_tests(paths: list[Path],
     skipped = len(picked) - len(targets)
     if not targets:
         return [], 0, skipped, 0, 0, 0
+    parallel = len(targets) >= PARALLEL_FILE_THRESHOLD
     args = [
         PYTHON, "-m", "pytest", "-q", "-p", "no:randomly",
-        "-m", "not slow", "--no-header", "-x", *[str(t) for t in targets],
+        "-m", "not slow", "--no-header", "-x",
+        # PARALLEL. This lane ran serially on a 16-core machine while its own
+        # sibling `scripts/run-tests.py:78` already passed `-n auto`, and the
+        # difference is what turned the Stop hook into a loop: on 2026-08-31 it
+        # refused five turns running, each re-run with a longer cap came back
+        # CLEAN, and the matched set grew 74 -> 75 -> 83 -> 89 -> 111 files under
+        # a fleet of parallel agents while the check itself could never finish
+        # inside the 80s the hook allows.
+        #
+        # MEASURED that day, on the real changed set and on a loaded machine:
+        #   40 files   serial 25.95s   parallel 18.90s   (1.37x)
+        #   78 files, 1932 tests       parallel 45.21s
+        # Serial does not fit the hook's budget at campaign size; parallel does.
+        # The speed-up is modest because worker start-up is a fixed cost, so the
+        # budget was widened as well rather than resting on the flag alone.
+        #
+        # `-n auto` is safe for this suite by precedent, not by assumption:
+        # `run-tests.py` has run the WHOLE suite that way for a long time, and
+        # the ordering defects xdist can mask are separately guarded (the
+        # root conftest arms its own isolation per test).
+        #
+        # ONLY above a threshold, and that is not tuning for its own sake.
+        # MEASURED: a 2-test file costs 0.04s serial and 7.41s parallel, because
+        # xdist pays about seven seconds to start its workers before it runs
+        # anything. An ordinary turn touches a handful of files, so parallelising
+        # unconditionally would make the common case a hundred times slower while
+        # fixing only the campaign case.
+        *(["-n", "auto"] if parallel else []),
+        *[str(t) for t in targets],
     ]
     try:
         out = subprocess.run(
-            args, cwd=str(ROOT), capture_output=True, text=True, timeout=timeout
+            args, cwd=str(ROOT), capture_output=True, text=True,
+            errors="replace", timeout=timeout
         )
+        # ONE retry, on ONE error string, and only under `-n auto`.
+        #
+        # Each xdist worker collects the suite independently, a moment apart.
+        # When a test FILE lands in `tests/` between gw0's collection and gw9's,
+        # their sets differ and xdist aborts the whole lane with
+        # "Different tests were collected between gw0 and gw9". Nothing failed;
+        # the corpus moved under the collector.
+        #
+        # MEASURED 2026-09-01, while a fleet of agents was creating test files:
+        #   serial collection, three runs back to back   20799, 20799, 20799
+        #   parallel collection, minutes apart           20806, then 20808
+        # Sixteen test files were written in the preceding thirty minutes, one
+        # of them 45 seconds before a run. The serial number never moved, so the
+        # cause is the race and not a conftest that generates tests at random.
+        #
+        # This matters beyond the wasted run. The hook tells the operator "a
+        # failure here is almost always real", and a check that cries wolf
+        # teaches its reader to skip it, which is the one failure mode a Stop
+        # hook cannot survive.
+        #
+        # Retrying ONE string, not any failure, is what keeps a red meaningful.
+        # A corpus that collects nondeterministically mismatches on BOTH
+        # attempts and is still reported; the file-arrival race almost never
+        # repeats, because the second collection starts after the write that
+        # broke the first.
+        #
+        # That second cause is not hypothetical, and this comment named only the
+        # race until a shard auditor found it the same day. A `gzip.compress()`
+        # call at MODULE scope inside a `parametrize` decorator wrote the
+        # current epoch second into byte 4 of its own fixture, so each worker
+        # built a different test id and EVERY parallel run aborted. Fixed at
+        # `tests/test_a_scan_that_called_trojan_source_clean.py` with `mtime=0`,
+        # and guarded by `tests/test_a_fixture_that_changed_id_every_second.py`.
+        #
+        # The retry was right for both: it absorbs the race and reports the
+        # nondeterminism. The lesson is about the DIAGNOSIS, not the fix. Two
+        # causes produce one error string, the measurement here (serial stable,
+        # parallel growing) established the first and said nothing about the
+        # second, and a retry that had swallowed a repeat would have hidden a
+        # broken gate for as long as anyone cared to look.
+        if out.returncode != 0 and parallel and _COLLECTION_RACE in (
+                (out.stdout or "") + (out.stderr or "")):
+            out = subprocess.run(
+                args, cwd=str(ROOT), capture_output=True, text=True,
+                errors="replace", timeout=timeout
+            )
     except subprocess.TimeoutExpired:
         return [
             f"the matched tests did not finish in {timeout}s "
@@ -511,7 +629,7 @@ def lane_tests(paths: list[Path],
     except OSError as e:
         return [f"pytest could not run: {e}"], 0, skipped, 0, 0, len(targets)
     body = (out.stdout or "") + (out.stderr or "")
-    dropped = _deselected(body)
+    dropped = _deselected(body, parallel=parallel)
     # Exit 5 is "no tests collected", and in NO form of it did a test fail.
     # Two causes reach it: the marker expression deselected everything (the
     # ordinary outcome for an all-slow file), or a matched file collected
@@ -542,7 +660,16 @@ def lane_tests(paths: list[Path],
 def run(timeout: int, use_cache: bool, transcript=None) -> dict:
     """Run the lanes and return a result dict. Never raises."""
     paths = changed_python_files()
-    paths, foreign = narrow(paths, transcript)
+    # `scope_known` is False when the write set could not be established at all:
+    # no transcript, an absent or unreadable one, or ANY ONE unreadable subagent
+    # sidecar (a session with a hundred of them has a hundred ways to get here).
+    # The narrowing then keeps every candidate and reports zero drops, which is
+    # indistinguishable from a clean scope that dropped nothing, so the flag
+    # travels in the result and the Stop hook names the widening out loud.
+    # Without it, MEASURED 2026-08-31 over a malformed transcript, the hook told
+    # the operator a break was in "the uncommitted Python edits in this turn"
+    # with no exclusion line, over a file another session had written.
+    paths, foreign, scope_known = narrow_with_scope(paths, transcript)
     deleted = deleted_python_files()
     if not paths:
         reason = "no uncommitted Python edits"
@@ -581,6 +708,7 @@ def run(timeout: int, use_cache: bool, transcript=None) -> dict:
         return {"status": "fail", "lane": lane, "failures": failures,
                 "files": len(paths), "tests_run": tests_run,
                 "skipped_foreign": foreign,
+                "scope_unknown": not scope_known,
                 "skipped_contract": skipped_contract,
                 "deselected_slow": deselected_slow,
                 "collected_nothing": collected_nothing,
@@ -588,7 +716,8 @@ def run(timeout: int, use_cache: bool, transcript=None) -> dict:
 
     write_state({"last_pass": fp, "files": len(paths), "tests_run": tests_run})
     return {"status": "pass", "files": len(paths), "tests_run": tests_run,
-            "skipped_foreign": foreign, "skipped_contract": skipped_contract,
+            "skipped_foreign": foreign, "scope_unknown": not scope_known,
+            "skipped_contract": skipped_contract,
             "deselected_slow": deselected_slow,
             "collected_nothing": collected_nothing,
             "unmeasured": unmeasured}
@@ -629,6 +758,13 @@ def _slow_note(result: dict) -> str:
     reason as the two notes above: an exclusion nobody can see reads as
     coverage."""
     count = result.get("deselected_slow") or 0
+    if count == DESELECTED_UNKNOWN:
+        # The parallel lane. Saying nothing here would be the exact defect this
+        # note exists to prevent, one level up: the exclusion is still happening,
+        # only the COUNT is unreadable, so name the state instead of the number.
+        return (f" {GRAY}[slow test(s) deselected here, count unavailable "
+                f"under the parallel lane: run `python scripts/run-tests.py` "
+                f"for those]{RESET}")
     if not count:
         return ""
     return (f" {GRAY}[{count} slow test(s) not run here: "

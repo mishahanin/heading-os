@@ -154,17 +154,27 @@ def _parse_status_from_decisions(text: str) -> dict[str, str]:
                     continue
         if not in_section:
             continue
-        if "Slot" in line and "Firm" in line and "Wave" in line:
+        # Unlike the regional table, EVERY cell of `_DECISION_ROW_RE` is free
+        # text, so the header and the separator both match it and both have to
+        # be recognised from the PARSED CELLS, never from a substring of the
+        # raw line. The two skips here were `"Slot" in line and "Firm" in line
+        # and "Wave" in line` and `"---" in line`. MEASURED 2026-08-31: a
+        # decision row whose Notes read "send-ready --- intro via LP" was read
+        # as the separator, so its firm never entered `statuses` and came back
+        # "TBD" on the raise dashboard while the operator's own document had it
+        # in "First 5 (this week)". A wave the CEO sorts a live raise by, lost
+        # to three hyphens in a note.
+        dm = _DECISION_ROW_RE.match(line) if stripped.startswith("|") else None
+        dcells = ([dm.group(g).strip() for g in ("slot", "firms", "wave", "notes")]
+                  if dm else [])
+        if dcells and [c.lower() for c in dcells[:3]] == ["slot", "firm", "wave"]:
             in_table = True
             continue
-        if in_table and "---" in line:
+        if in_table and dcells and all(c and set(c) <= {"-", ":"} for c in dcells):
             continue
-        if in_table and stripped.startswith("|"):
-            m = _DECISION_ROW_RE.match(line)
-            if not m:
-                continue
-            slot = m.group("slot").strip().lower()
-            firms_cell = m.group("firms").strip()
+        if in_table and dm:
+            slot = dcells[0].lower()
+            firms_cell = dcells[1]
             status_token: str
             # An explicitly numbered wave is the more specific signal, so it is
             # tested BEFORE the "parallel" catch-all. It used to come after, and
@@ -511,10 +521,19 @@ def list_investors(workspace_root: Path) -> dict:
             continue
         if not current_region:
             continue
-        if "---" in line:
-            continue
-        if "Firm" in line and "Type" in line and "HQ" in line:
-            continue
+        # The header and separator skips that used to sit here are GONE, and the
+        # bound is `_REGION_ROW_RE`: its first cell is `\d+`, so neither
+        # `| # | Firm | Type | HQ | ... |` nor `|---|------|...|` can match it
+        # (verified 2026-08-31 against both literal rows). They were substring
+        # tests (`"---" in line`, and `"Firm"`/`"Type"`/`"HQ"` all present),
+        # which is the row-loss shape `pipeline.py` measured and fixed on
+        # 2026-08-31 in the same words, and here they could only ever destroy
+        # real rows. MEASURED 2026-08-31 on three firm rows: only ONE survived.
+        # A row whose Notes read "intro pending --- awaiting warm path" was read
+        # as the separator, a row whose Notes read "Firm size, Type and HQ to
+        # confirm" was read as the header, and `total` came back 1 against a
+        # real 3. Two live firms gone from /investors, from `counts`, from the
+        # raise-progress card and from search, with nothing logged at any level.
         rm = _REGION_ROW_RE.match(line)
         if not rm:
             continue

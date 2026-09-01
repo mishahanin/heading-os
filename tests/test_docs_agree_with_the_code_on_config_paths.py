@@ -18,13 +18,35 @@ page keeps the guarantee.
 """
 from __future__ import annotations
 
+import importlib.util
 import re
+import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
 DAEMONS = ROOT / "docs" / "daemons.html"
 TELEGRAM = ROOT / "docs" / "TELEGRAM-AND-ALERTS.md"
 SENTINEL = ROOT / "scripts" / "sentinel.py"
+EXAMPLE = ROOT / "scripts" / "sentinel_config.example.yaml"
+
+
+@pytest.fixture(scope="module")
+def sentinel():
+    """`scripts/sentinel.py` loaded by path, so `config_file()` can be CALLED.
+
+    Importing the daemon module runs no daemon: everything below the constants
+    is behind `main()`.
+    """
+    spec = importlib.util.spec_from_file_location("_shard43_sentinel", SENTINEL)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["_shard43_sentinel"] = module
+    spec.loader.exec_module(module)
+    return module
+
 
 # `scripts/sentinel_config.yaml` — the engine-tree path that does not exist and
 # must never be presented as the live one. The `.example.` sibling IS in the
@@ -41,11 +63,53 @@ def test_the_engine_ships_only_the_template():
     )
 
 
-def test_the_code_resolves_the_config_under_the_data_root():
-    source = SENTINEL.read_text(encoding="utf-8")
-    assert "get_data_config_dir" in source or "config_path" in source
-    # The example file is the FALLBACK, not the live path.
-    assert "sentinel_config.example.yaml" in source
+def test_the_code_resolves_the_config_under_the_data_root(sentinel, tmp_path, monkeypatch):
+    """The tiebreak the whole file rests on, ASKED OF THE RESOLVER.
+
+    This test used to read the source text and accept
+    `"get_data_config_dir" in source or "config_path" in source`. Neither
+    disjunct binds anything: MEASURED 2026-09-01, `get_data_config_dir` occurs in
+    `scripts/sentinel.py` exactly once, inside a COMMENT, and `config_path` is
+    the name of a local variable and a CLI argument. Replacing the whole body of
+    `config_file()` with `return WORKSPACE_ROOT / "scripts" / "sentinel_config.yaml"`
+    (the precise defect `docs/daemons.html` documented, an engine-tree path in a
+    public repo) left all five tests in this file green. The guard measured the
+    comment that explains the fix.
+
+    So call it. With a real config in the overlay, the resolver must return that
+    file, under the data root and nowhere else.
+    """
+    overlay = tmp_path / "overlay"
+    (overlay / "config").mkdir(parents=True)
+    live = overlay / "config" / "sentinel_config.yaml"
+    live.write_text("monitoring: {}\n", encoding="utf-8")
+    monkeypatch.setenv("HEADING_OS_DATA", str(overlay))
+
+    resolved = sentinel.config_file()
+    assert resolved == live, (
+        f"sentinel resolves its config to {resolved}, not to the data overlay. "
+        f"docs/daemons.html and docs/TELEGRAM-AND-ALERTS.md both promise "
+        f"<data-root>/config/sentinel_config.yaml."
+    )
+
+
+def test_the_engine_example_is_the_fallback_and_never_a_live_engine_path(
+    sentinel, tmp_path, monkeypatch
+):
+    """With no config in the overlay the resolver falls back to the SHIPPED
+    example, not to a `scripts/sentinel_config.yaml` that does not exist.
+
+    The second half is the one that matters: a fallback pointing into the engine
+    tree is what would invite an operator to create the file there.
+    """
+    overlay = tmp_path / "empty-overlay"
+    (overlay / "config").mkdir(parents=True)
+    monkeypatch.setenv("HEADING_OS_DATA", str(overlay))
+
+    resolved = sentinel.config_file()
+    assert resolved == EXAMPLE, f"fallback resolved to {resolved}, not {EXAMPLE}"
+    assert resolved.name.endswith(".example.yaml"), resolved
+    assert resolved != ROOT / "scripts" / "sentinel_config.yaml"
 
 
 def test_daemons_page_does_not_present_the_engine_path_as_the_live_config():

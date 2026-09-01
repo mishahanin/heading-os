@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -72,6 +73,35 @@ def test_prune_drops_only_what_is_older_than_keep_days(tmp_path):
     ]
     CP._prune(list(entries), removed.append)
     assert [p.name for p in removed] == ["stale"]
+
+
+def test_prune_keeps_an_entry_sitting_exactly_on_the_age_cutoff(tmp_path, monkeypatch):
+    """The case ON the line, which no age test stood on.
+
+    `test_prune_drops_only_what_is_older_than_keep_days` brackets the cutoff at
+    a day either side, so it is true of `mtime < cutoff` and of `mtime <=
+    cutoff` alike. Mutation-confirmed 2026-09-01: flipping that comparator left
+    this file green at 18 passed. These three entries are one second apart
+    around the boundary, against a frozen clock - `_prune` reads
+    `CP.utc_now()` itself, so an exact hit is unconstructible without pinning
+    it, which is why the boundary went untested.
+    """
+    frozen = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(CP, "utc_now", lambda: frozen)
+    cutoff = frozen.timestamp() - CP.KEEP_DAYS * DAY
+
+    removed = []
+    CP._prune(
+        [
+            (cutoff, tmp_path / "on-the-line"),
+            (cutoff - 1, tmp_path / "one-second-older"),
+            (cutoff + 1, tmp_path / "one-second-younger"),
+        ],
+        removed.append,
+    )
+    assert [p.name for p in removed] == ["one-second-older"], (
+        "an entry exactly KEEP_DAYS old is inside the window and must survive"
+    )
 
 
 def test_prune_keeps_exactly_keep_max_when_all_are_fresh(tmp_path):
@@ -193,6 +223,54 @@ def test_state_prune_ignores_files_it_does_not_own(tmp_path):
 
     assert stranger.is_file()
     assert also.is_file()
+
+
+def test_state_prune_keeps_the_lock_of_a_session_whose_state_file_is_there(tmp_path):
+    """The lock sweep's key is "its state file is gone", and nothing tested it.
+
+    `locked_state` writes `<name>.json.lock` beside each state file and HOLDS an
+    flock on it while a hook reads-modifies-writes. The flock lives on the
+    inode: unlink the path and the next process creates a different inode and
+    takes an uncontended lock, so mutual exclusion is lost with nothing raised
+    and nothing logged. The live session's lock is exactly the one being held
+    while this function runs, from `checkpoint-save.py`.
+
+    Mutation-confirmed 2026-09-01: replacing the existence test with `if True`
+    - unlinking every lock in the directory, the live one included - was green
+    across all twelve checkpoint test files and green again across the wider
+    seventeen-file set that names this module.
+
+    Three locks, one per case, or the sweep could be satisfied by doing nothing:
+    the live session's survives, a session pruned by this very call loses its
+    lock with it, and a lock left behind by a session pruned long ago goes too.
+    """
+    live = tmp_path / "checkpoint-live.json"
+    stale = tmp_path / "checkpoint-stale.json"
+    for f in (live, stale):
+        f.write_text("{}", encoding="utf-8")
+        _age(f, CP.KEEP_DAYS + 40)
+
+    live_lock = tmp_path / "checkpoint-live.json.lock"
+    stale_lock = tmp_path / "checkpoint-stale.json.lock"
+    orphan_lock = tmp_path / "checkpoint-longgone.json.lock"
+    for f in (live_lock, stale_lock, orphan_lock):
+        f.write_text("", encoding="utf-8")
+
+    CP.prune_state_dir(tmp_path, keep_name="checkpoint-live.json")
+
+    assert live.is_file(), "the fixture's live state file was pruned"
+    assert live_lock.is_file(), (
+        "the live session's lock was unlinked while a hook may be holding an "
+        "flock on it; the next writer takes a fresh inode and the exclusion is "
+        "silently gone"
+    )
+    assert not stale.exists(), "the fixture no longer prunes a state file"
+    assert not stale_lock.exists(), (
+        "a lock whose state file this same call deleted was left behind"
+    )
+    assert not orphan_lock.exists(), (
+        "a lock left by a session pruned before the sweep existed was left behind"
+    )
 
 
 def test_state_prune_is_silent_when_the_dir_is_absent(tmp_path, capsys):

@@ -64,13 +64,27 @@ def test_missing_directory_reports_rather_than_raises(tmp_path):
 def test_the_real_auto_memory_store_has_no_dangling_links():
     """The live store, held at zero by the 2026-08-19 sweep.
 
-    Skipped where the data overlay is absent (a bare public engine clone).
+    Skipped where the data overlay is absent (a bare public engine clone), and
+    skipped where it is present but holds no memory files.
+
+    The second skip is the one that had to be added. `is_dir()` alone was the
+    whole gate until 2026-09-01, and an EMPTY `auto-memory/` satisfies it: the
+    scan returns `flagged == []` because it read nothing, and the assertion
+    below reports the live store clean without having opened a single file.
+    MEASURED that day with `HEADING_OS_DATA` pinned at an empty scratch
+    directory holding a bare `auto-memory/`: PASSED, in 0.44s, over zero
+    records. The count is asserted and printed so a corpus that silently
+    shrinks to nothing is a skip that says so, never a green.
     """
     from scripts.utils.workspace import get_data_root
     mem_dir = get_data_root() / "auto-memory"
     if not mem_dir.is_dir():
         pytest.skip("no data overlay on this clone")
+    scanned = [p for p in mem_dir.glob("*.md") if p.name != "MEMORY.md"]
+    if not scanned:
+        pytest.skip(f"{mem_dir} holds no memory files; not the live store")
     flagged = scan_dangling_links(mem_dir)["flagged"]
     assert flagged == [], (
-        "dangling memory links found; repoint each at the record it means "
-        f"(a file path, a thread) or write the memory: {flagged}")
+        f"dangling memory links found across {len(scanned)} memory file(s); "
+        "repoint each at the record it means (a file path, a thread) or write "
+        f"the memory: {flagged}")

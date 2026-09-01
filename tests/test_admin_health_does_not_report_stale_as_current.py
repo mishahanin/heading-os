@@ -110,6 +110,71 @@ def test_a_pull_that_cannot_start_is_also_visible(monkeypatch, tmp_path, capsys)
     assert "someone" in out
 
 
+# --- 1b. a byte git wrote must not defeat the warning ------------------------
+
+# A command that writes an undecodable byte on stderr and exits nonzero, which
+# is what `git pull` does whenever the message it is quoting - a branch, a path,
+# a remote's own output - is not valid UTF-8 in this process's encoding.
+_BAD_BYTE_CMD = [
+    sys.executable, "-c",
+    "import sys; sys.stderr.buffer.write(b'fatal: could not read \\xff\\xfe\\n');"
+    " sys.exit(1)",
+]
+
+
+def test_run_cmd_survives_git_writing_a_byte_that_is_not_utf8():
+    """`subprocess.run(text=True)` with no `errors=` raises `UnicodeDecodeError`.
+
+    That is a `ValueError`, so it is caught by none of
+    `CalledProcessError` / `FileNotFoundError` / `OSError` - the exact tuple
+    `ensure_per_exec_repos` wraps this call in - and by none of
+    `read_last_commit`'s `(OSError, FileNotFoundError)` either. MEASURED
+    2026-09-01 before the fix: one exec whose pull emitted a single 0xff byte
+    took down the WHOLE dashboard with a raw traceback, and the warning three
+    lines below the call, which exists so a failed pull is never silent, never
+    ran. A byte defeated the control built for exactly this failure.
+
+    `errors="replace"` is the fix rather than a wider `except`, because the
+    stderr TEXT is what the warning quotes: degrading the message keeps the
+    operator's diagnostic, where swallowing the exception would print
+    "no output".
+    """
+    result = AH.run_cmd(_BAD_BYTE_CMD, check=False)
+    assert result.returncode == 1
+    assert "could not read" in result.stderr, result.stderr
+
+
+def test_read_last_commit_configures_its_decode_the_same_way(monkeypatch, tmp_path):
+    """The third site, asked through the kwargs it actually passes.
+
+    `read_last_commit` builds its own `subprocess.run` call rather than going
+    through `run_cmd`, so fixing one says nothing about the other. Rather than
+    assert the source text, this captures the call's real keyword arguments and
+    REPLAYS them against a command known to emit an undecodable byte: if the
+    decode configuration it ships is unsafe, the replay raises exactly as
+    production would.
+    """
+    captured: dict = {}
+    real_run = subprocess.run
+
+    def _capture(cmd, **kw):
+        captured.update(kw)
+        return subprocess.CompletedProcess(cmd, 0, "2026-08-20T09:00:00+00:00", "")
+
+    monkeypatch.setattr(AH.subprocess, "run", _capture)
+    AH.read_last_commit(tmp_path)
+    assert captured, "read_last_commit no longer calls subprocess.run"
+
+    kw = dict(captured)
+    kw.pop("check", None)
+    replayed = real_run(_BAD_BYTE_CMD, check=False, **kw)
+    assert "could not read" in (replayed.stderr or ""), (
+        "read_last_commit decodes git's output strictly; an undecodable byte "
+        "raises UnicodeDecodeError past its (OSError, FileNotFoundError) "
+        "handler and the documented 'returns None' fallback never runs"
+    )
+
+
 # --- 2. a future timestamp must not read as fresh ----------------------------
 
 def test_a_commit_an_hour_in_the_future_is_not_ok():

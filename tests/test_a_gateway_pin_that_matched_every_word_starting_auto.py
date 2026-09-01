@@ -45,16 +45,25 @@ NOT_A_GATEWAY_PIN = [
     "autopilot.example.com",
 ]
 
-# The documented forms, and what each must resolve to.
+# The documented forms, and what each must resolve to. `auto:1` and
+# `auto:65535` sit ON the two ends of the accepted range: without them the
+# range has no case on either line, and MEASURED 2026-09-01 both
+# `1 <= int(port) <= 65536` and `2 <= int(port) <= 65535` survived the whole
+# 219-test scope of every file that imports this module.
 REAL_PINS = {
     "auto": f"http://{GATEWAY}:11434",
     "auto:11434": f"http://{GATEWAY}:11434",
     "auto:11436": f"http://{GATEWAY}:11436",
     "auto: 11436 ": f"http://{GATEWAY}:11436",
+    "auto:1": f"http://{GATEWAY}:1",
+    "auto:65535": f"http://{GATEWAY}:65535",
 }
 
-# An `auto:` pin whose port is not a port.
-BAD_PORTS = ["auto:banana", "auto:11436x", "auto:0", "auto:70000", "auto:-1", "auto:11.4"]
+# An `auto:` pin whose port is not a port. `auto:0` and `auto:65536` are the
+# first value outside each end, so the pair with REAL_PINS above pins both
+# bounds rather than bracketing them from a distance.
+BAD_PORTS = ["auto:banana", "auto:11436x", "auto:0", "auto:65536", "auto:70000",
+             "auto:-1", "auto:11.4"]
 
 
 @pytest.fixture(autouse=True)

@@ -248,6 +248,42 @@ def test_brave_search_happy_path(monkeypatch):
     assert "snip1" in results[0]["content"]
 
 
+def test_brave_search_decompresses_a_gzip_reply(monkeypatch):
+    """`brave_search` sends `Accept-Encoding: gzip`, so the reader must decompress.
+
+    `_mock_response` has been able to build a gzip body since 2026-08-26, and no
+    test ever asked it for one: MEASURED 2026-09-01, disabling the decompression
+    branch in `_decode_body` was caught by nothing in this file. A compressing
+    endpoint raised UnicodeDecodeError, which is not a SearchBackendError, so it
+    escaped `search_with_fallback` and took the whole search down instead of
+    falling back.
+    """
+    monkeypatch.setenv("BRAVE_API_KEY", "BSA-fake")
+    payload = {"web": {"results": [
+        {"title": "B1", "url": "https://x.com", "description": "compressed"},
+    ]}}
+    with patch.object(search_mod.urllib.request, "urlopen",
+                      return_value=_mock_response(payload, content_encoding="gzip")):
+        results = search_mod.brave_search("test query", max_results=1)
+    assert len(results) == 1
+    assert results[0]["title"] == "B1"
+
+
+def test_an_encoding_nobody_asked_for_is_a_backend_error(monkeypatch):
+    """The near miss, and the reason the branch is `elif`, not a silent pass.
+
+    A body in an encoding this reader cannot undo must be reported as a backend
+    failure, so `search_with_fallback` can try the other backend. Guessing at it
+    (decoding the compressed bytes as UTF-8) is what produced the defect above.
+    """
+    monkeypatch.setenv("BRAVE_API_KEY", "BSA-fake")
+    payload = {"web": {"results": []}}
+    with patch.object(search_mod.urllib.request, "urlopen",
+                      return_value=_mock_response(payload, content_encoding="br")), \
+            pytest.raises(search_mod.SearchBackendError, match="unsupported Content-Encoding"):
+        search_mod.brave_search("test query", max_results=1)
+
+
 def test_search_with_fallback_tavily_429_brave_succeeds(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-fake")
     monkeypatch.setenv("BRAVE_API_KEY", "BSA-fake")
@@ -282,7 +318,16 @@ def test_search_with_fallback_both_keys_absent(monkeypatch):
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("BRAVE_API_KEY", raising=False)
     # Also short-circuit load_env so it can't pick up real values
-    with patch.object(search_mod, "load_api_key", return_value=""), pytest.raises(search_mod.NoBackendsConfigured):
+    with patch.object(search_mod, "load_api_key", return_value=""), pytest.raises(
+        search_mod.NoBackendsConfigured,
+        # Both names, because the exception type alone does not identify which
+        # code raised it. MEASURED 2026-09-01: with `search_with_fallback`'s own
+        # both-absent guard removed, `brave_search` raised the same class with
+        # the message "BRAVE_API_KEY not configured" and a bare `pytest.raises`
+        # could not tell the difference. The caller's error text is what tells
+        # the operator to configure EITHER backend, so it is the thing to pin.
+        match="Neither TAVILY_API_KEY nor BRAVE_API_KEY",
+    ):
         search_mod.search_with_fallback("anything", max_results=1)
 
 

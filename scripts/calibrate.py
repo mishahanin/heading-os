@@ -93,7 +93,24 @@ def parse_jsonl(path: Path) -> tuple[list, list]:
     """
     events = []
     skipped = []
-    with path.open("r", encoding="utf-8") as fh:
+    # `errors="replace"`, since 2026-09-01. The decode runs inside the ITERATION
+    # over the handle, so a byte that is not UTF-8 raised `UnicodeDecodeError`
+    # from `for lineno, line in ...` - above the `json.JSONDecodeError` handler,
+    # which could not have caught it anyway (the two are SIBLINGS under
+    # `ValueError`, not parent and child), and above `main`'s
+    # `except (PermissionError, FileNotFoundError)`, which is not on its
+    # ancestry at all. MEASURED 2026-09-01 with one 0xff in a three-line
+    # transcript: a traceback and exit 1, where the documented answer for a
+    # session that cannot be read is exit 3, and where the right answer is
+    # neither - a transcript is the entire input to /calibrate, and this
+    # function's own docstring promises to carry on past a line it cannot use.
+    #
+    # Replacing rather than skipping keeps the cost bounded to the damaged line:
+    # the bad byte becomes U+FFFD, that line either still parses as JSON or is
+    # counted in `skipped`, and every other line arrives intact. Salvage by
+    # partial read would not be bounded like that - what survives a raising
+    # reader is a property of the buffer size, not of the file.
+    with path.open("r", encoding="utf-8", errors="replace") as fh:
         for lineno, line in enumerate(fh, start=1):
             line = line.strip()
             if not line:
@@ -317,6 +334,26 @@ def envelope_bytes(envelope: dict) -> int:
     return len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
 
 
+def _entry_bytes(entry, siblings_left: int) -> int:
+    """What the serialized envelope shrinks by when one list entry is dropped.
+
+    An entry costs its own serialization plus the two-byte ", " separator that
+    joined it to the next one; the last entry in a list carries no separator.
+    The default json encoder serializes a nested value byte-for-byte the same
+    inside the document as it does alone, so this delta is exact rather than an
+    estimate, and `apply_truncation` can track the running size instead of
+    re-serializing the whole envelope once per shed.
+    """
+    size = len(json.dumps(entry, ensure_ascii=False).encode("utf-8"))
+    return size + 2 if siblings_left else size
+
+
+def _drop_head(entries: list) -> int:
+    """Pop `entries[0]` and return the bytes the envelope lost by it."""
+    head = entries.pop(0)
+    return _entry_bytes(head, len(entries))
+
+
 def _pop_oldest(envelope: dict, keys: tuple[str, ...]) -> bool:
     """Drop the single oldest entry across `keys`. False when all are empty.
 
@@ -366,17 +403,42 @@ def apply_truncation(envelope: dict, max_bytes: int) -> dict:
     The size is a target, not a guarantee — a `max_bytes` smaller than the bare
     metadata cannot be met by shedding anything. Callers check
     `envelope_bytes()` against their own budget; `main` warns on stderr.
+
+    The running size is tracked incrementally. Each of the three loops used to
+    call `envelope_bytes()` per shed, which RE-SERIALIZES the whole envelope, so
+    shedding cost one full serialization per dropped entry: O(n squared) in
+    envelope size with nothing bounding the input. Measured 2026-08-31 on
+    synthetic envelopes, 0.24 MB took 0.53 s, 0.49 MB took 1.94 s and 0.98 MB
+    took 8.31 s, so doubling the input quadrupled the runtime. The reachable
+    input is not synthetic: `/calibrate` with no `--session` takes the newest
+    transcript by mtime, and on this workspace that file was 249,961,421 bytes
+    on the day of the measurement, which puts a bare run past a slow one and
+    into a hang. `_entry_bytes` gives the exact delta per shed, so the whole
+    shed now costs two serializations regardless of how much it drops, and the
+    shed order and the resulting envelope are unchanged.
     """
-    if envelope_bytes(envelope) <= max_bytes:
+    size = envelope_bytes(envelope)
+    if size <= max_bytes:
         return envelope
     envelope["truncated"] = True
-    while envelope["system_reminders"] and envelope_bytes(envelope) > max_bytes:
-        envelope["system_reminders"].pop(0)
-    while envelope_bytes(envelope) > max_bytes:
-        if not _pop_oldest(envelope, ("user_turns", "assistant_turns")):
+    # Re-read rather than adjust by hand: `truncated` may be a flip from False
+    # or a key this envelope did not carry at all, and callers pass both shapes.
+    size = envelope_bytes(envelope)
+    while envelope["system_reminders"] and size > max_bytes:
+        size -= _drop_head(envelope["system_reminders"])
+    prose = ("user_turns", "assistant_turns")
+    while size > max_bytes:
+        # `_pop_oldest` owns the choice of which side is older, so read the
+        # delta off whichever list it shortened rather than duplicating that
+        # comparison here, where a second copy would be the one left unfixed.
+        heads = {k: envelope[k][0] for k in prose if envelope.get(k)}
+        before = {k: len(envelope.get(k) or ()) for k in prose}
+        if not _pop_oldest(envelope, prose):
             break
-    while envelope["tool_errors"] and envelope_bytes(envelope) > max_bytes:
-        envelope["tool_errors"].pop(0)
+        shed = next(k for k in prose if len(envelope.get(k) or ()) < before[k])
+        size -= _entry_bytes(heads[shed], len(envelope[shed]))
+    while envelope["tool_errors"] and size > max_bytes:
+        size -= _drop_head(envelope["tool_errors"])
     return envelope
 
 
@@ -431,7 +493,12 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         events, skipped = parse_jsonl(session_path)
-    except (PermissionError, FileNotFoundError) as e:
+    except OSError as e:
+        # `(PermissionError, FileNotFoundError)` by name until 2026-09-01, which
+        # named two of the ways a path fails to open and left the rest to a
+        # traceback under an exit code that means nothing. `IsADirectoryError` is
+        # the one a mistyped `--session` reaches first; exit 3 already means
+        # "session unreadable", and a directory is exactly that.
         print(f"session unreadable: {e}", file=sys.stderr)
         return 3
 

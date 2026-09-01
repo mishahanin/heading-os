@@ -560,7 +560,13 @@ def queue_state(data_root: Path) -> dict:
     ready = failed = 0
     try:
         data = json.loads(qpath.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        # UnicodeError: the queue store is appended to by a live process, so a
+        # torn write is the ordinary corruption, and `read_text` answers it with
+        # UnicodeDecodeError -- a ValueError, caught by neither clause here.
+        # `json.loads` never sees the bytes, so JSONDecodeError cannot stand in
+        # for it. The docstring promises a degrade to zero; this raised into the
+        # radar instead.
         return classify_queue(ready, failed)
 
     # Valid JSON of the WRONG SHAPE was not handled, and only OSError and
@@ -968,7 +974,10 @@ def _index_source_globs(engine_root: Path) -> list[str] | None:
     path = Path(engine_root) / _INDEX_CONFIG_REL
     try:
         cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
+    except (OSError, UnicodeError, yaml.YAMLError):
+        # UnicodeError, same reason as `queue_state` above: the decode happens
+        # in `read_text`, before PyYAML is handed anything, so a config with an
+        # undecodable byte raised UnicodeDecodeError past both named clauses.
         return None
     if not isinstance(cfg, dict):
         return None
@@ -1159,7 +1168,13 @@ def _read_trend_records(trend_path: Path, limit: int) -> list[dict]:
     """
     try:
         lines = trend_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, UnicodeError):
+        # UnicodeError, for the reason the paragraph above already establishes
+        # about this very file: it is appended to by a nightly job, so a
+        # truncated or interleaved write is the expected corruption. Half a
+        # multi-byte character is that corruption, and `read_text` answers it
+        # with UnicodeDecodeError -- a ValueError, not an OSError -- out of a
+        # reader whose whole job is to survive a bad line.
         return []
     records: list[dict] = []
     for line in lines[-limit:]:

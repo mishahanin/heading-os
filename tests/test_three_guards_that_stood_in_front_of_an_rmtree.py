@@ -96,6 +96,66 @@ def test_an_ordinary_include_still_resolves(publish, tmp_path, rel):
     assert publish._contained(dest, rel) == (dest / rel).resolve()
 
 
+def _publishable(tmp_path):
+    """A workspace with one include, and a destination worth not deleting."""
+    workspace = tmp_path / "ws"
+    (workspace / "scripts").mkdir(parents=True)
+    (workspace / "scripts" / "a.py").write_text("x", encoding="utf-8")
+    dest = tmp_path / "clone"
+    (dest / ".git").mkdir(parents=True)
+    (dest / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (dest / "keep.md").write_text("the previous publication", encoding="utf-8")
+    outside = tmp_path / "escape"
+    outside.mkdir()
+    (outside / "x.md").write_text("not ours to delete", encoding="utf-8")
+    return workspace, dest, outside
+
+
+@pytest.mark.parametrize("rel", ROOT_SPELLINGS + ESCAPES,
+                         ids=[repr(r) for r in ROOT_SPELLINGS + ESCAPES])
+def test_a_refused_include_deletes_nothing_through_copy_includes(publish, tmp_path,
+                                                                 rel):
+    """The property that matters is the ABSENCE of the delete, not the refusal.
+
+    Every other case in this file, and the sibling in
+    `tests/test_a_guard_set_that_never_left_the_admin_machine.py`, wraps the
+    call in `pytest.raises` and stops there. A guard that ran one line BELOW the
+    `rmtree_force` would raise the SAME ValueError over a clone it had already
+    deleted, and all of them would stay green.
+
+    MEASURED 2026-09-01 by mutation: moving both `_contained` calls in
+    `copy_includes` to after the `rmtree_force` survived
+    `tests/test_three_guards_that_stood_in_front_of_an_rmtree.py`,
+    `tests/test_a_guard_set_that_never_left_the_admin_machine.py`,
+    `tests/test_a_publish_that_committed_to_a_branch_it_never_pushed.py` and
+    `tests/test_a_publish_path_with_no_wall.py` together. Under `['.']` the
+    mutant deleted the destination clone, `.git` and all, and then refused.
+    """
+    workspace, dest, outside = _publishable(tmp_path)
+
+    with pytest.raises(ValueError):
+        publish.copy_includes(workspace, dest, [rel], [])
+
+    assert (dest / ".git" / "HEAD").is_file(), "the clone's .git was removed"
+    assert (dest / "keep.md").read_text(encoding="utf-8") == "the previous publication"
+    assert (outside / "x.md").is_file(), "a path outside the clone was removed"
+
+
+def test_an_ordinary_include_still_replaces_its_directory(publish, tmp_path):
+    """The other direction, so a `copy_includes` that deleted nothing at all
+    would not satisfy the case above. The stale file under the destination's own
+    copy of the include IS removed, which is what the `rmtree_force` is for."""
+    workspace, dest, _outside = _publishable(tmp_path)
+    (dest / "scripts").mkdir()
+    (dest / "scripts" / "stale.py").write_text("gone", encoding="utf-8")
+
+    publish.copy_includes(workspace, dest, ["scripts"], [])
+
+    assert (dest / "scripts" / "a.py").read_text(encoding="utf-8") == "x"
+    assert not (dest / "scripts" / "stale.py").exists()
+    assert (dest / "keep.md").is_file()
+
+
 def test_the_three_verdicts_are_all_reachable(publish, tmp_path):
     dest = tmp_path / "clone"
     dest.mkdir()

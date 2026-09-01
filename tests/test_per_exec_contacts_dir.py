@@ -19,8 +19,11 @@ repeated five times.
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -42,30 +45,82 @@ def test_it_is_not_the_repo_root_join_that_was_wrong():
 
 
 def test_a_bad_slug_is_refused_by_the_repo_resolver():
-    import pytest
     for bad in ("../escape", "with/slash", ""):
         with pytest.raises(ValueError):
             get_per_exec_contacts_dir(bad)
 
 
+# The wrong join, matched by SHAPE rather than by the three exact strings the
+# five 2026-08-23 offenders happened to use. Those were
+# `repo_path / "contacts"` and `get_per_exec_repo_path({slug,exec_slug}) /
+# "contacts"`, and a literal list of them is green the moment somebody spells the
+# variable `exec_repo`, wraps the call, or reaches for `.joinpath`. The near-miss
+# a guard has to catch is the realistic one, not the one already fixed.
+_WRONG_JOIN = re.compile(
+    r'(?:get_per_exec_repo_path\s*\([^)]*\)|\b\w*repo\w*)\s*'
+    r'(?:/\s*"contacts"|\.joinpath\(\s*"contacts"\s*\))'
+)
+
+
+def _joins_contacts_too_high(line: str) -> bool:
+    """True for a path join that reaches `<exec repo>/contacts`, one level high.
+
+    `crm` on the same line is the correct layout and is never an offence, which
+    is what keeps `get_per_exec_contacts_dir`'s own body and every
+    `root / "crm" / "contacts"` in the tree out of the report.
+    """
+    if line.strip().startswith("#"):
+        return False
+    if '"crm"' in line and '"contacts"' in line:
+        return False
+    return bool(_WRONG_JOIN.search(line))
+
+
+@pytest.mark.parametrize("line", [
+    '        contacts_dir = repo_path / "contacts"',
+    '    d = get_per_exec_repo_path(slug) / "contacts"',
+    '    d = get_per_exec_repo_path(exec_slug) / "contacts"',
+    '    d = get_per_exec_repo_path(e["slug"]) / "contacts"',
+    '        target = exec_repo / "contacts" / f"{name}.md"',
+    '        target = repo_dir.joinpath("contacts")',
+])
+def test_the_matcher_bites_the_realistic_near_miss(line):
+    """A guard that only knows the spellings already fixed guards nothing.
+
+    The last three lines here are the ones the previous literal-substring form
+    read straight past: a renamed variable, a call with an expression argument,
+    and `.joinpath`. All three land in the same directory no reader opens, and
+    two of the five original offenders WROTE to it.
+    """
+    assert _joins_contacts_too_high(line)
+
+
+@pytest.mark.parametrize("line", [
+    '    return get_per_exec_repo_path(slug) / "crm" / "contacts"',
+    '        contacts_dir = repo_path / "crm" / "contacts"',
+    '        contacts_dir = data_root / "crm" / "contacts"',
+    '    # historical note: repo_path / "contacts" was the bug',
+    '        staging_dir = staging / "contacts"',
+])
+def test_the_matcher_leaves_the_correct_layout_alone(line):
+    """The other direction. A guard that fires on the fix teaches people to
+    delete it, after which it proves nothing while looking as though it does."""
+    assert not _joins_contacts_too_high(line)
+
+
 def test_no_caller_joins_contacts_onto_the_repo_root():
-    """The grep guard. Two of the five offenders wrote to that path."""
+    """The tree scan. Two of the five 2026-08-23 offenders wrote to that path."""
     scripts = sorted((ROOT / "scripts").rglob("*.py"))
     # An empty offender list is green over zero files, so a renamed scripts/
     # directory or a changed suffix would switch this guard off in silence.
-    # Measured 371 files on 2026-08-26; the floor only catches a collapse.
+    # Measured 386 files on 2026-09-01; the floor only catches a collapse.
     assert len(scripts) >= 220, f"the scan collapsed to {len(scripts)} files"
     offenders = []
     for script in scripts:
         text = script.read_text(encoding="utf-8", errors="replace")
         for n, line in enumerate(text.splitlines(), 1):
-            stripped = line.strip()
-            if stripped.startswith("#"):
-                continue
-            if 'repo_path / "contacts"' in line or \
-               'get_per_exec_repo_path(exec_slug) / "contacts"' in line or \
-               'get_per_exec_repo_path(slug) / "contacts"' in line:
-                offenders.append(f"{script.relative_to(ROOT)}:{n}: {stripped[:90]}")
+            if _joins_contacts_too_high(line):
+                offenders.append(f"{script.relative_to(ROOT)}:{n}: {line.strip()[:90]}")
     assert offenders == [], (
         "join through get_per_exec_contacts_dir(slug) instead:\n  "
         + "\n  ".join(offenders)
@@ -75,7 +130,6 @@ def test_no_caller_joins_contacts_onto_the_repo_root():
 def test_the_live_fleet_is_visible_through_the_helper():
     """Against the real overlay when one is present: the count must be non-zero
     for at least one exec, or the helper is pointing somewhere empty again."""
-    import pytest
     from scripts.utils.workspace import get_all_active_exec_slugs
 
     slugs = get_all_active_exec_slugs()

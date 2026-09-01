@@ -159,21 +159,32 @@ def load_ideas(state_dir: Path, cycle: Optional[int] = None,
     names an idea in the newest cycle -- and "not found" falls back to returning
     everything. `topic-ideas --cycle 2 --new` therefore listed every cycle-2
     idea, all of them submitted BEFORE the cursor, as new.
+
+    "Corrupt lines are skipped" covers a line that will not DECODE as well as
+    one that will not parse, and until 2026-09-01 it did not. The decode ran
+    inside `for line in f`, one frame outside the handler, and
+    `UnicodeDecodeError` is a `ValueError` -- a sibling of
+    `json.JSONDecodeError`, not a member of it -- so one torn append raised
+    straight out of this reader and out of every job that calls it. This file is
+    append-only and nothing prunes it, so that was permanent. Reading through
+    `jsonl_lines` decodes a line at a time, strictly: `errors="replace"` would
+    keep the line and put U+FFFD inside a member's name or their own words,
+    which are rendered back to the Tribe.
     """
+    from scripts.utils.jsonl_lines import jsonl_lines
+
     path = _ideas_path(state_dir)
     if not path.exists():
         return []
     out: list[dict] = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            out.append(rec)
+    for line in jsonl_lines(path):
+        if line is None:  # a line that will not decode; skipped like a bad parse
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        out.append(rec)
     if since_id is not None:
         idx = next((n for n, r in enumerate(out) if r.get("idea_id") == since_id), None)
         if idx is not None:
@@ -184,14 +195,25 @@ def load_ideas(state_dir: Path, cycle: Optional[int] = None,
 
 
 def load_topic_state(state_dir: Path) -> dict:
-    """Load topic-collection-state.json, returning defaults when absent/corrupt."""
+    """Load topic-collection-state.json, returning defaults when absent/corrupt.
+
+    `UnicodeError` is in the handler because "corrupt" includes bytes that are
+    not UTF-8 at all, and until 2026-09-01 it was not. `read_text(encoding=
+    "utf-8")` raises `UnicodeDecodeError` on those, and that is a `ValueError`:
+    neither an `OSError` nor a `json.JSONDecodeError`, which only fires on text
+    that DECODED and then failed to parse. A torn write therefore raised
+    straight out of this reader, past the promise on the line above. Measured
+    2026-09-01 against `b"\\xff\\xfe\\x00{"`: `UnicodeDecodeError: invalid start
+    byte`. Same widening as `scripts/watchdog_core.py::_read_beat` and
+    `scripts/fireside-pulse.py::load_checkpoint`.
+    """
     path = _state_path(state_dir)
     default = {"last_digest_idea_id": None, "pending_cycle_invite": None}
     if not path.exists():
         return dict(default)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, UnicodeError, OSError):
         return dict(default)
     if not isinstance(data, dict):
         # The docstring promises defaults for CORRUPT state, and a file holding

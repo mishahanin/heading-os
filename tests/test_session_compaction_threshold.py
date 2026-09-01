@@ -413,3 +413,47 @@ def test_the_rendered_bar_carries_the_session_number(env):
     result = _render(env, _payload(env, 20.0))
     assert result.returncode == 0, result.stderr
     assert "35%" in result.stdout
+
+
+# --------------------------------------------------------------------------
+# The CLI and the reader are two copies of one bound
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("bound", [CP.HARD_THRESHOLD_MIN, CP.HARD_THRESHOLD_MAX])
+def test_the_reader_accepts_the_exact_bounds_the_cli_accepts(bound):
+    """`test_a_value_exactly_on_a_bound_is_accepted` above proves the CLI takes
+    15 and 90 and writes the key. It does not prove anything READS the key back.
+
+    `_session_hard` carries its own copy of the same comparison, and MEASURED
+    2026-09-01 either half of it could gain an `=` with this whole file green:
+    the CLI would accept `--compact-at 90`, print "compaction at 90%", write
+    `session_hard_threshold: 90`, and every reader would silently resolve the
+    environment's 45 instead. The operator sees a number that is set, stored,
+    and echoed back at him, and nothing in the session uses it.
+    """
+    cfg = CP.config({"session_hard_threshold": bound})
+    assert cfg["hard"] == bound
+    assert cfg["soft"] == bound - CP.SOFT_OFFSET
+
+
+@pytest.mark.parametrize("just_outside", [CP.HARD_THRESHOLD_MIN - 1,
+                                          CP.HARD_THRESHOLD_MAX + 1])
+def test_the_reader_refuses_one_step_outside_each_bound(just_outside):
+    """The other jaw. A reader that accepted everything would satisfy the pair
+    above; the existing out-of-range cases (5, 95, 0) are far enough out that a
+    bound moved by one still refuses them."""
+    assert CP.config({"session_hard_threshold": just_outside})["hard"] == 45
+
+
+def test_an_environment_pair_that_is_exactly_equal_falls_back(monkeypatch):
+    """`soft >= hard`, not `soft > hard`, and only the strict case was pinned.
+
+    `test_an_inverted_environment_pair_still_falls_back` uses 50/45, which both
+    comparisons reject. Equal is the reachable one: a hand-edited settings file
+    with the same number twice. Without the `=`, soft and hard coincide, so the
+    soft reminder and the hard threshold fire on the same render and the graded
+    warning the two-tier design exists for disappears.
+    """
+    monkeypatch.setenv("CLAUDE_HANDOFF_SOFT_THRESHOLD", "45")
+    monkeypatch.setenv("CLAUDE_HANDOFF_HARD_THRESHOLD", "45")
+    assert (CP.config(None)["soft"], CP.config(None)["hard"]) == (25, 30)

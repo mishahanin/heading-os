@@ -80,6 +80,45 @@ def _only_xclip(monkeypatch, payload=PNG_BYTES, returncode=0):
     monkeypatch.setattr(clip.subprocess, "run", fake_run)
 
 
+def _only_wlpaste(monkeypatch, payload=PNG_BYTES, returncode=0):
+    """wl-paste is on PATH and produces `payload`; xclip is absent.
+
+    The Wayland half of the pair, and nothing exercised it until 2026-09-01.
+    MEASURED that day, with `_grab_via_wlpaste` mutated three ways in turn -
+    an unconditional `return False`, an unconditional `return True` that skips
+    the return-code and size checks, and dropping the function from `main()`'s
+    fallback tuple altogether - all three left the whole tree green, because
+    both existing helpers make `shutil.which("wl-paste")` answer None and the
+    body returns at its first line.
+    """
+    monkeypatch.setattr(
+        clip.shutil,
+        "which",
+        lambda name: "/usr/bin/wl-paste" if name == "wl-paste" else None,
+    )
+
+    def fake_run(args, **kwargs):
+        assert args[0] == "wl-paste", f"expected the wl-paste fallback, got {args!r}"
+        kwargs["stdout"].write(payload)
+        return subprocess.CompletedProcess(args, returncode)
+
+    monkeypatch.setattr(clip.subprocess, "run", fake_run)
+
+
+def _both_grabbers(monkeypatch, calls):
+    """Both binaries present. Records which one main() reached, in order."""
+    monkeypatch.setattr(
+        clip.shutil, "which", lambda name: f"/usr/bin/{name}"
+    )
+
+    def fake_run(args, **kwargs):
+        calls.append(args[0])
+        kwargs["stdout"].write(PNG_BYTES)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(clip.subprocess, "run", fake_run)
+
+
 def _raises_no_grabber(monkeypatch):
     def boom():
         raise NotImplementedError(PIL_NO_GRABBER)
@@ -151,6 +190,72 @@ def test_the_linux_fallback_now_runs_when_pil_refuses(out_dir, monkeypatch, caps
     assert rc == 0
     assert saved.read_bytes() == PNG_BYTES
     assert capsys.readouterr().out.strip() == str(saved)
+
+
+def test_the_wayland_fallback_runs_when_pil_refuses(out_dir, monkeypatch, capsys):
+    """The other half of the pair. PIL takes wl-paste only for a wayland session,
+    so an x11 session with only wl-paste installed lands here and wl-paste works."""
+    _raises_no_grabber(monkeypatch)
+    _only_wlpaste(monkeypatch)
+
+    rc = clip.main()
+
+    saved = out_dir / "clipboard" / "clip.png"
+    assert rc == 0
+    assert saved.read_bytes() == PNG_BYTES
+    assert capsys.readouterr().out.strip() == str(saved)
+
+
+def test_a_wayland_fallback_that_produces_nothing_cleans_up_and_reports(
+    out_dir, monkeypatch, capsys
+):
+    """wl-paste runs but yields an empty file: no success, no zero-byte litter.
+
+    The case ON the line for `_grab_via_wlpaste`'s `st_size > 0`. Without it the
+    hook returns success over an empty PNG and prints its path.
+    """
+    _raises_no_grabber(monkeypatch)
+    _only_wlpaste(monkeypatch, payload=b"")
+
+    rc = clip.main()
+
+    assert rc != 0
+    assert not (out_dir / "clipboard" / "clip.png").exists()
+    assert PIL_NO_GRABBER in capsys.readouterr().err
+
+
+def test_a_wayland_fallback_that_exits_nonzero_is_not_taken_as_success(
+    out_dir, monkeypatch, capsys
+):
+    """wl-paste writes bytes and still exits non-zero (it prints its refusal on
+    stderr and can leave partial output). The return code has to bind."""
+    _raises_no_grabber(monkeypatch)
+    _only_wlpaste(monkeypatch, payload=b"partial", returncode=1)
+
+    rc = clip.main()
+
+    assert rc != 0
+    assert capsys.readouterr().out.strip() == "", (
+        "a failed grab printed a path as though it had saved something"
+    )
+
+
+def test_wl_paste_is_tried_before_xclip(out_dir, monkeypatch, capsys):
+    """Order, asserted rather than assumed.
+
+    On a host carrying both, wl-paste is the one that talks to the compositor
+    actually holding the selection. `main()` names the tuple
+    `(_grab_via_wlpaste, _grab_via_xclip)`, and dropping the first element left
+    every other test in this file green.
+    """
+    _raises_no_grabber(monkeypatch)
+    calls: list[str] = []
+    _both_grabbers(monkeypatch, calls)
+
+    rc = clip.main()
+
+    assert rc == 0
+    assert calls[:1] == ["wl-paste"], f"the fallbacks ran in the order {calls!r}"
 
 
 def test_a_fallback_that_produces_nothing_cleans_up_and_reports(

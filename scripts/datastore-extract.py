@@ -317,7 +317,16 @@ def update_index(extracted_files):
         print(f"{YELLOW}INDEX.md not found - skipping index update{RESET}")
         return
 
-    content = index.read_text(encoding="utf-8")
+    try:
+        content = index.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        # Same failure the comment below already names, one line earlier: this
+        # runs LAST, after every file has been extracted, so raising here
+        # reports failure over work that succeeded. `UnicodeDecodeError`
+        # subclasses ValueError and this read had no handler at all.
+        print(f"{YELLOW}INDEX.md unreadable ({exc}) - skipping index "
+              f"update{RESET}")
+        return
     today = datetime.now(get_default_tz()).strftime("%Y-%m-%d")
 
     new_rows = []

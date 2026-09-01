@@ -116,6 +116,44 @@ def test_the_refresh_failure_names_itself_rather_than_going_silent(gmail, capsys
     assert "invalid_grant" in err
 
 
+@pytest.mark.parametrize("error", [
+    ValueError("Authorized user info was not in the expected format, "
+               "missing fields refresh_token."),
+    __import__("json").JSONDecodeError("Expecting value", "", 0),
+])
+def test_an_unusable_saved_token_falls_through_to_re_authorisation(gmail, capsys,
+                                                                   monkeypatch,
+                                                                   error):
+    """The handler is `except (ValueError, json.JSONDecodeError)` and only the
+    JSON half had a case.
+
+    Its own comment names both: "the library raises JSONDecodeError on a
+    truncated file and ValueError on valid JSON missing `refresh_token`".
+    MEASURED 2026-09-01 by narrowing the handler to `json.JSONDecodeError`
+    alone: the whole `tests/security/` tree plus this file stayed green, while a
+    token file that is perfectly good JSON with a field missing raised out of
+    `get_service` on a headless machine, which is the exact outcome that comment
+    says was fixed.
+    """
+    def refuse(*_a, **_k):
+        raise error
+
+    gmail(_Creds(None))
+    # Patched AFTER the fixture, so this is the loader `get_service` reaches.
+    # monkeypatch, not a hand-rolled save-and-restore: an assignment left behind
+    # by a failing assert would follow the whole pytest session.
+    monkeypatch.setattr(
+        "google.oauth2.credentials.Credentials.from_authorized_user_file", refuse)
+
+    with pytest.raises(FileNotFoundError) as caught:
+        gmail_auth.get_service()
+
+    assert "client secrets not found" in str(caught.value)
+    err = capsys.readouterr().err
+    assert "is unusable" in err
+    assert type(error).__name__ in err
+
+
 def test_a_refresh_that_succeeds_is_not_thrown_away(gmail, tmp_path):
     """The guard must not push a healthy expired token into the consent flow."""
     creds = gmail(_Creds(None))
@@ -206,3 +244,62 @@ def test_a_real_run_still_demands_the_key_when_env_exists_without_it(tmp_path, m
         healthchecks_setup.run_setup([SPEC], dry_run=False)
 
     assert "HEALTHCHECKS_API_KEY not set" in str(caught.value)
+
+
+# --------------------------------------------------------------------------
+# The twin read that never got the first one's guard
+# --------------------------------------------------------------------------
+
+# Invalid as UTF-8 at byte 0. No credential is expressed here; the point is
+# that the file cannot be decoded at all.
+UNDECODABLE_ENV = b"\xff\xfeHEALTHCHECKS_API_KEY\x00\n"
+
+
+def test_an_undecodable_env_is_refused_by_the_reader_with_a_reason(tmp_path,
+                                                                   monkeypatch):
+    """Anchor for the twin below: `load_env_key` already handles this shape, and
+    its docstring says so."""
+    env_file = tmp_path / ".env"
+    env_file.write_bytes(UNDECODABLE_ENV)
+    monkeypatch.setattr(healthchecks_setup, "_ENV_FILE", env_file)
+
+    with pytest.raises(SystemExit) as caught:
+        healthchecks_setup.load_env_key()
+
+    assert "could not read" in str(caught.value)
+
+
+def test_an_undecodable_env_is_refused_by_the_writer_too(tmp_path, monkeypatch):
+    """The finding. `write_env` reads the SAME file twenty lines below
+    `load_env_key` and had no guard at all.
+
+    MEASURED 2026-09-01: `UnicodeDecodeError` out of `write_env` with no
+    handler anywhere, which no AST sweep for a NARROW handler can see because
+    there is no handler to be narrow. The refusal has to name the recovery,
+    because by the time this runs the checks already exist on healthchecks.io
+    and only the ping URLs are lost.
+    """
+    env_file = tmp_path / ".env"
+    env_file.write_bytes(UNDECODABLE_ENV)
+    monkeypatch.setattr(healthchecks_setup, "_ENV_FILE", env_file)
+
+    with pytest.raises(SystemExit) as caught:
+        healthchecks_setup.write_env({"BOND_HC_SENTINEL": "https://hc.test/abc"})
+
+    message = str(caught.value)
+    assert "could not read" in message
+    assert "re-run" in message
+
+
+def test_the_writer_still_writes_a_readable_env(tmp_path, monkeypatch):
+    """The other jaw. A writer that refuses every file writes nothing at all,
+    and the ping URLs are the whole product of this module."""
+    env_file = tmp_path / ".env"
+    env_file.write_text("SOMETHING_ELSE=1\n", encoding="utf-8")
+    monkeypatch.setattr(healthchecks_setup, "_ENV_FILE", env_file)
+
+    healthchecks_setup.write_env({"BOND_HC_SENTINEL": "https://hc.test/abc"})
+
+    written = env_file.read_text(encoding="utf-8")
+    assert "BOND_HC_SENTINEL=https://hc.test/abc" in written
+    assert "SOMETHING_ELSE=1" in written

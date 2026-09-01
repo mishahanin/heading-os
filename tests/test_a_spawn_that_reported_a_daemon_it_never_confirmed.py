@@ -52,9 +52,12 @@ my own pass had walked straight past.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
+import re
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -316,13 +319,142 @@ def test_no_uncertain_case_answers_dead(fp):
 # 5-7. The metric, the exit code, the earliest timestamp
 # ============================================================
 
+def _webhook_timing() -> dict:
+    """The clocks and the log arguments of the webhook's success line.
+
+    Everything is DERIVED from the syntax tree - which names hold a
+    `time.monotonic()` inside the `async with handler_lock` block, which hold
+    one before it, and which expression each `%d` in the log line is fed. A
+    rename does not break this; a swap does, and the swap is the defect.
+    """
+    tree = ast.parse((ROOT / "scripts" / "fireside_webhook.py")
+                     .read_text(encoding="utf-8"))
+
+    locks = [n for n in ast.walk(tree)
+             if isinstance(n, (ast.AsyncWith, ast.With))
+             and "handler_lock" in ast.unparse(n.items[0])]
+    assert len(locks) == 1, f"expected one handler_lock block, found {len(locks)}"
+    lock = locks[0]
+
+    def _clocks(nodes) -> set[str]:
+        found = set()
+        for node in nodes:
+            for assign in ast.walk(node):
+                if (isinstance(assign, ast.Assign)
+                        and ast.unparse(assign.value) == "time.monotonic()"):
+                    found |= {t.id for t in assign.targets
+                              if isinstance(t, ast.Name)}
+        return found
+
+    inside = _clocks(lock.body)
+    # Everything in the module that is NOT inside the lock body.
+    lock_ids = {id(n) for n in ast.walk(lock)} - {id(lock)}
+    outside = set()
+    for assign in ast.walk(tree):
+        if (isinstance(assign, ast.Assign)
+                and ast.unparse(assign.value) == "time.monotonic()"
+                and id(assign) not in lock_ids):
+            outside |= {t.id for t in assign.targets if isinstance(t, ast.Name)}
+
+    logs = [n for n in ast.walk(tree)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute) and n.func.attr == "info"
+            and n.args and isinstance(n.args[0], ast.Constant)
+            and "handler_ms=%d" in str(n.args[0].value)]
+    assert len(logs) == 1, f"expected one handler_ms log line, found {len(logs)}"
+    call = logs[0]
+
+    # `"a=%s b=%d"` -> ["a=", "b="]; the argument vector lines up with these.
+    fmt = str(call.args[0].value)
+    fields = [chunk.rsplit(" ", 1)[-1].rsplit("\n", 1)[-1]
+              for chunk in re.split(r"%[a-z]", fmt)[:-1]]
+    vector = call.args[1:]
+    assert len(fields) == len(vector), (
+        f"{len(fields)} conversions against {len(vector)} arguments; the log "
+        f"line would raise inside `emit` and write nothing")
+    return {"inside": inside, "outside": outside,
+            "args": {name: ast.unparse(node)
+                     for name, node in zip(fields, vector, strict=True)}}
+
+
+def _operands(expr: str) -> set[str]:
+    """Every bare name in a rendered expression."""
+    return {n.id for n in ast.walk(ast.parse(expr)) if isinstance(n, ast.Name)}
+
+
 def test_the_webhook_log_separates_handler_time_from_queue_time():
-    src = (ROOT / "scripts" / "fireside_webhook.py").read_text(encoding="utf-8")
-    assert "queued_ms=%d" in src
-    assert "t_start = time.monotonic()" in src
-    # The start must be taken INSIDE the lock block, after `async with`.
-    lock_at = src.index("async with handler_lock:")
-    assert src.index("t_start = time.monotonic()") > lock_at
+    """handler_ms must be measured ENTIRELY inside the lock.
+
+    MEASURED 2026-09-01: the previous spelling of this test asserted only that
+    the string `t_start = time.monotonic()` appears AFTER the string
+    `async with handler_lock:`. Changing the log's own argument from
+    `t_done - t_start` to `t_done - t_queued` - which is finding 5 restored
+    verbatim, handler_ms converging on total_ms and reporting lock queueing as
+    handler slowness - left all 38 tests in this file green. The assignment's
+    position was checked; what the metric was computed FROM was not.
+
+    Two sibling source-text controls over this same log line were already
+    replaced by behavioural tests in
+    `tests/test_controls_that_restated_the_code_they_guarded.py`. This third one
+    was left behind. It is asked of the arithmetic now.
+    """
+    timing = _webhook_timing()
+    assert timing["inside"], "no clock is taken inside the handler_lock block"
+    assert timing["outside"], "no clock is taken before the lock; queued_ms " \
+                              "cannot be measuring a queue"
+
+    handler = timing["args"]["handler_ms="]
+    assert _operands(handler) <= timing["inside"] | {"int"}, (
+        f"handler_ms is computed as {handler!r}, which reaches a clock taken "
+        f"OUTSIDE the lock ({sorted(timing['outside'])}). That is the metric "
+        f"converging on total_ms and reporting queueing as handler slowness.")
+
+
+def test_the_queue_metric_is_the_one_that_spans_the_lock_boundary():
+    """The other direction, so the test above is not satisfied by a file that
+    measures nothing across the boundary at all. `queued_ms` is the one metric
+    that MUST reach a pre-lock clock."""
+    timing = _webhook_timing()
+    queued = timing["args"]["queued_ms="]
+    assert _operands(queued) & timing["outside"], (
+        f"queued_ms is computed as {queued!r} and never reaches a clock taken "
+        f"before the lock, so it is not measuring the queue")
+    assert _operands(queued) & timing["inside"], (
+        f"queued_ms is computed as {queued!r} and never reaches the post-lock "
+        f"clock, so it does not end where the handler begins")
+
+
+def test_the_arithmetic_check_refuses_the_defect_it_was_written_for():
+    """A guard with no case that makes it refuse is not known to refuse anything.
+
+    The synthetic module below is the shipped code with one operand swapped -
+    exactly the mutation that survived the old spelling - and the predicate must
+    reject it.
+    """
+    defective = textwrap.dedent("""
+        async def _process(update, kind):
+            t_queued = time.monotonic()
+            async with handler_lock:
+                t_start = time.monotonic()
+                t_done = time.monotonic()
+                logger.info("webhook: ok handler_ms=%d queued_ms=%d total_ms=%d",
+                            int((t_done - t_queued) * 1000),
+                            int((t_start - t_queued) * 1000),
+                            int((t_done - t_recv) * 1000))
+    """)
+    tree = ast.parse(defective)
+    lock = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncWith))
+    inside = {t.id for node in lock.body for a in ast.walk(node)
+              if isinstance(a, ast.Assign)
+              and ast.unparse(a.value) == "time.monotonic()"
+              for t in a.targets if isinstance(t, ast.Name)}
+    call = next(n for n in ast.walk(tree)
+                if isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute) and n.func.attr == "info")
+    handler_arg = ast.unparse(call.args[1])
+
+    assert not (_operands(handler_arg) <= inside | {"int"}), (
+        "the predicate accepted handler_ms measured from the pre-lock clock")
 
 
 # Two webhook logging controls lived here and read the module's SOURCE TEXT.

@@ -20,6 +20,33 @@ def test_env_override_wins(tmp_path, monkeypatch):
     assert paths.get_data_root() == d.resolve()
 
 
+def test_the_env_override_is_normalised_not_taken_verbatim(tmp_path, monkeypatch):
+    """`env_data_root` ends `return cand.resolve()`, and no case could tell.
+
+    Every override in this file is a `tmp_path` subdirectory, which is already
+    resolved, so `return cand` and `return cand.resolve()` produce the identical
+    object and the normalisation was free to disappear. Measured 2026-09-01:
+    dropping `.resolve()` left this file and all 29 files naming the seam green.
+
+    An unnormalised data root is not cosmetic. It becomes the prefix of every
+    `get_*_dir()` answer, and the two questions the seam is asked -- am I in demo
+    mode, is there a real overlay -- are both EQUALITY tests against a resolved
+    path (`data_root_is_demo`, `data_overlay_present`). A root spelled with a
+    climb compares unequal to the same directory spelled plainly, so those
+    answers flip while the path still opens the right files. The value arrives
+    from `.env` and from systemd units, where a `..` or a trailing `/.` is
+    exactly the kind of thing a hand-written path carries.
+    """
+    real = tmp_path / "overlay"
+    (real / "sub").mkdir(parents=True)
+    detour = real / "sub" / ".."          # names `real`, spelled with a climb
+    monkeypatch.setenv("HEADING_OS_DATA", str(detour))
+
+    resolved = paths.get_data_root()
+    assert resolved == real.resolve()
+    assert ".." not in resolved.parts, f"the climb survived into {resolved}"
+
+
 def test_sibling_data_root(tmp_path, monkeypatch):
     monkeypatch.delenv("HEADING_OS_DATA", raising=False)
     ws = tmp_path / ".heading-os"
@@ -104,6 +131,55 @@ def test_schema_missing_marker_is_compatible(tmp_path, monkeypatch):
     monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path))  # no .schema-version
     ok, _ = paths.check_schema_compatible()
     assert ok is True
+
+
+def test_a_marker_that_is_not_a_number_reads_as_current(tmp_path, monkeypatch):
+    """`read_data_schema_version`'s `ValueError` arm, which nothing drove.
+
+    The docstring says "Missing/unreadable -> assume current" and the handler is
+    `except (OSError, ValueError)`, but every case in this file supplies either
+    no file (OSError) or a clean integer. Measured 2026-09-01: narrowing the
+    handler to `except OSError` left this file and all 29 files naming the seam
+    green, while a `.schema-version` holding anything non-numeric raised a bare
+    ValueError.
+
+    Where it raises is the point. `check_schema_compatible()` and
+    `require_writable_data_root()` both call this, and the second is the guard
+    every write path goes through -- so a single stray character in a
+    one-line marker file would stop every workspace write with a traceback
+    rather than a refusal, on a machine whose data is entirely intact.
+    """
+    (tmp_path / ".schema-version").write_text("not-a-number\n", encoding="utf-8")
+    monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path))
+
+    assert paths.read_data_schema_version() == paths.DATA_SCHEMA_VERSION
+    assert paths.check_schema_compatible()[0] is True
+    assert paths.require_writable_data_root() == tmp_path.resolve()
+
+
+def test_an_undecodable_marker_reads_as_current(tmp_path, monkeypatch):
+    """The same arm, reached by the byte rather than by the character.
+
+    `UnicodeDecodeError` subclasses `ValueError`, so the existing handler
+    already covers this -- but it is a SIBLING of the JSON and YAML decode
+    errors, not a subclass, and it fails inside `read_text()` before any parsing
+    happens. That combination is what makes it slip past a handler written for
+    the parse. Held here so the pair cannot be narrowed to `except ValueError`
+    reasoning about `int()` alone and lose the read.
+    """
+    (tmp_path / ".schema-version").write_bytes(b"\xff\xfe1\n")
+    monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path))
+
+    assert paths.read_data_schema_version() == paths.DATA_SCHEMA_VERSION
+    assert paths.require_writable_data_root() == tmp_path.resolve()
+
+
+def test_an_empty_marker_reads_as_current(tmp_path, monkeypatch):
+    """The shape a truncated or interrupted write leaves behind."""
+    (tmp_path / ".schema-version").write_text("", encoding="utf-8")
+    monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path))
+
+    assert paths.read_data_schema_version() == paths.DATA_SCHEMA_VERSION
 
 
 def test_schema_older_data_is_incompatible(tmp_path, monkeypatch):

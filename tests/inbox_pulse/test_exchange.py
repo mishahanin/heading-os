@@ -294,6 +294,46 @@ def test_poll_inbox_respects_max_items_cap(monkeypatch):
     )
 
 
+def test_poll_inbox_defaults_to_two_hundred_items(monkeypatch):
+    """The DEFAULT cap, which test 9 does not reach. NEW 2026-09-01.
+
+    Test 9 passes `max_items=10` explicitly and asserts `slice(None, 10)`, so it
+    proves the argument is honoured and says nothing about the value a caller
+    gets when it does not pass one. `_main_loop` never passes one.
+
+    MEASURED 2026-09-01:
+
+        -   max_items: int = 200,
+        +   max_items: int = 20,
+
+        .venv/bin/python -m pytest tests/inbox_pulse -q
+            -> 226 passed        (baseline: 226 passed)
+        the 45-file wide set + tests/contract
+            -> 7 failed, 1199 passed, 3 skipped
+               (baseline: the identical 7, present either way)
+
+    Every mock in this file accepts any slice, so the number was free to move.
+    It governs how fast a backlog drains: on 2026-08-17 the Steward poll wedged
+    and 61 messages accumulated behind one oversized item, and the cap is how
+    many of those one cycle can clear.
+    """
+    monkeypatch.setenv("EXCHANGE_EMAIL", "ceo@31c.io")
+    monkeypatch.setenv("EXCHANGE_PASSWORD", "secret")  # pragma: allowlist secret
+    monkeypatch.setenv("EXCHANGE_SERVER", "mail.31c.io")
+
+    mock_account = MagicMock()
+    chain = mock_account.inbox.filter.return_value.only.return_value.order_by.return_value
+    chain.__getitem__.return_value = []
+
+    mod = _import_exchange()
+    conn = mod.EWSConnection()
+    conn._account = mock_account
+
+    list(conn.poll_inbox(since=datetime(2026, 5, 1, tzinfo=timezone.utc)))
+
+    chain.__getitem__.assert_called_once_with(slice(None, 200))
+
+
 # ---------------------------------------------------------------------------
 # Test 10: poll_inbox yields oldest-first when since is provided
 # ---------------------------------------------------------------------------

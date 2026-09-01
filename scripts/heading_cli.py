@@ -326,6 +326,32 @@ def run_skill(skill, args, *, budget_usd=None, model=None) -> int:
 
 
 def main(argv=None) -> int:
+    # A named shortcut's tail belongs to the target script, INCLUDING a leading
+    # option-looking token, and argparse cannot say that. `nargs=REMAINDER` as
+    # the FIRST positional of a subparser matches ZERO arguments when the next
+    # token starts with `-`; the token is then read as an option of the parser
+    # itself and reported as unrecognized. MEASURED 2026-09-01:
+    # `heading classification --json` exited 2 with "unrecognized arguments:
+    # --json" while `heading run scripts/classification-health.py --json`
+    # printed the JSON. Every flag both registry targets accept is
+    # option-looking (`--json`, `--section`, `--max-days`, ...), so NO flag was
+    # reachable through a shortcut at all, on a surface whose whole promise is
+    # that the two invocation paths do not diverge.
+    #
+    # `run` and `skill` are unaffected and stay with argparse: each consumes a
+    # positional (`script`, `name`) first, which is exactly what lets REMAINDER
+    # start. A bare shortcut, and `-h`/`--help` after one, also stay with
+    # argparse so the subcommand still documents itself.
+    tail = list(sys.argv[1:] if argv is None else argv)
+    if (len(tail) > 1 and tail[0] in REGISTRY
+            and "-h" not in tail and "--help" not in tail):
+        try:
+            return _dispatch(
+                _resolve(REGISTRY[tail[0]], get_workspace_root()), tail[1:])
+        except OutsideWorkspace as exc:
+            print(f"heading: {exc}", file=sys.stderr)
+            return 2
+
     ap = argparse.ArgumentParser(
         prog="heading",
         description="Thin dispatcher over HEADING OS scripts (F-10.1 hybrid).",

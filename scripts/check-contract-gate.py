@@ -99,10 +99,18 @@ def _artifact_date(path: Path) -> date | None:
 def _dir_slug(name: str) -> str | None:
     """The slug segment of a `<YYYY-MM-DD>-<slug>` directory, else None.
 
-    On the NAME, never on `Path.stem`: a directory called
-    `2026-01-01-bug-fix` has `.stem == "2026-01-01-bug"`, because `.fix` reads
-    as a file extension. `derive_slug` above is right for a plan FILE and wrong
-    for this, which is why the rule is spelled out twice rather than shared.
+    On the NAME, never on `Path.stem`: a directory called `2026-01-01-v1.2-fix`
+    has `.stem == "2026-01-01-v1"`, because `.2-fix` reads as a file extension,
+    so the slug segment would come back as `v1` instead of `v1.2-fix`.
+    `derive_slug` above is right for a plan FILE and wrong for this, which is
+    why the rule is spelled out twice rather than shared.
+
+    The example here read `2026-01-01-bug-fix` until 2026-09-01 and claimed its
+    stem was `2026-01-01-bug`. That is not what Python returns: `-fix` is a
+    HYPHEN, the name has no suffix at all, and `.stem` is the whole string. The
+    test named for this hazard used that same name, so it passed just as well
+    against a `Path(name).stem[11:]` implementation - a false worked example
+    that took its own test down with it.
     """
     if (len(name) >= 12 and name[4] == "-" and name[7] == "-" and name[10] == "-"
             and all(c.isdigit() or c == "-" for c in name[:10])):

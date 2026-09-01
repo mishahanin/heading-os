@@ -110,6 +110,118 @@ def test_env_is_never_group_or_world_readable(tmp_path, monkeypatch):
     assert stat.S_IMODE(env.stat().st_mode) & (stat.S_IRGRP | stat.S_IROTH) == 0
 
 
+def test_the_existing_env_is_never_truncated_before_the_rename(tmp_path):
+    """Atomicity, asserted rather than implied.
+
+    Every test above would pass for a `_upsert_env_line` that opened `.env`
+    directly and wrote into it: the final content is the same, and the mode
+    test's `os.replace` hook would simply never fire, which reads as a KeyError
+    on a dict nobody looks at rather than as a statement about the write. The
+    property that matters is that a run killed mid-write cannot leave a
+    half-written `.env`, because `load_env` is what every daemon in this
+    workspace reads its credentials from and a truncated line is a credential
+    that silently becomes absent.
+
+    Observed at the rename: the destination must still hold the PREVIOUS
+    document when `os.replace` is called, and the source must not be the
+    destination.
+    """
+    env = tmp_path / ".env"
+    env.write_text("OTHER=keep\nKEY=old\n", encoding="utf-8")
+    before = env.read_bytes()
+
+    seen = {}
+    real_replace = os.replace
+
+    def watching(src, dst):
+        seen["dst"] = Path(dst).read_bytes()
+        seen["src_text"] = Path(src).read_text(encoding="utf-8")
+        seen["same_file"] = Path(src) == Path(dst)
+        return real_replace(src, dst)
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(W.os, "replace", watching)
+        W._upsert_env_line(env, "KEY", "sk-not-a-real-key")
+    finally:
+        monkeypatch.undo()
+
+    assert seen, "_upsert_env_line never renamed anything into place"
+    assert not seen["same_file"], "the temporary and .env are one file"
+    assert seen["dst"] == before, (
+        "the .env had already been rewritten before the rename, so a run "
+        "interrupted at that moment leaves a truncated credential file"
+    )
+    assert "KEY=sk-not-a-real-key" in seen["src_text"]
+    assert env.read_text(encoding="utf-8").splitlines() == [
+        "OTHER=keep", "KEY=sk-not-a-real-key"]
+    assert not list(tmp_path.glob("*.tmp")), "the temporary outlived the write"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_the_temp_file_holding_the_secret_is_never_group_or_world_readable(
+    tmp_path, monkeypatch
+):
+    """The other half of the same window, open until 2026-09-01.
+
+    The test above inspects the mode at the moment of the rename, and passes for
+    code that writes the secret into a 0644 `.env.tmp` and chmods it a line
+    later. That is the identical exposure: same directory, same bytes, a
+    different filename, and nothing consults a filename before deciding whether
+    it may open a file.
+
+    Measured at the CREATION primitive, because that window is not observable
+    any other way: by the time `.env.tmp` exists on disk the chmod has already
+    run, so no post-hoc `stat` can tell the two implementations apart. `os.open`
+    is therefore hooked, and its absence is itself a failure - a write that does
+    not go through a mode-carrying open cannot have controlled the mode.
+
+    `umask` is forced to 0 so a permissive umask is what the assertion sees; a
+    developer machine at 0077 would mask the defect and pass either way.
+    """
+    env = tmp_path / ".env"
+    seen: list[int] = []
+    real_open = os.open
+    old_umask = os.umask(0)
+
+    def watching(path, flags, mode=0o777, **kwargs):
+        fd = real_open(path, flags, mode, **kwargs)
+        if str(path).endswith(".env.tmp"):
+            seen.append(stat.S_IMODE(os.fstat(fd).st_mode))
+        return fd
+
+    try:
+        monkeypatch.setattr(W.os, "open", watching)
+        W._upsert_env_line(env, "KEY", "sk-not-a-real-key")
+    finally:
+        os.umask(old_umask)
+
+    assert seen, (
+        "the secret was written to .env.tmp through a call that carries no "
+        "mode, so it existed at the umask default before any chmod ran"
+    )
+    assert all(m & (stat.S_IRGRP | stat.S_IROTH) == 0 for m in seen), (
+        f"the temp file was mode {[oct(m) for m in seen]} while the credential "
+        f"was being written into it"
+    )
+    assert env.read_text(encoding="utf-8").strip() == "KEY=sk-not-a-real-key"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_a_leftover_temp_file_from_a_crashed_run_is_re_moded(tmp_path):
+    """O_CREAT's mode argument applies only when it CREATES. A `.env.tmp` left
+    behind by an interrupted run keeps whatever mode it had, so the fchmod on
+    the descriptor is what makes the guard hold in the case that actually
+    happens after a crash."""
+    env = tmp_path / ".env"
+    stale = tmp_path / ".env.tmp"
+    stale.write_text("STALE=1\n", encoding="utf-8")
+    os.chmod(stale, 0o644)
+    W._upsert_env_line(env, "KEY", "sk-not-a-real-key")
+    assert stat.S_IMODE(env.stat().st_mode) & (stat.S_IRGRP | stat.S_IROTH) == 0
+    assert env.read_text(encoding="utf-8").strip() == "KEY=sk-not-a-real-key"
+
+
 # --- 3. the Windows comment must match the code ------------------------------
 
 def test_the_windows_branch_does_what_its_comment_says():

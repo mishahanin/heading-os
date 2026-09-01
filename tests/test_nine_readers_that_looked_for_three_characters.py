@@ -472,6 +472,51 @@ def _regex_divergence(pattern: str) -> tuple:
     return tuple(off)
 
 
+def test_the_regex_sweep_actually_finds_the_splitters():
+    """Every sweep below is green over an empty result.
+
+    The three tests that follow all assert that nothing UNDECLARED diverges,
+    which is trivially true of a sweep that found nothing. The detector is a
+    heuristic over pattern text - anchored at the start, two fences, one capture
+    group - and any of those three could stop matching after an ordinary rewrite
+    of a pattern, silently retiring the whole registry. That is the third time
+    this defect shape would have hidden here: the first detector keyed on the
+    function NAME, the second on the call SHAPE, and a floor is what stops the
+    third from keying on nothing at all.
+
+    MEASURED 2026-09-01: 12 call sites in 12 files. The floors sit well under
+    both, because a reader migrating to `scripts.utils.markdown` legitimately
+    removes its own regex and that must never fail this test.
+    """
+    found = _frontmatter_regexes()
+    files = {rel for rel, _line, _pattern in found}
+
+    assert len(found) >= 8, (
+        f"only {len(found)} frontmatter regexes reached the sweep; the detector "
+        f"heuristic has stopped matching and the registry below guards nothing")
+    assert "scripts/utils/markdown.py" in files, (
+        "the canonical splitter's own pattern is no longer being swept, so the "
+        "grammar every other reader is measured against is unmeasured itself")
+
+
+def test_the_declared_divergences_still_name_files_the_sweep_can_see():
+    """A declared entry outliving its regex is a hole nobody can see.
+
+    `KNOWN_REGEX_DIVERGENCE` is keyed by PATH, and the shrink test below reads
+    `seen.get(rel, set())`, so an entry whose file was renamed, or whose pattern
+    stopped matching the detector, passes both tests forever while covering
+    whatever is written at that path next. Same failure as a stale exemption
+    list anywhere else: it looks like a decision and is really an absence.
+    """
+    files = {rel for rel, _line, _pattern in _frontmatter_regexes()}
+    stale = sorted(set(KNOWN_REGEX_DIVERGENCE) - files)
+
+    assert stale == [], (
+        f"declared as divergent but no longer carrying a frontmatter regex the "
+        f"sweep can see: {stale}. Either the reader was migrated - drop the "
+        f"entry - or the detector stopped seeing its pattern.")
+
+
 def test_the_regex_frontmatter_splitters_are_all_declared():
     """A new divergent regex must be argued for, not inherited.
 

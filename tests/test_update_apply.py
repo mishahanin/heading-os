@@ -33,11 +33,29 @@ def test_held_component_is_skipped():
     assert result == "skipped"
 
 def test_observed_component_is_skipped():
+    """An `observed` component carries a real apply block, on purpose.
+
+    Without one the fixture never reaches the clause it names: `apply_one`
+    refuses on `comp.tier == "observed" or comp.apply is None`, and a component
+    with no apply block satisfies the SECOND half. Measured 2026-09-01, deleting
+    the tier check entirely left this file green, so the whole meaning of the
+    `observed` tier (watch the version, never touch the machine) was unbound.
+    """
     comp = Component(name="ollama", tier="observed", display="Ollama",
                      current={"via": "shell", "cmd": "echo 1"},
-                     latest={"via": "github_release", "repo": "x/y"})
+                     latest={"via": "github_release", "repo": "x/y"},
+                     apply={"cmd": "true", "rollback_cmd": "true"})
     result = ua.apply_one(comp, applier=lambda: 1/0, rollback=lambda: None)
     assert result == "skipped"
+
+
+def test_a_component_with_no_apply_block_is_skipped():
+    """The other half of the same `or`, kept separate now that the test above
+    stopped standing in for it."""
+    comp = Component(name="ollama", tier="auto", display="Ollama",
+                     current={"via": "shell", "cmd": "echo 1"},
+                     latest={"via": "github_release", "repo": "x/y"})
+    assert ua.apply_one(comp, applier=lambda: 1/0, rollback=lambda: None) == "skipped"
 
 def test_build_rollback_substitutes_prev_and_runs(tmp_path):
     marker = tmp_path / "rolled-back-to.txt"

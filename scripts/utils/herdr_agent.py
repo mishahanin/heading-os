@@ -160,6 +160,16 @@ def resolve_pane(session_id: str) -> str | None:
     without HERDR; they must not report it as an error, and they must not report
     it as "not hosted" when the lookup itself failed - that case raises
     HerdrUnavailable instead, and the two are different sentences to an operator.
+
+    A record that MATCHES this session and then carries an unusable `pane_id`
+    is the second kind, not the first. It used to be the first: the match fell
+    through to `return None`, which every caller reads as "HERDR does not host
+    this session". `_herdr_status` in .claude/hooks/checkpoint-offer.py then
+    PERSISTS `compact_host="not-hosted"` and short-circuits on that cached value
+    for the rest of the session, so one malformed record from a HERDR release
+    would have turned driven compaction off and told the operator it had never
+    been available. `agents()` already raises on a malformed agent record for
+    exactly this reason; this is the same judgement one field further in.
     """
     if not session_id:
         return None
@@ -173,7 +183,12 @@ def resolve_pane(session_id: str) -> str | None:
             continue
         if session.get("kind") == "id" and session.get("value") == session_id:
             pane = agent.get("pane_id")
-            return pane if isinstance(pane, str) and pane else None
+            if not isinstance(pane, str) or not pane:
+                raise HerdrUnavailable(
+                    f"the agent record matching this session carries pane_id "
+                    f"{type(pane).__name__}, not a usable pane id"
+                )
+            return pane
     return None
 
 

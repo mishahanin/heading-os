@@ -46,10 +46,24 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+# `CP.force_utf8()` is this loop with this guard, and calling it is not an option
+# here: CP is imported fifteen lines below, and stream setup cannot wait for an
+# import any more than the boot walk below can precede one. That is the same
+# chicken-and-egg that leaves five hooks carrying their own copy of that walk, so
+# the shape is copied rather than the call made: both streams, and never raising.
+#
+# Unguarded until 2026-08-31, in the one file whose stated premise is that an
+# import-time failure costs a handoff nobody can regenerate. MEASURED that day
+# with a stdout whose `reconfigure` raises ValueError("underlying buffer has been
+# detached"), which is what a detached stream answers: the import died on this
+# line, main() never ran, and `CP.force_utf8()` survived the identical stream.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception as _exc:  # noqa: BLE001 - never break a hook over stream setup
+            print(f"checkpoint-save: stream reconfigure failed: {_exc}",
+                  file=sys.stderr)
 
 # Walk to the tree that owns scripts/, rather than counting parents. This hook
 # sits at .claude/hooks/ in the monorepo and at hooks/ inside a built plugin
@@ -132,6 +146,18 @@ def safe_slug(value: str, max_len: int = 32) -> str:
 
 
 def write_text_atomic(path: Path, content: str) -> None:
+    """Write the handoff archive indivisibly.
+
+    `except BaseException` below, not `except Exception`: this runs on Stop and
+    on compaction, which is exactly when the operator presses Ctrl-C to end a
+    long turn. `KeyboardInterrupt` and `SystemExit` do not derive from
+    `Exception`, so the narrower clause let both walk past and left a
+    `<name>.XXXXXXXX.tmp` file beside the archive. The archive itself is
+    untouched either way, since `os.replace` is what makes the write visible;
+    this is about the orphan.
+
+    Guard: `tests/test_twenty_one_atomic_writers_and_three_that_survive_a_ctrl_c.py`.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(
         prefix=path.name + ".", suffix=".tmp", dir=str(path.parent)
@@ -140,7 +166,7 @@ def write_text_atomic(path: Path, content: str) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(content)
         os.replace(tmp_name, path)
-    except Exception:
+    except BaseException:
         try:
             os.unlink(tmp_name)
         except FileNotFoundError:
@@ -149,6 +175,25 @@ def write_text_atomic(path: Path, content: str) -> None:
 
 
 def write_json_atomic(path: Path, data: dict) -> None:
+    """A SHADOW of `CP.write_json_atomic`, and nothing in this repository calls it.
+
+    Kept rather than deleted, per the workspace convention that dead code is
+    reported and not removed without the operator's word. Two things a reader
+    should know before touching it.
+
+    It is uncalled: a repo-wide search on 2026-09-01 found the definition here
+    and callers only of `CP.write_json_atomic`, the canonical one in
+    `scripts/utils/checkpoint_paths.py`, which this file already imports as
+    `CP` at the top. A bare `write_json_atomic(...)` written in this module
+    would silently resolve to THIS one and bypass `locked_state`, which is why
+    `tests/test_checkpoint_state_lock.py` asks the AST about calls on a state
+    path rather than trusting the name.
+
+    Its handler is widened to `BaseException` alongside its live sibling above,
+    deliberately. A stale copy that is merely uncalled is a copy someone
+    eventually calls; leaving it narrow would preserve exactly the divergence
+    this campaign keeps finding.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(
         prefix=path.name + ".", suffix=".tmp", dir=str(path.parent)
@@ -157,7 +202,7 @@ def write_json_atomic(path: Path, data: dict) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         os.replace(tmp_name, path)
-    except Exception:
+    except BaseException:
         try:
             os.unlink(tmp_name)
         except FileNotFoundError:
@@ -316,6 +361,47 @@ def main() -> int:
         trigger_slug = "quarantine"
         pointer_trigger = "(withheld: unredacted)"
 
+    # The slug above answers "what shall the file be called". It does NOT answer
+    # "whose handoff is this", and with no id in the payload nothing does:
+    # `CP.session_id()` falls back to the shared sentinel `FALLBACK_SESSION_ID`,
+    # so `.latest/session/` is a bucket every id-less save writes rather than one
+    # session's pointer. `checkpoint_paths` states the obligation beside that
+    # sentinel - anything printing a sentence about whose handoff it found has to
+    # ask `session_id_is_known` first - and `checkpoint-inject.py` asks it. This
+    # hook never did, at any of the four places it matters: the artifact slug,
+    # the per-session pointer pair, the state path, and the systemMessage.
+    #
+    # MEASURED 2026-08-31 with a payload carrying no `session_id` and no
+    # CLAUDE_CODE_SESSION_ID exported: the save wrote `.latest/session/`,
+    # repointed the shared pair `scripts/next-signal.py` reads, reset
+    # `checkpoint-session.json`, appended to that file's cross-session
+    # `compact_history`, and reported `Saved handoff: ...` with nothing marking
+    # the slug as shared. The live archive holds 1,131 fallback-slug handoffs
+    # from 2026-08, and every one of them ALSO lacks `trigger`, so they are
+    # probes and suite runs rather than production compacts (a real PostCompact
+    # fires on matcher `manual|auto`). What the count establishes is that this
+    # hook has no refusal and no marker for an id-less write, not that a
+    # production pointer was ever lost to one.
+    #
+    # Not a refusal, deliberately: a handoff in a shared bucket is worth far more
+    # than no handoff, which is the trade the whole file is built on. It is
+    # LABELLED instead, per obligations 2 and 3 of
+    # `.claude/rules/scope-claims.md` - name what was left out, and say the state
+    # is unknown rather than letting silence read as coverage.
+    session_known = CP.session_id_is_known(payload)
+    # Under `## Next steps` rather than under `## Notes`, and that is not a
+    # stylistic choice: `read_handoff()` in scripts/next-signal.py parses
+    # `## Objective` and `## Next steps`, and `render_text()` prints those two
+    # only. A marker in `## Notes` is invisible on the loudest surface the
+    # operator has, which is the exact failure two of the pointer branches below
+    # were rewritten to fix. The success pointer has no `## Notes` section at all.
+    bucket_note = "" if session_known else (
+        f'\n- No session id reached this hook, so these artifacts were filed '
+        f'under the shared fallback slug "{CP.session_slug(payload)}", which '
+        f'every id-less save writes. Whose handoff they hold is not established '
+        f'by anything here.'
+    )
+
     archive_name = f"{stamp}_handoff_compact-{trigger_slug}_{session_slug}.md"
     # Where this bundle actually writes. In the monorepo the module-level values
     # are already right and the sandboxed tests read them. Inside a built plugin
@@ -347,8 +433,34 @@ def main() -> int:
     # `get_data_root()` is right only when the archive followed the data seam; on
     # an engine clone with no overlay the archive is project-local and this would
     # send every ref down `_ref`'s absolute fallback.
-    data_root = (get_data_root() if _ENGINE_TREE and data_overlay_present()
-                 else CP.project_root(payload))
+    #
+    # Guarded, for the same reason `CP.handoff_dir()` guards these same two
+    # calls, and against the same exception. `HEADING_OS_DATA` is pinned per
+    # host, so a pinned directory that has been moved or deleted makes
+    # `data_overlay_present()` raise `DataRootError` BY DESIGN ("Refusing to fall
+    # back"), which is right for a tool about to write the operator's data and
+    # wrong for a hook about to write a handoff.
+    #
+    # MEASURED 2026-08-31 against this tree with the variable pointed at a path
+    # that does not exist: `handoff_dir()` caught it twice and redirected, then
+    # this expression raised it a third time OUTSIDE every try and main() died
+    # here. Zero files written - no archive, no quarantine, no pointer pair, no
+    # state reset, no systemMessage - which is the outcome the docstring five
+    # lines below calls "the one loss nobody can undo", caused by the line above
+    # it. The catch is broad for the reason the guarded import is: whatever the
+    # resolver raises, it costs the handoff.
+    #
+    # The fallback is the project root, because that is where `handoff_dir()`
+    # redirects the archive on this same failure, so the refs stay relative to
+    # the root the archive actually landed under.
+    try:
+        data_root = (get_data_root() if _ENGINE_TREE and data_overlay_present()
+                     else CP.project_root(payload))
+    except Exception as exc:  # noqa: BLE001 - never lose the handoff
+        data_root = CP.project_root(payload)
+        print(f"checkpoint-save: cannot resolve the data root "
+              f"({type(exc).__name__}: {exc}); computing the refs against "
+              f"{data_root}", file=sys.stderr)
 
     def _ref(path: Path) -> str:
         """Data-root-relative when it can be, absolute when it cannot. Total.
@@ -495,7 +607,7 @@ THE HANDOFF WAS LOST ({lost_kind}): the post-compact body could not be written, 
 
 - Do not resume from this pointer. There is no handoff text anywhere on disk.
 - Treat the repository state and the most recent commits as the only record of where the session was.
-- Read stderr from the failed compact for the underlying error, then fix it before the next one.
+- Read stderr from the failed compact for the underlying error, then fix it before the next one.{bucket_note}
 
 ## Notes
 
@@ -543,7 +655,7 @@ Resume the work this session was doing when it compacted. The full summary is un
 ## Next steps
 
 - Read the archived handoff at {archive_ref} for the full summary.
-- Treat the repository state and the most recent commits as authoritative.
+- Treat the repository state and the most recent commits as authoritative.{bucket_note}
 
 ## Summary
 
@@ -590,7 +702,7 @@ REDACTION FAILED ({quarantine_kind}), so this handoff was QUARANTINED: it is NOT
 - Read the quarantined handoff at: {quarantine_ref}
 - Absolute path, for a shell: {quarantine_path}
 - Treat it as UNREDACTED - it may carry live credentials, so never copy it into a tracked file.
-- Fix the redactor (scripts/utils/secret_patterns.py), then re-file the handoff into the archive once it redacts clean.
+- Fix the redactor (scripts/utils/secret_patterns.py), then re-file the handoff into the archive once it redacts clean.{bucket_note}
 
 ## Notes
 
@@ -725,8 +837,19 @@ Rules:
     # session ends. Pruning runs last and reports rather than raises: it is
     # housekeeping, and nothing about it is worth costing a handoff. Only the
     # disposable surfaces are touched - the dated archives are the record.
+    #
+    # `CP.session_slug(payload)`, NOT the artifact slug, for the reason the state
+    # path above was switched to it on 2026-08-20: `keep_slug` names the dir the
+    # LIVE session owns, and the artifact slug is a filename. On the quarantine
+    # branch it is the literal "unredacted", so the real session's pointer dir
+    # was a prune candidate on every quarantined save. Bounded by KEEP_DAYS and
+    # KEEP_MAX, so it needed an old or a crowded `.latest/` to bite, and it is
+    # the same wrong-slug family this file already fixed once one field over.
+    # The dir this run just wrote is safe either way: `_prune` sorts by mtime and
+    # it is the newest entry, so neither the 14-day cutoff nor the position cap
+    # can reach it.
     try:
-        CP.prune_pointer_dirs(hdir, session_slug)
+        CP.prune_pointer_dirs(hdir, CP.session_slug(payload))
         CP.prune_state_dir(state_dir, state_path.name)
     except Exception as exc:  # noqa: BLE001 - housekeeping never breaks the save
         print(f"checkpoint-save: prune failed: {exc}", file=sys.stderr)
@@ -755,6 +878,16 @@ Rules:
         message += (
             f" The .latest pointers could not be written either "
             f"({pointers_kind}), so they are STALE and describe an earlier compact."
+        )
+    # `Saved handoff: ...` named a slug and said nothing about it being shared.
+    # The one channel the operator reads is the one that most needs to carry the
+    # exclusion, so the sentence names the bucket rather than implying a pointer
+    # only one session can read.
+    if not session_known:
+        message += (
+            f' No session id reached this hook, so the artifacts were filed '
+            f'under the shared fallback slug "{CP.session_slug(payload)}", which '
+            f'every id-less save writes.'
         )
     print(json.dumps({"systemMessage": message}, ensure_ascii=False))
     return 0

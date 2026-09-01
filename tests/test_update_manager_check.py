@@ -32,6 +32,19 @@ def test_build_state_no_delta_is_current(monkeypatch):
     assert state["components"]["c"]["status"] == "current"
 
 def test_write_state_is_atomic(tmp_path):
+    """Named for atomicity, and it does not measure it. Kept honest here.
+
+    `um.write_state` IS `scripts.utils.update_common.write_state`, imported at
+    line 25 of the CLI, so this and its twin in `tests/test_update_common.py`
+    are two green results over one function. Neither assertion below can tell a
+    tmp-plus-`os.replace` from a plain `path.write_text`: MEASURED 2026-09-01
+    with the body replaced by one `write_text`, both files stayed green.
+
+    What this test does still establish is that the writer leaves no temporary
+    behind. The atomicity itself is asserted at the rename by
+    `tests/test_update_common.py::test_write_state_renames_a_temporary_into_place`;
+    do not read this one as a second opinion on it.
+    """
     p = tmp_path / "state.json"
     um.write_state({"components": {}}, p)
     assert p.exists()

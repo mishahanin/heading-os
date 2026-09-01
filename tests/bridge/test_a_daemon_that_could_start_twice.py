@@ -448,3 +448,27 @@ def test_a_file_with_no_trailing_newline_is_still_repaired(tmp_path):
     rows = [json.loads(ln) for ln in
             target.read_text(encoding="utf-8").splitlines() if ln.strip()]
     assert rows == [{"a": 1}, {"b": 2}]
+
+
+def test_a_line_that_is_valid_json_but_not_an_object_is_skipped(tmp_path):
+    """The other half of section 1, added 2026-08-31.
+
+    The battery above varies the VALUE of `ts` and never the shape of the record.
+    `_iter_records` also carries `isinstance(rec, dict)`, and nothing made it
+    refuse: measured that day, deleting that clause left `tests/bridge` at 1312
+    passed, 1 skipped, identical to the baseline. A bare `[]` or a naked number
+    is the case `_shapes.as_mapping` exists for. `entry_ts` calls `.get`, which
+    is an `AttributeError` on a list and on an int, and no
+    `except json.JSONDecodeError` catches it, so one such line takes the whole
+    14-day report down. That is the same outcome as the `"ts": null` defect this
+    file is named after, through the other door.
+    """
+    for line in ('[]', '["2026-08-25T09:00:00+00:00"]', '"a bare string"',
+                 '42', 'null', 'true'):
+        root = _usage(tmp_path, [
+            line,
+            '{"ts": "2026-08-25T09:00:00+00:00", "event": "page_view"}',
+        ])
+        report = adoption.summarize(root, days=14, today=date(2026, 8, 25))
+        assert report["totals"]["page_views"] == 1, (
+            f"the line {line!r} was not skipped cleanly")

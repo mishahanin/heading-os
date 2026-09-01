@@ -16,6 +16,7 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from scripts.utils.denial_log import denial_log_path, log_denial, read_denials
@@ -58,12 +59,33 @@ def test_the_suite_does_not_spend_the_operators_daily_write_allowance():
     """
     engine_root = Path(__file__).resolve().parent.parent
     production = engine_root / ".claude" / "state" / "dispatch-rate.json"
-    before = production.read_text(encoding="utf-8") if production.is_file() else None
+
+    # A marker unique to THIS call, never a whole-file comparison. Until
+    # 2026-09-01 this test read the production file before and after and
+    # asserted the two strings equal. That file is live shared state: its
+    # `recent` list holds the last 20 tool calls and `tool_history` around four
+    # hundred, and BOTH grow on every Write, Edit and Bash the operator's own
+    # session makes. So any concurrent work between the two reads failed the
+    # test over a change the test did not cause.
+    #
+    # MEASURED that day. Under five concurrent fix agents the full suite came
+    # back `1 failed, 20292 passed`, this being the one, with a diff whose
+    # differing region was the counter and the recent-writes list. Run alone,
+    # immediately afterwards and against the same code, it passed three times
+    # out of three. Nothing about the hook changed between those runs.
+    #
+    # A flaky guard is worse than a missing one: it teaches its reader that red
+    # here means "somebody was busy", and this guard's real failure looks
+    # exactly the same. The sibling test one function below already had the
+    # right technique, and said so in its own first line: assert on a marker
+    # unique to this call, never on the whole-file total.
+    marker = f"rate-isolation-probe-{uuid.uuid4().hex}.txt"
+    probe_path = engine_root / "outputs" / "scratch" / marker
 
     payload = {
         "tool_name": "Write",
         "tool_input": {
-            "file_path": str(engine_root / "outputs" / "scratch" / "rate-isolation-probe.txt"),
+            "file_path": str(probe_path),
             "content": "a write the operator did not make",
         },
     }
@@ -78,17 +100,31 @@ def test_the_suite_does_not_spend_the_operators_daily_write_allowance():
     )
     assert proc.returncode == 0, f"the hook exited {proc.returncode}: {proc.stderr}"
 
-    after = production.read_text(encoding="utf-8") if production.is_file() else None
-    assert after == before, (
-        "a hook call made by the test suite moved the operator's daily write "
-        "counter; the suite is spending an allowance it did not earn and is "
-        "filling the runaway-loop guard with writes nobody made"
+    # Jaw one, the negative: the operator's real ledger never heard of us.
+    produced = production.read_text(encoding="utf-8") if production.is_file() else ""
+    assert marker not in produced, (
+        "a hook call made by the test suite landed in the operator's real "
+        "dispatch-rate ledger; the suite is spending an allowance it did not "
+        "earn and is filling the runaway-loop guard with writes nobody made"
     )
 
-    assert os.environ.get("WS_RATE_LIMIT_STATE"), (
+    # Jaw two, the positive: it landed in the suite's own file instead. Without
+    # this the test passes against a hook that counts NOWHERE at all, which
+    # would be the rate limit silently switched off rather than redirected.
+    redirected = os.environ.get("WS_RATE_LIMIT_STATE")
+    assert redirected, (
         "WS_RATE_LIMIT_STATE is unset during the run, so the isolation in "
         "tests/conftest.py is gone"
     )
+    sandbox = Path(redirected)
+    assert sandbox.is_file(), (
+        f"the redirected rate-limit state {sandbox} was never written, so the "
+        f"hook counted this write nowhere and the guard is off, not isolated")
+    assert marker in sandbox.read_text(encoding="utf-8"), (
+        f"the probe write is in neither ledger. It is absent from the "
+        f"operator's file, which is what this test wants, but it is also "
+        f"absent from the suite's own {sandbox.name}, so nothing counted it "
+        f"and this test would pass against a rate limit that does not run.")
 
 
 def test_a_denial_written_during_the_suite_lands_in_the_suite_directory():

@@ -27,6 +27,20 @@ second copy of a message already delivered.
 Nothing here reaches a real send. `send_card` is stubbed at the module seam, and
 every gate is verified by making it REFUSE, never by removing it.
 
+WHAT THIS FILE DOES NOT ESTABLISH, said here rather than left to be inferred
+from the title. "Two terminals" is two PROCESSES, and the concurrency test below
+runs two THREADS of one process. `_queue_lock` holds two locks: a
+`threading.Lock` that orders threads, and an flock on `queue.json.lock` that
+orders processes. Either one alone serialises two threads, so this file cannot
+tell them apart. MEASURED 2026-09-01 in a scratch copy: removing the flock and
+keeping the thread lock left this file green at 23 passed; removing the thread
+lock and keeping the flock also left it green at 23 passed; removing BOTH failed
+`test_two_concurrent_approves_send_the_card_once`. The cross-process half is
+pinned one file over, by
+`tests/test_three_promises_the_code_could_not_keep.py::test_the_lock_is_held_across_processes_not_only_threads`,
+which the same flock-removal mutation does fail. This file proves the
+compare-and-set; that one proves the boundary it spans.
+
 Run: python3 -m pytest tests/test_a_card_two_terminals_approved_at_the_same_moment.py
 """
 from __future__ import annotations
@@ -202,7 +216,8 @@ def test_a_claim_older_than_the_window_is_taken_over(store):
 
 
 def test_a_claim_one_second_inside_the_window_is_still_held(store):
-    """The bound needs a case ON the line, not only far either side of it."""
+    """One second inside the line. Beside the bound, not on it: the case ON the
+    line is the pair below, which needs a pinned clock to be exact."""
     held_since = datetime.now(timezone.utc) - timedelta(
         seconds=AQS.STALE_CLAIM_SECONDS - 1)
     store["put"](_card(status=AQS.SENDING, sending_since=held_since.isoformat()))
@@ -210,6 +225,71 @@ def test_a_claim_one_second_inside_the_window_is_still_held(store):
     res = AQS.claim_card_for_send(store["data_root"], CARD_ID, AQ.SENDABLE_STATUSES)
 
     assert res["ok"] is False
+
+
+# `claim_card_for_send(..., now=)` is what makes an exact age assertable. Both
+# tests above age their card against the wall clock, so neither can land on
+# `held == STALE_CLAIM_SECONDS`, and neither could see which way the comparison
+# points. MEASURED 2026-09-01 in a scratch copy: flipping `held < stale_after`
+# to `held <= stale_after` in `claim_card_for_send` left this file green at
+# 23 passed, and left the whole action-queue corpus green too (664 passed,
+# unchanged from its own baseline). Nothing in the tree decided the boundary.
+#
+# It is `<`, so a claim EXACTLY `STALE_CLAIM_SECONDS` old is taken over. That is
+# pinned rather than changed, because the margin is what makes it safe and the
+# margin is large: `STALE_CLAIM_SECONDS` is 300 and `SEND_TIMEOUT_S` (the only
+# slow step inside a claim, in action-queue-execute.py) is 120, so a claim that
+# reaches 300 seconds has been idle for 180 seconds past the longest a live
+# sender can take. The asymmetry to keep in view if either number ever moves:
+# refusing at the boundary costs one `dismiss` on a card whose sender is already
+# gone, and granting at the boundary while a sender is still running costs a
+# second copy of an outbound message. So the two constants below are asserted
+# together with the boundary they justify.
+_CLAIMED_AT = datetime(2026, 8, 30, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _claim_at_age(store, seconds: float) -> dict:
+    """Claim a card whose existing claim is exactly `seconds` old."""
+    store["put"](_card(status=AQS.SENDING, sending_since=_CLAIMED_AT.isoformat()))
+    return AQS.claim_card_for_send(
+        store["data_root"], CARD_ID, AQ.SENDABLE_STATUSES,
+        now=_CLAIMED_AT + timedelta(seconds=seconds))
+
+
+def test_a_claim_exactly_on_the_stale_line_is_taken_over(store):
+    """The case ON the line, which no test in the tree had."""
+    res = _claim_at_age(store, AQS.STALE_CLAIM_SECONDS)
+
+    assert res["ok"] is True, (
+        "the boundary moved: a claim exactly STALE_CLAIM_SECONDS old is the "
+        "first one this code takes over"
+    )
+    assert res["prev_status"] == AQS.SENDING
+
+
+def test_a_claim_one_tick_inside_the_stale_line_is_still_held(store):
+    """The other side of the same line, one second below it and exact this time,
+    so a guard that granted every takeover could not pass the test above."""
+    res = _claim_at_age(store, AQS.STALE_CLAIM_SECONDS - 1)
+
+    assert res["ok"] is False
+    assert store["read"]()["sending_since"] == _CLAIMED_AT.isoformat(), (
+        "the refused claim rewrote the timestamp anyway"
+    )
+
+
+def test_the_takeover_window_still_clears_the_senders_own_timeout(store):
+    """The boundary above is only safe while this margin holds.
+
+    A takeover at exactly `STALE_CLAIM_SECONDS` can never overrun a live sender
+    while that number is comfortably past the longest one can run. If either
+    constant moves so that it is not, the boundary has to move to `<=` and the
+    test above has to flip with it.
+    """
+    assert AQX.SEND_TIMEOUT_S < AQS.STALE_CLAIM_SECONDS, (
+        f"a claim goes stale at {AQS.STALE_CLAIM_SECONDS}s while a send may run "
+        f"for {AQX.SEND_TIMEOUT_S}s; the takeover can now hit a live sender"
+    )
 
 
 def test_a_claim_with_no_readable_stamp_is_not_taken_over(store):

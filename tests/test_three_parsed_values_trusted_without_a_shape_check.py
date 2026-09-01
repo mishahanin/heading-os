@@ -330,11 +330,30 @@ def test_a_string_expect_missing_can_no_longer_skip_the_render_assertion(outcome
     "SUBJECT",            # the measured one
     "",                   # falsy, so it slid through as "no missing fields"
     {"SUBJECT": True},    # a dict sorts to its KEYS, silently
-    ["SUBJECT", 7],       # a list, but not of field names
+    ["SUBJECT", 7],       # a MIXED list: `sorted()` raises on it (see below)
+    [7],                  # a HOMOGENEOUS list: `sorted()` does not raise
+    [None],
+    [["SUBJECT"]],        # sorts fine, compares against field names, grades wrong
     17,
     None,
 ])
 def test_every_non_list_of_strings_is_refused(outcomes, bad):
+    """Both halves of the check, and the second one needs a homogeneous list.
+
+    The guard is `isinstance(x, list) AND all(isinstance(f, str))`. Only the
+    ELEMENT half is in question here, and `["SUBJECT", 7]` cannot settle it:
+    mixed types make `sorted()` raise TypeError, `run_one_case`'s `except
+    Exception` converts that into `setup_error=True`, and the assertion below
+    is satisfied by the crash rather than by the refusal.
+
+    MEASURED 2026-09-01 with `all(isinstance(f, str) ...)` deleted from
+    `_assert_doctype_render`: `["SUBJECT", 7]` still reported `setup_error=True`
+    while `[7]` reported `setup_error=False`, `passed=[False]` and
+    `detail="missing=['SUBJECT'] expected=[7]"` — a correct renderer graded as
+    broken, and the run exiting 1 ("a check failed") rather than 2 ("malformed
+    case"). That is the same wrong-verdict shape as the bare string, and until
+    the homogeneous cases were added nothing in this file could see it.
+    """
     case = _official_case(bad, SUBJECT=1)
     _, setup_error = outcomes.run_one_case(case, render=False)
     assert setup_error is True, f"{bad!r} must be refused"

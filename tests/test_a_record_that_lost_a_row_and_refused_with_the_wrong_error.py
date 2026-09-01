@@ -89,10 +89,42 @@ def test_the_measured_twenty_byte_write_no_longer_vanishes_the_row(record, monke
 
 def test_a_write_that_makes_no_progress_raises_instead_of_looping_or_lying(
         record, monkeypatch):
-    """Zero bytes accepted is not "written". It must not spin, and must not pass."""
-    monkeypatch.setattr(os, "write", lambda fd, data: 0)
+    """Zero bytes accepted is not "written". It must not spin, and must not pass.
+
+    The "must not spin" half was UNMEASURED until 2026-09-01. `pytest.raises`
+    alone cannot tell a refusal from a loop that never ends: it only ever sees
+    the exception, so an implementation that spins produces no verdict at all.
+    Measured by mutating the guard from `sent <= 0` to `sent < 0`, which is the
+    one-character change that turns the refusal back into an infinite loop --
+    the run did not go red, it HUNG, and a 45-second bound had to SIGTERM it.
+    This suite has no `pytest-timeout` (checked in the venv, 2026-09-01), so a
+    hang is not a failing test; it is a stalled worker that takes the whole
+    xdist lane with it.
+
+    So the stub counts its own calls and refuses to be called a fourth time.
+    Three is a bound with slack: the loop below it needs exactly one call to
+    decide zero progress, and a correct implementation therefore never reaches
+    the ceiling. A spinning one now fails on a named assertion in milliseconds
+    instead of hanging.
+    """
+    calls = []
+
+    def never_progresses(fd, data):
+        calls.append(len(data))
+        if len(calls) > 3:
+            raise AssertionError(
+                f"os.write was called {len(calls)} times against a stub that "
+                f"accepts nothing: the short-write guard is looping rather than "
+                f"raising, and without this bound the run would hang instead of "
+                f"failing")
+        return 0
+
+    monkeypatch.setattr(os, "write", never_progresses)
     with pytest.raises(OSError, match="short write"):
         sr.append_row(run_id="r", kind="pass_start", target="t")
+    assert len(calls) == 1, (
+        f"zero progress was decided after {len(calls)} write(s); one is enough "
+        f"and anything more is a retry loop over a stream accepting nothing")
 
 
 def test_a_partial_write_that_can_be_completed_is_completed(record, monkeypatch):

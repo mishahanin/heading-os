@@ -28,7 +28,29 @@ def count_lines(source: str) -> tuple[int, int]:
 
     Raises SyntaxError if *source* is not parseable Python.
     """
-    lines = source.splitlines()
+    # `split`, never `splitlines()`. `str.splitlines()` breaks on eight
+    # characters Python's own tokenizer does not treat as line terminators -
+    # U+2028, U+2029, U+0085, U+000B, U+000C, U+001C, U+001D, U+001E - so a
+    # source holding any of them inside a string or a comment was cut into more
+    # "lines" than it has. That inflates BOTH returned numbers and, worse,
+    # shifts every line number after the first occurrence out of step with the
+    # ones `tokenize` and `ast` report, so a blank-line or docstring exclusion
+    # lands on the wrong line.
+    #
+    # MEASURED 2026-09-01 on this repository's own tracked sources, which is
+    # where it stops being hypothetical: `scripts/utils/sanitize_text.py`
+    # reported 272 physical lines against a true 268, and two test files
+    # over-reported by 2 each. Minimally, `x = "a<U+2028>b"` on one line came
+    # back as `(2, 2)` instead of `(1, 1)`.
+    #
+    # Line endings are normalised first because a `source` arriving from stdin
+    # has had no universal-newline translation, and the tokenizer accepts
+    # `\r\n` and a lone `\r`. The trailing empty element from a final newline is
+    # dropped, which is the one `splitlines()` behaviour that was correct.
+    normalised = source.replace("\r\n", "\n").replace("\r", "\n")
+    lines = normalised.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
     excluded = {n for n, text in enumerate(lines, 1) if not text.strip()}
     try:
         for tok in tokenize.generate_tokens(io.StringIO(source).readline):

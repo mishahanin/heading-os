@@ -97,10 +97,39 @@ def test_embed_fonts_orders_lst_after_notessz(tmp_path):
     assert children.index("embeddedFontLst") > children.index("sldSz")
 
 
+def _fake_font_bytes(marker: bytes) -> bytes:
+    return b"\x00\x01\x00\x00" + marker
+
+
+def _distinct_font(dir_: Path, name: str, marker: bytes) -> Path:
+    """Like `_fake_font`, but each file's bytes identify WHICH file it is.
+
+    `_fake_font` writes the same bytes into every file, so a slot pointing at the
+    wrong face is indistinguishable from one pointing at the right face. That is
+    what let the oblique-intent filter go unmeasured (see the italic test below).
+    """
+    dir_.mkdir(parents=True, exist_ok=True)
+    f = dir_ / name
+    f.write_bytes(_fake_font_bytes(marker))
+    return f
+
+
 def test_embed_fonts_adds_italic_slot(tmp_path):
+    """Both slots exist AND each carries its own face.
+
+    Asserting only that a `<regular>` and an `<italic>` element appeared says
+    nothing about which file went into either. Measured 2026-09-01 by disabling
+    the oblique-intent filter in `_embeddable_font`
+    (`if bool(ft & {"oblique", "italic"}) != fam_oblique: continue` -> `if False`):
+    the italic slot resolved to the REGULAR face, because "GT Standard L Medium"
+    ranks ahead of "GT Standard L Medium Oblique" on `len(ft - fam_core)` once the
+    intent check is gone. Two slots were still written, both elements were still
+    present, and this test stayed green while the deck shipped an italic run in
+    an upright face. The byte markers below are what tell the two apart.
+    """
     fonts = tmp_path / "fonts"
-    _fake_font(fonts, "GT Standard L Medium.ttf")
-    _fake_font(fonts, "GT Standard L Medium Oblique.ttf")
+    _distinct_font(fonts, "GT Standard L Medium.ttf", b"REGULAR")
+    _distinct_font(fonts, "GT Standard L Medium Oblique.ttf", b"OBLIQUE")
     pptx = tmp_path / "deck.pptx"
     _blank_pptx(pptx)
 
@@ -109,9 +138,41 @@ def test_embed_fonts_adds_italic_slot(tmp_path):
 
     with zipfile.ZipFile(pptx) as z:
         pres = etree.fromstring(z.read("ppt/presentation.xml"))
-    ef = pres.find(f"{{{P}}}embeddedFontLst/{{{P}}}embeddedFont")
-    assert ef.find(f"{{{P}}}regular") is not None
-    assert ef.find(f"{{{P}}}italic") is not None
+        rels = etree.fromstring(z.read("ppt/_rels/presentation.xml.rels"))
+        target = {r.get("Id"): r.get("Target") for r in rels
+                  if r.get("Type", "").endswith("/font")}
+        ef = pres.find(f"{{{P}}}embeddedFontLst/{{{P}}}embeddedFont")
+        assert ef.find(f"{{{P}}}regular") is not None
+        assert ef.find(f"{{{P}}}italic") is not None
+
+        got = {}
+        for style in ("regular", "italic"):
+            rid = ef.find(f"{{{P}}}{style}").get(f"{{{R}}}id")
+            got[style] = z.read("ppt/" + target[rid])
+
+    assert got["regular"] == _fake_font_bytes(b"REGULAR"), (
+        "the regular slot does not carry the upright face")
+    assert got["italic"] == _fake_font_bytes(b"OBLIQUE"), (
+        "the italic slot does not carry the oblique face; the oblique-intent "
+        "filter in _embeddable_font is not doing its job")
+
+
+def test_embeddable_font_prefers_ttf_on_the_token_match_path_too(tmp_path):
+    """The TTF preference lives on BOTH resolution paths, and both are pinned.
+
+    `test_embeddable_font_prefers_ttf_over_otf` below uses glued filenames, which
+    only the normalized-equality fallback resolves, so it pins the `.ttf` rank in
+    that sort and nothing else. Measured 2026-09-01: flipping the primary
+    token-match rank to prefer `.otf` left every test in this file green. The
+    brand fonts ship in both formats, so the untested branch is the one the real
+    export takes.
+    """
+    fonts = tmp_path / "fonts"
+    _fake_font(fonts, "GT-Standard-L-Standard-Medium.otf")
+    _fake_font(fonts, "GT-Standard-L-Standard-Medium.ttf")
+    hit = pencil_export._embeddable_font("GT Standard L Medium", [fonts])
+    assert hit is not None and hit.suffix == ".ttf", (
+        f"token match picked {hit.name if hit else None}, not the TTF")
 
 
 def test_embeddable_font_matches_glued_filename(tmp_path):

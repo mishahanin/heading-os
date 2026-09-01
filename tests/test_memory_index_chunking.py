@@ -64,7 +64,12 @@ def config_with_chunking(root: Path):
         "  - {layer: vaulttest, glob: '_secure/**/*.md'}\n"
         "  - {layer: segtest, glob: 'tmp/**/*.md'}\n"
         "collections:\n"
-        "  content: [outputs, crm]\n"
+        # `vaulttest` and `segtest` are members of a collection ON PURPOSE; see
+        # the same note in tests/test_memory_index_coverage.py. A layer in no
+        # collection is never built, so the air-gapped fixtures below did not
+        # reach the ingest walk and `test_fts_parity_and_airgap_under_chunking`
+        # was green for a reason that had nothing to do with the deny guard.
+        "  content: [outputs, crm, vaulttest, segtest]\n"
         "chunk:\n"
         "  enabled_layers: [outputs]\n"
         "  max_chars: 200\n"
@@ -100,6 +105,17 @@ def build_env(tmp_path, monkeypatch):
     monkeypatch.setenv("HEADING_OS_DATA", str(root))
     monkeypatch.setattr(mod, "get_workspace_root", lambda: root)
     monkeypatch.setattr(mod, "embed", fake_embed)
+    # The mock embedder is not the only route off this machine, and this file's
+    # docstring said "no ollama dependency" while the build opened sockets.
+    # `load_config` resolves the pinned host through `_resolve_embed_host`, and
+    # `cmd_build` asks the host for the model's weight digest through
+    # `model_digest`; both talk to `config: host:` above, which is a real
+    # address. MEASURED 2026-09-01 with `socket.socket.connect` counted across
+    # the four memory-index test files: 46 connects to 127.0.0.1:11434. Pinned
+    # here so the result does not depend on whether an ollama daemon happens to
+    # be up, matching tests/test_five_claims_that_covered_one_path_of_several.py.
+    monkeypatch.setattr(mod, "model_digest", lambda **k: None)
+    monkeypatch.setattr(mod, "_resolve_embed_host", lambda host=None, **k: host)
     monkeypatch.setattr(mod, "get_classification", lambda p: "ceo-only")
     assert mod.cmd_build(types.SimpleNamespace(force=True)) == 0
     # Isolation guard: DB under the temp root, never the real data root.

@@ -162,3 +162,45 @@ def test_bucket_label_exposed_for_ui(tmp_path):
     assert THREADS_BUCKET_LABEL["today"] == "Today"
     assert THREADS_BUCKET_LABEL["this_week"] == "This week"
     assert THREADS_BUCKET_LABEL["older"] == "Older"
+
+
+def test_the_week_bucket_boundary_has_a_case_on_the_line(tmp_path):
+    """Seven days is "this week"; eight is "older".
+
+    The bucket tests above use 0, 3 and 30 days, so nothing sat on the bound
+    `days_since <= 7` and nothing distinguished it from `<= 6` or `<= 8`. The
+    boundary is the whole content of `_recency_bucket`: everything else in it
+    is the None case and the equality on zero.
+    """
+    from datetime import date as _date
+    from scripts.bridge_daemon.sources.threads import _recency_bucket
+
+    assert _recency_bucket(7) == "this_week"
+    assert _recency_bucket(8) == "older"
+
+    # And through the real walk, so the bucket the page renders is the one the
+    # helper returns. `list_active_threads` dates against the host clock (it
+    # takes no `today`), so the fixtures are written relative to it.
+    today = datetime.now(get_default_tz()).date()
+    _write_thread(tmp_path, "seven", title="Seven",
+                  last_touched=(today - timedelta(days=7)).isoformat())
+    _write_thread(tmp_path, "eight", title="Eight",
+                  last_touched=(today - timedelta(days=8)).isoformat())
+
+    buckets = {t["title"]: t["bucket"] for t in list_active_threads(tmp_path)["threads"]}
+    assert buckets == {"Seven": "this_week", "Eight": "older"}
+
+
+def test_a_thread_with_no_date_is_older_not_a_crash(tmp_path):
+    """`days_since` is None when `last_touched` and `opened` are both absent or
+    unparseable, and None must bucket rather than raise."""
+    p = tmp_path / "threads" / "business" / "undated.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("---\nid: undated\ntitle: Undated\nstatus: active\n"
+                 "last_touched: 'not-a-date'\n---\n\nbody\n", encoding="utf-8")
+
+    got = list_active_threads(tmp_path)
+
+    assert got["total"] == 1
+    assert got["threads"][0]["days_since"] is None
+    assert got["threads"][0]["bucket"] == "older"

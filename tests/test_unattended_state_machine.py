@@ -87,6 +87,45 @@ def test_lower_without_a_raise_does_not_invent_a_prior():
     assert state["session_unattended"] is False
 
 
+def test_lower_does_not_re_raise_an_auto_that_raise_never_raised():
+    """What `unattended_raised_auto` is FOR, and nothing bound it until now.
+
+    Every round trip above is answered by `unattended_prior_auto` alone, so the
+    flag could hold any value and the results would not move. MEASURED
+    2026-09-01: replacing its computation with a constant `True` survived this
+    entire file.
+
+    The flag is not redundant. It records whether the raise is the REASON auto
+    is on, and a restore that ignores it reaches PAST its own side effect. Auto
+    is already on when the mode is raised, the operator types `--auto off`
+    during the stretch, and the lower then puts back a True it never wrote. The
+    docstring's "undoing exactly what raise_unattended did" is the property, and
+    it needs a state that CHANGED between the two calls to be visible at all.
+    """
+    state = {"session_auto": True}
+    CP.raise_unattended(state)
+    state["session_auto"] = False        # the operator turns auto off mid-stretch
+
+    CP.lower_unattended(state)
+
+    assert state["session_auto"] is False, (
+        "the lower restored an auto the raise never raised, overwriting a "
+        "value the operator set after it")
+
+
+def test_lower_does_restore_an_auto_that_raise_did_raise():
+    """The mirror, so the test above cannot be satisfied by a lower that stopped
+    restoring at all. Here the raise IS the reason auto is on, so the change
+    made during the stretch is ours to undo."""
+    state = {"session_auto": False}
+    CP.raise_unattended(state)
+    assert state["session_auto"] is True
+
+    CP.lower_unattended(state)
+
+    assert state["session_auto"] is False, "the raise's own side effect survived"
+
+
 def test_lowering_twice_is_safe():
     state = {}
     CP.raise_unattended(state)

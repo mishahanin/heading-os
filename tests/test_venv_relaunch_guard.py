@@ -19,6 +19,7 @@ So the guard moved to tests/conftest.py, which is collected before any test
 module, and the tests here replace the three that could not fail. Measured with
 the conftest line removed: the child run below printed zero bytes and exited 0.
 """
+import ast
 import os
 import re
 import shutil
@@ -33,13 +34,85 @@ from scripts.utils import venv_guard as _venv
 ROOT = Path(__file__).resolve().parent.parent
 TESTS = ROOT / "tests"
 
-# Any line that SETS the sentinel, however it spells the name. Reading it, as
-# this module does below, is not setting it.
+# Fallback only, for a file the parser cannot read. This regex WAS the whole
+# check, under a comment claiming it matched the sentinel "however it spells the
+# name". It matched two spellings of the ASSIGNMENT and one of the name.
+# MEASURED 2026-09-01 with a scratch module carrying
+#   from scripts.utils.venv_guard import _SENTINEL
+#   os.environ.setdefault(_SENTINEL, "1")
+# in `tests/`: the stray scan stayed green, 6 passed. An imported bare name is
+# the obvious way anyone would write that line, and it was the one spelling the
+# regex could not see - so the guard against cross-satisfying per-module copies
+# had a hole shaped exactly like the copies it exists to refuse.
 _SETS_THE_SENTINEL = re.compile(
     r"""os\.environ(?:\.setdefault)?[\[(]\s*(?:_venv\._SENTINEL|["']"""
     + _venv._SENTINEL
     + r"""["'])"""
 )
+
+# A write into the process environment, whatever it is spelled through.
+_ENV_WRITERS = ("environ.setdefault", "environ.update", "os.putenv", "putenv")
+
+
+def _names_the_sentinel(node) -> bool:
+    """Does this expression name the guard's sentinel, by literal or by binding?
+
+    Either the literal string, or any identifier ending in `_SENTINEL` - which
+    covers `_venv._SENTINEL`, a bare imported `_SENTINEL`, and an alias of it.
+    Deliberately generous: a false positive here is a stray reported for review,
+    a false negative is a silent second copy of the guard.
+    """
+    text = ast.unparse(node)
+    return _venv._SENTINEL in text or re.search(r"\b\w*_SENTINEL\b", text) is not None
+
+
+def sets_the_sentinel(source: str) -> bool:
+    """True when this module SETS the sentinel. An AST question, not a grep.
+
+    Three reasons it is not a regex. A comment or a docstring quoting the line
+    cannot satisfy it, which the regex could. An assignment written any of the
+    ways Python allows it (`os.environ[X] = `, `environ[X] = `,
+    `os.environ.setdefault(X, ...)`, `os.environ.update({X: ...})`,
+    `os.putenv(X, ...)`) is one question rather than one alternation branch per
+    spelling. And the key may be a bare imported name rather than an attribute,
+    which is the case the regex missed entirely.
+
+    READING the variable is not setting it, so a Load-context subscript and a
+    `.get`/`.pop`/`delenv` call are all ignored - this module reads it several
+    times below and must not flag itself.
+    """
+    # Prefilter, and it is exact rather than approximate. `_names_the_sentinel`
+    # returns True only when the unparsed key contains the sentinel literal or
+    # an identifier ending in `_SENTINEL`; `ast.unparse` reproduces those
+    # characters, so a file holding neither substring cannot make it answer True
+    # and needs no parse. Selectivity on the live tree, measured 2026-09-01: 10
+    # of 972 test modules survive it. Without it the stray scan cost 15.75s
+    # against 0.30s for the regex it replaced, parsing every module under
+    # `tests/` to look at ten of them; with it, 0.55s.
+    if _venv._SENTINEL not in source and "_SENTINEL" not in source:
+        return False
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        # A file the parser cannot read is not a file this scan can judge, so
+        # fall back to the old substring question rather than answering False.
+        return bool(_SETS_THE_SENTINEL.search(source))
+
+    for node in ast.walk(tree):
+        targets = []
+        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for target in targets:
+            if (isinstance(target, ast.Subscript)
+                    and ast.unparse(target.value).endswith("environ")
+                    and _names_the_sentinel(target.slice)):
+                return True
+        if isinstance(node, ast.Call):
+            func = ast.unparse(node.func)
+            if any(func.endswith(writer) for writer in _ENV_WRITERS) and any(
+                    _names_the_sentinel(arg) for arg in node.args):
+                return True
+    return False
 
 
 def test_the_guard_is_set_once_by_the_root_conftest():
@@ -49,7 +122,62 @@ def test_the_guard_is_set_once_by_the_root_conftest():
     property worth pinning is that the ONE file collected before every test
     module carries it.
     """
-    assert _SETS_THE_SENTINEL.search((TESTS / "conftest.py").read_text(encoding="utf-8"))
+    assert sets_the_sentinel((TESTS / "conftest.py").read_text(encoding="utf-8"))
+
+
+SPELLINGS = [
+    'import os\nos.environ["%s"] = "1"' % _venv._SENTINEL,
+    "import os\nfrom scripts.utils import venv_guard as _venv\n"
+    'os.environ[_venv._SENTINEL] = "1"',
+    "import os\nfrom scripts.utils.venv_guard import _SENTINEL\n"
+    'os.environ.setdefault(_SENTINEL, "1")',
+    "import os\nfrom scripts.utils.venv_guard import _SENTINEL as GUARD_SENTINEL\n"
+    'os.environ.update({GUARD_SENTINEL: "1"})',
+    "from os import environ\nfrom scripts.utils.venv_guard import _SENTINEL\n"
+    'environ[_SENTINEL] = "1"',
+    "import os\nfrom scripts.utils.venv_guard import _SENTINEL\n"
+    'os.putenv(_SENTINEL, "1")',
+]
+
+NOT_SETTING = [
+    "import os\nfrom scripts.utils.venv_guard import _SENTINEL\n"
+    "value = os.environ.get(_SENTINEL)",
+    "import os\nfrom scripts.utils.venv_guard import _SENTINEL\n"
+    "os.environ.pop(_SENTINEL, None)",
+    '# os.environ["%s"] = "1"  # a comment, not a copy' % _venv._SENTINEL,
+    '"""os.environ[_SENTINEL] = "1" in a docstring."""',
+    "import os\nos.environ[\"SOMETHING_ELSE\"] = \"1\"",
+]
+
+
+@pytest.mark.parametrize("source", SPELLINGS, ids=range(len(SPELLINGS)))
+def test_every_way_of_setting_the_sentinel_is_seen(source):
+    """The positive control the stray scan never had.
+
+    `strays == []` is green over a corpus the detector cannot read, so the
+    detector needs its own evidence. Case 2 is the measured miss: the old regex
+    answered False for it.
+    """
+    assert sets_the_sentinel(source), source
+
+
+@pytest.mark.parametrize("source", NOT_SETTING, ids=range(len(NOT_SETTING)))
+def test_reading_the_sentinel_is_not_setting_it(source):
+    """The true negative. A detector that answered True for everything would
+    satisfy the test above and fail the whole suite on this file, which reads
+    the sentinel four times."""
+    assert not sets_the_sentinel(source), source
+
+
+def test_the_old_regex_could_not_see_the_imported_spelling():
+    """The measurement, kept as a test so the reason for the AST walk survives.
+
+    If this ever fails the regex has been widened, and the fallback path in
+    `sets_the_sentinel` is no longer the narrow thing this comment says it is.
+    """
+    imported = SPELLINGS[2]
+    assert not _SETS_THE_SENTINEL.search(imported)
+    assert sets_the_sentinel(imported)
 
 
 def _tracked(rel: str) -> bool:
@@ -104,7 +232,7 @@ def test_no_test_module_carries_its_own_copy_of_the_guard():
                 f"{rel} is tracked by git but disappeared mid-scan"
             )
             continue
-        if _SETS_THE_SENTINEL.search(body):
+        if sets_the_sentinel(body):
             strays.append(rel)
     assert strays == []
 

@@ -28,12 +28,22 @@ def load_module():
 
 @pytest.fixture
 def store(tmp_path: Path):
-    """A built store: three memories with different counts, plus one non-memory."""
+    """A built store: four memories with different counts, plus one non-memory.
+
+    `legacy.md` carries `last_accessed = NULL`, which is not a contrived value:
+    `open_store`'s Gap #2 migration adds the column with no default, so every
+    row written by a pre-reinforcement build reads NULL until the next
+    `build --force`. Nothing else in this file produces one -- `upsert_note`
+    defaults to `""` -- so the `COALESCE` in `top_access_rows` was never
+    reached. MEASURED 2026-09-01 by dropping the `COALESCE`: this file stayed
+    green while the query started returning `None` for a never-surfaced memory.
+    """
     mod = load_module()
     conn = mod.open_store(tmp_path, mod.STORE_REL)
     rows = [
         ("auto-memory/busy.md", "memory", 42, "2026-08-07"),
         ("auto-memory/middling.md", "memory", 7, "2026-06-01"),
+        ("auto-memory/legacy.md", "memory", 3, None),
         ("auto-memory/quiet.md", "memory", 0, ""),
         ("knowledge/odin-brain/loud.md", "odin", 99, "2026-08-07"),
     ]
@@ -53,11 +63,30 @@ def test_ranks_memory_entries_by_access_count(store):
     conn.close()
 
     assert [r[0] for r in rows] == [
-        "auto-memory/busy.md", "auto-memory/middling.md", "auto-memory/quiet.md"
+        "auto-memory/busy.md", "auto-memory/middling.md",
+        "auto-memory/legacy.md", "auto-memory/quiet.md",
     ], "a non-memory layer must not appear, and the order is count-descending"
     assert rows[0][1] == 42
     assert rows[0][2] == "2026-08-07"
-    assert rows[2][2] == "", "never surfaced reads as empty, not as a missing row"
+    assert rows[3][2] == "", "never surfaced reads as empty, not as a missing row"
+
+
+def test_a_null_last_accessed_reads_as_empty_not_as_none(store):
+    """A row migrated in from a pre-reinforcement build carries NULL here.
+
+    The caller formats the value (`last or 'never'`), so a None would print the
+    same word -- but every other consumer of this tuple gets a type that the
+    docstring's "(path, access_count, last_accessed)" does not admit, and a
+    `sorted()` or a `max()` over the column raises on the mix. The COALESCE is
+    what keeps the column a string; this is the row that reaches it.
+    """
+    mod, root = store
+    conn = mod.open_store(root, mod.STORE_REL)
+    rows = mod.top_access_rows(conn, 20)
+    conn.close()
+    by_path = {r[0]: r for r in rows}
+    assert by_path["auto-memory/legacy.md"] == ("auto-memory/legacy.md", 3, "")
+    assert all(isinstance(r[2], str) for r in rows), rows
 
 
 def test_a_never_surfaced_memory_is_listed_not_hidden(store):

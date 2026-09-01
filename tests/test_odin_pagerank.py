@@ -128,6 +128,52 @@ def test_airgap_excludes_denied_paths(brain):
     assert g.node_count() == 5
 
 
+def test_a_note_linking_to_itself_gets_no_edge(tmp_path):
+    """`if dst and dst != src` had no witness: dropping `and dst != src` left the
+    whole file green. A self-loop is a node that endlessly recommends itself,
+    which is precisely the ranking artefact PPR is supposed to avoid."""
+    bdir = tmp_path / "knowledge" / "odin-brain" / "principles"
+    bdir.mkdir(parents=True)
+    _note(bdir, "3001", "Self referential", ["x"], ["3001", "3002"])
+    _note(bdir, "3002", "Other note", ["y"], [])
+    g = pr.build_graph(tmp_path / "knowledge" / "odin-brain", tmp_path)
+    assert g.adjacency["3001"] == {"3002"}, "a note linked itself into the graph"
+
+
+def test_frontmatter_wikilinks_are_not_edges(tmp_path):
+    """The body is what carries links. `build_graph` strips the frontmatter
+    region before parsing, and the strip could be removed with every test green:
+    no fixture put a `[[...]]` inside frontmatter. A `sources:` or `title:` line
+    that happens to contain wiki-link syntax would otherwise wire an edge the
+    author never wrote."""
+    bdir = tmp_path / "knowledge" / "odin-brain" / "principles"
+    bdir.mkdir(parents=True)
+    (bdir / "front.md").write_text(
+        '---\nid: "4001"\ntitle: "Front matter link [[4002]]"\ntype: principle\n---\n\n'
+        "# Front\n\nNo body links here.\n", encoding="utf-8")
+    _note(bdir, "4002", "Target note", ["y"], [])
+    g = pr.build_graph(tmp_path / "knowledge" / "odin-brain", tmp_path)
+    assert g.adjacency["4001"] == set(), (
+        "a wiki-link inside frontmatter became a graph edge")
+
+
+def test_a_duplicate_node_key_is_deterministic_first_file_wins(tmp_path):
+    """Two notes claiming one id: the sorted walk decides, and the second is
+    skipped rather than overwriting the first. Removing the `if key in g.nodes`
+    guard left the file green because no fixture had a collision, so the graph
+    would have become dependent on directory order."""
+    bdir = tmp_path / "knowledge" / "odin-brain" / "principles"
+    bdir.mkdir(parents=True)
+    for stem, title in (("a-first", "A first"), ("b-second", "B second")):
+        (bdir / f"{stem}.md").write_text(
+            f'---\nid: "5001"\ntitle: "{title}"\ntype: principle\n---\n\nbody\n',
+            encoding="utf-8")
+    g = pr.build_graph(tmp_path / "knowledge" / "odin-brain", tmp_path)
+    assert g.node_count() == 1
+    assert g.nodes["5001"]["title"] == "A first", (
+        "the later file overwrote the earlier one; the graph is order-dependent")
+
+
 def test_config_defaults_when_missing(tmp_path):
     cfg = pr.load_pagerank_config(tmp_path)  # no config dir
     assert cfg["enabled"] is False

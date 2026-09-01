@@ -206,23 +206,55 @@ def test_dry_run_validates_and_sends_nothing():
     assert "source=stdin" in p.stdout
 
 
+def _code_only(src: str) -> str:
+    """The source with whole-line comments removed.
+
+    Both guards below are explained by comments that NAME the calls they sit
+    above, and a naive substring search matches the explanation rather than the
+    code. Same trap as the tty-prompt guard.
+    """
+    return "\n".join(ln for ln in src.splitlines()
+                     if not ln.lstrip().startswith("#"))
+
+
+def _assert_guard_is_above(guard_marker: str, calls: tuple[str, ...]) -> None:
+    """No `calls` entry may appear between argparse and `guard_marker`.
+
+    Written as an ABSENCE over the region, because the presence form this file
+    carried until 2026-09-01 could not fail. It read::
+
+        guard = src.index(marker)
+        assert src.index(call, guard) > guard
+
+    and `str.index(sub, start)` returns the lowest index AT OR AFTER `start`, so
+    the comparison is true for every call that exists anywhere below the guard,
+    whether or not it ALSO exists above it. Measured 2026-09-01 on a copy with
+    `account = connect(config)` inserted directly under `parse_args()`: the old
+    assertion passed. The one control that stops a pytest run putting a message
+    on the wire had an ordering test that was arithmetically incapable of going
+    red, on all four of the calls it named.
+    """
+    code = _code_only(SEND_EMAIL.read_text(encoding="utf-8"))
+    start = code.index("args = parser.parse_args()")
+    guard = code.index(guard_marker, start)
+    region = code[start:guard]
+    for call in calls:
+        assert call not in region, (
+            f"{call} is reachable between argparse and {guard_marker!r}; the "
+            f"guard runs too late to stop it")
+        # ...and the call still exists below it, so a rename cannot satisfy the
+        # absence above by deleting the thing being ordered.
+        assert call in code[guard:], (
+            f"{call} no longer appears below {guard_marker!r}; this test is now "
+            f"ordering a call that is gone, which is a green over nothing")
+
+
 def test_dry_run_returns_before_any_credential_is_read():
     """Read the order out of the source. A dry run that reached load_config()
     would still touch .env, and a dry run that reached connect() would open a
     session -- neither is 'nothing was sent', but both would print it."""
-    src = SEND_EMAIL.read_text(encoding="utf-8")
-    guard = src.index("if args.dry_run:")
-    for call in ("load_config()", "connect(config)"):
-        assert src.index(call, guard) > guard, f"{call} runs before the dry-run guard"
-    # Strip comment lines before scanning: the guard's own comment names
-    # load_config() to explain why it sits above it, and a naive substring
-    # search matches the explanation. Same trap as the tty-prompt guard.
-    between = src[src.index("args = parser.parse_args()"):guard]
-    code = "\n".join(ln for ln in between.splitlines()
-                     if not ln.lstrip().startswith("#"))
-    assert "load_config()" not in code, (
-        "a credential is read between parsing and the dry-run exit"
-    )
+    _assert_guard_is_above("if args.dry_run:",
+                           ("load_config()", "connect(config)"))
 
 
 def test_a_two_hundred_kilobyte_body_survives_the_real_cli():
@@ -281,12 +313,12 @@ def test_the_refusal_still_allows_a_dry_run():
 
 def test_the_refusal_sits_above_every_send_path():
     """Read the order out of the source rather than proving it by sending."""
-    src = SEND_EMAIL.read_text(encoding="utf-8")
-    guard = src.index("PYTEST_CURRENT_TEST")
-    after_parse = src.index("args = parser.parse_args()")
-    assert after_parse < guard, "the guard runs before argparse; it needs args.dry_run"
-    for call in ("load_config()", "connect(config)", "send_email(", "send_batch("):
-        assert src.index(call, guard) > guard, f"{call} can be reached before the guard"
+    code = _code_only(SEND_EMAIL.read_text(encoding="utf-8"))
+    assert code.index("args = parser.parse_args()") < code.index("PYTEST_CURRENT_TEST"), \
+        "the guard runs before argparse; it needs args.dry_run"
+    _assert_guard_is_above(
+        "PYTEST_CURRENT_TEST",
+        ("load_config()", "connect(config)", "send_email(", "send_batch("))
 
 
 # --- 4. the file must not describe a spawner that no longer exists -----------

@@ -30,7 +30,10 @@ import ast
 import os
 import re
 import sys
+from collections import namedtuple
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 SOURCES = ROOT / "scripts" / "bridge_daemon" / "sources"
@@ -337,3 +340,288 @@ def test_the_promise_is_written_where_the_guard_runs():
             f"{fname}:{func} documents 'No symlinks' and the file has no live "
             "guard behind it"
         )
+
+
+# =============================================================================
+# EVERY guarded reader refuses, and the list of them is derived (2026-08-31)
+# =============================================================================
+#
+# Until today this file was named for a claim it established on two readers out
+# of thirteen. `read_skill` and `read_one_contact` had a real refusal case; the
+# other eleven had only the two checks above, and both of those ask about SOURCE
+# TEXT: does the file contain `contains_symlink(`, and was the argument already
+# `.resolve()`d. Neither can see a guard that is present, unresolved, and unable
+# to fire.
+#
+# Measured by neutering one of the eleven without touching either thing those
+# checks look at:
+#
+#     scripts/bridge_daemon/sources/library.py
+#     -        if contains_symlink(data_root / "knowledge", target_raw):
+#     +        if False and contains_symlink(data_root / "knowledge", target_raw):
+#
+#     tests/bridge tests/inbox_pulse tests/contract
+#       + tests/test_a_list_scan_that_published_what_its_drilldown_refused.py
+#         ->  1716 passed, 1 skipped
+#
+# Byte-identical to the baseline. `read_note` now serves a symlinked note, the
+# string `contains_symlink(` is still in the file, the AST still finds the call
+# with an unresolved argument, and the file whose whole subject is "a documented
+# control that cannot fire is worse than no control" says nothing.
+#
+# `test_every_reader_that_promises_no_symlinks_calls_the_live_guard` could not
+# have seen it either, for a second reason worth stating: its floor is
+# `promising >= 5` over eight files, so deleting a reader's guard AND its
+# "symlinks not allowed" string together drops the count to seven and passes.
+#
+# The registry below is checked against the AST both ways, so a new guarded
+# function fails here until someone writes its refusal case, and an entry whose
+# guard was removed fails too rather than sitting on as decoration.
+
+Verdict = namedtuple("Verdict", "served refused detail")
+
+
+def _skills_tree(tmp_path: Path) -> Path:
+    root = tmp_path / ".claude" / "skills"
+    (root / "real").mkdir(parents=True)
+    (root / "real" / "SKILL.md").write_text("---\nname: real\n---\nbody\n",
+                                            encoding="utf-8")
+    (root / "clone").mkdir()
+    os.symlink(root / "real" / "SKILL.md", root / "clone" / "SKILL.md")
+    return tmp_path
+
+
+def _case_list_capabilities(tmp_path: Path) -> Verdict:
+    from scripts.bridge_daemon.sources.capabilities import list_capabilities
+    got = list_capabilities(_skills_tree(tmp_path))
+    slugs = {s["slug"] for s in got["skills"]}
+    return Verdict("real" in slugs, "clone" not in slugs, slugs)
+
+
+def _case_read_skill(tmp_path: Path) -> Verdict:
+    from scripts.bridge_daemon.sources.capabilities import read_skill
+    root = _skills_tree(tmp_path)
+    return _dict_verdict(read_skill(root, "real"), read_skill(root, "clone"))
+
+
+def _contacts_tree(tmp_path: Path) -> Path:
+    contacts = tmp_path / "crm" / "contacts"
+    contacts.mkdir(parents=True)
+    (contacts / "real-person.md").write_text("# Real Person\n", encoding="utf-8")
+    os.symlink(contacts / "real-person.md", contacts / "shadow-person.md")
+    return tmp_path
+
+
+def _case_read_one_contact(tmp_path: Path) -> Verdict:
+    from scripts.bridge_daemon.sources.contacts import read_one_contact
+    root = _contacts_tree(tmp_path)
+    return _dict_verdict(
+        read_one_contact(root, "ceo", "real-person", data_root=root),
+        read_one_contact(root, "ceo", "shadow-person", data_root=root))
+
+
+def _case_read_contact(tmp_path: Path) -> Verdict:
+    from scripts.bridge_daemon.sources.tribe import read_contact
+    root = _contacts_tree(tmp_path)
+    return _dict_verdict(read_contact(root, "real-person"),
+                         read_contact(root, "shadow-person"))
+
+
+def _drafts_tree(tmp_path: Path) -> tuple[Path, str, str]:
+    from scripts.bridge_daemon.sources.approvals import EMAIL_DRAFTS_DIR
+    drafts = tmp_path / EMAIL_DRAFTS_DIR
+    drafts.mkdir(parents=True)
+    (drafts / "real.md").write_text("**To:** a@b.test\n**Subject:** x\n\nbody\n",
+                                    encoding="utf-8")
+    os.symlink(drafts / "real.md", drafts / "planted.md")
+    return tmp_path, f"{EMAIL_DRAFTS_DIR}/real.md", f"{EMAIL_DRAFTS_DIR}/planted.md"
+
+
+def _case_list_approvals(tmp_path: Path) -> Verdict:
+    from scripts.bridge_daemon.sources.approvals import list_approvals
+    root, _, _ = _drafts_tree(tmp_path)
+    names = {i["filename"] for i in list_approvals(root)["items"]}
+    return Verdict("real.md" in names, "planted.md" not in names, names)
+
+
+def _case_read_draft(tmp_path: Path) -> Verdict:
+    from scripts.bridge_daemon.sources.approvals import read_draft
+    root, honest, linked = _drafts_tree(tmp_path)
+    return _dict_verdict(read_draft(root, honest), read_draft(root, linked))
+
+
+def _case_read_note(tmp_path: Path) -> Verdict:
+    from scripts.bridge_daemon.sources.library import read_note
+    knowledge = tmp_path / "knowledge"
+    knowledge.mkdir(parents=True)
+    (knowledge / "real.md").write_text("# note\n", encoding="utf-8")
+    os.symlink(knowledge / "real.md", knowledge / "link.md")
+    return _dict_verdict(read_note(tmp_path, "knowledge/real.md"),
+                         read_note(tmp_path, "knowledge/link.md"))
+
+
+def _case_read_thread(tmp_path: Path) -> Verdict:
+    from scripts.bridge_daemon.sources.threads import (
+        THREADS_BUSINESS_DIR,
+        read_thread,
+    )
+    d = tmp_path / THREADS_BUSINESS_DIR
+    d.mkdir(parents=True)
+    (d / "real.md").write_text("# thread\n", encoding="utf-8")
+    os.symlink(d / "real.md", d / "link.md")
+    return _dict_verdict(read_thread(tmp_path, f"{THREADS_BUSINESS_DIR}/real.md"),
+                         read_thread(tmp_path, f"{THREADS_BUSINESS_DIR}/link.md"))
+
+
+def _case_read_dossier(tmp_path: Path) -> Verdict:
+    from scripts.bridge_daemon.sources.investors import PROGRAM_DIR, read_dossier
+    d = tmp_path / PROGRAM_DIR
+    d.mkdir(parents=True)
+    (d / "real.md").write_text("# dossier\n", encoding="utf-8")
+    os.symlink(d / "real.md", d / "link.md")
+    return _dict_verdict(read_dossier(tmp_path, f"{PROGRAM_DIR}/real.md"),
+                         read_dossier(tmp_path, f"{PROGRAM_DIR}/link.md"))
+
+
+def _case_read_inflight(tmp_path: Path) -> Verdict:
+    from scripts.bridge_daemon.sources.pulse import IN_FLIGHT_DIRS
+    from scripts.bridge_daemon.sources.studio import read_inflight
+    rel = IN_FLIGHT_DIRS[0]
+    d = tmp_path / rel
+    d.mkdir(parents=True)
+    (d / "real.md").write_text("# in flight\n", encoding="utf-8")
+    os.symlink(d / "real.md", d / "link.md")
+    return _dict_verdict(read_inflight(tmp_path, f"{rel}/real.md"),
+                         read_inflight(tmp_path, f"{rel}/link.md"))
+
+
+def _archive_tree(tmp_path: Path) -> tuple[Path, Path]:
+    """`<archive>/posts/{real,link}` where `link` is a symlink to `real`."""
+    from scripts.bridge_daemon.sources.studio import ARTIFACT_ROOT
+    posts = tmp_path / ARTIFACT_ROOT / "posts"
+    (posts / "real").mkdir(parents=True)
+    (posts / "real" / "post.md").write_text("# post\n", encoding="utf-8")
+    (posts / "real" / "cover.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    os.symlink(posts / "real", posts / "link")
+    return tmp_path, posts
+
+
+def _case_artifact_md_is_readable(tmp_path: Path) -> Verdict:
+    from scripts.bridge_daemon.sources.studio import _artifact_md_is_readable
+    _, posts = _archive_tree(tmp_path)
+    return Verdict(_artifact_md_is_readable(posts, posts / "real" / "post.md"),
+                   _artifact_md_is_readable(posts, posts / "link" / "post.md")
+                   is False, None)
+
+
+def _case_artifact_folder(tmp_path: Path) -> Verdict:
+    from scripts.bridge_daemon.sources.studio import _artifact_folder
+    root, _ = _archive_tree(tmp_path)
+    return Verdict(_artifact_folder(root, "post", "real") is not None,
+                   _artifact_folder(root, "post", "link") is None, None)
+
+
+def _case_resolve_artifact_image(tmp_path: Path) -> Verdict:
+    from scripts.bridge_daemon.sources.studio import (
+        ARTIFACT_ROOT,
+        resolve_artifact_image,
+    )
+    root, _ = _archive_tree(tmp_path)
+    honest = f"{ARTIFACT_ROOT}/posts/real/cover.png"
+    linked = f"{ARTIFACT_ROOT}/posts/link/cover.png"
+    return Verdict(resolve_artifact_image(root, honest) is not None,
+                   resolve_artifact_image(root, linked) is None, None)
+
+
+def _dict_verdict(honest: dict, linked: dict) -> Verdict:
+    """The `{"ok": ..., "error": ...}` readers, all of which share one wording.
+
+    The refusal REASON is asserted, not just the refusal. Every one of these
+    functions has four or five other ways to answer `ok: False` - not found,
+    not a file, path escapes, over the byte cap - and a guard that stopped
+    running while some earlier check happened to reject the same fixture would
+    otherwise read as a pass. That is the straw-man negative case.
+    """
+    return Verdict(honest.get("ok") is True,
+                   linked.get("ok") is False
+                   and linked.get("error") == "symlinks not allowed",
+                   (honest, linked))
+
+
+# (module, function) -> the case that makes THAT function refuse.
+REFUSAL_CASES = {
+    ("approvals", "list_approvals"): _case_list_approvals,
+    ("approvals", "read_draft"): _case_read_draft,
+    ("capabilities", "list_capabilities"): _case_list_capabilities,
+    ("capabilities", "read_skill"): _case_read_skill,
+    ("contacts", "read_one_contact"): _case_read_one_contact,
+    ("investors", "read_dossier"): _case_read_dossier,
+    ("library", "read_note"): _case_read_note,
+    ("studio", "read_inflight"): _case_read_inflight,
+    ("studio", "_artifact_md_is_readable"): _case_artifact_md_is_readable,
+    ("studio", "_artifact_folder"): _case_artifact_folder,
+    ("studio", "resolve_artifact_image"): _case_resolve_artifact_image,
+    ("threads", "read_thread"): _case_read_thread,
+    ("tribe", "read_contact"): _case_read_contact,
+}
+
+
+def _guarded_functions() -> set[tuple[str, str]]:
+    """(module, function) for every function under `sources/` that calls the
+    live guard in its OWN body. `_own_nodes` excludes nested scopes, so an
+    inner helper is credited to itself rather than to the function around it."""
+    out: set[tuple[str, str]] = set()
+    for path in sorted(SOURCES.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                   and n.func.id == "contains_symlink"
+                   for n in _own_nodes(node)):
+                out.add((path.stem, node.name))
+    return out
+
+
+def test_the_registry_names_exactly_the_functions_that_carry_a_guard():
+    """Both directions, so neither list can quietly stop describing the other.
+
+    Thirteen functions under `sources/` called `contains_symlink` on
+    2026-08-31 and two of them had a refusal case. A new guarded reader now
+    fails here until its author writes one, and a registry entry whose guard
+    was deleted fails too - an entry guarding nothing is the shape this whole
+    file is about.
+    """
+    guarded = _guarded_functions()
+    assert len(guarded) >= 10, (
+        f"only {len(guarded)} guarded function(s) found under sources/, far "
+        f"fewer than this daemon has ever had; retarget the AST scan rather "
+        f"than trimming the registry: {sorted(guarded)}")
+    missing = sorted(guarded - set(REFUSAL_CASES))
+    stale = sorted(set(REFUSAL_CASES) - guarded)
+    assert not missing, (
+        "these functions call the live symlink guard and no test here ever "
+        f"makes them refuse: {missing}")
+    assert not stale, (
+        "these registry entries name a function that no longer calls the "
+        f"guard, so they measure nothing: {stale}")
+
+
+@pytest.mark.parametrize("key", sorted(REFUSAL_CASES),
+                         ids=lambda k: f"{k[0]}.{k[1]}")
+def test_the_guarded_reader_actually_refuses_a_symlink(tmp_path, key):
+    """The behaviour, one reader at a time.
+
+    Both jaws in every case. `refused` is the control; `served` is the anchor
+    that stops a reader which refuses everything - a broken fixture, a renamed
+    directory, a guard inverted to `if not contains_symlink` - from reading as
+    a pass.
+    """
+    verdict = REFUSAL_CASES[key](tmp_path)
+    assert verdict.served, (
+        f"{key[0]}.{key[1]}: the honest, non-symlinked path stopped working, so "
+        f"the refusal below proves nothing: {verdict.detail}")
+    assert verdict.refused, (
+        f"{key[0]}.{key[1]}: a symlink was served. The workspace bans symlinks "
+        f"outright and this function's own code asks the question: "
+        f"{verdict.detail}")

@@ -21,6 +21,14 @@ wider than the evidence behind it:
     files" with the destroyed file uncounted.
   - `ops-radar ack` printed an error for an unknown key and exited 0.
 
+Two of those six are NOT pinned below, and saying so is the same discipline the
+file is named for (`.claude/rules/scope-claims.md`: name what you left out,
+because silence about an exclusion reads as coverage). Both are covered, in
+files that own the surrounding surface, and `_DELEGATED` at the foot of this
+module holds the check that they still are. Added 2026-09-01, after a shard
+reconciling this preamble against the sections found a bullet with no test
+here and had to go looking for whether one existed anywhere.
+
 Run: .venv/bin/python -m pytest tests/test_a_report_that_says_more_than_it_checked.py -q
 """
 
@@ -279,3 +287,40 @@ def test_the_second_collision_walks_past_the_first_rename(tmp_path):
     (tmp_path / "report.md").write_text("A", encoding="utf-8")
     (tmp_path / "report-2.md").write_text("B", encoding="utf-8")
     assert oo._free_name(tmp_path / "report.md").name == "report-3.md"
+
+
+# ============================================================
+# 10 - the two findings this file delegates, held to the files that own them
+# ============================================================
+# The preamble lists six findings and pins four. A pointer to somewhere else is
+# only worth anything while it still points at something, and a pointer that has
+# rotted is the same defect as the over-wide verdicts above: a sentence claiming
+# a state nobody re-established. So the delegation is checked, by AST rather
+# than by a substring, because `"def name(" in text` is also satisfied by the
+# name appearing in a comment or a longer identifier.
+
+_DELEGATED = {
+    "ops-radar ack exits non-zero on an unknown key": (
+        "tests/test_a_radar_that_refused_to_silence_its_own_alarm.py",
+        "test_an_unknown_key_is_still_refused_with_exit_2",
+    ),
+    "a HEAD-refusing server is retried with GET, not called BLOCKED": (
+        "tests/test_a_guard_with_no_negative_case.py",
+        "test_a_head_refusal_retries_with_get_and_reports_working",
+    ),
+}
+
+
+@pytest.mark.parametrize("finding", sorted(_DELEGATED))
+def test_a_delegated_finding_is_still_covered_where_this_file_says_it_is(finding):
+    import ast
+
+    rel, node = _DELEGATED[finding]
+    path = ROOT / rel
+    assert path.is_file(), f"{rel} is gone; {finding!r} is now covered nowhere"
+
+    defined = {n.name for n in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    assert node in defined, (
+        f"{rel} no longer defines {node}; this file says {finding!r} is covered "
+        f"there and it is not")

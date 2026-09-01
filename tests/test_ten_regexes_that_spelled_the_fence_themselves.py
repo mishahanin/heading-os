@@ -422,7 +422,13 @@ def test_the_leak_wall_names_a_contact_it_could_not_read(capsys):
         build_denylist(root)
     err = capsys.readouterr().err
     assert "broken.md" in err
-    assert "not" in err.lower()
+    # `"not" in err.lower()` stood here until 2026-09-01 and is satisfied by
+    # "Notes", "nothing", "another" and every other word that contains the
+    # three letters, so a line saying only "content-denylist: read 1 record"
+    # would have passed it. The claim this test exists to hold is the SECOND
+    # sentence of the warning: the record's fields are absent from the tokens.
+    assert "no readable frontmatter" in err, err
+    assert "NOT" in err and "denylist tokens" in err, err
 
 
 def test_an_unreadable_contact_does_not_switch_the_whole_wall_off():
@@ -537,8 +543,27 @@ def test_no_reader_in_the_set_can_receive_a_cr():
     `newline=""` (or reading bytes) preserves a CR. If someone adds one of those
     to a file in this list, the CRLF blind spot becomes reachable and this test
     goes red instead of the defect going unnoticed.
+
+    Three ways to read bytes, not one. `Path.read_bytes()` is the obvious one
+    and was the only one asked about until 2026-09-01; a BINARY MODE reaches the
+    same place and is the spelling a reader is far likelier to acquire, because
+    it arrives as an ordinary-looking `open(path, "rb")`. The mode argument sits
+    in a different POSITION for the two callables this walks - second for the
+    builtin `open`, FIRST for `Path.open` - so a check that read one index would
+    report nonsense on the other, and both are read here by position and by
+    keyword.
     """
     offenders = []
+
+    def _mode_arg(node, name):
+        """The mode string this call passes, or None. Position depends on the
+        callable: `open(path, mode)` vs `Path(p).open(mode)`."""
+        for kw in node.keywords:
+            if kw.arg == "mode":
+                return kw.value
+        index = 0 if isinstance(node.func, ast.Attribute) else 1
+        return node.args[index] if len(node.args) > index else None
+
     for rel in READERS_THAT_OPEN_FILES:
         source = (ROOT / rel).read_text(encoding="utf-8")
         tree = ast.parse(source)
@@ -549,8 +574,17 @@ def test_no_reader_in_the_set_can_receive_a_cr():
             if name not in ("read_text", "open", "read_bytes"):
                 continue
             if name == "read_bytes":
-                offenders.append(f"{rel}: read_bytes()")
+                offenders.append(f"{rel}:{node.lineno} read_bytes()")
                 continue
+            if name == "open":
+                mode = _mode_arg(node, name)
+                if isinstance(mode, ast.Constant) and "b" in str(mode.value):
+                    offenders.append(f"{rel}:{node.lineno} open(mode={mode.value!r})")
+                elif mode is not None and not isinstance(mode, ast.Constant):
+                    # A mode this cannot read is not a mode this may vouch for.
+                    offenders.append(
+                        f"{rel}:{node.lineno} open() with a computed mode "
+                        f"({ast.unparse(mode)}); read it by hand")
             for kw in node.keywords:
                 if kw.arg == "newline" and not (
                     isinstance(kw.value, ast.Constant) and kw.value.value is None

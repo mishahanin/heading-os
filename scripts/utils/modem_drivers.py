@@ -45,8 +45,37 @@ class ModemDriver:
 class Xe300Driver(ModemDriver):
     device_id = "xe300"
 
+    # An AT exchange always terminates in a final result code. "ERROR" also
+    # covers "+CME ERROR:" and "+CMS ERROR:", so a modem that answered and
+    # refused the command is a READ, not a transport failure.
+    AT_RESULT_CODES = ("OK", "ERROR")
+
     def _at(self, command: str, timeout: int = 30) -> str:
-        return self._ssh(f"gl_modem AT {shquote(command)}", timeout)
+        """One AT command over the gl_modem bridge. RAISES when nothing answered.
+
+        `modem_ssh.ssh` runs `subprocess.run` without `check=True`, so an
+        unreachable router comes back as an ordinary string holding the ssh
+        client's own complaint. `parse_at_imei` finds no digits in it and
+        answers "", which is exactly what a modem that WAS reached and holds no
+        IMEI returns. That is the outcome `ModemReadError` exists to end, and
+        the E5800 sibling was given the raise on 2026-08-30 while this driver,
+        one class up, was left answering "".
+
+        MEASURED 2026-09-01 with the string a dead session really returns,
+        "ssh: connect to host 192.0.2.1 port 22: No route to host":
+        `read_imei()` returned "", `read_status()` returned a well-formed dict
+        claiming slot 1 holds no IMEI, and `cmd_status` printed a Luhn verdict
+        over it and exited 0 while the same command against an unreachable
+        E5800 exits 2.
+        """
+        out = self._ssh(f"gl_modem AT {shquote(command)}", timeout)
+        text = out if isinstance(out, str) else str(out)
+        if not any(code in text for code in self.AT_RESULT_CODES):
+            raise ModemReadError(
+                f"the AT bridge returned no result code for {command}; the "
+                f"reply was: {text.strip()[:200] or '(empty)'}"
+            )
+        return out
 
     def read_imei(self) -> str:
         return parse_at_imei(self._at("AT+GSN"))
@@ -101,7 +130,29 @@ class E5800Driver(ModemDriver):
         return parsed
 
     def read_imei(self) -> str:
-        return parse_at_imei(self._at("AT+GSN").get("data", ""))
+        """The live IMEI, or "" for a modem that answered and holds none.
+
+        `channel_status` is the device's own statement about whether the AT
+        exchange happened, and `send_egmr` below already refuses to call a write
+        successful without it. This read ignored it, so a reply the device had
+        marked as not carried was mined for digits anyway. MEASURED 2026-09-01
+        with `{"data": "\\r\\n351756051523999\\r\\n\\r\\nERROR\\r\\n",
+        "channel_status": false}`: `read_imei()` answered "351756051523999",
+        and `modem-tune._apply_imei` files whatever this returns into the
+        device history AND into the never-repeat `used` list, so a value the
+        modem never confirmed is recorded as spent.
+
+        The key must be PRESENT and falsy to refuse. A firmware that omits it
+        entirely is not making a negative statement, and reading absence as
+        "dead" would refuse every modem on that build.
+        """
+        reply = self._at("AT+GSN")
+        if "channel_status" in reply and not reply.get("channel_status"):
+            raise ModemReadError(
+                "the AT channel reported itself down for AT+GSN "
+                f"(channel_status={reply.get('channel_status')!r}); the reply "
+                f"was: {str(reply.get('data', '')).strip()[:200] or '(empty)'}")
+        return parse_at_imei(reply.get("data", ""))
 
     def read_status(self) -> dict:
         info = self._modem_info()

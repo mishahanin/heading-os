@@ -114,6 +114,105 @@ def test_a_legacy_entry_belonging_to_another_session_is_left_alone(home):
     assert "/work/tree" in _registry(home)
 
 
+# --- an undecodable registry must recover, not crash --------------------------
+#
+# `_load_registry` promises "Returns empty dict on missing file or corrupt JSON
+# (auto-recover - the next session-start will rewrite a clean file)" and caught
+# `(json.JSONDecodeError, OSError)`. Neither reaches a byte that is not UTF-8:
+# `Path.read_text(encoding="utf-8")` raises `UnicodeDecodeError` INSIDE the read,
+# before `json.loads` is called at all, and `UnicodeDecodeError` is a sibling of
+# `JSONDecodeError` under `ValueError`, not a subclass of it.
+#
+# MEASURED 2026-09-01 against the unfixed hook: a registry holding one 0xff byte
+# made `session-start` exit 1 with a `UnicodeDecodeError` traceback. The promise
+# in the docstring is the part that matters - the file is never rewritten, so it
+# never heals, and every session on this machine stays unregistered until a human
+# deletes it by hand. The daemon-side reader of the same file
+# (`scripts/bridge_daemon/sessions.read_registry`) was fixed for exactly this on
+# an earlier pass; the hook that WRITES the file was not.
+
+BAD_BYTE = b"\xff"
+
+
+def _corrupt_registry(home: Path, payload: bytes) -> Path:
+    path = home / ".claude" / "state" / "active-sessions.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
+    return path
+
+
+def test_an_undecodable_registry_does_not_crash_session_start(home):
+    _corrupt_registry(home, b'{"s1": {"cwd": "' + BAD_BYTE + b'"}}')
+    proc = _run("session-start", {"session_id": "sess-A", "cwd": "/work/tree"}, home)
+    assert "UnicodeDecodeError" not in proc.stderr, (
+        "a byte that is not UTF-8 walked past `except (JSONDecodeError, OSError)` "
+        f"and crashed the hook: {proc.stderr}"
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_an_undecodable_registry_is_rewritten_clean(home):
+    """The docstring's actual promise: the next session-start heals the file."""
+    _corrupt_registry(home, b'{"s1": {"cwd": "' + BAD_BYTE + b'"}}')
+    _run("session-start", {"session_id": "sess-A", "cwd": "/work/tree"}, home)
+    assert sorted(_registry(home)) == ["sess-A"], (
+        "the corrupt registry was not replaced, so it never heals and every "
+        "later session stays unregistered"
+    )
+
+
+def test_an_undecodable_registry_does_not_crash_session_end(home):
+    _corrupt_registry(home, b'{"s1": {"cwd": "' + BAD_BYTE + b'"}}')
+    proc = _run("session-end", {"session_id": "sess-A", "cwd": "/work/tree"}, home)
+    assert "UnicodeDecodeError" not in proc.stderr, proc.stderr
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_a_decodable_but_corrupt_registry_still_recovers(home):
+    """The neighbouring branch, so a fix cannot trade one failure for the other."""
+    _corrupt_registry(home, b"{not json at all")
+    proc = _run("session-start", {"session_id": "sess-A", "cwd": "/work/tree"}, home)
+    assert proc.returncode == 0, proc.stderr
+    assert sorted(_registry(home)) == ["sess-A"]
+
+
+def test_a_registry_holding_a_list_does_not_crash_session_start(home):
+    """`_load_registry` returns {} for a non-object registry, and nothing
+    exercised that branch. MEASURED 2026-09-01: replacing the `isinstance(loaded,
+    dict)` check with `if False` left all 196 tests across the five files that
+    name this hook green, so the guard was standing unmeasured. A list reaches
+    `reg[sid] = {...}` as `TypeError: list indices must be integers`."""
+    _corrupt_registry(home, b'["s1", "s2"]')
+    proc = _run("session-start", {"session_id": "sess-A", "cwd": "/work/tree"}, home)
+    assert proc.returncode == 0, proc.stderr
+    assert "TypeError" not in proc.stderr, proc.stderr
+    assert sorted(_registry(home)) == ["sess-A"]
+
+
+def test_session_start_refuses_a_payload_with_no_cwd(home):
+    """The other half of "Returns 1 on missing fields". Only the session_id half
+    was covered: MEASURED 2026-09-01, narrowing the check to `if not sid` left
+    the same 196 tests green while an entry was written carrying `"cwd": null`,
+    which every consumer that groups by directory then has to defend against."""
+    proc = _run("session-start", {"session_id": "sess-A"}, home)
+    assert proc.returncode == 1, proc.stderr
+    assert _registry(home) == {}, "a cwd-less entry was written anyway"
+
+
+def test_session_start_refuses_a_payload_with_no_session_id(home):
+    proc = _run("session-start", {"cwd": "/work/tree"}, home)
+    assert proc.returncode == 1, proc.stderr
+    assert _registry(home) == {}
+
+
+def test_a_healthy_registry_is_never_discarded(home):
+    """The negative case. A recovery path that fires on a GOOD file would pass
+    every test above while silently dropping live sessions."""
+    _run("session-start", {"session_id": "sess-A", "cwd": "/work/tree"}, home)
+    _run("session-start", {"session_id": "sess-B", "cwd": "/other/tree"}, home)
+    assert sorted(_registry(home)) == ["sess-A", "sess-B"]
+
+
 # --- the tty prompt must be bounded -------------------------------------------
 
 def _function_source(src: str, name: str) -> str:
@@ -155,6 +254,49 @@ def test_the_prompt_does_not_call_blocking_readline():
     assert re.search(r"select\.select\(\[tty\], \[\], \[\], remaining\)", block), (
         "select is no longer called with the REMAINING time, so a slow typist "
         "can still exceed the caller's timeout without bound"
+    )
+
+
+def test_the_windows_branch_is_bounded_on_the_monotonic_clock():
+    """The same promise, on the branch that had stopped keeping it.
+
+    The rewrite above bounded the POSIX branch and added the sentence "every wait
+    is bounded, so the worst case is the timeout the caller asked for". The win32
+    branch twenty lines up was left on `time.time()`, so an NTP correction or a
+    manual clock change that stepped the system clock BACKWARD by N seconds
+    extended that loop by N, blocking the Stop hook and the session exit with it.
+    Found by the 2026-08-31 audit of the hooks family.
+
+    A source guard, and stated plainly: this branch CANNOT be driven on Linux.
+    `sys.platform == "win32"` is false here and the body imports `msvcrt`, which
+    this interpreter does not have, so no behavioural test on this machine reaches
+    the loop at all. MEASURED 2026-08-31 by reverting the branch to `_t.time()`
+    and running every test file that names bridge-hook (276 tests): all 276
+    passed. What this guard establishes is that the wrong clock cannot come back
+    unnoticed; it does not establish that the loop behaves correctly on Windows,
+    which nothing in this suite can.
+    """
+    src = HOOK.read_text(encoding="utf-8")
+    block = _function_source(src, "_read_user_choice")
+    marker = '        if sys.platform == "win32":'
+    closer = "\n        else:"
+    assert marker in block, "the win32 branch is gone; re-derive this guard"
+    assert closer in block, "the POSIX branch is gone; re-derive this guard"
+    win = block[block.index(marker):]
+    win = win[:win.index(closer)]
+    code = "\n".join(ln for ln in win.splitlines()
+                     if not ln.strip().startswith("#"))
+    # A floor: without it, a slice that had drifted to empty would satisfy every
+    # assertion below while reading no loop at all.
+    assert "msvcrt.kbhit()" in code, (
+        f"the slice does not contain the win32 wait loop: {code!r}")
+    assert "_t.time()" not in code, (
+        "the win32 wait is back on the wall clock; a backward clock step "
+        "lengthens it and blocks the session exit"
+    )
+    assert code.count("_t.monotonic()") == 2, (
+        "the win32 deadline and its loop test are not both on the monotonic "
+        f"clock (found {code.count('_t.monotonic()')} of 2)"
     )
 
 

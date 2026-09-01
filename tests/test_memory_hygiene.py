@@ -102,7 +102,28 @@ def test_compute_missing_dir(tmp_path):
 # gather() gate (Success Signal)
 # ---------------------------------------------------------------------------
 
-def _patch_brain(mod, monkeypatch, *, errors):
+def _patch_slow_halves(mod, monkeypatch, *, errors):
+    """Pin the two halves of `gather()` that leave this machine.
+
+    The brain compile is faked from `errors`, as it always was. The redundancy
+    scan is the half that was missed: `gather()` calls `scan_redundancy` with no
+    `embedder`, so it builds the DEFAULT one, which resolves the pinned ollama
+    host and embeds every fixture memory over HTTP. MEASURED 2026-09-01 with
+    `socket.socket.connect` counted per test, this file opened 6 connections to
+    the operator's ollama host across `test_gather_gates_on_objective_defects`
+    (2) and `test_detector_never_mutates_memory` (4). That makes a unit test's
+    verdict depend on whether a daemon is up, and it is why both carried
+    `@pytest.mark.slow`.
+
+    The scan still RUNS; only the embedder is supplied, one orthogonal vector
+    per text, so the pair loop executes and reports no near-duplicates
+    deterministically. Replacing `scan_redundancy` outright would leave the
+    advisory half of `gather()` unexecuted.
+
+    Both `slow` markers came off with the network: the marker's registered
+    meaning is ">5 seconds" (pyproject.toml), and this whole file now runs in
+    0.80s. A marker that stopped being true is a claim that decays.
+    """
     fake = {
         "ok": bool(errors is not None),
         "data": {"temporal_validity": {"errors": errors or [], "warnings": []}}
@@ -112,14 +133,28 @@ def _patch_brain(mod, monkeypatch, *, errors):
     }
     monkeypatch.setattr(mod, "collect_brain_compile", lambda: fake)
 
+    real_scan = mod.scan_redundancy
+    embedded: list[list[str]] = []
 
-@pytest.mark.slow
+    def offline_scan(memory_dir, **kw):
+        def orthogonal(texts):
+            embedded.append(list(texts))
+            return [[1.0 if i == j else 0.0 for j in range(len(texts))]
+                    for i in range(len(texts))]
+        return real_scan(memory_dir, **{**kw, "embedder": orthogonal})
+
+    monkeypatch.setattr(mod, "scan_redundancy", offline_scan)
+    return embedded
+
+
 def test_gather_gates_on_objective_defects(tmp_path, monkeypatch):
     mod = _load_hygiene()
     data_root = tmp_path / "data"
     _make_defect_memory(data_root / "auto-memory")
     monkeypatch.setattr(mod, "get_data_root", lambda: data_root)
-    _patch_brain(mod, monkeypatch, errors=[{"message": "dangling superseded_by", "file": "positions/x.md"}])
+    embedded = _patch_slow_halves(
+        mod, monkeypatch,
+        errors=[{"message": "dangling superseded_by", "file": "positions/x.md"}])
 
     result = mod.gather()
     # 1 temporal error + 1 orphan + over_budget = 3
@@ -128,13 +163,25 @@ def test_gather_gates_on_objective_defects(tmp_path, monkeypatch):
     assert result["gate"]["memory_orphans"] == ["orphan-fact.md"]
     assert result["gate"]["over_budget"] is True
 
+    # The advisory redundancy half RAN, over the real fixture corpus. Nothing
+    # asserted this until 2026-09-01, so replacing the `scan_redundancy(...)`
+    # call in `gather()` with a literal `{"ok": True, "pairs": []}` left this
+    # file green at 12 passed. Asserted on what the embedder was HANDED - the
+    # three fact files, MEMORY.md excluded - rather than on the note string,
+    # which a reword would retire.
+    assert len(embedded) == 1, embedded
+    assert sorted(t.strip() for t in embedded[0]) == [
+        "a linked fact", "a stale fact", "an orphan fact"], embedded[0]
+    assert result["redundancy"]["ok"] is True
+    assert result["redundancy"]["pairs"] == []
+
 
 def test_gather_clean(tmp_path, monkeypatch):
     mod = _load_hygiene()
     data_root = tmp_path / "data"
     _make_clean_memory(data_root / "auto-memory")
     monkeypatch.setattr(mod, "get_data_root", lambda: data_root)
-    _patch_brain(mod, monkeypatch, errors=[])
+    _patch_slow_halves(mod, monkeypatch, errors=[])
 
     result = mod.gather()
     assert result["gate_count"] == 0
@@ -145,7 +192,7 @@ def test_gather_degrades_when_brain_unavailable(tmp_path, monkeypatch):
     data_root = tmp_path / "data"
     _make_clean_memory(data_root / "auto-memory")
     monkeypatch.setattr(mod, "get_data_root", lambda: data_root)
-    _patch_brain(mod, monkeypatch, errors=None)  # brain absent
+    _patch_slow_halves(mod, monkeypatch, errors=None)  # brain absent
 
     result = mod.gather()
     assert result["brain_ok"] is False
@@ -231,7 +278,7 @@ def test_live_state_rows_is_advisory_never_gates(tmp_path, monkeypatch):
     mem_md = data_root / "auto-memory" / "MEMORY.md"
     mem_md.write_text(mem_md.read_text(encoding="utf-8") + _THREAD_ROW, encoding="utf-8")
     monkeypatch.setattr(mod, "get_data_root", lambda: data_root)
-    _patch_brain(mod, monkeypatch, errors=[])
+    _patch_slow_halves(mod, monkeypatch, errors=[])
 
     result = mod.gather()
     assert len(result["live_state_rows"]["flagged"]) == 1
@@ -307,14 +354,13 @@ def test_the_real_memory_index_claims_no_managed_section():
 # No-mutation + single-file-write
 # ---------------------------------------------------------------------------
 
-@pytest.mark.slow
 def test_detector_never_mutates_memory(tmp_path, monkeypatch):
     mod = _load_hygiene()
     data_root = tmp_path / "data"
     mem = data_root / "auto-memory"
     _make_defect_memory(mem)
     monkeypatch.setattr(mod, "get_data_root", lambda: data_root)
-    _patch_brain(mod, monkeypatch, errors=[])
+    _patch_slow_halves(mod, monkeypatch, errors=[])
 
     before = {p.name: (p.read_text(encoding="utf-8"), p.stat().st_mtime) for p in mem.glob("*.md")}
     mod.gather()

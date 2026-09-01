@@ -1,9 +1,50 @@
-"""Unit tests for scripts/wizard-verify-key.py."""
+"""Unit tests for scripts/wizard-verify-key.py.
+
+This is the one module in the wizard that talks to a provider, and every test
+below keeps the network out by monkeypatching `urlopen` in its own body. That is
+per-test discipline, and per-test discipline is what a future test forgets.
+
+Two things sit behind that forgetting, which is why the ban below is a fixture
+rather than a convention. `verify_anthropic` resolves its model through
+`claude_models.latest`, which reads `ANTHROPIC_API_KEY` out of the operator's
+`.env` when the on-disk model cache is stale - and MEASURED 2026-09-01 that
+cache WAS stale by 33 hours on the operator's machine, so `fetch_from_api()` is
+reached on the ordinary path. A test that patched `urlopen` for the ping but not
+for the resolver would put the operator's live key on the wire.
+
+The whole file was measured that day for outbound connections, with a probe
+installed through `sitecustomize.py` on `PYTHONPATH` so child processes inherit
+it too (an in-process probe cannot see the two subprocess tests): zero connects,
+in this process and in both children. The fixture pins that result.
+"""
+import socket
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).parent.parent
+
+
+@pytest.fixture(autouse=True)
+def _no_sockets(monkeypatch):
+    """Any outbound connect from this file's own process is a test defect."""
+
+    def refuse(self, address):
+        raise AssertionError(
+            f"a unit test opened a socket to {address!r}. Nothing here may "
+            f"reach a provider: patch urlopen, or stub claude_models.latest.")
+
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+    monkeypatch.setattr(socket.socket, "connect_ex", refuse)
+
+
+def test_the_socket_ban_is_armed():
+    """The control. Without it the ban is a fixture nobody has seen fire, and a
+    typo in the patch target would leave every test below unprotected."""
+    with pytest.raises(AssertionError, match="opened a socket"):
+        socket.create_connection(("127.0.0.1", 9), timeout=0.1)
 
 
 def _load_verify():

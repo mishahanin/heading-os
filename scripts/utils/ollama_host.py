@@ -264,10 +264,21 @@ def machine_hosts(role: str, *, root=None) -> list[str]:
             payload = yamlio.safe_load(fh) or {}
     except FileNotFoundError:
         return []
-    except (OSError, yaml.YAMLError) as exc:
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
         # Reported, never swallowed: a typo here silently unpins the machine,
         # and a silent unpin is the whole failure this arrangement exists to
         # prevent.
+        #
+        # `UnicodeDecodeError` is a `ValueError` and a SIBLING of `YAMLError`,
+        # not a subclass of either clause above it, and the decode happens
+        # inside the READ that `yamlio.safe_load` performs, before any parse.
+        # MEASURED 2026-09-01 with `embed: [\xff'auto:11434']` in the machine
+        # file: `machine_hosts("embed")` RAISED instead of reporting and
+        # returning [], so one bad byte in a gitignored, hand-edited,
+        # machine-local file took down every caller (`generation_host` for the
+        # 03:00 chronicle build, `index_embed_target` for `memory-index build`
+        # rather than falling back to no pin. The docstring above promises
+        # the reported-then-ignored behaviour; this is the class that escaped it.
         sys.stderr.write(f"ollama: cannot read {MACHINE_HOSTS_FILE}: {exc}\n")
         return []
 

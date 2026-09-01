@@ -90,6 +90,104 @@ def test_the_interpreter_falls_back_to_the_running_one(monkeypatch, tmp_path):
     assert lint_ratchet._interpreter() == sys.executable
 
 
+# ============================================================
+# The ratchet itself
+# ============================================================
+#
+# Every case above is about the "ruff never ran" discriminator. MEASURED
+# 2026-09-01, `cmd_check`'s `return 1` on a regression could be changed to
+# `return 0` with all six of them green. The gate's ACTUAL job, refusing a
+# merge that adds lint debt, had no witness at all.
+
+
+def _ruff_findings(monkeypatch, findings):
+    """Canned ruff JSON. `findings` is a list of (relpath, code) pairs."""
+    payload = json.dumps([{"filename": f, "code": c} for f, c in findings])
+    _ruff_answer(monkeypatch, returncode=1 if findings else 0, stdout=payload)
+
+
+def test_check_refuses_a_new_finding(monkeypatch, tmp_path):
+    """A `(file, rule)` bucket that is not in the baseline blocks the merge."""
+    baseline = tmp_path / ".lint-baseline.json"
+    baseline.write_text(json.dumps({"scripts/old.py::S310": 1}), encoding="utf-8")
+    monkeypatch.setattr(lint_ratchet, "BASELINE", baseline)
+    _ruff_findings(monkeypatch, [("scripts/old.py", "S310"),
+                                 ("scripts/new.py", "S603")])
+
+    assert lint_ratchet.cmd_check() == 1, (
+        "a brand new lint finding did not block the merge")
+
+
+def test_check_refuses_a_bucket_that_grew(monkeypatch, tmp_path):
+    """The count half. A known `(file, rule)` going 1 -> 2 is new debt too."""
+    baseline = tmp_path / ".lint-baseline.json"
+    baseline.write_text(json.dumps({"scripts/old.py::S310": 1}), encoding="utf-8")
+    monkeypatch.setattr(lint_ratchet, "BASELINE", baseline)
+    _ruff_findings(monkeypatch, [("scripts/old.py", "S310"),
+                                 ("scripts/old.py", "S310")])
+
+    assert lint_ratchet.cmd_check() == 1, (
+        "an existing bucket that doubled did not block the merge")
+
+
+def test_check_accepts_a_tree_at_or_below_the_baseline(monkeypatch, tmp_path):
+    """The anchor. A ratchet that refuses everything is a ratchet that gets
+    removed, so the pass path is measured beside the two refusals."""
+    baseline = tmp_path / ".lint-baseline.json"
+    baseline.write_text(
+        json.dumps({"scripts/old.py::S310": 2, "scripts/gone.py::B008": 1}),
+        encoding="utf-8")
+    monkeypatch.setattr(lint_ratchet, "BASELINE", baseline)
+    _ruff_findings(monkeypatch, [("scripts/old.py", "S310")])
+
+    assert lint_ratchet.cmd_check() == 0
+
+
+def test_a_corpus_that_vanished_is_not_a_clean_tree(monkeypatch, tmp_path):
+    """ruff RAN, exited 0, and inspected nothing.
+
+    The discriminator above reads the exit status, so it cannot see this third
+    answer. MEASURED 2026-09-01 against the committed 143-bucket baseline with
+    ruff stubbed to exit 0 and print `[]`: `check` printed "OK - 0 findings, at
+    or below baseline (245 fewer...)" and returned 0. An `exclude` widened by
+    one line in pyproject.toml disarms the whole gate and reports success.
+    """
+    baseline = tmp_path / ".lint-baseline.json"
+    baseline.write_text(json.dumps({"scripts/a.py::S310": 3,
+                                    "scripts/b.py::B008": 1}), encoding="utf-8")
+    monkeypatch.setattr(lint_ratchet, "BASELINE", baseline)
+    _ruff_answer(monkeypatch, returncode=0, stdout="[]")
+
+    with pytest.raises(SystemExit) as exc:
+        lint_ratchet.cmd_check()
+    assert "vanished" in str(exc.value)
+
+
+def test_update_cannot_erase_the_baseline_over_a_vanished_corpus(monkeypatch, tmp_path):
+    """The destructive half of the same door. `update` would write `{}`."""
+    baseline = tmp_path / ".lint-baseline.json"
+    original = {"scripts/a.py::S310": 3}
+    baseline.write_text(json.dumps(original), encoding="utf-8")
+    monkeypatch.setattr(lint_ratchet, "BASELINE", baseline)
+    _ruff_answer(monkeypatch, returncode=0, stdout="[]")
+
+    with pytest.raises(SystemExit):
+        lint_ratchet.cmd_update()
+    assert json.loads(baseline.read_text()) == original
+
+
+def test_a_first_run_with_no_baseline_can_still_record_an_empty_tree(monkeypatch, tmp_path):
+    """The refusal must not brick a fresh clone that genuinely has no findings,
+    and must not brick the deliberate `rm .lint-baseline.json` escape it names."""
+    baseline = tmp_path / ".lint-baseline.json"
+    monkeypatch.setattr(lint_ratchet, "BASELINE", baseline)
+    _ruff_answer(monkeypatch, returncode=0, stdout="[]")
+
+    assert lint_ratchet.cmd_update() == 0
+    assert json.loads(baseline.read_text()) == {}
+    assert lint_ratchet.cmd_check() == 0
+
+
 def test_check_refuses_rather_than_passing_when_ruff_never_ran(monkeypatch):
     """The exit code the pre-commit hook and CI both consume.
 

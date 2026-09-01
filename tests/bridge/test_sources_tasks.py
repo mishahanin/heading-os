@@ -40,17 +40,32 @@ def test_basic_active_row_parsed(tmp_path):
 
 
 def test_completed_section_skipped(tmp_path):
-    """Rows under '## Completed' are NOT returned even if format matches."""
+    """Rows under '## Completed' are NOT returned even if the format matches.
+
+    The fixture used to carry only a `- [x]` row there, which is not the format
+    `_ACTIVE_RE` matches at all: its checkbox is `\\[\\s*\\]`, empty brackets, so
+    the row was excluded by the checkbox and never by the section. The
+    assertion could not tell the two rules apart, and the docstring's "even if
+    format matches" was the part nothing measured. MEASURED 2026-08-31 by
+    deleting `if not in_active: continue` from `list_active_tasks` and running
+    the whole `tests/bridge` directory: 1349 passed, 1 skipped.
+
+    An UNCHECKED row now sits under `## Completed` too. That is a real shape:
+    the /viraid skill moves a row down and the CEO ticks the box afterwards,
+    and in that window the section is the only thing keeping it off /tasks.
+    """
     _write_tasks_md(tmp_path,
         "## Active\n\n"
         "- [ ] **2026-05-11** | `P1` | Active task | *Task* | Due: 2026-05-15\n"
         "\n## Completed\n\n"
         "- [x] **2026-04-21** | `P2` | Old task | *Task* | Completed: 2026-04-21\n"
+        "- [ ] **2026-04-22** | `P2` | Moved but unticked | *Task* | Completed: 2026-04-22\n"
     )
     result = list_active_tasks(tmp_path, today=date(2026, 5, 13))
     titles = [t["description"] for t in result["tasks"]]
     assert "Active task" in [d for d in titles]  # body match
     assert not any("Old task" in d for d in titles)
+    assert not any("Moved but unticked" in d for d in titles), titles
 
 
 def test_overdue_detection(tmp_path):
@@ -277,11 +292,35 @@ def test_done_log_recent_excludes_tombstones(tmp_path):
     assert all(r["task_key"] != key for r in rows)
 
 
-def test_done_log_recent_orders_ts_desc(tmp_path):
-    import time
-    from scripts.bridge_daemon.sources.tasks import mark_done, done_log_recent
+def test_done_log_recent_orders_ts_desc(tmp_path, monkeypatch):
+    """Newest mark-done first.
+
+    The clock is driven, not slept through. This read `time.sleep(0.01)` and
+    hoped the wall clock had moved between the two writes; a WSL2 host resync
+    can step it BACKWARDS and invert them, and the sleep measures nothing when
+    it does not. Same cause and same cure as
+    `test_dismiss_log_recent_orders_ts_desc` in `test_sources_inbox.py`, which
+    was converted for exactly this reason: state the two instants instead of
+    hoping for them.
+    """
+    from datetime import datetime, timedelta, timezone
+    from scripts.bridge_daemon.sources import tasks as tasks_mod
+    from scripts.bridge_daemon.sources.tasks import done_log_recent, mark_done
+
+    # A holder, not an iterator: `mark_done` reads the clock twice per call
+    # (UTC for `ts`, local for `date`), so a per-call sequence would
+    # desynchronise the moment a field is added or removed.
+    moment = [datetime(2026, 8, 9, 12, 0, 0, tzinfo=timezone.utc)]
+
+    class _HeldClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return moment[0] if tz in (None, timezone.utc) else moment[0].astimezone(tz)
+
+    monkeypatch.setattr(tasks_mod, "datetime", _HeldClock)
+
     mark_done(tmp_path, "2026-05-19|P1|first")
-    time.sleep(0.01)
+    moment[0] += timedelta(seconds=1)
     mark_done(tmp_path, "2026-05-19|P1|second")
     rows = done_log_recent(tmp_path)
     assert rows[0]["task_key"].endswith("|second")
@@ -308,3 +347,89 @@ def test_list_active_tasks_surfaces_done_log_count(tmp_path):
     _write_tasks_md(tmp_path, "## Active\n\n")
     result = list_active_tasks(tmp_path)
     assert result["done_log_count"] == 2
+
+
+# ============================================================
+# Three guards on the done-log that nothing ever made refuse
+# ============================================================
+# The done log is append-only JSONL on disk. Every test above writes it through
+# `mark_done`, so the reader's shape guards and the writer's bounds had no
+# negative case at all. MEASURED 2026-08-31 by deleting each guard in turn and
+# running the whole `tests/bridge` directory: 1349 passed, 1 skipped, every
+# time.
+
+def test_a_done_log_line_with_no_usable_key_is_skipped(tmp_path):
+    """A hand-edited or truncated line must not enter the done-key SET.
+
+    A key of `null` or `7` in that set is compared against every real task key
+    on every /tasks render; an empty one matches nothing and just inflates
+    `done_log_count`, which the 'Recently done' footer keys its visibility on.
+    """
+    import json
+    from scripts.bridge_daemon.sources.tasks import (
+        DONE_LOG_FILE, done_log_recent, read_done_log,
+    )
+    log = tmp_path / DONE_LOG_FILE
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(
+        json.dumps({"task_key": "2026-05-19|P1|Real", "ts": "2026-08-31T10:00:00+00:00"}) + "\n"
+        + json.dumps({"task_key": None, "ts": "x"}) + "\n"
+        + json.dumps({"task_key": 7, "ts": "x"}) + "\n"
+        + json.dumps({"task_key": "", "ts": "x"}) + "\n"
+        + json.dumps({"note": "no key at all"}) + "\n",
+        encoding="utf-8")
+
+    assert read_done_log(tmp_path) == {"2026-05-19|P1|Real"}
+    assert [r["task_key"] for r in done_log_recent(tmp_path)] == ["2026-05-19|P1|Real"]
+
+
+def test_undo_done_rejects_what_mark_done_rejects(tmp_path):
+    """The two halves of one workflow have to agree on what a key is.
+
+    `mark_done` has had `test_mark_done_rejects_blank_key` since it was
+    written; `undo_done` never had the matching case, so a blank key would be
+    appended as a tombstone that can tombstone nothing.
+    """
+    from scripts.bridge_daemon.sources.tasks import DONE_LOG_FILE, undo_done
+    assert undo_done(tmp_path, "")["ok"] is False
+    assert undo_done(tmp_path, "   ")["ok"] is False
+    assert undo_done(tmp_path, None)["ok"] is False  # type: ignore[arg-type]
+    assert not (tmp_path / DONE_LOG_FILE).exists(), "a refused undo must write nothing"
+
+
+def test_mark_done_rejects_an_oversized_key(tmp_path):
+    """The 500-character bound, with a case ON the line as well as over it."""
+    from scripts.bridge_daemon.sources.tasks import mark_done
+    assert mark_done(tmp_path, "k" * 501)["ok"] is False
+    assert mark_done(tmp_path, "k" * 500)["ok"] is True
+
+
+def test_emphasis_inside_the_body_is_not_the_metadata_boundary(tmp_path):
+    """Half a task description used to be cut off by an italic word.
+
+    `_strip_metadata_suffix` decided "metadata starts here" with
+    `part.startswith("*")`, which fires on a body segment that merely OPENS
+    with emphasis. MEASURED 2026-08-31 on the row below: the description came
+    back as "Call Zeek", so the half of the sentence saying what to do was gone
+    from the /tasks card, from unified search (which matches on `description`)
+    and from the `task_key` the mark-done workflow is built on, with nothing
+    logged.
+
+    The two body-pipe tests above could not see it: their extra segments are
+    `bar with detail` and `beta`, plain text that trips no metadata rule at
+    all, so they measured the rejoining and never the boundary test that
+    decides where rejoining stops.
+    """
+    _write_tasks_md(tmp_path,
+        "## Active\n\n"
+        "- [ ] **2026-05-01** | `P1` | Call Zeek | *urgently* about the SOW "
+        "| *Task* | Source: Telegram | Due: 2026-05-15\n")
+
+    t = list_active_tasks(tmp_path, today=date(2026, 5, 10))["tasks"][0]
+
+    assert t["description"] == "Call Zeek | *urgently* about the SOW"
+    # And the metadata is still stripped and still parsed: a boundary loosened
+    # far enough to keep the emphasis would otherwise swallow `*Task*` too.
+    assert t["kind"] == "Task"
+    assert t["source"] == "Telegram"
+    assert t["due"] == "2026-05-15"

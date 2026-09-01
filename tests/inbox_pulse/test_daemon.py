@@ -482,8 +482,18 @@ def test_main_loop_retries_on_poll_error(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_heartbeat_thread_writes_periodically(tmp_path, monkeypatch):
-    """Heartbeat thread calls write_heartbeat at least once within a short window."""
+def test_heartbeat_thread_writes_state_json_to_the_state_dir(tmp_path, monkeypatch):
+    """One real beat, through the real writer, landing in the real state dir.
+
+    RENAMED 2026-09-01 from `test_heartbeat_thread_writes_periodically`. It
+    asserts that `state.json` EXISTS after a short window, which one write
+    satisfies, so it never measured the "periodically" in its own name. The
+    periodicity claim is measured by
+    `test_the_heartbeat_keeps_beating_until_shutdown` below, deterministically
+    and without a sleep. What this test is genuinely worth keeping for is the
+    other half: that the thread wiring, the real `write_heartbeat`, and
+    `INBOX_PULSE_STATE_DIR` compose into a file on disk with the right fields.
+    """
     monkeypatch.setenv("INBOX_PULSE_STATE_DIR", str(tmp_path))
     _reload_paths(tmp_path, monkeypatch)
 
@@ -513,6 +523,221 @@ def test_heartbeat_thread_writes_periodically(tmp_path, monkeypatch):
     assert "last_heartbeat" in data
     assert "daemon_pid" in data
     assert "queue_depth" in data
+
+
+# ---------------------------------------------------------------------------
+# The heartbeat's periodicity, measured. NEW 2026-09-01.
+#
+# MEASURED that day by turning the loop into a single pass:
+#
+#     -   while not shutdown_event.is_set():
+#     +   if not shutdown_event.is_set():
+#
+#     tests/inbox_pulse                     -> 226 passed (baseline: 226 passed)
+#     the 45-file wide set + tests/contract -> 7 failed, 1199 passed, 3 skipped
+#                                              (identical to baseline; those 7
+#                                               are sandbox-environment
+#                                               failures, present either way)
+#
+# A heartbeat that beats once and stops is what the fleet-health reader sees as
+# a daemon that died seconds after boot, and nothing in the suite could tell the
+# difference. No thread and no sleep here: the loop is driven in the calling
+# thread with `tick_seconds=0`, and the spy ends it by setting the event, so the
+# count is exact rather than a function of how loaded the machine is.
+# ---------------------------------------------------------------------------
+
+
+def test_the_heartbeat_keeps_beating_until_shutdown(monkeypatch):
+    """Three beats, counted, not inferred from a file existing."""
+    mod = _import_daemon()
+
+    shutdown = threading.Event()
+    beats: list[dict] = []
+
+    def _spy_write_heartbeat(extra=None):
+        beats.append(dict(extra or {}))
+        if len(beats) == 3:
+            shutdown.set()
+
+    monkeypatch.setattr(mod, "write_heartbeat", _spy_write_heartbeat)
+
+    mod._heartbeat_loop(shutdown, lambda: 7, tick_seconds=0)
+
+    assert len(beats) == 3, (
+        f"the heartbeat loop produced {len(beats)} beat(s); it must keep "
+        f"beating until shutdown, not write once and stop")
+    # The queue-depth callable is consulted on every beat, not once and cached.
+    assert beats == [{"queue_depth": 7}] * 3
+
+
+def test_the_heartbeat_stops_when_shutdown_is_already_set(monkeypatch):
+    """Anchor. A loop that ignored the event would satisfy the count above by
+    running forever, and would keep a shut-down daemon writing heartbeats that
+    say it is alive."""
+    mod = _import_daemon()
+
+    shutdown = threading.Event()
+    shutdown.set()
+    beats: list[dict] = []
+    monkeypatch.setattr(mod, "write_heartbeat",
+                        lambda extra=None: beats.append(dict(extra or {})))
+
+    mod._heartbeat_loop(shutdown, lambda: 0, tick_seconds=0)
+
+    assert beats == [], "a heartbeat fired after shutdown was requested"
+
+
+def test_one_failed_heartbeat_write_does_not_stop_the_beat(monkeypatch, caplog):
+    """The `except` inside the loop, which had no case.
+
+    A heartbeat write can fail transiently: the state directory is on the data
+    overlay, and a remount or a full disk takes it away for a moment. The loop
+    catches and carries on by design. Without that, one bad write kills the
+    liveness signal of a daemon that is otherwise working perfectly.
+    """
+    import logging
+
+    mod = _import_daemon()
+
+    shutdown = threading.Event()
+    calls = {"n": 0}
+
+    def _flaky(extra=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("state dir vanished")
+        if calls["n"] == 3:
+            shutdown.set()
+
+    monkeypatch.setattr(mod, "write_heartbeat", _flaky)
+
+    with caplog.at_level(logging.WARNING, logger="inbox_pulse.daemon"):
+        mod._heartbeat_loop(shutdown, lambda: 0, tick_seconds=0)
+
+    assert calls["n"] == 3, "the loop stopped after the failed write"
+    assert any("Heartbeat write failed" in r.getMessage() for r in caplog.records), (
+        f"the failure was swallowed with no log line: "
+        f"{[r.getMessage() for r in caplog.records]}")
+
+
+# ---------------------------------------------------------------------------
+# The Healthchecks deadman, both jaws. NEW 2026-09-01.
+#
+# `_main_loop` ends a CLEAN poll cycle with `hc_ping("STEWARD_HC_EMAIL_TRIAGE")`,
+# and the comment beside it states the contract: "The `continue` above skips
+# this on failure, so a wedged Exchange poll stops the pings and trips an
+# external alert." Nothing measured either half. MEASURED 2026-09-01 with two
+# mutations, each against the 45 test files anywhere in tests/ that name
+# inbox_pulse, observability_safe, healthchecks or hc_ping, plus tests/contract:
+#
+#     the ping deleted outright             -> 7 failed, 1199 passed, 3 skipped
+#     a ping added to the failure path too  -> 7 failed, 1199 passed, 3 skipped
+#                                  (baseline: 7 failed, 1199 passed, 3 skipped;
+#                                   those 7 are sandbox-environment failures)
+#
+# Adding the ping to the failure path also survived the WHOLE tests/ suite:
+# 50 failed, 20042 passed, 104 skipped, and the same 50 fail with every
+# mutation reverted, so not one test anywhere detected it.
+#
+# Both directions of the one property this daemon's monitoring rests on, and
+# the suite was blind to each. It is not a hypothetical: on 2026-08-17 the poll
+# loop wedged for 33 hours and the check went green anyway, which is the outage
+# `tests/test_deadman_ping_containment.py` was written after. That file guards
+# the opposite property, that the SUITE cannot ping the live check. Nothing
+# guarded the daemon's own semantics.
+#
+# The spy replaces `hc_ping` in the daemon's namespace, which is where
+# `_main_loop` reads it, so these tests also cannot reach the network whatever
+# the environment holds. That is belt and braces over the conftest containment,
+# not a substitute for it.
+# ---------------------------------------------------------------------------
+
+
+def _ping_spy(monkeypatch, mod) -> list[str]:
+    pings: list[str] = []
+    monkeypatch.setattr(mod, "hc_ping", lambda name: pings.append(name) or True)
+    return pings
+
+
+def test_a_clean_poll_cycle_pings_the_deadman_once(monkeypatch):
+    """A live daemon has to keep the check green, or the alert is a false one."""
+    mod = _import_daemon()
+    pings = _ping_spy(monkeypatch, mod)
+
+    shutdown = threading.Event()
+    mock_ews = MagicMock()
+
+    def _fake_poll(since=None):
+        shutdown.set()
+        return iter([])
+
+    mock_ews.poll_inbox.side_effect = _fake_poll
+
+    mod._main_loop(
+        shutdown_event=shutdown,
+        ews=mock_ews,
+        write_log_fn=MagicMock(),
+        fetch_item_fn=MagicMock(),
+        get_cursor_fn=lambda: datetime(2026, 5, 27, 9, 0, 0, tzinfo=timezone.utc),
+        set_cursor_fn=lambda dt: None,
+        rules_engine=_make_mock_rules_engine(),
+        classifier=_make_mock_classifier(),
+    )
+
+    assert pings == ["STEWARD_HC_EMAIL_TRIAGE"], (
+        f"a completed poll cycle produced {pings!r}; the deadman must be pinged "
+        f"exactly once, by the name of the check that watches this daemon")
+
+
+def test_a_failed_poll_cycle_does_not_ping_the_deadman(monkeypatch):
+    """The jaw that matters, and the one the 33-hour outage turned on.
+
+    A ping on the failure path makes the check green while the daemon is
+    wedged, which is worse than having no check: the operator reads the green
+    and stops looking. The `continue` in the exception handler is the entire
+    mechanism, and it is one edit away from being lost.
+    """
+    mod = _import_daemon()
+    pings = _ping_spy(monkeypatch, mod)
+
+    shutdown = threading.Event()
+    mock_ews = MagicMock()
+    poll_calls = {"n": 0}
+
+    def _fake_poll(since=None):
+        poll_calls["n"] += 1
+        raise RuntimeError("EWS refused the request")
+
+    mock_ews.poll_inbox.side_effect = _fake_poll
+
+    # The backoff ends the run, so the loop takes the failure path exactly once
+    # and never reaches a clean cycle. Without this the retry would succeed and
+    # ping legitimately, which would not test anything.
+    waits: list = []
+
+    def _recording_wait(timeout=None):
+        waits.append(timeout)
+        shutdown.set()
+        return True
+
+    shutdown.wait = _recording_wait
+
+    mod._main_loop(
+        shutdown_event=shutdown,
+        ews=mock_ews,
+        write_log_fn=MagicMock(),
+        fetch_item_fn=MagicMock(),
+        get_cursor_fn=lambda: datetime(2026, 5, 27, 9, 0, 0, tzinfo=timezone.utc),
+        set_cursor_fn=lambda dt: None,
+        rules_engine=_make_mock_rules_engine(),
+        classifier=_make_mock_classifier(),
+    )
+
+    assert poll_calls["n"] == 1, "the loop did not take the failure path"
+    assert waits == [60], f"the error backoff did not run: {waits}"
+    assert pings == [], (
+        f"a poll cycle that raised still pinged the deadman ({pings!r}); a "
+        f"wedged daemon would report itself healthy")
 
 
 # ---------------------------------------------------------------------------

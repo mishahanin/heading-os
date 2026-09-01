@@ -80,6 +80,27 @@ def test_a_bump_does_not_revert_a_newer_native_edit(stores):
     assert "CORRECTED" in (canonical / "example-fact.md").read_text(encoding="utf-8")
 
 
+def test_an_identical_pair_is_not_rewritten_at_all(stores):
+    """No bump, no edit: reconcile must touch neither side.
+
+    `_copy_atomic` ends in `os.replace`, so a copy replaces the inode even when
+    the bytes and the mtime are identical. Without the `read_bytes() ==
+    read_bytes()` short-circuit an exact mtime tie falls through to the tie rule
+    and rewrites the canonical copy over the native one on EVERY SessionStart,
+    across every memory in the store. Nothing in this file saw that until
+    2026-09-01, when removing the short-circuit left it green: the content is
+    the same either way, so only the inode and the counters can tell.
+    """
+    canonical, native = stores
+    mod = load_hook()
+    before = {d: (d / "example-fact.md").stat().st_ino for d in (canonical, native)}
+
+    assert mod.reconcile(native, canonical) == (0, 0)
+
+    for d in (canonical, native):
+        assert (d / "example-fact.md").stat().st_ino == before[d], d
+
+
 def test_the_bump_still_propagates_when_nothing_else_changed(stores):
     """The guard above must not be bought by making the bump invisible: with no
     competing edit, the bumped canonical copy still reaches the native store."""

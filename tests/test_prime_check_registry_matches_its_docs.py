@@ -115,6 +115,30 @@ def test_the_safety_floor_admits_the_two_that_spawn():
         assert name in floor, f"the floor does not name {name} as an exception"
 
 
+def test_the_floor_counts_the_read_only_checks_correctly(keys):
+    """"Ten of the twelve are read-only" is a second count in the same file.
+
+    Nothing read it. `test_pattern_6_states_the_registry_count` binds the
+    heading and stops there, so adding a check moved the heading to 13 and left
+    this sentence saying ten of twelve, which is the drift this whole file was
+    written to end, one paragraph below where it was ended.
+    """
+    words = {8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve",
+             13: "thirteen", 14: "fourteen", 15: "fifteen"}
+    text = PATTERNS.read_text(encoding="utf-8")
+    floor = text[text.index("**Safety floor", text.index("**Checks (")):]
+    m = re.search(r"([A-Za-z]+) of the ([a-z]+) are read-only", floor)
+    assert m, "the safety floor no longer states how many checks are read-only"
+    expected_ro = words.get(len(keys) - len(SPAWNING))
+    expected_all = words.get(len(keys))
+    assert expected_ro and expected_all, (
+        f"add {len(keys)} and {len(keys) - len(SPAWNING)} to the words map")
+    assert (m.group(1).lower(), m.group(2)) == (expected_ro, expected_all), (
+        f"the floor says '{m.group(1)} of the {m.group(2)}' while the registry "
+        f"holds {len(keys)} checks of which {len(SPAWNING)} spawn"
+    )
+
+
 # --- the public docs page -----------------------------------------------------
 
 def test_the_docs_page_states_the_registry_count(keys):
@@ -153,6 +177,21 @@ def test_the_spawning_checks_really_spawn(check, script, keys):
     """If a pulse script stops auto-starting, the exception written into the
     safety floor becomes a lie in the other direction."""
     assert check in keys
-    text = (ROOT / "scripts" / script).read_text(encoding="utf-8")
-    assert "Popen" in text, f"{script} no longer spawns anything"
-    assert "auto-s" in text, f"{script} no longer documents an auto-start"
+    source = (ROOT / "scripts" / script).read_text(encoding="utf-8")
+    # A CALL, not the word. Both pulse scripts explain their spawn in prose --
+    # `fireside-pulse.py` says "subprocess.Popen with DETACHED_PROCESS" in a
+    # comment and names `Popen` in three more -- so `"Popen" in source` stayed
+    # true with every real call deleted, and the safety-floor exception would
+    # have become a lie in the direction this test exists to catch.
+    tree = ast.parse(source)
+    calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and (node.func.attr if isinstance(node.func, ast.Attribute)
+             else getattr(node.func, "id", None)) == "Popen"
+    ]
+    assert calls, (
+        f"{script} contains no Popen CALL; it no longer spawns anything, so the "
+        "safety-floor exception naming it now claims a behaviour that is gone"
+    )
+    assert "auto-s" in source, f"{script} no longer documents an auto-start"

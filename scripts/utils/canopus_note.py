@@ -79,9 +79,22 @@ BODY_FIELD = "body"
 # excluded, because "path:/home/x/plan.md" is exactly the leak this guard is
 # for; "http://example.com" is stopped by the tail instead (its first slash is
 # followed by another slash, which no path segment can start with).
+#
+# That last exclusion is what the `file://` alternative pays for. MEASURED
+# 2026-09-01: `file:///home/operator/private/plan.md` passed validation, because
+# the POSIX branch refuses a slash preceded by a slash and the third slash of a
+# file URL is exactly that. A markdown link to a local document is an ordinary
+# way to write a path down, and this repository is public. `file://` is never a
+# public web address, so the alternative costs no false positive that
+# `https://` does not already avoid.
+#
+# The parent-directory escape reads `[\\/]`, not `/`, because the comment above
+# says "a parent-directory escape" while the pattern knew only the POSIX
+# spelling: `..\up\one` walked through. `(?<!\.)` keeps an ellipsis followed by
+# a backslash from reading as one.
 _LEAK = re.compile(
     r"(?<![\w/])/[\w.-]+(?:/|\.[A-Za-z0-9]{1,8}\b)"
-    r"|~/|\b[A-Za-z]:[\\/]|\.\./|" + re.escape(DATA_OVERLAY_DIR)
+    r"|file://|~/|\b[A-Za-z]:[\\/]|(?<!\.)\.\.[\\/]|" + re.escape(DATA_OVERLAY_DIR)
 )
 # Abbreviated refs are accepted, and this pattern IS the repository's
 # convention for a sha written into a file: a full 40-character sha reads to
@@ -185,9 +198,22 @@ def write_note(root: Path, slug: str, fields: dict) -> Path:
 def read_note(root: Path, slug: str) -> dict:
     """Return the frontmatter of `records/slices/{slug}.md`, plus `body` when present."""
     path = Path(root) / NOTE_DIR / f"{slug}.md"
+    # `(OSError, ValueError)`, not `OSError` alone. MEASURED 2026-09-01 on a note
+    # carrying a lone 0xe9: `UnicodeDecodeError` is a `ValueError` and a SIBLING
+    # of `OSError`, so it walked past this handler and out of the function.
+    # `canopus_check.main` takes `note_paths()` as its ENTIRE population and
+    # catches exactly `(NoteError, CheckError)`, so one hand-edited note in the
+    # wrong encoding did not get reported: it ENDED the check for every other
+    # note, on a traceback naming a codec, a byte and an offset but no path.
+    #
+    # Not `errors="replace"`. A note is a committed record whose fields are
+    # compared (`plan_digest`, `approval_sha`), and a value silently repaired
+    # with U+FFFD would be compared as though it were what the author wrote.
+    # Failing closed with the slug named is the safe direction, and it is what
+    # `census_oracles._read` already does for the same reason.
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         raise NoteError(f"note {slug!r} is unreadable: {exc}") from exc
     # The fences come from the shared splitter. `_FENCE` accepted trailing
     # whitespace on the CLOSING fence and not on the OPENING one, which is the
@@ -199,7 +225,18 @@ def read_note(root: Path, slug: str) -> dict:
     block, body, kind = split_frontmatter(text)
     if block is None or kind != FM_OK:
         raise NoteError(f"note {slug!r} has no '---' frontmatter fence")
-    fields = yaml.safe_load(block)
+    # `split_frontmatter` finds the FENCES and parses nothing, so a block that
+    # fences correctly and does not parse arrives here. This call had no handler
+    # at all, and `yaml.YAMLError` is neither `NoteError` nor `CheckError`, so it
+    # took the whole `canopus_check` run down exactly as the decode above did.
+    # An unclosed flow sequence (`slug: [unclosed`) is one keystroke away in a
+    # note that is written by hand.
+    try:
+        fields = yaml.safe_load(block)
+    except yaml.YAMLError as exc:
+        raise NoteError(
+            f"note {slug!r} has frontmatter that is not valid YAML: {exc}"
+        ) from exc
     if not isinstance(fields, dict):
         raise NoteError(f"note {slug!r} has frontmatter that is not a mapping")
     body = body.strip()

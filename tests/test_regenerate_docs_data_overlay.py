@@ -18,8 +18,14 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "regenerate-docs-html.py"
 
 
-def _tracked_dirs(env_extra: dict) -> str:
-    """Import the renderer with a given env and return its tracked dirs, one per line."""
+def _tracked_dirs(env_extra: dict) -> tuple[str, str]:
+    """Import the renderer with a given env; return (stdout dirs, stderr).
+
+    The HEADING_OS_DATA pin lives in this CHILD's environment only. Pinning it
+    for a whole pytest run makes `overlay_write_guard` treat the scratch path as
+    the operator's live overlay and refuse unrelated tests, so the pin stays
+    where the question is.
+    """
     code = (
         "import importlib.util;from pathlib import Path;"
         f"spec=importlib.util.spec_from_file_location('r',r'{SCRIPT}');"
@@ -30,13 +36,34 @@ def _tracked_dirs(env_extra: dict) -> str:
                        env={**os.environ, **env_extra},
                        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
-    return r.stdout
+    return r.stdout, r.stderr
 
 
 def test_tracked_dirs_include_data_overlay(tmp_path):
     data = tmp_path / "data"
     (data / "docs").mkdir(parents=True)
     (data / "templates").mkdir()
-    out = _tracked_dirs({"HEADING_OS_DATA": str(data)})
+    out, _err = _tracked_dirs({"HEADING_OS_DATA": str(data)})
     assert str(data / "docs") in out
     assert str(data / "templates") in out
+
+
+def test_an_unresolvable_data_root_still_renders_the_engines_own_docs(tmp_path):
+    """Fail-soft, and loudly. The docstring promises both; nothing measured it.
+
+    `HEADING_OS_DATA` naming a directory that does not exist makes
+    `get_data_root()` raise, which is the exact state this handler exists for: a
+    misconfigured overlay must not stop the engine's own docs/ and templates/
+    from rendering, and it must not be swallowed in silence either
+    (`.claude/rules/security.md`). MEASURED 2026-09-01: replacing the handler's
+    `return dirs` with `return []` was caught by nothing, so the renderer could
+    have gone from "skips the overlay" to "renders nothing at all" unnoticed.
+    """
+    absent = tmp_path / "no-such-overlay"
+    out, err = _tracked_dirs({"HEADING_OS_DATA": str(absent)})
+
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    assert len(lines) == 2, lines
+    assert lines[0].endswith("/docs") and lines[1].endswith("/templates"), lines
+    assert str(absent) not in out
+    assert "data-overlay scan skipped" in err

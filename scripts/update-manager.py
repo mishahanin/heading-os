@@ -96,7 +96,13 @@ def _read_state() -> dict:
         return {}
     try:
         return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    # UnicodeDecodeError sits between the two named here and is caught by
+    # neither: it is a ValueError raised INSIDE `read_text`, a sibling of
+    # `json.JSONDecodeError` and not a subclass of OSError, so `json.loads` is
+    # never reached. A state file with one torn byte therefore crashed every
+    # update-manager subcommand out of a function whose whole contract is to
+    # answer `{}` when the state cannot be read.
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}
 
 

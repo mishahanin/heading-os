@@ -22,6 +22,26 @@ for engagement events in `dm-log.jsonl` when `_log_event` writes them to
 `sessions.jsonl`, so the set of members who had answered the bot was ALWAYS
 empty. `stats` reported "Current week: 1 of 9" after the cycle had finished.
 
+Two more landed on 2026-09-01, both found by mutating the production code in a
+copy of this tree rather than by reading it.
+
+*A rule spelled twice, guarded once.* "A slot is filled when it has a SPEAKER,
+bound or not" is written at two sites: `find_swap_candidates` (`if e.get(...`)
+and `_vacancy_swap_locked`'s occupancy recheck (`and (e.get(...`). One test
+here searched the source for the `if` spelling, so the second site was bound by
+nothing in this repository - narrowing it to the handle alone left the whole
+suite green while `_apply_vacancy_swap` double-booked a slot held by an unbound
+name. Both sites are now driven, not grepped.
+
+*Three readers that died on bytes they could not decode.*
+`fireside-pulse.load_checkpoint`, `fireside-bot._read_jsonl_rows` and
+`fireside_topics.load_topic_state` each read UTF-8 inside a handler catching
+`OSError` and `json.JSONDecodeError`. `UnicodeDecodeError` is a `ValueError`
+and neither, so a torn write raised out of all three - past a docstring
+promising defaults for corrupt state, past a reader that skips a line it cannot
+parse, and past the tool whose job is to report status. Same gap `watchdog_core`
+had already closed.
+
 One finding was refuted on reading rather than taken on trust: the audit called
 `swapped_with.with_username` self-referential after a bilateral swap. It is not.
 Each row records the counterparty of ITS OWN new occupant, and the `old_date` /
@@ -204,12 +224,82 @@ def _entry(date_str, slot, name=None, username=None):
             "theme": "T", "speaker_name": name, "speaker_username": username}
 
 
-def test_a_slot_with_a_name_but_no_bound_handle_is_occupied():
+TODAY = date(2026, 9, 1)
+
+
+def test_the_swap_picker_does_not_offer_a_slot_held_by_an_unbound_name(fb):
     """`build_schedule()` writes exactly this shape when a roster lookup
-    misses, and keying on the handle alone offered it as an open slot."""
-    code = _code_only()
-    assert 'if e.get("speaker_username") or e.get("speaker_name")' in code
-    assert 'filled_slots = {e["slot"] for e in entries if e.get("speaker_username")}' not in code
+    misses, and keying on the handle alone offered it as an open slot.
+
+    Driven through `find_swap_candidates` since 2026-09-01. It used to be two
+    source greps, and the SECOND of them could never fire: it looked for
+    `filled_slots = {e["slot"] for e in entries if e.get("speaker_username")}`
+    on ONE line, while the code has always wrapped that comprehension across
+    two, so a revert written the way the file is actually formatted walked past
+    it. The first grep did bind this site, and nothing bound the other one -
+    see the two tests below.
+    """
+    schedule = [
+        _entry("2026-09-07", 1, "Named But Unbound", None),
+        _entry("2026-09-07", 2, "Also Unbound", None),
+        _entry("2026-09-07", 3, "Bound One", "bound"),
+        _entry("2026-09-21", 1, "Alex Kim", "akim"),
+    ]
+    kinds = {c["kind"] for c in fb.find_swap_candidates(schedule, "akim", TODAY)}
+    assert "vacancy" not in kinds, (
+        "a session whose three slots all carry a speaker was offered as having "
+        "an opening, because two of those speakers never bound to a handle"
+    )
+
+
+def test_the_swap_picker_still_offers_a_genuinely_empty_slot(fb):
+    """The other direction. A picker that finds no vacancy is not a picker."""
+    schedule = [
+        _entry("2026-09-07", 1, "Bound One", "bound"),
+        _entry("2026-09-21", 1, "Alex Kim", "akim"),
+    ]
+    vacancies = [c for c in fb.find_swap_candidates(schedule, "akim", TODAY)
+                 if c["kind"] == "vacancy"]
+    assert vacancies and vacancies[0]["date"] == "2026-09-07"
+
+
+def test_a_vacancy_swap_refuses_a_target_held_by_an_unbound_name(fb, state):
+    """The site the grep above could not reach, and the double-booking it cost.
+
+    `_vacancy_swap_locked`'s occupancy recheck spells the same rule as
+    `find_swap_candidates`, but with `and (e.get(...)` rather than
+    `if e.get(...)`, so the literal the old test searched for never matched it.
+    Measured 2026-09-01 in a copy of this tree, with that one site narrowed to
+    `and (e.get("speaker_username"))`:
+
+        .venv/bin/python -m pytest -q \\
+            tests/test_a_bot_that_said_it_was_alive_while_it_was_not.py
+        83 passed
+
+        _apply_vacancy_swap(...) -> True
+        rows at target: ('2026-09-14', 2, 'Named But Unbound', None)
+                        ('2026-09-14', 2, 'Alex Kim', 'akim')
+
+    Two speakers, one slot, nobody told - which is the exact defect this
+    file's own module docstring says the recheck exists to prevent. No other
+    file in `tests/` names the vacancy swap at all.
+    """
+    fb.save_state(fb.SCHEDULE, [
+        _entry("2026-09-07", 1, "Alex Kim", "akim"),
+        _entry("2026-09-14", 2, "Named But Unbound", None),
+    ])
+
+    assert fb._apply_vacancy_swap("akim", "2026-09-07", 1,
+                                  "2026-09-14", 2, "Mon", "Theme", 2) is False
+
+    after = fb.load_state(fb.SCHEDULE)
+    at_target = [e for e in after
+                 if e["session_date"] == "2026-09-14" and e["slot"] == 2]
+    assert len(at_target) == 1, f"the slot was double-booked: {at_target}"
+    assert at_target[0]["speaker_name"] == "Named But Unbound"
+    assert any(e["speaker_username"] == "akim"
+               and e["session_date"] == "2026-09-07" for e in after), (
+        "a refused swap still lifted A out of the slot they held")
 
 
 def test_a_vacancy_swap_refuses_a_slot_taken_since_the_keyboard_was_built(fb, state):
@@ -597,6 +687,46 @@ def test_the_jsonl_reader_skips_a_bad_line_and_keeps_the_rest(fb, state):
     assert fb._read_jsonl_rows(p) == [{"a": 1}, {"b": 2}]
 
 
+def test_the_jsonl_reader_survives_a_file_it_cannot_decode(fb, state):
+    """One unparseable LINE costs one row; one undecodable FILE cost the run.
+
+    `_read_jsonl_rows` caught only `OSError` around
+    `read_text(encoding="utf-8")`, and `UnicodeDecodeError` is a `ValueError`.
+    So a torn append to `dm-log.jsonl` or `sessions.jsonl` raised out of this
+    reader, out of `cmd_email_backup`, and no speaker got a backup email -
+    from a reader that already `continue`s past a line it cannot parse.
+    Measured 2026-09-01 before the fix: `UnicodeDecodeError: invalid start
+    byte`.
+
+    The first fix widened the whole-file read to `except (OSError,
+    UnicodeError)`, which stopped the raise by returning the file EMPTY and
+    logged "could not read". That trades a crash for losing every INTACT row
+    over one bad byte, and this test's own first line says the contract is one
+    bad line costing one row. The reader now decodes a line at a time through
+    `scripts/utils/jsonl_lines`, so the wording moved with it. What is asserted
+    here has not moved: the drop is named rather than silent.
+    """
+    p = state / "torn.jsonl"
+    p.write_bytes(UNDECODABLE)
+    assert p.stat().st_size > 0
+    with pytest.raises(UnicodeDecodeError):
+        p.read_text(encoding="utf-8")
+
+    assert fb._read_jsonl_rows(p) == []
+    assert "undecodable" in (state / fb.ERRORS_LOG).read_text(encoding="utf-8"), (
+        "the file was dropped in silence; a reader that returns [] and says "
+        "nothing is indistinguishable from an empty log")
+
+
+def test_the_jsonl_reader_keeps_the_intact_rows_beside_the_torn_one(fb, state):
+    """The half the wording change above exists to buy, asserted rather than
+    described. A file with one good row and one undecodable line yields the good
+    row; the earlier whole-file handler yielded nothing."""
+    p = state / "half-torn.jsonl"
+    p.write_bytes(b'{"dm_type": "poll-tick"}\n' + UNDECODABLE + b"\n")
+    assert [r.get("dm_type") for r in fb._read_jsonl_rows(p)] == ["poll-tick"]
+
+
 # ============================================================
 # An operator id that is not a number is "unconfigured", not a crash
 # ============================================================
@@ -783,6 +913,14 @@ def test_local_liveness_accepts_the_tick_webhook_mode_actually_writes():
     assert 'if e.get("dm_type") == "poll-tick":' not in code
 
 
+# Bytes that are not valid UTF-8 under any interpretation: 0xFF never starts a
+# UTF-8 sequence. Written as an escape, never as a literal, per
+# `.claude/rules/hidden-chars.md`. This is what a torn write leaves behind, and
+# a truncated write is the first corruption `load_checkpoint`'s own docstring
+# names.
+UNDECODABLE = b"\xff\xfe\x00{"
+
+
 def test_a_corrupt_pulse_checkpoint_rebaselines_instead_of_crashing(tmp_path, monkeypatch, capsys):
     pulse = _load("fireside_pulse_probe", PULSE_SRC)
     bad = tmp_path / "pulse-checkpoint.json"
@@ -790,6 +928,37 @@ def test_a_corrupt_pulse_checkpoint_rebaselines_instead_of_crashing(tmp_path, mo
     monkeypatch.setattr(pulse, "checkpoint", lambda p=bad: p)
     assert pulse.load_checkpoint() is None
     assert "re-baselining" in capsys.readouterr().err
+
+
+def test_a_byte_corrupt_pulse_checkpoint_also_rebaselines(tmp_path, monkeypatch,
+                                                          capsys):
+    """The half "corrupt" did not cover until 2026-09-01.
+
+    `load_checkpoint` caught `(OSError, json.JSONDecodeError)` and read the
+    file as UTF-8. Undecodable bytes raise `UnicodeDecodeError`, which is a
+    `ValueError` and neither of those - `json.JSONDecodeError` only fires on
+    text that DECODED and then failed to parse. So the case above (`{`) was
+    handled and this one raised straight out of every run, from the tool whose
+    entire job is to report status. Measured 2026-09-01 before the fix:
+
+        UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0
+
+    Same gap, same shape, same fix as `watchdog_core._read_beat`, which this
+    tree had already closed - see
+    `tests/test_a_beat_reader_that_died_on_bytes_it_could_not_decode.py`.
+    """
+    pulse = _load("fireside_pulse_probe5", PULSE_SRC)
+    bad = tmp_path / "pulse-checkpoint.json"
+    bad.write_bytes(UNDECODABLE)
+    # Guard the guard: the corpus is non-empty and really is undecodable, so a
+    # silently-absent file cannot make this pass for the wrong reason.
+    assert bad.stat().st_size > 0
+    with pytest.raises(UnicodeDecodeError):
+        bad.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(pulse, "checkpoint", lambda p=bad: p)
+    assert pulse.load_checkpoint() is None
+    assert "unreadable" in capsys.readouterr().err
 
 
 def test_a_checkpoint_of_the_wrong_type_also_rebaselines(tmp_path, monkeypatch, capsys):
@@ -873,6 +1042,23 @@ def test_topic_state_of_the_wrong_type_returns_the_documented_defaults(tmp_path)
     (tmp_path / "topic-collection-state.json").write_text("[]", encoding="utf-8")
     got = topics.load_topic_state(tmp_path)
     assert got == {"last_digest_idea_id": None, "pending_cycle_invite": None}
+
+
+def test_byte_corrupt_topic_state_returns_the_documented_defaults(tmp_path):
+    """`load_topic_state` promises defaults when the state is "absent/corrupt".
+
+    It caught `(json.JSONDecodeError, OSError)` around a UTF-8 `read_text`, so
+    the promise held for `[]` and for `{` and not for bytes that are not UTF-8
+    at all. Measured 2026-09-01 before the fix: `UnicodeDecodeError: invalid
+    start byte` out of the reader. Third site of one shape in this shard, with
+    `fireside-pulse.load_checkpoint` and `fireside-bot._read_jsonl_rows`; all
+    three were widened together, because a fix that lands in one of several
+    copies is the copy the next reader trusts.
+    """
+    topics = _load("fireside_topics_probe3", ROOT / "scripts" / "fireside_topics.py")
+    (tmp_path / "topic-collection-state.json").write_bytes(UNDECODABLE)
+    assert topics.load_topic_state(tmp_path) == {
+        "last_digest_idea_id": None, "pending_cycle_invite": None}
 
 
 def test_good_topic_state_is_returned_with_defaults_filled(tmp_path):

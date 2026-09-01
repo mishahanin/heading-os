@@ -1,4 +1,5 @@
 import os
+import sys
 import subprocess
 
 from scripts.utils import modem_ssh
@@ -39,6 +40,38 @@ def test_the_host_argument_overrides_the_credentials_default(monkeypatch):
     for cmd in seen:
         assert "StrictHostKeyChecking=no" in cmd, (
             "the documented host-key stance is gone from the command")
+
+
+def test_a_router_reply_that_is_not_utf8_is_read_rather_than_raised(monkeypatch):
+    """A real child process, not a stub that raises.
+
+    `text=True` with no `encoding=` decodes with the HOST locale, and the raise
+    lands inside `subprocess.run` - above every handler the drivers have, so it
+    leaves `modem-tune` as a traceback rather than as the named refusal this
+    module is built around. A stub that raises `UnicodeDecodeError` would only
+    measure the handler; spawning a child that really emits the byte measures
+    the fix. MEASURED 2026-09-01 with `\\xff` in a `+COPS` carrier name: under
+    `text=True` alone the call raised, and `AT+GSN`'s digits went with it.
+    """
+    monkeypatch.setattr(modem_ssh, "credentials",
+                        lambda: ("192.0.2.10", "root", "synthetic-not-a-real-password"))
+    real_run = subprocess.run
+    emit = (
+        "import sys\n"
+        "sys.stdout.buffer.write(b'+COPS: 0,0,\"Synth\\xffCarrier\",7\\n')\n"
+        "sys.stdout.buffer.write(b'356741100000016\\nOK\\n')\n"
+    )
+
+    def _child(cmd, **kwargs):
+        return real_run([sys.executable, "-c", emit], **kwargs)
+
+    monkeypatch.setattr(modem_ssh.subprocess, "run", _child)
+
+    out = modem_ssh.ssh("AT+COPS?")
+
+    assert "356741100000016" in out, "the IMEI was lost with the undecodable byte"
+    assert "OK" in out, "the final result code was lost, so a driver would refuse"
+    assert "�" in out, "the bad byte was not replaced; something else decoded it"
 
 
 def test_a_failed_askpass_removal_is_reported_not_swallowed(monkeypatch, capsys):

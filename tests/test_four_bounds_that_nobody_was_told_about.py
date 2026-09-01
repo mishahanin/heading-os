@@ -120,9 +120,24 @@ def test_the_stamp_is_the_operator_day_not_utc(monkeypatch, tmp_path):
     source.write_text("x\n", encoding="utf-8")
 
     # 2026-08-27 22:00 UTC is 2026-08-28 02:00 in Dubai.
+    #
+    # `now(None)` REFUSES rather than returning the host's local time. Without
+    # that refusal this test could not tell the configured zone from the machine
+    # running it: `astimezone(None)` converts to the HOST zone, and the operator's
+    # host is +04, the same offset as the Asia/Dubai this test patches in.
+    # MEASURED 2026-09-01 on that host: rewriting the stamp to a bare
+    # `datetime.now().date()` -- reading the host clock, ignoring
+    # `get_default_tz()` entirely -- still produced `-20260828` and this test
+    # still passed. It would have failed on a UTC CI runner and passed here,
+    # which is the worst of both. The refusal binds the claim directly: the
+    # stamp must come from a zone the code asked for.
     class _Clock(datetime):
         @classmethod
         def now(cls, tz=None):
+            if tz is None:
+                raise AssertionError(
+                    "the backup stamp was taken from the host clock; it must "
+                    "pass the configured zone to datetime.now()")
             return datetime(2026, 8, 27, 22, 0, tzinfo=timezone.utc).astimezone(tz)
 
     monkeypatch.setattr("scripts.utils.crm.datetime", _Clock)

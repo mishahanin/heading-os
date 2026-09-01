@@ -232,3 +232,21 @@ def test_list_library_type_order_omits_absent_types(tmp_path):
     r = list_library(tmp_path)
     assert "principle" in r["type_order"]
     assert "position" not in r["type_order"]
+
+
+def test_a_note_in_a_dotted_directory_is_not_listed(tmp_path):
+    """`knowledge/.trash/` and friends are not the knowledge base.
+
+    The walk skips dotted path segments, and the two sibling skips (INDEX.md,
+    `_archive/`) each have a test while this one had none. MEASURED 2026-08-31
+    by deleting the `any(seg.startswith("."))` skip and running `tests/bridge`:
+    1349 passed, 1 skipped, so a deleted or editor-shadowed note would have
+    been published to /library with nothing to catch it.
+    """
+    _make_note(tmp_path, ".trash/deleted-note.md", title="Deleted note", updated="2026-05-18")
+    _make_note(tmp_path, "real-note.md", title="Real note", updated="2026-05-17")
+
+    result = list_library(tmp_path)
+
+    assert [n["title"] for n in result["notes"]] == ["Real note"]
+    assert result["total"] == 1

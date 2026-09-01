@@ -65,6 +65,7 @@ needs_bwrap = pytest.mark.skipif(
 SANDBOX_FREE_TESTS = (
     "test_the_overlay_check_is_not_fooled_by_the_shipped_demo_tree",
     "test_the_overlay_check_still_says_yes_to_a_real_corpus",
+    "test_the_overlay_check_says_no_to_an_overlay_with_no_corpus_content",
 )
 
 
@@ -144,14 +145,94 @@ def test_the_overlay_check_is_not_fooled_by_the_shipped_demo_tree(monkeypatch):
     )
 
 
-def test_the_overlay_check_still_says_yes_to_a_real_corpus(monkeypatch):
-    """The other jaw. A check hard-wired to False would pass the test above and
-    silently stop grading the benchmark on the operator's own machine."""
+def test_the_overlay_check_still_says_yes_to_a_real_corpus(monkeypatch, tmp_path):
+    """The other jaw, and it did not bite until 2026-08-31.
+
+    The body was `monkeypatch.setattr(..., lambda: True)` followed by
+    `if not _has_populated_overlay(): pytest.skip(...)`. It carried NO
+    assertion, on any machine: with a corpus present it did nothing, and with
+    none it skipped. Measured by hard-wiring the exact defect its own docstring
+    names:
+
+        -  try:
+        -      from scripts.utils.census_oracles import CorpusPaths
+        -      ... eleven lines ...
+        +  return False  # MUTATION: hard-wired to False
+
+        tests/contract/2026-08-13-census-primitive/test_contract.py
+            -> 8 passed, 2 skipped   (baseline: 10 passed)
+
+    Nothing failed. This test skipped, `needs_overlay` disabled the scorer
+    contract, and the benchmark stopped being graded on the operator's own
+    machine exactly as the docstring warned - silently, which is the word it
+    used.
+
+    The corpus is now BUILT, so the yes case runs everywhere. Only two things
+    are stubbed, and both are the seam under test rather than the answer:
+    `data_overlay_present` says an overlay exists, and `CorpusPaths` points at
+    a tree this test writes. Whether that tree counts as populated is still
+    decided by the real predicate.
+    """
+    import scripts.utils.census_oracles as oracles_mod
     import scripts.utils.paths as paths_mod
 
+    corpus = tmp_path / "overlay"
+    for sub in ("threads", "crm/contacts", "context", "auto-memory",
+                "knowledge", "outputs"):
+        (corpus / sub).mkdir(parents=True)
+    (corpus / "threads" / "2026-08-31-a-thread.md").write_text(
+        "# a thread\n", encoding="utf-8")
+
+    class _Fixture(oracles_mod.CorpusPaths):
+        @classmethod
+        def from_workspace(cls):
+            return cls(root=corpus, threads=corpus / "threads",
+                       crm=corpus / "crm" / "contacts",
+                       context=corpus / "context",
+                       auto_memory=corpus / "auto-memory",
+                       knowledge=corpus / "knowledge",
+                       outputs=corpus / "outputs")
+
     monkeypatch.setattr(paths_mod, "data_overlay_present", lambda: True)
-    if not _has_populated_overlay():
-        pytest.skip("no populated corpus on this machine to measure the yes case")
+    monkeypatch.setattr(oracles_mod, "CorpusPaths", _Fixture)
+
+    assert _has_populated_overlay() is True, (
+        "an overlay that is present and holds markdown was reported empty; "
+        "`needs_overlay` then skips the scorer contract and the benchmark "
+        "stops being graded, with nothing failing to say so")
+
+
+def test_the_overlay_check_says_no_to_an_overlay_with_no_corpus_content(
+        monkeypatch, tmp_path):
+    """The third case, between the two above: the overlay IS present and its
+    corpus directories are empty. That is a bare clone with a freshly created
+    data sibling, and grading a benchmark against it produces the same
+    `empty truth for question(s)` failure the skip exists to prevent."""
+    import scripts.utils.census_oracles as oracles_mod
+    import scripts.utils.paths as paths_mod
+
+    corpus = tmp_path / "overlay"
+    for sub in ("threads", "crm/contacts", "context", "auto-memory",
+                "knowledge", "outputs"):
+        (corpus / sub).mkdir(parents=True)
+    # A non-markdown file, so "the directory exists" and "the directory has a
+    # corpus in it" cannot be confused for each other.
+    (corpus / "context" / "notes.txt").write_text("x", encoding="utf-8")
+
+    class _Fixture(oracles_mod.CorpusPaths):
+        @classmethod
+        def from_workspace(cls):
+            return cls(root=corpus, threads=corpus / "threads",
+                       crm=corpus / "crm" / "contacts",
+                       context=corpus / "context",
+                       auto_memory=corpus / "auto-memory",
+                       knowledge=corpus / "knowledge",
+                       outputs=corpus / "outputs")
+
+    monkeypatch.setattr(paths_mod, "data_overlay_present", lambda: True)
+    monkeypatch.setattr(oracles_mod, "CorpusPaths", _Fixture)
+
+    assert _has_populated_overlay() is False
 
 
 def _load(name: str, filename: str):

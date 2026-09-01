@@ -179,7 +179,20 @@ def last_interaction_excerpt(contact_file_path: Path) -> str:
     """
     if not contact_file_path.exists():
         return "(no prior interaction)"
-    text = contact_file_path.read_text(encoding="utf-8")
+    try:
+        text = contact_file_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        # The docstring above names the fallback for two conditions and this is
+        # a third: a record this cannot decode is a record with no readable
+        # entry. `UnicodeDecodeError` subclasses ValueError, so no OSError
+        # handler anywhere on this path would have seen it, and the read had no
+        # handler at all. `/cold-sweep` calls this once per contact, so one
+        # byte-corrupt CRM file took the whole sweep down instead of one card.
+        # Named on stderr because the operator otherwise cannot tell WHICH
+        # record produced an empty excerpt.
+        print(f"crm_next: could not read {contact_file_path}: {exc}",
+              file=sys.stderr)
+        return "(no prior interaction)"
     if "## Interaction Log" not in text:
         return "(no prior interaction)"
     log = text.split("## Interaction Log", 1)[1]

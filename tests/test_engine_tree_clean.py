@@ -115,6 +115,58 @@ def test_every_shipped_demo_file_is_allowed(rel):
     assert find_data_artifacts([rel]) == []
 
 
+@pytest.mark.parametrize("spelling", [
+    "/examples/crm/contacts/real-person.md",        # leading slash
+    "//examples/crm/contacts/real-person.md",       # doubled, as a join can produce
+    "examples\\crm\\contacts\\real-person.md",      # Windows separators
+    "\\examples\\crm\\contacts\\real-person.md",    # both at once
+])
+def test_the_demo_branch_normalises_before_it_compares(spelling):
+    """The demo-tree rule matches STRINGS, so the spelling has to be settled first.
+
+    Every other rule in `find_data_artifacts` is decided by
+    `get_routing_destination`, which normalises the separator and the leading
+    slash itself, so those survive a caller that spells a path oddly. The
+    `examples/` rule does not: it is a literal `startswith(DEMO_ROOT)` and a
+    literal membership test against `DEMO_MANIFEST`, and it sees whatever it is
+    handed.
+
+    MEASURED 2026-09-01 by removing `rel.replace("\\\\", "/").lstrip("/")` from
+    the function and re-running the 116 tests across this file, test_engine_guard
+    and the five leak-wall neighbours: all 116 stayed GREEN, while
+
+        find_data_artifacts(["/examples/crm/contacts/real.md"])   -> []
+        find_data_artifacts(["examples\\\\crm\\\\contacts\\\\real.md"]) -> []
+
+    against `['examples/crm/contacts/real.md']` for the same file spelled plainly.
+    A contacts file under the bundled demo tree walked through the wall, which is
+    the exact operator law of 2026-08-26 that the manifest section exists to
+    enforce, and nothing in the suite noticed.
+
+    The route in is not hypothetical. `scan_engine_repo` renders `extra_paths`
+    with `str(p)`, and the push wall hands it the paths of the unpushed history;
+    `str()` on a Path under Windows yields backslashes.
+    """
+    assert find_data_artifacts([spelling]) == ["examples/crm/contacts/real-person.md"], (
+        f"a data file under the demo tree spelled {spelling!r} was cleared by the "
+        "wall. The demo rule compares strings and cannot normalise them itself."
+    )
+
+
+@pytest.mark.parametrize("spelling", [
+    "/examples/README.md",
+    "examples\\README.md",
+])
+def test_normalising_does_not_start_flagging_the_shipped_demo(spelling):
+    """The other jaw. A normalisation that flagged the manifest's own files would
+    make the tree-clean test fail on a correct tree, and the fix would be to
+    delete the rule."""
+    assert "examples/README.md" in DEMO_MANIFEST, (
+        "this anchor names a file the manifest no longer ships"
+    )
+    assert find_data_artifacts([spelling]) == []
+
+
 def test_the_manifest_matches_the_tree_git_actually_carries():
     """A manifest that drifts from disk is a claim that has stopped being true.
 

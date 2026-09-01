@@ -99,6 +99,57 @@ def test_a_ukrainian_letter_is_covered():
     assert transliterate("Ґанок").lower() == "ganok"
 
 
+# The BGN/PCGN-style scheme this module documents, written out by hand rather
+# than read off `_CYRILLIC`. Asserting the table against itself would pass for
+# any table at all; this is the reader's expectation the table is supposed to
+# satisfy, and the pairing is what makes a wrong edit visible.
+#
+# MEASURED 2026-09-01: before this existed, deleting `"є": "ye"` and `"ў": "u"`
+# from the table left all 27 tests in this file green. Both are in the module
+# for a stated reason - "the operator's counterparties write in both" Ukrainian
+# and Belarusian - and neither had a single case that named it. The word-level
+# tests above cover eleven letters between them; the other twenty-seven had no
+# witness of any kind.
+_EXPECTED_SCHEME = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
+    "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
+    "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
+    "ф": "f", "х": "kh", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "shch",
+    "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+    # Ukrainian and Belarusian. `є` and `ў` are the two that went unwitnessed.
+    "і": "i", "ї": "yi", "є": "ye", "ґ": "g", "ў": "u",
+}
+
+
+@pytest.mark.parametrize("letter,latin", sorted(_EXPECTED_SCHEME.items()))
+def test_every_letter_in_the_scheme_transliterates_as_documented(letter, latin):
+    """A sole witness for each letter, lowercase and uppercase both.
+
+    Uppercase is asserted here rather than left to the word tests because the
+    case-restoration branch only fires for a letter whose Latin form is longer
+    than nothing, and `ъ`/`ь` map to the empty string.
+    """
+    assert transliterate(letter) == latin
+    upper = letter.upper()
+    expected_upper = (latin[0].upper() + latin[1:]) if latin else ""
+    assert transliterate(upper) == expected_upper, (
+        f"{upper!r} did not keep its case: got {transliterate(upper)!r}")
+
+
+def test_the_scheme_above_is_the_whole_table():
+    """The anti-decay half. A letter added to `_CYRILLIC` with no expectation
+    here would otherwise ship unwitnessed, which is exactly how `є` and `ў`
+    reached 2026-09-01 with no case naming them."""
+    from scripts.utils.slugs import _CYRILLIC
+
+    assert set(_CYRILLIC) == set(_EXPECTED_SCHEME), (
+        f"the table and the expected scheme disagree on "
+        f"{sorted(set(_CYRILLIC) ^ set(_EXPECTED_SCHEME))}; add the new letter "
+        f"to _EXPECTED_SCHEME with the Latin form a reader should see")
+    assert len(_EXPECTED_SCHEME) >= 38, (
+        f"only {len(_EXPECTED_SCHEME)} letters expected; the scheme has shrunk")
+
+
 def test_a_decomposed_letter_is_normalised_before_lookup():
     """The same "ё" arrives two ways, and only one of them is a single character.
 

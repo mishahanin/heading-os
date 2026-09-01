@@ -30,6 +30,8 @@ Run: python3 -m pytest tests/test_a_scan_that_called_trojan_source_clean.py
 """
 from __future__ import annotations
 
+import ast
+import builtins
 import email.message
 import gzip
 import io
@@ -101,6 +103,32 @@ def test_an_unnamed_character_is_still_reported(monkeypatch):
 
 def test_every_scanned_character_has_a_name_today():
     assert st.SCANNED_CHARS - set(st.CHAR_NAMES) == set()
+
+
+def test_the_scanned_set_is_built_from_the_sanitizer_tables_in_source():
+    """The derivation, asked of the AST, because today the two sets are equal.
+
+    `CHAR_NAMES` names every scanned character right now, so
+    `SCANNED_CHARS = frozenset(CHAR_NAMES)` -- the hand-maintained shape whose
+    drift produced the Trojan Source hole -- passes every behavioural test in
+    this section. Measured: that substitution left all 37 cases green. What the
+    fix actually bought is that a character added to `INVISIBLE_CHARS` is
+    scanned WITHOUT anyone remembering to name it, and only the expression can
+    say whether that still holds.
+    """
+    module = ast.parse((ROOT / "scripts" / "utils" / "sanitize_text.py")
+                       .read_text(encoding="utf-8"))
+    assigns = [node for node in module.body
+               if isinstance(node, ast.Assign)
+               and any(isinstance(t, ast.Name) and t.id == "SCANNED_CHARS"
+                       for t in node.targets)]
+    assert len(assigns) == 1, f"expected one SCANNED_CHARS assignment, got {len(assigns)}"
+
+    names = {n.id for n in ast.walk(assigns[0].value) if isinstance(n, ast.Name)}
+    sources = names - set(dir(builtins))   # `frozenset` is a Name node too
+    assert sources == {"INVISIBLE_CHARS", "REPLACE_MAP"}, (
+        f"SCANNED_CHARS is built from {sorted(sources)}; it must be derived from "
+        "the two tables `sanitize()` acts on, never from the name table")
 
 
 def test_the_cli_exit_code_follows_the_finding(tmp_path):
@@ -248,6 +276,35 @@ def test_brave_search_asks_for_the_encoding_the_reader_handles():
     (b"not json at all", None),
     (b"\x1f\x8b broken gzip", "gzip"),
     (json.dumps(PAYLOAD).encode(), "br"),
+    # The one case that reaches `body.decode("utf-8")` itself. The three above
+    # raise JSONDecodeError, gzip.BadGzipFile (an OSError) and
+    # SearchBackendError, so dropping `UnicodeDecodeError` from the handler's
+    # tuple left every one of them green while a latin-1 reply from an
+    # uncompressing endpoint escaped `search_with_fallback` as a bare
+    # UnicodeDecodeError -- the very shape the gzip half of this section was
+    # written for.
+    (b"caf\xe9 not utf-8", None),
+    # And the same byte through the gzip branch: decompression succeeds and the
+    # decode after it is what fails.
+    #
+    # `mtime=0` is NOT cosmetic. This call sits at MODULE scope, inside the
+    # decorator, so it runs once per process at import. `gzip.compress` writes
+    # the current epoch second into the header, at byte offset 4, and pytest
+    # derives a parametrize id from the bytes. Under `-n auto` each xdist worker
+    # imports this module a moment apart, so the workers built DIFFERENT ids for
+    # this one case and xdist aborted the entire run with "Different tests were
+    # collected between gw0 and gwN".
+    #
+    # MEASURED 2026-09-01: `gzip.compress(x) != gzip.compress(x)` across 1.1s,
+    # first differing byte at offset 4; with `mtime=0` the two are identical.
+    # The whole parallel gate went down on every run, and the error names a
+    # collection mismatch, which reads as a nondeterministic conftest rather
+    # than as one timestamp in one fixture.
+    #
+    # The two other `gzip.compress` calls in this tree are FINE and were left
+    # alone: `test_resolve_entity.py:212` and line 257 above both run inside a
+    # function body, at test time, where the bytes never reach an id.
+    (gzip.compress(b"caf\xe9 not utf-8", mtime=0), "gzip"),
 ])
 def test_an_unreadable_body_is_a_backend_error(monkeypatch, body, encoding):
     """Anything else escapes `search_with_fallback` and kills the whole call."""
@@ -485,4 +542,31 @@ def test_the_tree_is_restored_after_an_ambiguous_anchor(tmp_path):
             python=sys.executable)
 
     assert (root / "src.py").read_text(encoding="utf-8") == before
+    assert list(root.rglob("*.mutbak")) == []
+
+
+def test_the_tree_is_restored_after_a_mutation_that_actually_applied(tmp_path):
+    """The restore, with a case on the line that exercises it.
+
+    The ambiguous-anchor case above never writes the file, so it holds whether
+    or not the `finally` puts the backup back: replacing
+    `shutil.move(backup, target)` with `backup.unlink()` left this whole file
+    green. That `finally` is the only thing standing between a killed harness
+    and mutated production code left in a working tree, which is the accident
+    this campaign has already had once, so it needs a case where the mutation
+    landed.
+    """
+    from scripts.utils.mutation_harness import run_mutations as harness
+
+    root, tests = _harness_tree(tmp_path, anchor_twice=False)
+    before = (root / "src.py").read_text(encoding="utf-8")
+    assert "if flag != 0:" in before, "the anchor must be present or nothing applied"
+
+    rc = harness(root, tests,
+                 [("Z1", "src.py", "    if flag != 0:", "    if False:")],
+                 python=sys.executable)
+
+    assert rc == 0, "the contract must have caught the mutation, or it never applied"
+    assert (root / "src.py").read_text(encoding="utf-8") == before, (
+        "the harness left its mutation in the tree")
     assert list(root.rglob("*.mutbak")) == []

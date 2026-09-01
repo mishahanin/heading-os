@@ -94,6 +94,87 @@ def test_a_successful_pull_records_nothing(monkeypatch, tmp_path):
     assert not [e for e in errors if "pull" in e.lower()], errors
 
 
+def test_a_pull_writing_a_non_utf8_byte_is_recorded_not_a_traceback(monkeypatch, tmp_path):
+    """The same byte that took down `admin-health.py`, on the same command here.
+
+    `subprocess.run(..., text=True)` with no `errors=` decodes strictly, and
+    `UnicodeDecodeError` is a `ValueError`: caught by neither
+    `subprocess.TimeoutExpired` nor `OSError`, the pull branch's whole handler
+    tuple. git quotes branch names, paths and a remote's own bytes back on
+    stderr, so this is the ordinary failure, not an exotic one.
+
+    MEASURED 2026-09-01 before the fix: one exec's undecodable pull stderr
+    raised out of `scan_all_contacts` and ended the WHOLE fleet aggregation in
+    a traceback - every other executive's contacts dropped - while the
+    `slug_errors` entry four lines below the call, which exists precisely so a
+    failed pull is never silent, never ran.
+
+    The kwargs are captured and REPLAYED against a real bad-byte emitter rather
+    than asserted as source text: that measures the decode configuration the
+    call actually ships, and survives any re-wrap of the call site.
+    """
+    real_run = subprocess.run
+    bad = [sys.executable, "-c",
+           "import sys; sys.stderr.buffer.write(b'fatal: could not read \\xff\\xfe\\n');"
+           " sys.exit(1)"]
+    seen: list[dict] = []
+
+    def replaying(cmd, **kw):
+        if list(cmd[:2]) == ["git", "pull"]:
+            seen.append(dict(kw))
+            kw.pop("cwd", None)
+            kw.pop("check", None)
+            kw.pop("timeout", None)
+            return real_run(bad, check=False, **kw)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    _contacts, errors = _scan(monkeypatch, tmp_path, "someone", replaying)
+    assert seen, "the pull branch never ran, so this measured nothing"
+    assert any("someone" in e and "could not read" in e for e in errors), (
+        f"an undecodable byte on git's stderr defeated the failed-pull record. "
+        f"Errors were {errors!r}"
+    )
+
+
+def test_the_clone_branch_decodes_the_same_way_as_the_pull_branch(monkeypatch, tmp_path):
+    """The copy a one-site fix leaves behind, asked about explicitly.
+
+    The clone and the pull sit twenty lines apart in the same function, run the
+    same kind of command, and each wraps it in a handler tuple that cannot catch
+    a `UnicodeDecodeError`. `gh repo clone` echoes the remote name and git's own
+    bytes. Fixing the pull alone and calling the finding closed is the shape
+    this suite keeps finding, so the clone gets its own case ON the line rather
+    than an assumption that the two were fixed together.
+    """
+    real_run = subprocess.run
+    bad = [sys.executable, "-c",
+           "import sys; sys.stderr.buffer.write(b'gh: could not clone \\xff\\xfe\\n');"
+           " sys.exit(1)"]
+    # repo_path must NOT exist, so the clone branch is the one that runs.
+    missing = tmp_path / ".heading-os-data-someone"
+    monkeypatch.setattr(AGG, "get_per_exec_repo_path_for_workspace",
+                        lambda _root, _slug: missing)
+    ceo_dir = tmp_path / "ceo-crm"
+    ceo_dir.mkdir()
+    monkeypatch.setattr(AGG, "get_crm_contacts_dir", lambda: ceo_dir)
+    seen: list[dict] = []
+
+    def replaying(cmd, **kw):
+        assert list(cmd[:2]) == ["gh", "repo"], cmd
+        seen.append(dict(kw))
+        kw.pop("timeout", None)
+        return real_run(bad, check=False, **kw)
+
+    monkeypatch.setattr(AGG.subprocess, "run", replaying)
+    _contacts, errors = AGG.scan_all_contacts(tmp_path, ["someone"], {},
+                                              ceo_only=False, skip_clone=False)
+    assert seen, "the clone branch never ran, so this measured nothing"
+    assert any("someone" in e and "could not clone" in e for e in errors), (
+        f"an undecodable byte on the cloner's stderr defeated the clone-failure "
+        f"record. Errors were {errors!r}"
+    )
+
+
 def test_skip_clone_does_not_pull_at_all(monkeypatch, tmp_path):
     calls = []
 
@@ -128,6 +209,31 @@ def test_a_corrupt_registry_is_not_silently_an_empty_fleet(tmp_path):
     with pytest.raises(AGG.FleetRegistryError) as exc:
         AGG.load_fleet_registry(tmp_path)
     assert "executives.json" in str(exc.value)
+
+
+def test_an_undecodable_registry_is_a_FleetRegistryError_not_a_traceback(tmp_path):
+    """The decode sibling, which had no witness of any kind.
+
+    `UnicodeDecodeError` is a `ValueError` and a SIBLING of
+    `json.JSONDecodeError` under it, not a subclass, and the decode happens
+    inside `read_text` before `json.loads` is handed anything. It is named in
+    `load_fleet_registry`'s handler tuple - and MEASURED 2026-09-01, removing
+    it from that tuple left this whole file green at 11 passed. So the fix was
+    load-bearing and untested: nothing would have stopped it being tidied away.
+
+    What it buys is specific. `main` catches `FleetRegistryError` and exits 2
+    printing "Refusing to aggregate: a CEO-only result would look like a fleet
+    with no executives." A raw `UnicodeDecodeError` escapes that handler
+    entirely, so the operator gets a traceback and the refusal that explains
+    what to do never prints - and a torn write is the ordinary way this file
+    goes bad.
+    """
+    (tmp_path / "admin").mkdir()
+    path = tmp_path / "admin" / "executives.json"
+    path.write_bytes(b'{"version": 1, "executives": [{"slug": "\xff\xfe"}]}')
+    with pytest.raises(AGG.FleetRegistryError) as exc:
+        AGG.load_fleet_registry(tmp_path)
+    assert str(path) in str(exc.value)
 
 
 def test_a_registry_that_is_not_an_object_is_also_refused(tmp_path):

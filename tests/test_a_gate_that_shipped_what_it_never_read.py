@@ -304,6 +304,50 @@ def test_a_real_date_still_reads(tmp_path):
     assert date_str == today and age == 0
 
 
+def test_a_file_that_is_not_utf8_still_reports_its_marker(tmp_path):
+    """The bad-DATE handler's twin, one input class over.
+
+    `get_freshness` documents three return shapes and the `except ValueError`
+    below the regex exists because a bad date "used to raise out of
+    `get_freshness`, abort the `check` listing partway through, and make every
+    OTHER file's freshness unreportable". A bare `read_text` did exactly that
+    for a bad BYTE. MEASURED 2026-09-01 on a file whose marker was valid and
+    whose body held one cp1252 byte: UnicodeDecodeError, so none of the three
+    promised shapes could be returned.
+
+    The marker here is GOOD, so the assertion is that the undecodable body does
+    not cost the reading - a fix that returned `(None, None)` for the file would
+    swap a crash for a silent "no marker" over a file that has one.
+    """
+    f = tmp_path / "note.md"
+    today = datetime.now(fresh.get_default_tz()).date().isoformat()
+    f.write_bytes(f"> Last verified: {today}\n\ncaf\xe9 body\n".encode("latin-1"))
+    date_str, age = fresh.get_freshness(f)
+    assert date_str == today
+    assert age == 0
+
+
+def test_one_undecodable_file_does_not_end_the_listing(tmp_path, monkeypatch,
+                                                        capsys):
+    """Through `check_all`, which is where the abort was actually paid.
+
+    `broken.md` sorts before `good.md`, so a reader that dies on it never
+    reaches the second file at all.
+    """
+    ctx = tmp_path / "context"
+    ctx.mkdir()
+    today = datetime.now(fresh.get_default_tz()).date().isoformat()
+    (ctx / "broken.md").write_bytes(
+        f"> Last verified: {today}\n\ncaf\xe9\n".encode("latin-1"))
+    (ctx / "good.md").write_text(f"> Last verified: {today}\n", encoding="utf-8")
+    monkeypatch.setattr(fresh, "context_dir", lambda p=ctx: p)
+
+    fresh.check_all()
+    out = capsys.readouterr().out
+    assert "broken.md" in out
+    assert "good.md" in out, "one undecodable file ended the listing"
+
+
 def test_a_file_with_no_marker_is_still_the_none_case(tmp_path):
     f = tmp_path / "note.md"
     f.write_text("# Heading\n\nNo marker here.\n", encoding="utf-8")

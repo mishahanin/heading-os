@@ -94,6 +94,16 @@ SEARCHED = ("scripts", ".claude/hooks")
 MIN_CLAIMS_FOUND = 30
 MIN_FILES_FOUND = 10
 
+# ...and PER SOURCE, because a floor over the union is satisfied while one of
+# the two trees contributes nothing at all. Measured 2026-09-01: `scripts/`
+# holds 28 claims in 9 files and `.claude/hooks/` holds 16 in 7, so
+# `.claude/hooks/` dropping out of `SEARCHED` entirely left 28 claims in 9
+# files against union floors of 30 and 10 - caught by a margin of two claims
+# and one file, and not caught at all after two more `scripts/` claims land.
+# The reference-case assertion below pins `scripts/` and nothing pinned the
+# hooks tree. Floors here are per source, set well under each source's census.
+MIN_PER_SOURCE = {"scripts": (18, 6), ".claude/hooks": (10, 4)}
+
 # (path, fingerprint) -> (head, the identifier that must appear in the file,
 # naming what resolves THIS claim). A claim with no resolver is the defect this
 # file exists to stop, so the value is never allowed to be empty.
@@ -287,6 +297,25 @@ DECLARED_CLAIMANTS: dict[str, dict[str, tuple[str, str]]] = {
         "ecac1c4155c9": (
             "no uncommitted python edits by this session (",
             "session_scope"),
+    },
+    # The failure message `resolve_pane` raises when the record it matched
+    # carries a pane_id no caller can use. "matching this session" is a
+    # membership claim about one entry in `herdr agent list`, and it is entitled
+    # to the subject only inside the branch guarded by
+    # `session.get("value") == session_id`, which is the comparison that
+    # established the match one line above the raise. `session_id` is therefore
+    # the resolver, and it is the caller-supplied id rather than anything this
+    # module infers about itself.
+    #
+    # `resolve_pane` would have been the wrong answer here even though it is the
+    # right one in scripts/compact-now.py: there the claim is made by a CALLER
+    # about the result of the lookup, here it is made inside the lookup, and
+    # naming the enclosing function would say only that the sentence is where it
+    # is.
+    "scripts/utils/herdr_agent.py": {
+        "79bf204f150e": (  # pragma: allowlist secret
+            "the agent record matching this session carries pane_id",
+            "session_id"),
     },
 }
 
@@ -717,6 +746,39 @@ def test_the_detector_is_not_vacuous():
         "the registries hold fewer entries than the floor, so most of the tree's "
         "claims are no longer classified individually"
     )
+
+
+@pytest.mark.parametrize("tree", sorted(MIN_PER_SOURCE))
+def test_each_searched_tree_still_contributes(tree):
+    """A floor over the union is satisfied while one source contributes zero.
+
+    `SEARCHED` names two trees and they are not interchangeable: the hooks are
+    where session membership is asserted most often, and the reference-case
+    assertion above pins only `scripts/`. Measured 2026-09-01, dropping
+    `.claude/hooks` from the walk left 28 claims in 9 files, two claims and one
+    file under the union floors - a margin that disappears the moment two more
+    `scripts/` claims are written. Each tree now carries its own floor, so the
+    walk cannot go silent on one of them and be paid for by the other.
+    """
+    assert tree in SEARCHED, f"{tree} is floored here but is no longer searched"
+    min_claims, min_files = MIN_PER_SOURCE[tree]
+    found = {path: byfp for path, byfp in _claimants().items()
+             if path == tree or path.startswith(tree + "/")}
+    total = sum(len(v) for v in found.values())
+    assert len(found) >= min_files, (
+        f"{tree} contributed claims in only {len(found)} file(s), under its own "
+        f"floor of {min_files}")
+    assert total >= min_claims, (
+        f"{tree} contributed {total} claim(s), under its own floor of "
+        f"{min_claims}")
+
+
+def test_every_searched_tree_carries_a_floor():
+    """The table above must not fall behind `SEARCHED`. A third tree added to
+    the walk with no floor beside it is the same blind spot in a new place."""
+    assert set(MIN_PER_SOURCE) == set(SEARCHED), (
+        f"SEARCHED is {SEARCHED} but MIN_PER_SOURCE floors "
+        f"{sorted(MIN_PER_SOURCE)}")
 
 
 # --------------------------------------------------------------------------

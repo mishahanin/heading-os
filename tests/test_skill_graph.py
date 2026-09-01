@@ -26,7 +26,15 @@ create-plan,operations,deep-think,implement,plans,
 implement,operations,create-plan,evaluate|scrutinize,outputs/operations/implement,plans
 ops-parent,operations,,,outputs/operations,
 lonely,operations,,,,
+market-brief,intel,,,outputs/intelligence,datastore
 """
+
+# `market-brief` is the near-miss the prefix rule exists to reject:
+# `outputs/intel` is a SUBSTRING of `outputs/intelligence` and not a path prefix
+# of it. Added 2026-09-01 after `if produces and (p == produces or
+# p.startswith(produces + "/"))` was replaced with `if produces and produces in
+# p` and this file stayed green - the fixture held no pair of skills whose
+# produces_in shared a leading string, so nothing separated the two rules.
 
 
 @pytest.fixture
@@ -59,6 +67,29 @@ def test_shipped_catalog_loads_with_all_fields():
 
 def test_load_strips_and_fills(rows):
     assert all(set(skill_graph.FIELDS) <= set(r) for r in rows)
+
+
+def test_load_really_strips_whitespace_off_every_cell(tmp_path):
+    """The name said "strips"; the assertion above only checked "fills".
+
+    MEASURED 2026-09-01 by deleting the `.strip()` from `load`: this file stayed
+    green at 20 passed. The strip is load-bearing - `_row` lowercases the skill
+    cell but does not strip it, so one padded column in the CSV makes `followers`,
+    `predecessors` and `show` return nothing for that skill with no error at all.
+    """
+    f = tmp_path / "padded.csv"
+    f.write_text(
+        "skill,phase,preceded_by,followed_by,produces_in,consumes_from\n"
+        "  osint  , intel ,, competitor-intel | deal-strategy , outputs/intel , datastore \n",
+        encoding="utf-8")
+    rows = skill_graph.load(f)
+
+    assert rows[0]["skill"] == "osint"
+    assert rows[0]["phase"] == "intel"
+    assert rows[0]["produces_in"] == "outputs/intel"
+    # And the padding does not survive into the answers the CLI prints.
+    assert skill_graph.followers(rows, "osint") == ["competitor-intel", "deal-strategy"]
+    assert skill_graph.by_output_dir(rows, "outputs/intel/x.md") == ["osint"]
 
 
 # --- followers / predecessors -------------------------------------------
@@ -166,6 +197,37 @@ def test_by_output_dir_no_match_returns_empty(rows):
 def test_by_output_dir_ignores_blank_produces_in(rows):
     # 'lonely' has empty produces_in and must never match any path
     assert "lonely" not in skill_graph.by_output_dir(rows, "outputs/intel/x.md")
+
+
+@pytest.mark.parametrize("path", ["", "/", "  ", "///"])
+def test_a_blank_path_matches_no_skill_at_all(rows, path):
+    """The clause `test_by_output_dir_ignores_blank_produces_in` names, reached.
+
+    That test asks about a blank `produces_in` using a NON-blank path, and on a
+    non-blank path the `produces and ...` guard is unreachable: `"" == p` is
+    already False and `p.startswith("/")` is already False. So the guard could be
+    deleted with the file green - MEASURED 2026-09-01, 20 passed.
+
+    A blank path is where it bites. `p` normalizes to `""`, `p == produces` is
+    `"" == ""`, and every skill with no produces_in comes back as the producer of
+    a path that names nothing. `/next` reads this answer to say which skill wrote
+    a file, so a blank input must produce no claim rather than a wrong one.
+    """
+    assert skill_graph.by_output_dir(rows, path) == []
+
+
+def test_produces_in_must_be_a_path_prefix_not_a_substring(rows):
+    """`outputs/intel` is a substring of `outputs/intelligence` and not a prefix.
+
+    MEASURED 2026-09-01 with the prefix test replaced by `produces in p`: green.
+    The fixture had no pair of skills sharing a leading string, so nothing in it
+    could tell the two rules apart. `market-brief` is now that pair.
+    """
+    assert skill_graph.by_output_dir(rows, "outputs/intelligence/x.md") == ["market-brief"]
+    # And the near-miss does not leak the other way either.
+    assert "market-brief" not in skill_graph.by_output_dir(rows, "outputs/intel/x.md")
+    # A prefix that stops mid-segment is not a match: `outputs/inte` names nothing.
+    assert skill_graph.by_output_dir(rows, "outputs/intelx/y.md") == []
 
 
 # --- CLI -----------------------------------------------------------------

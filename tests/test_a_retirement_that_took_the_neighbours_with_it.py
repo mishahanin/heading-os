@@ -428,6 +428,30 @@ def test_a_block_that_CLOSES_before_loose_text_still_breaks(html, expected):
 
 
 @pytest.mark.parametrize("html,expected", [
+    ("Line one<br/>Line two", "Line one\nLine two"),
+    ("Line one<br />Line two", "Line one\nLine two"),
+    ("<p>A</p><hr/><p>B</p>", "A\nB"),
+])
+def test_a_self_closing_block_tag_breaks_the_line_too(html, expected):
+    """The XHTML spelling reaches a DIFFERENT handler, and nothing measured it.
+
+    `HTMLParser` routes a bare `<br>` to `handle_starttag` and a self-closed
+    `<br/>` to `handle_startendtag`. `_HTMLStripper` overrides all three, so the
+    self-closed spelling is not covered by the `<br>` case above: measured
+    2026-09-01, gutting `handle_startendtag` to `return None` left every test in
+    this file green, and left the whole 607-test corpus of every `html_text`
+    consumer in `tests/` green too (28 failed / 579 passed, byte-identical to the
+    unmutated baseline). Because the override SHADOWS `HTMLParser`'s default -
+    which would otherwise have called `handle_starttag` and `handle_endtag` - a
+    regression there produces no break at all, and `Line one<br/>Line two` fuses
+    back to `Line oneLine two`. XHTML-serialized mail is the common case for the
+    senders that emit `<br />`, and this is the plaintext three mail daemons hand
+    to a model.
+    """
+    assert strip_html(html) == expected
+
+
+@pytest.mark.parametrize("html,expected", [
     ("keep <b>bold</b> inline", "keep bold inline"),
     ('an <a href="#">anchor</a> too', "an anchor too"),
     ("<span>a</span><span>b</span>", "ab"),

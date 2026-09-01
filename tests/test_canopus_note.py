@@ -103,10 +103,17 @@ def test_a_retired_note_without_a_promotion_target_is_refused(tmp_path):
 def test_every_committed_note_satisfies_the_schema(tmp_path):
     """Runs over records/slices/ in the real tree, so a hand-edited note is caught.
 
-    Empty today, so the loop is vacuous today -- but not vacuous forever, and
-    not silently dead either. Two guards: the directory must exist (a deleted
+    NOT empty since 2026-08-08; this said "Empty today, so the loop is vacuous
+    today" long after two notes were committed under it, which is a false claim
+    about the past that would send the next reader looking for a vacuous loop
+    that is not there. The loop is live.
+
+    No count FLOOR is asserted, and that is deliberate rather than an oversight:
+    `canopus_check.main` treats a repository with no slice note as the ORDINARY
+    state, so a floor here would fail a tree that is behaving correctly. The two
+    guards that stand in for one are the directory existing (a deleted
     records/slices/ fails here rather than turning this test into a permanent
-    no-op), and the validation the loop relies on is proved live in the same
+    no-op) and the validation the loop relies on being proved live in the same
     run by pushing a known-bad note through the identical code path.
     """
     root = _repo_root()
@@ -122,3 +129,93 @@ def test_every_committed_note_satisfies_the_schema(tmp_path):
 
     with pytest.raises(NoteError):
         write_note(tmp_path, "sample-slice", {**valid(), "plan_digest": "/etc/plan.md"})
+
+
+# ============================================================
+# read_note answers with NoteError, or the whole check run dies
+# ============================================================
+#
+# `scripts/canopus_check.py` takes `note_paths()` as its ENTIRE population and
+# catches exactly `(NoteError, CheckError)` around the read. Anything else
+# escaping `read_note` is not one unreadable note reported: it is the run
+# aborting before the remaining notes are opened at all, which is the outcome
+# `_unreadable`'s own docstring says the module exists to prevent.
+
+
+def _plant(root: pathlib.Path, slug: str, raw: bytes) -> None:
+    """Write a note's bytes directly, bypassing the writer's validation."""
+    directory = root / "records" / "slices"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{slug}.md").write_bytes(raw)
+
+
+def test_a_note_that_is_not_utf8_is_refused_rather_than_raising_a_decode_error(
+    tmp_path,
+):
+    """MEASURED 2026-09-01: `UnicodeDecodeError` walked straight out.
+
+    `read_note` reads with `encoding="utf-8"` and no `errors=`, under
+    `except OSError`. A decode failure raises `UnicodeDecodeError`, which is a
+    `ValueError` and a SIBLING of `OSError`, so the handler never saw it. Notes
+    are written by hand in an editor, so a cp1251 byte in a `value:` line is the
+    ordinary way to reach this, and the exception names a codec, a byte and an
+    offset but NO path.
+
+    Not `errors="replace"`: a note is a committed record whose fields are
+    compared (`plan_digest`, `approval_sha`), and a value silently repaired with
+    U+FFFD would be compared as if it were what the author wrote. Failing closed
+    with the slug named is the safe direction.
+    """
+    _plant(tmp_path, "sample-slice",
+           b"---\nslug: sample-slice\nvalue: caf\xe9 latte\n---\n")
+
+    with pytest.raises(NoteError) as excinfo:
+        read_note(tmp_path, "sample-slice")
+    assert "sample-slice" in str(excinfo.value)
+
+
+def test_a_note_whose_frontmatter_is_not_valid_yaml_is_refused(tmp_path):
+    """`yaml.safe_load` on the block had no handler at all.
+
+    `split_frontmatter` finds the fences and parses nothing, so a block that
+    fences correctly and does not parse reaches `yaml.safe_load` unguarded and
+    raises `yaml.YAMLError`, which is neither `NoteError` nor `CheckError`. An
+    unclosed flow sequence is one keystroke away in a hand-edited note.
+    """
+    _plant(tmp_path, "sample-slice", b"---\nslug: [unclosed\n---\n")
+
+    with pytest.raises(NoteError) as excinfo:
+        read_note(tmp_path, "sample-slice")
+    assert "sample-slice" in str(excinfo.value)
+
+
+def test_a_note_carrying_a_field_the_schema_does_not_define_is_refused(tmp_path):
+    """The allowlist half of the schema, which nothing exercised.
+
+    Deleting the `unknown` branch left the whole suite green. The branch is not
+    cosmetic: `write_note` serialises only `REQUIRED_FIELDS + OPTIONAL_FIELDS`,
+    so a field accepted here is a field DROPPED on the way to disk, and the
+    round-trip test would then be asserting over a note the caller did not ask
+    for. Silently discarding a field of a committed record is worse than
+    refusing it.
+    """
+    with pytest.raises(NoteError) as excinfo:
+        write_note(tmp_path, "sample-slice", {**valid(), "notes": "a spare room"})
+    assert "notes" in str(excinfo.value)
+
+
+def test_a_note_field_that_is_not_text_is_refused(tmp_path):
+    """A non-string value never meets `_LEAK`, so it is a hole in the leak wall.
+
+    `_LEAK.search(value)` needs a string. The type check is what routes every
+    value through the wall, and deleting it left the suite green. YAML supplies
+    the shapes without anyone trying: `undo:` with nothing after the colon
+    arrives as None, a bulleted `undo:` block arrives as a list, and a bare
+    `approval_sha: 1a2b3c4` that happens to be all digits arrives as an int.
+    A list is the one that matters, because its members are prose and a member
+    can hold the private path this repository is public enough to care about.
+    """
+    for value in (None, ["restore /home/someone/plans/x.md"], 17, {"a": "b"}):
+        with pytest.raises(NoteError) as excinfo:
+            write_note(tmp_path, "sample-slice", {**valid(), "undo": value})
+        assert "undo" in str(excinfo.value), value

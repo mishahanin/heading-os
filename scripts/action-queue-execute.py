@@ -185,9 +185,19 @@ def main() -> int:
     if not queue_path.exists():
         print("[]")
         return 0
+    #
+    # `UnicodeDecodeError` sits in the tuple beside the other two because it is
+    # a SIBLING of `json.JSONDecodeError` under `ValueError`, not a subclass of
+    # it, and the decode happens inside `read_text` before `json.loads` is
+    # handed anything at all. The queue store is appended to by a live sender,
+    # so a torn write is the ordinary corruption here. MEASURED 2026-09-01
+    # against a queue.json holding one 0xff byte: a raw UnicodeDecodeError
+    # traceback out of `main`, no `[]` on stdout, and the documented caller
+    # contract ("capture this stdout and apply the status changes") broken in
+    # exactly the way the comment above says it must not be.
     try:
         data = json.loads(queue_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         print(f"action-queue-execute: cannot read {queue_path}: {exc}",
               file=sys.stderr)
         print("[]")

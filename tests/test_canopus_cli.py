@@ -568,6 +568,41 @@ def test_probe_prints_outcomes_and_writes_nothing(tree, capsys):
     assert not (tree / ".canopus").exists()
 
 
+def test_probe_resolves_a_relative_path_against_root_and_not_against_the_cwd(
+    tmp_path, monkeypatch, capsys
+):
+    """`--root` exists so the tree being probed need not be the cwd.
+
+    Every other test in this file goes through the `tree` fixture, which does
+    `monkeypatch.chdir(root)` -- so cwd and `--root` are the SAME directory and
+    `_under_root`'s whole job is a no-op in all of them. MEASURED 2026-09-01:
+    cutting it down to `return candidate` left this file and
+    `tests/test_canopus_steps.py` green over 56 tests.
+
+    What the missing resolution actually does is worse than a refusal. Run from
+    inside this engine clone -- which has a `tests/` directory of its own --
+    `canopus --root ../other probe tests/contract/slice` would collect THIS
+    repository's files and print a vacuity reading about a contract nobody
+    asked about, under a heading naming the other tree.
+
+    So the cwd here is deliberately a directory with no `tests/` at all, and the
+    assertion is that the probe found the contract under `--root` and read it.
+    """
+    other = _make_tree(tmp_path / "other")
+    _write_contract(other)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    code = main(["--root", str(other), "probe", "tests/contract/slice"])
+
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert "test_a" in out and "test_b" in out, (
+        "the relative path was resolved against the cwd, so the contract under "
+        "--root was never found")
+
+
 def test_probe_refuses_a_contract_that_names_no_module(tree, capsys):
     """And it is a refusal, not a traceback: the CLI turns ContractError into an
     operator-visible line on every one of the three surfaces."""

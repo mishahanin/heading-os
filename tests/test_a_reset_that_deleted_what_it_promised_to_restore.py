@@ -498,6 +498,77 @@ def test_a_real_work_tree_is_accepted(wiz, tmp_path, monkeypatch):
     assert any("--is-inside-work-tree" in c for c in calls)
 
 
+def _reset_with_git(wiz, monkeypatch, tmp_path, lsfiles_rc, lsfiles_err=""):
+    """Drive `cmd_reset --force` past the work-tree gate with a stubbed git.
+
+    The gate runs `rev-parse --is-inside-work-tree` first and must be answered
+    "true"; the PER-FILE question is `ls-files --error-unmatch`, and that is
+    the return code these tests vary.
+    """
+    ws = _seed_workspace(tmp_path)
+
+    class _R:
+        def __init__(self, rc, err=""):
+            self.returncode, self.stdout, self.stderr = rc, "", err
+
+    def _run(cmd, **kw):
+        if "--is-inside-work-tree" in cmd:
+            r = _R(0)
+            r.stdout = "true\n"
+            return r
+        if "ls-files" in cmd:
+            return _R(lsfiles_rc, lsfiles_err)
+        return _R(0)
+
+    monkeypatch.setattr(subprocess, "run", _run)
+    rc = wiz.cmd_reset(_reset_args(wiz, ws, True))
+    return ws, rc
+
+
+def test_a_git_that_will_not_say_untracked_does_not_get_the_file_deleted(
+        wiz, tmp_path, monkeypatch, capsys):
+    """The whole-run gate was added and the PER-FILE branch kept the defect.
+
+    `git ls-files --error-unmatch` exits 1 for "not in the index" and 128 when
+    git itself fails. MEASURED with git 2.43.0. The else-branch read both as
+    untracked and unlinked the file -- which is exactly the shape the
+    `--is-inside-work-tree` gate above exists to stop, one copy short.
+    """
+    ws, rc = _reset_with_git(wiz, monkeypatch, tmp_path, 128,
+                             "fatal: detected dubious ownership\n")
+
+    assert (ws / "README.md").exists(), "a git FAILURE was read as 'untracked'"
+    assert rc == wiz.EXIT_FILE_WRITE_ERROR
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    reason = payload["errors"][0]["reason"]
+    assert "exited 128" in reason, reason
+    assert "dubious ownership" in reason, "git's own words were swallowed"
+
+
+def test_a_genuinely_untracked_file_is_still_deleted(wiz, tmp_path, monkeypatch,
+                                                     capsys):
+    """The other direction, and it carries the test above.
+
+    Refusing every non-zero return code would satisfy that test and turn
+    `--reset` into a no-op for the files it is meant to remove. Exit 1 is git
+    ANSWERING, and the answer is that this run created the file.
+    """
+    ws, rc = _reset_with_git(wiz, monkeypatch, tmp_path, 1)
+
+    assert not (ws / "README.md").exists(), "an untracked file was not removed"
+    assert rc == wiz.EXIT_OK
+    assert json.loads(capsys.readouterr().out.strip().splitlines()[-1])["errors"] == []
+
+
+def test_a_tracked_file_is_reverted_and_never_unlinked(wiz, tmp_path, monkeypatch,
+                                                       capsys):
+    """Exit 0 means tracked, and a tracked file goes to `git checkout --`."""
+    ws, rc = _reset_with_git(wiz, monkeypatch, tmp_path, 0)
+
+    assert (ws / "README.md").exists()
+    assert rc == wiz.EXIT_OK
+
+
 def test_a_malformed_identity_file_is_a_clean_exit_not_a_traceback(wiz, tmp_path,
                                                                    monkeypatch,
                                                                    capsys):

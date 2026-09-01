@@ -9,6 +9,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+import scripts.heading_cli as heading_cli
 from scripts.heading_cli import REGISTRY, _resolve, main
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +47,76 @@ def test_both_ways_parity():
     assert direct.returncode == via_cli.returncode == 0
     assert direct.stdout.strip() == via_cli.stdout.strip()
     assert direct.stdout.strip() != ""
+
+
+class _Done:
+    returncode = 0
+
+
+def _capture_dispatch(monkeypatch):
+    """Record the argv `_dispatch` builds instead of spawning the child."""
+    captured = {}
+
+    def _fake(argv, *_a, **_k):
+        captured["argv"] = list(argv)
+        return _Done()
+
+    monkeypatch.setattr(heading_cli.subprocess, "run", _fake)
+    return captured
+
+
+def test_run_passes_its_arguments_through(monkeypatch):
+    """The dispatcher's one job, and nothing in the tree measured it.
+
+    Measured 2026-09-01: `heading run <script> <args>` could be changed to hand
+    the child an EMPTY argument list, and `_dispatch` itself could drop `*args`,
+    with 187 tests green across this file and every other file that names
+    `heading_cli`. `heading run scripts/x.py --dry-run` would then have run
+    without `--dry-run` and reported the exit code of the wrong invocation.
+    `test_both_ways_parity` cannot see it: its representative script takes no
+    arguments, so parity is asserted only for the zero-argument case.
+    """
+    captured = _capture_dispatch(monkeypatch)
+    assert main(["run", TARGET, "--flag", "value"]) == 0
+    assert captured["argv"][0] == sys.executable
+    assert captured["argv"][1] == str((ROOT / TARGET).resolve())
+    assert captured["argv"][2:] == ["--flag", "value"]
+
+
+def test_a_named_shortcut_passes_an_option_looking_argument_through(monkeypatch):
+    """A live CLI defect, not only a missing test.
+
+    `nargs=argparse.REMAINDER` as the FIRST positional of a subparser matches
+    ZERO arguments when the next token starts with `-`, so argparse read the
+    token as an option of its own and refused. Measured 2026-09-01:
+    `heading classification --json` exited 2 with "unrecognized arguments:
+    --json" while `heading run scripts/classification-health.py --json` printed
+    the JSON. Every flag both registry targets accept is option-looking, so no
+    flag was reachable through a shortcut at all.
+    """
+    captured = _capture_dispatch(monkeypatch)
+    assert main(["classification", "--json"]) == 0
+    assert captured["argv"][1] == str((ROOT / REGISTRY["classification"]).resolve())
+    assert captured["argv"][2:] == ["--json"]
+
+
+def test_a_named_shortcut_flag_really_reaches_the_target_script():
+    """The same claim through the real process, because the assertion above is
+    about the argv this module builds and not about what the child then did."""
+    proc = subprocess.run(
+        [sys.executable, str(CLI), "classification", "--json"],
+        capture_output=True, text=True, cwd=ROOT,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.lstrip().startswith("{"), proc.stdout[:200] + proc.stderr[:400]
+
+
+def test_a_bare_shortcut_and_its_help_still_go_through_argparse(capsys):
+    """The interception must not swallow the subcommand's own `--help`."""
+    with pytest.raises(SystemExit) as exc:
+        main(["classification", "--help"])
+    assert exc.value.code == 0
+    assert "usage: heading classification" in capsys.readouterr().out
 
 
 def test_console_entry_point_installed():

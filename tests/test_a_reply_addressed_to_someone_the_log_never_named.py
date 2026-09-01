@@ -64,17 +64,55 @@ def test_prose_is_not_mistaken_for_html(se, body):
     assert se.is_html(body) is False
 
 
+# `_HTML_TAG_RE` is two alternatives: a BARE tag (`<p>`, `</p>`, `<br/>`) and a
+# tag WITH ATTRIBUTES (`<a href="x">`). Only the attribute one carries the `=`
+# requirement that tells `<a href="x">` from the prose `<b and y>`, so it is the
+# alternative doing the delicate work.
+#
+# It had no sole witness until 2026-09-01. Every attributed fixture below also
+# carried a closing tag (`</div>`, `</a>`), which the BARE alternative matches on
+# its own, so deleting the attribute alternative outright left this file green:
+# MEASURED, 45 passed, 1 skipped. That is the surviving-twin shape. The two
+# VOID-element fixtures are the fix: `<img ...>` and `<hr ...>` have no closing
+# form, so nothing but the attribute alternative can match them.
+_ATTR_ONLY_HTML = [
+    '<img src="https://example.invalid/logo.png" alt="x">',
+    "<hr style='color:red'>",
+]
+
+_BARE_ONLY_HTML = ["<br>", "<br/>", "<br />", "</p>"]
+
+
 @pytest.mark.parametrize("body", [
     "<p>real html</p>",
-    "<br>", "<br/>", "<br />",
-    "</p>",
+    *_BARE_ONLY_HTML,
     "<div style='font-size:11pt'>y</div>",
     "<TABLE><TR><TD>x</TD></TR></TABLE>",
     "text with <a href='https://example.invalid'>a link</a>",
     "<ul><li>one</li><li>two</li></ul>",
+    *_ATTR_ONLY_HTML,
 ])
 def test_real_html_is_still_recognised(se, body):
     assert se.is_html(body) is True
+
+
+@pytest.mark.parametrize("body", _ATTR_ONLY_HTML)
+def test_the_attributed_tag_shape_is_the_only_thing_that_matches_it(se, body):
+    """The anti-twin control for the fixtures above.
+
+    A void element carrying attributes must be reachable by the attribute
+    alternative and by nothing else, or deleting that alternative goes unnoticed
+    again. The bare-tag shape is rebuilt here from the module's own tag set, so
+    a change to `_HTML_TAGS` is carried rather than hard-coded.
+    """
+    import re as _re
+
+    bare = _re.compile(rf"</?(?:{se._TAG_NAMES})\s*/?>", _re.IGNORECASE)
+
+    assert se.is_html(body) is True
+    assert bare.search(body) is None, (
+        f"{body!r} is matched by the bare-tag alternative too, so it cannot "
+        f"witness the attributed one")
 
 
 def test_the_shipped_signature_is_recognised_as_html(se):
@@ -188,6 +226,46 @@ def test_a_message_with_no_author_falls_back_to_sender(se):
     original = _Original(author=None, sender=_Mailbox("only@example.invalid"))
 
     assert se._reply_target(original).email_address == "only@example.invalid"
+
+
+def test_an_author_mailbox_carrying_no_address_falls_through_to_sender(se):
+    """A PRESENT author with an absent address, which is not the same as no
+    author at all and had no test until 2026-09-01.
+
+    `_reply_target` tests each candidate for the mailbox AND for the address on
+    it. Only the first half was measured: every fixture above supplies either a
+    mailbox with an address or no mailbox, so weakening the condition to
+    `if mailbox:` left this whole file green.
+
+    exchangelib's `Mailbox` carries `email_address` as an optional field -- a
+    recipient resolved only by name or item id has none -- so this is a shape
+    that arrives off the wire, not a synthetic one.
+    """
+    original = _Original(author=_Mailbox(None),
+                         sender=_Mailbox("real@example.invalid"))
+
+    assert se._reply_target(original).email_address == "real@example.invalid"
+
+
+def test_an_addressless_author_does_not_crash_reply_all(se):
+    """The consequence, which is where the missing guard actually bites.
+
+    MEASURED 2026-09-01 against `if mailbox:`: `_reply_target` handed back the
+    addressless mailbox, `_replyall_recipients` put its `None` into the set, and
+    the self-address filter raised
+
+        AttributeError: 'NoneType' object has no attribute 'lower'
+
+    out of the CRM auto-log for a reply-all -- a traceback on the one script
+    allowed to put a message on the wire. The unit test above cannot show that,
+    because it stops at the mailbox it was handed.
+    """
+    original = _Original(author=_Mailbox(None),
+                         sender=_Mailbox("real@example.invalid"),
+                         to=[_Mailbox("x@example.invalid")])
+
+    assert sorted(se._replyall_recipients(_Account(), original)) == [
+        "real@example.invalid", "x@example.invalid"]
 
 
 def test_a_message_with_neither_resolves_to_nothing(se):

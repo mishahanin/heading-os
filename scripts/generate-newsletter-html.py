@@ -501,8 +501,16 @@ def build_navigation_chart(data, section_num=3):
             continue
         seen_regions.add(canonical)
         if isinstance(region, str):
-            code = key.upper()
-            name = key.upper()
+            # Escaped exactly like the dict branch below. The raw JSON object key
+            # went straight into the markup until 2026-08-31, and `.upper()` is
+            # not a defence: HTML attribute names are case-insensitive, so a key
+            # of `<img src=x onerror=alert(1)>` emitted a working
+            # `<IMG SRC=X ONERROR=ALERT(1)>` into the mailed briefing, and the
+            # upper-casing only hid the payload from a grep for the lowercase
+            # tag. A skill authors these keys, so this is consistency with the
+            # branch two lines down rather than a live exploit.
+            code = esc(key.upper())
+            name = nl2br(key.upper())
             body = region
         else:
             code = esc(region.get("code", key.upper()))

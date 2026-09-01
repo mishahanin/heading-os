@@ -173,8 +173,15 @@ def test_load_state_raises_on_corrupted_json(tmp_path):
         state.load_state("corrupt.json")
 
 
-def test_save_state_is_atomic(tmp_path):
-    """save_state leaves no .tmp files and the data roundtrips correctly."""
+def test_save_state_leaves_no_tmp_orphans_and_roundtrips(tmp_path):
+    """The happy path, named for what it measures.
+
+    RENAMED 2026-09-01 from `test_save_state_is_atomic`. Neither assertion below
+    has anything to do with atomicity: a plain truncating `open(path, "w")`
+    leaves no `.tmp` file either (it never makes one) and roundtrips a
+    successful write perfectly. Atomicity is a claim about the INTERRUPTED
+    write, and it is now measured by the test underneath this one.
+    """
     state = _import_state()
     payload = {"version": 1, "items": [1, 2, 3]}
 
@@ -187,6 +194,109 @@ def test_save_state_is_atomic(tmp_path):
     # Data roundtrips.
     loaded = state.load_state("roundtrip.json")
     assert loaded == payload
+
+
+def test_an_interrupted_save_leaves_the_previous_state_intact(tmp_path):
+    """The atomicity claim, measured. NEW 2026-09-01.
+
+    `save_state`'s docstring promises "A crash at any point leaves the previous
+    file intact". Until this test nothing exercised a crash, so the promise was
+    prose. MEASURED that day by replacing the mkstemp + os.replace body with the
+    naive form the docstring rules out:
+
+        -   tmp_fd, tmp_name = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+        -   ... write, fsync, os.replace ...
+        +   with open(path, "w", encoding="utf-8") as fh:
+        +       json.dump(data, fh, indent=2, ensure_ascii=False)
+
+        .venv/bin/python -m pytest tests/inbox_pulse -q
+            -> 226 passed          (baseline: 226 passed)
+
+    and against the 45 test files anywhere in tests/ that name inbox_pulse,
+    observability_safe, healthchecks or hc_ping, plus tests/contract:
+
+        -> 7 failed, 1199 passed, 3 skipped
+           (baseline: the identical 7 failed, 1199 passed, 3 skipped;
+            those 7 are sandbox-environment failures, present either way)
+
+    Nothing anywhere noticed. The interruption is produced without patching the
+    stdlib: `json.dump` streams, so a value it cannot serialise lands the
+    earlier bytes on disk and then raises, which is what a crash mid-write looks
+    like from the file's side. Under the naive form the target is left holding
+    `{\\n  "cursor": "xxx...",\\n  "boom": ` and the previous state is gone.
+
+    Why it matters here rather than in the abstract: the daemon persists its
+    inbox cursor through this function. A truncated cursor file is not valid
+    JSON, `load_state` is documented to raise on that, and `get_cursor()` runs
+    at the top of `_main_loop` OUTSIDE its try, so the next start dies before
+    the first poll.
+    """
+    state = _import_state()
+    good = {"cursor": "2026-09-01T09:00:00+04:00"}
+    state.save_state("inbox_cursor.json", good)
+
+    target = tmp_path / "inbox_cursor.json"
+    before = target.read_bytes()
+
+    # `set()` is not JSON-serialisable. Ordered after a long string so the
+    # encoder has already emitted real bytes by the time it gives up.
+    with pytest.raises(TypeError):
+        state.save_state("inbox_cursor.json",
+                         {"cursor": "x" * 200, "boom": set()})
+
+    assert target.read_bytes() == before, (
+        "an interrupted save left the cursor file changed; the previous state "
+        "must survive byte for byte")
+    assert state.load_state("inbox_cursor.json") == good
+    assert list(tmp_path.glob("*.tmp")) == [], (
+        "the failed write left its scratch file behind")
+
+
+def test_load_state_returns_the_default_for_an_empty_file(tmp_path):
+    """The second documented default path, which had no case. NEW 2026-09-01.
+
+    `load_state`'s docstring says "Returns `default` when the file is missing or
+    empty". Only the missing half was covered. MEASURED 2026-09-01 by deleting
+    the empty check:
+
+        -   text = path.read_text(encoding="utf-8").strip()
+        -   if not text:
+        -       return default
+        +   text = path.read_text(encoding="utf-8").strip()
+
+        tests/inbox_pulse            -> 226 passed  (baseline: 226 passed)
+        the 45-file wide set + contract -> 7 failed, 1199 passed, 3 skipped
+                                        (identical to baseline)
+
+    A zero-byte state file is not exotic: it is what a pre-atomic-era write, a
+    full disk, or an `install -m` style touch leaves behind, and `json.loads("")`
+    raises. The consequence is the same one as the test above: the daemon's
+    `get_cursor()` sits outside `_main_loop`'s try and takes the process down.
+
+    Whitespace-only is included because the code `.strip()`s before testing, so
+    that branch is a second, separate behaviour claim.
+    """
+    state = _import_state()
+    (tmp_path / "empty.json").write_text("", encoding="utf-8")
+    (tmp_path / "blank.json").write_text("   \n\t\n", encoding="utf-8")
+
+    sentinel = {"fresh": True}
+    assert state.load_state("empty.json", default=sentinel) is sentinel
+    assert state.load_state("blank.json", default=sentinel) is sentinel
+    assert state.load_state("empty.json") is None, "the None default too"
+
+
+def test_a_file_with_real_content_is_still_parsed(tmp_path):
+    """Anchor for the two tests above. A `load_state` hard-wired to `default`
+    satisfies the empty-file case and the missing-file case both, and would
+    hand the daemon a bootstrap cursor on every start, silently re-polling from
+    now and skipping everything that arrived while it was down."""
+    state = _import_state()
+    (tmp_path / "real.json").write_text('{"cursor": "2026-09-01T09:00:00+04:00"}',
+                                        encoding="utf-8")
+
+    assert state.load_state("real.json", default={"fresh": True}) == {
+        "cursor": "2026-09-01T09:00:00+04:00"}
 
 
 def test_write_heartbeat_records_pid_and_timestamp(tmp_path):

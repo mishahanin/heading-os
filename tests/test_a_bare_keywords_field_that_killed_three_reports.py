@@ -144,8 +144,18 @@ def test_no_reader_spells_the_coercion_for_itself_again():
     A patch applied to six of them would have left three as live defects with
     nothing pointing at them; this sweep is what found the last three.
     """
+    paths = tracked_python_files(root=ROOT)
+    # A corpus of zero makes "no offenders" true while reading nothing, and this
+    # sweep is the only thing standing between the fix and six of the nine sites
+    # keeping the defect. MEASURED 2026-09-01 by making `tracked_paths` return
+    # `[]`: all 39 tests in this file passed over an empty walk. Every other
+    # tree sweep in the suite carries this line - see
+    # `tests/test_no_os_path_join.py`, `tests/test_per_exec_contacts_dir.py`,
+    # `tests/test_transcript_dir_has_one_owner.py` - and this one did not.
+    # 443 files matched on 2026-09-01.
+    assert len(paths) >= 300, f"the scan collapsed to {len(paths)} files"
     offenders = {}
-    for path in tracked_python_files(root=ROOT):
+    for path in paths:
         if path.name == Path(__file__).name:
             continue
         try:

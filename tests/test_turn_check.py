@@ -68,6 +68,45 @@ def test_stem_match_does_not_drag_in_unrelated_neighbours():
         assert body == "crm" or body.startswith("crm_"), name
 
 
+@pytest.mark.parametrize("module,near_miss", [
+    ("scripts/thread.py", "test_threads_lib.py"),
+    ("scripts/utils/alert.py", "test_alerts_that_never_reached_the_session.py"),
+])
+def test_a_longer_word_starting_with_the_stem_is_not_matched(module, near_miss):
+    """The near-miss the test above cannot supply, because it does not exist.
+
+    `crm.py` is the wrong module to prove the underscore with: no test file in
+    the tree is named `test_crm<letter>...`, so the token rule and a bare
+    `startswith(stem)` pick exactly the same set there and the assertion is
+    green under both. Measured 2026-09-01 with `body.startswith(stem + "_")`
+    weakened to `body.startswith(stem)`: the whole file stayed green.
+
+    These two pairs are real collisions in the current tree. `thread` is a
+    prefix of `threads_lib` and `alert` of `alerts_that_never_reached_the_
+    session`, so under the weakened rule editing either module drags in a test
+    about something else — which is how a seconds-long end-of-turn check turns
+    into a suite run and teaches the operator to skip it.
+    """
+    target = ROOT / module
+    assert target.is_file(), f"{module} moved; pick another real collision"
+    assert (ROOT / "tests" / near_miss).is_file(), (
+        f"{near_miss} moved; this test needs a REAL near-miss or it proves "
+        f"nothing, which is the defect it was written for"
+    )
+
+    stem = target.stem.replace("-", "_")
+    body = near_miss[len("test_"): -len(".py")]
+    assert body.startswith(stem) and not body.startswith(stem + "_"), (
+        f"{near_miss} is no longer a near-miss for {stem}"
+    )
+
+    picked = {p.name for p in tc.matching_tests([target])}
+    assert near_miss not in picked, (
+        f"editing {module} selected {near_miss}, which is named after a "
+        f"different subject; the stem rule requires a `_` after the stem"
+    )
+
+
 def test_only_library_packages_are_import_probed():
     """A top-level CLI script may re-exec the interpreter through `ensure_venv`
     at module scope, which a Stop hook must never trigger."""
@@ -76,18 +115,31 @@ def test_only_library_packages_are_import_probed():
     assert tc.module_name(ROOT / "scripts" / "utils" / "__init__.py") is None
 
 
-def test_compile_lane_names_the_file_and_leaves_no_artefact(tmp_path):
+def test_compile_lane_names_the_file(tmp_path):
     bad = tmp_path / "broken.py"
     bad.write_text("def f(:\n", encoding="utf-8")
     failures = tc.lane_compile([bad])
     assert failures and "broken.py" in failures[0]
-    assert not (tmp_path / "broken.py.turncheck.pyc").exists()
 
 
-def test_compile_lane_is_silent_on_valid_source(tmp_path):
+def test_compile_lane_is_silent_on_valid_source_and_leaves_no_artefact(tmp_path):
+    """The `finally: unlink` is only observable on source that COMPILES.
+
+    This test used to assert only the empty failure list, and the artefact
+    assertion lived next door on `broken.py` — where `py_compile` raises before
+    it writes anything, so the file it looked for could never have existed and
+    the check was vacuous either way. Measured 2026-09-01 with the `unlink`
+    replaced by `pass`: `broken.py.turncheck.pyc` absent, `fine.py.turncheck.pyc`
+    PRESENT, and the whole file green. The lane would then drop a stray `.pyc`
+    beside every valid file it checked, once per turn, inside the repo.
+    """
     good = tmp_path / "fine.py"
     good.write_text("VALUE = 1\n", encoding="utf-8")
+
     assert tc.lane_compile([good]) == []
+
+    assert not (tmp_path / "fine.py.turncheck.pyc").exists()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["fine.py"]
 
 
 def test_fingerprint_tracks_content_not_mtime(tmp_path):

@@ -1,5 +1,9 @@
 """Unit tests for /approvals source."""
+import logging
+import os
 from pathlib import Path
+
+import pytest
 
 from scripts.bridge_daemon.sources.approvals import (
     EMAIL_DRAFTS_DIR,
@@ -96,6 +100,87 @@ def test_read_draft_rejects_non_md(tmp_path):
     r = read_draft(tmp_path, f"{EMAIL_DRAFTS_DIR}/evil.exe")
     assert r["ok"] is False
     assert "md" in r["error"]
+
+
+# ============================================================
+# The header block ENDS, and this file is not where that is proved
+# ============================================================
+# Recorded here rather than tested here, because the finding that started it
+# was WRONG and the correction is the useful part.
+#
+# `_parse_headers` gained an end condition for the header block after a
+# measured defect its docstring records: without one, "a draft with no
+# separator ... had its real `**To:**` silently OVERWRITTEN by a header-shaped
+# line further down in the body, and the approvals queue displayed a recipient
+# the draft was never addressed to."
+#
+# MEASURED 2026-08-31 in a clone under /tmp, replacing `elif started and line:`
+# with `elif False:` (the pre-fix behaviour, exactly):
+#
+#     pytest tests/bridge/test_sources_approvals.py  -> 18 passed
+#     pytest tests/bridge                            -> 1312 passed, 1 skipped
+#
+# On that evidence the guard looked naked, and it is not. Running the WHOLE
+# suite against the same mutation:
+#
+#     pytest tests  -> 12 failed, 19810 passed, 14 skipped
+#
+# and five of those twelve are
+# `tests/test_a_header_scan_that_ran_into_the_body.py`, a ten-test file written
+# for exactly this guard on 2026-08-29, covering the quoted-header draft, the
+# separator, the blank line inside the block, the H1 above it, and the queue
+# payload end to end.
+#
+# The lesson is about the METHOD, not the code. A directory-scoped mutation run
+# says a guard is untested when it only establishes that the guard is untested
+# IN THAT DIRECTORY, and a grep for files importing `sources.approvals` misses
+# a file that imports the module rather than the symbol. Duplicating those five
+# tests here would put a second copy of one guard in the tree, which is the
+# drift this module's own history is full of. The pointer is the fix.
+
+@pytest.mark.skipif(os.geteuid() == 0,
+                    reason="root ignores file permissions, so chmod 000 stays "
+                           "readable and the drop under test cannot happen")
+def test_an_unreadable_draft_leaves_the_queue_but_says_so(tmp_path, caplog):
+    """The only silent skip in the `list_approvals` loop.
+
+    The two skips above it (symlinked, unstattable) each log. This one was a
+    bare `continue`, and nothing in the tree ever made a draft unreadable.
+
+    MEASURED 2026-08-31 in a clone under /tmp: deleting the whole
+    `try/except OSError` around the read left `tests/bridge` at 1404 passed, 1
+    skipped. On a chmod 000 draft carrying `**Subject:** DO NOT LOSE` beside
+    one readable draft, the listing returned `items: 1 ['readable.md']` with
+    logging configured at DEBUG and not one record emitted. A draft present on
+    disk and absent from the page it is approved from must not be silent.
+    """
+    good = _write_draft(tmp_path, "readable.md",
+                        {"To": "a@example.com", "Subject": "ok"}, "body")
+    bad = _write_draft(tmp_path, "locked.md",
+                       {"To": "urgent@example.com", "Subject": "DO NOT LOSE"},
+                       "body")
+    os.chmod(bad, 0o000)
+    try:
+        with caplog.at_level(logging.WARNING):
+            result = list_approvals(tmp_path)
+    finally:
+        os.chmod(bad, 0o644)
+
+    assert [i["filename"] for i in result["items"]] == ["readable.md"]
+    assert "locked.md" in caplog.text, (
+        "a draft vanished from the approvals queue and nothing named it"
+    )
+    assert good.exists()
+
+
+def test_a_readable_queue_logs_nothing(tmp_path, caplog):
+    """Negative case for the warning above: an ordinary listing stays quiet."""
+    _write_draft(tmp_path, "a.md", {"To": "a@example.com", "Subject": "A"}, "body")
+    _write_draft(tmp_path, "b.md", {"To": "b@example.com", "Subject": "B"}, "body")
+    with caplog.at_level(logging.WARNING):
+        result = list_approvals(tmp_path)
+    assert result["total"] == 2
+    assert [r for r in caplog.records if "approvals" in r.name] == [], caplog.text
 
 
 # ============================================================

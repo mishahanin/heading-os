@@ -492,7 +492,13 @@ def load_data(args: argparse.Namespace) -> Any:
     if args.data_file is not None:
         try:
             raw = Path(args.data_file).read_text(encoding="utf-8")
-        except OSError as exc:
+        # UnicodeDecodeError, not only OSError. The decode happens INSIDE
+        # `read_text`, before any caller sees a string, and it is a ValueError
+        # -- a sibling of `json.JSONDecodeError`, never a subclass of OSError.
+        # A `--data-file` holding one stray byte therefore left this function
+        # as a traceback with interpreter exit 1, while this file's own "Exit
+        # codes" section promises 3 for a filesystem error.
+        except (OSError, UnicodeDecodeError) as exc:
             print(f"{RED}ERROR: cannot read --data-file {args.data_file}: {exc}{RESET}",
                   file=sys.stderr)
             sys.exit(3)
@@ -518,13 +524,34 @@ def _read_events(path: Path) -> list[dict]:
     Used by the emit-time sequencing guard to reconstruct open-step state from
     the trajectory written so far. Malformed lines are ignored here (verify
     surfaces them as defects); the guard only needs the well-formed events.
+
+    "Tolerant" has to cover the decode too. `read_text` decodes before any line
+    is split, so ONE undecodable byte anywhere in the file raised
+    UnicodeDecodeError out of a function documented to skip bad lines and
+    return the rest. It is a ValueError, a sibling of `json.JSONDecodeError`
+    rather than a subclass of OSError, so neither handler below it stood in.
+    `verify_trajectory` already caught `(OSError, UnicodeError)` for the same
+    read shape in this same file; the guard's copy did not, so a torn append
+    crashed `cmd_event` instead of returning exit 3.
     """
     events: list[dict] = []
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return events
-    for raw in text.splitlines():
+    # split("\n"), NOT splitlines(). The writer above emits
+    # `json.dumps(record, ensure_ascii=False) + "\n"`, and with ensure_ascii off
+    # a JSON string carries U+2028, U+2029 and U+0085 through VERBATIM - they
+    # are not C0 controls, so `json.dumps` does not escape them. `splitlines()`
+    # breaks on all three, so ONE well-formed JSONL record arrived here as two
+    # fragments, neither of them parseable, and both were dropped by the
+    # `continue` below IN SILENCE. MEASURED 2026-09-01 on a scratch trajectory:
+    # `--summary "before<U+2028>after"` wrote 2 real records, `splitlines()` saw
+    # 3, and this function returned 1 - the run_end event vanished from an audit
+    # record whose whole value is that it is verbatim. U+000B, U+000C and the
+    # ASCII separators do NOT reach here: those `json.dumps` escapes, so the
+    # reachable set is exactly the three named above.
+    for raw in text.split("\n"):
         raw = raw.strip()
         if not raw:
             continue
@@ -967,7 +994,14 @@ def verify_trajectory(run_id: str) -> list[str]:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
         return [f"trajectory could not be read: {exc}"]
-    for i, raw in enumerate(text.splitlines()):
+    # split("\n"), for the reason given at the sibling reader `_read_events`,
+    # and this is the copy where the symptom was LOUD rather than silent: the
+    # same U+2028 record split into two fragments here and the verifier reported
+    # `2 x malformed JSON` against a file that is perfectly well-formed JSONL,
+    # on line numbers that do not exist. MEASURED 2026-09-01. Both readers are
+    # changed together; a fix landing in one of two copies is the shape this
+    # workspace keeps finding.
+    for i, raw in enumerate(text.split("\n")):
         raw = raw.strip()
         if not raw:
             continue
@@ -1226,7 +1260,10 @@ def _plan_reconciliation(events: list[dict]) -> list[str]:
         return defects
     try:
         plan_text = plan_file.read_text(encoding="utf-8")
-    except OSError:
+    # UnicodeDecodeError too: the decode runs inside `read_text` and is a
+    # ValueError, so `except OSError` walked past a plan file holding one
+    # stray byte and took the whole advisory pass down with it.
+    except (OSError, UnicodeDecodeError):
         return defects
 
     recorded: set[str] = set()

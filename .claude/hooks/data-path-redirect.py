@@ -105,15 +105,38 @@ _PATH_FIELDS = {
 }
 
 
+def _path_value(tool_input: dict, field: str) -> str:
+    """The string value of a path field, or '' for anything that is not a string.
+
+    The TYPE of the path INSIDE tool_input. `main` guards the container and
+    nothing guarded the field, so `{"file_path": 3}` reached `_is_data_rel` and
+    raised an uncaught AttributeError on `.replace`. Measured 2026-08-31 driving
+    the real hook: an int, a bool, a list, a dict and a float each exited 1 with
+    a traceback.
+
+    This hook is PreToolUse, which is why the field matters more here than in
+    its PostToolUse neighbours. A traceback exit means the redirect does not
+    happen and the tool then proceeds against the ENGINE path, so a write lands
+    in the wrong repository. A field that is not a string names no path, so it
+    is treated as no path and announced, never silently swallowed.
+    """
+    value = tool_input.get(field) or ""
+    if not isinstance(value, str):
+        print(f"[data-path-redirect] {field} was {type(value).__name__}, "
+              "not a string; treated as no path", file=sys.stderr)
+        return ""
+    return value
+
+
 def _candidate_paths(tool_name: str, tool_input: dict) -> bool:
     """Cheap pre-check: is there any data-relative path worth rewriting?
     Runs before the workspace import so the common case stays import-free."""
     for field in _PATH_FIELDS.get(tool_name, ()):
-        if _is_data_rel(tool_input.get(field) or ""):
+        if _is_data_rel(_path_value(tool_input, field)):
             return True
     # Glob with no explicit path but a data-prefixed pattern (e.g. "outputs/**").
-    if tool_name == "Glob" and not (tool_input.get("path") or ""):
-        if _is_data_rel(tool_input.get("pattern") or ""):
+    if tool_name == "Glob" and not _path_value(tool_input, "path"):
+        if _is_data_rel(_path_value(tool_input, "pattern")):
             return True
     return False
 
@@ -131,6 +154,22 @@ def main() -> int:
     tool_name = payload.get("tool_name", "")
     tool_input = payload.get("tool_input", {})
     if not isinstance(tool_input, dict):
+        return 0
+    # The same guard as the line above, for the field beside it. `tool_name` is
+    # used as a DICT KEY (`not in _PATH_FIELDS`, `_PATH_FIELDS[tool_name]`), so
+    # an unhashable value does not merely mismatch, it raises. Measured
+    # 2026-09-01 driving the real hook: `[]` and `{}` each exited 1 with
+    # `TypeError: unhashable type`, while `3`, `True`, `null` and `""` matched
+    # nothing and returned 0 correctly.
+    #
+    # This is the defect `_path_value` documents one layer down, in the file
+    # that had just fixed it there: the container was type-checked, the field
+    # next to it was not. The consequence is the same one that docstring names.
+    # PreToolUse dying means the redirect never runs and the tool proceeds
+    # against the ENGINE path, so a write lands in the wrong repository.
+    if not isinstance(tool_name, str):
+        print(f"[data-path-redirect] tool_name was {type(tool_name).__name__}, "
+              "not a string; no tool matched, nothing redirected", file=sys.stderr)
         return 0
     if tool_name not in _PATH_FIELDS:
         return 0
@@ -165,14 +204,14 @@ def main() -> int:
     updated = dict(tool_input)
     changed = False
     for field in _PATH_FIELDS[tool_name]:
-        new = _redirect(updated.get(field) or "")
+        new = _redirect(_path_value(updated, field))
         if new is not None:
             updated[field] = new
             changed = True
     # Glob with a data-prefixed pattern and no path: anchor the search at the
     # data root so the (still-relative) pattern resolves under it.
-    if tool_name == "Glob" and not (tool_input.get("path") or ""):
-        if _is_data_rel(tool_input.get("pattern") or ""):
+    if tool_name == "Glob" and not _path_value(tool_input, "path"):
+        if _is_data_rel(_path_value(tool_input, "pattern")):
             updated["path"] = str(data_root)
             changed = True
 

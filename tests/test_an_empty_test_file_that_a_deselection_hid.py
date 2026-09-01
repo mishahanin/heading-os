@@ -30,6 +30,7 @@ They carry names nothing else uses and are removed in a `finally`, with
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -177,6 +178,75 @@ def test_a_collection_probe_that_could_not_run_widens_to_every_file(tc,
     targets = [Path("tests/a.py"), Path("tests/b.py"), Path("tests/c.py")]
 
     assert tc._files_holding_no_test(targets, 60) == 3
+
+
+@pytest.mark.parametrize("rc", [1, 2, 3, 4],
+                         ids=["tests-failed", "interrupted", "internal-error",
+                              "usage-error"])
+def test_a_probe_that_answered_unusably_also_widens_to_every_file(tc, monkeypatch,
+                                                                  rc):
+    """Obligation 3 again, on the OTHER unclean answer.
+
+    `test_a_collection_probe_that_could_not_run_widens_to_every_file` covers the
+    `OSError` arm. The `returncode not in (0, NO_TESTS_COLLECTED)` arm two lines
+    below it had no witness: MEASURED 2026-09-01, changing its `return
+    len(targets)` to `return 0` left this file green at 6 passed. Nought is the
+    one answer the docstring calls out as forbidden here - "a zero nothing
+    established" - and it renders as a clean lane.
+
+    Exit 4 is pytest's usage error and exit 3 its internal error; both are
+    exactly the "the probe did not answer" state, and neither is 5.
+    """
+    def _answer(*_args, **_kwargs):
+        return subprocess.CompletedProcess(args=[], returncode=rc,
+                                           stdout="", stderr="boom")
+
+    monkeypatch.setattr(tc.subprocess, "run", _answer)
+    targets = [Path("tests/a.py"), Path("tests/b.py"), Path("tests/c.py")]
+    assert tc._files_holding_no_test(targets, 60) == 3
+
+
+def test_a_node_id_that_could_belong_to_two_targets_is_not_guessed(tc,
+                                                                    monkeypatch):
+    """The ambiguity arm, unmeasured.
+
+    Node ids come back relative to the rootdir PYTEST picked, so a bare `x.py`
+    suffix-matches both `tests/a/x.py` and `tests/b/x.py`. The docstring says
+    "an id that could belong to two different targets makes the whole answer
+    unknown rather than an arbitrary pick". Measured 2026-09-01: replacing that
+    `return len(targets)` with `continue` - which picks neither and quietly
+    calls both files empty - left this file green at 6 passed.
+
+    A THIRD target is present, and it is what makes the two answers differ.
+    With only the ambiguous pair, "widen to every target" and "credit neither of
+    them" are both 2, so the first shape of this test could not tell them apart
+    either: an ambiguity anywhere in the probe makes the WHOLE answer unknown,
+    including for the file that did resolve, and that is the distinction.
+    """
+    def _answer(*_args, **_kwargs):
+        return subprocess.CompletedProcess(
+            args=[], returncode=0,
+            stdout="x.py::test_one\ntests/c/y.py::test_two\n", stderr="")
+
+    monkeypatch.setattr(tc.subprocess, "run", _answer)
+    targets = [Path("tests/a/x.py"), Path("tests/b/x.py"), Path("tests/c/y.py")]
+    assert tc._files_holding_no_test(targets, 60) == 3, (
+        "an ambiguous node id was absorbed instead of making the whole answer "
+        "unknown; the file that did resolve was credited off a probe that had "
+        "already proved it could not be trusted")
+
+
+def test_an_unambiguous_node_id_is_still_credited_to_its_file(tc, monkeypatch):
+    """Anchor for both rows above: returning `len(targets)` unconditionally
+    would satisfy them and report every lane as entirely empty."""
+    def _answer(*_args, **_kwargs):
+        return subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="tests/a/x.py::test_one\n", stderr="")
+
+    monkeypatch.setattr(tc.subprocess, "run", _answer)
+    targets = [Path("tests/a/x.py"), Path("tests/b/y.py")]
+    assert tc._files_holding_no_test(targets, 60) == 1, (
+        "the file that yielded a node id was still counted as holding no test")
 
 
 def test_a_lane_that_actually_ran_a_test_reports_no_empties(tc, tmp_path,

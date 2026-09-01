@@ -396,11 +396,68 @@ def test_an_ordinary_bullet_still_gets_its_marker(tmp_path, monkeypatch):
 
 
 def test_a_bullet_with_italics_inside_is_not_a_recommendation(tmp_path, monkeypatch):
-    """Only a line that is ENTIRELY italic qualifies."""
+    """Only a line that is ENTIRELY italic qualifies.
+
+    This row is decided by `startswith('- *')` alone: `- part *italic* part`
+    never reaches the `endswith` half. The row below carries that half.
+    """
     doc = _render_competitive("# T\n\n## S\n\n- part *italic* part\n",
                               tmp_path, monkeypatch)
     hit = next(p for p in doc.paragraphs if "part" in p.text and "italic" in p.text)
     assert hit.text.startswith("- ")
+
+
+def test_an_italic_opening_with_a_plain_tail_is_not_a_recommendation(tmp_path,
+                                                                     monkeypatch):
+    """The case that makes the second clause a clause and not decoration.
+
+    `- *Hold the anchor* and then some prose` starts with `- *` and does NOT end
+    with `*`, so `endswith('*')` is the only thing standing between it and the
+    indented 9pt grey italic style reserved for a whole-line recommendation.
+    MEASURED 2026-09-01: deleting `and line.strip().endswith('*')` left this
+    file green at 47 passed, because every other row here is settled by
+    `startswith` before the second clause is consulted.
+    """
+    doc = _render_competitive(
+        "# T\n\n## S\n\n- *Hold the anchor* and then some prose\n",
+        tmp_path, monkeypatch)
+    hit = next(p for p in doc.paragraphs if "Hold the anchor" in p.text)
+    assert hit.text.startswith("- "), (
+        "a part-italic bullet was styled as a recommendation; the endswith "
+        "clause no longer decides anything"
+    )
+
+
+def test_a_body_line_that_merely_ends_in_an_asterisk_is_left_alone(tmp_path,
+                                                                   monkeypatch):
+    """The other half of the pair above, so each clause has a case of its own.
+
+    Dropping `startswith('- *')` and keeping `endswith('*')` survived every row
+    in this file on 2026-09-01 at 49 passed. It is not harmless: the branch does
+    `line.strip()[2:]`, so a body line taken by mistake loses its first two
+    characters as well as its style.
+    """
+    doc = _render_competitive(
+        "# T\n\n## S\n\nA footnote marker belongs here*\n", tmp_path, monkeypatch)
+    hit = next(p for p in doc.paragraphs if "footnote marker" in p.text)
+    assert hit.text.startswith("A footnote"), (
+        f"the line was taken by the recommendation branch and truncated: "
+        f"{hit.text!r}"
+    )
+
+
+def test_a_recommendation_line_is_indented_away_from_the_bullets(tmp_path,
+                                                                 monkeypatch):
+    """The indent is half of what the style is FOR, and nothing measured it.
+
+    The branch's own comment calls the target "the indented 9pt grey italic
+    style", and the size was pinned while the indent was not: setting
+    `left_indent = Cm(0)` left this file green at 47 passed on 2026-09-01.
+    """
+    doc = _render_competitive(_REC, tmp_path, monkeypatch)
+    hit = next(p for p in doc.paragraphs if "Hold the anchor" in p.text)
+    indent = hit.paragraph_format.left_indent
+    assert indent is not None and indent.cm > 0.5, indent
 
 
 def test_the_info_box_promise_is_gone():

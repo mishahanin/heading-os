@@ -350,9 +350,22 @@ def test_a_secret_in_content_refuses_before_anything_is_committed(tmp_path, monk
         return subprocess.run(["true"], capture_output=True, text=True)
 
     # The scanner refuses; everything else is inert.
+    #
+    # BYTES, not str. `_run_scanner` drives the scanner in bytes mode since
+    # 2026-09-01, because the NUL-joined path list it writes to the child cannot
+    # go through a text-mode pipe; it decodes the two streams itself. A
+    # str-shaped double stands in for a call this code does not make, and the
+    # decode raises AttributeError from inside the wall under test. The
+    # assertion keeps the double honest if the mode ever moves again.
+    def _refusing_scanner(*args, **kwargs):
+        assert not (kwargs.get("text") or kwargs.get("encoding")
+                    or kwargs.get("universal_newlines")), (
+            "the scanner handoff is read as BYTES; this double returns bytes "
+            "and cannot stand in for a text-mode call")
+        return subprocess.CompletedProcess(args, 1, b"hit", b"")
+
     monkeypatch.setattr(push_all, "_push_delta_files", lambda _r: {"scripts/leak.py"})
-    monkeypatch.setattr(push_all.subprocess, "run",
-                        lambda *a, **k: subprocess.CompletedProcess(a, 1, "hit", ""))
+    monkeypatch.setattr(push_all.subprocess, "run", _refusing_scanner)
 
     with pytest.raises(SystemExit) as exc:
         push_all.content_scan(repo)

@@ -109,12 +109,56 @@ def test_a_committed_rename_reaches_the_wall(push_all, repo_with_remote):
 
 
 def test_an_unstaged_rename_reaches_the_wall(push_all, repo_with_remote):
-    """The third leg, the plain working tree. `git mv` stages, so this drives
-    the rename by hand to leave the index alone."""
+    """A rename done by hand, leaving the index alone, still reaches the wall.
+
+    Which LEG carries it was measured 2026-09-01, because the name this test
+    used to have ("the third leg, the plain working tree") named the wrong one.
+    Git cannot report an unstaged rename here at all: rename detection needs
+    both paths tracked, and the destination of an unstaged rename is untracked
+    by definition. So the worktree diff sees only `D docs_a.md`, and it is
+    `git ls-files --others` that carries `docs_b.md`.
+
+    MEASURED, two mutations of `_push_delta_files`:
+      - untracked leg deleted        -> this test FAILS (`assert 'docs_b.md' in set()`)
+      - unstaged diff leg deleted    -> this test PASSES
+    The name is corrected rather than the assertion: the property is real and
+    worth pinning, it just belongs to the untracked leg. The unstaged diff leg
+    gets its own test below, which it did not have.
+    """
     work, body = repo_with_remote
     (work / "docs_b.md").write_text(body + "\nthe new line\n", encoding="utf-8")
     (work / "docs_a.md").unlink()
     assert "docs_b.md" in push_all._push_delta_files(work)
+
+
+def test_an_unstaged_edit_to_a_tracked_file_reaches_the_wall(push_all,
+                                                              repo_with_remote):
+    """The third leg, for real: `git diff` with neither `--cached` nor a range.
+
+    It had NO test anywhere. MEASURED 2026-09-01 by deleting the leg from
+    `_push_delta_files` and running every test file in the repo that touches
+    that function -- `test_a_credential_hidden_behind_a_quoted_path`,
+    `test_handoff_redaction`, `test_push_all_gate`,
+    `test_two_walls_that_looked_at_the_wrong_moment`,
+    `test_two_secret_walls_that_split_a_filename_in_half`,
+    `test_a_wall_that_read_the_present_and_shipped_the_past` and this one:
+    258 passed, nothing red.
+
+    The leg is live, not dead code, and this is the case that proves it.
+    `engine_content_scan` runs at step 0 of `push_repo`, deliberately BEFORE the
+    commit, and `push_repo` then commits with `git add -A`. So a tracked file
+    the operator edited and never staged IS about to be pushed, and at the
+    moment the wall looks it is in neither the committed delta nor the index nor
+    the untracked list. This leg is the only thing that sees it.
+    """
+    work, body = repo_with_remote
+    (work / "docs_a.md").write_text(body + "\nan unstaged edit\n",
+                                    encoding="utf-8")
+
+    assert _git(work, "status", "--porcelain").stdout.startswith(" M "), (
+        "the fixture staged the edit; then this measures the --cached leg "
+        "instead of the one it is named for")
+    assert "docs_a.md" in push_all._push_delta_files(work)
 
 
 def test_an_ordinary_edit_still_reaches_the_wall(push_all, repo_with_remote):

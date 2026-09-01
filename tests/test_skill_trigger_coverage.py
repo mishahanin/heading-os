@@ -180,6 +180,78 @@ def test_coverage_gate_fires_without_fail_on_missing(fixture_root, monkeypatch):
     assert _run(monkeypatch) == 1
 
 
+# --- the corpus_issues clause, which had no witness of its own ------------------
+#
+# `coverage_fail` in main() is three OR'd clauses. MEASURED 2026-09-01 by
+# deleting the middle one (`any(r.get("corpus_issues") ...)`): this file stayed
+# GREEN at 15 passed. `test_thin_corpus_fails` above does not reach it, because a
+# thin corpus on a NON-baselined auto-routable skill also classifies MISSING, and
+# the first clause catches that. The clause only ever fires alone on a skill whose
+# status is something other than MISSING - GRANDFATHERED or EXEMPT - and neither
+# had a case. Both are shapes a real repo produces: a baselined skill starting to
+# ship a corpus, and a `router: manual` skill that carries one anyway.
+
+
+def test_a_grandfathered_skill_with_a_thin_corpus_still_fails(fixture_root, monkeypatch, capsys):
+    """GRANDFATHERED, so not MISSING; invalid, so not stale. Only THIN catches it."""
+    root, skills_dir = fixture_root
+    _mk(skills_dir, "oldskill", router="auto", corpus=_cases(3, 1))  # 4 cases
+    _write_baseline(root, ["oldskill"])
+
+    rc = _run(monkeypatch)
+    out = capsys.readouterr().out
+    assert "GRANDFATHERED:[0m 1" in out or "GRANDFATHERED" in out
+    assert "MISSING" in out and "STALE-BASELINE" not in out
+    assert "THIN" in out and "oldskill" in out
+    assert rc == 1, "a grandfathered skill may lack a corpus; it may not ship a broken one"
+
+
+def test_an_exempt_skill_with_a_malformed_corpus_still_fails(fixture_root, monkeypatch, capsys):
+    """`router: manual` is EXEMPT from NEEDING a corpus, not from the shape rule."""
+    _, skills_dir = fixture_root
+    _mk(skills_dir, "manualskill", router="manual", corpus="{ this is not json")
+
+    rc = _run(monkeypatch)
+    out = capsys.readouterr().out
+    assert "THIN" in out and "manualskill" in out
+    assert rc == 1
+
+
+# --- the walk itself ------------------------------------------------------------
+
+
+def test_an_empty_skills_tree_is_refused_not_passed(fixture_root, monkeypatch, capsys):
+    """Every gate in the script is a loop over the skills it walked.
+
+    MEASURED 2026-09-01 before the fix: a scratch root whose `.claude/skills`
+    existed but held nothing printed "Total skills: 0", four zeroes under the
+    coverage heading, and returned 0. The directory-exists check ahead of it does
+    not reach this: the directory was there, only its contents were gone. That is
+    the shape a shrink-only ratchet fails in - it can only ever get quieter.
+    """
+    _, _skills_dir = fixture_root  # created, deliberately left empty
+
+    rc = _run(monkeypatch)
+    out = capsys.readouterr().out
+    assert rc == 2, "an empty skills walk must refuse, not report clean"
+    assert "no skills found" in out
+
+
+def test_write_baseline_cannot_wipe_the_committed_set_from_an_empty_walk(
+        fixture_root, monkeypatch):
+    """The sharper edge of the same hole: `existing & {}` is `{}`.
+
+    One `--write-baseline` run over a collapsed walk would have rewritten the
+    committed grandfather set to `[]` and exited 0.
+    """
+    root, _skills_dir = fixture_root
+    _write_baseline(root, ["alpha", "beta"])
+
+    assert _run(monkeypatch, "--write-baseline") == 2
+    written = json.loads((root / "config" / "triggers-coverage-baseline.json").read_text())
+    assert written == ["alpha", "beta"], "the committed baseline was rewritten"
+
+
 # --- shrink-only --write-baseline (pins H1) -------------------------------------
 
 
@@ -225,6 +297,34 @@ def test_is_auto_routable_predicate():
         {"disable-model-invocation": True, "x-heading-routing": {"router": "auto"}}
     ) is False
     assert chk.is_auto_routable({}) is False  # no routing block
+
+
+def test_the_case_floor_is_at_least_the_two_it_sums(tmp_path):
+    """`TRIGGERS_MIN_CASES` has no negative case of its own, and cannot have one.
+
+    MEASURED 2026-09-01: lowering it from 6 to 1 left this file and
+    `test_skill_triggers_json.py` green across 495 tests. That is not a gap in
+    the tests, it is arithmetic - the constant is exactly MIN_POS + MIN_NEG, so a
+    corpus that clears the positive and negative floors has already cleared the
+    total, and no input can separate them. Recorded as the invariant rather than
+    chased with a fixture that cannot exist.
+
+    What it protects: someone lowering MIN_POS or MIN_NEG later, and assuming the
+    total floor still holds the line. If the sum ever exceeds the total, the
+    total stops being reachable and this fails instead of going quiet.
+    """
+    assert chk.TRIGGERS_MIN_CASES >= chk.TRIGGERS_MIN_POS + chk.TRIGGERS_MIN_NEG, (
+        f"MIN_CASES={chk.TRIGGERS_MIN_CASES} is below MIN_POS+MIN_NEG="
+        f"{chk.TRIGGERS_MIN_POS + chk.TRIGGERS_MIN_NEG}, so the case floor is dead"
+    )
+    # And the count check is still live where the pos/neg pair cannot see: a case
+    # whose `should_trigger` is neither True nor False counts toward neither.
+    odd = tmp_path / "odd.json"
+    odd.write_text(json.dumps(
+        [{"query": f"q{i}", "should_trigger": "maybe"} for i in range(3)]
+    ), encoding="utf-8")
+    issues = chk.corpus_issues(odd)
+    assert any(f"< {chk.TRIGGERS_MIN_CASES} required" in issue for issue in issues), issues
 
 
 def test_corpus_issues_shape(tmp_path):

@@ -221,8 +221,17 @@ def _load(root: Path, date: str) -> dict | None:
         return None
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
-        raise SweepUnreadable(f"{p}: {e}") from e
+    except (ValueError, OSError) as e:
+        # `ValueError`, not `json.JSONDecodeError`. `UnicodeDecodeError` is a
+        # ValueError and a SIBLING of JSONDecodeError, not a subclass, so a
+        # sweep saved in the wrong encoding or truncated mid-character went
+        # straight past this handler. `main` catches ValueError, so the run
+        # still refused rather than overwrote, but the operator got a raw codec
+        # message and exit 2 in place of the named "refusing to overwrite an
+        # unreadable sweep ... a replaced one is not". Both eval loaders,
+        # `eval-flag.py` and `eval-outcomes.py`, already carry this exact tuple
+        # and this exact reasoning; the sweep is the copy the fix missed.
+        raise SweepUnreadable(f"{p}: {type(e).__name__}: {e}") from e
     if not isinstance(data, dict) or not isinstance(data.get("actions"), list):
         raise SweepUnreadable(f"{p}: not a sweep object with an actions list")
     return data
@@ -271,7 +280,10 @@ def cmd_propose(root: Path, args) -> int:
         return 1
     try:
         proposed = json.loads(payload_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
+    except (ValueError, OSError) as e:
+        # `ValueError` covers `UnicodeDecodeError` beside `json.JSONDecodeError`;
+        # the two are siblings, so naming the second alone let a payload in the
+        # wrong encoding past a handler whose whole job is "not valid JSON".
         # OSError too. `exists()` passed a moment earlier, and the file can
         # still be unreadable - permissions, a dangling symlink, a race with
         # whatever wrote it - which left a raw traceback out of a command whose

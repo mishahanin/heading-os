@@ -114,6 +114,26 @@ def test_extra_spacing_between_the_marker_and_the_claim(tmp_path, monkeypatch):
     assert ">2x faster" in paragraphs, paragraphs
 
 
+def test_a_padded_nested_quote_unwraps_all_the_way(tmp_path, monkeypatch):
+    """Padding AND nesting together, which neither case above reaches.
+
+    The loop consumes the space after each marker with `.lstrip(' ')` before
+    testing the next one. Deleting that `.lstrip` looks harmless because the
+    final `.strip()` cleans up a single marker either way - `"> x"`, `">> x"`
+    and `">  >x"` all render identically with or without it, so all five cases
+    above stayed green when it was removed. MEASURED 2026-09-01: only `">  > x"`
+    separates them, because without the inner strip the loop halts on the two
+    spaces and the SECOND marker survives into the rendered text as `"> x"`.
+
+    `>  > note` is an ordinary nested blockquote, so the marker must go.
+    """
+    paragraphs = _render("# Head\n\n>  > deeply nested note\n", tmp_path, monkeypatch)
+    assert "deeply nested note" in paragraphs, paragraphs
+    assert "> deeply nested note" not in paragraphs, (
+        "the inner marker survived: the space after the outer marker was not "
+        "consumed, so the loop stopped one marker early")
+
+
 def test_a_bare_marker_line_adds_no_empty_callout(tmp_path, monkeypatch):
     """The loop must terminate on a line that is nothing but a marker."""
     paragraphs = _render("# Head\n\n>\n", tmp_path, monkeypatch)

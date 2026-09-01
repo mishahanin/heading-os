@@ -88,6 +88,23 @@ def test_the_detector_finds_the_real_references():
     assert len(found) >= 3, f"only {len(found)} handoff reference(s) found"
 
 
+def test_every_reader_glob_still_matches_a_tracked_file():
+    """The floor above is over the UNION, which is not a floor on any source.
+
+    Measured 2026-09-01: 12 references over a corpus of 94 SKILL.md, 53 eval
+    cases, 83 skill reference pages, 23 docs pages and 36 reference pages. The
+    references are not spread evenly - 7 come from one glob, 3 from another, and
+    `docs/*.md` contributes none - so ANY single glob can stop matching (a
+    rename, a moved directory, a typo) and the union floor of 3 is still met.
+    The guard would keep passing over a corpus it had quietly stopped reading.
+    Asserting per SOURCE is what makes the shrink visible.
+    """
+    empty = [glob for glob in READER_GLOBS if not tracked_paths([glob])]
+    assert not empty, (
+        f"{len(empty)} of {len(READER_GLOBS)} reader glob(s) match no tracked "
+        f"file, so that part of the corpus is no longer being read: {empty}")
+
+
 def test_the_detector_would_catch_the_defect_it_was_written_for():
     """The exact 2026-08-20 line, checked against the matcher directly, so the
     guard is pinned even if every page is later rewritten."""

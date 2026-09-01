@@ -326,6 +326,23 @@ def test_the_quoted_prompt_is_fenced_flattened_and_capped(tmp_path):
     assert len(excerpt) <= D._EVIDENCE_LIMIT + 16, (
         f"the excerpt is uncapped: {len(excerpt)} chars. A refusal is paid for "
         "in context every time it fires.")
+    # The line above compares the constant to ITSELF, so raising
+    # `_EVIDENCE_LIMIT` moves the bar with the behaviour and nothing reddens.
+    # MEASURED 2026-09-01: 160 -> 400 survived the whole suite, a 2.5x rise in
+    # what every refusal costs, invisible. The budget is what the cap models, so
+    # the budget is asserted separately, on a number this test owns.
+    #
+    # 256 is the ceiling, not the target. It is the point past which the
+    # excerpt stops being an excerpt: the refusal's own explanatory prose runs
+    # to a few hundred characters, and a quote that rivals it is the whole
+    # prompt pasted back under a label, which is the thing this cap replaced.
+    assert D._EVIDENCE_LIMIT <= 256, (
+        f"_EVIDENCE_LIMIT is {D._EVIDENCE_LIMIT}. A refusal is paid for in "
+        "context every time it fires, and this wall fires on ordinary work.")
+    assert D._EVIDENCE_LIMIT >= 40, (
+        f"_EVIDENCE_LIMIT is {D._EVIDENCE_LIMIT}, too short to identify which "
+        "prompt was read; the operator cannot argue with evidence they cannot "
+        "recognise.")
     assert noisy not in reason, "the whole prompt was pasted in verbatim"
     assert "\n" not in excerpt
     # `!r` alone already turns a newline into a `\n` ESCAPE, so the physical

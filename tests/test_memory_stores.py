@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -44,10 +45,26 @@ def test_retire_is_idempotent_and_missing_safe(tmp_path):
     assert memory_stores.retire_memory("a.md", stores=[canonical]) == ([], [])
 
 
-def test_retire_cli_runs_on_missing_name():
+def test_retire_cli_runs_on_missing_name(tmp_path):
+    """The CLI resolves its own stores, so the child must be pointed at scratch.
+
+    `retire_memory(name)` with no `stores=` calls `all_memory_stores()`, which
+    is `get_auto_memory_dir()` (HEADING_OS_DATA) plus every
+    `~/.claude/projects/*/memory`. The child inherits the environment and the
+    in-process overlay guard cannot see a child at all, so an unpinned run of
+    this test had the operator's live auto-memory and every native harness store
+    on the unlink path, one argument away from deleting a real memory. Nothing
+    but the absent name kept it read-only. Both roots are redirected here; a
+    delete is never the point of this test, only the exit code and the wording.
+    """
     root = Path(__file__).resolve().parent.parent
+    data_root = tmp_path / "data"
+    (data_root / "auto-memory").mkdir(parents=True)
+    home = tmp_path / "home"
+    (home / ".claude" / "projects").mkdir(parents=True)
     out = subprocess.run(
         [sys.executable, str(root / "scripts" / "retire-memory.py"), "definitely_absent_zzz.md"],
-        capture_output=True, text=True)
-    assert out.returncode == 0
+        capture_output=True, text=True,
+        env=dict(os.environ, HEADING_OS_DATA=str(data_root), HOME=str(home)))
+    assert out.returncode == 0, out.stderr
     assert "not found" in out.stdout

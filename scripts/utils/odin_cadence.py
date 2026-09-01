@@ -53,6 +53,21 @@ def read_cadence_json(engine_root: Path, *, script: Path | None = None,
             cwd=str(engine_root),
             capture_output=True,
             text=True,
+            # `errors="replace"`. `text=True` alone decodes STRICT UTF-8 and
+            # raises UnicodeDecodeError inside `subprocess.run` itself, past the
+            # handler below: UnicodeDecodeError is a ValueError, and neither
+            # OSError nor subprocess.SubprocessError is one of its bases.
+            # MEASURED 2026-09-01 with a child writing a raw 0xFF to stdout: the
+            # call raised, so this function could not deliver the `(dict, str)`
+            # its own docstring promises for every failure, and the traceback
+            # killed the whole `generate-dashboard.py` run rather than drawing
+            # one panel with a named reason. The sibling readers already had
+            # this: `scripts/scrutinize-dispatch.py` passes `errors="replace"`
+            # on the same grounds and `.claude/hooks/checkpoint-precompact.py`
+            # names ValueError in its handler. This was the copy that missed it.
+            # A mangled byte in a stderr tail is readable evidence; a traceback
+            # is none.
+            errors="replace",
             timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError) as e:

@@ -20,8 +20,25 @@ functions before anything was changed.
     stale threshold is 2. A consumer diffing reasons against thresholds cannot
     tell the observation from the setting.
 
-No host clock is read anywhere here: every date is a literal, and the cluster
-work goes through `analyze_reflect_clusters(root, today=...)`.
+No host clock decides an assertion here: every date is a literal, and the
+cluster work goes through an explicit `today=`.
+
+That sentence used to read "No host clock is read anywhere here", and it was
+false for every test that went through `compute()`. `compute` called
+`analyze_reflect_clusters(root)` with no date, so the ageing that produces
+`stale_clusters` and the `stale_clusters>=1` reason ran against the machine's
+clock while the episodes carried the literal `created: 2026-01-01`. The tests
+passed because the real date is far past that, not because anything pinned it.
+MEASURED 2026-09-01 with the module's clock frozen inside `odin-cadence.py`:
+
+    host clock (real today)  -> stale_clusters=2
+        reasons=['never collected', 'reflect_clusters>=1', 'stale_clusters>=1']
+    frozen at 2026-01-05     -> stale_clusters=0
+        reasons=['never collected', 'reflect_clusters>=1']
+
+`compute` now takes `today` and passes it down, which is the seam
+`analyze_reflect_clusters` already had, and every test below that reads a
+cluster age supplies it. `TODAY` is that literal.
 
 Run: .venv/bin/python -m pytest
      tests/test_a_cadence_that_called_a_corrupt_marker_a_fresh_install.py -q
@@ -46,6 +63,11 @@ def _load():
 
 
 oc = _load()
+
+# The one date every age in this file is measured against. Chosen well past the
+# `created:` literals below so the clusters really are stale, and passed in
+# explicitly so that stays true on any machine on any day.
+TODAY = date(2026, 8, 20)
 
 
 def _brain(root: Path) -> Path:
@@ -93,7 +115,7 @@ def test_read_marker_still_collapses_both_to_none(tmp_path):
     """
     _write_marker(tmp_path, "not-a-date\n")
     assert oc.read_marker(tmp_path) == (None, None)
-    assert oc.compute(tmp_path, 5)["unharvested_total"] == 0  # empty corpus, but no crash
+    assert oc.compute(tmp_path, 5, today=TODAY)["unharvested_total"] == 0  # empty corpus, but no crash
 
 
 # ============================================================
@@ -102,7 +124,7 @@ def test_read_marker_still_collapses_both_to_none(tmp_path):
 
 def test_a_corrupt_marker_is_not_reported_as_never_collected(tmp_path):
     _write_marker(tmp_path, "not-a-date\n")
-    result = oc.compute(tmp_path, 5)
+    result = oc.compute(tmp_path, 5, today=TODAY)
 
     assert result["marker_state"] == "unreadable"
     assert "never collected" not in result["reasons"], result["reasons"]
@@ -114,7 +136,7 @@ def test_a_corrupt_marker_is_not_reported_as_never_collected(tmp_path):
 def test_an_absent_marker_is_still_reported_as_never_collected(tmp_path):
     """The other direction, so the fix cannot pass by renaming both states."""
     _brain(tmp_path)
-    result = oc.compute(tmp_path, 5)
+    result = oc.compute(tmp_path, 5, today=TODAY)
 
     assert result["marker_state"] == "absent"
     assert "never collected" in result["reasons"], result["reasons"]
@@ -125,7 +147,7 @@ def test_an_absent_marker_is_still_reported_as_never_collected(tmp_path):
 def test_the_telegram_line_names_the_unreadable_marker(tmp_path):
     """This exact string is what `ops-radar-notify` puts on the wire."""
     _write_marker(tmp_path, "not-a-date\n")
-    line = oc.suggestion_line(oc.compute(tmp_path, 5))
+    line = oc.suggestion_line(oc.compute(tmp_path, 5, today=TODAY))
 
     assert "collect never run" not in line, line
     assert "collect marker unreadable" in line, line
@@ -172,7 +194,7 @@ def test_the_stale_reason_is_a_threshold_not_a_tally(tmp_path, n_stale):
     _brain(tmp_path)
     _episodes(tmp_path, clusters=n_stale, created="2026-01-01")
 
-    result = oc.compute(tmp_path, 5)
+    result = oc.compute(tmp_path, 5, today=TODAY)
 
     assert result["stale_clusters"] == n_stale, result
     assert "stale_clusters>=1" in result["reasons"], result["reasons"]
@@ -204,7 +226,7 @@ def test_every_sibling_reason_still_encodes_its_threshold(tmp_path):
     """
     _brain(tmp_path)
     _episodes(tmp_path, clusters=2, created="2026-01-01")
-    reasons = oc.compute(tmp_path, oc.DEFAULT_MIN_ENTRIES)["reasons"]
+    reasons = oc.compute(tmp_path, oc.DEFAULT_MIN_ENTRIES, today=TODAY)["reasons"]
 
     assert reasons, "empty reason list: the fixture stopped producing a nudge"
     numeric = [r for r in reasons if any(ch.isdigit() for ch in r)]

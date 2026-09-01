@@ -217,32 +217,194 @@ def test_the_page_no_longer_uses_the_text_node_serializer():
     assert "div.textContent = text;\n      return div.innerHTML;" not in source
 
 
-def test_no_benchmark_metadata_field_reaches_the_html_string_unescaped():
-    """A regression pin on the raw interpolations found alongside the main bug.
+# --------------------------------------------------------------------------
+# Default-deny over every interpolation, not a list of the fields already known
+# to be wrong.
+#
+# The first version of the check below named seven fields and asked whether each
+# one sat inside `escapeHtml(...)`. That is a hand-maintained security list, and
+# it behaves the way hand-maintained security lists behave: an EIGHTH field that
+# nobody added is invisible, and the test stays green while the page injects.
+#
+# Measured 2026-09-01, with that list in place and green: `renderBenchmark`'s
+# per-eval breakdown row spliced `r.passed`, `r.total` and `r.errors` into the
+# HTML string with no escaping at all. All three are run content -
+# `aggregate_benchmark.py` reads them out of grading.json with `.get(key, 0)`,
+# and a default fires only on an ABSENT key, so a present string passes through -
+# and all three land in `container.innerHTML`. `r.passed` set to
+# `<img src=x onerror="alert(1)">` produced a live tag in the assembled row.
+# The same three field names were ALREADY escaped in `renderGrades`, so this was
+# the `exp.evidence` fix landing in one of the two functions that splice run data.
+#
+# So the question is inverted here. Every operand concatenated into an `html +=`
+# statement must be a string LITERAL, an `escapeHtml(...)` call, or an entry in
+# `SAFE_UNESCAPED` carrying the reason it cannot inject. A new interpolation is a
+# failure until its author writes that reason down.
+# --------------------------------------------------------------------------
 
-    Named individually, because each was a separate `html +=` that concatenated
-    a benchmark.json value with no escaping at all.
+#: Operand text -> why it cannot carry attacker-controlled markup.
+SAFE_UNESCAPED = {
+    # Local class/icon choices: a ternary over string literals in this file.
+    "badgeClass": "ternary over 'grade-pass' / '' / 'grade-fail' literals",
+    "statusClass": "ternary over 'pass' / 'fail' literals",
+    "statusIcon": "ternary over two \\u escapes",
+    "rowClass": "ternary over 'benchmark-row-with' / '-without' literals",
+    "prClass": "ternary over two benchmark-delta-* literals and ''",
+    "avgPrClass": "ternary over two benchmark-delta-* literals and ''",
+    "cls": "ternary over two benchmark-delta-* literals",
+    "icon": "ternary over two \\u escapes",
+    # Helpers that return arithmetic or a literal class name.
+    "passRate": "Math.round(n * 100) + '%' -- arithmetic, NaN% at worst",
+    "fmtStat(a.pass_rate, true)": "fmtStat returns .toFixed() output or an em dash",
+    "fmtStat(b.pass_rate, true)": "fmtStat returns .toFixed() output or an em dash",
+    "fmtStat(a.time_seconds, false)": "fmtStat returns .toFixed() output or an em dash",
+    "fmtStat(b.time_seconds, false)": "fmtStat returns .toFixed() output or an em dash",
+    "fmtStat(a.tokens, false)": "fmtStat returns .toFixed() output or an em dash",
+    "fmtStat(b.tokens, false)": "fmtStat returns .toFixed() output or an em dash",
+    "deltaClass(delta.pass_rate)": "returns one of two benchmark-delta-* literals or ''",
+    "deltaClass(delta.time_seconds)": "returns one of two benchmark-delta-* literals or ''",
+    "deltaClass(delta.tokens)": "returns one of two benchmark-delta-* literals or ''",
+    # Arithmetic on run content. A string operand coerces to NaN, never to markup.
+    "((r.pass_rate || 0) * 100).toFixed(0)": "multiplication coerces; NaN at worst",
+    "(avgRate * 100).toFixed(0)": "multiplication coerces; NaN at worst",
+    # `.toFixed` on run content. Stated limit: a non-numeric value here raises a
+    # TypeError and the benchmark view fails to render. That is a robustness
+    # defect, not an injection: no markup reaches the string on that path.
+    '(r.time_seconds != null ? r.time_seconds.toFixed(1) : "—")':
+        "toFixed on a number; a string operand throws rather than injecting",
+    '(times.length ? (times.reduce((a, b) => a + b, 0) / times.length).toFixed(1) : "—")':
+        "division then toFixed; a string operand throws rather than injecting",
+}
+
+_JS_LITERAL = re.compile(r"""^(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")$""", re.S)
+
+
+def _split_concatenation(expression: str) -> list[str]:
+    """Split a JS `+` concatenation into operands, quote- and depth-aware.
+
+    A naive `split("+")` breaks `(a, b) => a + b` and every `+` inside a string.
     """
-    source = VIEWER.read_text(encoding="utf-8")
-    must_be_escaped = [
-        "metadata.timestamp",
-        "metadata.evals_run.join",
-        "metadata.runs_per_configuration",
-        "delta.pass_rate",
-        "delta.tokens",
-        "run.run_number",
-        "configLabel",
-    ]
-    unescaped = []
-    for line in source.splitlines():
+    out, buf, quote, depth, index = [], [], None, 0, 0
+    while index < len(expression):
+        char = expression[index]
+        if quote:
+            buf.append(char)
+            if char == "\\" and index + 1 < len(expression):
+                buf.append(expression[index + 1])
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in "'\"`":
+            quote = char
+            buf.append(char)
+            index += 1
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        if char == "+" and depth == 0:
+            out.append("".join(buf))
+            buf = []
+            index += 1
+            continue
+        buf.append(char)
+        index += 1
+    out.append("".join(buf))
+    return [operand.strip() for operand in out if operand.strip()]
+
+
+def _html_operands() -> list[tuple[int, str]]:
+    """Every operand spliced into an `html +=` statement, with its line number."""
+    found: list[tuple[int, str]] = []
+    for number, line in enumerate(VIEWER.read_text(encoding="utf-8").splitlines(), 1):
         if "html +=" not in line:
             continue
-        for field in must_be_escaped:
-            if field not in line:
-                continue
-            # Every occurrence of the field on an `html +=` line must sit inside
-            # an escapeHtml(...) call or a numeric-only helper.
-            if not re.search(r"escapeHtml\([^)]*" + re.escape(field.split(".")[-1]), line) \
-               and "deltaClass(" not in line:
-                unescaped.append(line.strip())
-    assert unescaped == [], "unescaped interpolations remain:\n" + "\n".join(unescaped)
+        statement = re.search(r"html\s*\+=\s*(.*?);\s*$", line)
+        assert statement, (
+            f"{VIEWER.name}:{number} appends to `html` in a shape this test cannot "
+            f"parse (a statement spanning lines?), so it would go unchecked: {line.strip()}"
+        )
+        found.extend((number, operand) for operand in _split_concatenation(statement.group(1)))
+    return found
+
+
+def test_the_operand_walk_actually_reaches_the_page():
+    """A walk that finds nothing would make the default-deny check vacuous."""
+    operands = _html_operands()
+    assert len(operands) > 80, f"only {len(operands)} operands parsed out of {VIEWER}"
+    assert sum(1 for _, o in operands if o.startswith("escapeHtml(")) > 20, operands
+
+
+def test_every_interpolation_is_escaped_or_declared_safe():
+    """Default-deny. A new unescaped operand fails until its reason is written down."""
+    offenders = []
+    for number, operand in _html_operands():
+        if _JS_LITERAL.match(operand):
+            continue
+        if operand.startswith("escapeHtml("):
+            continue
+        if operand in SAFE_UNESCAPED:
+            continue
+        offenders.append(f"{VIEWER.name}:{number}: {operand}")
+    assert offenders == [], (
+        "operands reach the page's HTML string without escapeHtml() and without an "
+        "entry in SAFE_UNESCAPED saying why they cannot inject:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+def test_the_safe_list_cannot_accumulate_entries_guarding_nothing():
+    """A registry entry whose operand is gone is a claim about code that left."""
+    live = {operand for _, operand in _html_operands()}
+    stale = sorted(set(SAFE_UNESCAPED) - live)
+    assert stale == [], f"SAFE_UNESCAPED entries with no matching operand: {stale}"
+
+
+def test_the_default_deny_would_catch_a_new_raw_field(tmp_path: Path):
+    """Positive control, on the exact three operands that were live on 2026-09-01.
+
+    Without it, an operand walk that silently stopped splitting would report an
+    empty offender list and read as a pass.
+    """
+    line = ('              html += \'<td class="\' + prClass + \'">\' + '
+            '((r.pass_rate || 0) * 100).toFixed(0) + "% (" + (r.passed || 0) + '
+            '"/" + (r.total || 0) + ")</td>";')
+    operands = list(_split_concatenation(
+        re.search(r"html\s*\+=\s*(.*?);\s*$", line).group(1)))
+    raw = [o for o in operands
+           if not _JS_LITERAL.match(o) and not o.startswith("escapeHtml(")
+           and o not in SAFE_UNESCAPED]
+    assert raw == ["(r.passed || 0)", "(r.total || 0)"], raw
+
+
+@requires_node
+def test_run_counts_cannot_inject_a_tag_into_the_breakdown_row():
+    """The behavioural half: the exact payload, through the page's real escaper."""
+    snippet = "\n".join([
+        _extract_const("HTML_ESCAPES"),
+        _extract("escapeHtml"),
+        'const r = { pass_rate: 1.0, passed: \'<img src=x onerror="alert(1)">\','
+        " total: 3, errors: 0 };",
+        'const prClass = "benchmark-delta-positive";',
+        'const html = \'<td class="\' + prClass + \'">\' + ((r.pass_rate || 0) * 100).toFixed(0)'
+        ' + "% (" + escapeHtml(r.passed || 0) + "/" + escapeHtml(r.total || 0) + ")</td>";',
+        "console.log(JSON.stringify(html));",
+    ])
+    html = json.loads(_run_js(snippet).strip())
+
+    class _Parser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.tags = []
+
+        def handle_starttag(self, tag, attrs):
+            self.tags.append(tag)
+
+    parser = _Parser()
+    parser.feed(html)
+    assert parser.tags == ["td"], f"run counts opened extra tags {parser.tags}: {html}"
+    assert "onerror" in html, "the text must survive; only the markup is neutralised"

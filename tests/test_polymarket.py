@@ -222,6 +222,31 @@ def test_render_markdown_includes_internal_use_footer():
     assert "never used in external" in md.lower()
 
 
+def test_render_markdown_includes_the_footer_on_a_NON_empty_render():
+    """"Every render" meant the empty one, until 2026-09-01.
+
+    Both footer tests above called `render_markdown([])`, and that path returns
+    on its own line before the table is ever built. MEASURED with the mutation
+    harness: replacing the `lines.append(INTERNAL_USE_FOOTER)` at the end of the
+    table branch with `lines.append('')` left this whole file GREEN. So the one
+    render that actually carries market numbers, which is the render that could
+    be pasted into something outward-facing, was the one nothing checked for the
+    line saying it must not be.
+    """
+    markets = [{
+        "question": "Will an invented vendor ship by Q4 2026?",
+        "outcomes": [{"name": "Yes", "probability": 0.42}],
+        "end_date": "2026-12-31",
+        "volume_usd": 123456.0,
+        "link": "https://polymarket.com/event/invented",
+    }]
+    md = pm.render_markdown(markets)
+    assert "| Market |" in md, "the table branch was not taken; premise gone"
+    assert pm.INTERNAL_USE_FOOTER in md
+    assert "internal signal only" in md.lower()
+    assert "never used in external" in md.lower()
+
+
 def test_render_markdown_empty_emits_no_matches_message():
     md = pm.render_markdown([])
     assert "No matching" in md

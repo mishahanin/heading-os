@@ -94,6 +94,67 @@ def test_meeting_duration_calc_with_incompatible_datetime(
     assert result[0]["duration_minutes"] == 0, result[0]
 
 
+# The handler above is `except (TypeError, AttributeError, ValueError)`, and
+# only TypeError had a case. MEASURED 2026-09-01 by narrowing it to
+# `except TypeError` alone: 2903 tests across the 102 files that name sentinel
+# passed with an identical result set, so two thirds of the clause was a claim
+# nothing checked. The two shapes below are what the missing thirds look like
+# on the one expression inside the try,
+# `int((invite.end - invite.start).total_seconds() / 60)`.
+
+class _NoTotalSeconds:
+    """A subtraction result that is not a timedelta. `.total_seconds()` is an
+    AttributeError, which is what an Exchange item carrying an EWSDate rather
+    than an EWSDateTime produces."""
+
+
+class _NotANumber:
+    def total_seconds(self):
+        return float("nan")     # int(nan / 60) raises ValueError
+
+
+@pytest.mark.parametrize("subtraction_result, why", [
+    (_NoTotalSeconds(), "AttributeError"),
+    (_NotANumber(), "ValueError"),
+])
+def test_the_duration_fallback_catches_more_than_typeerror(
+    subtraction_result, why, mock_config, state_manager, mock_logger,
+    mock_exchange_account
+):
+    """Each remaining member of the except clause, with a case on the line."""
+    from scripts.sentinel import MeetingInviteSource
+    from exchangelib import UTC
+
+    future_start = datetime(2030, 1, 1, 10, 0, 0, tzinfo=UTC)
+    bad_end = MagicMock()
+    bad_end.__sub__ = MagicMock(return_value=subtraction_result)
+
+    invite = SimpleNamespace(
+        message_id=f"invite-{why}", id=f"invite-{why}",
+        subject="TEST-MEETING-BAD-DURATION",
+        sender=SimpleNamespace(email_address="alice@example.com", name="Alice"),
+        start=future_start, end=bad_end,
+        body=None, text_body=None, location="",
+        datetime_received=future_start,
+        required_attendees=[], optional_attendees=[], type="SingleInstance",
+    )
+    filter_mock = MagicMock()
+    filter_mock.order_by.return_value = [invite]
+    mock_exchange_account.inbox.filter.return_value = filter_mock
+
+    source = MeetingInviteSource(mock_config.__dict__, state_manager, mock_logger)
+    source.account = mock_exchange_account
+
+    result = source.check_new_invites()
+
+    debug_messages = [call.args[0] for call in mock_logger.debug.call_args_list]
+    assert any("meeting duration calc fallback" in msg for msg in debug_messages), (
+        f"a {why} out of the duration expression was not caught and logged; "
+        f"debug log was {debug_messages}")
+    assert len(result) == 1, result
+    assert result[0]["duration_minutes"] == 0, result[0]
+
+
 # ---------------------------------------------------------------------------
 # Test 11: LLM theme classify fallback (anthropic-specific exception)
 # ---------------------------------------------------------------------------

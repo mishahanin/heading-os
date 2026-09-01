@@ -102,6 +102,66 @@ def test_all_builds_curated_marketplace(tmp_path):
     assert "heading-crm" not in names  # empty skills -> skipped by --all, never published
 
 
+def test_all_builds_a_bundle_whose_only_content_is_commands(tmp_path, monkeypatch):
+    """`--all` filters on `skills or hooks or commands`, and only the first two
+    had a case.
+
+    `commands` became a first-class field on 2026-08-21 and the filter was
+    updated for it with a comment saying why, and with nothing standing on it:
+    MEASURED 2026-09-01, dropping `s.get("commands")` back out of the filter left
+    all 92 tests across the five files that build this generator green, because
+    no bundle in the shipped manifest is commands-only. So the fix would have
+    regressed in silence, and the symptom is the quiet one the comment
+    describes - `--all` builds nothing for that bundle and says nothing about it.
+
+    The manifest is supplied rather than edited, so the test measures the filter
+    and not the current contents of `config/plugin-bundles.yaml`.
+    """
+    mod = _load_builder()
+    manifest = {
+        "probe-commands-only": {
+            "description": "commands only, no skills and no hooks",
+            "skills": [],
+            "hooks": [],
+            "hook_events": {},
+            "commands": ["unattended.md"],
+            "scripts": ["checkpoint-paths.py"],
+        },
+    }
+    monkeypatch.setattr(mod, "load_manifest", lambda root: manifest)
+
+    assert mod.main(["--all", "--out", str(tmp_path)]) == 0
+
+    mj = json.loads((tmp_path / ".claude-plugin" / "marketplace.json").read_text())
+    assert [p["name"] for p in mj["plugins"]] == ["probe-commands-only"], (
+        "a commands-only bundle was skipped by --all and never published"
+    )
+    assert (tmp_path / "plugins" / "probe-commands-only" / "commands"
+            / "unattended.md").is_file()
+
+
+def test_all_still_skips_a_bundle_that_declares_nothing(tmp_path, monkeypatch):
+    """The negative case. A filter that stopped filtering would satisfy the test
+    above while publishing every empty placeholder in the manifest."""
+    mod = _load_builder()
+    manifest = {
+        "probe-empty": {"description": "placeholder", "skills": [], "hooks": [],
+                        "hook_events": {}, "commands": [], "scripts": []},
+        "probe-commands-only": {
+            "description": "commands only",
+            "skills": [], "hooks": [], "hook_events": {},
+            "commands": ["unattended.md"], "scripts": ["checkpoint-paths.py"],
+        },
+    }
+    monkeypatch.setattr(mod, "load_manifest", lambda root: manifest)
+
+    assert mod.main(["--all", "--out", str(tmp_path)]) == 0
+
+    mj = json.loads((tmp_path / ".claude-plugin" / "marketplace.json").read_text())
+    assert [p["name"] for p in mj["plugins"]] == ["probe-commands-only"]
+    assert not (tmp_path / "plugins" / "probe-empty").exists()
+
+
 def test_hooks_json_registers_guards(built):
     bundle, _ = built
     hj = json.loads((bundle / "hooks" / "hooks.json").read_text())

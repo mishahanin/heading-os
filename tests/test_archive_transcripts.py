@@ -133,9 +133,20 @@ def test_a_transcript_that_grew_is_re_archived_in_place(tree):
     # fresh", `result["archived"]` becomes 0, and this test fails on a
     # predictable date for a reason unrelated to any code change. Every other
     # test in this file pins the mtime with `os.utime`; this one did not.
-    # Re-stamped to the same 2026-08-01 noon the fixture uses, so the assertion
-    # depends on the code and not on the day the suite runs.
-    grown_stamp = calendar.timegm((2026, 8, 1, 12, 0, 0, 0, 0, 0))
+    #
+    # The 2026-08-30 repair stamped it back to the SAME 2026-08-01 noon the
+    # fixture uses, which defused the bomb and disarmed the test with it: with
+    # the mtime and the first-line timestamp agreeing, both possible sources for
+    # the archive path give 2026-08-01, so the single-archive assertion below
+    # could no longer tell them apart. That is this file's central claim.
+    # MEASURED 2026-09-01: `_session_date` reverted to the mtime left the whole
+    # file green at 12 passed. The stamp now MOVES, exactly as resuming a real
+    # session moves it, while staying pinned (no wall clock) and comfortably
+    # settled: 2026-08-20 is months before `now - SETTLE_SECONDS`.
+    grown_stamp = calendar.timegm((2026, 8, 20, 12, 0, 0, 0, 0, 0))
+    assert 1_800_000_000.0 - grown_stamp >= arch.SETTLE_SECONDS, (
+        "the re-stamp must stay inside the settle window, or this test measures "
+        "the window instead of the archive path")
     os.utime(src, (grown_stamp, grown_stamp))
     result = arch.archive(now=1_800_000_000.0)
 
@@ -145,6 +156,31 @@ def test_a_transcript_that_grew_is_re_archived_in_place(tree):
     assert archives[0].name == "2026-08-01-dddd4444.jsonl.gz"
     with gzip.open(archives[0], "rt", encoding="utf-8") as fh:
         assert '"n": 99' in fh.read()
+
+
+def test_the_archive_path_follows_the_session_start_not_the_mtime(tree):
+    """The claim the whole file rests on, asked directly.
+
+    `_write` sets the first line's timestamp AND the mtime to the same date, so
+    every other test here passes whichever of the two `_session_date` reads.
+    This one drives them apart, which is exactly what resuming a session does:
+    the transcript still STARTED on 2026-08-01 and was last written on
+    2026-08-20. If the path came from the mtime the archive would land under a
+    second date and the earlier, truncated copy would stay behind forever.
+    """
+    source, dest = tree
+    src = _write(source, "7777cccc", when="2026-08-01")
+    resumed = calendar.timegm((2026, 8, 20, 12, 0, 0, 0, 0, 0))
+    os.utime(src, (resumed, resumed))
+
+    result = arch.archive(now=1_800_000_000.0)
+
+    assert result["archived"] == 1, result
+    out = next(dest.rglob("*.jsonl.gz"))
+    assert out.name == "2026-08-01-7777cccc.jsonl.gz", (
+        "the archive was dated from the mtime (2026-08-20) rather than the "
+        f"session's first timestamp (2026-08-01): {out.name}")
+    assert out.parent.name == "2026"
 
 
 def test_the_live_session_is_left_alone(tree):

@@ -23,6 +23,7 @@ interpreter that is not `.venv/bin/python`. Same load and same reason as
 `tests/test_push_all_gate.py`.
 """
 import importlib.util
+import os
 import subprocess
 from pathlib import Path
 
@@ -168,6 +169,84 @@ def test_a_submodule_shaped_gitdir_uses_its_own_hooks_not_a_parents(tmp_path):
 
     assert push_all._git_hooks_dir(repo) == gitdir / "hooks"
     assert push_all._pre_push_gate_armed(repo) is True
+
+
+@pytest.mark.parametrize("payload", [
+    # A shell hook with one Latin-1 byte in a comment.
+    b"#!/bin/sh\n# caf\xe9 in a comment\nexec python run-tests.py\n",
+    # A compiled hook. `\x7fELF\x02\x01\x01\x00` is every byte under 0x80, so
+    # the obvious ELF magic DECODES FINE as UTF-8 and would have been decided
+    # by the marker-absent clause instead of by the handler this case is named
+    # for: it stayed green with the handler reverted. The 0xc3 0x28 pair is a
+    # truncated two-byte sequence, which is what a real object file is full of.
+    b"\x7fELF\x02\x01\x01\x00\xc3\x28compiled hook\x00",
+    # The marker's own bytes, present but undecodable around them. Without this
+    # the pair above could pass on "no marker" rather than on "cannot read".
+    b"#!/bin/sh\n\xff\xfe\nexec python run-tests.py\n",
+])
+def test_a_hook_that_is_not_utf8_reads_as_unarmed_instead_of_raising(
+        tmp_path, payload):
+    """The predicate answers True or False, or it is not a predicate.
+
+    `UnicodeDecodeError` is a ValueError, so the `except OSError` here never
+    caught it while `_git_hooks_dir` two functions up catches the pair. A
+    pre-push hook is an arbitrary executable: a compiled binary, or a shell
+    script carrying one Latin-1 byte in a comment. MEASURED 2026-09-01 before
+    the fix, `_pre_push_gate_armed` raised `UnicodeDecodeError: 'utf-8' codec
+    can't decode byte 0xe9` out of a function this file's own docstring says
+    must fail CLOSED, and `_attempt` absorbs only `RepoNotPushable`, so the
+    backup ended on a traceback rather than the named refusal.
+
+    Unarmed is the right answer either way: the marker is a UTF-8 literal, so
+    bytes that are not UTF-8 cannot carry it.
+    """
+    repo = tmp_path / "binhook"
+    (repo / ".git" / "hooks").mkdir(parents=True)
+    (repo / ".git" / "hooks" / "pre-push").write_bytes(payload)
+
+    assert push_all._pre_push_gate_armed(repo) is False
+
+
+def test_a_directory_where_the_hook_belongs_reads_as_unarmed(tmp_path):
+    """`is_file()` is False here, so this measures the guard, not the handler.
+
+    Said plainly because the obvious reading is wrong: moving the `read_text`
+    above the `is_file()` check does NOT fail this test. It raises
+    IsADirectoryError, which is an OSError, which the handler catches, and the
+    verdict is False either way. MEASURED 2026-09-01, that reordering survived
+    the whole file. The permission case below is the one that reaches the
+    handler's OSError arm.
+    """
+    repo = tmp_path / "dirhook"
+    (repo / ".git" / "hooks" / "pre-push").mkdir(parents=True)
+
+    assert push_all._pre_push_gate_armed(repo) is False
+
+
+@pytest.mark.skipif(os.geteuid() == 0,
+                    reason="root reads a mode-000 file, so there is no refusal "
+                           "to observe; the UTF-8 case above still covers the "
+                           "widened handler")
+def test_an_unreadable_hook_reads_as_unarmed(tmp_path):
+    """The handler's OSError arm, which nothing reached before.
+
+    `is_file()` is True and the read raises PermissionError. Verified to be a
+    real refusal rather than a vacuous pass: the same file at mode 644 in the
+    companion assertion below reads as ARMED, so the mode is what changed the
+    answer.
+    """
+    repo = tmp_path / "unreadable"
+    (repo / ".git" / "hooks").mkdir(parents=True)
+    hook = repo / ".git" / "hooks" / "pre-push"
+    hook.write_text(ARMED_HOOK, encoding="utf-8")
+    assert push_all._pre_push_gate_armed(repo) is True
+
+    hook.chmod(0o000)
+    try:
+        assert hook.is_file(), "the guard, not the handler, would be answering"
+        assert push_all._pre_push_gate_armed(repo) is False
+    finally:
+        hook.chmod(0o644)
 
 
 def test_an_ordinary_clone_is_unchanged(tmp_path):

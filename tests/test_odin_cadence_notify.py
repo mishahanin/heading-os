@@ -53,15 +53,49 @@ def _write_brain_file(brain_dir: Path, name: str, text: str = "content") -> None
     (brain_dir / name).write_text(text, encoding="utf-8")
 
 
+class _RecordingRun:
+    """A `subprocess.run` stand-in that RECORDS instead of raising.
+
+    The three "must not run" tests below used a stub that raised
+    `AssertionError`. `_run_headless_propose` wraps its `subprocess.run` call in
+    `except Exception`, so the stub's AssertionError was caught by the very
+    function under test, logged, and turned into `return None` -- the same
+    answer the gate produces when it works. MEASURED 2026-09-01 with the
+    `if not cluster_detail: return None` gate replaced by `if False:` and with
+    the `ODIN_REFLECT_PROPOSE_ENABLED` gate removed: every one of those tests
+    stayed green with both gates gone.
+
+    A recording stub cannot be swallowed, because the assertion happens in the
+    TEST after the call returns, not inside the code under test.
+    """
+
+    def __init__(self, returncode=0, on_call=None):
+        self.calls: list[list[str]] = []
+        self._returncode = returncode
+        self._on_call = on_call
+
+    def __call__(self, cmd, **kwargs):
+        self.calls.append(list(cmd))
+        if self._on_call is not None:
+            self._on_call(cmd, **kwargs)
+        return _FakeProc(returncode=self._returncode)
+
+
 def test_propose_skipped_when_flag_unset(tmp_path, monkeypatch):
     mod = load_module()
     monkeypatch.delenv("ODIN_REFLECT_PROPOSE_ENABLED", raising=False)
+    # A cluster IS present, so the flag is the only thing that can stop the run.
+    # Without this the in-process cadence compute fails first (no
+    # scripts/odin-cadence.py under tmp_path) and the test passes whether or not
+    # the flag gate exists at all.
+    monkeypatch.setattr(mod, "_load_cadence_module",
+                        lambda path: _FakeCadenceModule([{"episodes": ["e1.md"]}]))
+    monkeypatch.setattr(mod, "get_data_root", lambda: tmp_path / "data")
+    run = _RecordingRun()
+    monkeypatch.setattr(mod.subprocess, "run", run)
 
-    def boom(*a, **k):
-        raise AssertionError("subprocess.run must not run when the flag is unset")
-
-    monkeypatch.setattr(mod.subprocess, "run", boom)
     line = mod._maybe_headless_propose(tmp_path, "Odin cadence: 2 reflect clusters ready.")
+    assert run.calls == [], "the headless propose ran with the flag unset"
     assert line == "Odin cadence: 2 reflect clusters ready."
 
 
@@ -69,12 +103,12 @@ def test_propose_skipped_when_clusters_empty(tmp_path, monkeypatch):
     mod = load_module()
     monkeypatch.setenv("ODIN_REFLECT_PROPOSE_ENABLED", "1")
     monkeypatch.setattr(mod, "_load_cadence_module", lambda path: _FakeCadenceModule([]))
+    monkeypatch.setattr(mod, "get_data_root", lambda: tmp_path / "data")
+    run = _RecordingRun()
+    monkeypatch.setattr(mod.subprocess, "run", run)
 
-    def boom(*a, **k):
-        raise AssertionError("subprocess.run must not run when cluster_detail is empty")
-
-    monkeypatch.setattr(mod.subprocess, "run", boom)
     line = mod._maybe_headless_propose(tmp_path, "Odin cadence: up to date.")
+    assert run.calls == [], "the headless propose ran with no cluster to reflect on"
     assert line == "Odin cadence: up to date."
 
 
@@ -260,12 +294,42 @@ def test_run_headless_propose_none_when_no_cluster(tmp_path, monkeypatch):
     mod = load_module()
     monkeypatch.setenv("ODIN_REFLECT_PROPOSE_ENABLED", "1")
     monkeypatch.setattr(mod, "_load_cadence_module", lambda path: _FakeCadenceModule([]))
+    monkeypatch.setattr(mod, "get_data_root", lambda: tmp_path / "data")
+    run = _RecordingRun()
+    monkeypatch.setattr(mod.subprocess, "run", run)
 
-    def boom(*a, **k):
-        raise AssertionError("subprocess.run must not run when cluster_detail is empty")
-
-    monkeypatch.setattr(mod.subprocess, "run", boom)
     assert mod._run_headless_propose(tmp_path) is None
+    assert run.calls == [], "the headless propose ran with no cluster to reflect on"
+
+
+def test_a_non_zero_headless_exit_withholds_the_proposal(tmp_path, monkeypatch):
+    """A failed headless run must not deliver a proposal, even when a file with
+    today's name is sitting in the directory.
+
+    `if proc.returncode != 0` had no witness: replacing it with `if False:` left
+    every test in this file green, because the only run that produced a
+    proposal file also exited 0. A crashed agent that wrote a partial draft
+    would then have been announced to the operator as a finished proposal.
+    """
+    mod = load_module()
+    monkeypatch.setenv("ODIN_REFLECT_PROPOSE_ENABLED", "1")
+    monkeypatch.setattr(mod, "_load_cadence_module",
+                        lambda path: _FakeCadenceModule([{"episodes": ["e1.md"]}]))
+    data_root = tmp_path / "data"
+    monkeypatch.setattr(mod, "get_data_root", lambda: data_root)
+    monkeypatch.setattr(mod, "_log", lambda msg: None)
+
+    def _write_a_proposal(cmd, **kwargs):
+        today = mod.datetime.now(mod.get_default_tz()).date()
+        d = data_root / "outputs" / "operations" / "odin-reflect-proposals"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{today.isoformat()}_odin-reflect-proposal.md").write_text("partial", encoding="utf-8")
+
+    run = _RecordingRun(returncode=3, on_call=_write_a_proposal)
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    assert mod._run_headless_propose(tmp_path) is None
+    assert len(run.calls) == 1, "the headless call itself must still have happened"
 
 
 def test_propose_only_delivers_relative_path_and_no_counts(tmp_path, monkeypatch):
@@ -284,10 +348,10 @@ def test_propose_only_delivers_relative_path_and_no_counts(tmp_path, monkeypatch
     monkeypatch.setattr(mod, "_run_headless_propose", lambda root: proposal)
     monkeypatch.setenv("ODIN_CADENCE_TELEGRAM_TARGET", "-100dm")
 
-    def boom_counts(*a, **k):
-        raise AssertionError("--propose-only must NOT run the counts subprocess")
-
-    monkeypatch.setattr(mod.subprocess, "run", boom_counts)
+    # Recording, not raising: `main()`'s counts branch wraps subprocess.run in
+    # `except Exception`, so a raising stub is caught by the code under test.
+    counts = _RecordingRun()
+    monkeypatch.setattr(mod.subprocess, "run", counts)
 
     notified = []
     monkeypatch.setattr(mod.telegram_notify, "notify",
@@ -296,6 +360,7 @@ def test_propose_only_delivers_relative_path_and_no_counts(tmp_path, monkeypatch
     monkeypatch.setattr(sys, "argv", ["odin-cadence-notify.py", "--propose-only"])
     rc = mod.main()
     assert rc == 0
+    assert counts.calls == [], "--propose-only must NOT run the counts subprocess"
     assert len(notified) == 1
     target, message = notified[0]
     assert target == "-100dm"
@@ -311,10 +376,8 @@ def test_propose_only_silent_when_no_proposal(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "load_env", lambda root: None)
     monkeypatch.setattr(mod, "_run_headless_propose", lambda root: None)
 
-    def boom_counts(*a, **k):
-        raise AssertionError("--propose-only must NOT run the counts subprocess")
-
-    monkeypatch.setattr(mod.subprocess, "run", boom_counts)
+    counts = _RecordingRun()
+    monkeypatch.setattr(mod.subprocess, "run", counts)
 
     notified = []
     monkeypatch.setattr(mod.telegram_notify, "notify",
@@ -323,6 +386,7 @@ def test_propose_only_silent_when_no_proposal(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["odin-cadence-notify.py", "--propose-only"])
     rc = mod.main()
     assert rc == 0
+    assert counts.calls == [], "--propose-only must NOT run the counts subprocess"
     assert notified == []
 
 

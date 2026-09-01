@@ -142,6 +142,43 @@ REQUIRED_ANCHORS = {
 }
 
 
+def advise(message: str) -> None:
+    """Deliver one advisory on every channel the harness might honour.
+
+    MEASURED 2026-08-31 through the real CLI, on this hook's PostToolUse
+    sibling: a file carrying a U+200B was touched with the real Edit tool,
+    `post-write-sanitize.py` was invoked by the shared matcher, and nothing
+    reached the session, while running that hook by hand on the same payload
+    printed its notice and exited 0. A top-level `additionalContext` on
+    PostToolUse is discarded. This file has the same shape, so its "The HTML is
+    STALE" and "Failed to sync" advisories never arrived either, and it exited 0
+    reporting a complete sync each time.
+
+    The hooks reference does not settle the correct shape. It says a top-level
+    `additionalContext` is ignored on UserPromptSubmit, it shows the
+    `hookSpecificOutput` wrapper for PreToolUse, and about PostToolUse it is
+    silent. What it does state plainly is that a PostToolUse hook's STDERR is
+    shown to Claude when the hook exits 0.
+
+    So all three channels go out. Stderr is documented. The wrapper is the shape
+    the docs show for the events they do describe, which on PostToolUse is still
+    an inference. The top-level key is the form this hook has always emitted and
+    the form other tooling in this tree reads, so dropping it would trade one
+    unproven shape for another. A duplicated warning costs a repeated paragraph;
+    a dropped one costs the whole guard. `post-write-sanitize.py` and
+    `prompt-guard.py` carry the same emission, so there is one shape of this
+    rule across the PostToolUse hooks.
+    """
+    json.dump({
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": message,
+        },
+        "additionalContext": message,
+    }, sys.stdout)
+    print(message, file=sys.stderr)
+
+
 def _missing_anchors(file_path: Path) -> list:
     """Return required anchors absent from the file's text (empty list = OK)."""
     anchors = REQUIRED_ANCHORS.get(file_path.name)
@@ -181,6 +218,17 @@ def main():
         sys.exit(0)
     file_path_str = tool_input.get("file_path", "")
 
+    # The TYPE of the path INSIDE tool_input, one line below the guard that
+    # checks the container. `file_path: 3` reached `Path()` and raised an
+    # uncaught TypeError. Measured 2026-08-31 driving the real hook: an int, a
+    # bool, a list, a dict and a float each exited 1 with a traceback. Coerce to
+    # the empty string, which the next line already handles, and say so on
+    # stderr: a silent coercion is a sync nobody knows was skipped.
+    if not isinstance(file_path_str, str):
+        print(f"[sync-docs] file_path was {type(file_path_str).__name__}, "
+              "not a string", file=sys.stderr)
+        file_path_str = ""
+
     if not file_path_str:
         sys.exit(0)
 
@@ -215,8 +263,7 @@ def main():
             f"({', '.join(missing)}). The docs/ copy was left unchanged. Restore "
             f"the dropped section in templates/{file_path.name} and re-save."
         )
-        print(f"[sync-docs] {warn}", file=sys.stderr)
-        json.dump({"additionalContext": f"Warning: {warn}"}, sys.stdout)
+        advise(f"Warning: {warn}")
         sys.exit(0)
 
     # Copy the file
@@ -226,10 +273,7 @@ def main():
             shutil.copy2(file_path, t)
         sync_msg = f"Auto-synced templates/{file_path.name} -> {len(targets)} docs/ copy(ies)"
     except Exception as e:
-        print(f"[sync-docs] failed to copy {file_path.name}: {e}", file=sys.stderr)
-        json.dump({
-            "additionalContext": f"Warning: Failed to sync {file_path.name} to docs/: {e}"
-        }, sys.stdout)
+        advise(f"Warning: Failed to sync {file_path.name} to docs/: {e}")
         sys.exit(0)
 
     # If MD was edited, regenerate the matching HTML in both templates/ and docs/.
@@ -287,9 +331,7 @@ def main():
             regen_msg = (f" (HTML NOT regenerated: no renderer at "
                          f"{regen_script}. The HTML is STALE.)")
 
-    json.dump({
-        "additionalContext": sync_msg + regen_msg
-    }, sys.stdout)
+    advise(sync_msg + regen_msg)
     sys.exit(0)
 
 

@@ -76,6 +76,75 @@ def test_category_pages_carry_per_skill_anchors():
     assert not missing, f"category pages without any per-skill anchor: {missing}"
 
 
+def _page_for(url: str) -> Path | None:
+    """The docs page a record names, or None when the record names no page here.
+
+    Resolved and prefix-checked rather than joined blindly: a record whose `u`
+    were absolute or carried `..` would otherwise reach outside `docs/`, and a
+    url of that shape is itself a finding rather than something to follow.
+    """
+    if not url or "/" in url or "\\" in url or url.startswith("."):
+        return None
+    candidate = (DOCS / url).resolve()
+    if not str(candidate).startswith(str(DOCS.resolve()) + "/"):
+        return None
+    return candidate if candidate.is_file() else None
+
+
+def test_every_record_points_at_a_page_that_exists():
+    """A record whose page is gone is a search hit that 404s.
+
+    The two tests above this one name exactly one record, `s-osint`, so until
+    2026-09-01 the other 508 could point anywhere. MEASURED that day: changing
+    the `u` of the `s-viraid` record to `skills-ghost.html` left every test in
+    this file, and every other test naming the search index, green.
+    """
+    records = _records()
+    # 509 records over 37 distinct urls, measured 2026-09-01. Floored well below
+    # so retiring pages is not this test's failure, but not at zero: a sweep that
+    # reads nothing passes silently.
+    assert len(records) >= 300, f"only {len(records)} search records; the index shrank"
+    missing = sorted({r["u"] for r in records if _page_for(r["u"]) is None})
+    assert not missing, (
+        f"the search index deep-links to pages that are not in docs/: {missing}. "
+        f"Run: .venv/bin/python scripts/regenerate-docs-html.py --all"
+    )
+
+
+def test_every_anchored_record_points_at_an_id_the_page_defines():
+    """And the other half: the page exists but the anchor on it does not.
+
+    The client builds `url#anchor`, so a record with a dangling anchor lands the
+    reader at the top of a long page with no sign anything went wrong. MEASURED
+    2026-09-01: an invented anchor on the `s-viraid` record was invisible to
+    every test in the repository that names the search index.
+    """
+    text_by_url: dict[str, str] = {}
+    bad: set[str] = set()
+    inspected = 0
+    for rec in _records():
+        anchor = rec.get("a")
+        if not anchor:
+            continue
+        page = _page_for(rec["u"])
+        if page is None:
+            continue                      # the test above owns that failure
+        text = text_by_url.setdefault(rec["u"], page.read_text(encoding="utf-8"))
+        inspected += 1
+        if f'id="{anchor}"' not in text:
+            bad.add(f'{rec["u"]}#{anchor}')
+    # 406 anchored records reached the comparison on 2026-09-01. Floored at 250:
+    # if the `a` key were renamed or emptied by a generator change, every record
+    # would take the `continue` above and this guard would pass having compared
+    # nothing.
+    assert inspected >= 250, f"only {inspected} anchored records were checked"
+    assert not bad, (
+        "the search index deep-links to anchors the page does not define:\n"
+        + "\n".join(sorted(bad))
+        + "\nRun: .venv/bin/python scripts/regenerate-docs-html.py --all"
+    )
+
+
 def test_old_catalog_url_still_resolves_as_index():
     """The old skills-mcp-plugins.html URL must not 404: it is now the catalog index
     (no per-skill <section> cards, links out to the category pages)."""

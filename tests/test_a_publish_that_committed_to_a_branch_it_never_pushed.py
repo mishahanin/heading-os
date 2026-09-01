@@ -90,13 +90,33 @@ def test_a_clone_on_a_side_branch_is_refused_by_name(pub, tmp_path):
 
 
 def test_a_detached_head_is_refused(pub, tmp_path):
+    """The objection must name DETACHMENT, not merely refuse.
+
+    This asserted `"detached" in objection.lower()` until 2026-09-01, and that
+    assertion could not fail. Every objection interpolates `dest`, and pytest
+    derives `tmp_path` from the test function's own name, so the string
+    `test_a_detached_head_is_refused0` sat inside every candidate message.
+    MEASURED by mutation: renaming the guard's condition from
+    `if branch == "HEAD"` to `if branch == "HEAD_NEVER"` drops a detached clone
+    into the ordinary side-branch branch below it, whose message says nothing
+    about detachment, and the whole 440-test scope around publish-service
+    stayed green at 440 passed.
+
+    `dest` is cut off the front before the message is read, so no part of the
+    fixture path can satisfy the assertion, and the uppercase literal the
+    detached branch alone emits is what is asked for.
+    """
     repo = _clone(tmp_path)
     _git(repo, "checkout", "-q", "--detach")
 
     objection = pub.branch_objection(repo)
 
     assert objection is not None
-    assert "detached" in objection.lower()
+    message = objection.replace(str(repo), "")
+    assert "DETACHED HEAD" in message, message
+    assert "is on branch" not in message, (
+        "a detached clone fell through to the side-branch message, which never "
+        f"tells the operator that HEAD points at no branch at all: {message}")
 
 
 def test_a_directory_that_is_not_a_repo_is_refused_not_passed(pub, tmp_path):

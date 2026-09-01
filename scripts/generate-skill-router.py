@@ -113,7 +113,16 @@ def parse_frontmatter(skill_md: Path) -> tuple[dict, str]:
     """
     try:
         text = skill_md.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
+        # `UnicodeDecodeError` is a ValueError, so `except OSError` never caught
+        # it, and a SKILL.md carrying one stray Latin-1 byte (a paste, an editor
+        # that saved cp1252) took the whole generator down with a traceback -
+        # in CI and in pre-commit, where `--check` runs. This function's entire
+        # contract is to hand `load_routing_rows` a `(data, error)` pair so the
+        # gate can print the curated `{rel}: {err}` line naming the file, which
+        # is the one thing a traceback does not do. MEASURED 2026-09-01 on a
+        # scratch skill tree: `UnicodeDecodeError: 'utf-8' codec can't decode
+        # byte 0xe9` out of `load_routing_rows`, with no file named.
         return {}, f"unreadable: {exc}"
     data, kind, detail = parse_frontmatter_strict(text)
     if kind == md.FM_OK:
@@ -516,6 +525,27 @@ def splice_region(router_text: str, region: str) -> str:
             f"sentinel markers not found in {ROUTER_FILE.relative_to(ROOT)}; "
             f"add\n  {MARKER_BEGIN}\n  {MARKER_END}\naround the '### Intel' ... last registry row."
         )
+    # Duplicates are settled BEFORE the splice, because the pattern below cannot
+    # report them afterwards. Under DOTALL the non-greedy body happily spans a
+    # SECOND `BEGIN`, so `subn` returned n == 1 and the n > 1 guard at the foot
+    # of this function never fired. Measured 2026-08-31 on
+    # `BEGIN / row A / BEGIN / row B / END`: the result held ONE `BEGIN`, the
+    # second marker and every line between the two were gone, exit 0, nothing
+    # printed, and a following `--check` regenerated the same result and PASSED.
+    # A doubled `END` is the mirror image: the body stops at the first one, so
+    # `row B` and a stray `END` survive outside the region and `--check` blesses
+    # that file too. This runs in pre-commit and in CI, which is exactly where a
+    # gate that certifies its own corruption does the most damage.
+    begins = router_text.count(MARKER_BEGIN)
+    ends = router_text.count(MARKER_END)
+    if begins > 1 or ends > 1:
+        detail = (f"found {begins} marker regions" if begins == ends
+                  else f"found {begins} BEGIN and {ends} END markers")
+        raise ValueError(
+            f"{detail} in {ROUTER_FILE.relative_to(ROOT)}; there must be "
+            f"exactly one. Remove the extra {MARKER_BEGIN} / {MARKER_END} "
+            f"pair(s). Nothing was written: the splice would otherwise destroy "
+            f"the content between them.")
     # `\n.*?\n` demanded at least one line BETWEEN the markers, so a file whose
     # markers sit on adjacent lines -- which is what you get after clearing the
     # region for the generator to refill, or after adding the markers exactly as

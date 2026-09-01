@@ -64,6 +64,19 @@ FONTS_DIR = SKILL_DIR / "themes" / "fonts"
 SAMPLE_DECK = SKILL_DIR / "examples" / "sample-deck.md"
 VERSION_PIN_FILE = WORKSPACE_ROOT / "scripts" / ".marp-version"
 WATCH_STATE_FILE = Path.home() / ".marp" / "watch.json"
+
+# Everything reading the watch state can hit. All three readers listed only
+# `(json.JSONDecodeError, KeyError)`, and the state file is the residue of a
+# killed watch process, so a half-written or wrongly-encoded one is the ordinary
+# case. `UnicodeDecodeError` is a ValueError and a SIBLING of JSONDecodeError,
+# not a subclass, so `read_text(encoding="utf-8")` over a file saved as UTF-16
+# went straight past the handler. MEASURED 2026-09-01: a watch.json written as
+# UTF-16 raised UnicodeDecodeError out of `watch_status()`, which is documented
+# to REPORT status and answers "Corrupt watch state file." for every other
+# unreadable shape. OSError joins it because a directory, a permission change or
+# a vanished home all reach the same read.
+_WATCH_STATE_UNREADABLE = (json.JSONDecodeError, KeyError, OSError,
+                           UnicodeDecodeError)
 WORD_OVERFLOW_THRESHOLD = 150
 DEFAULT_FOOTER = "(C) 2025-2026 - 31 Concept - 31C.io - Proprietary & Confidential"
 
@@ -998,7 +1011,7 @@ def watch_start(source: Path) -> dict:
                 return {"ok": False, "error": "watch-active",
                         "message": f"Watch already active (PID {pid}, source: {state.get('source_path')}). "
                                    f"Run '/marp watch stop' first."}
-        except (json.JSONDecodeError, KeyError):
+        except _WATCH_STATE_UNREADABLE:
             pass
 
     # Check marp-cli
@@ -1073,7 +1086,7 @@ def watch_stop() -> dict:
 
     try:
         state = json.loads(WATCH_STATE_FILE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, KeyError):
+    except _WATCH_STATE_UNREADABLE:
         WATCH_STATE_FILE.unlink(missing_ok=True)
         return {"ok": False, "message": "Corrupt watch state file removed."}
 
@@ -1117,7 +1130,7 @@ def watch_status() -> dict:
 
     try:
         state = json.loads(WATCH_STATE_FILE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, KeyError):
+    except _WATCH_STATE_UNREADABLE:
         return {"running": False, "message": "Corrupt watch state file."}
 
     pid = state.get("pid")

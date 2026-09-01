@@ -77,7 +77,19 @@ def main(argv=None):
         return 2
     try:
         canned = yaml.safe_load(args.answers.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        # `UnicodeDecodeError` because `read_text(encoding="utf-8")` runs BEFORE
+        # `yaml.safe_load` and fails on its own terms. It is a `ValueError`, and
+        # `yaml.YAMLError` descends from `Exception` rather than from it, so
+        # neither of the two names here covered the decode. MEASURED 2026-09-01
+        # with a canned file holding a latin-1 byte: a raw `UnicodeDecodeError`
+        # traceback and exit 1 - verbatim the outcome the comment above this
+        # block says was removed for a typo'd path, "instead of the clean
+        # `ERROR: ...` this file uses everywhere else".
+        #
+        # The missing-file case does NOT arrive here: `is_file()` above returns
+        # first with its own message. `OSError` still covers the reads that get
+        # past that check, a permission denied among them.
         print(f"ERROR: could not read {args.answers}: {exc}", file=sys.stderr)
         return 2
     # `or {}` guarded a MISSING file body and let a present-but-wrong one

@@ -237,12 +237,74 @@ def test_a_sentinel_declared_in_env_never_becomes_an_allowlist_entry(
     assert transport == []
 
 
+@pytest.mark.parametrize("sentinel", ["me", "self", "saved", "Me", "@SAVED"])
+def test_a_sentinel_is_diagnosed_as_unresolvable_and_not_as_a_stranger(
+    monkeypatch, transport, caplog, sentinel
+):
+    """The two refusals must not collapse into one message.
+
+    `own_targets()` already strips the sentinels, so the allowlist check alone
+    refuses "me" and the earlier `wanted in _UNRESOLVABLE_TARGETS` branch adds
+    no safety. What it adds is the DIAGNOSIS, and the module docstring promises
+    "a clear, distinct log hint" per failure mode: this branch is an ordinary
+    "not configured for a bot" state, while REFUSED at ERROR means something
+    asked this transport to reach a recipient the operator never declared. A
+    sentinel reported as REFUSED is a false alarm in the log a reader searches
+    for real ones.
+
+    MEASURED 2026-09-01: deleting `or wanted in _UNRESOLVABLE_TARGETS` from
+    `notify` left the whole file green at 29 passed, because every other case
+    here reads only the return value and the empty transport.
+    """
+    monkeypatch.setenv("ODIN_CADENCE_TELEGRAM_TARGET", OWN_SINK)
+
+    with caplog.at_level(logging.DEBUG, logger="telegram_notify"):
+        assert notify_mod.notify(sentinel, "x") is False
+
+    assert "not bot-resolvable" in caplog.text, caplog.text
+    assert "REFUSED" not in caplog.text, (
+        "Saved Messages was reported as an undeclared recipient; the log a "
+        "reader greps for real refusals now carries a routine one"
+    )
+    assert transport == []
+
+
 @pytest.mark.parametrize("target", [None, "", "   ", 12345, object()])
 def test_a_malformed_target_refuses_instead_of_raising(monkeypatch, transport, target):
     """notify() never raises, whatever a caller hands it."""
     monkeypatch.setenv("ODIN_CADENCE_TELEGRAM_TARGET", OWN_SINK)
 
     assert notify_mod.notify(target, "x") is False
+    assert transport == []
+
+
+def test_the_allowlist_is_read_from_the_environment_at_call_time(
+    monkeypatch, transport, tmp_path
+):
+    """The seam the whole test suite's containment stands on.
+
+    `own_targets()` reads `os.environ`, never the `.env` FILE, and that is load
+    bearing in both directions. `tests/conftest.py` contains every test in this
+    repository by BLANKING each `*_TELEGRAM_TARGET` name in `os.environ`; a
+    resolver that went to the file would walk straight past that and let a test
+    run message the operator, which is the accident that containment exists to
+    prevent.
+
+    So this pins the direction a well-meaning "hardening" would break: a target
+    present ONLY in a `.env` on disk, with the environment blank, must resolve to
+    nothing. The cost of the same seam is recorded in `own_targets`' own
+    docstring, measured: a value the running process assigns to one of these
+    names is accepted, because nothing can tell it from one the operator typed.
+    """
+    (tmp_path / ".env").write_text(
+        f"ODIN_CADENCE_TELEGRAM_TARGET={STRANGER}\n", encoding="utf-8")
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+
+    assert notify_mod.own_targets() == set(), (
+        "a target reached the allowlist from a file rather than from the "
+        "environment; tests/conftest.py can no longer contain this transport"
+    )
+    assert notify_mod.notify(STRANGER, "x") is False
     assert transport == []
 
 

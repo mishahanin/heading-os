@@ -38,6 +38,13 @@ different part, and none of them raises anything a test could notice.
 
 Found by the third defect-class fan-out over `tests/`, 2026-08-27, lens
 `cli-flag-that-does-nothing`.
+
+2026-09-01, section 2b: three more readers in `ops_signals`, all of the
+`except OSError` versus `UnicodeDecodeError` class. Each names a handler in its
+own docstring and each raised straight through it into the radar, where one bad
+byte in one file takes out every other signal beside it. Reproduced against the
+live functions before the widening was written; the measurement is at the head
+of that section.
 """
 from __future__ import annotations
 
@@ -274,6 +281,85 @@ def test_a_deleted_path_still_counts_but_reports_an_unknown_age(tmp_path):
     (repo / "gone.md").unlink()
     count, age = ops_signals._repo_uncommitted(repo)
     assert count == 1 and age is None
+
+
+# ============================================================
+# 2b. The three readers in this module that could not survive a bad byte
+# ============================================================
+#
+# `except OSError` does not catch `UnicodeDecodeError`, which is a `ValueError`,
+# and `json.loads` / `yaml.safe_load` never see the bytes because `read_text`
+# refuses them first. Measured 2026-09-01 against `ops_signals`, three readers
+# whose docstrings each promise a degrade and delivered a raise into the radar:
+#
+#   queue_state           "degrades to zero (not due) when ... unreadable"
+#   _index_source_globs   "None when the config cannot be read"
+#   _read_trend_records   written to survive a truncated nightly append
+#
+# All three read a file another process is writing while they read it, which is
+# how half a multi-byte character gets there in the first place. This is the
+# same class the wrong-SHAPE branches beside each of them already close, one
+# exception over.
+
+_UNDECODABLE = b"\xff\xfe\x00{"
+
+
+def test_an_undecodable_queue_store_degrades_to_not_due(tmp_path):
+    qpath = tmp_path / "outputs" / "operations" / "action-queue" / "queue.json"
+    qpath.parent.mkdir(parents=True)
+    qpath.write_bytes(_UNDECODABLE)
+    with pytest.raises(UnicodeDecodeError):
+        qpath.read_text(encoding="utf-8")
+
+    state = ops_signals.queue_state(tmp_path)
+
+    assert state["value"] == {"ready": 0, "failed": 0}
+    assert state["due"] is False
+
+
+def test_a_readable_queue_store_is_still_counted(tmp_path):
+    """The anchor: a handler returning zero for everything would pass above."""
+    qpath = tmp_path / "outputs" / "operations" / "action-queue" / "queue.json"
+    qpath.parent.mkdir(parents=True)
+    qpath.write_text(json.dumps({"actions": [
+        {"status": "pending", "draft_status": "ready_for_review"},
+        {"status": "send_failed"}]}), encoding="utf-8")
+
+    state = ops_signals.queue_state(tmp_path)
+    assert state["value"] == {"ready": 1, "failed": 1}
+    assert state["due"] is True
+
+
+def test_an_undecodable_index_config_reads_as_no_globs(tmp_path):
+    pytest.importorskip("yaml", reason="the reader needs PyYAML to get that far")
+    cfg = tmp_path / "config" / "memory-index.yaml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_bytes(b"layers:\n  - glob: \xff\xfe\n")
+
+    assert ops_signals._index_source_globs(tmp_path) is None
+
+
+def test_a_readable_index_config_still_yields_its_globs(tmp_path):
+    pytest.importorskip("yaml", reason="the reader needs PyYAML to get that far")
+    cfg = tmp_path / "config" / "memory-index.yaml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text("layers:\n  - glob: 'knowledge/**/*.md'\n", encoding="utf-8")
+
+    assert ops_signals._index_source_globs(tmp_path) == ["knowledge/**/*.md"]
+
+
+def test_an_undecodable_trend_file_reads_as_no_records(tmp_path):
+    trend = tmp_path / "router-accuracy-trend.jsonl"
+    trend.write_bytes(_UNDECODABLE)
+
+    assert ops_signals._read_trend_records(trend, 10) == []
+
+
+def test_a_readable_trend_file_still_yields_its_records(tmp_path):
+    trend = tmp_path / "router-accuracy-trend.jsonl"
+    trend.write_text(json.dumps({"accuracy": 0.9}) + "\n", encoding="utf-8")
+
+    assert ops_signals._read_trend_records(trend, 10) == [{"accuracy": 0.9}]
 
 
 # ============================================================

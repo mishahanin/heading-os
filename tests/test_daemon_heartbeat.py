@@ -56,8 +56,17 @@ def test_two_daemon_names_do_not_collide(tmp_path, monkeypatch):
     sentinel_data = json.loads(sentinel_path.read_text(encoding="utf-8"))
     assert bridge_data["daemon"] == "bridge"
     assert sentinel_data["daemon"] == "sentinel"
-    # config_version omitted -> defaults to "unversioned"
+    # config_version omitted -> defaults to "unversioned". BOTH fields, because
+    # the module docstring's claim is that they are "identical by construction",
+    # and only `version` was ever asserted on this path: changing
+    # `config_loaded_version`'s else-branch alone left every test naming this
+    # module green (measured 2026-09-01). `daemon-fleet-health.py` reads
+    # `config_loaded_version` to spot config skew across the fleet, so a wrong
+    # default there is a wrong skew verdict, not a cosmetic field.
     assert bridge_data["version"] == "unversioned"
+    assert bridge_data["config_loaded_version"] == "unversioned"
+    assert bridge_data["version"] == bridge_data["config_loaded_version"]
+    assert sentinel_data["config_loaded_version"] == "unversioned"
 
 
 def test_beat_never_raises_on_unwritable_root(tmp_path, monkeypatch):
@@ -67,3 +76,69 @@ def test_beat_never_raises_on_unwritable_root(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon_heartbeat, "get_workspace_root", lambda: blocker)
     # Must not raise; the warning is logged internally.
     daemon_heartbeat.beat("eval-drift")
+
+
+def test_a_failed_beat_leaves_no_tempfile_behind(tmp_path, monkeypatch):
+    """`_atomic_write_json`'s documented cleanup: "The tempfile is unlinked on
+    any failure before re-raising."
+
+    Nothing reached it. The one failure case above blocks at `mkdir`, which is
+    the first statement and is BEFORE `mkstemp`, so the cleanup branch had never
+    executed in any test -- deleting it outright left every file naming this
+    module green (measured 2026-09-01).
+
+    The failure is arranged without patching anything: the destination path is
+    made a non-empty DIRECTORY, so `mkdir(parents=True, exist_ok=True)` and
+    `mkstemp` both succeed and `os.replace` is the call that fails. Patching
+    `os.replace` would have worked too, but `daemon_heartbeat` does a plain
+    `import os`, so patching through it rebinds the stdlib for anything else
+    running in the same process.
+
+    Why it matters: a daemon beats roughly once a minute for as long as it runs.
+    A leaked tempfile per failed beat is about 1,440 files a day accumulating in
+    `.daemon-state/heartbeats/`, in exactly the situation -- writes failing --
+    where the operator least wants a second problem. `mkstemp` names them with a
+    random suffix and no `.json`, so the fleet-health reader that globs `*.json`
+    never sees them and nothing reports the pile.
+    """
+    monkeypatch.setattr(daemon_heartbeat, "get_workspace_root", lambda: tmp_path)
+    beats = tmp_path / ".daemon-state" / "heartbeats"
+    blocked = beats / "sentinel.json"
+    blocked.mkdir(parents=True)
+    (blocked / "occupant").write_text("x", encoding="utf-8")
+
+    before = sorted(p.name for p in beats.iterdir())
+    daemon_heartbeat.beat("sentinel")          # must not raise: the total promise
+    after = sorted(p.name for p in beats.iterdir())
+
+    assert after == before, (
+        f"the failed write left {sorted(set(after) - set(before))} behind in "
+        f"the heartbeats directory"
+    )
+
+
+def test_the_failure_arrangement_really_fails(tmp_path, monkeypatch):
+    """The control for the test above.
+
+    A cleanup test whose write SUCCEEDS proves nothing: no tempfile is left
+    behind when there was never a failure. So assert the arrangement is hostile
+    -- the beat produced no heartbeat file -- which is what makes the emptiness
+    next door meaningful rather than automatic.
+    """
+    monkeypatch.setattr(daemon_heartbeat, "get_workspace_root", lambda: tmp_path)
+    beats = tmp_path / ".daemon-state" / "heartbeats"
+    blocked = beats / "sentinel.json"
+    blocked.mkdir(parents=True)
+    (blocked / "occupant").write_text("x", encoding="utf-8")
+
+    daemon_heartbeat.beat("sentinel")
+
+    assert blocked.is_dir(), "the destination stopped being the obstacle"
+    assert sorted(p.name for p in blocked.iterdir()) == ["occupant"], (
+        "the beat wrote through the obstacle, so the failure never happened "
+        "and the cleanup assertion next door is vacuous"
+    )
+    # And the happy path in the same tree still works, so the obstacle is
+    # specific to this daemon's file rather than to the directory.
+    daemon_heartbeat.beat("fireside")
+    assert (beats / "fireside.json").is_file()

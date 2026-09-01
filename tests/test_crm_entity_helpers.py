@@ -253,6 +253,25 @@ def test_merge_keeps_the_entity_address_when_both_are_present():
         "dana@nimbus-freight.test"
 
 
+@pytest.mark.parametrize("raw,expected", [
+    (None, []),          # a card written with a bare `tags:` line
+    ("", []),
+    ("sovereign", ["sovereign"]),   # one bare word, not five characters
+    (["a", "b"], ["a", "b"]),
+])
+def test_merge_always_hands_downstream_a_list_of_tags(raw, expected):
+    """`merged["tags"]` is iterated by every consumer of the merged shape, and a
+    `[]` default only applies when the key is ABSENT, and a card carrying a bare
+    `tags:` parses to None through yaml.safe_load and the key IS present. The
+    coercion belongs to `frontmatter_list`; nothing pinned that it is still
+    called, so replacing it with `relationship.get("tags", [])` left the whole
+    repository green (measured 2026-09-01) while handing every reader a None to
+    iterate."""
+    from scripts.utils.crm import merge_entity_and_relationship
+    rel = {"entity_ref": "x", "relationship_type": "lead", "tags": raw}
+    assert merge_entity_and_relationship({"name": "X"}, rel)["tags"] == expected
+
+
 def test_merge_reports_no_address_when_neither_side_has_one():
     """The empty case must stay empty, or `email` becomes a field that is never
     falsy and every "has an address" check downstream silently passes."""

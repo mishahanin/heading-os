@@ -1,7 +1,12 @@
 """Tests for the per-channel cap in .claude/skills/yt-pulse/scripts/pulse.py.
 
-Covers cases listed in plans/2026-05-01-per-author-cap-yt-pulse.md
-Success Criterion #7:
+The five cases below were the acceptance criteria of the slice that added the
+cap. They are stated here rather than cited: the plan they came from lives in the
+private DATA overlay, and this repository is public, so a reader following the
+pointer arrives at a file that does not exist for them. Same defect
+`tests/test_public_prose_that_pointed_into_a_private_repo.py` closed across the
+tracked Markdown, one file type over.
+
   - cap=3 with one channel having 5 videos (3 survive + rollup +2)
   - cap=3 with all channels under cap (no rollup)
   - cap=0 disabled (legacy uncapped behaviour)

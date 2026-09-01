@@ -188,6 +188,49 @@ def test_match_keywords_body_preview_searched(engine):
     assert result == "promote_to_important"
 
 
+@pytest.mark.parametrize("offset,expected", [
+    (0, "promote_to_critical"),      # the keyword ends exactly at char 500
+    (1, None),                       # one character past the cap
+])
+def test_match_keywords_reads_exactly_five_hundred_body_chars(engine, offset,
+                                                              expected):
+    """The body cap, with a case ON the line. NEW 2026-09-01.
+
+    `overrides._BODY_PREVIEW_CHARS` is a SECOND copy of the 500 that
+    `rules._BODY_PREVIEW_CHARS` also holds, and only the one in rules.py was
+    covered (`test_classify_body_preview_truncated_to_500_chars`). Nothing here
+    read a body long enough to reach either edge.
+
+    MEASURED 2026-09-01:
+
+        -   _BODY_PREVIEW_CHARS = 500      (in scripts/inbox_pulse/overrides.py)
+        +   _BODY_PREVIEW_CHARS = 50
+
+        .venv/bin/python -m pytest tests/inbox_pulse -q
+            -> 226 passed        (baseline: 226 passed)
+        the 45-file wide set + tests/contract
+            -> 7 failed, 1199 passed, 3 skipped
+               (baseline: the identical 7, present either way)
+
+    Shrinking the window is the dangerous direction and it is silent: a
+    `promote_to_critical` phrase sitting past the new cap simply stops matching,
+    and the email is classified as though the operator had never listed the
+    phrase. Both rows below are needed, because a cap of 50 and a cap of 5000
+    each break exactly one of them.
+
+    LATENT today: `_main_loop` passes `body_preview=""`, so no production call
+    currently supplies a body at all. It is pinned because the plumbing is the
+    only thing missing, and the day it lands nobody will re-derive this bound.
+    """
+    keyword = "term sheet"
+    # Pad so the keyword's LAST character sits at index 499 (offset 0), which
+    # is the final character `[:500]` keeps, or at 500 (offset 1), the first it
+    # drops.
+    body = "z" * (500 - len(keyword) + offset) + keyword
+    assert engine.match_keywords(subject="Re: meeting",
+                                 body_preview=body) == expected
+
+
 def test_match_keywords_critical_wins_over_important(engine):
     """13. promote_to_critical wins when both critical and important keywords appear."""
     # "deadline" is important, "series b" is critical.

@@ -153,36 +153,53 @@ def load_blocked_domains(verbose=True):
                   file=sys.stderr)
         return []
 
+    # The read is guarded, and the guard is the same degradation the branch
+    # above takes. `search-domains.md` is an OPERATOR-authored file in a
+    # bilingual RU/EN workspace, so a copy saved by an editor in cp1251 is an
+    # ordinary accident rather than a hostile one, and `read_text`/`open` in
+    # text mode raises `UnicodeDecodeError` on it. Nothing caught that: the
+    # docstring says this function "says so on stderr when it loads nothing",
+    # and instead the whole command died with a traceback from inside a
+    # content-quality control. `ValueError` is the class of the decode failure;
+    # `OSError` covers the file vanishing between the `is_file()` above and the
+    # open here.
+    try:
+        text = domains_file.read_text(encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        if verbose:
+            print(f"[warn] {domains_file} could not be read ({type(exc).__name__}); "
+                  f"NO domains are being blocked", file=sys.stderr)
+        return []
+
     blocked = []
     in_blocked = False
-    with open(domains_file, "r", encoding="utf-8") as f:
-        for line in f:
-            if "## Blocked Domains" in line:
-                in_blocked = True
-                continue
-            if in_blocked and line.startswith("##"):
-                break
-            if not in_blocked:
-                continue
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            # A leading `-` used to skip the line outright, on the assumption
-            # that a bullet is prose. A Markdown bullet list is the ordinary
-            # way to write a domain list, so the bullet is stripped and the
-            # rest parsed like any other line.
-            if stripped.startswith(("- ", "* ", "-\t")):
-                stripped = stripped[1:].strip()
-            elif stripped == "-":
-                continue
-            for domain in stripped.split(","):
-                d = domain.strip().strip("`*_")
-                # A domain, not a sentence. The prose paragraph under the
-                # heading ("Content farms, stub-only paywalled sites, and
-                # low-signal aggregators. Apply as `blocked_domains`...") has
-                # dots in it too.
-                if d and "." in d and " " not in d:
-                    blocked.append(d)
+    for line in text.splitlines(keepends=True):
+        if "## Blocked Domains" in line:
+            in_blocked = True
+            continue
+        if in_blocked and line.startswith("##"):
+            break
+        if not in_blocked:
+            continue
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        # A leading `-` used to skip the line outright, on the assumption
+        # that a bullet is prose. A Markdown bullet list is the ordinary
+        # way to write a domain list, so the bullet is stripped and the
+        # rest parsed like any other line.
+        if stripped.startswith(("- ", "* ", "-\t")):
+            stripped = stripped[1:].strip()
+        elif stripped == "-":
+            continue
+        for domain in stripped.split(","):
+            d = domain.strip().strip("`*_")
+            # A domain, not a sentence. The prose paragraph under the
+            # heading ("Content farms, stub-only paywalled sites, and
+            # low-signal aggregators. Apply as `blocked_domains`...") has
+            # dots in it too.
+            if d and "." in d and " " not in d:
+                blocked.append(d)
     if not blocked and verbose:
         print(f"[warn] {domains_file} has a Blocked Domains section that parsed to "
               f"ZERO domains; nothing is being blocked", file=sys.stderr)
@@ -268,7 +285,15 @@ def check_cache(key, ttl_hours):
     try:
         with open(cache_file, "r", encoding="utf-8") as f:
             cached = json.load(f)
-    except (json.JSONDecodeError, OSError):
+    except (ValueError, OSError):
+        # `ValueError`, not `json.JSONDecodeError`. The decode happens in the
+        # text wrapper while `json.load` reads it, so a cache file holding a
+        # non-UTF-8 byte raises `UnicodeDecodeError` - a SIBLING of
+        # JSONDecodeError under ValueError, not a subclass. MEASURED 2026-09-01:
+        # one such file took the whole command down instead of taking the
+        # documented "return None and fetch it again" branch. A cache entry is
+        # the most disposable thing in this script and the least worth crashing
+        # over, and a torn write is how it becomes undecodable.
         return None
 
     ts = cached.get("timestamp", 0)

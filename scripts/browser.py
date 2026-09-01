@@ -741,9 +741,19 @@ def cmd_status(args: argparse.Namespace) -> int:
         # read. `_active_lock_file()` checks existence and this reads a moment
         # later, so a lock removed in between - or one this user cannot read -
         # crashed a health command with a traceback instead of reporting.
+        #
+        # `ValueError` sits beside `OSError` because the two siblings in this
+        # module catch exactly that pair and this one caught only half of it.
+        # `read_text()` decodes as UTF-8, and `UnicodeDecodeError` is a
+        # `ValueError` rather than an `OSError`, so it walked straight past this
+        # handler. MEASURED 2026-09-01 on a lock file carrying one 0xe9 byte:
+        # `cmd_status` died with `UnicodeDecodeError: 'utf-8' codec can't decode
+        # byte 0xe9 in position 23`, while `_lock_state` and `stop_comet` reading
+        # the SAME file degraded politely. The fix that added the pair landed in
+        # two of the three readers.
         try:
             body = lock.read_text().strip()
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             body = f"<unreadable: {exc}>"
         _log(f"Lock file ({lock.name}): {body}")
     return 0 if cdp else 2

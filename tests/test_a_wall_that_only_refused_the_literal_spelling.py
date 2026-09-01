@@ -367,6 +367,87 @@ def test_the_archived_subtree_is_matched_from_one_place():
 
 
 # ============================================================
+# 5b. Case is not a defence, and every pattern has to agree
+# ============================================================
+
+# The four spellings below are each the SOLE WITNESS for one case-insensitivity
+# flag. Measured 2026-09-01 by deleting `re.IGNORECASE` from one pattern at a
+# time and running this file, `test_a_wall_that_answered_about_the_spelling.py`
+# and `test_protect_personal_threads_hook.py` together - 194 tests, and all
+# three deletions left every one of them GREEN. The wall's own refusal table
+# above carries `Threads/Personal/*.md` and `Threads/**/*.md`, but both of those
+# are caught by the reachability walk, which folds case in `_segment_can_be` and
+# in its `threads` anchor. Nothing reached the three literal-matching regexes in
+# any casing but the one they are written in.
+#
+# What each entry pins, and what went through without it:
+CASE_FOLDING_WITNESSES = [
+    # PERSONAL_PATH_RE - the Read branch, and only the Read branch.
+    ("Read", {"file_path": "Threads/Personal/a.md"}, "PERSONAL_PATH_RE"),
+    # _PERSONAL_ARCHIVE_RE - the archived subtree, on every branch at once.
+    ("Read", {"file_path": "Threads/Archive/2026/Personal/a.md"},
+     "_PERSONAL_ARCHIVE_RE"),
+    # _PERSONAL_DIR_RE - a Grep `pattern` is a regex, so the reachability walk
+    # never reads it and the per-field literal test is the only cover.
+    ("Grep", {"pattern": "Threads/Personal/.*"}, "_PERSONAL_DIR_RE"),
+    # _PERSONAL_DIR_RE again, through the branch that matters most: an ordinary
+    # file quoting a CEO-only path is how the path leaves the machine.
+    ("Write", {"file_path": "outputs/notes/summary.md",
+               "content": "see Threads/Personal/a.md for the ceiling"},
+     "_PERSONAL_DIR_RE via the write branch"),
+]
+
+
+@pytest.mark.parametrize("tool,tool_input,pattern_name", CASE_FOLDING_WITNESSES,
+                         ids=[f"{t}-{n}" for t, _, n in CASE_FOLDING_WITNESSES])
+def test_a_mixed_case_spelling_reaches_the_same_directory(
+        dispatch, tool, tool_input, pattern_name):
+    """A path typed with capitals names the same file on every filesystem here.
+
+    Not a hostile input: the operator types these, and `threads/Personal` is a
+    plausible slip. On a case-insensitive volume the tool opens the CEO-only
+    file; on ext4 it does not, but the wall must not be the thing that decides
+    which, because the wall is the same on both.
+    """
+    verdict = _verdict(dispatch, tool, tool_input)
+    assert verdict is not None, (
+        f"{tool} {tool_input} was allowed; {pattern_name} stopped folding case")
+    assert verdict["decision"] == "block"
+
+
+def test_every_pattern_that_names_the_private_directory_folds_case(dispatch):
+    """Derived from the module, so a FOURTH pattern inherits the requirement.
+
+    Set equality, not a count: a count is satisfied by a walk that yields the
+    wrong three. A new pattern naming `personal` fails here until someone
+    decides whether it needs the flag and adds it to this set, which is the
+    check the four witnesses above cannot perform - they can only speak for the
+    patterns that existed when they were written.
+    """
+    found = {name: rx for name, rx in vars(dispatch).items()
+             if isinstance(rx, re.Pattern)
+             and re.search("personal", rx.pattern, re.IGNORECASE)}
+    assert set(found) == {"PERSONAL_PATH_RE", "_PERSONAL_DIR_RE",
+                          "_PERSONAL_ARCHIVE_RE"}, (
+        f"the set of patterns naming the CEO-only directory changed: "
+        f"{sorted(found)}. Give the new one a witness above, then list it here.")
+    for name, rx in found.items():
+        assert rx.flags & re.IGNORECASE, f"{name} is case-sensitive"
+
+    # The Bash branch matches through a list, so it is checked as a list. Its
+    # members are built from one shared fragment, `_BASH_CEO_THREADS`, and a
+    # single member compiled without the flag would be invisible to a spot check.
+    bash = dispatch.DANGEROUS_BASH_PATTERNS
+    assert len(bash) >= 10, f"the Bash pattern list shrank to {len(bash)}"
+    named = [rx for rx in bash if re.search("personal", rx.pattern, re.IGNORECASE)]
+    assert len(named) == len(bash), (
+        "a Bash pattern stopped naming the CEO-only directory; it now matches "
+        "on the verb alone")
+    for rx in named:
+        assert rx.flags & re.IGNORECASE, f"case-sensitive Bash pattern: {rx.pattern}"
+
+
+# ============================================================
 # 6. End to end, the way Claude Code runs it
 # ============================================================
 

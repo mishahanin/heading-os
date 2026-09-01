@@ -476,6 +476,70 @@ def test_the_substitution_sweep_still_skips_rather_than_refuses(wiz, tmp_path):
     assert wiz._apply_placeholder_substitution(binary, {"{A}": "v"}) is False
 
 
+def test_an_undecodable_answers_json_is_a_schema_error(wiz, tmp_path):
+    """`load_answers` names the class in its handler and nothing asked about it.
+
+    MEASURED 2026-09-01: dropping `UnicodeDecodeError` from that tuple left 337
+    tests across every wizard and archive file green. `.setup/answers.json` is
+    written by this same tool and read by every subcommand, so a torn write
+    there is the ordinary corruption - and without the class in the tuple the
+    read raises a bare `UnicodeDecodeError` past `main`'s
+    (SchemaError, StateWriteError, OSError) handler, which is the exact
+    traceback this file's third finding is about.
+    """
+    setup = tmp_path / ".setup"
+    setup.mkdir()
+    (setup / "answers.json").write_bytes(b'{"schema_version": 1, "answers": ' + BAD_BYTES + b'}')
+    with pytest.raises(wiz.SchemaError) as exc:
+        wiz.load_answers(tmp_path)
+    assert "answers.json" in str(exc.value)
+
+
+def test_an_undecodable_target_file_does_not_traceback_out_of_all(
+        wiz, tmp_path, monkeypatch, capsys):
+    """The `--all` merge loop's own read, which is a SECOND copy of the guard.
+
+    `_apply_placeholder_substitution` (line ~627) has the same
+    `(UnicodeDecodeError, PermissionError)` handler and a test above covers it.
+    `cmd_all` re-reads the file itself when merging per-file mappings, and that
+    copy had no witness: MEASURED 2026-09-01, narrowing it to `PermissionError`
+    alone left 337 tests green. It is the one-fix-in-one-of-two-copies shape,
+    on the branch whose own comment twenty lines down says a
+    `UnicodeDecodeError` "straight out of `--check`, past every handler" was the
+    defect.
+
+    `--check` is driven rather than the write path, because a dry run that
+    crashes is the sharpest form: the command's whole contract is that it writes
+    nothing, so it has no business raising at all.
+    """
+    _bank(tmp_path,
+          "- id: name\n"
+          "  audience: [public]\n"
+          "  type: placeholder\n"
+          "  required: true\n"
+          "  prompt: Name?\n"
+          "  example: Acme\n"
+          "  target:\n"
+          "    placeholder: '{A}'\n"
+          "    files: ['*.md']\n")
+    _answers(tmp_path, {"name": {"status": "answered", "value": "Acme"}})
+    good = tmp_path / "good.md"
+    good.write_text("{A} rules\n", encoding="utf-8")
+    binary = tmp_path / "binary.md"
+    binary.write_bytes(BAD_BYTES)
+
+    rc = _run_main(wiz, tmp_path, monkeypatch, ["--all", "--check"])
+    assert rc == wiz.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["dry_run"] is True
+    # The readable neighbour is still planned, so the undecodable one was
+    # skipped rather than the whole plan collapsing.
+    assert any(p.endswith("good.md") for p in payload["planned"]), payload
+    assert not any(p.endswith("binary.md") for p in payload["planned"]), payload
+    # And the dry run wrote nothing.
+    assert binary.read_bytes() == BAD_BYTES
+
+
 def test_text_or_none_reports_undecodable_as_absent(wiz, tmp_path):
     bad = tmp_path / "b.md"
     bad.write_bytes(BAD_BYTES)
@@ -790,6 +854,76 @@ def test_a_torn_copy_leaves_no_tmp_behind(arch, tree, monkeypatch, capsys):
     assert counts["failed"] == 1
     assert counts["archived"] == 0
     assert list(dest.glob("**/*.tmp")) == [], "a partial archive was left behind"
+
+
+def test_an_unreadable_size_marker_re_archives_rather_than_assuming_current(
+        arch, tree, capsys):
+    """`_needs_archiving` fails OPEN, and its own docstring is the contract.
+
+    "unreadable marker - re-archive rather than assume it is current". Nothing
+    asked. MEASURED 2026-09-01: inverting that `return True` to `return False`
+    left 337 tests across every wizard and archive file green.
+
+    The inversion is not a tidy no-op. A resumed session APPENDS, so the whole
+    point of the size marker is to notice a transcript that grew after its
+    archive was made. Reading an unreadable marker as "already current" pins
+    the truncated copy permanently: the archive is never rebuilt and the later
+    half of the reasoning is gone from the overlay with nothing reporting it.
+
+    An undecodable marker is the case driven here, because it is both the
+    ordinary corruption and a `ValueError` rather than an `OSError` - the same
+    class this file's third finding is about, one script over.
+    """
+    source, dest = tree
+    settled = _settled(source)
+    assert arch.archive(now=2_000_000_000)["archived"] == 1
+    marker = next(dest.glob("**/*.jsonl.gz.size"))
+    # The other jaw first, or this measures nothing: with an INTACT marker the
+    # same unchanged transcript must be SKIPPED. A `_needs_archiving` that
+    # always returned True would pass the assertion below while re-compressing
+    # the whole overlay on every run.
+    assert arch.archive(now=2_000_000_000)["skipped"] == 1
+    marker.write_bytes(BAD_BYTES)
+    # Nothing about the transcript changed; only the marker is unreadable.
+    counts = arch.archive(now=2_000_000_000)
+    assert counts["archived"] == 1, (
+        f"an unreadable size marker was read as 'already current', so a grown "
+        f"transcript would never be re-archived. counts={counts}")
+    assert counts["failed"] == 0, counts
+    assert settled.exists()
+
+
+def test_one_bad_transcript_does_not_end_the_run(arch, tree, monkeypatch, capsys):
+    """The loop's handler is `(OSError, ValueError)` and only OSError was driven.
+
+    MEASURED 2026-09-01: narrowing it to `OSError` alone left 337 tests green,
+    while the docstring beside it promises "one unreadable transcript must not
+    cost the rest of the run". `ValueError` is the live half here - it is what a
+    `UnicodeDecodeError` from the marker read arrives as, and what a
+    `_session_date` on a malformed name raises - so the narrowing turns one bad
+    file into a run that archives nothing after it.
+
+    Two transcripts, sorted so the failing one is FIRST: a handler that lets the
+    exception out takes the second one with it, which a single-file fixture
+    cannot show.
+    """
+    source, dest = tree
+    _settled(source, "a-first.jsonl")
+    _settled(source, "b-second.jsonl")
+    real_copy = arch.shutil.copyfileobj
+
+    def _one_bad(src, dst, *a, **kw):
+        if "a-first" in getattr(src, "name", ""):
+            raise ValueError("not an OSError")
+        return real_copy(src, dst, *a, **kw)
+
+    monkeypatch.setattr(arch.shutil, "copyfileobj", _one_bad)
+    counts = arch.archive(now=2_000_000_000)
+    assert counts["failed"] == 1, counts
+    assert counts["archived"] == 1, (
+        f"the second transcript was lost with the first one's ValueError. "
+        f"counts={counts}")
+    assert "a-first" in capsys.readouterr().err
 
 
 def test_a_successful_run_leaves_no_tmp_either(arch, tree, capsys):

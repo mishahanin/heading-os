@@ -1,5 +1,6 @@
 """Unit tests for /pipeline source."""
 import json
+import logging
 from datetime import date
 from pathlib import Path
 
@@ -107,6 +108,50 @@ def test_total_value_sums_priced_deals(tmp_path):
     )
     result = list_pipeline(tmp_path)
     assert result["total_value_usd"] == 3_500_000
+
+
+# ============================================================
+# The third row-loss path: a pipe inside a cell
+# ============================================================
+# A row carrying more than nine pipes cannot be parsed into the right columns,
+# so `list_pipeline` drops it, and until 2026-08-31 it did so in silence: a
+# $4,000,000 Negotiation row vanished and `total_value_usd` came back 2,000,000
+# against a real 6,000,000. The drop, the bound on the line, and the headline
+# total are covered in full by
+# `tests/bridge/test_a_wide_pipeline_row_that_vanished_with_no_log.py`, which
+# landed the same day. What is left here is the REMEDY the warning offers,
+# which that file does not assert and which was wrong.
+
+
+def test_the_dropped_row_warning_does_not_recommend_escaping(tmp_path, caplog):
+    """The advice has to be advice that works.
+
+    The first version of this warning read "Escape it or reword the cell".
+    MEASURED 2026-08-31: `line.count("|")` counts a markdown-escaped `\\|`
+    exactly like a raw one, so the escaped row is dropped by this same branch
+    with this same message, and an operator who followed the sentence edited
+    their pipeline into a row that still disappears. Honouring the escape would
+    be worse than dropping it: `_ROW_RE`'s cells are `[^|]`, so the row parses
+    with every column after the pipe shifted by one.
+    """
+    escaped = ("| Beta Co | UK | Negotiation | $4,000,000 | 2026-05-02 | M | "
+               "Send revised SOW \\| legal review | 2026-06-01 |\n")
+    good = "| Acme Co | USA | Proposal | $2,000,000 | 2026-05-01 | M | Send NDA | - |\n"
+    _write_pipeline(tmp_path,
+        "## Active Deals\n\n"
+        "| Company | Country | Stage | Est. Value | Stage Date | Owner | Next Action | Due Date |\n"
+        "|---------|---------|-------|------------|------------|-------|-------------|----------|\n"
+        + good + escaped)
+
+    with caplog.at_level(logging.WARNING):
+        result = list_pipeline(tmp_path, today=date(2026, 5, 18))
+
+    assert [d["company"] for d in result["deals"]] == ["Acme Co"]
+    dropped = [r for r in caplog.records if "dropping a row" in r.getMessage()]
+    assert len(dropped) == 1, caplog.text
+    message = dropped[0].getMessage()
+    assert "escape it" not in message.lower(), message
+    assert "reword" in message.lower(), message
 
 
 def test_investor_conversations_section_not_included(tmp_path):

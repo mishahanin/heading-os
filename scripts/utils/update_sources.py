@@ -44,9 +44,25 @@ def _get_json(url: str) -> dict[str, Any]:
         raise SourceError(f"network error for {url}: {exc.reason}") from exc
     except json.JSONDecodeError as exc:
         raise SourceError(f"bad JSON from {url}: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        # `resp.read().decode("utf-8")` above, with no `errors=`. A 200 whose
+        # body is not UTF-8 -- a mojibake error page, a proxy answering in
+        # Latin-1 -- raised `UnicodeDecodeError` straight out of this function.
+        # It is a `ValueError`, so it is a SIBLING of `json.JSONDecodeError`
+        # rather than an instance of it, and it matched no clause here.
+        # MEASURED 2026-09-01 on a body of `{"tag_name": "v1.0 caf\xe9"}`:
+        # "UNHANDLED UnicodeDecodeError", no SourceError. `update-manager.py`
+        # catches SourceError alone to mark ONE component unresolved, so this
+        # took down the whole update check instead of one row -- the identical
+        # failure the three clauses around it were each written to prevent.
+        #
+        # Ordered BEFORE the OSError clause because the two are disjoint, and
+        # after JSONDecodeError because both are ValueErrors and only this one
+        # is about the bytes.
+        raise SourceError(f"undecodable body from {url}: {exc}") from exc
     except (TimeoutError, OSError) as exc:
         # A read timeout is NOT a URLError. Since Python 3.10 `socket.timeout`
-        # IS `TimeoutError`, an OSError sibling, so `urlopen(..., timeout=20)`
+        # IS `TimeoutError`, which SUBCLASSES `OSError`, so `urlopen(..., timeout=20)`
         # raises it straight past both clauses above. Measured 2026-08-26
         # against a loopback socket that accepts the connection and then never
         # answers: "UNHANDLED TimeoutError: timed out", with no SourceError. The

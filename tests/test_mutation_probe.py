@@ -171,6 +171,58 @@ def test_two_edits_to_one_file_restore_it_completely(tmp_path):
     assert (root / "src.py").read_bytes() == before
 
 
+def test_the_child_is_told_not_to_write_bytecode(tmp_path, monkeypatch):
+    """`run_mutations` forces `PYTHONDONTWRITEBYTECODE` on the child, and the
+    reason is in its own docstring: a stale `.pyc` compiled from a previous
+    mutation once produced a false SURVIVED, and the run had to be repeated
+    twice before anyone noticed.
+
+    Nothing measured it. MEASURED 2026-09-01 by collapsing the env to
+    `dict(os.environ)`: this file, `test_a_probe_that_graded_a_suite_already_
+    red.py` and `test_a_mutation_that_hung_and_took_the_batch_with_it.py` all
+    stayed green across 26 tests. A false SURVIVED is the one outcome this
+    module exists to make impossible, so the guard against it cannot be the
+    only unmeasured line in the file.
+
+    Two witnesses, both from the child rather than from the call: the child
+    reports the variable it actually received, and the tree is checked for the
+    `.pyc` whose absence is the whole point. Nothing patches `subprocess`, so
+    this measures the real plumbing end to end.
+
+    The variable is cleared from THIS process first, and that is not tidiness.
+    `mutation_harness.run_tests` exports `PYTHONDONTWRITEBYTECODE=1` to the
+    pytest child it spawns, so a test run from inside a mutation harness
+    inherits it and the child would receive `1` however `run_mutations` builds
+    its env. MEASURED 2026-09-01: without this line the mutation that deletes
+    the variable from `run_mutations` was reported SURVIVED under the harness
+    and CAUGHT under a plain shell - the same test giving two answers because it
+    was reading the host environment instead of the code.
+    """
+    monkeypatch.delenv("PYTHONDONTWRITEBYTECODE", raising=False)
+    root = _tree(tmp_path)
+    (tmp_path / "check.py").write_text(
+        "import os, sys, pathlib\n"
+        "pathlib.Path('seen.txt').write_text(\n"
+        "    os.environ.get('PYTHONDONTWRITEBYTECODE', 'UNSET'), encoding='utf-8')\n"
+        "sys.path.insert(0, '.')\n"
+        "from src import answer\n"
+        "raise SystemExit(0 if answer() == 42 else 1)\n",
+        encoding="utf-8")
+
+    results = run_mutations(
+        [Mutation("break the answer",
+                  (("src.py", "return 42", "return 43"),), _always_valid)],
+        _COMMAND(), root)
+
+    assert [r.verdict for r in results] == [KILLED]
+    assert (root / "seen.txt").read_text(encoding="utf-8") == "1", (
+        "the child was not told to skip bytecode. A .pyc compiled from a "
+        "mutated source outlives the restore and fakes the next verdict.")
+    assert not list(root.rglob("__pycache__")), (
+        "the run left bytecode behind, which is what produced the false "
+        "SURVIVED this variable exists to prevent")
+
+
 def test_the_rendered_table_shouts_an_invalid_verdict(tmp_path):
     text = render([Result("a", KILLED), Result("b", SURVIVED),
                    Result("c", INVALID, "anchor not found in x.py")])

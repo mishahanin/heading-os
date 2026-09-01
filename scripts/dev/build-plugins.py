@@ -190,7 +190,16 @@ def completeness_gate(spec: dict, root: Path) -> list[str]:
             sources.append(cp)
 
     for src in sources:
-        text = src.read_text(encoding="utf-8")
+        # `errors="replace"`, not a bare decode. This gate returns a LIST OF
+        # NAMED missing targets, and a SKILL.md, hook or command carrying one
+        # stray non-UTF-8 byte raised UnicodeDecodeError - a ValueError, caught
+        # by nothing between here and the build - so the whole bundle build died
+        # on a traceback that named no file. Replacing an undecodable byte
+        # cannot manufacture a `scripts/...py` reference (the patterns need
+        # ASCII word characters) and cannot hide one either, since a reference
+        # made of ASCII decodes unchanged. So the scan still sees exactly what
+        # is there, and the build reports rather than dies.
+        text = src.read_text(encoding="utf-8", errors="replace")
         for ref in _SCRIPT_REF_RE.findall(text):
             rel = f"scripts/{ref}"
             # Exact repo-relative membership, and nothing looser. Two bypasses
@@ -220,7 +229,9 @@ def completeness_gate(spec: dict, root: Path) -> list[str]:
                 missing.append(f"{src.relative_to(root)} -> .claude/hooks/{ref}")
 
     for src in prose:
-        for ref in set(_INVOKE_REF_RE.findall(src.read_text(encoding="utf-8"))):
+        # `errors="replace"` for the reason given over the `sources` loop above.
+        for ref in set(_INVOKE_REF_RE.findall(
+                src.read_text(encoding="utf-8", errors="replace"))):
             if f"scripts/{ref}" in bundled_scripts:
                 continue
             missing.append(f"{src.relative_to(root)} -> scripts/{ref}")

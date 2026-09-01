@@ -298,6 +298,84 @@ def test_the_old_documented_command_is_the_one_that_warns(monkeypatch, capsys, t
     assert "--width" in out and "--height" in out
 
 
+# --------------------------------------------------------------------------
+# 3b - through the real parser, because every case above builds `args` by hand
+# --------------------------------------------------------------------------
+
+def _run_cli(monkeypatch, capsys, tmp_path, *argv):
+    """Drive `main()` over a real argv, so argparse is in the loop.
+
+    `_run_generate` hands `cmd_generate` a hand-built Namespace, which never asks
+    the parser anything. MEASURED 2026-09-01 by mutation, against this whole file
+    plus `tests/test_three_flag_lists_that_described_one_skill.py`,
+    `tests/test_design_output_paths.py`, `tests/test_a_price_the_tool_never_knew.py`,
+    `tests/test_a_budget_one_hung_request_could_spend.py` and
+    `tests/test_two_skill_contracts_that_were_declared_and_never_measured.py`:
+
+        dest="seed_value" on --seed                 SURVIVED  (real runs raise
+                                                     AttributeError on args.seed)
+        deleting gen_parser.set_defaults(func=...)  SURVIVED  (real runs raise
+                                                     AttributeError on args.func)
+
+    Both are one-token edits that break `design-engine.py generate` outright, and
+    the shape has a name in this campaign: a flag list checked against the parser
+    SOURCE rather than against the parser.
+    """
+    sent = {}
+
+    def _fake_pred(token, model_id, input_params):
+        sent.clear()
+        sent.update(input_params)
+        return {"output": ["https://x/a"]}
+
+    monkeypatch.setattr(de, "load_api_key", lambda k: "tok")
+    monkeypatch.setattr(de, "_create_prediction", _fake_pred)
+    monkeypatch.setattr(de, "_default_output_dir", lambda: tmp_path)
+    monkeypatch.setattr(de, "_download",
+                        lambda url, dest: (dest.write_bytes(PNG), PNG)[1])
+    monkeypatch.setattr(sys, "argv", ["design-engine.py", *argv])
+    de.main()
+    return sent, capsys.readouterr().out
+
+
+def test_every_shape_flag_survives_argparse_into_the_model_input(
+        monkeypatch, capsys, tmp_path):
+    """One real command line, and the four values flux carries out of six."""
+    sent, out = _run_cli(monkeypatch, capsys, tmp_path, "generate",
+                         "--model", "flux-schnell", "--prompt", "a cat",
+                         "--aspect", "3:2", "--count", "2", "--format", "jpg",
+                         "--seed", "77")
+
+    assert sent == {"prompt": "a cat", "aspect_ratio": "3:2",
+                    "num_outputs": 2, "output_format": "jpg", "seed": 77}
+    assert "Not sent" not in out
+
+
+def test_the_dropped_flag_report_survives_argparse_too(monkeypatch, capsys, tmp_path):
+    """The other family, through the same path: typed, parsed, dropped, named."""
+    sent, out = _run_cli(monkeypatch, capsys, tmp_path, "generate",
+                         "--model", "recraft-v4", "--prompt", "a cat",
+                         "--width", "512", "--height", "640",
+                         "--count", "3", "--seed", "99", "--format", "webp")
+
+    assert sent == {"prompt": "a cat", "size": "512x640"}
+    assert "Not sent" in out
+    for flag in ("--count", "--format", "--seed"):
+        assert flag in out
+    assert "--width" not in out and "--height" not in out
+
+
+def test_a_flag_the_operator_left_alone_is_not_reported_through_argparse(
+        monkeypatch, capsys, tmp_path):
+    """argparse's defaults must arrive as None, or every run looks like a run
+    that typed every flag. This is the parser half of the `default=None` claim
+    the source-text assertion below makes."""
+    _sent, out = _run_cli(monkeypatch, capsys, tmp_path, "generate",
+                          "--model", "recraft-v4", "--prompt", "a cat")
+
+    assert "Not sent" not in out
+
+
 def test_the_format_flag_defaults_to_none_so_typed_and_assumed_stay_distinct():
     """It defaulted to "png", which made every run look like a run that had
     asked for a format, so the report could not tell the two apart."""

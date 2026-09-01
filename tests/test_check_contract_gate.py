@@ -56,9 +56,54 @@ def test_skipped_none(tmp_path):
 
 # TEST-4 [integration/parity]: derive_slug identical to the trajectory helper
 def test_derive_slug_parity():
+    """The two copies must agree, INCLUDING on the fallback they both invent.
+
+    Every input here used to carry a real stem, so the `or "untitled"` tail of
+    each copy was never reached and the parity claim stopped one branch short.
+    Mutation-confirmed 2026-09-01: renaming the gate's fallback to "no-title"
+    left this file green at 11 passed, while `derive_slug` is the one function
+    in the gate that exists to stay byte-identical to its twin. The last three
+    inputs are the ones that reach it.
+    """
     for inp in ["2026-06-28-foo.md", "foo.md", "2026-06-28-a-b-c.md",
-                "plans/2026-05-27-r12-trajectory-evaluation.md", "refactor-foo.md"]:
+                "plans/2026-05-27-r12-trajectory-evaluation.md", "refactor-foo.md",
+                "plans/2026-06-28-.md", "2026-06-28-", ""]:
         assert gate.derive_slug(inp) == traj.derive_slug(inp), inp
+    # And the shared fallback is actually reached by the last three, or the
+    # parity above is being asserted over eight ordinary stems.
+    for reaches_fallback in ("plans/2026-06-28-.md", "2026-06-28-", ""):
+        assert gate.derive_slug(reaches_fallback) == "untitled", reaches_fallback
+
+
+def test_a_plan_actually_named_untitled_is_not_reported_as_undecodable(tmp_path):
+    """`_slug_is_the_fallback` exists to separate two things `derive_slug` merges.
+
+    `derive_slug` answers "untitled" both for a path it could not decode and for
+    a plan whose slug IS the word untitled, and the gate reads the second as the
+    first unless something tells them apart. Nothing exercised that function:
+    mutation-confirmed 2026-09-01, replacing its whole body with `return False`
+    left this file green at 11 passed, and so did `return True`. The first turns
+    an undecodable path into a MISSING contract, the second makes a real
+    `<date>-untitled` plan permanently unable to report FOUND.
+
+    Both directions are asserted here, because a one-sided case is satisfied by
+    a constant.
+    """
+    # A path with nothing after the date prefix: the fallback, and SKIPPED.
+    status, detail = gate.check_gate("plans/2026-06-28-.md", contract_dir=tmp_path,
+                                     today=date(2026, 6, 28))
+    assert status == "SKIPPED", f"an undecodable plan path was graded: {detail}"
+    assert "no decodable slug" in detail
+
+    # A plan whose slug is the literal word. Same derived string, opposite answer.
+    (tmp_path / "2026-06-28-untitled").mkdir()
+    status, detail = gate.check_gate("plans/2026-06-28-untitled.md",
+                                     contract_dir=tmp_path, today=date(2026, 6, 28))
+    assert status == "FOUND", (
+        f"a real plan named untitled was reported {status}; its contract can "
+        f"never be found: {detail}"
+    )
+    assert detail.startswith("2026-06-28-untitled")
 
 
 # TEST-5 [exact-match]: no substring mis-match (foo must not match foobar)
@@ -76,6 +121,29 @@ def test_staleness(tmp_path):
                                      today=date(2026, 6, 28))
     assert status == "FOUND"
     assert "stale" in detail
+
+
+def test_the_stale_note_starts_one_day_past_the_threshold(tmp_path):
+    """The case exactly ON the line, which nothing stood on.
+
+    TEST-6 above uses a 27-day-old contract against a 14-day threshold, so it is
+    true of `age > stale_days` and of `age >= stale_days` alike. Mutation-
+    confirmed 2026-09-01: flipping the comparator left this file green at 11
+    passed. A contract created exactly `stale_days` ago is INSIDE the window and
+    must carry no note; the day after is the first that does.
+    """
+    for age, expect_note in ((13, False), (14, False), (15, True)):
+        directory = tmp_path / f"2026-06-{28 - age:02d}-foo{age}"
+        directory.mkdir()
+        status, detail = gate.check_gate(
+            f"plans/2026-06-28-foo{age}.md", contract_dir=tmp_path,
+            today=date(2026, 6, 28), stale_days=14,
+        )
+        assert status == "FOUND", detail
+        assert ("stale" in detail) is expect_note, (
+            f"a contract {age} day(s) old against a 14-day threshold reported "
+            f"{detail!r}"
+        )
 
 
 # TEST-6b [newest wins]: the comparator, with something to compare

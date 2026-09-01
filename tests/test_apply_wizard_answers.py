@@ -450,6 +450,180 @@ def test_placeholder_skips_non_allowlisted_extensions(tmp_workspace):
     assert "{COMPANY_FULL}" in (tmp_workspace / "legacy.ini").read_text()
 
 
+# ---------------------------------------------------------------------------
+# The three guards that had no negative case at all.
+#
+# The question bank is hand-edited YAML, and on an exec workspace it arrives by
+# corporate sync, so it is untrusted structure. Three controls stand between it
+# and the filesystem, and MEASURED 2026-09-01 all three could be deleted outright
+# with this file green at 58 passed:
+#
+#   * `_require_inside`     - the rich `output` / `output_exec` path, and the
+#                             template read path.
+#   * the inline containment check in `_collect_matching_files` - a SECOND copy
+#     of the same rule, guarding glob targets. `_require_inside`'s own docstring
+#     says the invariant was written out twice and that the third site had none;
+#     neither copy was under test, so the split could not be noticed.
+#   * `_reject_token_values` - an answer carrying a placeholder token, on both
+#     `--question` and `--all`.
+#
+# `_resolve_output_path`'s docstring names the cost of the first: `../../tmp/
+# escape.md` was written to, and `--reset` then DELETED it.
+# ---------------------------------------------------------------------------
+
+def _run_wizard(tmp_workspace, *args, payload=None):
+    return subprocess.run(
+        [sys.executable, str(REPO / "scripts" / "apply-wizard-answers.py"), *args],
+        cwd=tmp_workspace, input=payload, capture_output=True, text=True,
+    )
+
+
+def test_a_rich_output_path_outside_the_workspace_is_refused(tmp_workspace):
+    """`output: ../<somewhere>/escape.md` must not be written, and must say so."""
+    outside = tmp_workspace.parent / "wizard-escape-target"
+    outside.mkdir(exist_ok=True)
+    victim = outside / "escape.md"
+    victim.write_text("untouched\n", encoding="utf-8")
+
+    (tmp_workspace / "config" / "wizard-templates").mkdir(parents=True)
+    (tmp_workspace / "config" / "wizard-templates" / "voice.md.tmpl").write_text(
+        "# Voice\n\n> {{ ceo_voice }}\n")
+    bank = [{
+        "id": "ceo_voice", "audience": ["public"], "type": "rich",
+        "required": True, "prompt": "voice?", "example": "e",
+        "target": {
+            "template": "config/wizard-templates/voice.md.tmpl",
+            "output": f"../{outside.name}/escape.md",
+        },
+    }]
+    (tmp_workspace / "config" / "wizard-questions.yaml").write_text(yaml.safe_dump(bank))
+
+    result = _run_wizard(
+        tmp_workspace, "--question", "ceo_voice", "--value-from-stdin",
+        payload=json.dumps({"value": "Direct.", "draft": "d", "draft_approved": True}))
+
+    assert result.returncode != 0, (
+        f"a rich output outside the workspace was accepted: {result.stdout}")
+    assert victim.read_text(encoding="utf-8") == "untouched\n", (
+        "the wizard wrote outside its own workspace")
+    assert "outside the workspace" in (result.stdout + result.stderr)
+
+
+def test_a_glob_target_that_escapes_the_workspace_is_refused(tmp_workspace):
+    """The SECOND copy of the containment rule, in `_collect_matching_files`.
+
+    Deleting `_require_inside` entirely does not reach this one, so it needs its
+    own witness or the split stays invisible.
+    """
+    outside = tmp_workspace.parent / "wizard-escape-glob"
+    outside.mkdir(exist_ok=True)
+    victim = outside / "victim.md"
+    victim.write_text("{COMPANY_FULL} must survive\n", encoding="utf-8")
+
+    (tmp_workspace / "config").mkdir()
+    bank = [{
+        "id": "company_full_name", "audience": ["public"], "type": "placeholder",
+        "required": True, "prompt": "full name?", "example": "e",
+        "target": {"placeholder": "{COMPANY_FULL}",
+                   "files": [f"../{outside.name}/*.md"]},
+    }]
+    (tmp_workspace / "config" / "wizard-questions.yaml").write_text(yaml.safe_dump(bank))
+
+    result = _run_wizard(
+        tmp_workspace, "--question", "company_full_name", "--value-from-stdin",
+        payload=json.dumps({"value": "Acme Corporation"}))
+
+    assert result.returncode != 0, (
+        f"a glob reaching outside the workspace was accepted: {result.stdout}")
+    assert victim.read_text(encoding="utf-8") == "{COMPANY_FULL} must survive\n", (
+        "the substitution engine rewrote a file outside the workspace")
+    assert "outside the workspace" in (result.stdout + result.stderr)
+
+
+def test_an_in_workspace_target_is_still_allowed(tmp_workspace):
+    """The other direction, so the two refusals above are not satisfied by a
+    wizard that refuses everything."""
+    _seed_public_fixture_with_placeholder(tmp_workspace)
+    result = _run_wizard(
+        tmp_workspace, "--question", "company_full_name", "--value-from-stdin",
+        payload=json.dumps({"value": "Acme Corporation"}))
+    assert result.returncode == 0, result.stderr
+    assert "Acme Corporation" in (tmp_workspace / "context" / "about.md").read_text()
+
+
+def test_an_answer_carrying_a_placeholder_token_is_refused_on_question(tmp_workspace):
+    """`_reject_token_values`, on the single-question path.
+
+    An answer that CONTAINS a token means two different things depending on
+    which command writes it: `--question` lands it verbatim, `--all` merges every
+    mapping and lets a later question's str.replace rewrite it. There is no
+    application order that makes it mean one thing, so it is refused.
+    """
+    _seed_public_fixture_with_placeholder(tmp_workspace)
+    result = _run_wizard(
+        tmp_workspace, "--question", "company_full_name", "--value-from-stdin",
+        payload=json.dumps({"value": "see {COMPANY_FULL} for details"}))
+
+    assert result.returncode != 0, (
+        f"an answer containing a live placeholder token was applied: {result.stdout}")
+    assert "{COMPANY_FULL}" in (tmp_workspace / "context" / "about.md").read_text(), (
+        "the token-bearing answer reached the file")
+
+
+def test_an_answer_carrying_a_placeholder_token_is_refused_on_all(tmp_workspace):
+    """The `--all` call site, which is a separate one.
+
+    Its own docstring records that `--all` never ran this guard at all, so an
+    answer written by hand into `answers.json` reached the files unexamined.
+    That is exactly the shape this drives: the state file is seeded directly.
+    """
+    (tmp_workspace / "config").mkdir()
+    bank = [
+        {"id": "a", "audience": ["public"], "type": "placeholder", "required": True,
+         "prompt": "?", "example": "e",
+         "target": {"placeholder": "{A}", "files": ["**/*.md"]}},
+        {"id": "b", "audience": ["public"], "type": "placeholder", "required": True,
+         "prompt": "?", "example": "e",
+         "target": {"placeholder": "{B}", "files": ["**/*.md"]}},
+    ]
+    (tmp_workspace / "config" / "wizard-questions.yaml").write_text(yaml.safe_dump(bank))
+    (tmp_workspace / "doc.md").write_text("{A} and {B}\n")
+    (tmp_workspace / ".setup").mkdir()
+    (tmp_workspace / ".setup" / "answers.json").write_text(json.dumps({
+        "schema_version": 1, "audience": "public",
+        "started_at": None, "last_updated": None, "applied_at": None,
+        "answers": {
+            # Hand-written, and it names the OTHER question's placeholder.
+            "a": {"value": "see {B} for details", "status": "answered",
+                  "answered_at": "t"},
+            "b": {"value": "Beta", "status": "answered", "answered_at": "t"},
+        },
+    }))
+
+    result = _run_wizard(tmp_workspace, "--all")
+
+    assert result.returncode != 0, (
+        f"--all applied an answer containing a live token: {result.stdout}")
+    assert (tmp_workspace / "doc.md").read_text() == "{A} and {B}\n", (
+        "--all rewrote the file with a token-bearing answer")
+
+
+def test_a_value_that_merely_looks_like_prose_is_not_refused(tmp_workspace):
+    """Anti-over-refusal: lowercase braces and bare braces are not tokens.
+
+    `_PLACEHOLDER_TOKEN_RE` is `\\{[A-Z_][A-Z0-9_]*\\}`. Without this case a
+    guard that refused every `{` would satisfy both refusals above while making
+    ordinary answers unanswerable.
+    """
+    _seed_public_fixture_with_placeholder(tmp_workspace)
+    result = _run_wizard(
+        tmp_workspace, "--question", "company_full_name", "--value-from-stdin",
+        payload=json.dumps({"value": "Acme {the good one} Corp {v2}"}))
+    assert result.returncode == 0, result.stderr
+    assert "Acme {the good one} Corp {v2}" in (
+        tmp_workspace / "context" / "about.md").read_text()
+
+
 def _seed_list_fixture(tmp_workspace):
     (tmp_workspace / "config").mkdir()
     bank = [{

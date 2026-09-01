@@ -65,6 +65,32 @@ def test_a_value_on_the_key_s_own_line_is_still_read():
     assert bench._truth("last_touched:\t2026-01-20\n", MARKER)["field"] == "2026-01-20"
 
 
+@pytest.mark.parametrize("document,expected", [
+    # Inside frontmatter, where every real corpus document carries it.
+    ("---\nid: t-002\nlast_touched: 2026-01-20\nstatus: active\n---\n\nbody\n",
+     "2026-01-20"),
+    # Quoted, and not on line 1.
+    ("---\nlast_touched: '2026-01-20'\n---\n", "2026-01-20"),
+    # Last line of the document.
+    ("# Notes\n\nsome prose\n\nlast_touched: 2026-01-20\n", "2026-01-20"),
+])
+def test_the_key_is_found_on_a_line_that_is_not_the_first(document, expected):
+    """`re.M` is what makes `^` mean "a line start" rather than "the string start".
+
+    MEASURED 2026-09-01: removing `, re.M` from the field regex left all 159
+    tests across the seven census files green. Every case in this file put the
+    key either on line 1 or nowhere, so the flag that decides where the anchor
+    may match was carried by no assertion at all.
+
+    The consequence is the same corrupted oracle this file is named for, running
+    the other way. `last_touched` sits in frontmatter, three or four lines down,
+    in every document the benchmark samples; without the flag the oracle reads
+    `None` for all of them, a model answering the real date LOSES the point, and
+    a model that always answers `null` collects the whole `field` third.
+    """
+    assert bench._truth(document, MARKER)["field"] == expected
+
+
 def test_the_key_must_still_start_its_line():
     """`^` under re.M, unchanged: a mention mid-line is not the field."""
     assert bench._truth("see last_touched: 2026-01-20\n", MARKER)["field"] is None

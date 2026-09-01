@@ -451,40 +451,88 @@ def test_a_genuine_path_is_not_flagged(traj):
 # 16 - the same file, not merely the same ending
 # ============================================================
 
-@pytest.mark.parametrize("recorded,planned,same", [
-    ("scripts/a.py", "scripts/a.py", True),
-    ("engine/scripts/alpha.py", "scripts/alpha.py", True),
-    (".heading-os-data/reference/x.md", "reference/x.md", True),
-    ("./scripts/a.py", "scripts/a.py", True),
-    # The defect: a different repo-relative path with the same ending.
-    ("other/scripts/reports/a.py", "scripts/reports/a.py", False),
-    ("scripts/scrutinize_record.py", "record.py", False),
-])
+# The overlay's directory name, read from the seam rather than spelled out.
+#
+# These two tests used to hardcode `.heading-os-data` and `.heading-os` and skip
+# on `data_root_is_demo()`. That predicate answers only one of the ways the
+# names can differ: an explicit `HEADING_OS_DATA` pointing anywhere else is
+# neither demo nor named `.heading-os-data`, so the tests went RED on code that
+# was right -- and pinning `HEADING_OS_DATA` at a scratch directory is how every
+# test in this suite is supposed to run. On the other side, the skip left the
+# whole prefix contract UNMEASURED on a public clone.
+#
+# `_tree_prefixes`'s own docstring states the contract in derived terms: a
+# recorded path may spell either root as an absolute path, as that root's
+# directory NAME, or as the word "engine". Asking the seam for the names binds
+# the assertion to that contract instead of to one machine's directory layout,
+# and it holds in demo mode, on an operator machine, and under a pinned scratch
+# root alike.
+def _overlay_dirname() -> str:
+    from scripts.utils.workspace import get_data_root
+    return Path(get_data_root()).name
+
+
+def _covers_cases():
+    return [
+        ("scripts/a.py", "scripts/a.py", True),
+        ("engine/scripts/alpha.py", "scripts/alpha.py", True),
+        (f"{_overlay_dirname()}/reference/x.md", "reference/x.md", True),
+        ("./scripts/a.py", "scripts/a.py", True),
+        # The defect: a different repo-relative path with the same ending.
+        ("other/scripts/reports/a.py", "scripts/reports/a.py", False),
+        ("scripts/scrutinize_record.py", "record.py", False),
+    ]
+
+
+@pytest.mark.parametrize("recorded,planned,same", _covers_cases())
 def test_covers_requires_a_known_prefix_not_any_suffix(recorded, planned, same):
-    if recorded.startswith(".heading-os-data/") and data_root_is_demo():
-        pytest.skip(
-            "no private data overlay on this clone, so get_data_root() resolves to "
-            "the in-tree examples root and '.heading-os-data' is not one of the "
-            "prefixes _tree_prefixes() names. Not measured here: that an overlay-"
-            "spelled recording reconciles against its engine-relative plan entry. "
-            "The other five cases, including both defect cases, still run."
-        )
     assert itl._covers(recorded, planned) is same
 
 
-def test_the_prefix_set_is_named_and_finite():
-    if data_root_is_demo():
+def test_the_overlay_case_above_is_not_secretly_the_engine_case():
+    """The derived fixture has to be able to DISTINGUISH the two roots.
+
+    If `get_data_root()` and the engine root ever resolve to one directory, the
+    overlay row of the table becomes a duplicate of a row that already passes
+    and stops measuring the overlay prefix at all. Say which of the two states
+    the run was in rather than letting a silent collapse read as coverage.
+    """
+    overlay = _overlay_dirname()
+    engine = Path(itl.WORKSPACE_ROOT).name
+    if overlay == engine:
         pytest.skip(
-            "no private data overlay on this clone. Both names this asserts on come "
-            "from directories that exist only on an operator machine: the overlay "
-            "sibling '.heading-os-data' and the engine clone '.heading-os'. In demo "
-            "mode the set carries the examples root instead. Not measured here: that "
-            "the prefix set names the engine tree and the overlay tree."
-        )
+            f"the data root and the engine root are the same directory "
+            f"({engine!r}), so the overlay row of _covers_cases() duplicates the "
+            f"engine row. Not measured on this clone: that a path spelled with "
+            f"the OVERLAY's directory name reconciles against an engine-relative "
+            f"plan entry.")
+    assert itl._covers(f"{overlay}/reference/x.md", "reference/x.md") is True
+    assert itl._covers(f"{engine}/reference/x.md", "reference/x.md") is True
+
+
+def test_the_prefix_set_is_named_and_finite():
+    """Every prefix the docstring promises, derived from the seam, plus a cap.
+
+    "Finite" is asserted as a real bound, not as prose: the set is the word
+    "engine" plus at most an absolute path and a directory name for each of the
+    two roots, so five is the ceiling and a de-duplicated single-root workspace
+    comes in under it. A change that started accepting "any number of leading
+    directories" again -- the defect finding 16 is about -- fails here.
+    """
+    from scripts.utils.workspace import get_data_root
+
     prefixes = itl._tree_prefixes()
+    engine_root = Path(itl.WORKSPACE_ROOT)
+    data_root = Path(get_data_root())
+
     assert "engine" in prefixes
-    assert any(p.endswith(".heading-os-data") for p in prefixes)
-    assert any(p.endswith(".heading-os") for p in prefixes)
+    for root in (engine_root, data_root):
+        assert root.name in prefixes, (root.name, prefixes)
+        assert str(root).rstrip("/") in prefixes, (str(root), prefixes)
+    assert len(prefixes) <= 5, prefixes
+    # Longest first, or a root whose name is a prefix of another token strips
+    # the wrong number of characters.
+    assert list(prefixes) == sorted(prefixes, key=len, reverse=True)
 
 
 # ============================================================
@@ -536,6 +584,127 @@ def test_the_importer_docstring_no_longer_promises_os_replace():
         encoding="utf-8").split('"""', 2)[1]
     assert "then os.replace" not in header
     assert "os.link" in header
+
+
+# ============================================================
+# A byte the file could not decode, in the readers that promised to survive it
+# ============================================================
+# No finding number: this is not from the `scripts-07-p3` shard report. It was
+# MEASURED 2026-09-01 while mutation-testing the shard above, and it is the same
+# defect one layer down from finding 11.
+#
+# `verify_trajectory` catches `(OSError, UnicodeError)` and finding 11's test
+# above proves it. Two sibling readers in the SAME FILE caught `OSError` alone,
+# and `UnicodeDecodeError` is a ValueError -- a sibling of
+# `json.JSONDecodeError`, never a subclass of OSError -- raised INSIDE
+# `read_text` before any line is split, so neither the outer handler nor the
+# per-line `except json.JSONDecodeError` below it stood in. The fix for finding
+# 11 had landed in one of three copies.
+
+def test_the_guards_tolerant_read_survives_the_byte_the_verifier_survives(traj):
+    """`_read_events` says "silently skipping bad lines" and did not.
+
+    One undecodable byte anywhere took the whole emit-time sequencing guard
+    down with a traceback, out of a function whose docstring promises a
+    degraded return. Measured against `verify_trajectory`, which already
+    handled the same byte on the same file: the two readers of one record must
+    not disagree about whether it can be opened.
+    """
+    path = traj / "badbyte.jsonl"
+    path.write_bytes(b'{"event_type": "run_start", "step_number": 0}\n\xff\xfe\n')
+
+    assert itl._read_events(path) == []
+    # The sibling reader, unchanged, on the same bytes. If this ever raises,
+    # the assertion above is measuring the wrong thing.
+    assert itl.verify_trajectory("badbyte")
+
+
+def test_the_tolerant_read_still_returns_the_lines_it_can_decode(traj):
+    """The negative direction: the widened handler must not have become
+    "return nothing on any trouble". A file that decodes cleanly and holds one
+    unparseable LINE still yields the events around it."""
+    path = traj / "onebadline.jsonl"
+    path.write_text(_ev("run_start") + "\nnot json\n" + _ev("run_end") + "\n",
+                    encoding="utf-8")
+
+    assert [e["event_type"] for e in itl._read_events(path)] == \
+        ["run_start", "run_end"]
+
+
+def test_an_undecodable_plan_file_leaves_the_advisory_pass_silent(traj,
+                                                                  monkeypatch,
+                                                                  tmp_path):
+    """`_plan_reconciliation` is documented "Silent when unavailable".
+
+    A plan file carrying one stray byte is unavailable in exactly that sense,
+    and `except OSError` walked past it, so an advisory pass took the whole
+    `verify_trajectory` call down with it.
+    """
+    plans = tmp_path / "plans"
+    plans.mkdir()
+    (plans / "foo.md").write_bytes(b"# Plan\n\xff\xfe\n")
+    monkeypatch.setattr(itl, "get_plans_dir", lambda: plans)
+
+    events = [{"event_type": "run_start", "payload": {"plan_path": "plans/foo.md"}}]
+
+    assert itl._plan_reconciliation(events) == []
+
+
+def test_a_readable_plan_still_produces_its_advisory(traj, monkeypatch, tmp_path):
+    """The control. Without it, `return []` satisfies the test above."""
+    plans = tmp_path / "plans"
+    plans.mkdir()
+    (plans / "ok.md").write_text(
+        "**Files affected:**\n- `scripts/never_touched.py`\n", encoding="utf-8")
+    monkeypatch.setattr(itl, "get_plans_dir", lambda: plans)
+
+    events = [{"event_type": "run_start", "payload": {"plan_path": "plans/ok.md"}}]
+    found = itl._plan_reconciliation(events)
+
+    assert any("scripts/never_touched.py" in d for d in found), found
+
+
+def _data_args(**kw):
+    ns = SimpleNamespace(data_file=None, data_stdin=False, data_json=None)
+    for k, v in kw.items():
+        setattr(ns, k, v)
+    return ns
+
+
+def test_an_undecodable_data_file_exits_three_not_a_traceback(tmp_path, capsys):
+    """This file's "Exit codes" section promises 3 for a filesystem error.
+
+    `--data-file` pointing at a file with one stray byte raised
+    UnicodeDecodeError past `except OSError`, so the interpreter exited 1 with
+    a traceback and the documented code never happened.
+
+    `load_data` is called directly rather than through the CLI: `cmd_event`
+    returns 3 for a MISSING TRAJECTORY several lines earlier, so a subprocess
+    that never minted one would exit 3 for the wrong reason and this test would
+    be green against the defect.
+    """
+    bad = tmp_path / "payload.json"
+    bad.write_bytes(b'{"a": "\xff\xfe"}')
+
+    with pytest.raises(SystemExit) as exc:
+        itl.load_data(_data_args(data_file=str(bad)))
+
+    assert exc.value.code == 3
+    assert "cannot read --data-file" in capsys.readouterr().err
+
+
+def test_a_decodable_data_file_is_still_loaded(tmp_path):
+    """The control: the widened handler must not refuse a good payload, and
+    the exit-4 branch for bad JSON must still be reachable behind it."""
+    good = tmp_path / "payload.json"
+    good.write_text('{"a": 1}', encoding="utf-8")
+    assert itl.load_data(_data_args(data_file=str(good))) == {"a": 1}
+
+    notjson = tmp_path / "bad.json"
+    notjson.write_text("not json", encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        itl.load_data(_data_args(data_file=str(notjson)))
+    assert exc.value.code == 4, "the decode guard swallowed the JSON guard"
 
 
 # ============================================================

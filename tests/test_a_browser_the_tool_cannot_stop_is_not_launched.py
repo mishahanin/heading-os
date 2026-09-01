@@ -310,14 +310,93 @@ def test_a_timed_out_launch_does_not_leave_the_browser_running(monkeypatch, tmp_
 # The lock file
 # ---------------------------------------------------------------------------
 
-def test_the_lock_is_never_written_non_atomically():
-    """A truncated lock is unrecoverable on Windows, where `ps` cannot help."""
-    src = Path(browser.__file__).read_text(encoding="utf-8")
-    assert "lock_file().write_text" not in src, (
+def test_the_lock_write_cannot_proceed_without_room_for_a_sibling_tempfile(
+        monkeypatch, tmp_path):
+    """The behavioural half: does `_write_lock` write the final path IN PLACE?
+
+    A same-directory tempfile plus `os.replace` needs to CREATE a file in the
+    lock's directory. Writing the final path in place does not: it only needs
+    the existing file, whose own mode bits are untouched. So a directory the
+    filesystem will not accept new files into separates the two by behaviour
+    rather than by spelling, with no patching of a stdlib primitive.
+
+    Measured 2026-09-01 in a copy of this tree, with `atomic_write_text` in
+    `_write_lock` replaced by `path.write_text(...)` across two lines:
+
+        atomic     -> PermissionError, previous lock still on disk verbatim
+        in place   -> returned normally, previous lock overwritten
+
+    The grep this replaced could not see that. It asserted
+    `"lock_file().write_text" not in src` and `"atomic_write_text" in src`
+    over the WHOLE file, and both survive the two-line spelling above: the
+    first because no single line holds `lock_file().write_text`, the second
+    because the import stays. Run against that mutation on 2026-09-01:
+
+        .venv/bin/python -m pytest -q \\
+            tests/test_a_browser_the_tool_cannot_stop_is_not_launched.py
+        29 passed
+
+    and 149 passed across the browser and atomic-write files together. That
+    set includes `tests/test_atomic_scripts.py`, whose own bare-write detector
+    keys on one LINE holding both `lock_file` and `.write_text(`, so the same
+    two-line spelling walks past it too.
+    """
+    state = tmp_path / "state"
+    state.mkdir()
+    lock = state / "browser-cdp.json"
+    lock.write_text('{"port": 1, "pid": 2, "browser": "previous"}\n', encoding="utf-8")
+    monkeypatch.setattr(browser, "lock_file", lambda p=lock: p)
+
+    state.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    try:
+        if os.access(state, os.W_OK):   # root, or a filesystem ignoring the mode
+            pytest.skip("this filesystem/user can still create in a read-only dir")
+        with pytest.raises(OSError):
+            browser._write_lock(19222, 4242, "brave")
+        assert json.loads(lock.read_text())["browser"] == "previous", (
+            "the previous session record was replaced in place, so this write "
+            "does not go through a tempfile and a crash mid-write truncates it"
+        )
+    finally:
+        state.chmod(stat.S_IRWXU)
+
+
+def test_the_lock_write_still_works_on_an_ordinary_directory(monkeypatch, tmp_path):
+    """The other direction. A writer that refuses everything records nothing."""
+    lock = tmp_path / "state" / "browser-cdp.json"
+    monkeypatch.setattr(browser, "lock_file", lambda p=lock: p)
+
+    browser._write_lock(19222, 4242, "brave")
+
+    assert json.loads(lock.read_text()) == {"port": 19222, "pid": 4242,
+                                            "browser": "brave"}
+
+
+def test_write_lock_itself_calls_the_atomic_helper_and_nothing_else():
+    """The structural half, scoped to the function by the AST.
+
+    The whole-file grep it replaces was satisfied by an `atomic_write_text`
+    anywhere in the module, including one this function does not call.
+    """
+    import ast
+
+    tree = ast.parse(Path(browser.__file__).read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_write_lock")
+    called = {n.func.id for n in ast.walk(fn)
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    attrs = {n.func.attr for n in ast.walk(fn)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+
+    assert "atomic_write_text" in called, (
         "the lock file is state; write it through atomic_write_text (tmp + "
         "os.replace), per the workspace no-non-atomic-state-writes rule"
     )
-    assert "atomic_write_text" in src
+    assert "write_text" not in attrs, (
+        f"_write_lock writes the lock in place ({sorted(attrs)}); a crash or a "
+        "concurrent read mid-write leaves truncated JSON, and on Windows "
+        "`_pids_for_cdp_port` cannot recover the owner from `ps`"
+    )
 
 
 def test_stop_reports_an_unreadable_lock_instead_of_swallowing_it(

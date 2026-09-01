@@ -168,8 +168,43 @@ if _ENV_FILE.exists():
         if _ and _key.endswith("_TELEGRAM_TARGET"):
             _MUTED_TELEGRAM.add(_key)
 _MUTED_TELEGRAM = tuple(sorted(_MUTED_TELEGRAM))
-for _key in _MUTED_TELEGRAM:
-    os.environ[_key] = ""
+
+
+def _mute_telegram_targets() -> None:
+    """Blank every notification target visible right now, plus the bot token.
+
+    `_MUTED_TELEGRAM` is frozen at import from this machine's `.env` and its
+    inherited environment, so it names only the targets this machine actually
+    configures. On the operator's laptop that is ODIN_CADENCE_ and SENTINEL_ and
+    nothing else - CHECKPOINT_TELEGRAM_TARGET and OPS_RADAR_TELEGRAM_TARGET, the
+    first two names the stall fuse reads, are absent from it.
+
+    A name absent from the frozen list is a name nothing re-blanks, and that is
+    a leak the fixture below cannot see. A test that removes such a name with
+    `monkeypatch.delenv(name, raising=False)` gets NO undo entry: pytest's
+    `MonkeyPatch.delitem` returns early when the name is already absent, before
+    it appends to `_setitem`. A `load_env()` inside that test then CREATES the
+    name, and nothing ever takes it back. MEASURED 2026-08-31:
+    tests/test_a_notice_that_could_not_see_its_own_target.py left
+    CHECKPOINT_TELEGRAM_TARGET and OPS_RADAR_TELEGRAM_TARGET at
+    'fixture-sink-9911' for the remainder of the session, and
+    tests/test_telegram_send_containment.py failed on both in a full serial run
+    while passing when collected alone.
+
+    So the second loop sweeps by SUFFIX over the live environment rather than
+    over the frozen list, which is what makes the containment independent of
+    which names this particular machine happens to have configured. The frozen
+    list still runs first: it carries the bot token, whose name does not end in
+    _TELEGRAM_TARGET.
+    """
+    for _name in _MUTED_TELEGRAM:
+        os.environ[_name] = ""
+    # Materialised before the writes: os.environ is mutated in the loop body.
+    for _name in [k for k in os.environ if k.endswith("_TELEGRAM_TARGET")]:
+        os.environ[_name] = ""
+
+
+_mute_telegram_targets()
 
 
 @pytest.fixture(autouse=True)
@@ -190,11 +225,12 @@ def _isolate_runtime_logs():
     `load_env()` anywhere in the session restores the operator's real chat id,
     because load_env uses setdefault. Blanking again before each test is what
     keeps the containment from lasting only until the first test that clears it.
+    `_mute_telegram_targets` sweeps by suffix, so a target this machine does not
+    configure is re-armed here too; its docstring records why that matters.
     """
     os.environ["WORKSPACE_LOG_DIR"] = _TEST_LOG_DIR
     os.environ["WS_RATE_LIMIT_STATE"] = str(_TEST_RATE_STATE)
-    for _name in _MUTED_TELEGRAM:
-        os.environ[_name] = ""
+    _mute_telegram_targets()
     yield
 
 
@@ -239,9 +275,21 @@ from scripts.utils import overlay_write_guard as _guard  # noqa: E402
 #     excluded from the per-push unit job; the third is the explicit opt-in for a
 #     unit test that genuinely has to leave the machine.
 #
-# `connect` is the choke point rather than `getaddrinfo`: a name lookup carries
-# no payload, and blocking it would turn "no network" into a DNS error a long way
-# from the call that wanted the network.
+# Three primitives are guarded: `connect`, `connect_ex`, and `getaddrinfo`.
+#
+# This paragraph used to say the opposite. It read "`connect` is the choke point
+# rather than `getaddrinfo`: a name lookup carries no payload", and on 2026-09-01
+# a probe test in this suite measured that claim false: with the guard armed,
+# `socket.getaddrinfo("example.com", 443)` reached a real resolver and came back
+# with a real address. A hostname IS a payload, because
+# `<secret>.attacker.example` leaves this machine through a resolver without
+# ever touching `connect`. The wrapper landed the same day; see the measurement
+# recorded at `_install_socket_guard`.
+#
+# The old paragraph's second half was a real cost, and it was accepted rather
+# than refuted: refusing a lookup does turn "no network" into a refusal raised
+# one call earlier than the connect that wanted it. `NetworkAccessRefused` names
+# the host and the verb ("resolve" or "connect to"), so the message says which.
 
 _NETWORK_MARKERS = ("network", "integration", "acceptance")
 _NETWORK_ALLOWED = False        # flipped per test by _no_egress below
@@ -366,9 +414,35 @@ def _install_socket_guard():
     socket.socket.connect = guarded_connect
     socket.socket.connect_ex = guarded_connect_ex
 
+    # Name RESOLUTION is egress too, and wrapping only the two connect
+    # primitives left it open. MEASURED 2026-09-01 with a probe test in this
+    # suite: `socket.getaddrinfo("example.com", 443)` returned
+    # `('104.20.23.154', 443)` with the guard armed, so a unit test asking for a
+    # third-party host sent a real DNS query to a real resolver before anything
+    # refused it. Two costs, and the second is the one that matters. The query
+    # itself carries the hostname off this machine, and a hostname is a channel:
+    # `<payload>.attacker.example` is exfiltration through a resolver that never
+    # touches `connect`. The refusal now happens one call earlier, before the
+    # packet, which is the same rule the rest of this guard already keeps.
+    #
+    # `address_is_local` answers this shape unchanged: `("localhost", 80)`,
+    # `(None, port)` and every loopback literal are local, so binding helpers
+    # and the WSL host gateway are untouched. MEASURED over the whole suite the
+    # same day, one scratch tree, one run each: 157 failed / 20112 passed
+    # without this wrapper and 157 failed / 20113 passed with it. No test in
+    # this repository resolves a third-party name for a legitimate reason.
+    real_getaddrinfo = socket.getaddrinfo
+
+    def guarded_getaddrinfo(host, port, *args, **kwargs):
+        _refuse_egress((host, port), "resolve")
+        return real_getaddrinfo(host, port, *args, **kwargs)
+
+    socket.getaddrinfo = guarded_getaddrinfo
+
     def restore():
         socket.socket.connect = real_connect
         socket.socket.connect_ex = real_connect_ex
+        socket.getaddrinfo = real_getaddrinfo
 
     return restore
 
@@ -400,10 +474,145 @@ def _no_egress(request):
         _NETWORK_ALLOWED = previous
 
 
+# ============================================================
+# Model resolution is pinned, so the suite does not go red on the clock
+# ============================================================
+#
+# MEASURED 2026-08-31: 40 tests across 10 files failed with
+# `NetworkAccessRefused`, and the whole cause was a cache 18 minutes past its
+# 24-hour TTL. `scripts/utils/claude_models.resolve()` asks the Anthropic Models
+# API for the newest model per family and caches the answer for a day
+# (`CACHE_TTL_SECONDS`). Inside the TTL every one of those tests passed; outside
+# it, `fetch_from_api()` reached for the network and the egress guard refused.
+#
+# The suite therefore went red on wall-clock time rather than on code, which is
+# the shape `auto-memory/a-test-that-reads-the-host-clock-is-not-a-test.md`
+# names. Nobody had changed anything.
+#
+# `fetch_from_api()` is written to degrade: it catches `HTTPError`, `URLError`,
+# `OSError`, `TimeoutError` and the decode errors, returns `{}`, and `resolve()`
+# then falls through to the cache and finally to `BASELINE`, which is exactly
+# what a public clone with no API key gets. The ONE thing it cannot catch is
+# `NetworkAccessRefused`, a `RuntimeError` this file raises.
+#
+# Two fixes were possible and this is the second one.
+#
+# Rejected: make `NetworkAccessRefused` inherit `OSError`. It would fix all 40
+# at a stroke, and it would also let every `except OSError` in the tree silently
+# swallow a test's attempt to leave the machine. The egress guard's whole value
+# is being loud, so widening what can catch it is the wrong direction.
+#
+# Chosen: pin `fetch_from_api` to `{}` for the whole suite, which is the same
+# thing `tests/test_no_claude_model_pins.py` already does for itself
+# (`monkeypatch.setattr(claude_models, "fetch_from_api", dict)`). Model
+# resolution then always degrades to cache-or-BASELINE, deterministically, and a
+# test that genuinely needs the live API marks itself `network` and gets the real
+# function back. One seam, and the next test author cannot forget it.
+_MODEL_PIN_MARKERS = _NETWORK_MARKERS
+
+
+# Packages whose own conftest pins the DATA root autouse. Mirrored here as a
+# safety net, NOT as a replacement: both directory fixtures stay, and both set
+# byte-for-byte the same value this one does.
+_DATA_ROOT_PINNED_PACKAGES = ("bridge", "integration")
+
+
+@pytest.fixture(autouse=True)
+def _pin_the_data_root_even_on_package_re_entry(request, tmp_path, monkeypatch):
+    """Hold the DATA-root pin when pytest drops a directory conftest's fixtures.
+
+    `tests/bridge/conftest.py::_isolate_data_root` and
+    `tests/integration/conftest.py::_pin_the_data_root` each set
+    `HEADING_OS_DATA` to the test's own `tmp_path`. On pytest 9.1.1 those
+    autouse fixtures are DROPPED when collection leaves a package and re-enters
+    it, which a hand-written interleaved command line does.
+
+    MEASURED 2026-09-01 in the real tree:
+
+        pytest tests/bridge/test_config.py tests/test_data_root.py \\
+               tests/bridge/test_telemetry.py
+        -> 74 passed, 6 errors      (fixture not found: _isolate_data_root)
+
+        pytest tests/integration/test_aggregate_crm_per_exec.py \\
+               tests/test_data_root.py \\
+               tests/integration/test_workspace_helpers_per_exec.py
+        -> 1 failed, 36 passed
+
+    The bridge shape is loud. The integration shape is the dangerous one: ONE
+    test failed, the guard shard 7 had just added, and the other 36 ran green
+    against the operator's live overlay. Four of that directory's files spawn
+    child processes, a child inherits the environment, and the in-process
+    overlay write guard cannot see a child at all.
+
+    A root conftest is loaded once for the session and is never re-entered, so
+    a pin placed here cannot be dropped the same way. This fixture sets exactly
+    `monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path))`, which is character
+    for character what both directory fixtures set, and `tmp_path` is the same
+    object both receive for a given test. In the ordinary run it is therefore a
+    no-op duplicate and cannot change any existing result; when the directory
+    fixture is missing it is the only pin left standing.
+
+    Deliberately NOT a replacement for the two directory fixtures. Each of them
+    carries the reasoning for its own directory, one of them is pinned by its
+    own guard test, and deleting them would move that reasoning away from the
+    tests it governs. Belt and braces is the right shape when the failure mode
+    is "the belt silently is not there".
+
+    Found by the shard-7 auditor of the 2026-08-31 tests campaign, which
+    measured the hole, recorded it, and correctly left the repo-wide fix alone
+    as outside a single shard's remit.
+    """
+    node_path = Path(str(request.node.fspath)).resolve()
+    try:
+        parts = node_path.relative_to(Path(__file__).resolve().parent).parts
+    except ValueError:
+        # A test collected from outside tests/ entirely. Not ours to pin.
+        return
+    if not parts or parts[0] not in _DATA_ROOT_PINNED_PACKAGES:
+        return
+    monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path))
+
+
+@pytest.fixture(autouse=True)
+def _pin_model_resolution(request):
+    """No unit test resolves a model id over the network.
+
+    The per-process memo and the failure latch are cleared on the way in AND on
+    the way out. They are module globals: one test that resolved a real id would
+    otherwise hand it to every later test, and a `_FETCH_FAILED` left standing
+    would suppress the fetch for a `network`-marked test that wanted it.
+    """
+    if any(request.node.get_closest_marker(name) is not None
+           for name in _MODEL_PIN_MARKERS):
+        yield
+        return
+    try:
+        from scripts.utils import claude_models
+    except ImportError:
+        yield
+        return
+
+    real_fetch = claude_models.fetch_from_api
+    claude_models.fetch_from_api = dict
+    claude_models._RESOLVED.clear()
+    claude_models._FETCH_FAILED = False
+    try:
+        yield
+    finally:
+        claude_models.fetch_from_api = real_fetch
+        claude_models._RESOLVED.clear()
+        claude_models._FETCH_FAILED = False
+
+
 def pytest_sessionstart(session):
     global _RESTORE_SOCKET_GUARD
     _RESTORE_SOCKET_GUARD = _install_socket_guard()
-    _guard.arm()
+    # MODE_REFUSE explicitly, never the environment's answer. `arm()` defaults to
+    # `resolve_mode()`, which honours `HEADING_OS_OVERLAY_GUARD=record`, and a
+    # test run must not be softened to logging by a variable someone exported for
+    # a measurement and forgot. A suite that records instead of refusing is a
+    # suite whose isolation failures all pass.
+    _guard.arm(_guard.MODE_REFUSE)
 
 
 def pytest_sessionfinish(session, exitstatus):

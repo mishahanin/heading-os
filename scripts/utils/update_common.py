@@ -38,9 +38,25 @@ def resolve_current(comp: Component) -> str:
     # broad boundary handler happened to swallow the first; the `check` CLI path
     # this module exists for gets the raw exception.
     try:
+        # `errors="replace"`, not the default strict decode. `text=True` decodes
+        # the child's stdout STRICTLY, and `UnicodeDecodeError` is a `ValueError`
+        # -- neither a `SubprocessError` nor an `OSError`, so the handler below
+        # cannot catch it. That is the same fault as the two named above, missed
+        # a third time: a tool whose version banner carries one non-UTF-8 byte (a
+        # Latin-1 copyright sign, an accented word -- ordinary in a vendor CLI)
+        # raised out of a function documented to answer "" rather than raise, and
+        # ONE such component took the whole `check` run down. MEASURED 2026-09-01
+        # with `printf 'v1.2.3 \xe9dition\n'`.
+        #
+        # Replacing rather than widening the `except`: the version is RECOVERABLE
+        # here, and returning "" would report a healthy tool as unknown, which is
+        # the misleading answer this function's "" exists to avoid. A stray byte
+        # is never part of the digits a `current.regex` captures.
+        # `update_sources._get_json` makes the opposite choice for the same
+        # exception, correctly -- an undecodable JSON body is not recoverable.
         out = subprocess.run(["bash", "-c", comp.current.get("cmd", "")],
-                            capture_output=True, text=True, timeout=30,
-                            check=False).stdout.strip()
+                            capture_output=True, text=True, errors="replace",
+                            timeout=30, check=False).stdout.strip()
     except (subprocess.SubprocessError, OSError):
         return ""
     regex = comp.current.get("regex")

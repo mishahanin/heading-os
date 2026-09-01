@@ -100,6 +100,70 @@ def test_the_fallback_does_not_overwrite_an_existing_destination(importer, tmp_p
     assert dest.read_text(encoding="utf-8") == "SPECTRE DOSSIER, ALREADY HERE"
 
 
+def test_the_hard_link_path_refuses_an_existing_destination_too(importer,
+                                                                 tmp_path):
+    """The module's headline invariant on the ORDINARY filesystem, untested.
+
+    Every collision row in this file runs under `no_hard_links`, so until
+    2026-09-01 the ordinary filesystem - the one every real recovery run uses -
+    had no collision test at all. This is that row.
+
+    It does NOT pin the `errno == EEXIST` branch on its own, and saying so is the
+    point. MEASURED 2026-09-01: replacing that branch with `if False:` still
+    leaves this file green, because control falls through to the `lexists`
+    re-check below it, which raises the same `FileExistsError` and cleans up the
+    same scratch file. The two are a deliberate redundant pair and neither can
+    be mutated away while the other stands. What is asserted here is the
+    OUTCOME - an existing destination survives untouched, with no scratch left
+    behind - which is the invariant the module docstring leads with, and which
+    was previously measured only on the degraded path.
+    """
+    if not hasattr(os, "link"):  # pragma: no cover - every supported platform has it
+        pytest.skip("this platform has no os.link at all")
+    src = tmp_path / "src.md"
+    src.write_text("NEW CONTENT", encoding="utf-8")
+    dest = tmp_path / "out" / "dest.md"
+    dest.parent.mkdir()
+    dest.write_text("SPECTRE DOSSIER, ALREADY HERE", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        importer._atomic_copy(src, dest)
+    assert dest.read_text(encoding="utf-8") == "SPECTRE DOSSIER, ALREADY HERE"
+    # And it took the LINK path, not the degraded one: no warning was printed.
+    assert sorted(p.name for p in dest.parent.iterdir()) == ["dest.md"]
+
+
+def test_a_file_already_at_the_scratch_name_is_not_destroyed(importer, tmp_path):
+    """`mkstemp`'s unique scratch name, which the docstring narrates and nothing
+    measured.
+
+    "Two ways this destroyed data before 2026-08-24, both from the fixed scratch
+    name `<dest>.tmp-import`: a file ALREADY at that name in the destination
+    directory was overwritten by `copy2` and then moved away by `os.replace`, so
+    its contents were gone." MEASURED 2026-09-01: putting the fixed name back
+    left this file green at 18 passed - the fix was described in eleven lines of
+    docstring and guarded by none.
+
+    The scratch path is a destination file like any other, and this importer's
+    one invariant is that it does not overwrite those.
+    """
+    src = tmp_path / "src.md"
+    src.write_text("NEW CONTENT", encoding="utf-8")
+    dest = tmp_path / "out" / "dest.md"
+    dest.parent.mkdir()
+    squatter = dest.parent / (dest.name + ".tmp-import")
+    squatter.write_text("SOMEBODY ELSE'S FILE", encoding="utf-8")
+
+    importer._atomic_copy(src, dest)
+
+    assert dest.read_text(encoding="utf-8") == "NEW CONTENT"
+    assert squatter.read_text(encoding="utf-8") == "SOMEBODY ELSE'S FILE", (
+        "the scratch name collided with a real file and destroyed it")
+    # And the copy left no scratch of its own behind.
+    assert sorted(p.name for p in dest.parent.iterdir()) == [
+        "dest.md", "dest.md.tmp-import"]
+
+
 def test_the_fallback_leaves_no_scratch_file_behind_when_it_refuses(importer,
                                                                     tmp_path,
                                                                     no_hard_links):
@@ -231,6 +295,81 @@ def test_a_whole_run_failure_still_propagates(importer, tmp_path, monkeypatch):
     with pytest.raises(OSError) as exc:
         _run(importer, ["--from", str(old), "--only", "knowledge"])
     assert exc.value.errno == errno.ENOSPC
+
+
+def test_a_name_taken_during_the_copy_is_counted_as_a_skip_not_a_crash(
+        importer, tmp_path, monkeypatch, capsys):
+    """The `except FileExistsError` inside the walk, which had no witness.
+
+    The walk's own `lexists` pre-check means a destination that exists BEFORE
+    the walk never reaches `_atomic_copy`, so the handler is only reachable in
+    the race the copy exists to catch. MEASURED 2026-09-01: replacing that
+    `except FileExistsError` with an exception `_atomic_copy` cannot raise left
+    this file green at 18 passed - the race the whole `os.link` design is for
+    would have come out of `main` as a traceback, abandoning every later file,
+    which is the exact failure the unreadable-file guard was added to end.
+
+    The race is forced rather than waited for: a real one needs a second writer
+    between two syscalls.
+    """
+    old = tmp_path / "old-workspace"
+    (old / "knowledge").mkdir(parents=True)
+    (old / "knowledge" / "a.md").write_text("first\n", encoding="utf-8")
+    (old / "knowledge" / "z.md").write_text("second\n", encoding="utf-8")
+
+    real_copy = importer._atomic_copy
+
+    def racing_copy(src_file, dest_file):
+        if src_file.name == "a.md":
+            raise FileExistsError(f"{dest_file} appeared after the check")
+        return real_copy(src_file, dest_file)
+
+    monkeypatch.setattr(importer, "_atomic_copy", racing_copy)
+    rc = _run(importer, ["--from", str(old), "--only", "knowledge"])
+
+    out = _plain(capsys.readouterr().out)
+    assert rc == 0, "a collision is this importer's documented skip, not a failure"
+    assert "skipped 1 (already exist)" in out, out
+    assert (_knowledge_dest() / "z.md").read_text(encoding="utf-8") == "second\n", (
+        "the file after the collision was never reached")
+
+
+def test_an_unreadable_source_that_is_not_a_permission_error_is_also_a_skip(
+        importer, tmp_path, monkeypatch, capsys):
+    """The probe catches `OSError`, not `PermissionError`, and the difference
+    was unmeasured.
+
+    Its own comment names "a bad sector" beside `chmod 000`, and an EIO is not a
+    `PermissionError`. MEASURED 2026-09-01: narrowing that `except OSError` to
+    `except PermissionError` left this file green at 18 passed, because the only
+    fixture reaching it is a `chmod 000` file. Under the narrowed clause an
+    unreadable-for-any-other-reason file goes back to ending the whole run.
+
+    `EIO` cannot be produced portably from a real file, so the error is injected
+    at the one call the probe makes.
+    """
+    old = tmp_path / "old-workspace"
+    (old / "knowledge").mkdir(parents=True)
+    (old / "knowledge" / "bad.md").write_text("unreadable\n", encoding="utf-8")
+    (old / "knowledge" / "z.md").write_text("fine\n", encoding="utf-8")
+
+    real_open = Path.open
+
+    def flaky_open(self, *args, **kwargs):
+        if self.name == "bad.md" and args and args[0] == "rb":
+            raise OSError(errno.EIO, "Input/output error")
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", flaky_open)
+    rc = _run(importer, ["--from", str(old), "--only", "knowledge"])
+
+    out = _plain(capsys.readouterr().out)
+    assert rc == 1, "a dropped file must not report success"
+    assert "unreadable bad.md" in out, out
+    assert "Input/output error" in out, (
+        "the reason must reach the operator; 'unreadable' alone does not say "
+        "whether to fix a permission or replace a disk")
+    assert (_knowledge_dest() / "z.md").read_text(encoding="utf-8") == "fine\n"
 
 
 def test_a_clean_run_still_exits_zero(importer, tmp_path):

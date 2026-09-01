@@ -41,7 +41,14 @@ def _read_state(root: Path, name: str) -> str | None:
         return None
     try:
         return p.read_text(encoding="utf-8").strip()
-    except OSError:
+    # `UnicodeDecodeError` is a `ValueError`, not an `OSError`, and the decode
+    # happens INSIDE `read_text` -- so a `.daemon-state/token` or `port` holding
+    # a byte that is not UTF-8 (a truncated write, a file from another tool)
+    # raised straight out of a helper whose whole contract is "or None".
+    # MEASURED 2026-09-01: exit 1 on a traceback, from a script whose docstring
+    # promises 0, 1 or 2, where the documented answer is the exit-2 "bridge
+    # daemon not reachable" that an unreadable state file should produce.
+    except (OSError, UnicodeDecodeError):
         return None
 
 
@@ -148,8 +155,15 @@ def main() -> int:
     if args.body_file:
         try:
             body = Path(args.body_file).read_text(encoding="utf-8")
-        except OSError as e:
-            print(f"{RED}cannot read --body-file{RESET}: {e}", file=sys.stderr)
+        # The sibling of the `_read_state` handler above, and it was the same
+        # shape. MEASURED 2026-09-01 with `printf 'hello \xff world\n'`:
+        # `UnicodeDecodeError: invalid start byte` out of `read_text`, past a
+        # handler that names only `OSError`, and out of `main` as a traceback.
+        # The file is NAMED, because a draft that cannot be decoded is a file
+        # the operator has to go and look at.
+        except (OSError, UnicodeDecodeError) as e:
+            print(f"{RED}cannot read --body-file{RESET} {args.body_file}: {e}",
+                  file=sys.stderr)
             return 1
         subject, recipient = args.subject, args.to
     else:

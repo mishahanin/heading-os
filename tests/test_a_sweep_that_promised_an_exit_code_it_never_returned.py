@@ -214,3 +214,69 @@ def test_a_sound_sweep_still_approves(tmp_path, capsys):
     capsys.readouterr()
     assert rc == 0
     assert _statuses(path) == {"1": "approved", "2": "approved"}
+
+
+# ============================================================
+# 3. An entry that is not an object at all
+# ============================================================
+#
+# `_has_int_id` opens with `if not isinstance(action, dict): return False`, and
+# nothing measured it. MEASURED 2026-09-01 by removing that line and driving the
+# real commands against a state file holding `[<a sound action>, null, "a
+# string", 7]`: `list`, `pending`, `approve` and `set` each raised
+# `AttributeError: 'NoneType' object has no attribute 'get'`, and the whole
+# suite stayed green - 31 passed across this file, `test_email_sweep.py` and
+# `test_a_record_that_lost_a_row_and_refused_with_the_wrong_error.py`.
+#
+# The path is reachable, not hypothetical. `_load_state` checks only that
+# `actions` IS A LIST (`isinstance(data.get("actions"), list)`); it never checks
+# what is in it, and the four sites at lines 366, 421 and 440 iterate that list
+# straight into `_has_int_id`. The one site that pre-filters with
+# `isinstance(a, dict)` is `cmd_propose`, so it is the only command the outer
+# check protects.
+#
+# Same threat model as the boolean id above and the same file: a hand-edited
+# sweep. `"id": true` needed a plausible edit to produce; `null` in a JSON list
+# needs a stray comma.
+
+NOT_OBJECTS = [None, "a string", 7, []]
+
+
+def test_list_and_pending_report_a_non_object_entry_instead_of_crashing(tmp_path, capsys):
+    _seed(tmp_path, [REAL, *NOT_OBJECTS])
+
+    assert sweep.cmd_list(tmp_path, _args(date=DATE, json=False)) == 0
+    listed = _plain(capsys.readouterr().out)
+    assert "malformed entry" in listed
+    assert "log the mNDA" in listed, "the sound entry stopped rendering"
+
+    assert sweep.cmd_pending(tmp_path, _args(date=DATE, json=False)) == 0
+    assert "[malformed]" in _plain(capsys.readouterr().out)
+
+
+@pytest.mark.parametrize("cmd", ["approve", "skip", "edit", "set"])
+def test_a_mutate_refuses_a_non_object_entry_instead_of_crashing(tmp_path, capsys, cmd):
+    """Refused, and the sound entry is left exactly as it was.
+
+    A traceback halfway through a mutate is worse than a refusal: it leaves the
+    operator unable to say which entries were written before it stopped.
+    """
+    path = _seed(tmp_path, [REAL, *NOT_OBJECTS])
+    call = {
+        "approve": lambda: sweep.cmd_approve(tmp_path, _args(date=DATE, ids=[1])),
+        "skip": lambda: sweep.cmd_skip(tmp_path, _args(date=DATE, ids=[1], note=None)),
+        "edit": lambda: sweep.cmd_edit(tmp_path, _args(date=DATE, id=1, note="x")),
+        "set": lambda: sweep.cmd_set(tmp_path, _args(date=DATE, id=1,
+                                                    status="done", note=None)),
+    }[cmd]
+
+    rc = call()
+    err = _plain(capsys.readouterr().err)
+    assert rc == 1, f"{cmd} did not refuse a state file holding non-object entries"
+    assert "malformed action entr" in err
+    # `_statuses` indexes every entry, which the non-object ones do not support,
+    # so read the sound one on its own. The state file must be untouched.
+    sound = [a for a in json.loads(path.read_text())["actions"]
+             if isinstance(a, dict) and a.get("id") == 1]
+    assert [a["status"] for a in sound] == ["proposed"], (
+        f"{cmd} mutated past the refusal")

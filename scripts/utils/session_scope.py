@@ -99,7 +99,10 @@ def files_written(transcript: Path | str | None) -> set[Path] | None:
     found = _scan(path)
     if found is None:
         return None
-    for sidecar in _subagent_transcripts(path):
+    sidecars = _subagent_transcripts(path)
+    if sidecars is None:
+        return None
+    for sidecar in sidecars:
         theirs = _scan(sidecar)
         if theirs is None:
             return None
@@ -120,8 +123,8 @@ def files_written(transcript: Path | str | None) -> set[Path] | None:
 # here 2026-08-30, on the first draft of this very comment.
 
 
-def _subagent_transcripts(transcript: Path) -> list[Path]:
-    """This session's subagent sidecars, newest layout, sorted for determinism.
+def _subagent_transcripts(transcript: Path) -> list[Path] | None:
+    """This session's subagent sidecars, sorted, or None when that cannot be told.
 
     Derived from the transcript path handed in, never from the environment or a
     fixed root: `<dir>/<session-id>.jsonl` implies `<dir>/<session-id>/subagents/`.
@@ -130,13 +133,41 @@ def _subagent_transcripts(transcript: Path) -> list[Path]:
     parent's view does not widen it to another author's work.
 
     A missing directory is the normal case for a session that dispatched no
-    agent, and answers with no files rather than an error.
+    agent, and answers with an empty list.
+
+    A directory that EXISTS and cannot be listed is the module's own
+    "unknown is not empty" rule, one level down, and this function used to break
+    it. It read the directory with `Path.glob`, whose selector catches
+    `PermissionError` internally and yields nothing, so the `except OSError`
+    below it could never fire: it was unreachable, and an unlistable sidecar
+    directory was indistinguishable from a session that dispatched no agent.
+
+    MEASURED 2026-09-01 on a transcript with one parent write and one subagent
+    write, with the sidecar directory at mode 000:
+
+        readable        {parent.py, from_subagent.py}
+        unreadable      {parent.py}
+        narrow_with_scope over both  ->  ([parent.py], 1, True)
+
+    The subagent's file was dropped as another author's, and the third value
+    said scope WAS established, so no caller could reach obligation 3 of
+    `.claude/rules/scope-claims.md` and say the state was unknown. That is the
+    2026-08-12 misattribution this module exists to refuse, arrived at through
+    the layer added to fix it.
+
+    `os.listdir` is used instead of `glob` because it RAISES where glob
+    swallows. `FileNotFoundError` keeps meaning "no agent was dispatched"; every
+    other `OSError` means the answer is unknowable and propagates as None.
     """
     directory = transcript.parent / transcript.stem / "subagents"
     try:
-        return sorted(directory.glob("agent-*.jsonl"))
-    except OSError:
+        names = os.listdir(directory)
+    except FileNotFoundError:
         return []
+    except OSError:
+        return None
+    return sorted(directory / name for name in names
+                  if name.startswith("agent-") and name.endswith(".jsonl"))
 
 
 def _scan(path: Path) -> set[Path] | None:
@@ -212,11 +243,24 @@ def current_transcript() -> str | None:
     return value or None
 
 
-def narrow(paths, transcript: Path | str | None) -> tuple[list, int]:
-    """`(paths this session wrote, how many were dropped as another author's)`.
+def narrow_with_scope(paths,
+                      transcript: Path | str | None) -> tuple[list, int, bool]:
+    """`(kept paths, how many were dropped, whether scope was established)`.
 
-    With no usable transcript every path is kept and the drop count is 0, so a
-    caller degrades to its pre-scope behaviour instead of going quiet.
+    The third value is what `narrow` cannot say. With no usable transcript this
+    function keeps every path and reports a drop count of 0, which is
+    byte-identical to a genuine zero-drop over a transcript it read perfectly
+    well. MEASURED 2026-08-31: over a malformed transcript, and over an absent
+    one, `narrow(['a.py'], t)` answered `(['a.py'], 0)`; over a real transcript
+    recording only reads it answered `([], 1)`. A caller with only those two
+    numbers then printed "the uncommitted Python edits in this turn" and added
+    no exclusion line, because the drop count said there was nothing to name.
+    That is the 2026-08-12 misattribution again, reached by the fail-open path
+    rather than by the missing narrowing.
+
+    So the flag says which of the two happened. False means the write set could
+    not be established at all, and obligation 3 of `.claude/rules/scope-claims.md`
+    is then the caller's: widen back to everything AND say the state is unknown.
     """
     # Materialise ONCE. `paths` was walked twice: the comprehension below
     # consumed it, and `len(list(paths))` then measured the exhausted remainder.
@@ -229,7 +273,21 @@ def narrow(paths, transcript: Path | str | None) -> tuple[list, int]:
     items = list(paths)
     mine = files_written(transcript)
     if mine is None:
-        return items, 0
+        return items, 0, False
     resolved = {p.resolve() for p in mine}
     kept = [p for p in items if Path(p).resolve() in resolved]
-    return kept, len(items) - len(kept)
+    return kept, len(items) - len(kept), True
+
+
+def narrow(paths, transcript: Path | str | None) -> tuple[list, int]:
+    """`(paths this session wrote, how many were dropped as another author's)`.
+
+    With no usable transcript every path is kept and the drop count is 0, so a
+    caller degrades to its pre-scope behaviour instead of going quiet.
+
+    Kept as the two-value form for callers that only narrow. A caller that
+    PRINTS a sentence about what it covered wants `narrow_with_scope` instead,
+    since the drop count alone cannot tell it whether scope exists.
+    """
+    kept, dropped, _known = narrow_with_scope(paths, transcript)
+    return kept, dropped

@@ -53,6 +53,68 @@ def test_no_preference_configured_is_never_a_fallback():
     assert mi.host_fell_back("", "http://localhost:11434") is False
 
 
+# --- the shape the preference actually arrives in -----------------------------
+#
+# Every case above hands `host_fell_back` a single string, and the first line of
+# the function is `preferred if isinstance(preferred, (list, tuple)) else
+# [preferred]`. That branch was never taken by a test, and it is the LIVE one on
+# this operator's machine: `cfg["host_preferred"]` comes from
+# `index_embed_preference()`, whose third and normal source is
+# `machine_hosts("embed")`, declared `-> list[str]`. MEASURED 2026-09-01:
+# replacing the whole line with `entries = [preferred]` left all 10 tests in this
+# file green, while a two-entry pin whose FIRST host answered would have been
+# announced as a fallback - a red "GPU EMBEDDER NOT AVAILABLE" banner on every
+# run, and, since `cmd_build` refuses on the same signal, a build that stops
+# because it succeeded.
+
+def test_a_list_preference_is_satisfied_by_any_entry_that_answered():
+    hosts = ["http://172.30.48.1:11436", "http://gpu.box:11436"]
+    assert mi.host_fell_back(hosts, "http://172.30.48.1:11436") is False
+    assert mi.host_fell_back(hosts, "http://gpu.box:11436") is False
+
+
+def test_a_list_preference_none_of_which_answered_is_a_fallback():
+    """The negative case: a list must still be able to report a real drop."""
+    hosts = ["http://172.30.48.1:11436", "http://gpu.box:11436"]
+    assert mi.host_fell_back(hosts, "http://localhost:11434") is True
+
+
+def test_a_list_preference_of_auto_entries_resolves_by_port():
+    assert mi.host_fell_back(["auto:11436"], "http://172.30.48.1:11436") is False
+    assert mi.host_fell_back(["auto:11436"], "http://localhost:11434") is True
+
+
+def test_an_empty_list_preference_is_never_a_fallback():
+    """`machine_hosts` returns [] on a fresh clone with no accelerator."""
+    assert mi.host_fell_back([], "http://localhost:11434") is False
+    assert mi.host_fell_back(["", "   "], "http://localhost:11434") is False
+
+
+# --- the two normalisations, each of which turns a success into an alarm -------
+
+def test_a_trailing_slash_on_either_side_is_not_a_different_host():
+    """MEASURED 2026-09-01: dropping the `rstrip("/")` on the RESOLVED value left
+    all 10 tests green, and made the preferred host answering read as a fallback
+    the moment the resolver returned a URL with a trailing slash."""
+    assert mi.host_fell_back("http://gpu.box:11436", "http://gpu.box:11436/") is False
+    assert mi.host_fell_back("http://gpu.box:11436/", "http://gpu.box:11436") is False
+
+
+def test_a_padded_config_entry_is_stripped_before_it_is_compared():
+    """A YAML value with stray whitespace is an ordinary typo, not a fallback."""
+    assert mi.host_fell_back("  http://gpu.box:11436  ", "http://gpu.box:11436") is False
+    assert mi.host_fell_back(["  auto:11436 "], "http://172.30.48.1:11436") is False
+
+
+def test_a_bare_auto_with_no_port_never_matches_by_the_empty_suffix():
+    """`if port and ...` is what keeps `landed.endswith(":")` out of the decision.
+
+    A bare `auto` names no port, so nothing can satisfy it and the honest answer
+    is that the preference was not met."""
+    assert mi.host_fell_back("auto", "http://172.30.48.1:11436") is True
+    assert mi.host_fell_back("auto", "http://localhost:11434") is True
+
+
 # --- the announcement ------------------------------------------------------
 #
 # Detecting the fallback is worth nothing if nobody is told. Operator directive,

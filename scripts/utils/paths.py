@@ -532,6 +532,41 @@ def load_env(workspace_root: Path = None) -> None:
         os.environ.setdefault(key, value)
 
 
+TZ_FALLBACK = "UTC"
+
+
+def resolve_tz_name() -> tuple[str, bool]:
+    """The operator's IANA zone name, and whether anything actually set one.
+
+    Reads `os.environ` only. The caller owns `load_env()`, because the two
+    callers cache it differently: `workspace.get_default_tz_name` loads once per
+    process, the `tz` CLI below loads on every invocation.
+
+    ONE owner for the BLANK case, which is the whole reason this function
+    exists. `HEADING_OS_TZ` had two readers and they disagreed about an empty
+    value. The `tz` CLI treated it as unset and answered UTC with a line on
+    stderr; `get_default_tz_name` returned `""`, and `get_default_tz()` then
+    raised `ValueError: ZoneInfo keys must be normalized relative paths, got:`
+    out of a helper documented to default to UTC. MEASURED 2026-09-01 with a
+    scratch `.env` carrying a bare `HEADING_OS_TZ=`: the CLI printed `UTC` and
+    exited 0 while the in-process helper crashed every caller that asked for a
+    zone. `.env` is hand-edited and gitignored, so a key left with no value is
+    an ordinary typo rather than a contrived input.
+
+    Whitespace is stripped for the same reason: `HEADING_OS_TZ= ` is the same
+    typo with a space after it, and `ZoneInfo(" ")` raises the same way.
+
+    The boolean is the announcement signal, kept separate from the name so the
+    CLI can say "nothing configured a zone" without re-deriving it from a
+    comparison against `TZ_FALLBACK`. An operator who really did write
+    `HEADING_OS_TZ=UTC` configured a zone, and should not be told he did not.
+    """
+    name = (os.environ.get("HEADING_OS_TZ") or "").strip()
+    if not name:
+        return TZ_FALLBACK, False
+    return name, True
+
+
 # ============================================================
 # Shell-callable resolver
 # ============================================================
@@ -554,15 +589,17 @@ if __name__ == "__main__":
 
     if _sys.argv[1:2] == ["tz"]:
         load_env()
-        _tz = os.environ.get("HEADING_OS_TZ")
-        if not _tz:
+        # `resolve_tz_name`, not a second reading of the variable. The blank
+        # case was handled here and nowhere else, so the in-process helper
+        # answered "" for the same `.env` this branch answered UTC for.
+        _tz, _configured = resolve_tz_name()
+        if not _configured:
             # Announced, never silent. A silent UTC default is the root of every
             # defect this resolver exists to end: an installer rendered UTC while
             # the operator believed the unit was local, and nothing said so.
             # stdout stays clean for the shell that consumes it.
             print("HEADING_OS_TZ resolved from neither the environment nor .env; "
                   "falling back to UTC", file=_sys.stderr)
-            _tz = "UTC"
         print(_tz)
     else:
         print(get_workspace_root())

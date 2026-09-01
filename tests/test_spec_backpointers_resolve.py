@@ -124,6 +124,24 @@ def test_every_anchor_pointer_into_docs_resolves():
         f"({skipped} skipped: private overlay absent):\n  "
         + "\n  ".join(broken[:20])
     )
+
+    # A floor on what was actually CHECKED, not on what was found. Measured
+    # 2026-09-01: all 84 pointers in the tree carry the `.heading-os-data/`
+    # prefix and none is engine-relative, so `_resolve` returning None is the
+    # difference between this test reading 84 documents and reading nothing.
+    # On a public clone that is the stated design and the whole set skips; on a
+    # checkout that HAS the overlay, a skip means the resolver stopped working,
+    # and without this line it would report a pass over an empty corpus with the
+    # note below printed into a stream pytest does not show.
+    from scripts.utils.paths import data_overlay_present
+
+    if data_overlay_present():
+        assert total - skipped >= 20, (
+            f"the overlay is present but only {total - skipped} of {total} "
+            f"pointers were resolved against it; the resolver, not the corpus, "
+            f"is what changed"
+        )
+
     if skipped:
         # Never silent about a narrowed check. A guard that quietly skips most
         # of its subject reads exactly like one that passed it.

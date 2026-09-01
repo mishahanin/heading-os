@@ -60,6 +60,7 @@ row beneath it stays silent.
 """
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -233,11 +234,81 @@ def test_the_priority_class_is_escaped_like_every_other_attribute():
 # --- recovery, not permanent failure -----------------------------------------
 
 def test_a_rotated_token_does_not_brick_the_dashboard():
-    src = _fn("authFetch")
-    assert "401" in src and "_bootstrap" in src, (
-        "no caller handles 401. A daemon restart rotates the token and every "
-        "page fails forever with no re-bootstrap and no reload"
+    """Structural, and narrowed after it was caught measuring nothing.
+
+    This was `assert "401" in src and "_bootstrap" in src`, which asks whether
+    two strings EXIST inside `authFetch`, never whether the branch they belong
+    to can run. Measured 2026-08-31 by making the recovery unreachable while
+    leaving both strings in place:
+
+        -  if (r.status !== 401) return r;
+        +  if (r.status !== 401 || true) return r;  // MUTATION
+
+        tests/bridge tests/inbox_pulse tests/contract -> 1706 passed, 1 skipped
+
+    Byte-identical to the baseline. Every 401 now returns straight to the
+    caller, which is the exact "fails forever with no re-bootstrap and no
+    reload" the old failure message described.
+
+    The gate expression is pinned literally here, and the behaviour is executed
+    in the sibling below. This half is what holds on a clone with no node.
+    """
+    src = _fn("authFetch", CODE)
+    assert re.search(r"if \(r\.status !== 401\) return r;", src), (
+        "the 401 gate is not the plain status test any more. Anything wider "
+        "makes the re-bootstrap below it unreachable while leaving it in the "
+        f"source: {src}"
     )
+    gate = src.index("if (r.status !== 401) return r;")
+    assert gate < src.index("_bootstrap"), (
+        "the re-bootstrap runs before the status is even checked")
+    assert src.index("_bootstrap") < src.rindex("_rawAuthFetch"), (
+        "nothing retries the request after the token is refreshed, so the "
+        "caller still gets the 401 it started with")
+
+
+def test_a_rotated_token_is_re_bootstrapped_and_the_request_retried():
+    """The same claim, executed. `authFetch` runs under node against a stub
+    that answers 401 once and 200 after, so the retry, the token refresh and
+    the absence of a page reload are read off real behaviour rather than
+    inferred from two substrings."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+
+    harness = f"""
+    let _reauthInFlight = null;
+    const state = {{ token: 'stale' }};
+    const seen = [];
+    let reloads = 0;
+    const location = {{ reload: () => {{ reloads += 1; }} }};
+    const console_ = console;
+    async function _rawAuthFetch(path, opts) {{
+      seen.push(state.token);
+      return {{ status: seen.length === 1 ? 401 : 200 }};
+    }}
+    async function fetch(url) {{
+      return {{ json: async () => ({{ token: 'rotated' }}) }};
+    }}
+    {_fn("authFetch")}
+    authFetch('/pulse').then(r => console_.log(JSON.stringify({{
+      status: r.status, seen, reloads, token: state.token,
+    }})));
+    """
+    proc = subprocess.run(  # nosec B603 - fixed argv, no shell
+        [node, "--input-type=module", "-e", harness],
+        capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    got = json.loads(proc.stdout.strip().splitlines()[-1])
+
+    assert got["status"] == 200, (
+        f"a 401 reached the caller instead of being recovered: {got}")
+    assert got["seen"] == ["stale", "rotated"], (
+        f"the request was not retried with the refreshed token: {got['seen']}")
+    assert got["token"] == "rotated", got  # noqa: S105 - the fixture's marker value, not a credential
+    assert got["reloads"] == 0, (
+        "the page was reloaded even though the retry succeeded; a reload throws "
+        "away whatever the operator was doing")
 
 
 def test_a_failed_panel_load_is_not_cached_forever():

@@ -734,6 +734,74 @@ def test_a_sweep_of_the_wrong_shape_is_not_replaced_either(tmp_path, capsys):
     assert "refusing to overwrite" in capsys.readouterr().err
 
 
+def test_a_sweep_in_the_wrong_encoding_is_not_replaced_either(tmp_path, capsys):
+    """The third unreadable shape, and the one the handler could not see.
+
+    `_load` caught `(OSError, json.JSONDecodeError)`. `UnicodeDecodeError` is a
+    `ValueError` and a SIBLING of `JSONDecodeError`, not a subclass, so a sweep
+    saved as UTF-16 or truncated mid-character went past it. `main` catches
+    ValueError, so the file was still never overwritten; what the operator got
+    was a raw codec message instead of the named refusal, on the one file this
+    module says "must never be silently discarded". Both eval loaders already
+    carried `(ValueError, OSError)` with this exact reasoning written above
+    them; the sweep was the copy the fix missed. MEASURED 2026-09-01 with a
+    UTF-16 sweep: `_load` raised UnicodeDecodeError, not SweepUnreadable.
+    """
+    root = tmp_path
+    day = "2026-08-24"
+    path = sweep._state_path(root, day)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    original = json.dumps({"date": day, "actions": []}).encode("utf-16")
+    path.write_bytes(original)
+
+    class _Args:
+        file = str(tmp_path / "payload.json")
+        date = day
+
+    Path(_Args.file).write_text('[{"type": "task", "title": "x"}]', encoding="utf-8")
+
+    assert sweep.cmd_propose(root, _Args()) == 1
+    assert path.read_bytes() == original, "the approval queue was replaced"
+    assert "refusing to overwrite" in capsys.readouterr().err
+
+
+def test_a_propose_payload_in_the_wrong_encoding_is_a_clean_refusal(tmp_path, capsys):
+    """The same tuple, in the same file, on the payload rather than the sweep."""
+    root = tmp_path
+    payload = tmp_path / "payload.json"
+    payload.write_bytes('[{"type": "task", "title": "x"}]'.encode("utf-16"))
+
+    class _Args:
+        file = str(payload)
+        date = "2026-08-24"
+
+    assert sweep.cmd_propose(root, _Args()) == 1
+    assert "not valid JSON" in capsys.readouterr().err
+
+
+def test_a_readable_sweep_is_still_merged_into(tmp_path, capsys):
+    """The anchor over both. A `_load` that refused everything would satisfy
+    them and make `propose` impossible to run twice in one day."""
+    root = tmp_path
+    day = "2026-08-24"
+    path = sweep._state_path(root, day)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"date": day, "actions": [
+        {"id": 1, "type": "task", "title": "already here", "status": "pending"}]}),
+        encoding="utf-8")
+
+    class _Args:
+        file = str(tmp_path / "payload.json")
+        date = day
+
+    Path(_Args.file).write_text('[{"type": "task", "title": "new"}]', encoding="utf-8")
+
+    assert sweep.cmd_propose(root, _Args()) == 0
+    capsys.readouterr()
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert [a["title"] for a in saved["actions"]] == ["already here", "new"]
+
+
 def test_a_sweep_with_a_non_numeric_id_is_a_clean_refusal_not_a_typeerror(tmp_path, capsys):
     root = tmp_path
     day = "2026-08-24"

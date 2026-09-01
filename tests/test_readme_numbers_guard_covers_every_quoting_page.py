@@ -65,6 +65,45 @@ def test_every_top_level_page_quoting_the_count_is_watched(guard):
     )
 
 
+def test_every_top_level_page_quoting_the_layer_count_is_watched(guard):
+    """The same membership rule, for the OTHER figure the guard checks.
+
+    This file's own docstring says the lesson generalises past one number, and
+    then asserted it for one number. MEASURED 2026-09-01 with the guard's own
+    `_LAYER_RE`: `SECURITY.md` carried "Seven ... layers" and was in no
+    `FRONT_DOORS`, so the enforcement-layer count sat in exactly the position
+    ROADMAP's security-test count sat in when it drifted to 554 -- one file away
+    from a watched page, agreeing with it today by luck rather than by check.
+    The contract gained layer 7 on 2026-08-31 and three pages had to be found by
+    hand; the next one has a guard.
+
+    The pattern is READ OFF the guard, never re-typed here. A second copy of
+    `_LAYER_RE` is how the first list drifted: the guard widened its noun on
+    2026-08-31 ("mechanical layers", "the six layers") and a hand-typed twin
+    would have gone on matching only the old wording while reporting membership.
+    """
+    watched = {p.resolve() for p in guard.FRONT_DOORS}
+    pages = _tracked_top_level_markdown()
+    assert len(pages) >= 5, (
+        f"only {len(pages)} tracked top-level markdown page(s); the membership "
+        "rule measured almost nothing")
+    quoting = [p for p in pages
+               if guard._LAYER_RE.search(p.read_text(encoding="utf-8"))]
+    assert quoting, "no top-level page quotes an enforcement-layer count any more"
+    unwatched = sorted(p.name for p in quoting if p.resolve() not in watched)
+    assert not unwatched, (
+        f"these pages quote an enforcement-layer count and nothing checks them: "
+        f"{unwatched}. Add them to FRONT_DOORS in {GUARD.name} (and to the "
+        f"readme-numbers hook's files: pattern)."
+    )
+
+
+def test_security_md_is_watched(guard):
+    """The page the layer-count gap was found on, named the way ROADMAP is, so
+    dropping it from FRONT_DOORS fails loudly rather than reopening the hole."""
+    assert (ROOT / "SECURITY.md").resolve() in {p.resolve() for p in guard.FRONT_DOORS}
+
+
 def test_roadmap_is_watched(guard):
     """The page the gap was found on. Named so a future edit to FRONT_DOORS
     that drops it fails loudly rather than quietly reopening the hole."""

@@ -199,6 +199,40 @@ def test_well_shaped_crosscheck_answers_are_still_graded(tmp_path, monkeypatch):
     assert code in (0, 1), "a valid crosscheck file must be graded, not refused"
 
 
+def test_a_crosscheck_answers_path_that_is_not_there_is_named(tmp_path,
+                                                              monkeypatch,
+                                                              capsys):
+    """A typo'd `--crosscheck-answers` gets the curated line, not errno 2.
+
+    MEASURED 2026-09-01: deleting the `is_file()` guard survived every test in
+    the eight files that touch this script (baseline and mutant both 4 failed,
+    204 passed, 2 skipped). It is not silent without the guard - `read_text`
+    raises FileNotFoundError and `main`'s `except OSError` still returns the
+    documented 2 - so the exit code was never at risk and only the sentence
+    was. That is worth one case: an untested guard is a deletable guard, and
+    "Файл недоступен: [Errno 2]" over a path the operator just typed sends them
+    to check permissions instead of their own spelling.
+    """
+    shown_path = tmp_path / "recall-crosscheck-shown.json"
+    shown_path.write_text(json.dumps({
+        "schema_version": 1,
+        "run_state": {},
+        "shown": {qid: [] for qid in bench.CROSSCHECK_QUESTIONS},
+    }), encoding="utf-8")
+    monkeypatch.setattr(bench, "_crosscheck_shown_path", lambda: shown_path)
+    monkeypatch.setattr(bench, "load_truth", lambda q, c, t: {})
+    monkeypatch.setattr(bench, "_run_state", lambda c, r, t: {})
+    monkeypatch.setattr(bench, "states_comparable", lambda a, b, pins=None: (True, []))
+
+    missing = tmp_path / "typo.json"
+    code = bench.mode_recall_crosscheck([], None, ROOT, date(2026, 8, 24),
+                                        str(missing), write=False)
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "typo.json" in err
+    assert "файл ответов не найден" in err
+
+
 def test_a_question_left_out_entirely_is_still_allowed(tmp_path, monkeypatch):
     """An ABSENT answer is not a malformed one: the code reads it as `{}` and
     grades it. Refusing it would make the guard stricter than the format."""

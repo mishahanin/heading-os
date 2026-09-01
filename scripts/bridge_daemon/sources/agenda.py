@@ -8,11 +8,14 @@ The existing sources/pulse.py uses a similar regex to extract only the
 NEXT upcoming event. This module returns ALL events for today plus
 a 'next_index' marker so the browser can highlight the next one.
 """
+import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from scripts.utils.paths import get_data_root
 from scripts.utils.workspace import get_default_tz
+
+logger = logging.getLogger(__name__)
 
 
 # Calendar table row format:
@@ -41,8 +44,13 @@ def today_agenda(data_root: "Path | None" = None,
                 {"time": "HH:MM", "subject": str, "location": str, "is_next": bool, "is_past": bool},
                 ...
             ],
-            "data_time": ISO 8601 UTC of the file mtime (None if file absent),
+            "data_time": ISO 8601 UTC of the file mtime, else None,
         }
+
+    `data_time` is None when the calendar file is absent AND when it is present
+    but unreadable, which the older "None if file absent" did not cover. The
+    two are told apart in the daemon log, not in the return: an unreadable file
+    is NAMED at warning level, an absent one is silent.
 
     HEADING OS engine/data split: the calendar file is DATA, so it resolves
     under ``data_root``, which falls back to the ``get_data_root()`` seam when
@@ -60,7 +68,17 @@ def today_agenda(data_root: "Path | None" = None,
     try:
         text = cal.read_text(encoding="utf-8")
         mtime = cal.stat().st_mtime
-    except OSError:
+    # `UnicodeDecodeError` is a `ValueError`, not an `OSError`, and the decode
+    # happens INSIDE `read_text` -- so the handler that exists to turn an
+    # unreadable calendar into an empty agenda could not see the one failure
+    # mode a sync-written markdown file actually produces. MEASURED 2026-09-01
+    # with one 0xe9 byte in a subject cell: `UnicodeDecodeError: invalid
+    # continuation byte` raised out of /day rather than returning the empty
+    # agenda the Returns block above promises.
+    except (OSError, UnicodeDecodeError) as exc:
+        logger.warning("calendar file %s is unreadable (%s); the agenda for %s "
+                       "is reported EMPTY, which is not the same as no events",
+                       cal, exc, date_str)
         return {"date": date_str, "events": [], "data_time": None}
 
     events: list[dict] = []
@@ -68,10 +86,31 @@ def today_agenda(data_root: "Path | None" = None,
         m = _CAL_ROW_RE.match(line)
         if not m:
             continue
-        # Defensive: a well-formed row has exactly 4 column separators + 1
-        # trailing = 5 pipes. More pipes mean an unescaped pipe in a cell
-        # corrupted the column boundaries. Skip rather than emit garbage.
+        # A well-formed row has exactly 4 column separators + 1 trailing = 5
+        # pipes. More pipes mean a pipe inside a cell corrupted the column
+        # boundaries. Skipping is right; skipping SILENTLY was not. MEASURED
+        # 2026-08-31 against the four-column form this module's own header
+        # comment documents (Time, Subject, Location, Duration): a 09:00 row
+        # reading "Board review \| Q3 close" with a zoom link and a 60m
+        # duration reached six pipes, 3 rows in produced 2 events out, and no
+        # log line was emitted at any level. A meeting that leaves the CEO's
+        # day silently is worse than one shown with a mangled subject, because
+        # nothing on the page says a row existed.
         if line.count("|") > 5:
+            # The remedy is "reword", not "escape". MEASURED 2026-08-31: a
+            # markdown-escaped `\|` is counted by `line.count("|")` exactly
+            # like a raw one, so the escaped row is dropped with this same
+            # message, and telling the operator to escape it sends them to do
+            # a thing that does not work. Honouring `\|` here would be worse
+            # than dropping: `_CAL_ROW_RE`'s cells are `[^|]`, so a five-pipe
+            # escaped row already parses with the columns shifted (subject
+            # "Board review \", location "Q3 close", the zoom link lost).
+            logger.warning(
+                "agenda: dropping a calendar row with %d pipes (max 5) from "
+                "today's events; a pipe inside a cell shifts the columns. "
+                "Reword the cell to remove it (a markdown-escaped \\| is "
+                "dropped too). Row: %s",
+                line.count("|"), line.strip())
             continue
         # No try/except around the int(): the regex already matched
         # `\d{2}:\d{2}`, so the parse cannot raise. The handler advertised a
@@ -80,6 +119,9 @@ def today_agenda(data_root: "Path | None" = None,
         time_str = m.group("time")
         hh, mm = (int(x) for x in time_str.split(":"))
         if not (0 <= hh < 24 and 0 <= mm < 60):
+            logger.warning("agenda: dropping a calendar row whose time %r is "
+                           "not a real clock time. Row: %s",
+                           time_str, line.strip())
             continue
         events.append({
             "time": time_str,

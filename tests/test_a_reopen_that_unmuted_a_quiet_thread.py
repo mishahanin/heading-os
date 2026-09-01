@@ -236,6 +236,68 @@ def test_an_unresolvable_upstream_is_reported_not_swallowed(um, capsys):
     assert "network unreachable" in err
 
 
+# ============================================================
+# A state file neither handler could open
+# ============================================================
+# Not from the `scripts-14-p4` shard. MEASURED 2026-09-01 while mutation-testing
+# the two scripts above, and it is the same "reported a state it never
+# established" shape one layer down: both `_read_state` helpers promise `{}`
+# when the state cannot be read, and both listed `(OSError,
+# json.JSONDecodeError)`. `UnicodeDecodeError` falls between those two. It is
+# raised INSIDE `read_text`, so `json.loads` is never reached, and it is a
+# ValueError -- a sibling of `json.JSONDecodeError`, not a subclass of OSError.
+# One torn byte in the state file therefore crashed the caller.
+
+def test_update_manager_answers_empty_over_an_undecodable_state_file(
+        um, tmp_path, monkeypatch):
+    """A promise of `{}` that a stray byte turned into a traceback."""
+    state = tmp_path / "state.json"
+    state.write_bytes(b'{"components": \xff\xfe}')
+    monkeypatch.setattr(um, "state_path", lambda: state)
+
+    assert um._read_state() == {}
+
+
+def test_turn_check_answers_empty_over_an_undecodable_state_file(tc, tmp_path,
+                                                                  monkeypatch):
+    """The same read, in the Stop hook, where a raise is a failed TURN.
+
+    `read_state` binds `STATE_PATH` at module scope, so the patch is on the
+    module attribute the function actually reads.
+    """
+    state = tmp_path / "turn-state.json"
+    state.write_bytes(b"\xff\xfe\x00")
+    monkeypatch.setattr(tc, "STATE_PATH", state)
+
+    assert tc.read_state() == {}
+
+
+@pytest.mark.parametrize("blob,label", [
+    (b"not json at all", "syntactically invalid JSON"),
+    (b'{"ok": 1}', "a well-formed state"),
+])
+def test_the_two_state_readers_still_tell_good_json_from_bad(
+        um, tc, tmp_path, monkeypatch, blob, label):
+    """The control for both fixes at once.
+
+    A handler widened to `except Exception` would satisfy the two tests above
+    and swallow every real failure with it, so the readable case has to come
+    back INTACT and the unparseable case still has to degrade rather than
+    raise.
+    """
+    expected = {"ok": 1} if blob == b'{"ok": 1}' else {}
+
+    um_state = tmp_path / "um.json"
+    um_state.write_bytes(blob)
+    monkeypatch.setattr(um, "state_path", lambda: um_state)
+    assert um._read_state() == expected, label
+
+    tc_state = tmp_path / "tc.json"
+    tc_state.write_bytes(blob)
+    monkeypatch.setattr(tc, "STATE_PATH", tc_state)
+    assert tc.read_state() == expected, label
+
+
 def _registry(tmp_path, names) -> Path:
     reg = tmp_path / "registry.yaml"
     body = ["components:", ""]
@@ -424,7 +486,15 @@ def test_the_run_result_carries_the_count(tc, monkeypatch, tmp_path):
     probe.write_text('"""Nothing."""\n', encoding="utf-8")
     monkeypatch.setattr(tc, "changed_python_files", lambda: [probe])
     monkeypatch.setattr(tc, "deleted_python_files", list)
-    monkeypatch.setattr(tc, "narrow", lambda paths, transcript: (paths, 0))
+    # `narrow_with_scope`, not `narrow`. `scripts/turn-check.py` stopped
+    # binding `narrow` on 2026-08-31, when it needed the third value
+    # (whether session scope was established at all) to satisfy obligation 3
+    # of `.claude/rules/scope-claims.md`. The rename is what makes this line
+    # honest: with the old name absent, `monkeypatch.setattr` RAISES. Had the
+    # module kept a re-exported `narrow` beside it, this patch would have
+    # bound a name nobody reads and the test would have passed over nothing.
+    monkeypatch.setattr(tc, "narrow_with_scope",
+                        lambda paths, transcript: (paths, 0, True))
     monkeypatch.setattr(tc, "write_state", lambda state: None)
     monkeypatch.setattr(tc, "lane_compile", lambda paths: [])
     monkeypatch.setattr(tc, "lane_import", lambda paths: [])

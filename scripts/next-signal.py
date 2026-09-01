@@ -182,21 +182,66 @@ def active_threads(limit: int) -> list[dict]:
 # Aggregation + render
 # ============================================================
 
+def load_graph_rows() -> tuple[list[dict], str]:
+    """The skill catalog, or an empty catalog and a sentence saying why.
+
+    Returns ``(rows, degraded_reason)``; the reason is `""` when the catalog
+    loaded. It is ONE of the four signal sources' enrichment, not a source in
+    its own right: without it `recent_outputs` reports the same files with no
+    skill attribution, and the handoff, the commits and the threads are
+    untouched. Losing all four to it is out of proportion, and losing them
+    silently is worse.
+
+    Both failures were measured on 2026-09-01 against this script:
+
+    - ABSENT (`reference/skill-graph.csv` deleted, which is the bare-clone
+      state `tests/test_a_show_command_that_printed_five_of_six_columns.py`
+      already skips for): `FileNotFoundError` out of `skill_graph.load`, caught
+      by `main`'s `except OSError`, printed as
+      `next-signal: [Errno 2] No such file or directory` with exit 1 and NOTHING
+      on stdout. The handoff, the git log and the open threads were all
+      discarded over a reference file none of them use.
+    - UNDECODABLE (one 0xff byte spliced in): a raw `UnicodeDecodeError`
+      traceback. It is a SIBLING of `json.JSONDecodeError` under `ValueError`
+      and not an `OSError`, so `main`'s handler never saw it.
+
+    `scripts/skill_graph.py`'s own `main` has handled the absent case since it
+    was written - it prints `error: skill-graph catalog not found` and returns
+    2. This second consumer of the same file had fallen behind it.
+    """
+    path = skill_graph.default_file()
+    try:
+        return skill_graph.load(path), ""
+    except (OSError, UnicodeDecodeError) as exc:
+        # NAMED, never dropped in silence: the reason travels in the signal and
+        # is rendered in both output modes, so a reader sees a signal that is
+        # missing its skill attribution rather than one that looks complete.
+        return [], f"skill catalog unreadable ({path}): {exc}"
+
+
 def gather(root: Path, limit: int) -> dict:
     """`root` is the ENGINE root, used only for the git log (recent_commits). The
     data sources (handoff, outputs, threads) resolve under the DATA root via their
     own get_*_dir() helpers and ignore `root`."""
-    graph_rows = skill_graph.load(skill_graph.default_file())
+    graph_rows, degraded = load_graph_rows()
     return {
         "handoff": read_handoff(),
         "recent_outputs": recent_outputs(limit, graph_rows),
         "recent_commits": recent_commits(root, 8),
         "active_threads": active_threads(5),
+        # Always present, `[]` when nothing degraded, so a JSON consumer reads
+        # the key rather than inferring its absence.
+        "degraded": [degraded] if degraded else [],
     }
 
 
 def render_text(sig: dict) -> str:
     lines = []
+    # First, so a reader cannot take the rest of the page for a complete one.
+    for why in sig.get("degraded") or []:
+        lines.append(f"{YELLOW}degraded:{RESET} {why}")
+    if sig.get("degraded"):
+        lines.append("")
     h = sig.get("handoff")
     if h:
         lines.append(f"{BOLD}Handoff (strongest signal){RESET}")

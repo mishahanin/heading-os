@@ -36,6 +36,8 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -145,6 +147,82 @@ def test_both_venv_interpreter_layouts_are_checked():
 def test_the_docstring_still_states_the_promise_being_kept():
     doc = _docstring(AUDIT, "_reexec_in_venv_if_needed")
     assert "silently skip" in doc
+
+
+def _audit_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_audit_deps_under_test", AUDIT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.parametrize("layout", [("bin", "python"), ("Scripts", "python.exe")])
+def test_either_venv_layout_is_the_one_re_execed(monkeypatch, tmp_path, layout):
+    """Drive the SELECTION, not the source text.
+
+    The two tests above ask whether both paths appear in the file. That is a
+    grep, and a grep cannot see which of them the code goes on to pick.
+    MEASURED 2026-09-01: rewriting the picker from
+    `next((c for c in candidates if c.exists()), None)` to
+    `candidates[0] if candidates[0].exists() else None` left both literals in
+    the list, both source assertions green, and the Windows layout unreachable
+    again -- the whole defect back, under a passing guard.
+
+    Here only ONE layout exists on disk per case, so a picker that looks at a
+    fixed element cannot answer both.
+    """
+    mod = _audit_module()
+    venv = tmp_path / ".venv" / layout[0]
+    venv.mkdir(parents=True)
+    interpreter = venv / layout[1]
+    interpreter.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    execed: list[list[str]] = []
+    monkeypatch.setattr(mod, "ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_have", lambda _name: False)
+    monkeypatch.delenv("_AUDIT_DEPS_REEXEC", raising=False)
+    monkeypatch.setattr(mod.sys, "executable", str(tmp_path / "some-other-python"))
+    monkeypatch.setattr(mod.sys, "argv", ["audit-deps.py"])
+    monkeypatch.setattr(mod.os, "execv", lambda path, argv: execed.append([path, *argv]))
+
+    mod._reexec_in_venv_if_needed()
+
+    assert execed, f"no re-exec for the {layout[0]} layout; the CVE gate skips there"
+    assert execed[0][0] == str(interpreter)
+
+
+def test_no_venv_at_all_does_not_re_exec(monkeypatch, tmp_path):
+    """The negative case. A picker that always re-execs would pass the two above
+    while sending the gate at a path that is not there."""
+    mod = _audit_module()
+    execed: list = []
+    monkeypatch.setattr(mod, "ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_have", lambda _name: False)
+    monkeypatch.delenv("_AUDIT_DEPS_REEXEC", raising=False)
+    monkeypatch.setattr(mod.os, "execv", lambda path, argv: execed.append(path))
+
+    mod._reexec_in_venv_if_needed()
+
+    assert execed == []
+
+
+def test_an_already_reexeced_run_does_not_re_exec_again(monkeypatch, tmp_path):
+    """The guard flag, so the re-exec cannot become a loop."""
+    mod = _audit_module()
+    venv = tmp_path / ".venv" / "bin"
+    venv.mkdir(parents=True)
+    (venv / "python").write_text("#!/bin/sh\n", encoding="utf-8")
+    execed: list = []
+    monkeypatch.setattr(mod, "ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_have", lambda _name: False)
+    monkeypatch.setenv("_AUDIT_DEPS_REEXEC", "1")
+    monkeypatch.setattr(mod.os, "execv", lambda path, argv: execed.append(path))
+
+    mod._reexec_in_venv_if_needed()
+
+    assert execed == []
 
 
 # --- 5. the banner spans the table ------------------------------------------

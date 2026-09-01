@@ -85,6 +85,25 @@ def test_a_dead_host_is_launched_and_re_probed():
     assert result.up is True and result.launched is True
 
 
+def test_zero_attempts_still_re_probes_once():
+    """`max(1, attempts)` is the floor a caller cannot argue away.
+
+    `attempts=0` would otherwise skip the re-probe entirely, so a launch that
+    worked would be reported as "started the application; still nothing at ..."
+    and whoever reads that goes looking for a crash that is not there. Nothing
+    exercised the floor: replacing `range(max(1, attempts))` with
+    `range(attempts)` left every other case in this file green.
+    """
+    probe = _Probe(False, True)          # down, then up after the launch
+    launched = []
+    result = guard.ensure_up(
+        ["http://gw:11434"], probe=probe, launch=lambda: launched.append(1),
+        settle=0, attempts=0,
+    )
+    assert launched == [1]
+    assert result.up is True and result.launched is True
+
+
 def test_a_launch_that_does_not_help_reports_failure():
     probe = _Probe(False, False, False, False)
     result = guard.ensure_up(
@@ -124,6 +143,25 @@ def test_the_launch_command_expands_the_windows_user_path():
     assert "%LOCALAPPDATA%" in joined
     assert "ollama app.exe" in joined
     assert not any("Users" in part for part in argv)
+
+
+def test_the_start_verb_carries_its_window_title_argument():
+    """`start` takes a TITLE before the program path, and the docstring says why:
+    without it cmd treats the quoted program path as the title and starts
+    nothing at all.
+
+    Only the joined string was asserted, and a join is blind to a dropped
+    argument: deleting the empty-string title left every other assertion in this
+    file true while the guard's one job -- starting ollama -- silently stopped
+    working. Asserted positionally, on the argv list, which is where the bug is.
+    """
+    argv = guard.launch_command()
+    i = argv.index("start")
+    assert argv[i + 1] == "", (
+        "`start` is not followed by its window-title argument, so cmd.exe will "
+        f"read the quoted program path as the title and launch nothing: {argv!r}")
+    assert "ollama app.exe" in argv[i + 2]
+    assert argv[i + 2].startswith("%LOCALAPPDATA%")
 
 
 def test_the_launcher_is_a_list_never_a_shell_string():

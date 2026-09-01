@@ -92,3 +92,39 @@ def test_notify_is_a_no_op_without_a_token():
         "reaching a notifier would send for real."
     )
     assert telegram_notify.notify("-100probe", "probe: this must not send") is False
+
+
+def test_the_containment_blanks_a_target_it_never_saw_at_import(monkeypatch):
+    """The belt: the sweep is by suffix, not by this machine's `.env`.
+
+    The containment's mute list is frozen at conftest import from `.env` plus
+    the inherited environment, so it names only the targets THIS machine
+    configures. Everything else is a name nothing re-blanks - and a name nothing
+    re-blanks is where a leak lands, because a test that removes it with
+    `monkeypatch.delenv(name, raising=False)` gets no undo entry at all
+    (pytest's `MonkeyPatch.delitem` returns early when the name is already
+    absent), so a `load_env()` in that test creates it for the rest of the
+    session. MEASURED 2026-08-31: that is how CHECKPOINT_TELEGRAM_TARGET and
+    OPS_RADAR_TELEGRAM_TARGET reached 'fixture-sink-9911' and stayed there,
+    failing the two tests above in a full serial run only.
+
+    Driven at the containment function rather than by collection ORDER, so it
+    measures the guard instead of measuring which file pytest happened to
+    collect first.
+    """
+    from tests import conftest
+
+    name = "A_TARGET_THIS_MACHINE_NEVER_CONFIGURED_TELEGRAM_TARGET"
+    assert name not in conftest._MUTED_TELEGRAM, (
+        "the fixture name is in the frozen mute list, so this test would pass "
+        "through the old list-driven loop and prove nothing"
+    )
+    monkeypatch.setenv(name, "-1009999999999")
+
+    conftest._mute_telegram_targets()
+
+    assert os.environ[name] == "", (
+        f"{name} survived the containment sweep. A target absent from .env is "
+        "exactly the name a leaked fixture value lands on, and the frozen list "
+        "cannot reach it."
+    )

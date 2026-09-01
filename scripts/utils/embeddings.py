@@ -59,17 +59,45 @@ def _index_config(root=None) -> dict:
     `root` exists for callers that already know which workspace they mean -
     `scripts/memory-index.py` is handed a root and must not silently read a
     different clone's config through `get_workspace_root()`.
+
+    A config it cannot read is NAMED on stderr before the `{}` goes back. The
+    fallbacks this degrades onto are real choices - an embedding host, a chunk
+    size - and a caller that silently ran on defaults could not tell that from
+    a config file that genuinely said nothing.
     """
+    import sys
+
     import yaml
 
     from scripts.utils import yamlio
     from scripts.utils.workspace import get_workspace_root
 
+    # `path` is resolved INSIDE the try, exactly as it was before this fix, so
+    # an `OSError` out of `get_workspace_root()` still degrades rather than
+    # escaping. It is pre-bound only so the handler can name the file.
+    path = "config/memory-index.yaml (workspace root unresolved)"
     try:
         path = (root or get_workspace_root()) / "config" / "memory-index.yaml"
         with open(path, encoding="utf-8") as fh:
             return yamlio.safe_load(fh) or {}
-    except (OSError, yaml.YAMLError):
+    # An ABSENT config is silent, exactly as it was before this widening: a
+    # clone with no `config/memory-index.yaml` is running on defaults on
+    # purpose. Only a config that EXISTS and cannot be read is worth a line.
+    except FileNotFoundError:
+        return {}
+    # `UnicodeDecodeError` is a `ValueError`; it is neither an `OSError` nor a
+    # `yaml.YAMLError`, so both names here were blind to it. `yaml.safe_load`
+    # over an open TEXT handle decodes lazily WHILE it parses, so the error
+    # surfaces from inside the yaml call and still is not a `YAMLError`.
+    # MEASURED 2026-09-01 with one 0xe9 byte in `config/memory-index.yaml`:
+    # `UnicodeDecodeError: invalid continuation byte` raised out of every
+    # caller of this function - the recall hook, the index builder and the ops
+    # radar - none of which, per the sentence above, should die over a config
+    # file.
+    except (OSError, yaml.YAMLError, UnicodeDecodeError) as exc:
+        print(f"memory-index config at {path} is unreadable ({exc}); "
+              f"falling back to built-in defaults for every setting in it",
+              file=sys.stderr)
         return {}
 
 
@@ -315,7 +343,25 @@ def model_digest(*, model: str, host: str, timeout: int = 10) -> str | None:
     want = model if ":" in model else f"{model}:latest"
     family = want.split(":")[0]
     prefix_hits = []
-    for entry in body.get("models") or []:
+    # The shape guard above asked only whether the ENVELOPE was an object, and
+    # the reply's shape does not stop there. MEASURED 2026-09-01 against this
+    # function, four replies that reach the loop and leave through an exception
+    # rather than through the None this docstring promises:
+    #   {"models": ["bge-m3"]}  -> AttributeError: 'str' has no attribute 'get'
+    #   {"models": "bge-m3"}    -> AttributeError, iterating the string's chars
+    #   {"models": [null]}      -> AttributeError on None
+    #   {"models": 5}           -> TypeError: 'int' object is not iterable
+    # A proxy or a future ollama that answers /api/tags in any of those shapes
+    # aborted `scripts/memory-index.py` with a stack trace, which is exactly the
+    # cost this function's "diagnostic, never fatal" contract exists to avoid.
+    # Both levels are checked, because one level of shape checking is what the
+    # first fix established and it was not enough.
+    listed = body.get("models")
+    if not isinstance(listed, (list, tuple)):
+        return None
+    for entry in listed:
+        if not isinstance(entry, dict):
+            continue
         name = str(entry.get("name", ""))
         full = name if ":" in name else f"{name}:latest"
         if full == want:
@@ -372,7 +418,25 @@ def _post_with_retry(url: str, payload: bytes, timeout: int, attempts: int = 3):
                 f"Is ollama running? (`ollama serve` / check the host in "
                 f"config/memory-index.yaml)"
             )
-        except (json.JSONDecodeError, KeyError) as e:
+        except (json.JSONDecodeError, UnicodeDecodeError, KeyError) as e:
+            # `UnicodeDecodeError` is a `ValueError` and a SIBLING of
+            # `json.JSONDecodeError`, not a subclass of it, so the decode one
+            # line above this try's `json.loads` was never covered by the clause
+            # that covers the parse. MEASURED 2026-09-01 by answering 200 with
+            # `b'{"embeddings": [[0.1]]}\xff\xfe'`: it left this module as
+            # `UnicodeDecodeError`, with no retry and no backoff, and as
+            # something other than `EmbeddingError` - which is verbatim the
+            # contract breach the non-object guard twelve lines up was added to
+            # end, on the very next expression.
+            #
+            # `model_digest` in this same file catches bare `ValueError` and so
+            # has always been covered; this is the second half of the module
+            # again, exactly as the isinstance guard was.
+            #
+            # Grouped with the parse rather than decoded with `errors="replace"`
+            # because they are the same answer: the endpoint returned bytes that
+            # are not a JSON object, and the retry is worth taking in case the
+            # next attempt reaches a healthy backend.
             last_err = f"malformed response from {url}: {e}"
         except TimeoutError as e:
             # A read-phase timeout (after connection) raises bare TimeoutError,

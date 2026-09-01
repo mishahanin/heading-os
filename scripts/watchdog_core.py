@@ -309,7 +309,22 @@ def _load_state(state_path: Path) -> dict:
     try:
         data = json.loads(state_path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        # `UnicodeError` for the same reason `_read_beat` carries it, and it was
+        # missing here alone: the fix landed in one of the two readers in this
+        # file. `read_text(encoding="utf-8")` raises UnicodeDecodeError on a torn
+        # byte, and that is a ValueError -- a SIBLING of json.JSONDecodeError,
+        # not an instance, and not an OSError either -- so the exception was
+        # raised INSIDE the read, before json.loads was ever reached, and walked
+        # past both clauses. MEASURED 2026-09-01 with one 0xff byte in
+        # `.daemon-state/watchdog-state.json`: a raw UnicodeDecodeError out of
+        # `_load_state`, out of `check_once`, and into the bridge daemon's
+        # blanket per-tick handler, which logs and carries on. The whole fleet
+        # then went unclassified on every tick while the daemon reported itself
+        # healthy -- the watchdog silenced by the file it writes itself, which is
+        # word for word the failure `_read_beat`'s handler was widened to stop.
+        # Losing the dedup state is the correct degradation: the next pass
+        # re-alerts rather than staying quiet.
         return {}
 
 

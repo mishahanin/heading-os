@@ -1,6 +1,20 @@
 #!/usr/bin/env python3
 """
-memory-inject.py - Claude Code SessionStart hook (matcher: startup).
+memory-inject.py - registered in NO settings file; superseded by recall-inject.py.
+
+Written as a SessionStart hook (matcher: startup) and never wired as one.
+MEASURED 2026-08-31: `grep -rn "memory-inject" .claude/settings*.json
+~/.claude/settings.json` returns zero hits, across the live file and all three
+per-OS templates. The registered SessionStart set is memory-reconcile.py,
+session-start.py, bridge-hook.py (matcher `.*`) and checkpoint-inject.py (matcher
+`compact|clear|resume`). So `inject.enabled: true` in config/memory-index.yaml
+switches on nothing, and until this line said so nothing explained why.
+
+`.claude/hooks/recall-inject.py` is the successor: it ranks by relevance to what
+was just typed instead of by date, and it IS registered, on UserPromptSubmit.
+Correcting the claim rather than wiring this file is the deliberate choice, since
+running both would inject memory twice per session, once date-ordered. The body
+below is kept and still works if it is ever wired by hand.
 
 The recall "injection leg": when enabled, inject a small, capped, salience-ranked
 snapshot of recent/important memory into the first turn of a fresh session, so

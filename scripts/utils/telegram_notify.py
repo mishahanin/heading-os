@@ -101,13 +101,30 @@ def own_targets() -> set[str]:
        variable that disagrees with it is then refused rather than obeyed, so
        one designated value governs all seven callers.
     2. Otherwise the allowlist is the union of the six per-feature
-       ``*_TELEGRAM_TARGET`` variables the callers read. Those values are
-       already the operator's own routing, edited by hand into a gitignored
-       ``.env``. Accepting them keeps a working install working while still
-       refusing every recipient that did not come from that file: a literal in
-       a caller, a value derived from fetched content, an argument handed in by
-       a skill. Arriving through the running process is exactly what separates
-       an exfiltration path from the operator talking to himself.
+       ``*_TELEGRAM_TARGET`` variables the callers read. Those values are the
+       operator's own routing, normally edited by hand into a gitignored
+       ``.env``. Accepting them keeps a working install working while refusing
+       the recipients a caller can produce WITHOUT touching the environment: a
+       literal in a caller, a value derived from fetched content, an argument
+       handed in by a skill. Those are the shapes this guard closes.
+
+       **What it does not close, stated because the sentence here used to claim
+       it did.** The read is ``os.environ``, not the ``.env`` FILE, so a value
+       the running process assigned to one of these names is indistinguishable
+       from one the operator typed. MEASURED 2026-09-01: with the six names
+       cleared, ``os.environ["OPS_RADAR_TELEGRAM_TARGET"] = "@example_stranger"``
+       followed by ``notify("@example_stranger", ...)`` returned True and reached
+       the transport.
+
+       Reading the file instead would be a worse trade, not a better one, and
+       that is why the seam is here: ``tests/conftest.py`` contains the whole
+       suite by BLANKING these names in ``os.environ``, so a resolver that went
+       to the file would let a test run message the operator, and a systemd unit
+       that passes the target via ``Environment=`` would go dark. An adversary
+       who can assign to ``os.environ`` in this process can also call
+       ``TelegramBot`` directly and skip this module entirely, so the boundary
+       buys nothing against that one. Do not "harden" this to a file read
+       without settling both of those first.
     3. Nothing set means an empty set, and an empty set refuses everything.
        Absent configuration must not resolve to "send anyway, somewhere".
 

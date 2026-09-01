@@ -137,21 +137,63 @@ def _files_under(root: Path) -> set[str]:
 
 
 # The three shapes `get_per_exec_repo_path` rejects for an exec slug, plus the
-# empty string. `..` alone is the degenerate case that resolves to the contacts
-# directory's own parent.
+# empty string.
+#
+# `..` alone carried a comment claiming it "resolves to the contacts directory's
+# own parent". MEASURED 2026-09-01: it does not. The slug is interpolated as
+# `f"{slug}.md"`, so `..` becomes `contacts/...md`, an ordinary file INSIDE the
+# tree. That mattered, because the assertion below was `== 1` and "source
+# contact not found" is also exit 1 -- so deleting the `".." in args.contact`
+# clause from the guard left this whole parametrization green. Every case now
+# asserts the refusal MESSAGE, which is what separates "I will not resolve that
+# slug" from "I resolved it and found nothing there".
 ESCAPES = ["../config", "..", "../../etc/passwd", "sub/q-branch",
            "sub\\q-branch", ""]
+
+# Which CLAUSE of the guard decides each shape. `or` short-circuits, so a
+# fixture is only a binding case for the clause that actually fires on it:
+# `../config` is decided by the `/` test and says nothing about the `..` test.
+# Written down because the list above reads as four `..` cases and is not.
+DECIDING_CLAUSE = {
+    "": "empty",
+    "../config": "slash",
+    "../../etc/passwd": "slash",  # pragma: allowlist secret - a traversal case, not a credential
+    "sub/q-branch": "slash",
+    "sub\\q-branch": "backslash",
+    "..": "dotdot",
+}
 
 
 # ============================================================
 # The escape itself
 # ============================================================
 
+def test_every_clause_of_the_guard_has_a_fixture_that_decides_it():
+    """Four clauses, four deciding shapes, and the map above says which is which.
+
+    Without this, three of the six ESCAPES could be deleted and the remaining
+    parametrization would still look like a thorough sweep while two clauses
+    went untested.
+    """
+    assert set(DECIDING_CLAUSE) == set(ESCAPES)
+    assert set(DECIDING_CLAUSE.values()) == {"empty", "slash", "backslash",
+                                             "dotdot"}
+
+
 @pytest.mark.parametrize("contact", ESCAPES)
-def test_a_slug_that_is_not_a_bare_stem_is_refused(tc, crm, monkeypatch,
+def test_a_slug_that_is_not_a_bare_stem_is_refused(tc, crm, monkeypatch, capsys,
                                                    contact):
     """The finding. `../config` used to exit 0 with the move already done."""
     assert _run(tc, monkeypatch, contact) == 1
+    out = capsys.readouterr().out
+    assert "Source contact not found" not in out, out
+    # The value is asserted where the code INTERPOLATES it, not anywhere in the
+    # message. MEASURED 2026-09-01: the refusal ends with a fixed
+    # `with no '/', '\\' or '..'.`, so a bare `repr(contact) in out` was
+    # satisfied by that tail for `contact == ".."` and could not fail however
+    # the code spelled the value. Anchoring on the surrounding words is what
+    # makes it read the half the code builds.
+    assert f"--contact {contact!r} is not a contact" in out, out
 
 
 def test_the_file_outside_the_contacts_tree_is_left_exactly_as_it_was(

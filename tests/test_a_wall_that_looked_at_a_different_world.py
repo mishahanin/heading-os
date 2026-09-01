@@ -54,6 +54,15 @@ AMBIENT_MARKER = "SHARD59_AMBIENT_MARKER"
 # against a TOKEN-shaped key as a hardcoded credential, and it is right to.
 _MARKER_VALUE = "shard59-stand-in"
 
+# Three distinguishable stand-ins for the credential the remote wall is handed.
+# Named rather than inlined for the same ruff S105 reason as `_MARKER_VALUE`,
+# and DISTINCT from each other on purpose: a precedence chain whose legs share a
+# value is a fixture whose two values are the same string, and it proves the
+# chain resolved to something without proving it resolved to the right leg.
+_ENV_CREDENTIAL = "shard30-from-the-push-env"
+_ARG_CREDENTIAL = "shard30-from-the-argument"
+_FALLBACK_CREDENTIAL = "shard30-from-the-stored-file"
+
 
 def _git_probe(*args, cwd=None, env=None):
     """Ask git a question whose non-zero exit is the ANSWER, not a failure.
@@ -208,6 +217,60 @@ def test_every_wall_receives_the_environment_the_push_will_run_with(
     assert callable(postcondition), "no postcondition reached run_supervised"
     assert postcondition() is True
     assert got["after"] == caller_env
+
+
+@pytest.fixture
+def captured_token(monkeypatch):
+    """The credential `supervised_push` hands the remote wall, without pushing."""
+    seen: dict = {}
+    monkeypatch.setattr(git_push, "enclosing_repo_root", lambda p, **k: None)
+    monkeypatch.setattr(git_push, "_roots_unreadable", lambda p: None)
+    monkeypatch.setattr(git_push, "_is_split_engine", lambda p: False)
+    monkeypatch.setattr(git_push, "load_gh_token", lambda: _FALLBACK_CREDENTIAL)
+    monkeypatch.setattr(
+        git_push, "remote_objection",
+        lambda repo, **k: seen.__setitem__("token", k.get("token")))
+    monkeypatch.setattr(
+        git_push, "run_supervised",
+        lambda cmd, **kw: {"state": "ok", "elapsed_s": 0.0,
+                           "exit_code": 0, "tail": ""})
+    return seen
+
+
+def test_the_wall_is_given_the_credential_the_push_env_carries(
+        captured_token, tmp_path):
+    """The same defect as the rest of this file, in the other argument.
+
+    `push-all.py` never passes `token=`; it puts `GH_TOKEN` inside the `env`
+    dict it hands to `supervised_push`, and the line that reaches into that dict
+    is what lets the remote wall ask GitHub whether the remote is public. Drop
+    that one leg and the wall still runs, still returns, and still reports
+    nothing - it just asks GitHub anonymously, so a private remote answers 404,
+    `_gh_visibility` returns None, and Check B goes dark with no message.
+
+    MEASURED 2026-09-01: deleting `(env or {}).get("GH_TOKEN")` from the token
+    expression left 177 tests green across this file, `tests/test_git_push.py`
+    and `tests/test_one_file_six_parsers.py` - every test in the tree that
+    mentions `GH_TOKEN` at all.
+    """
+    git_push.supervised_push(tmp_path, env={"GH_TOKEN": _ENV_CREDENTIAL})
+    assert captured_token["token"] == _ENV_CREDENTIAL
+
+
+def test_an_explicit_token_still_outranks_the_one_in_the_env(
+        captured_token, tmp_path):
+    """The contrast, derived the other way: the precedence is argument first."""
+    git_push.supervised_push(tmp_path, env={"GH_TOKEN": _ENV_CREDENTIAL},
+                             token=_ARG_CREDENTIAL)
+    assert captured_token["token"] == _ARG_CREDENTIAL
+
+
+def test_with_neither_the_wall_falls_back_to_the_stored_credential(
+        captured_token, tmp_path):
+    """And the third leg, so the chain is pinned end to end rather than at one
+    link. Without this case a mutation that hard-wires the env leg would pass."""
+    git_push.supervised_push(tmp_path, env={"HOME": "/nowhere"})
+    assert captured_token["token"] == _FALLBACK_CREDENTIAL
 
 
 def test_the_postcondition_verifies_under_the_same_environment(monkeypatch, tmp_path):

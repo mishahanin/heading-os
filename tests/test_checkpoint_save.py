@@ -8,10 +8,13 @@ was saved. The fix makes the @-reference path data-root-relative
 (`outputs/operations/handoff-archive/<name>`), matching the /checkpoint skill and
 the inject hook.
 """
+import importlib.util
+import io
 import json
 import os
 import subprocess
 import sys
+from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
@@ -181,6 +184,130 @@ def test_exec_layout_refs_fall_back_to_the_absolute_path(tmp_path):
     prompt = (archive_dir / ".latest" / "prompt.md").read_text(encoding="utf-8")
     assert archive.as_posix() in prompt, (
         f"the continuation prompt names no readable path:\n{prompt}")
+
+
+def test_the_archive_filename_lands_on_the_operators_calendar_day(tmp_path):
+    """The stamp is DISPLAY time, and only a source scan ever said so.
+
+    `tests/test_checkpoint_stamp_timezone.py` guards this by reading the hook's
+    text for `X.utc_now().strftime("%Y-%m-%d-%H%M%S")` and for a variable
+    assigned `datetime.now(timezone.utc)`. Both are the shapes the original
+    defect had, and neither is the only way to write it: measured 2026-09-01,
+    replacing the stamp with an INLINE
+    `datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")` matched neither
+    pattern, and was green across all twelve checkpoint test files here and
+    across a wider ten-file set including that scan.
+
+    So the property is asserted on the FILE THE HOOK WROTE instead of on the
+    line it was written from. The operator is at UTC+4 (`HEADING_OS_TZ` is
+    pinned in tests/conftest.py), and a handoff written at 02:56 local under
+    a UTC stamp files under the PREVIOUS calendar day - which is the window
+    this operator works in.
+
+    Both clock readings are taken around the run and either hour is accepted, so
+    a run that straddles an hour boundary cannot fail this.
+    """
+    sys.path.insert(0, str(ROOT))
+    from scripts.utils import checkpoint_paths as CP
+
+    before = CP.local_now().strftime("%Y-%m-%d-%H")
+    _run_hook(tmp_path, {
+        "session_id": "stamp-test", "trigger": "manual",
+        "compact_summary": "s", "transcript_path": "",
+    })
+    after = CP.local_now().strftime("%Y-%m-%d-%H")
+
+    archive_dir = tmp_path / "outputs" / "operations" / "handoff-archive"
+    written = list(archive_dir.glob("*_handoff_compact-manual_*.md"))
+    assert written, f"no handoff archive written under {archive_dir}"
+    stamp = written[0].name[:13]
+    assert stamp in (before, after), (
+        f"the archive is stamped {stamp}, not the operator's local hour "
+        f"({before}/{after}); a handoff written after local midnight would file "
+        "under the previous calendar day"
+    )
+    if CP.local_now().utcoffset() != CP.utc_now().utcoffset():
+        assert stamp != CP.utc_now().strftime("%Y-%m-%d-%H"), (
+            "local and UTC differ here, so a local stamp must not equal the UTC one"
+        )
+
+
+def _in_process_hook(tmp_path, monkeypatch):
+    """Load checkpoint-save.py as a module, with both roots pinned into tmp.
+
+    In-process rather than as a subprocess because the seam being exercised is
+    `redacted_field`'s module-global `redact` lookup, which the function's own
+    docstring names as the thing a test swaps. Module-scope `HANDOFF_DIR` and
+    `state_dir_for` both resolve from the environment, so pinning it before the
+    import is what keeps the write inside `tmp_path`.
+    """
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path / "data"))
+    (tmp_path / "data").mkdir()
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
+    spec = importlib.util.spec_from_file_location("checkpoint_save_inproc", HOOK)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module, project
+
+
+def test_a_redactor_that_returns_a_non_string_quarantines_the_handoff(
+    tmp_path, monkeypatch, capsys
+):
+    """`redacted_field`'s return-type check, which nothing exercised.
+
+    The guarded import above it covers a redactor that RAISES. A redactor that
+    returns None never raises, and `redacted_field`'s docstring records what
+    that once cost: an archive whose entire Summary section was the literal
+    string "None" - the handoff destroyed, stderr silent, and the systemMessage
+    reporting a successful save.
+
+    Mutation-confirmed 2026-09-01: deleting the `isinstance` check and its
+    `raise` was green across all twelve checkpoint test files here, and green
+    again across a wider ten-file set covering the save hook, the pointer
+    writer and the archive redaction. So the one line standing between a broken
+    redactor and a destroyed handoff was held by inspection alone.
+
+    Driven through the real `main()`, because the property is not that a
+    TypeError is raised - it is that raising routes the save into the same
+    quarantine as any other redaction failure, and says so on the one channel
+    the operator reads.
+    """
+    module, project = _in_process_hook(tmp_path, monkeypatch)
+    monkeypatch.setattr(module, "redact", lambda value: None)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({
+        "session_id": "redactor-test", "trigger": "manual",
+        "compact_summary": "the summary that must not become the word None",
+        "transcript_path": "",
+    })))
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        assert module.main() == 0, "a broken redactor must not break the hook"
+
+    message = json.loads(buffer.getvalue())["systemMessage"]
+    assert "REDACTION FAILED (TypeError)" in message, (
+        f"a redactor returning None was treated as a successful redaction: "
+        f"{message}"
+    )
+    assert "QUARANTINED" in message
+
+    handoff = module.CP.handoff_dir(project, module.WORKSPACE)
+    archived = list(handoff.glob("*_handoff_compact-*.md"))
+    assert not archived, (
+        f"an unredactable handoff was written into the tracked archive: {archived}"
+    )
+    quarantined = list((handoff / ".quarantine").glob("*.md"))
+    assert quarantined, "the handoff was neither archived nor quarantined"
+    assert "must not become the word None" in quarantined[0].read_text(encoding="utf-8")
+
+    pointer = (handoff / ".latest" / "summary.md").read_text(encoding="utf-8")
+    assert "REDACTION FAILED (TypeError)" in pointer
+    assert "\nNone\n" not in pointer, (
+        "the pointer carries the redactor's return value where the summary "
+        "should be, which is the measured incident this check exists for"
+    )
 
 
 def test_state_reset_records_data_root_relative_summary_path(tmp_path):

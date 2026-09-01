@@ -310,6 +310,49 @@ def test_no_non_string_name_reaches_a_row(gr, tmp_path, monkeypatch, literal):
     assert errors
 
 
+def test_a_skill_md_that_is_not_utf8_is_a_curated_error_too(gr, tmp_path,
+                                                             monkeypatch):
+    """The same defect one class over: an unreadable FILE, not an unreadable field.
+
+    `parse_frontmatter` caught `OSError`, and `UnicodeDecodeError` is a
+    ValueError, so one stray Latin-1 byte in a SKILL.md (a paste, an editor that
+    saved cp1252) raised straight out of `load_routing_rows`. MEASURED
+    2026-09-01 on a scratch skill tree: `UnicodeDecodeError: 'utf-8' codec can't
+    decode byte 0xe9`, no file named, from the gate that runs in CI and in
+    pre-commit and whose whole job is to print `{rel}: {err}`.
+
+    Asserted through `load_routing_rows` rather than `parse_frontmatter`,
+    because the file name only appears at that level and the name is the point.
+    """
+    d = tmp_path / "alpha"
+    d.mkdir()
+    (d / "SKILL.md").write_bytes(
+        b"---\nname: alpha\ndescription: caf\xe9\n---\n\nbody\n")
+    monkeypatch.setattr(gr, "SKILLS_DIR", tmp_path)
+    monkeypatch.setattr(gr, "ROOT", tmp_path)
+
+    rows, errors = gr.load_routing_rows()
+    assert rows == []
+    assert any("alpha" in e and "unreadable" in e for e in errors), errors
+
+
+def test_a_skill_md_that_cannot_be_opened_is_still_a_curated_error(gr, tmp_path,
+                                                                    monkeypatch):
+    """The OSError arm, so widening the tuple cannot have dropped it.
+
+    A directory named `SKILL.md` satisfies the `.exists()` check above the read
+    and then refuses to be read, which is the cheapest reachable OSError here.
+    """
+    d = tmp_path / "beta"
+    (d / "SKILL.md").mkdir(parents=True)
+    monkeypatch.setattr(gr, "SKILLS_DIR", tmp_path)
+    monkeypatch.setattr(gr, "ROOT", tmp_path)
+
+    rows, errors = gr.load_routing_rows()
+    assert rows == []
+    assert any("beta" in e and "unreadable" in e for e in errors), errors
+
+
 def test_two_skills_in_one_category_still_sort(gr, tmp_path, monkeypatch):
     """The crash needed two rows to compare; one alone never sorted."""
     monkeypatch.setattr(gr, "SKILLS_DIR", tmp_path)
@@ -398,6 +441,48 @@ def test_a_subjectless_parent_yields_no_subject(gd, parent):
 def test_the_bare_re_prefix_is_never_produced(gd):
     assert gd.reply_subject("").strip() != "Re:"
     assert gd.reply_subject("") != "Re: "
+
+
+def test_a_letter_that_is_not_utf8_is_a_named_refusal_not_a_traceback(gd, tmp_path):
+    """`main` wraps `body_text` in `except (DraftBuildError, OSError)` and prints
+    one curated line. `UnicodeDecodeError` is a ValueError, so it was neither.
+
+    MEASURED 2026-09-01 on a letter carrying one cp1252 byte: `UnicodeDecodeError:
+    'utf-8' codec can't decode byte 0xe9 in position 14`, straight past that
+    handler - for the one input in this script a human writes by hand, and the
+    likeliest single thing to be wrong with it. The raw exception does not name
+    the FILE either, which is what the operator has to go and fix, so this
+    asserts the path is in the message rather than only that it was caught.
+    """
+    letter = tmp_path / "letter.md"
+    letter.write_bytes(b"Dear Sir,\n\ncaf\xe9 latin-1 body\n")
+
+    with pytest.raises(gd.DraftBuildError) as caught:
+        gd.body_text(letter, False)
+    assert "letter.md" in str(caught.value)
+    assert "UTF-8" in str(caught.value)
+
+
+def test_a_letter_that_is_not_utf8_is_refused_through_main(gd, monkeypatch,
+                                                            tmp_path):
+    """End to end, because the class is only worth changing if `main` catches it."""
+    letter = tmp_path / "letter.md"
+    letter.write_bytes(b"Dear Sir,\n\ncaf\xe9 latin-1 body\n")
+    fake = _FakeGmail("Quarterly numbers")
+    monkeypatch.setattr("scripts.utils.gmail_auth.get_service", lambda: fake)
+    monkeypatch.setattr(gd.sys, "argv", [
+        "gmail-draft.py", "--to", "a@b.c", "--body-file", str(letter),
+        "--subject", "Numbers"])
+
+    assert gd.main() == 2
+    assert fake.drafts_created == [], "a draft was built from a body that would not decode"
+
+
+def test_a_utf8_letter_still_reads(gd, tmp_path):
+    """Anchor: the guard refuses the undecodable case only."""
+    letter = tmp_path / "letter.md"
+    letter.write_text("Dear Sir,\n\nplain body\n", encoding="utf-8")
+    assert "plain body" in gd.body_text(letter, False)
 
 
 def test_an_ordinary_subject_is_prefixed(gd):

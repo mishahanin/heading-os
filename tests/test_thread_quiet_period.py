@@ -244,6 +244,26 @@ def test_the_hygiene_scan_stays_silent_while_the_quiet_period_holds(tmp_path):
     assert "quiet-expired" not in actions
 
 
+@pytest.mark.parametrize("today, expected", [
+    (date(2026, 8, 24), False),   # the day before the lift
+    (date(2026, 8, 25), False),   # the lift date itself: still quiet
+    (date(2026, 8, 26), True),    # the first day after
+])
+def test_the_scan_turns_on_the_lift_date_and_not_a_day_early(tmp_path, today,
+                                                             expected):
+    """The two cases above sit 13 days either side of the lift, so a one-day
+    slip in the scan's own comparison would pass both. The boundary is asked at
+    the exact day here, on both sides of it."""
+    root = tmp_path / "threads"
+    (root / "business").mkdir(parents=True)
+    write_thread_file(
+        root / "business" / "2026-05-20-example-alliance.md",
+        _thread(last_touched="2026-08-20", quiet_until="2026-08-25"),
+    )
+    actions = {c.action for c in scan_for_archive(root, today=today)}
+    assert ("quiet-expired" in actions) is expected
+
+
 def test_a_quiet_thread_is_not_nagged_as_stale(tmp_path):
     """The 60-day 'propose on-hold' nudge is exactly the noise a quiet suppresses."""
     root = tmp_path / "threads"

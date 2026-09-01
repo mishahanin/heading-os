@@ -36,22 +36,35 @@ from pathlib import Path
 
 import pytest
 
+from tests.repo_files import tracked_paths
+
 ROOT = Path(__file__).resolve().parent.parent
 
 # Directories whose contents can become `sys.path[0]`: any directory holding a
 # Python file someone might execute directly, plus every package beside it.
-_SCANNED_TREES = ("scripts", ".claude/hooks")
+# Each carries its OWN floor. A single floor over the union was satisfied by
+# `scripts/` alone (386 files against a floor of 250), so `.claude/hooks/` could
+# contribute zero modules and the gate would still report green over a tree it
+# had stopped reading. Counts measured 2026-09-01; the floors sit well under
+# them so retiring a batch of files does not fail this test.
+_SCANNED_TREES = {"scripts": 250, ".claude/hooks": 10}
 
 _STDLIB = set(sys.stdlib_module_names)
 
 
+def _tree_files(tree: str) -> list[Path]:
+    """Every tracked `.py` under one scanned tree.
+
+    Through git, not a bare `rglob`: an agent worktree or a scratch copy under
+    an ignored path would otherwise join the corpus and make both the floor and
+    the failure message meaningless (`tests/test_a_walker_that_never_asked_git.py`).
+    """
+    return [p for p in tracked_paths((f"{tree}/**/*.py", f"{tree}/*.py"))
+            if "__pycache__" not in p.parts]
+
+
 def _module_files() -> list[Path]:
-    return [
-        p
-        for tree in _SCANNED_TREES
-        for p in sorted((ROOT / tree).rglob("*.py"))
-        if "__pycache__" not in p.parts
-    ]
+    return sorted({p for tree in _SCANNED_TREES for p in _tree_files(tree)})
 
 
 @pytest.mark.parametrize("path", _module_files(), ids=lambda p: str(p.relative_to(ROOT)))
@@ -67,11 +80,18 @@ def test_no_module_shadows_the_standard_library(path):
     )
 
 
-def test_the_scan_still_finds_the_modules():
+@pytest.mark.parametrize("tree,floor", sorted(_SCANNED_TREES.items()))
+def test_the_scan_still_finds_the_modules(tree, floor):
     """An empty parametrize is one silent skip, not a failure, so this gate
     would report green over zero modules. Every tree it reads is engine-only,
-    so an empty result means the glob or the layout moved. 388 on 2026-08-26.
-    """
-    found = _module_files()
+    so an empty result means the glob or the layout moved.
 
-    assert len(found) >= 250, f"only {len(found)} modules reached the shadowing gate"
+    Per tree, not over the union. Measured 2026-09-01: scripts 386,
+    .claude/hooks 17. Under the old single floor of 250 over the union,
+    `.claude/hooks/` could drop to zero files and this test still passed.
+    """
+    found = _tree_files(tree)
+
+    assert len(found) >= floor, (
+        f"only {len(found)} modules under {tree}/ reached the shadowing gate "
+        f"(floor {floor})")

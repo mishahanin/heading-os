@@ -174,6 +174,79 @@ def test_the_surviving_entries_are_printable(repo_with_an_undecodable_filename,
     assert "was modified in this run" in capsys.readouterr().out
 
 
+@pytest.fixture
+def repo_whose_TRACKED_file_is_undecodable(tmp_path):
+    """The other leg. `_git_changed_files` runs TWO git commands and decodes
+    each: `diff --name-only` for tracked changes and `ls-files --others` for
+    untracked ones. The fixture above only ever creates an UNTRACKED file, so
+    the tracked leg was never driven.
+
+    MEASURED 2026-09-01: changing ONLY the diff leg's decode to a strict
+    `decode("utf-8")` left this file green at 9 passed, while a tracked file
+    named b'bad\\xffname' then raised UnicodeDecodeError out of `cmd_verify` -
+    the exact traceback this file exists to prevent, through the door nobody
+    opened. A fix present in two legs and tested in one is the shape this
+    repository keeps producing.
+    """
+    repo = tmp_path / "tracked-repo"
+    repo.mkdir()
+    env = dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null")
+
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=str(repo), env=env,
+                              capture_output=True, check=True)
+
+    git("init", "-q", ".")
+    git("config", "user.email", "q@example.invalid")
+    git("config", "user.name", "Q Branch")
+    try:
+        (repo / os.fsdecode(_UNDECODABLE)).write_bytes(b"skyfall\n")
+    except (OSError, UnicodeError):  # pragma: no cover - a filesystem that refuses
+        pytest.skip("this filesystem will not hold a non-UTF-8 filename")
+    (repo / "tracked.txt").write_text("moneypenny\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "seed")
+    # Both files now TRACKED, and both modified: they reach the diff leg, and
+    # nothing reaches the untracked leg at all.
+    (repo / os.fsdecode(_UNDECODABLE)).write_bytes(b"spectre\n")
+    (repo / "tracked.txt").write_text("q branch\n", encoding="utf-8")
+    return repo
+
+
+def test_the_tracked_leg_survives_a_filename_it_cannot_decode(
+        repo_whose_TRACKED_file_is_undecodable, monkeypatch):
+    itl = _load("implement-trajectory-log", "implement_trajectory_log")
+    monkeypatch.setattr(itl, "WORKSPACE_ROOT", repo_whose_TRACKED_file_is_undecodable)
+
+    changed = itl._git_changed_files("HEAD")
+
+    assert "tracked.txt" in changed, (
+        "the readable neighbour vanished with the undecodable one")
+    assert len(changed) == 2, changed
+    mangled = next(p for p in changed if p != "tracked.txt")
+    assert mangled.startswith("bad") and mangled.endswith("name")
+
+
+def test_the_tracked_leg_is_driven_and_the_untracked_one_is_not(
+        repo_whose_TRACKED_file_is_undecodable):
+    """Establish the fixture's premise rather than assume it.
+
+    Without this, a fixture that accidentally left the file untracked would
+    re-test the leg already covered above and report a coverage it never had.
+    """
+    env = dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null")
+    repo = repo_whose_TRACKED_file_is_undecodable
+    others = subprocess.run(["git", "ls-files", "-z", "--others",
+                             "--exclude-standard"],
+                            cwd=str(repo), env=env, capture_output=True)
+    diff = subprocess.run(["git", "diff", "--name-only", "-z", "HEAD"],
+                          cwd=str(repo), env=env, capture_output=True)
+
+    assert others.stdout == b"", f"the fixture left untracked files: {others.stdout!r}"
+    assert _UNDECODABLE in diff.stdout, (
+        f"the undecodable name is not in the tracked diff: {diff.stdout!r}")
+
+
 def test_a_decodable_repo_still_reports_both_halves_of_the_change_set(tmp_path,
                                                                      monkeypatch):
     """Regression guard: the errors= policy must not narrow the ordinary case."""

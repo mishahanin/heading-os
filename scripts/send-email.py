@@ -395,7 +395,26 @@ def is_html(text):
     return bool(_HTML_TAG_RE.search(text))
 
 
-_SIGNOFF_KEYWORDS = r"(?:Best|Thanks|Regards|Cheers|Sincerely|Kind\s+regards|Warmly|BR|Br)"
+# Multi-word forms come FIRST, and the reason is worth the line: `Kind regards`
+# sat at the END of this alternation, after the bare `Best`, and `Best regards`
+# was absent entirely. MEASURED 2026-09-01 against the shipped list:
+#
+#     Best regards  -> SURVIVES        Kind regards -> stripped
+#     Warm regards  -> SURVIVES        Best         -> stripped
+#     Many thanks   -> SURVIVES        Regards      -> stripped
+#
+# So the three commonest two-word English sign-offs were the three that went out
+# doubled, under a function whose whole job is to stop the doubling. The one
+# multi-word form that DID work is the one that shares no prefix with a
+# single-word entry, which is what made the gap look like a complete list.
+#
+# Python's `re` backtracks through an alternation, so ordering is not strictly
+# required for correctness; the longest-first order is here so the next reader
+# adding a form sees the shape rather than rediscovering it.
+_SIGNOFF_KEYWORDS = (
+    r"(?:Kind\s+regards|Best\s+regards|Warm\s+regards|Many\s+thanks"
+    r"|Best|Thanks|Regards|Cheers|Sincerely|Warmly|BR|Br)"
+)
 _NAME_TOKEN = r"[A-Z][A-Za-z'\-]{1,30}"
 
 _SIGNOFF_PATTERNS = [

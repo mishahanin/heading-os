@@ -128,6 +128,21 @@ def test_caller_mutation_does_not_corrupt_next_caller(fake_root):
     assert workspace.get_routing_destination("crm/contacts/a.md") == "private"
 
 
+def test_a_bare_prefix_neighbour_does_not_inherit_a_rule(fake_root):
+    """The boundary, over a synthetic map so it cannot drift with the real one.
+
+    `crm/` is the only private rule in MAP, so `crmx/` must fall through to the
+    `engine` default rather than being swept up by a prefix comparison. Held
+    here as well as against the live map (`tests/test_routing_map.py`) because
+    the live map's rule set is the operator's and can change under the test,
+    while this one is three lines at the top of this file.
+    """
+    assert workspace.get_routing_destination("crm/contacts/a.md") == "private"
+    assert workspace.get_routing_destination("crmx/contacts/a.md") == "engine"
+    assert workspace.get_routing_destination("knowledge/shared-notes/x.md") == "engine"
+    assert workspace.get_routing_destination("knowledge/shared/x.md") == "corporate"
+
+
 def test_missing_map_fails_closed_private(tmp_path, monkeypatch):
     """No config/routing-map.yaml at all: unchanged fail-closed behaviour."""
     monkeypatch.setattr(workspace, "get_workspace_root", lambda: tmp_path)

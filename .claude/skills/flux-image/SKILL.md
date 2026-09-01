@@ -10,7 +10,8 @@ metadata:
   version: "1.1"
 x-heading-orchestration:
   parallel_safe: true
-  shared_state: []
+  shared_state:
+    - "outputs/content/images/"
   triggers:
     - generate image
     - create image

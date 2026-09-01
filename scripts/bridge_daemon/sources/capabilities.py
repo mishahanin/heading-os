@@ -185,6 +185,24 @@ def list_capabilities(workspace_root: Path) -> dict:
         except OSError:
             logger.warning("skipping unstattable skill %s", skill_md, exc_info=True)
             continue
+        # The SIZE cap `read_skill` enforces, applied by the LIST scan too, and
+        # for the same reason the symlink rule above is. MEASURED 2026-09-01 on
+        # a 250 KB SKILL.md: `list_capabilities` published the row under its
+        # frontmatter name and `read_skill` answered
+        # `file too large (250069 bytes, max 200000)`, so the dashboard
+        # advertised a skill whose drill-down cannot open. Same defect as the
+        # symlink one, one field over. `SKILL_MAX_BYTES` is defined below this
+        # function and resolved at call time, beside the check it bounds.
+        try:
+            size = skill_md.stat().st_size
+            if size > SKILL_MAX_BYTES:
+                logger.warning("skipping oversized skill %s (%d bytes, max %d); "
+                               "read_skill refuses this row too",
+                               skill_md, size, SKILL_MAX_BYTES)
+                continue
+        except OSError:
+            logger.warning("skipping unstattable skill %s", skill_md, exc_info=True)
+            continue
         try:
             text = skill_md.read_text(encoding="utf-8")
             mtime = skill_md.stat().st_mtime

@@ -363,11 +363,47 @@ def test_a_duration_is_read_as_written(text, minutes):
     assert _parse_duration_minutes(text) == minutes
 
 
+# MEASURED 2026-09-01: deleting EITHER lookbehind left all 50 tests in this file
+# green. The table above cannot see them, because adding `(?:\.\d+)?` to the
+# number is on its own enough to fix `1.5h` - the match starts at the `1` and
+# swallows the `.5`, lookbehind or not - and every other row is an integer. The
+# source check below could not see them either; see its own docstring.
+#
+# These are the inputs where the two spellings actually disagree, each verified
+# against both versions of the regex before being written down.
+@pytest.mark.parametrize("text,minutes,without", [
+    # A leading-dot decimal. Five hours for a half-hour meeting, which is
+    # verbatim the symptom section 5 is named for, reached by another spelling.
+    (".5h", 30, 300),
+    (".75h", 30, 4500),
+    # Two dots: the match restarts inside the second decimal.
+    ("1.5.5h", 30, 330),
+    # The minute branch, which had no distinguishing case at all.
+    (".5m", 30, 5),
+    ("x.5m", 30, 5),
+])
+def test_a_match_cannot_start_in_the_middle_of_a_number(text, minutes, without):
+    from scripts.bridge_daemon.sources.pulse import _parse_duration_minutes
+    assert _parse_duration_minutes(text) == minutes, (
+        f"{text!r} read as {_parse_duration_minutes(text)} minutes; without the "
+        f"lookbehind it reads as {without}")
+
+
 def test_the_hour_match_cannot_start_inside_a_decimal():
+    """BOTH lookbeholds, counted.
+
+    This asserted `r"(?<![\\d.])" in src`, and the token appears twice - once on
+    the hour pattern and once on the minute pattern. Deleting either one left
+    the other in the file and this check green, which is why two mutations
+    survived it on 2026-09-01. A substring test over a file cannot tell one
+    occurrence from two.
+    """
     from scripts.bridge_daemon.sources import pulse
     src = _code(Path(pulse.__file__))
-    assert r"(?<![\d.])" in src, (
-        "the lookbehind is the fix; without it `1.5h` matches the `5h`")
+    guarded = re.findall(r"\(\?<!\[\\d\.\]\)\(\\d\+\(\?:\\\.\\d\+\)\?\)([hm])", src)
+    assert sorted(guarded) == ["h", "m"], (
+        f"the hour and minute patterns must each carry the lookbehind; "
+        f"found it on {sorted(guarded)}")
 
 
 # ============================================================

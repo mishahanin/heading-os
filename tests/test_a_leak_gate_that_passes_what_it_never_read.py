@@ -221,7 +221,18 @@ def test_no_verdict_at_all_is_none():
 # 6 - a stratified sample reaches the size it was asked for
 # ============================================================
 def _sample(i, sev):
-    return sr.FindingSample(scrutiny_id="r", finding_id=f"{sev[0]}{i}", severity=sev,
+    # ZERO-PADDED, and the padding is load-bearing rather than tidiness. The
+    # spread assertion in `test_the_top_up_draws_from_across_the_pool_not_off
+    # _one_end` only detects a fixed ordering when that ordering is contiguous
+    # in the numbers it reads back out of the id. With bare `f"{sev[0]}{i}"`,
+    # lexicographic order is M0, M1, M10, M100, ... so a sampler that sorted the
+    # bucket instead of shuffling it produced a spread of 136 over a pool of 200
+    # and PASSED. MEASURED 2026-09-01: replacing `rng.shuffle(bucket)` in
+    # `stratified_sample` with `bucket.sort(key=lambda s: s.finding_id)` left
+    # this file at 24 passed, 0 failed. Padded, lexicographic order and numeric
+    # order are the same thing, so any fixed ordering is a slice off one end and
+    # the spread bound bites. `int(finding_id[1:])` parses "0042" unchanged.
+    return sr.FindingSample(scrutiny_id="r", finding_id=f"{sev[0]}{i:04d}", severity=sev,
                             confidence=None, statement="s", location="", evidence="",
                             was_flagged_fp=False)
 

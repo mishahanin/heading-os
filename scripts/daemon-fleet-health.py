@@ -226,7 +226,14 @@ def _read_corporate_config_version(workspace_root: Path) -> str | None:
         return None
     try:
         data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
+    except (OSError, UnicodeError, yaml.YAMLError):
+        # UnicodeError for the same reason `_read_heartbeat` carries it:
+        # `read_text(encoding="utf-8")` raises UnicodeDecodeError on undecodable
+        # bytes, that is a ValueError, and neither OSError nor yaml.YAMLError is
+        # its parent. A corporate config half-written by an interrupted
+        # `/push-updates` therefore escaped a handler whose docstring promises
+        # None "if the file is missing or unparseable" and killed `main` before
+        # a single daemon was classified.
         return None
     # `yaml.safe_load` answers with any YAML value. A config of `- a-list` or
     # a bare scalar parses fine, is truthy so `or {}` does not fire, and then
@@ -339,9 +346,27 @@ def _collect_daemon_beats(workspace: Path, kind: str = "local") -> list[dict]:
     for path in sorted(beats_dir.glob("*.json")):
         try:
             rec = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as e:
+        except (OSError, UnicodeError, json.JSONDecodeError) as e:
+            # UnicodeError, because the widening `_read_heartbeat` got on
+            # 2026-08-27 landed in ONE of this file's two readers. A per-daemon
+            # beat is written by a live daemon on this host, so a torn write is
+            # ordinary, and `read_text(encoding="utf-8")` raises
+            # UnicodeDecodeError - a ValueError, caught by neither clause that
+            # was here - straight out of a function documented to return a list
+            # of records. It killed the loop in `main`, so one corrupt beat took
+            # down the whole fleet report: the same failure, in the same file,
+            # one reader over.
             out.append({"daemon": path.stem, "workspace": str(workspace),
                         "status": "error", "detail": f"parse failed: {e}"})
+            continue
+        # A beat that parses to something other than an object is still a beat
+        # this function must DESCRIBE. `rec.get` raised AttributeError on a bare
+        # `null`, `[]`, a string or a number, past the same handler, for the
+        # same reason `_read_heartbeat` grew its own non-dict branch.
+        if not isinstance(rec, dict):
+            out.append({"daemon": path.stem, "workspace": str(workspace),
+                        "status": "error",
+                        "detail": f"beat is {type(rec).__name__}, not an object"})
             continue
         rec["daemon"] = rec.get("daemon") or path.stem
         rec["workspace"] = str(workspace)

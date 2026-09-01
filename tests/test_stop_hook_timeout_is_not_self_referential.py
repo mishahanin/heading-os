@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -46,16 +47,42 @@ TEMPLATES = (
 LIVE = ".claude/settings.local.json"
 
 
-def _hook_default() -> int:
-    """The default the hook falls back to, read without running its `main`."""
-    sys.path.insert(0, str(ROOT))
-    spec = importlib.util.spec_from_file_location("checkpoint_offer_timeout", HOOK)
-    mod = importlib.util.module_from_spec(spec)
+def _load_hook(env_value: str | None):
+    """Import the hook with `CLAUDE_HANDOFF_HOOK_TIMEOUT` set to `env_value`.
+
+    `None` means the variable is ABSENT for the duration, which is the state the
+    word "default" describes.
+    """
     import contextlib
 
-    with contextlib.suppress(SystemExit):
-        spec.loader.exec_module(mod)
-    return int(mod.HOOK_TIMEOUT_SECONDS)
+    sys.path.insert(0, str(ROOT))
+    previous = os.environ.pop("CLAUDE_HANDOFF_HOOK_TIMEOUT", None)
+    if env_value is not None:
+        os.environ["CLAUDE_HANDOFF_HOOK_TIMEOUT"] = env_value
+    try:
+        spec = importlib.util.spec_from_file_location("checkpoint_offer_timeout", HOOK)
+        mod = importlib.util.module_from_spec(spec)
+        with contextlib.suppress(SystemExit):
+            spec.loader.exec_module(mod)
+        return mod
+    finally:
+        os.environ.pop("CLAUDE_HANDOFF_HOOK_TIMEOUT", None)
+        if previous is not None:
+            os.environ["CLAUDE_HANDOFF_HOOK_TIMEOUT"] = previous
+
+
+def _hook_default() -> int:
+    """The default the hook falls back to, read without running its `main`.
+
+    The variable is cleared for the import, and that is the whole correction
+    made on 2026-09-01. `HOOK_TIMEOUT_SECONDS` is `CP.env_int(...)`, evaluated at
+    import, so this function returned whatever the AMBIENT environment said. On
+    a machine that used the documented override, the three shipped platform
+    templates would have been held to that machine's private number and the
+    guard would have failed a correct tree. The function's name says default;
+    now it reads one.
+    """
+    return int(_load_hook(None).HOOK_TIMEOUT_SECONDS)
 
 
 def _registered_timeout(rel: str) -> int | None:
@@ -103,10 +130,32 @@ def test_the_live_settings_agree_too_when_present():
 
 def test_the_hook_still_reads_the_number_from_the_environment():
     """The override must survive. Hardcoding the constant would make a plugin
-    bundle's different registration invisible to the bound."""
-    text = HOOK.read_text(encoding="utf-8")
-    assert 'CLAUDE_HANDOFF_HOOK_TIMEOUT' in text
-    assert "HOOK_TIMEOUT_SECONDS = CP.env_int(" in text, (
+    bundle's different registration invisible to the bound.
+
+    Driven, not grepped. The two assertions here read the hook's SOURCE for the
+    variable name and for the assignment text, and a comment mentioning either
+    would have satisfied both. Importing the module under a set variable and an
+    absent one asks the question the file actually cares about: does the number
+    move when the environment says so?
+    """
+    default = _hook_default()
+    override = str(default + 7)
+    assert int(_load_hook(override).HOOK_TIMEOUT_SECONDS) == int(override), (
         "the timeout is no longer read as data; a hardcoded number would "
         "describe somebody else's registration"
     )
+    assert _hook_default() == default, (
+        "reading the override changed what the hook falls back to"
+    )
+
+
+def test_the_default_does_not_move_with_this_machine(monkeypatch):
+    """`_hook_default` must answer for the SHIPPED default, whatever this host
+    has configured, or the three platform templates get held to a local number.
+    """
+    monkeypatch.setenv("CLAUDE_HANDOFF_HOOK_TIMEOUT", "37")
+    assert _hook_default() != 37, (
+        "the ambient environment leaked into what this guard calls the default"
+    )
+    for rel in TEMPLATES:
+        assert _registered_timeout(rel) == _hook_default()

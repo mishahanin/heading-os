@@ -74,10 +74,28 @@ def test_the_gmail_token_write_resolves_the_atomic_helper():
 
 
 def test_the_contacts_token_write_resolves_the_atomic_helper():
+    """Asked of the FUNCTION that writes the token, not of the file's text.
+
+    This asserted `'open(TOKEN_PATH, "w"' not in src` over the whole module -
+    a substring over source text, which is the wrong instrument in both
+    directions. It passes on any other spelling of the same truncating write
+    (measured 2026-09-01: `Path(TOKEN_PATH).open("w").write(creds.to_json())`
+    left this file entirely green while the OAuth refresh token went back to
+    being truncated in place), and it would fail on a legitimate re-wrap that
+    never touched the safety property. The gmail sibling above already asks
+    `co_names` of the function; this one now does too.
+    """
     mod = _load("scripts/google-contacts.py", "google_contacts_under_test")
     assert callable(mod.atomic_write_text)
-    src = (ROOT / "scripts" / "google-contacts.py").read_text(encoding="utf-8")
-    assert 'open(TOKEN_PATH, "w"' not in src
+    names = mod.authenticate.__code__.co_names
+    assert "atomic_write_text" in names, (
+        "authenticate() no longer reaches the atomic helper; the OAuth refresh "
+        "token is the whole Google Contacts path's credential"
+    )
+    assert "open" not in names, (
+        "authenticate() went back to a plain open(); a crash mid-write leaves "
+        "an empty credential and the next run demands a browser login"
+    )
 
 
 def test_an_oauth_token_write_lands_restricted_and_never_world_readable(tmp_path):
@@ -92,6 +110,54 @@ def test_an_oauth_token_write_lands_restricted_and_never_world_readable(tmp_path
     atomic_write_text(token, json.dumps(payload), mode=0o600)
     assert stat.S_IMODE(os.stat(token).st_mode) == 0o600
     assert json.loads(token.read_text(encoding="utf-8")) == payload
+
+
+def test_the_credential_is_CREATED_restricted_never_narrowed_afterwards(tmp_path, monkeypatch):
+    """The mechanism behind the test above, which that test cannot see.
+
+    `test_an_oauth_token_write_lands_restricted_and_never_world_readable`
+    stats the file after `atomic_write_text` returns, so it reads the FINAL
+    mode and nothing else. Every path that ends at 0o600 passes it, including
+    ones that put the whole refresh token on disk world-readable first.
+
+    Measured 2026-09-01: replacing `tempfile.mkstemp(dir=...)` with
+    `os.open(tmp, O_CREAT|O_WRONLY|O_TRUNC, 0o666)` - so the tempfile is
+    created at the process umask, carries the entire credential, and is only
+    narrowed by the chmod further down - left `tests/`,
+    `tests/security/test_SEC_006_oauth_dir_permissions.py` and
+    `tests/test_atomic_scripts.py` all green: 42 passed, 1 skipped. The
+    property those tests are named for is supplied by `mkstemp` creating at
+    0o600, and nothing asked about it.
+
+    So ask at the earliest observable instant instead: the mode the descriptor
+    already carries when the writer opens it. `os.fdopen` is the first thing
+    `atomic_write_text` does with the fd, which makes it the seam - and
+    `os.fstat` reads the mode through the descriptor, so this cannot be fooled
+    by a chmod that happens later.
+    """
+    seen: list[int] = []
+    real_fdopen = os.fdopen
+
+    def _watching_fdopen(fd, *a, **k):
+        seen.append(stat.S_IMODE(os.fstat(fd).st_mode))
+        return real_fdopen(fd, *a, **k)
+
+    monkeypatch.setattr("scripts.utils.atomic.os.fdopen", _watching_fdopen)
+    token = tmp_path / "google" / "gmail_token.json"
+    atomic_write_text(token, json.dumps({"refresh_token": "fixture"}), mode=0o600)
+
+    assert seen, (
+        "the observer never fired: atomic_write_text no longer opens its "
+        "tempfile through os.fdopen, so this guard measured nothing"
+    )
+    for observed in seen:
+        assert not observed & (stat.S_IRWXG | stat.S_IRWXO), (
+            f"the tempfile holding the credential was created mode {observed:#o}: "
+            "readable by group or other before any chmod could narrow it"
+        )
+        assert observed == 0o600, (
+            f"expected a 0o600 creation (mkstemp's own), got {observed:#o}"
+        )
 
 
 def test_a_failed_token_write_leaves_the_old_credential_intact(tmp_path, monkeypatch):

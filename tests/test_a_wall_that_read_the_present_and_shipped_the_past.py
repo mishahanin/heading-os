@@ -32,6 +32,7 @@ from __future__ import annotations
 import ast
 import base64
 import importlib.util
+import inspect
 import json
 import os
 import subprocess
@@ -179,6 +180,38 @@ def test_a_version_deleted_by_a_later_commit_is_still_listed(repo: Path) -> None
     assert "gone.md" not in two_endpoint, (
         "the premise of this test is that the endpoint diff misses it")
     assert "gone.md" in unpushed_paths(repo)
+
+
+def test_a_parentless_commit_in_the_range_is_still_walked(repo: Path) -> None:
+    """`--root`, which had no witness at all until 2026-09-01.
+
+    `git diff-tree` on a commit with no parent emits NOTHING unless `--root` is
+    given: there is no other tree to diff against. So a range containing a
+    parentless commit reports not "fewer paths" but ZERO, and all three push
+    walls then inspect an empty list and pass.
+
+    This is not a hypothetical shape. The workspace's standing plan for making
+    the engine repository public is to squash or rewrite its history first, "so
+    the initial-import commit cannot ship any pre-cleanup content" - and a
+    rewrite produces exactly this: a brand new root commit that `origin/main`
+    cannot reach. The one push where the walls matter most is the one where they
+    would have seen nothing.
+
+    MEASURED 2026-09-01 by deleting `--root` from the `diff-tree` argument list:
+    `rev-list origin/main..HEAD` still counted the commit, `unpushed_paths`
+    returned `[]` where it returns `['leaked.md']` today, and all 66 tests in
+    this file stayed green.
+    """
+    _git(repo, "checkout", "-q", "--orphan", "rewritten")
+    _git(repo, "rm", "-rq", "--cached", ".")
+    for path in repo.iterdir():
+        if path.name != ".git":
+            path.unlink()
+    _commit(repo, "leaked.md", "planted\n", "squashed import")
+
+    assert len(_git(repo, "rev-list", "origin/main..HEAD").stdout.split()) == 1, (
+        "the premise is a single parentless commit in the unpushed range")
+    assert unpushed_paths(repo) == ["leaked.md"]
 
 
 def test_a_blob_already_on_the_base_is_not_listed(repo: Path) -> None:
@@ -577,16 +610,82 @@ def test_the_scratch_tree_is_gone_afterwards(repo: Path, monkeypatch) -> None:
         assert not path.exists(), f"scratch tree survived: {path}"
 
 
-def test_the_history_pass_refuses_when_git_cannot_answer(
-        repo: Path, monkeypatch, capsys) -> None:
+# Every wall that asks git what the push will send, paired with the enumerator
+# it asks through. All three must fail CLOSED, and until 2026-09-01 only the
+# first had a witness: replacing the `sys.exit(2)` in `engine_clean_scan` or in
+# `engine_content_scan` with a silent fall-through left all 67 tests in this
+# file GREEN, measured one refusal at a time. That is a wall failing open in the
+# one state where it cannot see - the exact failure `HistoryUnavailable`'s own
+# docstring says it exists as an exception rather than an empty list to prevent.
+#
+# Named as (wall, enumerator) pairs derived from what each function calls, so a
+# fourth wall added later shows up as a missing entry rather than as silence.
+_HISTORY_WALLS = [
+    ("history_content_scan", "unpushed_blobs"),
+    ("engine_clean_scan", "unpushed_paths"),
+    ("engine_content_scan", "unpushed_blobs"),
+]
+
+
+@pytest.mark.parametrize("wall,enumerator", _HISTORY_WALLS,
+                         ids=[w for w, _ in _HISTORY_WALLS])
+def test_every_history_wall_refuses_when_git_cannot_answer(
+        repo: Path, monkeypatch, capsys, wall, enumerator) -> None:
     """Fail closed on the tooling error, exactly as the enumeration does."""
     def boom(*_a, **_k):
         raise HistoryUnavailable("git said no")
 
-    monkeypatch.setattr(push_all, "unpushed_blobs", boom)
-    refused, code = _refuses(push_all.history_content_scan, repo)
-    assert refused and code == "2"
+    class _CleanDenylist:
+        degraded = False
+        tokens = {"never-appears-shard30"}
+
+        def scan_text(self, _text):
+            return iter(())
+
+    # `engine_content_scan` refuses on a degraded denylist BEFORE it asks git
+    # anything, and a scratch clone is not a DATA overlay, so without this stub
+    # the case would exit 2 for the wrong reason and pass while proving nothing.
+    # The other two walls never call it. Same stub the two content-wall tests
+    # below already install.
+    monkeypatch.setattr(push_all, "build_denylist", lambda _root: _CleanDenylist())
+
+    fn = getattr(push_all, wall)
+    # `engine_content_scan` takes (repo, data_root); the other two take (repo).
+    # Read the arity off the live signature rather than hard-coding it, so a
+    # wall that gains a parameter fails here as a TypeError naming the wall
+    # instead of quietly dropping out of the table.
+    args = tuple(repo for _ in inspect.signature(fn).parameters)
+    monkeypatch.setattr(push_all, enumerator, boom)
+    refused, code = _refuses(fn, *args)
+    assert refused and code == "2", (
+        f"{wall} carried on after git could not report the unpushed history")
     assert "cannot read the unpushed history" in capsys.readouterr().out
+
+
+def test_the_list_of_history_walls_is_the_live_one() -> None:
+    """Derived from the module, so a fourth wall cannot be added unwitnessed.
+
+    The parametrized cases above can only speak for the walls named in them. This
+    asks `scripts/push-all.py` which of its functions call the history
+    enumerators at all, and requires the answer to be exactly the set that has a
+    fail-closed case. Set equality rather than a count: a count is satisfied by
+    naming the wrong three.
+    """
+    tree = ast.parse((ROOT / "scripts" / "push-all.py").read_text(encoding="utf-8"))
+    live = {}
+    for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)):
+        called = {c.func.id for c in ast.walk(fn)
+                  if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+        used = called & {"unpushed_blobs", "unpushed_paths"}
+        if used:
+            live[fn.name] = used
+    assert set(live) == {w for w, _ in _HISTORY_WALLS}, (
+        f"the set of walls reading the unpushed history changed: {sorted(live)}. "
+        f"Add a fail-closed case for the new one before listing it here.")
+    for wall, enumerator in _HISTORY_WALLS:
+        assert enumerator in live[wall], (
+            f"{wall} no longer calls {enumerator}, so its case above patches a "
+            f"name it never reads and proves nothing")
 
 
 # ============================================================

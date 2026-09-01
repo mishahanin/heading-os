@@ -110,3 +110,92 @@ def test_action_card_model_extra_fields_allowed():
     from scripts.bridge_daemon.app import ActionCardModel
     card = ActionCardModel(kind="email_send", title="t", body="b", recipient="alice@example.com")
     assert card.recipient == "alice@example.com"
+
+
+# ============================================================
+# The route, not only the model
+# ============================================================
+#
+# Everything above builds `ActionCardModel` by hand. Nothing asked whether the
+# endpoint named in this module's first line still uses it. Measured 2026-08-31:
+# replacing the request body's `cards: list[ActionCardModel]` with
+# `cards: list[dict]` (and dropping the `model_dump()` that goes with it) left
+# `tests/bridge` at 1312 passed, 1 skipped, identical to the baseline. Every
+# rejection test above stays green over a route that validates nothing, because
+# each one instantiates the class itself.
+#
+# The route is `POST /action-queue/deposit`. This file and the model's own
+# docstring both said `/aq/deposit`, which no version of `app.py` serves, so a
+# reader following either would have tested a 404.
+
+def _client(workspace_root, token="t1"):  # noqa: S107  test fixture default, not a secret
+    from fastapi.testclient import TestClient
+
+    from scripts.bridge_daemon.app import build_app
+    from scripts.bridge_daemon.state import State
+    app = build_app(workspace_root=workspace_root, state=State(), token=token,
+                    user_slug="misha", data_root=workspace_root)
+    return TestClient(app, base_url="http://127.0.0.1")
+
+
+_AUTH = {"Authorization": "Bearer t1"}
+
+
+def test_the_deposit_route_refuses_a_card_the_model_refuses(workspace_root):
+    """A card with no title must not reach the queue, and the 422 must name it."""
+    r = _client(workspace_root).post(
+        "/action-queue/deposit", headers=_AUTH,
+        json={"cards": [{"kind": "note", "action_type": "note"}]})
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert any(e["loc"][-1] == "title" and e["type"] == "missing" for e in detail), detail
+    assert not (workspace_root / "outputs" / "operations" / "action-queue"
+                / "queue.json").exists(), "a refused deposit still wrote the queue"
+
+
+@pytest.mark.parametrize("card,field", [
+    ({"title": "", "action_type": "note"}, "title"),
+    ({"title": "x" * 257, "action_type": "note"}, "title"),
+    ({"title": "t", "body": "x" * 4097, "action_type": "note"}, "body"),
+    ({"title": "t", "action_type": ""}, "action_type"),
+    # `kind=""` is raised by the MODEL validator, not by a field constraint, so
+    # its `loc` stops at the card's position in the list and names no field.
+    # `test_action_card_model_kind_explicit_empty_rejected` pins the same
+    # asymmetry one level down, where the empty `loc` is visible directly.
+    ({"title": "t", "kind": "", "action_type": "note"}, 0),
+])
+def test_every_limit_is_enforced_at_the_route_too(workspace_root, card, field):
+    """The per-field limits, asked of the endpoint rather than the class."""
+    r = _client(workspace_root).post("/action-queue/deposit", headers=_AUTH,
+                                     json={"cards": [card]})
+    assert r.status_code == 422, r.text
+    locs = [e["loc"][-1] if e["loc"] else None for e in r.json()["detail"]]
+    assert field in locs, locs
+
+
+def test_the_route_applies_the_model_before_the_queue_sees_the_card(workspace_root):
+    """`kind` is derived by the model, so its value on disk proves who ran.
+
+    A route typed `list[dict]` passes the caller's JSON through untouched, and
+    the stored card then has no `kind` at all. Asserting the DERIVED field is
+    what distinguishes the two; asserting the title would not.
+    """
+    import json as _json
+
+    r = _client(workspace_root).post(
+        "/action-queue/deposit", headers=_AUTH,
+        json={"cards": [{"title": "Reply to Q", "action_type": "email_send",
+                         "recipient": "q@example.com"}]})
+    assert r.status_code == 200, r.text
+    assert r.json()["added"] == 1, r.json()
+
+    queue = _json.loads((workspace_root / "outputs" / "operations" / "action-queue"
+                         / "queue.json").read_text(encoding="utf-8"))
+    stored = queue["actions"][0]
+    assert stored["kind"] == "email_send", (
+        "the deposited card carries no model-derived `kind`, so the route did "
+        "not validate through ActionCardModel")
+    assert stored["title"] == "Reply to Q"
+    # extra="allow": an action-specific field the model does not declare still
+    # reaches the queue.
+    assert stored["recipient"] == "q@example.com"

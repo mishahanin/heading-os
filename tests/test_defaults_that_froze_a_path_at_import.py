@@ -76,7 +76,53 @@ PATH_FACTORIES = frozenset({
     "get_state_dir", "get_cache_dir", "get_logs_dir", "get_brand_dir",
     "get_engine_root", "resolve_config_with_example",
     "Path", "PurePath",
+    # Added 2026-09-01. The twenty-one below are every OTHER path-returning
+    # helper in `scripts/utils/workspace.py` and `scripts/utils/paths.py`, and
+    # their absence was a hole in the rule rather than a stylistic gap.
+    # MEASURED that day on a synthetic source: a module constant built from
+    # `get_personal_root()`, `get_corporate_root()`, `log_dir()`, `state_dir()`
+    # or `get_config_dir()`, captured as a default, returned [] from
+    # `frozen_path_defaults` while the same shape built from `get_data_root()`
+    # was flagged. `get_personal_root()` is the CEO overlay root, which is the
+    # exact tree the 2026-08-29 incident wrote into: a test patches the root, a
+    # frozen default keeps the live one, and the run edits real data.
+    #
+    # Widening was free: with all twenty-one added the repository sweep still
+    # returned zero violations, so nothing here is a new false positive.
+    # `test_path_factories_still_covers_every_path_returning_seam_helper` below
+    # keeps the list from falling behind again.
+    "data_dir", "env_data_root", "get_config_dir",
+    "get_corporate_repo_path", "get_corporate_root", "get_crm_central_path",
+    "get_crm_config_path", "get_exec_data_root", "get_people_file",
+    "get_per_exec_contacts_dir", "get_per_exec_repo_path", "get_personal_context_dir",
+    "get_personal_root", "get_shared_knowledge_dir", "get_templates_dir",
+    "home", "log_dir", "private_cache_dir",
+    "require_outside_engine_clone", "require_writable_data_root", "state_dir",
 })
+
+# The two modules that define the data-root seam. A helper that returns a path
+# from either of them is a value a caller or a test legitimately redirects, so a
+# default capturing a constant built from one is this file's defect.
+SEAM_MODULES = ("scripts/utils/workspace.py", "scripts/utils/paths.py")
+
+
+def path_returning_seam_helpers() -> set[str]:
+    """Module-level functions in the seam that are annotated as returning a Path.
+
+    Derived by AST, per the lesson that a hand-written list of the dangerous
+    things falls behind. The annotation is the question because these two
+    modules annotate every public helper, and a name is only useful to this rule
+    when it is known to yield a path.
+    """
+    found: set[str] = set()
+    for relative in SEAM_MODULES:
+        tree = ast.parse((ROOT / relative).read_text(encoding="utf-8"))
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if node.returns is not None and "Path" in ast.unparse(node.returns):
+                found.add(node.name)
+    return found
 
 # Defaults that legitimately capture a module constant, each with the reason it
 # is safe. A plain string, an int, or a tuple is not this defect: nothing about
@@ -600,6 +646,43 @@ def test_the_ast_rule_accepts_the_shape_that_replaced_it():
 def test_the_ast_rule_does_not_flag_a_timeout_a_relative_string_or_a_tuple():
     """The defect is a captured PATH, not any captured constant."""
     assert frozen_path_defaults(_HARMLESS_FIXTURE) == []
+
+
+def test_path_factories_still_covers_every_path_returning_seam_helper():
+    """The hand list must not fall behind the seam it is a list of.
+
+    A helper added to `workspace.py` tomorrow, used to build a module constant,
+    and captured as a default is a defect this rule would not see - and nothing
+    else would either, because the rule IS the only thing looking. Derived
+    rather than remembered, per THE LAW: a step that depends on remembering is
+    already dead.
+    """
+    helpers = path_returning_seam_helpers()
+    # Floor: an AST walk that finds nothing would make the assertion below
+    # vacuously true for a PATH_FACTORIES of any size, including an empty one.
+    # Measured 34 on 2026-09-01.
+    assert len(helpers) >= 25, (
+        f"only {len(helpers)} path-returning helper(s) found across "
+        f"{SEAM_MODULES}; the AST walk has stopped reaching the seam")
+
+    missing = sorted(helpers - PATH_FACTORIES)
+    assert not missing, (
+        "these seam helpers return a path and are NOT in PATH_FACTORIES, so a "
+        "module constant built from one is invisible to this rule and a default "
+        "capturing it is not flagged:\n  " + "\n  ".join(missing))
+
+
+def test_the_ast_rule_flags_a_default_built_from_the_private_overlay_root():
+    """One case per shape that was invisible until 2026-09-01.
+
+    `get_personal_root()` matters most: it is the CEO-only overlay, and a frozen
+    default anchored to it survives every attempt a test makes to redirect it.
+    """
+    for factory in ("get_personal_root", "get_corporate_root", "log_dir",
+                    "state_dir", "get_config_dir"):
+        source = (f"ANCHOR = {factory}() / \"sub\" / \"file.json\"\n"
+                  "\n\ndef load(path=ANCHOR):\n    return path\n")
+        assert [q for _, q, _, _ in frozen_path_defaults(source)] == ["load"], factory
 
 
 def test_the_ast_rule_follows_a_chain_of_module_level_path_constants():

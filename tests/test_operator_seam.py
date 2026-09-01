@@ -154,6 +154,31 @@ def _code_lines(text: str):
         yield i, raw
 
 
+def _scan(text: str, rel: str):
+    """(offending code lines, how many code lines were inspected).
+
+    Split out of the test below so the detector can be run over text this file
+    owns. A guard whose only case is "the tree is clean" reports the same green
+    when it has stopped detecting anything; see the two tests under it.
+    """
+    offenders = []
+    inspected = 0
+    for lineno, line in _code_lines(text):
+        inspected += 1
+        if not _PERSONAL_RE.search(line):
+            continue
+        # Allowlisted category-c prose that lives on a code line: single-line
+        # docstrings and argparse/usage examples.
+        if '"""' in line or "'''" in line or "e.g." in line or "help=" in line:
+            continue
+        # Allowlisted: a trailing inline comment carrying the token (prose).
+        code = line.split("#", 1)[0]
+        if not _PERSONAL_RE.search(code):
+            continue
+        offenders.append(f"{rel}:{lineno}: {line.strip()}")
+    return offenders, inspected
+
+
 def test_no_personal_identity_literal_in_engine():
     """No personal slug/org literal survives in any fixed engine file's code.
 
@@ -164,20 +189,9 @@ def test_no_personal_identity_literal_in_engine():
     offenders = []
     inspected = 0
     for rel in FIXED_FILES:
-        text = (ROOT / rel).read_text(encoding="utf-8")
-        for lineno, line in _code_lines(text):
-            inspected += 1
-            if not _PERSONAL_RE.search(line):
-                continue
-            # Allowlisted category-c prose that lives on a code line: single-line
-            # docstrings and argparse/usage examples.
-            if '"""' in line or "'''" in line or "e.g." in line or "help=" in line:
-                continue
-            # Allowlisted: a trailing inline comment carrying the token (prose).
-            code = line.split("#", 1)[0]
-            if not _PERSONAL_RE.search(code):
-                continue
-            offenders.append(f"{rel}:{lineno}: {line.strip()}")
+        found, n = _scan((ROOT / rel).read_text(encoding="utf-8"), rel)
+        offenders.extend(found)
+        inspected += n
     # Corpus floor: 3339 code lines reached the regex on 2026-08-26, so 2000 is a
     # safe floor that survives retiring a file or two. Without it, a drift in
     # _code_lines (say the triple-quote fence tracking never leaves in_block)
@@ -187,6 +201,43 @@ def test_no_personal_identity_literal_in_engine():
         "personal operator-identity literal in engine code (identity must resolve "
         "through scripts/utils/operator_identity.py):\n" + "\n".join(offenders)
     )
+
+
+# The corpus floor above proves the WALK still reaches code lines. It proves
+# nothing about the DETECTOR: a mistyped `_PERSONAL_RE`, or an allowlist clause
+# widened until it swallows every hit, leaves `offenders` empty over three
+# thousand inspected lines and the assertion passes while checking nothing. The
+# two cases below run the real scanner over text this file owns, so the detector
+# has to keep both halves of its answer.
+
+_PLANTED = (
+    "import os\n"
+    "\n"
+    'DEFAULT_OWNER = "misha-hanin"\n'
+    'GITHUB_ORG = "mishahanin"\n'
+)
+
+_ALLOWLISTED = (
+    "import os\n"
+    'PARSER.add_argument("--org", help="the org, e.g. mishahanin")\n'
+    "SLUG = operator_slug()  # was hardcoded to misha-hanin before v0.5.0\n"
+    '"""One-line docstring naming misha-hanin."""\n'
+)
+
+
+def test_the_seam_detector_flags_a_planted_literal():
+    """The true negative. Without it the guard cannot fail for the right reason."""
+    offenders, inspected = _scan(_PLANTED, "planted.py")
+    assert inspected == 3, f"the scanner skipped a code line: {inspected}"
+    assert len(offenders) == 2, f"the detector missed a planted literal: {offenders}"
+    assert "misha-hanin" in offenders[0] and "mishahanin" in offenders[1]
+
+
+def test_the_seam_detector_leaves_the_allowlisted_prose_alone():
+    """And the other half: a detector that flags everything is switched off."""
+    offenders, inspected = _scan(_ALLOWLISTED, "allowed.py")
+    assert inspected == 4, f"the allowlisted lines never reached the regex: {inspected}"
+    assert offenders == [], f"category-c prose was flagged as code: {offenders}"
 
 
 def test_bare_user_slug_default_removed():

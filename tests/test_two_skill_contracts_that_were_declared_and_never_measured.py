@@ -147,6 +147,21 @@ def test_the_skill_corpus_is_not_empty():
 
 
 def test_a_parallel_dispatchable_writer_declares_the_paths_it_writes():
+    """WHAT THIS GATE CANNOT SEE, said rather than left to be discovered.
+
+    "Writes" is read off `allowed-tools`, and the proxy is the Write family. A
+    skill that produces files by running a script through `Bash(python3:*)`
+    carries none of those names and is skipped entirely. MEASURED 2026-09-01:
+    /flux-image is `parallel_safe: true`, writes `outputs/content/images/`
+    through `scripts/design-engine.py`, declared `shared_state: []`, and this
+    gate passed over it in silence. Its declaration is now correct, but the
+    blind spot is structural and one corrected skill does not close it.
+
+    Widening the proxy to `Bash` is not obviously right: most Bash-holding
+    skills read rather than write, so it would produce a long offender list
+    needing per-skill judgement rather than a mechanical answer. Recorded here
+    as a known limit instead of dressed up as coverage.
+    """
     offenders = []
     for skill_md in _skill_files():
         name = skill_md.parent.name
@@ -193,6 +208,7 @@ def test_the_empty_shared_state_allowance_is_not_stale():
         ("notebooklm", "outputs/content/notebooklm/"),
         ("design", "outputs/design/"),
         ("design", "outputs/content/images/"),
+        ("flux-image", "outputs/content/images/"),
     ],
 )
 def test_a_repaired_skill_still_names_its_output_root(skill, expected):
@@ -208,9 +224,16 @@ def test_a_repaired_skill_still_names_its_output_root(skill, expected):
     `get_outputs_dir() / "design"` (HTML Studio renders, plus the `source/` and
     `.tmp/` subtrees beneath it), and `scripts/design-engine.py:189` returns
     `get_outputs_dir() / "content" / "images"` (Replicate imagery). Both match
-    the SKILL.md "Output Locations" section. The second root is shared with
-    /flux-image, which declares `[]` - the asymmetry the orchestrator's step-4
-    intersection exists to catch, and which this repair only half closes.
+    the SKILL.md "Output Locations" section.
+
+    /flux-image writes that second root too, through the same
+    `design-engine.py` default, and declared `[]` against it until 2026-09-01.
+    Two `parallel_safe: true` skills writing one directory while only one names
+    it is precisely the asymmetry the orchestrator's step-4 intersection exists
+    to catch, and an intersection is empty whichever side stays silent. The
+    gate above could not see it and still cannot: it reads `allowed-tools` for a
+    Write-family tool, and /flux-image writes through `Bash(python3:*)`. That
+    limit is stated in `test_a_parallel_dispatchable_writer_declares_the_paths_it_writes`.
     """
     orchestration = _frontmatter(SKILLS_DIR / skill / "SKILL.md").get(
         "x-heading-orchestration") or {}

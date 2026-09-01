@@ -10,6 +10,7 @@ stalled-signal noise without editing pipeline.md by hand.
 
 Tests: tests/bridge/test_a_summary_that_read_the_wrong_end_of_the_file.py
 """
+import logging
 import re
 import threading
 from datetime import date, datetime, timezone
@@ -17,6 +18,8 @@ from scripts.utils.workspace import get_default_tz
 from pathlib import Path
 
 from scripts.bridge_daemon._jsonl import append_jsonl, read_jsonl_capped
+
+logger = logging.getLogger(__name__)
 
 # Stage progression: higher index = closer to closed-won.
 # We sort by -stage_rank so Won appears first, Lead last.
@@ -270,16 +273,56 @@ def list_pipeline(workspace_root: Path, today: date | None = None) -> dict:
             continue
         if not in_active:
             continue
-        # Skip header + separator lines (start with | but contain --- or are the col-name row).
-        if "---" in line:
-            continue
-        if "Company" in line and "Country" in line and "Stage" in line:
-            continue
         m = _ROW_RE.match(line)
         if not m:
             continue
-        # Defensive: skip rows with too many pipes (unescaped pipe in a cell would shift columns).
+        # Header-ness and separator-ness are decided from the PARSED CELLS, not
+        # from a substring of the raw line. Both skips were substring tests
+        # (`"---" in line`, and `"Company"`/`"Country"`/`"Stage"` all present),
+        # which is the same class of silent row loss the `_ROW_RE` comment above
+        # records fixing. MEASURED 2026-08-31 on three deal rows: only ONE
+        # survived. A row whose Next Action read "Await sign-off --- pending
+        # legal" was read as the separator, a row whose Next Action read
+        # "Confirm Company, Country and Stage with counsel" was read as the
+        # header, and `total_value_usd` came back 2,000,000 against a real
+        # 6,000,000. A separator is a row whose every cell is nothing but
+        # dashes and colons; a header is a row whose first three cells ARE the
+        # column names. Neither can be spelled by accident inside a deal cell.
+        cells = [m.group(g).strip() for g in
+                 ("company", "country", "stage", "value",
+                  "stage_date", "owner", "next_action", "due_date")]
+        if all(c and set(c) <= {"-", ":"} for c in cells):
+            continue
+        if [c.lower() for c in cells[:3]] == ["company", "country", "stage"]:
+            continue
+        # Skip rows with too many pipes: a pipe inside a cell shifts every
+        # column after it, so the parsed row would name the wrong country,
+        # stage and value. Dropping it is right; dropping it SILENTLY was not.
+        # This is the third row-loss path in this function, and the other two
+        # (the `---` substring and the `Company`/`Country`/`Stage` substring
+        # skips above) were both fixed after a measurement showed real deals
+        # disappearing. MEASURED 2026-08-31 on a two-row table: a Negotiation
+        # row carrying $4,000,000 whose Next Action read "Send revised SOW \|
+        # legal review" reached ten pipes and vanished, `total_value_usd` came
+        # back 2,000,000 against a real 6,000,000, and nothing was logged at
+        # any level. The operator's own document is the input here, so the
+        # answer is to name the row and say what to do about it.
         if line.count("|") > 9:
+            # The remedy sentence is "reword", not "escape it or reword".
+            # MEASURED 2026-08-31: a markdown-escaped `\|` is counted by
+            # `line.count("|")` exactly like a raw one, so the escaped row is
+            # dropped with this same message, and telling the operator to escape
+            # sends them to do a thing that does not work. Honouring `\|` here
+            # would be worse than dropping: `_ROW_RE`'s cells are `[^|]`, so the
+            # escaped row parses with every column after the pipe shifted by one
+            # (next_action "Send revised SOW \", due_date "legal review"), which
+            # is a wrong row published as a right one.
+            logger.warning(
+                "pipeline: dropping a row with %d pipes (max 9) from the "
+                "/pipeline view; a pipe inside a cell shifts the columns. "
+                "Reword the cell to remove it (a markdown-escaped \\| is "
+                "dropped too). Row: %s",
+                line.count("|"), stripped)
             continue
         company = m.group("company").strip()
         if not company or company.lower() == "company":

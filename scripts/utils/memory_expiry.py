@@ -17,10 +17,13 @@ Consumed by:
 from __future__ import annotations
 
 import datetime
+import logging
 import re
 import sys
 from pathlib import Path
 from typing import Iterable
+
+logger = logging.getLogger(__name__)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
@@ -81,7 +84,18 @@ def find_expired(memory_dir: Path, today: datetime.date) -> list[tuple[str, date
             continue
         try:
             exp = parse_expires(f.read_text(encoding="utf-8"))
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # `UnicodeDecodeError` is a `ValueError`, NOT an `OSError`, so one
+            # memory file that is not valid UTF-8 did not skip this iteration:
+            # it raised out of the whole walk. MEASURED 2026-09-01 on a corpus
+            # of one clean note and one carrying a lone 0xe9, `find_expired`
+            # raised instead of returning the clean note.
+            #
+            # Skipping is right and silence is not: a fact file that drops out
+            # of this walk never expires, and nothing anywhere would say why.
+            logger.warning("skipping unreadable memory file %s; its expiry was "
+                           "not read and it will never be retired", f,
+                           exc_info=True)
             continue
         if exp is not None and today > exp:
             out.append((f.name, exp))
@@ -105,8 +119,13 @@ _LINK_RE = re.compile(r"\[[^\]]*?\]\((?P<target>[^)]+)\)")
 # the index points straight at it. Reading uses `_LINK_RE`; removing uses this.
 _POINTER_RE = re.compile(_LINK_RE.pattern + r"[^·\n]*")
 
-# The indent and list marker a line may open with, before any content.
-_PREFIX_RE = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?")
+# The indent and list marker a line may open with, before any content. The
+# ordered forms are here because the prefix is what the leading-separator repair
+# in `strip_index_pointers` measures its content from: a marker this pattern
+# does not know leaves the repair looking at `1. · [b](b.md)` and finding no
+# separator to strip. MEASURED 2026-09-01: `1. [a](a.md) · [b](b.md)` with
+# `{"a.md"}` returned `1. · [b](b.md)`.
+_PREFIX_RE = re.compile(r"^[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?")
 
 
 def _pointers(text: str) -> list[re.Match]:
@@ -183,7 +202,20 @@ def strip_index_pointers(index_text: str, names: Iterable[str]) -> str:
         # Repair the separators the removal left behind: a doubled ` · `, and a
         # leading or trailing one where the first or last pointer was the one
         # taken out.
-        body = re.sub(r"\s*·\s*(?=·)", "", body)
+        #
+        # The doubled repair drops the LEFT separator without its leading
+        # whitespace, and that is load-bearing rather than a style choice. It
+        # read `\s*·\s*(?=·)` until 2026-09-01, which ate the space in front of
+        # the survivor too, so the two repairs below then measured a line the
+        # removal had already deformed: `(?<=: )` wants exactly one space after
+        # the colon and got none, and the label-less repair wants the separator
+        # to LEAD the content and found a space in front of it. MEASURED that
+        # day, removing the first TWO pointers of a three-pointer line returned
+        # `- Ledgers: · [c](c.md)` on the labelled shape and `-  [c](c.md)` on
+        # the label-less one: a stray separator and a doubled space, written
+        # into an operator-curated index this module may not mangle. One removal
+        # never reached it, which is why the eight cases here all passed.
+        body = re.sub(r"·\s*(?=·)", "", body)
         body = re.sub(r"·\s*$", "", body).rstrip()
         # The leading repair used to be `(?<=: )·`, which only fired after a
         # `Label: ` prefix. The index carries label-less lines too, and MEASURED

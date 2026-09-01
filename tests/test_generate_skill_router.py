@@ -223,6 +223,41 @@ def test_split_check_detects_category_file_drift(fixture_tree):
     assert gen.cmd_split_check(rows) == 1
 
 
+def test_split_check_detects_core_region_drift(fixture_tree):
+    """The layer that matters most had no negative case.
+
+    `--check` is the only gate standing over `.claude/rules/skill-router.md`, an
+    always-on rule injected into every session, and the only test touching it
+    (`test_write_then_check_is_idempotent`) asserts the POSITIVE direction: it
+    writes, then checks, and expects 0. Measured 2026-09-01: deleting the
+    core-region comparison from `cmd_split_check` left 179 tests green across
+    every file that names the generator, so a hand-edit of the always-on rule
+    would have passed CI and pre-commit indefinitely. The two detail-layer
+    negatives below existed; this one did not.
+    """
+    skills, router = fixture_tree
+    _write_skill(skills, "alpha", _INTEL)
+    rows, _ = gen.load_routing_rows()
+    gen.cmd_split_write(rows)
+    text = router.read_text(encoding="utf-8")
+    assert "| `/alpha` |" in text
+    router.write_text(text.replace("| `/alpha` |", "| `/rogue` |"), encoding="utf-8")
+    assert gen.cmd_split_check(rows) == 1
+
+
+def test_split_check_detects_an_orphan_category_file(fixture_tree):
+    """A detail file no current category backs is drift too. The branch that
+    says so had no witness either: stubbing its condition left 179 tests green
+    on the same run."""
+    skills, _router = fixture_tree
+    _write_skill(skills, "alpha", _INTEL)
+    rows, _ = gen.load_routing_rows()
+    gen.cmd_split_write(rows)
+    (gen.CATEGORY_FILE_DIR / "retired-category.md").write_text(
+        "# a category that no longer exists\n", encoding="utf-8")
+    assert gen.cmd_split_check(rows) == 1
+
+
 def test_split_check_detects_missing_category_file(fixture_tree):
     skills, router = fixture_tree
     _write_skill(skills, "alpha", _INTEL)

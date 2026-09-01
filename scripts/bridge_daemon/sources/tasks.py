@@ -12,6 +12,7 @@ items from its own surface. Each task gets a derived stable key
 (captured | priority | first chars of description) since tasks.md has
 no explicit IDs.
 """
+import logging
 import re
 import threading
 from datetime import date, datetime, timezone
@@ -22,6 +23,8 @@ from scripts.bridge_daemon._shapes import entry_ts, is_undo
 
 from scripts.bridge_daemon._jsonl import append_jsonl, read_jsonl_capped
 from scripts.utils.paths import get_data_root
+
+logger = logging.getLogger(__name__)
 
 PRIORITY_ORDER = {"P1": 0, "P2": 1, "P3": 2, "P4": 3}
 
@@ -156,6 +159,13 @@ _ACTIVE_RE = re.compile(
 
 _DUE_RE = re.compile(r"\bDue:\s*(?P<due>\d{4}-\d{2}-\d{2})\b")
 _KIND_RE = re.compile(r"\*(?P<kind>[A-Za-z][A-Za-z \+/]*?)\*")
+# A kind cell is a segment that is NOTHING BUT `*Kind*`. `startswith("*")` was
+# the old test, and it fires on a body segment that merely OPENS with emphasis.
+# MEASURED 2026-08-31: the row `Call Zeek | *urgently* about the SOW | *Task* |
+# Due: 2026-05-15` came back with the description "Call Zeek", so the half of
+# the sentence that says what to do was cut off the /tasks card with nothing
+# logged and nothing else carrying it.
+_KIND_CELL_RE = re.compile(r"\*[A-Za-z][A-Za-z \+/]*\*\Z")
 
 
 def _parse_iso_date(s: str | None) -> date | None:
@@ -177,13 +187,16 @@ def _strip_metadata_suffix(rest: str) -> tuple[str, str | None, str | None]:
     treat first segment as body, last segments as metadata.
     """
     parts = [p.strip() for p in rest.split("|")]
-    # Body is everything until we hit a part starting with '*' (kind) or
-    # 'Source:' or 'Due:'.
+    # Body is everything until we hit a WHOLE-CELL kind (`*Task*`) or a
+    # 'Source:' / 'Due:' prefix. The kind test is a full match, not a prefix:
+    # see `_KIND_CELL_RE` for the sentence that half a description used to
+    # disappear into.
     body_parts = []
     meta_kind = None
     meta_source = None
     for i, part in enumerate(parts):
-        if part.startswith("*") or part.lower().startswith("source:") or part.lower().startswith("due:"):
+        if (_KIND_CELL_RE.match(part) or part.lower().startswith("source:")
+                or part.lower().startswith("due:")):
             # Metadata starts here. Stop body accumulation.
             for tail in parts[i:]:
                 if tail.startswith("*"):
@@ -222,8 +235,13 @@ def list_active_tasks(data_root: "Path | None" = None,
             "overdue_count": int,
             "done_filtered": int,      # rows hidden because they are marked done
             "done_log_count": int,     # active entries in the done log
-            "data_time": ISO 8601 UTC of file mtime (None if missing),
+            "data_time": ISO 8601 UTC of file mtime, else None,
         }
+
+    `data_time` is None when tasks.md is absent AND when it is present but
+    unreadable, which the older "None if missing" did not cover. The two are
+    told apart in the daemon log, not in the return: an unreadable tasks.md is
+    NAMED at warning level, an absent one is silent.
 
     `task_key`, `done_filtered` and `done_log_count` were all returned and none
     of them documented. `task_key` is the worst of the three: the mark-done
@@ -257,7 +275,17 @@ def list_active_tasks(data_root: "Path | None" = None,
     try:
         text = tasks_md.read_text(encoding="utf-8")
         mtime = tasks_md.stat().st_mtime
-    except OSError:
+    # `UnicodeDecodeError` is a `ValueError` and not an `OSError`, and it is
+    # raised INSIDE `read_text` -- so the handler whose whole job is to turn an
+    # unreadable tasks.md into `_empty()` never saw it. tasks.md is hand-edited
+    # through the /viraid skill and by the operator directly, which is exactly
+    # where a stray non-UTF-8 byte comes from. MEASURED 2026-09-01 with one
+    # 0xe9 byte in an Active row: `UnicodeDecodeError: invalid continuation
+    # byte` raised out of /tasks instead of the empty listing.
+    except (OSError, UnicodeDecodeError) as exc:
+        logger.warning("tasks file %s is unreadable (%s); /tasks reports ZERO "
+                       "active tasks, which is not the same as none being due",
+                       tasks_md, exc)
         return _empty()
 
     # Phase 1.90: pull the done-key set up front so we can filter cheaply.

@@ -12,6 +12,7 @@ drift it was widened for.
 
 Run: python3 -m pytest tests/test_version_sync_guard.py
 """
+import ast
 import importlib.util
 import re
 import sys
@@ -26,7 +27,30 @@ sys.path.insert(0, str(ROOT))
 SCRIPT = ROOT / "scripts" / "check-version-sync.py"
 PRE_COMMIT = ROOT / ".pre-commit-config.yaml"
 
-SURFACES = ["README.md", "CHANGELOG.md", "ROADMAP.md", "pyproject.toml"]
+
+def _guarded_surfaces() -> list[str]:
+    """The files the guard reads, asked of the guard rather than typed here.
+
+    Every resolver opens exactly one file as `root / "<name>"`, so the AST
+    answers the question directly. A hand-written list is the same defect this
+    module exists to catch, one level up: ROADMAP.md drifted for six releases
+    because the pre-commit pattern named three files, and a hand-written
+    SURFACES here would let a FIFTH resolver land with the pattern naming four
+    and the test still green.
+    """
+    tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+    found = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)
+                and isinstance(node.left, ast.Name) and node.left.id == "root"
+                and isinstance(node.right, ast.Constant)
+                and isinstance(node.right.value, str)
+                and node.right.value not in found):
+            found.append(node.right.value)
+    return found
+
+
+SURFACES = _guarded_surfaces()
 
 
 @pytest.fixture(scope="module")
@@ -97,6 +121,25 @@ def test_the_hook_pattern_covers_every_guarded_surface():
     pattern decides only WHEN the guard runs. ROADMAP.md drifted for six
     releases while the pattern named three files.
     """
+    assert len(SURFACES) >= 4, (
+        f"the AST walk found only {SURFACES} in {SCRIPT.name}; a guard that "
+        f"reads nothing is covered by a pattern that names nothing"
+    )
     pattern = re.compile(_hook()["files"])
     uncovered = [s for s in SURFACES if not pattern.search(s)]
     assert not uncovered, f"these surfaces do not trigger the version-sync gate: {uncovered}"
+
+
+def test_the_surface_list_is_read_off_the_guard_not_typed_here():
+    """Anchor for the derivation above.
+
+    An extractor that returned nothing would satisfy `uncovered == []` for any
+    pattern at all, and the floor alone does not prove the names came from the
+    script rather than from a literal in this file.
+    """
+    assert set(SURFACES) == {"README.md", "CHANGELOG.md", "ROADMAP.md",
+                             "pyproject.toml"}, SURFACES
+    assert _guarded_surfaces.__doc__  # the reasoning travels with the helper
+    src = SCRIPT.read_text(encoding="utf-8")
+    for name in SURFACES:
+        assert f'"{name}"' in src, f"{name} is not a literal in {SCRIPT.name}"

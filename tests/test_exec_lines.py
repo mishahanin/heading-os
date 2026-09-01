@@ -72,6 +72,64 @@ def test_bare_string_that_is_not_the_first_statement_still_counts():
     assert count_lines(source) == (2, 2)
 
 
+# The eight characters `str.splitlines()` cuts on and Python's tokenizer does
+# not. Written as code points, never literally: `.claude/rules/hidden-chars.md`
+# and the shard brief both forbid a U+2028 or U+2029 in a source file, and the
+# first two would break this very file's own line numbering.
+SPLITLINES_ONLY = {
+    "U+2028 LINE SEPARATOR": chr(0x2028),
+    "U+2029 PARAGRAPH SEPARATOR": chr(0x2029),
+    "U+0085 NEXT LINE": chr(0x0085),
+    "U+000B LINE TABULATION": chr(0x000B),
+    "U+000C FORM FEED": chr(0x000C),
+    "U+001C FILE SEPARATOR": chr(0x001C),
+    "U+001D GROUP SEPARATOR": chr(0x001D),
+    "U+001E RECORD SEPARATOR": chr(0x001E),
+}
+
+
+@pytest.mark.parametrize("label", sorted(SPLITLINES_ONLY))
+def test_a_separator_inside_a_string_does_not_add_a_line(label):
+    """The counter splits on "\\n" alone, and the reason is in its own comment.
+
+    `str.splitlines()` breaks on all eight characters above; the Python
+    tokenizer treats none of them as a line terminator. Counting with it
+    inflated BOTH numbers and, worse, shifted every line number after the first
+    occurrence out of step with the ones `tokenize` and `ast` report, so a
+    blank-line or docstring exclusion landed on the wrong line.
+
+    The counter is the instrument the Canopus line-budget steps are measured
+    against, so a fix nothing binds is a number that can silently stop being
+    commensurable with the prior rounds. Reverting `split("\\n")` to
+    `splitlines()` left the other nine cases in this file green; measured
+    2026-09-01.
+    """
+    ch = SPLITLINES_ONLY[label]
+    source = f'x = "a{ch}b"\n'
+    assert count_lines(source) == (1, 1), label
+
+
+def test_a_separator_does_not_shift_the_docstring_exclusion(tmp_path):
+    """The consequential half. An inflated count is a wrong number; a shifted
+    line number excludes the wrong line, which is silent."""
+    ch = SPLITLINES_ONLY["U+2028 LINE SEPARATOR"]
+    source = (
+        f'HEADER = "a{ch}b"\n'
+        "def f():\n"
+        '    """A docstring on the line the shift would move off."""\n'
+        "    return 1\n"
+    )
+    # Executable: HEADER, def f, return 1. The docstring line is the exclusion.
+    assert count_lines(source) == (3, 4)
+
+
+def test_a_crlf_source_is_counted_as_one_line_per_record(tmp_path):
+    """The normalisation the split depends on. Source arriving from stdin has
+    had no universal-newline translation."""
+    assert count_lines("x = 1\r\ny = 2\r\n") == (2, 2)
+    assert count_lines("x = 1\ry = 2\r") == (2, 2)
+
+
 def test_cli_prints_totals_for_a_file(tmp_path, capsys):
     path = tmp_path / "fixture.py"
     path.write_text(FIXTURE, encoding="utf-8")

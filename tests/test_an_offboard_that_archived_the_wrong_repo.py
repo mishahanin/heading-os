@@ -40,7 +40,9 @@ Run: .venv/bin/python -m pytest tests/test_an_offboard_that_archived_the_wrong_r
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
+import json
 import subprocess
 import sys
 import types
@@ -63,6 +65,23 @@ ofb = _load("scripts/offboard-exec.py", "offboard_exec_10p4")
 orn = _load("scripts/ops-radar-notify.py", "ops_radar_notify_10p4")
 opr = _load("scripts/ops-radar.py", "ops_radar_10p4")
 opg = _load("scripts/odin_pagerank.py", "odin_pagerank_10p4")
+
+# The org this file's fixtures pretend to be offboarding from.
+#
+# Pinned, because `github_org()` resolves through `load_github_org()`, which
+# reads the OPERATOR'S PRIVATE DATA OVERLAY on every call and returns `""` when
+# there is not one. `main()` then refuses with "the GitHub org could not be
+# resolved" - correctly - so three of this file's tests passed only on the
+# author's machine. MEASURED 2026-09-01: with `HEADING_OS_DATA` pointed at an
+# empty directory, exactly the state of a fresh public clone and of CI, this
+# file went 43 passed / 3 failed; against the live overlay, 46 passed. A test
+# whose verdict is decided by data that is not in this repository is not a test
+# of this repository, and the engine repo is public.
+#
+# It is also a stronger assertion: at `""` the archive rows were checking for
+# `"/heading-os-data-marlow-carter"`, with a bare leading slash where the org
+# belongs, so a function that dropped the org entirely would still have passed.
+TEST_ORG = "example-org"
 
 
 def _cp(returncode=0, stdout="", stderr=""):
@@ -91,7 +110,23 @@ def gh(monkeypatch):
 
     monkeypatch.setattr(ofb, "run_cmd", run_cmd)
     monkeypatch.setattr(ofb, "repo_name_for", lambda slug: f"heading-os-data-{slug}")
+    monkeypatch.setattr(ofb, "github_org", lambda: TEST_ORG)
     return types.SimpleNamespace(calls=calls, table=table)
+
+
+def test_the_org_is_pinned_and_not_read_from_the_operators_overlay(gh):
+    """The fixture's own floor.
+
+    `github_org()` is patched on the MODULE, so every function in it that calls
+    the bare name resolves to `TEST_ORG` rather than to whatever
+    `HEADING_OS_DATA` happens to point at. If a future refactor imports the
+    resolver directly instead, this row goes red before the three `main()` tests
+    start passing for the wrong reason again.
+    """
+    assert ofb.github_org() == TEST_ORG
+    ofb.archive_workspace_repo("marlow-carter")
+    assert all(name.startswith(f"{TEST_ORG}/") for name in _archived(gh.calls)), (
+        f"an archive target was built from some other org: {_archived(gh.calls)}")
 
 
 def _archived(calls):
@@ -141,6 +176,37 @@ def test_a_missing_gh_binary_is_a_failure_not_a_crash(gh):
     assert ofb.archive_workspace_repo("marlow-carter") is False
 
 
+def test_one_name_archiving_is_not_reported_as_neither_existing(gh, capsys):
+    """The negative case ON the `all(...)` line.
+
+    `test_neither_name_existing_warns_without_failing_the_run` 404s BOTH names,
+    where `all` and `any` agree, so it cannot tell them apart. Measured
+    2026-09-01: `all(r is None ...)` rewritten as `any(r is None ...)` left the
+    file green at 47 passed - and on the CURRENT model that mutation fires on
+    every single offboard, because the retired name legitimately 404s while the
+    real overlay archives fine. The run would then print "Neither name exists;
+    nothing was archived" immediately after archiving the exec's data overlay,
+    which is the same permanent-false-alarm defect this function was fixed for,
+    with the colours swapped.
+    """
+    gh.table[("archive", "31c-workspace-marlow-carter")] = _cp(
+        1, stderr="HTTP 404: Not Found")
+    assert ofb.archive_workspace_repo("marlow-carter") is True
+    out = capsys.readouterr().out
+    assert "Neither name exists" not in out, out
+    assert "Archived" in out
+
+
+def test_a_404_on_the_real_overlay_is_a_skip_and_not_a_failure(gh, capsys):
+    """The `"404" in result.stderr` branch of `_archive_repo`, on the name that
+    matters. The existing skip row uses the RETIRED name, so a mutation that
+    kept the 404 branch for one name only would not show there."""
+    gh.table[("archive", "heading-os-data-marlow-carter")] = _cp(
+        1, stderr="HTTP 404: Not Found")
+    assert ofb.archive_workspace_repo("marlow-carter") is True
+    assert "[error]" not in capsys.readouterr().out
+
+
 def test_the_per_exec_crm_repo_still_uses_the_retired_name_only(gh, capsys):
     """Correct, and deliberate: the current model has no separate CRM repo, so
     a 404 there is the expected answer."""
@@ -164,6 +230,10 @@ def main_env(monkeypatch, tmp_path):
     the archive step to the exit code."""
     monkeypatch.setattr(sys, "argv", ["offboard-exec.py", "--exec", "marlow-carter"])
     for name, value in (
+        # Pinned first, and for the reason `TEST_ORG` records: unpinned, `main()`
+        # refuses outright on any clone without the operator's private overlay,
+        # and these three tests were green only on one machine.
+        ("github_org", lambda: TEST_ORG),
         ("validate_admin", lambda: None),
         ("get_exec_info", lambda slug: {"github_user": "marlow"}),
         ("safety_gate", lambda slug: True),
@@ -293,6 +363,52 @@ def test_an_unreachable_repo_is_not_reported_as_preserved(fleet, gh, capsys):
     assert "nothing was checked" in capsys.readouterr().out
 
 
+def test_no_gh_binary_while_cloning_is_reported_rather_than_crashing(
+        fleet, gh, capsys):
+    """The `FileNotFoundError` half of the clone handler, unmeasured.
+
+    Its own comment says catching only `CalledProcessError` "let that crash the
+    run partway through an offboard, leaving contacts unpreserved and the
+    registry untouched with no rollback". Measured 2026-09-01: narrowing that
+    `except` back to `(subprocess.CalledProcessError,)` left the file green at
+    47 passed - only the `CalledProcessError` spelling had a fixture. The two
+    are not interchangeable: `gh` missing from PATH raises the one that was
+    never tested.
+    """
+    gh.table[("clone",)] = FileNotFoundError("gh not found")
+    src, everywhere = ofb._find_exec_contacts("marlow-carter")
+    assert src is None
+    assert everywhere is False, (
+        "no repo was reached, so this must not report that it looked everywhere")
+    assert "Could not clone" in capsys.readouterr().out
+    assert ofb.preserve_crm_contacts("marlow-carter") is False
+
+
+def test_an_unanswerable_org_removal_is_announced(gh, capsys):
+    """The removal step's ORG arm, matching its team arm.
+
+    `test_the_removal_step_says_so_when_it_cannot_ask` covers the TEAM loop. The
+    org branch beside it prints its own line and had no test: an unanswered org
+    query skipped the DELETE and said nothing, so Step 1c rendered an empty
+    section for the widest grant in the offboard.
+    """
+    _teams_env(gh, _cp(1, stderr="HTTP 404: Not Found"),
+               org=_cp(1, stderr="HTTP 403: Resource not accessible by token"))
+    ofb.remove_residual_access("marlow-carter", {})
+    out = capsys.readouterr().out
+    assert "Could not check org membership" in out, out
+    assert "NOT attempted" in out
+
+
+def test_a_clean_org_404_is_not_announced_as_unremovable(gh, capsys):
+    """Anchor: printing that line on every 404 would make it noise on every
+    clean offboard, which is the failure mode the archive step was fixed for."""
+    _teams_env(gh, _cp(1, stderr="HTTP 404: Not Found"),
+               org=_cp(1, stderr="HTTP 404: Not Found"))
+    ofb.remove_residual_access("marlow-carter", {})
+    assert "Could not check org membership" not in capsys.readouterr().out
+
+
 def test_a_reachable_repo_with_no_contacts_is_an_honest_success(fleet, gh, capsys):
     (fleet / "heading-os-data-marlow-carter").mkdir()
     (fleet / "31c-crm-marlow-carter").mkdir()
@@ -342,6 +458,72 @@ def test_a_real_membership_is_still_reported(gh):
     residual = ofb.check_residual_access("marlow-carter", {})
     assert any(r == f"team membership in {ofb.github_org()}/leadership"
                for r in residual)
+
+
+def test_an_unreadable_ORG_probe_is_not_read_as_clean_either(gh, capsys):
+    """The same 403 blind spot, in the probe above the team loop.
+
+    `check_residual_access` asks two questions with the identical shape: org
+    membership, then team membership. This file's Finding 3 fixed and pinned the
+    TEAM one and left the ORG one measured by nothing. MEASURED 2026-09-01:
+    replacing `elif "404" not in (member.stderr or "")` with `elif False` - so an
+    org-level 403 reads exactly as "not a member" - left this file green at 47
+    passed.
+
+    Org membership is the WIDER grant of the two: it reaches every repository in
+    the org, which is why `safety_gate` names it, and Step 1d's re-verification
+    is this same function. A blind spot here is a blind spot in the verification
+    of the broadest access the departing exec holds.
+    """
+    _teams_env(gh, _cp(1, stderr="HTTP 404: Not Found"),
+               org=_cp(1, stderr="HTTP 403: Resource not accessible by token"))
+    residual = ofb.check_residual_access("marlow-carter", {})
+    assert any("org membership" in r and "COULD NOT BE CHECKED" in r
+               for r in residual), residual
+    assert "No org or team access found" not in capsys.readouterr().out
+    # And it reaches the verdict, which is what makes it more than a print.
+    assert ofb.offboard_verdict(True, True, residual, [])[0] is False
+
+
+def test_a_genuine_org_404_still_reads_as_not_a_member(gh, capsys):
+    """Anchor for the row above: reporting every org probe as unreadable would
+    pass it, and would make every clean offboard permanently INCOMPLETE."""
+    _teams_env(gh, _cp(1, stderr="HTTP 404: Not Found"),
+               org=_cp(1, stderr="HTTP 404: Not Found"))
+    assert ofb.check_residual_access("marlow-carter", {}) == []
+    assert "No org or team access found" in capsys.readouterr().out
+
+
+def test_an_unlistable_teams_endpoint_is_not_read_as_no_teams(gh, capsys):
+    """The third COULD-NOT-CHECK arm, which also had no witness.
+
+    When `gh api orgs/<org>/teams` itself fails there is no team loop to run at
+    all, so the per-team branch above cannot cover it. Measured 2026-09-01:
+    deleting this arm left the file green at 47 passed, and the run then said
+    "No org or team access found" having enumerated no teams whatsoever.
+    """
+    gh.table[("/teams ",)] = _cp(1, stderr="HTTP 403: Resource not accessible")
+    gh.table[("/memberships/marlow-carter",)] = _cp(1, stderr="HTTP 404")
+    residual = ofb.check_residual_access("marlow-carter", {})
+    assert any("team memberships COULD NOT BE CHECKED" in r for r in residual), \
+        residual
+    assert "No org or team access found" not in capsys.readouterr().out
+
+
+def test_a_missing_gh_binary_leaves_the_residual_check_saying_so(gh):
+    """`except FileNotFoundError` inside `check_residual_access`, unmeasured.
+
+    `test_a_missing_gh_binary_is_a_failure_not_a_crash` covers `_archive_repo`,
+    which is a different function with its own handler; measured 2026-09-01,
+    emptying THIS one left the file green at 47 passed. With no `gh` on PATH the
+    check answers nothing at all, and an empty residual list is what a clean exec
+    looks like - the run would have reported no residual access having made no
+    request.
+    """
+    gh.table[("gh", "api")] = FileNotFoundError("gh not found")
+    residual = ofb.check_residual_access("marlow-carter", {})
+    assert any("COULD NOT BE CHECKED" in r for r in residual), residual
+    assert ofb.offboard_verdict(True, True, residual, [])[0] is False
 
 
 def test_the_unreadable_probe_reaches_the_verdict(gh):
@@ -504,9 +686,72 @@ def test_the_precedence_that_is_real_is_first_note_wins(tmp_path):
 # Finding 9 -- an unlocked read-modify-write with a sweep inside
 # ============================================================
 
+def _own_body(node: ast.AST):
+    """Every node inside `node`, EXCLUDING anything in a nested function or
+    class. A guard parked in dead code is not a guard."""
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                              ast.ClassDef, ast.Lambda)):
+            continue
+        yield child
+        yield from _own_body(child)
+
+
+def _func(module: ast.Module, name: str) -> ast.FunctionDef:
+    for node in ast.walk(module):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"{name} is not defined any more")
+
+
 def test_the_ack_write_takes_the_same_lock_the_autoheal_does():
-    src = (ROOT / "scripts/ops-radar.py").read_text(encoding="utf-8")
-    assert 'file_lock(state_dir / (ACK_FILE + ".lock")' in src
+    """Asserted on the AST, scoped to `cmd_ack`, never on a source substring.
+
+    This was `'file_lock(state_dir / (ACK_FILE + ".lock")' in src` over the whole
+    file, which is the wrong instrument in BOTH directions. MEASURED 2026-09-01:
+
+      * moving the real write out from under the lock and leaving the same call
+        text inside a nested function that is never called left the file GREEN
+        at 56 passed - the write was unlocked and the test said it was locked;
+      * re-wrapping the one live call across three lines, changing nothing at
+        all, turned the file RED.
+
+    What matters is not that the characters appear somewhere in the file. It is
+    that the load-modify-save of the ack file happens INSIDE a `file_lock`
+    context in `cmd_ack` itself, so that is what is asserted. `_own_body` skips
+    nested definitions, so the parked-in-dead-code spelling fails here.
+    """
+    tree = ast.parse((ROOT / "scripts/ops-radar.py").read_text(encoding="utf-8"))
+    ack = _func(tree, "cmd_ack")
+
+    locks = [n for n in _own_body(ack)
+             if isinstance(n, ast.With)
+             and any(isinstance(item.context_expr, ast.Call)
+                     and getattr(item.context_expr.func, "id", None) == "file_lock"
+                     for item in n.items)]
+    assert len(locks) == 1, (
+        f"cmd_ack holds {len(locks)} file_lock blocks of its own; expected "
+        "exactly one around the read-modify-write")
+
+    def _ack_file_calls(scope):
+        """Calls that touch the ACK file, found by their arguments rather than
+        by callee name, so renaming the helper does not silently empty this."""
+        return [n for n in _own_body(scope)
+                if isinstance(n, ast.Call)
+                and any(isinstance(sub, ast.Name) and sub.id == "ACK_FILE"
+                        for arg in n.args for sub in ast.walk(arg))]
+
+    under_lock = {id(n) for n in _ack_file_calls(locks[0])}
+    all_touches = _ack_file_calls(ack)
+    # Three: the lock's own path, the load, and the save. The whole
+    # read-modify-write, not just the write - `save_json_atomic` already makes
+    # the write alone atomic, and that was never what raced.
+    assert len(all_touches) >= 3, (
+        f"only {len(all_touches)} ACK_FILE touches found in cmd_ack; the "
+        "read-modify-write this test exists for is no longer here")
+    outside = [ast.unparse(n) for n in all_touches if id(n) not in under_lock]
+    assert outside == [], (
+        f"these ACK_FILE operations sit outside the lock and can race: {outside}")
 
 
 def _stub_signal(key: str, severity: str, *, due: bool = True,
@@ -563,6 +808,37 @@ def test_the_ack_band_comes_from_the_sweep_and_not_from_a_default(tmp_path,
     args = types.SimpleNamespace(key="ollama", ttl=None)
     assert opr.cmd_ack(args, tmp_path, ROOT, tmp_path) == 0
     assert opr.load_json(tmp_path / opr.ACK_FILE)["ollama"]["acked_band"] == "high"
+
+
+def test_an_autoheal_key_is_banded_from_the_synthetic_signal(tmp_path,
+                                                             monkeypatch):
+    """The `autoheal_signals` line, which nothing exercised.
+
+    The synthetic `<target>_autoheal` keys are in `KNOWN_KEYS` but never in
+    `gather_live_signals`, so without that line `cur` is None and the band falls
+    through to "ok". `ack_suppressed` compares `severity_rank(critical) <=
+    severity_rank(ok)`, which is false, so the ack silences nothing while
+    reporting success - which the comment above the line says is "worse than the
+    exit-2 refusal it replaced". MEASURED 2026-09-01: deleting the line left the
+    file green at 56 passed.
+
+    The escalated Tier-A state is built from real inputs rather than by stubbing
+    `autoheal_signals`, so this measures the wiring and not the stub.
+    """
+    key = "ollama_autoheal"
+    assert key in opr.KNOWN_KEYS
+    monkeypatch.setattr(opr, "gather_live_signals",
+                        lambda e, d: [_stub_signal("ollama", "warn", due=True)])
+    escalate = opr.ops.AUTOHEAL_ESCALATE
+    (tmp_path / opr.AUTOHEAL_FILE).write_text(
+        json.dumps({"ollama": {"failures": escalate}}), encoding="utf-8")
+
+    args = types.SimpleNamespace(key=key, ttl=None)
+    assert opr.cmd_ack(args, tmp_path, ROOT, tmp_path) == 0
+    saved = opr.load_json(tmp_path / opr.ACK_FILE)
+    assert saved[key]["acked_band"] == "critical", (
+        "the synthetic auto-heal signal was banded from the live list alone, "
+        f"so the ack silences nothing: {saved[key]}")
 
 
 def test_two_acks_in_sequence_both_survive(tmp_path, monkeypatch):

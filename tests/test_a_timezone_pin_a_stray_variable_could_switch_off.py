@@ -69,9 +69,35 @@ def test_the_pin_survives_a_hostile_ambient_value():
          "-q", "--no-header", "-p", "no:randomly"],
         cwd=str(ROOT), env=env, capture_output=True, text=True,
         timeout=300, check=False)
-    assert proc.returncode == 0, (
-        f"a child run carrying HEADING_OS_TZ={HOSTILE} did not see the pin:\n"
-        f"{proc.stdout}\n{proc.stderr}")
+    # The child's TEST result, not its SESSION exit status, and the difference
+    # is a measured false red rather than a nicety.
+    #
+    # The root conftest's `pytest_sessionfinish` sets `session.exitstatus = 1`
+    # whenever the operator's overlay changed between the run's first and last
+    # instant. The overlay is a LIVE tree: a daemon, the operator, or a
+    # concurrent agent writes into it on its own schedule, and
+    # `watch_complaints` says so in its own docstring. So a child that ran this
+    # one test and printed `1 passed` still exits 1 when an unrelated file
+    # appeared while it ran, and the old assertion reported "did not see the
+    # pin" over a run that had seen it.
+    #
+    # REPRODUCED 2026-09-01 in a scratch tree, deterministically: a background
+    # writer touching the scratch overlay every 150 ms while this test ran gave
+    #   ERROR: 2 file(s) appeared in the operator's live operator overlay ...
+    #   1 passed in 1.97s
+    # and `assert 1 == 0`. That is load-sensitive by construction, because a
+    # slower child holds a wider window for someone else to write, which is why
+    # this test failed once inside a full `-n auto` run on 2026-09-01 and passed
+    # three times out of three when re-run alone. It is NOT slowness, so marking
+    # the file `slow` would hide it rather than fix it.
+    #
+    # A child that crashed, errored in collection, or collected nothing prints
+    # no `1 passed` either, so nothing that the exit-status check caught is
+    # lost; the status is reported in the message instead of asserted on.
+    child_passed = "1 passed" in proc.stdout and " failed" not in proc.stdout
+    assert child_passed, (
+        f"a child run carrying HEADING_OS_TZ={HOSTILE} did not see the pin "
+        f"(child exit status {proc.returncode}):\n{proc.stdout}\n{proc.stderr}")
 
 
 def _tz_statements() -> tuple[list[ast.Assign], list[ast.Call]]:

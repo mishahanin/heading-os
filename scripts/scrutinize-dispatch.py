@@ -932,7 +932,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.brief_file:
         try:
             brief = Path(args.brief_file).read_text(encoding="utf-8")
-        except OSError as exc:
+        # UnicodeDecodeError as well: it is raised by the decode inside
+        # `read_text`, is a ValueError, and is not an OSError, so a brief file
+        # holding one stray byte left this branch as a traceback instead of the
+        # exit 2 the operator is told to expect.
+        except (OSError, UnicodeDecodeError) as exc:
             print(f"{RED}ERROR: cannot read --brief-file: {exc}{RESET}",
                   file=sys.stderr)
             return 2

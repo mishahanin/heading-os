@@ -224,9 +224,55 @@ def test_deep_findings_merge_without_disturbing_the_regex_findings(tmp_path):
 
 
 def test_minified_assets_are_skipped_by_the_file_walk(tmp_path):
+    """What this actually measures, corrected 2026-09-01.
+
+    The name says the suffix list keeps minified bundles out. It does not: none
+    of `.min.js`, `.min.css` or `.min.mjs` has an extension in SCAN_EXTENSIONS
+    (`.html`, `.htm`, `.svg`, `.pptx`), so the extension filter one line above
+    rejects every one of them first and `OUT_OF_SCOPE_SUFFIXES` is unreachable
+    inside `_iter_files`. MEASURED: deleting `.min.js` from that tuple left this
+    test green.
+
+    The exclusion is therefore asserted where it is real - the extension
+    whitelist - and the suffix list is pinned separately, below, against the
+    copy that does govern. The dead branch in `_iter_files` is left in place and
+    named here rather than removed; it is a decision for whoever owns that file.
+    """
     (tmp_path / "app.min.js").write_text("var a=1", encoding="utf-8")
     (tmp_path / "page.html").write_text("<html></html>", encoding="utf-8")
 
     walked = [p.name for p in vdc._iter_files(tmp_path, include_internal=False)]
     assert "page.html" in walked
     assert "app.min.js" not in walked
+    assert ".js" not in vdc.SCAN_EXTENSIONS, (
+        "a .js file is now in scope, which makes OUT_OF_SCOPE_SUFFIXES live in "
+        "_iter_files; give it a test of its own rather than relying on this one"
+    )
+
+
+def test_the_two_minified_suffix_lists_cannot_drift_apart():
+    """There are two of them, and only one is enforced.
+
+    `visual-discipline-check.OUT_OF_SCOPE_SUFFIXES` is dead inside `_iter_files`
+    (see above). The list that actually keeps a minified bundle away from a
+    scanner is `out_of_scope.suffixes` in `config/visual-check-profiles.json`,
+    read by `impeccable_engine.is_out_of_scope`, which the deep engine calls
+    while walking a directory itself. The comment beside the constant says the
+    deep engine enforces "the suffix list", singular, as though the two were one
+    object. They are two, so adding `.min.ts` to either leaves the other behind
+    and the sentence in the source becomes false without anything failing.
+    """
+    from scripts.utils.impeccable_engine import is_out_of_scope, load_profiles
+
+    profiles, warning = load_profiles()
+    assert warning is None, warning
+    live = tuple(profiles["out_of_scope"]["suffixes"])
+    assert live, "the profile config lists no minified suffixes at all"
+    assert set(live) == set(vdc.OUT_OF_SCOPE_SUFFIXES), (
+        f"config/visual-check-profiles.json lists {sorted(live)} while "
+        f"visual-discipline-check.py lists {sorted(vdc.OUT_OF_SCOPE_SUFFIXES)}"
+    )
+    # And the live list is live: the enforced copy still rejects what it names.
+    for suffix in live:
+        assert is_out_of_scope(f"docs/assets/vendor-bundle{suffix}") is True
+    assert is_out_of_scope("docs/ARCHITECTURE.html") is False

@@ -23,6 +23,7 @@ suite until its exemption goes too.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import sys
 from pathlib import Path
@@ -98,9 +99,41 @@ def test_the_exemption_set_is_empty(hook):
 
 
 def test_the_exemption_is_tested_after_the_ingest_check(hook):
-    """Order is what made a basename-wide allowance reachable at all."""
-    source = HOOK.read_text(encoding="utf-8")
-    body = source[source.index("def main("):]
-    assert body.index("is_ingest_path(") < body.index("in ALLOW_BASENAMES"), (
+    """Order is what made a basename-wide allowance reachable at all.
+
+    Asked of the AST, not of substring positions in the source text. The
+    substring form was satisfiable by a COMMENT: MEASURED 2026-09-01, replacing
+    the whole exemption test with `if True:  # is_ingest_path( in
+    ALLOW_BASENAMES` left this file green while the hook skipped scanning for
+    EVERY file under every ingest path. Both markers were still present, still in
+    that order, and neither was executable any more.
+
+    Reading the AST also makes the two checks' EXISTENCE part of the assertion:
+    a branch that stops testing `ALLOW_BASENAMES` at all is not found, and the
+    comparison fails rather than passing over an absence.
+    """
+    tree = ast.parse(HOOK.read_text(encoding="utf-8"))
+    main = next((n for n in ast.walk(tree)
+                 if isinstance(n, ast.FunctionDef) and n.name == "main"), None)
+    assert main is not None, "prompt-guard.py no longer defines main()"
+
+    ingest_line = allow_line = None
+    for node in ast.walk(main):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+                and node.func.id == "is_ingest_path" and ingest_line is None:
+            ingest_line = node.lineno
+        if isinstance(node, ast.Compare) and any(
+                isinstance(op, ast.In) for op in node.ops) and any(
+                isinstance(c, ast.Name) and c.id == "ALLOW_BASENAMES"
+                for c in node.comparators) and allow_line is None:
+            allow_line = node.lineno
+
+    assert ingest_line is not None, (
+        "main() no longer calls is_ingest_path, so nothing asks where a file is")
+    assert allow_line is not None, (
+        "main() no longer tests ALLOW_BASENAMES; the exemption branch was "
+        "replaced by something that is not a membership test, and this ordering "
+        "rule now guards nothing")
+    assert ingest_line < allow_line, (
         "a file leaves on its name before anything asks where it is"
     )

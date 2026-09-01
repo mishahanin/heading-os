@@ -47,6 +47,18 @@ def _deny_reason(rc: int, stdout: str, stderr: str = "") -> str | None:
     allow decision across every "must not be blocked" assertion in this file --
     about twenty of them, all hollow at once. Raise instead: a broken hook is a
     test failure, never a pass.
+
+    A refusal is not a stop, and here the whole stop lives in the JSON. This hook
+    exits 0 and hands the CLI a decision, so the field names ARE the mechanism:
+    the CLI reads `hookSpecificOutput` and matches `hookEventName` against the
+    event it dispatched. A deny filed under a different event name is discarded,
+    the command runs, and the operator sees nothing at all - the same failure
+    shape as `.githooks/pre-push-data` printing "push blocked" and exiting 0,
+    one layer up. MEASURED 2026-09-01: changing `"hookEventName": "PreToolUse"`
+    in the `_policy_deny` renderer of `.claude/hooks/_dispatch.py` to
+    `"PostToolUse"` left this file GREEN at 20 passed, and no other test in the
+    tree asserts that field on a PreToolUse deny (three do, all for other
+    events). So it is asserted here, once, for every deny this file reads.
     """
     if rc != 0:
         raise AssertionError(
@@ -59,6 +71,11 @@ def _deny_reason(rc: int, stdout: str, stderr: str = "") -> str | None:
     hso = data.get("hookSpecificOutput", {})
     if hso.get("permissionDecision") != "deny":
         return None
+    assert hso.get("hookEventName") == "PreToolUse", (
+        "the hook produced a deny under hookEventName "
+        f"{hso.get('hookEventName')!r}. The CLI dispatched PreToolUse and matches "
+        "on that name, so this refusal is printed and then discarded: the command "
+        f"runs. Full payload: {data!r}")
     return hso.get("permissionDecisionReason", "")
 
 

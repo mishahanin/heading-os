@@ -48,6 +48,11 @@ def test_a_newline_in_a_record_cannot_forge_a_row():
     the numbers this report exists to produce."""
     out = _render(f"wipe\n{_FORGERY}")
     assert not any(line.startswith("FAKE") for line in out.split("\n")), out
+    # And the payload is still SHOWN, escaped, on one line. Without this line
+    # the assertion above is satisfied by a render that never emitted the cause
+    # at all: measured 2026-09-01, emptying the causes loop in `render` left it
+    # green, so "no forged row" could not be told apart from "no row".
+    assert f"wipe\\n{_FORGERY}" in out, out
 
 
 def test_a_crafted_mechanism_name_cannot_forge_a_row_either():
@@ -61,6 +66,7 @@ def test_a_crafted_mechanism_name_cannot_forge_a_row_either():
         now="2026-08-02T00:00:00+00:00")
     out = render(summary, now="2026-08-02T00:00:00+00:00")
     assert not any(line.startswith("FAKE") for line in out.split("\n")), out
+    assert f"x\\n{_FORGERY}" in out, out  # shown, escaped, on the mechanism row
 
 
 def test_both_readers_share_one_implementation():

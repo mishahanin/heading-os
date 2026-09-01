@@ -198,6 +198,198 @@ def test_revert_config_to_rejects_unsafe_names(workspace_root, name):
         revert_config_to(workspace_root, name)
 
 
+def test_the_unsafe_names_are_refused_by_the_guard_not_by_absence(workspace_root):
+    """The case above is a straw man, and this is the case it was missing.
+
+    Every name it lists also fails the `target.is_file()` check further down,
+    because none of them names a file inside `config-history`, and that check
+    raises `RuntimeError` too. So `pytest.raises(RuntimeError)` cannot tell a
+    traversal REFUSAL from an ordinary "snapshot not found". Deleting the two
+    prefix guards in `revert_config_to` (the separator/dot-name check and the
+    leading-dot check, config.py lines 371-379) was measured on 2026-08-31:
+
+        owner tests/bridge/test_config.py: 29 passed in 1.02s
+        tests/bridge                     : 1312 passed, 1 skipped in 45.61s
+        VERDICT: SURVIVED
+
+    The scope of that measurement is the owning file plus every test in
+    `tests/bridge`, which is what was run. Nothing in either made those nine
+    lines refuse anything.
+
+    The distinction is not cosmetic. `is_file()` is a question about the
+    filesystem, so it answers differently the moment a matching file exists:
+    a `.hidden.yaml` dropped into the history directory (by an editor
+    swapfile, a partial rsync, a `.#name` lock) would be RESTORED into the
+    live user config by a guardless revert, and `sub/file.yaml` would reach
+    outside the directory the moment `sub/` existed. This asserts the guard's
+    own message, which only the guard can produce, and creates the file first
+    so the fallback branch is genuinely unreachable.
+    """
+    history = workspace_root / ".daemon-state" / "config-history"
+    history.mkdir(parents=True, exist_ok=True)
+    # Make each name resolve to a real file, so "not found" cannot be the
+    # reason for the refusal.
+    (history / ".hidden.yaml").write_text("key: smuggled\n", encoding="utf-8")
+    (history / "sub").mkdir()
+    (history / "sub" / "file.yaml").write_text("key: smuggled\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="starts with '.'"):
+        revert_config_to(workspace_root, ".hidden.yaml")
+    with pytest.raises(RuntimeError, match="path separators"):
+        revert_config_to(workspace_root, "sub/file.yaml")
+    with pytest.raises(RuntimeError, match="path separators"):
+        revert_config_to(workspace_root, "back\\slash.yaml")
+    for dot in ("..", "."):
+        with pytest.raises(RuntimeError, match="path separators"):
+            revert_config_to(workspace_root, dot)
+    with pytest.raises(RuntimeError, match="snapshot name is required"):
+        revert_config_to(workspace_root, "")
+
+    # And the user layer was never written by any of the above.
+    assert not (workspace_root / ".daemon-state" / "config.yaml").exists()
+
+
+def test_an_absolute_path_cannot_be_read_out_of_the_filesystem(workspace_root):
+    """`/etc/passwd` is the one unsafe name that IS a file on this host.
+
+    `history_dir / "/etc/passwd"` is `/etc/passwd` under pathlib's join
+    semantics, so `is_file()` says yes and only a guard stands between the
+    revert and writing the host's password file into the daemon's config
+    layer. Asserting the message pins WHICH guard stopped it; the two prefix
+    checks and the `relative_to` containment check are separate lines and
+    either could be the one deleted next.
+    """
+    snapshot_config(workspace_root, {"a": 1})
+    with pytest.raises(RuntimeError, match="path separators|escapes history"):
+        revert_config_to(workspace_root, "/etc/passwd")
+    assert not (workspace_root / ".daemon-state" / "config.yaml").exists()
+
+
+# A broken config layer is SKIPPED, never fatal (config.py `_load_layer`).
+# That is a deliberate trade recorded in the function's docstring: an override
+# saved mid-edit used to stop the daemon booting at all, which also killed the
+# reconcile tick that would have picked up the corrected file. Nothing tested
+# it. Two mutations, measured 2026-08-31:
+#
+#   narrowing the except clause to `(OSError,)`, so a YAMLError propagates:
+#     owner tests/bridge/test_config.py: 29 passed in 1.21s
+#     tests/bridge                     : 1312 passed, 1 skipped in 51.56s
+#     VERDICT: SURVIVED
+#
+#   deleting the `isinstance(parsed, dict)` guard:
+#     owner tests/bridge/test_config.py: 29 passed in 1.14s
+#     tests/bridge                     : 1312 passed, 1 skipped in 50.62s
+#     VERDICT: SURVIVED
+#
+# Both were run against the owning file and all of `tests/bridge`, which is
+# the scope of the "SURVIVED" above. The first reinstates the exact boot outage
+# the docstring describes; the second turns a YAML list into an
+# `AttributeError` inside `_deep_merge`, from the same call site. Every test in
+# this file writes syntactically perfect YAML, which is why neither was
+# visible: the corpus had no broken member at all.
+
+BROKEN_LAYERS = {
+    "unclosed-bracket": "refresh: [1, 2\n",
+    "tab-indent": "refresh:\n\temail: 60\n",
+    "duplicate-block-mapping-key": "a: 1\n b: 2\n  c: 3\n",
+    "half-written": "refresh:\n  email:\n    - \n  -\n",
+    "a-yaml-list": "- one\n- two\n",
+    "a-bare-scalar": "just a string\n",
+    "a-number": "42\n",
+    "empty": "",
+}
+
+
+@pytest.mark.parametrize("label,text", sorted(BROKEN_LAYERS.items()))
+def test_a_broken_user_layer_does_not_stop_the_daemon(workspace_root, label, text):
+    """The documented promise: skipped, never fatal, layers below retained."""
+    corp = workspace_root / "corporate" / "daemon" / "config.yaml"
+    corp.parent.mkdir(parents=True)
+    corp.write_text("version: 7\nrefresh:\n  email: 300\n", encoding="utf-8")
+    (workspace_root / ".daemon-state" / "config.yaml").write_text(
+        text, encoding="utf-8")
+
+    cfg = load_config(workspace_root)          # must not raise
+
+    assert cfg["version"] == 7, f"the corporate layer was lost on {label!r}"
+    assert cfg["refresh"]["email"] == 300
+    assert cfg["refresh"]["inflight"] == 60, "DEFAULTS were lost too"
+
+
+@pytest.mark.parametrize("label,text", sorted(BROKEN_LAYERS.items()))
+def test_a_broken_corporate_layer_does_not_stop_the_daemon(workspace_root, label, text):
+    """Same for the layer above, where a bad `/push-updates` lands it."""
+    corp = workspace_root / "corporate" / "daemon" / "config.yaml"
+    corp.parent.mkdir(parents=True)
+    corp.write_text(text, encoding="utf-8")
+    (workspace_root / ".daemon-state" / "config.yaml").write_text(
+        "refresh:\n  email: 45\n", encoding="utf-8")
+
+    cfg = load_config(workspace_root)          # must not raise
+
+    assert cfg["refresh"]["email"] == 45, f"the user layer was lost on {label!r}"
+    assert cfg["version"] == 0, "should have fallen back to DEFAULTS"
+
+
+@pytest.mark.parametrize("label,text", sorted(BROKEN_LAYERS.items()))
+def test_a_broken_layer_says_so_in_the_log(workspace_root, label, text, caplog):
+    """Failing open silently is a different defect from failing open loudly.
+
+    An operator whose override stopped taking effect has nothing else to go
+    on: `load_config` returns a perfectly valid dict either way. `empty` is
+    the one member with nothing to report, since an empty file is a legal
+    empty mapping rather than a broken one.
+    """
+    import logging
+
+    (workspace_root / ".daemon-state" / "config.yaml").write_text(
+        text, encoding="utf-8")
+    with caplog.at_level(logging.WARNING, logger="scripts.bridge_daemon.config"):
+        load_config(workspace_root)
+    if label == "empty":
+        return
+    assert caplog.records, f"a {label!r} layer was skipped in silence"
+    assert any("user" in r.getMessage() for r in caplog.records), (
+        f"the warning does not name the layer that was dropped: "
+        f"{[r.getMessage() for r in caplog.records]}")
+
+
+def test_a_broken_layer_still_reloads_after_it_is_corrected(workspace_root):
+    """The reason failing open was chosen, and the half nothing measured.
+
+    The docstring's argument is that a fatal parse error 'killed the
+    reconcile tick that would have picked up the corrected file'. That is a
+    claim about `ConfigState`, not about `load_config`, and no test followed
+    it that far: booting on a broken layer, then fixing the file, then
+    reconciling.
+    """
+    user = workspace_root / ".daemon-state" / "config.yaml"
+    user.write_text("refresh: [1, 2\n", encoding="utf-8")
+
+    cs = ConfigState(workspace_root)            # must not raise
+    assert cs.config["refresh"]["email"] == 300  # DEFAULTS
+
+    user.write_text("refresh:\n  email: 42\n", encoding="utf-8")
+    _bump_mtime(user)
+    assert cs.reconcile() is True
+    assert cs.config["refresh"]["email"] == 42
+
+
+def test_a_broken_layer_is_not_snapshotted_as_content(workspace_root):
+    """A snapshot of an unparseable layer must record `{}`, not raise.
+
+    `snapshot_config` runs at boot and calls `_load_layer` on both layers,
+    so the fail-open branch is reachable from there too. If it raised, the
+    daemon would die at boot for the same reason, one function along.
+    """
+    user = workspace_root / ".daemon-state" / "config.yaml"
+    user.write_text("refresh: [1, 2\n", encoding="utf-8")
+    out = snapshot_config(workspace_root, load_config(workspace_root))
+    doc = yaml.safe_load(out.read_text(encoding="utf-8"))
+    assert doc["user"] == {}
+    assert doc["schema"] == 2
+
+
 def test_revert_config_to_rejects_none(workspace_root):
     snapshot_config(workspace_root, {"a": 1})
     with pytest.raises(RuntimeError):

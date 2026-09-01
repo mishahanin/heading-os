@@ -158,11 +158,20 @@ def test_the_cli_reports_the_refusal_instead_of_zero(monkeypatch, capsys):
 
 
 def test_archive_reports_the_refusal_too(monkeypatch, capsys):
+    """ONE `readouterr()`. It drains both streams, so the second call in the
+    old `capsys.readouterr().out + capsys.readouterr().err` always returned an
+    empty `err` — and `archive()` prints its refusal to stderr, so the text
+    half of this disjunction could never be true and only the `unresolved`
+    flag was ever measured."""
     monkeypatch.setattr(ARCH, "transcript_dir", lambda: None)
     counts = ARCH.archive()
-    text = (capsys.readouterr().out + capsys.readouterr().err).lower()
+    captured = capsys.readouterr()
+    text = (captured.out + captured.err).lower()
     assert counts.get("archived", 0) == 0
-    assert "could not be resolved" in text or counts.get("unresolved"), (
+    assert "could not be resolved" in text, (
+        f"archive() said nothing about an unresolvable directory; got {text!r}"
+    )
+    assert counts.get("unresolved"), (
         "archive() silently returned zero for an unresolvable directory"
     )
 

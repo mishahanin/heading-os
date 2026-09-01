@@ -487,12 +487,43 @@ def test_the_migration_docstring_does_not_promise_to_write_exec_files():
         "into an exec's repository")
 
 
+# Every expression this module is allowed to write through, spelled as
+# `ast.unparse` renders it. An ALLOWLIST rather than a denylist, because the
+# denylist it replaced ("the target expression contains the substring 'exec'")
+# only ever caught a write someone had named after the thing they should not be
+# writing to. Measured 2026-09-01 by injecting each shape into the module:
+#
+#   (exec_repo / f"{slug}.md").write_text(...)            -> caught (old + new)
+#   Path(rec["file_path"]).write_text(...)                -> MISSED by the old
+#
+# The second is the realistic regression, not the first. `scan_all_contacts()`
+# hands back records carrying `file_path`, and those paths point into every
+# exec's own repository; writing back through one is a single line and spells
+# no "exec" anywhere. The docstring's claim is "no write path into another
+# workspace", so what has to be pinned is the full set of destinations, not a
+# guess at how a bad one would be named.
+#
+# Adding a row here is the deliberate act the test exists to force: say where
+# the new write goes and why it is inside this workspace.
+_ALLOWED_WRITE_TARGETS = frozenset({
+    "os",                                 # os.replace(...) - atomic swap
+    "s", "s.replace('\\\\', '\\\\\\\\')",       # str.replace, not a filesystem write
+    "backup_dir", "dst.parent",           # the migration's own backup tree
+    "contacts_staging", "contacts_staging / f'{slug}.md'",
+    "address_book_staging", "address_book_staging / f'{slug}.md'",
+    "out_dir", "out_file",                # the proposal map under outputs/
+    "created", "legacy", "target.parent", "final_ab", "ab / name",
+})
+
+
 def test_the_migration_has_no_write_path_into_an_exec_repository():
     """The behaviour the docstring above describes, measured on the code.
 
     A docstring pin alone would let the sentence stay true while the code grew
-    the write path it disclaims. `apply_migration` must not write anywhere it
-    reached through the exec-record scan.
+    the write path it disclaims. Every filesystem write in this module must go
+    to a destination on `_ALLOWED_WRITE_TARGETS`, all of which live inside the
+    CEO's own workspace: the staging tree, the backup tree, the outputs
+    directory, and the CEO's own `crm/` subtrees.
     """
     import ast
     import inspect
@@ -501,16 +532,27 @@ def test_the_migration_has_no_write_path_into_an_exec_repository():
     tree = ast.parse(source)
 
     writers = {"write_text", "write_bytes", "mkdir", "rename", "replace", "unlink"}
-    exec_writes = []
+    seen, unknown = 0, []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
             continue
         if node.func.attr not in writers:
             continue
-        target = ast.unparse(node.func.value).lower()
-        if "exec" in target and "staging" not in target:
-            exec_writes.append(ast.unparse(node)[:80])
+        seen += 1
+        target = ast.unparse(node.func.value)
+        if target not in _ALLOWED_WRITE_TARGETS:
+            unknown.append(f"{target}.{node.func.attr}(...)")
 
-    assert exec_writes == [], (
-        f"a write reaches an exec-owned path, which the module docstring says "
-        f"this script has no path to do: {exec_writes}")
+    # Corpus floor. Without it, a rename of the writer methods (or an
+    # `ast.unparse` change) would leave the loop scanning nothing and the
+    # assertion below passing over an empty set.
+    assert seen >= 15, (
+        f"only {seen} write call(s) found in the migration module; the walk has "
+        f"stopped seeing them, so the allowlist below is guarding nothing")
+
+    assert unknown == [], (
+        f"a write goes somewhere this module has never written before. The "
+        f"docstring says it has no write path into another workspace, and the "
+        f"exec-record scan hands back paths that point into one. Add the "
+        f"destination to _ALLOWED_WRITE_TARGETS only after checking it stays "
+        f"inside the CEO's own tree: {unknown}")

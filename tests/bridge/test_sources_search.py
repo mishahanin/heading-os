@@ -312,3 +312,39 @@ def test_one_root_still_works_for_a_single_tree_clone(tmp_path):
     _setup_workspace(tmp_path)
     result = search(tmp_path, "exampleproject")
     assert result["categories"].get("capabilities")
+
+
+def test_one_failing_source_does_not_take_the_search_down(tmp_path, monkeypatch, caplog):
+    """"5 of 7 categories returned" beats "search broken because of an Inbox bug".
+
+    That sentence is in `sources/search.py`, above the per-source
+    `try/except Exception`, and nothing in this file had ever made a source
+    raise: every test seeds well-formed fixtures, so the eight handlers were
+    reached by nothing and the promise was prose. The patch target is
+    `search.list_tribe` and not `tribe.list_tribe`, because the module does
+    `from .tribe import list_tribe` at import time and reads its OWN name.
+    """
+    import logging
+
+    from scripts.bridge_daemon.sources import search as search_mod
+
+    _setup_workspace(tmp_path)
+
+    def _boom(*a, **kw):
+        raise RuntimeError("the tribe roster is on fire")
+
+    monkeypatch.setattr(search_mod, "list_tribe", _boom)
+
+    with caplog.at_level(logging.WARNING):
+        result = search(tmp_path, "ExampleProject")
+
+    assert "tribe" not in result["categories"]
+    for category in ("inbox", "tasks", "library", "studio", "capabilities"):
+        assert result["categories"].get(category), (
+            f"{category} was lost with the failing source; each one is wrapped "
+            "separately for exactly this reason")
+    assert result["total"] >= 5
+    assert any("tribe source failed" in r.getMessage() for r in caplog.records), caplog.text
+    assert any("on fire" in r.getMessage() for r in caplog.records), (
+        "the warning must carry the underlying error, or the log says only that "
+        "something failed")

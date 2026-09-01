@@ -64,16 +64,51 @@ def test_bumps_a_confident_memory_layer_hit(memory_dir):
 
 
 def test_ignores_non_memory_layers(memory_dir):
+    """The negative case has to be a file the bump COULD have written.
+
+    Until 2026-09-01 this passed a `knowledge/odin-brain/` path, which
+    `memory_touch._resolve` refuses outright as outside the auto-memory
+    directory. Deleting the `layer == "memory"` filter left the test green:
+    the refusal that answered was the path guard, not the layer gate, and the
+    only line under test was never reached. MEASURED that day by removing the
+    filter -- the file stayed green. The fixture below lives INSIDE auto-memory,
+    so nothing but the layer gate can decline it.
+    """
     mod = load_module()
-    assert mod._touch_memory_hits([_hit("knowledge/odin-brain/x.md", layer="odin")]) == 0
+    stray = memory_dir / "odin-shaped.md"
+    stray.write_text(FACT, encoding="utf-8")
+
+    assert mod._touch_memory_hits([_hit("auto-memory/odin-shaped.md", layer="odin")]) == 0
+
+    assert _access_count(stray) == 0
     assert _access_count(memory_dir / "example-fact.md") == 0
 
 
-def test_deduplicates_repeated_paths_within_one_result_set(memory_dir):
-    """A multi-chunk file returns several hits pointing at one file."""
+def test_deduplicates_repeated_paths_within_one_result_set(memory_dir, monkeypatch):
+    """A multi-chunk file returns several hits pointing at one file.
+
+    The count and the file contents cannot see this dedup: `touch_if_stale`
+    debounces on the same date, so a second call for the same path returns None
+    and changes nothing either way. MEASURED 2026-09-01 by replacing the
+    `dict.fromkeys` with a plain list -- the file stayed green, so it was
+    measuring the debounce in `scripts/utils/memory_touch.py` and not the line
+    it names. The call count is the only place the dedup is visible, so that is
+    what is asserted, alongside the effect.
+    """
     mod = load_module()
+    import scripts.utils.memory_touch as mt
+    calls = []
+    real = mt.touch_if_stale
+
+    def counting(raw_path, auto_memory_dir, today):
+        calls.append(raw_path)
+        return real(raw_path, auto_memory_dir, today)
+
+    monkeypatch.setattr(mt, "touch_if_stale", counting)
+
     hits = [_hit("auto-memory/example-fact.md"), _hit("auto-memory/example-fact.md")]
     assert mod._touch_memory_hits(hits) == 1
+    assert calls == ["auto-memory/example-fact.md"], calls
     assert _access_count(memory_dir / "example-fact.md") == 1
 
 
@@ -159,11 +194,24 @@ def test_the_new_count_reaches_the_index_without_a_rebuild(memory_dir, tmp_path,
 
 
 def test_the_index_mirror_never_breaks_a_recall(memory_dir, tmp_path, monkeypatch):
-    """No store built yet: the bump still lands, the mirror stays quiet."""
+    """No store built yet: the bump still lands, the mirror stays quiet.
+
+    "Quiet" includes creating nothing. `open_store` mkdirs the parent and lets
+    sqlite3 create the file before running the schema DDL, so a mirror that
+    skipped the existence check would MATERIALIZE an empty store from the read
+    path -- after which `stats` can no longer tell "never built" from "built and
+    empty", which is the same defect `cmd_query` and `_stats_one_store` each
+    carry their own guard against. MEASURED 2026-09-01: with the
+    `is_file()` check removed this file stayed green, because nothing asked
+    whether the store had appeared.
+    """
     mod = load_module()
     monkeypatch.setattr(mod, "get_data_root", lambda: tmp_path)
     cfg = {"collections": {"content": ["memory"]},
            "layers": [{"layer": "memory", "glob": "auto-memory/*.md"}]}
+    assert not (tmp_path / mod.STORE_REL).exists()
 
     assert mod._touch_memory_hits([_hit("auto-memory/example-fact.md")], cfg) == 1
     assert _access_count(memory_dir / "example-fact.md") == 1
+    assert not (tmp_path / mod.STORE_REL).exists(), (
+        "the read path materialized an index store that was never built")

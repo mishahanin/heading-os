@@ -133,7 +133,13 @@ def get_or_create_token(workspace_root: Path) -> str:
     if token_file.exists():
         try:
             existing = token_file.read_text(encoding="utf-8").strip()
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # `UnicodeDecodeError` is a `ValueError`, not an `OSError`, so a
+            # token file holding bytes that are not UTF-8 raised out of here
+            # instead of being regenerated. This runs during daemon startup,
+            # so the whole bridge failed to boot over a file this handler's
+            # own message says it knows how to replace. A restore from backup,
+            # a half-written file, or a stray editor save is enough.
             logger.warning("token file at %s is unreadable; regenerating",
                            token_file, exc_info=True)
             existing = ""
@@ -146,6 +152,47 @@ def get_or_create_token(workspace_root: Path) -> str:
     return token
 
 def validate(provided: str, expected: str) -> bool:
+    """Constant-time token compare that cannot be made to raise.
+
+    Both sides are encoded to bytes first, and that is the whole fix.
+    `secrets.compare_digest` accepts two `str` arguments only while BOTH are
+    ASCII; hand it one non-ASCII character and it raises `TypeError:
+    comparing strings with non-ASCII characters is not supported`. The
+    caller is `app._require_token`, which slices the value straight out of
+    the `Authorization` header, and uvicorn decodes header bytes as latin-1,
+    so any byte above 0x7F in that header arrives here as a non-ASCII `str`.
+    Measured 2026-08-31 against the real ASGI app, driving the scope uvicorn
+    builds:
+
+        raw 0xFF byte          -> UNCAUGHT TypeError: comparing strings with
+                                  non-ASCII characters is not supported
+        utf-8 cyrillic bytes   -> UNCAUGHT TypeError: (same)
+        valid ascii wrong      -> 401
+        100k ascii             -> 401
+
+    An uncaught exception out of a route handler is a 500, so an
+    unauthenticated request could pick the auth boundary's answer between
+    "401 invalid token" and "500 Internal Server Error" by flipping one bit
+    in the header. Nothing was disclosed and nothing was let through (the
+    request still failed), but a crash is a worse answer than a refusal on
+    the one boundary that is reachable before any check, and the error path
+    that reports it is far noisier than a 401.
+
+    `compare_digest` on `bytes` takes any byte value and keeps the timing
+    property, so encoding is the fix rather than a pre-filter that rejects
+    non-ASCII (which would answer 401 for a different reason and leave the
+    crash one refactor away). `surrogateescape` is there because a lone
+    surrogate would make a plain `encode` raise the same way, so the
+    encoding step itself cannot become the new crash.
+
+    An over-long token needs no cap here: it resolves 401 (measured above at
+    100,000 characters) and h11 already bounds the header size upstream.
+    """
     if not expected:
         return False
-    return secrets.compare_digest(provided or "", expected)
+    if not isinstance(provided, str) or not isinstance(expected, str):
+        return False
+    return secrets.compare_digest(
+        provided.encode("utf-8", "surrogateescape"),
+        expected.encode("utf-8", "surrogateescape"),
+    )

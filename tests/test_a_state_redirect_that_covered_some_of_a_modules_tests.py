@@ -261,6 +261,44 @@ def test_a_loader_named_through_a_module_constant_is_found():
     assert uncovered_tests(source) == ["test_an_uncovered_one"]
 
 
+def test_the_state_path_helper_counts_as_a_redirect():
+    """The third name in `REDIRECT_NAMES`, which had no case of its own.
+
+    MEASURED 2026-09-01: deleting `"state_path"` from `REDIRECT_NAMES` left all
+    twelve tests in this file green. It is not decoration - `state_path` is a
+    real function in `scripts/fireside-bot.py` (line 235, the helper over
+    `state_dir`), six tracked test modules name it, and a module that redirects
+    only that one would be reported as uncovered by a predicate that had
+    silently lost the alternative. Each of the three names has a sole witness
+    now: `state_dir` in `_OPT_IN_FIXTURE`, `HEADING_OS_DATA` below, this one
+    here.
+    """
+    source = _LOADER + '''
+@pytest.fixture
+def pathed(fb, tmp_path, monkeypatch):
+    monkeypatch.setattr(fb, "state_path", lambda name: tmp_path / name)
+    return tmp_path
+
+
+def test_a_covered_one(fb, pathed):
+    assert fb.something()
+''' + _UNCOVERED_TEST
+    assert uncovered_tests(source) == ["test_an_uncovered_one"]
+
+
+def test_each_redirect_name_is_witnessed_by_a_case_in_this_file():
+    """The anti-decay half. A fourth name added to `REDIRECT_NAMES` with no
+    case naming it would inherit exactly the hole `state_path` sat in."""
+    body = Path(__file__).read_text(encoding="utf-8")
+    # Everything below the synthetic-source section, so the constant's own
+    # definition line does not count as its witness.
+    cases = body.split("# The predicate, driven on synthetic source", 1)[1]
+    unwitnessed = [name for name in REDIRECT_NAMES if name not in cases]
+    assert unwitnessed == [], (
+        f"{unwitnessed} appear in REDIRECT_NAMES with no synthetic case driving "
+        f"them; deleting any of them would leave this file green")
+
+
 def test_the_environment_name_counts_as_a_redirect():
     """A module that drives a child process pins HEADING_OS_DATA instead, and
     that is the same guarantee reached a different way."""

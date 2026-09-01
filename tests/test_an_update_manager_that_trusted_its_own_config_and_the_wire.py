@@ -139,6 +139,42 @@ def test_a_command_that_cannot_be_spawned_resolves_to_unknown(monkeypatch):
     assert resolve_current(comp) == ""
 
 
+def test_a_version_banner_that_is_not_utf8_still_resolves():
+    """`text=True` with no `errors=` decodes the child's stdout STRICTLY.
+
+    Third fault of the same shape as the two this function's comment already
+    names, and the one it missed. `resolve_current` catches
+    `(subprocess.SubprocessError, OSError)`; `UnicodeDecodeError` is a
+    `ValueError`, so it is neither. A tool whose version banner carries one
+    non-UTF-8 byte - a Latin-1 copyright sign or an accented word, ordinary in a
+    vendor CLI - therefore raised straight out of a function documented to
+    answer "" rather than raise, and ONE such component took the whole `check`
+    run down. MEASURED 2026-09-01 with `printf 'v1.2.3 \\xe9dition\\n'`:
+    `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9 in position 7`,
+    past every caller.
+
+    Decoding with `errors="replace"` is the fix rather than a wider `except`,
+    because the version here is RECOVERABLE: returning "" would report a
+    perfectly healthy tool as unknown, which is the misleading answer the
+    docstring's "" is meant to avoid. `update_sources._get_json` made the other
+    choice for the same exception one module over, correctly - a JSON body with
+    an undecodable byte is not recoverable, so it raises SourceError.
+    """
+    comp = Component(name="x", tier="auto", latest={},
+                     current={"cmd": r"printf 'v1.2.3 \xe9dition\n'",
+                              "regex": r"v([0-9.]+)"})
+    assert resolve_current(comp) == "1.2.3"
+
+
+def test_an_undecodable_banner_with_no_regex_still_returns_its_first_line():
+    """The no-regex arm of the same read; both reach the strict decode."""
+    comp = Component(name="x", tier="auto", latest={},
+                     current={"cmd": r"printf 'v1.2.3 \xe9dition\nsecond line\n'"})
+    out = resolve_current(comp)
+    assert out.startswith("v1.2.3 "), out
+    assert "second line" not in out
+
+
 def test_a_working_regex_still_returns_its_capture_group():
     """The control: the guards must not turn every resolution into unknown."""
     comp = Component(name="x", tier="auto", latest={},

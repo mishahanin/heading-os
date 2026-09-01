@@ -228,6 +228,38 @@ class UnreadableCorpus(RuntimeError):
     """
 
 
+def _read(path: Path) -> str:
+    """A corpus file's text, or `UnreadableCorpus` naming the file.
+
+    `_threads` and `_contacts` route their reads through `_UNREADABLE`, which
+    holds `ValueError` and therefore holds `UnicodeDecodeError` too, so a file
+    that is not valid UTF-8 arrives at the operator as a named refusal saying
+    which file to look at. Three other reads in this module had no handler at
+    all: the address-book entity (`_entity_name`), `context/people.md`
+    (`oracle_agg_03`) and every auto-memory note (`oracle_agg_07`). Those are
+    operator-written files, which is exactly the corpus that is not UTF-8 by
+    construction.
+
+    MEASURED 2026-09-01 on a two-file fixture, one clean and one carrying a lone
+    0xe9: `oracle_agg_07` and `oracle_agg_03` both raised a bare
+    `UnicodeDecodeError` out of the oracle and took all fifteen with them. The
+    exception names a codec, a byte and an offset and NO path, so the operator
+    was told a byte was wrong and never which file held it - the same traceback
+    with no fix in it that `_threads`' docstring says was repaired.
+
+    Not `errors="replace"`. These oracles compute the benchmark's ground truth,
+    and a name silently garbled by U+FFFD would grade a correct traversal wrong.
+    Failing closed with the file named is the safe direction, and it matches
+    what the two readers above already do.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except _UNREADABLE as exc:
+        raise UnreadableCorpus(
+            f"cannot compute truth over {path.name}: it could not be read "
+            f"({exc}). Fix the file's encoding, or move it out of the corpus."
+        ) from exc
+
 
 def _iso(value: Any) -> date | None:
     """Parse an ISO date or datetime prefix; None when unparseable or absent.
@@ -341,7 +373,7 @@ def _contact_name(corpus: CorpusPaths, path: Path, fm: dict) -> str:
             f"record whose entity is missing has no name, and counting it as a "
             f"person with no card is the wrong answer, not a smaller one."
         )
-    entity = parse_frontmatter(entity_file.read_text(encoding="utf-8"))
+    entity = parse_frontmatter(_read(entity_file))
     name = (entity.get("name") or "").strip() if entity else ""
     if not name:
         raise UnreadableCorpus(
@@ -526,7 +558,7 @@ def oracle_agg_03(corpus: CorpusPaths, today: date) -> OracleAnswer:
     people_file = _people_file(corpus)
     if not people_file.exists():
         return OracleAnswer(kind="count", value=0)
-    section = _PEOPLE_SECTION_RE.search(people_file.read_text(encoding="utf-8"))
+    section = _PEOPLE_SECTION_RE.search(_read(people_file))
     names = _PEOPLE_BULLET_RE.findall(section.group(1) if section else "")
     known = _contact_names(corpus)
     # Containment, not equality -- the same rule `_counterparty_resolves` already
@@ -620,7 +652,7 @@ def oracle_agg_07(corpus: CorpusPaths, today: date) -> OracleAnswer:
     stems = {p.stem for p in files}
     hits, broken = [], {}
     for p in files:
-        targets = [_link_stem(t) for t in _WIKILINK_RE.findall(p.read_text(encoding="utf-8"))]
+        targets = [_link_stem(t) for t in _WIKILINK_RE.findall(_read(p))]
         dangling = sorted({t for t in targets if t and t not in stems})
         if dangling:
             hits.append(p)

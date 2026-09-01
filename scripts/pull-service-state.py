@@ -66,6 +66,18 @@ def service_config() -> tuple[dict, str | None]:
         # UTF-16 therefore killed the process with a raw traceback before
         # `main` could print the named message this docstring promises.
         return {}, f"could not be read: {exc}"
+    except Exception as exc:  # noqa: BLE001 - the docstring's promise is total
+        # Reading the file is only half of what this block does. Resolving WHERE
+        # it lives runs first, through `resolve_config_with_example` ->
+        # `get_data_config_dir()` -> `get_workspace_root()`, and a root that will
+        # not resolve (marker gone, an unresolvable `~` in WORKSPACE_ROOT) raises
+        # RuntimeError, which is neither an OSError nor a UnicodeDecodeError.
+        # MEASURED 2026-09-01 with a resolver raising RuntimeError: it came
+        # straight out of a function documented "NEVER raises", then out of
+        # `state_dirs()`, past `main`'s `except ValueError`, as a traceback.
+        # Nothing is swallowed: the reason is RETURNED, `state_dirs` raises it as
+        # the ValueError `main` already catches, and `main` prints it and exits 1.
+        return {}, f"could not be located: {type(exc).__name__}: {exc}"
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:

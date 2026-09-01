@@ -24,6 +24,14 @@ This file also finishes the date-reader family shard 53 opened: the last three
 readers that could not read their own input, and the ratchet that keeps the
 count honest.
 
+2026-09-01 adds the dashboard's own reads, in section C. `collect_capture_payoff`
+dropped a note it could not open through `except Exception: return False` with
+nothing printed, the viraid panel's handler named only JSONDecodeError and
+OSError, and `collect_freshness` read four context files inside a loop with no
+`try` at all -- so one undecodable file killed the whole render, which is
+verbatim what the impossible-date branch four lines below it exists to prevent.
+All three were reproduced before the fix.
+
 Example data is invented throughout. No real entity appears in this file.
 """
 from __future__ import annotations
@@ -387,6 +395,123 @@ def test_an_unreadable_field_does_not_stop_a_later_readable_one(overlay):
         "an unreadable earlier field stopped a readable later one")
     assert "no readable date" not in proc.stderr, (
         "a note that WAS dated must not be reported as undated")
+
+
+def test_a_note_the_reader_cannot_decode_is_reported_not_silently_dropped(overlay):
+    """`except Exception: return False`, with nothing printed.
+
+    The date branch fifteen lines below it says "no readable date" and names the
+    file. The read branch above it said nothing at all, so a cp1251 note left
+    "Signals Captured (7d)" one lower with no trace anywhere. Measured
+    2026-09-01: `UnicodeDecodeError` took that silent path, which is the same
+    undercount the noisy branch exists to prevent, by the other door.
+
+    The second note is the anchor: a reader that gave up on the whole tree at
+    the first bad file would report 0 here, and the point is that it reports 1.
+    """
+    today = dt.date.today()          # noqa: DTZ011 - the panel's own window is host-relative
+    _payoff_overlay(overlay, {
+        "fresh.md": ZK_BRAIN_NOTE.format(nid="4", title="Fresh",
+                                         ingested=today.isoformat(),
+                                         created=today.isoformat()),
+    })
+    bad = overlay / "knowledge" / "odin-brain" / "sources" / "cp1251.md"
+    bad.write_bytes(b"---\ntitle: \xcf\xf0\xe8\xed\xf6\xe8\xef\ncreated: 2020-01-01\n---\n")
+    with pytest.raises(UnicodeDecodeError):
+        bad.read_text(encoding="utf-8")
+
+    proc = _run_driver(overlay, _PAYOFF_DRIVER)
+
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["signals_week"] == 1
+    assert "cp1251.md" in proc.stderr, "the dropped note was not named"
+    assert "unreadable" in proc.stderr, proc.stderr
+
+
+_FRESHNESS_DRIVER = """
+import importlib.util, json
+spec = importlib.util.spec_from_file_location("gd", "scripts/generate-dashboard.py")
+GD = importlib.util.module_from_spec(spec); spec.loader.exec_module(GD)
+print(json.dumps(GD.collect_freshness(), default=str))
+"""
+
+
+def test_one_unreadable_context_file_degrades_one_row_not_the_whole_run(overlay):
+    """The read in this loop had no `try` at all, so an AST sweep for a bad
+    handler cannot see it.
+
+    Four lines below it, the impossible-date branch exists because a single bad
+    line "used to raise here and kill the whole run: no dashboard at all, from
+    one bad line in one of four files". An undecodable context file did exactly
+    that, by the door with no handler on it. Measured 2026-09-01: the driver
+    exited non-zero with a UnicodeDecodeError and printed no JSON.
+
+    `strategy.md` carries a valid marker and is checked in the same call, so a
+    reader that gave up on the first bad file would lose it.
+    """
+    (overlay / "context" / "pipeline.md").write_bytes(
+        b"# Pipeline\nLast verified: 2020-01-05\n\xff\xfe\x00\n")
+    (overlay / "context" / "strategy.md").write_text(
+        "# Strategy\nLast verified: 2020-01-05\n", encoding="utf-8")
+
+    proc = _run_driver(overlay, _FRESHNESS_DRIVER)
+
+    assert proc.returncode == 0, proc.stderr
+    rows = {r["name"]: r for r in json.loads(proc.stdout)}
+    assert rows["pipeline.md"]["health"] == "gray"
+    assert rows["pipeline.md"]["date"] is None
+    assert rows["strategy.md"]["date"] == "2020-01-05", (
+        "a readable file after the bad one was lost")
+    assert "pipeline.md is unreadable" in proc.stderr, proc.stderr
+
+
+def test_a_readable_context_file_is_not_reported_as_unreadable(overlay):
+    """The anchor. A branch that greyed out every row would pass above, and a
+    warning on every clean render is noise rather than a signal."""
+    (overlay / "context" / "pipeline.md").write_text(
+        "# Pipeline\nLast verified: 2020-01-05\n", encoding="utf-8")
+
+    proc = _run_driver(overlay, _FRESHNESS_DRIVER)
+
+    assert proc.returncode == 0, proc.stderr
+    rows = {r["name"]: r for r in json.loads(proc.stdout)}
+    assert rows["pipeline.md"]["date"] == "2020-01-05"
+    assert rows["pipeline.md"]["health"] != "gray"
+    assert "unreadable" not in proc.stderr, proc.stderr
+
+
+_VIRAID_DRIVER = """
+import importlib.util, json
+spec = importlib.util.spec_from_file_location("gd", "scripts/generate-dashboard.py")
+GD = importlib.util.module_from_spec(spec); spec.loader.exec_module(GD)
+print(json.dumps(GD.collect_viraid(), default=str))
+"""
+
+
+@pytest.mark.parametrize("payload, rate_known", [
+    (b"\xff\xfe\x00{", False),
+    (b"{not json", False),
+    (b'{"stats": {"completion_rate": 0.5}}', True),
+])
+def test_the_viraid_panel_degrades_on_a_state_file_it_cannot_read(
+        overlay, payload, rate_known):
+    """`except (json.JSONDecodeError, OSError)` cannot catch a decode failure.
+
+    `read_text(encoding="utf-8")` raises `UnicodeDecodeError`, a `ValueError`,
+    before `json.loads` is handed anything, so the undecodable row escaped the
+    handler this reader grew specifically to stop a corrupt state.json drawing a
+    measured-looking 0%. The last row is the anchor.
+    """
+    state = overlay / "outputs" / "operations" / "viraid" / "state.json"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_bytes(payload)
+
+    proc = _run_driver(overlay, _VIRAID_DRIVER)
+
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["rate_known"] is rate_known
+    if not rate_known:
+        assert "state.json unreadable" in proc.stderr, proc.stderr
 
 
 # ============================================================

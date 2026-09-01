@@ -114,6 +114,29 @@ def test_the_flagged_fp_marker_is_still_read_from_the_header(scrutiny, tmp_path)
     assert header.group(4), "the flagged-FP marker was lost to the widened id class"
 
 
+def test_a_count_mismatch_is_refused_rather_than_zipped_short(scrutiny, tmp_path):
+    """The guard the file's own docstring rests on, with a case on the line.
+
+    `zip(headers, ratings)` truncates to the shorter list, so without the
+    count check a sheet carrying more ratings than headers computes a kappa
+    over the rows that happened to pair up and returns 0 - a benchmark number
+    over a silently truncated sheet. Deleting the whole `len(headers) !=
+    len(ratings)` branch left this file green, because the only malformed
+    fixture here has ZERO headers and is caught one screen further down by the
+    "No rated rows found" refusal instead.
+    """
+    out = tmp_path / "sheet.md"
+    _generate_and_fill(scrutiny, out, ["B1", "B-1"])
+    text = out.read_text(encoding="utf-8")
+    assert text.count("**CEO rating:**") == 2, "the fixture must start balanced"
+    # One stray rating with no heading above it: the shape a hand-filled sheet
+    # takes when the CEO pastes a row twice.
+    out.write_text(text + "\n**CEO rating:** `agree`\n", encoding="utf-8")
+
+    assert replay.compute_kappa_from_sheet(out) == 4, (
+        "3 ratings against 2 headers produced a kappa instead of a refusal")
+
+
 def test_a_malformed_sheet_is_still_refused(scrutiny, tmp_path):
     """The negative case. The widened regex must not start matching prose."""
     sheet = tmp_path / "broken.md"

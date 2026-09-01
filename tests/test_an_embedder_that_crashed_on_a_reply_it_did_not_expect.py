@@ -30,9 +30,24 @@ from scripts.utils.embeddings import EmbeddingError, embed
 NON_OBJECT_BODIES = ["[]", "null", '"oops"', "3", "[[0.1, 0.2]]"]
 
 
+# Bodies that never reach `json.loads` at all, because the DECODE fails first.
+# `UnicodeDecodeError` is a `ValueError` and a SIBLING of `json.JSONDecodeError`,
+# so the clause covering the parse never covered the decode one expression above
+# it. Each of these is a plausible 200 from something that is not ollama: a
+# gzip-encoded reply whose header was dropped, a latin-1 error page, a raw
+# protobuf frame.
+UNDECODABLE_BODIES = [
+    b"\xff\xfe{\"embeddings\": []}",
+    b'{"error": "mod\xe8le introuvable"}',
+    b"\x1f\x8b\x08\x00\x00\x00\x00\x00",
+    b"\x80\x81\x82",
+]
+
+
 class _FakeResponse:
-    def __init__(self, payload: str) -> None:
-        self._payload = payload.encode("utf-8")
+    def __init__(self, payload) -> None:
+        self._payload = payload if isinstance(payload, bytes) \
+            else payload.encode("utf-8")
 
     def read(self) -> bytes:
         return self._payload
@@ -109,6 +124,95 @@ def test_a_well_shaped_reply_still_returns_its_vectors(stub_transport):
     got = embed(["sovereignty"], model="bge-m3", host="http://stub:11434",
                 keep_alive="30m")
     assert got == [[0.1, 0.2, 0.3]]
+
+
+def test_the_undecodable_corpus_really_does_fail_the_decode():
+    """A vacuous parametrize otherwise: every row must fail `.decode("utf-8")`
+    and not merely fail to parse, or the rows below prove nothing about the
+    clause they were added for."""
+    assert len(UNDECODABLE_BODIES) >= 4
+    for body in UNDECODABLE_BODIES:
+        with pytest.raises(UnicodeDecodeError):
+            body.decode("utf-8")
+
+
+@pytest.mark.parametrize("payload", UNDECODABLE_BODIES,
+                         ids=[repr(b) for b in UNDECODABLE_BODIES])
+def test_an_undecodable_reply_is_also_an_embedding_error(payload,
+                                                          stub_transport):
+    """The same contract breach as the non-object one, one expression earlier.
+
+    MEASURED 2026-09-01 against `_post_with_retry` as it stood: a 200 carrying
+    `b'{"embeddings": [[0.1]]}\\xff\\xfe'` left the module as a raw
+    `UnicodeDecodeError`. It is a `ValueError` and a sibling of
+    `json.JSONDecodeError`, so `except (json.JSONDecodeError, KeyError)` did not
+    see it: no retry, no backoff, and not the one exception this module
+    documents. `model_digest` in the same file catches bare `ValueError` and was
+    never exposed - the guard existed in one half of the module and not the
+    other, which is the identical shape as the isinstance guard this file was
+    written for.
+    """
+    calls = stub_transport(payload)
+    with pytest.raises(EmbeddingError) as caught:
+        embed(["sovereignty"], model="bge-m3", host="http://stub:11434",
+              keep_alive="30m")
+    message = str(caught.value)
+    assert "malformed response" in message, message
+    # Retried like the parse failure beside it, rather than refused on the first
+    # attempt like the shape failures: a transport that garbles one reply may
+    # not garble the next.
+    assert len(calls) == 3, (
+        f"an undecodable body took {len(calls)} attempt(s); it is grouped with "
+        "the malformed-JSON clause, which retries")
+
+
+@pytest.mark.parametrize("payload", ["not json at all", "{", "{'single': 1}"],
+                         ids=["prose", "truncated", "python-repr"])
+def test_a_body_that_decodes_but_does_not_parse_is_also_an_embedding_error(
+    payload, stub_transport
+):
+    """The sibling clause, which had no witness of its own.
+
+    Measured 2026-09-01: removing `json.JSONDecodeError` from the except tuple
+    left this file green at 18 passed - every existing row sent something that
+    parsed. An error page served as `text/html` with a 200 is the ordinary way
+    this arrives from a proxy.
+    """
+    calls = stub_transport(payload)
+    with pytest.raises(EmbeddingError) as caught:
+        embed(["sovereignty"], model="bge-m3", host="http://stub:11434",
+              keep_alive="30m")
+    assert "malformed response" in str(caught.value)
+    assert len(calls) == 3
+
+
+def test_a_read_phase_timeout_is_retried_and_not_propagated(monkeypatch):
+    """The bare `TimeoutError` clause, unmeasured.
+
+    Its own comment says a read-phase timeout "raises bare TimeoutError, not
+    wrapped in URLError -- without this branch it propagated uncaught and
+    skipped the retry/backoff below entirely". Measured 2026-09-01: replacing
+    that clause left the file green at 18 passed.
+
+    `TimeoutError` subclasses `OSError`, and `urllib.error.URLError` also
+    subclasses `OSError` - but not each other, so the URLError clause above does
+    NOT cover it and the ordering of the two is load-bearing.
+    """
+    calls: list[int] = []
+
+    def fake_urlopen(*_args, **_kwargs):
+        calls.append(1)
+        raise TimeoutError("read timed out")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(embeddings.time, "sleep", lambda _s: None)
+
+    with pytest.raises(EmbeddingError) as caught:
+        embed(["sovereignty"], model="bge-m3", host="http://stub:11434",
+              keep_alive="30m")
+    assert "timed out waiting for" in str(caught.value)
+    assert len(calls) == 3, (
+        "a read-phase timeout skipped the retry loop instead of being retried")
 
 
 def test_an_object_missing_embeddings_still_reports_its_keys(stub_transport):

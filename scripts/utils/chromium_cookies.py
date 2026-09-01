@@ -215,8 +215,14 @@ def find_profile_folder(user_data: Path, profile_name: str) -> str:
 
     try:
         data = json.loads(local_state.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Local State is malformed JSON: {exc}")
+    except ValueError as exc:
+        # `ValueError`, not `json.JSONDecodeError`. `read_text(encoding="utf-8")`
+        # raises `UnicodeDecodeError`, which is a SIBLING of JSONDecodeError
+        # under ValueError rather than a subclass, so a Local State torn
+        # mid-write escaped this handler and the caller got a raw decode
+        # traceback instead of the sentence this branch exists to raise.
+        # `_merge_playwright` in this same module already spells the wider form.
+        raise RuntimeError(f"Local State is unreadable: {exc}") from exc
 
     info_cache = data.get("profile", {}).get("info_cache", {})
     for folder, meta in info_cache.items():
@@ -324,7 +330,18 @@ def _get_keys_win(local_state_path: Path) -> dict[str, bytes]:
     import ctypes
     from ctypes import wintypes
 
-    data = json.loads(local_state_path.read_text(encoding="utf-8"))
+    # Same guard, same sentence, as `find_profile_folder` above, which reads the
+    # SAME file. That one turns an unreadable Local State into a named
+    # RuntimeError; this one let a `UnicodeDecodeError` or a
+    # `json.JSONDecodeError` out raw, so the two readers of one file on disk
+    # disagreed about what "unreadable" looks like to the caller. Windows-only
+    # by platform, and the branch where a bad answer costs the whole key.
+    try:
+        data = json.loads(local_state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            f"Local State at {local_state_path} is unreadable: {exc}"
+        ) from exc
     encrypted_b64 = data.get("os_crypt", {}).get("encrypted_key")
     if not encrypted_b64:
         raise RuntimeError(

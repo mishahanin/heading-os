@@ -42,6 +42,17 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 HOOK = ROOT / ".claude" / "hooks" / "sync-docs.py"
 
+# Carries both entries of `REQUIRED_ANCHORS["GETTING-STARTED.md"]`, so a probe
+# that uses this body is stopped by the gate under test and never by the anchor
+# guard standing in front of it.
+GOOD_TEMPLATE = """# Getting started
+
+## Windows setup
+- Install Python dependencies via `uv sync --all-groups`
+
+> Dependencies are managed by uv. See `docs/security/DEPENDENCY-POLICY.md`.
+"""
+
 
 def _hook_module():
     spec = importlib.util.spec_from_file_location("sync_docs_under_test", HOOK)
@@ -100,6 +111,86 @@ def test_a_synthetic_root_still_syncs(hook, tmp_path):
     assert hook.is_real_template(tmp_path / "templates" / "GETTING-STARTED.md") is True
 
 
+# --- rule 1, the one nothing measured ------------------------------------------
+
+@pytest.mark.parametrize("holder", ["nottemplates", "templates-backup", "docs",
+                                    "my-templates", "templates.old"])
+def test_a_directory_that_is_not_named_templates_is_refused(hook, tmp_path, holder):
+    """Rule 1 of the three, and until 2026-09-01 no test asked it anything.
+
+    Deleting the `parent.name != "templates"` clause left the whole sync-docs
+    corpus green, because every other case in this file puts the probe inside a
+    directory literally called `templates`. The spellings here are the realistic
+    near-misses a human types (`templates-backup`, `templates.old`), not an
+    obviously invalid one: `str(path)` contains "templates" in all of them, so
+    each would have satisfied the unanchored substring the module docstring
+    above records as the original defect.
+    """
+    assert hook.is_real_template(tmp_path / holder / "GETTING-STARTED.md") is False
+
+
+def test_the_hook_asks_the_guard_before_it_copies(tmp_path):
+    """`is_real_template` refusing proves nothing until the caller consults it.
+
+    The end-to-end probe below names a file it never creates, so `shutil.copy2`
+    fails on a missing SOURCE whatever the guard decides, and the published page
+    is left alone either way. MEASURED 2026-09-01 by removing the
+    `if not is_real_template(...)` line from `main()`: all three sync-docs test
+    files stayed green, and the hook created a `docs/` directory under the
+    scratch root it should have refused.
+
+    Here the source file EXISTS, so the only thing standing between it and
+    `<root>/docs/GETTING-STARTED.md` is the call. Everything happens under
+    `tmp_path`, so a regression writes into the scratch tree rather than into
+    the engine's published documentation.
+    """
+    holder = tmp_path / "nottemplates"
+    holder.mkdir()
+    (holder / "GETTING-STARTED.md").write_text(GOOD_TEMPLATE, encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+
+    payload = {"cwd": str(tmp_path),
+               "tool_input": {"file_path": str(holder / "GETTING-STARTED.md")}}
+    proc = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
+                          capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stderr
+    assert not (tmp_path / "docs" / "GETTING-STARTED.md").exists(), (
+        "the hook copied from a directory that is not a templates/ source, so "
+        "nothing in main() consults is_real_template"
+    )
+
+
+def test_a_name_outside_sync_files_is_never_copied(tmp_path):
+    """The other gate in `main()`, and it had no test either.
+
+    Removing `if file_path.name not in SYNC_FILES` left the corpus green. The
+    control half matters as much as the probe: the SAME tree is driven with a
+    name that IS in SYNC_FILES, so a run that copies nothing because the fixture
+    never reached the copy cannot be read as the gate doing its job.
+    """
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (tmp_path / "docs").mkdir()
+    (templates / "NOT-SHARED.md").write_text(GOOD_TEMPLATE, encoding="utf-8")
+    (templates / "GETTING-STARTED.md").write_text(GOOD_TEMPLATE, encoding="utf-8")
+
+    def drive(name):
+        payload = {"cwd": str(tmp_path),
+                   "tool_input": {"file_path": str(templates / name)}}
+        proc = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
+                              capture_output=True, text=True, timeout=60)
+        assert proc.returncode == 0, proc.stderr
+
+    drive("NOT-SHARED.md")
+    assert not (tmp_path / "docs" / "NOT-SHARED.md").exists(), (
+        "a name the sync does not own was copied into docs/"
+    )
+    drive("GETTING-STARTED.md")
+    assert (tmp_path / "docs" / "GETTING-STARTED.md").exists(), (
+        "the control never reached the copy, so the assertion above is empty"
+    )
+
+
 # --- end to end, through the hook itself ---------------------------------------
 
 def test_the_hook_does_not_touch_the_published_doc_from_a_scratch_template(tmp_path):
@@ -137,17 +228,45 @@ def test_the_hook_does_not_touch_the_published_doc_from_a_scratch_template(tmp_p
 
 # --- the regeneration claim must be earned -------------------------------------
 
-def test_the_regen_result_is_inspected():
-    """`subprocess.run(..., check=False)` with the result discarded let a failing
-    renderer produce the message '+ regenerated HTML' over stale output. The
-    failure stays non-blocking, per the module docstring, but it must be said."""
-    src = HOOK.read_text(encoding="utf-8")
-    assert "proc.returncode != 0" in src, (
-        "sync-docs no longer inspects the renderer's exit code, so a failed "
-        "regeneration is reported as a success again"
+def test_a_failing_renderer_is_reported_as_a_failure(tmp_path):
+    """The claim, driven rather than grepped.
+
+    The three assertions this replaced read the hook's own SOURCE for
+    `"proc.returncode != 0"`, `"HTML regen FAILED"` and `"The HTML is STALE."`.
+    MEASURED 2026-09-01: rewriting the live check to `if False and
+    proc.returncode != 0:` left every one of those substrings in the file and
+    the test green, which is the shape a comment satisfies too.
+
+    So the renderer is made to fail for real. `scripts/regenerate-docs-html.py`
+    writes `<name>.html` beside its input through an atomic replace, and a
+    DIRECTORY at that path makes the replace raise IsADirectoryError and the
+    script exit 1. Nothing is monkeypatched and no path leaves `tmp_path`.
+    """
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (tmp_path / "docs").mkdir()
+    (templates / "GETTING-STARTED.md").write_text(GOOD_TEMPLATE, encoding="utf-8")
+    # The first render target is the template's own sibling HTML.
+    (templates / "GETTING-STARTED.html").mkdir()
+
+    payload = {"cwd": str(tmp_path),
+               "tool_input": {"file_path": str(templates / "GETTING-STARTED.md")}}
+    proc = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
+                          capture_output=True, text=True, timeout=90)
+
+    # Non-blocking stays non-blocking: the docstring promises a warning, not an
+    # abort, and the markdown copy still lands.
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "docs" / "GETTING-STARTED.md").exists()
+
+    message = json.loads(proc.stdout)["additionalContext"]
+    assert "HTML regen FAILED" in message and "The HTML is STALE." in message, (
+        f"a renderer that exited non-zero was not reported: {message!r}"
     )
-    assert "HTML regen FAILED" in src
-    assert "The HTML is STALE." in src
+    assert "+ regenerated HTML" not in message, (
+        "the success line was emitted over a render that failed"
+    )
+    assert "HTML regen FAILED" in proc.stderr
 
 
 def test_the_success_message_is_not_emitted_unconditionally():

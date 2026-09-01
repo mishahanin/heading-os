@@ -360,7 +360,16 @@ def dead_socket():
 
 
 def test_a_hanging_endpoint_raises_the_declared_error(dead_socket, monkeypatch):
-    """TimeoutError is an OSError sibling, not a URLError: it escaped.
+    """TimeoutError is not a URLError, so it escaped.
+
+    Corrected 2026-09-01: this said "an OSError sibling", and `TimeoutError`
+    SUBCLASSES `OSError` (`TimeoutError.__mro__` is TimeoutError, OSError,
+    Exception, BaseException, object). The distinction is not pedantry. Read as
+    written, the sentence says `except OSError` would not catch it, when in fact
+    it does -- and a maintainer acting on that would either keep a redundant
+    name believing it load-bearing, or hunt for a clause that is already there.
+    What made it escape is the clause ORDER: `URLError` and `HTTPError` come
+    first and match neither.
 
     The URL under test is https, because `_get_json` now refuses anything else.
     The hanging socket is still reached over http, and that split is the point.
@@ -384,6 +393,62 @@ def test_a_hanging_endpoint_raises_the_declared_error(dead_socket, monkeypatch):
 
     with pytest.raises(us.SourceError, match="network error"):
         us._get_json("https://api.github.com/repos/acme/tool/releases/latest")
+
+
+def test_an_undecodable_body_is_wrapped_in_the_declared_error(monkeypatch):
+    """The fourth way out of `_get_json`, and the one nothing caught.
+
+    `resp.read().decode("utf-8")` carries no `errors=`, so a 200 whose body is
+    not UTF-8 raises `UnicodeDecodeError`. That is a `ValueError` and therefore a
+    SIBLING of `json.JSONDecodeError`, not an instance of it, so it matched
+    neither the JSON clause nor `HTTPError`, `URLError` or `OSError`. MEASURED
+    2026-09-01 against a body of `{"tag_name": "v1.0 caf\\xe9"}`: it left
+    `_get_json` unwrapped.
+
+    `scripts/update-manager.py` catches `SourceError` and nothing else, to mark
+    ONE component unresolved. An escapee takes the whole update check down
+    instead of one row -- which is verbatim the reason the two clauses above
+    this one exist.
+    """
+    class _R:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"tag_name": "v1.0 caf\xe9"}'
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: _R())
+
+    with pytest.raises(us.SourceError, match="undecodable body"):
+        us._get_json("https://x/y")
+
+
+def test_the_undecodable_message_is_not_the_bad_json_one(monkeypatch):
+    """Two different facts about the body must not print the same sentence.
+
+    Widening the JSON clause to `ValueError` would have caught the decode error
+    too and reported "bad JSON", which is a claim about the syntax of a document
+    that was never decoded into one. The negative case for the clause above.
+    """
+    class _R:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b"\xff\xfe not utf-8 at all"
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: _R())
+
+    with pytest.raises(us.SourceError) as excinfo:
+        us._get_json("https://x/y")
+    assert "bad JSON" not in str(excinfo.value)
+    assert "network error" not in str(excinfo.value)
 
 
 def test_a_bad_json_body_is_still_its_own_message(monkeypatch):

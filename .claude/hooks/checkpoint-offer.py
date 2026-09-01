@@ -474,10 +474,19 @@ def _context_was_rebuilt(state: dict, previous_at: str | None) -> bool:
     pre-compaction context, and the summary that replaces it is not obliged to
     keep hook prose.
 
-    Unparseable or missing timestamps answer YES. The two failure directions are
-    not symmetric - printing the full text when it was not needed costs the
-    operator four lines, while withholding it can leave a post-compaction
-    assistant unable to name the command that ends the stretch.
+    A missing `last_compact_at` answers NO. A missing previous timestamp, or an
+    unparseable pair, answers YES. The two failure directions are not symmetric -
+    printing the full text when it was not needed costs the operator four lines,
+    while withholding it can leave a post-compaction assistant unable to name the
+    command that ends the stretch - so only the one case that is not a failure at
+    all, "no compaction has ever happened here, so nothing was rebuilt", answers
+    NO.
+
+    Said as "unparseable or missing timestamps answer YES" until 2026-08-31,
+    which the missing-compaction branch below has never done. A docstring that
+    over-promises is worse than none: the branch is correct, and a maintainer
+    trusting the sentence would have "fixed" the working half. Each of the three
+    branches was re-read against the code before this paragraph was written.
     """
     compacted_at = state.get("last_compact_at")
     if not compacted_at:
@@ -498,6 +507,32 @@ def _used_percentage(state: dict) -> float | None:
         return float(raw)
     except (TypeError, ValueError):
         return None
+
+
+def _bucket(state: dict) -> int:
+    """This state file's hysteresis bucket, defended like its two siblings above.
+
+    Every other numeric read on this path already refuses to raise on a bad
+    value: `_used_percentage`, `_remaining_percentage`, `CP._session_hard`
+    ("an unparseable or out-of-range value returns None rather than raising ...
+    a status line that crashes on it is worse than one that falls back"), the
+    `offer_level in ("soft", "hard")` whitelist, and the non-dict payload
+    coercion in `main()`. The bucket was read as a bare `int(...)` at four call
+    sites and was the one exception.
+
+    MEASURED 2026-08-31 by calling `_driven_pending` directly: `offer_bucket`
+    of `''`, `None` and `'12'` all answered True, and `'abc'` raised ValueError
+    while `[1]` raised TypeError. That raise reaches `main()` uncaught, so a
+    single hand-edited or half-written value kills the Stop hook on EVERY turn -
+    no offer, no unattended continuation, no save, and a traceback per turn -
+    until the operator finds the file. 0 is the same answer an absent key
+    already gives, so a bad value degrades to "no bucket recorded" instead.
+    """
+    raw = state.get("offer_bucket") or state.get("current_bucket") or 0
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _remaining_percentage(state: dict, used: float) -> float:
@@ -632,8 +667,33 @@ def _queue_pending(path: Path, session: str) -> bool:
                 # every driven compaction cost the count one unit it never
                 # gained. `owed` carries the debt forward so the consuming
                 # decrement is cancelled instead of charged to the operator.
+                #
+                # The debt is paid HERE too, and not only by the contentless
+                # `dequeue` below. `remove` always carries `content`, so the
+                # operator deleting our own queued `/compact` from the input
+                # line records `remove` with `content: "/compact"` - which lands
+                # in this branch, and before 2026-08-31 continued without paying
+                # anything. `owed` then stayed at 1 for the life of the session,
+                # his next real message's contentless `dequeue` was charged to
+                # the debt instead of to `pending`, and `pending` stuck at 1
+                # permanently: `_queue_pending` true at every later pause,
+                # `_wait_out_the_grace` returning at once, and unattended mode
+                # halting in silence for the rest of the session. That is the
+                # exact outcome the paragraph above records fixing, arriving
+                # through the other door.
+                #
+                # MEASURED 2026-08-31 on a synthetic transcript of the four
+                # records (`enqueue /compact`, `remove /compact`, `enqueue` a
+                # real message, contentless `dequeue`): `_queue_pending` True
+                # before this line, False after. LATENT rather than live -
+                # replaying the same accounting over the six newest transcripts
+                # of this project found 49 `/compact` enqueues and ZERO
+                # `/compact` records of any other operation, and the fixed
+                # accounting answers identically on all six.
                 if operation == "enqueue":
                     owed += 1
+                elif operation in ("remove", "dequeue") and owed > 0:
+                    owed -= 1
                 continue
             if operation == "enqueue":
                 pending += 1
@@ -781,9 +841,35 @@ def _notify_stall(reason: str) -> None:
 
     A notification to the operator's own bot, which is established practice in
     this workspace; nothing here gains the ability to reach anyone else. The
-    import is deferred until a target is actually configured, so an engine with
-    no Telegram set up never pays for it.
+    `telegram_notify` import stays deferred behind the target check, so an engine
+    with no Telegram configured never pays for it.
+
+    What the deferral cannot do is answer whether a target IS configured. The
+    three names below live in the gitignored `.env` and reach `os.environ` only
+    through `load_env()`, and nothing on this hook's path calls it before here.
+    MEASURED 2026-08-31 in the hook's own process: all three absent at import,
+    and `ODIN_CADENCE_TELEGRAM_TARGET` present the moment `load_env()` runs, with
+    `TELEGRAM_NOTIFY_BOT_TOKEN` set beside it. So the notice this function exists
+    to send was resolving an empty target and returning, and the operator learned
+    that his night had ended by reading the status line in the morning.
+
+    It reached the operator at all only by accident: `_handoff_since` calls
+    `CP.local_now()`, which calls `get_default_tz_name()`, which calls
+    `load_env()` - and that path needs the mode on, `used >= hard`, and an
+    unspent bucket, so it is present on exactly the pause that is not the
+    ordinary one. `get_default_tz_name()` was fixed for this same defect in the
+    same words: reaching the environment alone answered UTC for every caller
+    that did not separately call `load_env()`.
     """
+    # First statement, before the walk, for the reason above.
+    try:
+        from scripts.utils.paths import load_env
+
+        load_env()
+    except Exception as exc:  # noqa: BLE001 - a notice worth trying is never worth a broken turn
+        print(f"checkpoint-offer: .env not loaded for the stall notice: {exc}",
+              file=sys.stderr)
+
     target = ""
     for var in (
         "CHECKPOINT_TELEGRAM_TARGET",
@@ -918,7 +1004,7 @@ def _driven_pending(state: dict) -> bool:
     """
     if not (CP.auto_mode(state) or CP.unattended_mode(state)):
         return False
-    bucket = int(state.get("offer_bucket") or state.get("current_bucket") or 0)
+    bucket = _bucket(state)
     return state.get("compact_requested_bucket") != bucket
 
 
@@ -942,7 +1028,7 @@ def _request_compaction(
         return False
     if used < CP.config(state)["hard"]:
         return False
-    bucket = int(state.get("offer_bucket") or state.get("current_bucket") or 0)
+    bucket = _bucket(state)
     if state.get("compact_requested_bucket") == bucket:
         return False
 
@@ -1383,9 +1469,7 @@ def main() -> int:
             # only by hand-editing; and the alternative - picking a level here -
             # would invent the one fact the corrupt state failed to record.
             if level in ("soft", "hard"):
-                bucket = int(
-                    state.get("offer_bucket") or state.get("current_bucket") or 0
-                )
+                bucket = _bucket(state)
                 # Reset the window BEFORE claiming the turn below. Claiming it
                 # first is what disarmed the reset in `unattended_turn`, which
                 # runs later on this same Stop and keys on exactly this id; see
@@ -1429,7 +1513,7 @@ def main() -> int:
         # missing here means stale state from before the contract - skip.
         return 0
 
-    bucket = int(state.get("offer_bucket") or state.get("current_bucket") or 0)
+    bucket = _bucket(state)
 
     # Mark the offer delivered (hysteresis), through the same read-modify-write
     # every other write in this file uses. This path wrote back the whole copy it

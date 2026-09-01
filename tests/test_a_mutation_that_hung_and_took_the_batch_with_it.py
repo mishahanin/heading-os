@@ -254,3 +254,66 @@ def test_the_pycache_wipe_still_uses_find_when_it_is_there(tmp_path):
     (cache / "stale.pyc").write_bytes(b"\x00")
     mh._clear_pycache(tmp_path)
     assert not cache.exists()
+
+
+# ============================================================
+# The restore check is the module's last line of defence, and nothing ever
+# asked it to refuse
+# ============================================================
+
+def test_a_restore_that_does_not_match_its_digest_stops_the_run(tmp_path,
+                                                                monkeypatch):
+    """The guard fires, and it fires by raising rather than by carrying on.
+
+    `run_mutations` writes the saved text back and then re-digests the file,
+    on the reasoning in its own message: a tree that is dirty makes every later
+    verdict worthless. MEASURED 2026-09-01 by replacing that comparison with
+    `if False:` and running all three suites that cover this module
+    (`test_a_mutation_that_hung_and_took_the_batch_with_it.py`,
+    `test_a_probe_that_graded_a_suite_already_red.py`, `test_mutation_probe.py`):
+    81 passed, 0 failed. Nothing had ever made it refuse, which is the one thing
+    a guard has to be able to do.
+
+    The disagreement is injected at `_digest`, the module's own seam, because
+    the real cause is a writer that touches the file between the restore and the
+    check - a concurrent agent, or a command that rewrites its own source - and
+    that is not reproducible in-process without inventing a race.
+    """
+    root = _tree(tmp_path, "alpha = 1\n")
+    from scripts.utils import mutation_probe as mp
+
+    seen = {"n": 0}
+
+    def drifting_digest(path):
+        seen["n"] += 1
+        # First call is the pre-mutation snapshot; the second is the check
+        # after the restore. Returning a different value there is exactly what
+        # a file changed underneath the restore looks like.
+        return f"digest-{seen['n']}"
+
+    monkeypatch.setattr(mp, "_digest", drifting_digest)
+
+    with pytest.raises(RuntimeError) as caught:
+        mp.run_mutations(
+            [Mutation("one", (("target.py", "alpha = 1", "alpha = 9"),), _ok)],
+            command=PASS, root=root, timeout=30)
+
+    assert "does not match its pre-mutation digest" in str(caught.value)
+    assert "target.py" in str(caught.value)
+
+
+def test_a_matching_digest_lets_the_run_finish_normally(tmp_path):
+    """The other direction, and it is what makes the test above a measurement.
+
+    A guard rewritten to raise unconditionally would satisfy the case above and
+    make the probe unusable, so the ordinary restore is asserted here on the
+    same path: one mutation, one verdict, and the tree byte-identical after it.
+    """
+    root = _tree(tmp_path, "alpha = 1\n")
+
+    results = run_mutations(
+        [Mutation("one", (("target.py", "alpha = 1", "alpha = 9"),), _ok)],
+        command=PASS, root=root, timeout=30)
+
+    assert [r.verdict for r in results] == [SURVIVED]
+    assert (root / "target.py").read_text(encoding="utf-8") == "alpha = 1\n"

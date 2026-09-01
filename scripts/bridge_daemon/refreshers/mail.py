@@ -17,6 +17,8 @@ from scripts.utils.paths import get_data_root
 if TYPE_CHECKING:
     from scripts.bridge_daemon.state import State
 
+logger = logging.getLogger(__name__)
+
 # The engine root this module was imported from. It is the FALLBACK only:
 # `refresh()` resolves the producer from the workspace_root it is handed, the
 # way `finalizers/mark_read.py` already does for the same script. The module
@@ -44,6 +46,10 @@ def read_email_state(data_root: "Path | None" = None) -> dict:
     HEADING OS engine/data split: state.json resolves under ``data_root``,
     which falls back to the ``get_data_root()`` seam when not supplied. The
     dead leading ``workspace_root`` went on 2026-08-24.
+
+    Unreadable degrades to ``{"messages": []}`` and says WHICH file it dropped,
+    at warning level in the daemon log. An empty return that names nothing is a
+    zero-unread badge indistinguishable from a genuinely clear inbox.
     """
     if data_root is None:
         data_root = get_data_root()
@@ -52,9 +58,18 @@ def read_email_state(data_root: "Path | None" = None) -> dict:
         return {"messages": []}
     try:
         data = json.loads(f.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        # OSError too: a permissions fault or a race with the writer used to
-        # propagate out of a reader whose whole contract is "degrade to empty".
+    # OSError too: a permissions fault or a race with the writer used to
+    # propagate out of a reader whose whole contract is "degrade to empty".
+    # `UnicodeDecodeError` walked past BOTH names for the same reason it walks
+    # past them everywhere: it is a `ValueError`, so a SIBLING of
+    # `json.JSONDecodeError` and not an `OSError`. The decode happens inside
+    # `read_text`, before `json.loads` is entered at all, so no JSON handler
+    # can ever see it. MEASURED 2026-09-01 with one 0xe9 byte in state.json:
+    # `UnicodeDecodeError: invalid continuation byte` raised out of the mail
+    # refresher instead of the documented empty state.
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        logger.warning("email state at %s is unreadable (%s); "
+                       "reporting zero messages for this tick", f, exc)
         return {"messages": []}
     return data if isinstance(data, dict) else {"messages": []}
 

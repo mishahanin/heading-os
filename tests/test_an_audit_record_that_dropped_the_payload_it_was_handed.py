@@ -68,8 +68,11 @@ def run_id(traj_dir):
 
 
 def _events(rid):
+    # split("\n"), for the same reason the module under test uses it: this
+    # helper read the file with `splitlines()` and would have shredded the
+    # very records the cases below plant.
     return [json.loads(line) for line
-            in itl.trajectory_path(rid).read_text(encoding="utf-8").splitlines()
+            in itl.trajectory_path(rid).read_text(encoding="utf-8").split("\n")
             if line.strip()]
 
 
@@ -187,6 +190,98 @@ def test_the_dropped_entries_are_exactly_what_verify_calls_defects(mixed_run):
 ])
 def test_the_shared_predicate_decides_each_shape(entry, scannable):
     assert itl.is_scannable_path(entry) is scannable
+
+
+# ============================================================
+# A record the reader shredded on a line separator it does not use
+# ============================================================
+
+# DERIVED, not listed. The writer emits `json.dumps(record,
+# ensure_ascii=False)`, which escapes the C0 controls and passes everything else
+# through verbatim, so only the code points that (a) survive json.dumps and
+# (b) `str.splitlines()` treats as a break can shred a record. Guessing the set
+# by hand is how five of eight parametrize cases end up unreachable.
+_SPLITLINES_ONLY = [
+    ch for ch in (
+        "\x0b", "\x0c", "\x1c", "\x1d", "\x1e",       # C0: escaped by json.dumps
+        "\x85", "\u2028", "\u2029",              # C1 + Unicode: NOT escaped
+    )
+    if len(f"x{ch}y".splitlines()) > 1
+]
+_REACHABLE = [ch for ch in _SPLITLINES_ONLY
+              if ch in json.dumps(ch, ensure_ascii=False)]
+
+
+def test_the_reachable_separator_set_is_what_this_file_thinks_it_is():
+    """The anti-decay half: the derivation above must still hold.
+
+    If `json.dumps` ever stopped escaping the C0 controls, or `splitlines()`
+    changed its set, the cases below would silently start testing something
+    else. Asserted by SET EQUALITY so a widened set fails as loudly as a
+    narrowed one.
+    """
+    assert set(_REACHABLE) == {"\x85", "\u2028", "\u2029"}, (
+        f"reachable set moved: {[hex(ord(c)) for c in _REACHABLE]}")
+    # And the derivation is doing work: the C0 controls really are excluded
+    # because json.dumps escapes them, not because nobody listed them.
+    assert set(_SPLITLINES_ONLY) - set(_REACHABLE) == {
+        "\x0b", "\x0c", "\x1c", "\x1d", "\x1e"}
+
+
+@pytest.mark.parametrize("sep", _REACHABLE, ids=lambda c: f"U+{ord(c):04X}")
+def test_a_separator_in_a_summary_does_not_drop_the_event(run_id, sep):
+    """One record in, one record back. `splitlines()` returned neither.
+
+    MEASURED 2026-09-01 before the fix: `--summary "before<U+2028>after"` wrote
+    two well-formed JSONL records, `splitlines()` saw three fragments, and
+    `_read_events` returned ONE - the run_end event was gone from the audit
+    record, with nothing printed and exit 0.
+    """
+    before = len(_events(run_id))
+    rc = itl.main(["--event", "--run-id", run_id, "--type", "run_end",
+                   "--summary", f"before{sep}after"])
+    assert rc == 0
+
+    path = itl.trajectory_path(run_id)
+    raw = path.read_text(encoding="utf-8")
+    # The premise: the file really does hold the shape that breaks splitlines.
+    assert len(raw.splitlines()) > len([x for x in raw.split("\n") if x]), (
+        "the separator did not survive into the file; this case proves nothing")
+
+    # Through the PRODUCTION reader, not this file's `_events` helper. Asking
+    # the helper measured the helper: MEASURED 2026-09-01, reverting
+    # `_read_events` to `splitlines()` left this test green because `_events`
+    # does its own `split("\n")` and never calls the function under test.
+    events = itl._read_events(path)
+    assert len(events) == before + 1, "the event was dropped from the record"
+    assert sep in events[-1]["payload"]["summary"], (
+        "the event survived but its text did not")
+    # And the helper agrees, so the two readers cannot silently diverge.
+    assert len(_events(run_id)) == len(events)
+
+
+@pytest.mark.parametrize("sep", _REACHABLE, ids=lambda c: f"U+{ord(c):04X}")
+def test_the_verifier_calls_that_record_well_formed(run_id, sep):
+    """The loud half of the same defect, at the other reader.
+
+    `verify_trajectory` reported two `malformed JSON` defects against a file
+    that is valid JSONL, on line numbers the file does not have.
+    """
+    itl.main(["--event", "--run-id", run_id, "--type", "run_end",
+              "--summary", f"before{sep}after"])
+
+    malformed = [d for d in itl.verify_trajectory(run_id) if "malformed JSON" in d]
+    assert malformed == [], malformed
+
+
+def test_a_genuinely_malformed_line_is_still_reported(run_id):
+    """The sole witness for the other direction, so "report nothing" does not
+    satisfy the two cases above."""
+    itl.trajectory_path(run_id).open("a", encoding="utf-8").write("{not json\n")
+
+    malformed = [d for d in itl.verify_trajectory(run_id) if "malformed JSON" in d]
+    assert len(malformed) == 1, malformed
+    assert "line 2" in malformed[0], malformed
 
 
 # ============================================================

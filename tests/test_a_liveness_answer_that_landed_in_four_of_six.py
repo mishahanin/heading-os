@@ -340,6 +340,12 @@ DECLARED_LIVENESS_SITES = {
         "measured against it, so the divergence is written down instead of hidden",
     "tests/test_a_liveness_answer_that_landed_in_four_of_six.py":
         "this file's own detector fixtures, which must keep spelling the shape",
+    "tests/test_a_liveness_answer_that_raised_instead_of_answering.py":
+        "two probes that pin `pid_liveness.PID_CEILING` to the number the kernel "
+        "really takes: os.kill must ACCEPT the ceiling and raise OverflowError "
+        "one above it. Asking `pid_is_running` there would ask the constant "
+        "about itself, and it does - measured 2026-09-01, a ceiling of 2**30 "
+        "passed every other test in that file",
 }
 
 

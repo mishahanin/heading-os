@@ -123,6 +123,36 @@ def test_a_metacharacter_token_does_not_match_text_that_is_not_the_entity(token,
     )
 
 
+@pytest.mark.parametrize("token, text, expected", [
+    # `delta+` unescaped is "delt" then one-or-more "a", so it matches the four
+    # characters "delta" and reports THEM. The token is still found, and the
+    # operator is told a different string leaked than the one that did.
+    ("delta+", "the delta+ programme is live", ["delta+"]),
+    # `q3(emea)` unescaped turns the parentheses into a group, so the pattern
+    # becomes `q3emea`, which its own real text does not contain. Blind to the
+    # entity it was curated for.
+    ("q3(emea)", "the q3(emea) push slipped", ["q3(emea)"]),
+])
+def test_a_single_word_metacharacter_token_needs_the_strict_pattern_escaped(
+        token, text, expected):
+    """The escape on the STRICT alternation, which had no case that could see it.
+
+    MEASURED 2026-09-01 by deleting `re.escape` from the `alts` join: this
+    module and eight sibling denylist files stayed green. Two things hid it.
+    Every metacharacter token above this test carries a SPACE, so it is also in
+    `_loose_pattern`, whose own `re.escape` is a separate call and still
+    matched; and the impostor cases are stopped one layer earlier by the
+    substring prefilter in `scan_text`, which needs the token verbatim and so
+    can never reach a text that only an unescaped pattern would match.
+
+    A single-word token has neither cover: it is absent from the loose pattern,
+    and the case below keeps the token verbatim in the text so the prefilter
+    passes and the strict pattern is what decides.
+    """
+    dl = _compiled({token: "curated:codenames"})
+    assert [h[1].lower() for h in dl.scan_text(text)] == expected
+
+
 def test_the_wrapped_name_pattern_also_escapes_its_words():
     """The second, whitespace-widened pattern builds its own alternation."""
     dl = _compiled({"q3 (emea) push": "curated:codenames"})
@@ -169,6 +199,38 @@ def test_a_short_token_holding_a_separator_is_exempt_from_the_length_gate(value)
     assert tokens == {value: "crm-slug"}, (
         f"{value!r} is a slug, an address or a two-word name, so the "
         "five-character minimum for BARE words must not reach it"
+    )
+
+
+@pytest.mark.parametrize("value, separator", [
+    # "J Lo", the same person the `j-lo` case above is about, arriving by the
+    # OTHER route: `_harvest_person_slugs` emits both the slug and
+    # `slug.replace("-", " ")`, so one contact produces `j-lo` AND `j lo`.
+    ("j lo", "space"),
+    ("a b", "space"),
+    ("a@b", "at-sign"),
+])
+def test_a_separator_shorter_than_the_gate_is_still_exempt(value, separator):
+    """The space and `@` arms of the exemption, which nothing could observe.
+
+    The four values in the case above are all FIVE characters or longer once the
+    hyphen and dot arms are set aside (`wu li` is 5, `e@f.gh` is 6), and the gate
+    only refuses below five. So both conjuncts could be deleted with every
+    denylist test green. MEASURED 2026-09-01 across the nine test files naming
+    this module: dropping `" " not in v` survived, and so did dropping
+    `"@" not in v`.
+
+    The space arm is the one with a live route behind it: a two-word name whose
+    parts are short is under five characters with the space counted, and the
+    harvest emits exactly that form because it is the form prose contains. The
+    `@` arm is asserted as the contract `_add`'s comment states rather than as a
+    reachable harvest, since a valid address is longer than the gate.
+    """
+    tokens: dict[str, str] = {}
+    _add(tokens, value, "crm-name")
+    assert tokens == {value: "crm-name"}, (
+        f"{value!r} carries a {separator}, so the five-character minimum for "
+        "BARE words must not reach it"
     )
 
 

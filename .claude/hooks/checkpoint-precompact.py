@@ -76,6 +76,25 @@ MAX_OUTPUT = 4000
 MAX_STATUS_LINES = 40
 MAX_WRITTEN = 25
 
+# The same two facts bounded in CHARACTERS, which is the half that actually
+# promises a size. A line here is a path, and a path has no length limit, so "40
+# lines" and "25 paths" name any number of characters at all, and the six facts
+# have to fit at their own bounds or the drop path below becomes the normal path.
+# It had. Measured on this tree 2026-08-31: the six blocks came to branch 20,
+# status 1030, log 467, written 944, handoff 118, plan 306, assembling to 4361
+# against MAX_OUTPUT's 4000, so an ORDINARY compaction shed the whole
+# uncommitted-changes block (the most volatile fact in the set) and every
+# compaction of this repository shipped without it.
+#
+# Sized from that measurement rather than guessed. The fixed instruction block
+# plus the facts header is 1466 characters and the four unbounded facts were 20,
+# 467, 118 and 306; reserving 46, 500, 140 and 400 for them plus 10 for the
+# separators leaves 1295 for status and written together, and their labels and
+# the gone-count line take 143 of it. Whichever of the two bounds binds first
+# wins, so raising MAX_STATUS_LINES can no longer cost a block.
+MAX_STATUS_CHARS = 680
+MAX_WRITTEN_CHARS = 600
+
 
 KEEP_SET = """\
 Compaction instructions from this project's PreCompact hook.
@@ -189,12 +208,52 @@ def _ref(path: Path, project: Path) -> str:
     return path.as_posix()
 
 
-def _head(text: str, limit: int) -> str:
-    """The first `limit` lines, saying so when it dropped any."""
+def _head(text: str, limit: int, max_chars: int | None = None) -> str:
+    """The first `limit` lines, then whole lines off the tail until the result
+    fits `max_chars`, saying so when it dropped any.
+
+    The character bound was added 2026-08-31 for the reason recorded beside
+    MAX_STATUS_CHARS: a line bound cannot promise a size when the lines are
+    paths, and a fact that overruns its share of MAX_OUTPUT is not trimmed by the
+    caller below, it is deleted whole.
+
+    Only WHOLE lines are ever dropped, for the reason the drop loop already
+    records: a cut inside a path is a pointer that resolves to nothing.
+    """
     lines = text.splitlines()
-    if len(lines) <= limit:
+    if len(lines) <= limit and (max_chars is None or len(text) <= max_chars):
         return text
-    return "\n".join(lines[:limit]) + f"\n[... {len(lines) - limit} more line(s)]"
+
+    def rendered(kept: list[str]) -> str:
+        body = "\n".join(kept)
+        if len(kept) == len(lines):
+            return body
+        return body + f"\n[... {len(lines) - len(kept)} more line(s)]"
+
+    kept = lines[:limit]
+    if max_chars is not None:
+        # Measure what will actually be returned, suffix included, so the bound
+        # holds for the string the caller gets rather than for the body alone.
+        while kept and len(rendered(kept)) > max_chars:
+            kept.pop()
+    return rendered(kept)
+
+
+def _mtime(path: Path) -> float:
+    """Modification time, or -inf when the filesystem will not say.
+
+    Callers below have already dropped the paths the tree no longer has, so a
+    raise here is a race (removed between the two calls) or a permission
+    problem, which is rare enough to be worth a line on stderr. Either way the
+    path sorts LAST: a file whose age cannot be read does not belong at the head
+    of a list whose whole purpose is to say what to read first.
+    """
+    try:
+        return path.stat().st_mtime
+    except OSError as exc:
+        print(f"checkpoint-precompact: age unavailable for {path}: {exc}",
+              file=sys.stderr)
+        return float("-inf")
 
 
 def _written(payload: dict, project: Path) -> str:
@@ -211,6 +270,15 @@ def _written(payload: dict, project: Path) -> str:
     what to READ. A pointer that resolves to nothing is worse than no pointer.
     The count keeps the drop visible, because an exclusion nobody mentions reads
     as coverage.
+
+    What survives the head cut is the MOST RECENTLY written, not the
+    alphabetically first. `sorted(mine)` orders by path components, which has
+    nothing to do with the work, and the cost was measured 2026-08-31 against
+    this session's own transcript: of 1786 recorded paths, 1651 still on disk,
+    the 25 shown were every `.claude/agents/*.md` and `.claude/hooks/*` in the
+    tree and not one of the files edited in the preceding hour. Those were in the
+    1624 the cut discarded, under a heading that says "Preserve the following
+    VERBATIM" inside a block that exists to tell the next turn what to READ.
     """
     try:
         from scripts.utils.session_scope import files_written
@@ -224,14 +292,20 @@ def _written(payload: dict, project: Path) -> str:
         # say. The distinction matters to a caller that NARROWS by this set; it
         # does not matter to one that only reports it.
         return ""
-    shown = []
+    live = []
     gone = 0
-    for path in sorted(mine):
-        if not path.exists():
+    for path in mine:
+        if path.exists():
+            live.append(path)
+        else:
             gone += 1
-            continue
-        shown.append(_ref(path, project))
-    body = _head("\n".join(shown), MAX_WRITTEN) if shown else ""
+    # Newest first, ties alphabetical. `mine` is a SET, so its iteration order
+    # varies run to run and a bare mtime sort would order equal timestamps
+    # differently on two runs over one tree; the second key makes the block
+    # reproducible, which matters for a text a later hook commits to a file.
+    shown = [_ref(path, project)
+             for path in sorted(live, key=lambda p: (-_mtime(p), p.as_posix()))]
+    body = _head("\n".join(shown), MAX_WRITTEN, MAX_WRITTEN_CHARS) if shown else ""
     if gone:
         note = f"[{gone} more path(s) written earlier no longer exist: renamed or deleted.]"
         body = f"{body}\n{note}" if body else note
@@ -302,7 +376,8 @@ def collect_facts(payload: dict) -> dict[str, str]:
     project = CP.project_root(payload)
     facts = {
         "branch": _git(project, "rev-parse", "--abbrev-ref", "HEAD"),
-        "status": _head(_git(project, "status", "--short"), MAX_STATUS_LINES),
+        "status": _head(_git(project, "status", "--short"), MAX_STATUS_LINES,
+                        MAX_STATUS_CHARS),
         "log": _git(project, "log", "--oneline", "-5"),
         "written": _written(payload, project),
         "handoff": _handoff_pointer(payload, project),
@@ -317,10 +392,23 @@ def collect_facts(payload: dict) -> dict[str, str]:
 # resumed session cannot re-derive, so they are the last to go.
 DROP_ORDER = ("status", "written", "log", "branch", "plan", "handoff")
 
-# Headroom reserved for the note that names what was dropped. It is a bound, not
-# the exact length: the note grows with the number of labels it lists, and the
-# caller re-checks the total before returning.
-_NOTE_BUDGET = 320
+def _note(dropped: list[str]) -> str:
+    """The tail line naming what the drop loop omitted.
+
+    A function rather than the reserved constant it replaces. Until 2026-08-31
+    the loop aimed at `MAX_OUTPUT - 320` while the note it then wrote measured
+    187 on this tree, so a body landing between 3681 and 3813 characters was cut
+    by one WHOLE extra fact to make room for 133 characters nothing would use.
+    Latent rather than live at the time (the measured run landed at 3326 after
+    its first drop), and cheaper to remove than to keep explaining: the loop now
+    asks how long the note it is about to write actually is.
+    """
+    return (
+        f"\n\n[Cut to fit {MAX_OUTPUT} characters. Omitted whole: "
+        + (", ".join(dropped) if dropped else "nothing")
+        + ". Read them from the tree with `git status`, `git log`, and "
+        "`python scripts/checkpoint-paths.py`.]"
+    )
 
 
 def _assemble(blocks_by_key: dict[str, str]) -> str:
@@ -392,19 +480,14 @@ def render(facts: dict[str, str] | None) -> str:
     dropped: list[str] = []
     kept = dict(blocks_by_key)
     for key in DROP_ORDER:
-        if len(_assemble(kept)) <= MAX_OUTPUT - _NOTE_BUDGET:
+        if len(_assemble(kept)) + len(_note(dropped)) <= MAX_OUTPUT:
             break
         if key in kept:
             dropped.append(dict(FACT_LABELS)[key])
             del kept[key]
 
     body = _assemble(kept)
-    note = (
-        f"\n\n[Cut to fit {MAX_OUTPUT} characters. Omitted whole: "
-        + (", ".join(dropped) if dropped else "nothing")
-        + ". Read them from the tree with `git status`, `git log`, and "
-        "`python scripts/checkpoint-paths.py`.]"
-    )
+    note = _note(dropped)
     if len(body) + len(note) > MAX_OUTPUT:
         # Even the fixed block plus the note overflows. Keep the block; a
         # truncated INSTRUCTION is worse than a missing note.

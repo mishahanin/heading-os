@@ -22,8 +22,33 @@ operator's email domain are not always the same one. Measured here: the
 operator email is on one domain and the GAL is on another, so a
 config-before-identity order was required rather than tidy.
 
-The sweep below is deliberately wider than the two files: this class of defect
-is written wherever someone had a value to hand.
+Scope, corrected 2026-09-01. This file used to end "the sweep below is
+deliberately wider than the two files: this class of defect is written wherever
+someone had a value to hand." It is not wider. `WATCHED` names exactly the two
+files the incident was found in, and it always has.
+
+The claim was checked rather than repaired, because a blanket widening does not
+work: over the 386 tracked `scripts/**/*.py` files there are 76 distinct
+`word.tld` tokens and 261 occurrences, and almost all of them are third-party
+service addresses (`github.com`, `googleapis.com`, `anthropic.com`) that belong
+in engine code. `_DOMAINISH` over that corpus is 260 findings of noise around
+one real class.
+
+What the wider sweep WOULD have caught, measured the same day and still open:
+
+  scripts/email-intelligence.py:92   INTERNAL_DOMAIN = "31c.io"
+  scripts/utils/crm.py:561           '"@31c.io" in email.lower()'
+  scripts/crm-health.py:82           the warning line that reports it
+
+Each is a tenant mail domain deciding BEHAVIOUR, not branding: on any other
+deployment `is_internal` classifies nothing and the tribe-email warning never
+fires. They are not fixed here, and the reason is not scope: the right value is
+the instance's CORPORATE mail domain, which is not the same field as
+`operator_email_domain()` (measured on this machine: the operator email is on
+one domain and the corporate mail on another, the same split that made
+`_gal_domain()` put the org chart's `gal_domain` ahead of the operator email).
+Closing them needs a new instance-config key and the operator's word on where it
+lives, which is a decision, not a repair. Reported up rather than silently left.
 """
 from __future__ import annotations
 
@@ -32,6 +57,8 @@ import json
 import re
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -76,10 +103,69 @@ _ALLOWED = {
     "mishahanin.github.io", "github.io", "pypi.org", "docs.astral.sh",
 }
 
-WATCHED = [
-    "scripts/gal-export.py",
-    "scripts/bootcamp-roster.py",
+# Per file, not over the union. The old floor was `inspected >= 400` across
+# both, and `scripts/bootcamp-roster.py` alone contributes 496 non-comment
+# lines, so `scripts/gal-export.py` could shrink to nothing and the gate would
+# still report green over a file it had stopped reading. Counts measured
+# 2026-09-01 (gal-export 228, bootcamp-roster 496); the floors sit well under
+# them so retiring a chunk of either script does not fail this test.
+WATCHED = {
+    "scripts/gal-export.py": 120,
+    "scripts/bootcamp-roster.py": 300,
+}
+
+
+def domain_hits(line: str) -> list[str]:
+    """The tenant-domain tokens in ONE line of code, or [].
+
+    Extracted 2026-09-01 so the detector has a true negative. The rule lived
+    inline in the loop below, so nothing anywhere asserted that it FIRES: a
+    broken `_DOMAINISH`, an over-wide `_ALLOWED`, or a `core` fold that swallowed
+    the hit would each have left this file green while checking nothing. The
+    docstring says the first cut missed `"gal-31c.io.json"`, which is exactly the
+    failure a detector with no negative case ships silently.
+
+    A comment line is skipped by the caller, not here: prose may name the old
+    default, and the caller is what knows whether it is reading code or prose.
+    """
+    out = []
+    for hit in _DOMAINISH.findall(line):
+        # `gal-example.com` is the placeholder wearing a filename prefix;
+        # `gal-31c.io` is the defect. Strip a leading `something-` and judge
+        # what is left.
+        core = hit.rsplit("-", 1)[-1]
+        if core not in _ALLOWED and hit not in _ALLOWED:
+            out.append(hit)
+    return out
+
+
+# The literal from the incident, plus the near-misses that must NOT fire.
+# `31c.io` is published project identity, so it is not a secret; what makes it a
+# defect here is being COMPILED IN as an instance value.
+_FIRES = [
+    'GAL = "gal-31c.io.json"',                       # the original defect
+    'ap.add_argument("--domain", default="31c.io")',  # the sibling default
+    'INTERNAL_DOMAIN = "acme-tenant.io"',
+    'if email.endswith("@some-company.com"):',
+    "url = 'https://tenant.example-corp.net/gal'",
 ]
+_QUIET = [
+    'GAL = f"gal-{domain}.json"',                    # resolved, not compiled in
+    'GAL = "gal-example.com.json"',                  # the shipped placeholder
+    'd = _org_data().get("gal_domain") or operator_email_domain()',
+    'DOCS = "https://mishahanin.github.io/heading-os/"',
+    'INDEX = "https://pypi.org/simple"',
+]
+
+
+def test_the_detector_fires_on_the_literal_it_was_written_for():
+    for line in _FIRES:
+        assert domain_hits(line), line
+
+
+def test_the_detector_leaves_placeholders_and_project_identity_alone():
+    for line in _QUIET:
+        assert domain_hits(line) == [], line
 
 
 def test_the_sweep_has_something_to_read():
@@ -87,27 +173,26 @@ def test_the_sweep_has_something_to_read():
         assert (ROOT / rel).is_file(), rel
 
 
+@pytest.mark.parametrize("rel,floor", sorted(WATCHED.items()))
+def test_the_sweep_still_reads_each_watched_file(rel, floor):
+    """If the `#` skip ever drifts true for every line, or a file empties,
+    nothing is scanned, `bad` is empty, and the assertion below passes while
+    guarding nothing. One floor per file, so neither can hide behind the other.
+    """
+    inspected = sum(
+        1 for line in (ROOT / rel).read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    assert inspected >= floor, f"only {inspected} code lines scanned in {rel}"
+
+
 def test_no_watched_script_hardcodes_a_tenant_domain():
     bad = []
-    inspected = 0
     for rel in WATCHED:
         for n, line in enumerate((ROOT / rel).read_text(encoding="utf-8").splitlines(), 1):
             if line.lstrip().startswith("#"):
                 continue                     # prose may name the old default
-            inspected += 1
-            for hit in _DOMAINISH.findall(line):
-                # `gal-example.com` is the placeholder wearing a filename
-                # prefix; `gal-31c.io` is the defect. Strip a leading
-                # `something-` and judge what is left.
-                core = hit.rsplit("-", 1)[-1]
-                if core not in _ALLOWED and hit not in _ALLOWED:
-                    bad.append(f"{rel}:{n}: {hit!r}")
-    # 627 code lines survived the comment skip on 2026-08-26; floor well under
-    # that so retiring a chunk of either script does not fail this test. If the
-    # `line.lstrip().startswith("#")` guard ever drifts true for every line
-    # (or WATCHED empties), nothing is scanned, `bad` is empty, and the domain
-    # assertion below passes while guarding nothing.
-    assert inspected >= 400, f"only {inspected} code lines scanned"
+            bad += [f"{rel}:{n}: {hit!r}" for hit in domain_hits(line)]
     assert not bad, (
         "a tenant domain is compiled into engine code; it belongs in "
         "operator.yaml or the instance config:\n  " + "\n  ".join(bad)

@@ -15,6 +15,13 @@ the inflated one was the one the operator saw.
 The record is append-only, so the two halves of the fix are separate: dedupe the
 requested ids, and read what is already flagged before writing. The tally counts
 distinct pairs, which also makes it honest over duplicates already on disk.
+
+2026-09-01: the two READS underneath every count above. `iter_rows` skipped a
+line it could not parse and then read the whole file with no guard at all, and
+`parse_findings_from_report` read the report with none either, so a single
+undecodable byte took out a tally that is documented to tolerate a bad row and
+turned a documented exit code into a stack trace. Section at the foot of this
+file; both were reproduced against the live functions first.
 """
 from __future__ import annotations
 
@@ -135,3 +142,85 @@ def test_a_missing_id_is_still_reported_after_the_dedupe(record):
 def test_two_distinct_ids_still_write_two_rows(record):
     assert flag_fp.main(["--scrutiny-id", _SID, "--ids", "B1,H2"]) == 0
     assert len(_fp_rows(record)) == 2
+
+
+# ============================================================
+# The two reads underneath all of the above
+# ============================================================
+#
+# `iter_rows` is where every count in this file comes from, and its docstring
+# promises "every well-formed row ... No file means none". It skips a line it
+# cannot parse and then read the WHOLE FILE with no guard, so one undecodable
+# byte lost every good row beside it. That is the third variant of the decode
+# class: a per-item handler that delivers the documented tolerance, over a
+# file-level read that cannot. Measured 2026-09-01 on a two-line record whose
+# second line was `\xff\xfe\x00` - UnicodeDecodeError, out of `flagged_pairs`,
+# out of `main`, and out of `scrutinize-replay.load_fp_set` with it.
+
+_UNDECODABLE = b"\xff\xfe\x00"
+
+
+def test_a_bad_line_costs_that_line_and_nothing_else(record, capsys):
+    """`json.JSONDecodeError` cannot stand in for it: `json.loads` never runs.
+
+    The bad byte sits BETWEEN two good rows, so a reader that gives up on the
+    file loses `H2`, and one that gives up at the bad line loses it too. Only
+    per-line decoding returns both, which is what the docstring promises.
+    """
+    from scripts.utils import scrutinize_record as rec
+
+    rec.append_row(run_id=_SID, kind="fp_flag", target="execution",
+                   finding_id="B1", writer="flag-fp")
+    with record.open("ab") as fh:
+        fh.write(_UNDECODABLE + b"\n")
+    rec.append_row(run_id=_SID, kind="fp_flag", target="execution",
+                   finding_id="H2", writer="flag-fp")
+    with pytest.raises(UnicodeDecodeError):
+        record.read_text(encoding="utf-8")   # the corpus is genuinely bad
+
+    assert [r["finding_id"] for r in rec.rows_of_kind("fp_flag")] == ["B1", "H2"]
+    assert flag_fp.flagged_pairs() == {(_SID, "B1"), (_SID, "H2")}
+    err = capsys.readouterr().err
+    assert "skipped 1 unreadable line" in err, err
+
+
+def test_a_record_that_is_nothing_but_bad_bytes_reports_no_rows(record, capsys):
+    """The floor. Degrading to [] is right here; degrading SILENTLY is not,
+    because "no rows" is a WRONG answer to the only question this record
+    answers, and nothing else on the page would say so."""
+    from scripts.utils import scrutinize_record as rec
+
+    record.write_bytes(_UNDECODABLE)
+
+    assert rec.iter_rows() == []
+    err = capsys.readouterr().err
+    assert "skipped 1 unreadable line" in err, err
+    assert "runs.jsonl" in err, err
+
+
+def test_a_readable_record_yields_its_rows_and_says_nothing(record, capsys):
+    """The anchor, both ways: a guard returning [] for everything would pass the
+    row above, and one warning on every clean read is noise, not a signal."""
+    from scripts.utils import scrutinize_record as rec
+
+    rec.append_row(run_id=_SID, kind="fp_flag", target="execution",
+                   finding_id="B1", writer="flag-fp")
+
+    assert [r["finding_id"] for r in rec.rows_of_kind("fp_flag")] == ["B1"]
+    assert capsys.readouterr().err == ""
+
+
+def test_an_unreadable_report_is_named_rather_than_tracebacked(record, capsys):
+    """`parse_findings_from_report` read the report with no guard at all.
+
+    The missing-report line six lines above it exits 3 with a message; an
+    undecodable one exited through `main` as a UnicodeDecodeError stack.
+    """
+    (record.parent / f"{_SID}.md").write_bytes(_UNDECODABLE)
+
+    rc = flag_fp.main(["--scrutiny-id", _SID, "--ids", "B1"])
+
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "unreadable" in err, err
+    assert _fp_rows(record) == [], "a flag was recorded against a report nobody read"

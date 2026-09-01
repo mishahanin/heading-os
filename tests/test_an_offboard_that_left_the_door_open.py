@@ -321,6 +321,148 @@ def test_nobody_with_no_access_is_touched(ob, monkeypatch):
 
 
 # ==========================================================================
+# 4b - "I could not ask" must never render as "they are not a member"
+#
+# `check_residual_access` is what `remove_residual_access` returns from Step 1d,
+# so it IS the re-verification, and its own comments say a 403 (a token without
+# `read:org`), a 429 or a 5xx used to read exactly like a 404. The fix landed;
+# nothing measured it. MEASURED 2026-09-01, over the 35 tests this file had: all
+# FOUR "COULD NOT BE CHECKED" branches could be deleted and the file stayed
+# green, which is a departing executive's retained org access reported as clear.
+# ==========================================================================
+
+def _check_router(*, org=None, teams=None, team_member=None):
+    """A stub for `check_residual_access`'s three GETs. Defaults are all-clear.
+
+    The org call is `orgs/{org}/memberships/{user}` and the team call is
+    `orgs/{org}/teams/{team}/memberships/{user}`; both contain `memberships/`,
+    so the team route is matched FIRST on `/teams/`.
+    """
+    org = org if org is not None else _Result(1, stderr="gh: 404 Not Found")
+    teams = teams if teams is not None else _Result(0, stdout="engineering\n")
+    team_member = (team_member if team_member is not None
+                   else _Result(1, stderr="gh: 404 Not Found"))
+
+    def run_cmd(cmd, cwd=None, check=True):
+        joined = " ".join(cmd)
+        if "/teams" in joined and "/memberships/" not in joined:
+            return teams
+        if "/teams/" in joined and "/memberships/" in joined:
+            return team_member
+        if "/memberships/" in joined:
+            return org
+        raise AssertionError(f"unexpected call: {joined}")
+
+    return run_cmd
+
+
+_UNANSWERED = [
+    "gh: 403 Forbidden (token is missing the read:org scope)",
+    "gh: 429 Too Many Requests",
+    "gh: 502 Bad Gateway",
+]
+
+
+@pytest.mark.parametrize("stderr", _UNANSWERED)
+def test_an_unqueryable_org_membership_is_reported_not_read_as_absent(
+        ob, monkeypatch, stderr):
+    monkeypatch.setattr(ob, "run_cmd", _check_router(org=_Result(1, stderr=stderr)))
+    residual = ob.check_residual_access("jane-doe", {"github_user": "jd"})
+    assert any("org membership" in r and "COULD NOT BE CHECKED" in r for r in residual), (
+        f"{stderr!r} was read as 'not an org member'; that is a departing exec's "
+        f"org-wide access reported as clear. Got: {residual}")
+
+
+@pytest.mark.parametrize("stderr", _UNANSWERED)
+def test_an_unqueryable_team_membership_is_reported_not_read_as_absent(
+        ob, monkeypatch, stderr):
+    monkeypatch.setattr(ob, "run_cmd",
+                        _check_router(team_member=_Result(1, stderr=stderr)))
+    residual = ob.check_residual_access("jane-doe", {"github_user": "jd"})
+    assert any("team membership" in r and "COULD NOT BE CHECKED" in r for r in residual), (
+        f"{stderr!r} was read as 'not on the team'. Got: {residual}")
+
+
+@pytest.mark.parametrize("stderr", _UNANSWERED)
+def test_a_team_list_that_could_not_be_fetched_is_reported(ob, monkeypatch, stderr):
+    """Zero teams enumerated and 'no teams' must not render the same."""
+    monkeypatch.setattr(ob, "run_cmd", _check_router(teams=_Result(1, stderr=stderr)))
+    residual = ob.check_residual_access("jane-doe", {"github_user": "jd"})
+    assert any("team memberships COULD NOT BE CHECKED" in r for r in residual), (
+        f"an unlistable org read as an org with no teams. Got: {residual}")
+
+
+def test_a_missing_gh_binary_is_reported_by_the_check_too(ob, monkeypatch):
+    """The sibling of test_a_missing_gh_binary_is_reported_not_swallowed, on the
+    read-only half. Without it the whole `except FileNotFoundError` branch of
+    `check_residual_access` could be replaced with `pass`."""
+    def _boom(*a, **k):
+        raise FileNotFoundError("gh")
+
+    monkeypatch.setattr(ob, "run_cmd", _boom)
+    residual = ob.check_residual_access("jane-doe", {"github_user": "jd"})
+    assert any("COULD NOT BE CHECKED" in r for r in residual), (
+        f"gh being absent reported no residual access at all. Got: {residual}")
+
+
+def test_a_genuine_404_on_every_route_reports_nothing_residual(ob, monkeypatch):
+    """The other direction, so the four tests above are not satisfied by a
+    function that simply always reports something."""
+    monkeypatch.setattr(ob, "run_cmd", _check_router())
+    assert ob.check_residual_access("jane-doe", {"github_user": "jd"}) == []
+
+
+def test_a_present_membership_is_reported_as_present_not_as_unqueryable(ob, monkeypatch):
+    """A real 200 must read as access held, with no 'could not check' hedge."""
+    monkeypatch.setattr(ob, "run_cmd", _check_router(org=_Result(0)))
+    residual = ob.check_residual_access("jane-doe", {"github_user": "jd"})
+    assert any("org membership" in r for r in residual)
+    assert not any("COULD NOT BE CHECKED" in r for r in residual), residual
+
+
+def test_an_org_membership_the_run_could_not_query_is_named_in_step_1c(
+        ob, monkeypatch, capsys):
+    """Step 1c must say it did not attempt the org removal, as its team half does.
+
+    The team loop prints '[error] Could not check membership of {org}/{team}' on
+    any non-404 answer and then skips the DELETE. The ORG half had no such
+    branch: a 403 (a token without `admin:org`), a 429 or a 5xx skipped the
+    DELETE and printed NOTHING, about the widest grant in the whole offboard -
+    org membership reaches every repo in the org, which is the reason
+    `safety_gate` warns about it by name. Step 1d does still catch it, so the
+    verdict was never wrong; what the operator could not tell was whether the
+    removal had been ATTEMPTED, which is the difference between "retry it" and
+    "escalate to a human with owner rights".
+    """
+    monkeypatch.setattr(ob, "run_cmd",
+                        _check_router(org=_Result(1, stderr="gh: 403 Forbidden")))
+    ob.remove_residual_access("jane-doe", {"github_user": "jd"})
+    step_1c = capsys.readouterr().out.split("Step 1d")[0]
+    assert "org membership" in step_1c.lower(), (
+        "Step 1c printed nothing at all about the org membership it could not "
+        "query:\n" + step_1c)
+
+
+def test_an_org_membership_that_is_genuinely_absent_prints_no_error(ob, monkeypatch, capsys):
+    """The other direction: a 404 is an answer, not a failure to ask."""
+    monkeypatch.setattr(ob, "run_cmd", _check_router())
+    ob.remove_residual_access("jane-doe", {"github_user": "jd"})
+    step_1c = capsys.readouterr().out.split("Step 1d")[0]
+    assert "could not check org membership" not in step_1c.lower(), step_1c
+
+
+def test_an_unqueryable_route_reaches_the_verdict_through_step_1d(ob, monkeypatch):
+    """End to end: what Step 1d returns is what decides the run."""
+    monkeypatch.setattr(ob, "run_cmd",
+                        _check_router(org=_Result(1, stderr="gh: 403 Forbidden")))
+    residual = ob.remove_residual_access("jane-doe", {"github_user": "jd"})
+    assert residual, "a route the run could not query was reported as clear"
+    complete, reasons = ob.offboard_verdict(True, True, residual, [])
+    assert complete is False
+    assert any("COULD NOT BE CHECKED" in r for r in reasons), reasons
+
+
+# ==========================================================================
 # 5 - the verdict that must fail on retained access
 # ==========================================================================
 

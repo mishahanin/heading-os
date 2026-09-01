@@ -9,6 +9,7 @@ plus engine_clean_scan() -- the pure-code routing wall that no `--no-verify` can
 get past.
 """
 import importlib.util
+import os
 import subprocess
 from pathlib import Path
 
@@ -123,6 +124,61 @@ def test_the_push_delta_reports_non_ascii_names_unquoted(tmp_path):
     delta = push_all._push_delta_files(repo)
     assert "docs/обзор.md" in delta, delta
     assert not any(f.startswith('"') for f in delta)
+
+
+def test_the_push_delta_survives_a_carriage_return_in_a_name(tmp_path):
+    """`_z_paths` reads git's bytes itself instead of using the shared text-mode
+    `run`, and this is the case that makes the difference observable.
+
+    Text mode turns on universal newlines with no `newline=` knob on
+    `subprocess`, so every CR byte becomes LF. `-z` is no defence: git already
+    emitted the name verbatim and the rewrite happens afterwards, in Python. The
+    mangled name opens no file, so a file about to be pushed reaches
+    `_run_scanner` and `engine_content_scan` as a name that reads nothing, and
+    both report clean.
+
+    MEASURED 2026-09-01: switching `_z_paths` to `text=True` left this file,
+    tests/test_push_all_orchestration.py and eleven push-wall neighbours green,
+    including the two that exist for non-ASCII names. Cyrillic is valid UTF-8 and
+    contains no CR, so every existing case passed through the defect untouched.
+    """
+    repo = _init_repo(tmp_path)
+    name = "two\rlines.md"
+    (repo / name).write_text("body\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+
+    delta = push_all._push_delta_files(repo)
+    assert name in delta, delta
+    assert "two\nlines.md" not in delta, (
+        "the CR was rewritten to LF: the scanner is handed a name that opens "
+        "nothing")
+    assert (repo / name).is_file(), "the reported name does not open the file"
+
+
+def test_the_push_delta_survives_a_byte_that_is_not_utf8_in_a_name(tmp_path):
+    """`surrogateescape`, not `replace`, and the two are only distinguishable on
+    a name that is not valid UTF-8 at all.
+
+    `replace` substitutes U+FFFD, which is lossy and irreversible: the resulting
+    string names no file on disk, so the same silent skip follows. The existing
+    non-ASCII case uses Cyrillic, which IS valid UTF-8 and decodes identically
+    under both handlers, so swapping them left every test in this file and its
+    eleven neighbours green when measured on 2026-09-01.
+
+    ext4 filenames are bytes, so `b"\\xff"` in one is legal and reachable; the
+    DATA clone carries non-ASCII names today, and one damaged byte in a name is
+    the ordinary way this arrives.
+    """
+    repo = _init_repo(tmp_path)
+    raw = b"od\xffd.md"
+    (repo / os.fsdecode(raw)).write_text("body\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+
+    delta = push_all._push_delta_files(repo)
+    assert os.fsdecode(raw) in delta, delta
+    assert not any("�" in f for f in delta), (
+        f"a name was decoded lossily and now opens nothing: {delta}")
+    assert (repo / os.fsdecode(raw)).is_file()
 
 
 def _make_hook(tmp_path, body: str):
@@ -417,3 +473,144 @@ def test_the_content_gate_runs_normally_on_a_healthy_overlay(tmp_path):
     _git(repo, "add", "-A")
     data = _overlay(tmp_path, curated='companies: ["Krellide Systems"]\n')
     assert push_all.engine_content_scan(repo, data) is None
+
+
+def test_the_content_gate_refuses_an_engine_file_it_could_not_decode(tmp_path, capsys):
+    """"Unverified is not clean." A file whose bytes are not UTF-8 is RECORDED
+    and refused, never skipped with a `continue`.
+
+    The refusal had no witness: MEASURED 2026-09-01, replacing `if unscanned:`
+    with `if False:` left this file and eleven push-wall neighbours green, so the
+    last wall could have gone back to passing a push over a file nobody read.
+    """
+    repo = _init_repo(tmp_path)
+    (repo / "docs").mkdir(parents=True, exist_ok=True)
+    # UTF-16 bytes under a .md suffix: `engine_text_files` keeps it (the suffix
+    # says text), and `read_text(encoding="utf-8")` cannot decode it.
+    (repo / "docs" / "note.md").write_bytes("a note\n".encode("utf-16"))
+    _git(repo, "add", "-A")
+    data = _overlay(tmp_path, curated='companies: ["Krellide Systems"]\n')
+
+    with pytest.raises(SystemExit) as exc:
+        push_all.engine_content_scan(repo, data)
+    assert exc.value.code == 2
+    out = capsys.readouterr().out
+    assert "could not read" in out, out
+    assert "docs/note.md" in out, out
+
+
+# ============================================================
+# THE JOIN: push_repo actually CALLS each wall, and stops there
+#
+# Every test above proves a wall REFUSES when it is called. None of them proved
+# it is called. That distinction is the one this file's own banner at the
+# remote-identity section states -- "A wall wired to a consumer that never calls
+# it passes all of them and protects nothing" -- and it was measured for exactly
+# one wall, `remote_objection`.
+#
+# MEASURED 2026-09-01 by mutation against this file, tests/test_push_all_
+# orchestration.py, and eleven push-wall neighbours (the history wall, the
+# different-world wall, the leak gate that counted what it never opened, the
+# rename wall, the engine tree-clean gate, the two secret-filename walls, the
+# wrong-moment walls, the quoted-path credential wall, the leak path matrix, and
+# the locale wall). Deleting the CALL from `push_repo` left every one of them
+# green:
+#
+#     content_scan(repo)                     deleted -> SURVIVED
+#     engine_clean_scan(repo)                deleted -> SURVIVED
+#     engine_content_scan(repo, data_root)   deleted -> SURVIVED
+#     the SECRET_TRACKED filename filter     disabled -> SURVIVED
+#     the .memory-index/ check               disabled -> SURVIVED
+#
+# So five of the walls this whole file exists to hold could have been unwired by
+# a one-line edit, with a green suite and a push that reported success.
+#
+# These tests assert the SIDE EFFECT, never a printed refusal: `supervised_push`
+# is replaced by a recorder that must never fire, and HEAD must not move, so a
+# wall that printed and returned (the `.githooks/pre-push-data` shape found on
+# 2026-08-31: "push blocked" on stdout, exit 0) fails here.
+# ============================================================
+
+# Synthesised at import, never spelled as one literal: a real-shaped token in
+# this file would be stopped by the repository's own commit gate before the test
+# could run. Same construction as
+# tests/test_two_secret_walls_that_split_a_filename_in_half.py.
+_FAKE_TOKEN = "ghp" + "_" + ("abcdefghijklmnopqrstuvwxyz" + "0123456789" * 2)[:36]
+
+
+def _wired_repo(tmp_path):
+    """A repo with one committed file, ready for `push_repo` to be driven over."""
+    repo = _init_repo(tmp_path)
+    _write(repo, "scripts/base.py", "print(1)\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    # `git init` names the default branch from the host's config, and step 4
+    # refuses anything that is not `main`. Pinned so the anti-vacuity case below
+    # reaches the push primitive on a machine whose default is `master`.
+    _git(repo, "branch", "-M", "main")
+    return repo
+
+
+@pytest.mark.parametrize("wall,rel,body,is_engine,with_overlay,expected", [
+    pytest.param("content_scan", "notes.md", _FAKE_TOKEN + "\n", False, False,
+                 "secret-like CONTENT", id="secret-content"),
+    pytest.param("engine_clean_scan", "crm/contacts/invented.md",
+                 "name: Invented Person\n", True, False,
+                 "data-class artifact", id="routing-leak"),
+    pytest.param("engine_content_scan", "docs/leak.md",
+                 "a note about Zenon Makarios\n", True, True,
+                 "real-entity CONTENT", id="real-entity-content"),
+    pytest.param("secret-tracked-filename", ".env", "SOME_KEY=placeholder\n",
+                 False, False, "secret-like tracked files", id="secret-filename"),
+    pytest.param("memory-index", ".memory-index/index.db", "rebuildable\n",
+                 False, False, ".memory-index/ would be pushed", id="memory-index"),
+])
+def test_push_repo_stops_at_each_wall_before_committing_or_pushing(
+        tmp_path, monkeypatch, capsys, wall, rel, body, is_engine, with_overlay,
+        expected):
+    repo = _wired_repo(tmp_path)
+    _write(repo, rel, body)
+    _git(repo, "add", "-A")
+    head_before = push_all.run(["git", "rev-parse", "HEAD"], repo).stdout.strip()
+
+    pushed = []
+    monkeypatch.setattr(push_all, "supervised_push",
+                        lambda *a, **k: pushed.append(a) or {"state": "ok",
+                                                            "elapsed_s": 0})
+    data_root = _overlay(tmp_path, curated='companies: ["Krellide Systems"]\n') \
+        if with_overlay else None
+
+    with pytest.raises(SystemExit) as exc:
+        push_all.push_repo("R", repo, "m", True, False, {},
+                           is_engine=is_engine, data_root=data_root)
+
+    assert exc.value.code == 2
+    out = capsys.readouterr().out
+    assert expected in out, f"{wall} did not produce its own refusal:\n{out}"
+    assert not pushed, f"{wall} refused and the push ran anyway"
+    head_after = push_all.run(["git", "rev-parse", "HEAD"], repo).stdout.strip()
+    assert head_after == head_before, (
+        f"{wall} refused AFTER the commit; the offending content is now in local "
+        "history and the repair is a history scrub rather than an edit")
+
+
+def test_the_join_fixture_pushes_when_nothing_is_wrong(tmp_path, monkeypatch):
+    """Anti-vacuity for the five cases above.
+
+    Without this, a `push_repo` that refused EVERYTHING -- a typo in a shared
+    predicate, a wall that fires on a clean tree -- would satisfy all five and
+    read as five walls working. The same fixture with nothing planted must reach
+    the push primitive.
+    """
+    repo = _wired_repo(tmp_path)
+    _write(repo, "scripts/extra.py", "print(2)\n")
+    _git(repo, "add", "-A")
+
+    pushed = []
+    monkeypatch.setattr(push_all, "supervised_push",
+                        lambda *a, **k: pushed.append(a) or {"state": "ok",
+                                                             "elapsed_s": 0})
+    data = _overlay(tmp_path, curated='companies: ["Krellide Systems"]\n')
+    assert push_all.push_repo("R", repo, "m", True, False, {},
+                              is_engine=True, data_root=data) is None
+    assert pushed, "a clean tree never reached the push primitive"

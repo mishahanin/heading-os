@@ -225,6 +225,26 @@ def test_the_wizard_label_is_unchanged_on_ordinary_prose():
 # The threshold. This is the one place the swap changes a verdict.
 # ==========================================================================
 
+def test_the_two_limits_are_still_the_numbers_this_file_reasoned_about():
+    """The constants themselves, pinned at their values.
+
+    Every fixture below is BUILT from `ste.PROSE_WORD_LIMIT` and
+    `ste.STEP_WORD_LIMIT` on purpose, so that the counter, not the threshold, is
+    what they measure. The cost of that is that the constants are then free: a
+    limit moved from 25 to 26 relocates the fixture with it and every assertion
+    in this file still holds. MEASURED 2026-09-01, `PROSE_WORD_LIMIT = 26`
+    survived the whole file, and nothing anywhere else in `tests/` names either
+    value, so a CI and pre-commit gate could be loosened with the suite green.
+
+    The docstring at the top of this file argues the swap "can only LOOSEN that
+    gate" from these two numbers. They are the premise of that argument, so they
+    are written down once, here, where changing one is a decision rather than an
+    edit.
+    """
+    assert ste.STEP_WORD_LIMIT == 20
+    assert ste.PROSE_WORD_LIMIT == 25
+
+
 def _length_findings(text):
     """Run only the check the counter feeds, through the real parse path."""
     units = ste.parse_units(ste.strip_noise(text))

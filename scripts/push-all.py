@@ -244,15 +244,34 @@ def _run_scanner(paths, cwd: Path, context: str, extra_env=None):
     and the callers run over both clones: without it, the same relative path in
     the engine and in the data overlay produce two records nothing can tell
     apart, which is the ambiguity the context field exists to remove.
+
+    `--stdin0` and BYTES, not `--stdin` and text. `_z_paths` goes to the
+    trouble of reading git's `-z` output as bytes so a path holding a newline
+    survives verbatim, and this handoff then joined that list with `"\n"` and
+    handed it to a reader that splits on `"\n"`. MEASURED 2026-09-01 in a
+    scratch repo: a tracked `two\nlines.env` carrying a `ghp_`-shaped token
+    arrived at the scanner as two names that open nothing, both skipped in
+    silence, and `content_scan` passed the push. The identical token in
+    `creds.env` was refused, so the measurement was measuring something. Text
+    mode also cannot encode a surrogateescape name at all, which is the other
+    half of what `_z_paths` preserves.
     """
     env = dict(os.environ, **{CONTEXT_ENV: context})
     if extra_env:
         env.update(extra_env)
+    payload = b"\0".join(p.encode("utf-8", "surrogateescape") for p in sorted(paths))
     try:
-        return subprocess.run(
-            [sys.executable, str(SCANNER), "--stdin"],
-            cwd=str(cwd), input="\n".join(sorted(paths)),
-            capture_output=True, text=True, env=env, timeout=SCANNER_TIMEOUT_S,
+        proc = subprocess.run(
+            [sys.executable, str(SCANNER), "--stdin0"],
+            cwd=str(cwd), input=payload,
+            capture_output=True, env=env, timeout=SCANNER_TIMEOUT_S,
+        )
+        # Decoded here rather than by `text=True`, so the INPUT stays bytes.
+        # `_refuse_on_scanner` writes these straight to the caller's streams.
+        return subprocess.CompletedProcess(
+            proc.args, proc.returncode,
+            proc.stdout.decode("utf-8", "replace"),
+            proc.stderr.decode("utf-8", "replace"),
         )
     except subprocess.TimeoutExpired:
         # Bounded for the same reason the pushes are: an indefinite stall in the
@@ -627,7 +646,16 @@ def _pre_push_gate_armed(repo: Path, marker: str = ENGINE_GATE_MARKER) -> bool:
     hook = hooks / "pre-push"
     try:
         return hook.is_file() and marker in hook.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # `UnicodeDecodeError` is a ValueError, so `except OSError` never caught
+        # it. A pre-push hook is an arbitrary executable - a compiled binary, or
+        # a shell script carrying one Latin-1 byte in a comment - and this
+        # predicate is documented to fail CLOSED on every shape it cannot
+        # resolve. MEASURED 2026-09-01: a hook holding `caf\xe9` raised out of a
+        # function that answers True or False, past `_attempt` (which absorbs
+        # only RepoNotPushable), and ended the backup on a traceback instead of
+        # the named refusal. `_git_hooks_dir` above already catches the pair;
+        # this is the half that was left behind.
         return False
 
 

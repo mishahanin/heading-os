@@ -334,3 +334,37 @@ def test_list_tribe_enriches_from_roster(tmp_path):
     assert by_name["Bob Roster"]["slug"] is None               # roster only
     assert by_name["Bob Roster"]["title"] == "QA Lead"
     assert result["counts"]["tribe-leadership"] == 1           # Ada
+
+
+def test_a_roster_with_no_recognisable_header_degrades_to_crm_only(tmp_path):
+    """The xlsx is an operator-maintained spreadsheet, so its header can move.
+
+    `_load_tribe_roster` looks for the row carrying both `name` and `email` and
+    returns [] when there is none. MEASURED 2026-08-31 by deleting that
+    `if header is None: return []` and running `tests/bridge`: 1349 passed, 1
+    skipped. Nothing had ever handed it a sheet it could not read, so the
+    branch that keeps /tribe alive on a renamed column was covered by nothing,
+    and the `col()` helper immediately below it iterates `header` (a TypeError
+    on None, outside every `try` in the function).
+    """
+    import openpyxl
+    d = tmp_path / "datastore" / "operations" / "tribe"
+    d.mkdir(parents=True, exist_ok=True)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Tribe Roster"
+    ws.append(["31C Tribe, test"])
+    # "Full name" and "Work address", so neither `name` nor `email` is an exact
+    # cell value and the header row is not found.
+    ws.append(["#", "Full name", "Work address", "Title (reconciled)"])
+    ws.append([1, "Ada Lovelace", "ada@example.com", "Chief Engineer"])
+    wb.save(d / "31C_Tribe.xlsx")
+
+    assert _load_tribe_roster(tmp_path) == []
+
+    # And the page still renders from CRM alone.
+    _make_contact(tmp_path, "ada-lovelace", relationship_type="tribe",
+                  last_touch="2026-05-15", _name="Ada Lovelace")
+    result = list_tribe(tmp_path, today=date(2026, 5, 18))
+    assert [m["name"] for m in result["members"]] == ["Ada Lovelace"]
+    assert result["members"][0]["in_roster"] is False

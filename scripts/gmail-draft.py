@@ -61,7 +61,21 @@ def body_text(path: Path, after_separator: bool = False) -> str:
     which is the safe default: silently truncating someone's letter at a stray
     `---` would be worse than sending a couple of header lines.
     """
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        # `main` wraps this call in `except (DraftBuildError, OSError)` and
+        # prints one curated yellow line. `UnicodeDecodeError` is a ValueError,
+        # so it is neither, and the operator got a traceback instead - from the
+        # one input here a human hands over by hand. MEASURED 2026-09-01 on a
+        # letter carrying a single cp1252 byte: `UnicodeDecodeError: 'utf-8'
+        # codec can't decode byte 0xe9 in position 14`, and the exception text
+        # alone does not name the FILE, which is the thing the operator has to
+        # go and fix. Re-raised as DraftBuildError so the message says which
+        # letter and what to do about it.
+        raise DraftBuildError(
+            f"{path}: not valid UTF-8 ({exc}). Re-save the letter as UTF-8; "
+            f"a body that cannot be decoded cannot be drafted.") from exc
     if not after_separator:
         return text
     lines = text.splitlines()

@@ -1247,9 +1247,18 @@
               html += '<tr class="' + rowClass + '">';
               html += "<td>" + escapeHtml(configLabel) + "</td>";
               html += "<td>" + escapeHtml(run.run_number) + "</td>";
-              html += '<td class="' + prClass + '">' + ((r.pass_rate || 0) * 100).toFixed(0) + "% (" + (r.passed || 0) + "/" + (r.total || 0) + ")</td>";
+              // `r.passed`, `r.total` and `r.errors` are run content, not numbers
+              // the page computed. `aggregate_benchmark.py` copies them out of
+              // grading.json with `.get(key, 0)`, and a default fires only on an
+              // ABSENT key -- a present string passes straight through. Measured
+              // 2026-09-01 with `passed` set to `<img src=x onerror="alert(1)">`:
+              // the assembled row carried a live tag into `container.innerHTML`.
+              // The same three fields were already escaped in `renderGrades`
+              // (line ~885); the fix for `exp.evidence` had landed in one of the
+              // two functions that splice this data.
+              html += '<td class="' + prClass + '">' + ((r.pass_rate || 0) * 100).toFixed(0) + "% (" + escapeHtml(r.passed || 0) + "/" + escapeHtml(r.total || 0) + ")</td>";
               if (hasTime) html += "<td>" + (r.time_seconds != null ? r.time_seconds.toFixed(1) : "—") + "</td>";
-              if (hasErrors) html += "<td>" + (r.errors || 0) + "</td>";
+              if (hasErrors) html += "<td>" + escapeHtml(r.errors || 0) + "</td>";
               html += "</tr>";
             }
 

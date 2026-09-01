@@ -235,12 +235,24 @@ def test_triple_dash_status_survives_in_ack(ws, capsys):
 
 
 def test_newline_in_field_is_neutralized(ws):
-    # A value carrying a newline can't break the fence on the next round-trip.
+    """A value carrying a newline can't break the fence, and does not LOSE its tail.
+
+    `"\\n" not in meta["topic"]` was the whole assertion until 2026-09-01, and a
+    render that simply writes the raw value satisfies it: the second physical
+    line has no colon, `split` drops it, and `topic` comes back as `"line one"`
+    with `status` still parsing fine. MEASURED that day with the `' '.join(...)`
+    collapse removed from `render`, this file stayed green at 25 passed while
+    the value was silently truncated at the newline.
+
+    So the property asserted is the round trip: what went in comes back, as one
+    line.
+    """
     memlog.main(["init", "--workspace", ws, "--field", "topic=line one\nline two"])
     append(ws, "x", entry_type="idea")
-    meta, _ = memlog.split(read(ws))
-    assert "\n" not in meta["topic"]
+    meta, body = memlog.split(read(ws))
+    assert meta["topic"] == "line one line two"
     assert meta["status"] == "active"
+    assert "line two" not in body, "the tail leaked out of the fence into the body"
 
 
 def test_append_emits_json_ack(ws, capsys):
@@ -260,3 +272,32 @@ def test_ack_entry_count_climbs(ws, capsys):
     append(ws, "b")
     out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert out["entries"] == 2
+
+
+def test_the_ack_counts_entries_not_lines(ws, capsys):
+    """`entry_count` filters on the `- ` prefix, and nothing reached that filter.
+
+    Every body this file builds is entries and nothing else, so counting the
+    lines and counting the entries give the same number for all of them.
+    MEASURED 2026-09-01 with `entry_count` replaced by `len(body.splitlines())`:
+    25 passed, including both ack cases above.
+
+    The realistic input is a hand-edited memlog. The host skill READS
+    `.memlog.md` itself on resume (the module docstring says so), so a human or
+    a skill putting a note between entries is the ordinary way a non-entry line
+    gets in, and the count the caller trusts to know where it stands must not
+    move because of it.
+    """
+    init(ws)
+    append(ws, "first")
+    path = Path(ws) / MEMLOG
+    meta, body = memlog.split(path.read_text(encoding="utf-8"))
+    body += "\n\nA note somebody typed in by hand.\n\n"
+    path.write_text(memlog.render(meta, body), encoding="utf-8")
+
+    capsys.readouterr()
+    append(ws, "second")
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert out["entries"] == 2, out
+    # and the hand-written line survived the append, unmoved.
+    assert "A note somebody typed in by hand." in body_of(ws)

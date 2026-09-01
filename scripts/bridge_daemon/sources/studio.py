@@ -373,6 +373,13 @@ def list_artifacts(data_root: Path) -> dict:
                 text = md.read_text(encoding="utf-8")
                 mtime = md.stat().st_mtime
             except (OSError, UnicodeDecodeError):
+                # The two drops immediately above this one both log; this one
+                # did not, so a published post whose markdown is unreadable
+                # (saved in Latin-1, or permission-denied) simply was not on
+                # /studio and nothing said why. Same drop, same visibility.
+                logger.warning(
+                    "skipping artifact %s: its markdown source could not be "
+                    "read as UTF-8 text", md, exc_info=True)
                 continue
             fm, body = _artifact_frontmatter(text)
             images = _artifact_images(folder, data_root)

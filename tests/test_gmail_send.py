@@ -45,9 +45,22 @@ def test_exact_id_selects_that_draft():
     assert select_draft(DRAFTS, draft_id="r2") == "r2"
 
 
-def test_unknown_id_raises():
-    with pytest.raises(DraftSelectionError, match="no draft with id"):
+def test_unknown_id_over_a_truncated_walk_says_the_walk_was_truncated():
+    """`complete` defaults to False, so this is the TRUNCATED leg, not the
+    whole-mailbox one. It used to be spelled `test_unknown_id_raises` and
+    matched on `no draft with id`, a substring both messages carry, so it could
+    not tell the two legs apart and the complete=True clause below had no
+    witness at all."""
+    with pytest.raises(DraftSelectionError, match="truncated"):
         select_draft(DRAFTS, draft_id="nope")
+
+
+def test_unknown_id_over_the_whole_mailbox_says_so_plainly():
+    """The complete=True miss: the walk was not truncated, so the message must
+    not send the operator hunting for an unread page that does not exist."""
+    with pytest.raises(DraftSelectionError, match="no draft with id nope") as exc:
+        select_draft(DRAFTS, draft_id="nope", complete=True)
+    assert "truncated" not in str(exc.value)
 
 
 def test_subject_substring_is_case_insensitive():

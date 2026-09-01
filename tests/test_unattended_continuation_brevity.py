@@ -176,13 +176,24 @@ def test_the_second_continuation_drops_the_rules_and_keeps_the_command(tmp_path)
 
 
 def test_a_compaction_inside_the_window_puts_the_full_text_back(tmp_path):
-    """The one moment "you already read it" stops being true."""
+    """The one moment "you already read it" stops being true.
+
+    `unattended_rules_shown=True` is what makes this test about the compaction.
+    Without it the fixture is a session where the rules were never shown, so
+    `not state.get("unattended_rules_shown")` is already True and the full form
+    goes out whether or not `rebuilt` is consulted at all. MEASURED 2026-09-01:
+    with the flag absent, deleting `rebuilt or` from `show_rules` in
+    `unattended_turn` left this file green, and the only test of the compaction
+    exception was passing on the wrong half of an `or`. Its negative twin below
+    always carried the flag, which is why the pair looked complete.
+    """
     reason = _reason(
         tmp_path,
         unattended_continuations=3,
         unattended_turn_id=TURN,
         unattended_last_at="2026-08-20T09:00:00+00:00",
         last_compact_at="2026-08-20T09:30:00+00:00",
+        unattended_rules_shown=True,
     )
     for sentence in STANDING:
         assert sentence in reason, (

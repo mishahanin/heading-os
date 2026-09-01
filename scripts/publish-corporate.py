@@ -249,7 +249,20 @@ def corporate_gitattributes_ok() -> bool:
     ga = CORPORATE_ROOT / ".gitattributes"
     try:
         lines = ga.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # UnicodeDecodeError is a ValueError, NOT an OSError, so the handler
+        # here caught nothing when a byte outside UTF-8 reached this read. A
+        # `.gitattributes` is exactly where one arrives: it is hand-maintained
+        # in the corporate repo, is never published from here, and a stray
+        # latin-1 byte in a pattern is invisible in an editor. MEASURED
+        # 2026-09-01 on a scratch corporate root holding
+        # `b"* text=auto\\n\\xff\\xfe not utf8\\n"`: this raised
+        # `UnicodeDecodeError` out of `corporate_gitattributes_ok`, past
+        # `mode_copy`'s `return 8` and past `verify_corporate_repo`'s warning,
+        # and `/publish-corporate` died on a traceback instead of naming the
+        # file. Unreadable is refused, the same direction as absent: the guard
+        # exists to stop the build-84 CRLF stall, so a file it cannot read is
+        # not a file it can clear.
         return False
     return any(s == "* text=auto" or s.startswith("* text=auto ")
                for s in (ln.strip() for ln in lines))
@@ -444,10 +457,35 @@ def bump_build(summary: str = "Workspace update", structural: bool = False,
     BUILD.json yet, so nothing reads a real number until a first bump.
     """
     build_path = CORPORATE_ROOT / "BUILD.json"
-    try:
-        cur = json.loads(build_path.read_text(encoding="utf-8")) if build_path.exists() else {}
-    except json.JSONDecodeError:
-        cur = {}
+    # ABSENT and CORRUPT are different answers, and collapsing them was the
+    # defect. `except json.JSONDecodeError: cur = {}` treated an unparseable file
+    # exactly like a missing one, so a damaged BUILD.json silently restarted the
+    # counter at build 1 / version 0.0.1. `scripts/check-build.py` compares this
+    # number against the copy each exec holds, so that reset does not lose an
+    # audit trail quietly: it tells every executive in the fleet that they are
+    # ahead of the publisher.
+    #
+    # The handler also could not see the commonest corruption of all.
+    # `UnicodeDecodeError` is a ValueError and a SIBLING of `json.JSONDecodeError`,
+    # raised inside `read_text` before any parsing happens, so `except
+    # json.JSONDecodeError` never caught it. MEASURED 2026-09-01 on a BUILD.json
+    # holding one Latin-1 byte: `bump_build` raised UnicodeDecodeError out of the
+    # function whose author had written a handler for exactly this case.
+    cur: dict = {}
+    if build_path.exists():
+        try:
+            cur = json.loads(build_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            print(f"{RED}REFUSING TO BUMP: {build_path} exists and could not be "
+                  f"read as JSON: {exc}{RESET}")
+            print(f"{GRAY}Bumping from a file this run cannot read would restart "
+                  f"the build number the whole fleet compares against. Repair or "
+                  f"remove BUILD.json, then re-run.{RESET}")
+            return 1
+        if not isinstance(cur, dict):
+            print(f"{RED}REFUSING TO BUMP: {build_path} is valid JSON but not an "
+                  f"object ({type(cur).__name__}).{RESET}")
+            return 1
     new_build = int(cur.get("build", 0)) + 1
     parts = (str(cur.get("version", "0.0.0")).split(".") + ["0", "0", "0"])[:3]
     try:

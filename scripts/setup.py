@@ -170,7 +170,20 @@ def load_state() -> dict:
     if STATE_FILE.exists():
         try:
             loaded = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            # `UnicodeDecodeError` is a SIBLING of `json.JSONDecodeError` under
+            # `ValueError`, not a subclass, and it comes out of `read_text`
+            # before `json.loads` is handed anything at all. So the one
+            # corruption this function most has to survive walked past it.
+            #
+            # The truncated-write case is not hypothetical here: `save_state`
+            # became atomic only in this same shard, and a state file left by
+            # the older non-atomic write can be cut mid-UTF-8-sequence.
+            # MEASURED 2026-09-01 on `b'{"completed_steps": ["ident\\xc3'`: a
+            # raw UnicodeDecodeError out of `load_state`, which is called on
+            # `main`'s first line - so the wizard died on the run whose whole
+            # purpose is to resume an interrupted one, which is the failure the
+            # docstring above describes and the shard was opened for.
             loaded = None
     state = {"completed_steps": [], "started_at": None}
     if isinstance(loaded, dict):
@@ -241,7 +254,12 @@ def step_detect_identity(state: dict) -> dict:
 
     try:
         identity = json.loads(identity_file.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as e:
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
+        # `UnicodeDecodeError` for the same reason `load_state` carries it: it
+        # is a SIBLING of `json.JSONDecodeError` under `ValueError` and is
+        # raised by `read_text` before `json.loads` sees anything. Without it an
+        # undecodable identity file answered a traceback instead of the named
+        # `Cannot read` above, on step 1 of the wizard.
         fail(f"Cannot read .workspace-identity.json: {e}")
         sys.exit(1)
 
@@ -773,7 +791,11 @@ def step_verify(state: dict) -> bool:
                 checks_passed += 1
             else:
                 warn(".workspace-identity.json missing slug or type")
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            # A file that will not decode IS malformed, which is what this arm
+            # already says. Without `UnicodeDecodeError` it raised instead, and
+            # `step_verify` is the diagnostic step - so the run died on the
+            # check that exists to report the problem.
             warn(".workspace-identity.json is malformed")
     else:
         warn(".workspace-identity.json not found")

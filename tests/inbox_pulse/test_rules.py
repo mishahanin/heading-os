@@ -537,6 +537,71 @@ def test_classify_handles_missing_crm_dir_gracefully(rules_engine, tmp_path):
     assert result["tier_guess"] == "LOW"
 
 
+@pytest.mark.parametrize("extra_tokens,expected_weight,expected_tier", [
+    (0, 3, "MAYBE"),        # just under
+    (1, 4, "HIGH_LIKELY"),  # ON the line
+    (2, 5, "HIGH_LIKELY"),  # just over
+])
+def test_the_high_likely_boundary_is_four_not_five(
+        rules_engine, make_workspace, extra_tokens, expected_weight,
+        expected_tier):
+    """Weight 4 is HIGH_LIKELY. Nothing put a case ON that line. NEW 2026-09-01.
+
+    The aggregate has two boundaries. The MAYBE one is held: tests 6 and 16
+    sit at weight 1 and 2, so `elif weight >= 2` cannot move without a failure.
+    The HIGH_LIKELY one had cases at 3 (test 7) and 5 (test 15) and none at 4,
+    which is the only value that distinguishes `>= 4` from `>= 5`.
+
+    MEASURED 2026-09-01:
+
+        -   if weight >= 4:
+        +   if weight >= 5:
+
+        .venv/bin/python -m pytest tests/inbox_pulse -q
+            -> 226 passed        (baseline: 226 passed)
+        the 45 test files anywhere in tests/ that name inbox_pulse,
+        observability_safe, healthchecks or hc_ping, plus tests/contract
+            -> 7 failed, 1199 passed, 3 skipped
+               (baseline: the identical 7 failed, 1199 passed, 3 skipped;
+                those 7 are sandbox-environment failures, present either way)
+
+    The same mutation applied to `elif weight >= 2` fails 2 tests at once, so
+    the two boundaries were not equally covered and only one of them knew it.
+
+    What moving this line costs: HIGH_LIKELY is the tier that reaches the
+    operator. A silent shift to 5 demotes every email whose signals sum to
+    exactly 4, which is an ordinary combination rather than a rare one. The
+    parametrisation below builds 4 as always_important (3) plus
+    time_sensitivity (1), both from the shared rules YAML.
+
+    `extra_tokens` is the count of time-sensitivity words in the subject: the
+    signal is a flag worth 1, not a per-word tally, so 2 words still add 1 and
+    the third row reaches 5 through a CRM contact instead.
+    """
+    if expected_weight == 5:
+        _write_crm_contact(
+            make_workspace / "crm" / "contacts",
+            slug="ordinary-contact",
+            email="important@example.com",
+            relationship_type="lead",          # +1, not +3
+        )
+    subject = "Please review asap" if extra_tokens else "Please review"
+
+    clf = _make_classifier(rules_engine, make_workspace)
+    result = clf.classify(
+        sender_email="important@example.com",   # always_important -> +3
+        subject=subject,
+        now=_fixed_now(),
+    )
+
+    assert result["weight"] == expected_weight, (
+        f"the fixture produced weight {result['weight']}, not "
+        f"{expected_weight}; breakdown {result['reason_breakdown']}")
+    assert result["tier_guess"] == expected_tier, (
+        f"weight {expected_weight} classified {result['tier_guess']}; the "
+        f"HIGH_LIKELY floor is 4")
+
+
 def test_classify_returns_breakdown_with_all_keys(rules_engine, make_workspace):
     """20. Return dict always has tier_guess, weight, and all 7 breakdown keys."""
     clf = _make_classifier(rules_engine, make_workspace)
@@ -823,19 +888,31 @@ def test_classify_missing_my_email_skips_rule_gracefully(rules_engine, make_work
 
 
 def test_classify_case_insensitive_email_matching(rules_engine, make_workspace):
-    """CRM email in mixed case, recipient in all-caps -> still matches correctly."""
+    """CRM email in mixed case, recipient in all-caps -> still matches correctly.
+
+    MEASURED 2026-08-31: until that day every value in this test was entirely
+    lowercase, while the inline comments read `# mixed case in CRM` and
+    `# all-caps in Exchange`. A grep for any uppercase address across this
+    whole file returned zero hits, so nothing anywhere exercised case folding.
+    The test was green over nothing for the property it is named for: deleting
+    `sender_email.lower()` at `scripts/inbox_pulse/rules.py:383` and
+    `addr.lower()` at `:257` left it passing.
+
+    The values below now differ in case from what the code compares them
+    against, so each `.lower()` in the implementation is load-bearing here.
+    """
     _write_crm_contact(
         make_workspace / "crm" / "contacts",
         slug="victor-stein",
-        email="alice@31c.io",  # mixed case in CRM
+        email="Alice@31C.io",  # mixed case in CRM, folded by contact_index_by_email
         relationship_type="tribe-leadership",
     )
     clf = _make_tl_classifier(rules_engine, make_workspace, my_email="ceo@31c.io")
     result = clf.classify(
-        sender_email="alice@31c.io",  # lowercase in daemon
+        sender_email="ALICE@31c.io",  # all-caps local part from the daemon
         subject="All caps test",
         now=_fixed_now(),
-        recipients_to=["ceo@31c.io"],  # all-caps in Exchange
+        recipients_to=["CEO@31C.IO"],  # all-caps in Exchange
     )
     assert result["tier_guess"] == "HIGH_LIKELY"
     assert result["reason_breakdown"]["sender_override"] == "tl_to_important"
@@ -1014,7 +1091,15 @@ def test_classify_internal_sender_in_neither_to_nor_cc_falls_through(make_worksp
 
 
 def test_classify_internal_domain_case_insensitive(make_workspace, tmp_path):
-    """Sender domain 31C.IO (uppercase) matches internal_domains: ['31c.io'] (case-insensitive)."""
+    """Sender domain 31C.IO (uppercase) matches internal_domains: ['31c.io'].
+
+    MEASURED 2026-08-31: the docstring named `31C.IO` and every input was
+    lowercase, so the test asserted nothing about case at all. Removing
+    `sender_domain.lower()` at `scripts/inbox_pulse/rules.py:251` left it green.
+
+    The sender domain below is now uppercase and the configured domain is
+    lowercase, so the fold at `:251` is the only thing that makes them match.
+    """
     from scripts.inbox_pulse.overrides import RulesEngine
     from scripts.inbox_pulse.rules import CheapClassifier
 
@@ -1024,6 +1109,39 @@ def test_classify_internal_domain_case_insensitive(make_workspace, tmp_path):
     _write_crm_contact(
         make_workspace / "crm" / "contacts",
         slug="victor-uppercase-domain",
+        email="alice@31c.io",
+        relationship_type="tribe-leadership",
+    )
+    clf = CheapClassifier(rules=engine, workspace_root=make_workspace, account=None, my_email="ceo@31c.io")
+    result = clf.classify(
+        sender_email="alice@31C.IO",   # uppercase domain against a lowercase config
+        subject="Test",
+        now=_fixed_now(),
+        recipients_to=["ceo@31c.io"],
+    )
+    assert result["tier_guess"] == "HIGH_LIKELY"
+    assert result["reason_breakdown"]["sender_override"] == "tl_to_important"
+
+
+def test_classify_internal_domain_matches_an_uppercase_configured_domain(
+    make_workspace, tmp_path
+):
+    """The other side of the same fold, which nothing covered.
+
+    `internal_domains_lower` at `scripts/inbox_pulse/rules.py:252` folds the
+    CONFIGURED list. The test above only folds the sender, so deleting that line
+    while keeping `:251` would still leave it green. An operator who writes
+    `internal_domains: ["31C.IO"]` in their YAML is the case this covers.
+    """
+    from scripts.inbox_pulse.overrides import RulesEngine
+    from scripts.inbox_pulse.rules import CheapClassifier
+
+    yaml_path = _make_rules_yaml_with_domains(tmp_path, ["31C.IO"])
+    engine = RulesEngine(yaml_path=yaml_path)
+
+    _write_crm_contact(
+        make_workspace / "crm" / "contacts",
+        slug="victor-uppercase-config",
         email="alice@31c.io",
         relationship_type="tribe-leadership",
     )

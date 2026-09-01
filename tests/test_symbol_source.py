@@ -25,7 +25,12 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.utils.symbol_source import iter_symbols, extract_docstring, EMBEDDABLE_KINDS  # noqa: E402
+from scripts.utils.symbol_source import (  # noqa: E402
+    EMBEDDABLE_KINDS,
+    MAX_BODY_CHARS,
+    extract_docstring,
+    iter_symbols,
+)
 
 
 def _graph(tmp_path: Path, rows: list[tuple]) -> Path:
@@ -65,6 +70,49 @@ def test_the_real_docstring_is_read_from_source_not_from_the_graph(tmp_path):
     (row,) = list(iter_symbols(db, tmp_path))
     assert "Raised when workspace identity is malformed." in row["body"]
     assert "=====" not in row["body"]
+
+
+def test_the_docstring_is_added_when_the_slice_does_not_already_carry_it(tmp_path):
+    """The test above cannot tell "read from source" from "not read at all".
+
+    Its node range covers the docstring line, so the string is inside the raw
+    slice whether or not `extract_docstring` ever ran. MEASURED 2026-09-01:
+    replacing `doc = extract_docstring(text, name)` with `doc = None` left the
+    whole file green. Here the range covers the signature line ONLY, so the
+    docstring can reach `body` by one route and no other.
+    """
+    _src(tmp_path, "m.py",
+         "def f():\n"
+         '    """The only place this sentence lives."""\n'
+         "    return 2\n")
+    db = _graph(tmp_path, [("n1", "function", "f", "m.f", "m.py",
+                            "python", 1, 1, "", "def f()")])
+    (row,) = list(iter_symbols(db, tmp_path))
+    assert "The only place this sentence lives." in row["body"]
+    assert row["has_docstring"] is True
+
+
+def test_a_row_says_so_when_the_symbol_has_no_docstring(tmp_path):
+    """The negative half of `has_docstring`, which nothing asserted either."""
+    _src(tmp_path, "m.py", "def f():\n    return 2\n")
+    db = _graph(tmp_path, [("n1", "function", "f", "m.f", "m.py",
+                            "python", 1, 2, "", "def f()")])
+    (row,) = list(iter_symbols(db, tmp_path))
+    assert row["has_docstring"] is False
+
+
+def test_the_body_is_bounded(tmp_path):
+    """`MAX_BODY_CHARS` exists so one long class cannot drown its own docstring.
+
+    Dropping the slice left this file green: no fixture was long enough for the
+    bound to have anything to do.
+    """
+    body_lines = "\n".join(f"    x{i} = {i}" for i in range(400))
+    _src(tmp_path, "m.py", f"def big():\n{body_lines}\n")
+    db = _graph(tmp_path, [("n1", "function", "big", "m.big", "m.py",
+                            "python", 1, 401, "", "def big()")])
+    (row,) = list(iter_symbols(db, tmp_path))
+    assert len(row["body"]) == MAX_BODY_CHARS
 
 
 def test_a_symbol_with_no_docstring_still_yields_a_row(tmp_path):
@@ -113,6 +161,40 @@ def test_the_vault_prefix_is_denied_for_symbols_too(tmp_path):
     assert list(iter_symbols(db, tmp_path)) == []
 
 
+def test_a_refusal_is_counted_back_to_the_caller(tmp_path):
+    """The docstring's own promise: the refusal happens in here, so the caller
+    cannot count it.
+
+    A caller that reports "0 withheld" over content the air gap actually
+    dropped is claiming coverage it does not have. Deleting the counter left
+    this file green until 2026-09-01, so the promise was prose only. The
+    control half is the second call: `denied` must stay absent when nothing was
+    refused, or the assertion above passes on a counter that always fires.
+    """
+    _src(tmp_path, "chronicle/personal/p.py", "def secret():\n    return 1\n")
+    _src(tmp_path, "m.py", "def open_one():\n    return 1\n")
+    db = _graph(tmp_path, [
+        ("n1", "function", "secret", "p.secret", "chronicle/personal/p.py",
+         "python", 1, 2, "", "def secret()"),
+        ("n2", "function", "open_one", "m.open_one", "m.py",
+         "python", 1, 2, "", "def open_one()"),
+    ])
+    stats: dict = {}
+    rows = list(iter_symbols(db, tmp_path, stats=stats))
+    assert [r["title"] for r in rows] == ["m.open_one"]
+    assert stats["denied"] == 1
+
+
+def test_nothing_is_counted_when_nothing_was_refused(tmp_path):
+    """The control for the counter above: it must not fire on a clean walk."""
+    _src(tmp_path, "m.py", "def open_one():\n    return 1\n")
+    db = _graph(tmp_path, [("n1", "function", "open_one", "m.open_one", "m.py",
+                            "python", 1, 2, "", "def open_one()")])
+    stats: dict = {}
+    assert len(list(iter_symbols(db, tmp_path, stats=stats))) == 1
+    assert stats.get("denied", 0) == 0
+
+
 # --- staleness -------------------------------------------------------------
 
 def test_a_node_whose_file_is_gone_is_skipped_not_guessed(tmp_path):
@@ -126,6 +208,35 @@ def test_a_node_pointing_past_the_end_of_its_file_is_skipped(tmp_path):
     _src(tmp_path, "m.py", "def a():\n    return 1\n")
     db = _graph(tmp_path, [("n1", "function", "a", "m.a", "m.py",
                             "python", 900, 950, "", "def a()")])
+    assert list(iter_symbols(db, tmp_path)) == []
+
+
+def test_a_node_whose_start_fits_but_whose_end_does_not_is_skipped(tmp_path):
+    """The exact shape the end-line check was added for, on 2026-08-26.
+
+    The test above moves the START out of range too, so it is caught by either
+    half of the condition. Dropping `start <= end <= len(lines)` left this file
+    green: a node recorded as `m.py:1-40` whose file is now three lines passed
+    the start test, the old `min(end, len(lines))` clamped the slice to the
+    whole file, and the row went out labelled with a range that does not exist.
+    """
+    _src(tmp_path, "m.py", "def a():\n    return 1\n\n")
+    db = _graph(tmp_path, [("n1", "function", "a", "m.a", "m.py",
+                            "python", 1, 40, "", "def a()")])
+    assert list(iter_symbols(db, tmp_path)) == []
+
+
+def test_a_node_starting_below_line_one_is_skipped(tmp_path):
+    """The other half of the same condition, and it is not decoration.
+
+    `1 <= start` is what stops a zero or negative start reaching the slice.
+    `lines[0 - 1:end]` is `lines[-1:end]`, which is a legal Python slice and
+    almost always the WRONG lines, so the row would be labelled `m.py:0-2` over
+    content from the end of the file.
+    """
+    _src(tmp_path, "m.py", "def a():\n    return 1\n")
+    db = _graph(tmp_path, [("n1", "function", "a", "m.a", "m.py",
+                            "python", 0, 2, "", "def a()")])
     assert list(iter_symbols(db, tmp_path)) == []
 
 

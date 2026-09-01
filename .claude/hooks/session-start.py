@@ -1,12 +1,89 @@
 #!/usr/bin/env python3
 """SessionStart hook: surface urgent CRM contacts and data freshness alerts."""
 import sys
+import contextlib
 import json
 import os
 import re
 import subprocess
 from datetime import date, datetime, timedelta
 from pathlib import Path
+
+def _load_checkpoint_paths():
+    """`scripts.utils.checkpoint_paths`, or None on a clone without it.
+
+    Located by walking for `scripts/utils/`, the same way
+    `.claude/hooks/bridge-hook.py` does, so a hook shipped inside a plugin bundle
+    finds its own copy rather than counting parents.
+
+    OPTIONAL on purpose, and for the same reason bridge-hook's is: a hook that
+    cannot import a helper must still deliver its alerts. The caller degrades to
+    an unserialised read-modify-write and says so on stderr. Loud degradation,
+    never a silent one.
+
+    Called at the USE SITE rather than at module import, which is where
+    bridge-hook puts its copy. Importing anything from `scripts.utils` puts that
+    package in `sys.modules` for the rest of the process, and `check_stale_files`
+    and `_thread_panel_lines` both do their own guarded `scripts.utils` import
+    earlier in `main()` and report when it fails. Doing it up here would change
+    what those two can see, on a tree where `project_dir` is not the engine root,
+    which is not this fix's business. Measured 2026-08-31: 0.021 s, and it is
+    spent only on the exec-workspace path that needs it.
+    """
+    here = Path(__file__).resolve()
+    for candidate in [here.parent, *here.parents]:
+        if (candidate / "scripts" / "utils" / "checkpoint_paths.py").is_file():
+            sys.path.insert(0, str(candidate))
+            try:
+                from scripts.utils import checkpoint_paths
+            except Exception as exc:  # noqa: BLE001 - reported, never fatal
+                print(f"session-start: checkpoint_paths unavailable ({exc}); the "
+                      f"workspace-update marker is read and rewritten "
+                      f"unserialised", file=sys.stderr)
+                return None
+            return checkpoint_paths
+    print("session-start: no scripts/utils/checkpoint_paths.py on this clone; the "
+          "workspace-update marker is read and rewritten unserialised",
+          file=sys.stderr)
+    return None
+
+
+# ============================================================
+# The hook's internal time budget
+# ============================================================
+#
+# Claude Code DISCARDS the output of a hook that outruns its REGISTERED timeout.
+# That is the same mechanic `.claude/hooks/checkpoint-offer.py` budgets against
+# (see the comment above `UNATTENDED_WAIT_CEILING_SECONDS` in
+# `scripts/utils/checkpoint_paths.py`), and here the loss is everything this file
+# computes: sync failure, corporate update, dependency marker, CRM red debt,
+# stale context, and the thread panel. Exit 0 and no alerts is what the operator
+# sees, which is indistinguishable from a healthy workspace.
+#
+# All four settings files register this hook at 15 seconds. Until 2026-08-31 the
+# two subprocess timeouts here were 5 and 10, which is exactly 15, leaving the
+# rest of the hook outside the budget. MEASURED that day against an
+# exec-workspace scratch tree with both child scripts sleeping 600 s: 14.50 s
+# wall, exit 0, and that run had a degenerate tail (no context directory, and no
+# importable `scripts/utils`, so the panel returned instantly). On the operator's
+# live tree the tail measured 0.188 s (`check_stale_files` 0.066 s,
+# `_thread_panel_lines` 0.121 s) and the registered `python3 -c` launcher 0.04 s.
+# Worst case 5 + 10 + 0.19 + 0.04 = 15.23 s, past the wall, in silence.
+#
+# The children are cheap when healthy. Measured the same day on the live tree:
+# `crm-health.py` 0.29 s, `apply-wizard-answers.py --status` 0.07 s. So the cuts
+# below still allow 27x and 43x their real cost, and the arithmetic reads
+# 3 + 8 + 4 = 15 with that 0.23 s tail sitting inside the 4.
+#
+# Cutting these needed no settings change and no fleet propagation, which is why
+# it was preferred over raising the registration in four files.
+# `tests/test_an_alert_surface_killed_by_its_own_identity_file.py` holds the sum
+# against the number the templates actually register, so the two cannot drift
+# apart unnoticed the way they had.
+REGISTERED_TIMEOUT_SECONDS = 15   # what every settings file registers for this hook
+WIZARD_STATUS_TIMEOUT_SECONDS = 3
+CRM_HEALTH_TIMEOUT_SECONDS = 8
+TAIL_BUDGET_SECONDS = 4           # staleness scan, thread panel, print, launcher
 
 
 def _setup_wizard_banner(workspace_root):
@@ -27,7 +104,31 @@ def _setup_wizard_banner(workspace_root):
         return
     try:
         identity = json.loads(identity_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        # `read_text` raises OSError on an unreadable file and UnicodeDecodeError
+        # (a ValueError, so not covered by OSError) on undecodable bytes. Only
+        # JSONDecodeError was caught, so either one killed the hook at its FIRST
+        # statement and took every alert below with it. Same hole, same file, as
+        # the five loaders fixed on 2026-08-30.
+        print(f"session-start: .workspace-identity.json unreadable "
+              f"({exc.__class__.__name__}: {exc}); setup banner suppressed",
+              file=sys.stderr)
+        return
+    if not isinstance(identity, dict):
+        # `json.loads` succeeds on any well-formed JSON, not only on an object,
+        # so `[]`, `"x"`, `3` and `null` all reached `.get` here. MEASURED
+        # 2026-08-31 with `[]` in the file and a payload naming that tree: the
+        # hook died at line 32 with `AttributeError: 'list' object has no
+        # attribute 'get'`, exit 1, and NOTHING this file computes was delivered.
+        # `get_workspace_type` carried the sixth copy of the same read and the
+        # same hole; both are guarded now.
+        #
+        # Suppressing the banner is the right degrade, not an arbitrary one: the
+        # documented default identity is ceo-master, and on ceo-master this
+        # banner is suppressed anyway.
+        print(f"session-start: .workspace-identity.json parsed as "
+              f"{type(identity).__name__}, not an object; setup banner "
+              f"suppressed", file=sys.stderr)
         return
     if identity.get("type") == "ceo-master":
         return
@@ -37,7 +138,14 @@ def _setup_wizard_banner(workspace_root):
     try:
         result = subprocess.run(
             [sys.executable, str(apply_script), "--status"],
-            cwd=workspace_root, capture_output=True, text=True, timeout=5,
+            cwd=workspace_root, capture_output=True, text=True,
+            # `json.JSONDecodeError` in the handler below reads as if the decode
+            # case were already covered. It is not. `UnicodeDecodeError` is its
+            # SIBLING under `ValueError`, not its subclass, so a byte that is
+            # not UTF-8 in the wizard's output raised out of `subprocess.run`
+            # and took the whole session start with it.
+            errors="replace",
+            timeout=WIZARD_STATUS_TIMEOUT_SECONDS,
         )
         if result.returncode != 0:
             return
@@ -48,22 +156,79 @@ def _setup_wizard_banner(workspace_root):
         print(f"session-start: setup status unavailable "
               f"({exc.__class__.__name__}): {exc}", file=sys.stderr)
         return
+    # The identity file fifteen lines up got this guard on 2026-08-31 and the
+    # wizard's own output, read in the same function, did not. `json.loads`
+    # succeeds on any well-formed JSON, not only on an object, so `[]`, `"x"`,
+    # `3` and `null` all reached `.get` here. MEASURED 2026-09-01 against a
+    # stand-in wizard printing `[]`: AttributeError on the next line, raised out
+    # of `main()` at the FIRST call it makes, hook exit 1, and every alert this
+    # file computes lost. Suppressing is the same degrade the identity guard
+    # chose, and the same one the `except` above already takes.
+    if not isinstance(payload, dict):
+        print(f"session-start: setup status parsed as "
+              f"{type(payload).__name__}, not an object; setup banner "
+              f"suppressed", file=sys.stderr)
+        return
     pct = payload.get("completion_pct", 100)
+    # `.get(key, default)` is not a type check: the default fires only on an
+    # ABSENT key, and a present-but-wrong value passes straight through. Same
+    # measurement, second shape: `{"completion_pct": "0"}` raised
+    # `TypeError: '>=' not supported between instances of 'str' and 'int'`
+    # below, with the same consequence. `bool` is excluded because `True` is an
+    # `int` and no setup is 1% complete because someone wrote `true`.
+    if isinstance(pct, bool) or not isinstance(pct, (int, float)):
+        print(f"session-start: setup status completion_pct is "
+              f"{type(pct).__name__}, not a number; setup banner suppressed",
+              file=sys.stderr)
+        return
     if pct >= 100:
         return
     print(f"[!] Workspace not fully set up ({pct}%). Type /setup-wizard to finish.\n")
 
 
 def get_workspace_type(project_dir):
-    """Read workspace identity to determine type."""
+    """Read workspace identity to determine type. Always a dict, whatever the
+    file holds.
+
+    The isinstance check is the second half of the promise the `except` below
+    already made, and it was missing until 2026-08-31. `json.loads` succeeds on
+    any well-formed JSON, not only on an object, so `[]`, `"x"`, `3` and `null`
+    were returned as-is to four callers that all begin with `identity.get(...)`.
+    MEASURED that day by loading this file and calling it against a `[]` identity:
+
+        get_workspace_type([])   -> []
+        check_sync_status          AttributeError 'list' object has no 'get'
+        check_corporate_updates    AttributeError
+        check_dep_update_marker    AttributeError
+        _setup_wizard_banner       AttributeError
+
+    `main()` reaches two of those unguarded, so the hook exited 1 with a
+    traceback and every alert was lost: CRM red debt, corporate update, dep
+    marker, stale context, and the thread panel.
+
+    `scripts/utils/workspace.get_workspace_identity` was fixed for exactly this
+    on 2026-08-30 and this, its sixth independent copy, was missed. It is NOT
+    reused here, and the reason is not stdlib purity: that loader resolves its
+    own root through `get_workspace_root()` and raises `ValueError` by design,
+    while this hook must read the tree named in the payload it was handed and
+    must never raise. Sharing it would silently change WHICH file is read.
+    """
     identity_file = os.path.join(project_dir, ".workspace-identity.json")
+    default = {"role": "admin", "slug": "misha-hanin", "type": "ceo-master"}
     if os.path.isfile(identity_file):
         try:
             with open(identity_file, "r", encoding="utf-8") as f:
-                return json.loads(f.read())
+                identity = json.loads(f.read())
         except Exception as e:
             print(f"[session-start] get_workspace_type failed: {e}", file=sys.stderr)
-    return {"role": "admin", "slug": "misha-hanin", "type": "ceo-master"}
+            return default
+        if not isinstance(identity, dict):
+            print(f"[session-start] .workspace-identity.json parsed as "
+                  f"{type(identity).__name__}, not an object with role/slug/type; "
+                  f"continuing as ceo-master", file=sys.stderr)
+            return default
+        return identity
+    return default
 
 
 def check_sync_status(project_dir, identity):
@@ -178,7 +343,8 @@ def check_crm_health(project_dir):
     try:
         result = subprocess.run(
             [sys.executable, script],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True,
+            timeout=CRM_HEALTH_TIMEOUT_SECONDS,
             cwd=project_dir
         )
         if result.returncode == 0:
@@ -465,6 +631,18 @@ def _thread_panel_lines(project_dir):
     active.sort(key=lambda row: (row[0] is not None, row[0] if row[0] is not None else 0))
     recent = [row for row in active if row[0] is None or row[0] <= THREAD_PANEL_DAYS]
     shown = recent[:THREAD_PANEL_ROWS]
+    # A row whose `last_touched` failed `date.fromisoformat` has `age is None`
+    # and is kept in `recent` on purpose (a broken date is a defect to see, not a
+    # thread to bury). But the head then read "Showing the N touched in the last
+    # 14 days" over a set that included it, asserting the recency the
+    # `except (TypeError, ValueError)` above had just failed to establish.
+    # MEASURED 2026-08-31 with one good thread and one carrying
+    # `last_touched: "sometime"`: "Showing the 2 touched in the last 14 days."
+    # The row itself prints "(no date)", so a careful reader could catch it; the
+    # sentence still over-claimed. Counted over `shown`, because `shown` is what
+    # the sentence is about. `.claude/rules/scope-claims.md` obligation 2: name
+    # what you left out, the way `quiet` and `unreadable` already do.
+    undated = sum(1 for row in shown if row[0] is None)
 
     # Two different reasons a thread is absent, named separately. "20 more
     # active" collapsed them, and a reader cannot tell a thread that went quiet
@@ -479,6 +657,8 @@ def _thread_panel_lines(project_dir):
     head += (f"{len(shown)} of {len(recent)}" if len(shown) < len(recent)
              else f"the {len(shown)}")
     head += f" touched in the last {THREAD_PANEL_DAYS} days"
+    if undated:
+        head += f", {undated} with no readable date"
     if older:
         head += f"; {older} older"
     head += "."
@@ -514,7 +694,36 @@ def main():
               "object; continuing with defaults", file=sys.stderr)
         input_data = {}
 
-    project_dir = input_data.get("cwd", os.getcwd())
+    # The default in `.get("cwd", os.getcwd())` fires only when the KEY IS
+    # ABSENT. With the key present and holding `null`, a number or a list, the
+    # STORED value came back and `Path(...)` raised `TypeError` here, above
+    # everything this hook computes. MEASURED 2026-09-01 by driving the hook:
+    # `{"cwd": null}`, `{"cwd": 3}` and `{"cwd": []}` each exited 1 with a
+    # traceback, so the CRM red-contact alert, the corporate-update notice, the
+    # stale-file warning and the setup banner were all lost while the session
+    # opened looking normal. `{"cwd": ""}` and `{}` were already fine.
+    #
+    # The same guard was already written three times: twice in
+    # `prompt-guard.py` (for the tool payload and for the file path, and a third
+    # time for `cwd` itself), once in `post-write-sanitize.py` on the same
+    # matcher, and the non-dict PAYLOAD case above came from
+    # `checkpoint-inject.py`. The field INSIDE the dict was missed in exactly
+    # the way that comment says the payload case was missed.
+    #
+    # The tool-payload field is deliberately named in prose above rather than
+    # spelled as an identifier, and so is the test that requires it.
+    # `tests/test_a_test_that_asserted_against_its_own_loop.py` carries a
+    # TEXTUAL tripwire: a hook excluded from that guard rule as a non-reader
+    # must not contain the key's name ANYWHERE, comments and docstrings
+    # included, because a read through a variable key would be invisible to its
+    # AST detector and visible only as text. Spelling the key here in a comment
+    # tripped it, and so did naming the test, whose own name contains it. Both
+    # are the tripwire working rather than a fault in it. Guard for the fix
+    # itself:
+    # `tests/test_a_session_start_that_died_on_a_field_it_did_not_check.py`.
+    project_dir = input_data.get("cwd")
+    if not isinstance(project_dir, str) or not project_dir:
+        project_dir = os.getcwd()
     workspace_root = Path(project_dir)
     _setup_wizard_banner(workspace_root)
 
@@ -565,30 +774,55 @@ def main():
     if identity.get("type") == "exec-workspace":
         update_file = os.path.join(project_dir, ".sync", "last-update.json")
         if os.path.isfile(update_file):
+            # SERIALISED, because the WRITE below being atomic is a different
+            # guarantee from the read and the write being indivisible. Two
+            # sessions starting together both read `notified: false`, both print
+            # the banner, and both write `true`. MEASURED 2026-08-31 by firing 12
+            # concurrent hooks at one fresh marker on an exec-workspace scratch
+            # tree, five trials: 2, 2, 1, 2, 2 banners. Nothing is lost, so this
+            # is milder than the statusline case `locked_state` was written for;
+            # a duplicated banner is still the operator being told twice.
+            #
+            # `file_lock` and not `locked_state`, deliberately. `locked_state`
+            # writes the dict back on every exit, so it would rewrite this marker
+            # on every exec session start, and would replace a CORRUPT marker
+            # with `{}` (its `read_json` degrades to an empty dict) instead of
+            # leaving it alone and saying so on stderr as the handler below does.
+            # The sidecar name is the one `locked_state` would use, so the two
+            # primitives contend over the same lock if this ever moves.
+            #
+            # A clone without `checkpoint_paths` gets the pre-2026-08-31
+            # behaviour and a line on stderr saying so, never a lost banner.
+            _cp = _load_checkpoint_paths()
+            lock = (_cp.file_lock(Path(update_file + ".lock"),
+                                  label="session-start")
+                    if _cp is not None else contextlib.nullcontext())
             try:
-                with open(update_file, "r", encoding="utf-8") as f:
-                    update = json.loads(f.read())
-                if not update.get("notified", True):
-                    version = update.get("version", "?")
-                    build = update.get("build", "?")
-                    summary = update.get("summary", "")
-                    applied = update.get("applied_at", "")[:16]
-                    msg = f"WORKSPACE UPDATE: v{version} (build {build})"
-                    if applied:
-                        msg += f" applied at {applied}"
-                    if summary:
-                        msg += f" -- {summary}"
-                    alerts.append(msg)
-                    # Mark as notified
-                    update["notified"] = True
-                    # tmp + os.replace, per the global atomic-state-write rule.
-                    # A crash mid-write left a truncated file, after which the
-                    # read above raises forever and the notification can never
-                    # be delivered. Found by the 2026-08-23 audit.
-                    tmp_update = update_file + ".tmp"
-                    with open(tmp_update, "w", encoding="utf-8") as f:
-                        f.write(json.dumps(update, indent=2))
-                    os.replace(tmp_update, update_file)
+                with lock:
+                    with open(update_file, "r", encoding="utf-8") as f:
+                        update = json.loads(f.read())
+                    if not update.get("notified", True):
+                        version = update.get("version", "?")
+                        build = update.get("build", "?")
+                        summary = update.get("summary", "")
+                        applied = update.get("applied_at", "")[:16]
+                        msg = f"WORKSPACE UPDATE: v{version} (build {build})"
+                        if applied:
+                            msg += f" applied at {applied}"
+                        if summary:
+                            msg += f" -- {summary}"
+                        alerts.append(msg)
+                        # Mark as notified
+                        update["notified"] = True
+                        # tmp + os.replace, per the global atomic-state-write
+                        # rule. A crash mid-write left a truncated file, after
+                        # which the read above raises forever and the
+                        # notification can never be delivered. Found by the
+                        # 2026-08-23 audit.
+                        tmp_update = update_file + ".tmp"
+                        with open(tmp_update, "w", encoding="utf-8") as f:
+                            f.write(json.dumps(update, indent=2))
+                        os.replace(tmp_update, update_file)
             except Exception as e:
                 print(f"[session-start] workspace update notification failed: {e}", file=sys.stderr)
 

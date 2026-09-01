@@ -584,3 +584,79 @@ def test_the_budget_docstring_does_not_claim_a_coverage_it_has_not_got():
         "the docstring names the uncounted surfaces but no longer says they are "
         f"uncounted: {doc!r}")
     assert "invisible here" in doc
+
+
+# ============================================================
+# 7. The here-STRING that every heredoc reader in the file read as a heredoc
+# ============================================================
+#
+# `<<<word` is a here-string: one word, on the same line, no body and no
+# terminator. All three heredoc openers in `_dispatch.py` matched it as a
+# heredoc opening on `word`, because a trailing `(?!<)` only refuses the match
+# that begins at the FIRST angle bracket and `re` simply retries one character
+# along. The reader then hunts for a line equal to `word`, never finds one, and
+# treats everything after it as body.
+#
+# MEASURED 2026-09-01 against the shipped patterns:
+#
+#     grep x <<<needle\nwhile true; do sleep 1; done
+#         _unquoted_skeleton  'grep x <<<\n'
+#         _blocking_wait      False        (the poll loop is invisible)
+#
+# Every here-string case in section 2 above is QUOTED, and the quote scanner
+# empties a quoted word before the heredoc pattern is consulted, so the bare
+# form was never reached. The fix is one lookbehind per pattern.
+
+@pytest.mark.parametrize("command", [
+    "grep x <<<needle\nwhile true; do sleep 1; done",
+    "grep x <<<$VAR\nuntil curl -s localhost:9; do sleep 2; done",
+    "tr a b <<<HELLO\nwhile true; do sleep 1; done",
+    "cat <<<word\nwhile ! test -f x; do sleep 5; done",
+])
+def test_a_poll_loop_after_a_bare_here_string_is_still_refused(dispatch, command):
+    """The consequence, asserted through the guard rather than the regex."""
+    assert dispatch._blocking_wait(command) is True, command
+
+
+@pytest.mark.parametrize("command", [
+    "grep x <<<needle\necho after",
+    "tr a b <<<HELLO\nsecond line\nthird line",
+])
+def test_a_bare_here_string_does_not_swallow_the_lines_after_it(dispatch, command):
+    """The skeleton must keep what follows. A reader that swallows to the end of
+    the command makes every later command invisible to every check built on it,
+    and that failure looks exactly like the guard working."""
+    skeleton = dispatch._unquoted_skeleton(command)
+    for line in command.split("\n")[1:]:
+        assert line in skeleton, (line, skeleton)
+
+
+def test_a_real_here_document_is_still_a_here_document(dispatch):
+    """The anti-vacuity jaw. A pattern that stopped matching `<<` altogether
+    would satisfy both cases above and would un-do the heredoc handling section 2
+    exists for."""
+    skeleton = dispatch._unquoted_skeleton(
+        "cat <<EOF\nsecret body text\nEOF\necho after")
+    assert "secret body text" not in skeleton, skeleton
+    assert "echo after" in skeleton, skeleton
+    assert dispatch._blocking_wait(
+        "cat <<EOF\nnothing\nEOF\nwhile true; do sleep 1; done") is True
+
+
+def test_the_other_two_heredoc_readers_carry_the_same_guard(dispatch):
+    """Three copies of one pattern, and the campaign's dominant failure is a fix
+    landing in some of them. Asserted through each reader's own entry point.
+
+    `strip_heredocs` feeds the fan-out read counter, so a swallowed remainder
+    makes the wall under-count a session's hand-reads. `_heredoc_body_spans`
+    blanks the same region for the release wall.
+    """
+    kept = dispatch.strip_heredocs("grep x <<<needle\necho after\nls -la")
+    assert "echo after" in kept and "ls -la" in kept, kept
+
+    dropped = dispatch.strip_heredocs("cat <<EOF\nbody line\nEOF\necho after")
+    assert "body line" not in dropped, dropped
+    assert "echo after" in dropped, dropped
+
+    assert dispatch._heredoc_body_spans("grep x <<<needle\necho after") == []
+    assert dispatch._heredoc_body_spans("cat <<EOF\nbody\nEOF\n") != []

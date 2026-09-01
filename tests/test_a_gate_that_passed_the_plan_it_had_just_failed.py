@@ -147,6 +147,54 @@ def test_a_clean_artifact_with_no_plan_stays_green():
     assert proc.returncode == 0, proc.stdout[-600:]
 
 
+def test_a_plan_that_is_not_utf8_is_still_graded(tmp_path):
+    """A traceback is not a verdict, and this gate's whole output is verdicts.
+
+    Every read in `artifact-evaluator.py` used a bare utf-8 decode, so one stray
+    byte in the plan - the operator-authored input here - raised
+    UnicodeDecodeError, a ValueError caught nowhere between the read and `main`.
+    MEASURED 2026-09-01: no JSON, no report, exit 1 on a stack trace, and exit 1
+    is the code this gate uses for "a criterion failed".
+
+    The criterion below names a script that does not exist, so the graded answer
+    is knowable: it must still come out `fail`, not vanish.
+    """
+    plan = tmp_path / "p.md"
+    plan.write_bytes(
+        "# Plan\n\n## Success Criteria\n\n"
+        "- caf\xe9: the widget ships per `scripts/there-is-no-such-script.py`\n"
+        .encode("latin-1"))
+    proc = _run_evaluator("--path", "scripts/audit-deps.py",
+                          "--plan", str(plan), "--json")
+    assert "Traceback" not in proc.stderr, proc.stderr
+    body = json.loads(proc.stdout)
+    assert "fail" in [c["status"] for c in body["plan_criteria"]], body["plan_criteria"]
+    assert proc.returncode == 1
+
+
+def test_an_artifact_that_is_not_utf8_is_still_reported_on(tmp_path):
+    """The same read, on the artifact side rather than the plan side."""
+    script = tmp_path / "tool.py"
+    script.write_bytes(b"#!/usr/bin/env python3\n# caf\xe9\nprint('hi')\n")
+    proc = _run_evaluator("--path", str(script), "--json")
+    assert "Traceback" not in proc.stderr, proc.stderr
+    body = json.loads(proc.stdout)
+    assert body["checks"], "the evaluator produced no checks at all"
+
+
+def test_a_utf8_plan_is_unchanged_by_the_replacement(tmp_path):
+    """Anchor: `errors="replace"` must not move an ordinary verdict."""
+    plan = tmp_path / "p.md"
+    plan.write_text(
+        "# Plan\n\n## Success Criteria\n\n"
+        "- the auditor exists per `scripts/audit-deps.py`\n",
+        encoding="utf-8")
+    proc = _run_evaluator("--path", "scripts/audit-deps.py",
+                          "--plan", str(plan), "--json")
+    assert [c["status"] for c in json.loads(proc.stdout)["plan_criteria"]] == ["pass"]
+    assert proc.returncode == 0
+
+
 def test_the_exit_code_reads_both_lists():
     code = _code("artifact-evaluator.py")
     tail = code[code.index("    sys.exit(1 if") - 400:]
@@ -276,6 +324,30 @@ def test_a_non_shell_label_is_not_scanned(bashpaths, tmp_path, lang):
     sk.write_text(f"# s\n\n```{lang}\npython scripts/x.py > outputs/y.md\n```\n",
                   encoding="utf-8")
     assert bashpaths.scan_skill(sk) == []
+
+
+def test_a_skill_that_is_not_utf8_is_still_scanned(bashpaths, tmp_path):
+    """`scan_skill` read with a bare utf-8 decode and this audit walks the whole
+    skill tree, so one stray byte anywhere raised UnicodeDecodeError - a
+    ValueError, caught nowhere on the path - and ended the run naming no file.
+
+    The bash fence below the bad byte must still be scanned: a fix that skipped
+    the file would swap a loud crash for a silent gap in a `--check` gate.
+    """
+    sk = tmp_path / "SKILL.md"
+    sk.write_bytes(
+        b"# s\n\ncaf\xe9\n\n```bash\npython scripts/x.py > outputs/y.md\n```\n")
+    hits = bashpaths.scan_skill(sk)
+    assert len(hits) == 1 and "outputs/y.md" in hits[0][1], hits
+
+
+def test_a_decodable_skill_scans_the_same_as_before(bashpaths, tmp_path):
+    """Anchor: the replacement must not change an ordinary file's line numbers."""
+    sk = tmp_path / "SKILL.md"
+    sk.write_text("# s\n\n```bash\npython scripts/x.py > outputs/y.md\n```\n",
+                  encoding="utf-8")
+    hits = bashpaths.scan_skill(sk)
+    assert len(hits) == 1 and hits[0][0] == 4, hits
 
 
 def test_the_empty_language_is_gone_from_the_fence_set(bashpaths):

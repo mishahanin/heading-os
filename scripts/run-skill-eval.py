@@ -451,6 +451,14 @@ def run_one_skill(skill_name: str, case_filter: str | None, model_override: str 
                 existing = json.loads(benchmark_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 corrupt_reason = "unparseable"
+            except (UnicodeError, OSError) as exc:
+                # The decode and the open both happen before `json.loads` sees a
+                # string, and neither raises JSONDecodeError, so a benchmark.json
+                # with a corrupt byte (or one this process cannot read) threw
+                # past this handler AFTER every case had been graded and PAID
+                # for -- the identical loss the wrong-shape branch below was
+                # added to prevent, by a route that never reached it.
+                corrupt_reason = f"unreadable ({exc})"
             else:
                 # Parseable is not the same as usable. `[]` and `"reset"` both
                 # load fine, and the last_run assignment below then raised

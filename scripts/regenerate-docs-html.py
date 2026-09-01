@@ -588,7 +588,24 @@ def inject_search(html_path: Path, quiet: bool = False) -> bool:
                 for ln in SEARCH_BOX.split("\n")
             )
             text = text[:anchor.start()] + box + "\n" + text[anchor.start():]
-    if "assets/search.js" not in text and "</body>" in text:
+    # The loader is PAIRED to the box, and it was not until 2026-09-01. This
+    # condition read `"assets/search.js" not in text and "</body>" in text`, so
+    # a page with no `menu-toggle` anchor got no box and the loader ANYWAY -
+    # the identical orphan-loader page the paragraph above says the anchor fix
+    # closed, reached by the other route. MEASURED that day on a page holding
+    # only `<html><body><main></main></body></html>`: no `#doc-search`,
+    # `<script src="assets/search.js">` appended, return value True.
+    #
+    # It was latent, like the first half: all 37 pages under `docs/` carry the
+    # anchor today, so nothing on the live site was affected and the injected
+    # bytes of those 37 are unchanged. Both halves are one hand-authored page
+    # from real.
+    #
+    # The test is `'id="doc-search"' in text` and not "did this call inject a
+    # box", because a page that already carries the box from `SITE_SHELL` and
+    # somehow lost its loader still needs one.
+    if ('id="doc-search"' in text and "assets/search.js" not in text
+            and "</body>" in text):
         text = text.replace("</body>", SEARCH_SCRIPT + "\n</body>", 1)
     if text != orig:
         atomic_write_text(html_path, text)

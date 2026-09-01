@@ -190,12 +190,79 @@ def test_the_cleanup_removes_the_port_file():
 
 
 def test_the_removal_only_touches_this_daemon_own_port():
-    """A second daemon may have claimed the file in the meantime."""
-    body = _finally_body()
-    assert "read_text().strip() == str(port)" in body, (
-        "the cleanup unlinks the port file without checking it still holds THIS "
-        "process's port, so a restart race would delete a live daemon's file"
-    )
+    """A second daemon may have claimed the file in the meantime.
+
+    Asked of the AST, not of the spelling. This assertion used to read
+
+        assert "read_text().strip() == str(port)" in body
+
+    and it went RED on 2026-09-01 over a change that STRENGTHENED the guard:
+    `read_text()` gained `encoding="utf-8", errors="replace"` so a torn port
+    file cannot raise out of a shutdown path, which pushed the call across two
+    lines and past that literal. The safety property was intact the whole time.
+
+    A substring is the wrong instrument for this. It fails on a re-wrap, an
+    added keyword, a rename, a black reformat; and it passes on the same text
+    sitting inside a comment. What must hold is structural: somewhere in the
+    finally clause, the result of reading the port file is COMPARED for
+    equality against this process's port, and the unlink is reached only
+    through that comparison.
+    """
+    tree = ast.parse(DAEMON.read_text(encoding="utf-8"))
+    finally_body = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "start_daemon":
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Try) and sub.finalbody:
+                    finally_body = sub.finalbody
+                    break
+    assert finally_body is not None, "start_daemon has no try/finally any more"
+
+    def _reads_the_port_file(node) -> bool:
+        return any(isinstance(c, ast.Call)
+                   and getattr(c.func, "attr", None) == "read_text"
+                   for c in ast.walk(node))
+
+    def _names_this_port(node) -> bool:
+        return any(isinstance(n, ast.Name) and n.id == "port"
+                   for n in ast.walk(node))
+
+    # The guard: an `==` comparison with the file read on one side and this
+    # process's port on the other. Sides are not fixed, because `a == b` and
+    # `b == a` are the same guard and a test that demanded one order would be
+    # brittle in the way this docstring is about.
+    guarded_unlinks = []
+    for stmt in finally_body:
+        for branch in ast.walk(stmt):
+            if not isinstance(branch, ast.If):
+                continue
+            compares = [c for c in ast.walk(branch.test)
+                        if isinstance(c, ast.Compare)
+                        and any(isinstance(op, ast.Eq) for op in c.ops)]
+            if not any(_reads_the_port_file(c) and _names_this_port(c)
+                       for c in compares):
+                continue
+            if any(isinstance(c, ast.Call)
+                   and getattr(c.func, "attr", None) == "unlink"
+                   for n in branch.body for c in ast.walk(n)):
+                guarded_unlinks.append(branch.lineno)
+
+    all_unlinks = [c.lineno for stmt in finally_body for c in ast.walk(stmt)
+                   if isinstance(c, ast.Call)
+                   and getattr(c.func, "attr", None) == "unlink"]
+
+    assert all_unlinks, (
+        "the finally clause no longer unlinks anything, so this test is "
+        "measuring nothing; if the cleanup was redesigned, rewrite this guard "
+        "rather than deleting it")
+    assert guarded_unlinks, (
+        f"the cleanup unlinks the port file at line(s) {all_unlinks} without "
+        f"an equality check between the file's contents and this process's "
+        f"port, so a restart race would delete a LIVE daemon's file")
+    assert len(guarded_unlinks) == len(all_unlinks), (
+        f"{len(all_unlinks)} unlink(s) in the finally clause but only "
+        f"{len(guarded_unlinks)} sit behind the ownership check. An unguarded "
+        f"one is the whole defect, whatever the guarded ones do.")
 
 
 def test_port_is_bound_before_the_try_so_the_cleanup_can_read_it():

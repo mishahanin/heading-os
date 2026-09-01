@@ -248,6 +248,22 @@ def test_ahead_behind_answers_about_the_enclosing_repository(tmp_path):
 # 2 - the chokepoint refuses, and pushes nothing
 # ==========================================================================
 
+def _reason_beyond_the_path_passed_in(reason: str, passed: Path) -> str:
+    """The part of a refusal reason that the INPUT path cannot account for.
+
+    A subdirectory's path contains its root's path as a prefix, so
+    `str(root) in reason` and `root.name in reason` are both satisfied by the
+    reason merely echoing back the path it was handed. MEASURED 2026-09-01:
+    deleting `{root}` from the refusal message left both assertions green,
+    because `{repo}` opens the sentence and `{repo}` is `<root>/nested`. Slicing
+    past that echo is what makes "the refusal NAMES the enclosing repository" a
+    claim the test actually measures.
+    """
+    marker = str(passed)
+    assert marker in reason, f"the refusal no longer echoes the path it refused: {reason}"
+    return reason.split(marker, 1)[1]
+
+
 def test_a_subdirectory_is_refused(tmp_path):
     _remote, work = _make_repo(tmp_path)
     sub = work / "nested"
@@ -257,7 +273,7 @@ def test_a_subdirectory_is_refused(tmp_path):
 
     assert v["state"] == "failed", v
     assert "not a git repository root" in v["reason"]
-    assert str(work.resolve()) in v["reason"]
+    assert str(work.resolve()) in _reason_beyond_the_path_passed_in(v["reason"], sub)
 
 
 def test_the_refusal_pushes_nothing(tmp_path):
@@ -281,8 +297,9 @@ def test_the_refusal_says_which_repository_would_have_been_pushed(tmp_path):
     sub.mkdir()
 
     reason = supervised_push(sub, stall_window=15)["reason"]
+    beyond = _reason_beyond_the_path_passed_in(reason, sub)
 
-    assert work.name in reason
+    assert work.name in beyond
     assert "postcondition" in reason
 
 

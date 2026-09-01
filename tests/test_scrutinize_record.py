@@ -85,6 +85,48 @@ def test_unknown_verdict_is_refused(runs):
         )
 
 
+def test_unknown_judge_family_is_refused(runs):
+    """`kind` and `verdict` had this twin; `judge_family` did not.
+
+    Measured 2026-09-01 by mutation: deleting the FAMILIES check from `_check`
+    left the whole suite green. `judge_family` is the audit trail for the
+    never-same-family rule the dispatcher enforces, so a row naming a family
+    that never judged anything is a false record of who ruled - and it landed
+    silently, on the one column that makes the rule checkable after the fact.
+    """
+    with pytest.raises(ValueError, match="judge_family"):
+        rec.append_row(
+            run_id="r1", kind="verdict", target="file:x", finding_id="H1",
+            judge_family="gemini", verdict="CORRECT",
+        )
+    assert not runs.exists() or _rows(runs) == [], "the refused row was written anyway"
+
+
+def test_every_declared_family_is_still_accepted(runs):
+    """The positive twin, so the refusal above is not satisfied by a check that
+    refuses every family including the two that judge."""
+    for family in sorted(rec.FAMILIES):
+        rec.append_row(run_id="r1", kind="verdict", target="file:x",
+                       finding_id="H1", judge_family=family, verdict="CORRECT")
+    assert {r["judge_family"] for r in _rows(runs)} == set(rec.FAMILIES)
+
+
+def test_unknown_role_is_refused(runs):
+    """Same gap, same shape. A `role` row is what `--validate` reads to say a
+    lens fired, so an unrecognised lens name recorded as fired is a claim about
+    coverage nobody performed."""
+    with pytest.raises(ValueError, match="role"):
+        rec.append_row(run_id="r1", kind="role", target="file:x",
+                       role="not-a-lens")
+    assert not runs.exists() or _rows(runs) == [], "the refused row was written anyway"
+
+
+def test_every_declared_role_is_still_accepted(runs):
+    for role in sorted(rec.ROLES):
+        rec.append_row(run_id="r1", kind="role", target="file:x", role=role)
+    assert {r["role"] for r in _rows(runs)} == set(rec.ROLES)
+
+
 # ============================================================
 # REPRODUCED / FALSIFIED - the two moments
 # ============================================================

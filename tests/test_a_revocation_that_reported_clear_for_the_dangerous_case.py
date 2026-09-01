@@ -88,7 +88,24 @@ def eo():
 # 1 + 2. The revocation that reported clear
 # ============================================================
 
-def _run_revoke(er, monkeypatch, capsys, exec_info, *, rc=0, stderr=""):
+def _run_revoke(er, monkeypatch, capsys, exec_info, *, rc=0, stderr="",
+                org="test-org"):
+    """Drive `revoke_all_github_access` with the org resolution PINNED.
+
+    The org pin is not cosmetic. `revoke_all_github_access` grew a second
+    fail-closed guard on 2026-08-30: when `github_org()` answers '' it prints
+    its own `[STOP] ... MANUAL ACTION REQUIRED` and returns before the loop.
+    Under pytest the data overlay is a sandbox, `load_admin_config()` finds no
+    admin.json, and `operator_org()` answers '', so that guard fired on EVERY
+    case in this file. Four tests went red, and - worse - the two username-guard
+    tests below went GREEN off the wrong branch: `calls == []`, `[STOP]` and
+    `MANUAL ACTION REQUIRED` are all satisfied by the org message, so deleting
+    the username guard entirely would not have failed them.
+
+    Pinning the org here makes each test measure the guard it names. Pass
+    `org=""` to exercise the org guard itself, which
+    `test_an_unresolvable_org_stops_rather_than_calling_the_api` does.
+    """
     calls = []
 
     def _fake(cmd, cwd=None, check=True):
@@ -96,6 +113,7 @@ def _run_revoke(er, monkeypatch, capsys, exec_info, *, rc=0, stderr=""):
         return SimpleNamespace(returncode=rc, stderr=stderr, stdout="")
 
     monkeypatch.setattr(er, "run_cmd", _fake)
+    monkeypatch.setattr(er, "github_org", lambda: org)
     er.revoke_all_github_access("some-exec", exec_info)
     return calls, capsys.readouterr()
 
@@ -130,12 +148,35 @@ def test_a_missing_github_username_stops_rather_than_guessing(er, monkeypatch, c
     assert calls == [], "it must not issue a request under a guessed username"
     assert "[STOP]" in cap.out
     assert "MANUAL ACTION REQUIRED" in cap.out
+    # Name the guard that fired. Without this the case is satisfied by the org
+    # guard's identically-shaped message, so the username guard could be deleted
+    # and this test would still pass.
+    assert "github_username" in cap.out
+    assert "the GitHub org could not be resolved" not in cap.out
 
 
 def test_a_null_exec_info_stops_too(er, monkeypatch, capsys):
     calls, cap = _run_revoke(er, monkeypatch, capsys, None)
     assert calls == []
     assert "[STOP]" in cap.out
+    assert "github_username" in cap.out
+
+
+def test_an_unresolvable_org_stops_rather_than_calling_the_api(er, monkeypatch,
+                                                               capsys):
+    """The other fail-closed branch, with a username that IS known.
+
+    An empty org makes every repo path here a guess ("/heading-os-corporate"),
+    every `gh api` call 404, and the loop print "[not a direct collaborator]"
+    three times: a reassuring report for a revocation that addressed nothing.
+    """
+    calls, cap = _run_revoke(er, monkeypatch, capsys,
+                             {"github_username": "realuser"}, org="")
+    assert calls == [], "no API call may be made against a guessed repo path"
+    assert "[STOP]" in cap.out
+    assert "GitHub org could not be resolved" in cap.out
+    assert "MANUAL ACTION REQUIRED" in cap.out
+    assert "[not a direct collaborator]" not in cap.out
 
 
 def test_the_real_username_is_the_one_sent(er, monkeypatch, capsys):

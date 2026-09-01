@@ -9,6 +9,22 @@ docstring and wrote no handler.
 Found by the third defect-class fan-out over `tests/`, 2026-08-27, lens
 `docstring-contradicts-code`. Every case below was reproduced against the
 unfixed source before the fix was written.
+
+ONE SHAPE CHECK IS NOT THE SHAPE CHECK. This file's own `embeddings` section
+asked whether the decoded BODY was an object and stopped there, which is the
+guarded region ending one line too early all over again, in the test rather
+than in the source. Measured 2026-09-01 against `model_digest`, five replies
+that are objects and still leave through an exception:
+
+    {"models": ["bge-m3"]}  AttributeError: 'str' has no attribute 'get'
+    {"models": "bge-m3"}    AttributeError, iterating the string's characters
+    {"models": [null]}      AttributeError on None
+    {"models": [[...]]}     AttributeError on list
+    {"models": 5}           TypeError: 'int' object is not iterable
+
+The mutation run that established the rest of this file was green over all
+five: removing the envelope guard killed three tests here, and no test in the
+tree touched the entries inside it.
 """
 import json
 import sys
@@ -130,8 +146,51 @@ def test_a_tags_reply_that_is_not_an_object_returns_none(monkeypatch, payload):
     assert embeddings.model_digest(model="bge-m3", host="http://127.0.0.1:11434") is None
 
 
+@pytest.mark.parametrize("body", [
+    {"models": ["bge-m3"]},
+    {"models": "bge-m3"},
+    {"models": [None]},
+    {"models": [["bge-m3", "sha256:abc"]]},
+    {"models": 5},
+    {"models": {"bge-m3": "sha256:abc"}},
+])
+def test_a_tags_reply_whose_models_list_is_the_wrong_shape_returns_none(
+        monkeypatch, body):
+    """The shape guard asked about the ENVELOPE and stopped there.
+
+    MEASURED 2026-09-01 against this function before the fix: the first four
+    rows left through `AttributeError: 'str' object has no attribute 'get'` (or
+    the `NoneType` / `list` spelling of it) and `{"models": 5}` through
+    `TypeError: 'int' object is not iterable`, all five past a docstring whose
+    argument is that a digest is a diagnostic and must never fail a build. The
+    test above covered a non-object BODY and could not see any of them, because
+    every one of these bodies IS an object.
+    """
+    monkeypatch.setattr(
+        embeddings.urllib.request, "urlopen",
+        lambda *a, **k: _FakeResponse(json.dumps(body).encode("utf-8")),
+    )
+    assert embeddings.model_digest(
+        model="bge-m3", host="http://127.0.0.1:11434") is None
+
+
 def test_a_well_formed_tags_reply_still_yields_the_digest(monkeypatch):
     body = json.dumps({"models": [{"name": "bge-m3:latest", "digest": "sha256:abc"}]})
+    monkeypatch.setattr(
+        embeddings.urllib.request, "urlopen",
+        lambda *a, **k: _FakeResponse(body.encode("utf-8")),
+    )
+    assert embeddings.model_digest(
+        model="bge-m3", host="http://127.0.0.1:11434") == "sha256:abc"
+
+
+def test_one_unusable_entry_does_not_hide_the_usable_one_beside_it(monkeypatch):
+    """The anchor for the skip. Dropping the whole reply on the first bad entry
+    would answer None for a host that really does hold the model, and a None is
+    recorded as "unknown" - so the guard would trade a crash for a silent blind
+    spot rather than fixing anything."""
+    body = json.dumps({"models": [
+        None, "bge-m3", {"name": "bge-m3:latest", "digest": "sha256:abc"}]})
     monkeypatch.setattr(
         embeddings.urllib.request, "urlopen",
         lambda *a, **k: _FakeResponse(body.encode("utf-8")),

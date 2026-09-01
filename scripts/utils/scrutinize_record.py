@@ -205,16 +205,52 @@ def iter_rows() -> list[dict]:
     path = record_path()
     if not path.exists():
         return []
+    # The per-line JSON handler below already says what this reader promises: a
+    # row it cannot use is skipped, and the rest of the record still comes back.
+    # The read had no such guard, so one undecodable byte ANYWHERE in an
+    # append-only JSONL file raised UnicodeDecodeError -- a ValueError, which no
+    # `except json.JSONDecodeError` can stand in for, because `json.loads` is
+    # never reached. Measured 2026-09-01 on a two-line record whose second line
+    # was `\xff\xfe\x00`: the exception left `flagged_pairs`, `main`, and
+    # `scrutinize-replay.load_fp_set` with it, out of a function documented to
+    # return "every well-formed row".
+    #
+    # The record is appended to by several writers (`scrutinize-flag-fp`,
+    # `scrutinize-dispatch`, the replay tooling), so a torn write is the
+    # ordinary corruption, and every cross-run tally in the system reads here.
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        print(f"[scrutinize-record] {path} unreadable ({exc}); reporting no rows",
+              file=sys.stderr)
+        return []
     out = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
+    dropped = 0
+    # Decoded PER LINE, which is the granularity the promise is made at. A
+    # whole-file `read_text(encoding="utf-8")` throws away every good row beside
+    # the bad one, and returning [] for the file would be the same loss wearing
+    # a warning.
+    for blob in raw.split(b"\n"):
+        try:
+            line = blob.decode("utf-8").strip()
+        except UnicodeDecodeError:
+            dropped += 1
+            continue
         if not line:
             continue
         try:
             row = json.loads(line)
         except json.JSONDecodeError:
+            dropped += 1
             continue
         out.append(row)
+    if dropped:
+        # Said, not swallowed. Every cross-run tally in the system counts what
+        # this returns, so a silently shorter list is a wrong number nobody can
+        # see. The JSON skip below was silent too, for the same reason it should
+        # not have been.
+        print(f"[scrutinize-record] {path}: skipped {dropped} unreadable line(s)",
+              file=sys.stderr)
     return out
 
 

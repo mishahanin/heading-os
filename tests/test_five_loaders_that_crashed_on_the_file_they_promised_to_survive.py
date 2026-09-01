@@ -86,6 +86,33 @@ def test_an_unparseable_identity_still_raises_valueerror(fake_root):
         workspace.get_workspace_identity()
 
 
+@pytest.mark.parametrize("body", [b'{"type": "ceo-\xff-master"}', b"\xff\xfe\x00"])
+def test_an_undecodable_identity_raises_the_documented_valueerror(fake_root, body):
+    """The `UnicodeDecodeError` arm of the handler, which had no case on it.
+
+    The tuple reads `(json.JSONDecodeError, OSError, UnicodeDecodeError)` and
+    only the first two were ever driven. The third is not reachable through
+    either: the decode fails inside `read_text()`, before `json.loads` is
+    called, so `JSONDecodeError` never applies, and `UnicodeDecodeError`
+    subclasses `ValueError`, not `OSError`. MEASURED 2026-09-01 by deleting
+    `UnicodeDecodeError` from that tuple: this module and the twenty other test
+    files naming these loaders all stayed green, and one non-UTF-8 byte in a
+    hand-edited `.workspace-identity.json` raised a raw decode traceback out of
+    the resolver every path helper in this module sits on -- instead of the
+    explanatory refusal the docstring promises for a file that "exists but
+    cannot be parsed".
+
+    Its sibling `load_admin_config` is covered by
+    `tests/test_data_config_seam.py`, which names this loader and
+    `_read_registry_or_empty` as the two copies it could not reach. These two
+    tests are those two.
+    """
+    (fake_root / ".workspace-identity.json").write_bytes(body)
+    workspace._reset_identity_cache()
+    with pytest.raises(ValueError, match="cannot be parsed"):
+        workspace.get_workspace_identity()
+
+
 def test_a_well_formed_identity_still_loads(fake_root):
     """The control."""
     (fake_root / ".workspace-identity.json").write_text(
@@ -109,6 +136,23 @@ def test_a_wrong_shape_registry_warns_and_reports_empty(fake_root, capsys):
 def test_a_corrupt_registry_still_warns_and_reports_empty(fake_root, capsys):
     """The pre-existing corrupt-file path must survive the shape check."""
     (fake_root / "admin" / "executives.json").write_text("{invalid", encoding="utf-8")
+    assert workspace.load_fleet() == []
+    assert "could not be read" in capsys.readouterr().err
+
+
+def test_an_undecodable_registry_warns_and_reports_empty(fake_root, capsys):
+    """The registry's `UnicodeDecodeError` arm, the second uncovered copy.
+
+    Same handler, same three-way tuple, same reason it escapes the other two
+    clauses. MEASURED 2026-09-01 by deleting `UnicodeDecodeError` from
+    `_read_registry_or_empty`: twenty-one test files naming these loaders stayed
+    green while `load_fleet()` raised a raw decode traceback. Offboarding, CRM
+    aggregation and admin-health all sit on this loader, and the whole point of
+    the stderr line beside it is that an empty fleet must never read as a
+    measured one.
+    """
+    (fake_root / "admin" / "executives.json").write_bytes(
+        b'{"version": 1, "executives": [{"slug": "\xff\xfe"}]}')
     assert workspace.load_fleet() == []
     assert "could not be read" in capsys.readouterr().err
 

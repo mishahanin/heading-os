@@ -100,14 +100,53 @@ def test_a_stale_port_file_does_not_block_the_next_start(entry, state_dir,
     assert entry._live_daemon_port() is None
 
 
-def test_no_port_file_is_not_a_live_daemon(entry, state_dir):
+@pytest.fixture
+def no_dialling(monkeypatch):
+    """Record every `urlopen` and refuse the connection.
+
+    Both roles at once. It keeps these tests off the network, and it is the
+    ASSERTION for the two below: `_live_daemon_port` short-circuits an unusable
+    port file BEFORE the HTTP call, and the return value alone cannot show that.
+    Measured 2026-09-01: with the range check removed, `"0"`, `"70000"` and
+    `"-1"` all still returned None, because `urlopen` on each of them raises and
+    the same `except` swallows it. The mutation survived the whole file. What
+    actually changed was that a unit test started dialling 127.0.0.1.
+    """
+    calls: list[str] = []
+
+    def _spy(url, timeout=None):
+        calls.append(url)
+        raise ConnectionRefusedError("no test may dial")
+
+    monkeypatch.setattr("urllib.request.urlopen", _spy)
+    return calls
+
+
+def test_no_port_file_is_not_a_live_daemon(entry, state_dir, no_dialling):
     assert entry._live_daemon_port() is None
+    assert no_dialling == [], "a probe was attempted with no port file at all"
 
 
 @pytest.mark.parametrize("blob", ["garbage", "", "0", "70000", "-1", "31415x"])
-def test_an_unusable_port_file_is_not_a_live_daemon(entry, state_dir, blob):
+def test_an_unusable_port_file_is_not_a_live_daemon(entry, state_dir, blob,
+                                                    no_dialling):
     (state_dir / "port").write_text(blob, encoding="utf-8")
     assert entry._live_daemon_port() is None
+    assert no_dialling == [], (
+        f"{blob!r} was not rejected by the validation; it reached the network "
+        f"as {no_dialling}")
+
+
+def test_the_no_dialling_spy_can_actually_see_a_probe(entry, state_dir,
+                                                      no_dialling):
+    """The straw-man check on the fixture.
+
+    A spy that never records would make every assertion above pass over
+    nothing. A VALID port file must reach it.
+    """
+    (state_dir / "port").write_text("31415", encoding="utf-8")
+    assert entry._live_daemon_port() is None      # refused by the spy
+    assert no_dialling == ["http://127.0.0.1:31415/health"]
 
 
 def test_start_refuses_when_a_daemon_is_already_serving(entry, monkeypatch,
@@ -367,6 +406,174 @@ def test_rotation_still_warns_about_the_running_daemon(entry, state_dir,
 # ============================================================
 # A comment describing an architecture the file no longer has
 # ============================================================
+
+# ============================================================
+# One byte that is not UTF-8, in the state the daemon writes itself
+# ============================================================
+#
+# `.daemon-state/port` and `.daemon-state/heartbeat.json` are both rewritten by
+# a LIVE daemon - the heartbeat on a timer - so a half-written file is the
+# ordinary corruption here, not an exotic one. Four readers decoded them and
+# none of the four handled `UnicodeDecodeError`, which is a `ValueError` and so
+# is caught by neither `except OSError` nor `except json.JSONDecodeError`:
+#
+#   _live_daemon_port        `except OSError`, and it is the SINGLETON GUARD
+#   _read_heartbeat_fallback `except (OSError, json.JSONDecodeError)`
+#   show_status              bare `read_text()`, no handler, LOCALE encoding
+#   check_health             bare `read_text()`, no handler, LOCALE encoding
+#
+# MEASURED 2026-09-01 with a port file of `b"3141\xff5"` and a heartbeat holding
+# one 0xff byte: all four raised a raw UnicodeDecodeError. So `--start` died on
+# the check that exists to stop a second daemon, and `--status` and `--health`
+# both answered a traceback - the two commands an operator runs precisely when
+# the daemon is sick.
+#
+# `scripts/daemon-fleet-health.py` already carried this class at its own three
+# reads, with a comment naming the same reason. The file that WRITES the state
+# it reads had fallen behind it.
+
+BAD_PORT_BYTES = b"3141\xff5"
+BAD_HEARTBEAT_BYTES = b'{"pid": 4242, "note": "\xff"}'
+
+
+def test_an_undecodable_port_file_is_not_a_live_daemon(entry, state_dir,
+                                                       no_dialling):
+    """The singleton guard must ANSWER, not raise: `--start` calls it first."""
+    (state_dir / "port").write_bytes(BAD_PORT_BYTES)
+
+    assert entry._live_daemon_port() is None
+    assert no_dialling == [], "an undecodable port reached the network"
+
+
+def test_start_is_not_killed_by_an_undecodable_port_file(entry, state_dir,
+                                                         monkeypatch, capsys):
+    """The consequence: the guard raising is `--start` raising.
+
+    `_pick_port` is stubbed so the run stops at the point the guard has already
+    answered; the assertion is that the guard did not raise, not that a daemon
+    started.
+    """
+    (state_dir / "port").write_bytes(BAD_PORT_BYTES)
+
+    class _Stop(RuntimeError):
+        pass
+
+    def _stop(*a, **k):
+        raise _Stop("reached the bind, so the guard answered")
+
+    monkeypatch.setattr(entry, "_pick_port", _stop)
+    monkeypatch.setattr("urllib.request.urlopen",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            ConnectionRefusedError("no test may dial")))
+
+    with pytest.raises(_Stop):
+        entry.start_daemon()
+
+
+def test_an_undecodable_heartbeat_reads_as_absent(entry, state_dir):
+    """The docstring promises "the parsed dict or None"."""
+    (state_dir / "heartbeat.json").write_bytes(BAD_HEARTBEAT_BYTES)
+    assert entry._read_heartbeat_fallback() is None
+
+
+def test_a_decodable_heartbeat_still_parses(entry, state_dir):
+    """The anchor. A reader that returned None for everything would satisfy the
+    case above while making the fallback useless."""
+    _write_heartbeat(state_dir)
+    assert entry._read_heartbeat_fallback()["pid"] == 4242
+
+
+@pytest.mark.parametrize("port_bytes,hb_bytes", [
+    (BAD_PORT_BYTES, None),
+    (None, BAD_HEARTBEAT_BYTES),
+    (BAD_PORT_BYTES, BAD_HEARTBEAT_BYTES),
+])
+def test_status_still_prints_a_line_over_undecodable_state(entry, state_dir,
+                                                           capsys, port_bytes,
+                                                           hb_bytes):
+    """`--status` is a diagnostic. It must not become the second failure."""
+    if port_bytes is None:
+        (state_dir / "port").write_text("31415", encoding="utf-8")
+    else:
+        (state_dir / "port").write_bytes(port_bytes)
+    if hb_bytes is None:
+        _write_heartbeat(state_dir)
+    else:
+        (state_dir / "heartbeat.json").write_bytes(hb_bytes)
+
+    entry.show_status()
+    line = capsys.readouterr().out.strip()
+
+    # Still the documented shape, so `cut -f` keeps working on a degraded line.
+    keys = [f.split("=", 1)[0] for f in line.split("\t")]
+    assert keys == ["port", "pid", "uptime", "version", "config_v",
+                    "sessions", "errors", "last_hb"]
+
+
+@pytest.mark.parametrize("hb_bytes", [None, BAD_HEARTBEAT_BYTES])
+def test_health_treats_an_undecodable_port_file_as_a_corrupt_one(entry,
+                                                                 state_dir,
+                                                                 capsys,
+                                                                 hb_bytes):
+    """It needs no new branch: the existing `corrupted port file` arm is right.
+
+    With a readable heartbeat that arm exits 1 and prints it; with none, or one
+    that is itself undecodable, it exits 2 - which is what "neither could be
+    read" means.
+    """
+    (state_dir / "port").write_bytes(BAD_PORT_BYTES)
+    expected = 2
+    if hb_bytes is None:
+        _write_heartbeat(state_dir)
+        expected = 1
+    else:
+        (state_dir / "heartbeat.json").write_bytes(hb_bytes)
+
+    with pytest.raises(SystemExit) as exc:
+        entry.check_health()
+
+    assert exc.value.code == expected
+    cap = capsys.readouterr()
+    assert "corrupted port file" in cap.err
+    if expected == 1:
+        assert json.loads(cap.out)["pid"] == 4242
+
+
+def _unencoded_read_text_linenos(tree) -> list[int]:
+    """Every `....read_text(...)` call with no `encoding=` keyword.
+
+    AST, not a substring search over the source: the first version of this check
+    was `"read_text()" not in src`, and it failed on the explanatory COMMENT
+    that was added beside the fix - prose describing the defect read as the
+    defect. A comment is not a call.
+    """
+    return sorted(
+        n.lineno for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and getattr(n.func, "attr", None) == "read_text"
+        and not any(kw.arg == "encoding" for kw in n.keywords)
+    )
+
+
+def test_the_unencoded_read_detector_still_detects():
+    """A detector that matches nothing passes everything."""
+    hit = ast.parse("p.read_text()\nq.read_text('utf-8')\n")
+    assert len(_unencoded_read_text_linenos(hit)) == 2
+    miss = ast.parse('p.read_text(encoding="utf-8")\n'
+                     'q.read_text(encoding="utf-8", errors="replace")\n'
+                     '# read_text() in a comment\n')
+    assert _unencoded_read_text_linenos(miss) == []
+
+
+def test_the_state_readers_name_the_encoding_they_decode_with():
+    """A bare `read_text()` decodes with the LOCALE encoding, so the same bytes
+    read differently on two machines. Both port readers were bare."""
+    tree = ast.parse(DAEMON.read_text(encoding="utf-8"))
+    found = _unencoded_read_text_linenos(tree)
+    assert not found, (
+        f"{DAEMON.name} decodes a file with the locale encoding at line(s) "
+        f"{found}; name utf-8 explicitly")
+
 
 def test_the_cleanup_comment_no_longer_claims_an_open_race():
     raw = DAEMON.read_text(encoding="utf-8")

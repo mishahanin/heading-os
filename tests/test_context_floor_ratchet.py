@@ -162,6 +162,64 @@ def test_a_missing_baseline_fails_rather_than_passing_silently(sandbox):
     assert "No baseline" in proc.stderr
 
 
+# --- an unmeasurable corpus is not a shrink --------------------------------
+#
+# `measure_skills` names a SKILL.md it cannot read and gives the reason itself:
+# "a dropped skill makes the measured floor SMALLER: the gate would then pass on
+# a floor that grew, which is the one direction a gate must not fail in." The
+# ratchet never read `unreadable_skills`, so a lost closing fence - an editor
+# truncation, a bad merge - silently removed a skill from the measurement and
+# `--baseline` reported the resulting drop as "within tolerance". MEASURED
+# 2026-09-01 in this sandbox: breaking the one skill's fence took the floor from
+# 273 bytes to 96 and the gate exited 0.
+
+def _break_the_only_skills_fence(sandbox):
+    """Truncate the closing fence, which is `FM_NO_CLOSING` to the parser."""
+    skill = sandbox / ".claude" / "skills" / "example-skill" / "SKILL.md"
+    skill.write_text(
+        "---\nname: example-skill\ndescription: An invented placeholder skill "
+        "used only to give the audit something to measure.\n\nBody with no "
+        "closing fence.\n",
+        encoding="utf-8",
+    )
+
+
+def test_a_skill_the_audit_cannot_read_refuses_the_comparison(sandbox):
+    now = _live_total(sandbox)
+    _write_baseline(sandbox, now)
+    _break_the_only_skills_fence(sandbox)
+
+    proc = _run(sandbox, "--baseline")
+    assert proc.returncode == 1, (
+        "the gate compared a floor that is missing a skill, so real growth "
+        f"elsewhere would read as a shrink\n{proc.stderr}")
+    assert "example-skill" in proc.stderr, proc.stderr
+
+
+def test_a_skill_the_audit_cannot_read_refuses_to_bank_a_baseline(sandbox):
+    """The same hole from the writing side, and the worse half of it.
+
+    A comparison that passes wrongly is undone by the next run. A baseline
+    BANKED while a skill was unreadable is wrong until somebody notices, and the
+    ratchet then holds the floor at a number that was never the floor.
+    """
+    _live_total(sandbox)
+    _break_the_only_skills_fence(sandbox)
+
+    proc = _run(sandbox, "--write-baseline")
+    assert proc.returncode == 1, proc.stderr
+    assert not (sandbox / "config" / "context-floor-baseline.json").exists(), (
+        "a baseline was written from a measurement that skipped a skill")
+
+
+def test_a_readable_corpus_is_not_refused(sandbox):
+    """Anchor: the refusal must key on the unreadable file, not on running at all."""
+    _write_baseline(sandbox, _live_total(sandbox))
+    proc = _run(sandbox, "--baseline")
+    assert proc.returncode == 0, proc.stderr
+    assert "no readable frontmatter" not in proc.stderr, proc.stderr
+
+
 def test_nothing_was_written_into_the_real_repository(sandbox):
     """The sandbox must not have touched the committed baseline."""
     _run(sandbox, "--write-baseline")

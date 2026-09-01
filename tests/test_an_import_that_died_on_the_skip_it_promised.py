@@ -27,6 +27,7 @@ step numbers, raising TypeError in the one branch that exists to reject cleanly.
 import errno
 import importlib.util
 import json
+import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -441,8 +442,143 @@ def test_a_path_that_merely_shares_a_suffix_is_still_flagged(traj_dir, monkeypat
 
 
 def test_the_flagged_paths_stay_in_sorted_order(traj_dir, monkeypatch):
-    hits = _recon("r7", [], {"z.py", "a.py", "m.py"}, monkeypatch)
-    assert [h.split()[1] for h in hits] == ["a.py", "m.py", "z.py"]
+    """Eight paths, not three, and the count is the point.
+
+    The production side iterates `sorted(changed)` over a SET. With three short
+    names there is a real chance the set's own iteration order already matches
+    sorted order, so dropping the `sorted()` passes on that draw and fails on
+    another - measured 2026-09-01, that mutation came back KILLED on one run of
+    this file and SURVIVED on the next, decided by nothing but the hash seed.
+    A test whose verdict depends on `PYTHONHASHSEED` reports on the interpreter,
+    not on the code.
+
+    Eight names make an accidental agreement 1 in 8! rather than 1 in 3!, and
+    the expected order is written out by hand rather than by calling `sorted`.
+    """
+    names = {"z.py", "a.py", "m.py", "d.py", "q.py", "b.py", "y.py", "c.py"}
+    hits = _recon("r7", [], names, monkeypatch)
+    assert [h.split()[1] for h in hits] == [
+        "a.py", "b.py", "c.py", "d.py", "m.py", "q.py", "y.py", "z.py"]
+
+
+# Git's empty-tree object id. Constant in every repository, so `git diff` has a
+# valid base without a commit having been made.
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # pragma: allowlist secret - git's empty-tree id, the same constant in every repository
+
+
+def _write_raw_name(directory: Path, raw_name: bytes) -> bytes:
+    """Create a file whose NAME is not valid UTF-8, and return its full bytes.
+
+    The filesystem takes bytes; only the display of them needs an encoding.
+    This is the shape `_git_changed_files`' comment says was found in a real
+    repository, and it is the only way to drive the decode it guards.
+    """
+    full = os.path.join(os.fsencode(str(directory)), raw_name)
+    with open(full, "wb") as handle:
+        handle.write(b"x\n")
+    return full
+
+
+@pytest.fixture
+def tiny_repo(tmp_path, monkeypatch):
+    """A real one-commit git repository, with `WORKSPACE_ROOT` pointed at it.
+
+    `_git_changed_files` is stubbed out by every other test in this section, so
+    its BODY - the `-z` flags, the bytes-mode decode, the untracked pass and the
+    `except` list, all of them added by a dated measured fix - was covered by
+    nothing at all. Measured 2026-09-01: three separate mutations of that body
+    left this file green at 40 passed.
+
+    A real repository rather than a stubbed `subprocess.run`, because what the
+    comments claim is how GIT behaves (`-z` framing, `core.quotePath`, raw bytes
+    in a filename), and a stub would only replay this test's own beliefs about
+    that. Nothing here touches the workspace repo: `cwd` follows
+    `WORKSPACE_ROOT` to `tmp_path`.
+    """
+    import subprocess as sp
+
+    def run(*a):
+        return sp.run(a, cwd=str(repo), capture_output=True, check=True)
+
+    repo = tmp_path / "tinyrepo"
+    repo.mkdir()
+    run("git", "init", "-q", "-b", "main")
+    run("git", "config", "user.email", "t@example.invalid")
+    run("git", "config", "user.name", "T")
+    (repo / "kept.md").write_text("one\n", encoding="utf-8")
+    _write_raw_name(repo, b"staged-bad\xffname.md")
+    run("git", "add", "-A")
+    monkeypatch.setattr(itl, "WORKSPACE_ROOT", repo)
+    # The empty-tree object, which exists in every repository without anything
+    # having been committed. Diffing against it lists the whole index, which is
+    # the same shape `git diff <head>` produces and needs no commit here.
+    return repo, EMPTY_TREE
+
+
+def test_a_tracked_edit_and_an_untracked_file_both_reach_the_change_set(tiny_repo):
+    """The two passes the body makes, each with its own sole witness.
+
+    Measured 2026-09-01: breaking the `git ls-files --others` call so it returns
+    non-zero left this file green at 40 passed - the untracked half was asserted
+    by nothing, and an untracked file is exactly what a new script written
+    during a run looks like.
+    """
+    repo, head = tiny_repo
+    (repo / "brand-new.py").write_text("x = 1\n", encoding="utf-8")
+
+    changed = itl._git_changed_files(head)
+
+    assert "kept.md" in changed, f"the tracked diff was lost: {changed}"
+    assert "brand-new.py" in changed, f"the untracked pass was lost: {changed}"
+
+
+@pytest.mark.parametrize("where", ["staged", "untracked"])
+def test_a_filename_that_is_not_utf8_does_not_empty_the_whole_change_set(
+        tiny_repo, where):
+    """The measured fix this function's comment block is about.
+
+    `subprocess` runs in BYTES mode and each decode names `errors="replace"`, so
+    one undecodable filename costs that one name and nothing else. Dropping
+    `"replace"` raises `UnicodeDecodeError` - a `ValueError`, caught here only
+    because `UnicodeError` is in the except list - and
+    `_git_changed_files` then returns the EMPTY set. Every other changed file
+    reconciles against nothing, so an ADVISORY check turns a whole verification
+    silent, which is the failure the comment says was fixed.
+
+    BOTH decodes, and that is why this is parametrized. There are two: one for
+    `git diff` and one for `git ls-files --others`. The first draft of this test
+    put the bad name in the untracked pass only, so mutating the DIFF decode
+    survived it - two sites, one witness, which is the same shape as everything
+    else in this shard. Verified 2026-09-01 that git emits the raw `0xff` byte
+    under `-z` (it does; `-z` is what switches `core.quotePath` off) and that a
+    strict decode of that output raises.
+    """
+    repo, head = tiny_repo
+    if where == "untracked":
+        _write_raw_name(repo, b"untracked-bad\xffname.md")
+    # else: the fixture already staged one, so the DIFF side carries it.
+
+    changed = itl._git_changed_files(head)
+
+    assert "kept.md" in changed, (
+        f"one undecodable filename ({where}) emptied the entire change set: "
+        f"{changed!r}")
+    assert any("�" in name for name in changed), (
+        f"the undecodable name was dropped rather than replaced: {changed!r}")
+
+
+def test_a_git_failure_degrades_to_an_empty_set_rather_than_raising(tmp_path,
+                                                                    monkeypatch):
+    """The documented graceful degradation, on a directory that is not a repo.
+
+    "Returns an empty set on any git failure so the run-level reconciliation
+    degrades gracefully to 'no defect'." Asserted here because the reconciliation
+    is advisory: it may go quiet, and it may never take the verifier down.
+    """
+    not_a_repo = tmp_path / "plain"
+    not_a_repo.mkdir()
+    monkeypatch.setattr(itl, "WORKSPACE_ROOT", not_a_repo)
+    assert itl._git_changed_files("abc123") == set()
 
 
 def test_an_unknown_git_head_still_skips_the_reconciliation_entirely(traj_dir, monkeypatch):

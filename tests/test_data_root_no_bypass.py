@@ -54,7 +54,36 @@ _ROOT_TOKENS = r"(?:get_workspace_root\(\)|WORKSPACE_ROOT|workspace_root|\bWORKS
 # DATA directories that must be reached via a get_*_dir() helper, never joined to
 # an engine root directly. context/ resolves under the data root for the CEO
 # (get_personal_context_dir / get_context_dir), so it belongs here too.
-_DATA_DIRS = r"(?:threads|crm|outputs|knowledge|plans|datastore|context)"
+#
+# `auto-memory`, `chronicle`, `admin` and `personal` were added 2026-09-01.
+# All four route `private` in `config/routing-map.yaml` for every rule that
+# names them, all four live only in the DATA overlay, and none of them was in
+# this alternation - so `get_workspace_root() / "auto-memory"` was a seam bypass
+# this guard reported as clean. MEASURED that day: the shipped pattern returned
+# False on `x = get_workspace_root() / "auto-memory" / "MEMORY.md"` and on the
+# same line spelled with `chronicle`, while the `outputs` spelling one character
+# away was caught. `auto-memory` is the memory store the workspace calls its own
+# second brain; misrouting it into the engine clone puts operator memory in a
+# public repository.
+#
+# Widening cost nothing: with all four added, the line scan and the cross-line
+# binder both returned zero hits across 442 files, so none of this is a new
+# false positive on existing code.
+#
+# NOT added, and the reason is worth writing down rather than leaving as a gap
+# someone re-derives later. `templates/` also routes `private` and also lives
+# only in the overlay, and adding it flags one real line -
+# `scripts/regenerate-docs-html.py:71`, `dirs = [ROOT / "docs", ROOT /
+# "templates"]`. That is a READ of a directory the engine tree does not contain
+# (`git ls-files templates` returns nothing), so it leaks nothing and simply
+# globs an absent path; the function adds `data_root / "templates"` separately
+# two lines below. It is pre-existing and outside this guard's purpose, so it is
+# surfaced here rather than silently forced green or silently deleted.
+# `docs`, `config`, `scripts`, `reference` and `.claude` are deliberately absent
+# for a different reason: each defaults to `engine` with per-file `private`
+# carve-outs, so joining one to an engine root is ordinary correct code.
+_DATA_DIRS = (r"(?:threads|crm|outputs|knowledge|plans|datastore|context"
+              r"|auto-memory|chronicle|admin|personal)")
 # Operator form: ROOT / "outputs"  or  ROOT + "outputs".
 _BYPASS = re.compile(_ROOT_TOKENS + r"\s*(?:/|\+)\s*[\"']" + _DATA_DIRS + r"\b")
 # os.path.join form: os.path.join(<...>, ROOT, "outputs", ...) -- the operator
@@ -442,6 +471,38 @@ def test_file_parent_idiom_detected_as_engine_producer():
     assert "base" in vars2
     op2 = re.compile(r"\bbase\b\)?\s*(?:/|\+)\s*[\"']" + _DATA_DIRS + r"\b")
     assert any(op2.search(line) for line in snippet2.splitlines())
+
+
+def test_every_data_dir_this_guard_names_is_actually_caught():
+    """One positive case per directory in `_DATA_DIRS`, in every join form.
+
+    Written out rather than derived from `_DATA_DIRS`, deliberately. A test
+    parametrized over the very alternation the defect shrinks deletes its own
+    coverage: drop `auto-memory` from the pattern and a derived case list drops
+    the `auto-memory` case with it, and the run stays green over a guard that
+    stopped looking. This list has to be edited by hand when the pattern is,
+    which is the point.
+    """
+    expected = ["threads", "crm", "outputs", "knowledge", "plans", "datastore",
+                "context", "auto-memory", "chronicle", "admin", "personal"]
+    missed = []
+    for name in expected:
+        if not _BYPASS.search(f'p = get_workspace_root() / "{name}" / "x.md"'):
+            missed.append(f"{name} (operator form)")
+        if not _BYPASS_JOIN.search(f'p = os.path.join(WORKSPACE_ROOT, "{name}", "x.md")'):
+            missed.append(f"{name} (os.path.join form)")
+        if not _BYPASS_JOINPATH.search(f'p = get_workspace_root().joinpath("{name}")'):
+            missed.append(f"{name} (joinpath form)")
+        if not _BYPASS_FSTRING.search(f'p = f"{{get_workspace_root()}}/{name}/x.md"'):
+            missed.append(f"{name} (f-string form)")
+    assert not missed, (
+        "these data directories are named in _DATA_DIRS but a bypass spelled "
+        "with them is not detected:\n  " + "\n  ".join(missed))
+
+    # And the other direction, so this is not a pattern that matches everything:
+    # an ENGINE directory joined to an engine root is ordinary correct code.
+    for engine_dir in ("scripts", "config", "reference", "docs", "tests"):
+        assert not _BYPASS.search(f'p = get_workspace_root() / "{engine_dir}"'), engine_dir
 
 
 def test_joinpath_and_fstring_direct_producer_forms_detected():

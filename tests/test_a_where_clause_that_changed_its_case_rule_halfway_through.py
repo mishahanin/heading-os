@@ -88,17 +88,79 @@ def test_the_exact_host_leg_is_case_insensitive_too():
 
 @pytest.mark.parametrize(
     "host",
-    ["notexample.com", "example.com.evil.net", "EVIL.COM", "myXsite.com"],
+    ["notexample.com", "example.com.evil.net", "EVIL.COM", ".myXsite.com"],
 )
 def test_case_insensitivity_did_not_widen_what_matches(host):
     """A foreign host stays foreign; only the case rule changed.
 
-    `myXsite.com` is the LIKE-metacharacter case the module already guards: it
+    `.myXsite.com` is the LIKE-metacharacter case the module already guards: it
     must not answer a request for `my_site.com`.
+
+    THE DOT IS LOAD-BEARING. This case read `myXsite.com` until 2026-09-01, and
+    a host with no leading dot cannot match `%.my_site.com` whether or not the
+    `_` is escaped - so the sentence above was false of its own fixture and the
+    case witnessed nothing. Measured: deleting `_escape_like` from the LIKE
+    parameter left all nine tests in this file green. With the dot the same
+    mutation fails here, because `%` absorbs nothing, `.` matches `.`, and the
+    unescaped `_` matches the `X`.
     """
     conn = _store([(host, "SID", "foreign")])
     assert _select(conn, "example.com") == []
     assert _select(conn, "my_site.com") == []
+
+
+def test_every_equality_leg_the_builder_emits_carries_the_case_rule():
+    """Derived from the fragment, so a leg added later inherits the check.
+
+    The three tests above name the legs that exist today. This one asks the
+    WHERE clause itself: split it on `OR`, and require every `=` leg to carry
+    `COLLATE NOCASE` and every `LIKE` leg to carry an `ESCAPE`. A fourth leg
+    written without the case rule fails here without anyone remembering to add
+    a fixture for it, which is the failure mode that let the two hand-written
+    copies of this rule drift apart in the first place.
+    """
+    for include_subdomains, floor in ((True, 3), (False, 1)):
+        where, params = host_match_sql("host_key", "example.com", include_subdomains)
+        legs = [leg.strip() for leg in where.split(" OR ")]
+        assert len(legs) == floor, where
+        assert len(params) == floor, params
+        for leg in legs:
+            if " = ?" in leg:
+                assert "COLLATE NOCASE" in leg, f"case-sensitive equality leg: {leg}"
+            elif "LIKE" in leg:
+                assert "ESCAPE" in leg, f"unescaped LIKE leg: {leg}"
+            else:
+                raise AssertionError(f"unrecognised leg, unchecked for case: {leg}")
+
+
+def test_host_rank_folds_case_on_both_sides():
+    """The claim `test_the_ranker_can_now_reach_the_row_it_would_have_chosen`
+    makes in prose, asserted as a value.
+
+    That test compares two rank-2 tuples and passes whether or not `host_rank`
+    lowercases: `EXAMPLE.com` beats `A.Example.Com` on dot-count alone. Measured
+    2026-09-01 - dropping both `.lower()` calls left this file AND
+    `test_a_cookie_reader_that_answered_with_the_wrong_bytes.py` fully green, 87
+    passed. The tier number is what the SQL fix exists to make reachable, so the
+    tier number is what gets pinned.
+    """
+    assert host_rank("EXAMPLE.com", "example.com")[0] == 0
+    assert host_rank(".EXAMPLE.COM", "example.com")[0] == 1
+    assert host_rank("A.Example.Com", "example.com")[0] == 2
+    assert host_rank("example.com", "EXAMPLE.COM")[0] == 0
+
+
+def test_host_rank_places_the_domain_cookie_between_the_apex_and_a_subdomain():
+    """Tier 1 exists, and `lstrip(".")` is what puts the row in it.
+
+    Asserted as tiers rather than as an ordering, because the ordering survives
+    the mutation by accident: with `lstrip` removed `.example.com` falls to tier
+    2 and still sorts ahead of `a.example.com`, on nothing more than `.` < `a`.
+    A host beginning with any character below `.` would reverse it.
+    """
+    assert host_rank(".example.com", "example.com") == (1, 0, ".example.com")
+    assert host_rank("example.com", "example.com")[0] == 0
+    assert host_rank("a.example.com", "example.com")[0] == 2
 
 
 def test_the_documented_usage_call_satisfies_the_real_signature():

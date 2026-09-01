@@ -19,9 +19,12 @@ involved in either failure, so the stage table -- written so a caller can "tell
 the operator something true about the draft and the wire" -- told them
 something false.
 
-NOTHING HERE SENDS. The stub original raises out of every create_* method, so
-any case that reaches the transport fails loudly rather than quietly putting
-mail on the wire.
+NOTHING HERE SENDS. The stub original raises out of every create_* method, which
+is the step BEFORE anything is persisted or transmitted: no draft object is
+built, `save()` never runs, and `send()` never runs. Note the raise does not
+propagate (`_send_threaded_core` catches it and returns `stage: "save_draft"`),
+so a case that walks past the refusal shows up as a wrong STAGE, not as an
+error. Every test below therefore asserts the stage, never merely the status.
 """
 from __future__ import annotations
 
@@ -140,21 +143,123 @@ def test_a_genuine_attachment_failure_still_reads_attachments():
     assert "path" in se._STAGE_GUIDANCE["attachments"].lower()
 
 
-def test_every_stage_a_threaded_send_can_return_has_its_own_guidance():
-    """A stage with no table entry silently falls to the unknown-state text."""
-    returned = set()
-    tree = ast.parse((ROOT / "scripts" / "send-email.py").read_text(encoding="utf-8"))
-    fn = next(n for n in ast.walk(tree)
-              if isinstance(n, ast.FunctionDef) and n.name == "_send_threaded_core")
-    for node in ast.walk(fn):
+# Every function in send-email.py that stamps a "stage" key, classified once.
+# The walk below derives the stamping set from the AST and fails when it does not
+# match these two registries, so a THIRD stamper cannot be added without someone
+# deciding which of the two it is.
+#
+# `_GUIDANCE_CONSUMERS`: the result is handed to `_STAGE_GUIDANCE.get(...)` (at
+# send-email.py:1010 via `send_email`, and at :1347 in main's threaded branch), so
+# every stage it can stamp must have a guidance entry or the operator is told the
+# stage was "unrecorded" when it was recorded.
+#
+# Until 2026-09-01 only `_send_threaded_core` was walked. MEASURED that day:
+# adding an unguided `"stage": "quota"` return to `_send_email_core`, the other
+# half of the same table's audience, left this file green at 9 passed.
+_GUIDANCE_CONSUMERS = {"_send_threaded_core", "_send_email_core"}
+
+# `_OWN_VOCABULARY`: stampers whose result never reaches that lookup. Each entry
+# states why, because "it does not need guidance" is exactly the claim that rots.
+_OWN_VOCABULARY = {
+    "send_batch": (
+        "main's batch branch (send-email.py:1301-1311) prints only r['error'] "
+        "per failed message and never calls _STAGE_GUIDANCE.get, so the stage is "
+        "an internal record. The irreversibility warning still reaches the "
+        "operator: _send_email_core embeds _UNSURE_NOTE in the error string "
+        "itself before returning, so the batch report carries it."
+    ),
+}
+
+# The stage vocabulary the two guidance consumers can stamp, MEASURED 2026-09-01.
+# A floor, not a description: a new stage has to be added here by hand, and that
+# edit is the moment its guidance entry gets written.
+_KNOWN_CONSUMER_STAGES = {"attach", "attachments", "save_draft", "send", "sent",
+                          "validation"}
+
+
+def _stage_stamps():
+    """Every ``{"stage": ...}`` site in send-email.py, grouped by enclosing function.
+
+    Returns ``(literals_by_function, opaque)``. ``opaque`` collects any stage
+    value that is not a plain constant. The previous walk SKIPPED those in
+    silence, so moving a literal behind a name removed it from the audit without
+    removing it from the wire.
+    """
+    src = (ROOT / "scripts" / "send-email.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    parent = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parent[child] = node
+
+    def enclosing(node):
+        while node is not None:
+            if isinstance(node, ast.FunctionDef):
+                return node.name
+            node = parent.get(node)
+        return "<module>"
+
+    literals: dict[str, set] = {}
+    opaque: list[str] = []
+    for node in ast.walk(tree):
         if not isinstance(node, ast.Dict):
             continue
         for key, value in zip(node.keys, node.values, strict=True):
-            if (isinstance(key, ast.Constant) and key.value == "stage"
-                    and isinstance(value, ast.Constant)):
-                returned.add(value.value)
+            if not (isinstance(key, ast.Constant) and key.value == "stage"):
+                continue
+            where = enclosing(node)
+            if isinstance(value, ast.Constant):
+                literals.setdefault(where, set()).add(value.value)
+            else:
+                opaque.append(f"{where} (line {key.lineno}): "
+                              f"{type(value).__name__}")
+    return literals, opaque
 
-    assert returned, "found no stage literals at all; the AST walk is not binding"
+
+def test_no_stage_value_is_hidden_behind_a_non_literal():
+    """A computed stage is invisible to this audit, so it is refused outright."""
+    _, opaque = _stage_stamps()
+    assert opaque == [], (
+        "these return a stage this file cannot read, so their coverage is "
+        f"unmeasured: {opaque}. Stamp a string literal, or the audit below "
+        "passes without having looked at them.")
+
+
+def test_every_function_that_stamps_a_stage_is_classified():
+    """A new stamper fails until someone decides whether it needs guidance."""
+    literals, _ = _stage_stamps()
+    found = set(literals)
+    classified = _GUIDANCE_CONSUMERS | set(_OWN_VOCABULARY)
+    assert found == classified, (
+        f"unclassified stampers (add to _GUIDANCE_CONSUMERS or _OWN_VOCABULARY "
+        f"with a reason): {sorted(found - classified)}; "
+        f"registered but no longer stamping anything: {sorted(classified - found)}")
+
+
+def test_every_stage_a_guidance_consumer_can_return_has_its_own_guidance():
+    """A stage with no table entry silently falls to the unknown-state text."""
+    literals, _ = _stage_stamps()
+    returned = set().union(*(literals.get(name, set()) for name in _GUIDANCE_CONSUMERS))
+
+    assert returned == _KNOWN_CONSUMER_STAGES, (
+        f"the stage vocabulary moved: new {sorted(returned - _KNOWN_CONSUMER_STAGES)}, "
+        f"gone {sorted(_KNOWN_CONSUMER_STAGES - returned)}. Update "
+        "_KNOWN_CONSUMER_STAGES and write the guidance entry in the same change.")
     assert returned - {"sent"} <= set(se._STAGE_GUIDANCE), (
         f"stages with no guidance entry: "
         f"{sorted(returned - {'sent'} - set(se._STAGE_GUIDANCE))}")
+
+
+def test_no_guidance_entry_guards_a_stage_nothing_can_return():
+    """The other direction: a table entry no code path can reach is dead text.
+
+    Without this, a typo'd or renamed key sits in _STAGE_GUIDANCE forever while
+    the stage it was meant to describe silently resolves to
+    _STAGE_GUIDANCE_UNKNOWN. Measured 2026-09-01: an invented key left the file
+    green at 9 passed.
+    """
+    literals, _ = _stage_stamps()
+    returned = set().union(*(literals.get(name, set()) for name in _GUIDANCE_CONSUMERS))
+    orphans = set(se._STAGE_GUIDANCE) - returned
+    assert orphans == set(), (
+        f"guidance entries no stage can reach: {sorted(orphans)}")

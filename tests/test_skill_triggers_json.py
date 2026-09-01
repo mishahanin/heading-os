@@ -46,6 +46,15 @@ MIN_CASES = gate.TRIGGERS_MIN_CASES
 MIN_POS = gate.TRIGGERS_MIN_POS
 MIN_NEG = gate.TRIGGERS_MIN_NEG
 
+# A bare single-level glob, deliberately, rather than `tests.repo_files.
+# tracked_paths`. The usual reason for that routing is an agent worktree under
+# `.claude/worktrees/` doubling a corpus and making every floor meaningless, and
+# this glob cannot reach one: it is rooted at `.claude/skills` and matches one
+# directory level. What it CAN reach that a git-filtered walk might not is a
+# corpus written for a new skill and not yet staged, which is the corpus most
+# likely to be malformed. MEASURED 2026-09-01: the two walks return the same 70
+# files on this tree, so the choice costs nothing today; it is stated so the next
+# reader does not "fix" it into the narrower one. The floor below is the guard.
 CORPORA = sorted(SKILLS.glob("*/triggers.json"))
 IDS = [p.parent.name for p in CORPORA]
 

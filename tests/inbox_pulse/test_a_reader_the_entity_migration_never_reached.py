@@ -63,6 +63,7 @@ shared reader. The tests here parametrize over all three real card shapes.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -439,3 +440,126 @@ def test_the_parametrized_schemas_cover_every_shape_on_the_tree():
     """Dropping a case from `SCHEMAS` silently removes coverage, and a mutation
     that dropped `entity` survived until this test existed."""
     assert set(SCHEMAS) == {"legacy", "entity", "hybrid"}
+
+
+# ============================================================
+# One card that will not decode must not take the other 168 with it
+# ============================================================
+#
+# Making `contact_index_by_email` THE ONE PLACE that answers "which contact
+# owns this address" concentrated the blast radius as well as the logic, and
+# this file never checked the other half of that trade. Its walk read
+# `card.read_text(encoding="utf-8")` under `except OSError`, and
+# `UnicodeDecodeError` is a `ValueError`, not an `OSError`, so it was not
+# caught by name and not caught by superclass either.
+#
+# MEASURED 2026-09-01 on a two-card tree, one clean and one carrying a lone
+# 0xe9 byte in its `name:` line:
+#
+#     contact_index_by_email -> RAISED UnicodeDecodeError: 'utf-8' codec can't
+#                               decode byte 0xe9 in position 46
+#
+# Not "the bad card is missing" - the call raised, so the index came back as an
+# exception and the clean card went with it. Every consumer this file spent its
+# length routing through the shared reader inherits that: the inbox classifier
+# scores every sender through it, and `/cold-sweep`, `aggregate-crm` and CRM
+# health all read it.
+#
+# Why nothing here saw it: every fixture in this file writes cards with
+# `write_text(..., encoding="utf-8")`, including `_card` above. No test in the
+# module had ever handed the reader bytes that are not valid UTF-8.
+# `write_bytes` is the whole trick.
+
+# A lone 0xe9. Valid latin-1 (an accented e), an invalid UTF-8 continuation
+# byte. Written as an escape so this file stays pure ASCII on disk.
+_LATIN1_BYTE = b"\xe9"
+
+
+def _undecodable_card(contacts_dir: Path, slug: str) -> None:
+    """A contact card that is well-formed markdown and not valid UTF-8."""
+    (contacts_dir / f"{slug}.md").write_bytes(
+        b"---\nrelationship_type: vendor\nname: caf" + _LATIN1_BYTE
+        + b"\nemail: " + slug.encode() + b"@example.test\n"
+        b"last_touch: 2026-05-28\nstatus: active\n---\n")
+
+
+def test_a_contact_card_that_is_not_utf8_does_not_take_the_index_down(tree):
+    """The clean card must still resolve. That is the whole assertion: before
+    the fix there was no index to look in, because the call raised."""
+    from scripts.utils.crm import contact_index_by_email
+
+    contacts = tree / "crm" / "contacts"
+    _card(contacts, "aaa-dana", "dana@nimbus-freight.test", "customer", "legacy")
+    # Sorted after the good one, so the walk reaches the good card FIRST and a
+    # test that merely counted survivors could pass on ordering luck.
+    _undecodable_card(contacts, "zzz-broken")
+
+    index = contact_index_by_email(contacts_dir=contacts, workspace_root=tree)
+    assert "dana@nimbus-freight.test" in index, (
+        "one card that will not decode removed every other card from the index")
+
+
+def test_the_undecodable_card_is_first_in_walk_order_and_still_not_fatal(tree):
+    """The other ordering. `sorted()` puts `aaa-` first, so this is the case
+    where the reader hits the bad bytes before it has indexed anything at all,
+    and an `except` placed one loop-iteration too late would pass the test
+    above and fail this one."""
+    from scripts.utils.crm import contact_index_by_email
+
+    contacts = tree / "crm" / "contacts"
+    _undecodable_card(contacts, "aaa-broken")
+    _card(contacts, "zzz-dana", "dana@nimbus-freight.test", "customer", "entity")
+
+    index = contact_index_by_email(contacts_dir=contacts, workspace_root=tree)
+    assert "dana@nimbus-freight.test" in index
+
+
+def test_the_dropped_card_is_named_in_the_log(tree, caplog):
+    """A card that vanishes from the CRM index silently is the defect
+    `.claude/rules/memory-discipline.md` is about: a consumer reads the smaller
+    answer as the true one. The skip is correct; the silence is not."""
+    from scripts.utils import crm
+
+    contacts = tree / "crm" / "contacts"
+    _card(contacts, "aaa-dana", "dana@nimbus-freight.test", "customer", "legacy")
+    _undecodable_card(contacts, "zzz-broken")
+
+    with caplog.at_level(logging.WARNING, logger=crm.logger.name):
+        crm.contact_index_by_email(contacts_dir=contacts, workspace_root=tree)
+
+    assert any("zzz-broken" in r.getMessage() for r in caplog.records), (
+        f"the card was dropped with no log line naming it: {caplog.text}")
+
+
+def test_a_clean_tree_logs_no_skip_at_all(tree, caplog):
+    """Anchor. Every assertion above is satisfied by a warning emitted on every
+    card, which would train the operator to ignore the one that matters."""
+    from scripts.utils import crm
+
+    contacts = tree / "crm" / "contacts"
+    for slug, schema in (("aaa-dana", "legacy"), ("bbb-rowan", "entity")):
+        _card(contacts, slug, f"{slug}@example.test", "customer", schema)
+
+    with caplog.at_level(logging.WARNING, logger=crm.logger.name):
+        index = crm.contact_index_by_email(contacts_dir=contacts,
+                                           workspace_root=tree)
+    assert len(index) == 2, index
+    assert not [r for r in caplog.records if "unreadable" in r.getMessage()], \
+        caplog.text
+
+
+def test_the_classifier_still_scores_the_good_sender_past_a_broken_card(tree):
+    """End to end, because the index is not the surface the operator sees.
+
+    `_score_crm_contact` is what the inbox classifier calls for every incoming
+    email. Before the fix, one undecodable card among 169 made that call raise,
+    so the classifier failed on mail from EVERY sender, not only the broken
+    contact's.
+    """
+    contacts = tree / "crm" / "contacts"
+    _card(contacts, "aaa-dana", "dana@nimbus-freight.test", "customer", "entity")
+    _undecodable_card(contacts, "zzz-broken")
+
+    c = _classifier(tree, tree)
+    assert c._score_crm_contact("dana@nimbus-freight.test") == 3
+    assert c._lookup_relationship_type("dana@nimbus-freight.test") == "customer"

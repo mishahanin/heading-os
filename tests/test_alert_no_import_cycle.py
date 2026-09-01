@@ -155,17 +155,66 @@ def test_alert_imports_without_bridge_daemon(forget, monkeypatch):
 
 
 
-def test_alert_init_sets_aq_fn():
-    """alert.init(fn) must store the callable for use in _post_card."""
+def test_alert_init_sets_aq_fn(monkeypatch):
+    """alert.init(fn) must store the callable for use in _post_card.
+
+    Through monkeypatch. Both this test and the one below used to write
+    `alert_mod._aq_append_fn` and never put it back, so whichever ran last left
+    the module global bound for the rest of the process - the "a patch that
+    outlived its test" shape, and this suite runs in random order.
+    """
     import scripts.utils.alert as alert_mod
-    dummy_fn = lambda ws, cards: {"ok": True, "added": 1}
+
+    monkeypatch.setattr(alert_mod, "_aq_append_fn", None)
+    dummy_fn = lambda ws, cards: {"ok": True, "added": 1}  # noqa: E731
     alert_mod.init(dummy_fn)
     assert alert_mod._aq_append_fn is dummy_fn
 
 
-def test_alert_post_card_graceful_without_init(tmp_path):
-    """_post_card must return False (not raise) when init() was never called."""
+def test_alert_post_card_graceful_without_init(tmp_path, monkeypatch, caplog):
+    """_post_card must return False (not raise) when init() was never called.
+
+    And it must SAY so. The return value alone does not bind the guard:
+    deleting the `if _aq_append_fn is None` branch entirely leaves `None(...)`
+    to raise `TypeError` into the sibling `except Exception`, which also
+    returns False - MEASURED 2026-09-01, all 10 tests still passed. What
+    changes is the log, and the log is the whole point of the branch: a card
+    that never existed and a card whose append failed must not read the same to
+    the operator, per the never-silent rule.
+    """
+    import logging
+
     import scripts.utils.alert as alert_mod
-    alert_mod._aq_append_fn = None  # reset
-    result = alert_mod._post_card(tmp_path, "warning", "t", "b", "test")
+
+    monkeypatch.setattr(alert_mod, "_aq_append_fn", None)
+    with caplog.at_level(logging.WARNING, logger="x31c.alert"):
+        result = alert_mod._post_card(tmp_path, "warning", "t", "b", "test")
+
     assert result is False, f"expected False when _aq_append_fn is None, got {result!r}"
+    assert "alert.init was never called" in caplog.text, caplog.text
+    assert "raised" not in caplog.text, (
+        "the missing-channel case is being reported as an append failure")
+
+
+def test_a_card_append_that_raises_reads_differently(tmp_path, monkeypatch,
+                                                     caplog):
+    """The sole witness for the OTHER branch, so the two cannot collapse.
+
+    Without this, a "fix" that reports every failure as a missing channel would
+    satisfy the test above.
+    """
+    import logging
+
+    import scripts.utils.alert as alert_mod
+
+    def _boom(_ws, _cards):
+        raise RuntimeError("queue file is locked")
+
+    monkeypatch.setattr(alert_mod, "_aq_append_fn", _boom)
+    with caplog.at_level(logging.WARNING, logger="x31c.alert"):
+        result = alert_mod._post_card(tmp_path, "warning", "t", "b", "test")
+
+    assert result is False
+    assert "queue file is locked" in caplog.text, caplog.text
+    assert "alert.init was never called" not in caplog.text, (
+        "an append failure is being reported as a channel that was never wired")

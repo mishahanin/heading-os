@@ -164,3 +164,73 @@ def test_already_down_is_a_clean_success(lock, signals, monkeypatch):
     assert browser.stop_comet() is True
     assert not lock.exists()
     assert signals == []
+
+
+def test_no_targets_while_cdp_still_answers_is_not_a_success(lock, signals, monkeypatch):
+    """The negative half of the test above, and the original 2026-07-27 symptom.
+
+    `stop_comet` takes the "already stopped" exit only when BOTH conditions hold:
+    no PID to signal AND the port has gone quiet. Nothing measured the second
+    one. MEASURED 2026-09-01: narrowing that condition to `if not targets` left
+    all 46 tests across the three files that import this module green, while
+    `stop` printed "Browser already stopped; clearing lock", returned True, and
+    deleted the lock with Brave still answering CDP - which is, word for word,
+    the defect this file's docstring was opened for.
+
+    `ps` failing to name the owner is not hypothetical: `_pids_for_cdp_port`
+    returns [] on win32 by design, and on POSIX whenever `ps` is absent or
+    errors.
+    """
+    monkeypatch.setattr(browser, "_pids_for_cdp_port", lambda port: [])
+    monkeypatch.setattr(browser, "_pid_is_browser", lambda pid, browser_name: False)
+    _cdp(monkeypatch, True)  # the browser is up and answering
+
+    assert browser.stop_comet(timeout=0.2) is False, (
+        "stop reported success with the browser still answering CDP"
+    )
+    assert lock.exists(), "the lock was cleared while the browser was still up"
+
+
+def test_the_sigkill_wait_is_capped_at_five_seconds(lock, signals, monkeypatch):
+    """`min(timeout, 5.0)` is a stated bound with nothing standing on it.
+
+    MEASURED 2026-09-01: replacing it with a bare `timeout` survived all 46
+    tests. A caller passing a generous SIGTERM budget then pays it twice, and
+    `cmd_stop` runs in the foreground of the operator's terminal.
+    """
+    waits = []
+    monkeypatch.setattr(browser, "_pids_for_cdp_port", lambda port: [1894831])
+    monkeypatch.setattr(browser, "_pid_is_browser", lambda pid, browser_name: False)
+    _cdp(monkeypatch, True)
+    monkeypatch.setattr(
+        browser, "_wait_until_cdp_down",
+        lambda port, timeout: waits.append(timeout) or False,
+    )
+
+    assert browser.stop_comet(timeout=60.0) is False
+    assert waits == [60.0, 5.0], (
+        f"the SIGTERM and SIGKILL waits were {waits}; the SIGKILL wait is "
+        "supposed to be capped at 5 s"
+    )
+
+
+# A `ps -eo pid=,args=` line whose first token is not a PID. An argv holding a
+# newline wraps onto a continuation line, and that line still carries the CDP
+# flag inherited from the process it belongs to. `head.isdigit()` is what keeps
+# `int(head)` off it.
+PS_WITH_A_WRAPPED_ARGV = """\
+ 2234786 /opt/brave.com/brave/brave --remote-debugging-port=9222 --user-data-dir=/home/builder/.config/Brave
+ 2234900 /opt/brave.com/brave/brave --type=utility --lang=en-GB --window-title=first line
+second line of a wrapped argv --remote-debugging-port=9222
+"""
+
+
+def test_a_wrapped_ps_line_does_not_crash_the_parser():
+    """MEASURED 2026-09-01: dropping the `head.isdigit()` guard survived all 46
+    tests across the three files importing this module, because every captured
+    fixture line begins with a PID. On this input the same deletion raises
+    `ValueError: invalid literal for int()` out of `stop`, which is the one
+    command an operator reaches for when the browser is already misbehaving."""
+    assert browser._parse_cdp_owner_pids(
+        PS_WITH_A_WRAPPED_ARGV, 9222, self_pid=1
+    ) == [2234786]

@@ -55,9 +55,34 @@ def load(*, force: bool = False) -> dict:
     data: dict = {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         # Missing or malformed ledger: empty tiers + empty send_capable.
         # tier_for then resolves everything to gated (safe default).
+        #
+        # `UnicodeDecodeError` sits in this tuple because it is a SIBLING of
+        # `json.JSONDecodeError` under `ValueError`, not a subclass of it, and
+        # the decode happens inside `read_text` before `json.loads` is handed
+        # anything at all. Without it the documented fallback two lines above
+        # was false for the commonest kind of corruption there is.
+        #
+        # MEASURED 2026-09-01 against a copy of the shipped ledger with one
+        # 0xff byte spliced in: `load`, `send_capable_types` and `tier_for`
+        # each raised a raw UnicodeDecodeError instead of resolving `gated`.
+        # `tier_for` IS the lethal-trifecta send gate, so the reach was the
+        # whole send path: `approve_and_send` (scripts/action-queue.py:195)
+        # calls it outside any handler and `cmd_approve` has none, so the CEO's
+        # own approve command answered a traceback rather than a refusal; the
+        # batch executor's broad `except Exception` turned it into a
+        # `send_failed` result, which sends a reader looking for a mail problem
+        # that is really a corrupt config file; and the three bridge-daemon
+        # callers (sources/action_queue.py:344 and :659, bridge-daemon.py:189)
+        # had no handler either. Nothing SENT - the gate fails closed by
+        # crashing - but "resolves gated" and "raises" are different answers
+        # and only one of them is the one this module promises.
+        #
+        # `scripts/action-queue.py` already caught this class at its own two
+        # reads (lines 406 and 426). This module, one layer below both, had
+        # fallen behind them.
         data = {}
     _CACHE = data
     return data

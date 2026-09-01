@@ -557,7 +557,12 @@ def _personal_keywords() -> tuple[str, ...]:
         text = private_file.read_text(encoding="utf-8")
     except FileNotFoundError:
         text = ""
-    except OSError as exc:
+    # `UnicodeDecodeError` beside `OSError`, never inside it: it subclasses
+    # ValueError, so the handler above could not see it and a keyword file with
+    # one non-UTF-8 byte raised out of a function documented to fall back to
+    # "just the generic defaults". This runs under `chronicle build` on a timer,
+    # so the raise took the whole build down over an optional private file.
+    except (OSError, UnicodeDecodeError) as exc:
         print(f"chronicle: could not read {private_file}: {exc}", file=sys.stderr)
         text = ""
     for line in text.splitlines():
@@ -1030,7 +1035,21 @@ def _load_personal_entries() -> list[dict]:
         return []
     entries = []
     for f in sorted(d.glob("session-*.md")):
-        raw = f.read_text(encoding="utf-8")
+        try:
+            raw = f.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            # No handler at all sat here until 2026-09-01. `UnicodeDecodeError`
+            # is a `ValueError`, so one personal session note that is not valid
+            # UTF-8 raised out of the whole walk and `_load_personal_entries`
+            # returned nothing rather than the notes it could read. MEASURED
+            # that day on two notes, one clean and one carrying a lone 0xe9.
+            #
+            # Skipping is right and silence is not: a dropped session note is a
+            # gap in the personal chronicle that nothing else would report.
+            print(f"chronicle: skipping unreadable personal note {f.name} "
+                  f"({type(exc).__name__}); it is absent from this run",
+                  file=sys.stderr)
+            continue
         # `raw.split("---", 2)` sat here, with no line anchor of any kind.
         # MEASURED 2026-08-28 against the shared splitter over eight documents:
         # a `---` inside a scalar cut the block mid-value, so `title: "alpha ---

@@ -73,15 +73,62 @@ def test_exec_generic_sibling_is_the_personal_root(tmp_path, monkeypatch):
 
 
 def test_exec_heading_os_data_env_override_wins(tmp_path, monkeypatch):
-    """An explicit HEADING_OS_DATA override beats sibling discovery."""
+    """An explicit HEADING_OS_DATA override beats sibling discovery.
+
+    The slug-named sibling is CREATED here, and that is the whole test. Without
+    it there is nothing for the override to beat, and the assertion is satisfied
+    by the fallback rather than by the branch it names: `get_exec_data_root`
+    ends at `get_data_root()`, which reads the same environment variable and
+    answers the same path.
+
+    MEASURED 2026-09-01 against the version of this test that created no
+    sibling. Deleting the env-override branch from `get_exec_data_root`
+    outright left it GREEN, and so did demoting that branch below the sibling
+    check, which inverts the documented precedence while keeping every symbol
+    in place. The second mutation survived all 122 tests in this file, in
+    test_exec_backup_target, and in the four neighbours that name the resolver;
+    the one neighbour that noticed the first mutation noticed it only by
+    scanning the source for the text `env_data_root()`, which a reorder does
+    not disturb.
+
+    It is not a cosmetic ordering. `scripts/push-all.py` resolves an exec's
+    BACKUP TARGET through this function, so an exec who pins HEADING_OS_DATA on
+    a machine that also carries a stale slug-named sibling would have their data
+    pushed to the repository they did not name.
+    """
     engine = _make_exec_engine(tmp_path, slug="jane-doe")
+    sibling = tmp_path / ".heading-os-data-jane-doe"
+    (sibling / "crm" / "contacts").mkdir(parents=True)
     override = tmp_path / "elsewhere" / "exec-data"
     (override / "crm" / "contacts").mkdir(parents=True)
     monkeypatch.setenv("WORKSPACE_ROOT", str(engine))
     monkeypatch.setenv("HEADING_OS_DATA", str(override))
 
-    from scripts.utils.workspace import get_personal_root
+    from scripts.utils.workspace import get_exec_data_root, get_personal_root
+    assert sibling.is_dir(), "the loser of the precedence test must exist"
     assert get_personal_root() == override.resolve()
+    assert get_exec_data_root() == override.resolve(), (
+        "the slug-named sibling beat an explicit HEADING_OS_DATA pin; the "
+        "resolver documents the override as the FIRST hit"
+    )
+    assert get_exec_data_root() != sibling.resolve()
+
+
+def test_the_sibling_is_only_used_when_no_override_is_pinned(tmp_path, monkeypatch):
+    """The other jaw, so the test above cannot be satisfied by ignoring siblings.
+
+    A resolver that answered the override unconditionally would pass every
+    assertion above while breaking the ordinary exec, who sets no environment
+    variable at all and relies on discovery.
+    """
+    engine = _make_exec_engine(tmp_path, slug="jane-doe")
+    sibling = tmp_path / ".heading-os-data-jane-doe"
+    (sibling / "crm" / "contacts").mkdir(parents=True)
+    monkeypatch.setenv("WORKSPACE_ROOT", str(engine))
+    monkeypatch.delenv("HEADING_OS_DATA", raising=False)
+
+    from scripts.utils.workspace import get_exec_data_root
+    assert get_exec_data_root() == sibling.resolve()
 
 
 def test_exec_personal_data_never_lands_in_engine_tree(tmp_path, monkeypatch):

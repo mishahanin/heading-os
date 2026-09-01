@@ -100,6 +100,77 @@ def test_this_domain_and_its_subdomains_are_still_replaced(tmp_path, stale):
     assert [c["name"] for c in merged] == ["fresh"]
 
 
+@pytest.mark.parametrize("stored,survives", [
+    (".x.com", False),      # the domain itself: re-read, so the stale row goes
+    ("x.com", False),
+    ("sub.x.com", True),    # NOT re-read under --exact-host, so it must stay
+    (".sub.x.com", True),
+    (".netflix.com", True),
+])
+def test_exact_host_leaves_the_subdomains_it_never_read(tmp_path, stored,
+                                                        survives):
+    """`include_subdomains=False`, which nothing was exercising.
+
+    `_merge_playwright`'s own docstring says: "Only what was actually re-read is
+    evicted: with `--exact-host` the read is the exact host alone, so the stored
+    SUBDOMAIN entries are left where they are. Evicting them was silent session
+    loss on a flag combination the CLI advertises". MEASURED 2026-09-01:
+    replacing `if not include_subdomains:` with `if False:` - so the flag is
+    ignored and every subdomain is evicted again - left this file green at 24
+    passed. Every existing row takes the default.
+
+    The `.x.com` row also pins the `lstrip(".")` on the stored value, which is
+    load-bearing ONLY here: on the default path a leading dot is absorbed by the
+    `endswith("." + suffix)` arm either way, so dropping the strip is invisible
+    until the exact comparison is the one being made.
+    """
+    store = _store(tmp_path, [{"name": "keep", "domain": stored}])
+
+    merged = CC._merge_playwright(store, "x.com", _fresh("x.com", fresh="v"),
+                                  include_subdomains=False)
+
+    assert ("keep" in {c["name"] for c in merged}) is survives, merged
+
+
+@pytest.mark.parametrize("stored", [".X.COM", "X.com", "SUB.X.Com"])
+def test_a_stored_domain_in_another_case_is_still_this_domain(tmp_path, stored):
+    """`.lower()` on the stored value, unmeasured.
+
+    Measured 2026-09-01: dropping it left this file green at 24 passed - every
+    fixture stores lowercase. DNS names are case-insensitive and nothing
+    normalises this column on the way in, so a store written by hand or by an
+    older tool keeps whatever case it was given. A missed match here is not a
+    deletion, it is the opposite: a stale value for a name just re-read survives
+    beside the fresh one, and the caller gets two cookies with one name.
+    """
+    store = _store(tmp_path, [{"name": "old", "domain": stored}])
+
+    merged = CC._merge_playwright(store, "x.com", _fresh("x.com", fresh="v"))
+
+    assert [c["name"] for c in merged] == ["fresh"], merged
+
+
+def test_a_blank_host_key_is_scoped_to_the_asked_for_domain(tmp_path):
+    """`_playwright_domain`'s fallback, which its docstring describes and
+    nothing measured.
+
+    "A blank host_key (which the schema should never produce) falls back to the
+    asked-for domain rather than exporting an entry with no scope at all."
+    Measured 2026-09-01: returning `host` unconditionally left this file green
+    at 24 passed, and the cookie then went out with `domain: ""`. Playwright
+    rejects a cookie with no domain, so the whole import fails on one bad row.
+    """
+    store = _store(tmp_path, [])
+
+    merged = CC._merge_playwright(
+        store, "x.com", {"SID": ("", "v", ATTRS), "OK": (".x.com", "w", ATTRS)})
+
+    by_name = {c["name"]: c for c in merged}
+    assert by_name["SID"]["domain"] == ".x.com"
+    assert by_name["OK"]["domain"] == ".x.com", (
+        "a host that WAS supplied must still travel through unchanged")
+
+
 def test_an_unparseable_store_is_still_treated_as_empty(tmp_path):
     """Documented behaviour: refusing to import is worse than losing a store
     that was already unusable."""

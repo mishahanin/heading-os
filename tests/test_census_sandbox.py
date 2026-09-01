@@ -251,6 +251,88 @@ def test_denied_descendants_finds_the_private_branch(tmp_path):
     assert found == ["personal"], found
 
 
+def test_denied_descendants_walks_deeper_than_one_level(tmp_path):
+    """The walk is a stack, and nothing proved it ever pushed onto it.
+
+    Every case above puts the denied directory ONE level under the corpus path,
+    which the first pass of the loop finds without ever descending. MEASURED
+    2026-09-01: replacing `stack.append(child)` with `pass` left this file and
+    `tests/test_census_engine.py` green over 48 tests, so the recursion that
+    makes this a walk rather than a listing was carrying no coverage at all.
+
+    A one-level-only check is not a smaller guard, it is an open one:
+    `--corpus <data>/knowledge` mounts everything under it read-only, and a
+    `personal` branch two directories down is then read by the traversal exactly
+    as the thread branch was on 2026-08-13 -- the same defect this function was
+    written for, one directory deeper.
+
+    The tmpfs overlay is asserted on the command line as well, because finding
+    the directory and BLANKING it are two different things, and only the second
+    one makes the branch absent inside the box.
+    """
+    corpus = tmp_path / "knowledge"
+    (corpus / "shared" / "notes").mkdir(parents=True)
+    deep = corpus / "shared" / "notes" / "personal"
+    deep.mkdir()
+    (deep / "medical.md").write_text("PRIVATE", encoding="utf-8")
+
+    found = sandbox.denied_descendants(corpus)
+    assert [p.relative_to(corpus).as_posix() for p in found] == \
+        ["shared/notes/personal"], found
+
+    program = tmp_path / "t.py"
+    program.write_text("pass\n", encoding="utf-8")
+    argv = sandbox.build_argv(program=program, corpus_paths=[corpus],
+                              out_dir=tmp_path / "out",
+                              mount_names={corpus: "knowledge"})
+    assert "--tmpfs" in argv
+    assert "/data/knowledge/shared/notes/personal" in argv, argv
+
+
+def test_the_writable_output_may_not_CONTAIN_a_corpus_path(tmp_path):
+    """The other nesting order, and it had no test at all.
+
+    Its sibling `test_the_writable_output_may_not_sit_inside_the_corpus` covers
+    `out_dir` UNDER the corpus. The reverse is the one the module's own comment
+    records as MEASURED with bwrap 0.9.0 on 2026-08-26: an `out_dir` that
+    contains a corpus path is bound read-write at `/out`, the corpus then sits
+    under it as a writable subtree, and a traversal writing `/out/<name>/x.md`
+    reaches the host corpus without ever touching the read-only mount. The box
+    reported exit 0 and the host file had been overwritten.
+
+    MEASURED 2026-09-01: switching that refusal off left this file and
+    `tests/test_census_engine.py` green over 48 tests. A control with a
+    measured breach behind it and no test is a control that gets deleted by the
+    next person tidying a duplicated-looking branch.
+
+    The refusal is asserted together with its SIDE EFFECT: no process, and the
+    corpus bytes unchanged. A message that says "refused" while the write
+    happened is the failure this whole file is written against.
+    """
+    out = tmp_path / "out"
+    corpus = out / "corpus"
+    corpus.mkdir(parents=True)
+    (corpus / "note.md").write_text("original", encoding="utf-8")
+    before = {p: p.read_bytes() for p in sorted(corpus.rglob("*")) if p.is_file()}
+
+    prog = program(tmp_path, '''
+        import pathlib
+        for target in sorted(pathlib.Path("/out").rglob("*.md")):
+            target.write_text("mutated")
+        (pathlib.Path("/out") / "corpus" / "planted.md").write_text("planted")
+    ''')
+
+    result = run_sandboxed(program=prog, corpus_paths=[corpus], out_dir=out,
+                           timeout_s=60)
+
+    assert result.refused is not None
+    assert "contains the corpus path" in result.refused, result.refused
+    assert result.exit_code is None, "the traversal ran despite the refusal"
+    after = {p: p.read_bytes() for p in sorted(corpus.rglob("*")) if p.is_file()}
+    assert after == before, "the corpus changed behind a refusal"
+    assert not (corpus / "planted.md").exists()
+
+
 def test_a_missing_bwrap_refuses_and_never_falls_back(tmp_path, out, monkeypatch):
     """The one failure mode a soft degradation would quietly convert into the
     configuration this whole design exists to refuse."""

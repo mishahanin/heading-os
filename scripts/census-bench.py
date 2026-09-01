@@ -1411,7 +1411,21 @@ def main() -> int:
 
     try:
         questions = load_questions(root)
-    except (FileNotFoundError, KeyError, json.JSONDecodeError) as exc:
+    # `ValueError` and `OSError`, not the three narrower names that stood here.
+    # `json.JSONDecodeError` is a ValueError SUBCLASS and `UnicodeDecodeError`
+    # is its SIBLING, so a question set carrying one byte that is not UTF-8
+    # failed inside `read_text` before `json.loads` was reached and walked
+    # straight past this handler. `FileNotFoundError` is likewise one OSError of
+    # several: a file that exists and cannot be opened took the same exit.
+    #
+    # MEASURED 2026-09-01 against the previous tuple, driving `main()` with a
+    # question set holding a single 0xe9: the exception left `main()` uncaught,
+    # so this gate printed a traceback naming a codec, a byte and an offset -
+    # never the path - and exited 1. On an ACCEPTANCE gate that is worse than a
+    # crash: `mode_score` returns 1 for REJECTED, so a harness reading exit
+    # codes records the crash as a verdict. The wide try below already catches
+    # both of these; only this earlier call site was narrow.
+    except (KeyError, ValueError, OSError) as exc:
         print(f"{RED}Набор вопросов не читается:{RESET} {exc}", file=sys.stderr)
         return 2
 

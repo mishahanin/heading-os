@@ -30,6 +30,7 @@ Tests: tests/test_a_queue_that_read_corrupt_as_empty.py
 
 from __future__ import annotations
 
+import logging
 import re
 import sys
 from datetime import date, datetime, timedelta
@@ -52,6 +53,8 @@ from scripts.utils.workspace import (  # noqa: E402
 )
 from scripts.utils.markdown import parse_frontmatter_str as _parse_frontmatter  # noqa: E402
 from scripts.utils.markdown import frontmatter_list
+
+logger = logging.getLogger(__name__)
 
 
 def _decoded_stderr(exc) -> str:
@@ -135,13 +138,24 @@ def parse_config(config_path: Path) -> dict:
 
     Returns a dict keyed by relationship type, with each value containing
     ``cadence``, ``yellow``, and ``red`` integer thresholds (in days).
-    Returns an empty dict if the file does not exist or has no table.
+    Returns an empty dict if the file does not exist, cannot be decoded, or
+    has no table.
     """
     defaults: dict = {}
     if not config_path.exists():
         return defaults
 
-    content = config_path.read_text(encoding="utf-8")
+    try:
+        content = config_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        # `crm-health.py` reads the cadence table through here before it scans,
+        # so an undecodable config.md ended the health run with a codec error
+        # rather than the built-in type defaults. Empty is what the two branches
+        # around this one already return, and the docstring now says so.
+        logger.warning("could not read %s; cadence thresholds fall back to the "
+                       "built-in defaults for this run", config_path,
+                       exc_info=True)
+        return defaults
     in_table = False
     separator_seen = False
 
@@ -475,7 +489,30 @@ def scan_contacts(config: dict, today=None, contacts_dir: Path | None = None,
         return contacts, tribe_warnings, dangling_refs, _stages, _aliases
 
     for file_path in contact_files:
-        content = file_path.read_text(encoding="utf-8")
+        try:
+            content = file_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            # Same defect as `contact_index_by_email` below, in the walk that
+            # feeds CRM health rather than the email index, and it had no
+            # handler AT ALL rather than one that could not catch a decode
+            # error. The 2026-09-01 AST sweep that found the other four looked
+            # for try-blocks whose handler names could not catch
+            # `UnicodeDecodeError`; a read with no try around it is invisible to
+            # that question, which is how this one survived it.
+            #
+            # MEASURED 2026-09-01 on two cards, one clean and one carrying a
+            # lone 0xe9 in its body: `scan_contacts` raised `UnicodeDecodeError`
+            # and returned neither card, so `crm-health.py`, `/cold-sweep`'s
+            # overdue set and the morning dashboard all died on one file. The
+            # exception names a codec, a byte and an offset and no path.
+            #
+            # Skipping is right and silence is not: a dropped card is a person
+            # who stops accruing red debt and stops appearing in the health
+            # report, so the file that caused it is named on the log.
+            logger.warning("skipping unreadable contact card %s; it will be "
+                           "absent from CRM health and every count derived "
+                           "from it", file_path, exc_info=True)
+            continue
         fm = parse_frontmatter(content)
 
         if not fm.get("name") and not fm.get("entity_ref"):
@@ -679,7 +716,31 @@ def load_entity(slug: str, workspace_root: Path | None = None) -> dict | None:
     entity_file = _address_book_dir(workspace_root) / f"{slug}.md"
     if not entity_file.exists():
         return None
-    text = entity_file.read_text(encoding="utf-8")
+    try:
+        text = entity_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        # THE READ THE 2026-09-01 FIX WALKED PAST. That day both callers of this
+        # function -- `scan_contacts` and `contact_index_by_email` -- were
+        # hardened against a contact card that is not valid UTF-8, and each
+        # carries a comment saying so. Neither touched the read one call below
+        # them, so the same byte in the ADDRESS-BOOK entity still raised
+        # straight out of both walks. MEASURED 2026-09-01 on one clean entity
+        # and one carrying a lone 0xe9: `scan_contacts` returned neither
+        # contact, and `contact_index_by_email` -- whose own docstring calls
+        # itself THE ONE PLACE that answers which contact owns an address --
+        # answered with an exception instead. The entity path is not the rare
+        # one: that docstring records 80 of 169 cards resolving their address
+        # only through an entity.
+        #
+        # None is the honest answer and it is already a reported outcome: the
+        # caller files it under `dangling_refs`, so the operator sees the card
+        # named rather than losing the whole scan. The docstring's contract
+        # ("Returns parsed frontmatter or None") is what makes this a
+        # degradation and not a new behaviour.
+        logger.warning("skipping unreadable address-book entity %s; every "
+                       "contact referencing it will be reported as a dangling "
+                       "ref", entity_file, exc_info=True)
+        return None
     parsed = parse_frontmatter(text)
     # `parse_frontmatter` returns `{}` for a file with no frontmatter block, and
     # `{}` is not None, so `scan_contacts`' dangling-ref branch never fired for
@@ -740,7 +801,23 @@ def contact_index_by_email(contacts_dir: Path | None = None,
     for card in sorted(Path(contacts_dir).glob("*.md")):
         try:
             relationship, _body = _parse_frontmatter(card.read_text(encoding="utf-8"))
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # `UnicodeDecodeError` is a `ValueError`, NOT an `OSError`, so a
+            # single card that is not valid UTF-8 did not skip this iteration:
+            # it raised out of the whole walk and the index came back as an
+            # exception. THE ONE PLACE that answers "which contact owns this
+            # address" then answers nothing, and the 168 readable cards go with
+            # the one bad one. MEASURED 2026-09-01 on two cards, one clean and
+            # one carrying a lone 0xe9 in its `name:` line:
+            # `contact_index_by_email` raised UnicodeDecodeError rather than
+            # returning the good card.
+            #
+            # Skipping is right and silence is not: an operator card dropping
+            # out of the CRM index changes what the inbox classifier scores,
+            # what `/cold-sweep` drafts, and what CRM health reports, so the
+            # drop is logged with the file that caused it.
+            logger.warning("skipping unreadable contact card %s; it will be "
+                           "absent from the email index", card, exc_info=True)
             continue
         if not relationship:
             continue
@@ -858,7 +935,19 @@ def parse_pipeline_stages(pipeline_path: Path) -> dict:
     """
     if not pipeline_path.exists():
         return {}
-    text = pipeline_path.read_text(encoding="utf-8")
+    try:
+        text = pipeline_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        # `scan_contacts` calls this unconditionally, so an unreadable
+        # pipeline.md took down the whole CRM scan rather than costing it its
+        # stage-aware cadence. The absent-file branch two lines up already
+        # answers `{}` for "no stages available", which is the same degradation
+        # with the same consequence, so an unreadable file gets the same answer
+        # and a line naming it.
+        logger.warning("could not read %s; stage-aware cadence is off for this "
+                       "run and every contact falls back to its type default",
+                       pipeline_path, exc_info=True)
+        return {}
     stages: dict = {}
     in_table = False
     headers: list = []
@@ -908,7 +997,15 @@ def parse_aliases(aliases_path: Path) -> dict:
     """
     if not aliases_path.exists():
         return {}
-    text = aliases_path.read_text(encoding="utf-8")
+    try:
+        text = aliases_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        # Same call site and same reasoning as `parse_pipeline_stages` above:
+        # `scan_contacts` reads both on every run, so either one being
+        # undecodable ended the scan instead of narrowing it.
+        logger.warning("could not read %s; company aliases are unavailable for "
+                       "this run", aliases_path, exc_info=True)
+        return {}
     aliases: dict = {}
     current_canonical = None
     in_aliases_section = False

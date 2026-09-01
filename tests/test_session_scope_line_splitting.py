@@ -32,7 +32,15 @@ from scripts.utils.session_scope import files_written  # noqa: E402
 
 # Every character `str.splitlines()` treats as a line break and a file handle
 # does not. Pinned as data so a Python release that adds one is visible here.
-EXTRA_BREAKS = ("\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", " ", " ")
+# Written as backslash-u escapes, never as the characters themselves. U+2028
+# and U+2029 are hidden characters under `.claude/rules/hidden-chars.md`, and
+# `scripts/sanitize-text.py --scan` reported both on this line on 2026-09-01:
+# a sanitiser pass over this file would have emptied two of the eight cases
+# below into no-ops. `test_the_premise_holds...` does catch that, so the
+# failure would be loud rather than silent, but the escape costs nothing and
+# removes the trap.
+EXTRA_BREAKS = ("\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85",
+                "\u2028", "\u2029")
 
 # Of those eight, only three can reach a transcript line intact.
 # `json.dumps` escapes every C0 control (U+000B through U+001E) as a

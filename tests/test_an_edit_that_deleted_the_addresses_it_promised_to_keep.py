@@ -392,6 +392,9 @@ def test_the_send_horizon_is_wider_than_one_page():
 # ==========================================================================
 
 def test_a_symlinked_directory_is_never_descended(tmp_path):
+    """Two independent layers stop this descent, so neither can be measured
+    behaviourally on its own; see `test_the_walk_asks_os_walk_not_to_follow_links`.
+    """
     outside = tmp_path / "payload"
     outside.mkdir()
     (outside / "pwn.md").write_text("payload\n", encoding="utf-8")
@@ -406,6 +409,40 @@ def test_a_symlinked_directory_is_never_descended(tmp_path):
     assert "pwn.md" not in names, \
         "content outside the plugin root was walked as installed surface"
     assert "real.md" in names
+
+
+def test_the_walk_asks_os_walk_not_to_follow_links():
+    """The second layer, which has no behavioural witness and needs one anyway.
+
+    `_walk_surface` strips every symlinked name out of `dirnames` before
+    `os.walk` recurses, so `followlinks=` can never change the result while
+    that stripping is in place - MEASURED 2026-09-01, flipping it to True left
+    all 34 tests passing, and deleting the stripping ALSO left the descent test
+    passing because this argument caught it. Two guards covering each other is
+    the right design here and the wrong thing to leave unwitnessed: remove both
+    in one edit and the audit hashes content from outside the plugin root into
+    the reviewed baseline, silently.
+
+    Asked of the AST and SCOPED to this function, because a substring search
+    over the file would be satisfied by the literal appearing in a comment, and
+    would fail on a legitimate rewrite elsewhere in the module.
+    """
+    import ast
+
+    tree = ast.parse((ROOT / "scripts" / "harness-audit.py").read_text(
+        encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_walk_surface")
+    walks = [c for c in ast.walk(fn)
+             if isinstance(c, ast.Call)
+             and isinstance(c.func, ast.Attribute) and c.func.attr == "walk"]
+    assert len(walks) == 1, (
+        f"_walk_surface makes {len(walks)} os.walk call(s); re-derive this test")
+    follow = [kw for kw in walks[0].keywords if kw.arg == "followlinks"]
+    assert follow, "os.walk was called without followlinks=, which DEFAULTS to False"
+    assert isinstance(follow[0].value, ast.Constant) and follow[0].value.value is False, (
+        f"followlinks={ast.unparse(follow[0].value)}; a symlinked directory "
+        "left in dirnames would then be descended into")
 
 
 def test_a_symlinked_directory_is_reported_by_name(tmp_path):

@@ -27,6 +27,23 @@ operator as well, not only for the public.
 there were reachable only through conftest fixtures that no test requested. An
 unread corpus contributes no assertion while reading as coverage, and the
 directory's README listed all three under "Test Coverage".
+
+**What this guard does NOT cover, stated rather than left to be inferred.** The
+corpus is tracked MARKDOWN only. Every tracked file in this repository is public,
+not only the `.md` ones, and the same citations are live outside the scan.
+MEASURED 2026-09-01 over `git ls-files`: 39 tracked non-Markdown files carry a
+`plans/` citation, and 23 of those carry one in PROSE (a docstring or a comment)
+rather than as fixture data. Three of those 23 cite the very two plan files named
+above as offenders this guard closed (two the retire-workspace-sync one, one the
+sentinel-integration-tests one), so the fix landed in one file type of two.
+
+It was not widened here, and the reason is scope rather than judgement: the fix
+is 23 files across territory other work is holding, and separating a pointer
+("see `plans/x.md`") from invented fixture data (`plans/2026-06-28-foo.md`,
+`plans/no-such-plan-exists.md`) needs a per-site reading, not a regex. The
+prose-versus-data split above is the discriminator that worked when measured;
+whoever widens this should start there. Until then, read the green result below
+as "no Markdown page points at a plan", never as "no public page does".
 """
 from __future__ import annotations
 

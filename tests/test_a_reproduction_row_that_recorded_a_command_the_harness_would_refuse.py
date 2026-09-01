@@ -14,6 +14,13 @@ it. The evidence field of a row fails the guard of the harness that wrote it.
 Both directions are asserted here. The raw `--cmd` string must survive verbatim
 when the CLI supplied one, and an in-process caller with argv only must get a
 spelling that splits back to the same argv and clears the guard.
+
+One more read in the same module joined this file on 2026-09-01, for the same
+reason one layer down: `--brief-file` was read under `except OSError`, and the
+decode inside `read_text` raises `UnicodeDecodeError`, a ValueError and a
+sibling of `json.JSONDecodeError` rather than any kind of OSError. A brief
+holding one stray byte therefore left the judge as a traceback instead of the
+exit 2 its own message promises.
 """
 from __future__ import annotations
 
@@ -98,6 +105,49 @@ def test_promote_records_the_same_faithful_command(runs, tmp_path):
     falsified = [r for r in _reproduction_rows(runs) if r["verdict"] == "FALSIFIED"]
     assert len(falsified) == 1
     assert falsified[0]["reproduction"]["cmd"] == green_raw
+
+
+def test_an_undecodable_brief_file_exits_two_not_a_traceback(tmp_path, capsys):
+    """The judge's `--brief-file` read promised exit 2 and could not deliver it.
+
+    MEASURED 2026-09-01 while mutation-testing this module. The handler was
+    `except OSError`, and the decode happens INSIDE `read_text`:
+    `UnicodeDecodeError` is a ValueError, a sibling of `json.JSONDecodeError`
+    and no kind of OSError, so a brief holding one stray byte left `cmd_judge`
+    as a traceback with interpreter exit 1 while the operator was told to
+    expect 2.
+
+    Driven through `main`, because the exit code is the subject and the
+    argument parsing is what produces it.
+    """
+    bad = tmp_path / "brief.md"
+    bad.write_bytes(b"# brief\n\xff\xfe\n")
+
+    rc = disp.main(["--judge", "--run-id", "r-brief", "--target", "t",
+                    "--finding", "H1", "--pass", "2.5a",
+                    "--family", "kimi", "--brief-file", str(bad)])
+
+    assert rc == 2, rc
+    assert "cannot read --brief-file" in capsys.readouterr().err
+
+
+def test_a_readable_brief_file_gets_past_the_read(tmp_path, capsys, runs):
+    """The control. `return 2` for every brief would satisfy the test above.
+
+    An EMPTY readable brief is refused for a different, named reason, which is
+    what shows the read itself succeeded rather than being short-circuited.
+    """
+    empty = tmp_path / "brief.md"
+    empty.write_text("   \n", encoding="utf-8")
+
+    rc = disp.main(["--judge", "--run-id", "r-brief", "--target", "t",
+                    "--finding", "H1", "--pass", "2.5a",
+                    "--family", "kimi", "--brief-file", str(empty)])
+
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "cannot read --brief-file" not in err
+    assert "non-empty content is required" in err
 
 
 def test_a_plain_command_with_nothing_to_quote_is_unchanged(runs):

@@ -60,8 +60,24 @@ STALE_THRESHOLD = 30 * 86400    # quiet for a month
 
 
 def run_cmd(cmd: list, cwd: str = None, check: bool = True) -> subprocess.CompletedProcess:
-    """Run a subprocess command."""
-    return subprocess.run(cmd, cwd=cwd, check=check, capture_output=True, text=True)
+    """Run a subprocess command.
+
+    `errors="replace"` because `text=True` alone decodes strictly, and strict
+    decoding of git's output raises `UnicodeDecodeError` - a `ValueError`, so
+    caught by neither the `(CalledProcessError, FileNotFoundError, OSError)`
+    around the pull in `ensure_per_exec_repos` nor anything above it. git quotes
+    branch names, paths and a remote's own bytes back on stderr, so this is not
+    exotic. MEASURED 2026-09-01: a single 0xff byte on one exec's pull stderr
+    ended the whole dashboard in a traceback, and the failed-pull warning
+    written three lines below the call - the control that exists so a stale
+    clone is never presented as current - never ran.
+
+    Replace rather than a wider `except`: the stderr text is what that warning
+    quotes, so a degraded message keeps the operator's diagnostic where
+    swallowing would print "no output".
+    """
+    return subprocess.run(cmd, cwd=cwd, check=check, capture_output=True,
+                          text=True, errors="replace")
 
 
 # repo_name_for moved to scripts/utils/workspace.py so aggregate-crm.py reads
@@ -117,11 +133,18 @@ def read_last_commit(repo_path: Path) -> str | None:
     a git repo, the repo has no commits yet, or git is not installed. A freshly
     provisioned overlay hits the second case, and that is a real state to show,
     not an error to raise.
+
+    This builds its own `subprocess.run` rather than going through `run_cmd`, so
+    it needs the same `errors="replace"` for the same reason: `text=True` decodes
+    strictly, and `UnicodeDecodeError` is a `ValueError` that walks straight past
+    the `(OSError, FileNotFoundError)` below. git writes the offending path to
+    stderr when it cannot read a repo, and `capture_output` decodes both streams,
+    so the documented "returns None" fallback was defeated by one byte.
     """
     try:
         result = subprocess.run(
             ["git", "-C", str(repo_path), "log", "-1", "--format=%cI"],
-            capture_output=True, text=True, check=False,
+            capture_output=True, text=True, errors="replace", check=False,
         )
     except (OSError, FileNotFoundError):
         return None
@@ -277,7 +300,14 @@ def find_shared_contacts(exec_repos: list) -> int:
             # disagreed about a number they both print.
             try:
                 fm, _body = parse_frontmatter_str(f.read_text(encoding="utf-8"))
-            except OSError as exc:
+            except (OSError, UnicodeDecodeError) as exc:
+                # `UnicodeDecodeError` is a `ValueError`, not an `OSError`, so
+                # one contact record saved in a non-UTF-8 encoding raised out
+                # of this loop and killed the whole fleet dashboard: no table,
+                # no JSON, no per-row degradation. That is the same shape as
+                # the `collect_exec_state` NameError this file was fixed for,
+                # one function further down, and the handler already here says
+                # a contact it cannot read is skipped with a warning.
                 print(f"  {YELLOW}[warn]{RESET} unreadable contact {f}: {exc}",
                       file=sys.stderr)
                 continue

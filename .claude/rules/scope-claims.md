@@ -98,7 +98,12 @@ which "session" means a fireside meeting.
 The detector is deliberately wide and its false positives are a feature: a
 defect of this shape is written in whatever words the author reached for, not in
 a fixed phrase. Floors on the walk pin it against decay, since a phrase list
-that matches nothing passes everything.
+that matches nothing passes everything. The floors are PER SEARCHED TREE as well
+as over the union: measured 2026-09-01, `scripts/` holds 28 claims in 9 files and
+`.claude/hooks/` holds 16 in 7, so the hooks tree dropping out of the walk
+entirely cleared the union floors by two claims and one file, and would have
+cleared them outright once two more `scripts/` claims landed. A floor over the
+union is satisfied while one source contributes zero.
 
 **What the gate does not establish**, stated here rather than dropped. It checks
 that a resolver is named and still bound; it cannot check that the named

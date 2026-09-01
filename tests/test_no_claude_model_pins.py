@@ -27,17 +27,29 @@ the eval. A run record naming the model that ran is correct, not a stale pin.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
+sys.path.insert(0, str(ROOT))
+
+from scripts.utils.claude_models import FAMILIES  # noqa: E402
 
 # A Claude model named with a version: `claude-opus-5`, `claude-sonnet-4-6`,
 # `claude-haiku-4-5-20251001`. Bare `opus` / `sonnet` / `haiku` are families and
 # are exactly what callers are supposed to use.
-_PINNED_ID = re.compile(r"claude-(opus|sonnet|haiku|fable)-[\d]", re.IGNORECASE)
+#
+# The alternation is DERIVED from the resolver's own family tuple, never retyped.
+# Until 2026-09-01 it was a literal `(opus|sonnet|haiku|fable)` living beside a
+# resolver that owns the same list, which is the one thing this guard cannot
+# afford: the day a fifth family ships, `claude_models.FAMILIES` gains it, every
+# caller may pin it, and a hand-written alternation goes on reading green over
+# the pin it was written to find. Deriving it means the guard cannot know less
+# about the families than the resolver does.
+_PINNED_ID = re.compile(r"claude-(" + "|".join(FAMILIES) + r")-[\d]", re.IGNORECASE)
 
 # The one file allowed to hold the floor.
 _RESOLVER = SCRIPTS / "utils" / "claude_models.py"
@@ -52,10 +64,15 @@ def _guarded_sources() -> list[Path]:
     the daemon stayed frozen while the code looked de-pinned. A guard that reads
     only one file type finds only one kind of pin.
     """
-    patterns = ("*.py", "*.yaml", "*.yml", "*.json")
+    return [p for pattern in _PATTERNS for p in _sources_matching(pattern)]
+
+
+_PATTERNS = ("*.py", "*.yaml", "*.yml", "*.json")
+
+
+def _sources_matching(pattern: str) -> list[Path]:
     return [
         p
-        for pattern in patterns
         for p in sorted(SCRIPTS.rglob(pattern))
         if p != _RESOLVER and "__pycache__" not in p.parts
     ]
@@ -129,3 +146,23 @@ def test_the_scan_still_finds_the_sources():
     found = _guarded_sources()
 
     assert len(found) >= 250, f"only {len(found)} sources reached the model-pin gate"
+
+
+def test_the_config_templates_still_reach_the_gate_on_their_own():
+    """The floor above is over the UNION, and `*.py` alone clears it.
+
+    Measured 2026-09-01: 386 Python files against 10 config files. Dropping
+    `*.yaml` and `*.json` from `_PATTERNS` leaves 386 sources, the floor of 250
+    still passes, and the guard goes silently blind to config templates - which
+    is the exact miss `_guarded_sources`' own docstring was written to record
+    (`sentinel_config.example.yaml` pinned a Haiku release while the code looked
+    de-pinned). A floor over a union is satisfied while one source contributes
+    nothing.
+    """
+    configs = [p for pattern in ("*.yaml", "*.yml", "*.json")
+               for p in _sources_matching(pattern)]
+
+    assert len(configs) >= 5, (
+        f"only {len(configs)} config templates reached the model-pin gate; the "
+        f"file type that carried the last real pin is no longer being read")
+    assert len(_sources_matching("*.py")) >= 250

@@ -76,6 +76,7 @@ _RATE_SEQ = itertools.count()
 
 HOOK = ROOT / ".claude" / "hooks" / "_dispatch.py"
 REDIRECT = ROOT / ".claude" / "hooks" / "data-path-redirect.py"
+PROMPT_GUARD = ROOT / ".claude" / "hooks" / "prompt-guard.py"
 
 # Assembled rather than written out, so this file does not itself carry a
 # literal CEO-only path. The wall refuses a write whose CONTENT spells one, and
@@ -654,8 +655,75 @@ def test_the_declaration_list_does_not_outlive_its_sites():
     assert stale == [], f"declared collapse sites that no longer exist: {stale}"
 
 
-def test_both_hooks_import_the_shared_collapse():
-    """The wall and the rewriter must read one implementation, not two."""
-    for hook in (HOOK, REDIRECT):
-        source = hook.read_text(encoding="utf-8")
-        assert "from scripts.utils.pathnorm import" in source, hook.name
+def _imports_pathnorm(source: str) -> bool:
+    """True when this module imports the shared collapse, in ANY import form.
+
+    Asked of the syntax tree, because the claim is "this module imports the one
+    implementation" and that is a property of the import statements, not of a
+    line of text. Three forms all satisfy it and one is what the tree uses
+    today:
+
+        from scripts.utils.pathnorm import normalize_path
+        from scripts.utils import pathnorm
+        import scripts.utils.pathnorm
+
+    while a mention inside a comment or a docstring satisfies none of them -
+    which matters here, since `data-path-redirect.py` names the module in prose
+    two lines above the import that does the work.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:  # pragma: no cover - another test's job
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == "scripts.utils.pathnorm":
+                return True
+            if node.module == "scripts.utils" and any(
+                    alias.name == "pathnorm" for alias in node.names):
+                return True
+        elif isinstance(node, ast.Import):
+            if any(alias.name == "scripts.utils.pathnorm" for alias in node.names):
+                return True
+    return False
+
+
+def test_the_import_check_reads_structure_and_not_spelling():
+    """Both directions on synthetic input, because this predicate replaced a
+    substring test that was WRONG BOTH WAYS and measured to be so.
+
+    MEASURED 2026-09-01 against `.claude/hooks/prompt-guard.py`, driving the
+    real suite:
+
+      the hook stops COLLAPSING the path it checks    -> 67 passed (green)
+      the import is rewritten to the equivalent
+      `from scripts.utils import pathnorm` form       -> 1 failed (red)
+
+    Red on the safe change, green on the unsafe one, which is the wrong
+    instrument in both of its directions at once. The regression half is not
+    this file's to hold - `tests/test_an_injection_scanner_blind_to_four_
+    spellings.py` fails on it, verified the same day - so what is fixed here is
+    the false red, which is the half that gets a guard deleted for being
+    annoying.
+    """
+    assert _imports_pathnorm("from scripts.utils.pathnorm import normalize_path")
+    assert _imports_pathnorm("from scripts.utils import pathnorm")
+    assert _imports_pathnorm("import scripts.utils.pathnorm")
+    assert _imports_pathnorm("from scripts.utils.pathnorm import (\n    normalize_rel,\n)")
+    assert not _imports_pathnorm("# from scripts.utils.pathnorm import normalize_path")
+    assert not _imports_pathnorm('"""see scripts.utils.pathnorm for the rule."""')
+    assert not _imports_pathnorm("from scripts.utils.paths import get_data_root")
+    assert not _imports_pathnorm("import os.path")
+
+
+def test_every_path_reading_hook_imports_the_shared_collapse():
+    """The wall, the rewriter and the injection scanner read one implementation.
+
+    Two until 2026-08-31, when the third was found: `prompt-guard.py` collapsed a
+    RELATIVE `file_path` with `os.path.normpath` and left the ABSOLUTE branch one
+    `if` above it raw. Four of nine spellings of one ingest file skipped the
+    injection scan, and absolute is the form the harness actually passes. Same
+    defect as the wall, in the one path-reading hook that had not been looked at.
+    """
+    for hook in (HOOK, REDIRECT, PROMPT_GUARD):
+        assert _imports_pathnorm(hook.read_text(encoding="utf-8")), hook.name

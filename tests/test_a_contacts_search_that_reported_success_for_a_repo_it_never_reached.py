@@ -200,5 +200,94 @@ def test_a_contact_without_frontmatter_is_still_given_an_owner(ob, tmp_path, mon
     assert owned_fm.count("owner:") == 1
 
 
+def _one_contact_repo(ob, tmp_path, monkeypatch, first, files: dict[str, str]):
+    """Stub `run_cmd` so only `first` clones, carrying the named contact files."""
+
+    def run_cmd(cmd, cwd=None, check=True):
+        if cmd[:3] == ["gh", "repo", "clone"]:
+            repo = cmd[3].split("/")[-1]
+            if repo != first:
+                raise subprocess.CalledProcessError(1, cmd, stderr="not found")
+            contacts = Path(cmd[4]) / "crm" / "contacts"
+            contacts.mkdir(parents=True, exist_ok=True)
+            for name, body in files.items():
+                (contacts / name).write_text(body, encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(ob, "run_cmd", run_cmd)
+
+
+def test_a_frontmatter_block_with_no_owner_line_is_given_one(ob, tmp_path,
+                                                             monkeypatch):
+    """The third shape, and the only one nothing measured.
+
+    `reassign_contacts` has three branches: a frontmatter block carrying
+    `owner:`, a frontmatter block WITHOUT it, and no block at all. The first and
+    the third had cases; the middle one did not. MEASURED 2026-09-01 by deleting
+    the `n == 0` append: the whole shard stayed green while a card with a real
+    frontmatter block landed in the CEO's CRM owned by nobody, which the code's
+    own comment calls "the one thing reassign is supposed to do".
+    """
+    first, _second = _wire(ob, tmp_path, monkeypatch)
+    _one_contact_repo(ob, tmp_path, monkeypatch, first, {
+        "ownerless.md": "---\nname: Q Branch\ncompany: Acme Telecom\n---\n\nnotes\n",
+    })
+
+    ob.reassign_contacts(SLUG, "vesper-lynd")
+
+    card = (tmp_path / "data" / "crm" / "contacts" / "ownerless.md").read_text(
+        encoding="utf-8")
+    block = card.split("---")[1]
+    assert "owner: vesper-lynd" in block, card
+    assert block.count("owner:") == 1, card
+    # The fields that were already there survive the insert.
+    assert "name: Q Branch" in block
+    assert "company: Acme Telecom" in block
+    assert "Transfer note" in card
+
+
+def test_a_card_already_in_the_destination_crm_is_not_overwritten(ob, tmp_path,
+                                                                  monkeypatch,
+                                                                  capsys):
+    """The skip branch had no case either, and losing to it is silent data loss.
+
+    MEASURED 2026-09-01 by forcing the `dest_file.exists()` test to False: the
+    shard stayed green while the CEO's own version of a shared contact, notes
+    and all, was replaced by the departing exec's copy.
+    """
+    first, _second = _wire(ob, tmp_path, monkeypatch)
+    _one_contact_repo(ob, tmp_path, monkeypatch, first, {
+        "moneypenny.md": "---\nname: Moneypenny\nowner: james-bond\n---\n\nexec copy\n",
+    })
+    dst = tmp_path / "data" / "crm" / "contacts"
+    dst.mkdir(parents=True)
+    mine = dst / "moneypenny.md"
+    mine.write_text("---\nname: Moneypenny\nowner: vesper-lynd\n---\n\nCEO copy\n",
+                    encoding="utf-8")
+    before = mine.read_bytes()
+
+    ob.reassign_contacts(SLUG, "vesper-lynd")
+
+    assert mine.read_bytes() == before, "the CEO's own card was replaced"
+    out = capsys.readouterr().out
+    assert "moneypenny.md" in out
+    assert "already exists" in out
+
+
+def test_a_card_that_is_not_yet_in_the_destination_is_still_written(ob, tmp_path,
+                                                                    monkeypatch):
+    """The other jaw: a skip that fires for every card reassigns nothing."""
+    first, _second = _wire(ob, tmp_path, monkeypatch)
+    _one_contact_repo(ob, tmp_path, monkeypatch, first, {
+        "moneypenny.md": "---\nname: Moneypenny\nowner: james-bond\n---\n\nexec copy\n",
+    })
+
+    ob.reassign_contacts(SLUG, "vesper-lynd")
+
+    card = tmp_path / "data" / "crm" / "contacts" / "moneypenny.md"
+    assert card.is_file()
+    assert "exec copy" in card.read_text(encoding="utf-8")
+
+
 if __name__ == "__main__":
     sys.exit(__import__("pytest").main([__file__, "-q"]))

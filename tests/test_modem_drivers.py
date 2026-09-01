@@ -39,6 +39,39 @@ def test_e5800_send_egmr_channel_false_is_failure():
     assert ok is False
 
 
+def test_e5800_send_egmr_refuses_an_ok_the_channel_says_it_did_not_carry():
+    """The near-miss the case above cannot reach.
+
+    That fixture pairs `channel_status: false` with an EMPTY `data`, so
+    `"OK" in ""` is already False and the channel test is never the reason for
+    the answer. MEASURED 2026-09-01 by deleting the `channel_status` conjunct
+    from `send_egmr`: every modem test stayed green, and the driver would then
+    have called a write successful over a channel the device itself said was
+    down. `read_imei`'s docstring cites this very conjunct as the precedent it
+    was following, so the claim was resting on an unmeasured line.
+
+    The consequence is not cosmetic: `modem-tune._apply_imei` files a successful
+    write into the device history AND into the never-repeat `used` list, so an
+    IMEI the modem never took is recorded as spent.
+    """
+    ssh = FakeSSH({"EGMR": json.dumps(
+        {"data": "\r\nOK\r\n", "channel_status": False})})
+    d = md.E5800Driver(ssh)
+
+    ok, _raw = d.send_egmr("356741100000024")
+
+    assert ok is False, "an OK the device said it never carried was called a write"
+
+
+def test_e5800_send_egmr_still_succeeds_when_the_channel_carried_it():
+    """The do-not-break half: the refusal must not swallow a real write."""
+    ssh = FakeSSH({"EGMR": json.dumps(
+        {"data": "\r\nOK\r\n", "channel_status": True})})
+    d = md.E5800Driver(ssh)
+
+    assert d.send_egmr("356741100000024")[0] is True
+
+
 def test_xe300_read_imei_via_gl_modem():
     ssh = FakeSSH({"gl_modem AT": "\r\n356741100000032\r\nOK\r\n"})
     d = md.Xe300Driver(ssh)

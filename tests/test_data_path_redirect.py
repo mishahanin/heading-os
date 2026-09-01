@@ -136,6 +136,75 @@ def test_no_op_when_data_in_tree():
     assert res == {}
 
 
+# ----------------------------------------------------------------------
+# Every tool in `_PATH_FIELDS`, not just the four this file happened to use
+# ----------------------------------------------------------------------
+#
+# The hook maps seven tools to their path fields. Until 2026-09-01 this file
+# exercised four of them -- Read, Write, Grep, Glob -- so `MultiEdit` and
+# `NotebookEdit` were declared and never driven. Measured: deleting either row
+# from `_PATH_FIELDS` left this file green, and so did all twelve files in the
+# repository that name this hook.
+#
+# What a dropped row costs is stated in the hook's own docstring. An unredirected
+# `MultiEdit` on `outputs/report.md` does not fail; it succeeds against the
+# ENGINE path, which is a write into the public repository instead of the private
+# overlay. This is a PreToolUse hook, so nothing downstream re-checks it.
+#
+# `NotebookEdit` also carries the ONLY field name that is not `file_path` or
+# `path`, so it is the single case that proves the mapping is read per tool
+# rather than assumed.
+#
+# The tool list below is a LITERAL, deliberately. Deriving it from the hook's own
+# `_PATH_FIELDS` would make a deleted row delete its own test case and pass -- the
+# shape a neighbouring guard already has, where dropping `NotebookEdit` silently
+# removed six of its parametrized cases and stayed green.
+
+_EVERY_REDIRECTED_TOOL = [
+    ("Read", "file_path"),
+    ("Write", "file_path"),
+    ("Edit", "file_path"),
+    ("MultiEdit", "file_path"),
+    ("NotebookEdit", "notebook_path"),
+    ("Grep", "path"),
+    ("Glob", "path"),
+]
+
+
+@pytest.mark.parametrize("tool,field", _EVERY_REDIRECTED_TOOL)
+def test_every_path_carrying_tool_is_redirected(data_sibling, tool, field):
+    res = _run(
+        {"tool_name": tool, "tool_input": {field: "outputs/report.md"}},
+        str(data_sibling),
+    )
+    upd = _updated(res)
+    assert upd is not None, (
+        f"{tool} was not redirected, so its {field} would resolve against the "
+        f"ENGINE tree; a write there lands in the public repository"
+    )
+    assert upd[field] == str(data_sibling / "outputs/report.md")
+
+
+@pytest.mark.parametrize("tool,field", _EVERY_REDIRECTED_TOOL)
+def test_every_path_carrying_tool_leaves_engine_paths_alone(data_sibling, tool, field):
+    """The other direction, per tool. Without it, a hook that rewrote EVERY
+    relative path would satisfy the case above for all seven."""
+    res = _run(
+        {"tool_name": tool, "tool_input": {field: "scripts/prime-health-parallel.py"}},
+        str(data_sibling),
+    )
+    assert _updated(res) is None, f"{tool} redirected an engine path"
+
+
+def test_the_tool_coverage_floor_holds():
+    """A parametrize that shrank to nothing would pass silently."""
+    assert len(_EVERY_REDIRECTED_TOOL) == 7, _EVERY_REDIRECTED_TOOL
+    assert ("NotebookEdit", "notebook_path") in _EVERY_REDIRECTED_TOOL, (
+        "the one tool whose path field is neither file_path nor path is the "
+        "only case that proves the mapping is read per tool"
+    )
+
+
 def test_non_path_tool_ignored(data_sibling):
     res = _run(
         {"tool_name": "Bash", "tool_input": {"command": "cat context/x.md"}},

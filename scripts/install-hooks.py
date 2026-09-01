@@ -83,15 +83,21 @@ if [ -n "$STAGED" ]; then
         echo "Re-stage them (git add), or commit them separately."
         exit 1
     fi
-    # An ESCAPED path is refused rather than handed to the scanner.
+    # An ESCAPED path is refused rather than committed.
     #
-    # Without `-z`, git C-quotes any path holding a newline, a quote, a
-    # backslash or a non-ASCII byte, wrapping the whole thing in double quotes.
-    # The scanner's `--stdin` contract is one raw path per line, so it receives
-    # a literal that names no file on disk. MEASURED 2026-08-30 with a staged
-    # file called `two\\nlines.env`: the scanner printed "No secrets detected."
-    # and exited 0 over a file it never opened. A clean verdict for an unread
-    # file is the failure this whole hook exists to prevent.
+    # `$STAGED` above is the un-`-z` listing, in which git C-quotes any path
+    # holding a newline, a quote, a backslash or a non-ASCII byte, wrapping the
+    # whole thing in double quotes. MEASURED 2026-08-30 with a staged file
+    # called `two\\nlines.env`, back when that listing was also what the scanner
+    # was handed: the scanner printed "No secrets detected." and exited 0 over a
+    # file it never opened. A clean verdict for an unread file is the failure
+    # this whole hook exists to prevent.
+    #
+    # Since 2026-09-01 the scanner is fed NUL-delimited (below), so an escaped
+    # path can no longer reach it as a literal and this refusal is the SECOND
+    # line, not the only one. It is kept deliberately: it is the operator's
+    # standing posture that a name git has to escape gets renamed rather than
+    # committed, and a refusal can only over-block, never let a secret through.
     #
     # A line beginning with a double quote is git's own signal that it escaped
     # the path, and a filename that genuinely starts with one is escaped too, so
@@ -104,8 +110,30 @@ if [ -n "$STAGED" ]; then
         printf '%s\\n' "$STAGED" | grep '^"'
         exit 1
     fi
-    # Run scanner - if python3 fails, warn but don't block
-    echo "$STAGED" | python3 scripts/secret-scanner.py --stdin
+    # NUL-delimited handoff, NOT `echo "$STAGED" | ... --stdin`.
+    #
+    # `--stdin` reads one path per LINE and strips each line. A leading or
+    # trailing space is legal in a POSIX filename and git prints it verbatim
+    # WITHOUT C-quoting it, so the escape guard above does not see it either.
+    # Stripped, the name opens nothing, and `scan_files` skips a path that is
+    # not a file in silence. MEASURED 2026-09-01 in a scratch repository running
+    # this generated hook: `harmless.txt`, `" leading-space.env"` and
+    # `"trailing-space.env "` staged together, the two padded files each holding
+    # a `ghp_`-shaped token, produced "No secrets detected." and exit 0. The
+    # identical token in `control.env` was refused. A file whose name is padded
+    # with a space carried a secret straight past the commit gate.
+    #
+    # The fix is to stop the shell being the transport for a filename, not to
+    # quote harder: `-z` emits raw NUL-separated bytes and `--stdin0` splits on
+    # NUL, so nothing is stripped and nothing is split on a newline. This is the
+    # same handoff `scripts/push-all.py` and `scripts/publish-service.py`
+    # already use; the commit-time gate, which is the bypassable layer, had
+    # fallen behind the unbypassable push wall.
+    #
+    # `EXIT_CODE=$?` after a pipeline is the last command's status, i.e.
+    # python3's, exactly as it was before.
+    git diff --cached --name-only --diff-filter=ACMR -z |
+        python3 scripts/secret-scanner.py --stdin0
     EXIT_CODE=$?
 
     if [ $EXIT_CODE -eq 1 ]; then

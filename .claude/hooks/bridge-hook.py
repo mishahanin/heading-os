@@ -9,6 +9,7 @@ Subcommands:
 Reads hook payload from stdin. NEVER writes to stdout (SessionStart stdout
 gets injected into Claude's context). All diagnostics go to stderr.
 """
+import contextlib
 import http.client
 import json
 import os
@@ -22,6 +23,71 @@ REGISTRY = (
     / ".claude" / "state" / "active-sessions.json"
 )
 
+# `checkpoint_paths.file_lock`, when this clone has it. Located by walking for
+# `scripts/utils/`, the same way `checkpoint-inject.py` does, so a hook shipped
+# inside a plugin bundle finds its own copy rather than counting parents.
+#
+# OPTIONAL on purpose. A hook that cannot import a helper must still register the
+# session; failing to import is not a reason to lose the entry. So `_CP` stays
+# None, `_registry_lock` degrades to a no-op, and one line goes to stderr saying
+# the registry write is unserialised. Loud degradation, never a silent one.
+_CP = None
+for _candidate in [Path(__file__).resolve().parent, *Path(__file__).resolve().parents]:
+    if (_candidate / "scripts" / "utils" / "checkpoint_paths.py").is_file():
+        sys.path.insert(0, str(_candidate))
+        try:
+            from scripts.utils import checkpoint_paths as _CP  # noqa: E402
+        except Exception as _exc:  # noqa: BLE001 - reported, never fatal
+            print(f"bridge-hook: checkpoint_paths unavailable ({_exc}); "
+                  f"registry writes are not serialised", file=sys.stderr)
+        break
+
+
+@contextlib.contextmanager
+def _registry_lock():
+    """Serialise the registry read-modify-write across concurrent sessions.
+
+    `_atomic_write` makes each WRITE indivisible, which is a DIFFERENT guarantee
+    from making a read and its following write indivisible. Both `session_start`
+    and `session_end` load the whole registry, mutate their own key, and write
+    the whole thing back; two sessions overlapping in that span lose one of the
+    two mutations, and `os.replace` gives no error when it happens.
+
+    `session_end` is the worse half: it writes back a copy loaded before a
+    concurrent `session_start` landed, deleting the entry of a session that is
+    still alive. That is the same defect the 2026-08-23 audit fixed once already
+    by rekeying from cwd to session_id, arriving through a different door.
+
+    The registry lives at `~/.claude/state/active-sessions.json`, a PER-USER path
+    shared by every project on the machine, so the racing writers need not be in
+    this workspace. `bridge-hook.py` is its only writer, so every racer is
+    another copy of this hook.
+
+    Found by the 2026-08-31 audit of the hooks family, its first ever. The
+    primitive is `scripts/utils/checkpoint_paths.file_lock`, which is bounded and
+    degrades to unlocked with a stderr line rather than blocking: a hook that
+    waits forever is worse than a hook that races, and the Stop hook has a
+    90-second budget.
+    """
+    if _CP is None:
+        # ABSENT was the silent case, and it is the ordinary one. The comment
+        # above `_CP` promises "one line goes to stderr saying the registry write
+        # is unserialised. Loud degradation, never a silent one", and the only
+        # branch that printed was the one where the file WAS found and its import
+        # raised. A public engine clone carries no `scripts/utils/`, so the walk
+        # finds nothing, no exception is raised, and nothing was said. MEASURED
+        # 2026-08-31 by copying this hook to a directory with no `scripts/utils`
+        # above it: `session-start` exited 0, wrote the entry, and printed 0
+        # bytes of stderr. Said here rather than at import, so it names a
+        # read-modify-write that is actually happening: `stop` touches no
+        # registry and has nothing to warn about.
+        print("bridge-hook: checkpoint_paths not available; this registry "
+              "read-modify-write is not serialised", file=sys.stderr)
+        yield False
+        return
+    with _CP.file_lock(REGISTRY.with_suffix(".lock"), label="bridge-hook") as held:
+        yield held
+
 
 def _atomic_write(path: Path, content: str) -> None:
     """Atomically write content to path via write-to-tmp + os.replace.
@@ -34,7 +100,14 @@ def _atomic_write(path: Path, content: str) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(content)
         os.replace(tmp, path)
-    except Exception:
+    except BaseException:
+        # BaseException, not Exception. `KeyboardInterrupt` and `SystemExit` do
+        # not derive from `Exception`, so a Ctrl-C or an interpreter shutdown
+        # landing between the mkstemp and the replace walked past this clause
+        # and left the scratch file beside the target, named `tmpXXXXXXXX` and
+        # owned by nothing. This hook writes the session registry at session
+        # start and session end, so an interrupt is not a remote possibility.
+        #
         # Cleanup the orphan tmp file. Swallow only the cleanup OSError -
         # the original exception is re-raised below so the caller sees it.
         try:
@@ -51,11 +124,24 @@ def _load_registry() -> dict:
         return {}
     try:
         loaded = json.loads(REGISTRY.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
+    except (OSError, ValueError) as exc:
         # OSError was uncaught until 2026-08-23, so an unreadable or locked
         # registry crashed session-start with a traceback while this docstring
         # promised recovery. A permission or lock error is exactly the case the
         # promise was written for.
+        #
+        # `ValueError`, not `json.JSONDecodeError`, since 2026-09-01. The decode
+        # happens INSIDE `read_text(encoding="utf-8")`, before `json.loads` is
+        # reached at all, and `UnicodeDecodeError` is a SIBLING of
+        # `JSONDecodeError` under `ValueError` rather than a subclass of it. So
+        # the narrower tuple walked straight past one byte that is not UTF-8.
+        # MEASURED 2026-09-01: a registry holding a single 0xff made both
+        # `session-start` and `session-end` exit 1 with a traceback, and because
+        # the file is only ever rewritten AFTER this read, it could never heal -
+        # every session on the machine stayed unregistered until a human deleted
+        # it. The daemon-side reader of this same file,
+        # `scripts/bridge_daemon/sessions.read_registry`, had already been fixed
+        # for exactly this; its writer had not.
         print(f"bridge-hook: registry unreadable ({exc}); starting empty",
               file=sys.stderr)
         return {}
@@ -84,16 +170,17 @@ def session_start(payload: dict) -> int:
     if not sid or not cwd:
         print("bridge-hook: missing session_id or cwd in session-start payload", file=sys.stderr)
         return 1
-    reg = _load_registry()
-    reg[sid] = {
-        "session_id": sid,
-        "cwd": cwd,
-        "transcript_path": payload.get("transcript_path"),
-        "pid": os.getppid(),
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "source": payload.get("source", "unknown"),
-    }
-    _atomic_write(REGISTRY, json.dumps(reg, indent=2))
+    with _registry_lock():
+        reg = _load_registry()
+        reg[sid] = {
+            "session_id": sid,
+            "cwd": cwd,
+            "transcript_path": payload.get("transcript_path"),
+            "pid": os.getppid(),
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "source": payload.get("source", "unknown"),
+        }
+        _atomic_write(REGISTRY, json.dumps(reg, indent=2))
     return 0
 
 
@@ -107,18 +194,19 @@ def session_end(payload: dict) -> int:
     """
     sid = payload.get("session_id")
     cwd = payload.get("cwd")
-    reg = _load_registry()
-    changed = False
-    if sid and sid in reg:
-        del reg[sid]
-        changed = True
-    # Legacy cwd-keyed entry from before the rekey, and only if it is OURS.
-    if cwd and cwd in reg and isinstance(reg[cwd], dict) \
-            and reg[cwd].get("session_id") == sid:
-        del reg[cwd]
-        changed = True
-    if changed:
-        _atomic_write(REGISTRY, json.dumps(reg, indent=2))
+    with _registry_lock():
+        reg = _load_registry()
+        changed = False
+        if sid and sid in reg:
+            del reg[sid]
+            changed = True
+        # Legacy cwd-keyed entry from before the rekey, and only if it is OURS.
+        if cwd and cwd in reg and isinstance(reg[cwd], dict) \
+                and reg[cwd].get("session_id") == sid:
+            del reg[cwd]
+            changed = True
+        if changed:
+            _atomic_write(REGISTRY, json.dumps(reg, indent=2))
     return 0
 
 
@@ -135,9 +223,18 @@ def _read_user_choice(timeout: int) -> str:
         if sys.platform == "win32":
             import msvcrt
             import time as _t
-            deadline = _t.time() + timeout
+            # `monotonic`, not `time`. This branch was left on wall-clock time
+            # when the POSIX branch below was rewritten to be bounded, so the
+            # sentence that rewrite added twenty lines down, "every wait is
+            # bounded, so the worst case is the timeout the caller asked for",
+            # was false on Windows. An NTP correction or a manual clock change
+            # that steps the system clock BACKWARD by N seconds extended this
+            # loop by N, blocking the Stop hook and the session exit with it.
+            # `monotonic` cannot step backward, so the bound holds. Found by the
+            # 2026-08-31 audit of the hooks family, its first ever.
+            deadline = _t.monotonic() + timeout
             buf = ""
-            while _t.time() < deadline:
+            while _t.monotonic() < deadline:
                 if msvcrt.kbhit():
                     ch = msvcrt.getwch()
                     if ch in ("\r", "\n"):

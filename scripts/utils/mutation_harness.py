@@ -39,10 +39,15 @@ harness, not a finding.
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 try:
@@ -59,6 +64,157 @@ except ImportError:  # pragma: no cover - POSIX is the only platform CI runs
 
 DEFAULT_TIMEOUT_S = 300
 DEFAULT_MEMORY_LIMIT_GB = 4
+
+#: How long to wait for another harness to release the same source file.
+#: Generous, because the holder is running a whole pytest invocation under it.
+LOCK_WAIT_S = 1800
+LOCK_POLL_S = 0.5
+
+
+class MutationUnsafe(RuntimeError):
+    """The tree cannot be left in a state this module is willing to vouch for.
+
+    Raised rather than returned, and never caught inside this module, because
+    every caller of `run_mutations` is an audit harness whose whole output is a
+    claim about a file it restored. A verdict printed over a tree the harness
+    could not restore is worse than no verdict.
+    """
+
+
+@contextlib.contextmanager
+def _restore_on_sigterm():
+    """Turn SIGTERM into an exception, so the restore `finally` actually runs.
+
+    Python's default SIGTERM disposition terminates the process immediately.
+    `finally` does NOT run, so a harness killed by a wrapping `timeout`, by a
+    supervisor, or by `kill` leaves its mutation in the working tree with no
+    message printed at all.
+
+    MEASURED 2026-09-01: an audit batch was killed mid-window by the Bash tool's
+    own 120-second default, and `scripts/run-tests.py` was left holding
+    `return 0` in place of `return proc.returncode` - the push gate reporting
+    success over a red suite. The only reason it was recovered is that the
+    backup carries the pid, so the agent could tell its own leftover from a
+    peer's live window. Nothing printed; the next run reported ANCHOR MISSING
+    and was nearly read as a peer's damage.
+
+    SIGINT already raises `KeyboardInterrupt`, so it was never affected. This
+    brings SIGTERM to the same footing. SIGKILL cannot be caught by anything and
+    stays the case the pid-named backup exists for.
+
+    Signal handlers can only be installed from the main thread; a harness driven
+    from a worker thread degrades to the previous behaviour and says so once.
+    """
+    def _raise(signum, _frame):
+        raise KeyboardInterrupt(f"terminated by signal {signum}")
+
+    try:
+        previous = signal.signal(signal.SIGTERM, _raise)
+    except ValueError:  # not the main thread
+        print("note: not on the main thread, so a SIGTERM will not run the "
+              "restore; a `.mutbak.<pid>` beside the source is the sign",
+              file=sys.stderr)
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+@contextlib.contextmanager
+def _target_lock(root: Path, rel: str, *, wait: float = LOCK_WAIT_S):
+    """Serialise every harness that mutates the same source file.
+
+    Two agents mutating one file is not a slow path, it is data loss, and it
+    happened twice on 2026-09-01. The backup path was `<target>.mutbak` with no
+    process in it, so with harness A and harness B on the same file the order
+    that destroys work is:
+
+        A copies the clean file to .mutbak
+        A writes its mutation
+        B copies the file -- now MUTATED -- over the same .mutbak
+        A's finally moves .mutbak back, so the file keeps A's mutation
+        B's finally finds no .mutbak at all
+
+    `scripts/utils/workspace.py` was found that afternoon with a peer's mutation
+    still applied, no `.mutbak` beside it, and its mtime untouched, which is
+    exactly this: `copy2` and `move` both preserve mtime, so neither `ls` nor a
+    glance at `git status` showed anything. It read as a live regression in the
+    data-root seam.
+
+    Unlike `checkpoint_paths.file_lock`, this one does NOT proceed unlocked when
+    the wait expires. That primitive serves hooks with a turn budget, where
+    racing beats hanging. Here, proceeding unlocked is the failure being
+    prevented, so a timeout raises.
+
+    The lock file lives under `.tmp/`, which is gitignored, so no sidecar can
+    reach a commit (`tests/test_lock_sidecars_are_never_tracked.py`).
+    """
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - POSIX is the only platform CI runs
+        # No interlock available. Say so rather than pretending: a silent
+        # no-op here restores the exact race described above.
+        print(f"note: no file locking on this platform; {rel} is not "
+              "protected from a concurrent harness", file=sys.stderr)
+        yield
+        return
+
+    slug = rel.replace("/", "__").replace("\\", "__")
+    lock_path = root / ".tmp" / "mutation-locks" / f"{slug}.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + wait
+    with open(lock_path, "a+") as handle:  # noqa: SIM115 - closed by the with
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise MutationUnsafe(
+                        f"another harness has held {rel} for {wait:.0f}s. "
+                        f"Refusing to mutate it concurrently: that is how a "
+                        f"peer's mutation gets left in the tree.") from None
+                time.sleep(LOCK_POLL_S)
+        try:
+            yield
+        finally:
+            with contextlib.suppress(OSError):
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """Replace `path`'s contents indivisibly, preserving its mode.
+
+    A plain `path.write_text(...)` truncates first and writes second, so a write
+    that fails partway leaves the file short, and on a FULL DISK it leaves the
+    file EMPTY. That is not hypothetical: on 2026-09-01 the filesystem hit 100%
+    while agents were mutating, and `scripts/utils/workspace.py` was left at
+    zero bytes, which made every test in the repository uncollectable for every
+    agent at once. An empty Python file still compiles, so the sweep that
+    followed reported all 454 changed files fine.
+
+    The temp file is created in the target's own directory so `os.replace` is a
+    same-filesystem rename, which is the part that cannot half-happen.
+    """
+    mode = path.stat().st_mode
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".muttmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        # BaseException, not Exception: a Ctrl-C between mkstemp and replace
+        # otherwise orphans the scratch file beside the source it was named for.
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def _digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _limit_child(memory_limit_bytes: int):
@@ -132,10 +288,16 @@ def run_mutations(root, tests, mutations, *, timeout: int = DEFAULT_TIMEOUT_S,
     and counted as a survivor, because a mutation that never applied, or applied
     somewhere other than where its author aimed it, proved nothing.
 
-    Restoration happens in a ``finally``, and the backup is written before the
-    edit, so a kill between the two still leaves the backup on disk beside the
-    file. If this process is killed anyway, a ``.mutbak`` next to a source file
-    is the sign: move it back before trusting the tree.
+    Restoration happens in a ``finally``, the backup is written before the edit,
+    and the restore is VERIFIED against the backup's digest before the backup is
+    removed. A restore that fails or lands wrong raises `MutationUnsafe` and
+    leaves the backup on disk. If this process is killed outright, a
+    ``.mutbak.<pid>`` next to a source file is the sign: copy it back before
+    trusting the tree.
+
+    Each mutation holds an exclusive lock on its target for the whole
+    backup-mutate-run-restore window, so two harnesses cannot interleave on one
+    file. See `_target_lock` for the sequence that made this necessary.
     """
     root = Path(root)
     limit = memory_limit_gb * 1024 ** 3
@@ -157,44 +319,77 @@ def run_mutations(root, tests, mutations, *, timeout: int = DEFAULT_TIMEOUT_S,
 
     survivors = []
     for tag, rel, old, new in mutations:
-        target = root / rel
-        backup = target.with_suffix(target.suffix + ".mutbak")
-        shutil.copy2(target, backup)
-        try:
-            text = target.read_text(encoding="utf-8")
-            occurrences = text.count(old)
-            if occurrences == 0:
-                print(f"{tag:5} {rel:42} ANCHOR MISSING", flush=True)
-                survivors.append((tag, "anchor missing"))
-                continue
-            if occurrences > 1:
-                # `replace(old, new, 1)` patches the FIRST match, which for an
-                # anchor that is not unique is whichever function happens to
-                # come first in the file. Measured 2026-08-26: three mutations
-                # aimed at `_install_systemd_user_timer` and `_get_json` landed
-                # in `_install_windows_task` and `_post_json` instead, so the
-                # target code was never mutated and all three were reported as
-                # SURVIVED. That reads as a test gap in code that is in fact
-                # untested by the mutation, which is the worse of the two
-                # errors: it sends the reader to weaken a guard that was fine.
-                print(f"{tag:5} {rel:42} ANCHOR AMBIGUOUS ({occurrences}x)",
-                      flush=True)
-                survivors.append((tag, f"anchor matches {occurrences} places"))
-                continue
-            target.write_text(text.replace(old, new, 1), encoding="utf-8")
-            outcome = run_tests(root, tests, timeout=timeout,
-                                memory_limit_bytes=limit, python=python,
-                                clear_cache=False)
-            label = {"fail": "caught", "timeout": "caught (timeout)",
-                     "pass": "SURVIVED"}[outcome]
-            print(f"{tag:5} {rel:42} {label}", flush=True)
-            if outcome == "pass":
-                survivors.append((tag, rel))
-        finally:
-            shutil.move(str(backup), str(target))
+        with _restore_on_sigterm(), _target_lock(root, rel):
+            _run_one(root, rel, tag, old, new, tests, survivors,
+                     timeout=timeout, limit=limit, python=python)
 
     _clear_pycache(root)
     print(f"\n{len(mutations) - len(survivors)}/{len(mutations)} caught")
     for tag, why in survivors:
         print(f"  SURVIVOR {tag}: {why}")
     return 1 if survivors else 0
+
+
+def _run_one(root, rel, tag, old, new, tests, survivors, *, timeout, limit,
+             python):
+    """One mutation, under the caller's lock. Restores or raises, never both."""
+    target = root / rel
+    # The PID is in the name so two harnesses cannot share, and therefore
+    # cannot clobber, one backup. The lock already serialises them; this is the
+    # second layer, for the case where the lock is unavailable (non-POSIX) or a
+    # previous run died holding one.
+    backup = target.with_suffix(f"{target.suffix}.mutbak.{os.getpid()}")
+    shutil.copy2(target, backup)
+    original = _digest(backup)
+    if original != _digest(target):
+        raise MutationUnsafe(
+            f"{rel} changed between the backup and its verification. Another "
+            f"writer is active in this tree; refusing to mutate.")
+    try:
+        text = target.read_text(encoding="utf-8")
+        occurrences = text.count(old)
+        if occurrences == 0:
+            print(f"{tag:5} {rel:42} ANCHOR MISSING", flush=True)
+            survivors.append((tag, "anchor missing"))
+            return
+        if occurrences > 1:
+            # `replace(old, new, 1)` patches the FIRST match, which for an
+            # anchor that is not unique is whichever function happens to
+            # come first in the file. Measured 2026-08-26: three mutations
+            # aimed at `_install_systemd_user_timer` and `_get_json` landed
+            # in `_install_windows_task` and `_post_json` instead, so the
+            # target code was never mutated and all three were reported as
+            # SURVIVED. That reads as a test gap in code that is in fact
+            # untested by the mutation, which is the worse of the two
+            # errors: it sends the reader to weaken a guard that was fine.
+            print(f"{tag:5} {rel:42} ANCHOR AMBIGUOUS ({occurrences}x)",
+                  flush=True)
+            survivors.append((tag, f"anchor matches {occurrences} places"))
+            return
+        _write_atomic(target, text.replace(old, new, 1))
+        outcome = run_tests(root, tests, timeout=timeout,
+                            memory_limit_bytes=limit, python=python,
+                            clear_cache=False)
+        label = {"fail": "caught", "timeout": "caught (timeout)",
+                 "pass": "SURVIVED"}[outcome]
+        print(f"{tag:5} {rel:42} {label}", flush=True)
+        if outcome == "pass":
+            survivors.append((tag, rel))
+    finally:
+        # A restore is a WRITE, and a write can fail. Until 2026-09-01 this was
+        # a bare `shutil.move` whose success was assumed, and the assumption is
+        # the whole reason a mutation survived into the working tree unnoticed.
+        # `copy2` then `unlink` rather than `move`, so a failure leaves the
+        # backup on disk to restore by hand instead of consuming it.
+        try:
+            shutil.copy2(backup, target)
+            restored = _digest(target)
+        except OSError as exc:
+            raise MutationUnsafe(
+                f"could not restore {rel}: {exc}. The backup is still at "
+                f"{backup}; copy it back before trusting this tree.") from exc
+        if restored != original:
+            raise MutationUnsafe(
+                f"{rel} does not match its backup after restore. The mutation "
+                f"is still in the tree. The backup is at {backup}.")
+        backup.unlink()

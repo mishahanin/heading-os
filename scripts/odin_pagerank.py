@@ -166,6 +166,26 @@ class BrainGraph:
     def edge_count(self) -> int:
         return sum(len(v) for v in self.adjacency.values())
 
+    def resolve(self, token: str) -> str | None:
+        """The node key a wiki-link token points at, or None.
+
+        THE single definition of "does this wiki-link resolve", and it is public
+        so a second caller cannot approximate it. `build_graph`'s second pass
+        uses it, and so does `scripts/odin_brain_lint.check_dangling_references`.
+
+        Before 2026-08-31 the lint built its own note universe with a
+        NON-recursive `glob("*.md")` over six named subdirs, dropping any note
+        with no frontmatter, while this graph walks the whole brain root with
+        `rglob` and registers a node whether or not it has frontmatter. The lint
+        carried a comment claiming the two agreed: "a wiki-link the lint flags is
+        precisely one the recall graph would also fail to wire an edge for."
+        MEASURED that day on a four-note fixture, the graph resolved 4 tokens and
+        the lint 1, so three real links would have been reported as dangling. The
+        divergence ran one way only, which is why it produced false warnings
+        rather than missed ones, and why nothing had caught it.
+        """
+        return self._resolver.get(token) or self._resolver.get(_slug(token))
+
     def out_degree(self, key: str) -> int:
         return len(self.adjacency.get(key, ()))
 
@@ -246,7 +266,7 @@ def build_graph(brain_root: Path, workspace_root: Path | None = None) -> BrainGr
     # Second pass: resolve link targets to known node keys.
     for src, targets in raw_links.items():
         for tok in targets:
-            dst = g._resolver.get(tok) or g._resolver.get(_slug(tok))
+            dst = g.resolve(tok)
             if dst and dst != src:
                 g.adjacency[src].add(dst)
     return g

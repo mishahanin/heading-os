@@ -334,6 +334,50 @@ def test_a_missing_file_is_not_scanned_and_not_clean(check, tmp_path):
     assert check.scan_file(tmp_path / "gone.md", check.SUBSTRING_CRITICAL, set()) is None
 
 
+# ------------------------------------------------------------
+# 4b - the SAME rule, asked of the bytes in the index
+# ------------------------------------------------------------
+# `is_text_blob` carries its own copy of the suffix fast path and its own copy
+# of the NUL sniff; `is_text_file` does not call it for the fast path, it
+# repeats it. Two copies of one rule, and every test above drives only the
+# on-disk one. MEASURED 2026-09-01: deleting the suffix fast path from
+# `is_text_blob` alone left this file at 83 passed and the whole
+# `sanitize-check` corpus at 120 passed, 0 failed. That mutant is a silent skip
+# of a staged markdown blob carrying one NUL byte - decided by a heuristic
+# instead of by the extension, on the `--staged` path that gates a commit.
+
+
+def test_a_declared_text_blob_is_scanned_whatever_its_bytes(check):
+    """The `is_text_file` twin of this is `test_an_allowlisted_suffix_beats_the
+    _sniff`. This is the copy the `--staged` path uses, and it needs its own
+    case or the two can drift apart unnoticed."""
+    assert check.is_text_blob("weird.md", b"\x00 someone@gmail.com\n") is True
+
+
+def test_a_staged_markdown_blob_holding_a_nul_is_still_scanned(check):
+    """End of the same wire: `scan_blob` is what `--staged` calls, and `None`
+    from it means the blob was never opened but still counted."""
+    findings = check.scan_blob("weird.md", b"\x00 someone@gmail.com\n",
+                               check.SUBSTRING_CRITICAL, set())
+    assert findings, "a declared-text blob was skipped on one NUL byte"
+
+
+def test_a_binary_blob_is_still_skipped(check):
+    """The other direction: the sniff must not turn `--staged` into a binary
+    scanner, and a name outside the allowlist is decided on its bytes."""
+    assert check.is_text_blob("logo.woff2", b"wOF2\x00\x01\x00\x00" + b"\x00" * 64) is False
+    assert check.scan_blob("logo.woff2", b"wOF2\x00\x01\x00\x00" + b"\x00" * 64,
+                           check.SUBSTRING_CRITICAL, set()) is None
+
+
+def test_an_extensionless_text_blob_is_scanned_on_its_bytes(check):
+    """The suffix allowlist is a fast path, not the whole test, on this side
+    too: `LICENSE` and `.githooks/pre-push` carry no suffix at all."""
+    assert check.is_text_blob("pre-push", b"#!/bin/sh\nmail someone@gmail.com\n") is True
+    assert check.scan_blob("pre-push", b"#!/bin/sh\nmail someone@gmail.com\n",
+                           check.SUBSTRING_CRITICAL, set())
+
+
 def test_the_pass_line_counts_only_files_that_were_opened(check, tmp_path, capsys,
                                                           monkeypatch):
     text = tmp_path / "a.md"

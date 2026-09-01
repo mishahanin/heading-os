@@ -35,6 +35,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -271,6 +272,145 @@ def test_a_scrape_still_records_its_one_known_credit(fc, wired, tmp_path, capsys
     assert _cache_entries(tmp_path / "cache")[0]["credits_used"] == 1
 
 
+# ---- the read side of the same cache -------------------------------------------
+#
+# Everything above pins the KEY. `check_cache` decides whether an entry found
+# under that key is still an answer, and nothing in the tree decided any of its
+# three exits. MEASURED 2026-09-01 in a scratch copy, each mutation run against
+# every test file in the repository that touches firecrawl (184 passed at
+# baseline, and 184 passed under all three):
+#
+#   `age_hours > ttl_hours`      -> `>=`                    : 184 passed
+#   `cached.get("timestamp", 0)` -> `..., time.time())`     : 184 passed
+#   corrupt entry `return None`  -> `return {}`             : 184 passed
+#
+# The second and third are the shape this shard was told to weight: a cache that
+# serves a failure under a key nothing will ever change makes that failure
+# permanent. A timestamp-less entry read as written-just-now is fresh forever,
+# and a torn entry read as an empty answer is an empty answer forever, because
+# `scrape` writes with a plain `open(..., "w")` and the key is a hash of the URL
+# and the formats. Only `--no-cache` or a hand-deleted file would ever break out.
+
+
+def test_a_cache_entry_inside_its_ttl_is_served(fc, tmp_path, monkeypatch, capsys):
+    """The anchor. Without it every refusal below could be a broken fixture."""
+    monkeypatch.setattr(fc, "cache_dir", lambda: tmp_path / "cache")
+    fc.write_cache("k", {"markdown": "body"}, "scrape", "https://example.com", 1, 24)
+    assert fc.check_cache("k", 24) == {"markdown": "body"}
+
+
+_WRITTEN_AT = 1000.0
+
+
+def _entry(tmp_path, **over) -> None:
+    payload = {"url": "https://example.com", "command": "scrape",
+               "timestamp": _WRITTEN_AT, "ttl_hours": 24, "credits_used": 1,
+               "cached_at": "2026-09-01T00:00:00+00:00",
+               "content": {"markdown": "body"}}
+    payload.update(over)
+    cdir = tmp_path / "cache"
+    cdir.mkdir(parents=True, exist_ok=True)
+    (cdir / "k.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _at(fc, monkeypatch, when: float) -> None:
+    """Freeze the clock `check_cache` reads, without touching the stdlib.
+
+    `firecrawl.py` does `import time`, so the obvious
+    `monkeypatch.setattr(fc.time, "time", ...)` mutates the shared `time`
+    MODULE and every other module in the process reads the frozen value for the
+    duration of the test. Rebinding the NAME on the firecrawl module instead
+    reaches only the code under test. `sleep` is carried along because `_retry`
+    in the same module uses it, and a stand-in missing it would turn a retry
+    into an AttributeError rather than a wait.
+    """
+    assert fc.time.time is not None, "firecrawl no longer reads a `time` module"
+    monkeypatch.setattr(
+        fc, "time", SimpleNamespace(time=lambda: when, sleep=lambda _s: None))
+
+
+def test_an_entry_exactly_at_its_ttl_is_still_served(fc, tmp_path, monkeypatch):
+    """The case ON the line. `>` and `>=` both looked right and nothing chose.
+
+    Pinned as written rather than changed: an entry one second past its TTL is
+    already refused by the test below, so serving the exact boundary costs a
+    single re-fetch of freshness and saves a credit.
+    """
+    monkeypatch.setattr(fc, "cache_dir", lambda: tmp_path / "cache")
+    _at(fc, monkeypatch, _WRITTEN_AT + 24 * 3600)
+    _entry(tmp_path)
+    assert fc.check_cache("k", 24) == {"markdown": "body"}
+
+
+def test_an_entry_one_second_past_its_ttl_is_refused(fc, tmp_path, monkeypatch):
+    """The other side of the same line, so 'serve everything' cannot pass above."""
+    monkeypatch.setattr(fc, "cache_dir", lambda: tmp_path / "cache")
+    _at(fc, monkeypatch, _WRITTEN_AT + 24 * 3600 + 1)
+    _entry(tmp_path)
+    assert fc.check_cache("k", 24) is None
+
+
+def test_an_entry_with_no_timestamp_is_refused_rather_than_called_fresh(
+        fc, tmp_path, monkeypatch):
+    """A missing stamp must read as infinitely OLD, never as just-written.
+
+    The default is `0`, so the age comes out as the whole Unix epoch and the
+    entry is re-fetched. Reading it as `now` instead makes the entry permanently
+    fresh: the key never changes, so nothing would ever re-ask.
+    """
+    monkeypatch.setattr(fc, "cache_dir", lambda: tmp_path / "cache")
+    _entry(tmp_path)
+    payload = json.loads((tmp_path / "cache" / "k.json").read_text(encoding="utf-8"))
+    del payload["timestamp"]
+    (tmp_path / "cache" / "k.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    assert fc.check_cache("k", 24) is None, (
+        "an entry carrying no write time was served as if it had just been written"
+    )
+
+
+def test_a_torn_cache_entry_is_a_miss_and_not_an_empty_answer(fc, tmp_path,
+                                                              monkeypatch, capsys):
+    """`write_cache` truncates in place, so an interrupted run leaves half a
+    document. That has to be a MISS, which re-fetches and overwrites it."""
+    monkeypatch.setattr(fc, "cache_dir", lambda: tmp_path / "cache")
+    _entry(tmp_path)
+    text = (tmp_path / "cache" / "k.json").read_text(encoding="utf-8")
+    (tmp_path / "cache" / "k.json").write_text(text[: len(text) // 2], encoding="utf-8")
+
+    assert fc.check_cache("k", 24) is None, (
+        "a torn entry answered instead of missing; the key is a hash of the URL "
+        "and the formats, so nothing would ever ask again"
+    )
+    assert "cache hit" not in capsys.readouterr().err
+
+
+def test_a_torn_entry_makes_the_next_scrape_refetch_and_repair_it(fc, wired,
+                                                                  tmp_path, capsys):
+    """The consequence, end to end: the failure heals on the next run."""
+    fc.cmd_scrape(_Args())
+    capsys.readouterr()
+    entry = next(iter((tmp_path / "cache").glob("*.json")))
+    entry.write_text(entry.read_text(encoding="utf-8")[:20], encoding="utf-8")
+
+    fc.cmd_scrape(_Args())
+
+    assert len(wired.scrape_calls) == 2, "the torn entry was served forever"
+    assert json.loads(entry.read_text(encoding="utf-8"))["content"]
+
+
+def test_an_entry_whose_content_key_is_absent_is_a_miss(fc, tmp_path, monkeypatch):
+    """`check_cache` returns `content`, and `cmd_scrape` tests it for None. A
+    payload with no `content` must therefore not read as an answer."""
+    monkeypatch.setattr(fc, "cache_dir", lambda: tmp_path / "cache")
+    payload = {"url": "u", "command": "scrape", "timestamp": 1000.0}
+    (tmp_path / "cache").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "cache" / "k.json").write_text(json.dumps(payload), encoding="utf-8")
+    _at(fc, monkeypatch, _WRITTEN_AT)
+
+    assert fc.check_cache("k", 24) is None
+
+
 # ============================================================
 # fireside daemon: the atomic write
 # ============================================================
@@ -294,7 +434,15 @@ def test_two_writers_do_not_share_one_scratch_name(fbd, tmp_path, monkeypatch):
     file into place - so the winner ran under a PID file naming the loser, and
     the ownership-checked cleanup then refused to remove it.
 
-    Held open mid-write so the two overlap the way the real race does.
+    Two SEQUENTIAL writes, and the assertion is on the scratch names rather than
+    on an outcome. This docstring claimed the two were "held open mid-write so
+    the two overlap the way the real race does", and nothing here overlaps
+    anything: there is no barrier, no second thread and no pause inside the
+    write. The claim was corrected rather than the arrangement, because the
+    property that closes the race is that no two writers can ever choose the
+    same scratch path, and that is decided before either of them opens a file.
+    Racing two writers would prove it only for the interleaving that happened to
+    occur; naming every scratch path they picked proves it for all of them.
     """
     target = tmp_path / "daemon.pid"
     seen: list[str] = []

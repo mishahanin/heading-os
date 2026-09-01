@@ -8,6 +8,8 @@ meta, and the sync that replaces the generated tree.
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 PUBLISHER = ROOT / "scripts" / "dev" / "publish-marketplace.py"
 
@@ -52,6 +54,54 @@ def test_sync_replaces_generated_tree(tmp_path):
     assert (repo / "plugins" / "heading-core" / "plugin.json").exists()
     assert not (repo / "plugins" / "old-bundle").exists()  # stale bundle gone
     assert (repo / "README.md").read_text() == "keep me"  # repo meta untouched by sync
+
+
+def test_a_build_that_produced_no_bundle_is_refused_before_the_wipe(tmp_path):
+    """The destructive half of the sync above, with the input nobody tested.
+
+    `test_sync_replaces_generated_tree` proves the wipe works. This proves it
+    does not work when there is nothing to put back. `build-plugins.py --all`
+    picks its bundle list by asking each manifest entry for
+    `skills`/`hooks`/`commands`; a renamed key yields an empty list, and every
+    layer below it treats that as success.
+
+    MEASURED 2026-09-01 before the refusal existed, on exactly this fixture: the
+    repo went from one bundle to zero and `sync_into_repo` returned None. The
+    public marketplace would then serve nothing, and `commit_and_push` would
+    print "Pushed ... (verified in sync)" over the deletion.
+
+    The assertion is the SIDE EFFECT, not the message: a refusal that still
+    deleted the bundles would satisfy `pytest.raises` on its own.
+    """
+    mod = _load()
+    build_out = tmp_path / "build"
+    (build_out / ".claude-plugin").mkdir(parents=True)
+    (build_out / ".claude-plugin" / "marketplace.json").write_text(
+        '{"name": "heading-os-marketplace", "plugins": []}')
+    (build_out / "plugins").mkdir(parents=True)      # built, and empty
+
+    repo = tmp_path / "repo"
+    (repo / "plugins" / "heading-core").mkdir(parents=True)
+    (repo / "plugins" / "heading-core" / "plugin.json").write_text("{}")
+
+    with pytest.raises(mod.NothingToPublish):
+        mod.sync_into_repo(build_out, repo)
+    assert (repo / "plugins" / "heading-core" / "plugin.json").exists(), (
+        "the refusal fired after the rmtree: the live bundles are already gone")
+
+
+def test_a_build_tree_with_no_plugins_directory_at_all_is_refused(tmp_path):
+    """The near-miss shape. An `iterdir()` on an absent directory raises
+    FileNotFoundError, which is a crash rather than a refusal, and a caller
+    catching only NothingToPublish would let it out as a traceback."""
+    mod = _load()
+    build_out = tmp_path / "build"
+    (build_out / ".claude-plugin").mkdir(parents=True)
+    repo = tmp_path / "repo"
+    (repo / "plugins").mkdir(parents=True)
+
+    with pytest.raises(mod.NothingToPublish):
+        mod.sync_into_repo(build_out, repo)
 
 
 def test_write_repo_meta(tmp_path):

@@ -82,6 +82,26 @@ def test_unparseable_file_is_reported_then_ignored(tmp_path, capsys):
     assert "ollama-hosts" in capsys.readouterr().err
 
 
+def test_a_non_utf8_file_is_reported_then_ignored_too(tmp_path, capsys):
+    """One bad byte must not be worse than a syntax error.
+
+    `UnicodeDecodeError` is a `ValueError` and a SIBLING of `yaml.YAMLError`,
+    and it is raised inside the READ, before any parse, so
+    `except (OSError, yaml.YAMLError)` walked straight past it. MEASURED
+    2026-09-01 with `embed: [\\xff'auto:11434']`: `machine_hosts("embed")`
+    RAISED rather than returning [], taking down `generation_host` (the 03:00
+    chronicle build) and `index_embed_target` (`memory-index build`) over a
+    gitignored file that is edited by hand on one laptop.
+
+    The sibling case above covers unparseable YAML. This is the same promise
+    for the other way a text file goes bad.
+    """
+    (tmp_path / "config").mkdir(parents=True)
+    (tmp_path / oh.MACHINE_HOSTS_FILE).write_bytes(b"embed: [\xff'auto:11434']\n")
+    assert oh.machine_hosts("embed", root=tmp_path) == []
+    assert "ollama-hosts" in capsys.readouterr().err
+
+
 def test_an_unknown_role_is_refused(tmp_path):
     with pytest.raises(ValueError):
         oh.machine_hosts("summarise", root=tmp_path)

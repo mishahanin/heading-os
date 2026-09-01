@@ -321,6 +321,19 @@ def remove_residual_access(slug: str, exec_info: dict) -> list[str]:
                       f"{(gone.stderr or '').strip()}")
                 print(f"    {RED}An organisation OWNER cannot be removed this way. "
                       f"Demote them in the GitHub UI first.{RESET}")
+        elif "404" not in (member.stderr or ""):
+            # Not "they are not a member" -- "I could not ask". The team loop
+            # above has distinguished these two since the 403/429/5xx fix; this
+            # half was left behind, so an unanswered org query skipped the
+            # DELETE and printed NOTHING. Step 1c then rendered an EMPTY section
+            # for the widest grant in the offboard (org membership reaches every
+            # repo in the org, which is why `safety_gate` names it), and the
+            # operator could not tell whether the removal had been attempted.
+            # Step 1d still catches the access itself, so the verdict was never
+            # wrong; the silence was.
+            print(f"  {RED}[error]{RESET} Could not check org membership in "
+                  f"{github_org()}: {(member.stderr or '').strip()}; "
+                  f"the removal was NOT attempted")
     except FileNotFoundError as e:
         print(f"  {RED}[error]{RESET} gh is unavailable: {e}")
         return [f"org and team access COULD NOT BE REMOVED: {e}"]
@@ -532,9 +545,25 @@ def reassign_contacts(slug: str, reassign_to: str) -> None:
     transferred = 0
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
+    unreadable: list[str] = []
     for item in src.iterdir():
         if item.is_file() and item.suffix == ".md":
-            content = item.read_text(encoding="utf-8")
+            try:
+                content = item.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                # No handler at all sat here until 2026-09-01, and this runs
+                # while an executive is being offboarded, which is the worst
+                # moment for the loop to die: `UnicodeDecodeError` is a
+                # `ValueError`, so ONE card that is not valid UTF-8 raised out
+                # of the walk and every card after it was never transferred,
+                # while the ones before it already had been. A half-finished
+                # transfer that reports nothing is worse than either outcome.
+                #
+                # The count is printed beside the success count below, because
+                # a contact that was NOT transferred during offboarding has to
+                # be visible to the operator in the same breath.
+                unreadable.append(f"{item.name} ({type(exc).__name__})")
+                continue
             # Add transfer note
             transfer_note = (
                 f"\n\n---\n**Transfer note ({now}):** "
@@ -572,6 +601,13 @@ def reassign_contacts(slug: str, reassign_to: str) -> None:
                 transferred += 1
 
     print(f"  {GREEN}[ok]{RESET} Transferred {transferred} contacts to {reassign_to}")
+    if unreadable:
+        # Beside the success count, never instead of it. A transferred total
+        # printed alone reads as "all of them".
+        print(f"  {YELLOW}[warn]{RESET} {len(unreadable)} contact(s) could NOT "
+              f"be read and were NOT transferred: {', '.join(unreadable)}")
+        print(f"  {YELLOW}       {RESET} Move these by hand before closing the "
+              f"offboarding.")
 
 
 def update_exec_registry(slug: str) -> None:

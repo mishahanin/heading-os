@@ -23,6 +23,16 @@ has no field for. `format` turned out to be a genuinely REQUIRED field for a
 The fix is a per-destination extras table in the skill reference. This test is
 the guard that keeps the table and `REQUIRED_FIELDS` from drifting apart again:
 the whole defect was two lists in two files with nothing comparing them.
+
+The kinds this file checks are DERIVED from `REQUIRED_FIELDS`, not typed. They
+were a literal six-name list until 2026-09-01, and a literal list is a third
+copy of the same thing the file exists to stop drifting. MEASURED that day by
+adding an `anecdote` kind requiring `punchline` and `teller` to `REQUIRED_FIELDS`
+and a matching `| anecdote | none |` row to the extras table: all 15 tests
+passed. `test_the_table_covers_every_brain_kind` was satisfied by the row's
+existence, and the only two tests that ask whether a kind can actually be
+WRITTEN correctly could not see the new name, so a note type born failing the
+brain's health check was exactly the defect this file was written to catch.
 """
 from __future__ import annotations
 
@@ -44,13 +54,40 @@ EXTRAS_BLOCK = re.compile(
     r"<!-- zk-required-extras:start -->\n(.*?)<!-- zk-required-extras:end -->", re.S)
 
 
-@pytest.fixture(scope="module")
-def required_fields() -> dict:
+def _load_required_fields() -> dict:
     spec = importlib.util.spec_from_file_location("odin_brain_health_mod", HEALTH)
     mod = importlib.util.module_from_spec(spec)
     sys.modules["odin_brain_health_mod"] = mod
     spec.loader.exec_module(mod)
     return mod.REQUIRED_FIELDS
+
+
+# Loaded at import so `parametrize` can be built from it. A hand-typed kind list
+# is the third copy of a thing this file exists to keep from drifting, and it is
+# the copy that goes silently stale: a kind added to the schema and to the table
+# passes the set-equality check below while never being asked whether a note of
+# that kind can be written correctly at all.
+REQUIRED_FIELDS = _load_required_fields()
+BRAIN_KINDS = sorted(REQUIRED_FIELDS)
+
+
+@pytest.fixture(scope="module")
+def required_fields() -> dict:
+    return REQUIRED_FIELDS
+
+
+def test_the_kind_list_this_file_parametrizes_over_is_not_empty():
+    """A guard is green over an empty corpus.
+
+    Every per-kind test below is parametrized from `BRAIN_KINDS`. An import that
+    silently yielded `{}` - a renamed constant, a module that failed halfway -
+    would turn six checks into zero collected tests and report a clean pass.
+    Six is the count on 2026-09-01 and the floor is deliberately below it, so a
+    genuine addition does not fail here while a collapse to nothing does.
+    """
+    assert len(BRAIN_KINDS) >= 5, BRAIN_KINDS
+    assert all(REQUIRED_FIELDS[k] for k in BRAIN_KINDS), (
+        f"a brain kind declares no required fields at all: {REQUIRED_FIELDS}")
 
 
 @pytest.fixture(scope="module")
@@ -99,8 +136,7 @@ def test_the_table_covers_every_brain_kind(extras, required_fields):
 
 # --- base plus extras must satisfy every schema -------------------------------
 
-@pytest.mark.parametrize("kind", ["source", "principle", "position",
-                                  "episode", "conflict", "reference"])
+@pytest.mark.parametrize("kind", BRAIN_KINDS)
 def test_base_plus_extras_satisfies_the_schema(kind, base_fields, extras,
                                                required_fields):
     produced = base_fields | extras.get(kind, set())
@@ -114,8 +150,7 @@ def test_base_plus_extras_satisfies_the_schema(kind, base_fields, extras,
 
 # --- the extras must be needed, not decoration --------------------------------
 
-@pytest.mark.parametrize("kind", ["source", "principle", "position",
-                                  "episode", "conflict", "reference"])
+@pytest.mark.parametrize("kind", BRAIN_KINDS)
 def test_no_extra_field_is_invented(kind, base_fields, extras, required_fields):
     """An extra the schema does not ask for is drift in the other direction."""
     unnecessary = sorted(f for f in extras.get(kind, set())

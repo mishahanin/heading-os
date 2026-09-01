@@ -608,7 +608,17 @@ def cmd_status(args) -> None:
         loaded = json.loads(REGISTERED_JOBS_FILE.read_text(encoding="utf-8"))
         if isinstance(loaded, dict) and isinstance(loaded.get("jobs"), list):
             info = loaded
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
+        # `ValueError`, not `json.JSONDecodeError`. `read_text(encoding="utf-8")`
+        # raises `UnicodeDecodeError` on a file of non-UTF-8 bytes, and that is a
+        # SIBLING of JSONDecodeError under ValueError, not a subclass of it, so
+        # the narrower tuple saw neither an OSError nor a JSON error and let it
+        # out. MEASURED 2026-09-01 with a registered-jobs file of
+        # `b"\xff\xfe\x00binary"`: `cmd_status` printed the RUNNING line and then
+        # died with a traceback, on the one command an operator runs to find out
+        # what state the daemon is in. A torn write is exactly how this file
+        # becomes undecodable, and the block right above already spells the wider
+        # form (`except (ValueError, OSError)`) for the same reason.
         info = None
 
     if info is None:

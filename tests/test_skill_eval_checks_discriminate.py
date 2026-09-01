@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -177,8 +179,80 @@ def test_some_benchmarks_carry_a_real_baseline():
     assert real, "no benchmark has ever been compared against a real baseline"
 
 
-def test_the_writer_labels_a_fresh_seed(tmp_path: Path):
-    source = RUNNER.read_text(encoding="utf-8")
-    assert 'existing["baseline"]["source"] = "seeded-from-first-run"' in source
-    assert '"baseline_is_self_seed"' in source
-    assert "baseline is a self-seed" in source
+# The writer, run rather than grepped.
+#
+# This was three `in source` assertions over `scripts/run-skill-eval.py`, and a
+# grep is not a test of a behaviour: a comment satisfies it. MEASURED 2026-09-01
+# by changing the assignment to `existing["baseline"]["source"] = "x"` while
+# leaving the searched literal in a trailing comment on the same line. The label
+# was dead - a fresh seed came out `baseline_is_self_seed: false`, which is the
+# exact reading the whole second half of this file exists to prevent - and the
+# suite stayed GREEN, here and across every other file naming run-skill-eval.
+# Pinning the label to a constant `False` survived the same way. The one
+# neighbour with a real harness
+# (`test_a_broken_fixture_that_billed_itself_as_an_api_error.py`) asserts
+# `baseline_is_self_seed is False` on the promoted and non-object paths; nothing
+# asserted the TRUE side, and nothing asserted the stdout warning at all.
+
+
+@pytest.fixture
+def _runner():
+    spec = importlib.util.spec_from_file_location("run_skill_eval", RUNNER)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["run_skill_eval"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.fixture
+def _first_run(tmp_path, _runner, monkeypatch):
+    """One graded run against a scratch skills tree, with no API call.
+
+    Returns the benchmark.json path. Nothing here touches the real catalog:
+    `SKILLS_DIR` is the seam the rest of this suite redirects.
+    """
+    root = tmp_path / ".claude" / "skills"
+    (root / "q-branch" / "evals" / "cases").mkdir(parents=True)
+    (root / "q-branch" / "SKILL.md").write_text(
+        "---\nname: q-branch\nmodel: haiku\n---\nBody of the skill.\n",
+        encoding="utf-8")
+    (root / "q-branch" / "evals" / "cases" / "case-1.json").write_text(
+        json.dumps({"id": "case-1", "input": "brief me", "checks": {"min_words": 2}}),
+        encoding="utf-8")
+    monkeypatch.setattr(_runner, "SKILLS_DIR", root)
+    monkeypatch.setattr(_runner, "call_skill", lambda system, user, model: (
+        "gadget briefing text here",
+        {"input_tokens": 1, "output_tokens": 1,
+         "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}, 0.1))
+    monkeypatch.setattr(sys, "argv", ["run-skill-eval.py", "--skill", "q-branch"])
+    return root / "q-branch" / "evals" / "benchmark.json"
+
+
+def test_a_first_run_seeds_the_baseline_and_says_so_in_the_file(_runner, _first_run):
+    """The TRUE side of the label, which nothing bound."""
+    assert _runner.main() == 0
+    written = json.loads(_first_run.read_text(encoding="utf-8"))
+    assert written["baseline"]["source"] == "seeded-from-first-run"
+    assert written["baseline_is_self_seed"] is True
+    # And it really is the self-seed the label describes: identical but for the
+    # marker the writer adds.
+    seeded = dict(written["baseline"])
+    assert seeded.pop("source") == "seeded-from-first-run"
+    assert seeded == written["last_run"]
+
+
+def test_a_first_run_announces_the_self_seed_on_stdout(_runner, _first_run, capsys):
+    """The other half of the fix: the operator reading the terminal is told."""
+    _runner.main()
+    out = re.sub(r"\x1b\[[0-9;]*m", "", capsys.readouterr().out)
+    assert "baseline is a self-seed" in out
+    assert "delta detects nothing" in out
+
+
+def test_a_second_run_against_the_seeded_baseline_stays_labelled(_runner, _first_run):
+    """The label is recomputed each write, so it must not decay after run one."""
+    assert _runner.main() == 0
+    assert _runner.main() == 0
+    written = json.loads(_first_run.read_text(encoding="utf-8"))
+    assert written["baseline_is_self_seed"] is True, (
+        "the second run compared against a self-seed and stopped saying so")

@@ -119,6 +119,40 @@ def test_load_ideas_skips_corrupt_lines(tmp_path):
     assert len(ft.load_ideas(tmp_path)) == 1  # corrupt line ignored
 
 
+def test_topic_state_defaults_over_a_file_that_will_not_decode(tmp_path):
+    """`UnicodeError` in the handler, asserted rather than only documented.
+
+    The docstring says the reader returns defaults for a file that is "absent or
+    corrupt", and "corrupt" covers bytes that are not UTF-8 at all.
+    `read_text(encoding="utf-8")` raises `UnicodeDecodeError` on those, and that
+    is a `ValueError`: neither an `OSError` nor a `json.JSONDecodeError`, which
+    only fires on text that DECODED and then failed to parse. Dropping
+    `UnicodeError` from the tuple left every other case in this file green;
+    MEASURED 2026-09-01.
+
+    The blast radius is the whole topic feature: `cmd_topic_digest`,
+    `cmd_cycle_end_invite` and the cycle-invite callback all open this file
+    first, and one torn write is permanent because nothing rewrites it until
+    something succeeds in reading it.
+    """
+    (tmp_path / ft.TOPIC_STATE_FILE).write_bytes(b"\xff\xfe\x00{")
+    assert ft.load_topic_state(tmp_path) == {
+        "last_digest_idea_id": None, "pending_cycle_invite": None}
+
+
+def test_topic_state_defaults_over_text_that_will_not_parse(tmp_path):
+    """The sibling corruption, so the case above cannot be the only one."""
+    (tmp_path / ft.TOPIC_STATE_FILE).write_text("{not json", encoding="utf-8")
+    assert ft.load_topic_state(tmp_path)["last_digest_idea_id"] is None
+
+
+def test_topic_state_still_returns_what_a_readable_file_holds(tmp_path):
+    """Anchor for both: the reader must not answer defaults unconditionally."""
+    ft.save_topic_state(tmp_path, {"last_digest_idea_id": "abc",
+                                   "pending_cycle_invite": None})
+    assert ft.load_topic_state(tmp_path)["last_digest_idea_id"] == "abc"
+
+
 def test_topic_state_default_and_roundtrip(tmp_path):
     st = ft.load_topic_state(tmp_path)
     assert st == {"last_digest_idea_id": None, "pending_cycle_invite": None}
@@ -199,6 +233,57 @@ def test_current_cycle_reads_schedule():
     assert ft.current_cycle(sched, date(2026, 6, 25)) == 1
     assert ft.current_cycle(sched, date(2026, 7, 10)) == 2   # cycle 1 over, next is cycle 2
     assert ft.current_cycle([], date(2026, 6, 25)) == 1      # empty -> 1
+
+
+def test_current_cycle_of_an_exhausted_schedule_is_its_highest_cycle():
+    """The other branch, and it was the untested one.
+
+    Every case above lands on the "next session on or after today" path. Once
+    the last session is past there is no upcoming entry and the function falls
+    through to `max(cycle)`, which is the state the schedule sits in between the
+    final Wednesday and the rollover. Replacing that fallback with a literal 1
+    left this whole file green; MEASURED 2026-09-01.
+
+    A 1 there is the exact defect `tests/test_fireside_cycle_number.py` exists
+    for, reached from the other side: `/idea` stamps its submission with this
+    number, so ideas sent in the gap after cycle 3's last session would be filed
+    under cycle 1, the cycle-end backlog would show every idea ever submitted,
+    and the invite's idempotency key would keep matching cycle 1's invite.
+    """
+    sched = [
+        {"week": 1, "day": "Mon", "session_date": "2026-06-29", "cycle": 2},
+        {"week": 2, "day": "Wed", "session_date": "2026-07-08", "cycle": 3},
+    ]
+    assert ft.current_cycle(sched, date(2026, 7, 9)) == 3
+    assert ft.current_cycle(sched, date(2027, 1, 1)) == 3
+
+
+def test_a_session_today_is_the_current_cycle_not_the_next():
+    """The `>= today` boundary, which no case sat on.
+
+    Both selectors here ask for sessions "on or after today". Every existing
+    case picks a date strictly between sessions, so `>` and `>=` behave
+    identically and the boundary was free to move. On a session day itself the
+    difference is a whole cycle: `>` skips today's session and answers with the
+    one after it.
+    """
+    sched = [
+        {"week": 1, "day": "Mon", "session_date": "2026-06-29", "cycle": 2},
+        {"week": 1, "day": "Mon", "session_date": "2026-07-20", "cycle": 3},
+    ]
+    assert ft.current_cycle(sched, date(2026, 6, 29)) == 2
+
+
+def test_a_session_today_is_the_upcoming_week():
+    """The same boundary in `_upcoming_week`, which is a separate expression.
+
+    Two copies of `>= today` sit in this module and each needs its own case;
+    the one here drives `is_final_week` and `cycle_end_trigger_today` as well,
+    so a shift by one session shifts the cycle-end invite by a week.
+    """
+    assert ft._upcoming_week(_SCHED, date(2026, 6, 29)) == 1   # week-1 Monday
+    assert ft._upcoming_week(_SCHED, date(2026, 7, 8)) == 2    # final Wednesday
+    assert ft.is_final_week(_SCHED, date(2026, 7, 8)) is True
 
 
 # _SCHED live cycle: Week-1 Mon 2026-06-29, last session 2026-07-08.

@@ -30,6 +30,7 @@ Found by the third defect-class fan-out over `tests/`, 2026-08-27, lens
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import signal
@@ -183,15 +184,88 @@ def test_start_actually_installs_the_handlers():
         "daemon waits out the whole check interval on SIGTERM")
 
 
+def _start_wait_loops() -> list[ast.While]:
+    """Every `while` inside `Sentinel.start` that waits on the stop event.
+
+    Scoped to that one method on purpose. The old spelling of the test below
+    searched the whole 3,000-line file for a literal, so it answered a question
+    about the FILE while claiming to answer one about the LOOP.
+    """
+    tree = ast.parse((ROOT / "scripts" / "sentinel.py").read_text(encoding="utf-8"))
+    cls = next(n for n in ast.walk(tree)
+               if isinstance(n, ast.ClassDef) and n.name == "Sentinel")
+    start = next(n for n in cls.body
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and n.name == "start")
+    return [node for node in ast.walk(start)
+            if isinstance(node, ast.While)
+            and "self._stop_event.wait()" in ast.unparse(node)]
+
+
 def test_the_wait_loop_breaks_when_the_stop_event_is_set():
     """`wait_for` returning is not enough: the loop must not run another cycle.
 
     Without the explicit break, a woken wait fell straight back into the top of
     `while self._running` and ran a full check cycle on the way out.
+
+    MEASURED 2026-09-01: the previous spelling of this test was
+    `assert "if self._stop_event.is_set():\\n                    break" in src`
+    over the whole module. Deleting the break from the loop and parking the same
+    two lines in an unused method left all eight tests in this file green while
+    a live daemon ran a full cycle on every SIGTERM. Asked of the syntax tree
+    now, scoped to `Sentinel.start`, and asked of the loop's OWN body rather
+    than of anything nested inside it: a break buried in a `try` or an inner
+    `for` binds to that construct, not to the wait loop.
     """
-    src = (ROOT / "scripts" / "sentinel.py").read_text(encoding="utf-8")
-    assert "if self._stop_event.is_set():\n                    break" in src, (
-        "the wait no longer leaves the loop when the stop event is set")
+    loops = _start_wait_loops()
+    assert len(loops) == 1, (
+        f"expected exactly one stop-event wait loop in Sentinel.start, "
+        f"found {len(loops)}; re-point this test at the right one")
+
+    breaking = [
+        stmt for stmt in loops[0].body
+        if isinstance(stmt, ast.If)
+        and ast.unparse(stmt.test) == "self._stop_event.is_set()"
+        and any(isinstance(inner, ast.Break) for inner in stmt.body)
+    ]
+    assert breaking, (
+        "the wait no longer leaves the loop when the stop event is set, so a "
+        "woken wait falls back into the top of `while self._running` and runs "
+        "a full check cycle on the way out")
+
+
+def test_that_check_is_not_satisfied_by_a_break_somewhere_else_in_the_file():
+    """The negative case for the test above, run on a synthetic module.
+
+    A guard with no case that makes it refuse is not known to refuse anything,
+    and this one replaced a guard that refused nothing at all.
+    """
+    relocated = textwrap.dedent("""
+        class Sentinel:
+            async def start(self):
+                while self._running:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=1)
+
+            async def _elsewhere(self):
+                while True:
+                    if self._stop_event.is_set():
+                        break
+    """)
+    tree = ast.parse(relocated)
+    cls = next(n for n in ast.walk(tree) if isinstance(n, ast.ClassDef))
+    start = next(n for n in cls.body
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and n.name == "start")
+    loops = [node for node in ast.walk(start)
+             if isinstance(node, ast.While)
+             and "self._stop_event.wait()" in ast.unparse(node)]
+    assert len(loops) == 1
+    assert not [
+        stmt for stmt in loops[0].body
+        if isinstance(stmt, ast.If)
+        and ast.unparse(stmt.test) == "self._stop_event.is_set()"
+        and any(isinstance(inner, ast.Break) for inner in stmt.body)
+    ], "the scoped check accepted a break that lives in another method"
 
 
 # ============================================================

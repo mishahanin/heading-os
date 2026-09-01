@@ -17,18 +17,33 @@ layer against "Claude Opus 4.7" months after that stopped being current.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
-SKILL_DIR = Path(__file__).resolve().parent.parent / ".claude" / "skills" / "scrutinize"
-DISPATCH = Path(__file__).resolve().parent.parent / "scripts" / "scrutinize-dispatch.py"
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from scripts.utils.claude_models import FAMILIES  # noqa: E402
+from scripts.utils.council_models import FALLBACKS  # noqa: E402
+
+SKILL_DIR = ROOT / ".claude" / "skills" / "scrutinize"
+DISPATCH = ROOT / "scripts" / "scrutinize-dispatch.py"
 
 # A Claude model named with a version: "Opus 4.7", "opus-4-7", "claude-opus-5",
 # "Sonnet 4.5". Bare "Claude" and bare "Opus" are fine - they name the family,
 # not a frozen release.
+#
+# The alternation is DERIVED from `claude_models.FAMILIES`, never retyped. It was
+# a literal `(opus|sonnet|haiku)` until 2026-09-01, and the resolver's tuple had
+# already grown a fourth family, `fable`, that this guard did not know about: a
+# sentence reading "Claude Fable 2" would have frozen the judge layer on the day
+# it was typed with the suite green. A guard over a list somebody else owns has
+# to read that list, or it silently knows less than the code it is guarding.
 _VERSIONED_CLAUDE = re.compile(
-    r"\b(claude[- ]?)?(opus|sonnet|haiku)[- ]?\d", re.IGNORECASE)
+    r"\b(claude[- ]?)?(" + "|".join(sorted(FAMILIES)) + r")[- ]?\d",
+    re.IGNORECASE)
 
 # The skill's own version-history file is a changelog: it records what was true on
 # a past date and must keep saying so.
@@ -79,8 +94,17 @@ def test_claude_is_absent_from_the_council_pin_table():
 # A model version this skill's judge layer does not have: the two retired council
 # families are as stale as an old Opus when a live sentence still names them with
 # a release attached.
+#
+# Derived from the same two seams for the same reason as `_VERSIONED_CLAUDE`
+# above. The hand-typed list read `claude|opus|sonnet|haiku|gemini|grok` and was
+# missing BOTH families that matter most: `fable`, which `claude_models` owns,
+# and `kimi`, which is the one judge in this roster that is genuinely pinned - so
+# "Kimi k2.5" in a sentence describing /scrutinize is precisely the stale literal
+# this test exists to find, and it was the one spelling the pattern let past.
+_COUNCIL_FAMILIES = sorted({k.split("_")[0] for k in FALLBACKS})
 _VERSIONED_MODEL = re.compile(
-    r"\b(claude|opus|sonnet|haiku|gemini|grok)[- ]?\d", re.IGNORECASE)
+    r"\b(claude|" + "|".join(sorted(set(FAMILIES) | set(_COUNCIL_FAMILIES)))
+    + r")[- ]?\d", re.IGNORECASE)
 
 
 def test_the_operator_overview_pins_no_model_where_it_describes_scrutinize():
@@ -122,6 +146,30 @@ def test_the_operator_overview_pins_no_model_where_it_describes_scrutinize():
         "the operator overview pins a model version while describing /scrutinize. "
         "The judge roster is the running session's Claude, never pinned, and the "
         "Kimi pin resolved through council-models.json.\n" + "\n".join(hits))
+
+
+def test_the_patterns_know_every_family_their_resolvers_do():
+    """The derivation, measured rather than trusted.
+
+    Both patterns hand-typed their alternations until 2026-09-01, and both had
+    already fallen behind the seams they copy: `claude_models.FAMILIES` carries
+    `fable`, which neither pattern matched, and `council_models.FALLBACKS`
+    carries `kimi`, the one judge in this roster that IS pinned and therefore
+    the one most likely to be named with a release in prose. A hand-written list
+    cannot fail on the day the list it copied grows. This test can, and it is
+    the reason the alternations are built from the tuples instead of retyped.
+    """
+    assert FAMILIES, "the Claude family tuple is empty; the pattern would match nothing"
+    assert _COUNCIL_FAMILIES, "the council family set is empty"
+    for family in FAMILIES:
+        assert _VERSIONED_CLAUDE.search(f"Claude {family.title()} 4.7"), family
+        assert _VERSIONED_MODEL.search(f"judged on {family} 4.7"), family
+    for family in _COUNCIL_FAMILIES:
+        assert _VERSIONED_MODEL.search(f"judged on {family} 3.5"), family
+    # ...and the family named WITHOUT a release is still what callers are told
+    # to write, so the pattern must leave it alone.
+    for family in FAMILIES:
+        assert not _VERSIONED_CLAUDE.search(f"the latest Claude {family}"), family
 
 
 def test_the_scan_still_finds_the_skill_files():

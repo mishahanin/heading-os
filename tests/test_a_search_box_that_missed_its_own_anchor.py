@@ -119,17 +119,75 @@ def test_injection_is_idempotent(tmp_path):
     assert once.count('id="doc-search"') == 1
 
 
+ANCHORLESS = "<!DOCTYPE html>\n<html>\n<body>\n<main></main>\n</body>\n</html>\n"
+
+
 def test_a_page_with_no_menu_toggle_gets_neither_half(tmp_path):
     """No anchor, no box -- and then no loader either, or the pairing above
-    breaks in the other direction."""
+    breaks in the other direction.
+
+    That second sentence was this docstring's claim from the day it was written
+    and the assertion for it was never here, so the case went unmeasured and the
+    code kept doing it. MEASURED 2026-09-01 on exactly this page: no
+    `#doc-search`, `<script src="assets/search.js">` appended, return True. It
+    is the same orphan-loader page the indentation fix closed, reached by the
+    other route, and only the indentation route had ever been bound.
+    """
     page = tmp_path / "plain.html"
-    page.write_text("<!DOCTYPE html>\n<html>\n<body>\n<main></main>\n"
-                    "</body>\n</html>\n", encoding="utf-8")
+    page.write_text(ANCHORLESS, encoding="utf-8")
 
     assert regen.inject_search(page, quiet=True) is True
     out = page.read_text(encoding="utf-8")
 
     assert 'id="doc-search"' not in out
+    assert "assets/search.js" not in out, (
+        "the page shipped the search loader with no #doc-search element for it "
+        "to bind to -- the exact failure the anchor fix was for")
+    # Nothing was written at all, so `atomic_write_text` never ran and the page
+    # is byte-identical. Stated because "no loader" could also be satisfied by a
+    # rewrite that dropped something else.
+    assert out == ANCHORLESS
+
+
+def test_the_anchorless_page_is_not_simply_inert(tmp_path):
+    """The straw-man check on the case above.
+
+    If `inject_search` never wrote to a page in this shape for some unrelated
+    reason - an unreadable file, a missing `</body>`, an early return - the
+    assertions above would pass while measuring nothing about the pairing. Give
+    the same page an anchor and it must gain BOTH halves.
+    """
+    page = tmp_path / "anchored.html"
+    page.write_text(ANCHORLESS.replace(
+        "<main></main>",
+        '  <button class="menu-toggle" onclick="void 0">Menu</button>'),
+        encoding="utf-8")
+
+    assert regen.inject_search(page, quiet=True) is True
+    out = page.read_text(encoding="utf-8")
+
+    assert 'id="doc-search"' in out
+    assert "assets/search.js" in out
+
+
+def test_a_page_that_already_has_the_box_still_gains_the_loader(tmp_path):
+    """The bound the pairing must not overshoot.
+
+    A page carrying `#doc-search` from `SITE_SHELL` but no loader is a real
+    shape, and keying the loader on "this call injected a box" rather than on
+    "the page has one" would leave it without a loader forever.
+    """
+    page = tmp_path / "shelled.html"
+    page.write_text(
+        '<!DOCTYPE html>\n<html>\n<body>\n'
+        '<div class="search-box"><input id="doc-search"></div>\n'
+        "<main></main>\n</body>\n</html>\n", encoding="utf-8")
+
+    assert regen.inject_search(page, quiet=True) is True
+    out = page.read_text(encoding="utf-8")
+
+    assert "assets/search.js" in out
+    assert out.count('id="doc-search"') == 1
 
 
 def test_the_live_site_pages_are_the_corpus_this_guards(tmp_path):

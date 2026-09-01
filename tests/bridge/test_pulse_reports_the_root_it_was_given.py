@@ -158,6 +158,16 @@ def test_an_agreeing_summary_row_reports_no_drift(tmp_path, monkeypatch):
 # --- the small ones ----------------------------------------------------------
 
 def test_a_company_name_with_an_ampersand_survives_the_deep_link():
+    """Structural. Kept for what it is, and it is not a measurement.
+
+    This asserts a source LITERAL. It fails on any respelling of a correct
+    fix, and it passes as long as the literal appears somewhere in the file,
+    so a second `focus=` link built without `quote` would leave it green. It
+    catches the exact regression it names and nothing wider. The behavioural
+    half is the test below; both are here on purpose, because the structural
+    one is what pins the ONE construction site and the behavioural one is what
+    proves the link it emits is usable.
+    """
     from urllib.parse import quote
     assert "&" not in quote("A&B Telecom"), "the fixture no longer exercises this"
     src = (ROOT / "scripts" / "bridge_daemon" / "sources" / "pulse.py").read_text(encoding="utf-8")
@@ -165,6 +175,53 @@ def test_a_company_name_with_an_ampersand_survives_the_deep_link():
         "the raw company name is interpolated into a query string again; "
         "`#/pipeline?focus=A&B Telecom` focuses 'A' and a '#' truncates it"
     )
+
+
+def test_the_emitted_deep_link_is_actually_escaped(tmp_path, monkeypatch):
+    """The same claim, decided on the value the browser receives.
+
+    The structural test above never calls `suggestions()`, so it establishes
+    nothing about the string that reaches the page. This drives a stalled-deal
+    signal with the four characters that break a hash route (space, `&`, `#` and
+    `?`), then reads the link off the returned row.
+    """
+    from urllib.parse import parse_qs, unquote, urlparse
+
+    monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path))
+    _pipeline_md(tmp_path, _ROW)
+    company = "A&B Telecom #2 (who?)"
+    monkeypatch.setattr(P, "signals", lambda *a, **kw: [
+        {"kind": "pipeline-stalled", "ref": company, "title": "no touch in 30d"},
+    ])
+
+    rows = [s for s in P.suggestions(tmp_path) if s["agent"] == "/follow-up"]
+    assert rows, "the stalled-deal rule did not fire, so nothing was measured"
+    link = rows[0]["link"]
+
+    # The route survives being read back: one fragment, one query, one focus.
+    assert link.startswith("#/pipeline?focus=")
+    query = link.split("?", 1)[1]
+    assert parse_qs(query) == {"focus": [company]}, link
+    assert unquote(link) == f"#/pipeline?focus={company}"
+    # And none of the four characters is left raw to be reinterpreted.
+    for ch in (" ", "&", "#", "?"):
+        assert ch not in link.split("focus=", 1)[1], (ch, link)
+
+
+def test_a_stalled_deal_with_no_company_falls_back_to_the_bare_route(tmp_path,
+                                                                    monkeypatch):
+    """The other side of the `if ref else` bound, which nothing asserted.
+
+    A signal with an empty ref must not emit `#/pipeline?focus=`, a route that
+    focuses the empty string.
+    """
+    monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path))
+    _pipeline_md(tmp_path, _ROW)
+    monkeypatch.setattr(P, "signals", lambda *a, **kw: [
+        {"kind": "pipeline-stalled", "ref": "", "title": "no touch in 30d"},
+    ])
+    rows = [s for s in P.suggestions(tmp_path) if s["agent"] == "/follow-up"]
+    assert rows and rows[0]["link"] == "#/pipeline"
 
 
 def test_a_malformed_odin_target_falls_back_instead_of_raising():

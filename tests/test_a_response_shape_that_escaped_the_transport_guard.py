@@ -59,6 +59,18 @@ def _cases(n: int = 3) -> list:
 PROXY = bench.Runner("proxy k3", "proxy", "k3", True, "test runner")
 ANTHROPIC = bench.Runner("api haiku", "anthropic", "haiku", True, "test runner")
 
+# The shape checks must raise ValueError SPECIFICALLY, not merely some member of
+# TRANSPORT_FAILURES. That tuple already carries KeyError, TimeoutError and
+# OSError, so `pytest.raises(TRANSPORT_FAILURES)` is satisfied by an unguarded
+# `data["message"]["content"]` on a payload with no "message" key - which is the
+# pre-fix code. Measured 2026-09-01: reverting the ollama branch to the bare
+# subscript chain left three of that case's four payloads green under the tuple
+# assertion, and all four red under this one. The module docstring already states
+# the contract these cases now assert: "The fix is not a wider tuple."
+SHAPE_REFUSAL = ValueError
+assert issubclass(SHAPE_REFUSAL, bench.TRANSPORT_FAILURES), (
+    "the refusal must still be a member of the tuple the callers catch")
+
 
 # ============================================================
 # The proxy shape
@@ -78,7 +90,7 @@ def test_an_empty_or_shapeless_proxy_response_is_a_named_transport_failure(
                         lambda url, body, headers, timeout=300: payload)
     monkeypatch.setattr(bench, "load_api_key", lambda *a, **k: None)
 
-    with pytest.raises(bench.TRANSPORT_FAILURES):
+    with pytest.raises(SHAPE_REFUSAL):
         bench.call_model(PROXY, "prompt")
 
 
@@ -126,7 +138,7 @@ def test_a_shapeless_anthropic_response_is_a_named_transport_failure(
     monkeypatch.setattr(bench, "load_api_key", lambda *a, **k: "test-key")
     monkeypatch.setattr(bench, "latest", lambda family: family)
 
-    with pytest.raises(bench.TRANSPORT_FAILURES):
+    with pytest.raises(SHAPE_REFUSAL):
         bench.call_model(ANTHROPIC, "prompt")
 
 
@@ -147,7 +159,7 @@ def test_a_shapeless_ollama_response_is_a_named_transport_failure(
     monkeypatch.setattr(bench, "_post",
                         lambda url, body, headers, timeout=300: payload)
 
-    with pytest.raises(bench.TRANSPORT_FAILURES):
+    with pytest.raises(SHAPE_REFUSAL):
         bench.call_model(runner, "prompt")
 
 

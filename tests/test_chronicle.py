@@ -44,6 +44,30 @@ def test_session_date_prefers_started_when_valid():
     assert _session_date(env, Path("/nonexistent.jsonl")) == "2026-05-01"
 
 
+def test_session_date_is_the_earliest_day_not_the_latest():
+    """A session resumed across midnight is dated from its START.
+
+    MEASURED 2026-09-01: `min(days)` -> `max(days)` in `_session_date` left all
+    759 chronicle-covering tests green. `test_session_date_earliest_turn_timestamp`
+    above cannot see it, because `_iso_day` reduces every stamp to a calendar day
+    before the comparison and that fixture puts both turns on 2026-06-11 - so its
+    09:00 and 08:59 are the SAME value by the time min() runs, and earliest and
+    latest are indistinguishable. Only turns on different days can tell them apart.
+
+    The cost is not cosmetic. `render_entry` writes the pointer
+    `chronicle/transcripts/<year>/<date>-<id>.jsonl.gz`, and
+    `scripts/archive-transcripts.py` files the transcript by the session's START
+    date, so the later day names an archive that was never written.
+    """
+    env = {
+        "started_at_utc": "",
+        "user_turns": [{"ts": "2026-06-12T00:40:00.000Z", "text": "still going"}],
+        "assistant_turns": [{"ts": "2026-06-11T23:55:00.000Z", "text": "on it"}],
+        "system_reminders": [],
+    }
+    assert _session_date(env, Path("/nonexistent.jsonl")) == "2026-06-11"
+
+
 def test_session_date_mtime_fallback_never_today(tmp_path):
     """No timestamps anywhere -> the file mtime date, NOT today().
 
@@ -77,6 +101,52 @@ def test_normalize_curly_to_straight():
 
 def test_normalize_leaves_plain_ascii():
     assert _normalize("plain 'text' and \"quotes\"") == "plain 'text' and \"quotes\""
+
+
+def test_render_entry_normalizes_typography_in_every_field():
+    """`_normalize` reaching the rendered entry, not just existing.
+
+    MEASURED 2026-09-01: dropping the `_normalize` call from the gist alone left
+    the whole tree green. `render_entry` is called from exactly two test files
+    and neither asserted that the map reaches the text - the tests above exercise
+    `_normalize` in isolation, which says nothing about the five call sites that
+    use it.
+
+    The map is READ from the module rather than re-listed here, so a key added to
+    `_TYPO_MAP` is covered the day it lands, and the two pairs no test had ever
+    fed it (the low quotes and the primes) are covered now.
+    """
+    import scripts.chronicle as ch
+
+    typo = "".join(ch._TYPO_MAP)
+    entry = ch.render_entry("sid", "2026-08-23", "sessions/x.jsonl", {
+        "personal": False,
+        "gist": f"gist {typo}",
+        "topics": [f"topic {typo}"],
+        "reasoning": f"reasoning {typo}",
+        "considered": [f"considered {typo}"],
+        "open": [f"open {typo}"],
+    })
+    survivors = sorted({c for c in ch._TYPO_MAP if c in entry})
+    assert not survivors, (
+        f"typographic characters reached the entry unnormalized: {survivors}"
+    )
+    # The floor. An entry that rendered none of the fields would satisfy the
+    # assertion above by carrying nothing at all.
+    for marker in ("gist", "topic", "reasoning", "considered", "open"):
+        assert marker in entry, f"the {marker} field never reached the entry"
+    # A derived corpus shrinks with the thing it is derived from: delete a pair
+    # from `_TYPO_MAP` and it leaves both sides of the check at once. MEASURED
+    # 2026-09-01 - removing the low-quote pair kept this green until the count
+    # below was pinned to the map's real size.
+    assert len(ch._TYPO_MAP) == 11, (
+        f"_TYPO_MAP holds {len(ch._TYPO_MAP)} pairs, not the 11 measured on "
+        "2026-09-01; adding one is fine and this line records it, removing one "
+        "is a decision that has to be made on purpose"
+    )
+    # Two anchors that are NOT derived, so the guard keeps an opinion of its own
+    # about the pairs no other test has ever fed it.
+    assert ch._normalize("\u201e\u2032") == '"\'', "the low quote and the prime no longer map"
 
 
 # --- _extract_json: model reply parsing + skip signal ---------------------

@@ -116,6 +116,18 @@ CODE_SEARCHES = [
     ("Bash", {"command": "awk '/def /' scripts/memory.py"}),
     # Hole 3: named in the comment, absent from the tuple.
     ("Bash", {"command": "find scripts -name '*.py'"}),
+    # The hooks tree, named WITHOUT a `.py` on the end. Every other fixture
+    # that reaches `.claude/hooks` also carries `.py`, so the `.claude/hooks`
+    # entry in `_CODE_HINTS` was a twin of the `.py` entry and deleting it
+    # changed no verdict here: MEASURED 2026-09-01, `_CODE_HINTS = (".py",)`
+    # left all 69 cases in this file green. A grep of the hooks DIRECTORY is
+    # the shape this hint exists for, and the hooks are not under `scripts/`
+    # or `tests/`, so the code-tree regex does not reach them either.
+    ("Grep", {"pattern": "check_graph_first", "path": ".claude/hooks"}),
+    # The Windows spelling is a second alternative with the same twin problem:
+    # dropping only `".claude\\hooks"` also left the file green.
+    ("Grep", {"pattern": "check_graph_first", "path": ".claude\\hooks"}),
+    ("Glob", {"pattern": ".claude/hooks/*"}),
 ]
 
 NOT_CODE_SEARCHES = [
@@ -127,6 +139,13 @@ NOT_CODE_SEARCHES = [
     # Not a search at all.
     ("Bash", {"command": "git status --short"}),
     ("Bash", {"command": "python -m pytest tests/test_x.py -q"}),
+    # Running a CLI and reading its OUTPUT. `re.split` returned every word, so
+    # the `tail` at the end of the pipe marked the whole line a code lookup and
+    # `.py` in `scripts/thread.py` then confirmed it. MEASURED 2026-08-31: this
+    # exact command answered True and was refused as a session's first code
+    # lookup. A search binary carrying nothing but flags reads a stream.
+    ("Bash", {"command": "python scripts/thread.py list | tail -5"}),
+    ("Bash", {"command": ".venv/bin/python scripts/ops-radar.py | head -20"}),
     ("Write", {"file_path": "scripts/sentinel.py", "content": "x"}),
     # The five shell readers over things that are NOT code. Without these the
     # whole `_NOT_CODE_HINTS` filter could be deleted for them and no verdict
@@ -152,6 +171,16 @@ NOT_CODE_SEARCHES = [
     # unanchored shell grep, into refusals.
     ("Glob", {"pattern": "**/*"}),
     ("Bash", {"command": "grep -rn TODO ."}),
+    # A search binary whose arguments are ALL flags, and whose flags name code.
+    # This is the only shape in which the "flags only: reading a stream, not a
+    # corpus" rule decides anything: every other flags-only segment in this
+    # list (`tail -5`, `head -20`) carries no code hint, so it answers False
+    # with or without the rule. MEASURED 2026-09-01 -- deleting the flags-only
+    # `continue` left all 69 cases green, and with it deleted these two become
+    # REFUSALS. A wall that refuses `rg --glob=*.py` is a wall that gets
+    # switched off, which is the failure mode the rule was written against.
+    ("Bash", {"command": "rg --glob=*.py"}),
+    ("Bash", {"command": "python scripts/gen.py | rg --glob=*.py"}),
 ]
 
 
@@ -416,7 +445,19 @@ def test_a_bash_command_merely_naming_the_graph_does_not_unlock(hook, tmp_path,
                                                                 monkeypatch):
     """The mirror on the shell door. If any mention of the word unlocked the
     session, writing `# ask codegraph first` into a file would open it, and the
-    second door would be a hole rather than a door."""
+    second door would be a hole rather than a door.
+
+    This test was green over the input class it was written to exclude. All
+    three of its original cases are near-misses that the whitespace-delimited
+    regex rejected for unrelated reasons: `mycodegraph` failed the left
+    boundary, `codegraph_explore` failed the right, `.codegraph/` failed both.
+    None of them was a BARE, whitespace-delimited `codegraph` in argument
+    position, which is the only spelling the mention hazard actually has.
+
+    MEASURED 2026-08-31, before the fix: `grep -rn codegraph scripts/` was
+    allowed AND stamped the marker, so a session's first code grep passed the
+    wall and disarmed it permanently. The cases below now lead with that one.
+    """
     _walled(hook, tmp_path, monkeypatch)
     search = {
         "session_id": "mention-probe",
@@ -425,13 +466,51 @@ def test_a_bash_command_merely_naming_the_graph_does_not_unlock(hook, tmp_path,
     }
 
     assert (hook.check_graph_first(dict(search)) or {}).get("decision") == "block"
-    for command in ("grep -rn mycodegraph scripts/",
-                    "echo 'use codegraph_explore' >> notes.md",
-                    "ls .codegraph/"):
+    for command in (
+            # The real hazard: a bare `codegraph` in ARGUMENT position.
+            "grep -rn codegraph scripts/",
+            "echo codegraph ; grep -rn foo scripts/",
+            "rg --files-with-matches codegraph .",
+            "cat <<'EOF' > notes.md\ncodegraph explore foo\nEOF",
+            # The three near-misses, kept: they must stay refused too.
+            "grep -rn mycodegraph scripts/",
+            "echo 'use codegraph_explore' >> notes.md",
+            "ls .codegraph/"):
         hook.check_graph_first({"session_id": "mention-probe",
                                 "tool_name": "Bash",
                                 "tool_input": {"command": command}})
     assert (hook.check_graph_first(dict(search)) or {}).get("decision") == "block"
+
+
+@pytest.mark.parametrize("command", [
+    'codegraph explore "something"',
+    "codegraph explore foo | head -20",
+    "timeout 60 codegraph explore foo",
+    "cd /tmp && codegraph explore foo",
+    "python scripts/x.py && codegraph explore foo",
+    "./codegraph explore foo",
+])
+def test_a_real_graph_invocation_still_unlocks(hook, tmp_path, monkeypatch, command):
+    """The other direction, so tightening the door did not weld it shut.
+
+    Program-position resolution has to keep reading through the wrappers an
+    agent actually types: a pipe, a `timeout`, a `cd &&` prefix, a relative
+    `./`. A door that only opens for one bare spelling is the cage this wall's
+    own refusal text promises it is not.
+    """
+    _walled(hook, tmp_path, monkeypatch)
+    search = {
+        "session_id": f"unlock-{abs(hash(command))}",
+        "tool_name": "Grep",
+        "tool_input": {"pattern": "def something", "path": "scripts"},
+    }
+
+    assert (hook.check_graph_first(dict(search)) or {}).get("decision") == "block"
+    hook.check_graph_first({"session_id": search["session_id"],
+                            "tool_name": "Bash",
+                            "tool_input": {"command": command}})
+    assert hook.check_graph_first(dict(search)) is None, (
+        f"a real graph invocation did not unlock the session: {command!r}")
 
 
 def test_a_payload_with_no_session_is_not_walled(hook, tmp_path, monkeypatch):

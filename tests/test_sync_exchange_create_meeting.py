@@ -107,3 +107,80 @@ def test_send_invites_without_attendees_sends_nothing(monkeypatch):
         timezone_str="Asia/Dubai",
     )
     assert created[0].saved_with is SEND_TO_NONE
+
+
+def test_the_invited_addresses_actually_land_on_the_item(monkeypatch):
+    """SEND_ONLY_TO_ALL with an empty attendee list emails nobody.
+
+    Every case above reads `saved_with` and nothing else, so the send MODE was
+    the whole of what this file measured. MEASURED 2026-09-01 by replacing
+    `if attendees:` with `if False:`, which stops the addresses ever reaching
+    `item.required_attendees`: this file stayed green, and so did every
+    neighbour that names `create_meeting`
+    (`test_a_tick_that_landed_on_the_wrong_line.py`,
+    `test_a_sort_that_could_not_compare_a_date_to_a_time.py`,
+    `test_a_sync_that_reported_failure_after_it_succeeded.py`). A meeting saved
+    SEND_ONLY_TO_ALL with no attendee on it is a hold the operator believes was
+    an invitation, which is the same wrong belief as an invite sent by accident,
+    pointing the other way.
+
+    Whitespace around one address is in the case because `--attendees` is a
+    comma-separated CLI string and `email.strip()` is the line that handles it.
+    """
+    created = _patch_exchange_globals(monkeypatch)
+    sync_exchange.create_meeting(
+        _fake_account(),
+        subject="31C / ExampleCorp - technical call",
+        start_time="2026-07-16 11:00",
+        attendees=["dana.reyes@example.com", "  sam.okafor@example.com  "],
+        send_invites=True,
+        timezone_str="Asia/Dubai",
+    )
+    invited = [a.mailbox.email_address for a in created[0].required_attendees]
+    assert invited == ["dana.reyes@example.com", "sam.okafor@example.com"]
+
+
+def test_a_hold_with_no_attendees_carries_no_attendee_list(monkeypatch):
+    """Anchor: attaching everybody always would satisfy the test above."""
+    created = _patch_exchange_globals(monkeypatch)
+    sync_exchange.create_meeting(
+        _fake_account(),
+        subject="Solo hold",
+        start_time="2026-07-16 11:00",
+        attendees=None,
+        send_invites=False,
+        timezone_str="Asia/Dubai",
+    )
+    assert not getattr(created[0], "required_attendees", None)
+
+
+def test_the_meeting_lasts_the_duration_it_was_asked_for(monkeypatch):
+    """`duration_minutes` was passed by two cases above and read by none.
+
+    MEASURED 2026-09-01 by rewriting `end = start + timedelta(...)` to
+    `end = start`: this file and all three neighbours stayed green, and the
+    default 30 is what a bare `--create-meeting` books, so the survivor is a
+    zero-length calendar entry on the operator's real calendar.
+    """
+    created = _patch_exchange_globals(monkeypatch)
+    sync_exchange.create_meeting(
+        _fake_account(),
+        subject="Ninety minutes",
+        start_time="2026-07-16 11:00",
+        duration_minutes=90,
+        timezone_str="Asia/Dubai",
+    )
+    kwargs = created[0].kwargs
+    assert (kwargs["end"] - kwargs["start"]).total_seconds() == 90 * 60
+
+
+def test_the_default_duration_is_not_zero(monkeypatch):
+    created = _patch_exchange_globals(monkeypatch)
+    sync_exchange.create_meeting(
+        _fake_account(),
+        subject="Default",
+        start_time="2026-07-16 11:00",
+        timezone_str="Asia/Dubai",
+    )
+    kwargs = created[0].kwargs
+    assert (kwargs["end"] - kwargs["start"]).total_seconds() == 30 * 60

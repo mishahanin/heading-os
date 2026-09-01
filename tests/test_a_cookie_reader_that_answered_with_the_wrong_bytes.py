@@ -339,6 +339,55 @@ def _chromium_profile(tmp_path: Path, cookie_rows, schema_version=24) -> Path:
     return ud
 
 
+# ============================================================
+# Two readers of one Local State, two answers to "unreadable"
+# ============================================================
+
+# Invalid as UTF-8 at byte 0. Nothing here is a credential; the file cannot be
+# decoded at all, which is the whole case.
+_UNDECODABLE = b"\xff\xfe\x00binary"
+
+
+@pytest.mark.parametrize("payload", [_UNDECODABLE, b"{not json"])
+def test_the_windows_key_reader_names_an_unreadable_local_state(tmp_path, payload):
+    """`find_profile_folder` turns an unreadable Local State into a sentence.
+    `_get_keys_win` reads the SAME file and had no guard at all, so the caller
+    got a raw `UnicodeDecodeError` or `JSONDecodeError` on the branch where a
+    wrong answer costs the whole decryption key.
+
+    MEASURED 2026-09-01. No AST sweep for a narrow handler can find this one:
+    there was no handler to be narrow.
+    """
+    local_state = tmp_path / "Local State"
+    local_state.write_bytes(payload)
+
+    with pytest.raises(RuntimeError, match="unreadable"):
+        CC._get_keys_win(local_state)
+
+
+@pytest.mark.parametrize("payload", [_UNDECODABLE, b"{not json"])
+def test_the_profile_lookup_names_it_the_same_way(tmp_path, payload):
+    """The sibling, so the two readers of one file agree about the word."""
+    (tmp_path / "Local State").write_bytes(payload)
+
+    with pytest.raises(RuntimeError, match="unreadable"):
+        CC.find_profile_folder(tmp_path, "ClaudeCode")
+
+
+def test_a_readable_local_state_without_a_key_says_something_else(tmp_path):
+    """The other jaw. A reader that raises "unreadable" on every Local State
+    would pass both cases above while hiding the real diagnosis: the file
+    parsed fine and simply carries no key yet."""
+    local_state = tmp_path / "Local State"
+    local_state.write_text(json.dumps({"os_crypt": {}}), encoding="utf-8")
+
+    with pytest.raises(RuntimeError) as caught:
+        CC._get_keys_win(local_state)
+
+    assert "unreadable" not in str(caught.value)
+    assert "encrypted_key" in str(caught.value)
+
+
 @pytest.fixture
 def fake_keys(monkeypatch):
     key = CC._derive_pbkdf2(b"peanuts", iterations=1)

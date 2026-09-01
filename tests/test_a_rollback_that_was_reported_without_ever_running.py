@@ -145,6 +145,55 @@ def test_a_healthy_apply_is_still_applied(harness, monkeypatch):
     assert rc == 0
 
 
+def test_an_undecodable_state_file_does_not_take_down_the_apply(harness,
+                                                                monkeypatch):
+    """The decode class, on the read that runs AFTER the appliers have fired.
+
+    `_mark_state` caught `(OSError, json.JSONDecodeError)`. `UnicodeDecodeError`
+    is a `ValueError` and a SIBLING of `json.JSONDecodeError`, and the decode
+    fails inside `read_text` before json sees a character, so neither arm caught
+    it. One bad byte in `state.json` therefore raised out of `cmd_apply` after
+    the swap had already happened: past the per-component outcome lines, past
+    the `FAILED_RESULTS` exit code, and past the `fail_count` increment the
+    circuit breaker depends on. A corrupt state file silently disabled the
+    breaker AND crashed the run.
+
+    `scripts/utils/update_registry.py` already carried `UnicodeDecodeError` in
+    its handler; these two reads in `update_apply` were the copies that fix
+    missed.
+    """
+    state_path, calls, recorded = harness
+    state_path.write_bytes(b'{"components": {"quantum-tool": \xff\xfe}}')
+    monkeypatch.setattr(update_apply, "_default_applier", lambda comp: (lambda: None))
+    monkeypatch.setattr(update_apply, "run_health", lambda comp: True)
+
+    # No exception, and the in-memory outcome still reports what happened.
+    assert cmd_apply(_args(), [_comp()], state_path) == 0
+    assert recorded["quantum-tool"] == "applied"
+    assert calls["rollback"] == 0
+    with pytest.raises(UnicodeDecodeError):
+        state_path.read_text(encoding="utf-8")
+
+
+def test_an_undecodable_state_file_does_not_take_down_the_auto_gate(tmp_path,
+                                                                    monkeypatch):
+    """The other copy of the same read, on the `--auto` delta gate.
+
+    An unreadable state file means the gate has nothing to gate on, which is the
+    `{}` the JSON arm already degrades to. It raised instead.
+    """
+    state_path = tmp_path / "state.json"
+    state_path.write_bytes(b"\xff\xfe not utf-8 at all")
+    monkeypatch.setattr(update_apply, "_build_rollback",
+                        lambda comp, prev: (lambda: None))
+    monkeypatch.setattr(update_apply, "resolve_current", lambda comp: "1.0")
+    monkeypatch.setattr(update_apply, "_default_applier", lambda comp: (lambda: None))
+    monkeypatch.setattr(update_apply, "run_health", lambda comp: True)
+
+    args = argparse.Namespace(auto=True, name=None)
+    assert cmd_apply(args, [_comp()], state_path) == 0
+
+
 def test_error_is_a_failed_result():
     """The outcome must be in the set that drives status and the exit code."""
     assert "error" in FAILED_RESULTS

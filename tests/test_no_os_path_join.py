@@ -16,25 +16,52 @@ in the frontmatter-coercion sweep. A call is a call; prose about a call is not.
 import ast
 from pathlib import Path
 
+from tests.repo_files import tracked_paths
+
 ROOT = Path(__file__).resolve().parent.parent
-SCRIPTS_DIR = ROOT / "scripts"
+
+
+_PATH_MODULES = ("os.path", "posixpath", "ntpath", "genericpath")
 
 
 def join_call_lines(source: str) -> list[int]:
     """Line numbers of `os.path.join(...)` CALLS in `source`.
 
-    Pure, so both directions are measurable on synthetic input. Matches the
-    dotted attribute call and a `from os.path import join` alias, and matches
+    Pure, so both directions are measurable on synthetic input. It matches
     neither a mention in a comment nor one in a docstring.
+
+    Four spellings reach the same helper, and the rule reads all four. Only the
+    first two were matched until 2026-09-01, which left `import posixpath` and
+    `from os import path` as ways to call the forbidden helper with the guard
+    green. Measured that day: zero live sites used either, so the widening
+    reports no pre-existing violation and cannot be mistaken for one.
+
+      os.path.join(a, b)                  the dotted attribute call
+      from os.path import join            a direct alias of the function
+      import posixpath   -> posixpath.join(a, b)
+      from os import path -> path.join(a, b)
     """
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return []
-    aliased = set()
+    func_aliases = set()      # names bound to the join FUNCTION
+    module_aliases = set()    # names bound to a path MODULE
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module in ("os.path", "posixpath"):
-            aliased.update(a.asname or a.name for a in node.names if a.name == "join")
+        if isinstance(node, ast.ImportFrom):
+            if node.module in _PATH_MODULES:
+                func_aliases.update(a.asname or a.name
+                                    for a in node.names if a.name == "join")
+            elif node.module == "os":
+                module_aliases.update(a.asname or a.name
+                                      for a in node.names if a.name == "path")
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name in _PATH_MODULES:
+                    # `import os.path` binds `os`, which the dotted branch below
+                    # already covers; `import os.path as p` binds `p`.
+                    module_aliases.add(a.asname or a.name.split(".")[0])
+    module_aliases.discard("os")   # bare `os` is the dotted case, not an alias
 
     hits = []
     for node in ast.walk(tree):
@@ -45,8 +72,10 @@ def join_call_lines(source: str) -> list[int]:
             value = func.value
             if (isinstance(value, ast.Attribute) and value.attr == "path"
                     and isinstance(value.value, ast.Name) and value.value.id == "os"):
-                hits.append(node.lineno)
-        elif isinstance(func, ast.Name) and func.id in aliased:
+                hits.append(node.lineno)          # os.path.join(...)
+            elif isinstance(value, ast.Name) and value.id in module_aliases:
+                hits.append(node.lineno)          # posixpath.join(...) / path.join(...)
+        elif isinstance(func, ast.Name) and func.id in func_aliases:
             hits.append(node.lineno)
     return hits
 
@@ -56,6 +85,13 @@ VIOLATING = [
     "import os\nreturn os.path.join(root, *parts)",
     "from os.path import join\np = join(a, b)",
     "from os.path import join as j\np = j(a, b)",
+    # The four spellings the first cut of the rule could not see.
+    "import posixpath\np = posixpath.join(a, b)",
+    "import ntpath\np = ntpath.join(a, b)",
+    "import os.path as osp\np = osp.join(a, b)",
+    "from os import path\np = path.join(a, b)",
+    "from os import path as p_\nq = p_.join(a, b)",
+    "from posixpath import join\np = join(a, b)",
 ]
 CLEAN = [
     "# `os.path.join` is forbidden here; see the note above",
@@ -64,6 +100,12 @@ CLEAN = [
     "s = ', '.join(parts)",
     "import os\np = os.path.dirname(a)",
     "x = 'os.path.join'",
+    # Realistic near-misses, not obviously invalid input: a path module used for
+    # something else, a locally defined `join`, and `os.sep.join`.
+    "import posixpath\np = posixpath.basename(a)",
+    "def join(*parts): return '/'.join(parts)\np = join(a, b)",
+    "from pathlib import Path\np = Path(a).joinpath(b)",
+    "import os\np = os.sep.join(parts)",
 ]
 
 
@@ -78,11 +120,20 @@ def test_the_rule_leaves_prose_and_pathlib_alone():
 
 
 def test_no_os_path_join_in_live_scripts():
-    """No live script under scripts/ may call the os.path join helper."""
-    paths = sorted(p for p in SCRIPTS_DIR.rglob("*.py") if "archive" not in p.parts)
+    """No live script under scripts/ may call the os.path join helper.
+
+    Scope is `scripts/` only, and that is deliberate rather than an oversight:
+    `.claude/hooks/` carries 26 calls of its own (measured 2026-09-01) under a
+    different convention, and widening this rule is a separate decision.
+
+    The corpus comes through git, not a bare `rglob`, so an ignored scratch copy
+    under `scripts/` cannot join it.
+    """
+    paths = sorted(p for p in tracked_paths(("scripts/**/*.py", "scripts/*.py"))
+                   if "archive" not in p.parts)
     # An empty violations list is green over zero files, so a renamed scripts/
     # directory or a changed suffix would switch this guard off without a failure.
-    # 371 files survived the archive filter on 2026-08-26.
+    # 386 tracked files survived the archive filter on 2026-09-01.
     assert len(paths) >= 220, f"the scan collapsed to {len(paths)} files"
     violations = []
     for py in paths:

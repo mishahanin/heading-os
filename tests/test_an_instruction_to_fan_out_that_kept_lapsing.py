@@ -123,6 +123,17 @@ INVESTIGATES_NOTHING = [
     # A separator somebody typed is not a file either.
     ("Bash", {"command": "echo a / b"}),
     ("Bash", {"command": "cd .."}),
+    # The alnum half of that same guard, on the ONE branch that can reach it.
+    # `echo` and `cd` are not readers, so `reader_path_tokens` drops those two
+    # rows before the guard is consulted and dropping `any(c.isalnum() ...)`
+    # changed no verdict: MEASURED 2026-09-01, that mutation left this file
+    # green at 94 passed. A path field arriving straight off a Read/Grep/Glob
+    # payload goes through no allowlist, so it is where a bare separator has to
+    # be refused.
+    ("Read", {"file_path": "/"}),
+    ("Grep", {"path": "../"}),
+    ("Glob", {"pattern": "//"}),
+    ("Read", {"file_path": "./"}),
 ]
 
 
@@ -296,6 +307,61 @@ def test_the_escapes_alone_still_charge_nothing_without_a_heredoc(hook):
     the only reason the case above passes."""
     command = r"""python -c 're.sub(r"^[\s]*[-*+]\s+", "", t)'"""
     assert hook.investigated_paths("Bash", {"command": command}) == set()
+
+
+def test_one_file_written_two_ways_is_one_file(hook):
+    """`token.replace("\\\\", "/")`, which nothing was measuring.
+
+    The budget counts DISTINCT PATHS, so the same file spelled with a backslash
+    separator and with a slash must collapse to one entry or a session pays
+    twice for one file and the wall fires early. MEASURED 2026-09-01: dropping
+    the normalisation left this file green at 94 passed - every fixture spells
+    its separators one way.
+    """
+    mixed = hook.investigated_paths("Read", {"file_path": r"scripts/utils\a.py"})
+    plain = hook.investigated_paths("Read", {"file_path": "scripts/utils/a.py"})
+    assert mixed == plain == {"scripts/utils/a.py"}
+    # And the union is ONE path, which is the property the budget consumes.
+    assert len(mixed | plain) == 1
+
+
+def test_a_corrupt_budget_marker_is_read_as_no_budget_spent(hook, tmp_path,
+                                                             monkeypatch):
+    """`_fanout_state`'s guards, neither of which had a witness.
+
+    Two ways the marker is unusable, and the wall must survive both by starting
+    the count again rather than by crashing the dispatcher on a PreToolUse:
+
+      * bytes that do not decode. `read_text(encoding="utf-8")` raises
+        `UnicodeDecodeError`, a `ValueError` and a SIBLING of
+        `json.JSONDecodeError`. MEASURED 2026-09-01: narrowing that `except` to
+        `(OSError, json.JSONDecodeError)` left this file green at 94 passed.
+      * valid JSON of the wrong shape. `set(3)` is a `TypeError`, uncaught by
+        anything here; dropping `isinstance(data, list)` also left the file
+        green.
+
+    A hook that raises on a corrupt state file of its own making takes the
+    operator's turn with it, which is strictly worse than forgetting a budget.
+    """
+    monkeypatch.setattr(hook, "_FANOUT_STATE_DIR", tmp_path / "fanout")
+    marker = hook._fanout_marker("corrupt", "main")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+
+    for label, raw in (("undecodable", b'["scripts/a.py"\xff]'),
+                       ("truncated", b'["scripts/a.py"'),
+                       ("a number", b"3"),
+                       ("an object", b'{"a": 1}'),
+                       ("a string", b'"scripts/a.py"'),
+                       ("null", b"null")):
+        marker.write_bytes(raw)
+        assert hook._fanout_state(marker) == set(), label
+
+    # Anchor: a WELL-FORMED marker is still read, or the rows above would pass
+    # over a function that always returns the empty set and no budget would ever
+    # be spent.
+    marker.write_text(json.dumps(["scripts/a.py", "scripts/b.py"]),
+                      encoding="utf-8")
+    assert hook._fanout_state(marker) == {"scripts/a.py", "scripts/b.py"}
 
 
 def test_one_bash_command_naming_three_files_counts_three(hook):

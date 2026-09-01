@@ -197,6 +197,59 @@ def test_episode_sourced_but_no_reflect_body_refused(tmp_path):
     assert "reflection-derived" in r["error"]
 
 
+NOT_A_PRINCIPLE = """---
+id: "20260601120005"
+title: An episode, not a principle
+type: episode
+sources: ["20260530120000"]
+confidence: medium
+keywords: [sales]
+created: 2026-06-01
+---
+
+## Principle
+Matured from one lived episode, CEO-confirmed in `reflect` on 2026-06-01.
+
+## Application
+- Do the thing.
+"""
+
+
+def test_a_note_that_is_not_a_principle_is_refused(tmp_path):
+    """`type` is the first gate and it had no witness.
+
+    Every fixture in this file carried `type: principle`, so replacing
+    `if fm.get("type") != "principle":` with `if False:` left the file green.
+    The fixture here is the realistic near-miss, not an obviously invalid one:
+    an EPISODE that satisfies every later gate (Application section, a
+    reflection-derived provenance line), so only the type check can refuse it.
+    An episode is raw, unreviewed material; turning one into a skill checklist
+    step is the whole thing this gate exists to stop.
+    """
+    ws = _ws(tmp_path, "an-episode", NOT_A_PRINCIPLE)
+    r = build_proposal("an-episode", "test-skill", workspace_root=ws)
+    assert r["ok"] is False
+    assert "not a principle" in r["error"]
+    assert "episode" in r["error"]
+
+
+def test_a_phraser_that_returns_a_non_string_falls_back(tmp_path):
+    """`if phrased and isinstance(phrased, str)` -- the isinstance half.
+
+    Only the raising phraser was covered, so dropping the type check left the
+    file green. A phraser handing back a dict or a list (an un-unwrapped model
+    envelope is the ordinary way to get one) would then become `proposed_step`
+    verbatim and land in the unified diff shown to the operator.
+    """
+    ws = _ws(tmp_path, "gate-mnda", ELIGIBLE)
+    for bad in ({"text": "a step"}, ["a step"], 17, b"a step"):
+        r = build_proposal("gate-mnda", "test-skill", workspace_root=ws,
+                           phraser=lambda bad=bad, **kw: bad)
+        assert r["ok"] is True
+        assert isinstance(r["proposed_step"], str)
+        assert "(see principle: gate-mnda)" in r["proposed_step"], bad
+
+
 def test_unknown_skill_refused(tmp_path):
     ws = _ws(tmp_path, "gate-mnda", ELIGIBLE)
     r = build_proposal("gate-mnda", "no-such-skill", workspace_root=ws)

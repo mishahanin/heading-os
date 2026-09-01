@@ -180,8 +180,38 @@ def test_the_retry_gets_a_bigger_socket_ceiling_than_the_first_call():
     assert seen[1] > seen[0], f"retry reused the first ceiling: {seen}"
 
 
+def test_the_cap_is_a_number_a_supervisor_can_be_sized_against():
+    """The cap's VALUE, asserted against a fixed number rather than itself.
+
+    `test_the_retry_ceiling_growth_is_bounded` below reads
+    `seen[1] <= seen[0] * pt.RETRY_TIMEOUT_GROWTH_CAP`, which compares the
+    constant against itself: raising the cap raises the bound the test checks, so
+    the assertion holds at any value. MEASURED 2026-09-01: setting
+    RETRY_TIMEOUT_GROWTH_CAP to 1000.0 left every test in this file green, and at
+    the 300s default that is a single retry allowed to sit on a socket for 83
+    hours. Same shape as the gate_marker default in
+    tests/test_push_all_orchestration.py, which was caught the same way.
+
+    `call_model`'s own docstring promises callers "budget `16 * timeout + 210s`"
+    and tells them to size supervisors, units and CI wall-times against it. That
+    arithmetic is only true while this multiplier is small, so the number is part
+    of a published contract and belongs in an assertion with a literal on the
+    other side.
+    """
+    assert 1.0 < pt.RETRY_TIMEOUT_GROWTH_CAP <= 4.0, (
+        f"the retry ceiling may grow {pt.RETRY_TIMEOUT_GROWTH_CAP}x. At the "
+        f"{pt.DEFAULT_TIMEOUT}s default that is one retry waiting "
+        f"{pt.DEFAULT_TIMEOUT * pt.RETRY_TIMEOUT_GROWTH_CAP / 3600:.1f} hours, "
+        "and call_model's documented worst case stops being true")
+
+
 def test_the_retry_ceiling_growth_is_bounded():
-    """Scaling with the budget without a cap would let one call wait an hour."""
+    """Scaling with the budget without a cap would let one call wait an hour.
+
+    Relative to the constant, so it measures that the CODE applies the cap.
+    `test_the_cap_is_a_number_a_supervisor_can_be_sized_against` above measures
+    that the constant is a sane number; neither is enough alone.
+    """
     seen = []
 
     def fake_make_client(api_key, timeout=pt.DEFAULT_TIMEOUT):

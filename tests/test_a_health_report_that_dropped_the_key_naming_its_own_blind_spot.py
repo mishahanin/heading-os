@@ -77,6 +77,43 @@ def test_an_index_that_cannot_be_read_is_still_reported_as_unreadable(tmp_path):
     assert result["orphans"] == ["alpha.md"]
 
 
+def test_an_index_that_is_not_utf8_is_counted_rather_than_fatal(tmp_path):
+    """The line count read this file strictly while the orphan read forty lines
+    down read it with `errors="ignore"`, so one byte answered the same question
+    two ways. MEASURED 2026-09-01 on a `MEMORY.md` carrying a lone 0xe9:
+    `compute_memory_defects` raised `UnicodeDecodeError` - a `ValueError`, which
+    the `except OSError` beside it cannot catch - and took the whole health
+    computation with it, defeating `index_readable`, the key this function grew
+    to answer.
+    """
+    (tmp_path / "alpha.md").write_text("a", encoding="utf-8")
+    (tmp_path / "bravo.md").write_text("b", encoding="utf-8")
+    (tmp_path / "MEMORY.md").write_bytes(b"- [alpha](alpha.md)\n- caf\xe9 note\n")
+
+    result = compute_memory_defects(tmp_path)
+
+    assert result["status"] == "ok"
+    # The count is EXACT, not zeroed: dropping an invalid byte cannot remove a
+    # newline, and a zeroed count is how an over-budget index reads as fine.
+    assert result["memory_md_lines"] == 2, result["memory_md_lines"]
+    # And the pointers in it were still honoured, so the undecodable byte did
+    # not turn a linked file into an orphan.
+    assert result["orphans"] == ["bravo.md"], result["orphans"]
+    assert result["index_readable"] is True
+
+
+def test_a_utf8_index_still_counts_the_same_lines(tmp_path):
+    """The passing twin: the lenient handler must not change the answer for an
+    ordinary index."""
+    (tmp_path / "alpha.md").write_text("a", encoding="utf-8")
+    (tmp_path / "MEMORY.md").write_text("- [alpha](alpha.md)\n- plain note\n",
+                                        encoding="utf-8")
+    result = compute_memory_defects(tmp_path)
+    assert result["memory_md_lines"] == 2
+    assert result["orphans"] == []
+    assert result["index_readable"] is True
+
+
 # ============================================================
 # scan_redundancy: an unreadable file is skipped, not fatal
 # ============================================================

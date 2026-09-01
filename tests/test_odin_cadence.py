@@ -25,6 +25,8 @@ import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -150,15 +152,23 @@ def main():
     _write(root, "threads/personal/p1.md", _biz_thread(
         "p1", [(iso(today), f"personal no count {SENTINEL}")]))
 
-    # CRM: 2 rows >= marker for an external contact; exclusions present but uncounted
+    # CRM: 2 rows >= marker for an external contact. The two cards below are OUT
+    # OF SCOPE, not excluded: `count_crm` globs `crm/contacts/*.md`, which is
+    # non-recursive and rooted one level below `crm/`, so neither file is ever
+    # opened and the CRM_EXCLUDE clause is never reached. The comment here read
+    # "exclusions present but uncounted" until 2026-09-01, which is why deleting
+    # `any(x in f"/{rel}" for x in CRM_EXCLUDE)` left this whole file green.
+    # They stay, because "a sibling directory of crm/contacts/ is not counted"
+    # is worth pinning; `test_the_crm_count_never_leaves_crm_contacts` below
+    # pins the scope directly rather than through this aggregate.
     _write(root, "crm/contacts/acme-corp.md", _crm_contact(
         "Acme Corporation",
         [(iso(today), f"meeting {SENTINEL}"), (iso(today), f"follow up {SENTINEL}"),
          ("2019-01-01", f"old row {SENTINEL}")]))
     _write(root, "crm/.migration-backup/old.md", _crm_contact(
-        "Backup Co", [(iso(today), f"excluded {SENTINEL}")]))
+        "Backup Co", [(iso(today), f"out of scope {SENTINEL}")]))
     _write(root, "crm/aggregated/agg.md", _crm_contact(
-        "Agg Co", [(iso(today), f"excluded {SENTINEL}")]))
+        "Agg Co", [(iso(today), f"out of scope {SENTINEL}")]))
 
     # VIRAID: one admitted (external Acme) + one tribe-only/no-counterpart (dropped)
     _write(root, "outputs/operations/viraid/state.json", json.dumps({"messages": {
@@ -401,6 +411,123 @@ def main():
 def test_odin_cadence():
     """Collect the whole script into the suite. Failures print above as [FAIL]."""
     assert main() == 0, "see the [FAIL] lines in captured stdout"
+
+
+# ---------------------------------------------------------------------------
+# `_is_unreviewed` compared dates as TEXT
+# ---------------------------------------------------------------------------
+#
+# Nothing in this repository referenced `_is_unreviewed` before 2026-08-31.
+# `main()` above covers the clustering it feeds, but only ever with well-formed
+# ISO dates, so the whole malformed-input half of the function was uncovered and
+# the defect below survived every run.
+#
+# Written as a real parametrized test rather than another `_check` inside
+# `main()`, so a failure names the case instead of collapsing into one assert.
+
+@pytest.mark.parametrize("created,unreviewed,why", [
+    ("2026-06-15", True,
+     "a normal date after the marker is unreviewed"),
+    ("2026-03-01", False,
+     "the marker date itself is not after the marker"),
+    ("2026-01-01", False,
+     "a normal date before the marker was reviewed"),
+    ("15 March 2026", True,
+     "unparseable and sorting BELOW the marker: the defect. Text comparison "
+     "returned False here, so an undatable episode read as already reviewed"),
+    ("1999-13-40", True,
+     "an impossible month and day parse as nothing and sort below the marker"),
+    ("not-a-date", True,
+     "unparseable and sorting ABOVE the marker. Text comparison got this one "
+     "right, by accident of sort order, which is why the defect looked covered"),
+    ("", True,
+     "no date at all cannot establish that anything was reviewed"),
+])
+def test_an_undatable_episode_counts_as_unreviewed(created, unreviewed, why):
+    """The safe direction is to SURFACE, and the docstring says so.
+
+    An episode nobody can date, that then went silent, is material lost from the
+    signal. `analyze_reflect_clusters` drops a reviewed episode from
+    `unreviewed`, and a cluster whose only unreviewed member was dropped is
+    skipped with nothing added to `skipped`, so the nudge goes quiet and cannot
+    say why.
+    """
+    block = f"status: raw\ncreated: {created}\n"
+    assert oc._is_unreviewed(block, "2026-03-01") is unreviewed, why
+
+
+def test_a_malformed_created_does_not_hide_a_good_date():
+    """The docstring says "date fieldS", plural, and the sibling already does this.
+
+    `_episode_age_days` falls through from an unparseable `created` to `date`.
+    `_is_unreviewed` returned on the first NON-EMPTY field regardless of whether
+    it parsed, so one malformed `created` threw away a perfectly good `date`.
+    """
+    before = "status: raw\ncreated: 15 March 2026\ndate: 2026-01-01\n"
+    after = "status: raw\ncreated: 15 March 2026\ndate: 2026-06-15\n"
+    assert oc._is_unreviewed(before, "2026-03-01") is False, (
+        "the good `date` is before the marker, so this episode was reviewed")
+    assert oc._is_unreviewed(after, "2026-03-01") is True, (
+        "the good `date` is after the marker, so this episode is unreviewed")
+
+
+def test_the_crm_count_never_leaves_crm_contacts(tmp_path):
+    """Scope, asserted where the aggregate above could not assert it.
+
+    `count_crm` globs `crm/contacts/*.md`. Non-recursive, so a card one level
+    deeper is out of scope, and rooted below `crm/`, so a sibling directory is
+    too. `main()` writes its two "excluded" cards as siblings of `crm/contacts/`
+    and therefore never reaches the CRM_EXCLUDE clause at all -- measured
+    2026-09-01 by deleting that clause, which changed nothing anywhere in the
+    suite. This test states the scope that is actually enforced, so a later
+    widening of the glob to `**` fails here rather than silently pulling the
+    derived `crm/aggregated/` view into a count the operator reads as original
+    interactions.
+    """
+    today = datetime.now(get_default_tz()).date().isoformat()
+    rows = [(today, "counted")]
+    _write(tmp_path, "crm/contacts/in-scope.md", _crm_contact("In Scope", rows))
+    _write(tmp_path, "crm/contacts/nested/deeper.md", _crm_contact("Deeper", rows))
+    _write(tmp_path, "crm/aggregated/agg.md", _crm_contact("Agg", rows))
+    _write(tmp_path, "crm/.migration-backup/old.md", _crm_contact("Backup", rows))
+
+    assert oc.count_crm(tmp_path, "1970-01-01") == 1
+
+
+def test_an_unreadable_viraid_state_is_reported_not_fatal(tmp_path):
+    """`except (OSError, ValueError)` around the viraid state read.
+
+    `read_text(encoding="utf-8")` raises UnicodeDecodeError -- a ValueError and
+    a SIBLING of JSONDecodeError, not a subclass -- so a state file torn
+    mid-write escapes an `except OSError`. The handler's own comment says this
+    was MEASURED, and nothing in the suite held it: narrowing the tuple to
+    `except OSError` left every cadence test green, because no fixture ever fed
+    a state file that could not be read.
+
+    Both halves of the class are exercised: bytes that are not UTF-8, and
+    well-decoded text that is not JSON. Either way the count is 0 AND `skipped`
+    says so, because the `--json` output must never assert a complete pass it
+    did not make.
+    """
+    for label, payload in (("bad bytes", b"\xe9\xff not utf-8"),
+                           ("bad json", b"{not: json,,,")):
+        root = tmp_path / label.replace(" ", "-")
+        state = root / oc.VIRAID_STATE
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_bytes(payload)
+
+        skipped: list = []
+        assert oc.count_viraid(root, "1970-01-01", skipped) == 0, label
+        assert any("viraid" in s and "unreadable" in s for s in skipped), (
+            f"{label}: the run was silent about a state file it could not read: {skipped}")
+
+
+def test_an_unreadable_marker_leaves_everything_unreviewed():
+    """A marker nobody can parse establishes nothing, so nothing is reviewed."""
+    block = "status: raw\ncreated: 2026-01-01\n"
+    assert oc._is_unreviewed(block, "whenever") is True
+    assert oc._is_unreviewed(block, None) is True
+    assert oc._is_unreviewed(block, "") is True
 
 
 if __name__ == "__main__":

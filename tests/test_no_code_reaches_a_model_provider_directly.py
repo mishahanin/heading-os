@@ -85,9 +85,26 @@ def _tracked_code() -> list[Path]:
 
 
 def test_the_scan_actually_reads_files():
-    """A scan over an empty file list passes everything."""
-    files = _tracked_code()
-    assert len(files) > 200, f"only {len(files)} files scanned; the walk is broken"
+    """A scan over an empty file list passes everything.
+
+    The floor is PER SOURCE, not over the union. A single number across
+    `scripts`, `tests` and `.claude` is satisfied by `tests/` alone, which held
+    983 of the 1458 files measured on 2026-09-01: either of the other two could
+    fall to zero, every sweep below would go quiet on it, and this test would
+    still read green. `scripts/` is the surface a second model client would
+    actually be written on, so it is the one a union floor is worst at guarding.
+    """
+    per_source = {
+        d: [p for p in tracked_paths([f"{d}/**/*"]) if p.suffix in CODE_SUFFIXES]
+        for d in ("scripts", "tests", ".claude")
+    }
+    # Measured 2026-09-01: scripts 417, tests 982, .claude 58. Each floor sits
+    # well under its source so ordinary churn never trips it.
+    for source, floor in (("scripts", 300), ("tests", 600), (".claude", 25)):
+        assert len(per_source[source]) >= floor, (
+            f"only {len(per_source[source])} files reached the scan from "
+            f"{source}/; the walk is broken for that source and every sweep "
+            f"in this file is silently blind to it")
 
 
 def test_no_tracked_code_names_a_provider_endpoint():
@@ -158,16 +175,89 @@ def test_the_proxy_owner_still_exists_and_points_at_the_proxy():
     assert "def call_model" in src
 
 
-def test_the_client_constructor_actually_passes_the_proxy_address():
+# The OpenAI-compatible SDK is the shape a CLIProxyAPI client takes here, and
+# this workspace holds no OpenAI account: a client of this family that is not
+# aimed at the proxy is a bypass by construction, whatever it is called. The
+# Anthropic SDK is deliberately NOT in this set - it talks to Anthropic, which
+# is the operator's own subscription and not one of the providers the proxy
+# fronts, and nine tracked callers build one directly today.
+_SDK_CLIENTS = frozenset({"OpenAI", "AsyncOpenAI"})
+
+
+def _openai_client_calls(tree) -> list:
+    """Every OpenAI-SDK constructor in one module, with import aliases resolved.
+
+    A name test alone is defeated by `from openai import OpenAI as Client`,
+    which is the whole reason this asks the AST rather than grepping for
+    `OpenAI(`. The canonical names stay in the set so the attribute form
+    `openai.OpenAI(...)` is caught too.
+    """
+    import ast
+
+    local = set(_SDK_CLIENTS)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "openai":
+            for alias in node.names:
+                if alias.name in _SDK_CLIENTS:
+                    local.add(alias.asname or alias.name)
+    calls = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = (func.id if isinstance(func, ast.Name)
+                else func.attr if isinstance(func, ast.Attribute) else None)
+        if name in local:
+            calls.append(node)
+    return calls
+
+
+def _assert_aimed_at_the_proxy(rel: str, call) -> None:
+    import ast
+
+    if any(kw.arg is None for kw in call.keywords):
+        raise AssertionError(
+            f"{rel}:{call.lineno} builds a model client from a **kwargs splat, "
+            f"so no reader (this one included) can tell where it points. Name "
+            f"base_url on the call.")
+    kwargs = {kw.arg for kw in call.keywords if kw.arg}
+    assert "base_url" in kwargs, (
+        f"{rel}:{call.lineno} builds a client without base_url, so the SDK uses "
+        f"its own default endpoint and every prompt plus the CLIPROXY "
+        f"subscription key leaves this machine.")
+    rendered = ast.unparse(
+        [kw.value for kw in call.keywords if kw.arg == "base_url"][0])
+    assert rendered.endswith("PROXY_BASE_URL") or PROXY_ADDRESS_RE.search(rendered), (
+        f"{rel}:{call.lineno} points the client at {rendered}, which is neither "
+        f"the module constant nor the loopback proxy.")
+
+
+def test_no_module_builds_a_model_client_that_is_not_aimed_at_the_proxy():
     """The scans above are text. Text cannot see an OMITTED argument.
 
-    Every check in this file asks whether a forbidden hostname APPEARS. The way
-    a bypass most plausibly arrives is the opposite: `base_url` is simply left
-    off the `OpenAI(...)` call, and the SDK silently falls back to its own
-    default endpoint. No provider hostname is written anywhere, `PROXY_BASE_URL`
-    is still defined, `"127.0.0.1:8317" in src` is still true, and every request
-    leaves the machine. Measured 2026-08-27: the SDK reports
-    `https://api.openai.com/v1/` when the argument is omitted.
+    Every other check in this file asks whether a forbidden hostname APPEARS.
+    The way a bypass most plausibly arrives is the opposite: `base_url` is
+    simply left off the `OpenAI(...)` call, and the SDK silently falls back to
+    its own default endpoint. No provider hostname is written anywhere, the
+    proxy address appears in no new file, and every request leaves the machine.
+    Measured 2026-08-27: the SDK reports `https://api.openai.com/v1/` when the
+    argument is omitted.
+
+    Until 2026-09-01 this check read the OWNER MODULE alone, which is the one
+    file that was never going to get it wrong. MEASURED that day by adding a
+    second client to `scripts/utils/modem_ssh.py`:
+
+        def _second_client(api_key):
+            from openai import OpenAI
+            return OpenAI(api_key=api_key)
+
+    All six tests in this file stayed green. `test_no_tracked_code_names_a_
+    provider_endpoint` needs a provider hostname and there is none;
+    `test_only_one_module_holds_the_proxy_address` needs the proxy address to
+    appear and it does not; and this check never looked outside the owner. The
+    same edit WITH the proxy address was caught, so the guard was strongest
+    against the client that already obeys the rule and blind to the one that
+    does not.
 
     Read from the AST rather than by importing, because this file must keep
     working on a clone with no `openai` installed. The behavioural counterpart,
@@ -176,27 +266,43 @@ def test_the_client_constructor_actually_passes_the_proxy_address():
     """
     import ast
 
+    seen = 0
+    for path in _tracked_code():
+        if path.suffix != ".py":
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        # Parsing 1400 files costs a minute; this prefilter costs a second and
+        # loses nothing the AST below could have caught. Constructing the SDK
+        # client in a module means naming the `openai` package in that same
+        # module, whatever the class is then aliased to - and a class handed in
+        # as a parameter is out of reach of any static check either way.
+        if "openai" not in text.lower():
+            continue
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        rel = path.relative_to(ROOT).as_posix()
+        for call in _openai_client_calls(tree):
+            seen += 1
+            _assert_aimed_at_the_proxy(rel, call)
+    assert seen, (
+        "no model client was found anywhere in the tree, so this sweep asserted "
+        "nothing. Either the transport moved or the AST walk is broken.")
+
+
+def test_the_owner_still_builds_the_client_the_sweep_measures():
+    """Anchor: the sweep above is vacuous if the seam it protects is gone, and
+    `seen > 0` alone would be satisfied by any other module's client."""
+    import ast
+
     tree = ast.parse((ROOT / PROXY_OWNER).read_text(encoding="utf-8"))
-    calls = [n for n in ast.walk(tree)
-             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-             and n.func.id in {"OpenAI", "Anthropic"}]
-    assert calls, (
+    assert _openai_client_calls(tree), (
         f"{PROXY_OWNER} builds no model client at all. Either the seam moved - "
-        f"in which case point this test at it - or the transport is gone."
-    )
-    for call in calls:
-        kwargs = {kw.arg for kw in call.keywords if kw.arg}
-        assert "base_url" in kwargs, (
-            f"{PROXY_OWNER}:{call.lineno} builds a client without base_url, so "
-            f"the SDK uses its own default endpoint and every prompt plus the "
-            f"CLIPROXY subscription key leaves this machine."
-        )
-        addr = [kw.value for kw in call.keywords if kw.arg == "base_url"][0]
-        rendered = ast.unparse(addr)
-        assert rendered == "PROXY_BASE_URL" or "127.0.0.1:8317" in rendered, (
-            f"{PROXY_OWNER}:{call.lineno} points the client at {rendered}, "
-            f"which is neither the module constant nor the loopback proxy."
-        )
+        f"in which case point this test at it - or the transport is gone.")
 
 
 def test_the_rule_is_written_down_where_a_shell_command_would_be_stopped():

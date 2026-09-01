@@ -104,6 +104,30 @@ def test_a_genuine_length_truncation_still_says_length(scripted):
     assert "cut off mid-word" in message
 
 
+def test_the_partial_branch_can_only_ever_be_reached_on_length(scripted):
+    """Only ONE of the two messages was ever able to name a wrong reason.
+
+    MEASURED 2026-09-01: re-hardcoding `finish_reason=length` in the
+    "cut off mid-word" message leaves this whole file green, and that is
+    correct rather than a gap. `_is_complete(content, reason)` is
+    `bool(content.strip()) and reason != "length"`, and the retry returns as soon
+    as it holds. Arriving at that message means it did NOT hold while
+    `content.strip()` is non-empty, which forces `reason == "length"`. So the
+    interpolation there is documentary, and the empty-answer message below it is
+    the one that carried the defect this file is named for.
+
+    Written as a property over `_is_complete` rather than as a comment, because a
+    comment saying "unreachable" decays the moment `_is_complete` changes -- and
+    it is `_is_complete` that makes the claim true, not the branch.
+    """
+    for reason in ("stop", "content_filter", None, "length"):
+        complete = proxy_transport._is_complete("some partial text", reason)
+        assert complete is (reason != "length"), (
+            f"_is_complete no longer returns early for a non-empty answer on "
+            f"{reason!r}; the 'cut off mid-word' message can now name a reason "
+            "that is not the terminal state, and needs its own case above")
+
+
 def test_an_empty_length_on_both_calls_still_says_length(scripted):
     scripted([("", "length"), ("", "length")])
     with pytest.raises(RuntimeError) as excinfo:

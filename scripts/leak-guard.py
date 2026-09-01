@@ -58,8 +58,71 @@ def _rel(path: Path) -> str:
         return str(path)
 
 
+# A path whose destination this gate knows without asking: it is engine code by
+# definition, since it IS the engine's leak gate. Used only to ask the classifier
+# a question whose right answer is already known.
+_CLASSIFIER_CANARY = "scripts/leak-guard.py"
+
+
+def _classifier_is_answering() -> bool:
+    """True when `get_routing_destination` still recognises engine code.
+
+    `load_routing_map()` fails CLOSED: an unreadable, non-UTF-8, or malformed
+    `config/routing-map.yaml` classifies EVERY path 'private'. That is the right
+    direction for `check_staged`, which then refuses everything. Composed with
+    the `!= "engine"` skip in `check_paths` it is the WRONG direction: every file
+    is skipped, no literal is ever examined, and the gate returns 0 - which is
+    byte-for-byte what a clean tree looks like.
+
+    MEASURED 2026-09-01 on one engine file holding a real violation
+    (`P = "crm/contacts/x.md"`):
+
+        healthy map   -> 1 violation, BLOCKED
+        degraded map  -> 0 violations, silence          <- the defect
+
+    At commit time the sibling `leak-guard-staged` hook masks it, because a
+    degraded map makes it refuse every staged path. Nothing masks it in CI:
+    `.github/workflows/ci.yml` runs `check-paths` over `git ls-files` with no
+    `check-staged` beside it, so the whole-tree lint would pass having read
+    nothing. Same shape as the unreadable-file skip fixed the same day, one
+    level up: a control whose failure is indistinguishable from its success.
+    """
+    return get_routing_destination(_CLASSIFIER_CANARY) == "engine"
+
+
 def check_paths(files) -> int:
+    if not _classifier_is_answering():
+        log_denial(mechanism="leak-guard:check-paths", action="commit",
+                   path=_CLASSIFIER_CANARY,
+                   reason="routing map degraded, so nothing was checked")
+        print("BLOCKED - the routing map is not classifying engine code, so this "
+              "gate checked nothing:")
+        print(f"  config/routing-map.yaml answers "
+              f"'{get_routing_destination(_CLASSIFIER_CANARY)}' for "
+              f"{_CLASSIFIER_CANARY}, which is engine code by definition.")
+        print("  The map failed closed to 'private' for every path, which makes "
+              "this lint skip every file and report clean. Fix the map "
+              "(unreadable? not UTF-8? `rules:` written as a list?) and re-run.")
+        return 1
     violations = []
+    # Paths this gate could NOT read. Tracked because until 2026-09-01 an
+    # unreadable engine file was skipped with a bare `continue` and the gate
+    # returned 0, which is byte-for-byte what a clean file looks like.
+    #
+    # MEASURED that day on one file holding a real violation
+    # (`P = "crm/contacts/x.md"`), the same bytes in all three states:
+    #
+    #     readable      -> 1 violation, BLOCKED
+    #     mode 0o000    -> 0 violations, silence          <- the defect
+    #     not UTF-8     -> RAISED UnicodeDecodeError      <- the second defect
+    #
+    # The first is the shape SEC-007 refuses: a control whose failure is
+    # indistinguishable from its success. The second is the decode class this
+    # tree keeps finding, `UnicodeDecodeError` being a `ValueError` and not an
+    # `OSError`, so the handler below could not catch it and the gate died
+    # instead of refusing. A crash at least fails closed under pre-commit; the
+    # silent skip did not fail at all.
+    unreadable = []
     for f in files:
         p = Path(f)
         rel = _rel(p)
@@ -81,7 +144,8 @@ def check_paths(files) -> int:
             continue
         try:
             text = p.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError) as exc:
+            unreadable.append((rel, f"{type(exc).__name__}: {exc}"))
             continue
         for n, line in enumerate(text.splitlines(), 1):
             if line.lstrip().startswith("#"):
@@ -110,6 +174,22 @@ def check_paths(files) -> int:
         print("BLOCKED - hardcoded data-path literal(s) outside the get_*_dir() seam:")
         for rel, n, lit in violations:
             print(f"  {rel}:{n}  \"{lit}\"  -> use a get_*_dir() helper from scripts/utils/workspace.py")
+    if unreadable:
+        # Refuse, rather than report a scope this gate never assembled. The
+        # reason is only NOT to say "clean": an engine file that could not be
+        # opened has not been checked, and the commit is the moment to say so.
+        # Denials are logged with the class only, matching the violation branch
+        # above, since a path is not credential-shaped and `redact()` would not
+        # strip one.
+        for rel, why in unreadable:
+            log_denial(mechanism="leak-guard:check-paths", action="commit",
+                       path=rel, reason=f"unreadable, so unchecked [{why.split(':')[0]}]")
+        print("BLOCKED - engine file(s) this gate could not read, so did not check:")
+        for rel, why in unreadable:
+            print(f"  {rel}  -> {why}")
+        print("  Fix the file, or take it out of the commit. A file the gate "
+              "cannot read is not a file the gate found clean.")
+    if violations or unreadable:
         return 1
     return 0
 

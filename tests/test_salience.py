@@ -63,8 +63,29 @@ def test_reinforcement_bonus_never_decreases():
 
 
 def test_composite_salience_multiplies_weight_and_bonus():
+    """`feedback` weighs exactly 1.0, so this case alone cannot see the operator.
+
+    Multiplying by 1.0 and adding 1.0-minus-one give the same number, and the
+    other composite case below has a bonus of exactly 1.0, which is degenerate
+    the same way. MEASURED 2026-09-01: rewriting `composite_salience` as
+    `type_weight(...) + reinforcement_bonus(...) - 1.0` left both green. The
+    `reference` case is the one that discriminates: weight 0.5, bonus 1.1733,
+    product 0.5866 against a sum of 0.6733.
+    """
     expected = salience.type_weight("feedback") * salience.reinforcement_bonus(3)
     assert salience.composite_salience("feedback", 3) == pytest.approx(expected)
+
+
+def test_composite_salience_is_a_product_and_not_a_sum():
+    weight = salience.type_weight("reference")
+    bonus = salience.reinforcement_bonus(3)
+    assert weight != pytest.approx(1.0) and bonus != pytest.approx(1.0), \
+        "fixture no longer discriminates a product from a shifted sum"
+
+    got = salience.composite_salience("reference", 3)
+
+    assert got == pytest.approx(weight * bonus)
+    assert got != pytest.approx(weight + bonus - 1.0)
 
 
 def test_composite_salience_zero_access_equals_type_weight():

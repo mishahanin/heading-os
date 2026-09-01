@@ -453,13 +453,26 @@ DECLARED_SIDECAR_SITES = {
         "both repositories and no git tree can see it",
     ("scripts/updaters/cliproxyapi_update.py", "derived", "BIN.name + '.incoming'"):
         "same directory, same reason: outside both repositories",
-    ("scripts/utils/mutation_harness.py", "literal", ".mutbak"):
-        "restored by shutil.move in a finally, and left VISIBLE on purpose -- a "
-        "mutation run that litters must show up in `git status`, which is how the "
-        "2026-08 littering incident was caught; hiding it in .quarantine/ would "
-        "trade a data-leak fix for a measurement one",
-    ("scripts/utils/mutation_harness.py", "derived", "target.suffix + '.mutbak'"):
-        "the same site seen through the other shape",
+    ("scripts/utils/mutation_harness.py", "literal", ".mutbak."):
+        "restored in a finally and VERIFIED against a sha256 taken before the "
+        "edit, and left VISIBLE on purpose -- a mutation run that litters must "
+        "show up in `git status`, which is how the 2026-08 littering incident "
+        "was caught; hiding it in .quarantine/ would trade a data-leak fix for a "
+        "measurement one. The trailing dot is not a typo: the name carries the "
+        "pid (see the derived entry below), so this literal is the separator "
+        "rather than the whole suffix",
+    ("scripts/utils/mutation_harness.py", "derived",
+     "f'{target.suffix}.mutbak.{os.getpid()}'"):
+        "the pid went into the name on 2026-09-01 and it is load-bearing. The "
+        "shared `<target>.mutbak` meant two concurrent harnesses used ONE backup "
+        "file: A copies the clean file, A mutates, B copies the now-MUTATED file "
+        "over the same backup, A's finally restores B's copy, and the mutation "
+        "stays in the tree with no backup left and the mtime untouched, because "
+        "copy2 and move both preserve it. scripts/utils/workspace.py was found "
+        "in exactly that state twice that day. Each mutation also holds an "
+        "exclusive flock on its target, so the pid is the second layer, not the "
+        "only one. This entry replaced the two `.mutbak` entries that named the "
+        "pre-fix shape",
     ("scripts/sync-exchange-pulse.py", "derived", "f'{LOG_FILE.name}.{n}'"):
         "the only entry here that WRITES NOTHING. The pulse reads back what the "
         "daemon's RotatingFileHandler already rotated, so it can answer 'when did "
@@ -540,19 +553,28 @@ def derived_sidecar_expressions(source: str) -> list[str]:
     return found
 
 
-def sidecar_sites(corpus) -> set[tuple[str, str, str]]:
+def sidecar_sites(corpus, drops: list[str] | None = None) -> set[tuple[str, str, str]]:
     """(relative path, shape, token) for every derived-name site in `corpus`.
 
     `corpus` is a sequence of (relative path, source). A set, not a list: the
     same token on two lines of one file is one site to argue about, and line
     numbers drift on every edit above them.
+
+    `drops` collects the files this could not parse. It used to `continue` in
+    silence, which makes a file the sweep never inspected indistinguishable from
+    one it inspected and cleared -- the exact confusion this whole file is about,
+    reproduced inside its own detector. A caller that passes a list gets the
+    names; the synthetic-fixture callers below pass nothing and keep the old
+    shape.
     """
     sites: set[tuple[str, str, str]] = set()
     for rel, source in corpus:
         try:
             literals = wreck_name_literals(source)
             derived = derived_sidecar_expressions(source)
-        except SyntaxError:  # pragma: no cover - another test's job
+        except SyntaxError as exc:
+            if drops is not None:
+                drops.append(f"{rel}: SyntaxError: {exc}")
             continue
         sites.update((rel, "literal", value) for value in literals)
         sites.update((rel, "derived", value) for value in derived)
@@ -666,14 +688,20 @@ def _scanned() -> list[Path]:
     return tracked_paths(("scripts/**/*.py", ".claude/**/*.py"))
 
 
+# Files `_corpus` walked but could not read. Module-level rather than returned,
+# so every existing caller keeps its shape and one test can ask about it.
+_CORPUS_DROPS: list[str] = []
+
+
 def _corpus() -> list[tuple[str, str]]:
     out = []
+    _CORPUS_DROPS.clear()
     for path in _scanned():
+        rel = path.relative_to(ROOT).as_posix()
         try:
-            out.append((path.relative_to(ROOT).as_posix(),
-                        path.read_text(encoding="utf-8")))
-        except UnicodeDecodeError:  # pragma: no cover - not a python source
-            continue
+            out.append((rel, path.read_text(encoding="utf-8")))
+        except UnicodeDecodeError as exc:
+            _CORPUS_DROPS.append(f"{rel}: UnicodeDecodeError: {exc}")
     return out
 
 
@@ -694,6 +722,87 @@ def test_the_sweep_reaches_a_real_corpus():
                    "scripts/run-skill-eval.py",
                    "scripts/utils/quarantine.py"):
         assert writer in present, f"the sweep no longer reaches {writer}"
+
+
+def test_the_sweep_INSPECTED_every_file_it_walked():
+    """The floor above is a count and four names. This one is set equality.
+
+    `_corpus` skipped an unreadable file with a bare `continue`, and
+    `sidecar_sites` did the same for one it could not parse. Both are the
+    confusion this file exists to end - "I could not look at it" rendering
+    exactly like "I looked and it was clean" - reproduced inside the detector
+    that is supposed to catch it.
+
+    MEASURED 2026-09-01: dropping ONE arbitrary undeclared file
+    (`scripts/leak-guard.py`) from `_corpus` left the whole file green at 39
+    passed. `test_the_sweep_reaches_a_real_corpus` could not see it, because
+    434 minus one is still over 300 and the dropped file was not one of the
+    four writers named there. The file that gets dropped is exactly the file
+    most likely to be a new writer: a source mid-edit, or one that is not
+    UTF-8.
+
+    A count cannot express this and a hand-written list of names decays, so
+    the assertion is that the set READ equals the set WALKED, and that nothing
+    failed to parse. Any drop is named rather than counted.
+    """
+    walked = {p.relative_to(ROOT).as_posix() for p in _scanned()}
+    corpus = _corpus()
+    assert _CORPUS_DROPS == [], (
+        "the sweep walked files it could not read, so it reported clean over "
+        "source it never opened:\n  " + "\n  ".join(_CORPUS_DROPS))
+    read = {rel for rel, _ in corpus}
+    assert read == walked, (
+        f"walked but not read: {sorted(walked - read)}; "
+        f"read but not walked: {sorted(read - walked)}")
+    parse_drops: list[str] = []
+    sidecar_sites(corpus, drops=parse_drops)
+    assert parse_drops == [], (
+        "the sweep could not parse these, so no rule below ran over them:\n  "
+        + "\n  ".join(parse_drops))
+
+
+def test_the_drop_reporting_is_not_dead_code():
+    """Both collectors, driven. A recorder nobody can make fire is decoration.
+
+    The live tree is clean by construction, so the assertions above pass with
+    either collector deleted. These are the cases ON the line: a source that is
+    not decodable, and one that is decodable but not parseable.
+    """
+    drops: list[str] = []
+    sites = sidecar_sites([("ok.py", "d = p.with_name(p.name + '.broken')\n"),
+                           ("broken.py", "def f(:\n")], drops=drops)
+    assert len(drops) == 1, drops
+    assert drops[0].startswith("broken.py: SyntaxError: "), drops
+    # The readable neighbour still yielded its site, so the drop is a drop and
+    # not the whole call giving up.
+    assert ("ok.py", "derived", "p.name + '.broken'") in sites, sites
+    assert sidecar_sites([("broken.py", "def f(:\n")]) == set(), (
+        "a caller that passes no list must still not crash")
+
+
+def test_the_corpus_drop_recorder_fires_on_an_undecodable_source(tmp_path, monkeypatch):
+    """The `_corpus` half, driven the same way."""
+    here = sys.modules[__name__]
+    bad = tmp_path / "scripts" / "not-utf8.py"
+    good = tmp_path / "scripts" / "fine.py"
+    bad.parent.mkdir(parents=True)
+    bad.write_bytes(b"x = '\xff\xfe'\n")
+    good.write_text("y = 1\n", encoding="utf-8")
+    monkeypatch.setattr(here, "ROOT", tmp_path)
+    monkeypatch.setattr(here, "_scanned", lambda: [bad, good])
+
+    corpus = _corpus()
+    # The readable neighbour still lands, so this is one file dropped and not
+    # the walk aborting.
+    assert corpus == [("scripts/fine.py", "y = 1\n")], corpus
+    assert len(_CORPUS_DROPS) == 1, _CORPUS_DROPS
+    assert _CORPUS_DROPS[0].startswith("scripts/not-utf8.py: UnicodeDecodeError: "), (
+        _CORPUS_DROPS)
+    # And the drop list is per-call, not cumulative: a second clean run must
+    # not inherit the first run's complaint.
+    monkeypatch.setattr(here, "_scanned", lambda: [good])
+    assert _corpus() == [("scripts/fine.py", "y = 1\n")]
+    assert _CORPUS_DROPS == []
 
 
 def test_the_three_fixed_writers_no_longer_build_a_wreck_name():

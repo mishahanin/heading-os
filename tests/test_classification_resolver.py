@@ -66,10 +66,31 @@ def test_broken_map_fails_closed_to_ceo_only(route):
     assert workspace.get_classification("anything/at/all.md") == "ceo-only"
 
 
-def test_path_normalization(route):
-    route({"scripts/x.py": "engine"})
+def test_path_normalization(monkeypatch):
+    """Asked of the REAL resolver, not of the fixture's own lambda.
+
+    This used the `route` fixture, whose stub normalises the path ITSELF
+    (`p.replace("\\\\", "/").lstrip("/")`), so the assertion measured the test
+    helper. MEASURED 2026-09-01: deleting the normalise line from
+    `matched_routing_rule` in scripts/utils/workspace.py left this whole file
+    green at 8 passed.
+
+    `load_routing_map` is stubbed instead - the input `matched_routing_rule`
+    actually reads - so the production normalisation runs between the argument
+    and the answer.
+    """
+    monkeypatch.setattr(
+        workspace, "load_routing_map",
+        lambda: {"default": "private", "rules": {"scripts/x.py": "engine"}},
+    )
     assert workspace.get_classification("\\scripts\\x.py") == "corporate"
     assert workspace.get_classification("/scripts/x.py") == "corporate"
+    assert workspace.get_classification("scripts/x.py") == "corporate"
+    # The negative case, on a map whose DEFAULT is the other value: without it a
+    # resolver that answered "corporate" for every input would satisfy the three
+    # lines above, and the normalisation would be doing nothing.
+    assert workspace.get_classification("/threads/business/y.md") == "ceo-only"
+    assert workspace.get_classification("\\threads\\business\\y.md") == "ceo-only"
 
 
 def test_is_corporate_wrapper(route):

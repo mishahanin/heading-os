@@ -25,6 +25,7 @@ Run: python3 -m pytest tests/test_a_stall_after_the_headers_arrived.py
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import io
 import sys
@@ -130,6 +131,130 @@ def test_a_non_json_body_keeps_its_own_path(wired, monkeypatch, capsys):
     with pytest.raises(SystemExit):
         critique._fetch_card(ROOT, "abc123")
     assert "not JSON" in capsys.readouterr().err
+
+
+# ============================================================
+# The same shape one layer down: a read that cannot be decoded
+# ============================================================
+
+def test_a_body_file_that_is_not_utf8_exits_one_with_a_message(monkeypatch,
+                                                               capsys, tmp_path):
+    """`UnicodeDecodeError` is a `ValueError`, so `except OSError` walked past it.
+
+    MEASURED 2026-09-01 against the shipped script: one 0xff byte in the file
+    produced `UnicodeDecodeError: invalid start byte` as a traceback and exit 1,
+    from a module whose docstring promises 0, 1 and 2 and whose neighbouring
+    handler exists to turn an unreadable body file into exactly this message.
+    The same defect class as the stall above, one layer down.
+    """
+    bad = tmp_path / "draft.txt"
+    bad.write_bytes(b"hello \xff world\n")
+    monkeypatch.setattr(sys, "argv",
+                        ["draft-critique.py", "--body-file", str(bad)])
+
+    assert critique.main() == 1
+    err = capsys.readouterr().err
+    assert "cannot read --body-file" in err
+    assert "Traceback" not in err
+    assert str(bad) in err, "the operator is not told which file to go and look at"
+
+
+def test_a_readable_body_file_is_still_read(monkeypatch, capsys, tmp_path):
+    """The negative case: the widened handler must not swallow a good file.
+
+    `critique_draft` is stubbed to None, which is the documented "no critique
+    produced" exit 1 - a DIFFERENT 1 from the one above, and told apart by the
+    message, which is why both are asserted rather than the code alone.
+    """
+    good = tmp_path / "draft.txt"
+    good.write_text("Dear Ms Brand, the quote stands at 347,850.\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv",
+                        ["draft-critique.py", "--body-file", str(good)])
+    monkeypatch.setattr(critique.draft_critique, "critique_draft",
+                        lambda *_a, **_kw: None)
+
+    assert critique.main() == 1
+    err = capsys.readouterr().err
+    assert "cannot read --body-file" not in err
+    assert "no critique produced" in err
+
+
+def test_an_undecodable_daemon_state_file_reads_as_absent(tmp_path):
+    """`_read_state` promises `str | None`, and raised a third thing.
+
+    A `.daemon-state/token` holding a non-UTF-8 byte is a truncated or foreign
+    write, which is the same situation as an absent one from this helper's point
+    of view. It used to raise out of a function whose annotation says otherwise.
+    """
+    state = tmp_path / ".daemon-state"
+    state.mkdir()
+    (state / "token").write_bytes(b"\xff\xfe not utf-8")
+    assert critique._read_state(tmp_path, "token") is None
+
+
+def test_an_undecodable_token_takes_the_documented_no_daemon_exit(tmp_path,
+                                                                  capsys):
+    """The consequence, at the seam the operator meets: exit 2, not a traceback."""
+    state = tmp_path / ".daemon-state"
+    state.mkdir()
+    (state / "token").write_bytes(b"\xff\xfe")
+    (state / "port").write_text("8765", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as se:
+        critique._fetch_card(tmp_path, "abc123")
+    assert se.value.code == 2
+    err = capsys.readouterr().err
+    assert "not reachable" in err
+    assert "Traceback" not in err
+
+
+def test_a_readable_state_file_is_still_returned(tmp_path):
+    """The other direction, so the guard above is not passing over a helper that
+    answers None for everything."""
+    state = tmp_path / ".daemon-state"
+    state.mkdir()
+    (state / "token").write_text("  tok-31c  \n", encoding="utf-8")
+    assert critique._read_state(tmp_path, "token") == "tok-31c"
+
+
+def test_every_state_and_file_read_in_this_module_covers_the_decode_class():
+    """The sibling sweep, because the first fix landed in one of two copies.
+
+    Both `read_text` calls in this module carried `except OSError` and neither
+    covered `UnicodeDecodeError`. Asked of the syntax tree so a third one added
+    later cannot inherit the same hole quietly.
+    """
+    tree = ast.parse((ROOT / "scripts" / "draft-critique.py")
+                     .read_text(encoding="utf-8"))
+    reads = [node for node in ast.walk(tree)
+             if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute)
+             and node.func.attr == "read_text"]
+    assert len(reads) >= 2, (
+        f"only {len(reads)} text reads found; this sweep has stopped reaching "
+        f"the calls it was written for")
+
+    guarded, uncovered = 0, []
+    for tried in [n for n in ast.walk(tree) if isinstance(n, ast.Try)]:
+        if not any("read_text" in ast.unparse(stmt) for stmt in tried.body):
+            continue
+        guarded += 1
+        # A decode failure is a `ValueError`; either spelling catches it, and
+        # a bare `except:` or `except Exception` does too.
+        covers = any(
+            h.type is None
+            or {"UnicodeDecodeError", "ValueError", "Exception", "BaseException"}
+            & {n.id for n in ast.walk(h.type) if isinstance(n, ast.Name)}
+            for h in tried.handlers
+        )
+        if not covers:
+            uncovered.append(ast.unparse(tried.body[0]))
+    assert guarded == len(reads), (
+        f"{len(reads)} text reads but only {guarded} of them sit in a try; a "
+        f"read with no handler at all is invisible to this sweep")
+    assert uncovered == [], (
+        "these text reads are guarded by handlers that cannot see a decode "
+        "failure:\n  " + "\n  ".join(uncovered))
 
 
 def test_the_handler_order_puts_urlerror_first():

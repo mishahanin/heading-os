@@ -168,6 +168,98 @@ def test_a_corrupt_file_still_gives_a_usable_state(tmp_path, monkeypatch):
     assert state == {"completed_steps": [], "started_at": None}
 
 
+# `load_state` caught `(json.JSONDecodeError, OSError)` until 2026-09-01.
+# `UnicodeDecodeError` is a SIBLING of `JSONDecodeError` under `ValueError`, not
+# a subclass, and it comes out of `read_text` BEFORE `json.loads` is handed
+# anything - so the corruption this function most has to survive was the one it
+# did not catch.
+#
+# It is not hypothetical here. `save_state` became atomic in this same shard, so
+# a state file left behind by the older non-atomic write can be cut mid
+# UTF-8 sequence. MEASURED that day on `b'{"completed_steps": ["ident\xc3'`: a
+# raw UnicodeDecodeError out of `load_state`, which `main` calls on its first
+# line. The wizard died on the run whose whole purpose is to resume an
+# interrupted one.
+UNDECODABLE_STATES = [
+    b'{"completed_steps": ["ident\xc3',      # cut mid multi-byte sequence
+    b'{"completed_steps": [], "started_at": "\xff"}',   # a lone invalid byte
+    b"\xff\xfe\x00\x00",                     # not text at all
+]
+
+
+@pytest.mark.parametrize("raw", UNDECODABLE_STATES)
+def test_an_undecodable_state_file_still_gives_a_usable_state(
+        tmp_path, monkeypatch, raw):
+    setup = _load("setup_p13a_decode", "scripts/setup.py")
+    state_file = tmp_path / "setup-state.json"
+    state_file.write_bytes(raw)
+    monkeypatch.setattr(setup, "STATE_FILE", state_file)
+
+    state = setup.load_state()
+
+    assert state == {"completed_steps": [], "started_at": None}
+    # The two keys `main` and `mark_done` subscript, which is the whole contract.
+    setup.mark_done(state, "identity")
+    assert setup.is_done(state, "identity") is True
+
+
+def test_the_undecodable_corpus_really_is_undecodable():
+    """The straw-man check. A payload that happens to decode would make the
+    parametrised case above a second copy of the plain-corrupt test."""
+    assert UNDECODABLE_STATES
+    for raw in UNDECODABLE_STATES:
+        with pytest.raises(UnicodeDecodeError):
+            raw.decode("utf-8")
+
+
+def test_no_json_read_in_setup_is_blind_to_an_undecodable_byte():
+    """The sibling sweep, because the same fix landed in one of three sites.
+
+    `load_state` was the site this shard reached; `.workspace-identity.json` is
+    read the same way in two more places in this file, both catching
+    `(json.JSONDecodeError, OSError)` and neither reaching its own written
+    degraded answer for a byte that will not decode. A per-site test for each
+    would decay the moment a fourth read is added, so the property is asserted
+    over the AST of the whole file.
+    """
+    tree = ast.parse((ROOT / "scripts" / "setup.py").read_text(encoding="utf-8"))
+    offenders = []
+    handlers = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ExceptHandler) or node.type is None:
+            continue
+        caught = {ast.unparse(x) for x in (
+            node.type.elts if isinstance(node.type, ast.Tuple) else [node.type])}
+        flat = " ".join(caught)
+        if "JSONDecodeError" not in flat:
+            continue
+        handlers += 1
+        # `ValueError` is the shared parent, so a handler naming it is covered.
+        if "UnicodeDecodeError" not in flat and "ValueError" not in flat:
+            offenders.append((node.lineno, sorted(caught)))
+    assert handlers >= 3, (
+        f"only {handlers} JSON handlers were inspected; the detector has "
+        f"decayed and this sweep is passing over nothing")
+    assert offenders == [], (
+        f"these handlers catch a JSON parse error but not the decode error that "
+        f"precedes it: {offenders}")
+
+
+def test_a_decodable_state_file_is_still_read_rather_than_reset(
+        tmp_path, monkeypatch):
+    """The bound on the other side.
+
+    A `load_state` that answered the skeleton for everything would satisfy every
+    corruption case in this file while throwing away the operator's progress on
+    every ordinary run - which is the same "an interrupted setup destroyed the
+    record of what it had done" this shard exists to stop.
+    """
+    _, state = _load_state_with(
+        tmp_path, monkeypatch,
+        '{"completed_steps": ["identity"], "started_at": "2026-01-01"}')
+    assert state["completed_steps"] == ["identity"]
+
+
 def test_a_missing_file_still_gives_a_usable_state(tmp_path, monkeypatch):
     _, state = _load_state_with(tmp_path, monkeypatch, None)
     assert state == {"completed_steps": [], "started_at": None}

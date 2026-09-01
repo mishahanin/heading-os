@@ -62,6 +62,59 @@ def test_record_writes_owner_only_mode(tmp_path):
     assert (path.stat().st_mode & 0o777) == 0o600
 
 
+@pytest.mark.parametrize(
+    "field,hostile",
+    [
+        ("trace_id", "../../../escaped"),
+        ("kind", "../../../escaped"),
+        ("trace_id", "a/b/c"),
+        ("kind", "a/b/c"),
+        ("trace_id", ".."),
+    ],
+)
+def test_a_hostile_segment_cannot_name_a_file_outside_the_queue(tmp_path, field, hostile):
+    """The entry filename is built from caller-supplied text, so it is contained.
+
+    `trace_id` is `tracing.get()`, which reads `X31C_TRACE_ID` out of the
+    environment, and `kind` is a card's `action_type` read off a queue file.
+    Neither is a literal this module chose, so both reach `_reserve_unique_path`
+    as attacker-influenced filename segments.
+
+    MEASURED 2026-09-01: replacing `_sanitize`'s character filter with a
+    pass-through left all 151 tests across the six files that exercise this
+    module green, so nothing in the suite was holding the containment. With the
+    filter removed, `trace_id="../../../escaped"` wrote
+    `<dlq>/../../../escaped__email_send.json`, which lands outside the
+    dead-letter tree entirely.
+
+    Asserted on the SIDE EFFECT, not on the sanitizer's return value: the
+    question is where a file appeared, and a test that called `_sanitize`
+    directly would keep passing against a `record` that stopped calling it.
+    """
+    fields = {"trace_id": "safe-id", "kind": "email_send"}
+    fields[field] = hostile
+
+    path = dead_letter.record(
+        payload={},
+        classification="permanent",
+        error="x",
+        workspace_root=tmp_path,
+        **fields,
+    )
+
+    dlq = dead_letter.dead_letter_dir(tmp_path)
+    assert path is not None, "the write failed outright rather than being contained"
+    assert path.parent.resolve() == dlq.resolve(), (
+        f"the entry was named outside the dead-letter directory: {path}"
+    )
+    assert "/" not in path.name and "\\" not in path.name
+
+    # Nothing at all was created anywhere else under the injected workspace.
+    strays = [p for p in tmp_path.rglob("*")
+              if p.is_file() and p.parent.resolve() != dlq.resolve()]
+    assert strays == [], f"files appeared outside the dead-letter directory: {strays}"
+
+
 def test_unknown_classification_defaults_permanent(tmp_path):
     path = dead_letter.record(
         trace_id="cls1",

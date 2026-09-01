@@ -500,6 +500,78 @@ def test_a_malformed_cadence_value_is_reported(wd, tmp_path, monkeypatch, caplog
     assert any("cadence.sentinel.grace" in r.getMessage() for r in caplog.records)
 
 
+@pytest.mark.parametrize("cfg, malformed_at", [
+    # `watchdog: off` -- one YAML typo turning a mapping into a scalar.
+    ({"daemon": {"watchdog": "off"}}, "watchdog"),
+    ({"daemon": "off"}, "daemon"),
+    ({"daemon": {"watchdog": {"cadence": "default"}}}, "cadence"),
+    ({"daemon": {"watchdog": ["off"]}}, "watchdog"),
+])
+def test_a_malformed_cadence_CONTAINER_does_not_kill_the_watchdog(
+        wd, tmp_path, monkeypatch, caplog, cfg, malformed_at):
+    """The other half of the same defect, and the half nothing measured.
+
+    The four cases above are malformed CONTAINERS, not malformed values: a level
+    of the `daemon.watchdog.cadence` chain that is not a mapping. `_seconds`
+    guards the leaf; the chain walk guards these, and the production comment
+    says so outright ("fixed for malformed VALUES and left open for malformed
+    CONTAINERS"). Before that walk was guarded, `.get` on a str raised
+    AttributeError out of `load_cadence`, out of `check_once`, and into the
+    bridge daemon's per-tick handler, which logs and carries on -- so the 2-minute
+    tick did nothing forever while the daemon reported itself healthy.
+
+    MEASURED 2026-09-01: deleting BOTH container branches left this file green at
+    34 passed. The parametrized value test above cannot reach them, because every
+    one of its inputs sits at the leaf with the chain intact.
+    """
+    monkeypatch.setattr(wd, "load_expected", lambda root: ("sentinel",))
+    fake = types.ModuleType("scripts.bridge_daemon.config")
+    fake.load_config = lambda root: cfg
+    monkeypatch.setitem(sys.modules, "scripts.bridge_daemon.config", fake)
+
+    with caplog.at_level(logging.WARNING):
+        cadence = wd.load_cadence(tmp_path)
+
+    assert cadence == {"sentinel": (wd.DEFAULT_EXPECTED_S, wd.DEFAULT_GRACE_S)}
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("malformed" in m or "not a mapping" in m for m in messages), (
+        f"the watchdog fell back to defaults over a malformed {malformed_at!r} "
+        f"level and said nothing: {messages}")
+
+
+def test_a_well_formed_config_logs_no_malformed_warning(wd, tmp_path, monkeypatch, caplog):
+    """Anti-over-reporting: the container guards must not fire on a good config,
+    or the warning above stops meaning anything."""
+    monkeypatch.setattr(wd, "load_expected", lambda root: ("sentinel",))
+    fake = types.ModuleType("scripts.bridge_daemon.config")
+    fake.load_config = lambda root: {
+        "daemon": {"watchdog": {"cadence": {"sentinel": {"expected": 900, "grace": 300}}}}}
+    monkeypatch.setitem(sys.modules, "scripts.bridge_daemon.config", fake)
+
+    with caplog.at_level(logging.WARNING):
+        assert wd.load_cadence(tmp_path) == {"sentinel": (900, 300)}
+
+    assert [r.getMessage() for r in caplog.records] == []
+
+
+def test_an_absent_cadence_section_is_not_a_malformed_one(wd, tmp_path, monkeypatch, caplog):
+    """`cadence:` simply not configured is the ordinary case, not a defect.
+
+    It reaches the same `node is None` path the malformed cases exit through, so
+    without this the guard could report every default-cadence host as malformed.
+    """
+    monkeypatch.setattr(wd, "load_expected", lambda root: ("sentinel",))
+    fake = types.ModuleType("scripts.bridge_daemon.config")
+    fake.load_config = lambda root: {"daemon": {"watchdog": {}}}
+    monkeypatch.setitem(sys.modules, "scripts.bridge_daemon.config", fake)
+
+    with caplog.at_level(logging.WARNING):
+        cadence = wd.load_cadence(tmp_path)
+
+    assert cadence == {"sentinel": (wd.DEFAULT_EXPECTED_S, wd.DEFAULT_GRACE_S)}
+    assert [r.getMessage() for r in caplog.records] == []
+
+
 def test_a_good_cadence_value_is_honoured(wd, tmp_path, monkeypatch):
     """The tolerance must not have become an override."""
     monkeypatch.setattr(wd, "load_expected", lambda root: ("sentinel",))

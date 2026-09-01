@@ -501,7 +501,18 @@ def _live_daemon_port(timeout: float = 2.0) -> int | None:
     port_file = WORKSPACE_ROOT / ".daemon-state" / "port"
     try:
         port_str = port_file.read_text(encoding="utf-8").strip()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # `UnicodeDecodeError` is a `ValueError`, so `except OSError` never saw
+        # it. The port file is written by a live daemon, so a torn write is the
+        # ordinary corruption here, and the docstring above promises None for a
+        # file that does not name a live port. MEASURED 2026-09-01 with a port
+        # file of `b"3141\xff5"`: a raw UnicodeDecodeError out of this function,
+        # which is the SINGLETON GUARD - so `--start` died on the check that
+        # exists to stop a second daemon, instead of answering it.
+        #
+        # `scripts/daemon-fleet-health.py` already carried this class at its own
+        # three reads. This file, which writes the state that file reads, had
+        # fallen behind it.
         return None
     if not port_str.isdigit() or not (1 <= int(port_str) <= 65535):
         return None
@@ -867,8 +878,13 @@ def start_daemon(explicit_port: int | None = None):
         # hazard was the port file itself, which `_live_daemon_port` now guards.
         try:
             port_file = WORKSPACE_ROOT / ".daemon-state" / "port"
+            # `errors="replace"` so a torn port file cannot raise out of a
+            # SHUTDOWN path. An undecodable file never equals `str(port)`, so
+            # this daemon leaves it alone, which is the safe direction: it does
+            # not own a file it cannot read.
             if (port is not None and port_file.exists()
-                    and port_file.read_text().strip() == str(port)):
+                    and port_file.read_text(
+                        encoding="utf-8", errors="replace").strip() == str(port)):
                 port_file.unlink()
         except OSError:
             logging.warning("could not remove the stale port file", exc_info=True)
@@ -904,7 +920,19 @@ def _read_heartbeat_fallback():
         return None
     try:
         return json.loads(hb.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        # `UnicodeDecodeError` is a SIBLING of `json.JSONDecodeError` under
+        # `ValueError`, not a subclass, and it is raised by `read_text` before
+        # `json.loads` is handed anything. The heartbeat is rewritten on a timer
+        # by a live daemon, so a half-written file is the ordinary corruption.
+        #
+        # MEASURED 2026-09-01 on a heartbeat holding one 0xff byte: this
+        # function raised instead of returning None, and took `show_status` and
+        # `check_health` with it - the two commands an operator runs precisely
+        # when the daemon is sick, both answering a traceback rather than the
+        # diagnostic they exist to print. `scripts/daemon-fleet-health.py`
+        # already caught this at its own `_read_heartbeat`, naming the same
+        # reason; this reader had fallen behind it.
         return None
 
 
@@ -931,7 +959,14 @@ def show_status():
     """
     port_file = WORKSPACE_ROOT / ".daemon-state" / "port"
     hb = _read_heartbeat_fallback()
-    port = port_file.read_text().strip() if port_file.exists() else "-"
+    # `errors="replace"`, and the encoding stated. A bare `read_text()` decodes
+    # with the LOCALE encoding and raises on a byte it cannot handle, so an
+    # undecodable port file killed this whole status line - measured 2026-09-01
+    # with `b"3141\xff5"`. Replacing keeps the existing "print whatever is in
+    # the file" behaviour (a decodable `garbage` already printed as
+    # `port=garbage`) and simply extends it to bytes that are not text.
+    port = (port_file.read_text(encoding="utf-8", errors="replace").strip()
+            if port_file.exists() else "-")
 
     if hb is None and port == "-":
         print("daemon not started (no port file, no heartbeat.json)", file=sys.stderr)
@@ -975,7 +1010,12 @@ def check_health():
             sys.exit(1)
         print("bridge daemon not running (no .daemon-state/port file, no heartbeat.json)", file=sys.stderr)
         sys.exit(2)
-    port_str = port_file.read_text().strip()
+    # `errors="replace"` for the same reason as `show_status`, and it needs no
+    # new branch: an undecodable port file becomes a string that is not all
+    # digits, so the `corrupted port file` arm below - which already falls back
+    # to the heartbeat - is the one that runs. Before this it was a raw
+    # UnicodeDecodeError out of `--health`, measured 2026-09-01.
+    port_str = port_file.read_text(encoding="utf-8", errors="replace").strip()
     if not port_str.isdigit() or not (1 <= int(port_str) <= 65535):
         # Exit 2 is documented as "neither could be read", and this branch used
         # to take it without ever trying the heartbeat -- losing the last known

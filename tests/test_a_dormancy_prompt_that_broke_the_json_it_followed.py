@@ -20,6 +20,15 @@ terminal caller still reads it, and leaves stdout as the primary stream
 otherwise so the interactive flow is unchanged.
 
 Fixed 2026-08-29.
+
+THE PROMPT HALF WAS NOT MEASURED UNTIL 2026-09-01. `_run` patched `input` with
+`lambda *a: answer`, a stub that accepts the prompt and writes nothing, so
+`test_the_confirmation_prompt_is_off_stdout_under_json` was asserting the
+absence of a string nothing in the test could produce. Measured that day:
+putting `resp = input("> ")` back in place of the hand-written
+`print("> ", file=out)` left the file at 6 passed. The stub now writes the
+prompt to `sys.stdout` the way CPython does when stdout is not a tty, and the
+same edit fails.
 """
 from __future__ import annotations
 
@@ -87,10 +96,42 @@ def tree(health, monkeypatch, tmp_path):
     return tmp_path
 
 
+def _input_stub(answer: str):
+    """`input()`, including the half of it the first stub threw away.
+
+    The stub here was `lambda *a: answer`, which DISCARDS the prompt argument.
+    The prompt is the defect this file's third test is named for, so with that
+    stub the assertion could not fail on it: measured 2026-09-01, restoring
+    `resp = input("> ")` in place of the hand-written `print("> ", file=out)`
+    left all six tests green.
+
+    CPython writes the prompt to `sys.stdout` (not stderr, and not the terminal
+    directly) whenever stdout is not an interactive tty, which is the state
+    under capsys and the state in the piped run that produced the 98 536-byte
+    unparseable stream. So the stub writes it there too, and the assertion
+    measures the thing it names.
+    """
+    def _fake_input(prompt=""):
+        if prompt:
+            sys.stdout.write(str(prompt))
+        return answer
+    return _fake_input
+
+
 def _run(health, monkeypatch, argv, answer="no"):
-    monkeypatch.setattr("builtins.input", lambda *a: answer)
+    monkeypatch.setattr("builtins.input", _input_stub(answer))
     monkeypatch.setattr(sys, "argv", argv)
     health.main()
+
+
+def test_the_input_stub_reproduces_the_prompt_on_stdout(capsys):
+    """The stub is load-bearing, so it gets its own case.
+
+    A stub that silently stopped writing the prompt would take the guard below
+    with it and nothing would say so.
+    """
+    assert _input_stub("no")("> ") == "no"
+    assert capsys.readouterr().out == "> "
 
 
 def test_the_json_document_is_the_whole_of_stdout(health, tree, monkeypatch, capsys):

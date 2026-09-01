@@ -202,14 +202,56 @@ def test_a_caller_supplied_deny_still_applies(repo):
     assert stats.get("denied") == 1
 
 
-def test_a_path_is_not_trimmed_of_its_own_whitespace(repo):
-    """`.strip()` on a path produces one that matches neither disk nor a prefix."""
-    name = "docs/trailing .md"
+@pytest.mark.parametrize("name", [
+    # A space INSIDE the name. `.strip()` cannot touch this one, which is why
+    # it was the only case here and why it measured nothing.
+    "docs/trailing .md",
+    # Whitespace at the END of the whole path. This is what `.strip()` eats.
+    "docs/trailing.md ",
+    # And at the START of it.
+    " docs/leading.md",
+    # Both ends at once.
+    " docs/both.md ",
+    # A tab, which `.strip()` also removes and which git emits verbatim under -z.
+    "docs/tabbed.md\t",
+])
+def test_a_path_is_not_trimmed_of_its_own_whitespace(repo, name):
+    """`.strip()` on a path produces one that matches neither disk nor a prefix.
+
+    MEASURED 2026-09-01: mutating `paths[sha].append(entry)` to
+    `append(entry.strip())` left all 26 tests across this file and
+    `tests/test_commit_source.py` green. The single case here was
+    `"docs/trailing .md"`, whose only whitespace is INTERNAL, so `.strip()` is a
+    no-op on it. The module's own comment claims "a filename may legally begin
+    or end with whitespace" and nothing had ever passed such a filename.
+
+    It matters for the same reason the quoting did: `is_denied` matches deny
+    PREFIXES with `startswith`, so a trimmed leading space turns a path the air
+    gap would refuse into one it does not recognise, and a trimmed trailing
+    space puts a name in the index that matches nothing on disk.
+    """
     _commit(repo, "spaced filename", write=(name, "x"))
 
     found = [p for entries in _changed_paths(repo, ["HEAD"]).values() for p in entries]
 
     assert found == [name]
+
+
+def test_a_leading_space_does_not_hide_a_vault_path(repo):
+    """The consequence, not just the mechanism.
+
+    ` _secure/x.md` is denied because `is_denied` strips a leading separator and
+    normalises; the danger is the trailing form, where a trimmed name silently
+    stops matching what the walk actually recorded.
+    """
+    name = "_secure/leak.md "
+    _commit(repo, "vault file with a trailing space", write=(name, "secret"))
+
+    stats: dict = {}
+    rows = _walk(repo, include_paths=True, stats=stats)
+
+    assert rows == [], "a vault path with trailing whitespace was indexed"
+    assert stats.get("denied") == 1
 
 
 def test_several_files_in_one_commit_are_all_listed(repo):

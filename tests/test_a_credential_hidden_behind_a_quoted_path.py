@@ -91,8 +91,19 @@ def _write(repo: Path, rel: str, body: str = "x") -> Path:
 
 @pytest.fixture
 def no_denial_log(monkeypatch):
-    """The wall records refusals into the real data overlay; not from a test."""
-    monkeypatch.setattr(push_all, "log_denial", lambda **_kw: None)
+    """The wall records refusals into the real data overlay; not from a test.
+
+    The stub RECORDS rather than discards. A stub that throws its argument away
+    makes every call look identical to no call at all, which is how the
+    `log_denial` call below went untested: measured 2026-09-01, deleting it left
+    this file and `test_push_all_gate.py` and `test_denial_log_isolation.py` all
+    green while `push:secret-tracked-files`, a DECLARED WALL in
+    `scripts/utils/gate_yield.WALLS`, reported zero firings forever.
+    """
+    recorded: list[dict] = []
+    monkeypatch.setattr(push_all, "log_denial",
+                        lambda **kw: recorded.append(kw) or True)
+    return recorded
 
 
 def _step_one(repo: Path):
@@ -163,6 +174,64 @@ def test_the_refused_paths_are_printed_unquoted(tmp_path, capsys, no_denial_log)
     out = capsys.readouterr().out
     assert '\\320' not in out
     assert '"документы' not in out
+
+
+def test_the_refusal_is_recorded_in_the_denial_ledger(tmp_path, capsys,
+                                                      no_denial_log):
+    """`push:secret-tracked-files` is a declared WALL in
+    `scripts/utils/gate_yield.WALLS`, and the denial log is the only place its
+    firings are counted. `tests/test_yield_axes.py` asserts the NAME is
+    declared; nothing asserted the call site still exists, so the ledger could
+    report a wall that never fires while the wall fires every time."""
+    repo = _init_repo(tmp_path)
+    _write(repo, "config/.env", "k=v\n")
+    _git(repo, "add", "-A")
+    with pytest.raises(SystemExit):
+        _step_one(repo)
+
+    assert len(no_denial_log) == 1, no_denial_log
+    record = no_denial_log[0]
+    assert record["mechanism"] == "push:secret-tracked-files"
+    assert record["action"] == "push"
+    assert record["path"] == "config/.env"
+    assert record["reason"]
+
+
+def test_every_refused_path_gets_its_own_record(tmp_path, capsys, no_denial_log):
+    """One record per file, not one per run: the ledger counts refusals, and a
+    push carrying three credentials refused three things."""
+    # Escaped rather than typed. The sibling cases above spell these names
+    # literally, which is fine there; new lines in this campaign are written
+    # ASCII-only so the file's byte content is decidable without a hex dump.
+    docs = "\u0434\u0430\u043d\u043d\u044b\u0435"      # "dannye"
+    browser = "\u0431\u0440\u0430\u0443\u0437\u0435\u0440"  # "brauzer"
+    repo = _init_repo(tmp_path)
+    _write(repo, "config/.env", "k=v\n")
+    _write(repo, f"{docs}/telegram.session", "blob\n")
+    _write(repo, f"{browser}/cookies.json", "[]\n")
+    _git(repo, "add", "-A")
+    with pytest.raises(SystemExit):
+        _step_one(repo)
+
+    paths = sorted(r["path"] for r in no_denial_log)
+    assert paths == sorted(["config/.env",
+                            f"{browser}/cookies.json",
+                            f"{docs}/telegram.session"]), paths
+
+
+def test_a_clean_repo_records_no_refusal(tmp_path, no_denial_log, monkeypatch):
+    """The other jaw. A wall that logs on every run reports a firing count that
+    means nothing."""
+    repo = _init_repo(tmp_path)
+    _write(repo, "notes.md", "text\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    monkeypatch.setattr(push_all, "content_scan",
+                        lambda _r: (_ for _ in ()).throw(RuntimeError("reached step 3.5")))
+    with pytest.raises(RuntimeError, match="step 3.5"):
+        _step_one(repo)
+
+    assert no_denial_log == []
 
 
 def test_an_ascii_credential_is_still_refused(tmp_path, capsys, no_denial_log):

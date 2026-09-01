@@ -284,18 +284,60 @@ def _load_revoke():
     return mod
 
 
-def test_the_resolver_creates_nothing(tmp_path, monkeypatch):
-    """`get_crm_central_path()` names a path and stops there."""
+# `get_crm_central_path` has TWO branches and they answer with different
+# paths: the CEO workspace gets a SIBLING of the workspace root, an exec
+# workspace gets a directory INSIDE it. Only the first was exercised, so a
+# `mkdir` added to the exec branch was invisible - measured 2026-09-01, all
+# seven tests in this file stayed green with one there.
+#
+# The exec branch creates inside the workspace rather than outside it, so it
+# does not breach this file's headline invariant. It breaches the narrower one
+# this test states in its own first line: the function NAMES a path and stops.
+# A resolver with a side effect on one of two paths is the shape the whole file
+# is about, one directory in.
+EXEC_RETIRED_DIRNAME = ".crm-central-repo"
+
+
+@pytest.mark.parametrize("is_ceo,expected_parent,expected_name", [
+    (True, "parent", RETIRED_DIRNAME),
+    (False, "root", EXEC_RETIRED_DIRNAME),
+], ids=["ceo-workspace", "exec-workspace"])
+def test_the_resolver_creates_nothing(tmp_path, monkeypatch, is_ceo,
+                                      expected_parent, expected_name):
+    """`get_crm_central_path()` names a path and stops there, on both branches."""
+    from scripts.utils import workspace as ws_mod
+
+    root = tmp_path / "engine"
+    root.mkdir()
+    monkeypatch.setattr(ws_mod, "get_workspace_root", lambda: root)
+    monkeypatch.setattr(ws_mod, "is_ceo_workspace", lambda: is_ceo)
+
+    base = tmp_path if expected_parent == "parent" else root
+    resolved = ws_mod.get_crm_central_path()
+    assert resolved == base / expected_name
+    assert not resolved.exists(), "a pure resolver created its own answer"
+    # Nothing anywhere under the sandbox, so a mkdir of some OTHER path on the
+    # way to the answer is caught too rather than only the answer itself.
+    assert sorted(p.name for p in tmp_path.rglob("*")) == ["engine"], (
+        f"the resolver left something behind: "
+        f"{sorted(str(p) for p in tmp_path.rglob('*'))}")
+
+
+def test_the_two_resolver_branches_answer_differently(tmp_path, monkeypatch):
+    """A straw-man guard otherwise: if both branches returned the same path, the
+    parametrized pair above would be one case written twice."""
     from scripts.utils import workspace as ws_mod
 
     root = tmp_path / "engine"
     root.mkdir()
     monkeypatch.setattr(ws_mod, "get_workspace_root", lambda: root)
     monkeypatch.setattr(ws_mod, "is_ceo_workspace", lambda: True)
-
-    resolved = ws_mod.get_crm_central_path()
-    assert resolved == tmp_path / RETIRED_DIRNAME
-    assert not resolved.exists(), "a pure resolver created its own answer"
+    ceo = ws_mod.get_crm_central_path()
+    monkeypatch.setattr(ws_mod, "is_ceo_workspace", lambda: False)
+    exec_ = ws_mod.get_crm_central_path()
+    assert ceo != exec_
+    assert root not in ceo.parents, "the CEO answer moved inside the workspace"
+    assert root in exec_.parents, "the exec answer moved outside the workspace"
 
 
 def test_logging_a_security_event_does_not_build_the_retired_tree(tmp_path,

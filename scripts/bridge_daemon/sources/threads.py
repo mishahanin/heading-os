@@ -13,6 +13,7 @@ intentionally NOT walked even though the daemon runs on the CEO's
 machine - this keeps the bridge sources portable to any future
 per-exec workspace.
 """
+import logging
 from datetime import date, datetime, timezone
 from scripts.utils.workspace import get_default_tz
 from pathlib import Path
@@ -24,6 +25,8 @@ from .pulse import (
     _parse_thread_frontmatter,
 )
 from scripts.bridge_daemon._safepath import contains_symlink, normalize_rel_path
+
+logger = logging.getLogger(__name__)
 
 THREADS_ROW_CAP = 50
 THREAD_MAX_BYTES = 200_000  # 200 KB upper bound on any thread body read
@@ -90,7 +93,22 @@ def list_active_threads(data_root: Path) -> dict:
         try:
             text = p.read_text(encoding="utf-8")
             stat_result = p.stat()
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # UnicodeDecodeError is a ValueError, NOT an OSError, so ONE thread
+            # file saved in anything but UTF-8 used to abort this walk with a
+            # bare traceback: /threads 500'd, and so did /pulse, whose
+            # `threads_state_preview` runs the same read unguarded and is called
+            # without a wrapper in `pulse_data`. `library.py` caught both after
+            # exactly this measurement on knowledge/, and `read_thread` below
+            # already catches both -- the fix landed in the reader and not in
+            # the walker. MEASURED 2026-08-31: two thread files, one of them
+            # holding a Latin-1 title, and `list_active_threads` raised
+            # `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9` instead
+            # of returning the one good thread.
+            logger.warning(
+                "threads: skipping %s from the /threads listing; it is not "
+                "readable as UTF-8 text. Re-save it as UTF-8.", p,
+                exc_info=True)
             continue
         fm = _parse_thread_frontmatter(text)
         if not fm:

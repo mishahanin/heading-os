@@ -31,6 +31,7 @@ Run: python3 -m pytest tests/test_four_summaries_that_named_a_coverage_they_neve
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import sys
 from pathlib import Path
@@ -193,18 +194,57 @@ def test_an_all_green_set_is_the_only_way_to_read_current():
     assert dash.freshness_summary(rows) == "all 3 files current"
 
 
-def test_main_prints_the_function_rather_than_a_copy_of_it(monkeypatch, capsys):
+def test_main_calls_the_shared_summary_rather_than_a_copy_of_it():
     """The summary lived inline in `main()` and a test could only reproduce it,
     so the test and the script were free to drift apart while both stayed green.
-    This calls the printer through the module attribute: if `main` ever stops
-    using the function, this stops seeing the sentinel."""
-    monkeypatch.setattr(dash, "freshness_summary", lambda rows: "SENTINEL")
-    print(f"  Freshness: {dash.freshness_summary([])}")
 
-    assert "Freshness: SENTINEL" in capsys.readouterr().out
-    src = (ROOT / "scripts" / "generate-dashboard.py").read_text(encoding="utf-8")
-    assert "freshness_summary(freshness)" in src
-    assert "Freshness: all current" not in src
+    Asked of the PARSE TREE, and of `main` specifically. This test used to patch
+    `dash.freshness_summary`, print through the patched attribute IN THE TEST
+    BODY, and assert it saw the sentinel -- which measures the monkeypatch, not
+    the script: `main` was never called and could not have been, since it drives
+    a dozen collectors over the live workspace. Its docstring claimed "if `main`
+    ever stops using the function, this stops seeing the sentinel", and that was
+    simply false. What remained was a substring search over the whole file, and
+    a substring search is satisfied by a comment.
+
+    MEASURED 2026-09-01: replacing the call in `main` with
+    `print(f"  Freshness: {len(freshness)} files")` and leaving
+    `# was freshness_summary(freshness)` beside it kept both source assertions
+    green while the panel stopped reporting bands entirely. Comments are not in
+    the parse tree, so the check below fails on exactly that edit.
+    """
+    tree = ast.parse((ROOT / "scripts" / "generate-dashboard.py").read_text(encoding="utf-8"))
+    main = next(n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == "main")
+
+    calls = [n for n in ast.walk(main)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "freshness_summary"]
+
+    assert len(calls) == 1, (
+        "main() no longer calls freshness_summary exactly once, so the terminal "
+        "panel is back to a copy of the logic that can drift from the tested one"
+    )
+    # And no string main evaluates may state a freshness verdict of its own: the
+    # collapsed "all current" is the sentence the function exists to replace.
+    verdicts = [n.value for n in ast.walk(main)
+                if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                and "Freshness: all current" in n.value]
+    assert verdicts == [], verdicts
+
+
+def test_the_ast_probe_can_actually_fail(tmp_path):
+    """The control for the test above. A `next(...)` that never finds `main`, or
+    a walk that never finds a call, would make it pass over anything."""
+    tree = ast.parse("def main():\n    print(f'  Freshness: {len(x)} files')\n"
+                     "    # freshness_summary(freshness)\n")
+    main = next(n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == "main")
+    calls = [n for n in ast.walk(main)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "freshness_summary"]
+
+    assert calls == [], "the comment was read as a call"
 
 
 # ============================================================
@@ -360,6 +400,38 @@ def test_the_note_names_the_rows_that_went_not_just_the_count():
     body = pulse._tier_table_rows(_entries(60), max_rows=50)
 
     assert "by weight" in body.splitlines()[-1]
+
+
+def test_the_rows_that_survive_the_cut_are_the_heaviest_ones():
+    """The claim the note makes, asserted as ordering rather than as a phrase.
+
+    The test above checks that the note SAYS "by weight". Nothing checked that
+    it is true. MEASURED 2026-09-01: flipping the sort to `reverse=False` left
+    every test over this function green while the table showed the fifty
+    LIGHTEST rows and the note went on telling the reader the dropped ones were
+    the lowest by weight. A summary naming a coverage it does not have is this
+    module's whole subject, so the note has to be checked against the rows.
+    """
+    # SCRAMBLED on the way in. `_entries` emits weight 60 down to 1 already in
+    # descending order, so a fixture built from it cannot tell a working sort
+    # from no sort at all: MEASURED 2026-09-01, replacing the whole `sorted(...)`
+    # with `list(entries)` passed against the plain helper. The interleave below
+    # puts the lightest rows first, so arrival order and weight order disagree
+    # on the very first row.
+    plain = _entries(60)
+    scrambled = plain[30:][::-1] + plain[:30][::-1]
+    assert [int(e["weight"]) for e in scrambled][:3] == [1, 2, 3], (
+        "the scramble stopped scrambling; this test is back to a pre-sorted input")
+
+    body = pulse._tier_table_rows(scrambled, max_rows=50)
+    rows = body.splitlines()[:-1]           # everything but the note
+    weights = [int(r.split("|")[3].strip()) for r in rows]
+
+    assert len(weights) == 50
+    assert weights == sorted(weights, reverse=True), "the table is not weight-descending"
+    # `_entries(60)` runs weight 60 down to 1, so the ten that went are 10..1.
+    assert weights[0] == 60
+    assert weights[-1] == 11, "a lighter row survived the cut than one that was dropped"
 
 
 def test_an_empty_table_is_still_empty():

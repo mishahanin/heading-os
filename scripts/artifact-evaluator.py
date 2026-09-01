@@ -61,6 +61,27 @@ def check(name, passed, detail="", warn=False):
     return {"name": name, "status": status, "detail": detail}
 
 
+def read_artifact(path):
+    """(text, None) when the artifact could be read, (None, failed check) when not.
+
+    Every `evaluate_*` below opened its artifact with a bare `read_text`. The
+    DECODE half of that was guarded on 2026-09-01 by adding
+    `errors="replace"`; the OPEN half was not, so a path the evaluator was
+    pointed at and could not open - mode 000, a directory, a file that vanished
+    between the `exists()` above it and the read - ended the whole run on a
+    traceback before a single check existed.
+
+    MEASURED 2026-09-01 on a chmod 000 reference file: `--json` printed a
+    `PermissionError` stack trace and exited 1, so a caller parsing the JSON got
+    nothing at all to parse. An artifact that cannot be read is a FAILED CHECK
+    naming the path, never a crash and never a silent pass.
+    """
+    try:
+        return path.read_text(encoding="utf-8", errors="replace"), None
+    except OSError as exc:
+        return None, check("file_readable", False, f"cannot read {path}: {exc}")
+
+
 def has_consumed_by_pointer(text):
     """True when the text carries a "Consumed by:" pointer as a LINE LABEL.
 
@@ -307,7 +328,17 @@ def evaluate_skill(skill_path):
     if not skill_md.exists():
         return [check("skill_exists", False, "SKILL.md not found")]
 
-    content = skill_md.read_text(encoding="utf-8")
+    # `errors="replace"`. Every read in this file feeds a list of NAMED
+    # checks with pass/warn/fail statuses, and a bare utf-8 decode raised
+    # UnicodeDecodeError - a ValueError, caught nowhere between here and
+    # `main` - so one stray byte in the artifact under review replaced the
+    # whole report with a traceback. Replacing the byte lets the evaluator
+    # say what it found; the artifact is corrupt either way, and that shows
+    # up in the checks rather than in a stack trace. The OPEN half is
+    # `read_artifact`, for the reason in its docstring.
+    content, unreadable = read_artifact(skill_md)
+    if unreadable:
+        return [unreadable]
     lines = content.splitlines()
 
     # Frontmatter
@@ -379,7 +410,11 @@ def evaluate_skill(skill_path):
     refs_dir = skill_dir / "references"
     if refs_dir.is_dir():
         for ref_file in refs_dir.glob("*.md"):
-            ref_content = ref_file.read_text(encoding="utf-8")
+            # `errors="replace"` for the reason given at the first read above.
+            ref_content, unreadable = read_artifact(ref_file)
+            if unreadable:
+                results.append(unreadable)
+                continue
             ref_lines = ref_content.splitlines()
             issues = []
             if not ref_lines or not ref_lines[0].startswith("# "):
@@ -409,7 +444,10 @@ def evaluate_script(script_path):
     if not script_path.exists():
         return [check("file_exists", False, f"File not found: {script_path}")]
 
-    content = script_path.read_text(encoding="utf-8")
+    # `errors="replace"` for the reason given at the first read above.
+    content, unreadable = read_artifact(script_path)
+    if unreadable:
+        return [unreadable]
     lines = content.splitlines()
 
     # Module detection: files under scripts/utils/ (or any */utils/ package)
@@ -506,7 +544,10 @@ def evaluate_reference(file_path):
     if not file_path.exists():
         return [check("file_exists", False, f"File not found: {file_path}")]
 
-    content = file_path.read_text(encoding="utf-8")
+    # `errors="replace"` for the reason given at the first read above.
+    content, unreadable = read_artifact(file_path)
+    if unreadable:
+        return [unreadable]
     lines = content.splitlines()
 
     # H1 on line 1
@@ -555,7 +596,10 @@ def evaluate_rule(file_path):
     if not file_path.exists():
         return [check("file_exists", False, f"File not found: {file_path}")]
 
-    content = file_path.read_text(encoding="utf-8")
+    # `errors="replace"` for the reason given at the first read above.
+    content, unreadable = read_artifact(file_path)
+    if unreadable:
+        return [unreadable]
     lines = content.splitlines()
 
     # Strip YAML frontmatter before checking H1 (rules may have frontmatter like paths: ...)
@@ -608,7 +652,10 @@ def evaluate_plan_criteria(plan_path):
     if not plan_path.exists():
         return [check("plan_exists", False, f"Plan not found: {plan_path}")]
 
-    content = plan_path.read_text(encoding="utf-8")
+    # `errors="replace"` for the reason given at the first read above.
+    content, unreadable = read_artifact(plan_path)
+    if unreadable:
+        return [unreadable]
     results = []
 
     # Find Success Criteria section

@@ -333,6 +333,86 @@ def test_rotate_token_prints_restart_warning(entry_module, tmp_path, monkeypatch
     assert len(token_file.read_text()) > 16
 
 
+def test_rotate_token_actually_rotates(entry_module, tmp_path, monkeypatch, capsys):
+    """The one thing the test above cannot see: whether the token CHANGED.
+
+    It starts from an empty `.daemon-state`, so `get_or_create_token` creates
+    a token either way and every assertion it makes (file exists, longer than
+    16 characters, the warning text) holds for a rotate that rotated nothing.
+    `rotate_token` unlinks the old file precisely because
+    `get_or_create_token` RETURNS AN EXISTING TOKEN rather than replacing it.
+    Deleting those two lines was measured on 2026-08-31:
+
+        owner tests/bridge/test_entry.py: 26 passed in 0.67s
+        tests/bridge                    : 1312 passed, 1 skipped in 51.38s
+        VERDICT: SURVIVED
+
+    measured over the owning file and all of `tests/bridge`. That is the worst
+    direction for this particular no-op: rotation is what the operator runs
+    after a suspected disclosure, and `.claude/rules/security.md` lists the
+    daemon token under credentials to rotate on compromise. A `--rotate-token`
+    that printed "new token written", printed a 4-character tail of the OLD
+    secret as confirmation, and left the disclosed token in place would end
+    the incident response with the operator believing the opposite of the
+    truth.
+
+    The printed tail is asserted against the NEW token for the same reason:
+    it is the only confirmation the operator gets, and it would otherwise be
+    the old secret's tail.
+    """
+    state = tmp_path / ".daemon-state"
+    state.mkdir()
+    token_file = state / "token"
+    monkeypatch.setattr(entry_module, "WORKSPACE_ROOT", tmp_path)
+
+    entry_module.rotate_token()
+    first = token_file.read_text().strip()
+    capsys.readouterr()
+
+    entry_module.rotate_token()
+    second = token_file.read_text().strip()
+    out = capsys.readouterr().out
+
+    assert second != first, (
+        "rotate_token returned the existing token; the old secret is still "
+        "the live one")
+    assert len(second) == 64, f"not a sha256 hex digest: {second!r}"
+    assert f"...{second[-4:]}" in out, (
+        f"the confirmation tail names a different token than the one on disk: "
+        f"{out!r}")
+    assert first[-4:] not in out or first[-4:] == second[-4:], (
+        "the old token's tail was printed as confirmation of the new one")
+
+
+def test_rotate_token_narrows_an_over_permissive_predecessor(entry_module, tmp_path,
+                                                             monkeypatch):
+    """A rotation must not inherit the old file's mode.
+
+    The replaced file is the one whose mode may be wrong (the header of
+    `auth.py` names a copy from another machine and a restore from backup,
+    both of which land 0644). Since `rotate_token` unlinks first and
+    `atomic_write_text` sets the mode before the rename, the new token is
+    0600 regardless; nothing asserted it, and a rotation that answers a
+    disclosure by writing the replacement world-readable has not answered it.
+    """
+    import os
+    import stat
+
+    state = tmp_path / ".daemon-state"
+    state.mkdir()
+    token_file = state / "token"
+    token_file.write_text("an-old-token-left-world-readable", encoding="utf-8")
+    os.chmod(token_file, 0o644)
+    monkeypatch.setattr(entry_module, "WORKSPACE_ROOT", tmp_path)
+
+    entry_module.rotate_token()
+
+    if os.name == "posix":
+        assert stat.S_IMODE(token_file.stat().st_mode) == 0o600, oct(
+            stat.S_IMODE(token_file.stat().st_mode))
+    assert token_file.read_text().strip() != "an-old-token-left-world-readable"
+
+
 # Phase Y - revert_to_prior_config CLI wrapper tests.
 # The Phase 1.154 + 1.159 + 1.165 tests cover the config.py functions
 # directly (revert_config, revert_config_to). Until now the CLI wrapper

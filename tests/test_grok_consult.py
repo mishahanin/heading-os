@@ -121,6 +121,44 @@ def test_main_returns_3_on_auth_failure(monkeypatch):
     assert gc.main(["--mode", "independent", "--question", "Q?"]) == 3
 
 
+# ------------------------------------------------------------
+# --length-hint must REACH the prompt, in both modes
+#
+# `tests/test_kimi_consult.py` has held these three since the flag landed on
+# 2026-08-23; the two sibling wrappers had none. Measured 2026-09-01: dropping
+# `length_hint=args.length_hint` from BOTH build calls in `main()` left 189
+# tests green across every file that names a consult wrapper. A silently
+# ignored `--length-hint ""` caps an enumerating task ("list every defect") at
+# "Aim for 200-400 words." while the caller believes it uncapped, which is the
+# exact defect the flag was added to end.
+# ------------------------------------------------------------
+
+def test_the_council_word_cap_is_still_the_default(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(gc, "consult_grok",
+                        lambda prompt, **k: captured.setdefault("p", prompt) or "answer")
+    assert gc.main(["--mode", "independent", "--question", "Q?"]) == 0
+    assert gc.DEFAULT_LENGTH_HINT in captured["p"]
+
+
+def test_an_empty_length_hint_removes_the_cap_from_the_prompt(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(gc, "consult_grok",
+                        lambda prompt, **k: captured.setdefault("p", prompt) or "answer")
+    assert gc.main(["--mode", "independent", "--question", "List every defect.",
+                    "--length-hint", ""]) == 0
+    assert "200-400" not in captured["p"]
+    assert "List every defect." in captured["p"], "the question itself was lost"
+
+
+def test_the_length_hint_reaches_critique_mode_too(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(gc, "consult_grok",
+                        lambda prompt, **k: captured.setdefault("p", prompt) or "answer")
+    assert gc.main(["--mode", "critique", "--draft", "D", "--length-hint", ""]) == 0
+    assert "200-400" not in captured["p"]
+
+
 def test_consult_grok_forwards_kwargs_to_call_model(monkeypatch):
     # The thin delegate must pass model/temperature/max_tokens straight through.
     captured = {}

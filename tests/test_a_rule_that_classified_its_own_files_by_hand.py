@@ -41,6 +41,15 @@ use rather than invented here:
      and is fine (`.claude/rules/classification.md` already writes them that way);
      a BARE one next to a backticked path is an unparsed claim and fails. This is
      the exact shape `tiered-risk.md` used to smuggle three wrong claims through.
+     The unit is the PARAGRAPH, not the line. Until 2026-09-01 it was the line,
+     and every rule file in this tree is hard-wrapped at roughly 85 columns, so a
+     claim that happened to wrap between its path and its destination word - the
+     single most likely place for a wrap to land in a sentence of that shape -
+     produced zero claims AND zero complaints. Measured on the pre-fix parser:
+     "`scripts/utils/tool_risk.py` is\ncorporate." returned `(claims=0,
+     complaints=0)`, byte-identical to a clean file, while the same sentence
+     unwrapped returned one complaint. The smuggling shape this rule exists to
+     stop was one newline away from being invisible.
   4. A canonical claim bullet may not live outside a `Classification` section,
      where nothing would be looking for it.
 
@@ -111,6 +120,56 @@ _BARE_DESTINATION = re.compile(
     rf"(?<![\w/`-])(?:{'|'.join(DESTINATIONS)})(?![\w`-])"
 )
 
+#: A bare destination in PREDICATE position - the shape an assertion takes.
+#:
+#: Bare-ness alone is not enough once the prose check reads a whole paragraph
+#: rather than a single line, because two of the three destination words are also
+#: ordinary English nouns in this workspace's vocabulary. Both real sections
+#: contain the sentence "the engine repo is public", and joining a paragraph put
+#: that bare "engine" beside a backticked `scripts/` path from the NEXT line.
+#: Measured 2026-09-01: bare-ness alone produced two false positives on the live
+#: tree, at `corporate-docs.md:121` and `tiered-risk.md:48`, both on that phrase.
+#:
+#: A claim puts the destination in the predicate - "`x.py` is corporate", "these
+#: stayed corporate", "`y` -> private". A noun-modifier does not: "the engine
+#: repo", "the private overlay". Requiring a copula or an arrow immediately
+#: before the word separates the two without a denylist of noun phrases, which
+#: would rot exactly the way the claims did.
+_CLAIM_COPULA = (
+    r"(?:is|are|was|were|be|stay|stays|stayed|remain|remains|remained|"
+    r"resolve|resolves|resolved|become|becomes|became|reads|read|says|"
+    r"classified as|routed to|routes to|treated as|marked|->|=>|→|:=)"
+)
+_PREDICATE_DESTINATION = re.compile(
+    rf"(?:\b{_CLAIM_COPULA}\b|->|=>|→)"
+    r"\s+(?:all\s+|both\s+|now\s+|still\s+|already\s+|therefore\s+|"
+    r"genuinely\s+|simply\s+|of course\s+)*"
+    rf"(?<![\w/`-])(?:{'|'.join(DESTINATIONS)})(?![\w`-])"
+)
+
+#: The canonical claim shape with the leading `- ` taken off: a backticked PATH,
+#: a separator, a destination. Dropping the bullet marker is the cheapest way to
+#: move a claim out of the parser's reach while leaving it just as readable, and
+#: `_PREDICATE_DESTINATION` cannot see it because a dash or a colon is not a
+#: copula. Measured 2026-09-01 against the predicate rule alone:
+#: "`scripts/utils/tool_risk.py`: corporate" and the em-dash spelling both
+#: returned zero claims and zero complaints.
+#:
+#: Safe to anchor this loosely because the separator must sit IMMEDIATELY after
+#: the closing backtick of a path-shaped token. "The engine repo is public, so a
+#: `scripts/` file ships" has no separator there, and every descriptive bullet in
+#: the rules ("- `outputs/` - CEO deliverables") is followed by a word that is
+#: not a destination.
+_INLINE_CLAIM = re.compile(
+    r"`[^`]*(?:/|\.[A-Za-z0-9]{1,6})[^`]*`\s*(?:\([^)`]*\)\s*)?"
+    rf"{_SEPARATOR}\s+(?<![\w/`-])(?:{'|'.join(DESTINATIONS)})(?![\w`-])"
+)
+
+
+def _asserts_a_destination(text: str) -> bool:
+    """True when `text` puts a destination word in a claiming position."""
+    return bool(_PREDICATE_DESTINATION.search(text) or _INLINE_CLAIM.search(text))
+
 
 def _display(path: Path) -> str:
     """Repo-relative when the file is in the repo; absolute for a tmp fixture."""
@@ -155,9 +214,32 @@ def audit_rule_file(path: Path) -> tuple[list[Claim], list[str]]:
     inside = False
     section_depth = 0
 
+    # The prose check's unit is a paragraph: a run of consecutive non-blank lines
+    # that is not a heading and not a bullet. A blank line, a bullet, a heading,
+    # leaving the section, or EOF ends it. Joining the run before testing it is
+    # what makes the check survive the hard wrap every rule file in this tree
+    # uses; testing line by line does not.
+    para: list[str] = []
+    para_start = 0
+
+    def _flush_paragraph() -> None:
+        nonlocal para, para_start
+        if not para:
+            return
+        joined = " ".join(chunk.strip() for chunk in para)
+        if _PATH_TOKEN.search(joined) and _asserts_a_destination(joined):
+            complaints.append(
+                f"{_display(path)}:{para_start}: prose in a Classification section "
+                f"asserts a destination for a backticked path without being a "
+                f"claim bullet: {joined[:160]!r}. Make it a bullet, or backtick "
+                f"the destination word to mark it as a quoted term."
+            )
+        para = []
+
     for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         heading = _HEADING.match(line)
         if heading:
+            _flush_paragraph()
             depth = len(heading.group("hashes"))
             if _is_classification_heading(heading.group("title")):
                 inside, section_depth = True, depth
@@ -178,6 +260,7 @@ def audit_rule_file(path: Path) -> tuple[list[Claim], list[str]]:
             continue
 
         if _BULLET.match(line):
+            _flush_paragraph()
             parsed = CLAIM_ANY_DEST.match(line)
             if not parsed:
                 complaints.append(
@@ -192,14 +275,15 @@ def audit_rule_file(path: Path) -> tuple[list[Claim], list[str]]:
             )
             continue
 
-        if line.strip() and _PATH_TOKEN.search(line) and _BARE_DESTINATION.search(line):
-            complaints.append(
-                f"{where}: prose in a Classification section asserts a destination "
-                f"for a backticked path without being a claim bullet: "
-                f"{line.strip()[:160]!r}. Make it a bullet, or backtick the "
-                f"destination word to mark it as a quoted term."
-            )
+        if not line.strip():
+            _flush_paragraph()
+            continue
 
+        if not para:
+            para_start = lineno
+        para.append(line)
+
+    _flush_paragraph()
     return claims, complaints
 
 
@@ -380,6 +464,169 @@ def test_a_claim_smuggled_into_prose_is_caught(tmp_path):
     assert claims == []
     assert len(complaints) == 1
     assert "prose in a Classification section" in complaints[0]
+
+
+@pytest.mark.parametrize("body", [
+    # The wrap lands between the path and its destination word.
+    "The fleet-safe primitive `scripts/utils/tool_risk.py` is\ncorporate.\n",
+    # ...and the other way round, destination first.
+    "These are corporate:\n`scripts/utils/tool_risk.py` and its config.\n",
+    # Three lines, with the two halves not even adjacent.
+    "`scripts/utils/tool_risk.py` decides the tier for every\naction the queue "
+    "carries, and the file itself is\ncorporate.\n",
+])
+def test_a_prose_claim_split_by_a_line_wrap_is_still_caught(tmp_path, body):
+    """The gap that made the prose check one newline from useless.
+
+    Until 2026-09-01 this check ran per LINE, so it needed the backticked path
+    and the bare destination word to land on the same one. Every rule file in
+    `.claude/rules/` is hard-wrapped at roughly 85 columns, and the join between
+    a path and the word that classifies it is exactly where a wrap falls in a
+    sentence of this shape.
+
+    Measured on the pre-fix parser, all three bodies below returned
+    `(claims=0, complaints=0)` - indistinguishable from a file that makes no
+    claim at all - while the same sentences on one line returned one complaint
+    each. `tiered-risk.md` smuggled three wrong claims through as prose; one
+    newline in the right place and this module would have reported nothing about
+    them either.
+    """
+    fake = _fixture(tmp_path, "# Fake\n\n## Classification\n\n" + body)
+    claims, complaints = audit_rule_file(fake)
+    assert claims == []
+    assert len(complaints) == 1, (
+        f"a wrapped prose claim escaped the parser entirely: {complaints}")
+    assert "prose in a Classification section" in complaints[0]
+    assert "tool_risk.py" in complaints[0], (
+        "the complaint must quote the joined paragraph, not just the line the "
+        "destination word happened to land on")
+
+
+def test_the_engine_repo_phrase_is_not_a_claim_but_is_corporate_still_is(tmp_path):
+    """Both directions of the predicate rule, on the real sentence that forced it.
+
+    "the engine repo is public" appears in BOTH live Classification sections, and
+    once the prose check reads a paragraph it sits beside a backticked `scripts/`
+    path from the next line. Suppressing it must not suppress a real claim, so
+    this pins the discrimination rather than the outcome: the noun-modifier is
+    not a claim, the predicate on the very same destination word is.
+
+    Derived both ways on purpose. Asserting only that the live tree is clean
+    would be satisfied by a regex that matches nothing at all.
+    """
+    noun = "The engine repo is public, so a `scripts/` file ships to everyone."
+    predicate = "The renderer `scripts/render-doctype.py` is engine."
+    assert _BARE_DESTINATION.search(noun), (
+        "the phrase must still contain a BARE destination word; if it does not, "
+        "this test has stopped exercising the false positive it was written for")
+    assert not _PREDICATE_DESTINATION.search(noun), (
+        f"noun-modifier 'engine' read as a claim: {noun!r}")
+    assert _PREDICATE_DESTINATION.search(predicate), (
+        f"a real predicate claim on the SAME word was suppressed: {predicate!r}")
+
+    # And end to end, through the parser, in the wrapped shape that produced the
+    # false positive: path and phrase on different lines of one paragraph.
+    fake = _fixture(tmp_path, "# Fake\n\n## Classification\n\n"
+                              "`engine` is the WIDER destination. The engine repo is\n"
+                              "public, so a `scripts/` file already ships in the\n"
+                              "public clone.\n")
+    claims, complaints = audit_rule_file(fake)
+    assert claims == []
+    assert complaints == [], f"live-tree prose flagged as a claim: {complaints}"
+
+
+@pytest.mark.parametrize("sentence", [
+    "`scripts/utils/tool_risk.py`: corporate",
+    "`scripts/utils/tool_risk.py` - corporate",
+    "`scripts/utils/tool_risk.py` — corporate",
+    "`config/tool-risk.json` (the tier table) - corporate",
+])
+def test_a_claim_with_the_bullet_marker_removed_is_still_caught(tmp_path, sentence):
+    """Dropping `- ` is the cheapest way out of the parser, so it must not work.
+
+    The canonical bullet is audited; the identical sentence without its marker is
+    prose, and a dash or a colon is not a copula, so the predicate rule alone
+    could not see it. Measured 2026-09-01 before `_INLINE_CLAIM` existed: the
+    colon and em-dash spellings both returned zero claims AND zero complaints,
+    which is the same output as a file that says nothing.
+    """
+    fake = _fixture(tmp_path, "# Fake\n\n## Classification\n\n" + sentence + "\n")
+    claims, complaints = audit_rule_file(fake)
+    assert claims == []
+    assert len(complaints) == 1, f"an unbulleted claim escaped: {complaints}"
+
+
+@pytest.mark.parametrize("sentence", [
+    # A path, a separator, and an ordinary noun. Real shapes: the rules describe
+    # paths this way constantly.
+    "`config/routing-map.yaml`: the single classification input.",
+    "The renderer `scripts/render-doctype.py` - loaded once per doctype.",
+    "`datastore/brand/templates/doctypes/` (the locked set) — content, not code.",
+])
+def test_a_path_followed_by_a_non_destination_word_is_not_a_claim(tmp_path, sentence):
+    """The false-positive direction for `_INLINE_CLAIM`, and it must be INSIDE.
+
+    Anchoring on "backticked path, separator, word" without checking that the
+    word is a destination would flag every descriptive line in the rules, and an
+    unusable check gets deleted rather than fixed.
+
+    The fixture sits inside a `## Classification` section deliberately. Placed
+    under a `## Notes` heading, as this test was first written, it proved
+    nothing: the prose check only runs while `inside` is true, so widening
+    `_INLINE_CLAIM` to accept any trailing word left it green. Measured
+    2026-09-01 - that mutation SURVIVED the first version of this test and is
+    killed by this one. A negative case has to be on the code path it is
+    negating.
+    """
+    fake = _fixture(tmp_path, "# Fake\n\n## Classification\n\n"
+                              "- `scripts/render-doctype.py` - engine.\n\n"
+                              + sentence + "\n")
+    claims, complaints = audit_rule_file(fake)
+    assert len(claims) == 1
+    assert complaints == [], (
+        f"an ordinary descriptive line was read as a classification claim: "
+        f"{complaints}")
+
+
+def test_a_backticked_destination_after_a_copula_is_still_allowed(tmp_path):
+    """`became `engine`` is the map header's own wording, quoted, not asserted."""
+    fake = _fixture(tmp_path, "# Fake\n\n## Classification\n\n"
+                              "- `scripts/render-doctype.py` - engine.\n\n"
+                              "Code directories in `scripts/` that were `corporate`\n"
+                              "became `engine`, because code is not data.\n")
+    claims, complaints = audit_rule_file(fake)
+    assert len(claims) == 1
+    assert complaints == [], complaints
+
+
+def test_a_paragraph_break_stops_the_join(tmp_path):
+    """The boundary, so the join is a paragraph and not the whole section.
+
+    Without a case ON this line, `_flush_paragraph` could join every prose line
+    in the section and pair a path in one paragraph with a destination word four
+    paragraphs later. That would flag the real `corporate-docs.md` section, and
+    an unusable check gets deleted rather than fixed.
+    """
+    fake = _fixture(tmp_path, "# Fake\n\n## Classification\n\n"
+                              "- `scripts/render-doctype.py` - engine.\n\n"
+                              "The path above is the renderer.\n\n"
+                              "Templates are content, so they stayed corporate.\n")
+    claims, complaints = audit_rule_file(fake)
+    assert len(claims) == 1
+    assert complaints == [], (
+        f"the join crossed a blank line and manufactured a claim: {complaints}")
+
+
+def test_a_bullet_ends_the_paragraph_too(tmp_path):
+    """The other boundary: prose, then a bullet, then a bare destination word."""
+    fake = _fixture(tmp_path, "# Fake\n\n## Classification\n\n"
+                              "Resolved for `scripts/render-doctype.py` on 2026-08-31.\n"
+                              "- `outputs/documents/` - private.\n"
+                              "Everything else stayed corporate.\n")
+    claims, complaints = audit_rule_file(fake)
+    assert len(claims) == 1
+    assert complaints == [], (
+        f"the join swallowed the bullet between two prose runs: {complaints}")
 
 
 def test_a_quoted_destination_word_in_prose_is_allowed(tmp_path):

@@ -302,9 +302,11 @@ class _Proto:
 
     def __init__(self, fail):
         self.fail = set(fail)
+        self.asked: list[str] = []
 
     def resolve_names(self, queries, **kw):
         q = queries[0]
+        self.asked.append(q)
         if q in self.fail:
             raise RuntimeError(f"ErrorServerBusy for {q}")
         return [_Mailbox(f"{q}user@example.test", f"{q} User")]
@@ -355,6 +357,38 @@ def test_the_sweep_returns_a_pair_so_the_caller_cannot_ignore_failures(gal):
     """A bare list let `main` print [OK] without ever seeing the failures."""
     out = gal.sweep_gal(_Account(fail={"z"}), "example.test")
     assert isinstance(out, tuple) and len(out) == 2
+
+
+def test_the_tenant_prefixes_are_derived_from_the_domain_not_written_in(gal):
+    """The other claim `sweep_gal` makes about itself, and it had no witness.
+
+    Two of its extra prefixes were the tenant's own name and `@<tenant domain>`,
+    typed in as literals; the docstring says both are derived from `domain` now,
+    "so the sweep is as thorough on any deployment as it was on the one it was
+    written for". MEASURED 2026-09-01: putting the literal back left this file,
+    `tests/test_no_tenant_domain_is_compiled_into_the_engine.py` and
+    `tests/test_two_controls_that_measured_themselves.py` at 87 passed, so a
+    second deployment would silently lose its own label from the sweep and query
+    a stranger's instead.
+
+    Asked of the queries the protocol actually RECEIVED, not of the module's
+    source, and with two unrelated domains so the answer cannot come from one
+    coincidence.
+    """
+    first, second = _Account(), _Account()
+    gal.sweep_gal(first, "acme.example")
+    gal.sweep_gal(second, "vesper.test")
+
+    assert "acme" in first.protocol.asked and "@acme.example" in first.protocol.asked
+    assert "vesper" in second.protocol.asked and "@vesper.test" in second.protocol.asked
+    # And neither sweep carried the other's tenant, which is what a written-in
+    # literal would produce.
+    assert "vesper" not in first.protocol.asked
+    assert "acme" not in second.protocol.asked
+    # The shared prefixes are the same in both, so the difference above is the
+    # derivation and not two entirely different query sets.
+    assert {"a", "z", "0", "info", "sales"} <= set(first.protocol.asked)
+    assert {"a", "z", "0", "info", "sales"} <= set(second.protocol.asked)
 
 
 # ============================================================

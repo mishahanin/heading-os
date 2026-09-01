@@ -41,24 +41,70 @@ def no_real_env_load(monkeypatch):
 
 
 @pytest.fixture
-def send_message_must_not_be_called(monkeypatch):
-    def boom(self, *args, **kwargs):
-        raise AssertionError("send_message must not be called for this case")
+def sends(monkeypatch):
+    """Record every send instead of raising on one.
 
-    monkeypatch.setattr(TelegramBot, "send_message", boom)
+    A stub that raises `AssertionError` reports "the guard held" only while the
+    code under test happens to catch nothing wider than `TelegramAPIError`. The
+    day a handler around the send widens to `except Exception`, the test's own
+    AssertionError is swallowed by the code under test and converted into the
+    same quiet False a working guard returns, so the test passes whether the
+    guard is there or not. Asserting on the recorded calls cannot be turned
+    green that way, and it is the same rule as asserting a refusal by the
+    ABSENCE of the side effect rather than by the presence of a log line.
+    """
+    calls: list[tuple] = []
+
+    def record(self, chat_id, text, **kwargs):
+        calls.append((chat_id, text))
+        return {"message_id": len(calls)}
+
+    monkeypatch.setattr(TelegramBot, "send_message", record)
+    return calls
 
 
-def test_missing_token_returns_false_no_call(monkeypatch, send_message_must_not_be_called):
-    monkeypatch.delenv("TELEGRAM_NOTIFY_BOT_TOKEN", raising=False)
+# A `.env` line typed as `TELEGRAM_NOTIFY_BOT_TOKEN=` with nothing after it, and
+# the same line with a stray space, are the two ways this variable is present
+# and useless. `tests/conftest.py` produces the first shape on every run when it
+# blanks the name, so it is the state the whole suite actually executes in.
+#
+# A whitespace-only value is deliberately NOT in the list. `parse_env_line`
+# strips, so `TELEGRAM_NOTIFY_BOT_TOKEN=   ` in a `.env` arrives as `""` and is
+# already the blank case; only the quoted form `="   "` survives it, and there
+# the transport degrades correctly anyway (a space in the URL raises
+# `requests.InvalidURL`, which `_call` wraps). Asserting on it would be a
+# negative case chosen for being easy to fail rather than for being reachable.
+@pytest.mark.parametrize("token", [None, ""], ids=["absent", "blank"])
+def test_a_token_that_is_missing_or_blank_sends_nothing_and_never_raises(
+        monkeypatch, sends, token):
+    """Only the ABSENT case was covered, and absent is the easy one.
+
+    MEASURED 2026-09-01: narrowing the guard to `if token is None:` left this
+    file, and every neighbour that names telegram_notify, green. With that
+    narrowing a blank token reaches `TelegramBot("")`, whose constructor raises
+    ValueError - out of a function whose docstring says it NEVER raises, called
+    by six timer-driven scripts and the checkpoint hook with no human in the
+    loop. A notifier that raises inside a systemd timer fails the job it was
+    attached to, not just the notification.
+
+    The target is declared so the allowlist is not what refuses; the token
+    check has to be.
+    """
+    monkeypatch.setenv("ODIN_CADENCE_TELEGRAM_TARGET", "-100123")
+    if token is None:
+        monkeypatch.delenv("TELEGRAM_NOTIFY_BOT_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("TELEGRAM_NOTIFY_BOT_TOKEN", token)
+
     assert notify_mod.notify("-100123", "hi") is False
+    assert sends == []
 
 
 @pytest.mark.parametrize("target", ["me", "Self", "SAVED", "", None])
-def test_unresolvable_targets_return_false_no_call(
-    monkeypatch, send_message_must_not_be_called, target
-):
+def test_unresolvable_targets_return_false_no_call(monkeypatch, sends, target):
     monkeypatch.setenv("TELEGRAM_NOTIFY_BOT_TOKEN", "fake-token")
     assert notify_mod.notify(target, "hi") is False
+    assert sends == []
 
 
 def test_success_returns_true(monkeypatch):

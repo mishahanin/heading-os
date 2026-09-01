@@ -5,7 +5,19 @@ secret-scanner.py - Scan files for accidentally included secrets.
 Usage:
   python3 scripts/secret-scanner.py FILE [FILE...]       # Scan specific files
   python3 scripts/secret-scanner.py --stdin               # Read file list from stdin (for git hooks)
+  python3 scripts/secret-scanner.py --stdin0              # Same, NUL-delimited (for callers that ran `git -z`)
   python3 scripts/secret-scanner.py --scan-dir DIR        # Scan all files in directory
+
+`--stdin0` exists because `--stdin` cannot carry every legal filename and the
+callers that matter had already gone to the trouble of preserving them.
+`scripts/push-all.py` and `scripts/publish-service.py` both list the files about
+to leave the machine with `git ... -z` and decode the raw bytes, precisely so a
+path holding a newline survives; both then joined that list with `"\n"` for this
+scanner, which split it back into two names that open nothing. MEASURED
+2026-09-01 in scratch repositories: a tracked `two\nlines.env` carrying a
+`ghp_`-shaped token produced "No secrets detected." and a clean verdict from
+BOTH gates, while the identical token in `creds.env` was refused. `--stdin0`
+splits on NUL, so a name is a name whatever bytes are in it.
 
 Exit codes:
   0 = clean (no secrets found)
@@ -173,7 +185,14 @@ def scan_files(file_list: list, unreadable: list | None = None) -> dict:
     if unreadable is None:
         unreadable = []
     for filepath in file_list:
-        filepath = filepath.strip()
+        # NOT `filepath.strip()`. A leading or trailing space is legal in a
+        # POSIX filename, and `git ls-files -z` reports it verbatim; stripping
+        # it here produced a name that opens nothing, which the `is_file()`
+        # branch below then skipped in silence. MEASURED 2026-09-01: a tracked
+        # `" leading-space.env"` holding a `ghp_`-shaped token came back clean
+        # from `publish-service.secret_scan`, as did `"trailing-space.env "`.
+        # The line-oriented `--stdin` reader strips its own lines, which is
+        # where the padding it was written for actually comes from.
         if not filepath:
             continue
         try:
@@ -248,19 +267,33 @@ def main():
         help="Read file list from stdin (one per line, for git hooks)"
     )
     parser.add_argument(
+        "--stdin0", action="store_true",
+        help="Read a NUL-delimited file list from stdin (for `git ... -z` callers)"
+    )
+    parser.add_argument(
         "--scan-dir",
         help="Scan all text files in directory recursively"
     )
     args = parser.parse_args()
 
     file_list = []
-    # Only --scan-dir can populate this: the other two modes scan exactly the
-    # paths they were handed, so the gates that drive --stdin (the pre-commit
-    # hook, push-all.py, publish-service.py) see no change in verdict.
+    # Only --scan-dir can populate this: the other three modes scan exactly the
+    # paths they were handed, so the gates that drive them see no change in
+    # verdict. Those gates are the standalone pre-commit hook `install-hooks.py`
+    # writes (`--stdin`), push-all.py and publish-service.py (`--stdin0` since
+    # 2026-09-01), and the `secret-scanner-31c` pre-commit entry (argv).
     oversized: list = []
 
-    if args.stdin:
-        file_list = sys.stdin.read().strip().split("\n")
+    if args.stdin0:
+        # `sys.stdin.buffer`, not `sys.stdin`: the caller wrote raw path bytes
+        # and the locale is not guaranteed to decode them. `surrogateescape`
+        # round-trips whatever git emitted back through `os.fsencode` when the
+        # path is opened, so a name that is not valid UTF-8 still names its
+        # file. Nothing is stripped and nothing is split on a newline.
+        raw = sys.stdin.buffer.read().decode("utf-8", "surrogateescape")
+        file_list = [name for name in raw.split("\0") if name]
+    elif args.stdin:
+        file_list = [line.strip() for line in sys.stdin.read().strip().split("\n")]
     elif args.scan_dir:
         scan_dir = Path(args.scan_dir)
         # Prune whole trees rather than filtering afterwards. The bare rglob fed

@@ -190,6 +190,76 @@ def test_import_is_pure(script: Path):
     )
 
 
+def _run_harness(script: Path) -> subprocess.CompletedProcess:
+    """The exact harness `test_import_is_pure` runs, pointed at one file."""
+    code = _HARNESS.format(blocked=BLOCKED, root=str(ROOT), script=str(script))
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True, text=True, cwd=str(ROOT), timeout=60,
+    )
+
+
+def test_the_denier_actually_denies_a_blocked_import(tmp_path):
+    """The positive control this gate ran 217 times a session without.
+
+    Every assertion above is `returncode == 0` over a corpus that is already
+    import-pure, so the whole gate rests on `_Denier` refusing the blocked
+    packages and NOTHING asked whether it still does. Measured 2026-09-01, two
+    mutations survived the file and every neighbour, silently:
+
+      - deleting the `raise ModuleNotFoundError` from `_Denier.find_spec`, so
+        the finder denied nothing at all: 232 passed;
+      - removing `exchangelib` from BLOCKED: 232 passed.
+
+    A guard with no negative case is not a guard. This drives a module-level
+    `import exchangelib` - the exact shape the docstring names as the failure -
+    through the real harness and requires it to fail.
+    """
+    offender = tmp_path / "imports_a_blocked_dep.py"
+    offender.write_text("import exchangelib\n", encoding="utf-8")
+
+    result = _run_harness(offender)
+
+    assert result.returncode != 0, (
+        "the harness imported a module whose first line is `import exchangelib`; "
+        "the meta-path denier is no longer denying, so every green verdict this "
+        "file prints is over a gate that is switched off"
+    )
+    assert "blocked optional dep" in result.stderr, (
+        f"the import failed for some other reason than the denier:\n{result.stderr[-800:]}"
+    )
+
+
+def test_the_denier_lets_an_unblocked_import_through(tmp_path):
+    """The control for the control: the harness is not simply always red.
+
+    Without this, `_Denier.find_spec` could start raising for EVERY name and
+    the test above would still pass while the parametrized gate above it went
+    red for a reason that has nothing to do with import purity.
+    """
+    clean = tmp_path / "imports_only_stdlib.py"
+    clean.write_text("import json, pathlib\nVALUE = json.dumps({'ok': True})\n",
+                     encoding="utf-8")
+
+    result = _run_harness(clean)
+
+    assert result.returncode == 0, (
+        f"a stdlib-only module failed the purity harness:\n{result.stderr[-800:]}")
+
+
+def test_every_blocked_name_is_a_name_the_denier_would_refuse():
+    """BLOCKED is the gate's whole surface, so it may not silently empty out.
+
+    Not a floor on a count anybody has to maintain: the set is compared against
+    itself being non-empty and every member being a plain top-level package
+    name, since `_Denier` matches on `name.split('.')[0]` and a dotted or empty
+    entry would sit in the set matching nothing.
+    """
+    assert BLOCKED, "the blocked-package set is empty; the harness blocks nothing"
+    bad = sorted(n for n in BLOCKED if not n or "." in n or n != n.strip())
+    assert not bad, f"these entries can never match a top-level package name: {bad}"
+
+
 def test_the_scan_still_finds_the_scripts():
     """A parametrize over an EMPTY list is not a failure to pytest: with the
     default `empty_parameter_set_mark` it becomes one silent skip, and this

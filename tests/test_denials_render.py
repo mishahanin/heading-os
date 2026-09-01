@@ -67,12 +67,113 @@ def test_detail_does_not_replay_an_escape_from_the_mechanism_name(tmp_path):
     assert f"probe{_ESC}[31m" not in proc.stdout
 
 
+import pytest  # noqa: E402
+
+# Every TEXT field `--detail` renders. `ts` is excluded because it is rendered
+# through `_stamp`, which parses it as a float and never prints the raw value.
+#
+# Written out as a list rather than derived from `_write_record`'s dict so that
+# narrowing the renderer cannot narrow the case list with it. A field ADDED to
+# the record and then rendered raw is a case this list does not carry; the
+# structural test below is what covers that direction.
+_RENDERED_TEXT_FIELDS = ("mechanism", "action", "path", "context")
+
+
+@pytest.mark.parametrize("field", _RENDERED_TEXT_FIELDS)
+def test_no_rendered_field_replays_an_escape_sequence(tmp_path, field):
+    """The escaping is per FIELD, and three of the four had no test.
+
+    The two tests above pin `path` and `mechanism`. `scripts/denials.py` calls
+    `_printable` on four fields, and MEASURED 2026-09-01, dropping that call
+    from `action` left 92 tests across seven files green, as did dropping it
+    from `context`. Half the render surface was unguarded, which is the
+    one-of-N-copies shape this repository keeps paying for: the guard was
+    repaired on the two fields somebody happened to write a case for.
+
+    `action` is the denied call's `tool_name`, read off the PreToolUse payload
+    on stdin. `context` is `HEADING_OS_DENIAL_CONTEXT` out of the environment of
+    whichever process was refusing. Neither is a literal this workspace chose,
+    so both reach the log as text and both reach the operator's terminal when he
+    reads it back.
+    """
+    marker = "anchor-for-this-case"
+    fields = {"mechanism": "probe", "action": "Write",
+              "path": "outputs/x.txt", "context": "push"}
+    fields[field] = f"{marker}{_ESC}[31m{_ESC}]0;pwned\x07"
+    _write_record(tmp_path, **fields)
+    proc = _run(_CLI, ["--detail"], tmp_path)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    assert marker in proc.stdout, (
+        f"the record carrying the {field} case never reached stdout, so this "
+        f"test would pass against a renderer that printed nothing")
+    assert f"{_ESC}[31m" not in proc.stdout, (
+        f"the record's ESC survived into stdout through the {field} field")
+    assert "\x07" not in proc.stdout
+    assert "\\x1b" in proc.stdout, (
+        f"the {field} field's escape was DELETED rather than shown as text; a "
+        f"reader must be able to see that a record carried one")
+
+
 def test_a_carriage_return_cannot_overwrite_the_line_above(tmp_path):
     """CR is the cheap way to hide a record behind another one."""
     _write_record(tmp_path, path="outputs/a.txt\rBENIGN")
     proc = _run(_CLI, ["--detail"], tmp_path)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "\\r" in proc.stdout
+
+
+def test_every_record_field_interpolated_into_a_printed_line_is_escaped():
+    """The other direction: a field ADDED tomorrow and printed raw.
+
+    The parametrized test above carries the four fields that exist today. It
+    cannot fail for a fifth, because a case list is written by hand and the
+    fifth field's author is the person who would have to remember to add one.
+
+    Asked of the AST rather than by grepping for `_printable`, per the lesson
+    this repository has already paid for twice: a source-scan for the guard's
+    NAME measures the text that mentions it, stays green when the call is parked
+    in a branch that never runs, and goes red on an innocent re-wrap. The
+    question here is structural and scoped: inside `main`, every f-string slot
+    whose expression READS `record` must have a `_printable` or `_stamp` call at
+    its top. `{context}` is exempt by construction rather than by exception - it
+    reads a local, and that local was itself built by `_printable` one line
+    above, which this same rule checks.
+    """
+    import ast
+
+    tree = ast.parse(_CLI.read_text(encoding="utf-8"))
+    main = next(n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == "main")
+
+    checked = 0
+    unescaped: list[str] = []
+    for slot in ast.walk(main):
+        if not isinstance(slot, ast.FormattedValue):
+            continue
+        reads_record = any(isinstance(n, ast.Name) and n.id == "record"
+                           for n in ast.walk(slot.value))
+        if not reads_record:
+            continue
+        checked += 1
+        top = slot.value
+        escaped = (isinstance(top, ast.Call) and isinstance(top.func, ast.Name)
+                   and top.func.id in {"_printable", "_stamp"})
+        if not escaped:
+            unescaped.append(ast.unparse(top))
+
+    # Floor: an AST question that matches nothing answers "clean" for every
+    # renderer, including one that prints every field raw. Measured 4 on
+    # 2026-09-01 (ts, mechanism, action, path); context is interpolated one line
+    # earlier, in its own f-string, and is counted there too.
+    assert checked >= 4, (
+        f"only {checked} record-reading f-string slot(s) found in denials.py "
+        f"main(); the AST question has stopped reaching the renderer")
+    assert not unescaped, (
+        "these record fields are interpolated into a printed line without "
+        "passing through `_printable`, so a record written at denial time can "
+        "replay control bytes into the operator's terminal when he reads the "
+        "log back:\n  " + "\n  ".join(unescaped))
 
 
 def test_leak_guard_records_the_token_not_the_matched_literal(tmp_path):

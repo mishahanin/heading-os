@@ -72,7 +72,9 @@ def _load_config() -> dict:
 
     A missing file is silent (first-run / not-yet-created is normal). A present
     but unreadable or malformed file warns to stderr and falls back, so a bad
-    edit degrades to the baseline instead of crashing the council.
+    edit degrades to the baseline instead of crashing the council. "Unreadable"
+    includes a file that will not DECODE, which is a separate failure from a
+    file that will not parse.
     """
     path = config_path()
     try:
@@ -80,7 +82,15 @@ def _load_config() -> dict:
             data = json.load(f)
     except FileNotFoundError:
         return {}
-    except (json.JSONDecodeError, OSError) as e:
+    # `UnicodeDecodeError` subclasses `ValueError`, making it a SIBLING of
+    # `json.JSONDecodeError`, and it is not an `OSError`. `json.load` over a
+    # text handle decodes inside its own `f.read()`, before parsing, so a
+    # config carrying one non-UTF-8 byte raised past both names and crashed the
+    # council -- the outcome the sentence above promises it degrades from.
+    # MEASURED 2026-09-01 with one 0xe9 byte: `UnicodeDecodeError: invalid
+    # continuation byte` out of `_load_config`. `set_model` below reads the
+    # same file and carried the same gap.
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
         print(
             f"Warning: could not read {path} ({e}); using fallback council model pins.",
             file=sys.stderr,
@@ -170,7 +180,14 @@ def set_model(provider: str, model: str) -> None:
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
+        # `UnicodeDecodeError` was missing here for the same reason as in
+        # `_load_config`: it is a `ValueError`, a sibling of
+        # `json.JSONDecodeError`, and not an `OSError`. The write still did not
+        # happen -- the raw decode error propagated -- but it propagated as a
+        # bare `UnicodeDecodeError` naming no path and offering no remedy,
+        # instead of the RuntimeError this docstring promises. MEASURED
+        # 2026-09-01 with one 0xe9 byte in the config.
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
             raise RuntimeError(
                 f"refusing to rewrite {path}: it exists but cannot be read "
                 f"({e}). Writing would drop every pin already in it. Fix or "

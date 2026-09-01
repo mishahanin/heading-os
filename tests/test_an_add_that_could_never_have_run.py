@@ -306,6 +306,76 @@ def test_a_direct_body_is_returned_without_walking_parts(reader):
     assert reader.decode_body({"body": {"data": _b64("direct")}}) == "direct"
 
 
+# ------------------------------------------------------------
+# The single-part path, which `decode_body`'s docstring is mostly about and
+# which nothing above reaches. Every case here is multipart, so the three
+# branches that read the MIME type of a payload's OWN body were unmeasured.
+# MEASURED 2026-09-01: deleting `if mime == "text/html"` - the defect the
+# docstring names FIRST - left all 44 tests passing, as did deleting the
+# non-text refusal below it.
+# ------------------------------------------------------------
+
+def test_a_whole_payload_that_is_html_is_stripped_not_returned_raw(reader):
+    """The headline defect: an HTML-only sender with no multipart wrapper.
+
+    Nested HTML was stripped correctly and only the top level was not, so the
+    defect appeared and disappeared with the sender's choice of wrapper, and
+    `read` printed tag soup at the operator.
+    """
+    payload = {"mimeType": "text/html",
+               "body": {"data": _b64("<p>Hello  <b>there</b></p>")}}
+    assert reader.decode_body(payload) == "Hello there"
+
+
+def test_a_whole_payload_that_is_binary_has_no_text_body(reader):
+    """Rather than decoding binary into replacement characters and calling it
+    a message."""
+    payload = {"mimeType": "application/pdf",
+               "body": {"data": _b64("%PDF-1.4 not a message")}}
+    assert reader.decode_body(payload) == reader.NO_TEXT_BODY
+
+
+def test_a_whole_payload_that_is_plain_text_is_returned_verbatim(reader):
+    """The sole witness for the accept branch, so a refusal-everywhere "fix"
+    cannot satisfy the two cases above."""
+    payload = {"mimeType": "text/plain", "body": {"data": _b64("just words")}}
+    assert reader.decode_body(payload) == "just words"
+
+
+@pytest.mark.parametrize("mime", [
+    "text/html; charset=UTF-8",   # what a real HTML sender actually writes
+    "TEXT/HTML",
+    "  text/html  ",
+])
+def test_the_mime_type_is_read_without_its_parameters(reader, mime):
+    """`_mime_of` lowercases and strips parameters, and only the HTML branch
+    can witness it.
+
+    A charset case on `text/plain` proves nothing and was written here first:
+    both the normalising and the non-normalising form still satisfy
+    `startswith("text/")`, so the assertion held either way - MEASURED
+    2026-09-01. `text/html` is different, because its branch is an EQUALITY
+    test. Without normalisation `text/html; charset=UTF-8` misses it, falls
+    through to the `startswith` accept, and the raw markup goes back to the
+    operator, which is the original defect wearing a charset.
+    """
+    payload = {"mimeType": mime, "body": {"data": _b64("<p>Hello  there</p>")}}
+    assert reader.decode_body(payload) == "Hello there"
+
+
+@pytest.mark.parametrize("mime", ["text/calendar", "text/csv"])
+def test_any_text_subtype_is_still_text(reader, mime):
+    """The accept branch is `startswith("text/")`, not a list of two types.
+
+    `text/calendar` is an ordinary Gmail part (every meeting invite carries
+    one), and narrowing this to `== "text/plain"` would turn it into
+    NO_TEXT_BODY. Nothing else in this file distinguishes the two forms:
+    MEASURED 2026-09-01, that narrowing left all 50 tests passing.
+    """
+    payload = {"mimeType": mime, "body": {"data": _b64("BEGIN:VCALENDAR")}}
+    assert reader.decode_body(payload) == "BEGIN:VCALENDAR"
+
+
 class _FakeMessages:
     """Two pages, so a caller that ignores nextPageToken sees half."""
 

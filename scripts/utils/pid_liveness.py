@@ -25,6 +25,12 @@ PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 STILL_ACTIVE = 259
 ERROR_ACCESS_DENIED = 5
 
+# The largest PID either platform call can carry. `os.kill` marshals the pid as
+# a C signed int and raises OverflowError above this; Windows OpenProcess takes
+# a DWORD, so the same ceiling is safe there. No process can hold a larger
+# number, which is why refusing one is a verdict rather than a guess.
+PID_CEILING = 2 ** 31 - 1
+
 
 def _windows_pid_is_running(pid: int, kernel32, get_last_error, c_ulong, byref) -> bool:
     """The Windows branch, with its ctypes surface passed IN.
@@ -57,8 +63,27 @@ def _windows_pid_is_running(pid: int, kernel32, get_last_error, c_ulong, byref) 
 
 
 def pid_is_running(pid: int) -> bool:
-    """True when a process with this PID exists, whoever owns it."""
-    if pid <= 0:
+    """True when a process with this PID exists, whoever owns it.
+
+    Total: every input answers True or False, and none raises. The callers all
+    read their PID out of a file the operator never types, so the input is
+    whatever survived the last crash. MEASURED 2026-09-01:
+
+        pid_is_running(99999999999)  -> OverflowError out of os.kill
+        pid_is_running("1234")       -> TypeError out of the `pid <= 0` compare
+
+    Both escaped as tracebacks from commands documented to REPORT state:
+    `sentinel --status` over a PID file holding a long digit string, and
+    `marp_render.watch_status()` over a watch state whose JSON `pid` is a string
+    or an over-range number. Neither number can name a process, so False is the
+    answer, not an exception. This refuses a bad value; it does not widen what
+    counts as alive: `os.kill` still decides every in-range case, and the
+    PermissionError branch below is untouched.
+    """
+    # bool is an int subclass, and True would otherwise probe PID 1.
+    if isinstance(pid, bool) or not isinstance(pid, int):
+        return False
+    if pid <= 0 or pid > PID_CEILING:
         return False
     if os.name == "nt":
         import ctypes

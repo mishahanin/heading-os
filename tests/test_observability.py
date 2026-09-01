@@ -75,6 +75,47 @@ def test_no_warn_when_explicitly_disabled(monkeypatch, caplog):
     assert f() == 1
 
 
+@pytest.mark.parametrize("value", ["false", "FALSE", "0", "no", "off", "", "  Off  "])
+def test_every_documented_off_token_disables(monkeypatch, value):
+    """The module docstring lists `false` / `0` / `no` (case-insensitive) and the
+    code also refuses `off` and the empty string. Only `false` was ever asserted,
+    so narrowing the tuple to `("false",)` alone left the whole file green while
+    `LANGFUSE_ENABLED=off` silently started shipping traces.
+    """
+    monkeypatch.setenv("SENSITIVE_MODE", "off")
+    monkeypatch.setenv("LANGFUSE_ENABLED", value)
+    assert obs.is_enabled() is False, value
+
+
+@pytest.mark.parametrize("value", ["true", "1", "yes", "on", "anything-else"])
+def test_anything_else_leaves_it_enabled(monkeypatch, value):
+    """The other direction, so the test above cannot be satisfied by an
+    `is_enabled` that always returns False."""
+    monkeypatch.setenv("SENSITIVE_MODE", "off")
+    monkeypatch.setenv("LANGFUSE_ENABLED", value)
+    assert obs.is_enabled() is True, value
+
+
+def test_the_bare_decorator_form_degrades_to_the_function_itself(monkeypatch, caplog):
+    """`@observe` written without parentheses.
+
+    Every existing case uses `@obs.observe()`, which reaches `_noop_decorator`
+    with an EMPTY `dargs` and so never executes its `return dargs[0]` branch.
+    That branch could be replaced by `return lambda *a, **k: None` -- silently
+    turning every bare-decorated function into a no-op that returns None -- with
+    the whole file green.
+    """
+    monkeypatch.setenv("SENSITIVE_MODE", "off")
+    monkeypatch.setenv("LANGFUSE_ENABLED", "false")
+
+    @obs.observe
+    def f(a, b=2):
+        return a + b
+
+    assert f(1) == 3
+    assert f.__name__ == "f"
+
+
 def test_no_warn_when_sensitive(monkeypatch, caplog):
     # Sensitive content must never traverse observability AND must not announce
     # its own state via a warning. Intentional (fail-closed) disable -> silent.

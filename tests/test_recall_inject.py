@@ -326,21 +326,59 @@ def test_unreadable_config_stays_silent_and_never_runs(monkeypatch, capsys, tmp_
 
 
 def test_disabled_flag_stays_silent(monkeypatch, capsys, tmp_path):
-    """`recall_inject.enabled: false` is honoured, as the hooks reference says."""
+    """`recall_inject.enabled: false` is honoured, as the hooks reference says.
+
+    The tracker RECORDS before it raises, and the assertion is on the record.
+    Until 2026-09-01 it only raised, and `main()` wraps the backend call in
+    `except Exception -> _emit("")`, so the AssertionError was swallowed by the
+    code under test and the hook fell silent for the wrong reason. MEASURED:
+    both `if cfg is None or not cfg["enabled"]` reduced to `if cfg is None`, and
+    the whole `cfg.update(...)` of the config block deleted, left this test
+    green. A raise inside a fake is a message to a handler, not an assertion.
+    """
     mod = load_hook()
     feed(monkeypatch, "что мы решили по Омеге и почему")
     cfg = tmp_path / "memory-index.yaml"
     cfg.write_text("recall_inject:\n  enabled: false\n", encoding="utf-8")
     monkeypatch.setattr(mod, "CONFIG_PATH", cfg)
+    called = []
 
     def tracker(cmd, **kwargs):
+        called.append(cmd)
         raise AssertionError("backend must not run when the hook is switched off")
 
     monkeypatch.setattr(mod.subprocess, "run", tracker)
     with pytest.raises(SystemExit) as exc:
         mod.main()
     assert exc.value.code == 0
+    assert called == [], "the backend ran with recall_inject.enabled: false"
     assert capsys.readouterr().out == ""
+
+
+def test_a_missing_backend_stays_silent_and_never_spawns(monkeypatch, capsys, tmp_path):
+    """No venv interpreter means no recall, and the hook says why on stderr.
+
+    A fresh clone with no `.venv` is an ordinary state, not an error, and the
+    hook must degrade to silence rather than hand `subprocess.run` a `None`
+    interpreter. The branch had no test at all until 2026-09-01.
+    """
+    mod = load_hook()
+    feed(monkeypatch, "что мы решили по Омеге и почему")
+    monkeypatch.setattr(mod, "INTERPRETERS", (tmp_path / "absent" / "bin" / "python",))
+    called = []
+
+    def tracker(cmd, **kwargs):
+        called.append(cmd)
+        raise AssertionError("no backend exists to invoke")
+
+    monkeypatch.setattr(mod.subprocess, "run", tracker)
+    with pytest.raises(SystemExit) as exc:
+        mod.main()
+    assert exc.value.code == 0
+    captured = capsys.readouterr()
+    assert called == []
+    assert captured.out == ""
+    assert "recall backend missing" in captured.err
 
 
 def test_touch_flag_reaches_the_backend_argv(monkeypatch, capsys):
@@ -370,7 +408,49 @@ def test_touch_flag_reaches_the_backend_argv(monkeypatch, capsys):
     with pytest.raises(SystemExit) as exc:
         mod.main()
     assert exc.value.code == 0
-    assert "--touch" in captured["cmd"], captured["cmd"]
+    cmd = [str(part) for part in captured["cmd"]]
+    assert "--touch" in cmd, cmd
+
+    # The rest of the argv contract, pinned in the one place that looks at it.
+    # MEASURED 2026-09-01: dropping `--top-k` and dropping the `--` terminator
+    # were each caught by nothing in this file.
+    assert "--top-k" in cmd, cmd
+    assert cmd[cmd.index("--top-k") + 1] == str(mod.TOP_K), cmd
+
+    # `--` terminates option parsing, because `text` is a POSITIONAL argument of
+    # memory-index.py's query command. Without it a prompt beginning with "-" is
+    # read as an unknown option and the backend exits 2, silently. The prompt
+    # must be the argument immediately after the terminator, and nothing else
+    # may follow it.
+    assert cmd[-2] == "--", cmd
+    assert cmd[-1] == "что мы решили по Омеге и почему", cmd
+
+
+def test_a_prompt_that_begins_with_a_dash_is_still_passed_as_text(monkeypatch, capsys):
+    """The reason the `--` terminator above is not decoration.
+
+    A prompt like "-- what did we decide" is a real thing to type. Without the
+    terminator the backend's argparse rejects it and exits 2, and the hook logs
+    "recall exited 2" and goes silent - a whole class of question that memory
+    quietly never answers.
+    """
+    mod = load_hook()
+    prompt = "-- почему мы отказались от Омеги и что решили"
+    feed(monkeypatch, prompt)
+    captured = {}
+
+    def tracker(cmd, **kwargs):
+        captured["cmd"] = [str(part) for part in cmd]
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout=_json.dumps({"hits": [], "gap": False}), stderr="")
+
+    monkeypatch.setattr(mod.subprocess, "run", tracker)
+    with pytest.raises(SystemExit) as exc:
+        mod.main()
+    assert exc.value.code == 0
+    cmd = captured["cmd"]
+    assert cmd[-1] == prompt, cmd
+    assert cmd[cmd.index(prompt) - 1] == "--", cmd
 
 
 def test_interpreter_probes_both_platform_layouts():

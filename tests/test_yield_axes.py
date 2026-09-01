@@ -123,6 +123,54 @@ def test_a_session_gate_is_NOT_a_wall_and_can_still_be_judged():
 # SC-2 -- an unclassified mechanism fails SAFE
 # ============================================================
 
+def test_the_json_row_carries_the_split_the_verdict_loses():
+    """SC-1e. The machine-readable half of the axis, which nothing pinned.
+
+    `summarise` stamps `entry["wall"]`, and its own comment says why: a wall
+    that HAS caught something reads CATCHING exactly like a gate, so the verdict
+    alone gives a `--json` consumer no way to tell that this mechanism must
+    never be judged by that count. MEASURED 2026-09-01 by replacing that line
+    with `entry["wall"] = False`: this file, `tests/test_gate_yield.py` and
+    `tests/test_gate_yield_render.py` all stayed green. The field is written for
+    a consumer and read by nothing in the tree, so the only thing standing
+    between it and silent inversion is this test.
+
+    Both halves are asserted, over a summary that includes a wall with a catch
+    and a gate with none, because a constant `True` and a constant `False` are
+    equally wrong and a one-sided check catches only one of them.
+    """
+    from scripts.utils.gate_yield import (
+        CATCHING,
+        GATES,
+        SOURCE_DENIALS,
+        WALLS,
+        is_wall,
+        summarise,
+    )
+
+    a_wall = WALLS[0]
+    a_gate = GATES[0]
+    summary = summarise(
+        denials=[_denial(a_wall)],
+        since={SOURCE_DENIALS: "2020-01-01T00:00:00+00:00"},
+        now="2026-08-03T00:00:00+00:00")
+
+    rows = summary["mechanisms"]
+    assert rows, "the summary named no mechanism at all"
+    for name, entry in rows.items():
+        assert entry["wall"] is is_wall(name), (
+            f"the JSON row for {name} says wall={entry['wall']} while the "
+            f"classifier says {is_wall(name)}")
+
+    # The case the comment names: the verdict has lost the distinction here and
+    # the field is the only thing still carrying it.
+    assert rows[a_wall]["verdict"] == CATCHING
+    assert rows[a_wall]["wall"] is True
+    assert rows[a_gate]["wall"] is False
+    assert {r["wall"] for r in rows.values()} == {True, False}, (
+        "every row answered the same way, so a constant would satisfy this")
+
+
 def test_an_unknown_mechanism_is_treated_as_a_wall_not_as_a_gate():
     """SC-2. WHEN a mechanism appears in a log but in no classification, THE
     SYSTEM SHALL treat it as a wall.

@@ -219,7 +219,16 @@ def _load_queue(workspace_root: Path) -> dict:
         return _empty_queue()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        # `UnicodeDecodeError` is a `ValueError`, so neither `OSError` nor
+        # `json.JSONDecodeError` caught it, and the decode fails inside
+        # `read_text` before `json.loads` is ever reached. A torn write that
+        # lands mid multi-byte character is the ORDINARY way this file goes
+        # bad, and it was the one corruption that skipped the quarantine
+        # entirely: the exception left `_load_queue`, `/action-queue` 500'd,
+        # and the wreck stayed in the live path for the next writer to
+        # overwrite. That is the exact loss `_quarantine_corrupt_queue` exists
+        # to prevent, arriving through the door nobody had shut.
         _quarantine_corrupt_queue(path, f"{type(exc).__name__}: {exc}")
         return _empty_queue()
     if not isinstance(data, dict) or not isinstance(data.get("actions"), list):

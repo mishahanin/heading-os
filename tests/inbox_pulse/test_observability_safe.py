@@ -164,9 +164,9 @@ def test_debug_trace_env_var_writes_local_file(
     INBOX_PULSE_STATE_DIR`, i.e. two directories deeper than the assertion
     below looks. The assertion is the correct side: `INBOX_PULSE_STATE_DIR`
     IS the `state/email-triage` directory, which is how
-    `test_heartbeat_thread_writes_periodically` in test_daemon.py finds
-    `state.json` at its root. Anyone implementing or debugging from the old
-    wording looked two levels down for a file written at the top.
+    `test_heartbeat_thread_writes_state_json_to_the_state_dir` in test_daemon.py
+    finds `state.json` at its root. Anyone implementing or debugging from the
+    old wording looked two levels down for a file written at the top.
     """
     monkeypatch.setenv("LANGFUSE_ENABLED", "false")  # skip real tracing
     monkeypatch.setenv("INBOX_PULSE_DEBUG_TRACE", "true")
@@ -194,6 +194,124 @@ def test_debug_trace_env_var_writes_local_file(
     # Full input and output must be present in debug mode
     assert payload["args"] == [3, 4]
     assert payload["result"] == 7
+
+
+# ---------------------------------------------------------------------------
+# Test 3b - the OFF default, which had no case at all. NEW 2026-09-01.
+#
+# `INBOX_PULSE_DEBUG_TRACE` writes the FULL payload to disk: every argument and
+# every return value, which for this decorator means the email body, the subject
+# text and the full sender address. The module says so in its own header: "OFF
+# by default. Never enable in production - it will capture sovereign data."
+# Test 3 above proves the flag turns it ON. Nothing proved the default leaves it
+# OFF, so the whole sovereignty claim rested on the branch nobody exercised.
+#
+# MEASURED 2026-09-01 by inverting the gate so an unset variable means on:
+#
+#     -   debug_mode = os.environ.get("INBOX_PULSE_DEBUG_TRACE", "").strip().lower() == "true"
+#     +   debug_mode = os.environ.get("INBOX_PULSE_DEBUG_TRACE", "").strip().lower() != "false"
+#
+#     tests/inbox_pulse, run with no data overlay (a fresh clone, and CI)
+#         -> 226 passed                (baseline: 226 passed)
+#     the 45-file wide set + tests/contract
+#         -> 7 failed, 1199 passed, 3 skipped   (identical to baseline; those 7
+#            are sandbox-environment failures, present either way)
+#
+# On the operator's own workstation that mutation DOES go red, and it is worth
+# saying why the gap is real anyway: what fails there is the overlay write guard
+# refusing a write to `.heading-os-data/state/email-triage/debug-trace.jsonl`,
+# not any assertion in this file. Take the overlay away, which is what a public
+# clone and CI are, and `_debug_trace_path` diverts to a private temp file, the
+# write succeeds, and the mutation passes. Green where the engine actually ships.
+# ---------------------------------------------------------------------------
+
+_OFF_SPELLINGS = ["", "false", "False", "0", "no", "off", "yes", "1"]
+# The gate is `.strip().lower() == "true"`, so these three ARE on. They are
+# listed rather than assumed: the first draft of this test put `"TRUE "` in the
+# OFF list and went red against correct code, which is the right way round for
+# a mistake about a sovereignty switch to be found.
+_ON_SPELLINGS = ["true", "TRUE", " true "]
+
+
+@pytest.mark.parametrize("value", _OFF_SPELLINGS)
+def test_the_debug_trace_stays_off_unless_the_flag_says_exactly_true(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    value: str,
+) -> None:
+    """Nothing sovereign reaches disk for any value that is not `true`.
+
+    `"yes"`, `"1"` and `"TRUE "` are in the list on purpose. They are the
+    spellings a reader assumes will work, so they pin the gate as a literal
+    `== "true"` after strip and lower, rather than as some looser truthiness a
+    later edit might reach for. `""` stands in for the variable being set to
+    nothing, which is what `tests/conftest.py` does to a muted name.
+    """
+    monkeypatch.setenv("LANGFUSE_ENABLED", "false")
+    monkeypatch.setenv("INBOX_PULSE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("INBOX_PULSE_DEBUG_TRACE", value)
+
+    body = "SOVEREIGN_BODY_MARKER_5150"
+    subject = "sovereign-subject-marker-5150"
+    sender = "dana@nimbus-freight.test"
+
+    @observe_metadata_only("test_off_by_default")
+    def classify(email_addr: str, subject: str, body: str) -> dict:
+        return {"tier": "CRITICAL", "note": body}
+
+    result = classify(email_addr=sender, subject=subject, body=body)
+    assert result == {"tier": "CRITICAL", "note": body}, "the call-through broke"
+
+    assert not (tmp_path / "debug-trace.jsonl").exists(), (
+        f"INBOX_PULSE_DEBUG_TRACE={value!r} wrote a debug trace; only the exact "
+        f"string 'true' may turn the full-payload capture on")
+    # And nothing else under the state dir carries the payload either, so a
+    # renamed trace file cannot slip past the filename check above.
+    written = [p for p in tmp_path.rglob("*") if p.is_file()]
+    for path in written:
+        blob = path.read_text(encoding="utf-8", errors="replace")
+        for marker in (body, subject, sender):
+            assert marker not in blob, (
+                f"sovereign payload {marker!r} reached {path} with "
+                f"INBOX_PULSE_DEBUG_TRACE={value!r}")
+
+
+@pytest.mark.parametrize("value", _ON_SPELLINGS)
+def test_the_off_by_default_check_would_notice_a_trace_if_one_were_written(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    value: str,
+) -> None:
+    """Anchor for the test above, and it is the load-bearing half.
+
+    Every assertion up there is "the file is absent" or "the marker is not in
+    what was written", and an empty directory satisfies all of them. If the
+    decorator had stopped writing a trace under ANY setting, or if the state
+    dir resolved somewhere else entirely, that test would pass over nothing.
+    Same markers, same directory, flag on: the file appears and carries them.
+
+    Parametrized over the three ON spellings so the `.strip().lower()` in the
+    gate is pinned from this side too. Deleting the strip would leave `" true "`
+    silently off, which is a sovereignty switch a trailing space could disarm
+    in the direction of the operator thinking tracing was running.
+    """
+    monkeypatch.setenv("LANGFUSE_ENABLED", "false")
+    monkeypatch.setenv("INBOX_PULSE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("INBOX_PULSE_DEBUG_TRACE", value)
+
+    body = "SOVEREIGN_BODY_MARKER_5150"
+
+    @observe_metadata_only("test_on_when_asked")
+    def classify(email_addr: str, subject: str, body: str) -> dict:
+        return {"tier": "CRITICAL"}
+
+    classify(email_addr="dana@nimbus-freight.test", subject="s", body=body)
+
+    trace_file = tmp_path / "debug-trace.jsonl"
+    assert trace_file.exists(), "the flag no longer turns the trace on"
+    assert body in trace_file.read_text(encoding="utf-8"), (
+        "the trace exists but does not carry the payload, so the absence "
+        "assertions above are measuring a writer that writes nothing")
 
 
 # ---------------------------------------------------------------------------

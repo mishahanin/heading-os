@@ -208,6 +208,85 @@ def test_an_unreadable_document_sorts_last_rather_than_raising(sub, tmp_path):
     assert sub._doc_length(tmp_path / "gone.md") == 0
 
 
+def test_the_fallback_does_not_measure_one_document_twice(sub, monkeypatch,
+                                                          tmp_path):
+    """The dedupe between the primary loop and the fallback, unmeasured.
+
+    Both loops draw from `_candidate_docs`, so a document long enough for the
+    width is returned by BOTH: the primary at `min_len=width`, the fallback at
+    `min_len=0`. Measured 2026-09-01, deleting `if any(c.path == path ...)` left
+    the file green at 43 passed, because no fixture had a corpus the two loops
+    could overlap on. A duplicated document is the same slice scored twice, and
+    it also feeds `distinct_truth_fraction`, which exists to notice exactly that.
+    """
+    long = tmp_path / "long.md"
+    long.write_text("y" * 5000, encoding="utf-8")
+    short = tmp_path / "short.md"
+    short.write_text("z" * 900, encoding="utf-8")
+
+    # The real shape: the long document clears `min_len`, the short one does not.
+    monkeypatch.setattr(
+        sub, "_candidate_docs",
+        lambda min_len, want: [p for p in (long, short)
+                               if p.stat().st_size >= min_len][:want])
+    cases = sub.build_cases(1000, "MARKER", doc_count=2)
+    assert [c.path for c in cases] == [long, short], (
+        "the fallback re-added the document the primary loop had already taken")
+
+
+def test_the_fallback_survives_a_document_deleted_under_it(sub, monkeypatch,
+                                                           tmp_path):
+    """The `except OSError` in the fallback read, which its own comment says was
+    the fix, and which nothing exercised.
+
+    Measured 2026-09-01: changing that `except OSError` to `except
+    ZeroDivisionError` left the file green at 43 passed. `_candidate_docs`
+    stats the corpus and `build_cases` reads it afterwards, so a file removed in
+    between is the ordinary race on a live workspace, not a contrived one.
+
+    `doc_count=2` deliberately: the fallback breaks as soon as the slice is
+    full, and `_doc_length` sorts the missing file LAST, so with `doc_count=1`
+    the loop stops before it ever reaches the ghost and the mutation survives.
+    That was this test's own first shape, and it measured nothing.
+    """
+    real = tmp_path / "real.md"
+    real.write_text("y" * 5000, encoding="utf-8")
+    ghost = tmp_path / "ghost.md"  # never created
+
+    monkeypatch.setattr(sub, "_candidate_docs",
+                        lambda min_len, want: [] if min_len else [ghost, real])
+    cases = sub.build_cases(1000, "MARKER", doc_count=2)
+    assert [c.path for c in cases] == [real], (
+        "a document that vanished between the stat and the read took the whole "
+        "run down instead of being skipped")
+
+
+def test_the_fallback_pool_is_wider_than_the_slice_it_fills(sub, monkeypatch):
+    """`doc_count * 4`, so the sort has something to choose between.
+
+    The comment says the fallback "sorts what it already looked at" - but if the
+    pool were only `doc_count` wide the sort would be sorting one element and the
+    whole length ordering above would be decorative. Measured 2026-09-01,
+    narrowing the pool to `doc_count` left the file green at 43 passed, because
+    every fixture's fake `_candidate_docs` ignores `want`.
+
+    This one honours `want`, so the requested width is what the assertion is
+    about. The multiplier is written out by hand rather than read from the
+    module.
+    """
+    seen = []
+
+    def _candidates(min_len, want):
+        seen.append((min_len, want))
+        return []
+
+    monkeypatch.setattr(sub, "_candidate_docs", _candidates)
+    sub.build_cases(1000, "MARKER", doc_count=3)
+    assert seen == [(1000, 3), (0, 12)], (
+        "the fallback asked for a pool that was not four times the slice: "
+        f"{seen}")
+
+
 # ---------------------------------------------------------------------------
 # Finding 4 -- an answers file of the wrong shape
 # ---------------------------------------------------------------------------
@@ -224,6 +303,45 @@ def test_a_valid_json_answers_file_of_the_wrong_shape_is_refused(census, text,
         census.append_answer(path, {"answer": None}, "agg-01", {})
     assert "shape" in str(caught.value) or "cannot read" in str(caught.value)
     assert path.read_text(encoding="utf-8") == text, "it overwrote the file"
+
+
+@pytest.mark.parametrize("text", ["{not json", "", "{\"answers\": [}", "\x00\x01"],
+                         ids=["truncated", "empty", "unbalanced", "binary"])
+def test_an_undecodable_answers_file_is_refused_rather_than_replaced(
+        census, text, tmp_path):
+    """The OTHER half of the guard the seven shape rows never reach.
+
+    Every one of those rows is valid JSON, so all seven land on the SAME
+    `isinstance` branch and the `json.JSONDecodeError` arm above it had no
+    witness: measured 2026-09-01, narrowing `except (OSError, json.JSONDecodeError)`
+    to `except (OSError,)` left this whole file green at 38 passed. The shape
+    assertion below already accepts "cannot read", which is the message only
+    this arm produces, so the file asserted an outcome nothing could reach.
+
+    A half-written answers file is the realistic case, not the exotic one: this
+    file is rewritten atomically after a traversal that may run 180 seconds.
+    """
+    path = tmp_path / "answers.json"
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(RuntimeError) as caught:
+        census.append_answer(path, {"answer": None}, "agg-01", {})
+    assert "cannot read" in str(caught.value)
+    assert path.read_text(encoding="utf-8") == text, "it overwrote the file"
+
+
+def test_an_answers_path_that_cannot_be_opened_is_refused(census, tmp_path):
+    """The OSError arm of the same `except`, which the JSON rows cannot reach.
+
+    A directory sitting where the answers file belongs `exists()`, so the read
+    is attempted and raises `IsADirectoryError`. Without this row the tuple
+    could be narrowed to `json.JSONDecodeError` alone and nothing would notice.
+    """
+    path = tmp_path / "answers.json"
+    path.mkdir()
+    with pytest.raises(RuntimeError) as caught:
+        census.append_answer(path, {"answer": None}, "agg-01", {})
+    assert "cannot read" in str(caught.value)
+    assert path.is_dir(), "it replaced the directory"
 
 
 def test_a_well_shaped_answers_file_is_still_appended_to(census, tmp_path):
@@ -317,6 +435,31 @@ def test_the_comparison_still_reads_the_number(build):
     assert build.build_status(build._build_number(0), 0) == ("up to date", " ")
 
 
+@pytest.mark.parametrize("corp,ex,text,marker", [
+    (5, 5, "up to date", " "),
+    (0, 0, "up to date", " "),
+    (6, 5, "1 build behind", " !"),
+    (7, 5, "2 builds behind", " !"),
+    (99, 5, "94 builds behind", " !"),
+    (5, 6, "1 build ahead of corporate", " "),
+    (5, 7, "2 builds ahead of corporate", " "),
+])
+def test_every_branch_of_build_status_is_pinned(build, corp, ex, text, marker):
+    """All four branches, with the warning marker written out by hand.
+
+    Only the EQUAL branch was measured. Measured 2026-09-01: dropping the `!`
+    from "1 build behind" and from "N builds behind" each left the file green at
+    43 passed, and neither AHEAD row existed at all - though `build_status`'s
+    own docstring says the function was extracted "so the AHEAD case can be
+    tested". The marker is the whole point of the comparison: it is what puts a
+    row in front of the operator, and an exec ahead of corporate must not carry
+    it, because being ahead is normally how the next corporate build starts.
+
+    Expected values are written here, not derived from the function.
+    """
+    assert build.build_status(corp, ex) == (text, marker)
+
+
 # ---------------------------------------------------------------------------
 # Finding 7 -- one plan's contract satisfying another
 # ---------------------------------------------------------------------------
@@ -341,10 +484,25 @@ def test_the_plans_own_contract_is_still_found(gate, tmp_path):
 
 
 def test_a_slug_carrying_a_dot_is_read_from_the_name_not_the_stem(gate, tmp_path):
-    """`Path("2026-01-01-bug-fix").stem` is `2026-01-01-bug`: the `.fix` reads
-    as an extension. The slug segment is taken off `name`."""
-    (tmp_path / "2026-01-01-bug-fix").mkdir()
-    status, _ = gate.check_gate("plans/2026-01-01-bug-fix.md",
+    """The slug segment is taken off `name`, never off `Path.stem`.
+
+    This test used the directory `2026-01-01-bug-fix` and could not tell the two
+    apart: `-fix` is a HYPHEN, so that name has no suffix and
+    `Path("2026-01-01-bug-fix").stem` is the whole string. Measured 2026-09-01,
+    rewriting `_dir_slug` as `Path(name).stem[11:]` left the file green at 43
+    passed - the one test named for the hazard did not bind it. The worked
+    example in this docstring and in `_dir_slug`'s own said `.stem` was
+    `2026-01-01-bug`, which is simply not what Python returns; both are
+    corrected.
+
+    A slug with a REAL dot separates them: `Path("2026-01-01-v1.2-fix").stem`
+    is `2026-01-01-v1`, whose slug segment is `v1` rather than `v1.2-fix`. A
+    version number in a slug is the ordinary way that dot arrives.
+    """
+    assert gate._dir_slug("2026-01-01-v1.2-fix") == "v1.2-fix", (
+        "the slug was read off Path.stem, which truncates at the dot")
+    (tmp_path / "2026-01-01-v1.2-fix").mkdir()
+    status, _ = gate.check_gate("plans/2026-01-01-v1.2-fix.md",
                                 contract_dir=tmp_path)
     assert status == "FOUND"
 
@@ -352,14 +510,45 @@ def test_a_slug_carrying_a_dot_is_read_from_the_name_not_the_stem(gate, tmp_path
 @pytest.mark.parametrize("name,expected", [
     ("2026-08-13-census-primitive", "census-primitive"),
     ("2026-08-05-foreign-recipe", "foreign-recipe"),
+    ("2026-01-01-v1.2-fix", "v1.2-fix"),
     ("not-dated-at-all", None),
     ("2026-08-13-", None),
     ("20260813-slug", None),
     ("abcd-ef-gh-slug", None),
     ("2026-08-1x-slug", None),
+    # One row ON each separator, because the three rows above refuse for the
+    # WRONG reason: `20260813-slug` already fails `name[4] == "-"`, so deleting
+    # the test at position 7 or at position 4 changed nothing. Measured
+    # 2026-09-01, both deletions left the file green at 43 passed. Each name
+    # below satisfies every part of the check except the one separator it is
+    # named for, so it is that clause's sole witness.
+    ("2026-08131-slug", None),   # separator at 7 missing; 4 and 10 present
+    ("2026008-13-slug", None),   # separator at 4 missing; 7 and 10 present
+    ("2026-08-13x-slug", None),  # separator at 10 missing; 4 and 7 present
 ])
 def test_the_slug_segment_is_read_off_the_date_prefix(gate, name, expected):
     assert gate._dir_slug(name) == expected
+
+
+def test_an_absent_contract_directory_is_never_FOUND(gate, tmp_path):
+    """The branch that answers before anything is read.
+
+    `check_gate`'s own comment says "FOUND is the one signal here that means
+    'this plan went through the gate', so a wrong FOUND is the only reading
+    worth preventing" - and the absent-directory exit, which is the one place
+    a wrong FOUND would wave every plan through at once, had no test.
+    Measured 2026-09-01: flipping that return to FOUND left the file green.
+    """
+    missing = tmp_path / "no-such-dir"
+    status, detail = gate.check_gate("plans/2026-06-28-fix.md",
+                                     contract_dir=missing)
+    assert status == "MISSING", f"{status} {detail}"
+    assert "absent" in detail, detail
+    # A FILE where the directory belongs is not a directory either.
+    as_file = tmp_path / "a-file"
+    as_file.write_text("x", encoding="utf-8")
+    assert gate.check_gate("plans/2026-06-28-fix.md",
+                           contract_dir=as_file)[0] == "MISSING"
 
 
 def test_an_undated_directory_never_matches(gate, tmp_path):

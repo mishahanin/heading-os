@@ -71,7 +71,18 @@ def parse_findings_from_report(report_path: Path) -> dict[str, dict]:
     """
     if not report_path.exists():
         return {}
-    text = report_path.read_text(encoding="utf-8")
+    # A report this reader cannot decode is a report it has no findings from,
+    # which is the same answer the missing-file line above gives. It used to be
+    # a UnicodeDecodeError traceback out of `main`, so a CEO flagging a finding
+    # against a report with one bad byte got a stack trace where the file's own
+    # exit-code contract (3 for a report it cannot use) already had an answer.
+    # Measured 2026-09-01.
+    try:
+        text = report_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        print(f"{RED}ERROR: scrutiny report unreadable: {report_path} ({exc}){RESET}",
+              file=sys.stderr)
+        return {}
     findings: dict[str, dict] = {}
     for match in _FINDING_RE.finditer(text):
         fid = match.group(1)

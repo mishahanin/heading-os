@@ -46,3 +46,27 @@ def test_log_recall_never_raises(monkeypatch, tmp_path):
     monkeypatch.setattr(m, "_recall_log_path", lambda: (_ for _ in ()).throw(OSError("boom")))
     m.log_recall(query_snippet="x", collection="content", layer=None, top_score=0.1,
                  gap=True, n_hits=0, threshold=0.55, latency_ms=1, hit_paths=[])
+
+
+def test_a_failed_write_is_reported_before_it_is_swallowed(monkeypatch, tmp_path, capsys):
+    """Never-raises is not the same promise as never-says-anything.
+
+    `cmd_query._emit` wraps this call in its own handler and prints "recall
+    ops-log write failed" there, explaining that a silent return meant a broken
+    ops log was noticed only when somebody went to read it and found nothing.
+    That handler is unreachable: this function catches everything and returns.
+    MEASURED 2026-09-01 -- with the append raising, neither message appeared,
+    so the deferred-memory metrics could lose every record with no signal
+    anywhere. The report belongs in the frame that catches.
+    """
+    m = _fresh_module(monkeypatch, tmp_path)
+    monkeypatch.setattr(m, "is_sensitive", lambda: False)
+    monkeypatch.setattr(m, "_recall_log_path", lambda: (_ for _ in ()).throw(OSError("boom")))
+    capsys.readouterr()
+
+    m.log_recall(query_snippet="x", collection="content", layer=None, top_score=0.1,
+                 gap=True, n_hits=0, threshold=0.55, latency_ms=1, hit_paths=[])
+
+    err = capsys.readouterr().err
+    assert "recall log write failed" in err, err
+    assert "boom" in err, err

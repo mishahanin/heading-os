@@ -1,6 +1,8 @@
 """Unit tests for /capabilities skill catalog source."""
+import logging
 from pathlib import Path
 
+import scripts.bridge_daemon.sources.capabilities as capabilities_mod
 from scripts.bridge_daemon.sources.capabilities import (
     CATEGORY_ORDER,
     list_capabilities,
@@ -171,6 +173,113 @@ def test_read_skill_accepts_realistic_slugs(tmp_path):
         (d / "SKILL.md").write_text("---\nname: " + slug + "\n---\n", encoding="utf-8")
         result = read_skill(tmp_path, slug)
         assert result["ok"] is True, f"{slug!r} should be accepted, got: {result.get('error')}"
+
+
+# ============================================================
+# The list scan's OSError arm, and one claim that turned out to be wrong
+# ============================================================
+# Full-suite branch coverage on 2026-08-31 over 19,835 tests:
+#
+#     scripts/bridge_daemon/sources/capabilities.py  113  14  38  3  89%
+#         Missing 101, 104-105, 166, 185-187, 286-287, 289, 292-293, 298-299
+#
+# Lines 185-187 are the `except OSError` beside the symlink check in
+# `list_capabilities`: never executed, so never asserted. Lines 101 and 104-105
+# are `_parse_frontmatter`'s two degradation returns, which the docstring
+# promises leave "the skill still listing with its directory name as a
+# fallback" and which nothing checked. Those three are what the tests below
+# add.
+#
+# The claim that did NOT survive checking, recorded rather than quietly
+# dropped: deleting the whole symlink try/except from `list_capabilities` left
+# `tests/bridge/test_sources_capabilities.py` and
+# `tests/bridge/test_symlink_guards_are_not_dead_code.py` at 31 passed, which
+# read as a naked guard. It is not naked.
+# `tests/test_a_list_scan_that_published_what_its_drilldown_refused.py` covers
+# it directly, for `list_capabilities` and `list_approvals` both, with a real
+# planted link and a corpus guard. The file whose NAME promises symlink
+# coverage covers the two drill-downs; the file that covers the two list scans
+# is named after the defect instead. A mutation run scoped to the first could
+# only ever find half the answer.
+#
+# Line 166, the `not d.is_dir()` skip, is a third answer again: deleting it
+# leaves every test below green, because a stray FILE has no `SKILL.md` under
+# it and the existence check two lines down already refuses it. Redundant, not
+# untested. `test_a_stray_file_among_the_skill_directories_is_ignored` pins the
+# BEHAVIOUR and makes no claim about which check delivers it.
+#
+# The OSError arm is driven through `contains_symlink` rather than by breaking
+# a real directory, because that is where the exception comes from in
+# production: it stats the target and its parents, and a producer directory can
+# go away between `iterdir` and that stat.
+
+def test_a_skill_the_scan_cannot_stat_is_skipped_not_raised(tmp_path, monkeypatch, caplog):
+    """The OSError arm, lines 185-187, executed by nothing in the tree.
+
+    `contains_symlink` stats the path and its parents, and a producer directory
+    can go away between `iterdir` and that stat. Without the handler the whole
+    /capabilities endpoint 500s over one row.
+    """
+    _make_skill(tmp_path, "genuine", description="A real skill")
+    _make_skill(tmp_path, "vanished", description="Removed mid-scan")
+
+    def raise_for_one(root, target):
+        if Path(target).parent.name == "vanished":
+            raise OSError("no such file or directory")
+        return False
+
+    monkeypatch.setattr(capabilities_mod, "contains_symlink", raise_for_one)
+    with caplog.at_level(logging.WARNING):
+        result = list_capabilities(tmp_path)          # must not raise
+    assert [s["slug"] for s in result["skills"]] == ["genuine"]
+    assert "vanished" in caplog.text, caplog.text
+
+
+def test_a_stray_file_among_the_skill_directories_is_ignored(tmp_path):
+    """`.claude/skills/` collects `README.md` and editor droppings, and a file
+    must not become a catalogue row. Two checks could deliver this and the test
+    does not care which; see the note above on line 166."""
+    _make_skill(tmp_path, "genuine", description="A real skill")
+    (tmp_path / ".claude" / "skills" / "README.md").write_text(
+        "# skills\n", encoding="utf-8")
+    (tmp_path / ".claude" / "skills" / ".DS_Store").write_bytes(b"\x00\x01")
+    result = list_capabilities(tmp_path)
+    assert [s["slug"] for s in result["skills"]] == ["genuine"]
+
+
+def test_an_unparseable_frontmatter_block_still_lists_the_skill(tmp_path):
+    """Lines 101 and 104-105: no frontmatter at all, and YAML that will not
+    parse. `_parse_frontmatter` returns {} for both and the docstring promises
+    "the skill still lists with its directory name as a fallback"; nothing
+    checked that promise."""
+    d = tmp_path / ".claude" / "skills" / "broken"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: [unclosed\n---\n\n# Broken\n",
+                                encoding="utf-8")
+    bare = tmp_path / ".claude" / "skills" / "bare"
+    bare.mkdir(parents=True)
+    (bare / "SKILL.md").write_text("# No frontmatter here\n", encoding="utf-8")
+
+    result = list_capabilities(tmp_path)
+    by_slug = {s["slug"]: s for s in result["skills"]}
+    assert set(by_slug) == {"broken", "bare"}
+    for slug in ("broken", "bare"):
+        assert by_slug[slug]["name"] == slug, "the directory name is the fallback"
+        assert by_slug[slug]["description"] == ""
+        assert by_slug[slug]["version"] == ""
+
+
+def test_a_scalar_frontmatter_block_is_not_treated_as_a_mapping(tmp_path):
+    """`yaml.safe_load` on a plain scalar returns a string, and the guard is
+    `return data if isinstance(data, dict) else {}`. Without it the next
+    `.get` is an AttributeError on a string."""
+    d = tmp_path / ".claude" / "skills" / "scalar"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\njust a bare line\n---\n\n# Scalar\n",
+                                encoding="utf-8")
+    result = list_capabilities(tmp_path)          # must not raise
+    assert [s["slug"] for s in result["skills"]] == ["scalar"]
+    assert result["skills"][0]["name"] == "scalar"
 
 
 # ============================================================

@@ -125,9 +125,30 @@ def read_denials(path: Path = None) -> list:
     used to be appended and returned as though it were a record; the next
     `record.get(...)` in `summarize` or in `scripts/denials.py` then raised
     AttributeError and cost the whole history, which is the exact outcome the
-    line above promises never happens."""
+    line above promises never happens.
+
+    It also covers a line whose BYTES are not valid UTF-8, which is the shape a
+    truncated write actually takes. `append_denial` writes one JSON line per
+    refusal from whichever hook process is refusing, so a torn append lands
+    mid-character, and `read_text(encoding="utf-8")` raised UnicodeDecodeError
+    over the whole file. That is a ValueError, not an OSError, so the handler
+    below never saw it. MEASURED 2026-09-01 on a log holding one intact record
+    followed by a half-written multi-byte character: `read_denials` raised, and
+    `scripts/denials.py` reads it with no handler at all, so the console-first
+    answer to "is any guard catching anything" was a traceback and the entire
+    history was lost. Exactly what the first line of this docstring promises
+    never happens, arriving one layer below where that promise was enforced.
+
+    `errors="replace"` rather than a wider `except`: a returned `[]` would read
+    as "no refusals recorded", which is the silent-clean answer
+    `.claude/rules/scope-claims.md` forbids. Replacing the undecodable bytes
+    leaves every intact line intact, and turns the torn one into text that
+    fails `json.loads` and is skipped by the loop below, one line at a time.
+    That IS the promise: a truncated write costs its own line and nothing
+    else."""
     try:
-        text = Path(path or denial_log_path()).read_text(encoding="utf-8")
+        text = Path(path or denial_log_path()).read_text(
+            encoding="utf-8", errors="replace")
     except OSError:
         return []
     out = []

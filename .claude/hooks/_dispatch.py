@@ -525,10 +525,22 @@ def _search_reaches_personal(segments: list[str]) -> bool:
     Only a LITERAL `threads` segment anchors the search. A wildcard that could
     itself expand to `threads` is not treated as an anchor, because then
     `Glob("**/*.py")` is refused and that is every ordinary sweep in the engine.
-    The limit is deliberate and the redirect is what makes it safe: only a
+
+    That limit is deliberate, and what makes it safe is `_sweep_descends_from_above`
+    one screen up - NOT the sentence that used to stand here, which read: "only a
     `threads`-prefixed path is re-anchored at the data root by
     data-path-redirect.py, so an unanchored sweep stays inside the engine clone,
-    which holds no threads at all.
+    which holds no threads at all." That premise was measured FALSE and retired.
+    A Glob with no `path` resolves against `cwd`, the redirect says nothing about
+    where `cwd` points, and with `cwd` at the data root the sweep descends
+    straight into the threads tree.
+
+    The sentence stayed here after the check that replaced it landed, which is
+    the dangerous half of a stale comment: it told the next reader the carve-out
+    was self-justifying, so the sibling rule carrying the actual load reads as
+    redundant and invites deletion. `_sweep_descends_from_above` resolves the
+    real search root and refuses when that root sits above a threads tree that
+    exists. Do not remove it.
     """
     # `..` was left in place here while `""` and `.` were dropped, so
     # `Grep(path="threads/business/../personal")` found no `personal` segment
@@ -591,16 +603,76 @@ DANGEROUS_BASH_PATTERNS = [
     re.compile(rf"\bopen\s*\(\s*['\"][^'\"]*{_BASH_CEO_THREADS}", re.IGNORECASE),
 ]
 
-ALLOWED_DOC_PATH_RE = re.compile(
-    r"(?:^|/)("
-    r"docs/superpowers/(plans|specs)/|"
-    r"outputs/operations/scrutiny/|"  # leak-guard: ok (regex alternation branch)
-    r"\.claude/(skills|rules|hooks)/|"
-    r"reference/|"
-    r"templates/|"
-    r"tests/"
-    r")",
+# Directories whose files legitimately QUOTE a CEO-only path: the specs and
+# plans that designed the wall, the scrutiny reports that audit it, the skills
+# and rules that name it, and the tests that drive it.
+#
+# Anchored at the workspace root, not at any `/`. A `(?:^|/)` regex matched the
+# segment ANYWHERE, so a decoy directory exempted a write: MEASURED 2026-08-31,
+# `outputs/scratch/reference/leak.md`, `knowledge/templates/leak.md` and
+# `outputs/scratch/tests/leak.md` were all ALLOWED to carry a `threads/personal/`
+# reference, while the control `outputs/reports/leak.md` was blocked. Creating a
+# directory called `reference` is not a privilege.
+#
+# Same hole shape, and the same fix, as `SECRETS_ALLOW_DIR_SEGMENTS` on
+# 2026-07-31. That one was measured and anchored; this allowlist, twelve lines
+# away, was left matching a segment anywhere.
+ALLOWED_DOC_DIRS = (
+    "docs/superpowers/plans/",
+    "docs/superpowers/specs/",
+    "outputs/operations/scrutiny/",  # leak-guard: ok (relative prefix/match key)
+    ".claude/skills/",
+    ".claude/rules/",
+    ".claude/hooks/",
+    "reference/",
+    "templates/",
+    "tests/",
 )
+
+
+_DOC_BASES_CACHE: list[str] | None = None
+
+
+def _doc_bases() -> list[str]:
+    """The roots under which one of `ALLOWED_DOC_DIRS` is a real directory.
+
+    BOTH repositories, because the two-part topology puts `reference/` and
+    `templates/` in the private overlay and `tests/` and `.claude/` in the
+    engine clone. Anchoring to the engine root alone would have refused a
+    legitimate `<data-root>/reference/x.md`, which is the over-tightening a
+    narrower fix would have shipped. Same base set, and the same reasoning, as
+    `_threads_roots` above.
+    """
+    global _DOC_BASES_CACHE
+    if _DOC_BASES_CACHE is not None:
+        return _DOC_BASES_CACHE
+    bases = [WORKSPACE.as_posix()]
+    try:
+        from scripts.utils.workspace import get_data_root
+        bases.append(Path(get_data_root()).as_posix())
+    except Exception as exc:  # noqa: BLE001 - reported, never raised, in a hook
+        # Fail toward the WALL: an unresolvable overlay means one fewer exempt
+        # root, so a doc write there is refused rather than silently allowed.
+        print(f"[_dispatch:doc_paths] overlay root unresolvable, so only the "
+              f"engine tree exempts a doc path: {exc}", file=sys.stderr)
+    _DOC_BASES_CACHE = [b.rstrip("/") for b in bases if b]
+    return _DOC_BASES_CACHE
+
+
+def _is_allowed_doc_path(normalized: str) -> bool:
+    """True for one of `ALLOWED_DOC_DIRS` inside a root this machine really has.
+
+    Relative spellings are exempt as before. An ABSOLUTE spelling is exempt only
+    under one of `_doc_bases()`, so a decoy `reference/` anywhere else is not a
+    privilege, and an absolute path into some OTHER workspace entirely is not
+    this wall's business to exempt.
+    """
+    for seg in ALLOWED_DOC_DIRS:
+        if normalized.startswith(seg):
+            return True
+        if any(normalized.startswith(f"{base}/{seg}") for base in _doc_bases()):
+            return True
+    return False
 
 def check_protect_personal_threads(payload: dict) -> dict | None:
     """Block leaks of threads/personal/ content. Each block carries the
@@ -738,7 +810,7 @@ def check_protect_personal_threads(payload: dict) -> dict | None:
 
     if PERSONAL_PATH_RE.search(target) or _PERSONAL_ARCHIVE_RE.search(target):
         return None
-    if ALLOWED_DOC_PATH_RE.search(target):
+    if _is_allowed_doc_path(target):
         return None
     for c in contents:
         if _names_personal_threads(c):
@@ -825,7 +897,27 @@ def check_protect_corporate(payload: dict) -> dict | None:
     unreadable = ""
     try:
         identity = json.loads(identity_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        # `UnicodeDecodeError` is a `ValueError`, and a SIBLING of
+        # `json.JSONDecodeError` rather than a subclass, because the decode
+        # fails inside `read_text` before `json.loads` is ever called. So the
+        # handler below caught the corrupt-JSON case the comment underneath
+        # describes and walked straight past the corrupt-BYTES case.
+        #
+        # MEASURED 2026-09-01, one identity file in three states, same Write
+        # into `corporate/`:
+        #
+        #     valid, role exec  -> allowed        (correct, the normal path)
+        #     not JSON          -> BLOCKED        (correct, fails shut)
+        #     not UTF-8         -> ALLOWED        (the defect, fails OPEN)
+        #
+        # The third printed the decode error to stderr and let the write
+        # through, which is the exact outcome the paragraph below says was
+        # fixed: one corrupt byte switched the corporate wall off for the whole
+        # session and the executive's edit was silently overwritten on the next
+        # sync. Only half of "corrupt" was covered. Fixing a handler means
+        # asking which OTHER inputs reach it, not only the one that prompted
+        # the fix.
         identity, unreadable = {}, f"{type(exc).__name__}: {exc}"
     if not isinstance(identity, dict):
         identity, unreadable = {}, "the file is not a JSON object"
@@ -843,7 +935,14 @@ def check_protect_corporate(payload: dict) -> dict | None:
         return None  # CEO workspace -- no restriction
 
     tool_input = payload.get("tool_input", {}) or {}
-    file_path = tool_input.get("file_path", "") or ""
+    # `notebook_path` as well, because NotebookEdit carries the target there and
+    # nowhere else. MEASURED 2026-08-31 with an exec-workspace identity file:
+    # `Write` and `Edit` into `corporate/` both BLOCKED, `NotebookEdit` was
+    # ALLOWED. The module docstring claims "every payload shape reaches every
+    # check", and the two siblings `check_prevent_secrets` and
+    # `check_protect_personal_threads` both already read this field.
+    file_path = (tool_input.get("file_path", "")
+                 or tool_input.get("notebook_path", "") or "")
     if not file_path:
         return None
 
@@ -877,7 +976,9 @@ def check_protect_corporate(payload: dict) -> dict | None:
 # ============================================================
 # Folded in from .claude/hooks/protect-docs.py during Phase 2.3 of the
 # 2026-05-12 perf v2 sprint. SYNCED_FILES must match SYNC_FILES in
-# scripts/sync-docs.py — keep in sync if either side changes.
+# `.claude/hooks/sync-docs.py` — keep in sync if either side changes. The path
+# read `scripts/sync-docs.py` until 2026-08-31 and no such file exists; the two
+# sets do currently match, so this was a stale pointer, not a drift.
 
 _DOCS_DIR_RE = re.compile(r"(?:^|/)docs/")
 
@@ -916,7 +1017,12 @@ def check_protect_docs(payload: dict) -> dict | None:
         return None
 
     tool_input = payload.get("tool_input", {}) or {}
-    file_path = tool_input.get("file_path", "") or ""
+    # `notebook_path` too. Same gap, same date and same reason as the one in
+    # `check_protect_corporate` above: NotebookEdit carries its target in this
+    # field and nowhere else, so reading only `file_path` left the tool outside
+    # a wall the module docstring says every payload shape reaches.
+    file_path = (tool_input.get("file_path", "")
+                 or tool_input.get("notebook_path", "") or "")
     if not file_path:
         return None
 
@@ -984,6 +1090,36 @@ WORKSPACE_REL_SCRIPT_RE = re.compile(
     r"""(?:^|(?<=[\s"'=(|&;]))["']?((?:\./)?(?:\.claude/(?:skills|hooks)|scripts)/[^\s"';|&)]+\.py)"""
 )
 
+def _cds_to_workspace_root(command: str, norm_root: str) -> bool:
+    """True when a segment of `command` changes directory to the workspace root.
+
+    The second self-anchoring spelling, and the one an operator actually types.
+    Only the literal `git rev-parse --show-toplevel` was recognised, so
+    `cd <root> && .venv/bin/python scripts/run-tests.py` was refused from a
+    drifted shell, with the message saying the command "would fail with ENOENT".
+    It would not: the `cd` fixes the cwd before the script is reached. MEASURED
+    2026-08-31 from `<root>/tests`, that exact command BLOCKED.
+
+    Same false-cause claim as the 2026-08-25 absolute-path defect recorded above,
+    reached by the other door. Exempting is the right direction for a friction
+    guard: a wrong refusal is the documented harm, and it is what teaches the
+    operator to reach for the escape.
+    """
+    for segment in _SEGMENT_SPLIT_RE.split(command):
+        words = segment.split()
+        if len(words) < 2 or words[0] != "cd":
+            continue
+        target = words[1].strip("\"'")
+        if not target:
+            continue
+        try:
+            if os.path.realpath(target) == norm_root:
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
 def check_cwd_anchor(payload: dict) -> dict | None:
     if payload.get("tool_name") != "Bash":
         return None
@@ -998,6 +1134,9 @@ def check_cwd_anchor(payload: dict) -> dict | None:
         norm_cwd = os.path.realpath(cwd) if cwd else ""
         norm_root = os.path.realpath(str(WORKSPACE))
     except (OSError, ValueError):
+        return None
+    # The second self-anchoring spelling. See `_cds_to_workspace_root`.
+    if _cds_to_workspace_root(command, norm_root):
         return None
     if not norm_cwd or norm_cwd == norm_root:
         # `norm_cwd == norm_root` changes no verdict and is kept for cost: when
@@ -1201,8 +1340,28 @@ def _unquoted_skeleton(command: str) -> str:
 # "double" quoted. `<<<` is a here-STRING, one word on the same line, and is not
 # matched here: the negative lookahead keeps it out so it falls through to the
 # ordinary character walk.
+# `(?<!<)` as well as `(?!<)`, and the lookBEHIND is the half that works.
+#
+# A here-STRING is `<<<word`, and the trailing `(?!<)` only stops the match that
+# starts at its FIRST `<`. `re` then retries one character along, where `<<` is
+# the second and third angle brackets, the lookahead sees `w`, and `word` is
+# read as a heredoc delimiter. `_skip_heredoc_body` looks for a line equal to
+# `word`, never finds one, and returns len(command) - so everything after the
+# here-string is dropped from the skeleton.
+#
+# MEASURED 2026-09-01 against the shipped pattern:
+#
+#     grep x <<<needle\nwhile true; do sleep 1; done
+#         skeleton  'grep x <<<\n'      _blocking_wait  False
+#
+# The poll loop the guard exists to refuse is invisible to it. That is the
+# failure `test_a_real_loop_after_a_here_document_is_still_refused` names in its
+# own docstring - "a heredoc reader that never recognises its terminator
+# swallows the rest of the command" - reached through the one opener nobody
+# tested. Every here-string case in that file is QUOTED, and the quote scanner
+# empties those before this pattern is consulted, so the bare form went unseen.
 _HEREDOC_START_RE = re.compile(
-    r"<<(?!<)(?P<dash>-?)\s*(?P<quote>['\"]?)(?P<word>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)")
+    r"(?<!<)<<(?!<)(?P<dash>-?)\s*(?P<quote>['\"]?)(?P<word>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)")
 
 
 def _skip_heredoc_body(command: str, position: int, match) -> int:
@@ -1343,7 +1502,64 @@ _PYTEST_VALUE_FLAGS = ("--rootdir", "-p", "-k", "-o", "--basetemp",
                        "-c", "--override-ini", "--junitxml", "-W")
 
 
+def _pytest_marker_expression(argv: list) -> str | None:
+    """The value of pytest's OWN `-m`, or None.
+
+    Located after the pytest token, never by scanning the whole argv.
+    `python -m pytest` puts an unrelated `-m` in the same list, so reading the
+    first one would have made every `python -m pytest tests/` look narrow and
+    deleted the Bash half of this guard.
+    """
+    start = next((i for i, w in enumerate(argv)
+                  if w == "pytest" or w.endswith("/pytest")), None)
+    if start is None:
+        return None
+    rest = argv[start + 1:]
+    for i, word in enumerate(rest):
+        if word == "-m":
+            return rest[i + 1] if i + 1 < len(rest) else None
+        if word.startswith("-m") and len(word) > 2 and not word.startswith("--"):
+            return word[2:]
+    return None
+
+
+def _marker_selects_a_subset(expr: str) -> bool:
+    """True when `-m <expr>` PICKS a subset, not when it merely deselects.
+
+    `-k` was exempt here and `-m` was not, so `.venv/bin/python -m pytest -m
+    acceptance` was policy-denied. That shape is not exotic: this repo defines
+    the markers itself (`pyproject.toml`, `slow` and `acceptance`) and
+    `scripts/run-tests.py` runs `-m acceptance` as one of its own lanes. MEASURED
+    2026-08-31, before the fix: `-m acceptance` and `-m "not slow"` both BLOCKED
+    while `-k test_foo` passed. A guard that refuses the exact shape its own
+    refusal text exempts is the failure mode `_is_subdirectory_target` above was
+    written about, and it teaches the operator to reach for the escape comment.
+
+    The rule is per NAME, because the two directions are genuinely different.
+    `-m acceptance` runs a couple of tests. `-m "not slow"` is the whole suite
+    with a handful removed, so it stays blocked: a marker reached through `not`
+    only deselects, and deselecting from six thousand tests is still six
+    thousand tests. `-m "not slow and acceptance"` selects, so it passes.
+    """
+    tokens = expr.replace("(", " ").replace(")", " ").split()
+    negate = False
+    for tok in tokens:
+        if tok == "not":
+            negate = not negate
+            continue
+        if tok in ("and", "or"):
+            negate = False
+            continue
+        if not negate:
+            return True
+        negate = False
+    return False
+
+
 def _is_serial_full_suite(argv: list) -> bool:
+    marker = _pytest_marker_expression(argv)
+    if marker and _marker_selects_a_subset(marker):
+        return False
     skip_next = False
     for index, token in enumerate(argv):
         if skip_next:
@@ -1466,8 +1682,19 @@ def check_slow_shell(payload: dict) -> dict | None:
 # only be stopped by Claude's own context window. This check catches the pattern
 # at the hook layer with file-based daily counters.
 #
-# State file is best-effort - concurrent hook invocations may race and miscount
-# by a few; we are not banking on exact counts, only on catching runaway loops.
+# State file is best-effort, and the honest size of "best-effort" is bigger than
+# this comment used to claim. It read "may race and miscount by a few", which is
+# the arithmetic of two callers. `actor_id` below records the real rate: 36 hook
+# calls in 25 seconds across six actors. An unlocked load-modify-save at that
+# rate loses whole updates, not a few, and per-pid staging fixes tearing rather
+# than lost updates. So the counter UNDER-counts hardest exactly when fan-out is
+# heaviest, which is the runaway case the cap exists to catch.
+#
+# Not a new defect and not silently narrowed: this is the claim corrected to what
+# the method establishes, per `.claude/rules/scope-claims.md`. The cap still
+# catches a sustained runaway, because a loop that trips it does so over minutes
+# rather than in one 25-second burst. A lock here is the fix if the cap is ever
+# relied on for an exact number, and it is not today.
 
 import time
 from datetime import datetime
@@ -1501,7 +1728,19 @@ def _load_rate_state() -> dict:
     if not RATE_LIMIT_STATE_FILE.exists():
         return {"date": "", "count": 0, "recent": []}
     try:
-        return json.loads(RATE_LIMIT_STATE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(RATE_LIMIT_STATE_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            # Valid JSON that is not an object reached `.get` in BOTH counter
+            # checks and raised AttributeError, which `main()` then caught and
+            # failed open on. MEASURED 2026-08-31 with the state file holding
+            # `[]`: `check_rate_limit` and `check_tool_budget` both raised. The
+            # sibling `check_protect_corporate` already learned this exact
+            # lesson for the identity file; this is the second copy of the read.
+            print(f"[_dispatch:rate_limit] state was a "
+                  f"{type(data).__name__}, not an object; counters reset to zero",
+                  file=sys.stderr)
+            return {"date": "", "count": 0, "recent": []}
+        return data
     except Exception as e:  # noqa: BLE001 - a hook must not break the tool call
         # Say it. This reset the daily write cap, the runaway-loop window AND
         # check_tool_budget's rolling history to empty, and printed nothing at
@@ -1523,13 +1762,36 @@ def _save_rate_state(state: dict) -> None:
     # and interleaved their writes, and whichever replaced second promoted torn
     # JSON to the live file. Per-process staging makes the atomicity claim above
     # true for the concurrency that actually happens here.
+    #
+    # The staging file is REMOVED when the write does not complete. Until
+    # 2026-09-01 the handler below only printed, so a failed write left the
+    # staging file behind for good. MEASURED that day: the filesystem filled to
+    # 100% while eight hook processes were saving, and `.claude/state/` was left
+    # holding eight zero-byte `dispatch-rate.json.<pid>.tmp` files, all stamped
+    # 12:05. Nothing ever removed them, and nothing would have: the pid is in
+    # the name, so no later run reuses that path on purpose. This directory is
+    # read on every Write and Edit, so the litter is unbounded growth in a hot
+    # path.
+    #
+    # `finally` rather than an `except` arm, because a KeyboardInterrupt between
+    # the create and the replace leaves exactly the same orphan and does not
+    # derive from `Exception`.
+    tmp = RATE_LIMIT_STATE_FILE.with_suffix(f".json.{os.getpid()}.tmp")
     try:
         RATE_LIMIT_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = RATE_LIMIT_STATE_FILE.with_suffix(f".json.{os.getpid()}.tmp")
         tmp.write_text(json.dumps(state), encoding="utf-8")
         os.replace(tmp, RATE_LIMIT_STATE_FILE)
     except Exception as e:
         print(f"[_dispatch:rate_limit] state save failed: {e}", file=sys.stderr)
+    finally:
+        # A successful `os.replace` consumed the staging path, so this is a
+        # no-op on the happy path. `missing_ok` rather than a check, because a
+        # check would race with the replace it is meant to follow.
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError as e:
+            print(f"[_dispatch:rate_limit] could not remove {tmp.name}: {e}",
+                  file=sys.stderr)
 
 
 def check_rate_limit(payload: dict) -> dict | None:
@@ -1803,7 +2065,17 @@ _SEARCH_BINARIES = ("grep", "rg", "egrep", "fgrep", "ag", "ack", "ast-grep", "sg
 # but the `Bash` matcher is present in every settings file in the repository.
 # Two independent unlock doors mean a missing matcher can never cage a session,
 # so the rule needs no escape hatch. See `check_graph_first`.
-_GRAPH_CLI_RE = re.compile(r"(^|[\s|;&(])codegraph(\s|$)")
+#
+# Resolved in PROGRAM POSITION, not matched anywhere in the command line. A
+# whitespace-delimited regex over the whole command made the word `codegraph`
+# the key to its own wall: MEASURED 2026-08-31, `grep -rn codegraph scripts/`
+# was allowed AND stamped the marker, so the session's first code grep both
+# passed and disarmed the wall permanently. So did
+# `echo codegraph ; grep -rn foo scripts/`. Heredoc bodies are blanked first,
+# because a body is data the command writes, never a program it runs.
+def _bash_asked_the_graph(command: str) -> bool:
+    """True when a segment of `command` actually RUNS the graph CLI."""
+    return any("codegraph" in _program_candidates(seg) for seg in _SEGMENT_SPLIT_RE.split(strip_heredocs(command)))
 
 # Reading output, not locating code. Any of these in the target and the search
 # is none of this check's business.
@@ -1882,11 +2154,40 @@ def is_code_search(tool_name: str, tool_input: dict) -> bool:
         target = str(tool_input.get("file_path", ""))
     elif tool_name == "Bash":
         command = str(tool_input.get("command", ""))
-        first = re.split(r"[\s|;&]+", command.strip())
-        binaries = {part.split("/")[-1] for part in first if part}
-        if not binaries & set(_SEARCH_BINARIES):
+        # Program position, per segment, AND the segment must carry something to
+        # search. The variable here was named `first` while `re.split` returned
+        # EVERY word, so a reader binary anywhere in the line marked the call a
+        # code lookup, and the whole line then became the target that
+        # `_CODE_HINTS` matched `.py` in. MEASURED 2026-08-31:
+        # `python scripts/thread.py list | tail -5` answered True and was refused
+        # as the session's first code lookup. It runs a CLI and reads its output.
+        #
+        # The non-flag argument is the second half of the rule. `tail -5` and
+        # `head -20` at the end of a pipe read a stream, not a file, so a search
+        # binary with nothing but flags is not a search. Only the matching
+        # segments become the target, so a path elsewhere in the line no longer
+        # decides the verdict.
+        # `_SEGMENT_SPLIT`, not `_SEGMENT_SPLIT_RE`. The latter also splits on
+        # parentheses, for the release wall's subshells, and an `ast-grep
+        # --pattern 'os.kill($P, 0)' scripts/x.py` then lost `scripts/x.py` into
+        # a third segment and stopped reading as a code search. Caught by the
+        # existing fixture list on the first run.
+        searching = []
+        for seg in _SEGMENT_SPLIT.split(strip_heredocs(command)):
+            progs = _program_candidates(seg)
+            if not set(progs) & set(_SEARCH_BINARIES):
+                continue
+            words = seg.split()
+            at = next((i for i, w in enumerate(words)
+                       if w.rsplit("/", 1)[-1] in _SEARCH_BINARIES), None)
+            if at is None:
+                continue
+            if not any(not w.startswith("-") for w in words[at + 1:]):
+                continue  # flags only: reading a stream, not a corpus
+            searching.append(seg)
+        if not searching:
             return False
-        target = command
+        target = " ".join(searching)
     else:
         return False
 
@@ -1954,8 +2255,8 @@ def check_graph_first(payload: dict):
     # command. The second is what makes the rule safe to enforce absolutely.
     asked_the_graph = "codegraph" in tool_name.lower() or (
         tool_name == "Bash"
-        and bool(_GRAPH_CLI_RE.search(str((payload.get("tool_input") or {})
-                                          .get("command", ""))))
+        and _bash_asked_the_graph(str((payload.get("tool_input") or {})
+                                      .get("command", "")))
     )
     if asked_the_graph:
         try:
@@ -2075,7 +2376,14 @@ def _fanout_marker(session_id: str, actor: str = "main") -> Path:
     return _FANOUT_STATE_DIR / f"{_state_key(session_id, actor)}.json"
 
 
-_HEREDOC_OPEN = re.compile(r"<<-?\s*[\"\']?([A-Za-z_][A-Za-z0-9_]*)[\"\']?")
+# The second of three copies of the heredoc opener in this file, and it had
+# neither guard against a here-string. See `_HEREDOC_START_RE` for the
+# measurement: `<<<word` is read as a heredoc opening on `word`, the terminator
+# is never found, and `strip_heredocs` drops every line after it. Here that
+# means the fan-out counter stops seeing the paths those lines name, so the
+# wall under-counts a session's hand-reads - a guard weakened by a typo the
+# operator did not make.
+_HEREDOC_OPEN = re.compile(r"(?<!<)<<(?!<)-?\s*[\"\']?([A-Za-z_][A-Za-z0-9_]*)[\"\']?")
 
 
 def strip_heredocs(command: str) -> str:
@@ -2139,14 +2447,29 @@ def reader_path_tokens(command: str) -> list[str]:
         if not words:
             continue
         # Skip a leading `sudo`, `time`, or `VAR=value` assignment.
+        #
+        # `.split()[0]` used to sit on the end of the basename read. A word
+        # coming out of `segment.split()` holds no whitespace, so it was
+        # redundant on every input except one: a word ENDING in `/` has the
+        # empty string as its basename, `"".split()` is `[]`, and `[0]` raised
+        # IndexError. MEASURED 2026-08-31 on `grep -rn foo \` + newline +
+        # `  scripts/`, which is an ordinary backslash-continued grep: the
+        # continuation segment is a bare directory. `check_fanout_first` died,
+        # `main()` caught it, printed one stderr line, allowed the tool, and the
+        # path was never charged to the budget the wall exists to keep.
         i = 0
-        while i < len(words) and ("=" in words[i].split("/")[-1].split()[0]
-                                  and not words[i].startswith("-")
-                                  or words[i] in ("sudo", "time", "command", "nohup")):
-            i += 1
+        while i < len(words):
+            word = words[i]
+            if word in ("sudo", "time", "command", "nohup"):
+                i += 1
+                continue
+            if "=" in word.rsplit("/", 1)[-1] and not word.startswith("-"):
+                i += 1
+                continue
+            break
         if i >= len(words):
             continue
-        binary = words[i].split("/")[-1]
+        binary = words[i].rsplit("/", 1)[-1]
         if binary in _READER_BINARIES:
             # The ARGUMENTS, not the command word. Scanning the whole segment
             # charged `/bin/cat` and `/usr/bin/grep` as files being read, which
@@ -2154,6 +2477,15 @@ def reader_path_tokens(command: str) -> list[str]:
             # for one file.
             found.extend(_PATH_TOKEN.findall(" ".join(words[i + 1:])))
     return found
+
+
+def _runs_fanout_note(command: str) -> bool:
+    """True when a segment of `command` actually RUNS `scripts/fanout-note.py`.
+
+    Program position, so a reader binary in the same segment is not a door. See
+    the measurement at the call site in `check_fanout_first`.
+    """
+    return any("fanout-note.py" in _program_candidates(seg) for seg in _SEGMENT_SPLIT_RE.split(strip_heredocs(command)))
 
 
 def investigated_paths(tool_name: str, tool_input: dict) -> set[str]:
@@ -2215,7 +2547,14 @@ def check_fanout_first(payload: dict):
     # cannot tell them apart afterwards and does not need to: what it enforces
     # is that ONE of them happened.
     command = str((payload.get("tool_input") or {}).get("command", ""))
-    cleared = tool_name in FANOUT_TOOLS or "fanout-note.py" in command
+    # Resolved in PROGRAM POSITION. A substring test made every command that
+    # merely NAMED the script a door, and the refusal text asserts the door is
+    # audited: "It appends the reason with a timestamp to a log the operator
+    # reads." MEASURED 2026-08-31 with the budget at 12 and the state seeded at
+    # 20 paths, `grep -n fanout-note.py scripts/*.py` and
+    # `ls -la scripts/fanout-note.py` each reset the count to zero and appended
+    # nothing. The first of those is itself the hand-reading the wall bounds.
+    cleared = tool_name in FANOUT_TOOLS or _runs_fanout_note(command)
     if cleared:
         try:
             _FANOUT_STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -2315,7 +2654,17 @@ _RELEASE_STATE_DIR = WORKSPACE / ".claude" / "state" / "release"
 # Quoted spans are stripped before matching, so `grep "git commit" file` is not
 # read as a commit. Without this the wall blocks ordinary searches, and a wall
 # that blocks ordinary work is a wall somebody routes around.
-_QUOTED_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
+# Escape-aware. A quote character preceded by a backslash is a literal, not the
+# start of a quoted span, and reading it as one let a real push hide between two
+# of them: MEASURED 2026-08-31, `echo can\'t; git push; echo won\'t` is valid
+# shell, the two escaped apostrophes paired as a span, and `release_action`
+# returned None for a command that pushes. Contrived, and still a hole in a wall.
+#
+# The lookbehind is the conservative direction for a WALL: it blanks LESS, so a
+# missed span costs a false refusal (visible, annoying) rather than a missed push
+# (invisible, and the whole point). `\\'` (an escaped backslash then a real
+# quote) is still read as a literal, which errs the same safe way.
+_QUOTED_RE = re.compile(r"(?<!\\)'[^']*'|(?<!\\)\"(?:\\.|[^\"\\])*\"")
 
 # The push-capable scripts of this workspace, by BASENAME.
 #
@@ -2451,7 +2800,12 @@ _SEGMENT_SPLIT_RE = re.compile(r"(?:\|\||&&|[;&|\n\r()]|\$\()")
 # raised `IndexError: no such group`, taking 11 tests down with it. The two
 # patterns are near-identical to read and differ only in whether their groups
 # are named, which is exactly why the collision was invisible in review.
-_RELEASE_HEREDOC_RE = re.compile(r"<<-?[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+# The third copy, with the same here-string hole as the other two. See
+# `_HEREDOC_START_RE`. `_heredoc_body_spans` blanks from the newline after the
+# match to the terminator, or to the end when there is none, so a `<<<word`
+# blanked the remainder of the command out of whatever this pattern feeds.
+_RELEASE_HEREDOC_RE = re.compile(
+    r"(?<!<)<<(?!<)-?[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
 # Shell punctuation clinging to a word. `git push)` must compare equal to
 # `push`, or the wall fails open on a subshell.
@@ -2922,7 +3276,33 @@ def main():
         if decision.get("additionalContext"):
             advisory.append(decision["additionalContext"])
     if advisory:
-        json.dump({"additionalContext": "\n".join(advisory)}, sys.stdout)
+        # Nested in `hookSpecificOutput`, not at the top level. The Claude Code
+        # hooks documentation is explicit that a top-level `additionalContext`
+        # is "silently ignored", and this hook is registered on PreToolUse, so
+        # every advisory it has ever produced was discarded while the hook
+        # exited 0 reporting success. Five signals: the two `check_rate_limit`
+        # notices, the two `check_tool_budget` notices, and the
+        # `HOOK INTERNAL ERROR in <check>` line above.
+        #
+        # That last one is why this matters beyond tidiness. It is the stated
+        # justification for `continue`-ing past a crashed check ("the advisory
+        # carries the signal"), so with it dropped a crashed check was a fully
+        # silent fail-open. `reader_path_tokens` raising IndexError on a bare
+        # directory, fixed the same day, was exactly that.
+        #
+        # The BLOCK paths above are untouched and were never affected: the
+        # `_policy_deny` branch already used this wrapper, and the plain
+        # `{"decision": "block"}` form demonstrably blocks (the denial log holds
+        # 25 real refusals through it). Only the advisory-only tail was wrong.
+        json.dump(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "additionalContext": "\n".join(advisory),
+                }
+            },
+            sys.stdout,
+        )
     sys.exit(0)
 
 if __name__ == "__main__":

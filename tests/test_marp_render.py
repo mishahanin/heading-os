@@ -3,9 +3,11 @@
 
 import json
 import os
+import platform
+import subprocess
 import sys
-import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -240,25 +242,74 @@ def test_version_mismatch_detects_difference():
 
 # --- Collision / Source Integrity ---
 
-def test_source_file_never_mutated_by_shim():
-    """Verify that render operations never modify the source file."""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
-        content = "---\nmarp: true\ntheme: 31c\n---\n\n# Test\n\nContent"
-        f.write(content)
-        f.flush()
-        source_path = Path(f.name)
+def _marp():
+    import scripts.marp_render as marp
+    return marp
 
-    try:
-        original_hash = _file_hash(source_path)
-        # We don't actually render (no marp-cli in tests), but we verify
-        # the shim's in-memory approach by checking the file stays unchanged
-        from scripts.marp_render import run_sanitizer
-        text = source_path.read_text(encoding="utf-8")
-        clean, _ = run_sanitizer(text)
-        # File should be untouched
-        assert _file_hash(source_path) == original_hash
-    finally:
-        source_path.unlink(missing_ok=True)
+
+def _fake_marp(monkeypatch, marp):
+    """Stand in for marp-cli: report installed, and write whatever `-o` names.
+
+    marp-cli is not installed in the test environment, so `render()` returned
+    `marp-not-installed` at line 6 of a 200-line function and every claim past
+    that point went unmeasured. Faking the four seams (`check_marp_installed`,
+    `check_version_match`, `probe_browser`, `_run_marp`) drives the real body:
+    the sanitize branch, the temp-source write, the output collection and the
+    `finally` cleanup all run.
+    """
+    monkeypatch.setattr(marp, "check_marp_installed", lambda: (True, "0.0.0-fake"))
+    monkeypatch.setattr(marp, "check_version_match", lambda v: True)
+    monkeypatch.setattr(marp, "probe_browser", lambda: None)
+    monkeypatch.setattr(marp, "_resolve_marp_bin", lambda: "/nonexistent/marp")
+    seen = []
+
+    def fake_run(cmd):
+        seen.append(list(cmd))
+        out = Path(cmd[cmd.index("-o") + 1])
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("rendered\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(marp, "_run_marp", fake_run)
+    return seen
+
+
+def test_render_never_mutates_the_source_file(tmp_path, monkeypatch):
+    """The shim renders from a temporary copy, and leaves the original alone.
+
+    This was `test_source_file_never_mutated_by_shim`, and it never rendered.
+    Its body read the file and called `run_sanitizer` on the returned STRING,
+    then asserted the file's hash was unchanged - which is true of any program
+    that opens a file for reading, and would stay true if `render` overwrote the
+    source on the very next line. Its own comment said "we don't actually
+    render".
+
+    The input carries a zero-width space on purpose: the sanitize branch is
+    where a naive implementation writes the cleaned text back over the source,
+    and it is the only branch in `render` that has a reason to write near it.
+    """
+    marp = _marp()
+    source = tmp_path / "deck.md"
+    # The zero-width space is written as an escape, never as a literal: this
+    # file is scanned by the hidden-character gate like every other.
+    source.write_text(
+        "---\nmarp: true\ntheme: 31c\n---\n\n# Test\u200b\n\nContent\n",
+        encoding="utf-8")
+    before = source.read_bytes()
+    assert b"\xe2\x80\x8b" in before, "the fixture must carry a hidden character"
+
+    _fake_marp(monkeypatch, marp)
+    result = marp.render(source, output_dir=tmp_path / "out", pdf_only=True)
+
+    assert result["ok"] is True, result
+    assert source.read_bytes() == before, "render rewrote its own source file"
+    # The temp copy lives BESIDE the source (relative image paths), so a leaked
+    # one is litter inside the operator's deck directory.
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["deck.md", "out"], (
+        sorted(p.name for p in tmp_path.iterdir()))
+    # and the hidden character never reached marp: the temp source is what was
+    # rendered, and it was the sanitized text.
+    assert result["hidden_characters"].startswith("1 found"), result
 
 
 def test_the_shim_holds_no_collision_or_force_handling():
@@ -303,20 +354,83 @@ def test_theme_prepare_substitutes_fonts_dir():
 
 # --- Browser Probe ---
 
-def test_browser_probe_returns_string_or_none():
-    from scripts.marp_render import probe_browser
-    result = probe_browser()
-    assert result is None or isinstance(result, str)
+@pytest.mark.skipif(platform.system() != "Linux",
+                    reason="the candidate list under test is the Linux branch")
+def test_browser_probe_picks_a_chromium_and_refuses_firefox(monkeypatch):
+    """`assert result is None or isinstance(result, str)` was the whole test.
+
+    That holds for every function whose annotation is `str | None`, and it held
+    on this machine whether the probe found Brave or found nothing, so it could
+    not tell a working lookup from a broken one. What matters is which browser
+    comes back: marp drives Puppeteer over the Chrome DevTools Protocol, so a
+    Firefox path is not a degraded answer, it is a broken render.
+
+    `shutil` is replaced as a NAME on the module, never by rebinding
+    `shutil.which` itself: that attribute belongs to `sys.modules["shutil"]`,
+    which every other module in the interpreter shares.
+    """
+    marp = _marp()
+
+    def only(*names):
+        table = {n: f"/usr/bin/{n}" for n in names}
+        return SimpleNamespace(which=lambda name: table.get(name))
+
+    monkeypatch.setattr(marp, "shutil", only("chromium"))
+    assert marp.probe_browser() == "/usr/bin/chromium"
+
+    monkeypatch.setattr(marp, "shutil", only("firefox", "firefox-esr", "safari"))
+    assert marp.probe_browser() is None, (
+        "a Firefox path was accepted; marp needs a Chromium-family browser and "
+        "a wrong one fails at render time with an opaque Puppeteer error")
+
+    monkeypatch.setattr(marp, "shutil", only())
+    assert marp.probe_browser() is None
 
 
 # --- Watch State ---
 
-def test_watch_start_writes_pid_file():
-    """Test that watch state file would be created (without actually starting marp)."""
-    from scripts.marp_render import WATCH_STATE_FILE
-    # Just verify the path is well-formed
-    assert WATCH_STATE_FILE.name == "watch.json"
-    assert ".marp" in str(WATCH_STATE_FILE)
+def test_watch_start_writes_the_state_file_and_reports_the_pid(tmp_path, monkeypatch):
+    """The name promised a write; the body asserted a filename and a substring.
+
+    `WATCH_STATE_FILE.name == "watch.json"` is a fact about a module constant.
+    It stays true if `watch_start` never writes anything, which is what
+    `/marp watch stop` and `watch_status` both depend on it having done.
+
+    `Popen` is faked, so no marp-cli is spawned and no port is bound; the state
+    file is redirected into tmp_path, so the operator's live `~/.marp/watch.json`
+    is not touched (this file has deleted it once already, orphaning a running
+    watch, which is why the neighbour below carries its own warning).
+    """
+    marp = _marp()
+    source = tmp_path / "deck.md"
+    source.write_text("---\nmarp: true\n---\n\n# Deck\n", encoding="utf-8")
+    state_file = tmp_path / ".marp" / "watch.json"
+    monkeypatch.setattr(marp, "WATCH_STATE_FILE", state_file)
+    monkeypatch.setattr(marp, "_resolve_marp_bin", lambda: "/nonexistent/marp")
+    monkeypatch.setattr(marp, "probe_browser", lambda: None)
+
+    spawned = []
+
+    def fake_popen(cmd, **kw):
+        spawned.append(list(cmd))
+        return SimpleNamespace(pid=424242)
+
+    # The `subprocess` NAME on the module, never `subprocess.Popen` itself:
+    # `marp.subprocess` IS `sys.modules["subprocess"]`, so rebinding its
+    # attribute poisons every other module in the interpreter for the duration.
+    # `DEVNULL` is carried through because `watch_start` reads it.
+    monkeypatch.setattr(marp, "subprocess", SimpleNamespace(
+        Popen=fake_popen, DEVNULL=subprocess.DEVNULL))
+    assert sys.modules["subprocess"].Popen is subprocess.Popen
+    result = marp.watch_start(source)
+
+    assert result["ok"] is True, result
+    assert result["pid"] == 424242
+    assert state_file.is_file(), "watch_start wrote no state file"
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert state["pid"] == 424242
+    assert state["source_path"] == str(source)
+    assert spawned and "--watch" in spawned[0]
 
 
 def test_watch_stop_handles_missing_state(tmp_path, monkeypatch):
@@ -335,10 +449,3 @@ def test_watch_stop_handles_missing_state(tmp_path, monkeypatch):
     result = marp.watch_stop()
     assert result["ok"] is False
     assert "No active" in result["message"]
-
-
-# --- Helpers ---
-
-def _file_hash(path: Path) -> str:
-    import hashlib
-    return hashlib.sha256(path.read_bytes()).hexdigest()

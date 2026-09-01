@@ -148,15 +148,63 @@ def test_a_missing_executable_still_yields_json_and_exit_one(
 
 
 def test_a_timeout_is_still_reported_as_a_timeout(mod, tmp_path, monkeypatch) -> None:
-    """The new OSError handler must not swallow the pre-existing branch."""
+    """The new OSError handler must not swallow the pre-existing branch.
+
+    The CLONE branch. Its pull twin is the test below, and until 2026-09-01
+    there was only this one.
+    """
     _install_shim(mod, monkeypatch, _NeverSpawns(
         raises=subprocess.TimeoutExpired(cmd=["gh"], timeout=mod.CLONE_TIMEOUT_S)))
 
     res = mod.sync_corporate()
 
     assert res["status"] == "error"
+    assert res["action"] == "clone"
     assert str(mod.CLONE_TIMEOUT_S) in res["message"]
     assert "exceeded" in res["message"]
+
+
+def test_a_pull_timeout_is_still_reported_as_a_timeout(mod, tmp_path, monkeypatch) -> None:
+    """The twin the file was missing. `sync_corporate` has TWO timeout handlers.
+
+    Every other pair in this file is measured both ways: the OSError handler has
+    a pull test and a clone test, and so does the happy path. The timeout had
+    only the clone one, and the clone branch is the one an exec workspace takes
+    exactly once. Afterwards every run takes the PULL branch, which is where a
+    stalled network actually shows up.
+
+    MEASURED 2026-09-01: replacing the pull branch's `except
+    subprocess.TimeoutExpired` with a clause that cannot match left this file,
+    `tests/test_sync_corporate.py` and `tests/integration/test_setup_wizard_e2e.py`
+    at 16 passed, while `git pull` on a hung remote would take the traceback out
+    of `main()` - the same contract breach as the missing executable this file
+    is named for, one branch over. Doing the same to the CLONE handler failed a
+    test immediately.
+
+    `PULL_TIMEOUT_S` is 120 and `CLONE_TIMEOUT_S` is 300, so the number in the
+    message is what distinguishes the two branches rather than two spellings of
+    one value.
+    """
+    (tmp_path / ".corporate-repo" / ".git").mkdir(parents=True)
+    shim = _install_shim(mod, monkeypatch, _NeverSpawns(
+        raises=subprocess.TimeoutExpired(cmd=["git"], timeout=mod.PULL_TIMEOUT_S)))
+
+    res = mod.sync_corporate()
+
+    assert shim.calls and shim.calls[0][0] == "git", "the pull branch must be the one exercised"
+    assert res["status"] == "error"
+    assert res["action"] == "pull"
+    assert str(mod.PULL_TIMEOUT_S) in res["message"]
+    assert str(mod.CLONE_TIMEOUT_S) not in res["message"], (
+        "the pull branch reported the clone timeout")
+    assert "exceeded" in res["message"]
+
+
+def test_the_two_timeouts_are_different_numbers(mod) -> None:
+    """Anti-vacuity for the pair above. If the two constants ever converge, the
+    `not in` assertion in the pull test becomes unsatisfiable and the pair stops
+    telling the branches apart."""
+    assert mod.PULL_TIMEOUT_S != mod.CLONE_TIMEOUT_S
 
 
 def test_a_successful_pull_is_unaffected(mod, tmp_path, monkeypatch) -> None:

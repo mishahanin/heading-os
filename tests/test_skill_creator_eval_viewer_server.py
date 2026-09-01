@@ -36,6 +36,8 @@ import json
 import os
 import socket
 import subprocess
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -299,3 +301,87 @@ def test_the_module_no_longer_carries_a_killer(monkeypatch):
     reaching the dangerous half.
     """
     assert not hasattr(gen, "_kill_port")
+
+
+# ------------------------------------------------- the bind F11 leans on
+
+def _drive_main(monkeypatch, tmp_path, *, busy: tuple[int, ...] = ()) -> list[tuple]:
+    """Run `main()` end to end and return the addresses it tried to bind.
+
+    NOTHING here opens a socket. `HTTPServer` is imported by name into the
+    module under test, so replacing `gen.HTTPServer` intercepts the construction
+    before any bind, and the stub's `serve_forever` raises KeyboardInterrupt -
+    the exit `main()` already handles - so no listener is ever started and none
+    can be left behind. `busy` names the ports the stub refuses with EADDRINUSE,
+    which is how a real kernel reports a port another process holds.
+    """
+    workspace = tmp_path / "ws"
+    run_dir = workspace / "eval-0-with_skill"
+    (run_dir / "outputs").mkdir(parents=True)
+    (run_dir / "outputs" / "answer.txt").write_text("x\n", encoding="utf-8")
+
+    binds: list[tuple] = []
+
+    class _Server:
+        def __init__(self, address, handler):
+            binds.append(tuple(address))
+            if address[1] in busy:
+                raise OSError(98, "Address already in use")
+            self.server_address = (address[0], address[1] or 45999)
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            pass
+
+    monkeypatch.setattr(gen, "HTTPServer", _Server)
+    monkeypatch.setattr(gen, "webbrowser", types.SimpleNamespace(open=lambda url: None))
+    monkeypatch.setattr(gen, "check_port_holder", lambda port: [])
+    monkeypatch.setattr(
+        sys, "argv",
+        ["generate_review.py", str(workspace), "--port", "3117"])
+    gen.main()
+    return binds
+
+
+def test_the_viewer_listens_on_loopback_only(tmp_path, monkeypatch, capsys):
+    """Every bind this server attempts names 127.0.0.1.
+
+    Unbound until 2026-09-01. MEASURED: changing the address to `0.0.0.0` left
+    this whole file, `tests/test_skill_creator_eval_viewer_embedding.py` and
+    `tests/test_skill_creator_viewer_attribute_escaping.py` green. The viewer
+    serves the operator's eval outputs and accepts an unauthenticated POST that
+    writes to disk, so binding every interface would put both on the LAN with
+    nothing going red.
+    """
+    binds = _drive_main(monkeypatch, tmp_path)
+    capsys.readouterr()
+    assert binds, "main() never reached the server construction"
+    assert all(host == "127.0.0.1" for host, _port in binds), binds
+
+
+def test_a_busy_port_falls_back_to_an_ephemeral_one(tmp_path, monkeypatch, capsys):
+    """The claim the F11 refusal rests on, now measured.
+
+    Refusing to kill the port's holder is only safe because `main()` degrades:
+    it retries on port 0 and lets the kernel pick. That fallback had no witness.
+    MEASURED 2026-09-01: replacing the `except OSError` body with a bare `raise`
+    left every test in this file green, and the refusal would then have turned a
+    busy port into a crash - strictly worse for the operator than the killer it
+    replaced, because the viewer does not come up at all.
+    """
+    binds = _drive_main(monkeypatch, tmp_path, busy=(3117,))
+    out = capsys.readouterr().out
+    assert binds == [("127.0.0.1", 3117), ("127.0.0.1", 0)], binds
+    assert "45999" in out, (
+        "the fallback bound an ephemeral port and then printed the busy one; "
+        f"the operator would open the wrong URL:\n{out}")
+
+
+def test_a_free_port_is_used_as_asked(tmp_path, monkeypatch, capsys):
+    """The other direction: the fallback must not fire on every run."""
+    binds = _drive_main(monkeypatch, tmp_path)
+    out = capsys.readouterr().out
+    assert binds == [("127.0.0.1", 3117)], binds
+    assert "http://localhost:3117" in out, out

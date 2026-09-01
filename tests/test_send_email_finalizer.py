@@ -69,6 +69,44 @@ def test_the_module_reaches_no_transport(tmp_path):
         )
 
 
-def test_a_traversing_artifact_id_is_still_refused(tmp_path):
+@pytest.mark.parametrize("artifact_id", [
+    "../../etc/passwd",           # the obvious one: refused by the FIRST character
+    "abc/../../etc/passwd",       # the realistic near-miss: an allowed prefix
+    "abc/def",                    # a bare separator with no traversal at all
+    "abc\\..\\..\\etc",           # the Windows separator
+    "a" * 65,                     # over the length bound
+    "abc.json",                   # a dot, which the allowlist does not carry
+    "",                           # empty
+])
+def test_a_traversing_artifact_id_is_still_refused(tmp_path, artifact_id):
+    """The first case alone was a straw man.
+
+    `"../../etc/passwd"` is refused by the very first character, so it passes
+    against an UNANCHORED pattern too. Measured 2026-09-01 by mutation: dropping
+    the `^...$` anchors from `_ARTIFACT_ID_RE` left this file green, while
+    `"abc/../../etc/passwd"` - an id whose allowed prefix satisfies a floating
+    match - was accepted and joined onto the drafts directory. The near-miss is
+    the case worth writing; the obvious one is kept beside it, not instead.
+    """
     with pytest.raises(ValueError):
-        send_drafted(tmp_path, "../../etc/passwd")
+        send_drafted(tmp_path, artifact_id)
+
+
+@pytest.mark.parametrize("artifact_id", [None, 42, b"abc", ["abc"], {"id": "abc"}])
+def test_a_non_string_artifact_id_is_refused_with_the_documented_error(
+        tmp_path, artifact_id):
+    """`re.match` on a non-string raises TypeError, not the ValueError this
+    guard is documented to produce, so a JSON body carrying `"artifact_id": null`
+    reached the endpoint as an unhandled 500. The `isinstance` check that fixes
+    it is written down in the source and was carried by no test: measured
+    2026-09-01, deleting it left this file green.
+    """
+    with pytest.raises(ValueError):
+        send_drafted(tmp_path, artifact_id)
+
+
+def test_a_well_formed_artifact_id_is_still_accepted(tmp_path):
+    """The positive twin. Without it every refusal above is satisfied by a guard
+    that refuses everything, which locates no draft at all."""
+    _draft(tmp_path, "Abc-123_x")
+    assert send_drafted(tmp_path, "Abc-123_x")["found"] is True

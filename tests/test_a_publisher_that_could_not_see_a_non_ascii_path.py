@@ -150,6 +150,41 @@ def test_no_blank_entry_survives_the_split(publisher, source_repo):
     assert all(rel.strip() for rel in publisher.list_tracked_files())
 
 
+@pytest.mark.parametrize("rel", [
+    "datastore/brand/ leading.md",
+    "datastore/brand/trailing .md",
+    "datastore/brand/\ttab.md",
+    "datastore/brand/ ",
+    " ",
+    "\t",
+])
+def test_a_padded_or_blank_name_is_returned_verbatim(publisher, source_repo, rel):
+    """The filter drops only the EMPTY tail, never a name made of whitespace.
+
+    The obvious defensive rewrite of the line above is
+    `[path for path in out.split("\\0") if path.strip()]`, and it looks
+    identical on every ordinary name. MEASURED by mutation on 2026-09-01: that
+    one substitution left all 397 tests across the fifteen files that touch
+    this publisher green, because every fixture in the tree had a non-space
+    character somewhere. A tracked file whose whole name is a space is legal on
+    ext4, and under the strip filter it is dropped from the publish set with
+    nothing said, which is this file's own defect wearing a different byte.
+
+    The first four cases are STRAW MEN and are kept as such, because writing
+    down which fixtures cannot decide a test is the only way the next reader
+    knows the last two are load-bearing. `.strip()` is a no-op on the first
+    three. The fourth looks like the case on the line and is NOT: the predicate
+    reads the whole RELATIVE PATH, and `"datastore/brand/ ".strip()` is
+    `"datastore/brand/"`, which is truthy. MEASURED: with only those four
+    cases this test passed under the mutation it was written to kill, at 29
+    passed either way. Only a repo-ROOT name with nothing but whitespace in it
+    makes the two predicates disagree, which is what the last two are.
+    """
+    _add(source_repo, rel)
+    _commit(source_repo)
+    assert publisher.list_tracked_files() == [rel]
+
+
 def test_an_empty_repo_returns_nothing(publisher, source_repo):
     assert publisher.list_tracked_files() == []
 
@@ -312,34 +347,47 @@ def _enumerating_git_calls(tree: ast.AST):
             yield node.lineno, argv
 
 
-def _quoting_is_disabled(argv: list[str]) -> bool:
+def _quoting_is_disabled(argv: list[str], strict: bool) -> bool:
     """Does this argv stop git from C-quoting the paths it prints?
 
-    Two ways, and both are accepted because both close the hole this test is
-    named for:
+    `-z` is the only complete answer, and under `strict` it is the only one
+    accepted. NUL-terminated output is never quoted, whatever bytes the name
+    holds.
 
-      -z                              NUL-terminated output is never quoted.
-      -c core.quotepath=false         turns off the escaping of non-ASCII bytes.
+    `-c core.quotepath=false` was accepted unconditionally from 2026-08-30,
+    when widening the scanner to see global options first surfaced
+    `scripts/build_data_repo.py` and `scripts/build_engine_repo.py`. The
+    docstring here recorded, in the same breath, why that acceptance was wrong:
+    `core.quotepath=false` suppresses the escaping of NON-ASCII bytes only, and
+    git C-quotes a path holding a CONTROL character regardless, so a filename
+    carrying a newline still arrives quoted and `splitlines()` still cuts it in
+    two. It then said the two call sites "were left alone; the gap is REPORTED,
+    not fixed here".
 
-    The second was added on 2026-08-30, when widening the scanner to see global
-    options first surfaced `scripts/build_data_repo.py` and
-    `scripts/build_engine_repo.py`. Those two are NOT instances of the defect
-    this test names: the publisher dropped Cyrillic filenames because git
-    escaped them, and `core.quotepath=false` is the documented switch for
-    exactly that.
+    That sentence is now false in both halves, which is why it is gone rather
+    than reworded. Both builders were fixed: each reads
+    `["git", "-c", "core.quotepath=false", "ls-files", "-z"]` today, and
+    `build_engine_repo._tracked_files` carries the measurement of the CR and
+    newline names that forced it. With the corpus clean, the loophole no longer
+    protects anything and only leaves the door open for the NEXT reader, so
+    `scripts/` and `.claude/hooks/` are held to `-z`.
 
-    RESIDUAL, recorded rather than silently accepted: `core.quotepath=false`
-    does not stop git quoting a path that holds a control character, so a
-    filename containing a newline still arrives quoted and `splitlines()` still
-    splits it. `-z` is immune to both. Those two call sites live outside this
-    audit package and were left alone; the gap is REPORTED, not fixed here.
+    `tests/` is not, and deliberately: a test that reproduces the pre-fix
+    invocation in order to pin the premise is not an instance of the defect.
+    `tests/test_a_builder_that_could_not_spell_a_control_character.py` runs
+    `["git", "-c", "core.quotepath=false", "ls-files"]` twice for exactly that
+    reason, and flagging it would punish a file for documenting the trap.
     """
     if "-z" in argv:
         return True
+    if strict:
+        return False
     return any(tok.replace(" ", "") == "core.quotepath=false" for tok in argv)
 
 
-SEARCH_ROOTS = ("scripts", "tests", ".claude/hooks")
+# `-z` is mandatory in the two roots that ship executable behaviour. Under
+# `tests/` a pre-fix invocation may be a fixture; see `_quoting_is_disabled`.
+SEARCH_ROOTS = (("scripts", True), ("tests", False), (".claude/hooks", True))
 
 
 @pytest.mark.parametrize("src,seen", [
@@ -387,7 +435,8 @@ def test_no_engine_reader_enumerates_paths_without_the_nul_separator() -> None:
     holding a space. Each silently dropped files while reporting a clean pass.
     """
     offenders = []
-    for root in SEARCH_ROOTS:
+    scanned = 0
+    for root, strict in SEARCH_ROOTS:
         for path in sorted((ROOT / root).rglob("*.py")):
             if ".venv" in path.parts or path.name == Path(__file__).name:
                 continue
@@ -396,8 +445,13 @@ def test_no_engine_reader_enumerates_paths_without_the_nul_separator() -> None:
             except (OSError, SyntaxError):
                 continue
             for lineno, argv in _enumerating_git_calls(tree):
-                if not _quoting_is_disabled(argv):
+                scanned += 1
+                if not _quoting_is_disabled(argv, strict):
                     offenders.append(f"{path.relative_to(ROOT)}:{lineno} {argv}")
+    # A floor under the walk. A sweep that finds no enumerating call at all is
+    # green whatever the detector does, which is the shape this file's own
+    # `test_the_argv_scanner_sees_each_calling_form` exists to refuse.
+    assert scanned >= 10, f"the walk collapsed to {scanned} enumerating calls"
     assert not offenders, (
         "git C-quotes any non-ASCII path, so these readers drop files without "
         "saying so:\n  " + "\n  ".join(offenders)

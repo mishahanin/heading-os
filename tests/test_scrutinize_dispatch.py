@@ -314,6 +314,26 @@ def test_promote_without_a_prior_reproduction_is_refused(runs):
     assert [r for r in _rows(runs) if r["verdict"] == "FALSIFIED"] == []
 
 
+def test_promote_does_not_borrow_another_findings_reproduction(runs):
+    """The record above holds a reproduction, just not for THIS finding.
+
+    Measured 2026-09-01 by mutation: dropping the `finding_id` half of
+    `scrutinize_record.last_reproduction`'s match left the whole suite green,
+    because the only test of the refusal path ran against a record with no
+    reproduction row in it at all - the straw-man near-miss. With one present,
+    H2 inherits H1's `exit_before` and a FALSIFIED verdict is written for a
+    finding nobody ever reproduced. That is the same "evidence for a check that
+    never ran" this file's own section header is about, arriving through the
+    join instead of through the exit code.
+    """
+    disp.reproduce(run_id="r1", target="file:x", finding_id="H1",
+                   cmd=["python3", "-c", "import sys; sys.exit(3)"])
+    rc = disp.promote(run_id="r1", target="file:x", finding_id="H2",
+                      cmd=["python3", "-c", "pass"])
+    assert rc != 0, "H2 was promoted on H1's reproduction"
+    assert [r for r in _rows(runs) if r["verdict"] == "FALSIFIED"] == []
+
+
 # ============================================================
 # A non-zero exit is evidence only if the check actually ran
 # ============================================================

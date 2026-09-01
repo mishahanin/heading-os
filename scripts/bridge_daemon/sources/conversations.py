@@ -159,7 +159,16 @@ def list_conversations(workspace_root: Path) -> dict:
     try:
         text = fetch_path.read_text(encoding="utf-8")
         mtime = fetch_path.stat().st_mtime
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # `UnicodeDecodeError` is a `ValueError`, NOT an `OSError`, so the
+        # two-name clause this used to be read as "the file would not read"
+        # and was not. The fetch file is machine-written, which is exactly the
+        # case that produces the failure: a write torn mid-codepoint leaves a
+        # lone continuation byte. MEASURED 2026-09-01 with one 0xe9 inside a
+        # conversation topic, `list_conversations` raised UnicodeDecodeError
+        # out of the endpoint (a 500) instead of returning the degraded payload
+        # three lines below, which is what it does for every other unreadable
+        # state. `sources/inbox.py` reads the same file and had the same gap.
         return {
             "conversations": [], "counts": {"by_priority": {}, "by_category": {}, "by_direction": {}},
             "total": 0, "truncated": False, "data_time": None,

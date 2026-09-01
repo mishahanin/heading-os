@@ -242,11 +242,16 @@ chunk:
 # embedding) and injects a capped salience snapshot of recent/important memory
 # into the first turn. Salience = status:evergreen first, then most-recent. The
 # `memory` layer is excluded (MEMORY.md is already injected by the memory system).
-# Currently OFF: superseded 2026-08-07 by .claude/hooks/recall-inject.py
-# (relevance-ranked, per-prompt); this date-ordered snapshot stays behind the
-# flag. / Инъекция памяти на старте сессии. Сейчас ВЫКЛ.
+# Superseded 2026-08-07 by .claude/hooks/recall-inject.py (relevance-ranked,
+# per-prompt). This block SWITCHES ON NOTHING: the hook it configures is
+# registered in no settings file, measured 2026-08-31 across the live settings
+# and all three per-OS templates, so enabled: true has no effect until someone
+# wires the hook by hand. It is kept as configuration for that case. Until
+# 2026-08-31 this comment said the snapshot was merely held back by the switch
+# below, which reads as a switch that does something. / Инъекция памяти на
+# старте сессии. Хук не зарегистрирован.
 inject:
-  enabled: false           # superseded 2026-08-07 by .claude/hooks/recall-inject.py (relevance-ranked, per-prompt); this date-ordered snapshot stays behind the flag
+  enabled: false           # inert: the hook this configures is registered in no settings file (measured 2026-08-31); superseded 2026-08-07 by .claude/hooks/recall-inject.py
   max_tokens: 1300        # hard cap (~chars/4) on the injected block
   layers: [thread, odin, context]   # never 'memory' (already injected elsewhere)
   quota: {thread: 4, odin: 4, context: 4}   # per-layer slot guarantee; without it, top_k splits evenly across layers

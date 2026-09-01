@@ -140,7 +140,13 @@ def scan_skill(path: Path) -> list[tuple[int, str]]:
     cur_bash = False
     pending: str | None = None
     pending_line = 0
-    for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    # `errors="replace"`: this runs over every SKILL.md in the tree and drives a
+    # `--check` gate, so one stray non-UTF-8 byte in any one of them used to
+    # raise UnicodeDecodeError - a ValueError, caught nowhere on the path - and
+    # take the whole audit down naming no file. A replaced byte cannot invent or
+    # conceal a `scripts/...` path, which is all this scanner matches on.
+    text = path.read_text(encoding="utf-8", errors="replace")
+    for i, line in enumerate(text.splitlines(), 1):
         stripped = line.strip()
         if stripped.startswith("```"):
             if not in_block:
@@ -164,9 +170,32 @@ def scan_skill(path: Path) -> list[tuple[int, str]]:
     return hits
 
 
+def skill_files(root: Path) -> list[Path]:
+    """Every SKILL.md this audit covers, as its own assertable value.
+
+    Split out of `scan_all` on 2026-09-01 because the corpus was unmeasurable
+    from outside. `scan_all` returns only the skills that produced a hit, and
+    `BASELINE` has been legitimately empty since 2026-08-31, so
+    ``counts == BASELINE`` holds just as well over a corpus of ZERO FILES.
+    MEASURED by pointing this glob at `.claude/skillz/`: both
+    `test_no_new_skill_bash_data_path_misroutes` and
+    `test_baseline_matches_current_corpus` stayed green, and so did the
+    neighbouring `test_the_real_skill_tree_still_has_no_unlabelled_fence_hits`,
+    which asks the same absence question. A ratchet that has stopped looking
+    reports exactly what a clean tree reports.
+
+    The LIVE tree on purpose, not `git ls-files`: an unstaged new skill is the
+    file most likely to carry a misroute, and "a new skill appearing" is one of
+    the two regressions this gate exists to catch. The glob is one level deep
+    under `.claude/skills/`, so an agent worktree under `.claude/worktrees/`
+    cannot double the corpus the way a recursive walk would.
+    """
+    return sorted(root.glob(".claude/skills/*/SKILL.md"))
+
+
 def scan_all(root: Path) -> dict[str, list[tuple[int, str]]]:
     out: dict[str, list[tuple[int, str]]] = {}
-    for sk in sorted(root.glob(".claude/skills/*/SKILL.md")):
+    for sk in skill_files(root):
         hits = scan_skill(sk)
         if hits:
             out[sk.parent.name] = hits

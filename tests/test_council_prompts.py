@@ -78,6 +78,13 @@ def test_an_enumerating_caller_can_drop_the_cap(build, arg, off):
     p = build(arg, length_hint=off)
     assert "200-400" not in p
     assert "words" not in p.split("## Output")[-1], p.split("## Output")[-1]
+    # The three "off" spellings must produce the SAME prompt, byte for byte.
+    # Without this, `"   "` was only checked for the absence of two literals, so
+    # dropping the `.strip()` in `_with_hint` (which appends four spaces to
+    # the Output instruction instead of nothing) left the whole repository
+    # green (measured 2026-09-01). A trailing-whitespace difference in a prompt
+    # is a different prompt to a model and a different cache key to the proxy.
+    assert p == build(arg, length_hint="")
 
 
 @pytest.mark.parametrize("build,arg", [

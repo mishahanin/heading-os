@@ -351,3 +351,24 @@ def test_send_log_corrupt_line_is_skipped(tmp_path):
     by_num = {f["num"]: f for f in result["firms"]}
     assert by_num[8]["sent_date"] == "2026-05-18"
     assert result["sent_total"] == 1
+
+
+def test_read_dossier_size_cap(tmp_path):
+    """The byte cap that bounds one dossier read into the daemon's memory.
+
+    Its siblings in `library.read_note` and `threads.read_thread` each have
+    this case; the dossier reader did not. MEASURED 2026-08-31 by deleting the
+    `size > DOSSIER_MAX_BYTES` branch and running `tests/bridge`: 1349 passed,
+    1 skipped, so the cap was enforced by nothing but the reading of it.
+    """
+    from scripts.bridge_daemon.sources.investors import DOSSIER_MAX_BYTES
+    _write_dossier(tmp_path, "08-huge.md", content="x" * (DOSSIER_MAX_BYTES + 1))
+    rel_path = f"{PROGRAM_DIR}/dossiers/08-huge.md"
+
+    r = read_dossier(tmp_path, rel_path)
+
+    assert r["ok"] is False
+    assert "too large" in r["error"].lower()
+    # The case ON the line: exactly the cap is served.
+    _write_dossier(tmp_path, "09-at-cap.md", content="x" * DOSSIER_MAX_BYTES)
+    assert read_dossier(tmp_path, f"{PROGRAM_DIR}/dossiers/09-at-cap.md")["ok"] is True

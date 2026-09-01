@@ -332,6 +332,27 @@ def main() -> int:
     result = measure(root)
     baseline_file = root / BASELINE_PATH
 
+    # A corpus with a hole in it is not a floor, and `measure_skills` already
+    # spells out why: "a dropped skill makes the measured floor SMALLER: the
+    # gate would then pass on a floor that grew, which is the one direction a
+    # gate must not fail in." Until 2026-09-01 that reasoning ended at a warning
+    # on stderr and neither ratchet mode read `unreadable_skills`. MEASURED in
+    # the ratchet sandbox: truncating one SKILL.md's closing fence took the
+    # measured floor from 273 bytes to 96 and `--baseline` called the drop
+    # "within tolerance" and exited 0.
+    #
+    # Both modes refuse, and banking is the worse of the two: a comparison that
+    # passes wrongly is undone by the next run, while a baseline WRITTEN while a
+    # skill was invisible holds the ratchet at a number that was never the floor.
+    # A bare informational run still prints, because reporting is not asserting.
+    if (args.baseline or args.write_baseline) and result["unreadable_skills"]:
+        print(f"\n{RED}Refusing: {len(result['unreadable_skills'])} SKILL.md "
+              f"file(s) carry no readable frontmatter, so this measurement is "
+              f"smaller than the real floor and growth elsewhere would read as "
+              f"a shrink: {', '.join(result['unreadable_skills'])}{RESET}",
+              file=sys.stderr)
+        return 1
+
     if args.write_baseline:
         baseline_file.parent.mkdir(parents=True, exist_ok=True)
         baseline_file.write_text(

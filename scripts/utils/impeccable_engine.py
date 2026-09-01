@@ -91,10 +91,26 @@ def get_pinned_version() -> str:
     never appear here; `tests/contract/.../test_contract.py` asserts it.
     """
     pin_path = get_workspace_root() / VERSION_PIN_FILE
+    pinned = ""
     if pin_path.exists():
-        pinned = pin_path.read_text(encoding="utf-8").strip()
-        if pinned:
-            return pinned
+        try:
+            pinned = pin_path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError) as exc:
+            # `run_detector` calls `resolve_cli()`, which calls this, on the line
+            # ABOVE its own `try` - so a pin file this cannot decode raised
+            # straight out of a function whose docstring says "Never raises.
+            # Every failure ... comes back as a human-readable string". The
+            # sibling read at the detector's stdout was given an explicit
+            # `UnicodeDecodeError` handler on 2026-08-30 and this one, with no
+            # handler of any kind, was left beside it.
+            #
+            # The fallback pin is an exact spec, so degrading to it keeps the
+            # only mitigation this integration claims. Announced, never silent:
+            # running on a pin nobody chose is worth a line.
+            print(f"impeccable: version pin at {pin_path} is unreadable ({exc}); "
+                  f"falling back to {FALLBACK_PIN}", file=sys.stderr)
+    if pinned:
+        return pinned
     return FALLBACK_PIN
 
 
@@ -143,7 +159,14 @@ def load_profiles(path: Path | None = None) -> tuple[dict, str | None]:
         return dict(_SAFE_PROFILES), f"profile config not found at {path}; falling back to screen (suppresses nothing)"
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
+    # `UnicodeDecodeError` belongs in this tuple and was missing from it: it
+    # subclasses ValueError, which makes it a SIBLING of `json.JSONDecodeError`
+    # rather than a member, and it is not an `OSError` either. So a config
+    # carrying one non-UTF-8 byte raised past both handlers, out of a function
+    # whose docstring promises that a file we cannot read falls back to a
+    # screen-only profile and makes the check noisier. A handler that cannot see
+    # the error cannot deliver the fallback the sentence describes.
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
         return dict(_SAFE_PROFILES), f"profile config unreadable ({exc}); falling back to screen (suppresses nothing)"
 
     # Valid JSON is not a valid config. A file holding a list, a string or a
@@ -428,7 +451,17 @@ def load_baseline(path: Path | None = None) -> dict:
         return {}
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    # `UnicodeDecodeError` for the same reason as `load_profiles` above: a
+    # ValueError sibling of `json.JSONDecodeError`, invisible to both members of
+    # the old tuple, raised out of a function documented to answer an empty
+    # freeze on a file it cannot use.
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        # Announced rather than swallowed. An empty freeze un-suppresses every
+        # frozen finding, so the gate goes red for a reason that appears nowhere
+        # in the output without this line - and the comment in `record_baseline`
+        # already names that outcome as the one to avoid.
+        print(f"impeccable: baseline at {path} is unreadable ({exc}); "
+              f"treating it as an empty freeze", file=sys.stderr)
         return {}
     return loaded.get("files", loaded) if isinstance(loaded, dict) else {}
 

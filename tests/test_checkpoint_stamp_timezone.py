@@ -46,6 +46,65 @@ def test_local_now_and_utc_now_are_both_present_and_differ_in_role():
     assert abs((CP.utc_now() - local).total_seconds()) < 5
 
 
+def test_local_now_follows_the_operators_configured_zone(monkeypatch):
+    """The property this whole file is named for, and nothing bound it.
+
+    MEASURED 2026-09-01: replacing `local_now`'s body with
+    `datetime.now(timezone.utc)` - reverting the 2026-08-20 fix exactly - left
+    the full suite green at 4765 passed. Every other stamp assertion here
+    compares a value against `CP.local_now()` itself, so the same clock stands on
+    both sides of the `==` and the comparison holds in whatever zone that clock
+    happens to be. `test_no_filename_stamp_is_built_from_a_utc_clock` reads the
+    SOURCE and sees the call spelled `local_now()`, which is still true when
+    `local_now` answers UTC.
+
+    So the zone is asserted against a configured value rather than against the
+    function under test. Two fixed-offset zones, neither of them the suite's own
+    `Etc/GMT-4` pin, so a leftover environment cannot satisfy this by accident.
+    The sign in the `Etc/GMT*` names is inverted by POSIX convention: `Etc/GMT-7`
+    is UTC+7.
+    """
+    import sys
+    from datetime import timedelta
+
+    sys.path.insert(0, str(ROOT))
+    from scripts.utils import checkpoint_paths as CP
+
+    for zone, offset in (("Etc/GMT-7", 7), ("Etc/GMT+3", -3)):
+        monkeypatch.setenv("HEADING_OS_TZ", zone)
+        local = CP.local_now()
+        assert local.utcoffset() == timedelta(hours=offset), (
+            f"HEADING_OS_TZ={zone} but local_now() answered "
+            f"{local.utcoffset()}; the filename stamp is not on the operator's "
+            "clock"
+        )
+        # The case ON the line for the filename claim: a whole-hour offset moves
+        # the %H the archive name carries, which is the 02:56-filed-as-yesterday
+        # defect stated as an assertion instead of a docstring.
+        assert local.strftime("%Y-%m-%d-%H") != CP.utc_now().strftime("%Y-%m-%d-%H"), (
+            f"at {zone} the local and UTC stamps agree to the hour, so this "
+            "assertion cannot tell the two clocks apart"
+        )
+    # And utc_now must NOT have moved with it - the opposite mistake.
+    assert CP.utc_now().utcoffset() == timedelta(0)
+
+
+def test_the_offer_floor_lands_on_a_literal_wall_clock(monkeypatch):
+    """`_stamp` converts into the operator's zone, asserted against a LITERAL.
+
+    `test_a_utc_floor_is_converted_into_the_filename_s_clock` below builds its
+    expected value out of `CP.local_now().tzinfo`, so it agrees with `_stamp`
+    whatever zone that is. This one pins the zone and writes the answer out, so
+    the pair can no longer both be satisfied by a clock that never moved.
+    """
+    monkeypatch.setenv("HEADING_OS_TZ", "Etc/GMT-7")
+    mod = _offer_hook()
+    assert mod._stamp("2026-08-20T00:00:00+00:00") == "2026-08-20-070000"
+    assert mod._stamp("2026-08-19T20:30:00Z") == "2026-08-20-033000", (
+        "the Z form must convert too, including across the day boundary"
+    )
+
+
 def test_local_now_defers_its_import():
     """Five hooks import this module every turn; `get_default_tz` reads .env and
     costs ~50 ms cold. Only a caller that builds a filename should pay it."""

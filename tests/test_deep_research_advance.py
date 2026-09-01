@@ -38,6 +38,68 @@ def test_run_writes_intermediate(tmp_path):
     assert data["degraded"] is False
 
 
+def test_depth_caps_the_fan_out_even_when_the_model_returns_more(tmp_path):
+    """`--depth` is the operator's cost control, and it is enforced by a slice.
+
+    MEASURED 2026-09-01: deleting `[:depth]` from
+    `result["angles"] = [str(a) for a in angles][:depth]` left all 103 tests
+    across the four files that exercise this script green. Nothing held the cap.
+    A decompose that returns twelve angles for a depth of three then fans out
+    twelve Perplexity searches, each a paid call, and the run costs four times
+    what the operator asked for.
+
+    Asserted on the CALL COUNT as well as on the recorded angles, because the
+    angles list is what gets written and the searches are what get spent.
+    """
+    five = json.dumps([f"angle {i}" for i in range(5)])
+    reason_json = '{"summary": "s", "claims": [], "contradictions": []}'
+    searched = []
+
+    def fake_pplx(angle, **kw):
+        searched.append(angle)
+        return ("finding", ["https://a.com"])
+
+    with mock.patch.object(dra, "kimi_reason", side_effect=[five, reason_json]), \
+         mock.patch.object(dra, "probe_proxy", return_value=["k3"]), \
+         mock.patch.object(dra, "pplx_research", side_effect=fake_pplx), \
+         mock.patch.object(dra, "get_outputs_dir", return_value=tmp_path):
+        run_dir = dra.run("q", depth=2, critical=False)
+
+    data = json.loads((run_dir / "intermediate.json").read_text())
+    assert data["angles"] == ["angle 0", "angle 1"]
+    assert searched == ["angle 0", "angle 1"], (
+        f"the run made {len(searched)} paid Perplexity call(s) for a depth of 2")
+    assert len(data["corpus"]) == 2
+
+
+def test_an_empty_decompose_is_a_decompose_failure_not_a_perplexity_one(tmp_path):
+    """A model that answers `[]` must fall back, not be believed.
+
+    MEASURED 2026-09-01: dropping `or not angles` from the decompose validation
+    left the same 103 tests green. With it gone an empty list is accepted, the
+    Phase 1 loop iterates zero times, and the run reaches the `if not
+    result["corpus"]` abort - which exits 3 and writes the reason "no corpus:
+    all Perplexity calls failed". Perplexity was never called. The instrument
+    would blame a healthy dependency for another one's empty answer, and the
+    operator would go and check the wrong service.
+    """
+    reason_json = '{"summary": "s", "claims": [], "contradictions": []}'
+    with mock.patch.object(dra, "kimi_reason", side_effect=["[]", reason_json]), \
+         mock.patch.object(dra, "probe_proxy", return_value=["k3"]), \
+         mock.patch.object(dra, "pplx_research",
+                           return_value=("finding", ["https://a.com"])), \
+         mock.patch.object(dra, "get_outputs_dir", return_value=tmp_path):
+        run_dir = dra.run("what is X?", depth=2, critical=False)
+
+    data = json.loads((run_dir / "intermediate.json").read_text())
+    assert data["angles"] == ["what is X?"], (
+        "an empty decompose must fall back to the bare question")
+    assert data["degraded"] is True
+    assert data["degraded_reason"].startswith("decompose:"), data["degraded_reason"]
+    assert "perplexity" not in data["degraded_reason"].lower(), (
+        "the run blamed Perplexity for a decompose that returned nothing")
+
+
 def test_extract_json_tolerates_fenced_block():
     raw = "noise\n```json\n{\"a\": 1}\n```\ntrailing"
     assert dra.extract_json(raw) == {"a": 1}

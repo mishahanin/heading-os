@@ -279,6 +279,41 @@ def test_the_corpus_is_still_measured_on_a_malformed_skill(smc, tmp_path,
     assert result["corpus_issues"], "the thin corpus was never opened"
 
 
+def test_the_corpus_is_measured_on_a_skill_that_merely_fails_its_checks(
+        smc, tmp_path, monkeypatch):
+    """`check_skill` returns from FOUR places, and only three were witnessed.
+
+    Three of them are the ERROR paths (unreadable, unparseable, no frontmatter),
+    and each calls `_classify_corpus` before returning - which is why the two
+    malformed-SKILL.md tests above pass whether or not the FOURTH return also
+    does. The fourth is the ordinary path, where the status is FAIL, WARN or
+    PASS, and its own comment states the contract: the coverage classification is
+    "independent of the frontmatter status above so a coverage gap is visible
+    even on a skill that also fails other checks".
+
+    WARN and PASS had witnesses. FAIL did not. MEASURED 2026-09-01 by inserting
+    `if result["status"] == "FAIL": return result` immediately above the call:
+    all 43 tests in this file stayed green. (The same insertion for "ERROR" is
+    behaviourally equivalent, since those paths have already returned - which is
+    exactly why the malformed fixtures cannot speak for this one.)
+
+    The frontmatter here PARSES; it is just missing `metadata`, so the skill
+    lands on the ordinary path with FAIL rather than ERROR.
+    """
+    monkeypatch.setattr(smc, "get_workspace_root", lambda: tmp_path)
+    parses_but_incomplete = GOOD_FM.format(name="demo").replace(
+        "metadata:\n  author: A\n  email: a@example.invalid\n  version: \"1.0\"\n", "")
+    thin = json.dumps([{"query": "x", "should_trigger": True}])
+    d = _tree(tmp_path, "demo", parses_but_incomplete, thin)
+
+    result = smc.check_skill(d)
+
+    assert result["status"] == "FAIL", (
+        f"the premise is the ordinary path, not an ERROR return: {result['status']}")
+    assert result["corpus_issues"], (
+        "a skill that fails its frontmatter checks had its thin corpus hidden")
+
+
 def test_a_missing_skill_md_is_also_unknown_not_clean(smc, tmp_path, monkeypatch):
     monkeypatch.setattr(smc, "get_workspace_root", lambda: tmp_path)
     d = _tree(tmp_path, "demo", None, GOOD_CORPUS)

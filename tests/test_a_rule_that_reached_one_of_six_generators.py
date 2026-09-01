@@ -106,9 +106,19 @@ def _out_of_order(element, seq):
     return [] if positions == sorted(positions) else kids
 
 
+# Ten golden documents on 2026-09-01, one per generator plus variants. The floor
+# sits below that so deleting a fixture deliberately is not a test failure, and
+# far enough above one that a narrowed glob - which would leave a bare
+# `assert found` perfectly green on a single surviving file - is red.
+_MIN_GOLDEN_DOCUMENTS = 8
+
+
 def _documents():
     found = sorted(GOLDEN.rglob("*__word_document.xml"))
-    assert found, f"no golden document fixtures under {GOLDEN}"
+    assert len(found) >= _MIN_GOLDEN_DOCUMENTS, (
+        f"only {len(found)} golden document fixture(s) under {GOLDEN}; this is "
+        f"the load-bearing check of the whole module and it is parametrized over "
+        f"whatever the glob happens to return, so a narrowed glob passes silently")
     return found
 
 
@@ -267,10 +277,23 @@ def _raw_property_appends(source: str) -> list[int]:
 
 def test_no_generator_appends_onto_a_property_container():
     offenders = {}
+    scanned = 0
     for path, source in read_sources(sorted(SCRIPTS.rglob("*.py"))):
+        scanned += 1
         lines = _raw_property_appends(source)
         if lines:
             offenders[str(path.relative_to(ROOT))] = lines
+    # Corpus floor, added 2026-09-01 after measuring the gap: repointing SCRIPTS
+    # at a directory that does not exist left this test GREEN, because
+    # `offenders == {}` is trivially true over nothing. The detector below has a
+    # negative case; the SWEEP had none, and a sweep is exactly the shape that
+    # rots silently - the defect it guards is "the rule reached one of six
+    # generators", so a walk that reaches none of them reads identically.
+    # 385 Python files under scripts/ on 2026-09-01.
+    assert scanned >= 200, (
+        f"the sweep read only {scanned} source file(s) under {SCRIPTS}; it is "
+        f"looking at the wrong tree, so the empty offender list below means "
+        f"nothing")
     assert offenders == {}, (
         f"raw property append(s); use insert_in_order from "
         f"scripts.utils.docx_helpers: {offenders}")

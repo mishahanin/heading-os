@@ -122,9 +122,14 @@ def load_config(root: Path, *, allow_fallback: bool = False) -> dict:
     if not path.exists():
         sys.stderr.write(f"Config not found: {path}\n")
         sys.exit(1)
+    # `UnicodeDecodeError` beside `yaml.YAMLError`: the decode happens in
+    # `read_text`, before PyYAML is handed anything, and a decode error is a
+    # `ValueError` that no YAML clause catches. MEASURED 2026-09-01 against a
+    # `config/memory-index.yaml` holding one 0xff byte - a raw traceback where
+    # the two lines above promise a named message and exit 1.
     try:
         cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError as e:
+    except (UnicodeDecodeError, yaml.YAMLError) as e:
         sys.stderr.write(f"Cannot parse {path}: {e}\n")
         sys.exit(1)
     cfg.setdefault("model", "bge-m3")
@@ -1515,6 +1520,46 @@ def _should_touch(args, near_miss: bool) -> bool:
     return bool(getattr(args, "touch", False)) and not near_miss
 
 
+def resolve_threshold(cfg, cli_threshold, allowed):
+    """The confidence cut for one query: CLI value, else per-layer, else global.
+
+    Cosine is not comparable across registers. Measured 2026-08-21 on the frozen
+    25-query commit set: the correct answer to a paraphrased or Russian question
+    scores 0.456-0.597, while the SAME index answers a keyword query at
+    0.590-0.697. One global cut calibrated on prose therefore reports a gap on a
+    commit question it did in fact rank first -- 77% against the agreed 80% bar,
+    where 0.45 gives 85%. The cost is measured too: one nonsense query in six
+    gets a confident-looking hit at 0.45, none at 0.55. Scoped to the layers that
+    need it, so `content` keeps 0.55 and its honest-gap behaviour.
+
+    `allowed` is the resolved layer set, or None for "no restriction". The
+    per-layer cut applies only when the query resolves to exactly ONE layer (via
+    `--layer` or a single-layer collection): with several layers in play there is
+    no single right cut, so the global one stands. An explicit `--threshold`
+    always wins.
+
+    A FUNCTION rather than eight lines inside `cmd_query`, since 2026-09-01.
+    `tests/test_per_layer_threshold.py` held a hand-written replay of those eight
+    lines and asserted against the replay, so four of its tests measured the copy
+    in the test file. Measured that day by disabling the production block
+    (`if False and args.threshold is None and ...`): the whole file stayed green
+    while `--layer commit-engine` silently went back to the 0.55 that scored 77%.
+    """
+    if cli_threshold is not None:
+        return cli_threshold
+    threshold = cfg["threshold"]
+    if allowed and len(allowed) == 1:
+        only = next(iter(allowed))
+        per_layer = next(
+            (lc.get("threshold") for lc in cfg["layers"]
+             if lc["layer"] == only and lc.get("threshold") is not None),
+            None,
+        )
+        if per_layer is not None:
+            threshold = float(per_layer)
+    return threshold
+
+
 def cmd_query(args) -> int:
     _t0 = time.perf_counter()
 
@@ -1554,7 +1599,6 @@ def cmd_query(args) -> int:
             )
         return 3
 
-    threshold = args.threshold if args.threshold is not None else cfg["threshold"]
     near_miss_margin = float(cfg.get("near_miss_margin", 0.12) or 0.0)
     top_k = args.top_k or cfg["top_k"]
     layer = args.layer
@@ -1599,28 +1643,9 @@ def cmd_query(args) -> int:
         )
         return 1
 
-    # Per-layer threshold. Cosine is not comparable across registers: measured
-    # 2026-08-21 on the 25-query commit set, the correct answer to a paraphrased
-    # or Russian question scores 0.456-0.597, while the SAME index answers a
-    # keyword query at 0.590-0.697. One global cut calibrated on prose therefore
-    # reports a gap on a commit question it actually answered -- 77% against the
-    # agreed 80% bar, where 0.45 gives 85%. The cost is measured too, not waved
-    # away: one nonsense query in six gets a confident-looking hit at 0.45, none
-    # at 0.55. Scoped to the layers that need it, so `content` keeps 0.55 and its
-    # honest-gap behaviour is untouched.
-    #
-    # Applied only when the query resolves to ONE layer (via --layer or a
-    # single-layer collection). With several layers in play there is no single
-    # right cut, so the global one stands. An explicit --threshold always wins.
-    if args.threshold is None and allowed and len(allowed) == 1:
-        only = next(iter(allowed))
-        per_layer = next(
-            (lc.get("threshold") for lc in cfg["layers"]
-             if lc["layer"] == only and lc.get("threshold") is not None),
-            None,
-        )
-        if per_layer is not None:
-            threshold = float(per_layer)
+    # Per-layer threshold; the reasoning and the measurements live on
+    # `resolve_threshold`, which is what the tests call.
+    threshold = resolve_threshold(cfg, args.threshold, allowed)
 
     try:
         qvec = embed([qtext], model=cfg["model"], host=cfg["host"])[0]

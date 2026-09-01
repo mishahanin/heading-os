@@ -41,6 +41,7 @@ WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKSPACE_ROOT))
 
 from scripts.utils.colors import GREEN, RESET, YELLOW  # noqa: E402
+from scripts.utils.jsonl_lines import jsonl_lines  # noqa: E402
 from scripts.utils.workspace import get_outputs_dir  # noqa: E402
 
 def council_dir() -> Path:
@@ -73,9 +74,24 @@ def latest_verdicts(path: Path) -> dict[str, dict]:
     if not path.exists():
         return {}
     out: dict[str, dict] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
+    # The twin of the reader in `scripts/council-aggregate.py`, and now the same
+    # function: both read THIS file, both spelled the read
+    # `read_text(encoding="utf-8").splitlines()`, and both carried the two
+    # defects `scripts/utils/jsonl_lines.py` documents. A shared reader, because
+    # the previous fix to this pair -- the `isinstance(rec, dict)` guard below --
+    # reached one of them and not the other, twice running.
+    try:
+        lines = list(jsonl_lines(path))
+    except OSError as exc:
+        print(f"{YELLOW}WARN: {path} could not be read ({exc}); "
+              f"treating the ledger as empty{RESET}", file=sys.stderr)
+        return {}
+    for line in lines:
+        if line is None:
+            # Named, never silent: a dropped verdict changes the tally printed
+            # after every record.
+            print(f"{YELLOW}WARN: skipped an undecodable line in {path}; "
+                  f"that verdict is not counted{RESET}", file=sys.stderr)
             continue
         try:
             rec = json.loads(line)

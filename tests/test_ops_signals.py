@@ -10,6 +10,7 @@ must never break:
   - summaries are counts-only (no content leaks)
 """
 
+import json
 import sys
 import tempfile
 import time
@@ -250,6 +251,70 @@ def test_queue_fs():
         s = ops.queue_state(data)
         _check("queue fs counts ready+failed",
                      s["value"]["ready"] == 1 and s["value"]["failed"] == 1 and s["due"])
+
+
+def _trend_record(osint_rate, overall=0.90, model="judge-a"):
+    return {"overall_rate": overall, "per_skill": {"osint": osint_rate},
+            "model": model}
+
+
+def test_router_accuracy_drop_bar():
+    """The drop threshold, ON its boundary rather than near it.
+
+    The neighbouring `tests/test_router_accuracy_nightly.py` exercises 14- and
+    15-point drops, so MEASURED 2026-09-01 by mutation the constant could move
+    from 10.0 to 11.0 and the whole suite stayed green. `due` is
+    `drop > ROUTER_ACCURACY_DROP_PCT`, so a 10.5-point drop is the smallest case
+    that can tell the two apart.
+    """
+    baseline = _trend_record(0.90)
+    under = ops.classify_router_accuracy(_trend_record(0.805), baseline)  # 9.5pt
+    _check("router-accuracy below the bar -> not due",
+           not under["due"] and under["severity"] == "ok")
+    over = ops.classify_router_accuracy(_trend_record(0.795), baseline)   # 10.5pt
+    _check("router-accuracy past the bar -> due warn",
+           over["due"] and over["severity"] == "warn")
+    _check("router-accuracy names the skill that dropped",
+           over["value"]["worst_skill"] == "osint")
+    _check("router-accuracy tier B", over["tier"] == "B")
+
+
+def test_router_accuracy_high_bar():
+    """The escalation threshold, likewise. Mutation-measured 2026-09-01: 20.0
+    could move to 21.0 unnoticed, because no case sat between them."""
+    baseline = _trend_record(0.90)
+    warn = ops.classify_router_accuracy(_trend_record(0.72), baseline)    # 18pt
+    _check("router-accuracy 18pt -> warn, not high", warn["severity"] == "warn")
+    high = ops.classify_router_accuracy(_trend_record(0.695), baseline)   # 20.5pt
+    _check("router-accuracy 20.5pt -> high", high["severity"] == "high")
+
+
+def test_router_accuracy_baseline_window_is_the_documented_length(tmp_path):
+    """The rolling window, pinned by the record it must EXCLUDE.
+
+    `router_accuracy_state` reads `ROUTER_ACCURACY_BASELINE_N + 1` records and
+    averages all but the last. Nothing bound the window's length: mutation-
+    measured 2026-09-01, 7 could become 8 with the suite green. The fixture
+    writes one more record than the window admits, and that oldest record is a
+    10%-accuracy outlier - inside the window it drags the mean down far enough
+    that the same latest run stops being due.
+    """
+    _check("the fixture below is nine rows wide because the window is seven; "
+           "widen it deliberately if the window really moved",
+           ops.ROUTER_ACCURACY_BASELINE_N == 7)
+    trend = (tmp_path / "datastore" / "operations" / "router-accuracy")
+    trend.mkdir(parents=True)
+    # Nine rows, written as a literal count: a fixture sized FROM the constant
+    # grows with it and can never notice it moving.
+    rows = ([_trend_record(0.10)]                     # outside a seven-wide window
+            + [_trend_record(0.90) for _ in range(7)]
+            + [_trend_record(0.795)])                 # the latest run, 10.5pt down
+    (trend / "trend.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+    s = ops.router_accuracy_state(tmp_path)
+    _check("the outlier beyond the window does not enter the baseline",
+           s["due"] and s["value"]["worst_skill"] == "osint")
 
 
 def test_summaries_counts_only():

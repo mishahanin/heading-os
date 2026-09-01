@@ -168,6 +168,23 @@ def test_traversal_is_refused(data_root, tmp_path):
     Three real attempts now, all of which a legacy tree could genuinely contain:
     a symlinked FILE aimed above the destination, a symlinked DIRECTORY aimed at
     a sibling tree, and a nested path whose components spell a climb.
+
+    Two of those three were still unasserted until 2026-09-01. Every check below
+    watches the DESTINATION, and a source symlink is a READ out of the source
+    tree: the destination stays perfectly tidy, no symlink is copied, nothing
+    resolves outside, and the content of a file the operator never named lands
+    in the overlay as a regular .md. Measured that day, deleting the
+    `if src_file.is_symlink()` skip from the importer left all 8 tests in this
+    file green. The content assertion below is what closes it; the neighbouring
+    tests/test_an_import_that_overwrote_and_an_import_that_gave_up.py holds the
+    same property from the counting side.
+
+    The third attempt is honestly a non-attempt: `rel` comes from
+    `src_file.relative_to(src_dir)` over an `rglob` walk, so it can never carry
+    a `..` component and the importer's own prefix check is unreachable through
+    this path. Deleting that check changes no verdict here or in any neighbour.
+    It is defence in depth against a future caller that builds `rel` some other
+    way, and it is named as such rather than left looking measured.
     """
     from scripts.utils.workspace import get_knowledge_dir
 
@@ -208,6 +225,18 @@ def test_traversal_is_refused(data_root, tmp_path):
         resolved = path.resolve()
         assert resolved == kd or kd in resolved.parents, \
             f"an imported path resolves outside the destination: {path} -> {resolved}"
+
+    # The read, not the write. Following the link produces a REGULAR file in the
+    # destination whose bytes came from outside the source tree, which every
+    # assertion above accepts.
+    assert not (kd / "link.md").exists(), (
+        "the source symlink was followed and its target imported as a regular "
+        "file; the importer's collection surface is no longer the four subtrees "
+        "its docstring names")
+    imported = [p.read_text(encoding="utf-8")
+                for p in kd.rglob("*") if p.is_file()]
+    assert "original\n" not in imported, (
+        f"content from outside the source tree reached the destination: {imported}")
 
 
 def test_missing_from_dir_exits_nonzero(data_root, tmp_path):

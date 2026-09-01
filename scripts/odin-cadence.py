@@ -166,7 +166,14 @@ def read_reflect_marker(root: Path):
     p = root / REFLECT_MARKER
     if not p.exists():
         return None
-    raw = p.read_text(encoding="utf-8", errors="replace").strip()
+    # Same shape as `read_marker` below, and fixed in the same change rather
+    # than one at a time: an unreadable reflect marker returns None, which the
+    # caller already treats as "no confirmed reflect pass" and is the safe
+    # direction (it makes the cluster signal treat material as UNREVIEWED).
+    try:
+        raw = p.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
     if not raw:
         return None
     try:
@@ -181,7 +188,17 @@ def read_marker(root: Path):
     p = root / MARKER
     if not p.exists():
         return None, None
-    raw = p.read_text(encoding="utf-8", errors="replace").strip()
+    # `errors="replace"` closed the DECODE half of this; the read could still
+    # raise an OSError. MEASURED 2026-09-01 with the marker at mode 000:
+    # `PermissionError` out of this function, and out of `marker_state` below,
+    # whose docstring undertakes to RETURN "unreadable" for exactly this case.
+    # `(None, None)` is the same safe direction the corrupt-marker branch below
+    # already chose: it falls the caller through to `EPOCH_FLOOR` and counts
+    # everything, which is the right way to be wrong about a marker.
+    try:
+        raw = p.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None, None
     if not raw:
         return None, None
     try:
@@ -215,7 +232,16 @@ def marker_state(root: Path) -> str:
     p = root / MARKER
     if not p.exists():
         return "absent"
-    raw = p.read_text(encoding="utf-8", errors="replace").strip()
+    # A file that exists and will not open IS the "unreadable" this function is
+    # named for, and until 2026-09-01 it was the one input that raised instead.
+    # MEASURED that day at mode 000: `PermissionError` out of a function whose
+    # first docstring line is the enumeration `"absent" | "ok" | "unreadable"`.
+    # Returning the value the contract already names costs nothing and is what
+    # the two branches below were written to express.
+    try:
+        raw = p.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return "unreadable"
     if not raw:
         return "unreadable"
     try:
@@ -346,7 +372,16 @@ def count_threads(root: Path, since: str) -> int:
         rel = p.relative_to(root).as_posix()
         if is_denied(rel):
             continue
-        text = p.read_text(encoding="utf-8", errors="replace")
+        # A walker, so one unreadable thread must not end the count. Skipping
+        # is NAMED: a silently dropped thread turns this count into a lower
+        # bound that the caller reads as a total, and the count drives a nudge
+        # sent verbatim to Telegram.
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            print(f"[warn] odin-cadence: skipping unreadable thread {p}: {exc}",
+                  file=sys.stderr)
+            continue
         block = _frontmatter_block(text)
         # Frontmatter guard: business + ceo-only only.
         if _fm_scalar(block, "type") != "business":
@@ -378,7 +413,16 @@ def count_crm(root: Path, since: str) -> int:
         rel = p.relative_to(root).as_posix()
         if is_denied(rel) or any(x in f"/{rel}" for x in CRM_EXCLUDE):
             continue
-        for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        # Same walker rule as `count_threads`: skip the card, name it, keep
+        # counting. This total is quoted to the operator, so a card dropped in
+        # silence turns it into a lower bound that reads as a total.
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            print(f"[warn] odin-cadence: skipping unreadable CRM card {p}: "
+                  f"{exc}", file=sys.stderr)
+            continue
+        for line in text.splitlines():
             m = CRM_ROW_RE.match(line)
             if m and m.group("date") >= since:
                 n += 1
@@ -393,7 +437,15 @@ def count_viraid(root: Path, since: str, skipped: list) -> int:
         return 0
     try:
         data = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
+        # `ValueError`, not `json.JSONDecodeError`. `read_text(encoding="utf-8")`
+        # raises `UnicodeDecodeError` on non-UTF-8 bytes, a SIBLING of
+        # JSONDecodeError under ValueError rather than a subclass, so a state
+        # file that had been torn mid-write escaped this handler entirely.
+        # MEASURED 2026-09-01: `compute()` died rather than appending the
+        # "state.json unreadable" line to `skipped`, which is the whole point of
+        # the `skipped` list - the JSON must never assert a complete pass it did
+        # not make.
         skipped.append(f"viraid: state.json unreadable ({type(exc).__name__})")
         return 0
     vocab = viraid_counterpart.build_vocab(root)
@@ -434,10 +486,43 @@ def _is_unreviewed(block: str, last_reflect: str | None) -> bool:
     """
     if not last_reflect:
         return True
+    # PARSED, not compared as text, and it tries BOTH keys.
+    #
+    # This was `return raw[:10] > last_reflect` on the first non-empty field
+    # until 2026-08-31, which is a lexicographic compare of whatever string the
+    # frontmatter happened to carry. MEASURED that day against a marker of
+    # 2026-03-01, by calling this function directly:
+    #
+    #     created='15 March 2026'  -> False     (must be True)
+    #     created='1999-13-40'     -> False     (must be True)
+    #     created='not-a-date'     -> True      (right only by sort order)
+    #
+    # So an unparseable date that sorts BELOW the marker read as ALREADY
+    # REVIEWED, the exact opposite of what the docstring above promises, and the
+    # one case that came out right did so by accident. Downstream,
+    # `analyze_reflect_clusters` drops such an episode from `unreviewed`, and a
+    # cluster whose only unreviewed member was dropped is skipped entirely with
+    # nothing added to `skipped`, so the nudge goes quiet and says nothing about
+    # why.
+    #
+    # The `continue` matters as much as the parse: the docstring says "date
+    # fieldS", plural, and the sibling `_episode_age_days` above already falls
+    # through from an unparseable `created` to `date`. Returning on the first
+    # non-empty field meant a malformed `created` hid a perfectly good `date`.
     for key in ("created", "date"):
         raw = _fm_scalar(block, key)
-        if raw:
-            return raw[:10] > last_reflect
+        if not raw:
+            continue
+        try:
+            episode_day = date.fromisoformat(raw[:10])
+        except ValueError:
+            continue
+        try:
+            marker_day = date.fromisoformat(last_reflect[:10])
+        except ValueError:
+            # An unreadable marker cannot establish that anything was reviewed.
+            return True
+        return episode_day > marker_day
     return True
 
 
@@ -482,7 +567,17 @@ def analyze_reflect_clusters(root: Path, today: date | None = None) -> dict[str,
 
     nodes = []  # list of (set_of_tags, age_days|None, filename, unreviewed)
     for p in sorted(base.glob("*.md")):
-        block = _frontmatter_block(p.read_text(encoding="utf-8", errors="replace"))
+        # The third walker in this file, fixed in the same change as the other
+        # two rather than one at a time. A note this cannot open is a note that
+        # cannot join a cluster, and a cluster silently missing a member is a
+        # nudge the operator never gets.
+        try:
+            raw_note = p.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            print(f"[warn] odin-cadence: skipping unreadable note {p}: {exc}",
+                  file=sys.stderr)
+            continue
+        block = _frontmatter_block(raw_note)
         if _fm_scalar(block, "status") != "raw":
             continue
         tags = set(_fm_list(block, "entities")) | set(_fm_list(block, "keywords"))
@@ -559,7 +654,22 @@ def count_reflect_clusters(root: Path) -> int:
 # Compute + render
 # ============================================================
 
-def compute(root: Path, min_entries: int) -> dict[str, Any]:
+def compute(root: Path, min_entries: int, today: date | None = None) -> dict[str, Any]:
+    """The whole cadence verdict for one brain root.
+
+    `today` is the date every age here is measured against, defaulting to the
+    CONFIGURED zone's today. It exists because `analyze_reflect_clusters` already
+    took one and this function did not pass it, so `stale_clusters` and the
+    `stale_clusters>=1` reason were computed against the host clock even when the
+    caller had a date in hand. Every test of those two therefore passed only
+    while the machine's clock sat far enough past its fixture dates: MEASURED
+    2026-09-01, the same fixture (two clusters of episodes created 2026-01-01)
+    reported `stale_clusters=2` with the real clock and `stale_clusters=0` with
+    the module's clock frozen at 2026-01-05. Threading the date through makes the
+    ageing decidable by the caller, as it already was one function down.
+
+    Nothing else moves: omitting the argument is exactly the previous behaviour.
+    """
     marker, days_since = read_marker(root)
     mstate = marker_state(root)
     since = marker[:10] if marker else EPOCH_FLOOR
@@ -571,7 +681,7 @@ def compute(root: Path, min_entries: int) -> dict[str, Any]:
     crm_n = count_crm(root, since)
     viraid_n = count_viraid(root, since, skipped)
     total = thread_n + crm_n + viraid_n
-    ca = analyze_reflect_clusters(root)
+    ca = analyze_reflect_clusters(root, today=today)
     clusters = ca["count"]
 
     reasons = []

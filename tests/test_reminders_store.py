@@ -53,6 +53,25 @@ def test_recurring_not_due_beyond_grace_window():
     assert rs.is_due(rec, date(2026, 8, 14)) is False
 
 
+def test_the_grace_window_is_bound_at_its_exact_last_day():
+    """The boundary itself, not a pair of comfortable dates either side of it.
+
+    The neighbours above test 6 days late (due) and 8 days late (not due), which
+    leaves the whole question of where the edge sits unmeasured: MEASURED
+    2026-09-01, both `RECURRING_CATCHUP_GRACE_DAYS = 7 -> 6` and the comparison
+    `<= -> <` kept them green. Aug 13 2026 is exactly seven days after the Aug 6
+    target, and `<= RECURRING_CATCHUP_GRACE_DAYS` makes that the last day a
+    missed nudge still fires.
+
+    The dates are LITERALS on purpose. A fixture computed from
+    RECURRING_CATCHUP_GRACE_DAYS moves with the constant and can never notice it
+    move, which is the whole failure this test exists to close.
+    """
+    rec = {"kind": "recurring", "when": "first-friday-minus-1", "last_fired": None}
+    assert rs.is_due(rec, date(2026, 8, 13)) is True   # 7 days late: the last day
+    assert rs.is_due(rec, date(2026, 8, 14)) is False  # 8 days late: one past it
+
+
 def test_recurring_due_across_month_boundary():
     # First Friday of May 2026 is May 1 -> target is Apr 30 (previous month).
     # A month-keyed `today.month` lookup never matches this target: on Apr 30
@@ -117,6 +136,23 @@ def test_load_corrupt_raises(tmp_path, monkeypatch):
     p.write_text("{ not json", encoding="utf-8")
     monkeypatch.setattr(rs, "store_path", lambda: p)
     with pytest.raises(ValueError):
+        rs.load()
+
+
+def test_load_refuses_a_store_that_parses_but_is_not_a_list(tmp_path, monkeypatch):
+    """Valid JSON of the wrong shape must raise, not flow into the readers.
+
+    `load()` promises a list of records and `due_records` iterates it directly.
+    A JSON OBJECT parses cleanly, so without the isinstance guard it reaches
+    `is_due` one dict KEY at a time and dies on `str.get` deep inside the
+    dispatcher, where `reminders-notify.main()`'s `except ValueError` cannot see
+    it. MEASURED 2026-09-01: replacing the guard with `return []` kept every
+    other test in this file green.
+    """
+    p = tmp_path / "reminders.json"
+    p.write_text('{"kind": "once"}', encoding="utf-8")
+    monkeypatch.setattr(rs, "store_path", lambda: p)
+    with pytest.raises(ValueError, match="not a list"):
         rs.load()
 
 

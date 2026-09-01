@@ -177,6 +177,41 @@ def test_realert_after_window(root):
     assert all(c[0] == "critical" for c in rec.calls)
 
 
+def test_an_undecodable_dedup_state_does_not_silence_the_watchdog(root):
+    """The other reader in this file, which the UnicodeError fix had missed.
+
+    `_load_state` caught `(OSError, json.JSONDecodeError)`. UnicodeDecodeError is
+    a ValueError raised INSIDE `read_text`, a sibling of JSONDecodeError and not
+    an OSError, so one torn byte in the watchdog's OWN state file raised out of
+    `_load_state`, out of `check_once`, and into the bridge daemon's blanket
+    per-tick handler. The fleet then went unclassified every tick while the
+    daemon reported itself healthy.
+
+    Asserted on the SIDE EFFECT, not on the absence of a traceback: the pass has
+    to still classify the daemon and still fire its critical alert. A handler
+    that returned early would also "not raise".
+    """
+    state = root / ".daemon-state" / "watchdog-state.json"
+    state.write_bytes(b'{"sentinel": {"state": "ok"\xff}}')
+    rec = _Rec()
+    report = _run(root, rec)
+    assert report["verdict"] == "down"
+    assert report["alerts_fired"] == 1
+    assert rec.calls[0][0] == "critical"
+
+
+def test_a_readable_dedup_state_is_still_honoured(root):
+    """The negative case for the handler above: a state file that DOES decode
+    must still suppress the re-alert, or the fix above would be satisfied by a
+    `_load_state` that always answers `{}`."""
+    rec = _Rec()
+    _run(root, rec, now=NOW0)
+    assert json.loads((root / ".daemon-state" / "watchdog-state.json")
+                      .read_text(encoding="utf-8"))["sentinel"]["state"] == "down"
+    _run(root, rec, now=NOW0 + timedelta(minutes=5))
+    assert len(rec.calls) == 1
+
+
 def test_recovery_fires_one_info(root):
     rec = _Rec()
     _run(root, rec, now=NOW0)  # missing -> down, critical alert

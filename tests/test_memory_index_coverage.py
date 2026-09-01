@@ -90,7 +90,15 @@ def build_index(tmp_path, monkeypatch):
         "  - {layer: vaulttest, glob: '_secure/**/*.md'}\n"
         "  - {layer: segtest, glob: 'tmp/**/*.md'}\n"
         "collections:\n"
-        "  content: [context, crm]\n"
+        # `vaulttest` and `segtest` are members of a collection ON PURPOSE. A
+        # layer belonging to no collection is reported and simply NOT BUILT
+        # (`_store_targets`), so until 2026-09-01 the two air-gapped fixtures
+        # below never reached the ingest walk at all and the air-gap assertion
+        # in this file was satisfied by collection membership rather than by the
+        # deny guard. MEASURED that day: with the `is_denied` call at
+        # scripts/memory-index.py:955 disabled, this file stayed green at 6
+        # passed while tests/test_memory_index_airgap.py went red.
+        "  content: [context, crm, vaulttest, segtest]\n"
         "  code: [skill, rule]\n"
         "deny_prefixes: ['_secure/']\n"
         "deny_segments: ['personal']\n",
@@ -104,6 +112,17 @@ def build_index(tmp_path, monkeypatch):
     monkeypatch.setenv("HEADING_OS_DATA", str(root))
     monkeypatch.setattr(mod, "get_workspace_root", lambda: root)
     monkeypatch.setattr(mod, "embed", fake_embed)
+    # The mock embedder is not the only route off this machine, and this file's
+    # docstring said "no ollama dependency" while the build opened sockets.
+    # `load_config` resolves the pinned host through `_resolve_embed_host`, and
+    # `cmd_build` asks the host for the model's weight digest through
+    # `model_digest`; both talk to `config: host:` above, which is a real
+    # address. MEASURED 2026-09-01 with `socket.socket.connect` counted across
+    # the four memory-index test files: 46 connects to 127.0.0.1:11434. Pinned
+    # here so the result does not depend on whether an ollama daemon happens to
+    # be up, matching tests/test_five_claims_that_covered_one_path_of_several.py.
+    monkeypatch.setattr(mod, "model_digest", lambda **k: None)
+    monkeypatch.setattr(mod, "_resolve_embed_host", lambda host=None, **k: host)
     # Deterministic classifier: crm is ceo-only, everything else corporate.
     monkeypatch.setattr(
         mod, "get_classification",

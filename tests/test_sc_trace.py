@@ -275,6 +275,88 @@ def test_a_criterion_id_inside_a_table_row_is_not_a_definition():
     assert read_criteria(text) == ["SC-1"]
 
 
+def test_the_section_ends_at_the_next_heading_of_its_own_level():
+    """SC-1. The scoping has an END, and nothing bound it until 2026-09-01.
+
+    The two false-positive cases above both put the stray identifier on a line
+    that does NOT open with an `SC-` token, so `CRITERION_LINE` refuses it on its
+    own and the section boundary is never consulted. Deleting the boundary
+    outright (`len(heading.group(1)) < 0`, so the loop never breaks) left every
+    test in this file and its two neighbours green.
+
+    A later phase that opens a line with a criterion id is the ordinary shape:
+    a Phase 5 test-contract section restating `- **SC-2** ...` from the spec, or
+    a Phase 2 critique listing `SC-3` as a bullet. Read as definitions, those
+    become criteria the operator never stated and the trace refuses the slice
+    for failing to test them.
+    """
+    from scripts.utils.sc_trace import read_criteria
+
+    text = ("## Phase 1 — Success criteria\n"
+            "- **SC-1** WHEN a, THE SYSTEM SHALL b.\n"
+            "## Phase 5 — Test contract\n"
+            "- **SC-2** restated from the spec, not a criterion of this gate.\n"
+            "SC-3 [failure-mode]: also restated.\n")
+
+    assert read_criteria(text) == ["SC-1"]
+
+
+def test_a_deeper_heading_stays_inside_the_section():
+    """SC-1. The paired case: the break is on level, not on any heading at all.
+
+    A `###` subsection under a `##` criteria section is part of it, so a
+    criterion stated below one is the operator's and must still be read.
+    """
+    from scripts.utils.sc_trace import read_criteria
+
+    text = ("## Phase 1 — Success criteria\n"
+            "- **SC-1** WHEN a, THE SYSTEM SHALL b.\n"
+            "### Failure modes\n"
+            "- **SC-2** WHEN c, THE SYSTEM SHALL refuse.\n"
+            "## Phase 2\n"
+            "- **SC-9** not a criterion.\n")
+
+    assert read_criteria(text) == ["SC-1", "SC-2"]
+
+
+def test_an_artifact_with_no_criteria_section_states_no_criteria():
+    """SC-5. Zero criteria is the answer that makes `refusal` fire.
+
+    `read_criteria` returning [] for a document with no success-criteria heading
+    is what routes an unstructured artifact into the empty-criteria refusal
+    rather than into a clean trace. Falling back to scanning the whole file
+    instead (`start = 0`) survived a mutation run over this file and its two
+    neighbours: the document below would then define SC-4 out of a critique
+    table and report a trace over criteria nobody wrote.
+    """
+    from scripts.utils.sc_trace import read_criteria, refusal, trace
+
+    text = ("# Gate — a slice with no criteria section\n\n"
+            "## Phase 2 — Devil's critique\n"
+            "- **SC-4** rewritten: fall back to plaintext.\n")
+
+    assert read_criteria(text) == []
+    assert "no success criteria" in refusal(trace(read_criteria(text), {}))
+
+
+def test_a_criterion_stated_twice_is_reported_once():
+    """SC-1. The operator's order is preserved; his duplicates are not.
+
+    An artifact that restates `SC-1` inside its own criteria section (an edit
+    that split a criterion and left both bullets) must not produce two rows for
+    one criterion, and must not report the second copy as separately unbound.
+    """
+    from scripts.utils.sc_trace import read_criteria
+
+    text = ("## Phase 1 — Success criteria\n"
+            "- **SC-1** WHEN a, THE SYSTEM SHALL b.\n"
+            "- **SC-2** WHEN c, THE SYSTEM SHALL d.\n"
+            "- **SC-1** WHEN a, THE SYSTEM SHALL b (restated).\n"
+            "## Phase 2\n")
+
+    assert read_criteria(text) == ["SC-1", "SC-2"]
+
+
 def test_both_written_shapes_of_a_criterion_are_read():
     """SC-1. Two shapes exist in the real corpus and both are the operator's.
 

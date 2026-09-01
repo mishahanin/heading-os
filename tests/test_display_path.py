@@ -12,11 +12,13 @@ Standalone-runnable, plain asserts.
 """
 
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from scripts.utils import workspace as _workspace
 from scripts.utils.workspace import display_path, get_data_root, get_workspace_root
 
 
@@ -39,6 +41,33 @@ def test_unrelated_path_falls_back_to_absolute():
 def test_accepts_string_input():
     p = get_data_root() / "outputs" / "operations" / "council" / "x.md"
     assert display_path(str(p)) == "outputs/operations/council/x.md"
+
+
+def test_corporate_root_path_is_relative():
+    """The third leg of the resolver, which nothing else reaches.
+
+    display_path() tries data, engine, then corporate. MEASURED 2026-09-01:
+    deleting `get_corporate_root` from that tuple left every test in this file
+    and every other test in the repository that names `display_path` green.
+
+    It survives because in BOTH shipped topologies the third getter is shadowed
+    by one of the first two: on a CEO workspace `get_corporate_root()` returns
+    the data root, and on an exec workspace it returns
+    `<engine>/.corporate-repo`, which is under the engine root and so already
+    matched. The leg is therefore unreachable today, and this test says so
+    rather than implying it guards a live path. What it does guard is the
+    CONTRACT the docstring states, so a `get_corporate_root()` that later
+    resolves outside both roots is resolved rather than printed absolute.
+    """
+    original = _workspace.get_corporate_root
+    with tempfile.TemporaryDirectory() as raw:
+        outside = Path(raw).resolve()
+        _workspace.get_corporate_root = lambda: outside
+        try:
+            got = display_path(outside / "datastore" / "brand" / "logo.svg")
+        finally:
+            _workspace.get_corporate_root = original
+    assert got == "datastore/brand/logo.svg", got
 
 
 if __name__ == "__main__":

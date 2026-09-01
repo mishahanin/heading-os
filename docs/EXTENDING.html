@@ -202,6 +202,23 @@ rules freely. Leave the security ones in place.</p>
   the root still reads the operator&rsquo;s real data. Write a function instead:
   <code>def out_dir() -&gt; Path: return get_outputs_dir() / "reports"</code>. The gate is
   <code>tests/test_a_tracked_dir_list_frozen_before_any_test_could_move_it.py</code>.</li>
+<li><strong>Commit code before you let it write the private overlay.</strong>
+  <code>scripts/utils/overlay_write_guard.py</code> runs in every process of this venv. A
+  <code>.pth</code> arms it at interpreter startup. Install that file with
+  <code>scripts/overlay-guard-install.py --install</code>.
+  The guard refuses a write to the operator&rsquo;s private data when the calling
+  file is one git does not track. A scratch probe, a throwaway harness or an
+  uncommitted experiment gets refused. A committed tool goes through, and the
+  guard logs it to <code>.logs/overlay-write-record.jsonl</code>.
+  A census derived that boundary. <code>scripts/overlay-writer-census.py</code> swept 1898
+  Python files across both repositories. It found 300 that can write the
+  overlay, and git tracks every one of them.
+  For a one-off experiment, point <code>HEADING_OS_DATA</code> at a scratch directory.
+  Or set <code>HEADING_OS_OVERLAY_GUARD=off</code> for that one command.
+  Run <code>--install</code> again after any <code>uv sync</code>. That command rebuilds
+  site-packages and removes the arming file.
+  <code>tests/test_a_guard_that_armed_under_pytest_and_nowhere_else.py</code> fails when
+  the file is missing, so the guard cannot go quiet.</li>
 <li><strong>Catch <code>HTTPError</code> before <code>URLError</code></strong> (the former is a subclass).</li>
 </ul>
 <hr />

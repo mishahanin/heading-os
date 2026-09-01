@@ -141,3 +141,48 @@ def test_the_detector_reads_real_files():
                   for _ in base.rglob("*.md"))
     assert scanned > 100, f"the sweep only looked at {scanned} files"
     assert CANONICAL.is_file()
+
+
+def test_every_searched_root_contributes_to_the_sweep():
+    """A floor over the union is satisfied while a root contributes zero.
+
+    `.claude/skills` alone holds 201 markdown files, so the `> 100` above is met
+    by that one root and says nothing about the other four. `_sites()` skips a
+    root that is not a directory in silence, so a rename of `.claude/agents` or
+    of `reference/` would remove those files from the guard and leave every
+    assertion in this module green. Measured 2026-09-01: rules 26, skills 201,
+    agents 4, reference 36, docs 23.
+
+    Per root, not in total, and with no per-root number to maintain: each of the
+    five must exist and hold at least one markdown file.
+    """
+    empty = []
+    for base in SEARCHED:
+        rel = base.relative_to(ROOT).as_posix()
+        if not base.is_dir():
+            empty.append(f"{rel} (missing)")
+            continue
+        if not any(base.rglob("*.md")):
+            empty.append(f"{rel} (no .md)")
+    assert not empty, (
+        f"these roots contribute nothing to the confirmation-line sweep, so "
+        f"anything under them can pre-write the outcome unnoticed: {empty}")
+
+
+def test_the_sweep_deliberately_does_not_ask_git():
+    """Why this is a hand walk and not `tests.repo_files.tracked_paths`.
+
+    Every other corpus sweep in this suite routes through the git-aware walker,
+    because a worktree under `.claude/worktrees/` doubles the corpus. None of
+    the five roots below is that path, and here the untracked files are the
+    point: a skill or rule an agent has just written and not yet staged is
+    exactly the file most likely to carry a pre-filled outcome, and a
+    tracked-only sweep would not see it until after it was committed.
+
+    This test exists so that reasoning is on the record rather than inferred
+    from the absence of an import, and so a future migration to the walker is a
+    deliberate change with this note in front of it.
+    """
+    assert not any("worktrees" in base.as_posix() for base in SEARCHED)
+    for base in SEARCHED:
+        assert base.is_relative_to(ROOT)

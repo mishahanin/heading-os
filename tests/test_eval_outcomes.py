@@ -128,6 +128,54 @@ def test_loader_ignores_cases_and_staged(mod, tmp_path):
     assert ids == {"out"}, "must load only evals/outcomes/*.json, not cases/ or _staged/"
 
 
+@pytest.mark.parametrize("body", ["[]", "null", '"a bare string"', "3", "true"])
+def test_a_case_file_that_parses_but_is_not_an_object_is_a_setup_error(
+    mod, tmp_path, monkeypatch, body
+):
+    """Parsing cleanly is not the same as being a case.
+
+    `[]`, `null`, a bare string and a number all decode without complaint, and
+    the line after the parse stamps `case["_path"]`. On a list that is
+    `TypeError: list indices must be integers`, raised out of
+    `load_outcome_cases`, which both `run_skill` and `main` call BARE - the
+    `except Exception` in `run_one_case` sits downstream and never sees it. So
+    one malformed file took the whole grading run down with a traceback, where
+    the module docstring promises a setup error and exit 2.
+
+    MEASURED 2026-09-01 by removing the `isinstance(case, dict)` guard from
+    `load_outcome_cases` and running `main()` over a skill whose only case file
+    held `[]`:
+
+        with the guard     exit 2, "case loads: unreadable: not a JSON object (got list)"
+        without the guard  TypeError: list indices must be integers or slices, not str
+
+    All 144 tests in this file and the four neighbours that name the loader
+    stayed GREEN with the guard removed, including
+    `test_three_parsed_values_trusted_without_a_shape_check`, which holds this
+    exact shape for three OTHER readers and not for this one.
+
+    Asserted through `main()`, not through the loader's return value, because the
+    contract the docstring states is the EXIT CODE.
+    """
+    skill_dir = tmp_path / ".claude" / "skills" / "official-doc"
+    (skill_dir / "evals" / "outcomes").mkdir(parents=True)
+    (skill_dir / "evals" / "outcomes" / "bad.json").write_text(body, encoding="utf-8")
+    monkeypatch.setattr(mod, "SKILLS_DIR", tmp_path / ".claude" / "skills")
+    monkeypatch.setattr(sys, "argv", ["eval-outcomes", "--skill", "official-doc", "--no-write"])
+
+    assert mod.main() == 2, (
+        f"a case file holding {body} did not floor the exit code at 2"
+    )
+
+    # And the loader itself reports WHY, rather than dropping the file silently.
+    # A guard that skipped the entry would satisfy the exit code above while
+    # making an unreadable case indistinguishable from an absent one.
+    cases = mod.load_outcome_cases(skill_dir)
+    assert len(cases) == 1, f"the malformed case vanished instead of reporting: {cases}"
+    assert "_load_error" in cases[0], cases[0]
+    assert "not a JSON object" in cases[0]["_load_error"], cases[0]["_load_error"]
+
+
 # ---- no model call ----------------------------------------------------------
 
 def test_no_model_import():

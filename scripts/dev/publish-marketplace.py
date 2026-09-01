@@ -75,8 +75,41 @@ def build_marketplace(engine_root: Path, out: Path) -> dict:
     return mkt
 
 
+class NothingToPublish(RuntimeError):
+    """The built tree carries no bundle, so syncing it would empty the repo."""
+
+
 def sync_into_repo(build_out: Path, repo_dir: Path) -> None:
-    """Replace the repo's distribution tree with the freshly built one."""
+    """Replace the repo's distribution tree with the freshly built one.
+
+    Refuses an EMPTY build, and that refusal is the one thing here that is not
+    housekeeping. `build-plugins.py --all` selects `names` by asking each
+    manifest entry for `skills`/`hooks`/`commands`, so a manifest edit that
+    renames a key, or a schema change that moves that content, yields
+    `names == []`. Nothing downstream objects: `write_marketplace([])` writes a
+    valid marketplace.json with an empty `plugins` list, `main()` returns 0, this
+    function then rmtree's every bundle out of the PUBLIC distribution repo and
+    copies an empty directory over them, and `commit_and_push` commits the
+    deletion and reports "Pushed ... (verified in sync)".
+
+    MEASURED 2026-09-01 against a scratch repo holding one bundle, handed a
+    build tree with an empty `plugins/`: the repo was left with zero bundles and
+    the function returned None. Every installed marketplace would have resolved
+    to nothing on the next refresh, and the operator's terminal would have said
+    the publish verified.
+
+    A publish that removes everything is never the change anyone meant to make;
+    deleting the repo is how you do that on purpose. So it fails loudly BEFORE
+    the first rmtree rather than after it.
+    """
+    built = sorted(p.name for p in (build_out / "plugins").iterdir()
+                   if p.is_dir()) if (build_out / "plugins").is_dir() else []
+    if not built:
+        raise NothingToPublish(
+            f"the build produced no bundle under {build_out / 'plugins'}; "
+            "syncing it would delete every bundle from the marketplace repo. "
+            "Check config/plugin-bundles.yaml and re-run build-plugins.py --all."
+        )
     # Wipe the generated parts only; leave the repo's own meta (README, LICENSE, .git).
     for rel in (".claude-plugin", "plugins"):
         target = repo_dir / rel
@@ -233,7 +266,11 @@ def main(argv=None) -> int:
         out = Path(td) / "marketplace"
         mkt = build_marketplace(engine_root, out)
         print(f"  built {len(mkt.get('plugins', []))} bundle(s): {', '.join(p['name'] for p in mkt.get('plugins', []))}")
-        sync_into_repo(out, repo_dir)
+        try:
+            sync_into_repo(out, repo_dir)
+        except NothingToPublish as exc:
+            print(f"{RED}REFUSING TO PUBLISH: {exc}{RESET}", file=sys.stderr)
+            return 2
         write_repo_meta(repo_dir, engine_root, mkt)
     return commit_and_push(repo_dir, engine_root, args.message, push=not args.no_push)
 

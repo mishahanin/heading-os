@@ -17,6 +17,7 @@ With the browser's streams detached, the caller's pipe reaches EOF immediately.
 """
 from __future__ import annotations
 
+import json
 import os
 import select
 import signal
@@ -43,9 +44,14 @@ def _fake_browser(tmp_path: Path) -> tuple[Path, Path]:
     """A wrapper that forks a long-lived child and exits, like brave-browser."""
     pidfile = tmp_path / "child.pid"
     exe = tmp_path / "fake-browser"
+    # The wrapper records what its OWN fd 0 points at before it forks. Reading
+    # the forked child's fd 0 instead would prove nothing: POSIX sh assigns
+    # /dev/null to the stdin of an asynchronous list, so `sleep 60 &` shows
+    # /dev/null whether or not the wrapper inherited the caller's stdin.
     exe.write_text(
         "#!/bin/sh\n"
         "echo 'browser starting'\n"
+        f'readlink /proc/$$/fd/0 > "{tmp_path / "stdin.link"}" 2>/dev/null\n'
         "sleep 60 &\n"
         f'echo "$!" > "{pidfile}"\n'
         "exit 0\n"
@@ -54,8 +60,8 @@ def _fake_browser(tmp_path: Path) -> tuple[Path, Path]:
     return exe, pidfile
 
 
-def _launch_with_stdout_on_a_pipe(monkeypatch, tmp_path: Path) -> int:
-    """Run launch_comet with fd 1 pointing at a pipe. Returns the read end."""
+def _patch_launch(monkeypatch, tmp_path: Path, owners=()) -> None:
+    """Point launch_comet at the fake browser and a throwaway lock/log."""
     exe, _ = _fake_browser(tmp_path)
 
     monkeypatch.setattr(
@@ -68,7 +74,7 @@ def _launch_with_stdout_on_a_pipe(monkeypatch, tmp_path: Path) -> int:
         },
     )
     monkeypatch.setattr(browser, "is_running", lambda b=browser.DEFAULT_BROWSER: False)
-    monkeypatch.setattr(browser, "_pids_for_cdp_port", lambda port: [])
+    monkeypatch.setattr(browser, "_pids_for_cdp_port", lambda port: list(owners))
     monkeypatch.setattr(browser, "lock_file", lambda p=tmp_path / "lock.json": p)
     monkeypatch.setattr(browser, "launch_log", lambda p=tmp_path / "launch.log": p)
 
@@ -80,16 +86,33 @@ def _launch_with_stdout_on_a_pipe(monkeypatch, tmp_path: Path) -> int:
 
     monkeypatch.setattr(browser, "_cdp_ready", fake_cdp_ready)
 
+
+def _launch_with_fd_on_a_pipe(monkeypatch, tmp_path: Path, fd: int) -> int:
+    """Run launch_comet with `fd` pointing at a pipe. Returns the read end.
+
+    Parameterised over the descriptor since 2026-09-01. It read fd 1 only, and
+    `stderr=log` is a separate argument to the same `Popen`: MEASURED, dropping
+    it left all 49 tests across the three files importing this module green,
+    while the forked child went on holding the caller's fd 2. The command in this
+    module's own docstring is `browser.py launch ... 2>&1 | tail -20`, so the
+    descriptor the 12.5-hour hang actually travelled on was the untested one.
+    """
+    _patch_launch(monkeypatch, tmp_path)
+
     read_fd, write_fd = os.pipe()
-    saved_stdout = os.dup(1)
+    saved = os.dup(fd)
     try:
-        os.dup2(write_fd, 1)
+        os.dup2(write_fd, fd)
         browser.launch_comet(port=19222, wait_timeout=5.0)
     finally:
-        os.dup2(saved_stdout, 1)
-        os.close(saved_stdout)
+        os.dup2(saved, fd)
+        os.close(saved)
         os.close(write_fd)
     return read_fd
+
+
+def _launch_with_stdout_on_a_pipe(monkeypatch, tmp_path: Path) -> int:
+    return _launch_with_fd_on_a_pipe(monkeypatch, tmp_path, 1)
 
 
 def _reaches_eof(read_fd: int, timeout: float = EOF_TIMEOUT_S) -> bool:
@@ -145,6 +168,101 @@ def test_browser_output_goes_to_the_launch_log(monkeypatch, tmp_path):
         assert "browser starting" in log.read_text()
     finally:
         os.close(read_fd)
+        _reap(tmp_path)
+
+
+def test_launched_browser_does_not_hold_the_callers_stderr(monkeypatch, tmp_path):
+    """`2>&1 | tail -20` is the command that hung, so fd 2 is not optional."""
+    read_fd = _launch_with_fd_on_a_pipe(monkeypatch, tmp_path, 2)
+    try:
+        assert _reaches_eof(read_fd), (
+            "the caller's stderr pipe never reached EOF: the launched browser "
+            "inherited fd 2, so `2>&1 | tail` hangs until the browser closes "
+            "exactly as it did on 2026-07-28"
+        )
+    finally:
+        os.close(read_fd)
+        _reap(tmp_path)
+
+
+@pytest.mark.skipif(not Path("/proc").is_dir(), reason="reads /proc/<pid>/fd")
+def test_the_launched_browser_does_not_inherit_the_callers_stdin(monkeypatch,
+                                                                 tmp_path):
+    """The third stream. "Detach the browser's standard streams" names all three.
+
+    MEASURED 2026-09-01: dropping `stdin=subprocess.DEVNULL` left all 49 tests
+    green, because nothing looked at fd 0. Asserted against a NAMED file rather
+    than against /dev/null: under pytest the runner's own stdin is usually
+    /dev/null already, so a test comparing to that would pass with the argument
+    deleted and prove nothing.
+    """
+    marker = tmp_path / "callers-stdin"
+    marker.write_text("the caller's own stdin\n", encoding="utf-8")
+
+    _patch_launch(monkeypatch, tmp_path)
+    saved = os.dup(0)
+    with marker.open("rb") as fh:
+        try:
+            os.dup2(fh.fileno(), 0)
+            browser.launch_comet(port=19222, wait_timeout=5.0)
+        finally:
+            os.dup2(saved, 0)
+            os.close(saved)
+
+    # The wrapper runs on its own schedule and launch_comet does not wait for
+    # it, so poll rather than read once.
+    link = tmp_path / "stdin.link"
+    deadline = time.time() + EOF_TIMEOUT_S
+    while time.time() < deadline and not link.exists():
+        time.sleep(0.05)
+    assert link.exists(), "the fake browser never reported its stdin"
+
+    target = link.read_text().strip()
+    try:
+        assert target != str(marker), (
+            "the launched browser's child holds the caller's stdin; a terminal "
+            "sharing fd 0 with a background browser is the same inheritance "
+            "defect as the stdout hang"
+        )
+    finally:
+        _reap(tmp_path)
+
+
+def test_the_lock_records_the_cdp_owner_not_the_launcher(monkeypatch, tmp_path):
+    """On Debian/Ubuntu `Popen`'s PID is the wrapper, which exits at once.
+
+    Recording it is the 2026-07-27 defect `test_browser_stop.py` opens with: the
+    tracked PID is dead, its number is free to be recycled, and `stop` then has
+    nothing real to signal. MEASURED 2026-09-01: replacing `owners[0] if owners
+    else proc.pid` with a bare `proc.pid` left all 49 tests green.
+    """
+    _patch_launch(monkeypatch, tmp_path, owners=[1894831])
+
+    pid = browser.launch_comet(port=19222, wait_timeout=5.0)
+    try:
+        assert pid == 1894831, (
+            f"launch returned {pid}, the wrapper PID, not the CDP owner"
+        )
+        state = json.loads((tmp_path / "lock.json").read_text(encoding="utf-8"))
+        assert state["pid"] == 1894831
+        assert state["port"] == 19222
+    finally:
+        _reap(tmp_path)
+
+
+def test_the_launcher_pid_is_still_used_when_nothing_owns_the_port(monkeypatch,
+                                                                   tmp_path):
+    """The negative case. `owners[0] if owners else proc.pid` has a second half,
+    and on Windows `_pids_for_cdp_port` returns [] by design: a launch that
+    recorded 0 or None there would leave `stop` with nothing to signal."""
+    _patch_launch(monkeypatch, tmp_path, owners=[])
+
+    pid = browser.launch_comet(port=19222, wait_timeout=5.0)
+    try:
+        assert pid > 0
+        state = json.loads((tmp_path / "lock.json").read_text(encoding="utf-8"))
+        assert state["pid"] == pid
+    finally:
         _reap(tmp_path)
 
 

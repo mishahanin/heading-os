@@ -116,9 +116,50 @@ def test_unit_template_caps_the_leak():
 
     Measured 2026-08-20: RSS grew 1,198,672 kB -> 1,909,224 kB in 72 minutes
     with VmHWM == VmRSS, so the process is capped rather than left to OOM.
+
+    Parsed, not grepped. `"RuntimeMaxSec=21600" in text` is a SUBSTRING test,
+    and `RuntimeMaxSec=216000` contains it: one extra zero turns the 6-hour
+    recycle into a 60-hour one, which at the measured ~600 MB/hour is no cap
+    at all, and the assertion held. Measured 2026-08-31 with exactly that
+    typo:
+
+        owner tests/bridge/test_daemon_logging.py: 6 passed in 0.97s
+        tests/bridge                            : 1312 passed, 1 skipped
+        VERDICT: SURVIVED
+
+    The sibling test directly below already parsed its directive into a value
+    for the same class of reason; this one had not caught up. Reading the
+    seconds as an integer also lets the bound be asserted as a RANGE, which
+    is the honest shape: the exact number is a judgement, but "long enough to
+    be useless" and "so short the daemon thrashes" are both defects.
     """
     text = _UNIT_TEMPLATE.read_text()
-    assert "RuntimeMaxSec=21600" in text
+    values = [
+        line.split("=", 1)[1].strip()
+        for line in text.splitlines()
+        if line.strip().startswith("RuntimeMaxSec=")
+    ]
+    assert len(values) == 1, f"expected exactly one RuntimeMaxSec= line, got {values}"
+    seconds = int(values[0])
+    assert seconds == 21600, f"the 6-hour recycle moved to {seconds}s"
+    # And the range, so a future deliberate change still has to stay sane.
+    assert 1800 <= seconds <= 43200, (
+        f"{seconds}s is outside 30 minutes to 12 hours; below that the daemon "
+        f"thrashes, above it the ~600 MB/hour leak is uncapped in practice")
+
+
+def test_the_recycle_directive_is_not_commented_out():
+    """A `#` in front of it leaves the literal in the file and the cap gone.
+
+    `startswith` on the STRIPPED line is what makes the test above see this,
+    so this pins the property rather than trusting the implementation of the
+    other assertion. systemd ignores a commented directive silently, so there
+    would be no boot-time signal at all.
+    """
+    text = _UNIT_TEMPLATE.read_text()
+    live = [ln for ln in text.splitlines()
+            if "RuntimeMaxSec" in ln and not ln.lstrip().startswith("#")]
+    assert len(live) == 1, f"RuntimeMaxSec is commented out or duplicated: {live}"
 
 
 def test_unit_template_restarts_after_the_recycle():

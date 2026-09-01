@@ -346,3 +346,153 @@ def test_an_assertion_flag_sets_the_exit_code(tree, monkeypatch):
         sys, "argv", ["compaction-probe.py", "--assert-no-native-compaction"]
     )
     assert probe.main() == 1
+
+
+# ============================================================
+# One handoff per boundary, not one handoff per session
+# ============================================================
+#
+# `assert_handoff_precedes` carries a per-session `floor` so a second boundary
+# cannot be satisfied by the archive that already answered for the first.
+# Nothing pinned it: every case above has exactly one boundary, so deleting
+# `floor < ` from the comparison passed the whole file, MEASURED 2026-09-01.
+# Without the floor the assertion degrades to the same vacuity the KIND filter
+# was added to remove - one qualifying archive anywhere in a session's history
+# excuses every compaction that follows it, forever.
+
+def test_a_second_boundary_needs_its_own_handoff(tree, utc_clock):
+    _transcript(tree["transcripts"], SESSION, [
+        _boundary("2026-08-19T09:50:47.749Z", "manual", 324190, 10929),
+        _boundary("2026-08-19T11:20:00.000Z", "manual", 310000, 10000),
+    ])
+    _archive(tree, SESSION, "auto", "2026-08-19-094500")
+    violations = probe.assert_handoff_precedes(_scan_all(tree), tree["project"])
+    assert len(violations) == 1, (
+        f"expected the second boundary alone to violate, got {violations}")
+    assert "11:20:00" in violations[0], violations[0]
+
+
+def test_two_boundaries_each_with_their_own_handoff_pass(tree, utc_clock):
+    """Anchor: the floor must not turn a correctly-handed-off session red."""
+    _transcript(tree["transcripts"], SESSION, [
+        _boundary("2026-08-19T09:50:47.749Z", "manual", 324190, 10929),
+        _boundary("2026-08-19T11:20:00.000Z", "manual", 310000, 10000),
+    ])
+    _archive(tree, SESSION, "auto", "2026-08-19-094500")
+    _archive(tree, SESSION, "manual", "2026-08-19-111500")
+    assert probe.assert_handoff_precedes(_scan_all(tree), tree["project"]) == []
+
+
+def test_an_archive_stamped_on_the_previous_boundary_does_not_carry_forward(tree, utc_clock):
+    """The floor is exclusive, and this is the case exactly on that line.
+
+    `checkpoint-save.py` truncates its stamp to `%H%M%S`, so the archive a
+    compaction CAUSES routinely shares that compaction's second - that is the
+    whole 31cea474 story the kind filter answers. An archive at exactly the
+    previous boundary's stamp is therefore ambiguous at best and post-hoc at
+    worst, and must not excuse the boundary that follows. `floor <=` survived
+    every other case in this file.
+    """
+    _transcript(tree["transcripts"], SESSION, [
+        _boundary("2026-08-19T09:50:47.749Z", "manual", 324190, 10929),
+        _boundary("2026-08-19T11:20:00.000Z", "manual", 310000, 10000),
+    ])
+    _archive(tree, SESSION, "auto", "2026-08-19-094500")     # answers the first
+    _archive(tree, SESSION, "auto", "2026-08-19-095047")     # ON the first's stamp
+    violations = probe.assert_handoff_precedes(_scan_all(tree), tree["project"])
+    assert len(violations) == 1, (
+        f"an archive stamped on the first boundary answered the second: {violations}")
+
+
+def test_the_cascade_gap_is_a_minimum_not_an_exclusive_bound(tree):
+    """A bound needs a case exactly ON the line.
+
+    `turns < gap` means a gap of exactly `gap` is acceptable. The two cases
+    above sit at 2 and 5 for a gap of 3, so both `<` and `<=` satisfied them and
+    the off-by-one was invisible.
+    """
+    exact = [
+        _boundary("2026-08-19T07:57:11.479Z", "auto", 171608, 20262),
+        {"type": "assistant"},
+        {"type": "assistant"},
+        {"type": "assistant"},
+        _boundary("2026-08-19T07:58:19.997Z", "auto", 118635, 29049),
+    ]
+    _transcript(tree["transcripts"], SESSION, exact)
+    assert probe.assert_no_cascade(_scan_all(tree), 3) == [], (
+        "a gap of exactly the minimum was reported as a cascade")
+
+
+# ============================================================
+# The scalar request fallback, and the two CLI filters
+# ============================================================
+
+def test_a_pre_list_state_file_still_correlates_its_one_request(tree):
+    """The positive half of the `compact_requested_at` fallback.
+
+    `test_driven_ignores_a_request_made_after_the_boundary` uses the scalar form
+    too, but it expects a VIOLATION - which is also what an unread scalar
+    produces. Deleting the fallback entirely survived that test, MEASURED
+    2026-09-01. A state file written before `compact_requests` existed would then
+    have its one genuine request read as no request at all.
+    """
+    _transcript(tree["transcripts"], SESSION, [
+        _boundary("2026-08-19T09:50:47.749Z", "manual", 324190, 10929),
+    ])
+    _write_state(tree, SESSION, compact_requested_at="2026-08-19T09:49:00+00:00",
+                 compact_requested_bucket=45)
+    assert probe.assert_driven(_scan_all(tree), tree["project"]) == []
+
+
+def test_the_session_filter_narrows_the_scan(tree, monkeypatch, capsys):
+    """`--session` had no test; making it a no-op passed the whole file."""
+    other = "bbbbbbbb-1111-2222-3333-444444444444"
+    _transcript(tree["transcripts"], SESSION, [
+        _boundary("2026-08-19T07:31:51.814Z", "auto", 617013, 15772),
+    ])
+    _transcript(tree["transcripts"], other, [
+        _boundary("2026-08-19T08:31:51.814Z", "auto", 111111, 22222),
+    ])
+    monkeypatch.setattr(probe, "get_workspace_root", lambda: tree["project"])
+    monkeypatch.setattr(sys, "argv",
+                        ["compaction-probe.py", "--session", SESSION, "--json"])
+    assert probe.main() == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert [e["session"] for e in payload["events"]] == [SESSION], payload["events"]
+
+
+def test_the_since_filter_bounds_the_window(tree, monkeypatch, capsys):
+    """`--since` had no test either; `events = list(events)` passed everything."""
+    _transcript(tree["transcripts"], SESSION, [
+        _boundary("2026-08-19T07:31:51.814Z", "auto", 617013, 15772),
+        _boundary("2026-08-25T09:50:47.749Z", "manual", 324190, 10929),
+    ])
+    monkeypatch.setattr(probe, "get_workspace_root", lambda: tree["project"])
+    monkeypatch.setattr(sys, "argv",
+                        ["compaction-probe.py", "--since", "2026-08-20", "--json"])
+    assert probe.main() == 0  # a bare run asserts nothing
+    payload = json.loads(capsys.readouterr().out)
+    assert [e["preTokens"] for e in payload["events"]] == [324190], payload["events"]
+
+
+def test_one_unparseable_line_does_not_lose_the_rest_of_the_transcript(tree):
+    """A JSONL file is appended to live, so a torn last line is ordinary.
+
+    `_scan` skips the line and keeps reading. Nothing held that: turning the
+    `continue` into a `raise` passed every case in this file, because none of
+    them wrote a malformed line. A torn tail that aborted the scan would make
+    the probe report the session's boundaries as absent, which is the direction
+    `.claude/rules/scope-claims.md` calls a narrowed scan reading as a complete
+    one.
+    """
+    path = _transcript(tree["transcripts"], SESSION, [
+        _boundary("2026-08-19T07:31:51.814Z", "auto", 617013, 15772),
+    ])
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write('{"type": "system", "subtype": "compact_bou\n')
+        handle.write(json.dumps(
+            _boundary("2026-08-19T09:50:47.749Z", "manual", 324190, 10929)) + "\n")
+
+    events, problem = probe._scan(path)
+    assert problem is None, problem
+    assert [e["trigger"] for e in events] == ["auto", "manual"], events

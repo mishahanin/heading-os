@@ -129,6 +129,18 @@ def test_every_oncalendar_carries_the_timezone_token():
 # ---------------------------------------------------------------------------
 
 
+def _shell_code(text: str) -> str:
+    """A shell script's executable lines, with whole-line comments removed.
+
+    Crude on purpose: it does not parse quoting, so a `#` inside a string keeps
+    its line, which errs toward KEEPING code rather than dropping it. The one
+    thing it must do is stop a mention of a token in a usage comment from
+    passing for the substitution that fills it.
+    """
+    return "\n".join(line for line in text.splitlines()
+                     if not line.lstrip().startswith("#"))
+
+
 def test_every_installer_substitutes_the_timezone_token():
     """SC-2. A template carrying `{{TZ}}` and an installer that does not
     substitute it renders a literal `{{TZ}}` into the unit, which systemd
@@ -139,19 +151,52 @@ def test_every_installer_substitutes_the_timezone_token():
     names the unit files it renders, while the name mapping is irregular
     (`memory-index-refresh.timer` is installed by `install-memory-index-timer.sh`)
     and a filename guess would silently pair nothing and pass.
+
+    Asked of the installer's CODE, not of its whole text. Every one of these
+    scripts opens with a usage block reading
+    `# ... substitutes {{WORKSPACE}}, {{PYTHON}}, {{TZ}} ...`, so a bare
+    `"{{TZ}}" in source` was satisfied by that comment alone. MEASURED
+    2026-09-01: deleting the real `-e "s|{{TZ}}|${TZ_VALUE}|g"` line from
+    `scripts/install-ops-radar-timer.sh` left this whole file green, while the
+    unit it installs would have carried a literal `{{TZ}}` in `OnCalendar=` and
+    been rejected at enable time — precisely the failure the paragraph above
+    describes. Measured the same day across all 15 timer/installer pairings:
+    every one carries the token in code today, so the tightening costs nothing.
     """
     offenders = []
     installers = tracked_paths(("scripts/install-*.sh",))
+    pairs = 0
     for timer in _timer_templates():
         renderers = [i for i in installers if timer.name in i.read_text(encoding="utf-8")]
         assert renderers, f"no installer references {timer.name}; the pairing is broken"
         for installer in renderers:
-            if "{{TZ}}" not in installer.read_text(encoding="utf-8"):
+            pairs += 1
+            if "{{TZ}}" not in _shell_code(installer.read_text(encoding="utf-8")):
                 offenders.append(
-                    f"{installer.name} renders {timer.name} but never substitutes the TZ token"
+                    f"{installer.name} renders {timer.name} but never substitutes "
+                    f"the TZ token outside a comment"
                 )
 
+    # "no offenders" is what zero pairings produces, and the loop above only
+    # floors each timer's renderer list, never the template glob itself.
+    # Measured 2026-09-01: 14 timer templates, 15 pairings.
+    assert pairs >= 10, f"the pairing walk collapsed to {pairs} installer/timer pairs"
     assert not offenders, "\n".join(offenders)
+
+
+def test_the_comment_stripper_removes_a_usage_line_and_keeps_a_sed_line():
+    """Anchor for the check above. A stripper that returned its input unchanged
+    would restore the exact hole, and one that dropped everything would empty
+    the scan into a guard that cannot fail."""
+    text = ("#!/usr/bin/env bash\n"
+            "#   HEADING_OS_TZ=Area/City installer.sh   # renders {{TZ}}\n"
+            "        -e \"s|{{TZ}}|${TZ_VALUE}|g\" \\\n")
+    code = _shell_code(text)
+
+    assert "{{TZ}}" in code
+    assert "HEADING_OS_TZ=Area/City" not in code
+    assert "{{TZ}}" not in _shell_code(
+        "# an installer that only MENTIONS {{TZ}} in its usage block\n")
 
 
 # ---------------------------------------------------------------------------

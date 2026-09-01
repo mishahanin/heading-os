@@ -9,6 +9,7 @@ the Stop-hook protocol.
 Behaviour:
   clean, cached, or nothing changed -> silent, exit 0
   a lane failed                     -> {"decision": "block"} with the failure text
+  no verdict reachable at all       -> one line on stderr, exit 0, never silent
 
 Scope. The payload's `transcript_path` is forwarded to the checker, which uses
 it to narrow the changed set to files THIS session wrote. Without that the hook
@@ -36,7 +37,20 @@ CHECKER = WORKSPACE / "scripts" / "turn-check.py"
 
 # Long enough for a handful of matched test files, short enough that nobody
 # learns to dread the end of a turn.
-BUDGET_SECONDS = 90
+#
+# Raised from 90 on 2026-08-31, together with `-n auto` in the lane itself. At 90
+# this hook REFUSED five turns in a row: each re-run with a longer cap came back
+# clean, so the operator paid the wait and learned nothing, which is the exact
+# outcome the number above was chosen to avoid. A budget too small to ever finish
+# is not caution; it converts a check into a toll.
+#
+# MEASURED that day, on the real changed set, on a machine loaded by five
+# parallel agents: 78 test files and 1932 tests finished in 45.2s with `-n auto`.
+# 150 leaves roughly 3x headroom over that, and the matched set only reaches this
+# size during a fix campaign; an ordinary turn touches a handful of files and
+# still returns in seconds. The flag alone was not enough to rely on, because its
+# measured speed-up is 1.37x and worker start-up is a fixed cost.
+BUDGET_SECONDS = 150
 
 REASON = """\
 `scripts/turn-check.py` failed on the uncommitted Python edits in this turn \
@@ -78,6 +92,17 @@ def interpreter() -> str:
     return str(venv) if venv.exists() else sys.executable
 
 
+def stderr_tail(text: str, keep: int = 3) -> str:
+    """The last few stderr lines, joined onto one line.
+
+    One line because this goes to a Stop hook's stderr on a path where nothing
+    is otherwise printed, and a screenful of traceback there is how a warning
+    gets muted. The last lines are the ones that name the exception.
+    """
+    lines = [ln.strip() for ln in (text or "").strip().splitlines() if ln.strip()]
+    return " | ".join(lines[-keep:]) or "(nothing on stderr)"
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -96,6 +121,11 @@ def main() -> int:
         return 0
 
     if not CHECKER.is_file():
+        # Announced for the same reason as the three degradations below. A
+        # checker that is not on disk passes every turn forever, and a control
+        # whose absence looks exactly like its success is the shape SEC-007
+        # refuses. Renaming or moving the script is how this arrives.
+        print(f"turn-check: checker not found at {CHECKER}", file=sys.stderr)
         return 0
 
     command = [interpreter(), str(CHECKER), "--json",
@@ -107,7 +137,20 @@ def main() -> int:
     try:
         proc = subprocess.run(
             command,
-            cwd=str(WORKSPACE), capture_output=True, text=True, timeout=BUDGET_SECONDS,
+            cwd=str(WORKSPACE), capture_output=True, text=True,
+            # `errors="replace"`, or one byte of the checker's output ends the
+            # turn. Strict decoding raises `UnicodeDecodeError` from inside
+            # `subprocess.run` itself, before this call returns, and that error
+            # is a `ValueError`: the handler below catches neither it nor
+            # anything it derives from. The checker prints file paths and a
+            # failing test's own output, so a byte that is not UTF-8 is
+            # reachable, not theoretical.
+            #
+            # The sibling fix landed in `scripts/turn-check.py` (four call
+            # sites) on 2026-09-01 and this file, the WRAPPER the harness
+            # actually invokes on every Stop, was not looked at. Guard:
+            # `tests/test_three_hooks_one_byte_could_end_a_session.py`.
+            errors="replace", timeout=BUDGET_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         # One line, then degrade. Returning 0 silently made a checker that
@@ -121,6 +164,29 @@ def main() -> int:
     try:
         result = json.loads(proc.stdout.strip().splitlines()[-1])
     except (ValueError, IndexError):
+        # The same one line, and the same reason, as the branch above. This
+        # branch is reached when the checker died before printing anything: an
+        # empty stdout leaves `splitlines()` an empty list and `[-1]` raises
+        # IndexError. MEASURED 2026-08-31 with CHECKER pointed at a three-line
+        # stub that wrote a traceback to stderr and exited 1: the hook exited 0
+        # and emitted nothing on either stream, which is byte-for-byte what a
+        # clean tree looks like. A syntax error in the checker or in one of its
+        # imports, a missing pytest, and an OOM kill all land here, so the
+        # Stop-hook control could be gone permanently with nobody told.
+        print(f"turn-check: no usable result from the checker (exit "
+              f"{proc.returncode}): {stderr_tail(proc.stderr)}", file=sys.stderr)
+        return 0
+
+    # A last stdout line that parses to `[]`, `"x"`, `3` or `null` reaches
+    # `result.get` and raises AttributeError, which exits the hook 1 with a
+    # traceback and blocks nothing. MEASURED the same day with a stub printing
+    # `[]`. The real checker only ever emits an object, so this is the same
+    # defensive guard the stdin payload already carries thirty lines above, for
+    # the same reason: the shape arrives from another process.
+    if not isinstance(result, dict):
+        print(f"turn-check: the checker returned a "
+              f"{result.__class__.__name__}, not an object (exit "
+              f"{proc.returncode})", file=sys.stderr)
         return 0
 
     if result.get("status") != "fail":
@@ -139,6 +205,24 @@ def main() -> int:
     # actually reads, with every exclusion dropped. Fixing the named failure then
     # looked like a green turn over a set that was never checked.
     exclusions = []
+    # First, because it is the one exclusion that reports a WIDENING rather than
+    # a drop, and it makes the count below it meaningless: with no scope, every
+    # candidate is kept and `skipped_foreign` is 0 by construction. The two
+    # never appear together.
+    #
+    # `session_scope.files_written` answers None for an absent, unreadable or
+    # malformed transcript, and for any one unreadable subagent sidecar out of
+    # the hundred-odd a busy session writes. `narrow` collapsed that None into a
+    # zero drop, so the message below asserted the failure belonged to this turn
+    # and named no exclusion at all. MEASURED 2026-08-31 over a malformed
+    # transcript: another session's deliberately-red file blocked the turn and
+    # was attributed to this one, which is the 2026-08-12 incident verbatim.
+    # Obligation 3 of `.claude/rules/scope-claims.md` is to widen back to
+    # everything AND say the state is unknown; only the widening was built.
+    if result.get("scope_unknown"):
+        exclusions.append("the attribution above (session scope could not be "
+                          "established, so every uncommitted file was checked, "
+                          "including files another session wrote)")
     foreign = result.get("skipped_foreign") or 0
     if foreign:
         # A disjunction, because that is what the scope establishes: a dropped
@@ -153,7 +237,27 @@ def main() -> int:
         exclusions.append(f"{contract} frozen-contract file(s) not run: red by "
                           f"design until the slice implements them")
     slow = result.get("deselected_slow") or 0
-    if slow:
+    if slow < 0:
+        # The checker's sentinel for "the count could not be read at all".
+        # `DESELECTED_UNKNOWN` is -1 in `scripts/turn-check.py`, returned when
+        # the lane ran under `-n auto`: xdist prints no deselection summary, so
+        # the number is unavailable while the exclusion is still happening. The
+        # checker's own renderer (`_slow_note`) has always said that in words;
+        # this hook read the value as a count and printed "-1 slow test(s) not
+        # run here" to the operator. MEASURED 2026-09-01 by driving the real
+        # hook over a failing result carrying `deselected_slow: -1`: that
+        # sentence appeared verbatim in the block message. A negative count is
+        # not a smaller claim, it is a nonsense one, and the honest answer here
+        # is the state rather than the number
+        # (obligation 3, `.claude/rules/scope-claims.md`).
+        #
+        # Reached whenever a campaign-sized changed set fails: the parallel lane
+        # starts at 20 matched files, which the 2026-08-31 run passed on its way
+        # from 74 to 111.
+        exclusions.append("an unknown number of slow test(s) not run here: the "
+                          "parallel lane reports no deselection count, so run "
+                          "`python scripts/run-tests.py` for those")
+    elif slow:
         exclusions.append(f"{slow} slow test(s) not run here: run "
                           f"`python scripts/run-tests.py` for those")
     if unmeasured:

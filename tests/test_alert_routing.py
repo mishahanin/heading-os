@@ -109,12 +109,18 @@ def test_telegram_failure_degrades_to_card_and_log(recorder):
     assert len(recorder.telegram_calls) == 1   # send was attempted, then failed
 
 
-def test_telegram_notify_failure_does_not_propagate(recorder, monkeypatch):
+def test_telegram_notify_returning_false_does_not_propagate(recorder, monkeypatch):
     # telegram_notify.notify() is contracted to never raise (CAP-2) - its
-    # worst case is returning False. This replaces the old subprocess-raise
-    # test (there is no longer a raising transport call inside
-    # _send_telegram to defend against; that defense now lives entirely
-    # inside notify() itself, covered by tests/test_telegram_notify.py).
+    # worst case is returning False.
+    #
+    # This case is the EASY half and it is not the guard. The comment here used
+    # to add that "there is no longer a raising transport call inside
+    # _send_telegram to defend against", which stopped being true when the
+    # handler went back into `_send_telegram` on 2026-08-30 after a raising
+    # `notify` was measured propagating through `alert()`. A `return False` stub
+    # exercises no handler at all: deleting `_send_telegram`'s try/except left
+    # every test in this file passing - MEASURED 2026-09-01. The raising case
+    # below is the one that binds it.
     def fake_notify(target, message):
         return False
 
@@ -124,3 +130,34 @@ def test_telegram_notify_failure_does_not_propagate(recorder, monkeypatch):
     assert fired["telegram"] is False
     assert fired["card"] is True
     assert fired["log"] is True
+
+
+@pytest.mark.parametrize("exc", [
+    OSError("network unreachable"),   # the measured 2026-08-30 reproduction
+    RuntimeError("bot token rejected"),
+    ValueError("target is not a channel"),
+])
+def test_a_raising_telegram_transport_degrades_to_card_and_log(recorder,
+                                                               monkeypatch,
+                                                               exc):
+    """`_send_telegram` enforces never-raises HERE, not by delegation.
+
+    Three promises ride on this: the module docstring's "degrades to card+log
+    and NEVER raises", `alert()`'s own "Never raises", and `_send_telegram`'s.
+    The callers are watchdogs, so the alert fires exactly when the network is
+    already broken - the one moment the contract has to hold. `notify` is
+    contracted not to raise, but this handler exists precisely because the
+    contract was once broken, and a guard that trusts a promise measures the
+    promise rather than the guard.
+    """
+    def fake_notify(target, message):
+        raise exc
+
+    monkeypatch.setattr(alert_mod.telegram_notify, "notify", fake_notify)
+
+    fired = alert_mod.alert("critical", "daemon bridge down", source="watchdog")
+
+    assert fired["telegram"] is False
+    assert fired["card"] is True, "the card channel was lost to a telegram error"
+    assert fired["log"] is True
+    assert len(recorder.cards) == 1

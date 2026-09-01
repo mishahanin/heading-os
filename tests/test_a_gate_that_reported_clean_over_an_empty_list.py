@@ -125,7 +125,11 @@ def test_a_failed_listing_refuses_the_publish(tmp_path, capsys):
     assert pubsvc.secret_scan(dest) is False
     out = capsys.readouterr().out
     assert "REFUSING TO PUBLISH" in out
-    assert "128" in out, f"the git exit code is not in the message: {out!r}"
+    assert "ls-files exit 128" in out, (
+        # Not a bare "128": the message embeds `dest`, which is under
+        # tmp_path, so a pytest base dir numbered 128 would satisfy the
+        # loose form without the exit code being reported at all.
+        f"the git exit code is not in the message: {out!r}")
 
 
 def test_a_failed_listing_refuses_even_when_the_tree_is_innocent(tmp_path):
@@ -230,7 +234,8 @@ def test_a_failed_status_fails_the_publish(tmp_path, capsys):
     assert pubsvc.publish(dest, push=False) == 1
     out = capsys.readouterr().out
     assert "No changes to publish" not in out
-    assert "128" in out, f"the git exit code is not in the message: {out!r}"
+    assert "status exit 128" in out, (
+        f"the git exit code is not in the message: {out!r}")
 
 
 def test_a_genuinely_unchanged_repo_still_reports_nothing_to_publish(tmp_path, capsys):

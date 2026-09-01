@@ -102,6 +102,50 @@ def test_no_new_skill_bash_data_path_misroutes():
     )
 
 
+def test_the_ratchet_is_not_green_over_an_empty_corpus():
+    """The two ratchet tests above ask only ABSENCE questions, so they pass over
+    a corpus of nothing.
+
+    MEASURED 2026-09-01: changing `scan_all`'s glob to `.claude/skillz/*/SKILL.md`
+    left this whole file green, and left the neighbouring
+    `test_the_real_skill_tree_still_has_no_unlabelled_fence_hits` in
+    `tests/test_a_gate_that_passed_the_plan_it_had_just_failed.py` green as well.
+    `BASELINE` is empty by design since 2026-08-31, and `{} == {}` is true whether
+    the scanner read 94 files or none. The four `test_scanner_*` cases below prove
+    the MATCHER works, on synthetic files in tmp_path; nothing proved the scanner
+    was still pointed at the skills tree.
+
+    The floor is per source in the only sense that applies here: this gate has one
+    source, and it is pinned below its live size rather than at it, so adding or
+    retiring a skill does not force a churn commit.
+    """
+    files = _mod.skill_files(get_workspace_root())
+    assert len(files) >= 60, (
+        f"the audit corpus fell to {len(files)} SKILL.md files; the ratchet above "
+        "reports a clean tree over an empty one")
+    assert all(p.name == "SKILL.md" and p.is_file() for p in files), files[:5]
+
+
+def test_scan_all_reads_every_file_in_that_corpus():
+    """The corpus and the scan must be the same set.
+
+    A non-empty `skill_files` does not by itself prove `scan_all` iterates it: the
+    two could drift apart in a later edit and the assertion above would still hold.
+    Bound with a recording stub over `scan_skill` rather than by reading the
+    source, so a rewrite that keeps the behaviour keeps the test.
+    """
+    root = get_workspace_root()
+    expected = _mod.skill_files(root)
+    seen: list[Path] = []
+    real = _mod.scan_skill
+    _mod.scan_skill = lambda path: seen.append(path) or []
+    try:
+        assert _mod.scan_all(root) == {}
+    finally:
+        _mod.scan_skill = real
+    assert seen == expected
+
+
 def test_baseline_matches_current_corpus():
     """The frozen baseline must equal the live scan -- so a CLEANED skill (count drops
     below baseline) forces a baseline update, keeping the ratchet honest."""

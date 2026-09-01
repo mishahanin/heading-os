@@ -144,7 +144,16 @@ def cmd_apply(args, components: list[Component], state_path: Path) -> int:
         if state_path.exists():
             try:
                 st = json.loads(state_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
+            # UnicodeDecodeError, because the decode fails inside read_text
+            # BEFORE json sees a character. It is a ValueError and a SIBLING of
+            # json.JSONDecodeError, not a subclass, so `(OSError,
+            # json.JSONDecodeError)` walked past it and one corrupt byte in
+            # state.json raised out of `--auto` instead of degrading to "no
+            # prior state". `scripts/utils/update_registry.py:40` already
+            # carried this handler; these two sites are the copies the fix
+            # missed. Same treatment as a malformed JSON document: an
+            # unreadable state file means the delta-gate has nothing to gate on.
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 st = {}
         comps_state = st.get("components", {})
         targets = [c for c in components if c.tier == "auto"
@@ -203,7 +212,12 @@ def _mark_state(state_path: Path, results: dict[str, str]) -> None:
         return
     try:
         state = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    # The second of the two sites; see the note at the `--auto` read above.
+    # This one is the worse of the pair: it runs AFTER the appliers have been
+    # invoked, so an escaping UnicodeDecodeError takes down `cmd_apply` itself,
+    # past the printed per-component outcomes and past the exit-code return, and
+    # a component that was just swapped is never marked failed.
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return
     changed = False
     for name, result in results.items():

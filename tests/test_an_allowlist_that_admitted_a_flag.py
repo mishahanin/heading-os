@@ -173,6 +173,96 @@ def test_status_reports_an_unreadable_lock_instead_of_raising(tmp_path,
     assert "unreadable" in out
 
 
+def test_status_reports_a_torn_lock_instead_of_raising(tmp_path, monkeypatch,
+                                                       capsys):
+    """The decode half of the same guard, which the OSError-only handler missed.
+
+    `read_text()` decodes as UTF-8 and `UnicodeDecodeError` is a `ValueError`,
+    not an `OSError`, so a lock file with one bad byte walked past the handler
+    and killed the health command with a traceback. MEASURED 2026-09-01: this
+    exact file raised `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9
+    in position 23` out of `cmd_status`, while `_lock_state` and `stop_comet`
+    reading it degraded politely.
+    """
+    import scripts.browser as browser
+
+    lock = tmp_path / "browser-cdp.json"
+    lock.write_bytes(b'{"pid": 1234, "note": "\xe9\xff torn"}')
+    _stub_probes(browser, monkeypatch)
+    monkeypatch.setattr(browser, "_active_lock_file", lambda: lock)
+
+    # The premise: this really is undecodable, so the assertion below is not
+    # satisfied by bytes that were never a problem.
+    with pytest.raises(UnicodeDecodeError):
+        lock.read_text()
+
+    code = browser.cmd_status(_Args())
+    out = capsys.readouterr().out
+    assert code in (0, 2)
+    assert "unreadable" in out
+
+
+def _lockfile_read_guards() -> dict[str, frozenset[str]]:
+    """{function name -> exception names its lock-file read is guarded by}.
+
+    Derived from the parsed module, because the claim is about every reader of
+    that file and a hand-kept list of three goes stale the moment a fourth
+    appears.
+    """
+    import ast
+
+    src = (ROOT / "scripts" / "browser.py").read_text(encoding="utf-8")
+    found: dict[str, frozenset[str]] = {}
+    for fn in ast.walk(ast.parse(src)):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Try):
+                continue
+            reads = any(
+                isinstance(c, ast.Call)
+                and isinstance(c.func, ast.Attribute)
+                and c.func.attr == "read_text"
+                for stmt in node.body
+                for c in ast.walk(stmt)
+            )
+            if not reads:
+                continue
+            names: set[str] = set()
+            for handler in node.handlers:
+                exc = handler.type
+                parts = exc.elts if isinstance(exc, ast.Tuple) else [exc]
+                for p in parts:
+                    if isinstance(p, ast.Name):
+                        names.add(p.id)
+                    elif isinstance(p, ast.Attribute):
+                        names.add(p.attr)
+            found[fn.name] = frozenset(names)
+    return found
+
+
+def test_every_lock_file_reader_is_named_by_this_guard():
+    """The anti-decay half. A fourth reader must join the rule, not dodge it."""
+    assert set(_lockfile_read_guards()) == {"_lock_state", "stop_comet", "cmd_status"}, (
+        "the set of guarded lock-file readers in scripts/browser.py moved; "
+        "re-derive this test rather than widening the expected set blindly"
+    )
+
+
+@pytest.mark.parametrize("func", ["_lock_state", "stop_comet", "cmd_status"])
+def test_all_three_lock_readers_catch_the_same_pair(func):
+    """One of the three caught only OSError. The pair is the whole point:
+    an absent/denied file raises OSError, a torn one raises ValueError."""
+    guards = _lockfile_read_guards()
+    assert func in guards, f"{func} no longer guards its lock read at all"
+    caught = guards[func]
+    assert "OSError" in caught, f"{func} does not catch OSError"
+    assert "ValueError" in caught or "UnicodeDecodeError" in caught, (
+        f"{func} catches {sorted(caught)}; a torn lock file raises "
+        "UnicodeDecodeError, which is a ValueError and not an OSError"
+    )
+
+
 def test_status_still_prints_a_readable_lock(tmp_path, monkeypatch, capsys):
     import scripts.browser as browser
 

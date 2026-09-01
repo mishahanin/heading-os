@@ -28,6 +28,19 @@ _spec.loader.exec_module(cpr)
 
 def test_engine_prose_names_no_missing_engine_path():
     """The real gate: nothing dangling beyond the frozen baseline."""
+    # The corpus floor, and it is not decoration. MEASURED 2026-09-01 by pointing
+    # `git ls-files` at a glob that matches nothing: `tracked_markdown` returns
+    # [], `scan` returns {}, and this assertion passes over zero files. It was
+    # caught only by `test_baseline_carries_no_entry_that_is_already_clean`
+    # below, which needs BASELINE to be non-empty -- and BASELINE is a ratchet
+    # that only shrinks, so on the day it reaches zero both tests go blind
+    # together and nothing says so. Measured 341 tracked .md files on
+    # 2026-09-01; the floor only catches a collapse.
+    corpus = cpr.tracked_markdown(get_workspace_root())
+    assert len(corpus) >= 250, (
+        f"only {len(corpus)} tracked Markdown file(s) were scanned; the corpus "
+        "collapsed and this gate is reading almost nothing"
+    )
     found = cpr.scan(get_workspace_root())
     new = {p: sites for p, sites in found.items() if p not in cpr.BASELINE}
     assert not new, (

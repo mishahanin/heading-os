@@ -107,6 +107,33 @@ def test_a_bullet_after_a_new_heading_does_not_inherit_the_previous_canonical(tm
     assert "quantum" not in crm.parse_aliases(path)
 
 
+def test_a_reentered_aliases_section_does_not_inherit_the_earlier_canonical(tmp_path):
+    """The case only the `current_canonical = None` reset can catch.
+
+    The test above it looks like the reset's binding case and is not: at
+    `## Retired` the section flag is already False, so the bullet is dropped by
+    the flag test whichever way the reset went. The reset earns its place only
+    when the section is ENTERED again, which is what a file carrying two
+    `## Aliases` headings does. Measured 2026-09-01: deleting the reset left
+    all 47 tests over `parse_aliases` green, and this corpus returns
+    `{'stray': 'spectre telecom'}` without it.
+    """
+    path = tmp_path / "aliases.md"
+    path.write_text(
+        "## Aliases\n### Spectre Telecom\n- spectre\n\n"
+        "## Retired\n\n"
+        "## Aliases\n- stray\n",
+        encoding="utf-8",
+    )
+    aliases = crm.parse_aliases(path)
+
+    assert "stray" not in aliases, (
+        f"a bullet under a re-entered heading attached to the previous "
+        f"canonical: {aliases}"
+    )
+    assert aliases["spectre"] == "spectre telecom"
+
+
 def test_a_file_that_is_only_the_aliases_section_is_unchanged(tmp_path):
     """The fix must not narrow the section it was always meant to read."""
     path = tmp_path / "aliases.md"

@@ -435,3 +435,71 @@ def test_the_refresh_comment_names_where_each_bump_comes_from():
     # quoting clause in front of it rather than banning the words.
     assert block.index("the previous wording") < block.index(
         "state.bump still fires")
+
+
+# ------------------------------------------------------------
+# The two failure paths inside that same function, added 2026-08-31
+# ------------------------------------------------------------
+#
+# Section 5 above measures the chmod that FAILS and the token that is empty. Two
+# sibling branches in the same two functions had no case at all, and branch
+# coverage over `tests/bridge` reported both as never taken: the unreadable
+# token file in `get_or_create_token`, and the stat that fails inside
+# `_enforce_token_mode` before any chmod is attempted. Both are the fail-safe
+# side of the whole auth boundary, so both need a case rather than a comment.
+
+def test_an_unreadable_token_file_is_regenerated(tmp_path, monkeypatch, caplog):
+    """A token that exists and cannot be read is not a token.
+
+    Without this branch the OSError leaves `get_or_create_token` on the way out
+    of a daemon boot, and the daemon does not start at all.
+    """
+    planted = "deadbeef"
+    f = _token(tmp_path, planted, 0o600)
+    real_read = Path.read_text
+
+    def _unreadable(self, *a, **k):
+        if self == f:
+            raise OSError(13, "Permission denied", str(f))
+        return real_read(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", _unreadable)
+    with caplog.at_level(logging.WARNING, logger="scripts.bridge_daemon.auth"):
+        regenerated = auth.get_or_create_token(tmp_path)
+
+    assert regenerated.strip(), "no usable token came back"
+    assert regenerated != planted, "the unreadable value was somehow returned"
+    assert any("unreadable" in r.getMessage() for r in caplog.records), \
+        [r.getMessage() for r in caplog.records]
+    assert stat.S_IMODE(f.stat().st_mode) == 0o600
+
+
+def test_a_token_that_vanishes_before_the_mode_check_still_serves(tmp_path,
+                                                                  monkeypatch,
+                                                                  caplog):
+    """`_enforce_token_mode` stats before it chmods, and that stat can fail.
+
+    The second stat on the token path is where the mode check happens: the file
+    was read successfully and then removed, which is what a concurrent rotation
+    looks like. The token in hand is still the right answer; refusing to serve
+    over a mode question would be worse than the exposure the chmod is for.
+    """
+    f = _token(tmp_path, "deadbeef", 0o644)
+    real_stat = Path.stat
+    calls = {"n": 0}
+
+    def _second_stat_fails(self, *a, **k):
+        if self == f:
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise FileNotFoundError(2, "No such file or directory", str(f))
+        return real_stat(self, *a, **k)
+
+    monkeypatch.setattr(Path, "stat", _second_stat_fails)
+    with caplog.at_level(logging.WARNING, logger="scripts.bridge_daemon.auth"):
+        assert auth.get_or_create_token(tmp_path) == "deadbeef"
+
+    assert calls["n"] > 1, "the mode check never stat'ed the token, so nothing " \
+                           "below is measured"
+    assert any("could not read the mode" in r.getMessage() for r in caplog.records), \
+        [r.getMessage() for r in caplog.records]

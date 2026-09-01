@@ -1475,3 +1475,156 @@ def test_sea_state_combines_pipeline_and_tasks(tmp_path):
     assert r["tasks_overdue"] == 2
     assert r["overdue_total"] == 4
     assert r["state"] == "moderate"
+
+
+# ============================================================
+# The tomorrow fallback in next_items (Phase 1.121)
+# ============================================================
+# When today has nothing left, `next_items` reads TOMORROW's calendar and
+# returns its earliest event, flagged `is_next_day` with a `day_label`. The
+# feature shipped with no test at all. MEASURED 2026-08-31 by replacing the
+# `if cal_tom.exists():` test with `if False:` and running the whole directory:
+# 1349 passed, 1 skipped. The same held for the two guards inside the block
+# (`not m or line.count("|") > 5`, and the hour/minute range check), so the
+# entire branch was unexecuted by the suite: a refactor could have deleted it
+# and been told the workspace agreed.
+#
+# The empty-today assertion already existed
+# (`test_next_items_empty_when_nothing_scheduled`), and it is what hid this:
+# with no calendar file for tomorrow either, the empty return and the missing
+# fallback are the same observation.
+
+def _calendar(tmp_path, day: str, body: str):
+    cal_dir = tmp_path / "outputs" / "_sync" / "calendar"
+    cal_dir.mkdir(parents=True, exist_ok=True)
+    (cal_dir / f"{day}.md").write_text(body, encoding="utf-8")
+
+
+def test_next_items_falls_back_to_tomorrows_first_event(tmp_path):
+    """Nothing left today, so the panel points at tomorrow's earliest event."""
+    from scripts.bridge_daemon.sources.pulse import next_items
+    _calendar(tmp_path, "2026-05-18", "| 06:00 | Already done | - |\n")
+    _calendar(tmp_path, "2026-05-19",
+              "| Time | Subject | Location |\n"
+              "|------|---------|----------|\n"
+              "| 11:00 | Second thing | - |\n"
+              "| 09:30 | First thing | https://zoom.us/j/x |\n")
+    # 12:00 UTC = 16:00 local (UTC+4), past today's only event.
+    items = next_items(tmp_path, now=datetime(2026, 5, 18, 12, 0, tzinfo=timezone.utc))
+
+    assert len(items) == 1, items
+    assert items[0]["label"] == "First thing"
+    assert items[0]["time"] == "09:30"
+    assert items[0]["location"] == "https://zoom.us/j/x"
+    assert items[0]["is_next_day"] is True
+    assert items[0]["day_label"] == "Tomorrow"
+
+
+def test_next_items_prefers_today_over_tomorrow(tmp_path):
+    """The other direction: a remaining event today suppresses the fallback.
+
+    Without this, a fallback that ran unconditionally would satisfy the test
+    above and quietly show tomorrow's 09:30 alongside this afternoon's work.
+    """
+    from scripts.bridge_daemon.sources.pulse import next_items
+    _calendar(tmp_path, "2026-05-18", "| 18:00 | Still to come | - |\n")
+    _calendar(tmp_path, "2026-05-19", "| 09:30 | Tomorrow thing | - |\n")
+
+    items = next_items(tmp_path, now=datetime(2026, 5, 18, 9, 0, tzinfo=timezone.utc))
+
+    assert [it["label"] for it in items] == ["Still to come"]
+    assert all("is_next_day" not in it for it in items)
+
+
+def test_the_tomorrow_fallback_skips_table_furniture(tmp_path):
+    """The header and separator of tomorrow's table are not meetings.
+
+    The guards inside the fallback block were as unexecuted as the block, so
+    nothing established that it parses rows the way the two loops above it do.
+    """
+    from scripts.bridge_daemon.sources.pulse import next_items
+    _calendar(tmp_path, "2026-05-19",
+              "# Calendar 2026-05-19\n\n"
+              "| Time | Subject | Location |\n"
+              "|------|---------|----------|\n"
+              # `00:99` and not `44:00`: the fallback sorts on the time STRING
+              # and returns only the first row, so an impossible hour late in
+              # the day is discarded by the cap rather than by the guard, and
+              # the test would pass with the guard deleted. An impossible
+              # MINUTE at midnight sorts ahead of every real event, so only the
+              # guard can keep it out.
+              "| 00:99 | Impossible minute | - |\n"
+              "| 08:15 | Real meeting | - |\n")
+
+    items = next_items(tmp_path, now=datetime(2026, 5, 18, 12, 0, tzinfo=timezone.utc))
+
+    assert [it["label"] for it in items] == ["Real meeting"]
+
+
+def test_next_items_skips_table_furniture_today_too(tmp_path):
+    """Today's loop has the same guards and the same gap: every calendar
+    fixture in this file is bare rows with no header, so `if not m: continue`
+    was never the reason anything was skipped (measured 2026-08-31, same
+    method)."""
+    from scripts.bridge_daemon.sources.pulse import next_items
+    _calendar(tmp_path, "2026-05-18",
+              "# Calendar 2026-05-18\n\n"
+              "| Time | Subject | Location |\n"
+              "|------|---------|----------|\n"
+              "| 25:61 | Impossible hour | - |\n"
+              "| 14:00 | Real meeting | - |\n")
+
+    items = next_items(tmp_path, now=datetime(2026, 5, 18, 9, 0, tzinfo=timezone.utc))
+
+    assert [it["label"] for it in items] == ["Real meeting"]
+
+
+def test_signals_ignores_a_deal_that_is_not_in_a_forward_stage(tmp_path):
+    """A Lead sitting for a year is not a Critical Signal.
+
+    `signals` filters on `SIGNALS_FORWARD_STAGES` first, and every fixture in
+    this file gives it Negotiation, Proposal or Demo/POC deals, so the filter
+    had no negative case. MEASURED 2026-08-31 by replacing the
+    `stage not in SIGNALS_FORWARD_STAGES` skip with `if False:` and running
+    `tests/bridge`: 1349 passed, 1 skipped. The panel is where the CEO looks
+    for what needs action today; filling it with Leads and Won deals that
+    happen to be old is how a signal surface stops being read.
+    """
+    pipeline_md = tmp_path / "context" / "pipeline.md"
+    pipeline_md.parent.mkdir(parents=True, exist_ok=True)
+    pipeline_md.write_text(
+        "## Active Deals\n\n"
+        "| Company | Country | Stage | Est. Value | Stage Date | Owner | Next Action | Due Date |\n"
+        "|---|---|---|---|---|---|---|---|\n"
+        "| Cold Lead Co | UAE | Lead | TBD | 2025-01-01 | M | Qualify | 2025-02-01 |\n"
+        "| Closed Co | UAE | Won | $1,000,000 | 2025-01-01 | M | Kick off | 2025-02-01 |\n"
+        "| Live Co | UAE | Negotiation | $2,000,000 | 2026-04-01 | M | Send redlines | 2026-05-01 |\n",
+        encoding="utf-8")
+
+    sigs = signals(tmp_path, today=PINNED_TODAY, cap=50)
+
+    assert {s["ref"] for s in sigs} == {"Live Co"}, sigs
+
+
+def test_a_thread_file_with_no_frontmatter_is_skipped_by_the_pulse_card(tmp_path):
+    """`_parse_thread_frontmatter` returns {} and the walker must drop the file.
+
+    MEASURED 2026-08-31 by deleting the `if not m: return {}` early exit from
+    the parser: `tests/bridge` stayed green, because every thread fixture in
+    the directory is written WITH frontmatter, so the no-frontmatter branch was
+    reached by nothing and `km.group(1)` on a `None` match was one unformatted
+    file away.
+    """
+    biz = tmp_path / "threads" / "business"
+    biz.mkdir(parents=True, exist_ok=True)
+    (biz / "bare.md").write_text("# Just a heading\n\nSome notes, no frontmatter.\n",
+                                 encoding="utf-8")
+    (biz / "real.md").write_text(
+        "---\nid: t-1\ntitle: Real thread\nstatus: active\nlast_touched: '2026-05-18'\n---\n\nbody\n",
+        encoding="utf-8")
+
+    card = threads_state_preview(tmp_path, today=PINNED_TODAY)
+
+    assert card is not None
+    assert [t["id"] for t in card["threads"]] == ["t-1"]
+    assert card["active_total"] == 1

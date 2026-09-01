@@ -132,8 +132,62 @@ def test_two_sources_without_ids_do_not_collide_into_one_author(bh, tmp_path, mo
     clusters = bh.find_domain_clusters(bh.collect_brain_files())
     assert len(clusters) == 1
     assert clusters[0]["author_count"] == 2
-    # The empty id must never become a lookup key of its own.
-    assert "" not in bh._source_ref_forms({"id": "  "}, root / "sources" / "x.md")
+
+
+# The values a PARSED frontmatter actually yields for a blank id. `"''"` is
+# deliberately NOT here: those are the two literal quote characters a YAML file
+# holds, and `yaml.safe_load` turns them into `""` long before this function
+# sees them, so passing the raw two-char string tests a shape that cannot
+# arrive. The YAML level is covered by
+# `test_two_blank_ids_do_not_share_one_author_key` below.
+@pytest.mark.parametrize("blank", ["", "  ", "\t\n", None])
+def test_a_blank_id_registers_no_reference_form_at_all(bh, tmp_path, blank):
+    """SET EQUALITY, and a case ON the line.
+
+    This was `assert "" not in _source_ref_forms({"id": "  "}, ...)`, which is
+    the wrong shape twice over. It named a value the whitespace input could not
+    produce: the guard under test is `.strip()`, so removing it registers
+    `"  "`, and `"" not in forms` still held. MEASURED 2026-09-01, deleting the
+    strip-and-truthiness guard entirely left all 12 tests passing. Asking for
+    the whole set is the only phrasing that cannot miss a stray key.
+    """
+    fm = {} if blank is None else {"id": blank}
+    forms = bh._source_ref_forms(fm, tmp_path / "sources" / "acme-whitepaper.md")
+    assert forms == {"acme-whitepaper"}, forms
+
+
+def test_a_real_id_still_registers_both_forms(bh, tmp_path):
+    """The other direction, so "return the stem only" cannot pass the case
+    above: an id-carrying source must answer to BOTH names."""
+    forms = bh._source_ref_forms({"id": "20260101100000"},
+                                 tmp_path / "sources" / "acme-whitepaper.md")
+    assert forms == {"acme-whitepaper", "20260101100000"}, forms
+
+
+def test_two_blank_ids_do_not_share_one_author_key(bh, tmp_path, monkeypatch,
+                                                    capsys):
+    """The collision itself, driven through the join.
+
+    The fixture above referenced both sources by SLUG, so the `""` key was
+    written and never read and the authors could not have merged whatever the
+    code did - a straw-man for the claim it was named after. Here a principle
+    references the empty string, which is the only way the shared key is ever
+    looked up. Registering it resolves ONE author for two distinct sources;
+    dropping it leaves the reference unresolved, which is reported.
+    """
+    root = _brain(tmp_path)
+    _source(root, "acme-telecom-whitepaper", sid="''", author="James Bond")
+    _source(root, "bond-dpi-review", sid="''", author="Vesper Lynd")
+    _principle(root, "p-one", sid="1", sources=["''"], keywords=["dpi"])
+    _principle(root, "p-two", sid="2", sources=["''"], keywords=["dpi"])
+    _principle(root, "p-three", sid="3", sources=["''"], keywords=["dpi"])
+    monkeypatch.setattr(bh, "brain_root", lambda p=root: p)
+
+    assert bh.find_domain_clusters(bh.collect_brain_files()) == []
+    err = capsys.readouterr().err
+    assert "could not be counted" in err, (
+        f"the blank reference resolved to an author it does not own; "
+        f"stderr was {err!r}")
 
 
 def test_a_reference_to_a_missing_source_is_counted_out_loud(bh, tmp_path, monkeypatch, capsys):
@@ -229,6 +283,38 @@ def test_a_fresh_source_seed_is_not_stale(bh, tmp_path, monkeypatch):
     monkeypatch.setattr(bh, "brain_root", lambda p=root: p)
 
     assert bh.find_stale_seeds(bh.collect_brain_files()) == []
+
+
+def test_a_source_carrying_both_dates_is_aged_by_created(bh, tmp_path,
+                                                         monkeypatch):
+    """`created` is tried BEFORE `ingested`, and only a source carrying BOTH
+    can tell the two orders apart.
+
+    `find_stale_seeds` argues at length for this order - it answers "how long
+    has this seed sat unfinished", where a seed stating its own `created:` is
+    stating exactly that, while `_recent_rows` deliberately uses the reverse for
+    "when was this learned". Nothing measured it: MEASURED 2026-09-01, swapping
+    the tuple to `("ingested", "created")` left all 12 tests passing, because
+    every source fixture carried only one of the two fields.
+
+    The dates are 100 days apart, so the ages cannot be confused for each other.
+    """
+    root = _brain(tmp_path)
+    _source(root, "acme-telecom-whitepaper", sid="20260101100000",
+            author="James Bond", status="seed",
+            ingested="2026-05-01", created="2026-01-21")
+    monkeypatch.setattr(bh, "brain_root", lambda p=root: p)
+
+    stale = bh.find_stale_seeds(bh.collect_brain_files())
+
+    assert len(stale) == 1, stale
+    # The result key stays `created` whichever field supplied the value, so the
+    # VALUE is what distinguishes the two orders.
+    assert str(stale[0]["created"]) == "2026-01-21", (
+        "the seed was aged by `ingested:` while `created:` was present")
+    ingested_age = (bh.datetime.now(bh.get_default_tz()).date()
+                    - bh._as_date("2026-05-01")).days
+    assert stale[0]["age_days"] != ingested_age
 
 
 def test_a_principle_seed_is_still_dated_by_created(bh, tmp_path, monkeypatch):

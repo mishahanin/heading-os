@@ -190,6 +190,30 @@ def test_all_with_a_real_case_id_actually_runs_it(outcomes, outcome_tree, monkey
     assert "Total: 1/1" in capsys.readouterr().out
 
 
+def test_all_with_a_case_carried_only_by_the_first_skill_exits_zero(
+        outcomes, outcome_tree, monkeypatch, capsys):
+    """The other half of the case above, and without it the aggregation is free.
+
+    `matched_anywhere` accumulates ACROSS skills; `list_skills_with_outcomes()`
+    returns `sorted(...)`, so the fixture's skills always arrive as
+    `official-doc` then `xpager`, and `case-gamma` always lives in the LAST one.
+    Every aggregation defect that keeps only the last skill's count therefore
+    passes the `case-gamma` test unchanged: MEASURED 2026-09-01, replacing
+    `matched_anywhere += matched` with `matched_anywhere = matched` left this
+    file at 57 passed and `tests/test_a_dry_run_that_said_the_case_did_not_exist.py`
+    green as well, while `--all --case <a real id>` would again print "matched
+    no outcome case in any skill" over a case it had just run and passed - the
+    exact defect the sibling test's docstring says was fixed.
+
+    `case-alpha` is carried ONLY by `official-doc`, the FIRST skill, so this is
+    the sole witness for the other direction. Between the two, no ordering of
+    the skill list leaves the accumulation unmeasured.
+    """
+    _argv(monkeypatch, "--all", "--case", "case-alpha", "--no-write")
+    assert outcomes.main() == 0, "a passing targeted run reported a setup error"
+    assert "Total: 1/1" in capsys.readouterr().out
+
+
 def test_all_with_a_typo_case_id_exits_two(outcomes, outcome_tree, monkeypatch, capsys):
     """Matched NOWHERE is the error the per-skill check was reaching for."""
     _argv(monkeypatch, "--all", "--case", "case-nonexistent", "--no-write")

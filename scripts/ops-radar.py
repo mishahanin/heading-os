@@ -90,10 +90,62 @@ def resolve_state_dir() -> Path:
 
 
 def load_json(path: Path) -> dict:
+    """The ack / autoheal state, or `{}` when it cannot be read.
+
+    `UnicodeDecodeError` is named because it is a SIBLING of
+    `json.JSONDecodeError` under `ValueError`, not a subclass, and the decode
+    happens inside `read_text` before `json.loads` sees a single byte. These
+    files are rewritten under a lock on every radar pass, so a torn write is
+    the ordinary corruption; MEASURED 2026-09-01, one non-UTF-8 byte in
+    `ack.json` raised out of here and took the whole radar run with it - the
+    signal-killing shape `ops_signals.queue_state` was already fixed for.
+    """
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}
+
+
+def _state_dict(path: Path) -> dict:
+    """`load_json` widened from "can it be decoded" to "is it the right shape".
+
+    `load_json` degrades a file it cannot DECODE or PARSE. A file that parses
+    cleanly and is a list, a string or a bare null was handed straight back, and
+    every consumer here then called `.get` on it. MEASURED 2026-09-01, one
+    `ack.json` holding `["not", "a", "dict"]` raised AttributeError out of
+    `ack_suppressed` and took the whole radar pass down - every other signal
+    with it. `ops_signals` has been fixed for this exact shape five times
+    (`queue_state`, `odin_cadence_state`, `_read_trend_records`,
+    `publish_state`, `_index_source_globs`); these three state files were the
+    copy nobody updated.
+
+    The drop NAMES the file on stderr. A radar that quietly runs on defaults is
+    the other half of the same defect: the operator's acks stop working and
+    nothing says why.
+    """
+    data = load_json(path)
+    if isinstance(data, dict):
+        return data
+    print(f"ops-radar: ignoring {path.name} - expected a JSON object, got "
+          f"{type(data).__name__}; continuing on defaults", file=sys.stderr)
+    return {}
+
+
+def _num_or(value, default: float = 0.0) -> float:
+    """A stored number that is not a number. Float, so an `acked_at` timestamp
+    keeps its sub-second part; callers that need a count cast.
+
+    `float("many")` is a ValueError and `float(None)` a TypeError, and neither
+    is in any except clause on the paths that read `ack.json` / `autoheal.json`.
+    A bool is rejected deliberately: `true` in a counter field is corruption,
+    not the number 1.
+    """
+    if isinstance(value, bool):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
 
 
 def save_json_atomic(path: Path, data: dict) -> None:
@@ -120,7 +172,12 @@ def parse_ttl(s: str | None, key: str) -> int:
         if s.endswith("s"):
             return int(float(s[:-1]))
         return int(float(s))
-    except ValueError:
+    # OverflowError is NOT a ValueError, and `float("inf")` is what "infd" and
+    # "1e400" parse to. MEASURED: both raised `OverflowError: cannot convert
+    # float infinity to integer` out of `cmd_ack`, a traceback where the module
+    # docstring contracts exit 2 for bad usage. "nand" was already fine, because
+    # `int(nan)` IS a ValueError - which is why the gap was invisible.
+    except (ValueError, OverflowError):
         return DEFAULT_TTL_WEEKLY if key in WEEKLY_KEYS else DEFAULT_TTL_DAILY
 
 
@@ -158,7 +215,12 @@ def autoheal_signals(signals: list[dict], autoheal: dict) -> list[dict]:
         sig = by_key.get(target)
         if not sig or not sig["due"]:
             continue
-        failures = int((autoheal.get(target) or {}).get("failures", 0))
+        # A counter of the wrong shape degrades to 0, which fails toward SILENCE
+        # on this one signal rather than toward a false critical line the
+        # operator cannot act on. `int((x or {}).get(...))` raised AttributeError
+        # on a string entry and ValueError on a non-numeric count.
+        entry = autoheal.get(target)
+        failures = int(_num_or(entry.get("failures", 0))) if isinstance(entry, dict) else 0
         if failures >= ops.AUTOHEAL_ESCALATE:
             out.append({
                 "key": f"{target}_autoheal",
@@ -180,10 +242,14 @@ def ack_suppressed(sig: dict, ack: dict, now: float) -> bool:
     """True if `sig` is currently ack-silenced: an ack entry exists, is within
     TTL, and the signal's severity has not worsened past the acked band."""
     entry = ack.get(sig["key"])
-    if not entry:
+    # An entry that is not an object is not an ack. `"yesterday"` raised
+    # AttributeError on `.get`, and a non-numeric `acked_at` raised TypeError on
+    # the comparison below; both fail toward NOT suppressing, so a corrupt ack
+    # file loses silence rather than gaining it.
+    if not isinstance(entry, dict):
         return False
-    acked_at = entry.get("acked_at", 0)
-    ttl = entry.get("ttl_seconds", 0)
+    acked_at = _num_or(entry.get("acked_at", 0))
+    ttl = _num_or(entry.get("ttl_seconds", 0))
     if now >= acked_at + ttl:
         return False  # expired
     acked_band = entry.get("acked_band", "ok")
@@ -210,9 +276,9 @@ def assess(engine_root: Path, data_root: Path, state_dir: Path,
     if signals is None:
         signals = gather_live_signals(engine_root, data_root)
     if autoheal is None:
-        autoheal = load_json(state_dir / AUTOHEAL_FILE)
-    ack = load_json(state_dir / ACK_FILE)
-    crunch_on = bool(load_json(state_dir / CRUNCH_FILE).get("on"))
+        autoheal = _state_dict(state_dir / AUTOHEAL_FILE)
+    ack = _state_dict(state_dir / ACK_FILE)
+    crunch_on = bool(_state_dict(state_dir / CRUNCH_FILE).get("on"))
 
     candidates = select_candidates(signals, autoheal)
     displayed: list[dict] = []
@@ -282,7 +348,7 @@ def cmd_ack(args, state_dir: Path, engine_root: Path, data_root: Path) -> int:
     # the key without this line would have stored an ack that silenced nothing,
     # which is worse than the exit-2 refusal it replaced.
     signals = gather_live_signals(engine_root, data_root)
-    signals = signals + autoheal_signals(signals, load_json(state_dir / AUTOHEAL_FILE))
+    signals = signals + autoheal_signals(signals, _state_dict(state_dir / AUTOHEAL_FILE))
     cur = next((s for s in signals if s["key"] == key), None)
     band = cur["severity"] if cur else "ok"
     ttl = parse_ttl(args.ttl, key)
@@ -296,7 +362,7 @@ def cmd_ack(args, state_dir: Path, engine_root: Path, data_root: Path) -> int:
     # firing.
     state_dir.mkdir(parents=True, exist_ok=True)
     with file_lock(state_dir / (ACK_FILE + ".lock"), label="ops-radar-ack"):
-        ack = load_json(state_dir / ACK_FILE)
+        ack = _state_dict(state_dir / ACK_FILE)
         ack[key] = {"acked_at": now, "ttl_seconds": ttl, "acked_band": band}
         save_json_atomic(state_dir / ACK_FILE, ack)
     hrs = ttl / 3600
@@ -320,8 +386,12 @@ def record_heal_result(autoheal: dict, target: str, ok: bool) -> dict:
     """Pure: increment a target's consecutive-failure counter on failure, reset
     it to 0 on success. Returns a NEW dict (no in-place mutation)."""
     out = {k: dict(v) if isinstance(v, dict) else v for k, v in autoheal.items()}
-    entry = dict(out.get(target) or {})
-    entry["failures"] = 0 if ok else int(entry.get("failures", 0)) + 1
+    # `dict("broken")` raised ValueError and `int("many")` raised ValueError, so
+    # a corrupt counter for ONE target killed the heal pass for both. A counter
+    # that cannot be read restarts from this run rather than blocking it.
+    raw = out.get(target)
+    entry = dict(raw) if isinstance(raw, dict) else {}
+    entry["failures"] = 0 if ok else int(_num_or(entry.get("failures", 0))) + 1
     out[target] = entry
     return out
 
@@ -424,7 +494,7 @@ def run_autoheal(state_dir: Path, engine_root: Path, data_root: Path,
 
 def _autoheal_locked(state_dir: Path, engine_root: Path, signals,
                      restart_fn, rebuild_fn) -> dict:
-    autoheal = load_json(state_dir / AUTOHEAL_FILE)
+    autoheal = _state_dict(state_dir / AUTOHEAL_FILE)
     by_key = {s["key"]: s for s in signals}
     actions: list[dict] = []
 

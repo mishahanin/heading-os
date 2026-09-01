@@ -139,7 +139,15 @@ def _run_with_broken_pytest(tc, monkeypatch, tmp_path, exc):
     probe.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
     monkeypatch.setattr(tc, "changed_python_files", lambda: [probe])
     monkeypatch.setattr(tc, "deleted_python_files", list)
-    monkeypatch.setattr(tc, "narrow", lambda paths, transcript: (paths, 0))
+    # `narrow_with_scope`, not `narrow`. `scripts/turn-check.py` stopped
+    # binding `narrow` on 2026-08-31, when it needed the third value
+    # (whether session scope was established at all) to satisfy obligation 3
+    # of `.claude/rules/scope-claims.md`. The rename is what makes this line
+    # honest: with the old name absent, `monkeypatch.setattr` RAISES. Had the
+    # module kept a re-exported `narrow` beside it, this patch would have
+    # bound a name nobody reads and the test would have passed over nothing.
+    monkeypatch.setattr(tc, "narrow_with_scope",
+                        lambda paths, transcript: (paths, 0, True))
     monkeypatch.setattr(tc, "matching_tests", lambda paths: [probe])
     monkeypatch.setattr(tc, "lane_compile", lambda paths: [])
     monkeypatch.setattr(tc, "lane_import", lambda paths: [])
@@ -177,7 +185,8 @@ def test_the_renderer_still_calls_a_real_failure_failed(tc, monkeypatch, tmp_pat
     probe.write_text("def test_no():\n    assert False\n", encoding="utf-8")
     monkeypatch.setattr(tc, "changed_python_files", lambda: [probe])
     monkeypatch.setattr(tc, "deleted_python_files", list)
-    monkeypatch.setattr(tc, "narrow", lambda paths, transcript: (paths, 0))
+    monkeypatch.setattr(tc, "narrow_with_scope",
+                        lambda paths, transcript: (paths, 0, True))
     monkeypatch.setattr(tc, "matching_tests", lambda paths: [probe])
     monkeypatch.setattr(tc, "lane_compile", lambda paths: [])
     monkeypatch.setattr(tc, "lane_import", lambda paths: [])

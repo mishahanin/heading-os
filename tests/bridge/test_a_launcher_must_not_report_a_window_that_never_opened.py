@@ -370,3 +370,89 @@ def test_the_linux_attach_builder_validates_its_own_slug():
 def test_the_linux_attach_builder_still_builds_for_a_valid_slug():
     cmd = T.build_linux_attach_command("/usr/bin/xterm", "bond")
     assert cmd == ["/usr/bin/xterm", "-e", "tmux", "attach", "-t", "31c-bond"]
+
+
+# --- the FOCUS half of spawn_or_focus, and the race it carves out ------------
+#
+# Added 2026-08-31. Every tmux test above pins `_tmux_has_session` to False, so
+# only the SPAWN half of `spawn_or_focus` was ever driven, and the two branches
+# that handle an already-live session had no case at all. Measured that day,
+# each deletion alone leaving `tests/bridge` at 1312 passed, 1 skipped, which is
+# the baseline:
+#
+#   `if _tmux_has_session(session): return` in `_run_tmux_session`
+#   the `if "duplicate session" in detail: return` carve-out below it
+#
+# Both exist to stop a launch that SUCCEEDED from being reported as a failure,
+# which is this module's own subject read the other way round. `TerminalUnavailable`
+# out of `/launch` tells the operator no window opened while a session is sitting
+# there ready.
+
+def test_a_live_session_is_focused_rather_than_created_again(monkeypatch):
+    """The FOCUS half. tmux is never spawned when the session already exists."""
+    calls: list[list[str]] = []
+    proc = _FakeProc(rc=0)
+    monkeypatch.setattr(T.sys, "platform", "linux")
+    monkeypatch.setattr(T.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.setattr(T, "_tmux_has_session", lambda session: True)
+    monkeypatch.setattr(T.subprocess, "Popen",
+                        lambda argv, *a, **kw: (calls.append(list(argv)), proc)[1])
+
+    out = T.spawn_or_focus("bond", "t", Path("/tmp"), "osint", None)  # noqa: S108
+
+    assert out["launched"] is True
+    assert calls == [], f"a live session was re-created instead of focused: {calls}"
+
+
+def test_the_session_name_probed_is_the_one_being_created(monkeypatch):
+    """`_run_tmux_session` reads the name out of the argv it was handed.
+
+    A stub that ignores its argument cannot see that, so the probe records what
+    it was asked.
+    """
+    asked: list[str] = []
+    monkeypatch.setattr(T.sys, "platform", "linux")
+    monkeypatch.setattr(T.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.setattr(T, "_tmux_has_session",
+                        lambda session: bool(asked.append(session)))
+    monkeypatch.setattr(T.subprocess, "Popen", lambda *a, **kw: _FakeProc(rc=0))
+
+    T.spawn_or_focus("bond", "t", Path("/tmp"), "osint", None)  # noqa: S108
+
+    assert asked == ["31c-bond"], asked
+
+
+def test_a_duplicate_session_race_is_not_reported_as_a_failure(monkeypatch):
+    """Two launches raced past the probe; tmux refuses the second create.
+
+    The session the caller asked for exists, so this is a success. Without the
+    carve-out the operator is told the launch failed and no window opened, while
+    `tmux attach -t 31c-bond` would have worked.
+    """
+    _posix(monkeypatch, _FakeProc(rc=1, stderr=b"duplicate session: 31c-bond"))
+    out = T.spawn_or_focus("bond", "t", Path("/tmp"), "osint", None)  # noqa: S108
+    assert out["launched"] is True
+    assert out["attach_hint"] == "tmux attach -t 31c-bond"
+
+
+def test_any_other_tmux_failure_is_still_a_failure(monkeypatch):
+    """The carve-out must stay narrow, or it swallows every real failure.
+
+    A ban on reporting failures passes the test above; this is the anchor that
+    refuses it.
+    """
+    _posix(monkeypatch, _FakeProc(
+        rc=1, stderr=b"no server running on /tmp/tmux-1000/default"))
+    with pytest.raises(T.TerminalUnavailable, match="exited 1"):
+        T.spawn_or_focus("bond", "t", Path("/tmp"), "osint", None)  # noqa: S108
+
+
+def test_the_real_cause_reaches_the_operator(monkeypatch):
+    """tmux's own stderr is quoted rather than guessed at."""
+    _posix(monkeypatch, _FakeProc(rc=1, stderr=b"open terminal failed: not a terminal"))
+    with pytest.raises(T.TerminalUnavailable, match="not a terminal"):
+        T.spawn_or_focus("bond", "t", Path("/tmp"), "osint", None)  # noqa: S108

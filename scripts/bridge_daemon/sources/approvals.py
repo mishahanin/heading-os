@@ -307,7 +307,37 @@ def list_approvals(workspace_root: Path) -> dict:
             # Read just enough to grab headers + H1 (cap bytes for safety).
             with p.open("r", encoding="utf-8") as f:
                 head = f.read(4096)
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # Named, like the two skips above it. This was a bare `continue`,
+            # the only silent one in the loop: a draft the daemon could not
+            # read left the approvals queue with no record that it had ever
+            # been there. MEASURED 2026-08-31 on a chmod 000 draft carrying
+            # `**Subject:** DO NOT LOSE` beside one readable draft: the
+            # listing returned 1 item and logged nothing at any level. This
+            # queue is where the operator decides what to send, so a draft
+            # that is present on disk and absent from the page has to say why.
+            #
+            # `UnicodeDecodeError` joined the clause on 2026-09-01. It is a
+            # `ValueError`, not an `OSError`, so a draft that is not valid
+            # UTF-8 was not skipped-and-logged here: it raised straight out of
+            # the walk and took the WHOLE queue with it, losing every other
+            # pending draft rather than the one bad file. MEASURED that day
+            # with one 0xe9 in a `**Subject:**` line beside one clean draft:
+            # `list_approvals` raised UnicodeDecodeError. Skipping one draft is
+            # the documented behaviour above; dropping the page is not.
+            logger.warning("skipping unreadable draft %s; it will not appear "
+                           "in the approvals queue", p, exc_info=True)
+            continue
+        # The SIZE cap `read_draft` enforces, applied by the LIST scan too, for
+        # the same reason the symlink rule above it is. MEASURED 2026-09-01 on a
+        # 250 KB draft: `list_approvals` published the row with its `**To:**`
+        # and `**Subject:**` and `read_draft` answered
+        # `file too large (250054 bytes, max 200000)`, so the approvals queue
+        # carried a card the operator cannot open and can still mark sent.
+        if stat.st_size > DRAFT_MAX_BYTES:
+            logger.warning("skipping oversized draft %s (%d bytes, max %d); "
+                           "read_draft refuses this row too",
+                           p, stat.st_size, DRAFT_MAX_BYTES)
             continue
         headers = _parse_headers(head)
         # First H1 if present, else filename stem.

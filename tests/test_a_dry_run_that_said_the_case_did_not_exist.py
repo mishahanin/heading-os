@@ -32,6 +32,12 @@ than the method established.
     verbatim, and printed codes 3-6 as a yellow `[WARN]` with a bare number.
     Code 5 means nothing was measured at all.
 
+A seventh, 2026-09-01, of the same family as the sixth: the benchmark sidecar's
+reader named only `json.JSONDecodeError`, so a file it could not DECODE (or
+could not open) raised after every case had been graded and paid for -- past the
+wrong-shape branch added to prevent exactly that loss, and past the quarantine
+that keeps the baseline.
+
 Run: .venv/bin/python -m pytest tests/test_a_dry_run_that_said_the_case_did_not_exist.py -q
 """
 from __future__ import annotations
@@ -277,6 +283,51 @@ def test_a_present_tree_with_no_evals_keeps_its_own_message(
     captured = capsys.readouterr()
     assert "No skills with evals" in captured.out
     assert "not found" not in captured.err
+
+
+@pytest.mark.parametrize("payload, reason", [
+    (b"\xff\xfe\x00{", "unreadable"),
+    (b"{not json", "unparseable"),
+    (b"[]", "not an object"),
+])
+def test_a_benchmark_sidecar_the_runner_cannot_use_is_quarantined_not_raised(
+        evalrun, eval_tree, monkeypatch, capsys, payload, reason):
+    """The graded run is already PAID FOR by the time this file is opened.
+
+    The wrong-shape branch was added because `[]` loaded fine and then raised
+    TypeError after every case had been billed. An undecodable sidecar took the
+    same loss by a route that never reached it: `read_text(encoding="utf-8")`
+    raises `UnicodeDecodeError`, a `ValueError`, and the handler named only
+    `json.JSONDecodeError`. Measured 2026-09-01. The write path is the same one
+    the other two rows take, so the baseline is quarantined rather than deleted.
+    """
+    bench = eval_tree / "demo" / "evals" / "benchmark.json"
+    bench.write_bytes(payload)
+
+    # No `--case`: the sidecar's contract is "the last FULL run", so a filtered
+    # run leaves it alone and would never reach the branch under test.
+    _argv(monkeypatch, "--skill", "demo")
+    assert evalrun.main() == 0
+
+    err = capsys.readouterr().err
+    assert reason in err, err
+    assert json.loads(bench.read_text(encoding="utf-8"))["last_run"], (
+        "a fresh baseline was not written")
+
+
+def test_a_usable_benchmark_sidecar_is_left_where_it_is(
+        evalrun, eval_tree, monkeypatch, capsys):
+    """The anchor. A handler that quarantined everything would pass above and
+    throw away the one artefact that makes runs comparable."""
+    bench = eval_tree / "demo" / "evals" / "benchmark.json"
+    bench.write_text(json.dumps({"history": ["a prior run"]}), encoding="utf-8")
+
+    _argv(monkeypatch, "--skill", "demo")
+    assert evalrun.main() == 0
+
+    assert "unreadable" not in capsys.readouterr().err
+    written = json.loads(bench.read_text(encoding="utf-8"))
+    assert written["history"] == ["a prior run"], written
 
 
 def test_a_file_beside_the_skills_is_not_mistaken_for_one(

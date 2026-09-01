@@ -153,6 +153,33 @@ def test_handoff_nextsteps_strips_only_real_ordinal(tmp_path, monkeypatch):
     assert h["next_steps"] == ["2026-Q3 forecast due", "3D print the bracket", ".env rotation"]
 
 
+def test_handoff_stops_reading_steps_at_the_summary_heading(tmp_path, monkeypatch):
+    """The model's own prose below `## Summary` routinely carries its own
+    `## Next steps`, and without the latch those bullets APPEND to the real
+    list: /next then renders the previous session's steps as this handoff's.
+
+    The latch has been in `read_handoff` with a measurement written beside it
+    ("a summary containing that heading produced four steps, two of them the
+    body's") and nothing testing it. MEASURED 2026-09-01 by replacing the
+    `break` with `pass`: every test in this file stayed green.
+    """
+    monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path))
+    latest = tmp_path / "outputs" / "operations" / "handoff-archive" / ".latest"
+    latest.mkdir(parents=True)
+    (latest / "summary.md").write_text(
+        "# H\n\nSource: a/b.md\n\n## Next steps\n\n"
+        "1. Ship the gate.\n2. Re-run the audit.\n\n"
+        "## Summary\n\nThe session opened on last week's handoff, which said:\n\n"
+        "## Next steps\n\n1. A step from the PREVIOUS session.\n"
+        "2. Another one nobody asked for now.\n",
+        encoding="utf-8")
+
+    h = next_signal.read_handoff()
+
+    assert h["next_steps"] == ["Ship the gate.", "Re-run the audit."], (
+        "the body's own '## Next steps' was appended to the real list")
+
+
 def test_handoff_body_source_line_does_not_hijack_header(tmp_path, monkeypatch):
     monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path))
     latest = tmp_path / "outputs" / "operations" / "handoff-archive" / ".latest"

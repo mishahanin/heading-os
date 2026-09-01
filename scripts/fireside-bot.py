@@ -512,18 +512,44 @@ def _read_jsonl_rows(path: Path) -> list[dict]:
 
     One reader, so a caller cannot forget the `exists()` guard the way
     `cmd_email_backup` did on its second pass over dm-log.jsonl.
+
+    Decoding is per LINE, through `jsonl_lines`, and that settles two separate
+    defects in the one expression this used to be.
+
+    `read_text(encoding="utf-8")` raises `UnicodeDecodeError` on undecodable
+    bytes, and that is a `ValueError`: neither an `OSError` nor the
+    `json.JSONDecodeError` the per-line handler below catches. So one torn
+    append to `dm-log.jsonl` or `sessions.jsonl` raised out of here, out of
+    `cmd_email_backup`, and no speaker got a backup email. Widening the
+    whole-file read to `except UnicodeError` stopped the raise by returning the
+    file EMPTY, which trades a crash for losing every intact row -- and this
+    reader's own contract is that one bad LINE costs one row.
+
+    `str.splitlines()` was the second. It breaks on eight characters a JSONL
+    record does not end at, three of which (U+0085, U+2028, U+2029)
+    `append_jsonl` writes raw because it uses `ensure_ascii=False`. A record
+    carrying one was written as a single valid line and then shredded into
+    halves that no longer parsed, and the `JSONDecodeError` clause dropped both
+    in silence. MEASURED 2026-09-01: an `idea_submitted` row whose text held one
+    U+2028 (what a browser paste produces for a line separator) vanished from
+    `responded_user_ids` in `cmd_email_backup`, so the member who HAD answered
+    was mailed "haven't seen a response". `bytes.splitlines()` breaks on `\\n`
+    and `\\r` only.
     """
+    from scripts.utils.jsonl_lines import jsonl_lines
+
     rows: list[dict] = []
     if not path.exists():
         return rows
     try:
-        text = path.read_text(encoding="utf-8")
+        lines = list(jsonl_lines(path))
     except OSError:
         log_error(f"could not read {path}")
         return rows
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
+    undecodable = 0
+    for line in lines:
+        if line is None:
+            undecodable += 1
             continue
         try:
             row = json.loads(line)
@@ -531,6 +557,8 @@ def _read_jsonl_rows(path: Path) -> list[dict]:
             continue
         if isinstance(row, dict):
             rows.append(row)
+    if undecodable:
+        log_error(f"{path}: skipped {undecodable} undecodable line(s)")
     return rows
 
 
@@ -1548,22 +1576,20 @@ def _dm_already_sent(dm_log_path: Path, speaker_username: str, dm_type: str,
     """
     if not dm_log_path.exists():
         return False
-    with open(dm_log_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
+    # Through `jsonl_lines`, so a torn append costs that line rather than the
+    # run. The decode used to happen inside `for line in f`, outside the handler
+    # below, and `UnicodeDecodeError` is a `ValueError` that
+    # `except json.JSONDecodeError` cannot see. A raise here takes the whole
+    # email-backup job down; the alternative failure, a silent False, mails a
+    # second identical letter to a real person. Skipping the one line is neither.
+    for entry in _read_jsonl_rows(dm_log_path):
+        if (entry.get("dm_type") == dm_type
+                and entry.get("speaker_username") == speaker_username
+                and entry.get("session_date") == session_date
+                and entry.get("delivered")):
+            if on_date is not None and str(entry.get("ts", ""))[:10] != on_date:
                 continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if (entry.get("dm_type") == dm_type
-                    and entry.get("speaker_username") == speaker_username
-                    and entry.get("session_date") == session_date
-                    and entry.get("delivered")):
-                if on_date is not None and str(entry.get("ts", ""))[:10] != on_date:
-                    continue
-                return True
+            return True
     return False
 
 
@@ -2108,18 +2134,14 @@ def _load_swap_requests() -> dict:
     path = state_path(SWAP_REQUESTS_LOG)
     if not path.exists():
         return {}
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                e = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            rid = e.get("rid")
-            if rid:
-                by_rid[rid].append(e)
+    # `_read_jsonl_rows`, not a fourth hand-rolled copy of the same walk. The
+    # copies each decoded the whole file inside `for line in f`, outside their
+    # own `except json.JSONDecodeError`, so a torn append raised out of the swap
+    # state machine entirely.
+    for e in _read_jsonl_rows(path):
+        rid = e.get("rid")
+        if rid:
+            by_rid[rid].append(e)
     return dict(by_rid)
 
 
@@ -4296,46 +4318,37 @@ def cmd_stats(args) -> None:
     no_show_count: dict[str, int] = {}
     swap_count = 0
 
-    sessions_path = state_path(SESSIONS_LOG)
-    if sessions_path.exists():
-        with open(sessions_path, "r", encoding="utf-8") as f:
-            for line in f:
-                try:
-                    e = json.loads(line.strip())
-                except (json.JSONDecodeError, ValueError):
-                    continue
-                t = e.get("event_type")
-                if t == "session_logged":
-                    for u in (e.get("shared") or "").split(","):
-                        if u.strip():
-                            spoken_users.add(u.strip())
-                    for u in (e.get("no_shows") or "").split(","):
-                        if u.strip():
-                            no_show_count[u.strip()] = no_show_count.get(u.strip(), 0) + 1
-                elif t == "swap_requested":
-                    swap_count += 1
+    # `_read_jsonl_rows`, not another copy of the walk. `except (json.JSONDecodeError, ValueError)`
+    # here LOOKED like it covered the decode -- `UnicodeDecodeError` is a
+    # `ValueError` -- but the decode happens in `for line in f`, one frame
+    # outside the try, so it never reached this clause and the report died on a
+    # torn append instead of printing.
+    for e in _read_jsonl_rows(state_path(SESSIONS_LOG)):
+        t = e.get("event_type")
+        if t == "session_logged":
+            for u in (e.get("shared") or "").split(","):
+                if u.strip():
+                    spoken_users.add(u.strip())
+            for u in (e.get("no_shows") or "").split(","):
+                if u.strip():
+                    no_show_count[u.strip()] = no_show_count.get(u.strip(), 0) + 1
+        elif t == "swap_requested":
+            swap_count += 1
 
     delivered = total = 0
-    dm_log_path = state_path(DM_LOG)
-    if dm_log_path.exists():
-        with open(dm_log_path, "r", encoding="utf-8") as f:
-            for line in f:
-                try:
-                    e = json.loads(line.strip())
-                except (json.JSONDecodeError, ValueError):
-                    continue
-                # No "helmsman_brief" here: nothing writes a dm-log row with
-                # that type. `cmd_helmsman_brief` records its send through
-                # `_log_event("helmsman_briefed", ...)`, so the filter named
-                # five categories and counted four, and the percentage beneath
-                # spoke for a set it never contained. Either the writer or the
-                # reader had to change; the brief is already covered by the
-                # "briefed" flag rendered under "Helmsman schedule" below, so
-                # the reader is the one that was lying.
-                if e.get("dm_type") in ("2wk", "3day", "dayof", "email-backup"):
-                    total += 1
-                    if e.get("delivered"):
-                        delivered += 1
+    for e in _read_jsonl_rows(state_path(DM_LOG)):
+        # No "helmsman_brief" here: nothing writes a dm-log row with
+        # that type. `cmd_helmsman_brief` records its send through
+        # `_log_event("helmsman_briefed", ...)`, so the filter named
+        # five categories and counted four, and the percentage beneath
+        # spoke for a set it never contained. Either the writer or the
+        # reader had to change; the brief is already covered by the
+        # "briefed" flag rendered under "Helmsman schedule" below, so
+        # the reader is the one that was lying.
+        if e.get("dm_type") in ("2wk", "3day", "dayof", "email-backup"):
+            total += 1
+            if e.get("delivered"):
+                delivered += 1
 
     completed = sum(1 for s in schedule if s.get("completed"))
     sessions_total = len(set((s["session_date"]) for s in schedule))
@@ -4440,20 +4453,21 @@ def cmd_health_check(args) -> None:
     # case, a file that exists and holds no tick, alerted. The monitor went
     # quiet exactly where the evidence was worst. Fall through with no ticks
     # instead, and let the `last_tick_ts is None` branch below say so.
+    #
+    # The read goes through `_read_jsonl_rows`, which decodes a line at a time.
+    # `read_text(...).splitlines()` decoded the WHOLE file with no handler at
+    # all, and the `except (json.JSONDecodeError, ValueError)` two lines further down could not
+    # cover it because the decode had already happened outside the try. So this
+    # monitor - the one job whose purpose is to notice that the bot stopped
+    # writing ticks - died on a torn append to the very file it reads, and
+    # `dm-log.jsonl` is append-only with nothing pruning it, so it stayed dead.
     dm_log_path = state_path(DM_LOG)
-    lines_in_log: list[str] = []
-    if dm_log_path.exists():
-        lines_in_log = dm_log_path.read_text(encoding="utf-8").splitlines()
-    else:
+    if not dm_log_path.exists():
         print(f"{YELLOW}health-check: dm-log.jsonl missing{RESET}")
 
     last_tick_ts = None
     last_tick: dict = {}
-    for line in lines_in_log:
-        try:
-            e = json.loads(line.strip())
-        except (json.JSONDecodeError, ValueError):
-            continue
+    for e in _read_jsonl_rows(dm_log_path):
         # Either tick type counts as proof of life, and since 2026-08-25 the two
         # certify the same thing: poll-tick is written after a successful
         # getUpdates, heartbeat-tick after a successful getWebhookInfo. Both mean

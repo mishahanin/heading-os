@@ -112,7 +112,21 @@ def write_env(updates: dict) -> None:
     the replacement line is written bare, so the file ends up agreeing with
     itself rather than carrying an indented ghost of the old value.
     """
-    lines = _ENV_FILE.read_text(encoding="utf-8").splitlines()
+    # Guarded the way `load_env_key` above already guards its read. That one
+    # catches `(OSError, UnicodeDecodeError)` and exits with the reason, and its
+    # docstring records why: "An undecodable file used to raise
+    # UnicodeDecodeError out of a provisioning CLI as a traceback." This twin,
+    # twenty lines down and reading the SAME file, never got the same treatment.
+    # MEASURED 2026-09-01 on a `.env` holding one non-UTF-8 byte: `run_setup`
+    # had already upserted every check on healthchecks.io by the time it reached
+    # here, so the traceback lost the ping URLs for checks that now exist, and a
+    # re-run creates nothing new to recover them from.
+    try:
+        lines = _ENV_FILE.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        sys.exit(f"ERROR: could not read {_ENV_FILE}: {exc}. "
+                 f"The checks were provisioned; re-run once .env is readable "
+                 f"to write the ping URLs back.")
     remaining = dict(updates)
     for i, line in enumerate(lines):
         pair = parse_env_line(line)

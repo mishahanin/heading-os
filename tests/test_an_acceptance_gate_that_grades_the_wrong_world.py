@@ -570,6 +570,52 @@ def test_a_normal_slug_still_finds_its_contract(tmp_path):
     assert status != "MISSING"
 
 
+def test_another_plans_contract_is_not_claimed_as_this_ones(tmp_path):
+    """A gate failing OPEN, on the reproduction its own source comment names.
+
+    The matcher between `glob` and today was `p.name.endswith(f"-{slug}")` - a
+    suffix of the whole DIRECTORY name rather than of the slug segment - so any
+    slug that ends another one collected it. `check_gate` compares
+    `_dir_slug(p.name) == slug` for exactly this, and nothing measured it:
+    MEASURED 2026-09-01, restoring the `endswith` form left all 43 tests
+    passing.
+
+    FOUND is the one signal here that means "this plan went through the gate",
+    so a wrong FOUND is the reading worth preventing: the plan
+    `2026-06-28-fix.md` would be reported as gated by a contract belonging to
+    `2026-01-01-bug-fix`.
+    """
+    other = tmp_path / "2026-01-01-bug-fix"
+    other.mkdir()
+    (other / "test_contract.py").write_text("", encoding="utf-8")
+
+    # The premise, stated so this case cannot pass for the wrong reason.
+    assert ccg.derive_slug("plans/2026-06-28-fix.md") == "fix"
+    assert other.name.endswith("-fix"), "the collision this test is about is gone"
+    assert ccg._dir_slug(other.name) == "bug-fix"
+
+    status, detail = ccg.check_gate("plans/2026-06-28-fix.md", contract_dir=tmp_path)
+    assert status == "MISSING", (
+        f"the gate claimed another plan's contract: {detail}")
+
+
+def test_the_slug_segment_match_is_not_merely_a_refusal(tmp_path):
+    """The sole witness for the other direction: with its OWN contract present
+    beside the near-miss, the same plan must still be FOUND - so "always
+    MISSING" cannot satisfy the case above."""
+    (tmp_path / "2026-01-01-bug-fix").mkdir()
+    (tmp_path / "2026-01-01-bug-fix" / "test_contract.py").write_text(
+        "", encoding="utf-8")
+    own = tmp_path / "2026-06-28-fix"
+    own.mkdir()
+    (own / "test_contract.py").write_text("", encoding="utf-8")
+
+    status, detail = ccg.check_gate("plans/2026-06-28-fix.md", contract_dir=tmp_path)
+    assert status == "FOUND", detail
+    assert "2026-06-28-fix" in detail and "bug-fix" not in detail, (
+        f"the gate named the wrong contract: {detail}")
+
+
 # ============================================================
 # check-path-references 1, 2
 # ============================================================

@@ -107,6 +107,31 @@ def test_scans_frontmatter_descriptions(tmp_path):
     assert flagged_files == {"deal.md"}, result["flagged_descriptions"]
 
 
+def test_a_description_line_outside_frontmatter_is_not_a_description(tmp_path):
+    """`_extract_description` reads a FRONTMATTER value, not any matching line.
+
+    The reader returns "" unless the file opens with `---`, so prose that
+    happens to start a line with `description:` in the body is not a
+    pointer-layer summary and must not be scanned as one. Nothing measured that
+    until 2026-09-01: with the header check removed, this file stayed green,
+    because every fixture it wrote carried frontmatter. The guard is what keeps
+    an advisory, precision-first scanner from flagging body text -- which is the
+    place the rule says a live number BELONGS.
+    """
+    mem_dir = _write_memory(tmp_path, ["- [Clean](clean.md) — a clean topic hook."])
+    (mem_dir / "prose.md").write_text(
+        "# A note with no frontmatter\n\n"
+        "description: live offer 640k, seller 700k firm\n",
+        encoding="utf-8",
+    )
+    _write_memory_file(mem_dir, "real.md", "live offer 640k, seller 700k firm")
+
+    result = scan_volatile_hooks(mem_dir)
+
+    flagged_files = {f["file"] for f in result["flagged_descriptions"]}
+    assert flagged_files == {"real.md"}, result["flagged_descriptions"]
+
+
 def test_missing_memory_md_is_clean(tmp_path):
     mem_dir = tmp_path / "auto-memory"
     mem_dir.mkdir()

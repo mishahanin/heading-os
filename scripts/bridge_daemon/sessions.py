@@ -15,12 +15,19 @@ def read_registry(path: Path) -> dict:
     array reached `session_for_cwd`, which called `.get` on a list and 500'd
     `/launch`. `heartbeat._active_session_count` already reads the same file
     with both guards; this was the copy that drifted.
+
+    `UnicodeDecodeError` is in the tuple because it is a `ValueError`, not an
+    `OSError`, and `json.JSONDecodeError` never covers it: the decode happens
+    in `read_text` BEFORE `json.loads` is reached. A registry left holding a
+    torn half-written multi-byte character therefore raised straight out of
+    this reader and 500'd `/launch`, past a docstring promising `{}` for
+    anything not usable.
     """
     if not path.exists():
         return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
 

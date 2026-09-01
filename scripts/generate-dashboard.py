@@ -193,9 +193,28 @@ def esc(text):
 
 
 def read_file(path):
-    if path.exists():
+    """The text of a dashboard source, or "" when this cannot read it.
+
+    Every panel already distinguishes "the source was not read" from "the source
+    was empty": the collectors leave `source_read` False on a falsy return and
+    `_sync_label` renders that as NOT SYNCED. A file this cannot decode belongs
+    in the first of those two states, and until 2026-09-01 it reached neither -
+    `read_text(encoding="utf-8")` raised `UnicodeDecodeError` (a ValueError, so
+    no relation to the OSError handlers elsewhere on this page) straight out of
+    `collect_calendar`, and the whole dashboard died over one byte in one source.
+
+    Announced rather than swallowed, because "" is also what an empty file
+    gives: without this line the panel would report NOT SYNCED with the reason
+    recorded nowhere.
+    """
+    if not path.exists():
+        return ""
+    try:
         return path.read_text(encoding="utf-8")
-    return ""
+    except (OSError, UnicodeDecodeError) as exc:
+        print(f"[generate-dashboard] could not read {path}: {exc}",
+              file=sys.stderr)
+        return ""
 
 
 # parse_md_table used to live here, and an identical copy lived in
@@ -787,7 +806,19 @@ def collect_freshness():
         if not path.exists():
             result.append({"name": name, "date": None, "age": None, "health": "red"})
             continue
-        content = path.read_text(encoding="utf-8")
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            # The impossible-date branch below already refuses to let one bad
+            # line in one of four files kill the whole run. An undecodable
+            # context file did exactly that, by the other door and with no
+            # handler at all: `read_text(encoding="utf-8")` raised
+            # UnicodeDecodeError out of the loop and the CEO got no dashboard.
+            # Measured 2026-09-01. One unreadable file degrades one row.
+            print(f"  Warning: {name} is unreadable ({exc})", file=sys.stderr)
+            result.append({"name": name, "date": None, "age": None,
+                           "health": "gray"})
+            continue
         match = re.search(r"Last verified:\s*(\d{4}-\d{2}-\d{2})", content)
         if match:
             date_str = match.group(1)
@@ -994,7 +1025,12 @@ def collect_viraid():
             stats = state.get("stats", {})
             result["completion_rate"] = _as_percent(stats.get("completion_rate"))
             result["rate_known"] = True
-        except (json.JSONDecodeError, OSError) as e:
+        except (json.JSONDecodeError, UnicodeError, OSError) as e:
+            # UnicodeError, because the decode happens inside `read_text` and a
+            # UnicodeDecodeError is a ValueError, so neither named clause caught
+            # it: the corrupt-state case this handler was written for escaped it
+            # in the one shape that produces no JSON at all.
+            #
             # The only handler in this file that said nothing at all. A corrupt
             # or unreadable state.json left `completion_rate` at its initialised
             # 0.0, which reached `{rate:.0f}%` and drew a measured-looking "0%"
@@ -1026,7 +1062,15 @@ def collect_capture_payoff():
     def _recent(md_path):
         try:
             fm, _ = _parse_fm(md_path.read_text(encoding="utf-8"))
-        except Exception:
+        except (OSError, UnicodeError, ValueError) as exc:
+            # Named, not swallowed. This was `except Exception: return False`
+            # with no line printed, so a note this reader could not open was
+            # dropped from "Signals Captured (7d)" in complete silence -- the
+            # same undercount the `no readable date` warning fifteen lines down
+            # exists to make visible, by the other door. A cp1251 note is the
+            # ordinary way to hit it.
+            print(f"[generate-dashboard] {md_path.name}: unreadable ({exc}); "
+                  f"not counted as a captured signal", file=sys.stderr)
             return False
         unreadable = []
         for key in ("updated", "created", "date", "ingested"):

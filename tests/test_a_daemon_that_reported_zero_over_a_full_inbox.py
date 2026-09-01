@@ -235,6 +235,33 @@ def test_a_backlog_larger_than_the_window_is_eventually_drained(inbox):
     assert len(seen) == 120, f"{120 - len(seen)} message(s) never entered a cycle"
 
 
+def test_a_backlog_that_overlaps_the_newest_window_is_not_served_twice(inbox):
+    """The `seen_ids` skip, which nothing measured.
+
+    With 60 unread and a window of 50 the two ends OVERLAP: the newest slice
+    holds ids 10-59 and the oldest-first walk reaches them after ten items.
+    Nothing marks mail read on the server, so without the skip those forty land
+    in the cycle a second time and the daemon scores, notifies and queues each
+    of them twice. Measured 2026-09-01: deleting the skip left all 144 tests
+    over `sentinel.py` green, and this cycle came back with 100 items of which
+    40 were duplicates.
+
+    The drain test above cannot see it: at 120 unread against a window of 50
+    the two ends do not meet, so the skip never fires there.
+    """
+    source = inbox(60, max_per_check=50)
+
+    got = source.check_new()
+
+    ids = [item["message_id"] for item in got]
+    assert ids, "the fake mailbox served nothing; the test proves nothing"
+    repeated = sorted({m for m in ids if ids.count(m) > 1})
+    assert repeated == [], (
+        f"{len(repeated)} message(s) were served twice in one cycle: {repeated[:5]}"
+    )
+    assert len(ids) == 60
+
+
 def test_the_newest_mail_is_still_read_first(inbox):
     """This is an urgency daemon: fresh mail must not queue behind a backlog."""
     source = inbox(120, max_per_check=50)

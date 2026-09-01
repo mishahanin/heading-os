@@ -147,6 +147,35 @@ def test_falsy_user_id_rejected(fb, state_dir):
     assert fb._is_authorized_user(0, username="alice") is False
 
 
+def test_a_missing_user_id_does_not_match_every_unbound_member(fb, state_dir):
+    """SECURITY: the `if not user_id` gate is load-bearing, and only for None.
+
+    The test above uses 0, and 0 is a value no roster entry ever holds, so it
+    passes whether or not the gate is there. `None` is a different matter:
+    `bootstrap` leaves an unbootstrapped member at `telegram_user_id: None`, so
+    the roster scan's `v.get("telegram_user_id") == user_id` MATCHES every one
+    of them when `user_id` is None, and the function then returns that member's
+    `active` flag. Bob is exactly that shape here.
+
+    It is reachable from the public webhook. `_handle_message` reads the caller
+    from `message.get("from", {}).get("id")`, and Telegram's `from` is optional
+    on a message: absent, `.get("id")` is None, not 0.
+
+    MEASURED 2026-09-01 with the gate removed and this roster: `None` returned
+    True while `0` still returned False, so the whole file stayed green.
+    """
+    assert fb._is_authorized_user(None) is False
+    assert fb._is_authorized_user(None, username="bob") is False
+
+
+def test_an_update_with_no_from_block_is_not_authorized(fb, state_dir, no_forward):
+    """The same absence arriving the way Telegram actually delivers it."""
+    bot = _FakeBot()
+    fb._handle_message(bot, {"chat": {"type": "private"}, "text": "/start"})
+    assert bot.sent in ([], [(None, fb.UNAUTHORIZED_REPLY)]), bot.sent
+    assert _read_roster(fb, state_dir)["bob"]["telegram_user_id"] is None
+
+
 # ---------------------------------------------------------------------------
 # /start handler: greets bound members, never binds from username
 # ---------------------------------------------------------------------------

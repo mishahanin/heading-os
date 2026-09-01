@@ -188,6 +188,111 @@ def test_a_content_leak_still_outranks_an_unreadable_file(tmp_path, capsys):
 
 
 # ============================================================
+# The same wall, reading the unpushed COMMITS instead of the disk
+# ============================================================
+#
+# `engine_content_scan` grew a history pass on 2026-08-29 and it carries its own
+# `except UnicodeDecodeError` beside its own `unscanned.append`. Nothing bound
+# it: MEASURED 2026-09-01 by mutation, reducing that clause to a bare `continue`
+# -- the exact defect this file exists to close, in the other half of the same
+# function -- survived every test here and every test in
+# `tests/test_a_wall_that_read_the_present_and_shipped_the_past.py`, which is the
+# only other file that reaches `unpushed_blobs`.
+
+
+def _repo_with_remote(tmp_path: Path) -> Path:
+    """A clone with a real bare remote and one PUSHED commit on `origin/main`.
+
+    A real remote, because the history pass asks git what is reachable from HEAD
+    and not from `origin/main`. `_init_repo` above has no remote, so everything
+    it holds is either staged or already the base, and the history pass reads
+    nothing there.
+    """
+    bare = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(bare)], check=True)
+    repo = tmp_path / "work"
+    subprocess.run(["git", "clone", "-q", str(bare), str(repo)], check=True)
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
+    (repo / "seed.md").write_text("seed\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "--no-verify", "-m", "seed")
+    _git(repo, "push", "-q", "origin", "HEAD:main")
+    _git(repo, "fetch", "-q", "origin")
+    return repo
+
+
+def _commit_then_delete(repo: Path, rel: str, blob: bytes) -> None:
+    """Add `rel` in one unpushed commit and remove it in the next.
+
+    The deletion is what separates the two halves of the wall: `is_file()` is
+    false afterwards, so `engine_text_files` drops the path and the DISK pass
+    cannot see it. Only the history pass can, and the push ships the version the
+    first commit carries whatever the working copy says now.
+    """
+    _write_bytes(repo, rel, blob)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "--no-verify", "-m", "add")
+    (repo / rel).unlink()
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "--no-verify", "-m", "drop")
+
+
+def test_an_undecodable_version_in_an_unpushed_commit_is_refused(tmp_path, capsys):
+    """The history half of the same hole, stated as the operator's outcome."""
+    repo = _repo_with_remote(tmp_path)
+    _commit_then_delete(repo, "docs/note.md", UTF16_BYTES)
+    assert not (repo / "docs" / "note.md").exists(), \
+        "the disk pass must not be able to see this file, or the case proves nothing"
+
+    with pytest.raises(SystemExit) as exc:
+        push_all.engine_content_scan(repo, _overlay(tmp_path))
+
+    assert exc.value.code == 2
+    out = capsys.readouterr().out
+    assert "could not read" in out
+    # `path@blobsha`, so the operator can tell a history finding from a disk one:
+    # editing the file now does not remove it.
+    assert "docs/note.md@" in out
+
+
+def test_the_history_refusal_is_recorded_in_the_denial_log(tmp_path, monkeypatch):
+    """Same obligation as the disk half. A refusal nobody can count afterwards
+    is half a control."""
+    repo = _repo_with_remote(tmp_path)
+    _commit_then_delete(repo, "docs/note.md", UTF16_BYTES)
+
+    recorded: list[dict] = []
+    monkeypatch.setattr(push_all, "log_denial", lambda **kw: recorded.append(kw))
+
+    with pytest.raises(SystemExit):
+        push_all.engine_content_scan(repo, _overlay(tmp_path))
+
+    assert [r["mechanism"] for r in recorded] == ["push:engine-content-scan"]
+    # The blob sha survives into the log, so a history refusal stays
+    # distinguishable there from a disk one after the terminal has scrolled.
+    assert recorded[0]["path"].startswith("docs/note.md@")
+    assert recorded[0]["reason"] == "engine-routed file could not be read"
+
+
+def test_a_decodable_version_in_an_unpushed_commit_still_passes(tmp_path):
+    """The negative case. A history pass that refused over every deleted file
+    would block every ordinary push, which is how a wall gets switched off."""
+    repo = _repo_with_remote(tmp_path)
+    _commit_then_delete(repo, "docs/note.md", b"ordinary prose\n")
+
+    assert push_all.engine_content_scan(repo, _overlay(tmp_path)) is None
+
+
+def test_a_binary_version_in_an_unpushed_commit_is_skipped_deliberately(tmp_path):
+    """Brand assets are engine-routed and legitimately not UTF-8 in history too."""
+    repo = _repo_with_remote(tmp_path)
+    _commit_then_delete(repo, "docs/assets/logo.png", b"\x89PNG\r\n\x1a\n\xff\xfe\x00")
+
+    assert push_all.engine_content_scan(repo, _overlay(tmp_path)) is None
+
+
+# ============================================================
 # The shared selector, which is what stops the drift recurring
 # ============================================================
 
@@ -242,10 +347,17 @@ def test_neither_gate_carries_its_own_copy_of_the_filter(tmp_path):
     definition of either name outside `engine_guard.py` puts the two gates back
     on separate code paths, so the AST is asked directly rather than trusting a
     convention.
+
+    `engine_text_rels` joined the watchlist on 2026-09-01. It was split out of
+    `engine_text_files` on 2026-08-29 for the push wall's history pass and the
+    detector had never been told its name, which is the same blindness
+    `tests/test_three_gates_that_read_one_file_three_ways.py` records for
+    `parse_yaml_frontmatter`: a name-keyed sweep sees only the spellings it was
+    given, and the spelling carrying the defect is the one nobody added.
     """
     owner = ROOT / "scripts" / "utils" / "engine_guard.py"
-    watched = {"engine_text_files", "BINARY_SUFFIXES", "_engine_text_files",
-               "_BINARY_SUFFIXES"}
+    watched = {"engine_text_files", "engine_text_rels", "BINARY_SUFFIXES",
+               "_engine_text_files", "_engine_text_rels", "_BINARY_SUFFIXES"}
     offenders: list[str] = []
 
     for path in (ROOT / "scripts" / "content-guard.py",
@@ -273,6 +385,7 @@ def test_the_owner_really_defines_both_names(tmp_path):
              for t in n.targets if isinstance(t, ast.Name)}
 
     assert "engine_text_files" in funcs
+    assert "engine_text_rels" in funcs
     assert "BINARY_SUFFIXES" in names
 
 

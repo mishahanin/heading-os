@@ -463,12 +463,33 @@ def _upsert_env_line(env_path: Path, key: str, value: str) -> None:
     if not updated:
         lines.append(new_line)
     tmp = env_path.with_suffix(env_path.suffix + ".tmp")
-    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    body = "\n".join(lines) + "\n"
     # Mode BEFORE the rename. Setting it afterwards left the new .env at umask
     # defaults -- commonly 0644 -- for the gap between the two calls, on a file
     # that exists to hold credentials.
+    #
+    # And mode before the WRITE, which is the half that was still open until
+    # 2026-09-01. `tmp.write_text(...)` creates `.env.tmp` at 0666 & ~umask, so
+    # the secret sat in a world-readable file for the gap between that call and
+    # the `os.chmod` below it. Same window, same directory, same bytes; only the
+    # filename differed, and nothing reads a filename before deciding whether it
+    # may open a file. The `chmod` was moved above `os.replace` on 2026-08-23 and
+    # the temp file's own creation mode was left behind -- one of two writes
+    # fixed, which is the shape this repository keeps finding.
+    #
+    # `os.open` with an explicit mode, then `fchmod` on the same descriptor: the
+    # mode argument only applies when O_CREAT actually creates the file, so a
+    # `.env.tmp` left behind by a previous crashed run would otherwise keep
+    # whatever mode it had. The fchmod lands before any byte of `body` is
+    # written, and on the descriptor rather than the path, so nothing can be
+    # swapped underneath it in between.
     if os.name == "posix":
-        os.chmod(tmp, 0o600)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(body)
+    else:
+        tmp.write_text(body, encoding="utf-8")
     os.replace(tmp, env_path)
     if os.name == "nt":
         # Best-effort ACL restriction on Windows: remove inheritance, grant the
@@ -530,6 +551,18 @@ def _log(workspace_root: Path, message: str) -> None:
             f.write(f"{_now_iso()} {message}\n")
     except OSError as e:
         print(f"WARNING: could not append to {log_path}: {e}", file=sys.stderr)
+        return
+    # The same mode `.env` and `answers.json` get, and it was missed when they
+    # got it on 2026-08-23. This diary sits in `.setup/` beside `answers.json`
+    # and its only caller is the secret branch: every line names an environment
+    # variable that holds a credential on this machine, and the length of that
+    # credential. That is a shopping list for anyone who can read the file, and
+    # it was landing at umask defaults -- commonly 0644 -- while its neighbour
+    # holding the same class of residue was 0600. Best-effort, like the other
+    # two: a filesystem without POSIX modes cannot honour it and that is not
+    # fatal to a diary line.
+    with contextlib.suppress(OSError):
+        os.chmod(log_path, 0o600)
 
 
 def _iter_matching_files(workspace_root: Path, globs: list[str]):
@@ -1463,12 +1496,33 @@ def cmd_reset(args) -> int:
             )
             if revert.returncode != 0:
                 errors.append({"file": rel, "reason": revert.stderr.strip()})
-        else:
+        elif check.returncode == 1:
+            # 1 is git's answer for "that path is not in the index", which is
+            # the only reading under which deleting the file is right: this run
+            # created it and there is nothing to revert to.
             try:
                 if path.exists():
                     path.unlink()
             except OSError as e:
                 errors.append({"file": rel, "reason": str(e)})
+        else:
+            # Anything else is git failing, not git answering. MEASURED with
+            # git 2.43.0: an untracked path exits 1, a path git refuses to
+            # reason about exits 128 -- and the else-branch this replaces read
+            # both as "untracked" and UNLINKED the file.
+            #
+            # That is the same defect the `--is-inside-work-tree` gate above was
+            # added for, one copy short: there, `ls-files --error-unmatch`
+            # failing for every file in a non-repository sent every file to the
+            # delete branch. The gate closed the whole-run case and left the
+            # per-file case reading a failure as a fact.
+            errors.append({
+                "file": rel,
+                "reason": (f"git ls-files exited {check.returncode} rather than "
+                           f"answering; refusing to delete a file it will not "
+                           f"say is untracked: "
+                           f"{(check.stderr or '').strip()[:200]}"),
+            })
 
     state["applied_at"] = None
     save_answers(workspace_root, state)

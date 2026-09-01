@@ -532,6 +532,25 @@ def main() -> int:
     baseline = frozenset(load_baseline(root))
     results = audit_skills(skills_dir, baseline)
 
+    # A shrink-only ratchet goes blind at zero. Every gate below is a loop over
+    # `results`: with no skills to walk, the size budget, the coverage gate and
+    # the stale-baseline check all say nothing and this function returns 0.
+    # MEASURED 2026-09-01 against a scratch root holding an empty
+    # `.claude/skills`: "Total skills: 0", four zeroes under `triggers.json
+    # coverage`, exit 0. The directory-exists check above does not reach it,
+    # because the directory was there; only its contents were gone.
+    #
+    # `--write-baseline` is the sharper edge, which is why this stands ahead of
+    # it: with `results` empty, `still_uncovered` is empty, `existing &
+    # still_uncovered` is empty, and one run over a collapsed walk rewrites the
+    # committed grandfather set to `[]`.
+    if not results:
+        print(f"{RED}no skills found under{RESET} {skills_dir}\n"
+              f"{GRAY}Every check in this script is a loop over the skills it "
+              f"walked, so an empty walk reports clean. Refusing rather than "
+              f"passing.{RESET}")
+        return 2
+
     if args.write_baseline:
         written, excluded = write_baseline(root, results)
         rel = "/".join(BASELINE_REL)

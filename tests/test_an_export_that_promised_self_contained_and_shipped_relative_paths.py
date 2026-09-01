@@ -27,6 +27,8 @@ font for the rewriting to be checkable.
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 # hyphenated filename -> load as a module by path
 _spec = importlib.util.spec_from_file_location(
@@ -130,6 +132,55 @@ def test_absolute_and_missing_references_are_left_alone(tmp_path):
         '<div style="background:url(images/gone.png)"></div>'
     )
     assert _inline(tmp_path, body) == body
+
+
+@pytest.mark.parametrize("body", ['<img src="images/gone.png">',
+                                  "<img src='images/gone.png'>"],
+                         ids=["double-quoted", "single-quoted"])
+def test_a_missing_src_keeps_its_path_and_does_not_become_the_word_None(
+        tmp_path, body):
+    """`_src`'s `if u else m.group(0)`, which nothing was measuring.
+
+    The row above covers the `url()` branch's missing file and the SCHEME cases
+    for `src=`, but never a `src=` pointing at a file that is simply not there.
+    MEASURED 2026-09-01: dropping the `else m.group(0)` from `_src` left this
+    file green at 12 passed, and a missing image then rendered as
+    `src="None"` - the literal four characters. That is strictly worse than the
+    relative path it replaced: a relative path still resolves for anyone who
+    keeps the export directory, and `src="None"` resolves for nobody and names
+    no file the operator can go and find.
+
+    Both quotings, because `_src` handles both and each writes the quote back
+    from its own capture group. Parametrized rather than looped: `_work_dir`
+    calls `mkdir()` without `exist_ok`, so a second `_inline` under one
+    `tmp_path` raises `FileExistsError` before reaching the assertion.
+    """
+    out = _inline(tmp_path, body)
+    assert out == body, out
+    assert "None" not in out
+
+
+def test_an_already_inlined_src_survives_a_basename_that_would_resolve(tmp_path):
+    """The `url.startswith("data:")` early-out in `_embed_src`.
+
+    The existing already-inlined row cannot see it: `Path("data:font/woff2;
+    base64,QUJD").name` is `base64,QUJD`, which resolves to no font, so the
+    function returns the rule untouched with or without the guard. Measured
+    2026-09-01, deleting the guard left this file green at 12 passed.
+
+    The base64 alphabet INCLUDES `/`, so the tail of a real payload after its
+    last slash is an arbitrary string - and if it ever coincided with a font
+    file's name, `_find_font_file`'s `by_basename` branch would hit and the
+    export would swap an already-embedded face for a different file's bytes.
+    The construction below is that coincidence, made deterministic.
+    """
+    inlined = f"data:font/woff2;base64,QUJD/{FONT_FILE}"
+    html = _face(inlined)
+    fonts = _font_dir(tmp_path)
+    # The premise: without the guard this URL WOULD resolve to a real file.
+    assert pencil_export._find_font_file(
+        FAMILY, [fonts], by_basename=Path(inlined).name) is not None
+    assert pencil_export.resolve_fonts(html, [fonts]) == html
 
 
 # ------------------------------------------------------------------

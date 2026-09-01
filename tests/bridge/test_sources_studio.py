@@ -284,3 +284,52 @@ def test_resolve_artifact_image_rejects_non_image(tmp_path):
 def test_resolve_artifact_image_rejects_outside_archive(tmp_path):
     (tmp_path / "secret.png").write_bytes(b"x")
     assert resolve_artifact_image(tmp_path, "secret.png") is None
+
+
+# ============================================================
+# Two artifact drops nothing ever exercised
+# ============================================================
+
+def test_an_artifact_whose_markdown_is_not_utf8_is_dropped_out_loud(tmp_path, caplog):
+    """A published post can be saved in a legacy code page, and then it is
+    simply not on /studio.
+
+    The `except (OSError, UnicodeDecodeError)` around the source read was the
+    only one of the three drops in `list_artifacts` that logged nothing, so the
+    post vanished with no line anywhere saying which folder to look at. Nothing
+    fed it an undecodable source either: every fixture in this file writes
+    `encoding="utf-8"`.
+    """
+    import logging
+    good = _make_post(tmp_path, "2026-05-10-readable", title="Readable", date="2026-05-10")
+    bad = _make_post(tmp_path, "2026-05-01-legacy", title="Legacy", date="2026-05-01")
+    (bad / "2026-05-01-legacy.md").write_bytes(
+        "---\ntitle: Caf\xe9 launch\n---\n\nBody.\n".encode("latin-1"))
+
+    with caplog.at_level(logging.WARNING):
+        d = list_artifacts(tmp_path)
+
+    assert [a["slug"] for a in d["artifacts"]] == [good.name]
+    assert d["total"] == 1
+    assert any("2026-05-01-legacy" in r.getMessage() for r in caplog.records), caplog.text
+
+
+def test_read_artifact_on_a_folder_with_no_markdown(tmp_path):
+    """An images-only folder is an error, not an IndexError.
+
+    MEASURED 2026-08-31 by deleting the `if not mds` guard in `read_artifact`
+    and running `tests/bridge`: 1349 passed, 1 skipped. The listing's copy of
+    the same guard is exercised by `test_list_artifacts_skips_underscore_folders`
+    only by accident; the detail view's copy was reached by nothing.
+    """
+    folder = (tmp_path / "datastore" / "content" / "linkedin-archive"
+              / "posts" / "2026-05-01-images-only")
+    folder.mkdir(parents=True)
+    (folder / "hero.png").write_bytes(b"\x89PNG\r\n fake image bytes")
+
+    r = read_artifact(tmp_path, "post", "2026-05-01-images-only")
+
+    assert r["ok"] is False
+    assert "markdown" in r["error"]
+    # The listing agrees: a folder with no source is not an artifact.
+    assert list_artifacts(tmp_path)["total"] == 0

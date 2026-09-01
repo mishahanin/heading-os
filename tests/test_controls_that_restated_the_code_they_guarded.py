@@ -51,6 +51,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 
 import pytest
 
@@ -387,3 +388,126 @@ async def test_a_wrong_secret_token_is_refused_before_anything_is_parsed():
                               headers={"X-Telegram-Bot-Api-Secret-Token": "wrong"})
     assert r.status_code == 401
     assert fb.handled == []
+
+
+# ============================================================
+# The serialization that stops two handlers eating each other's write
+# ============================================================
+#
+# `handler_lock` is the 2026-08-23 fix for lost writes: every handler in
+# fireside-bot.py works load -> mutate -> save on a JSON file and none of them
+# takes a lock, so two updates a second apart interleaved and one write vanished
+# into valid JSON that had lost somebody's action. Nothing exercised it - every
+# test above posts ONE update - and MEASURED 2026-09-01, replacing
+# `async with handler_lock:` with `if True:` passed the entire file.
+
+class _OverlapFB(_FakeFB):
+    """Records the peak number of handlers running at once.
+
+    The handler runs through `asyncio.to_thread`, so two unserialized updates
+    genuinely overlap on two worker threads. Counting the peak is what
+    distinguishes "serialized" from "happened to finish in order", which an
+    ordering assertion alone cannot.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.peak = 0
+        self._live = 0
+        self._guard = threading.Lock()
+        self._seen = 0
+
+    def _handle_update(self, bot, update):
+        with self._guard:
+            self._live += 1
+            self.peak = max(self.peak, self._live)
+        time.sleep(0.05)
+        with self._guard:
+            self._live -= 1
+            self._seen += 1
+        self.handled.append(update)
+        self.done.set()
+
+
+async def test_two_updates_are_handled_one_at_a_time():
+    fb = _OverlapFB()
+    app, _ = _build(fb)
+    await _post(app, {"update_id": 301, "message": {"text": "first"}})
+    await _post(app, {"update_id": 302, "message": {"text": "second"}})
+    await _drain(fb)
+
+    assert len(fb.handled) == 2, f"both updates must run: {fb.handled}"
+    assert fb.peak == 1, (
+        f"{fb.peak} handlers ran concurrently; the JSON load/mutate/save in "
+        "fireside-bot.py takes no lock, so an interleave loses a write")
+
+
+# ============================================================
+# The rest of the public surface
+# ============================================================
+
+async def test_the_health_endpoint_answers_and_carries_no_secret():
+    """The daemon's liveness probe, deliberately unauthenticated.
+
+    Nothing drove it, so breaking it was invisible here. It is reachable by
+    anyone who finds the URL, which is why what it returns is pinned too: a
+    liveness answer, and no token, port or path.
+    """
+    fb = _FakeFB()
+    app, _ = _build(fb)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://probe") as client:
+        r = await client.get("/health")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "service": "fireside-webhook"}
+    assert SECRET not in r.text
+
+
+@pytest.mark.parametrize("key,expected", [
+    ("message_reaction", "message_reaction"),
+    ("my_chat_member", "my_chat_member"),
+    ("edited_message", "unknown"),
+])
+async def test_an_update_that_is_neither_a_message_nor_a_callback_is_named(key, expected):
+    """The third branch. Hard-coding its `kind` to "message" passed everything.
+
+    `kind` is the only word in the log that tells the operator what Telegram
+    delivered, and it is also what the success line reports, so a branch that
+    mislabels every reaction as a message makes the daemon log a fiction.
+    """
+    fb = _FakeFB()
+    app, cap = _build(fb)
+    await _post(app, {"update_id": 401, key: {"anything": 1}})
+    await _drain(fb)
+
+    recv = [r for r in cap.records if r.getMessage().startswith("webhook: recv")]
+    assert len(recv) == 1, recv
+    assert f"type={expected}" in recv[0].getMessage(), recv[0].getMessage()
+
+
+class _UnreadableStateFB(_FakeFB):
+    """`load_state` raises, as an absent or truncated JSON state file does."""
+
+    def load_state(self, key):
+        raise OSError("last-update-id state file is unreadable")
+
+
+async def test_an_unreadable_offset_file_still_lets_the_update_be_acked():
+    """`except Exception` around the state READ, asserted rather than assumed.
+
+    The comment says an unreadable state file "means 0". Narrowing that handler
+    so the read escapes passed every test in this file, MEASURED 2026-09-01: the
+    exception is then caught one level up, the offset is never written, and every
+    successful update is re-served forever on a poll fallback with only a generic
+    "failed to update last-update-id" in the log.
+    """
+    fb = _UnreadableStateFB()
+    app, cap = _build(fb)
+    await _post(app, {"update_id": 402, "message": {"text": "hi"}})
+    await _drain(fb)
+
+    assert fb.saves == [(LAST_UPDATE_ID, {"offset": 403})], (
+        f"the unreadable state file blocked the ack: {fb.saves}")
+    errors = [r for r in cap.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1, f"expected exactly one ERROR record, got {errors}"
+    assert "unreadable" in errors[0].getMessage(), errors[0].getMessage()

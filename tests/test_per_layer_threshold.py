@@ -104,23 +104,35 @@ def test_a_layer_without_its_own_threshold_keeps_the_global_one():
     assert cfg["threshold"] == 0.55
 
 
-def _resolve(cfg, *, layer=None, collection="content", cli=None):
-    """Replay cmd_query's threshold resolution without running a query."""
-    threshold = cli if cli is not None else cfg["threshold"]
+def _allowed(cfg, *, layer=None, collection="content"):
+    """The layer set `cmd_query` computes before it asks for a threshold.
+
+    This half IS still a replay, and deliberately: it is the collection-to-layers
+    lookup, which `test_a_multi_layer_collection_keeps_the_global_cut` pins
+    against the shipped YAML directly. The threshold arithmetic below is not
+    replayed any more, for the reason in `_resolve`.
+    """
     coll_map = cfg.get("collections") or {}
     if layer:
-        allowed = {layer}
-    elif collection in coll_map:
-        allowed = set(coll_map[collection])
-    else:
-        allowed = None
-    if cli is None and allowed and len(allowed) == 1:
-        only = next(iter(allowed))
-        per = next((lc.get("threshold") for lc in cfg["layers"]
-                    if lc["layer"] == only and lc.get("threshold") is not None), None)
-        if per is not None:
-            threshold = float(per)
-    return threshold
+        return {layer}
+    if collection in coll_map:
+        return set(coll_map[collection])
+    return None
+
+
+def _resolve(cfg, *, layer=None, collection="content", cli=None):
+    """Ask the PRODUCTION resolver, never a copy of it.
+
+    Until 2026-09-01 this function was a hand-written replay of the eight lines
+    inside `cmd_query`, and the four tests below asserted against the replay.
+    Measured that day by disabling the production block
+    (`if False and args.threshold is None and ...`): every test in this file
+    stayed green while `--layer commit-engine` silently reverted to the 0.55 that
+    scored 77% against the agreed 80% bar. The arithmetic now lives once, in
+    `memory-index.resolve_threshold`, and this calls it.
+    """
+    return mi.resolve_threshold(cfg, cli, _allowed(cfg, layer=layer,
+                                                   collection=collection))
 
 
 def test_one_layer_uses_its_own_cut():
@@ -147,3 +159,38 @@ def test_the_query_parser_still_defaults_threshold_to_none():
     ap = argparse.ArgumentParser()
     ap.add_argument("--threshold", type=float, default=None)
     assert ap.parse_args([]).threshold is None
+
+
+def test_cmd_query_gets_its_threshold_from_the_resolver_and_nowhere_else():
+    """The wiring, asked of `cmd_query`'s own body rather than of the file.
+
+    The tests above call `resolve_threshold` directly, which is what makes them
+    measure production arithmetic instead of a replay -- but it also means a
+    `cmd_query` that stopped calling it would leave them all green. So the call
+    is asserted, and asserted INSIDE the function (`.claude/rules/scope-claims.md`
+    § a grep over a whole file is not a test of one function): the name recurs in
+    this module's own docstrings and in the import list.
+
+    The second half is the one that catches a re-inlining: `threshold` may be
+    bound in `cmd_query` exactly once, by that call. A second assignment is how
+    the duplicate spelling came back last time.
+    """
+    import ast
+
+    tree = ast.parse(_SRC.read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "cmd_query")
+
+    calls = [n for n in ast.walk(fn)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "resolve_threshold"]
+    assert len(calls) == 1, (
+        f"cmd_query calls resolve_threshold {len(calls)} time(s); the per-layer "
+        "cut is resolved in exactly one place or not at all")
+
+    binds = [t.id for n in ast.walk(fn) if isinstance(n, ast.Assign)
+             for t in n.targets if isinstance(t, ast.Name) and t.id == "threshold"]
+    assert len(binds) == 1, (
+        f"`threshold` is assigned {len(binds)} times in cmd_query. A second "
+        "assignment is a second spelling of the resolution rule, which is the "
+        "defect the extraction removed on 2026-09-01.")

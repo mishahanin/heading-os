@@ -46,6 +46,60 @@ def test_canonical_slug_generation():
     assert generate_slug("John Smith", existing={"john-smith"}) == "john-smith-2"
 
 
+def test_the_collision_suffix_keeps_counting_past_two():
+    """One collision cannot tell a counter from a constant.
+
+    The single case above is satisfied by `return f"{base}-2"`, and measured
+    2026-09-01 that replacement left this file and all 16 other files naming
+    the migration green. The suffix loop only matters on the SECOND collision,
+    and that is not a hypothetical shape: this migration slugs the whole address
+    book in one pass, so three people called John Smith is an ordinary Tuesday
+    in a CRM of any size.
+
+    What a frozen `-2` costs is the thing the migration exists to prevent.
+    `generate_slug` is how a group gets its identity; two groups handed the same
+    slug write the same address-book file, and the second overwrites the first.
+    The migration would report both as migrated.
+    """
+    from scripts.crm_migrate_to_entity_model import generate_slug
+    assert generate_slug("John Smith", existing={"john-smith", "john-smith-2"}) == \
+        "john-smith-3"
+    assert generate_slug(
+        "John Smith",
+        existing={"john-smith", "john-smith-2", "john-smith-3"},
+    ) == "john-smith-4"
+    # Every slug this yields is distinct from every name already taken, which is
+    # the property the loop is actually for.
+    taken = {"john-smith"}
+    for _ in range(4):
+        fresh = generate_slug("John Smith", existing=taken)
+        assert fresh not in taken, f"{fresh!r} collides with {sorted(taken)}"
+        taken.add(fresh)
+
+
+def test_a_name_with_no_sluggable_characters_still_gets_a_slug():
+    """The `if not base: base = "unnamed"` guard, which nothing exercised.
+
+    Every name in this file is plain ASCII, so the guard could be deleted and
+    stay green (measured 2026-09-01 across 17 files). The names it exists for
+    are the ones a real address book holds: a record whose `name` is a
+    Cyrillic or Arabic string, or punctuation, or empty because the source file
+    had no `name:` at all. `re.sub(r"[^a-z0-9\\s-]", ...)` strips every one of
+    those to nothing.
+
+    An empty slug is not a cosmetic defect. The slug becomes the address-book
+    FILENAME, so an empty one writes `.md` -- a dotfile -- and every such record
+    lands on the same one, each overwriting the last.
+    """
+    from scripts.crm_migrate_to_entity_model import generate_slug
+    assert generate_slug("") == "unnamed"
+    assert generate_slug("!!!") == "unnamed"
+    assert generate_slug("Мария Волкова") == "unnamed"
+    # And the collision path still applies to it, so two unnameable records do
+    # not both become `unnamed`.
+    assert generate_slug("", existing={"unnamed"}) == "unnamed-2"
+
+
 def test_pick_canonical_owner_picks_highest_priority():
     from scripts.crm_migrate_to_entity_model import pick_canonical_owner
     records = [
@@ -61,6 +115,31 @@ def test_pick_canonical_owner_picks_highest_priority():
     ]
     # investor-active wins (higher in priority list)
     assert pick_canonical_owner(records) == "owner-exec-a"
+
+
+def test_an_unrecognised_type_falls_back_to_the_documented_default():
+    """"Defaults to owner-exec-a for unknown/missing types" -- untested until
+    2026-09-01, when changing that literal left all 17 files green.
+
+    Every case above hands the function a type the policy table already holds,
+    so the default was free to be anything, including a slug no owner answers
+    to. This is a MIGRATION: the owner it picks is written into the address-book
+    entry, and a record filed under an owner that does not exist belongs to
+    nobody and appears in no owner's view.
+
+    Three shapes reach the same fallback and all three are real -- a legacy type
+    string the policy never learned, a record with no `type` key, and a `type`
+    explicitly set to None by a source file with a bare `type:` line.
+    """
+    from scripts.crm_migrate_to_entity_model import pick_canonical_owner
+    assert pick_canonical_owner([{"type": "some-retired-type"}]) == "owner-exec-a"
+    assert pick_canonical_owner([{}]) == "owner-exec-a"
+    assert pick_canonical_owner([{"type": None}]) == "owner-exec-a"
+    assert pick_canonical_owner([]) == "owner-exec-a"
+    # A recognised type anywhere in the group still wins over the fallback, so
+    # this cannot pass by the function having stopped consulting the table.
+    assert pick_canonical_owner(
+        [{"type": "some-retired-type"}, {"type": "partner"}]) == "owner-exec-b"
 
 
 def test_render_address_book_entry_minimal():

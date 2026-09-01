@@ -20,12 +20,15 @@ Consumed by:
 from __future__ import annotations
 
 import datetime
+import logging
 import math
 import re
 from pathlib import Path
 
 from scripts.utils.memory_expiry import index_link_targets
 from scripts.utils.workspace import get_default_tz
+
+logger = logging.getLogger(__name__)
 
 # Budget + staleness thresholds (kept identical to the prior inlined values).
 MEMORY_BUDGET_LINES = 200
@@ -296,7 +299,20 @@ def compute_memory_defects(memory_dir: Path) -> dict:
 
     if memory_file.exists():
         try:
-            lines = sum(1 for _ in memory_file.open("r", encoding="utf-8"))
+            # `errors="ignore"`, matching the read of this SAME file forty
+            # lines down. Strict here and lenient there is not a style
+            # difference, it is two answers to one question: MEASURED
+            # 2026-09-01 on a `MEMORY.md` carrying a lone 0xe9, this line raised
+            # `UnicodeDecodeError` straight out of `compute_memory_defects`,
+            # while the orphan read below would have carried on and reported
+            # `index_readable: True`. `UnicodeDecodeError` is a `ValueError` and
+            # not an `OSError`, so the handler could not catch it and the whole
+            # health computation died - defeating `index_readable`, the key this
+            # function grew precisely to answer "was the index actually read?".
+            # Dropping an invalid byte cannot change a LINE count: 0x0A is never
+            # part of an invalid UTF-8 sequence.
+            lines = sum(1 for _ in memory_file.open(
+                "r", encoding="utf-8", errors="ignore"))
         except OSError:
             lines = 0
     else:
@@ -410,8 +426,17 @@ def scan_redundancy(memory_dir, *, threshold=0.86, embedder=None, timeout=120) -
     for f in files:
         try:
             texts.append(f.read_text(encoding="utf-8"))
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # `UnicodeDecodeError` is a `ValueError`, NOT an `OSError`. Until
+            # 2026-09-01 this handler could not catch it, so the "degrade to
+            # ok=False" contract described three lines above did not hold for
+            # the one input most likely to break a read: a file that is not
+            # valid UTF-8. MEASURED that day on a corpus of one clean note and
+            # one carrying a lone 0xe9, `scan_redundancy` raised out of the
+            # walk instead of returning a note.
             unreadable += 1
+            logger.warning("dropping unreadable memory file %s from the "
+                           "redundancy scan", f, exc_info=True)
             continue
         readable.append(f)
     files = readable

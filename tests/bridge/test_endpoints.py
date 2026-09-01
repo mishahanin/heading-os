@@ -1,3 +1,4 @@
+import asyncio
 import json
 from unittest.mock import patch
 
@@ -115,9 +116,111 @@ def test_malformed_authorization_headers_rejected(workspace_root):
     # Empty token after Bearer
     r = client.get("/version", headers={"Authorization": "Bearer "})
     assert r.status_code == 401
+    # A well-formed but wrong token. Not in this file until 2026-08-31: every
+    # case above is refused by the header PARSE, so none of them reached
+    # `validate` at all, and the one endpoint test that did lives in
+    # test_studio_nonce.py.
+    r = client.get("/version", headers={"Authorization": "Bearer wrongtoken"})
+    assert r.status_code == 401
+    r = client.get("/version", headers={"Authorization": "Bearer " + "a" * 100_000})
+    assert r.status_code == 401
     # Lowercase 'bearer ' should still work
     r = client.get("/version", headers={"Authorization": "bearer t1"})
     assert r.status_code == 200
+
+
+async def _raw_asgi_get(app, path: str, raw_headers: list[tuple[bytes, bytes]]):
+    """Call the app the way uvicorn does: raw header BYTES, no client library.
+
+    `TestClient` cannot express this test. httpx encodes header values as
+    ASCII and raises `UnicodeEncodeError` before anything leaves the client,
+    so a byte above 0x7F in the `Authorization` header is unreachable through
+    it. uvicorn has no such restriction: it decodes header bytes as latin-1
+    and hands the resulting `str` to the app. That gap is exactly why the
+    defect below survived a suite with 1,312 passing tests.
+
+    Returns the HTTP status, or the string "UNCAUGHT <Type>: <msg>" when the
+    app raised instead of responding (which is what becomes a 500 in
+    production, via the error middleware uvicorn installs).
+    """
+    scope = {
+        "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+        "method": "GET", "path": path, "raw_path": path.encode(),
+        "query_string": b"", "root_path": "", "scheme": "http",
+        "client": ("127.0.0.1", 5000), "server": ("127.0.0.1", 31415),
+        "headers": [(b"host", b"127.0.0.1"), *raw_headers],
+    }
+    sent = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    try:
+        await app(scope, receive, send)
+    except BaseException as exc:  # noqa: BLE001 - reporting it IS the assertion
+        return f"UNCAUGHT {type(exc).__name__}: {exc}"
+    starts = [m for m in sent if m["type"] == "http.response.start"]
+    return starts[0]["status"] if starts else "NO RESPONSE"
+
+
+@pytest.mark.parametrize("raw", [
+    pytest.param(b"Bearer \xff", id="raw-high-byte"),
+    pytest.param("Bearer пароль".encode("utf-8"), id="utf8-cyrillic"),
+    pytest.param("Bearer \U0001f600".encode("utf-8"), id="utf8-emoji"),
+    pytest.param(b"Bearer t1\xff", id="valid-prefix-then-high-byte"),
+    pytest.param(b"Bearer \xff" * 2000, id="many-high-bytes"),
+    pytest.param(b"bearer \xc3\xa9", id="lowercase-scheme-non-ascii"),
+])
+def test_a_non_ascii_bearer_token_is_401_not_500(workspace_root, raw):
+    """The auth boundary answered 500 to an unauthenticated request.
+
+    `validate` was `secrets.compare_digest(provided or "", expected)`, and
+    `compare_digest` accepts two `str` arguments only while BOTH are ASCII.
+    One byte above 0x7F in the header raised `TypeError: comparing strings
+    with non-ASCII characters is not supported` straight out of the route.
+    Measured 2026-08-31 through this same raw-ASGI harness, before the fix:
+
+        raw 0xFF byte          -> UNCAUGHT TypeError: comparing strings with
+                                  non-ASCII characters is not supported
+        utf-8 cyrillic bytes   -> UNCAUGHT TypeError: (same)
+        valid ascii wrong      -> 401
+        100k ascii             -> 401
+
+    Nothing leaked and nothing was let through; the request failed either
+    way. What was wrong is that an unauthenticated caller chose between "401
+    invalid token" and "500 Internal Server Error" by flipping one bit, on
+    the one boundary reachable before any other check, and a 500 on the auth
+    path is the shape that gets escalated as a compromise.
+
+    The unit-level sibling is in `test_auth.py`; this is the same question
+    asked of the wire, because the header parse in `app._require_token` sits
+    between the two and could reintroduce the crash on its own.
+    """
+    state = State()
+    app = build_app(workspace_root=workspace_root, state=state, token="t1",
+                    user_slug="misha", data_root=workspace_root)
+    result = asyncio.run(_raw_asgi_get(app, "/version", [(b"authorization", raw)]))
+    assert result == 401, result
+
+
+def test_the_raw_asgi_harness_agrees_with_testclient_on_a_good_token(workspace_root):
+    """The harness must be able to say 200, or every test above is vacuous.
+
+    A scope missing a field the app reads would fail every request for an
+    unrelated reason, and the parametrized assertions would then be measuring
+    the harness. This is the floor under them.
+    """
+    state = State()
+    app = build_app(workspace_root=workspace_root, state=state, token="t1",
+                    user_slug="misha", data_root=workspace_root)
+    assert asyncio.run(_raw_asgi_get(app, "/version",
+                                     [(b"authorization", b"Bearer t1")])) == 200
+    assert asyncio.run(_raw_asgi_get(app, "/version",
+                                     [(b"authorization", b"Bearer nope")])) == 401
+    assert asyncio.run(_raw_asgi_get(app, "/version", [])) == 401
 
 def test_pulse_endpoint_shape(workspace_root):
     client, _ = _make_client(workspace_root, token="t1")

@@ -21,6 +21,7 @@ Run:
 
 from __future__ import annotations
 
+import ast
 import json
 import subprocess  # nosec B404 - invokes the repo's own checker with a fixed argv
 import sys
@@ -225,6 +226,36 @@ def test_cap3_profile_is_derived_from_the_path_with_longest_glob_winning():
     assert profile_for("some/unmapped/place/page.html") == "screen"
 
 
+def test_cap3_the_longest_glob_wins_when_two_globs_both_match():
+    """The tie-break the test above NAMES and never exercised.
+
+    No two globs in the shipped config overlap, so every path there matches at
+    most one entry and the `len(glob) > best_len` comparison never decides
+    anything. Measured 2026-09-01: replacing it with "first match wins" left
+    the whole suite and every neighbouring impeccable test green, while the
+    test asserting longest-glob-winning sat one function above.
+
+    Injected profiles rather than the shipped file, so the property is bound to
+    the resolver instead of to a config that happens not to overlap today. The
+    entries are ordered SHORTEST FIRST, which is the order under which a
+    first-match implementation returns the wrong answer.
+    """
+    from scripts.utils.impeccable_engine import profile_for
+
+    profiles = {
+        "default": "screen",
+        "profiles": {"screen": {"suppress": {}}, "print": {"suppress": {}},
+                     "doctype": {"suppress": {}}},
+        "path_profiles": [
+            {"glob": "outputs/**", "profile": "print"},
+            {"glob": "outputs/documents/locked/**", "profile": "doctype"},
+        ],
+    }
+
+    assert profile_for("outputs/documents/locked/a.html", profiles) == "doctype"
+    assert profile_for("outputs/elsewhere/b.html", profiles) == "print"
+
+
 # ---------------------------------------------------------------------------
 # CAP-4 - keeps working with no network and no Node
 # ---------------------------------------------------------------------------
@@ -265,6 +296,38 @@ def test_cap5_the_visual_rule_names_the_deep_command():
     assert "--deep" in rule, "the rule must name the deep command it now obliges"
 
 
+# The engine entry points a renderer may legitimately reach for. `deep_findings`
+# is the raw pipeline (the docs site pairs it with `apply_baseline`);
+# `report_for_artifact` is the one-line verdict the other two print.
+_RENDERER_ENTRY_POINTS = {"deep_findings", "report_for_artifact"}
+
+
+def _calls_the_engine(source: str) -> set[str]:
+    """Engine entry points this module actually CALLS, asked of the AST.
+
+    Never a substring test. Until 2026-09-01 this was
+    `"visual-discipline-check" in source or "impeccable_engine" in source`, and
+    a whole-file substring is satisfied by an import line, a comment or a
+    docstring. Measured that day: replacing the live
+    `impeccable_engine.report_for_artifact(html_path, profile="doctype")` in
+    scripts/render-doctype.py with `pass` left all 45 tests over this module
+    and tests/test_visual_discipline_check.py green, because the now-unused
+    `from scripts.utils import impeccable_engine` at the top still spelled the
+    string. CAP-5 was asserted by a word.
+    """
+    called: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if (isinstance(func, ast.Attribute)
+                and func.attr in _RENDERER_ENTRY_POINTS
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "impeccable_engine"):
+            called.add(func.attr)
+    return called
+
+
 @pytest.mark.parametrize(
     "renderer",
     [
@@ -275,7 +338,32 @@ def test_cap5_the_visual_rule_names_the_deep_command():
 )
 def test_cap5_each_renderer_invokes_the_check_on_its_own_output(renderer):
     source = (ROOT / renderer).read_text(encoding="utf-8")
-    assert "visual-discipline-check" in source or "impeccable_engine" in source
+    assert _calls_the_engine(source), (
+        f"{renderer} names the deep engine but calls none of "
+        f"{sorted(_RENDERER_ENTRY_POINTS)}; CAP-5 says each renderer runs the "
+        f"check on its own output, and mentioning the module is not running it")
+
+
+def test_the_cap5_detector_is_not_satisfied_by_a_mention():
+    """The negative control for the AST rule above.
+
+    Without it the rule could narrow back to a substring test and all three
+    renderers would still pass. Both samples spell every string the old test
+    looked for; neither runs the check.
+    """
+    assert _calls_the_engine(
+        "from scripts.utils import impeccable_engine\n"
+        "# visual-discipline-check runs over this output elsewhere\n"
+        '"""impeccable_engine.report_for_artifact used to live here."""\n'
+    ) == set()
+    assert _calls_the_engine(
+        "import impeccable_engine\nreport_for_artifact = None\n"
+    ) == set()
+    # And the shape it must still see.
+    assert _calls_the_engine(
+        "from scripts.utils import impeccable_engine\n"
+        'impeccable_engine.report_for_artifact(out, profile="screen")\n'
+    ) == {"report_for_artifact"}
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +449,119 @@ def test_out_of_scope_findings_are_dropped_from_a_deep_run(monkeypatch):
 
     assert error is None
     assert [f["type"] for f in findings] == ["impeccable:side-tab"]
+
+
+# ---------------------------------------------------------------------------
+# The other two calibration filters, asserted through the pipeline
+#
+# `test_out_of_scope_findings_are_dropped_from_a_deep_run` above states the
+# principle for the scope filter: "the filter is load-bearing only if the
+# pipeline actually applies it." Its two siblings had no such test. Measured
+# 2026-09-01, deleting each of these two lines from `deep_findings`
+#
+#     if not is_plausible(item, profiles): continue
+#     if is_suppressed(item.get("antipattern", ""), profile, profiles): continue
+#
+# left this file and seven neighbouring impeccable test modules green - 26 and
+# 169 passed respectively - while the predicate tests above went on asserting
+# that the predicates themselves answer correctly.
+#
+# `load_profiles` is stubbed rather than the shipped config read, so these bind
+# the WIRING and cannot drift when a rule is recalibrated. CAP-3 above already
+# holds the shipped config to its own contract.
+# ---------------------------------------------------------------------------
+
+
+_PIPELINE_PROFILES = {
+    "default": "screen",
+    "profiles": {
+        "screen": {"suppress": {}},
+        "print": {"suppress": {"tiny-text": "a print floor, not a screen one"}},
+    },
+    "path_profiles": [{"glob": "outputs/paged/**", "profile": "print"}],
+    "plausibility": {"oversized-h1": {"unit": "px", "max": 500}},
+    "out_of_scope": {"suffixes": [], "path_fragments": []},
+}
+
+
+def _stub_pipeline(monkeypatch, raw):
+    from scripts.utils import impeccable_engine
+
+    monkeypatch.setattr(impeccable_engine, "load_profiles",
+                        lambda *a, **k: (_PIPELINE_PROFILES, None))
+    monkeypatch.setattr(impeccable_engine, "run_detector", lambda *a, **k: (raw, None))
+    return impeccable_engine
+
+
+def test_an_implausible_finding_is_dropped_from_a_deep_run(monkeypatch):
+    """The plan names the plausibility filter as a load-bearing failure mode.
+
+    Both entries below are the same rule on the same page; only the measured
+    value differs. The 2856px reading is the parser artifact the filter exists
+    for, and the 96px one is the genuine hit it must not take with it.
+    """
+    engine = _stub_pipeline(monkeypatch, [
+        {"antipattern": "oversized-h1", "severity": "warning",
+         "file": "docs/CANOPUS.html", "line": 4, "snippet": "2856px h1, 44 chars"},
+        {"antipattern": "oversized-h1", "severity": "warning",
+         "file": "docs/CANOPUS.html", "line": 9, "snippet": "96px h1, 44 chars"},
+    ])
+
+    findings, error = engine.deep_findings(Path("docs"))
+
+    assert error is None
+    assert [f["line"] for f in findings] == [9], (
+        "the implausible reading reached the report, so the filter the plan "
+        "calls load-bearing is not applied by the pipeline that uses it")
+
+
+def test_a_profile_suppressed_rule_is_dropped_from_a_deep_run(monkeypatch):
+    """Calibration only calibrates if the run consults it.
+
+    `tiny-text` is suppressed for `print` and live for `screen`, so one raw
+    batch spanning both surfaces must come back carrying exactly the screen one.
+    That also pins the per-finding profile resolution the docstring promises:
+    one directory scan must not pick a single profile for the batch.
+    """
+    engine = _stub_pipeline(monkeypatch, [
+        {"antipattern": "tiny-text", "severity": "warning",
+         "file": "outputs/paged/brief.html", "line": 1, "snippet": "9px"},
+        {"antipattern": "tiny-text", "severity": "warning",
+         "file": "docs/CANOPUS.html", "line": 2, "snippet": "9px"},
+    ])
+
+    findings, error = engine.deep_findings(Path("."))
+
+    assert error is None
+    assert [f["file"] for f in findings] == ["docs/CANOPUS.html"]
+    assert findings[0]["profile"] == "screen"
+
+
+def test_the_profile_override_participates_in_suppression(monkeypatch):
+    """`deep_findings`'s own docstring: the override participates in
+    SUPPRESSION, "not just in the label - stamping the name on afterwards would
+    have been a lie the report told itself." Nothing measured it.
+
+    A renderer passes `profile_override="print"` for a freshly produced paged
+    document that lands in a directory the path map has never seen. If the
+    override reached only the label, the finding would still be reported and
+    merely be MARKED print.
+    """
+    raw = [{"antipattern": "tiny-text", "severity": "warning",
+            "file": "docs/fresh-render.html", "line": 3, "snippet": "9px"}]
+
+    engine = _stub_pipeline(monkeypatch, raw)
+    without, _ = engine.deep_findings(Path("docs"))
+    assert [f["profile"] for f in without] == ["screen"], (
+        "the fixture no longer reaches the suppression branch it is meant to test")
+
+    engine = _stub_pipeline(monkeypatch, raw)
+    overridden, error = engine.deep_findings(Path("docs"), profile_override="print")
+
+    assert error is None
+    assert overridden == [], (
+        "the override was stamped on the label but never consulted for "
+        "suppression, which is the lie the docstring forbids")
 
 
 def test_the_version_pin_is_exact_never_a_range():

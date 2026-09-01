@@ -168,7 +168,33 @@ def test_a_brand_new_untracked_test_is_still_scanned():
         probe.unlink()
 
 
+# A floor PER SCANNED TREE, not over the union. Measured 2026-09-01:
+# `tests/` 983 files, `scripts/` 386, `.claude/` 58. The single union floor of
+# 200 that stood here was satisfied twenty times over by `tests/` alone, so
+# `.claude/` and `scripts/` could each have contributed nothing - a glob that
+# stopped matching a dotted directory, a `tracked_paths` pattern that lost a
+# top - and this file would still have reported a full sweep. Each floor sits
+# roughly a third below the count measured that day, low enough that ordinary
+# deletion is not a failure and high enough that a source dropping out is.
+_MIN_PER_TREE = {"tests": 600, "scripts": 250, ".claude": 35}
+
+
 def test_the_scan_is_not_empty():
     """A filter that dropped everything would make this file pass over nothing."""
     found = list(_python_files())
     assert len(found) > 200, f"only {len(found)} python files reached the guard"
+
+    per_tree = dict.fromkeys(_SCANNED_DIRS, 0)
+    for path in found:
+        top = path.relative_to(ROOT).parts[0]
+        if top in per_tree:
+            per_tree[top] += 1
+    assert set(per_tree) == set(_MIN_PER_TREE), (
+        f"the scanned trees changed to {sorted(per_tree)}; give each one a floor"
+    )
+    short = {t: n for t, n in per_tree.items() if n < _MIN_PER_TREE[t]}
+    assert not short, (
+        f"these trees contributed fewer files than their floor: {short} "
+        f"(floors {_MIN_PER_TREE}). A union floor cannot see one source go to "
+        f"zero while another carries it."
+    )

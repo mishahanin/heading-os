@@ -2,7 +2,25 @@
 
 The hook is invoked by Claude Code as a child process with stdin payload.
 These tests exercise the real subprocess interface, not the in-process API,
-so any change to the hook contract is caught here."""
+so any change to the hook contract is caught here.
+
+**One call in this file was unbounded, against the rule stated 20 lines below.**
+`test_session_start_with_malformed_stdin_returns_one` is the only test here that
+bypasses `_invoke`, and it passed no `timeout=`, so the ceiling
+`HOOK_CALL_CEILING_S` exists to enforce did not apply to it. A hook that
+regressed into an indefinite wait on unparseable stdin would therefore hang the
+run rather than fail it, which is precisely the failure the comment below
+records having already happened once.
+
+Stated honestly: this one is REASONED, not measured. The other findings in this
+shard were confirmed by mutating production code and observing a green suite; a
+hang cannot be demonstrated that way without writing a hook that hangs and then
+waiting out CI, which is the cost the fix exists to avoid paying. What IS
+measured is the guard: `test_every_subprocess_call_in_this_file_is_bounded`
+below goes red when the `timeout=` is removed again, and that transcript is in
+the fix report.
+"""
+import ast
 import json
 import subprocess
 import sys
@@ -167,10 +185,60 @@ def test_session_start_with_malformed_stdin_returns_one(tmp_path, monkeypatch):
         input="not-json{garbage",
         capture_output=True,
         text=True,
+        # The only call in this file that does not go through `_invoke`, and it
+        # carried no bound until 2026-08-31. A hook that hangs on unparseable
+        # stdin would have hung the run instead of failing it.
+        timeout=HOOK_CALL_CEILING_S,
     )
     assert r.returncode == 1
     # Falls into session_start with empty payload -> missing session_id/cwd
     assert "session_id" in r.stderr or "cwd" in r.stderr
+
+
+def test_every_subprocess_call_in_this_file_is_bounded():
+    """No `subprocess.run` here may omit `timeout=`.
+
+    `_invoke` carries the ceiling, and for eleven of the twelve hook calls in
+    this file that was enough. The twelfth was written inline, because the test
+    needed to send raw bytes rather than a JSON payload, and the ceiling did not
+    come with it. That is the shape a comment cannot prevent: the next test that
+    needs an unusual stdin will also be written inline.
+
+    So this asks the AST instead of asking the author. Every `subprocess.run`
+    call in this module must pass `timeout`, whether by keyword or by unpacking
+    a dict that names it. `_invoke`'s own call is included and satisfies it.
+    """
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"), filename=__file__)
+    calls: list[int] = []
+    unbounded: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        is_run = (isinstance(func, ast.Attribute) and func.attr == "run"
+                  and isinstance(func.value, ast.Name)
+                  and func.value.id == "subprocess")
+        if not is_run:
+            continue
+        calls.append(node.lineno)
+        # `timeout=X`, or `**kwargs` that might carry it (conservative: a
+        # double-star unpack is accepted rather than reported, since its
+        # contents are not knowable here).
+        bounded = any(kw.arg == "timeout" or kw.arg is None
+                      for kw in node.keywords)
+        if not bounded:
+            unbounded.append(node.lineno)
+
+    # Anti-vacuity. A walk that stopped matching `subprocess.run` would report a
+    # bounded file over nothing at all, which is how the unbounded call survived
+    # in the first place: nothing was looking.
+    assert len(calls) >= 2, (
+        f"only {len(calls)} subprocess.run call(s) reached the guard: {calls}")
+    assert not unbounded, (
+        "these subprocess.run calls pass no `timeout=`, so a hook that hangs "
+        "will hang the test run instead of failing it. Add "
+        "`timeout=HOOK_CALL_CEILING_S`:\n  "
+        + "\n  ".join(f"{Path(__file__).name}:{n}" for n in unbounded))
 
 
 def test_session_start_recovers_from_corrupt_registry(tmp_path, monkeypatch):

@@ -1,4 +1,18 @@
-"""The standalone pre-commit hook's dirty-tree guard failed open on quoting.
+"""Two ways a space in a filename walked past the standalone pre-commit hook.
+
+The second, added 2026-09-01, is the one that actually carried a secret: the
+hook piped the staged list to `secret-scanner.py --stdin`, which reads one path
+per LINE and STRIPS each line, so a name padded with a space arrived as a
+different name that opens nothing and was skipped in silence. MEASURED that day
+in a scratch repository, `harmless.txt` plus `" leading-space.env"` plus
+`"trailing-space.env "` with a `ghp_`-shaped token in each padded file:
+"No secrets detected.", exit 0. The same token in `control.env` was refused. The
+unbypassable push wall already handed its list over NUL-delimited; this
+bypassable commit-time layer had fallen behind it. The fix is the same NUL
+handoff, `git diff --cached -z` into `--stdin0`, so the shell stops being the
+transport for a filename. Those cases are at the bottom of this file.
+
+The first, which is the rest of it:
 
 `scripts/install-hooks.py` writes a `SCANNER_BLOCK` whose first job is to REFUSE
 a partially-staged commit. The scanner takes PATHS and reads them from the
@@ -37,6 +51,7 @@ from __future__ import annotations
 
 import importlib.util
 import shutil
+import string
 import subprocess
 import sys
 from pathlib import Path
@@ -168,13 +183,19 @@ def test_one_dirty_file_among_several_is_named_alone(repo):
     "\u043f\u0430\u0440\u043e\u043b\u0438.env",           # and, by default, any non-ASCII byte
 ])
 def test_an_escaped_path_is_refused_rather_than_mis_scanned(repo, name):
-    """The scanner's `--stdin` contract is one RAW path per line.
+    """A path git C-quotes is renamed, not committed.
 
-    Without `-z`, git wraps such a path in double quotes with escapes, so the
-    scanner is handed a literal naming no file. Measured before the guard: a
-    staged `two\\nlines.env` produced "No secrets detected." and exit 0 over a
-    file that was never opened. A clean verdict for an unread file is the exact
-    failure this hook exists to prevent.
+    Without `-z`, git wraps such a path in double quotes with escapes. Measured
+    before the guard, back when that same listing was also piped to the
+    scanner: a staged `two\\nlines.env` produced "No secrets detected." and exit
+    0 over a file that was never opened. A clean verdict for an unread file is
+    the exact failure this hook exists to prevent.
+
+    Since 2026-09-01 the scanner is fed NUL-delimited, so an escaped path can
+    no longer reach it as a literal and this refusal is the second line rather
+    than the only one. It is asserted here because the hook still refuses: the
+    operator's posture is that such a name gets renamed, and a refusal can only
+    over-block.
     """
     (repo / name).write_text("content\n", encoding="utf-8")
     _git(repo, "add", "--", name)
@@ -204,3 +225,114 @@ def test_an_empty_index_runs_no_scan_and_blocks_nothing(repo):
 
     assert result.returncode == 0
     assert "BLOCKED" not in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# A space in the NAME, which git does not escape, walked a secret through
+# ---------------------------------------------------------------------------
+#
+# The guards above all end at the point where the path list is handed to the
+# scanner. Until 2026-09-01 that handoff was `echo "$STAGED" | secret-scanner.py
+# --stdin`, and `--stdin` reads one path per LINE and STRIPS each line. A
+# leading or trailing space is legal in a POSIX filename and git prints it
+# verbatim WITHOUT C-quoting, so the escape guard never sees it either. Stripped
+# it names nothing, and `scan_files` skips a path that is not a file in silence.
+#
+# MEASURED 2026-09-01 in a scratch repository running the generated hook, with
+# `harmless.txt`, `" leading-space.env"` and `"trailing-space.env "` staged
+# together and the two padded files each holding the token below: the hook
+# printed "No secrets detected." and exited 0. The identical token in
+# `control.env` was refused. The unbypassable push wall
+# (`scripts/push-all.py`) had already moved to `--stdin0`; this bypassable
+# commit-time layer had fallen behind it.
+#
+# Synthesised at import, never written out as one literal, so this tracked file
+# does not itself carry a real-shaped credential. Same construction as
+# `tests/test_two_secret_walls_that_split_a_filename_in_half.py`.
+TOKEN = "ghp" + "_" + (string.ascii_lowercase + string.digits * 2)[:36]
+
+# TWO padded names, not one, and a harmless file in FRONT of them. With a single
+# path a newline join and a NUL join produce identical bytes, so a one-file case
+# would stay green against the very defect it claims to measure.
+PADDED = (" leading-space.env", "trailing-space.env ")
+
+
+def _commit(repo: Path) -> subprocess.CompletedProcess:
+    """Drive the real `git commit`, so git runs the hook the way git runs it."""
+    return subprocess.run(
+        ["git", "-C", str(repo), "commit", "-m", "attempt"],
+        capture_output=True, text=True)
+
+
+def test_a_space_padded_name_cannot_carry_a_secret_past_the_commit_hook(repo):
+    (repo / "harmless.txt").write_text("nothing here\n", encoding="utf-8")
+    _git(repo, "add", "--", "harmless.txt")
+    for name in PADDED:
+        (repo / name).write_text(f"TOKEN={TOKEN}\n", encoding="utf-8")
+        _git(repo, "add", "--", name)
+
+    result = _commit(repo)
+    out = result.stdout + result.stderr
+
+    assert result.returncode != 0, f"the commit went through: {out}"
+    assert "COMMIT BLOCKED: Secrets detected" in out, out
+    for name in PADDED:
+        assert name in out, f"the refusal never named {name!r}: {out}"
+    assert _git(repo, "rev-list", "--count", "--all").stdout.strip() == "0", \
+        "a commit object was created despite the refusal"
+
+
+def test_the_padded_names_are_the_whole_of_the_difference(repo):
+    """The straw-man check: is it the PADDING that used to leak, or the token?
+
+    The same token under an ordinary name was always refused. If this passed
+    only because the token is refused everywhere, the test above would measure
+    nothing about the padding. Both directions are asserted, so the two cases
+    are known to differ in exactly one property.
+    """
+    (repo / "control.env").write_text(f"TOKEN={TOKEN}\n", encoding="utf-8")
+    _git(repo, "add", "--", "control.env")
+
+    result = _commit(repo)
+    out = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert "control.env" in out
+
+
+def test_a_space_padded_name_without_a_secret_still_commits(repo):
+    """The over-refusal anchor, and it is load-bearing.
+
+    A hook that refused every padded name, or simply refused everything, would
+    pass the case above while making the gate unusable. The clean tree here
+    holds the same two padded names and the same harmless file; only the token
+    is gone.
+    """
+    (repo / "harmless.txt").write_text("nothing here\n", encoding="utf-8")
+    _git(repo, "add", "--", "harmless.txt")
+    for name in PADDED:
+        (repo / name).write_text("no credential in this one\n", encoding="utf-8")
+        _git(repo, "add", "--", name)
+
+    result = _commit(repo)
+    out = result.stdout + result.stderr
+
+    assert result.returncode == 0, out
+    assert "BLOCKED" not in out
+    assert _git(repo, "rev-list", "--count", "--all").stdout.strip() == "1"
+
+
+def test_the_generated_hook_hands_the_scanner_a_nul_list(repo):
+    """The mechanism, pinned so a revert to the line-oriented pipe is caught.
+
+    The behavioural tests above are the real measurement; this one names WHY,
+    so a future edit that reintroduces `--stdin` fails with the reason rather
+    than with a puzzling secret that walked through.
+    """
+    hook = (repo / ".git" / "hooks" / "pre-commit").read_text(encoding="utf-8")
+
+    assert "--stdin0" in hook
+    assert "secret-scanner.py --stdin\n" not in hook, \
+        "the line-oriented, space-stripping handoff is back"
+    assert 'echo "$STAGED" | python3' not in hook, \
+        "the shell is the transport for a filename again"

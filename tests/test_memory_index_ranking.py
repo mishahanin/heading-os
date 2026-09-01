@@ -50,6 +50,24 @@ def write(path: Path, body: str):
     path.write_text(body, encoding="utf-8")
 
 
+def pin_the_embedder(mod, monkeypatch):
+    """Mocking `embed` is not the only route off this machine.
+
+    `load_config` resolves the pinned host through `_resolve_embed_host` and
+    `cmd_build` asks that host for the model's weight digest through
+    `model_digest`; both dial the `host:` line in the fixture config, which is a
+    real address. MEASURED 2026-09-01 with `socket.socket.connect` counted over
+    a run of this file alone: 2 connects to 127.0.0.1:11434, so the file's
+    "no ollama" claim held for the embedding call and nothing else. A unit test
+    that reaches the embedder passes or fails on whether a Windows-side ollama
+    happens to be up, which is a fact about the host and not about the code, and
+    it cannot run on a public clone at all. Same shape as
+    tests/test_five_claims_that_covered_one_path_of_several.py.
+    """
+    monkeypatch.setattr(mod, "model_digest", lambda **k: None)
+    monkeypatch.setattr(mod, "_resolve_embed_host", lambda host=None, **k: host)
+
+
 # --- Unit tests: combiner pieces (clock-independent) ----------------------
 
 def test_recency_evergreen_floor_ignores_age():
@@ -151,6 +169,7 @@ def ranked_index(tmp_path, monkeypatch):
     monkeypatch.setenv("HEADING_OS_DATA", str(root))
     monkeypatch.setattr(mod, "get_workspace_root", lambda: root)
     monkeypatch.setattr(mod, "embed", fake_embed)
+    pin_the_embedder(mod, monkeypatch)
     assert mod.cmd_build(types.SimpleNamespace(force=True)) == 0
     # Isolation guard: DB under the temp root, never the real data root.
     assert (root / mod.STORE_REL).is_file()

@@ -102,7 +102,12 @@ def log_to_crm(conv_id: str, data_root: "Path | None" = None) -> dict:
         return {"ok": False, "error": "no latest fetch on disk (run /email-intel first)"}
     try:
         data = json.loads(fetch_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as e:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+        # `UnicodeDecodeError` is a `ValueError` and it comes out of
+        # `read_text`, ahead of `json.loads`, so the two types already named
+        # here never reached it. An undecodable fetch file raised through this
+        # finalizer and 500'd the endpoint rather than returning the "fetch
+        # unreadable" answer the caller is written to display.
         return {"ok": False, "error": f"fetch unreadable: {e}"}
     conversations = data.get("conversations", [])
     if not isinstance(conversations, list):
@@ -153,7 +158,13 @@ def log_to_crm(conv_id: str, data_root: "Path | None" = None) -> dict:
                 "Logged from the Inbox dashboard.",
             )
             atomic_write(contact_file, text)
-        except OSError as e:
+        except (OSError, UnicodeDecodeError) as e:
+            # A contact record is hand-edited (Zettlr, an editor with a
+            # different default encoding), so a byte that is not UTF-8 is an
+            # ordinary accident here. `UnicodeDecodeError` is a `ValueError`,
+            # so `read_text` raised past this handler, out of the finalizer,
+            # and past the `_CONTACT_WRITE_LOCK`'s caller, instead of the
+            # "CRM write failed" answer the dashboard knows how to show.
             return {"ok": False, "error": f"CRM write failed: {e}"}
         ok, err = mark_crm_logged(data_root, conv_id, slug)
     if not ok:

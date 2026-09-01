@@ -117,6 +117,71 @@ def test_a_contact_whose_name_contains_red_is_not_an_alert(hook):
     assert hook._red_contacts(RADAR_NONE) == []
 
 
+# A GREEN section whose FIRST line contains RED and whose second line does not.
+#
+# MEASURED 2026-09-01: reverting the section test to the unanchored
+# `"RED" in stripped` left every assertion above green, RADAR_NONE included.
+# That fixture cannot discriminate, because the one line carrying RED is the
+# LAST of its section: the mutant enters on it, hits the blank line on the very
+# next iteration, and returns the same empty list the anchored version does.
+# The near-miss has to be a RED-containing line with a sibling BELOW it, or the
+# negative case is testing the blank line rather than the anchor.
+RADAR_RED_IN_A_GREEN_NAME = """\x1b[1m31C Relationship Radar\x1b[0m
+
+\x1b[92m\x1b[1mGREEN - On Track\x1b[0m
+  \x1b[92mRedmond Fredricks\x1b[0m (REDACTED Holdings) - partner - 1 days (cadence: 30)
+  \x1b[92mSigma Person\x1b[0m (Sigma Co) - partner - 2 days (cadence: 30)
+
+\x1b[1mTotal:\x1b[0m 2 contacts tracked | 0 red | 0 yellow | 2 green
+"""
+
+
+def test_a_red_inside_a_green_name_does_not_open_the_section(hook):
+    """The anchoring itself, which RADAR_NONE above does not reach."""
+    assert hook._red_contacts(RADAR_RED_IN_A_GREEN_NAME) == []
+
+
+# No blank line between the sections. The second terminator ("next section
+# header, unindented") is what stops the walk here, and nothing reached it:
+# every fixture above separates its sections with a blank line, so the FIRST
+# terminator always fires and the second could be deleted with the file green.
+RADAR_NO_BLANK_BETWEEN_SECTIONS = """\x1b[1m31C Relationship Radar\x1b[0m
+
+\x1b[91m\x1b[1mRED - Overdue\x1b[0m
+  \x1b[91mAlpha Person\x1b[0m (Alpha Co) - prospect - 2426 days (cadence: 14)
+\x1b[93m\x1b[1mYELLOW - Approaching\x1b[0m
+  \x1b[93mDelta Person\x1b[0m (Delta Co) - partner - 79 days (cadence: 90)
+"""
+
+
+def test_an_unindented_next_section_ends_the_walk_without_a_blank_line(hook):
+    found = hook._red_contacts(RADAR_NO_BLANK_BETWEEN_SECTIONS)
+    assert len(found) == 1, found
+    assert "Alpha Person" in found[0]
+    assert not any("Delta" in line or "YELLOW" in line for line in found), found
+
+
+# The mirror: a blank line ends the section even when indented lines follow it.
+RADAR_BLANK_THEN_MORE_INDENTED = """\x1b[91m\x1b[1mRED - Overdue\x1b[0m
+  \x1b[91mAlpha Person\x1b[0m (Alpha Co) - prospect - 2426 days (cadence: 14)
+
+  \x1b[93mDelta Person\x1b[0m (Delta Co) - partner - 79 days (cadence: 90)
+"""
+
+
+def test_a_blank_line_ends_the_section_even_when_indented_lines_follow(hook):
+    """The first terminator, asserted on its own.
+
+    The two terminators mask each other: with the real radar's blank line
+    between sections, deleting either one alone changes nothing, because the
+    other stops the walk one line later. Only deleting both went red. Each is
+    now held by the fixture the other cannot answer.
+    """
+    found = hook._red_contacts(RADAR_BLANK_THEN_MORE_INDENTED)
+    assert len(found) == 1, found
+    assert "Alpha Person" in found[0]
+
+
 def test_no_red_section_means_no_alert(hook):
     assert hook._red_contacts("31C Relationship Radar\n\nTotal: 0 contacts\n") == []
     assert hook._red_contacts("") == []
@@ -291,3 +356,63 @@ def test_the_update_marker_is_written_atomically():
     assert 'open(update_file, "w"' not in body, (
         "the marker is still opened for writing in place"
     )
+
+
+# ---------------------------------------------------------------------------
+# Three properties of `_red_contacts` that nothing reached
+#
+# MEASURED 2026-09-01 by mutation, with this file,
+# tests/test_session_start_wizard_banner.py and
+# tests/test_six_guards_that_named_a_tool_and_missed_its_twin.py running
+# together: all three green under each mutant below.
+# ---------------------------------------------------------------------------
+
+RADAR_INDENTED_HEADER = (
+    "\x1b[1m31C Relationship Radar\x1b[0m\n"
+    "\n"
+    "  \x1b[91m\x1b[1mRED - Overdue\x1b[0m\n"
+    "    \x1b[91mAlpha Person\x1b[0m (Alpha Co) - prospect - 2426 days (cadence: 14)\n"
+    "\n"
+)
+
+RADAR_COMBINED_SGR = (
+    "\x1b[1m31C Relationship Radar\x1b[0m\n"
+    "\n"
+    "\x1b[1;91mRED - Overdue\x1b[0m\n"
+    "  \x1b[0;91mAlpha Person\x1b[0m (Alpha Co) - prospect - 2426 days (cadence: 14)\n"
+    "\n"
+)
+
+
+def test_an_indented_red_header_still_opens_the_section(hook):
+    """`stripped.startswith`, never `line.startswith`.
+
+    The producer emits the header flush left today, so a `line.startswith`
+    reader passes every fixture in this file. If crm-health.py ever nests the
+    radar under a parent heading, that reader stops opening the section and the
+    banner reports zero overdue contacts on a workspace with a growing red debt.
+    Silence reading as "nothing is overdue" is the precise failure this parser
+    was rewritten to end.
+    """
+    assert len(hook._red_contacts(RADAR_INDENTED_HEADER)) == 1
+
+
+def test_a_multi_parameter_colour_code_is_still_stripped(hook):
+    """`\\x1b[1;91m` is one SGR sequence carrying two parameters, and it is the
+    ordinary way a colourizer writes bold-red. `scripts/utils/colors.py` happens
+    to emit two single-parameter sequences instead, so the `;` in `_ANSI_RE`'s
+    class is unexercised by every fixture above. Narrow it to `[0-9]*m` and this
+    header keeps its escape prefix, `startswith("RED - ")` fails, and the
+    section is never opened."""
+    found = hook._red_contacts(RADAR_COMBINED_SGR)
+    assert len(found) == 1, found
+    assert "\x1b[" not in found[0], found
+
+
+def test_a_returned_contact_carries_no_leading_indentation(hook):
+    """These strings are cached to `.sessions/crm-health-cache.json` and shown
+    to the operator in the session banner, so the indentation the radar uses for
+    layout must not travel with them."""
+    for line in hook._red_contacts(RADAR_THREE):
+        assert line == line.strip(), repr(line)
+        assert line, "an empty contact line was collected"

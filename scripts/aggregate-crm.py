@@ -81,12 +81,38 @@ NO_CADENCE_TYPES = {"tribe", "tribe-leadership", "inactive"}
 
 
 def parse_config(config_path: Path) -> dict:
-    """Parse cadence defaults from crm/config.md table."""
+    """Parse cadence defaults from crm/config.md table.
+
+    Returns the full `DEFAULT_CADENCE` when the file is absent, cannot be read,
+    or holds no table - three ways of having no overrides, one answer.
+
+    `exists()` says the NAME is there, never that the bytes can be had, and the
+    read below used to sit outside any `try`. MEASURED 2026-09-01: one 0xff byte
+    in the table raised `UnicodeDecodeError` and a mode-000 file raised
+    `PermissionError`, both straight out of `main`, which calls this at its third
+    statement and catches nothing until `FleetRegistryError` much later. The
+    whole fleet aggregation died over a file that only supplies thresholds which
+    already have built-in defaults.
+
+    `scripts/utils/crm.py::parse_config` - the near-identical twin every other
+    CRM tool reads through - was given this guard, with this reason, and this
+    copy was the one nobody updated. `UnicodeDecodeError` is a `ValueError` and
+    a sibling of `json.JSONDecodeError`, so an `OSError`-shaped handler would
+    have walked past it too.
+    """
     if not config_path.exists():
         return DEFAULT_CADENCE.copy()
 
     defaults = {}
-    content = config_path.read_text(encoding="utf-8")
+    try:
+        content = config_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        # Named, not silent: a run that quietly falls back leaves the operator
+        # reading cadence numbers that are not the ones in their config file.
+        print(f"aggregate-crm: could not read {config_path} ({type(exc).__name__}); "
+              f"cadence thresholds fall back to the built-in defaults for this run",
+              file=sys.stderr)
+        return DEFAULT_CADENCE.copy()
     in_table = False
     separator_seen = False
 
@@ -291,9 +317,15 @@ def scan_all_contacts(workspace_root: Path, exec_slugs: list, config: dict,
                 # roster, so an exec with a non-convention repo name was cloned
                 # correctly there and 404'd here -- and their contacts silently
                 # dropped out of the aggregate while it exited 0.
+                # `errors="replace"` for the reason spelled out at the pull
+                # below, and this is the copy that would have been left behind:
+                # the two branches sit twenty lines apart, decode git's output
+                # the same way, and each wraps it in a handler tuple that cannot
+                # catch a `UnicodeDecodeError`. `gh repo clone` echoes the remote
+                # name and git's own bytes, so it has the same exposure.
                 result = subprocess.run(
                     ["gh", "repo", "clone", f"{org}/{repo_name_for(slug)}", str(repo_path)],
-                    capture_output=True, text=True, timeout=120,
+                    capture_output=True, text=True, errors="replace", timeout=120,
                 )
                 if result.returncode != 0:
                     slug_errors.append(f"Clone failed for {slug}: {result.stderr.strip()}")
@@ -308,9 +340,20 @@ def scan_all_contacts(workspace_root: Path, exec_slugs: list, config: dict,
             # -- fell through and the aggregate was built from a stale clone and
             # reported as current. Two branches four lines apart, disagreeing.
             try:
+                # `errors="replace"`, not just `text=True`. Strict decoding
+                # raises `UnicodeDecodeError`, a `ValueError`, which is caught
+                # by neither `TimeoutExpired` nor `OSError` below - so one
+                # exec's undecodable pull stderr raised out of this function
+                # and ended the whole fleet aggregation in a traceback, every
+                # other executive's contacts dropped with it, and the
+                # `slug_errors` entry four lines down that exists so a failed
+                # pull is never silent never ran. git quotes branch names,
+                # paths and a remote's own bytes back on stderr, so this is the
+                # ordinary failure. Measured 2026-09-01; the same call in
+                # `scripts/admin-health.py` had it too.
                 pull = subprocess.run(["git", "pull"], cwd=str(repo_path),
                                       capture_output=True, text=True,
-                                      timeout=60, check=False)
+                                      errors="replace", timeout=60, check=False)
             except (subprocess.TimeoutExpired, OSError) as e:
                 slug_errors.append(f"Pull warning for {slug}: {e}")
             else:
@@ -729,13 +772,20 @@ def write_audit_log(aggregated_dir: Path, contacts_count: int, exec_count: int,
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
 
+    # The entry above is already on disk; only the CAP is best effort, so a
+    # failure here is reported and dropped rather than raised over a completed
+    # aggregation. `UnicodeDecodeError` is named because the decode happens
+    # inside `read_text` and is a `ValueError`, not an `OSError`: one stray byte
+    # in the append-only log took down a whole run that had already finished its
+    # work. Measured 2026-09-01.
     try:
         all_lines = log_path.read_text(encoding="utf-8").strip().split("\n")
         if len(all_lines) > AUDIT_MAX_ENTRIES:
             trimmed = all_lines[-AUDIT_MAX_ENTRIES:]
             log_path.write_text("\n".join(trimmed) + "\n", encoding="utf-8")
-    except OSError:
-        pass
+    except (OSError, UnicodeDecodeError) as exc:
+        print(f"{YELLOW}[warn]{RESET} could not trim the aggregation audit log "
+              f"{log_path}: {exc}", file=sys.stderr)
 
 
 # ============================================================

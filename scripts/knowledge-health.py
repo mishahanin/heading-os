@@ -193,7 +193,23 @@ def scan_notes():
     notes = []
 
     for subdir, file_path in scanned_note_files():
-        content = file_path.read_text(encoding="utf-8")
+        try:
+            content = file_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            # This engine already refuses to drop a note silently: an unreadable
+            # `created:` value prints a warn line naming the file, because "a
+            # report asserting a smaller number than it measured" is the defect
+            # this file was written to close. An UNREADABLE NOTE is the same
+            # sentence one level up, and it had no handler at all -- one byte of
+            # Latin-1 in any note under the knowledge root ended the scan with a
+            # codec error and no report. The sibling engine
+            # `odin-brain-health.py` caught OSError here, which cannot catch a
+            # UnicodeDecodeError either; both are fixed together, because a
+            # per-engine fix is how these two drifted apart the last time.
+            print(f"{YELLOW}warn:{RESET} {display_path(file_path)} could not be "
+                  f"read ({type(exc).__name__}: {exc}); it is absent from every "
+                  f"count in this report.", file=sys.stderr)
+            continue
         fm = parse_frontmatter(content)
         links = extract_links(content)
 
@@ -316,7 +332,16 @@ def scan_shared_notes():
         if not dir_path.exists():
             continue
         for file_path in sorted(dir_path.glob("*.md")):
-            content = file_path.read_text(encoding="utf-8")
+            try:
+                content = file_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                # The shared tier, same handling as the main scan above. The
+                # report prints "Corporate Shared Knowledge: N notes", so a note
+                # dropped from here is a number that is quietly wrong.
+                print(f"{YELLOW}warn:{RESET} {display_path(file_path)} could "
+                      f"not be read ({type(exc).__name__}: {exc}); it is absent "
+                      f"from the shared-knowledge count.", file=sys.stderr)
+                continue
             fm = parse_frontmatter(content)
             notes.append({
                 "file": file_path.name,

@@ -207,6 +207,67 @@ def test_read_one_contact_not_found(tmp_path):
     assert "not found" in r["error"]
 
 
+# ============================================================
+# CONTACT_FILE_MAX_BYTES on the drill-down, and the guard nobody made refuse
+# ============================================================
+# `_contact_record`'s copy of this cap has a test, in
+# `tests/test_a_daemon_that_answered_for_the_wrong_tree.py::test_the_contact_
+# list_scan_honours_the_same_size_cap_as_the_drill_down`. The name of that test
+# says which side it is checking against, and the side it names has no test of
+# its own: `read_one_contact`'s `if size > CONTACT_FILE_MAX_BYTES` was asserted
+# by nothing.
+#
+# Full-suite branch coverage on 2026-08-31 over 19,835 tests:
+#
+#     scripts/bridge_daemon/sources/contacts.py  142  17  54  6  88%
+#         Missing 141-143, 205, 228-229, 312, 316, 336, 349-350, 357,
+#                 359-360, 362, 365-366
+#
+# Line 362 is `return {"ok": False, "error": f"file too large ..."}`. So the
+# module declares one cap, applies it in two readers, and a test written to
+# keep the pair in agreement pinned exactly one of them. If the drill-down's
+# copy were deleted, the sibling test would keep passing and go on describing
+# it in its own name.
+
+def test_read_one_contact_refuses_an_oversized_file(tmp_path):
+    """A contact file over the cap is refused, and the pair still agree.
+
+    The two halves are asserted together on ONE file, because "both readers
+    apply one cap" is the invariant and two separate tests can drift apart the
+    way the code did.
+    """
+    ws = _ws(tmp_path)
+    fat = ws / "crm" / "contacts" / "pasted-log.md"
+    fat.write_text("# Pasted Log\n" + "x" * contacts_src.CONTACT_FILE_MAX_BYTES,
+                   encoding="utf-8")
+
+    r = read_one_contact(ws, "ceo", "pasted-log", data_root=ws)
+    assert r["ok"] is False
+    assert "too large" in r["error"], r
+    assert contacts_src._contact_record(fat, "ceo", None) is None, (
+        "the list scan read every byte of a file the drill-down refuses"
+    )
+
+
+def test_a_contact_just_under_the_cap_is_still_served(tmp_path):
+    """The case ON the other side of the line.
+
+    Without it, a cap of zero passes the refusal test and hides every contact
+    the CEO has.
+    """
+    ws = _ws(tmp_path)
+    body = "---\nrelationship_type: prospect\n---\n\n# Under Cap\n\n"
+    padding = "y" * (contacts_src.CONTACT_FILE_MAX_BYTES - len(body) - 1)
+    slim = ws / "crm" / "contacts" / "under-cap.md"
+    slim.write_text(body + padding, encoding="utf-8")
+    assert slim.stat().st_size < contacts_src.CONTACT_FILE_MAX_BYTES
+
+    r = read_one_contact(ws, "ceo", "under-cap", data_root=ws)
+    assert r["ok"] is True, r
+    assert r["name"] == "Under Cap"
+    assert list_contacts(ws, data_root=ws)["total"] == 1
+
+
 # Executive DATA-overlay coverage. Added 2026-05-27 against the per-exec mirror
 # repo; repointed 2026-08-30 to `../.heading-os-data-{slug}/crm/contacts/` after
 # a measurement found the daemon still reading two roots that the 2026-08-23

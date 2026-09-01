@@ -446,19 +446,47 @@ def test_the_counter_sits_where_a_decision_becomes_terminal(tmp_path):
     import ast
 
     tree = ast.parse(_HOOK.read_text(encoding="utf-8"))
-    called_in = {}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef):
-            continue
-        for inner in ast.walk(node):
-            if isinstance(inner, ast.Call):
-                name = getattr(inner.func, "id", None) or getattr(inner.func, "attr", None)
-                if name == "log_denial":
-                    called_in.setdefault(node.name, 0)
-                    called_in[node.name] += 1
+
+    def _callers_of(target: str) -> dict:
+        found = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Call):
+                    name = (getattr(inner.func, "id", None)
+                            or getattr(inner.func, "attr", None))
+                    if name == target:
+                        found[node.name] = found.get(node.name, 0) + 1
+        return found
+
+    called_in = _callers_of("log_denial")
     assert called_in, "the dispatcher never calls the counter"
     offenders = [n for n in called_in if n.startswith("check_")]
     assert not offenders, (
         f"the counter is called inside individual checks {offenders}; a new check "
         "would then go uncounted unless its author remembered"
     )
+
+    # The same question, asked of the name the dispatcher actually spells.
+    #
+    # The block above looks for `log_denial`, and this file has only ever
+    # contained ONE such call: the one inside `_record_denial`, the wrapper.
+    # So the `check_` filter it applies has never had a candidate to reject in
+    # either direction, which is a guard with no negative case. MEASURED
+    # 2026-09-01: inserting `_record_denial("check_prevent_secrets", payload,
+    # "probe")` at the top of `check_prevent_secrets` - the exact defect this
+    # test names - left this assertion green. Seven other tests in this file
+    # caught it on the record COUNTS, so the wall held; the test that says it
+    # is watching placement was not the one watching.
+    wrapper_callers = _callers_of("_record_denial")
+    assert wrapper_callers, "the dispatcher never calls the denial wrapper either"
+    wrapper_offenders = sorted(n for n in wrapper_callers if n.startswith("check_"))
+    assert not wrapper_offenders, (
+        f"the counter wrapper is called inside individual checks "
+        f"{wrapper_offenders}; a refusal would be counted twice there and a new "
+        f"check would still depend on its author remembering")
+    assert sum(wrapper_callers.values()) == 1, (
+        f"the counter wrapper is called from {wrapper_callers}; it is meant to "
+        f"have exactly one call site, the dispatcher's terminal deny path, so "
+        f"that every check is counted by construction")

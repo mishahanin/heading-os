@@ -524,6 +524,114 @@ def test_a_redactor_that_cannot_load_costs_the_facts_not_the_block(precompact,
     assert "pointer line" not in out
 
 
+def test_a_few_very_long_lines_are_still_cut_to_the_character_bound(precompact):
+    """The half of the bound the line count cannot promise.
+
+    `MAX_STATUS_CHARS` exists because "40 lines" names any number of characters
+    when a line is a path, and a fact that overruns its share of `MAX_OUTPUT` is
+    not trimmed by the caller, it is DELETED WHOLE. Nothing measured it: every
+    fixture in this file builds `status` from short lines, so the LINE bound
+    always binds first and `MAX_STATUS_CHARS` was inert. MEASURED 2026-09-01,
+    raising it from 680 to 68000 left all 55 tests passing.
+    """
+    # Three lines, so the line bound of 40 cannot fire; 900 characters each,
+    # so only the character bound can.
+    text = "\n".join(f" M {'d' * 300}/file_{i}.py" for i in range(3))
+    assert len(text.splitlines()) < precompact.MAX_STATUS_LINES, (
+        "this fixture must not trip the line bound, or it measures that instead")
+    assert len(text) > precompact.MAX_STATUS_CHARS
+
+    out = precompact._head(text, precompact.MAX_STATUS_LINES,
+                           precompact.MAX_STATUS_CHARS)
+
+    assert len(out) <= precompact.MAX_STATUS_CHARS, (
+        f"the returned string is {len(out)} chars against a bound of "
+        f"{precompact.MAX_STATUS_CHARS}")
+    assert "more line(s)]" in out, "the drop happened without saying so"
+
+
+def test_the_character_bound_never_cuts_inside_a_path(precompact):
+    """Whole lines only: a cut inside a path is a pointer that resolves to
+    nothing, which is the failure this whole hook was rewritten for."""
+    lines = [f" M {'d' * 300}/file_{i}.py" for i in range(3)]
+    out = precompact._head("\n".join(lines), precompact.MAX_STATUS_LINES,
+                           precompact.MAX_STATUS_CHARS)
+
+    body = [ln for ln in out.splitlines() if not ln.startswith("[...")]
+    assert body, "every line was dropped; the bound cannot be met at all"
+    for line in body:
+        assert line in lines, f"a line was cut mid-path: {line!r}"
+
+
+def test_the_dropped_count_suffix_is_inside_the_bound_it_reports(precompact):
+    """The suffix is part of what the caller gets, so it is part of the budget.
+
+    Measuring the body alone would let the note push the result past the bound
+    that exists to keep the fact from being deleted whole.
+    """
+    text = "\n".join(f" M {'d' * 60}/file_{i}.py" for i in range(30))
+    for limit in range(80, 400, 37):
+        out = precompact._head(text, precompact.MAX_STATUS_LINES, limit)
+        assert len(out) <= limit, (
+            f"max_chars={limit} produced {len(out)} chars: {out[-80:]!r}")
+
+
+def test_a_block_inside_both_bounds_is_returned_byte_for_byte(precompact):
+    """The other direction, so "always truncate" cannot pass the cases above."""
+    text = "\n".join(f" M scripts/file_{i}.py" for i in range(5))
+    assert len(text) < precompact.MAX_STATUS_CHARS
+    out = precompact._head(text, precompact.MAX_STATUS_LINES,
+                           precompact.MAX_STATUS_CHARS)
+    assert out == text
+    assert "more line(s)]" not in out
+
+
+def test_the_written_block_carries_its_own_character_bound(precompact):
+    """The sibling constant, which is a separate value and a separate site.
+
+    Without this, `MAX_WRITTEN_CHARS` has the same shared-witness problem
+    `MAX_STATUS_CHARS` had: one test covering both lets either go inert.
+    """
+    text = "\n".join(f"{'d' * 300}/skill_{i}/SKILL.md" for i in range(3))
+    out = precompact._head(text, precompact.MAX_WRITTEN,
+                           precompact.MAX_WRITTEN_CHARS)
+    assert len(out) <= precompact.MAX_WRITTEN_CHARS
+    assert precompact.MAX_WRITTEN_CHARS != precompact.MAX_STATUS_CHARS, (
+        "the two bounds became one value; this test would then witness nothing")
+
+
+def test_the_two_char_bounds_leave_room_for_the_four_unbounded_facts(precompact):
+    """The arithmetic the constants were SIZED by, asserted instead of recorded.
+
+    `_head` can never witness either constant's VALUE: raise it and the fixture
+    is compared against the raised number, so the cut still happens and the
+    assertion still holds. MEASURED 2026-09-01, `MAX_WRITTEN_CHARS` 600 ->
+    60000 left all 60 tests passing. What a raised bound actually breaks is the
+    budget: `status` and `written` crowd out the four facts that carry no bound
+    of their own, and the drop loop then DELETES a whole block on an ordinary
+    compaction - the regression the sizing comment beside these constants exists
+    to record ("every compaction of this repository shipped without it").
+
+    The reservations are the ones that comment states: 46 for branch, 500 for
+    log, 140 for the handoff pointer, 400 for the plan, 10 for separators, and
+    143 for the two labels plus the gone-count line.
+    """
+    fixed = len(precompact.KEEP_SET)
+    reserved = 46 + 500 + 140 + 400 + 10 + 143
+    worst_case = (fixed + reserved
+                  + precompact.MAX_STATUS_CHARS + precompact.MAX_WRITTEN_CHARS)
+    assert worst_case <= precompact.MAX_OUTPUT, (
+        f"the six facts at their bounds assemble to {worst_case} against "
+        f"MAX_OUTPUT {precompact.MAX_OUTPUT}: an ordinary compaction will shed "
+        f"a whole block. Raising a char bound costs a fact.")
+    # And the budget is not so slack that the check constrains nothing - if it
+    # were, either bound could be raised freely and this would witness nothing.
+    assert worst_case > precompact.MAX_OUTPUT * 0.75, (
+        f"only {worst_case} of {precompact.MAX_OUTPUT} is budgeted; either the "
+        f"reservations above are stale or MAX_OUTPUT grew, and this check has "
+        f"stopped constraining the two bounds")
+
+
 def test_the_drop_order_puts_the_recoverable_facts_first(precompact):
     order = precompact.DROP_ORDER
     assert order.index("status") < order.index("plan")

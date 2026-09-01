@@ -170,6 +170,110 @@ def test_two_rows_carry_their_own_flags_rather_than_one_shared_stamp(reader, tmp
     assert by_name["PREF"]["path"] == "/prefs"
 
 
+@pytest.mark.parametrize("stored", [None, ""], ids=["null-column", "empty"])
+def test_a_row_with_no_path_falls_back_to_root_not_to_the_word_None(
+        reader, tmp_path, stored):
+    """`str(path) if path else "/"`, whose fallback half had no witness.
+
+    Every other row in this file supplies a path. MEASURED 2026-09-01: dropping
+    the `if path else "/"` and writing `str(path)` left this file green at 24
+    passed, and a NULL `path` column then exported as the four-character string
+    `"None"`. Playwright would scope that cookie to a path no page is ever
+    served from, so the imported session silently does not authenticate -
+    exactly the failure mode the stamped `secure: true` produced, arriving
+    through the one attribute that was NOT stamped.
+
+    A NULL path column is not hypothetical: the schema does not declare `path`
+    NOT NULL, and a row written by an older Chromium can carry one.
+    """
+    reader([{"host_key": "example.invalid", "name": "SID", "value": "v",
+             "path": stored}])
+
+    payload = chromium_cookies._merge_playwright(
+        tmp_path / "store.json", "example.invalid",
+        chromium_cookies._read_cookies("example.invalid")[0],
+    )
+
+    assert payload[0]["path"] == "/", payload[0]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [b"\xff\xfe[]", b'[{"name": "caf\xe9"}]', b"\x80\x81\x82"],
+    ids=["bom-like", "latin1-payload", "binary"],
+)
+def test_an_undecodable_store_is_treated_as_empty_not_as_a_crash(
+        reader, tmp_path, raw):
+    """The recovery `_merge_playwright`'s own docstring describes, unmeasured.
+
+    That docstring says the previous catch "named `json.JSONDecodeError` and
+    `OSError`, which miss the `UnicodeDecodeError` a store holding non-UTF-8
+    bytes raises, so the documented recovery crashed on one of the two ways a
+    file is unparseable", and that `ValueError` now covers both because each is
+    a subclass of it. MEASURED 2026-09-01: narrowing that `except` back to
+    `(OSError, json.JSONDecodeError)` left this file green at 24 passed - the
+    fix was written, explained at length, and guarded by nothing.
+
+    `UnicodeDecodeError` is a SIBLING of `json.JSONDecodeError`, not a subclass,
+    so the clause covering the parse never covered the decode above it. The
+    caller re-runs this precisely because the store is unusable, which is when
+    the crash lands.
+    """
+    reader([{"host_key": "example.invalid", "name": "SID", "value": "v"}])
+    store = tmp_path / "store.json"
+    store.write_bytes(raw)
+
+    payload = chromium_cookies._merge_playwright(
+        store, "example.invalid",
+        chromium_cookies._read_cookies("example.invalid")[0],
+    )
+
+    assert [c["name"] for c in payload] == ["SID"], (
+        "an unreadable store was not recovered from as if empty")
+
+
+@pytest.mark.parametrize("text", ['{"cookies": []}', '"a string"', "7", "null"],
+                         ids=["object", "string", "number", "null"])
+def test_a_store_that_decodes_to_the_wrong_shape_is_also_treated_as_empty(
+        reader, tmp_path, text):
+    """The third way a store is unusable: it parses, and is not a list.
+
+    `isinstance(loaded, list)` is the guard, and it had no witness - measured
+    2026-09-01, `existing = loaded` unconditionally left this file green at 30
+    passed. The rows above cover unreadable bytes and the row below covers a
+    good store; a store that is valid JSON of the wrong shape is neither, and it
+    is the shape a half-finished hand edit leaves behind.
+    """
+    reader([{"host_key": "example.invalid", "name": "SID", "value": "v"}])
+    store = tmp_path / "store.json"
+    store.write_text(text, encoding="utf-8")
+
+    payload = chromium_cookies._merge_playwright(
+        store, "example.invalid",
+        chromium_cookies._read_cookies("example.invalid")[0],
+    )
+
+    assert [c["name"] for c in payload] == ["SID"]
+    assert all(isinstance(c, dict) for c in payload), payload
+
+
+def test_a_readable_store_still_keeps_another_domains_cookies(reader, tmp_path):
+    """Anchor: treating EVERY store as empty would pass the rows above and
+    silently drop every other domain's session on each import."""
+    reader([{"host_key": "example.invalid", "name": "SID", "value": "v"}])
+    store = tmp_path / "store.json"
+    store.write_text(
+        '[{"name": "OTHER", "value": "keep", "domain": "other.invalid", '
+        '"path": "/"}]', encoding="utf-8")
+
+    payload = chromium_cookies._merge_playwright(
+        store, "example.invalid",
+        chromium_cookies._read_cookies("example.invalid")[0],
+    )
+
+    assert {c["name"] for c in payload} == {"SID", "OTHER"}
+
+
 def test_the_flat_get_cookies_shape_is_unchanged(reader):
     """The public contract is {name: value}; widening the tuple must not leak."""
     reader([{"host_key": "example.invalid", "name": "SID", "value": "token",

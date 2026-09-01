@@ -23,7 +23,23 @@ sys.path.insert(0, str(ROOT))
 
 
 def _iter_py_files():
-    return [p for p in SCRIPTS.rglob("*.py")]
+    return list(SCRIPTS.rglob("*.py"))
+
+
+def test_the_symbol_sweeps_actually_read_the_tree():
+    """Both absence guards below are green over an empty file list.
+
+    They assert that a name appears NOWHERE, which is trivially true of nothing.
+    A glob that stops matching - a moved layout, a renamed directory, a walk
+    that starts raising and gets wrapped in a swallow - retires the wall in
+    silence, and the regression it exists to stop is a script that WIPED the
+    engine tree on a clean exec deploy. Measured 2026-09-01: 386 files.
+    """
+    found = _iter_py_files()
+
+    assert len(found) >= 250, (
+        f"only {len(found)} Python files reached the orphan-delete sweep; the "
+        f"walk is broken and both symbol guards below are asserting nothing")
 
 
 def test_workspace_sync_script_is_gone():

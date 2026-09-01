@@ -120,7 +120,20 @@ def _load() -> tuple[dict, bool]:
     if path is not None and path.exists():
         try:
             loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except (OSError, yaml.YAMLError):
+        except (OSError, UnicodeDecodeError, yaml.YAMLError):
+            # UnicodeDecodeError is a ValueError and a SIBLING of yaml.YAMLError,
+            # not a subclass of either, and the decode happens inside read_text
+            # BEFORE the parser is reached - so `(OSError, yaml.YAMLError)` walked
+            # straight past it. An operator.yaml saved as UTF-16 (or any non-UTF-8
+            # encoding) therefore raised out of get_operator(), and this module is
+            # bound at MODULE scope by several scripts, so the traceback arrived
+            # during import, before argparse. That is the same import-time death
+            # the module docstring above says was fixed on 2026-08-30 for the
+            # DataRootError path; the encoding path was still open until
+            # 2026-09-01. Measured: writing "name: Ada\n".encode("utf-16") to the
+            # overlay's operator.yaml raised
+            # `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff` out of
+            # get_operator(). "Never raises" now covers it.
             loaded = {}
         if isinstance(loaded, dict):
             for key in _GENERIC:

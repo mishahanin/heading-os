@@ -67,6 +67,20 @@ def _valid_imei() -> str:
 
 TARGET = _valid_imei()
 
+# The IMEI a reachable modem is already holding, and it must NOT be the one
+# being written. It was `359070116384108`, which the helper above derives as
+# TARGET from the same base, so old and new were the same fifteen digits.
+# MEASURED 2026-09-01 by mutation over this file plus tests/test_modem_drivers.py,
+# tests/test_modem_ssh.py and the driver-read suite (baseline 31 passed):
+# deleting the `led["used"].append(old)` burn, deleting the `led["used"]`
+# append of the target, and filing the TARGET into `history` instead of the
+# replaced IMEI all SURVIVED, 31 passed and 0 failed each time. Every ledger
+# assertion below was satisfied by whichever of the two appends ran first, and
+# the line labelled "the replaced IMEI was not burned" was asserting the same
+# string the line above it had already asserted. With CURRENT distinct, all
+# three of those mutations fail.
+CURRENT = "359070111111118"
+
 
 class _Dead:
     """A transport that cannot be reached."""
@@ -86,7 +100,7 @@ class _Dead:
 class _Live:
     """A reachable modem holding a current IMEI."""
 
-    def __init__(self, current: str = "359070116384108") -> None:
+    def __init__(self, current: str = CURRENT) -> None:
         self.current = current
         self.sends: list[str] = []
 
@@ -108,8 +122,12 @@ def ledger(tmp_path, monkeypatch):
 
 def test_the_arrangement_is_not_refused_before_the_read(ledger):
     """Pins the fixture. Every assertion below would hold vacuously if the
-    target IMEI failed the Luhn check two lines earlier."""
+    target IMEI failed the Luhn check two lines earlier, and every ledger
+    assertion would hold for the wrong reason if the modem already held the
+    IMEI being written."""
     assert MT.mc.luhn_valid(TARGET)
+    assert MT.mc.luhn_valid(CURRENT)
+    assert CURRENT != TARGET, "old and new must differ or the burn tests are vacuous"
     assert TARGET not in ledger["used"]
 
 
@@ -153,16 +171,16 @@ def test_the_ledger_is_not_spent_by_a_refused_write(ledger):
 def test_a_readable_modem_is_still_written_and_recorded(ledger):
     """The negative control, and it carries the whole file. A guard that refused
     every modem would pass all three tests above and break the command."""
-    drv = _Live(current="359070116384108")
+    drv = _Live(current=CURRENT)
 
     rc = MT._apply_imei(DEVICE, drv, ledger, CFG, TARGET, False)
 
     assert rc == 0
     assert drv.sends == [TARGET]
     assert TARGET in ledger["used"]
-    assert "359070116384108" in ledger["used"], "the replaced IMEI was not burned"
+    assert CURRENT in ledger["used"], "the replaced IMEI was not burned"
     history = ledger["devices"][DEVICE]["history"]
-    assert history and history[-1]["imei"] == "359070116384108"
+    assert history and history[-1]["imei"] == CURRENT
 
 
 def test_a_modem_with_no_current_imei_is_still_written(ledger):

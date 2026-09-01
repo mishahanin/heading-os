@@ -77,6 +77,56 @@ def test_every_write_tool_is_denied_on_the_brain_directory() -> None:
         )
 
 
+def _tools_granted_on(argv: list[str], directory: str) -> set[str]:
+    """Every tool name carrying a path-scoped grant over `directory`.
+
+    Derived from the command the tier actually emits, NOT from `WRITE_TOOLS`.
+    `PROPOSE_WRITE_REL` is by definition the one directory this tier may WRITE,
+    so a tool named in a pattern over it is a tool this tier can write with.
+    """
+    prefix = str((get_data_root() / directory).resolve()).lstrip("/")
+    needle = f"(//{prefix}/**)"
+    return {a[: -len(needle)] for a in _values_after(argv, "--allowedTools")
+            if a.endswith(needle)}
+
+
+def test_every_write_tool_THIS_TIER_GRANTS_is_denied_on_the_brain(tmp_path: Path) -> None:
+    """The anti-decay half, and the one `WRITE_TOOLS` cannot supply.
+
+    `WRITE_TOOLS` is a hand-maintained tuple inside this file, so it is the
+    thing that falls behind - the same one-of-N shape the file is named for,
+    reproduced in its own constant. Measured 2026-09-01: granting a THIRD
+    write tool on this tier (`NotebookEdit(//<proposals>/**)`) with no matching
+    brain deny left `test_every_write_tool_is_denied_on_the_brain_directory`
+    GREEN. The only test that reddened was the grant-scope one below, whose
+    message is about the grant list; an author who widened that assertion to
+    admit the new tool - the natural next step - would have shipped a brain
+    deny covering two of three write tools and no test would have said so.
+
+    This derives the obligation from the emitted command instead: whatever set
+    of tools the tier grants over its write directory, every one of them is
+    denied on the brain directory. A new write tool cannot be granted without
+    its deny.
+    """
+    cmd = build_skill_command("odin", ["reflect", "--propose"], tier="propose")
+    granted = _tools_granted_on(cmd, PROPOSE_WRITE_REL)
+    # Floor, so the check can never be green over an empty derived set: the
+    # tier is known to grant both of these, and set-equality here is what makes
+    # a SILENTLY DROPPED grant fail too, in the other direction.
+    assert granted == set(WRITE_TOOLS), (
+        "the tools this tier grants over its write directory changed; if that is "
+        f"deliberate, WRITE_TOOLS must change with it. granted={sorted(granted)!r}"
+    )
+    disallowed = _values_after(cmd, "--disallowedTools")
+    prefix = _brain_prefix()
+    missing = [t for t in sorted(granted) if f"{t}(//{prefix}/**)" not in disallowed]
+    assert not missing, (
+        f"this tier grants {sorted(granted)!r} over {PROPOSE_WRITE_REL} but the "
+        f"brain deny does not name {missing!r}; a permission pattern binds exactly "
+        f"the tool it names, so the brain is writable by those tools"
+    )
+
+
 def test_the_brain_directory_is_not_read_denied() -> None:
     """reflect reviews the brain. A read deny here would break the mode."""
     cmd = build_skill_command("odin", ["reflect", "--propose"], tier="propose")

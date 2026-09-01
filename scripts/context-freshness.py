@@ -39,7 +39,19 @@ def get_freshness(filepath):
         (date_str, None)      a marker shaped like a date that is not one
         (None, None)          no marker at all
     """
-    content = filepath.read_text(encoding="utf-8")
+    # `errors="replace"`, for the same reason the `except ValueError` below
+    # exists and one input class over. A bare decode raised UnicodeDecodeError
+    # on a context file carrying one non-UTF-8 byte, which aborted the `check`
+    # listing partway through and made every OTHER file's freshness
+    # unreportable - the exact failure that handler was written to end.
+    # MEASURED 2026-09-01 on a file whose marker was perfectly good and whose
+    # BODY held a cp1252 byte: the function raised, so none of the three return
+    # shapes this docstring promises could be delivered.
+    #
+    # Replacing is safe for what is being read: the marker is ASCII and is
+    # anchored at position 0 by `re.match`, so a replaced byte can neither
+    # invent a marker nor hide one that is there.
+    content = filepath.read_text(encoding="utf-8", errors="replace")
     first_line = content.split("\n")[0] if content else ""
     match = re.match(r">\s*Last verified:\s*(\d{4}-\d{2}-\d{2})", first_line)
     if match:

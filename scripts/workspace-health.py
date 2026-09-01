@@ -160,7 +160,25 @@ def check_reference_validation():
         inconclusive("refs", "no reference index (no data overlay on this clone)")
         return 0
 
-    paths, skipped = _reference_index_paths(index.read_text(encoding="utf-8"))
+    try:
+        index_text = index.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        # `main`'s loop was UNGUARDED when this was written, so a read that
+        # raised here did not fail one section: it ended the run with a
+        # traceback and no summary at all. `run_one` now catches it too, and
+        # this handler still earns its place: it names the FILE and keeps the
+        # section's own verdict, where `run_one` can only say the section
+        # died. That was MEASURED on 2026-09-01 in
+        # `check_context_freshness` and fixed there; four sibling reads in this
+        # same file, this one included, kept the defect. Reported as an issue
+        # rather than skipped, because a reference check that could not open the
+        # index has not found the references sound.
+        action(f"reference index could not be read ({type(exc).__name__}); "
+               f"0 paths checked")
+        inconclusive("refs", "the reference index could not be read")
+        return 1
+
+    paths, skipped = _reference_index_paths(index_text)
 
     # Which root each path is relative to. The workspace is two layered roots,
     # and the index names files in both: `scripts/send-email.py` is engine,
@@ -212,7 +230,23 @@ def check_context_freshness(max_days=30):
         return 1
 
     for f in sorted(context_files):
-        content = f.read_text(encoding="utf-8")
+        try:
+            content = f.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            # No handler at all sat here until 2026-09-01. This is a HEALTH
+            # CHECK, and it ran before `/push-updates`. MEASURED that day on
+            # two context files, one clean and one carrying a lone 0xe9: it
+            # reported on the clean file, then died on the next one with a
+            # traceback naming a codec, a byte and an offset but no filename,
+            # so every later context file went unchecked and the run produced
+            # no verdict at all.
+            #
+            # Counted as an issue rather than skipped quietly: a freshness
+            # check that cannot read a file has not found it fresh.
+            action(f"{f.name}: could not be read ({type(exc).__name__}), so "
+                   f"its freshness is unknown")
+            issues += 1
+            continue
         lines = content.split("\n")[:10] if content else []
 
         # Check for freshness marker: > Last verified|updated: YYYY-MM-DD (first 10 lines).
@@ -226,10 +260,11 @@ def check_context_freshness(max_days=30):
         if match:
             # The regex validates digit SHAPE, never the calendar, so
             # `> Last verified: 2026-02-31` reached `strptime` and raised
-            # ValueError. `main` runs these checks in an unguarded loop -- a fact
-            # `check_build_sync` already carries a fix-comment for -- so one
-            # malformed marker aborted every remaining section with a traceback
-            # and no summary, in front of `/push-updates`. The sibling
+            # ValueError. `main` ran these checks in an unguarded loop when
+            # this was written, so one malformed marker aborted every remaining
+            # section with a traceback and no summary, in front of
+            # `/push-updates`. `run_one` now catches that; this handler stays
+            # because it names the marker rather than only the section. The sibling
             # `check_doc_versions` wraps the identical parse; this one was
             # missed. A date nobody can parse is an unverified file, not a
             # crash, so it counts as an issue and the run continues.
@@ -310,7 +345,19 @@ def check_pipeline_health():
         action("pipeline.md not found!")
         return 1
 
-    content = pipeline_file.read_text(encoding="utf-8")
+    try:
+        content = pipeline_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        # See `check_reference_validation` above: `main`'s loop was unguarded
+        # when this was written, so raising here ended the whole health run
+        # with no verdict. `run_one` now catches it; this handler stays because
+        # it names the file. pipeline.md is
+        # operator-authored data in the private overlay, which is precisely
+        # where a stray non-UTF-8 byte arrives from (a paste out of Word, a
+        # Latin-1 company name).
+        action(f"pipeline.md could not be read ({type(exc).__name__}); "
+               f"pipeline health NOT checked")
+        return 1
 
     # The comment here used to promise TBD, placeholder AND empty fields.
     # `placeholder_count` was assigned and never read, nothing anywhere looked
@@ -369,7 +416,15 @@ def check_people_completeness():
         action("people.md not found!")
         return 1
 
-    content = people_file.read_text(encoding="utf-8")
+    try:
+        content = people_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        # Same class and same file as the two above. people.md holds names, so
+        # it is the single likeliest context file to carry a byte that is not
+        # valid UTF-8.
+        action(f"people.md could not be read ({type(exc).__name__}); "
+               f"people completeness NOT checked")
+        return 1
 
     # Check for placeholder patterns
     add_patterns = re.findall(r"\[Add[^\]]*\]", content)
@@ -589,7 +644,15 @@ def check_skill_router_coverage() -> int:
     if not skills_dir.exists():
         action(".claude/skills/ missing")
         return 1
-    router_text = router_file.read_text(encoding="utf-8")
+    try:
+        router_text = router_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        # An unreadable router is the same outcome as a missing one for this
+        # check: no skill can be shown to be covered. The branch above already
+        # returns 1 for the missing case.
+        action(f"skill-router.md could not be read ({type(exc).__name__}); "
+               f"0 skills checked for coverage")
+        return 1
     skill_dirs = [d.name for d in sorted(skills_dir.iterdir()) if d.is_dir() and not d.name.startswith(".")]
     for name in skill_dirs:
         # A skill name may not run straight into another name character, so
@@ -643,7 +706,17 @@ def check_doc_versions(max_age_days: int = 90) -> int:
             action(f"{label}: missing from templates/")
             issues += 1
             continue
-        first_lines = f.read_text(encoding="utf-8").splitlines()[:3]
+        try:
+            first_lines = f.read_text(encoding="utf-8").splitlines()[:3]
+        except (OSError, UnicodeDecodeError) as exc:
+            # The last of the five reads in this file that had no decode
+            # guard. A template
+            # whose version marker cannot be read is an unverified template,
+            # which is what the two `continue` branches below already count.
+            action(f"{label}: could not be read ({type(exc).__name__}); "
+                   f"version marker NOT checked")
+            issues += 1
+            continue
         first_block = "\n".join(first_lines)
         match = version_pattern.search(first_block)
         if not match:
@@ -709,10 +782,11 @@ def check_build_sync() -> int:
     if not isinstance(data, dict):
         # Valid JSON of the wrong shape. A list, string, number or null parsed
         # cleanly, so the handler above never fired and `.get` raised
-        # AttributeError on the next line. `main` runs these checks in an
-        # unguarded loop, so the WHOLE health run died there: the remaining
-        # sections never ran, no summary printed, and the operator got a
-        # traceback instead of a verdict in front of `/push-updates`.
+        # AttributeError on the next line. `main` ran these checks in an
+        # unguarded loop when this was written, so the WHOLE health run died
+        # there: the remaining sections never ran, no summary printed, and the
+        # operator got a traceback instead of a verdict in front of
+        # `/push-updates`. `run_one` now catches that class.
         action(f"BUILD.json is a {type(data).__name__}, expected an object")
         return 1
     build_no = data.get("build", "?")
@@ -850,13 +924,51 @@ def main():
         "extras": check_extras_importability,
     }
 
+    def run_one(name, check_fn) -> int:
+        """One section, whose crash costs that section and no other.
+
+        The loop below used to call each check bare. Every section that raises
+        therefore ended the WHOLE run: the remaining sections never executed, no
+        summary printed, and the operator got a traceback instead of a verdict,
+        in front of `/push-updates`. `check_build_sync`'s own comment has named
+        this amplifier since 2026-08-23 and fixed only its own read.
+
+        MEASURED 2026-09-01: five reads under this module still had no handler
+        at all (`check_pipeline_health`, `check_people_completeness`,
+        `check_skill_router_coverage`, `check_reference_validation`,
+        `check_doc_versions`), and a `context/pipeline.md` holding one invalid
+        byte took the entire health run down through this loop. Guarding each
+        read in turn fixes the five that exist today; guarding the CALL fixes
+        the class, including the next check somebody adds.
+
+        Counted as an issue, never swallowed. A section that could not run has
+        not passed, and a health check that exits 0 over a section it never
+        completed is the failure this whole file is written against.
+
+        The five per-read handlers STAY, and that is not redundancy left by
+        accident. This one can only say which section died; each of theirs
+        names the FILE that could not be read and lets the rest of that
+        section still produce its verdict. Both layers landed on 2026-09-01
+        from two different auditors, and the five comments beside those reads
+        were reconciled the same day: each said "`main` runs every section in
+        an unguarded loop" in the present tense, which this function had just
+        made false. A comment that describes a fixed defect as live misleads
+        the next audit, so they now say when it was true.
+        """
+        try:
+            return check_fn()
+        except Exception as exc:  # noqa: BLE001 - one section must not end the run
+            action(f"section '{name}' could not run ({type(exc).__name__}: {exc}); "
+                   f"it verified nothing")
+            return 1
+
     if args.section:
         ran = [args.section]
-        total_issues = checks[args.section]()
+        total_issues = run_one(args.section, checks[args.section])
     else:
         ran = list(checks)
         for name, check_fn in checks.items():
-            total_issues += check_fn()
+            total_issues += run_one(name, check_fn)
 
     # Summary. "All checks passed." was printed after `--section extras` too --
     # one section, and one whose own docstring says it is informational and

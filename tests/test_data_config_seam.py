@@ -86,6 +86,36 @@ def load_exec_registry_fresh():
     return load_exec_registry()
 
 
+def test_an_undecodable_admin_config_degrades_and_says_so(data_root, capsys):
+    """`load_admin_config`'s `UnicodeDecodeError` arm, with no case on it.
+
+    The handler catches the triple `(json.JSONDecodeError, OSError,
+    UnicodeDecodeError)` and the docstring argues at length for why an
+    unreadable file must not be answered in silence. Measured 2026-09-01:
+    dropping `UnicodeDecodeError` from that tuple left this file and all 18
+    files naming these loaders green.
+
+    It escapes the other two because it is neither. A decode failure happens
+    inside `read_text()`, BEFORE `json.loads` is reached, so `JSONDecodeError`
+    never applies; and `UnicodeDecodeError` subclasses `ValueError`, not
+    `OSError`, so the file-error clause walks past it. One non-UTF-8 byte in a
+    hand-edited `admin.json` would therefore raise out of a loader that promises
+    `{}`, and `load_github_org` and `get_admin_slugs` sit directly on it.
+
+    Two sibling loaders in the same module -- `_read_registry_or_empty` and
+    `get_workspace_identity` -- carry the identical triple, so this is the
+    third copy of one decision and the only one this file could see.
+    """
+    from scripts.utils.workspace import load_admin_config
+    (data_root / "config" / "admin.json").write_bytes(b'{"github_org": "\xff31c"}')
+
+    assert load_admin_config() == {}
+    assert "could not be read" in capsys.readouterr().err, (
+        "the loader degraded in silence; an operator with a corrupt admin.json "
+        "would see default admin gating and be told nothing"
+    )
+
+
 def test_loaders_degrade_when_data_config_absent(data_root):
     """Missing config-data files degrade to empty, never crash."""
     from scripts.utils.workspace import load_admin_config, load_exec_registry

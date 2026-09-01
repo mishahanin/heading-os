@@ -240,10 +240,21 @@ def test_a_claimant_does_not_silence_the_hook_above_hard(tmp_path, monkeypatch):
 
     _run(41.0)
     assert calls == [], "a claimant below the hard threshold must silence the hook"
+    _run(44.0)
+    assert calls == [], "one point below hard is still below hard"
     _run(46.0)
     assert calls == [46.0], (
         "a claimant above the hard threshold silenced the hook; the last save "
         "before compaction cannot wait a turn"
+    )
+    # The case exactly ON the line. Without it the pair above is equally true of
+    # `used <= hard`, which moves the courtesy one point past the threshold it is
+    # documented to stop at. Mutation-confirmed 2026-09-01: that flip was green
+    # across all twelve checkpoint test files.
+    _run(45.0)
+    assert calls == [46.0, 45.0], (
+        "a claimant silenced the hook AT the hard threshold; the courtesy ends "
+        "where the threshold begins, not one point above it"
     )
 
 

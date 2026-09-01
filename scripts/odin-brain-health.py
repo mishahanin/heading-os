@@ -141,7 +141,25 @@ def parse_frontmatter(filepath):
     """
     try:
         text = filepath.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError) as exc:
+        # `UnicodeDecodeError` is a `ValueError`, not an `OSError`, so this
+        # handler could not catch the one failure a text read of an
+        # operator-authored note most plausibly produces: the decode happens
+        # inside `read_text` and never reaches the frontmatter parser. The
+        # narrower handler made this engine LOOK like it degraded while it
+        # raised, and its twin `knowledge-health.py` had no handler here at all.
+        # Both are widened in the same change, because
+        # `tests/test_a_health_engine_that_scanned_a_name_list.py` exists
+        # because these two engines drifted apart over exactly this kind of
+        # per-engine repair.
+        #
+        # The warn line matters as much as the return: silence would make an
+        # unreadable brain file indistinguishable from one with no frontmatter,
+        # and the report's counts would be smaller than the tree with nothing
+        # said.
+        print(f"{YELLOW}warn:{RESET} {filepath} could not be read "
+              f"({type(exc).__name__}: {exc}); it is absent from every count "
+              f"in this report.", file=sys.stderr)
         return None
     data, _ = _parse_frontmatter_text(text)
     if not data:

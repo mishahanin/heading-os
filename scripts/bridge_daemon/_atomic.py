@@ -35,7 +35,16 @@ def atomic_write_text(path: Path, content: str, mode: int = 0o600) -> None:
             # rather than abort the write. POSIX honors it.
             pass
         os.replace(tmp, path)
-    except Exception:
+    except BaseException:
+        # BaseException, not Exception. `KeyboardInterrupt` and `SystemExit`
+        # do not derive from `Exception`, so a Ctrl-C or a shutdown landing
+        # between the mkstemp and the replace left the scratch file behind
+        # under `.daemon-state/`, named `tmpXXXXXXXX` and owned by nothing.
+        # The sibling helper `scripts/utils/crm_autolog.atomic_write` already
+        # catches `BaseException` for exactly this reason; this copy kept the
+        # narrower clause. The target file is untouched either way (the
+        # `os.replace` is what makes the write visible), so this is about the
+        # orphan, not about corruption.
         try:
             os.unlink(tmp)
         except OSError:

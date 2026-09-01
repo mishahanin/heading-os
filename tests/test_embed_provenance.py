@@ -154,6 +154,75 @@ def test_model_digest_returns_none_when_the_model_is_absent(monkeypatch):
     assert emb.model_digest(model="bge-m3", host="http://x:1") is None
 
 
+def test_a_non_http_host_never_reaches_the_opener(monkeypatch):
+    """The scheme allowlist, asked about the CALL rather than the return value.
+
+    `model_digest` refuses any host that is not http(s) before building a URL,
+    because `urlopen` honours whatever scheme it is handed and would open and
+    read `file:///etc/passwd`. The test above it asserts only that a scheme-less
+    host yields None, and None is ALSO what comes back with the guard removed:
+    `urlopen` raises `unknown url type`, which the same function catches. So the
+    return value cannot distinguish the guarded code from the unguarded code.
+
+    MEASURED 2026-09-01: deleting `if not is_http_url(host): return None` left
+    all 173 tests green across this file and the six neighbours that name
+    `model_digest` or `is_http_url`. The guard's comment says it is the same one
+    as `ollama_host.probe`; `tests/test_ollama_host.py` binds it there, and
+    nothing bound this copy.
+
+    Asked of the recorded call, not the result, because that is the only
+    question whose answer differs.
+    """
+    from scripts.utils import embeddings as emb
+
+    opened = []
+
+    def _record(url, *a, **k):
+        opened.append(url)
+        return _ctx(b'{"models": [{"name": "bge-m3:latest", "digest": "d"}]}')
+
+    monkeypatch.setattr(emb.urllib.request, "urlopen", _record)
+
+    for host in ("file:///etc", "ftp://h", "stub", "172.30.48.1:11436"):
+        assert emb.model_digest(model="bge-m3", host=host) is None, host
+    assert opened == [], (
+        f"a non-http host was handed to urlopen: {opened}. urlopen honours the "
+        "scheme, so `file://` would be opened and read."
+    )
+
+    # The control jaw. Without it a resolver that refused EVERY host would pass
+    # the assertion above while making the digest permanently unknown.
+    assert emb.model_digest(model="bge-m3", host="http://x:1") == "d"
+    assert opened == ["http://x:1/api/tags"]
+
+
+def test_a_tags_reply_that_is_not_utf8_returns_none_instead_of_raising(monkeypatch):
+    """The decode happens INSIDE the read, before any parse.
+
+    `resp.read().decode("utf-8")` raises `UnicodeDecodeError` on bytes that are
+    not valid UTF-8. That is a `ValueError`; it is NOT an `OSError` and NOT a
+    `json.JSONDecodeError`, so of the five exception types this function catches
+    only the bare `ValueError` covers it, and nothing exercised that.
+
+    MEASURED 2026-09-01: removing `ValueError` from the caught set left all 173
+    tests green across this file and the six neighbours. The function's docstring
+    justifies that entry by a scheme-less host raising `unknown url type` - and
+    that path is unreachable, because `is_http_url` refuses a scheme-less host
+    two lines earlier. The entry is load-bearing for a reason its own docstring
+    does not give.
+
+    The contract it protects is the one stated at the top of `model_digest`:
+    the digest is a diagnostic, and a build must never fail because the tags
+    endpoint answered oddly.
+    """
+    from scripts.utils import embeddings as emb
+
+    monkeypatch.setattr(
+        emb.urllib.request, "urlopen",
+        lambda *a, **k: _ctx(b'\xff\xfe{"models": [{"name": "bge-m3"}]}'))
+    assert emb.model_digest(model="bge-m3", host="http://x:1") is None
+
+
 class _ctx:
     """Minimal context manager standing in for urlopen's response."""
     def __init__(self, body): self._body = body

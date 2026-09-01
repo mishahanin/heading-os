@@ -585,17 +585,27 @@ class EmailSource:
         self.logger.info(f"Email: {len(new_items)} new unread messages{examined}")
         return new_items
 
+    # The email section of sentinel_config.yaml has its own `vip_senders` and
+    # its own `ignore_patterns`, read by these two methods. They are the third
+    # and fourth copies of the reader hardened in `CalendarPolicyEngine`, and
+    # they were the two that still took a hand-edited list on trust: an empty
+    # dash makes a None ENTRY and `.lower()` raises on it. Both are called at
+    # try-depth 0 inside `check_new`'s `for email_item in items` loop, so the
+    # raise ends the whole email cycle - the same shape as the invite livelock
+    # documented on `_configured_seq`, on the other source.
     def _is_ignored(self, sender: str) -> bool:
-        sender_lower = sender.lower()
-        for pattern in self.config.get("ignore_patterns", []):
-            if fnmatch.fnmatch(sender_lower, pattern.lower()):
+        sender_lower = (sender or "").lower()
+        for pattern in _configured_seq(self.config.get("ignore_patterns"), str,
+                                       "ignore_patterns", self.logger):
+            if fnmatch.fnmatch(sender_lower, pattern.strip().lower()):
                 return True
         return False
 
     def _is_vip(self, sender: str) -> bool:
-        sender_lower = sender.lower()
-        for vip in self.config.get("vip_senders", []):
-            if sender_lower == vip.lower():
+        sender_lower = (sender or "").lower()
+        for vip in _configured_seq(self.config.get("vip_senders"), str,
+                                   "vip_senders", self.logger):
+            if sender_lower == vip.strip().lower():
                 return True
         return False
 
@@ -742,6 +752,165 @@ class MeetingInviteSource:
 _ZERO_WIDTH = dict.fromkeys([0x200b, 0x200c, 0x200d, 0x2060, 0xfeff], None)
 
 _DEFAULT_RUNE_TOKEN = "[RUNE]"  # noqa: S105 — a subject tag, not a credential
+_DEFAULT_DECLINE_MESSAGE = (
+    "Due to some conflicts, I'd like to propose a new day and time for our meeting."
+)
+
+
+def _configured_text(value, default: str) -> str:
+    """A hand-edited YAML string, or `default` for any value that is not one.
+
+    `sentinel_config.yaml` is edited by hand, and a key written with nothing
+    after it (`rune_token:`) parses as None rather than as an ABSENT key, so
+    `config.get("rune_token", _DEFAULT_RUNE_TOKEN)` hands that None straight
+    through: the default fires only on absence. Every reader below took the
+    value on trust, and each one paid differently.
+
+    MEASURED 2026-09-01 against the shipped code, with `rune_token:` blank:
+
+        detector  subject_has_rune("[RUNE] x")   True   (it guarded itself)
+        message   "...resend with the tag None added ... None Weekly sync"
+
+    The two disagreed, and the message is the half that reaches a person. A
+    Tribe member who did exactly what the automated decline told them - put
+    `None` at the front of the subject - would be declined again, because the
+    detector was still looking for `[RUNE]`. `subject_has_rune` carried the
+    `or _DEFAULT_RUNE_TOKEN` fallback and `build_tribe_decline_message` did
+    not: one fix, two copies, the outbound one missed.
+
+    And with `decline_message:` blank, `msg += f" How about {alternative}?"`
+    raised TypeError from OUTSIDE the try that wraps `decline_invite`, out of
+    the invite loop, past `state.save()`. The cycle handler logs one
+    "Meeting invite check failed" line and every invite in that batch is left
+    unprocessed with the earlier in-memory decisions unsaved, so the next cycle
+    reaches the same invite and does it again. A permanent livelock behind a
+    single log line.
+
+    Nothing here touches the auto-accept / auto-decline POLICY, which is the
+    operator's design and frozen since 2026-08-23: the same invites get the same
+    decisions and the same people get the same replies. Only the text of a reply
+    that is already being sent, and the crash on the way to sending it, change.
+    """
+    return value if isinstance(value, str) and value.strip() else default
+
+
+def _bad_config(logger, key: str, detail: str) -> None:
+    """Say which key was wrong. A dropped value must never be a silent one."""
+    if logger is not None and key:
+        logger.warning(f"sentinel_config.yaml: calendar.{key} {detail}; "
+                       f"ignoring it for this cycle")
+
+
+def _configured_seq(value, kind: type, key: str = "", logger=None) -> list:
+    """Entries of type `kind` from a hand-edited YAML sequence; the rest dropped.
+
+    `_configured_text` above fixed this premise for the three calendar keys that
+    hold a STRING. The keys beside them that hold a LIST, a MAPPING or a NUMBER
+    were left on the old footing, and they fail the same way for the same
+    reason: `sentinel_config.yaml` is edited by hand, `vip_senders:` written with
+    nothing after it parses as None rather than as an absent key, a dash left
+    empty makes a None ENTRY, and a trailing colon turns an entry into a mapping.
+
+    MEASURED 2026-09-01 against the shipped code, one well-formed invite, one
+    malformed key at a time - every one of these raised out of
+    `CalendarPolicyEngine.evaluate`:
+
+        tribe_domains: [null]      AttributeError: 'NoneType' has no 'lower'
+        tribe_domains: [{a: b}]    AttributeError: 'dict' has no 'lower'
+        vip_senders: [null]        AttributeError: 'NoneType' has no 'lower'
+        external_domains: [null]   AttributeError: 'NoneType' has no 'lower'
+        vip_senders:               TypeError: 'NoneType' is not iterable
+        protected_blocks:          TypeError: 'NoneType' is not iterable
+        protected_blocks: [null]   AttributeError: 'NoneType' has no 'get'
+        protected_blocks: ["am"]   AttributeError: 'str' has no 'get'
+        protected_blocks: [{days:}] TypeError: 'NoneType' is not iterable
+        day_themes:                AttributeError: 'NoneType' has no 'get'
+        day_themes: [x]            AttributeError: 'list' has no 'get'
+        max_duration_minutes:      TypeError: '>' not supported, int vs None
+        max_attendees:             TypeError: '>' not supported, int vs None
+        min_gap_minutes:           TypeError: '<' not supported, float vs None
+
+    `evaluate` is called at try-depth 0 inside the `for invite in invites` loop,
+    so any of those leaves the loop, skips `self.state.save()`, and lands in the
+    cycle handler's `except Exception: logger.error("Meeting invite check
+    failed")`. The whole batch is left unprocessed with the earlier in-memory
+    decisions unsaved, the next cycle reaches the same invites and does the same
+    thing: the permanent livelock `_configured_text` documents, reached through
+    a different key.
+
+    A lone scalar (`vip_senders: ceo@example.org`, no leading dash) is read here
+    as a one-entry list. It did not crash before: `for vip in "ceo@example.org"`
+    iterates CHARACTERS, so no entry ever matched, a configured VIP was not
+    recognised, and an invite that should have been held for the operator was
+    auto-declined instead. Reading that shape correctly can only move a decision
+    from decline toward escalate, never the other way, so the frozen
+    auto-accept / auto-decline design is untouched here as well.
+    """
+    if isinstance(value, (list, tuple)):
+        items = list(value)
+    elif isinstance(value, kind):
+        items = [value]          # a lone scalar written without a leading dash
+    elif value is None:
+        items = []
+    else:
+        _bad_config(logger, key, f"is a {type(value).__name__}, not a list")
+        return []
+    kept = [v for v in items
+            if isinstance(v, kind) and (not isinstance(v, str) or v.strip())]
+    if len(kept) != len(items):
+        _bad_config(logger, key,
+                    f"has {len(items) - len(kept)} of {len(items)} entries that "
+                    f"are not a usable {kind.__name__}")
+    return kept
+
+
+def _configured_number(value, default, key: str = "", logger=None):
+    """A hand-edited YAML number, or `default`. See `_configured_seq`.
+
+    `True` is an `int` in Python and a threshold of 1 is not what
+    `max_attendees: yes` meant, so bool is refused rather than counted.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        if value is not None:
+            _bad_config(logger, key,
+                        f"is {value!r}, not a number; using {default}")
+        return default
+    return value
+
+
+def _configured_bound(block: dict, key: str, logger=None) -> str:
+    """One hand-typed `"HH:MM"` edge of a protected block, or "" if unusable.
+
+    `after: 9:00` written without quotes is not a string. YAML 1.1 reads an
+    unprefixed `9:00` as sexagesimal and hands over the INTEGER 540, so
+    `start_time < block["after"]` raised `'<' not supported between instances
+    of 'str' and 'int'` - out of `evaluate`, into the livelock described on
+    `_configured_seq`. `09:00` with the leading zero is not a valid sexagesimal
+    and stays a string, which is why the shape survives review: the same edit
+    is harmless on one line and fatal on the next.
+
+    A bound that is not a usable string is treated as ABSENT and said out loud,
+    never as a bound of "". Absent is what the operator gets today for a key
+    they never wrote, and it is the only reading that cannot invent a protected
+    window nobody configured.
+    """
+    if key not in block:
+        return ""
+    text = _configured_text(block.get(key), "")
+    if not text:
+        _bad_config(logger, f"protected_blocks[].{key}",
+                    f'is {block.get(key)!r}, not an "HH:MM" string')
+    return text
+
+
+def _configured_mapping(value, key: str = "", logger=None) -> dict:
+    """A hand-edited YAML mapping, or {}. See `_configured_seq`."""
+    if isinstance(value, dict):
+        return value
+    if value is not None:
+        _bad_config(logger, key,
+                    f"is a {type(value).__name__}, not a mapping")
+    return {}
 
 
 def _normalize_subject(s: str) -> str:
@@ -752,7 +921,8 @@ def _normalize_subject(s: str) -> str:
 
 def subject_has_rune(subject: str, rune_token: str = _DEFAULT_RUNE_TOKEN) -> bool:  # noqa: S107 — rune_token is a subject tag, not a credential
     """True when the bracketed override tag is present (case-insensitive)."""
-    token = _normalize_subject(rune_token or _DEFAULT_RUNE_TOKEN).lower()
+    token = _normalize_subject(
+        _configured_text(rune_token, _DEFAULT_RUNE_TOKEN)).lower()
     return token in _normalize_subject(subject).lower()
 
 
@@ -761,6 +931,14 @@ def build_tribe_decline_message(subject: str, alternative,
                                 template: str = None) -> str:
     """Warm, Tribe-specific decline body with a ready-to-copy override example."""
     subject = subject or "your meeting"
+    # The same guard `subject_has_rune` has carried all along. Without it the
+    # detector and the message disagree about what tag to look for, and the
+    # message is the half a person acts on. See `_configured_text`.
+    rune_token = _configured_text(rune_token, _DEFAULT_RUNE_TOKEN)
+    # A template that is not a string (a list or a mapping in the YAML) reached
+    # `.format` and raised AttributeError, which the tuple below does not catch
+    # and which no caller of this function catches either.
+    template = _configured_text(template, "")
     if template:
         try:
             return template.format(subject=subject,
@@ -792,10 +970,8 @@ def select_decline_message(is_tribe: bool, subject: str, alternative,
             calendar_config.get("rune_token", _DEFAULT_RUNE_TOKEN),
             calendar_config.get("tribe_decline_message"),
         )
-    msg = calendar_config.get(
-        "decline_message",
-        "Due to some conflicts, I'd like to propose a new day and time for our meeting.",
-    )
+    msg = _configured_text(calendar_config.get("decline_message"),
+                           _DEFAULT_DECLINE_MESSAGE)
     if alternative:
         msg += f" How about {alternative}?"
     return msg
@@ -906,12 +1082,14 @@ class CalendarPolicyEngine:
                     violations.append({"type": "theme_mismatch", "detail": theme_issue})
 
         # Check duration
-        max_dur = self.config.get("max_duration_minutes", 80)
+        max_dur = _configured_number(self.config.get("max_duration_minutes"), 80,
+                                     "max_duration_minutes", self.logger)
         if duration > max_dur:
             violations.append({"type": "duration", "detail": f"Duration {duration}m exceeds {max_dur}m limit"})
 
         # Check attendees
-        max_att = self.config.get("max_attendees", 6)
+        max_att = _configured_number(self.config.get("max_attendees"), 6,
+                                     "max_attendees", self.logger)
         if attendee_count > max_att:
             violations.append({"type": "attendees", "detail": f"{attendee_count} attendees exceeds {max_att} limit"})
 
@@ -940,7 +1118,8 @@ class CalendarPolicyEngine:
 
     def _check_protected_time(self, start, end) -> str:
         """Check if invite falls within a protected time block."""
-        blocks = self.config.get("protected_blocks", [])
+        blocks = _configured_seq(self.config.get("protected_blocks"), dict,
+                                 "protected_blocks", self.logger)
         # Convert to local time
         try:
             local_start = start.astimezone(self.tz)
@@ -953,29 +1132,41 @@ class CalendarPolicyEngine:
         end_time = local_end.strftime("%H:%M")
 
         for block in blocks:
-            block_days = block.get("days", [])
+            block_days = _configured_seq(block.get("days"), int,
+                                         "protected_blocks[].days", self.logger)
             if day not in block_days:
                 continue
 
-            # All-day block (no time constraints)
+            # Each bound is a hand-typed "HH:MM" compared with `<`, so a key
+            # written with nothing after it made `start_time < None` raise. The
+            # bound is read once, and a bound that is not a string is treated as
+            # absent - the same outcome as never writing the key.
+            before = _configured_bound(block, "before", self.logger)
+            after = _configured_bound(block, "after", self.logger)
+            b_start = _configured_bound(block, "start", self.logger)
+            b_end = _configured_bound(block, "end", self.logger)
+
+            # All-day block (no time constraints). Still asked of the KEYS, not
+            # of the values read above: a block whose `before:` is blank is a
+            # malformed bound, not a declaration that the whole day is blocked,
+            # and reading it as the latter would turn an invite that is accepted
+            # today into an auto-decline sent to a real organizer.
             if "before" not in block and "after" not in block and "start" not in block:
                 day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
                 return f"Protected time: {day_names[day]} is blocked"
 
             # Before X
-            if "before" in block:
-                if start_time < block["before"]:
-                    return f"Protected time: before {block['before']}"
+            if before and start_time < before:
+                return f"Protected time: before {before}"
 
             # After X
-            if "after" in block:
-                if start_time >= block["after"]:
-                    return f"Protected time: after {block['after']}"
+            if after and start_time >= after:
+                return f"Protected time: after {after}"
 
             # Start-End range
-            if "start" in block and "end" in block:
-                if start_time < block["end"] and end_time > block["start"]:
-                    return f"Protected time: {block['start']}-{block['end']} block"
+            if b_start and b_end:
+                if start_time < b_end and end_time > b_start:
+                    return f"Protected time: {b_start}-{b_end} block"
 
         return ""
 
@@ -1001,8 +1192,10 @@ class CalendarPolicyEngine:
         branches below. `tests/test_a_pid_file_emptied_before_the_lock.py` pins
         the CURRENT behaviour so this stays visible rather than drifting.
         """
-        min_gap = self.config.get("min_gap_minutes", 15)
-        max_consecutive = self.config.get("max_consecutive", 3)
+        min_gap = _configured_number(self.config.get("min_gap_minutes"), 15,
+                                     "min_gap_minutes", self.logger)
+        max_consecutive = _configured_number(self.config.get("max_consecutive"), 3,
+                                             "max_consecutive", self.logger)
 
         try:
             local_start = start.astimezone(self.tz)
@@ -1070,8 +1263,9 @@ class CalendarPolicyEngine:
 
     def _check_theme_alignment(self, subject: str, body: str, weekday: int) -> str:
         """Check if meeting topic aligns with the day's theme."""
-        themes = self.config.get("day_themes", {})
-        day_theme = themes.get(weekday, "")
+        themes = _configured_mapping(self.config.get("day_themes"),
+                                     "day_themes", self.logger)
+        day_theme = _configured_text(themes.get(weekday), "")
         if not day_theme:
             return ""
 
@@ -1142,21 +1336,30 @@ class CalendarPolicyEngine:
 
     def _is_vip_or_external(self, sender_email: str) -> bool:
         """Check if sender is VIP or from an external domain."""
-        sender_lower = sender_email.lower()
+        # `(sender_email or "")` was on `_is_tribe` and not here, though both
+        # read the same `invite.get("sender_email", "")` and `.get` with a
+        # default is not a type check: a present-but-null key walks through it.
+        # The rune-override branch of `evaluate` calls THIS one, so the escape
+        # hatch the operator relies on was the path that raised.
+        sender_lower = (sender_email or "").lower()
 
-        for vip in self.config.get("vip_senders", []):
-            if sender_lower == vip.lower():
+        for vip in _configured_seq(self.config.get("vip_senders"), str,
+                                   "vip_senders", self.logger):
+            if sender_lower == vip.strip().lower():
                 return True
 
-        for domain in self.config.get("external_domains", []):
-            if sender_lower.endswith(f"@{domain.lower()}"):
+        for domain in _configured_seq(self.config.get("external_domains"), str,
+                                      "external_domains", self.logger):
+            if sender_lower.endswith(f"@{domain.strip().lower()}"):
                 return True
 
         return False
 
     def _tribe_domains(self) -> list:
         """Configured Tribe domains, defaulting to the operator's own domain."""
-        doms = [d.lower() for d in (self.config.get("tribe_domains") or [])]
+        doms = [d.strip().lower()
+                for d in _configured_seq(self.config.get("tribe_domains"), str,
+                                         "tribe_domains", self.logger)]
         if not doms:
             email = (get_operator().get("email") or "").strip().lower()
             if "@" in email:
@@ -1267,23 +1470,35 @@ class CalendarPolicyEngine:
         start_time = start.strftime("%H:%M")
         end_time = end.strftime("%H:%M")
 
-        for block in self.config.get("protected_blocks", []):
-            if weekday not in block.get("days", []):
+        # The second copy of the `protected_blocks` reader. It runs while
+        # composing the alternative slot a decline message offers, so the same
+        # malformed block that crashed `_check_protected_time` crashed here too,
+        # one call later. Same treatment, same reasons - see `_configured_seq`.
+        for block in _configured_seq(self.config.get("protected_blocks"), dict,
+                                     "protected_blocks", self.logger):
+            if weekday not in _configured_seq(block.get("days"), int,
+                                              "protected_blocks[].days",
+                                              self.logger):
                 continue
+            before = _configured_bound(block, "before", self.logger)
+            after = _configured_bound(block, "after", self.logger)
+            b_start = _configured_bound(block, "start", self.logger)
+            b_end = _configured_bound(block, "end", self.logger)
             if "before" not in block and "after" not in block and "start" not in block:
                 return True  # Full day block
-            if "before" in block and start_time < block["before"]:
+            if before and start_time < before:
                 return True
-            if "after" in block and start_time >= block["after"]:
+            if after and start_time >= after:
                 return True
-            if "start" in block and "end" in block:
-                if start_time < block["end"] and end_time > block["start"]:
+            if b_start and b_end:
+                if start_time < b_end and end_time > b_start:
                     return True
         return False
 
     def _has_conflict(self, slot_start, slot_end, existing_events: list) -> bool:
         """Check if slot conflicts with existing events (with gap buffer)."""
-        min_gap = self.config.get("min_gap_minutes", 15)
+        min_gap = _configured_number(self.config.get("min_gap_minutes"), 15,
+                                     "min_gap_minutes", self.logger)
         buffered_start = slot_start - timedelta(minutes=min_gap)
         buffered_end = slot_end + timedelta(minutes=min_gap)
 
@@ -1836,7 +2051,15 @@ Respond ONLY in this JSON format (no markdown, no code fences):
                 if len(content) > 3000:
                     content = content[:3000] + "\n[...truncated]"
                 parts.append(f"--- {rel_path} ---\n{content}")
-            except OSError as e:
+            except (OSError, UnicodeDecodeError) as e:
+                # `UnicodeDecodeError` is a `ValueError`, not an `OSError`, so
+                # one context file carrying a byte that is not UTF-8 raised
+                # out of here, out of `UrgencyAnalyzer.__init__`, and took the
+                # always-on daemon down at startup. The configured files are
+                # hand-maintained markdown in the DATA overlay, which is
+                # exactly where a stray encoding arrives, and the handler
+                # beside this one already treats an unreadable context file as
+                # a warning-and-skip.
                 self.logger.warning(f"Could not read context file {rel_path}: {e}")
 
         if missing:
@@ -3088,7 +3311,14 @@ def _read_pid_file() -> int | None:
     """
     try:
         raw = PID_FILE.read_text(encoding="utf-8").strip()
-    except OSError:
+    except (OSError, UnicodeError):
+        # UnicodeError too. A PID file is the residue of a crash mid-write, so
+        # a partial byte sequence in it is the ordinary case, and
+        # `read_text(encoding="utf-8")` answers that with UnicodeDecodeError --
+        # a ValueError, not an OSError. It escaped a reader documented to return
+        # None on a file it cannot use, into all three CLI paths, which is the
+        # traceback-instead-of-a-diagnosable-state this function was written to
+        # remove.
         return None
     try:
         return int(raw)

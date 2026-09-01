@@ -31,8 +31,10 @@ Run:
 from __future__ import annotations
 
 import ast
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -321,6 +323,69 @@ def test_no_git_path_reader_runs_in_subprocess_text_mode():
         f"{sorted(stale)} no longer offends; delete the row from KNOWN_UNFIXED")
 
 
+def test_the_detector_cannot_see_a_helper_that_builds_its_argv(tmp_path):
+    """State the blind spot, so the behavioural test below is not mistaken for
+    belt-and-braces.
+
+    `_argv_strings` reads STRING LITERALS out of the argv list, so a helper
+    written as `subprocess.run(["git", *args], ...)` presents as `["git", "*"]`
+    and never carries `-z` for the detector to find - however its callers spell
+    it. `ops_signals._run_git_bytes` is exactly that shape.
+    """
+    helper = ast.parse(
+        "import subprocess\n"
+        "def run(repo, args):\n"
+        "    return subprocess.run(['git', *args], capture_output=True,\n"
+        "                          text=True).stdout\n"
+    )
+    assert _text_mode_dash_z_offenders(helper) == [], (
+        "the detector grew argv-tracing; fold the behavioural test below back "
+        "into it and delete this one")
+
+
+def test_a_git_helper_with_a_built_argv_still_preserves_a_carriage_return(tmp_path):
+    """The reader the AST guard above structurally cannot reach.
+
+    `ops_signals._run_git_bytes` is the sole git reader for the backup signal,
+    and its own docstring makes the CR claim this file measures. Adding
+    `text=True` to it left every suite green, so the claim was unbound.
+
+    MEASURED 2026-09-01 in a scratch repo holding `x\\r\\ny.md` (300h old),
+    `x\\ny.md` (100h) and `plain.md` (1h). Bytes mode reported the oldest sitting
+    change as 300.0 hours; the same function with `text=True` reported 100.0 -
+    the CR name arrived spelled as a file that does not exist, `stat()` raised,
+    and `except OSError: continue` dropped it. Backup debt understated by 200
+    hours, in the direction that keeps the signal quiet.
+    """
+    from scripts.utils import ops_signals as ops
+
+    repo = tmp_path / "crrepo"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q", "."],
+                   capture_output=True, check=True)
+
+    ages = {"x\r\ny.md": 300.0, "x\ny.md": 100.0, "plain.md": 1.0}
+    now = time.time()
+    for rel, hours in ages.items():
+        target = repo / rel
+        try:
+            target.write_bytes(b"x\n")
+        except OSError:
+            pytest.skip("a CR in a filename is not creatable on this filesystem")
+        stamp = now - hours * 3600.0
+        os.utime(target, (stamp, stamp))
+
+    count, oldest = ops._repo_uncommitted(repo)
+
+    assert count == 3, count
+    assert oldest == pytest.approx(300.0, abs=0.5), (
+        f"the oldest sitting change reported as {oldest}h, not 300h; the CR name "
+        f"was mistranslated on the way in and its mtime never read")
+
+    # The consequence, not just the number.
+    assert ops.classify_backup(count, oldest, 0)["severity"] == "critical"
+
+
 # ---------------------------------------------------------------------------
 # The push wall, both directions
 # ---------------------------------------------------------------------------
@@ -337,6 +402,50 @@ def test_repo_carried_paths_returns_the_bytes_git_gave_it(tmp_path):
     on_disk = {rel for rel in names if (repo / rel).is_file()}
     missing = on_disk - carried
     assert not missing, f"the wall cannot see {sorted(missing)!r}"
+
+
+def test_a_whitespace_only_filename_still_reaches_the_wall(tmp_path):
+    """`repo_carried_paths` filters `if entry`, deliberately NOT `if entry.strip()`.
+
+    Its docstring says so in as many words - "a filename may legally consist of
+    whitespace, and `if entry.strip()` dropped exactly those from the wall's
+    view" - and nothing measured it: every fixture in this file names files with
+    real characters, so a `.strip()` there survived the whole suite.
+
+    MEASURED 2026-09-01 in a scratch repo holding root-level files named `" "`,
+    `"\\t"` and `"ok.md"`:
+
+        carried               ['\\t', ' ', 'ok.md']
+        under a .strip filter ['ok.md']
+        content-scanned then  ['ok.md']
+
+    Two files leave the wall's view entirely: no routing lookup, no content
+    scan. The push wall is unbypassable by design, so a filter that silently
+    drops a carried file is the one defect it cannot have.
+    """
+    from scripts.utils.engine_guard import engine_text_files, repo_carried_paths
+
+    repo = tmp_path / "wsrepo"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q", "."],
+                   capture_output=True, check=True)
+    made = []
+    for name in (" ", "\t", "ok.md"):
+        try:
+            (repo / name).write_text("body\n", encoding="utf-8")
+        except OSError:  # pragma: no cover - a filesystem that refuses
+            continue
+        made.append(name)
+    if made == ["ok.md"]:
+        pytest.skip("this filesystem holds no whitespace-only filename")
+
+    carried = repo_carried_paths(repo)
+
+    for name in made:
+        assert name in carried, f"{name!r} never reached the wall: {carried!r}"
+    scanned = engine_text_files(repo, carried)
+    for name in made:
+        assert name in scanned, f"{name!r} was carried but never opened"
 
 
 def test_the_content_leg_still_opens_a_carriage_return_file(tmp_path):

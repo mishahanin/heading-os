@@ -411,6 +411,124 @@ def test_an_explicit_path_still_wins(tmp_path):
     assert ei.StateManager(explicit).path == explicit, "positional callers exist"
 
 
+# ============================================================
+# 8. Every context loader survives a file it cannot decode
+# ============================================================
+#
+# `except OSError` does not catch `UnicodeDecodeError`, which is a `ValueError`.
+# Measured 2026-09-01 against this module, four readers whose handlers named
+# only OSError / JSONDecodeError / yaml.YAMLError:
+#
+#   load_pipeline_context   UnicodeDecodeError out of a documented degrade
+#   load_viraid_state       UnicodeDecodeError out of a `return {}` handler
+#   _load_ignore_patterns   UnicodeDecodeError past the DEFAULT_IGNORE fallback
+#   StateManager.save       UnicodeDecodeError out of the merge re-read
+#
+# `load_pipeline_context` and `load_viraid_state` run on BOTH the time-window
+# path and the `--unread` bridge path, so either one ended the whole digest over
+# a single corrupt byte in a file it treats as optional. The same class the
+# handlers just above them were widened for, one exception over.
+
+UNDECODABLE = b"\xff\xfe\x00 broken"
+
+
+def test_an_undecodable_pipeline_file_degrades_instead_of_ending_the_run(
+        monkeypatch, tmp_path):
+    path = tmp_path / "pipeline.md"
+    path.write_bytes(UNDECODABLE)
+    with pytest.raises(UnicodeDecodeError):
+        path.read_text(encoding="utf-8")        # the corpus is genuinely bad
+    monkeypatch.setattr(ei, "pipeline_file", lambda: path)
+
+    assert ei.load_pipeline_context() == ""
+
+
+def test_a_readable_pipeline_file_still_comes_through_whole(monkeypatch, tmp_path):
+    """The anchor: a handler that returned "" for everything would pass above."""
+    path = tmp_path / "pipeline.md"
+    path.write_text("# Pipeline\n\nUniversal Exports - EUR 412,000\n", encoding="utf-8")
+    monkeypatch.setattr(ei, "pipeline_file", lambda: path)
+
+    assert "Universal Exports" in ei.load_pipeline_context()
+
+
+def test_an_undecodable_viraid_state_reads_as_empty(monkeypatch, tmp_path):
+    path = tmp_path / "viraid-state.json"
+    path.write_bytes(UNDECODABLE)
+    monkeypatch.setattr(ei, "viraid_state", lambda: path)
+
+    assert ei.load_viraid_state() == {}
+
+
+def test_a_readable_viraid_state_still_loads(monkeypatch, tmp_path):
+    path = tmp_path / "viraid-state.json"
+    path.write_text(json.dumps({"stats": {"completion_rate": 0.5}}), encoding="utf-8")
+    monkeypatch.setattr(ei, "viraid_state", lambda: path)
+
+    assert ei.load_viraid_state() == {"stats": {"completion_rate": 0.5}}
+
+
+def test_an_undecodable_sentinel_config_falls_back_to_the_defaults(
+        monkeypatch, tmp_path):
+    pytest.importorskip("yaml", reason="the reader returns the defaults without PyYAML")
+    cfg = tmp_path / "sentinel_config.yaml"
+    cfg.write_bytes(b"email:\n  ignore_patterns:\n    - \xff\xfe\n")
+    monkeypatch.setattr(ei, "sentinel_config", lambda: cfg)
+
+    patterns = ei._load_ignore_patterns()
+
+    assert patterns == list(ei.DEFAULT_IGNORE_PATTERNS)
+
+
+def test_a_readable_sentinel_config_still_adds_its_patterns(monkeypatch, tmp_path):
+    pytest.importorskip("yaml", reason="the reader returns the defaults without PyYAML")
+    cfg = tmp_path / "sentinel_config.yaml"
+    cfg.write_text("email:\n  ignore_patterns:\n    - 'bounce@*'\n", encoding="utf-8")
+    monkeypatch.setattr(ei, "sentinel_config", lambda: cfg)
+
+    assert "bounce@*" in ei._load_ignore_patterns()
+
+
+def test_a_save_over_an_undecodable_state_file_still_writes_this_run(tmp_path):
+    """The merge re-read is a best-effort read of what ANOTHER process wrote.
+
+    The corruption therefore has to arrive AFTER the constructor: `_load`
+    already catches ValueError, so a file that was bad at load time is
+    quarantined and never reaches `save`. Writing it mid-run is not a contrived
+    ordering, it is the exact race the merge exists for - two overlapping runs,
+    one of them torn mid-write - and it is the only route to this handler.
+
+    Raising there loses the run's OWN work on the way out, which is the same
+    data loss the rest of this file is about: the ids never reach disk, so the
+    next run re-analyses mail this one already paid a model for.
+    """
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"version": 1, "processed_message_ids": []}),
+                    encoding="utf-8")
+    state = ei.StateManager(path=path)
+    state.mark_processed("<a@x>")
+    path.write_bytes(UNDECODABLE)          # the other run tore its write
+
+    state.save()
+
+    assert json.loads(path.read_text(encoding="utf-8"))[
+        "processed_message_ids"] == ["<a@x>"]
+
+
+def test_a_save_over_a_readable_state_file_still_merges_it(tmp_path):
+    """The anchor. A widened handler must not stop the merge it guards."""
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"version": 1, "processed_message_ids": ["<old@x>"]}),
+                    encoding="utf-8")
+    state = ei.StateManager(path=path)
+    state.mark_processed("<new@x>")
+
+    state.save()
+
+    on_disk = json.loads(path.read_text(encoding="utf-8"))["processed_message_ids"]
+    assert set(on_disk) == {"<old@x>", "<new@x>"}
+
+
 def test_a_full_run_writes_nothing_outside_the_patched_path(monkeypatch, tmp_path):
     """The test that would have caught the 2026-08-29 incident."""
     overlay = tmp_path / "pretend-overlay"

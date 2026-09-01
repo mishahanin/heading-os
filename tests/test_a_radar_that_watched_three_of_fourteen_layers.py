@@ -337,21 +337,39 @@ def test_a_read_only_file_is_still_removed(tmp_path):
     assert not base.exists()
 
 
-def test_the_handler_adds_the_write_bit_rather_than_replacing_the_mode(tmp_path):
-    """The measured mode after the old handler ran was 0o200: write-only."""
+@pytest.mark.parametrize("kind", ["dir", "file"])
+def test_the_handler_adds_the_write_bit_rather_than_replacing_the_mode(tmp_path, kind):
+    """The measured mode after the old handler ran was 0o200: write-only.
+
+    The FILE case was added 2026-09-01. The handler's docstring states the fix as
+    "the mode bits are now ADDED to what is already there", an unqualified claim
+    covering both kinds, and only the directory branch was bound: a mutant that
+    kept `stat.S_IMODE(mode) | extra` for directories and went back to a bare
+    `extra` for files left the whole suite green, because the two tests that
+    reach a read-only FILE (`test_a_read_only_file_is_still_removed` and
+    `rmtree_force` above it) only assert the tree is gone afterwards, and an
+    unlink succeeds from a 0o200 file just as well as from a 0o644 one. The mode
+    is observable whenever the retry does NOT complete the removal, which is the
+    case the handler exists for.
+    """
     from scripts.utils.rmtree import _clear_readonly
 
-    target = tmp_path / "dir"
-    target.mkdir()
-    os.chmod(target, 0o500)
+    target = tmp_path / kind
+    if kind == "dir":
+        target.mkdir()
+        os.chmod(target, 0o500)
+    else:
+        target.write_text("x", encoding="utf-8")
+        os.chmod(target, 0o444)
     seen = []
 
     _clear_readonly(seen.append, str(target), None)
 
     mode = stat.S_IMODE(target.stat().st_mode)
     assert mode & stat.S_IWUSR, "the write bit was not added"
-    assert mode & stat.S_IRUSR, "read was taken away from a directory"
-    assert mode & stat.S_IXUSR, "execute was taken away from a directory"
+    assert mode & stat.S_IRUSR, f"read was taken away from a {kind}"
+    if kind == "dir":
+        assert mode & stat.S_IXUSR, "execute was taken away from a directory"
     assert seen == [str(target)], "the removal was not retried"
 
 

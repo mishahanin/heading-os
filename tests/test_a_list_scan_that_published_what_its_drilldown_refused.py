@@ -131,6 +131,106 @@ def test_the_symlinked_skill_is_still_refused_by_the_read_layer(workspace, outsi
 
 
 # ============================================================
+# The same disagreement, one field over: the SIZE cap
+# ============================================================
+# The symlink rule was not the only policy `read_skill` and `read_draft` kept to
+# themselves. Both refuse a file over 200 KB, and neither list scan asked.
+# MEASURED 2026-09-01 on a 250 KB SKILL.md and a 250 KB draft, before the fix:
+#
+#   list_capabilities -> ['huge']   read_skill -> file too large (250069 bytes)
+#   list_approvals    -> ['...huge.md']  read_draft -> file too large (250054)
+#
+# The agreement tests above could not see it: their corpus holds one honest row
+# and one symlinked row, and neither sits near the cap, so the bound had no
+# case on either side of it.
+
+
+def _oversized(path, header, filler):
+    path.write_text(header + filler * (capabilities.SKILL_MAX_BYTES + 50_000),
+                    encoding="utf-8")
+    return path
+
+
+def test_an_oversized_skill_is_not_listed(workspace, outside):
+    ws = _skills_workspace(workspace, outside)
+    huge = ws / ".claude" / "skills" / "huge"
+    huge.mkdir()
+    _oversized(huge / "SKILL.md",
+               "---\nname: huge\ndescription: Manifest past the cap.\n---\n", "x")
+
+    slugs = [s["slug"] for s in capabilities.list_capabilities(ws)["skills"]]
+    assert "dossier" in slugs, "empty corpus proves nothing"
+    assert "huge" not in slugs, (
+        "the list published a skill whose manifest read_skill refuses on size")
+
+
+def test_the_oversized_skill_is_still_refused_by_the_read_layer(workspace, outside):
+    """The refusal the list layer now matches. Asserted on the REASON, so a
+    row refused for some other cause could not stand in for this one."""
+    ws = _skills_workspace(workspace, outside)
+    huge = ws / ".claude" / "skills" / "huge"
+    huge.mkdir()
+    _oversized(huge / "SKILL.md", "---\nname: huge\n---\n", "x")
+
+    result = capabilities.read_skill(ws, "huge")
+    assert result["ok"] is False
+    assert "too large" in result["error"], result
+
+
+def test_a_skill_just_under_the_cap_is_still_listed(workspace, outside):
+    """The other side of the bound. A cap applied one byte too eagerly hides
+    real skills from the dashboard, which is the opposite failure."""
+    ws = _skills_workspace(workspace, outside)
+    ordinary = ws / ".claude" / "skills" / "ordinary"
+    ordinary.mkdir()
+    body = "y" * (capabilities.SKILL_MAX_BYTES - 200)
+    (ordinary / "SKILL.md").write_text(
+        f"---\nname: ordinary\ndescription: Just under the cap.\n---\n{body}",
+        encoding="utf-8")
+
+    slugs = [s["slug"] for s in capabilities.list_capabilities(ws)["skills"]]
+    assert "ordinary" in slugs, slugs
+    assert capabilities.read_skill(ws, "ordinary")["ok"] is True
+
+
+def test_an_oversized_draft_is_not_listed(workspace, outside):
+    ws = _drafts_workspace(workspace, outside)
+    drafts = ws / approvals.EMAIL_DRAFTS_DIR
+    _oversized(drafts / "huge.md",
+               "**To:** bond@example.com\n**Subject:** Past the cap\n\n---\n\n", "z")
+
+    names = [i["filename"] for i in approvals.list_approvals(ws)["items"]]
+    assert "acme-intro.md" in names, "empty corpus proves nothing"
+    assert "huge.md" not in names, (
+        "the queue published a draft read_draft refuses on size, and the row "
+        "stays markable-sent")
+
+
+def test_the_oversized_draft_is_still_refused_by_the_read_layer(workspace, outside):
+    ws = _drafts_workspace(workspace, outside)
+    drafts = ws / approvals.EMAIL_DRAFTS_DIR
+    _oversized(drafts / "huge.md", "**To:** bond@example.com\n\n---\n\n", "z")
+
+    result = approvals.read_draft(ws, f"{approvals.EMAIL_DRAFTS_DIR}/huge.md")
+    assert result["ok"] is False
+    assert "too large" in result["error"], result
+
+
+def test_a_draft_just_under_the_cap_is_still_listed(workspace, outside):
+    ws = _drafts_workspace(workspace, outside)
+    drafts = ws / approvals.EMAIL_DRAFTS_DIR
+    body = "w" * (approvals.DRAFT_MAX_BYTES - 200)
+    (drafts / "ordinary.md").write_text(
+        f"**To:** bond@example.com\n**Subject:** Just under\n\n---\n\n{body}",
+        encoding="utf-8")
+
+    names = [i["filename"] for i in approvals.list_approvals(ws)["items"]]
+    assert "ordinary.md" in names, names
+    assert approvals.read_draft(
+        ws, f"{approvals.EMAIL_DRAFTS_DIR}/ordinary.md")["ok"] is True
+
+
+# ============================================================
 # approvals.list_approvals
 # ============================================================
 

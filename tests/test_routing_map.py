@@ -43,6 +43,37 @@ def test_most_specific_wins():
     assert get_routing_destination("datastore/operations/tribe/fireside-state/opt-ins.json") == "private"
 
 
+def test_a_rule_key_matches_whole_path_components_not_bare_prefixes():
+    """A neighbour whose name merely STARTS with a rule key does not inherit it.
+
+    `matched_routing_rule` compares `norm == k or norm.startswith(k + "/")`, and
+    dropping the `+ "/"` to a bare `startswith(k)` survived a mutation run over
+    this file, `tests/test_routing_map_cache.py` and five neighbours on
+    2026-09-01. Nothing bound the boundary.
+
+    It is not a harmless over-match. The map's longest key wins, so under a bare
+    prefix `crm/address-bookkeeping/x.md` stops matching `crm/` (private) and
+    starts matching `crm/address-book/` (corporate), which is the audience-
+    widening direction: a CEO-only file published down to every executive.
+    `config/modem.json.bak` behaves the same way against the exact-file rule for
+    `config/modem.json`, and `threadsx/`, `contexts/` and `datastore/brandish/`
+    are the same shape on the other rules.
+
+    Every path below is invented; none needs to exist on disk, because the
+    resolver is pure over the map.
+    """
+    # the corporate/private pair, which is where the widening lands
+    assert get_routing_destination("crm/address-bookkeeping/x.md") == "private"
+    # a bare-prefix neighbour of an exact-FILE rule
+    assert get_routing_destination("config/modem.json.bak") == "engine"
+    # bare-prefix neighbours of directory rules
+    assert get_routing_destination("threadsx/a.md") == "engine"
+    assert get_routing_destination("contexts/pipeline.md") == "engine"
+    # and the rules themselves still match what they are for
+    assert get_routing_destination("crm/address-book/list.md") == "corporate"
+    assert get_routing_destination("config/modem.json") == "private"
+
+
 def test_exact_file_override_beats_dir():
     # context/ has no dir rule; specific files route explicitly
     assert get_routing_destination("context/pipeline.md") == "private"

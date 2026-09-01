@@ -15,6 +15,7 @@ conversation), replacing the flat now/later zoned list.
 Tests: tests/bridge/test_two_layers_that_disagreed_about_the_same_file.py
 """
 import json
+import logging
 import threading
 from datetime import date, datetime, timedelta, timezone
 from scripts.utils.workspace import get_default_tz
@@ -23,6 +24,8 @@ from pathlib import Path
 from scripts.bridge_daemon._jsonl import append_jsonl, read_jsonl_capped
 from scripts.bridge_daemon._shapes import as_mapping, entry_ts, is_undo
 from scripts.utils.timeparse import parse_iso
+
+logger = logging.getLogger(__name__)
 
 # Phase 1.32: priority -> band. P1/P2 need a decision or reply (full cards);
 # P3 is analyzed-but-no-action; P4 is low-priority noise (count only).
@@ -104,8 +107,12 @@ def dismiss_log_recent(data_root: Path, limit: int = 20) -> list[dict]:
             for c in data.get("conversations", []) or []:
                 if isinstance(c, dict) and c.get("id"):
                     topics[c["id"]] = c.get("topic") or ""
-        except (json.JSONDecodeError, OSError):
-            pass
+        # `UnicodeDecodeError` is a `ValueError`, not a `json.JSONDecodeError`
+        # and not an `OSError`; it fires inside `read_text`. Same file, same
+        # gap as `read_conversation` and `read_inbox` below.
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+            logger.warning("fetch file %s is unreadable (%s); dismiss-log rows "
+                           "fall back to raw conversation ids", fetch_path, exc)
 
     rows = []
     for conv_id, entry in active.items():
@@ -218,7 +225,11 @@ def _fetch_topics(data_root: Path) -> dict:
         return topics
     try:
         data = as_mapping(json.loads(fetch_path.read_text(encoding="utf-8")))
-    except (json.JSONDecodeError, OSError):
+    # See `read_conversation`: `UnicodeDecodeError` is neither of the two names
+    # that were here, and it is raised by `read_text` before `json.loads` runs.
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        logger.warning("fetch file %s is unreadable (%s); topic labels are "
+                       "unavailable for this listing", fetch_path, exc)
         return topics
     for c in data.get("conversations", []) or []:
         if isinstance(c, dict) and c.get("id"):
@@ -483,7 +494,25 @@ def read_inbox(data_root: Path, now: datetime | None = None) -> dict:
         return _empty()
     try:
         data = as_mapping(json.loads(fetch_file.read_text(encoding="utf-8")))
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+        # `UnicodeDecodeError` is a `ValueError` and neither an `OSError` nor a
+        # `json.JSONDecodeError`, so it walked past both names here. The fetch
+        # file is machine-written and a write torn mid-codepoint leaves bytes
+        # that will not decode. MEASURED 2026-09-01 with one 0xe9 inside a
+        # conversation topic: `read_inbox` raised out of the endpoint (a 500)
+        # rather than degrading to `_empty()` the way it does for every other
+        # unreadable state. `sources/conversations.py` reads the same file and
+        # carried the same gap.
+        #
+        # The log line is the OTHER half, and it landed a few hours after the
+        # handler did. `_empty()` is byte-identical to the answer for a healthy
+        # mailbox with no mail in it, so a silent degrade here renders an empty
+        # inbox panel that means "this file is unreadable" and looks exactly
+        # like one that means "you have no mail". Naming the file is what makes
+        # the two distinguishable, and an unread panel that reads as a read one
+        # is the shape this whole class of defect is about.
+        logger.warning("inbox: cannot read %s, reporting an empty inbox: %s",
+                       fetch_file, exc)
         return _empty()
 
     conversations = data.get("conversations", [])
@@ -567,7 +596,13 @@ def _read_state_conversation(data_root: Path, conv_id: str) -> dict | None:
         return None
     try:
         data = as_mapping(json.loads(state_file.read_text(encoding="utf-8")))
-    except (json.JSONDecodeError, OSError):
+    # This is the FALLBACK `read_conversation` reaches for when the fetch file
+    # is missing or holds no match, so widening that reader without widening
+    # this one leaves the promise unkept on the exact path it degrades onto.
+    # `UnicodeDecodeError` is a `ValueError`, raised inside `read_text`.
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        logger.warning("email state at %s is unreadable (%s); the drill-down "
+                       "fallback for %s is unavailable", state_file, exc, conv_id)
         return None
     convs = data.get("conversations", {})
     if not isinstance(convs, dict):
@@ -627,8 +662,18 @@ def read_conversation(data_root: Path, conv_id: str) -> dict:
         return {"ok": False, "error": "no latest fetch on disk (run /email-intel first)"}
     try:
         data = as_mapping(json.loads(fetch_path.read_text(encoding="utf-8")))
-    except (json.JSONDecodeError, OSError) as e:
-        return {"ok": False, "error": f"fetch file unreadable: {e}"}
+    # `UnicodeDecodeError` subclasses `ValueError`, which makes it a SIBLING of
+    # `json.JSONDecodeError` rather than a member of it, and it is not an
+    # `OSError`. The decode runs inside `read_text`, before `json.loads` is
+    # entered, so neither name here could ever see it. MEASURED 2026-09-01 with
+    # one 0xe9 byte in the fetch file: this raised out of the drill-down (a
+    # 500) instead of the documented `{"ok": False, ...}`. `read_inbox` above
+    # carries the same widening; this reader and its two state.json fallbacks
+    # did not, which is finding #1 of this campaign in one file.
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+        logger.warning("fetch file %s is unreadable (%s); drill-down for %s "
+                       "refused", fetch_path, e, conv_id)
+        return {"ok": False, "error": f"fetch file {fetch_path} unreadable: {e}"}
     conversations = data.get("conversations", [])
     if not isinstance(conversations, list):
         return {"ok": False, "error": "unexpected fetch schema"}

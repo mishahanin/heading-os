@@ -31,6 +31,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parents[1]
 
 _ASK = (
@@ -87,3 +89,53 @@ def test_utc_remains_the_answer_when_nothing_configures_a_zone(tmp_path):
     zone gets UTC, exactly as before -- the fix adds a lookup, not a default."""
     name, key = _ask(tmp_path, "# no zone here\n")
     assert name == "UTC" and key == "UTC", f"expected UTC, got {name!r}/{key!r}"
+
+
+@pytest.mark.parametrize("line", ["HEADING_OS_TZ=\n", "HEADING_OS_TZ=   \n"])
+def test_a_key_with_no_value_falls_back_instead_of_crashing(tmp_path, line):
+    """The second half of the same fix, found 2026-09-01 by mutating the
+    default out of the `os.environ.get` this helper used to end on.
+
+    `.env` is hand-edited and gitignored, so `HEADING_OS_TZ=` with nothing after
+    it is an ordinary typo. The default in `.get(name, "UTC")` fires only on an
+    ABSENT key, so the present-but-blank value went straight through: the helper
+    answered `''` and `get_default_tz()` raised `ValueError: ZoneInfo keys must
+    be normalized relative paths, got:` in every CLI script that asks for a
+    zone. Not a silent wrong answer, which is what the rest of this file is
+    about, but a crash out of a helper whose docstring promises UTC.
+
+    Asserted through `get_default_tz().key` as well as the name, because the
+    name alone would pass on a helper that returned a string no ZoneInfo
+    accepts.
+    """
+    name, key = _ask(tmp_path, line)
+    assert name == "UTC", f"a blank HEADING_OS_TZ resolved to {name!r}"
+    assert key == "UTC", f"the ZoneInfo form disagreed: {key!r}"
+
+
+def test_the_two_readers_agree_about_a_blank_zone(tmp_path):
+    """Both halves of the seam, over one scratch `.env`.
+
+    The shell resolver handled the blank case from the start and the in-process
+    one did not, which is finding 6's shape sitting on the exact seam these two
+    files exist to guard: one fix, two readers, and only one of them got it.
+    Asked of both in the same workspace so a future divergence fails here rather
+    than being discovered on a host whose thread dates land a day out.
+    """
+    ws = tmp_path / "ws"
+    (ws / "scripts").mkdir(parents=True)
+    (ws / ".env").write_text("HEADING_OS_TZ=\n", encoding="utf-8")
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path),
+           "WORKSPACE_ROOT": str(ws), "PYTHONDONTWRITEBYTECODE": "1"}
+
+    shell = subprocess.run([sys.executable, "-m", "scripts.utils.paths", "tz"],
+                           cwd=str(_ROOT), capture_output=True, text=True, env=env)
+    in_process = subprocess.run([sys.executable, "-c", _ASK], cwd=str(_ROOT),
+                                capture_output=True, text=True, env=env)
+
+    assert shell.returncode == 0, shell.stderr[-500:]
+    assert in_process.returncode == 0, in_process.stderr[-500:]
+    assert shell.stdout.strip() == in_process.stdout.split()[0] == "UTC", (
+        f"the two readers disagree: shell said {shell.stdout.strip()!r}, "
+        f"in-process said {in_process.stdout.split()!r}"
+    )

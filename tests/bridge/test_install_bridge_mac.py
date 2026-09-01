@@ -4,7 +4,30 @@ The script is macOS-only (guarded by sys.platform), but the plist
 builder is pure data. We import via importlib (kebab-case CLI script
 can't be imported as a module) and test the plist shape on any
 platform.
+
+**Three of these tests wrote into the live repository.** `install()` calls
+`(WORKSPACE_ROOT / ".daemon-state").mkdir(parents=True, exist_ok=True)` at
+`install-bridge-service-mac.py:93-94`, and `WORKSPACE_ROOT` resolves from the
+script's own `__file__`, not from the plist globals the tests patched. Patching
+`PLIST_PATH` and `PLIST_DIR` redirected the plist and left the mkdir pointing at
+the checkout. MEASURED 2026-08-31 in a clean tree with `.daemon-state` removed
+first::
+
+    $ rm -rf .daemon-state
+    $ .venv/bin/python -m pytest tests/bridge/test_install_bridge_mac.py -q
+    14 passed in 0.45s
+    $ ls -d .daemon-state
+    .daemon-state
+
+`.gitignore:218` excludes `.daemon-state/`, so `git status` reported a clean
+tree over a directory the suite had just created, which is why running the file
+sixteen times never surfaced it. The three `install()` tests now pin
+`WORKSPACE_ROOT` to `tmp_path`, and
+`test_no_test_in_this_file_calls_install_without_redirecting_the_workspace_root`
+is the mechanical guard, because prose in this docstring would not have stopped
+the fourth one.
 """
+import ast
 import importlib.util
 import sys
 from pathlib import Path
@@ -12,6 +35,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 SCRIPT = ROOT / "scripts" / "install-bridge-service-mac.py"
+
+
+def _isolate_workspace(monkeypatch, mod, tmp_path):
+    """Point the module's WORKSPACE_ROOT at tmp_path.
+
+    `install()` reads the module global at call time for its `.daemon-state`
+    mkdir, and `_build_plist` reads it for `WorkingDirectory` and the log paths,
+    so one patch covers every write and every path the plist embeds. Returns the
+    isolated root so a caller can assert against it.
+    """
+    monkeypatch.setattr(mod, "WORKSPACE_ROOT", tmp_path)
+    return tmp_path
 
 
 def _load_module():
@@ -131,10 +166,14 @@ def test_install_writes_plist_and_loads_via_launchctl(monkeypatch, tmp_path):
     plist = tmp_path / "test.plist"
     monkeypatch.setattr(mod, "PLIST_PATH", plist)
     monkeypatch.setattr(mod, "PLIST_DIR", plist.parent)
+    _isolate_workspace(monkeypatch, mod, tmp_path / "ws")
     captured: list[list[str]] = []
     _patch_subprocess(monkeypatch, mod, captured)
 
     mod.install()
+
+    # 0. The state directory landed under tmp_path, not in the checkout.
+    assert (tmp_path / "ws" / ".daemon-state").is_dir()
 
     # 1. Plist file exists and is valid plist XML.
     assert plist.exists()
@@ -161,6 +200,7 @@ def test_install_is_idempotent(monkeypatch, tmp_path):
     plist = tmp_path / "test.plist"
     monkeypatch.setattr(mod, "PLIST_PATH", plist)
     monkeypatch.setattr(mod, "PLIST_DIR", plist.parent)
+    _isolate_workspace(monkeypatch, mod, tmp_path / "ws")
     captured: list[list[str]] = []
     _patch_subprocess(monkeypatch, mod, captured)
 
@@ -179,6 +219,7 @@ def test_install_aborts_when_launchctl_load_fails(monkeypatch, tmp_path):
     plist = tmp_path / "test.plist"
     monkeypatch.setattr(mod, "PLIST_PATH", plist)
     monkeypatch.setattr(mod, "PLIST_DIR", plist.parent)
+    _isolate_workspace(monkeypatch, mod, tmp_path / "ws")
 
     call_index = [0]
     def _fake_run(cmd, **kwargs):
@@ -231,6 +272,88 @@ def test_uninstall_is_silent_noop_when_no_plist(monkeypatch, tmp_path):
     assert captured == []
 
 
+def test_install_creates_its_state_dir_under_the_root_it_was_given(
+        monkeypatch, tmp_path):
+    """The finding stated as behaviour: no write escapes to the checkout.
+
+    Fails against the pre-2026-08-31 file, where `WORKSPACE_ROOT` stayed
+    anchored on the script's own `__file__` and `install()` mkdir'd
+    `.daemon-state` inside the repository. `.gitignore:218` hid that from
+    `git status`, so the only way to see it is to ask the live root directly,
+    which is what the second half of this test does.
+    """
+    mod = _load_module()
+    ws = tmp_path / "ws"
+    monkeypatch.setattr(mod, "PLIST_PATH", tmp_path / "test.plist")
+    monkeypatch.setattr(mod, "PLIST_DIR", tmp_path)
+    _isolate_workspace(monkeypatch, mod, ws)
+    _patch_subprocess(monkeypatch, mod, [])
+
+    live_state = ROOT / ".daemon-state"
+    live_existed = live_state.is_dir()
+    before = sorted(p.name for p in live_state.iterdir()) if live_existed else None
+
+    mod.install()
+
+    assert (ws / ".daemon-state").is_dir(), "the state dir did not follow the root"
+    assert mod._build_plist("/usr/bin/python3")["StandardOutPath"].startswith(str(ws))
+    # The checkout is unchanged: neither created, nor added to. A pre-existing
+    # `.daemon-state` belongs to the operator's own daemon, so the assertion is
+    # on its CONTENTS, not on its absence.
+    if live_existed:
+        assert sorted(p.name for p in live_state.iterdir()) == before, (
+            "install() wrote into the repository's own .daemon-state")
+    else:
+        assert not live_state.exists(), (
+            f"install() created {live_state} in the live checkout; it is "
+            f"gitignored, so `git status` will not show it")
+
+
+def test_no_test_in_this_file_calls_install_without_redirecting_the_workspace_root():
+    """The guard, because the docstring at the top would not stop the fourth one.
+
+    Three tests called `install()` with `PLIST_PATH` redirected and
+    `WORKSPACE_ROOT` left alone, and each was written by someone who believed
+    the patching was complete. This parses THIS file and requires every test
+    that calls `mod.install()` to also name `WORKSPACE_ROOT` in the same
+    function, whether directly or through `_isolate_workspace`.
+
+    Lexical, like the browser guard in
+    `tests/bridge/test_no_test_opens_a_real_browser.py`: a redirect installed by
+    a fixture elsewhere would be reported. That is the safe direction, since a
+    false report costs one line and a miss writes into the operator's checkout.
+    """
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"), filename=__file__)
+    installers: list[str] = []
+    unguarded: list[str] = []
+    for func in ast.walk(tree):
+        if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        calls_install = any(
+            isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "install"
+            for n in ast.walk(func))
+        if not calls_install:
+            continue
+        installers.append(func.name)
+        redirected = any(
+            (isinstance(n, ast.Constant) and n.value == "WORKSPACE_ROOT")
+            or (isinstance(n, ast.Name) and n.id == "_isolate_workspace")
+            for n in ast.walk(func))
+        if not redirected:
+            unguarded.append(func.name)
+
+    # Anti-vacuity: a walk that matched no install() call would pass forever,
+    # which is the failure mode this file just demonstrated.
+    assert len(installers) >= 4, (
+        f"only {len(installers)} test(s) reached the guard: {installers}")
+    assert not unguarded, (
+        "these tests call install() without redirecting WORKSPACE_ROOT, so the "
+        "`.daemon-state` mkdir lands in the repository checkout. Add "
+        "`_isolate_workspace(monkeypatch, mod, tmp_path / \"ws\")`:\n  "
+        + "\n  ".join(unguarded))
+
+
 def test_install_aborts_when_daemon_script_missing(monkeypatch, tmp_path):
     """If scripts/bridge-daemon.py doesn't exist, install() exits 1 before
     touching the filesystem."""
@@ -238,6 +361,12 @@ def test_install_aborts_when_daemon_script_missing(monkeypatch, tmp_path):
     bogus_script = tmp_path / "nonexistent.py"
     monkeypatch.setattr(mod, "DAEMON_SCRIPT", bogus_script)
     monkeypatch.setattr(mod, "PLIST_PATH", tmp_path / "test.plist")
+    # Redirected even though the DAEMON_SCRIPT check currently returns before
+    # the `.daemon-state` mkdir. The guard below asks for this unconditionally,
+    # and it is right to: the ordering inside install() is not this test's
+    # contract, and reordering those two blocks would silently turn this into a
+    # fourth test writing into the checkout.
+    _isolate_workspace(monkeypatch, mod, tmp_path / "ws")
     captured: list[list[str]] = []
     _patch_subprocess(monkeypatch, mod, captured)
 

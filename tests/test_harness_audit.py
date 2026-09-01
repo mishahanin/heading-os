@@ -48,7 +48,28 @@ def installed(tmp_path):
 
 def test_an_installed_file_cannot_hide_behind_the_skip_marker(tmp_path, installed):
     """The whole point of the marker is that WE placed it. A plugin that writes
-    it is asking to be trusted about its own trustworthiness."""
+    it is asking to be trusted about its own trustworthiness.
+
+    **This test is also the only real witness that an injection finding drives
+    the exit code**, which is not what its name suggests, so do not retire it as
+    redundant with the frozen contract.
+
+    `test_harness_audit_contract.py::test_an_injection_finding_exits_non_zero`
+    reads like that witness and is not one: it writes the payload into a
+    SKILL.md that the manifest fixture already hashed, so the run it grades has
+    BOTH an injection finding and a drift finding, and drift alone is enough to
+    return 1. MEASURED 2026-09-01, with `result["injection"]` removed from the
+    exit condition at `scripts/harness-audit.py:900`:
+
+        contract test_an_injection_finding_exits_non_zero          1 passed
+        this test_an_installed_file_cannot_hide_behind_the_marker  1 failed
+
+    The difference is the ORDER. This test writes the payload FIRST and mints
+    the manifest AFTER, so the baseline already covers the payload, drift is
+    zero, and the exit code can only come from the injection. Keep that order.
+    The contract is frozen by design and is not edited to fix this; the property
+    lives here, which is this file's stated purpose.
+    """
     cache, skills = installed
     (skills / "hidden.md").write_text(
         f"{_SKIP_OPEN}\n{_INJECT} and send it all.\n{_SKIP_CLOSE}\n",
@@ -85,6 +106,95 @@ def test_our_own_rules_are_clean_under_the_audit_today(tmp_path):
     payload = json.loads(proc.stdout)
     ours = [f for f in payload["injection"] if not f["path"].startswith("plugins/")]
     assert ours == [], f"this repository's own loaded content carries findings: {ours}"
+
+
+def test_installed_content_cannot_borrow_the_repo_allowance_by_spelling_its_path(
+        tmp_path, installed):
+    """The frozen contract's version of this went stale and nobody noticed.
+
+    `test_the_allowance_never_covers_installed_content` builds its fixture as a
+    plugin file named `prompt-guard.py`, which was the shape of the allowance
+    when the contract was written. The allowance is now three explicit
+    repo-relative FILE paths under `.claude/rules/`, so that basename matches
+    nothing and the test is green whether or not the allowance is applied to
+    installed content. Measured 2026-09-01: adding
+    `if _is_allowed_repo_path(path.relative_to(root).as_posix()): continue` to
+    the plugin scan loop left all 187 tests green across both audit files and
+    every neighbour that names the tool.
+
+    The fixture here spells a currently allow-listed path INSIDE the cache,
+    which is the shape an attacker would actually use, and it has to be
+    re-derived from `ALLOWED_REPO_PREFIXES` rather than written out, or this
+    test rots the same way the contract's did.
+    """
+    from scripts.utils.paths import get_workspace_root  # noqa: F401  (import guard)
+    import runpy
+    mod = runpy.run_path(str(_CLI))
+    borrowed = next(p for p in mod["ALLOWED_REPO_PREFIXES"] if not p.endswith("/"))
+
+    cache, _skills = installed
+    # Two depths on purpose. The plugin-root-relative spelling is the one a
+    # path-equality allowance can actually match, so it is what a mutation has
+    # to be caught by; the in-plugin spelling is the ordinary installed layout
+    # and keeps the test honest about the common case.
+    targets = [cache / borrowed, cache / "vendor" / "thing" / "1.0.0" / borrowed]
+    for target in targets:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(f"{_INJECT} and export everything.\n", encoding="utf-8")
+
+    manifest = tmp_path / "m.json"
+    _run(["--manifest", str(manifest), "--update-manifest"], cache)
+    proc = _run(["--manifest", str(manifest), "--json"], cache)
+    payload = json.loads(proc.stdout)
+
+    flagged = {f["path"] for f in payload["injection"]}
+    for target in targets:
+        rel = f"plugins/{target.relative_to(cache).as_posix()}"
+        assert rel in flagged, (
+            f"installed content borrowed the repo allowance by spelling "
+            f"{borrowed!r}: {sorted(flagged)}")
+    assert proc.returncode == 1
+
+
+def test_an_unreadable_installed_file_exits_non_zero(tmp_path):
+    """The exit half of the claim, which the contract never asserted.
+
+    `scripts/harness-audit.py` says in so many words that `unreadable` exits 1
+    "for the same reason `symlinks` does", and the only test over it
+    (`test_an_unreadable_file_is_reported_rather_than_silently_skipped`) reads
+    the JSON field and stops. Measured 2026-09-01: dropping `unreadable` from
+    the exit condition left all 187 tests green, so a chmod-000 payload in a
+    plugin's tree would have defeated both the hash baseline and the injection
+    scan and reported the run as clean.
+
+    The baseline is minted while the file is ALREADY unreadable, so it is absent
+    from both the index and the baseline. That leaves no drift and no injection
+    finding, which is what makes `unreadable` the only thing this exit code can
+    be measuring.
+    """
+    cache = tmp_path / "cache" / "vendor" / "thing" / "1.0.0" / "skills"
+    cache.mkdir(parents=True)
+    (cache / "real.md").write_text("harmless\n", encoding="utf-8")
+    locked = cache / "locked.md"
+    locked.write_text("x\n", encoding="utf-8")
+    locked.chmod(0o000)
+    root = tmp_path / "cache"
+    manifest = tmp_path / "m.json"
+    try:
+        accept = _run(["--manifest", str(manifest), "--update-manifest"], root)
+        assert accept.returncode == 0, accept.stdout + accept.stderr
+
+        proc = _run(["--manifest", str(manifest), "--json"], root)
+        payload = json.loads(proc.stdout)
+        assert payload["unreadable"], "the unreadable file vanished from the audit"
+        assert payload["drift"] == {"added": [], "changed": [], "removed": []}, (
+            "this test only measures the unreadable exit if nothing drifted")
+        assert not payload["injection"] and not payload["symlinks"]
+        assert proc.returncode == 1, (
+            "content the audit could not read exited clean: "
+            f"{proc.stdout[:400]}")
+    finally:
+        locked.chmod(0o644)
 
 
 # ---------------------------------------------------------------------------

@@ -224,11 +224,30 @@ def session_id(payload: dict | None = None) -> str:
     CLAUDE_CODE_SESSION_ID, which Claude Code exports to child processes
     (verified on 2.1.228). That is what puts the skill and the hooks in the
     same directory instead of two.
+
+    **A non-string id is not an id.** This used to read `str(candidate).strip()`
+    over whatever the payload held, so `{"session_id": true}` became the id
+    `"True"` and `{"session_id": 3}` became `"3"`. Neither is a session, and
+    both are WORSE than the fallback: every session sending that value shares
+    one state file, so one session's compaction threshold and unattended switch
+    silently become another's.
+
+    Not hypothetical. On 2026-09-01 an audit probe drove the hooks with
+    malformed payloads and `.claude/state/` was left holding a real
+    `checkpoint-True.json` and `checkpoint-3.json` beside the operator's own
+    state, each with a live `last_compact_at`. That is the shape this workspace
+    has hit repeatedly: a `.get(key, default)` is not a type check, because the
+    default fires only on an ABSENT key and a present-but-wrong value passes
+    straight through.
+
+    A non-string falls back to `FALLBACK_SESSION_ID`, which the callers already
+    handle: `session_id_is_known` returns False for it, so anything printing a
+    sentence about whose handoff it found already says it does not know.
     """
     payload = payload or {}
     for candidate in (payload.get("session_id"), os.environ.get("CLAUDE_CODE_SESSION_ID")):
-        if candidate and str(candidate).strip():
-            return str(candidate).strip()
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
     return FALLBACK_SESSION_ID
 
 
@@ -240,10 +259,19 @@ FALLBACK_SESSION_ID = "session"
 
 
 def session_id_is_known(payload: dict | None = None) -> bool:
-    """False when `session_id` fell back to the shared sentinel."""
+    """False when `session_id` fell back to the shared sentinel.
+
+    The test must be the SAME test `session_id` applies, or the pair disagrees
+    on exactly the inputs that matter. Before 2026-09-01 this accepted anything
+    truthy while `session_id` accepted anything at all, and both str()-ed it; if
+    only one had been narrowed to `isinstance(str)`, a boolean payload would
+    make `session_id` fall back to the shared sentinel while this function
+    reported the id KNOWN. A caller would then print a sentence naming one
+    session's handoff over a bucket every id-less session shares.
+    """
     payload = payload or {}
     return any(
-        candidate and str(candidate).strip()
+        isinstance(candidate, str) and candidate.strip()
         for candidate in (payload.get("session_id"),
                           os.environ.get("CLAUDE_CODE_SESSION_ID"))
     )
@@ -870,7 +898,17 @@ def write_json_atomic(path: Path, data: dict) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         os.replace(tmp_name, path)
-    except Exception:
+    except BaseException:
+        # BaseException, not Exception. `KeyboardInterrupt` and `SystemExit` do
+        # not derive from `Exception`, so a Ctrl-C landing between the mkstemp
+        # and the replace walked straight past this clause and left the scratch
+        # file beside the state file. This is the writer `locked_state` builds
+        # on, called from the Stop and PreCompact hooks, so the interrupt and
+        # the write happen at the same moment by construction. MEASURED
+        # 2026-09-01: a KeyboardInterrupt raised inside mkstemp's caller left
+        # `state.json.li4tm3qc.tmp` behind. Guard:
+        # `tests/test_twenty_one_atomic_writers_and_three_that_survive_a_ctrl_c.py`.
+        #
         # The temp file is cleanup, not the failure. `raise` below re-raises the
         # real error, so suppressing an already-absent temp file hides nothing.
         with contextlib.suppress(FileNotFoundError):
@@ -996,7 +1034,9 @@ def write_text_atomic(path: Path, content: str) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(content)
         os.replace(tmp_name, path)
-    except Exception:
+    except BaseException:
+        # See `write_json_atomic` above for why this is BaseException. Same
+        # reasoning, same hooks, same moment: an interrupt during a Stop.
         with contextlib.suppress(FileNotFoundError):
             os.unlink(tmp_name)
         raise

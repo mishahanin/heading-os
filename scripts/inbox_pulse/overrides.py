@@ -177,6 +177,44 @@ class RulesEngine:
     # Bucket shape
     # ------------------------------------------------------------------
 
+    def _mapping(self, raw: object, where: str) -> dict:
+        """Return `raw` as a mapping, tolerating the two ways YAML says "nothing".
+
+        `reload()` checks only that the YAML ROOT is a dict, so a section may
+        hold anything the operator typed, and `self._config.get(key, {})` hands
+        back the stored value rather than the default whenever the key is
+        present with a null value. MEASURED 2026-09-01 against parseable
+        configs, each one line long:
+
+            sender_overrides:                 -> None  -> .get() AttributeError
+            keyword_overrides:                -> None  -> .get() AttributeError
+            sender_overrides: "*@x.example"   -> str   -> .get() AttributeError
+            quiet_hours: "23:00-07:00"        -> str   -> .get() AttributeError
+
+        Every one of those raised straight out of `classify`, which the daemon
+        catches and logs per message, so the whole override set stopped applying
+        and every email fell through to LOW with nothing saying the rules were
+        never consulted. That is the same failure the class docstring rules out
+        ("the daemon keeps running without crashing") and the same shape
+        `_coerce_number` and `internal_domains` were already hardened against;
+        the three match helpers were left out of that pass.
+
+        Warned once per config, through the same set `_pattern_list` uses, so a
+        bad section does not write a line per inbound message.
+        """
+        if isinstance(raw, dict):
+            return raw
+        if raw is not None and where not in self._scalar_warned:
+            log.warning(
+                "%s: %s is a %s, not a mapping; ignoring it. Write it as a "
+                "YAML mapping to silence this.",
+                self.yaml_path,
+                where,
+                type(raw).__name__,
+            )
+            self._scalar_warned.add(where)
+        return {}
+
     def _pattern_list(self, raw: object, where: str) -> list:
         """Return `raw` as a list of pattern strings, tolerating a bare scalar.
 
@@ -197,7 +235,12 @@ class RulesEngine:
         if raw is None:
             return []
         if isinstance(raw, list):
-            return raw
+            # Every entry is stringified, not just the bare-scalar case below.
+            # A pattern reaches `fnmatch` and `.lower()`, and YAML types an
+            # unquoted entry natively: MEASURED 2026-09-01,
+            # `always_critical: [31337]` raised `AttributeError: 'int' object
+            # has no attribute 'lower'` out of `match_sender`.
+            return [str(p) for p in raw if p is not None]
         if where not in self._scalar_warned:
             log.warning(
                 "%s: %s is a single value, not a list; reading it as a "
@@ -218,7 +261,8 @@ class RulesEngine:
         Glob match: case-insensitive. First-match-wins in priority order
         (always_critical > always_important > always_normal).
         """
-        sender_overrides: dict = self._config.get("sender_overrides", {})
+        sender_overrides = self._mapping(
+            self._config.get("sender_overrides"), "sender_overrides")
         addr_lower = email_addr.lower()
 
         for bucket in _SENDER_PRIORITY:
@@ -241,7 +285,8 @@ class RulesEngine:
         Case-insensitive substring match against subject + first 500 chars
         of body_preview. promote_to_critical wins over promote_to_important.
         """
-        keyword_overrides: dict = self._config.get("keyword_overrides", {})
+        keyword_overrides = self._mapping(
+            self._config.get("keyword_overrides"), "keyword_overrides")
         haystack = (subject + " " + body_preview[:_BODY_PREVIEW_CHARS]).lower()
 
         for bucket in _KEYWORD_PRIORITY:
@@ -266,13 +311,13 @@ class RulesEngine:
 
         A naive `at` is interpreted as UTC, never as the host's local time.
         """
-        quiet: dict = self._config.get("quiet_hours", {})
+        quiet = self._mapping(self._config.get("quiet_hours"), "quiet_hours")
         if not quiet:
             return False
 
-        tz_name: str = quiet.get("timezone", "UTC")
-        start_str: str = quiet.get("start", "")
-        end_str: str = quiet.get("end", "")
+        tz_name = quiet.get("timezone") or "UTC"
+        start_str = quiet.get("start", "")
+        end_str = quiet.get("end", "")
 
         if not start_str or not end_str:
             return False
@@ -402,8 +447,19 @@ def _coerce_number(raw: object, default, caster, field_name: str):
         return default
 
 
-def _parse_hhmm(value: str) -> Optional[time]:
-    """Parse "HH:MM" string into a time object. Returns None on failure."""
+def _parse_hhmm(value: object) -> Optional[time]:
+    """Parse an "HH:MM" string into a time object. Returns None on failure.
+
+    The argument is typed `object` because YAML decides the type, not the
+    caller. In YAML 1.1, which PyYAML implements, an UNQUOTED `start: 23:00` is
+    a base-60 integer literal and `yaml.safe_load` returns 1380. MEASURED
+    2026-09-01: `_parse_hhmm(1380)` raised `AttributeError: 'int' object has no
+    attribute 'strip'` out of `is_quiet_hours`, on a config file the operator
+    had every reason to think was right. Refusing the shape hands the caller
+    its own "cannot parse quiet_hours" warning, which names both values.
+    """
+    if not isinstance(value, str):
+        return None
     try:
         parts = value.strip().split(":")
         return time(int(parts[0]), int(parts[1]))

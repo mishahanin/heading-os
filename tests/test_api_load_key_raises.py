@@ -41,3 +41,71 @@ def test_present_key_returns_value():
     """A key that exists in the environment returns its value (regression guard)."""
     with patch.dict(os.environ, {"TEST_PRESENT_KEY_31C": "test-value-abc"}):
         assert load_api_key("TEST_PRESENT_KEY_31C") == "test-value-abc"
+
+
+def test_key_that_lives_only_in_dotenv_is_loaded_and_returned():
+    """The .env fallback must actually run, and its value must be what comes back.
+
+    Every other test in this file patches ``load_env`` to a no-op, so nothing
+    here witnessed that ``load_api_key`` calls it at all. MEASURED 2026-09-01:
+    deleting the ``load_env()`` line from ``scripts/utils/api.py`` left this
+    whole file green. That is the credential path for the entire workspace:
+    almost every key (ANTHROPIC_API_KEY, HUNTER_API_KEY, the Exchange
+    credentials) lives ONLY in the gitignored ``.env``, never exported, so the
+    deletion would report every one of them missing while four tests said the
+    loader was fine.
+
+    The stub RECORDS its invocation rather than discarding it, and the assertion
+    is on the returned value, so neither "load_env was never called" nor
+    "load_env ran but its result was ignored" can pass.
+    """
+    calls = []
+
+    def _fake_load_env(*args, **kwargs):
+        calls.append((args, kwargs))
+        os.environ[ABSENT_KEY] = "value-from-dotenv"
+
+    env = {k: v for k, v in os.environ.items() if k != ABSENT_KEY}
+    with patch.dict(os.environ, env, clear=True), \
+            patch("scripts.utils.api.load_env", _fake_load_env):
+        assert load_api_key(ABSENT_KEY) == "value-from-dotenv"
+    assert len(calls) == 1, f"load_env called {len(calls)} time(s), expected exactly 1"
+
+
+def test_dotenv_is_not_consulted_when_the_key_is_already_exported():
+    """An exported key short-circuits before .env is read.
+
+    The negative case on the same line as the test above: without it, a
+    load_api_key that read .env unconditionally would satisfy the fallback test
+    while quietly paying a file read on every call and, worse, letting a stale
+    .env value be re-published into the environment on a key the caller had
+    deliberately overridden.
+    """
+    calls = []
+
+    def _fake_load_env(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    with patch.dict(os.environ, {"TEST_PRESENT_KEY_31C": "exported-wins"}), \
+            patch("scripts.utils.api.load_env", _fake_load_env):
+        assert load_api_key("TEST_PRESENT_KEY_31C") == "exported-wins"
+    assert calls == [], "load_env was consulted even though the key was already exported"
+
+
+def test_the_error_message_names_the_key_but_never_a_value():
+    """A missing-key error must not carry any credential material.
+
+    The engine repo is public and this message reaches stderr, logs, and CI
+    output. Naming the variable is the useful half; echoing anything from the
+    environment would be a secret in a public repo.
+    """
+    env = {k: v for k, v in os.environ.items() if k != ABSENT_KEY}
+    env["UNRELATED_31C_ENV_ENTRY"] = "sk-do-not-echo-me"
+    with patch.dict(os.environ, env, clear=True), \
+            patch("scripts.utils.api.load_env"), \
+            pytest.raises(ValueError) as excinfo:
+        load_api_key(ABSENT_KEY)
+    message = str(excinfo.value)
+    assert ABSENT_KEY in message
+    assert "sk-do-not-echo-me" not in message
+    assert "UNRELATED_31C_ENV_ENTRY" not in message

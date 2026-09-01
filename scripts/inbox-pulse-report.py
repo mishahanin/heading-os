@@ -124,7 +124,20 @@ def ssh_read(remote_path: str) -> str | None:
 
 
 def fetch_jsonl_for_date(target_date: date) -> "list[dict[str, Any]] | None":
-    """Entries for one day, `[]` for a genuinely empty day, None if unreachable."""
+    """Entries for one day, `[]` for a genuinely empty day, None if unreachable.
+
+    A line that will not parse is SKIPPED and COUNTED, and the count is printed
+    to stderr. It used to be skipped in silence, which made every number this
+    report prints a lower bound that read as a total: "Total emails classified:
+    N" is the headline, the tier splits and the tuning thresholds are all
+    derived from the surviving rows, and a dropped row moved every one of them
+    with nothing to say so. This report already distinguishes an UNREACHABLE day
+    from a quiet one, loudly and in red, for the same reason.
+
+    The wording follows `corpus_bytes` in scripts/census.py, which is the
+    in-repo precedent for a count that had to degrade: name the number that
+    vanished and say the total below is a lower bound.
+    """
     remote_path = f"{VM_STATE_DIR}/log-{target_date.isoformat()}.jsonl"
     raw = ssh_read(remote_path)
     if raw is None:
@@ -132,6 +145,7 @@ def fetch_jsonl_for_date(target_date: date) -> "list[dict[str, Any]] | None":
     if not raw:
         return []
     entries = []
+    unparseable = 0
     for line in raw.splitlines():
         line = line.strip()
         if not line:
@@ -139,7 +153,11 @@ def fetch_jsonl_for_date(target_date: date) -> "list[dict[str, Any]] | None":
         try:
             entries.append(json.loads(line))
         except json.JSONDecodeError:
-            continue
+            unparseable += 1
+    if unparseable:
+        print(f"{YELLOW}warning: {unparseable} unparseable line(s) skipped in "
+              f"log-{target_date.isoformat()}.jsonl; every count derived from "
+              f"that day is a LOWER bound{RESET}", file=sys.stderr)
     return entries
 
 
@@ -562,12 +580,13 @@ def _tier_table_rows(entries: list[dict[str, Any]], max_rows: int = 50) -> str:
     """Render markdown table rows for HIGH_LIKELY or MAYBE tiers."""
     if not entries:
         return ""
-    sorted_entries = sorted(
-        entries,
-        key=lambda e: (-(e.get("weight", 0)), e.get("ts", "") or ""),
-        reverse=False,
-    )
-    # weight desc already handled by negation; sort again properly
+    # One sort, weight descending then timestamp descending. There were two:
+    # the first negated the weight and then also had to be undone, so its
+    # result was overwritten by the second on the very next statement without
+    # ever being read, and the comment between them ("sort again properly")
+    # described the overwrite rather than removing it. Dead as of 2026-09-01 --
+    # MEASURED by deleting it, with every test over this function green -- and
+    # it cost a full extra sort of the entry list on every tier table.
     sorted_entries = sorted(
         entries,
         key=lambda e: (e.get("weight", 0), e.get("ts", "") or ""),

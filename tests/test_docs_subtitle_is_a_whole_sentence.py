@@ -137,8 +137,41 @@ def test_the_search_index_carries_the_same_whole_sentences():
     )
 
 
-def test_a_lead_paragraph_followed_by_a_list_does_not_swallow_the_list():
-    """The join must stop at the first structural line, not run into the list."""
+# The structural line openers `_join_paragraph` stops at, written out here and
+# NOT read off the tuple in the generator. A corpus derived from the thing under
+# test shrinks with the mutant, so a change that deleted three of the seven
+# openers would also delete its own coverage and the sweep would still pass.
+# Seven, and the count is pinned in the test below.
+STRUCTURAL_OPENERS = ["#", "---", "|", ">", "-", "*", "+"]
+
+
+@pytest.mark.parametrize("opener", STRUCTURAL_OPENERS)
+def test_a_structural_line_ends_the_lead_paragraph(opener):
+    """The join stops at the first structural line, WITHOUT a blank line first.
+
+    This is the case the old fixture never reached. It read
+    `"# T\\n\\nOne wrapped\\nlead paragraph.\\n\\n- a bullet\\n"`, with a blank
+    line between the paragraph and the list, so the join ended on the earlier
+    `if not s: break` and the structural-line clause the test is named for was
+    never executed. MEASURED 2026-09-01: deleting `"- ", "* ", "+ "` from that
+    clause, and separately deleting `"#", "---", "|", ">"`, each left every test
+    in this file and in `test_a_gate_that_stops_at_the_first_stumble.py` green.
+
+    A list that INTERRUPTS a paragraph with no blank line is ordinary CommonMark,
+    and it is the shape that reaches the clause.
+    """
+    assert len(STRUCTURAL_OPENERS) == 7
+    md = f"# T\n\nOne wrapped\nlead paragraph.\n{opener} must not be swallowed\n"
+    _, subtitle = GEN.extract_title(md, "T")
+    assert subtitle == "One wrapped lead paragraph.", (
+        f"a line opening {opener!r} was joined into the subtitle: {subtitle!r}"
+    )
+
+
+def test_a_lead_paragraph_separated_from_a_list_by_a_blank_line_also_stops():
+    """The original shape, kept as the second half of the pair. It stops on the
+    blank line rather than on the structural clause, which is why it could not
+    stand alone."""
     md = "# T\n\nOne wrapped\nlead paragraph.\n\n- a bullet\n- another\n"
     _, subtitle = GEN.extract_title(md, "T")
     assert subtitle == "One wrapped lead paragraph."

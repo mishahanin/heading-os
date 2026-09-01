@@ -1,18 +1,26 @@
 #!/usr/bin/env python3
 """Keep the README / docs front-door "By the numbers" block honest (F-8.3).
 
-README.md, docs/index.html and ROADMAP.md each carry a "By the numbers" block
-whose figures must come from CI, not from a hand-typed guess. This guard
-re-derives the one figure that actually drifts (the security-test count) and
-asserts all three front doors agree with it and with each other; it also
-cross-checks the enforcement-layer count across them against the architectural
-constant.
+README.md, docs/index.html, ROADMAP.md and SECURITY.md each carry a "By the
+numbers" block whose figures must come from CI, not from a hand-typed guess.
+This guard re-derives the one figure that actually drifts (the security-test
+count) and asserts all four front doors agree with it and with each other; it
+also cross-checks the enforcement-layer count across them against the
+architectural constant.
 
 These two paragraphs said "two front doors" and named only README and
 docs/index.html. ROADMAP.md was added to `FRONT_DOORS` after it drifted to 554
 against a real 563, and the guard has failed the run on it ever since. A reader
 of the old text would conclude ROADMAP was unchecked and "fix" a failing guard
 by reverting ROADMAP's number instead of believing the failure.
+
+SECURITY.md joined `FRONT_DOORS` on 2026-09-01 and this text was not updated
+with it, which turned `tests/test_a_guard_that_was_green_over_an_absent_tree.py::
+test_the_docstring_names_every_front_door` red. That test exists precisely
+because the paragraph above describes a reader being misled by a stale list, so
+the same omission recurring one door later is the argument for the test rather
+than an inconvenience from it. Name the file here in the SAME change that adds
+it to `FRONT_DOORS`.
 
 Derived vs asserted:
   * security-test count -- DERIVED by collecting ``tests/security`` (the exact suite
@@ -107,7 +115,13 @@ EXPECTED_LAYERS = derive_layer_count()
 # security-test count that nothing checked, and it had drifted: 554 against a
 # real 563, while the README beside it was right. A number that only one guarded
 # page carries is a number that will disagree with its unguarded twin.
-FRONT_DOORS = [ROOT / "README.md", ROOT / "docs" / "index.html", ROOT / "ROADMAP.md"]
+# SECURITY.md joined on 2026-09-01, for the layer count what ROADMAP was for the
+# test count: the one top-level page carrying an enforcement-layer numeral that
+# nothing checked. The contract gained layer 7 on 2026-08-31 and three pages had
+# to be found by hand afterwards; this one was not among them because no guard
+# named it. It agrees today, which is the state a drift starts from.
+FRONT_DOORS = [ROOT / "README.md", ROOT / "docs" / "index.html", ROOT / "ROADMAP.md",
+               ROOT / "SECURITY.md"]
 
 _SEC_RE = re.compile(r"(\d+)\s+security tests", re.IGNORECASE)
 # Digits OR the spelled word. README.md:62 wrote "six enforcement layers" in

@@ -340,12 +340,94 @@ def test_no_body_is_built_from_strip_html_without_redaction(filename):
 @pytest.mark.parametrize("filename", _BODY_WRITERS)
 def test_the_mail_body_is_built_by_the_shared_extractor(filename):
     """The positive half. The rule above forbids the old shape; this one
-    requires the new one, so deleting the body entirely does not pass."""
+    requires the new one, so deleting the body entirely does not pass.
+
+    Whole-file presence, which is all this one asks. It is NOT sufficient on
+    its own and it never was: `sentinel.py` holds TWO call sites, so a
+    regression at one of them left the name in the file and this test green.
+    MEASURED 2026-09-01 - replacing `check_new`'s
+    `body = email_body_text(email_item)` with a raw `email_item.text_body`
+    read, which stores an UNREDACTED body, kept all 26 tests passing. Removing
+    BOTH sites was needed to fail it. `test_every_extractor_call_site_is_named`
+    below is the per-site witness that closes that; this one stays as the
+    cheap floor.
+    """
     import ast
     tree = ast.parse((ROOT / "scripts" / filename).read_text(encoding="utf-8"))
     calls = {c.func.id for c in ast.walk(tree)
              if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
     assert "email_body_text" in calls, f"{filename} no longer uses the shared extractor"
+
+
+def _extractor_call_sites() -> set[tuple[str, str, str]]:
+    """{(file, enclosing function, assigned name)} for every body assignment
+    whose value reaches `email_body_text`.
+
+    Derived from the parsed source rather than listed, so the pin below fails
+    on a site that moves as loudly as on one that disappears.
+    """
+    import ast
+
+    sites: set[tuple[str, str, str]] = set()
+    for filename in _BODY_WRITERS:
+        tree = ast.parse((ROOT / "scripts" / filename).read_text(encoding="utf-8"))
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for node in ast.walk(fn):
+                if not isinstance(node, ast.Assign):
+                    continue
+                uses = any(
+                    isinstance(c, ast.Call)
+                    and isinstance(c.func, ast.Name)
+                    and c.func.id == "email_body_text"
+                    for c in ast.walk(node)
+                )
+                if not uses:
+                    continue
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        sites.add((filename, fn.name, target.id))
+    return sites
+
+
+# Every place a persisted body is BUILT, named one by one. A whole-file
+# presence check gives the four sites a single shared witness, and a shared
+# witness cannot fail for three of them.
+_EXPECTED_CALL_SITES = {
+    ("sync-exchange.py", "sync_emails", "body"),
+    ("sentinel.py", "check_new", "body"),
+    ("sentinel.py", "check_new_invites", "body"),
+    ("email-intelligence.py", "fetch_emails", "body"),
+}
+
+
+def test_every_extractor_call_site_is_named():
+    """The sole witness per site, plus the anti-decay half in one assertion.
+
+    Set equality, not a count and not a subset: a site that stops using the
+    extractor drops out, a new persisting site that never adopted it never
+    appears, and either way a human re-derives the set instead of the guard
+    quietly covering three sites out of four.
+    """
+    found = _extractor_call_sites()
+    assert found == _EXPECTED_CALL_SITES, (
+        "the set of body-building call sites moved.\n"
+        f"  gone:  {sorted(_EXPECTED_CALL_SITES - found)}\n"
+        f"  new:   {sorted(found - _EXPECTED_CALL_SITES)}\n"
+        "A site that left must be shown to redact by some other route before "
+        "this set is edited; a site that arrived must go through "
+        "email_body_text."
+    )
+
+
+@pytest.mark.parametrize("site", sorted(_EXPECTED_CALL_SITES))
+def test_this_one_call_site_still_builds_its_body_through_the_extractor(site):
+    """One failing case per site, so a report names WHICH body regressed."""
+    assert site in _extractor_call_sites(), (
+        f"{site[0]}::{site[1]} no longer builds `{site[2]}` through "
+        "email_body_text, so that body is persisted unredacted"
+    )
 
 
 def test_the_redactor_is_the_scanners_own_vocabulary():

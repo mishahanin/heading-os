@@ -481,17 +481,41 @@ def enclosing_repo_root(path, *, env: Optional[dict] = None) -> Optional[Path]:
     numbers, because all three questions were about the enclosing repository.
     A linked git worktree IS its own toplevel, so this does not object to one.
     """
+    # BYTES, then a deliberate decode. `git` answers with a filesystem PATH, and
+    # any subprocess text mode turns on universal newlines and rewrites every CR
+    # byte to LF - `subprocess` exposes no `newline=` knob to switch it off, and
+    # naming an `encoding=` is the same translation. MEASURED 2026-09-01 on ext4
+    # against real scratch repositories:
+    #
+    #   /tmp/gpprobe/re\rpo   -> text mode answered '/tmp/gpprobe/re\npo', which
+    #                            compares unequal to `repo.resolve()`, so the
+    #                            chokepoint below REFUSED a genuine root as a
+    #                            subdirectory of itself. A false refusal is the
+    #                            expensive direction, as the note on the
+    #                            `.resolve()` call below already says.
+    #   /tmp/gpprobe/re\xffpo -> UnicodeDecodeError, a `ValueError`, which
+    #                            neither clause here catches. This function
+    #                            documents None as "could not establish" and
+    #                            raised out of the universal chokepoint instead.
+    #
+    # `surrogateescape` round-trips an undecodable byte back through
+    # `os.fsencode`, so `Path` names the file git actually named.
     try:
         out = subprocess.run(
             ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=15, env=env,
+            capture_output=True, timeout=15, env=env,
         )
     except (subprocess.SubprocessError, OSError) as exc:
         logger.debug("repo root unreadable for %s: %s", path, exc)
         return None
     if out.returncode != 0:
         return None
-    top = out.stdout.strip()
+    # `removesuffix`, not `.strip()`. git terminates this answer with exactly one
+    # newline, and a leading or trailing SPACE is a legal path component:
+    # stripping one off names a directory that does not exist, and the guard
+    # below then refuses a root for being a subdirectory of itself. That is the
+    # same `.strip()` corruption already fixed in `ops_signals._repo_uncommitted`.
+    top = out.stdout.removesuffix(b"\n").decode("utf-8", "surrogateescape")
     if not top:
         return None
     try:

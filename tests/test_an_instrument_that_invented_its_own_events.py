@@ -82,6 +82,66 @@ def test_a_state_that_is_not_an_object_is_refused(cw, state, tmp_path, body):
         _snap(cw, state, tmp_path)
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [b'{"used_percentage": 40, "note": "caf\xe9"}', b"\xff\xfe{}", b"\x80\x81"],
+    ids=["latin1-inside", "bad-lead-bytes", "raw-bytes"],
+)
+def test_a_state_file_that_is_not_utf8_is_refused_as_unreadable(cw, state,
+                                                                 tmp_path, raw):
+    """The WIDTH of `except ValueError`, which nothing was measuring.
+
+    `_read_state` calls `read_text(encoding="utf-8")` with no `errors=`, so a
+    state file holding non-UTF-8 bytes raises `UnicodeDecodeError` BEFORE
+    `json.loads` ever runs. It is a `ValueError` and a SIBLING of
+    `json.JSONDecodeError`, and the comment on that `except` names only the
+    JSON one. MEASURED 2026-09-01: narrowing the clause to
+    `except json.JSONDecodeError` left this file green at 39 passed, and the
+    decode error then escaped `_snapshot` as something other than `Unreadable` -
+    which is precisely the "a read that did not happen was logged as state
+    moving" failure this whole section exists to prevent, arriving one
+    expression earlier.
+
+    A torn write is exactly how these bytes appear: a partial write can land
+    mid-multibyte-character, so the truncated JSON and the truncated UTF-8 are
+    two faces of the same event.
+    """
+    state.write_bytes(raw)
+    with pytest.raises(cw.Unreadable):
+        _snap(cw, state, tmp_path)
+
+
+@pytest.mark.parametrize("history", ["null", "[]"], ids=["null", "empty"])
+def test_a_null_compact_history_is_zero_length_not_a_crash(cw, state, tmp_path,
+                                                            history):
+    """`or []`, not `.get(key, [])`, and the difference had no witness.
+
+    A state file carrying `"compact_history": null` is a PRESENT key with a null
+    value, so the default never applies and `len(None)` is a TypeError - out of
+    the watcher, out of `main`, ending the instrument. MEASURED 2026-09-01:
+    rewriting the line as `state.get("compact_history", [])` left this file
+    green at 39 passed, because every fixture omits the key entirely.
+
+    `_compact_history_last` carries the same `or [None]` guard for the same
+    reason, so it is asserted here beside it.
+    """
+    state.write_text(
+        '{"used_percentage": 40, "compact_history": %s}' % history,
+        encoding="utf-8")
+    snap = _snap(cw, state, tmp_path)
+    assert snap["_compact_history_len"] == 0
+    assert snap["_compact_history_last"] is None
+
+
+def test_a_real_compact_history_is_still_measured(cw, state, tmp_path):
+    """Anchor: hard-coding zero would pass both rows above."""
+    state.write_text(
+        '{"used_percentage": 40, "compact_history": ["a", "b"]}', encoding="utf-8")
+    snap = _snap(cw, state, tmp_path)
+    assert snap["_compact_history_len"] == 2
+    assert snap["_compact_history_last"] == "b"
+
+
 def test_an_absent_state_file_is_genuinely_empty(cw, tmp_path):
     """Anchor: 'not written yet' IS empty, and must not raise."""
     snap = cw._snapshot(tmp_path / "never.json", tmp_path / "arch", "slug")
@@ -304,6 +364,119 @@ def test_a_working_status_still_returns_zero(ws, harness, tmp_path, capsys):
     assert "all answered" in capsys.readouterr().out
 
 
+def test_a_failed_answer_step_stops_the_replay(ws, harness, tmp_path, capsys):
+    """The premise of the whole finding, unmeasured.
+
+    The fix for `--status` is justified as "Checked, like every other call above
+    it" - and neither of those other two calls had a test. MEASURED 2026-09-01:
+    deleting the `--question` step's `if result.returncode != 0` left this file
+    green at 45 passed. A replay that carries on after an answer was rejected
+    applies the REST of the answers to a workspace whose earlier state never
+    landed, which is worse than the `--status` defect it sits above: that one
+    only misreported, this one keeps writing.
+    """
+    workspace, root = harness
+    (root / "scripts" / "apply-wizard-answers.py").write_text(
+        "import sys\n"
+        "if '--question' in sys.argv:\n"
+        "    print('rejected: unknown question', file=sys.stderr)\n"
+        "    raise SystemExit(5)\n"
+        "print('ok')\n", encoding="utf-8")
+    answers = _canned(root, "answers: {tone: warm, cadence: weekly}\n")
+
+    rc = ws.main(["--answers", str(answers), "--workspace", str(workspace)])
+
+    assert rc == 5, "the replay reported the apply script's failure as success"
+    err = capsys.readouterr().err
+    assert "FAILED on" in err and "rejected: unknown question" in err, err
+
+
+def test_a_failed_skip_step_stops_the_replay(ws, harness, tmp_path, capsys):
+    """The second of the two, and it has its own message and its own branch.
+
+    Measured 2026-09-01: deleting the `--skip` step's return-code check left
+    this file green at 45 passed. `test_a_real_skipped_list_still_runs` only
+    covers the success direction.
+    """
+    workspace, root = harness
+    (root / "scripts" / "apply-wizard-answers.py").write_text(
+        "import sys\n"
+        "if '--skip' in sys.argv:\n"
+        "    print('cannot skip a required question', file=sys.stderr)\n"
+        "    raise SystemExit(6)\n"
+        "print('ok')\n", encoding="utf-8")
+    body = "answers: {}\nskipped: [calendar_policy, tone]\n"
+
+    rc = ws.main(["--answers", str(_canned(root, body)),
+                  "--workspace", str(workspace)])
+
+    assert rc == 6
+    err = capsys.readouterr().err
+    assert "FAILED on skip calendar_policy" in err, err
+    assert "cannot skip a required question" in err
+
+
+@pytest.mark.parametrize("body", ["answers: {\n", "a: [1,\n", "\ta: 1\n"],
+                         ids=["unclosed-map", "unclosed-list", "tab-indent"])
+def test_an_unparseable_canned_file_is_refused_with_its_reason(ws, harness,
+                                                                tmp_path, body,
+                                                                capsys):
+    """`yaml.YAMLError` in the read guard, which had no witness.
+
+    Every canned fixture in this file is valid YAML, so the clause covering the
+    PARSE was never exercised - only the shape guards below it. MEASURED
+    2026-09-01: narrowing that `except (OSError, yaml.YAMLError)` to `(OSError,)`
+    left this file green at 45 passed, and a hand-edited canned file then ended
+    the harness with a raw YAML traceback instead of exit 2 and a sentence.
+    """
+    workspace, root = harness
+    rc = ws.main(["--answers", str(_canned(root, body)),
+                  "--workspace", str(workspace)])
+    assert rc == 2
+    assert "could not read" in capsys.readouterr().err
+
+
+def test_a_canned_file_that_is_not_utf8_is_refused_not_a_traceback(
+        ws, harness, tmp_path, capsys):
+    """A LIVE defect found here, and the same class as the `--status` one.
+
+    `read_text(encoding="utf-8")` runs before `yaml.safe_load`, and the guard
+    named `OSError` and `yaml.YAMLError`. `UnicodeDecodeError` is a `ValueError`
+    and `yaml.YAMLError` descends from `Exception`, so neither name covered the
+    DECODE. MEASURED 2026-09-01 before the fix: a canned file holding one
+    latin-1 byte produced a raw `UnicodeDecodeError` traceback and exit 1 -
+    which is exactly what the comment above the `is_file()` check says was
+    removed for a typo'd path, arriving one line further down.
+    """
+    workspace, root = harness
+    bad = root / "canned.yaml"
+    bad.write_bytes(b"answers: {tone: caf\xe9}\n")
+
+    rc = ws.main(["--answers", str(bad), "--workspace", str(workspace)])
+
+    assert rc == 2, "an undecodable canned file crashed instead of being refused"
+    assert "could not read" in capsys.readouterr().err
+
+
+def test_a_missing_canned_file_keeps_its_own_message(ws, harness, tmp_path,
+                                                      capsys):
+    """The `is_file()` pre-check ABOVE the try, which answers first.
+
+    Worth pinning separately: a reader looking only at the `except (OSError,
+    ...)` would conclude a missing file lands there, and it does not - the exit
+    one block above is the branch that actually fires. Both must stay, and they
+    must keep saying different things, because "not found" and "found but
+    unreadable" are different instructions to the operator.
+    """
+    workspace, root = harness
+    rc = ws.main(["--answers", str(root / "no-such-file.yaml"),
+                  "--workspace", str(workspace)])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "answers file not found" in err, err
+    assert "could not read" not in err
+
+
 @pytest.mark.parametrize("body", ["- a\n- b\n", "just a string\n", "42\n"])
 def test_a_canned_file_that_is_not_a_mapping_is_refused(ws, harness, tmp_path,
                                                         body, capsys):
@@ -435,3 +608,90 @@ def test_a_tokenize_failure_is_reported_as_one(el):
 def test_unparseable_source_raises_syntaxerror(el):
     with pytest.raises(SyntaxError):
         el.count_lines("def f(:\n")
+
+
+# The eight characters `str.splitlines()` breaks on and Python's tokenizer does
+# not. Written out by hand from the `str.splitlines` documentation, not derived
+# from the code under test, and built with `chr()` so this file carries none of
+# them literally (`.claude/rules/hidden-chars.md`).
+NON_TERMINATORS = {
+    "U+000B line tabulation": 0x0B,
+    "U+000C form feed": 0x0C,
+    "U+001C file separator": 0x1C,
+    "U+001D group separator": 0x1D,
+    "U+001E record separator": 0x1E,
+    "U+0085 next line": 0x85,
+    "U+2028 line separator": 0x2028,
+    "U+2029 paragraph separator": 0x2029,
+}
+
+
+def test_the_separator_corpus_really_does_fool_splitlines():
+    """A vacuous parametrize otherwise. Every codepoint below must actually
+    split under `str.splitlines()` and must NOT be a newline to Python, or the
+    rows that follow prove nothing about the difference between the two."""
+    for label, cp in NON_TERMINATORS.items():
+        src = "x = 1" + chr(cp) + "y = 2"
+        assert len(src.splitlines()) == 2, label
+        assert "\n" not in src, label
+
+
+@pytest.mark.parametrize("label,cp", sorted(NON_TERMINATORS.items()),
+                         ids=sorted(NON_TERMINATORS))
+def test_a_line_holding_a_non_terminator_is_still_one_line(el, label, cp):
+    """A LIVE defect found here: `source.splitlines()` was cutting on eight
+    characters the tokenizer treats as ordinary text.
+
+    Both returned numbers were inflated, and worse, every line number after the
+    first occurrence fell out of step with the ones `tokenize` and `ast` report
+    - so a blank-line or docstring exclusion was subtracted from the wrong line.
+
+    MEASURED 2026-09-01, and reachable on this repository rather than in theory:
+    `scripts/utils/sanitize_text.py` is tracked engine source, it contains
+    U+2028 and U+2029, and it came back as 272 physical lines against a true
+    268. Two test files over-reported by 2 apiece. Minimally, the row below was
+    `(2, 2)`.
+    """
+    assert el.count_lines('x = "a' + chr(cp) + 'b"\n') == (1, 1), label
+    # And in a COMMENT, where the same cut lands on the exclusion arithmetic.
+    assert el.count_lines("x = 1  # note" + chr(cp) + "more\n") == (1, 1), label
+
+
+def test_the_repositorys_own_sources_are_counted_at_their_real_length(el):
+    """The end-to-end version, over the files that actually carry these
+    characters, so the row above cannot pass over a corpus of one-liners.
+
+    The expected length is computed HERE, by the definition Python itself uses
+    (split on newline, drop the trailing empty), rather than read back from the
+    function under test.
+    """
+    carriers = [p for p in (ROOT / "scripts" / "utils" / "sanitize_text.py",
+                            ROOT / "tests" / "test_session_scope_line_splitting.py")
+                if p.is_file()]
+    assert carriers, "the corpus is empty, so this asserts nothing"
+    checked = 0
+    for path in carriers:
+        src = path.read_text(encoding="utf-8")
+        if not any(chr(cp) in src for cp in NON_TERMINATORS.values()):
+            continue
+        checked += 1
+        expected = len(src.split("\n")) - (1 if src.endswith("\n") else 0)
+        assert el.count_lines(src)[1] == expected, path.name
+    assert checked, (
+        "no tracked file still carries one of these characters, so this test "
+        "measured nothing; keep the synthetic rows above, which do not depend "
+        "on the corpus")
+
+
+@pytest.mark.parametrize("src,expected", [
+    ("x = 1\r\ny = 2\r\n", (2, 2)),
+    ("x = 1\ry = 2\r", (2, 2)),
+    ("x = 1", (1, 1)),
+    ("", (0, 0)),
+    ("\n\n", (0, 2)),
+])
+def test_the_real_line_endings_and_the_edges_are_unchanged(el, src, expected):
+    """Anchor for the fix: normalising `\\r\\n` and `\\r` and dropping the
+    trailing empty element must not move the ordinary answers. A bare
+    `split("\\n")` would report `x = 1\\n` as two lines and CRLF source as one."""
+    assert el.count_lines(src) == expected

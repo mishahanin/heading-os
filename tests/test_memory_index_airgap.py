@@ -101,6 +101,17 @@ def built_index(tmp_path, monkeypatch):
     monkeypatch.setenv("HEADING_OS_DATA", str(root))
     monkeypatch.setattr(mod, "get_workspace_root", lambda: root)
     monkeypatch.setattr(mod, "embed", fake_embed)
+    # The mock embedder is not the only route off this machine, and this file's
+    # docstring said "no ollama dependency" while the build opened sockets.
+    # `load_config` resolves the pinned host through `_resolve_embed_host`, and
+    # `cmd_build` asks the host for the model's weight digest through
+    # `model_digest`; both talk to `config: host:` above, which is a real
+    # address. MEASURED 2026-09-01 with `socket.socket.connect` counted across
+    # the four memory-index test files: 46 connects to 127.0.0.1:11434. Pinned
+    # here so the result does not depend on whether an ollama daemon happens to
+    # be up, matching tests/test_five_claims_that_covered_one_path_of_several.py.
+    monkeypatch.setattr(mod, "model_digest", lambda **k: None)
+    monkeypatch.setattr(mod, "_resolve_embed_host", lambda host=None, **k: host)
 
     rc = mod.cmd_build(types.SimpleNamespace(force=True))
     assert rc == 0

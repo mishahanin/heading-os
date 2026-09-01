@@ -87,6 +87,38 @@ def test_an_ssl_socket_inherits_the_refusal(cf):
         wrapped.connect(("192.0.2.1", 443))
 
 
+def test_resolving_a_third_party_name_is_refused(cf):
+    """Name resolution is egress, and it was the hole in this wall.
+
+    MEASURED 2026-09-01 with the guard armed and only `connect`/`connect_ex`
+    wrapped: `socket.getaddrinfo("example.com", 443)` answered
+    `('104.20.23.154', 443)`, so the query had already left this machine before
+    anything refused the connection. A hostname is a channel in its own right:
+    `<payload>.attacker.example` exfiltrates through a resolver that never
+    touches `connect`.
+    """
+    with pytest.raises(cf.NetworkAccessRefused):
+        socket.getaddrinfo("example.invalid", 443)
+    with pytest.raises(cf.NetworkAccessRefused):
+        socket.getaddrinfo("198.51.100.7", 443)
+
+
+def test_resolving_a_local_name_is_allowed(cf):
+    """The other direction, and the reason this cannot be a blanket refusal: a
+    loopback server's own address is resolved through the same call, and
+    `(None, port)` is what a bind helper passes."""
+    assert socket.getaddrinfo("127.0.0.1", 0, type=socket.SOCK_STREAM)
+    assert socket.getaddrinfo("localhost", 0, type=socket.SOCK_STREAM)
+    assert socket.getaddrinfo(None, 0, type=socket.SOCK_STREAM)
+
+
+def test_the_resolver_guard_is_installed_on_the_module(cf):
+    """A wrapper nobody applied refuses nothing. Asserted on the live module
+    attribute, because that is the name every caller reads at call time."""
+    assert socket.getaddrinfo.__qualname__.startswith("_install_socket_guard"), (
+        f"socket.getaddrinfo is {socket.getaddrinfo!r}, not the guarded one")
+
+
 def test_the_refusal_says_what_to_do(cf):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(_FAIL_FAST)
@@ -263,13 +295,15 @@ def test_the_session_actually_installed_the_socket_guard(cf):
 
 
 def test_the_guard_puts_the_primitives_back(cf):
-    before = (socket.socket.connect, socket.socket.connect_ex)
+    before = (socket.socket.connect, socket.socket.connect_ex, socket.getaddrinfo)
     restore = cf._install_socket_guard()
     try:
         assert socket.socket.connect is not before[0], "the guard did not arm"
+        assert socket.getaddrinfo is not before[2], "the resolver did not arm"
     finally:
         restore()
-    assert (socket.socket.connect, socket.socket.connect_ex) == before
+    assert (socket.socket.connect, socket.socket.connect_ex,
+            socket.getaddrinfo) == before
 
 
 def test_the_marker_is_registered_so_strict_markers_accepts_it(pytestconfig):

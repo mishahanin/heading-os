@@ -274,7 +274,21 @@ def scan_all_contacts() -> tuple[list[dict], list[str]]:
     # CEO contacts at crm/contacts/
     ceo_dir = get_crm_contacts_dir()
     for f in sorted(ceo_dir.glob("*.md")):
-        fm = parse_frontmatter(f.read_text(encoding="utf-8"))
+        try:
+            text = f.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            # No handler at all sat here until 2026-09-01. `UnicodeDecodeError`
+            # is a `ValueError`, so one card that is not valid UTF-8 raised out
+            # of the whole scan and this returned NO records rather than the
+            # cards it could read. MEASURED that day on a two-card corpus.
+            #
+            # `unreadable` already existed for a missing exec directory, so a
+            # card that cannot be read joins it: this is a MIGRATION, and a
+            # record silently absent from the scan is a record silently absent
+            # from the migrated set.
+            unreadable.append(f"{f.name} ({type(exc).__name__})")
+            continue
+        fm = parse_frontmatter(text)
         if not fm:
             continue
         records.append(_record_from(f, "owner-exec-a", fm))
@@ -293,7 +307,16 @@ def scan_all_contacts() -> tuple[list[dict], list[str]]:
             unreadable.append(slug)
             continue
         for f in sorted(exec_contacts_dir.glob("*.md")):
-            fm = parse_frontmatter(f.read_text(encoding="utf-8"))
+            try:
+                text = f.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                # The same defect as the CEO loop above, and worse here: one
+                # unreadable card in ONE executive's overlay took every other
+                # executive's cards with it, because the raise left this loop
+                # and the enclosing one together.
+                unreadable.append(f"{slug}/{f.name} ({type(exc).__name__})")
+                continue
+            fm = parse_frontmatter(text)
             if not fm:
                 continue
             records.append(_record_from(f, slug, fm))

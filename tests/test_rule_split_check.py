@@ -109,7 +109,24 @@ def test_committed_inventories_match_the_live_rules():
     # CI-only until 2026-08-10, and an edit to documentation.md's migration-cruft table
     # sat red on main until someone read the notification.
     repo = pathlib.Path(__file__).resolve().parents[1]
-    bad = check_inventories(inventory_dir=repo / "config/rule-split-inventory",
+    inventory = repo / "config/rule-split-inventory"
+
+    # `check_inventories` globs `<dir>/*.txt` and returns [] when the glob is
+    # empty, which is byte-for-byte the answer it gives over a clean tree. A
+    # renamed directory, a snapshot deleted with the rule it guarded, or a `.txt`
+    # convention that moves, all report "no directive was dropped" while reading
+    # nothing at all. Floors first, per snapshot rather than in total, so one
+    # emptied file cannot hide behind a full sibling.
+    snapshots = sorted(inventory.glob("*.txt"))
+    assert len(snapshots) >= 2, (
+        f"only {len(snapshots)} rule-split snapshots under {inventory}; the "
+        f"drift check below would pass by having nothing to check")
+    for snap in snapshots:
+        frozen = [ln for ln in snap.read_text(encoding="utf-8").splitlines()
+                  if ln.strip()]
+        assert len(frozen) >= 5, f"{snap.name} froze only {len(frozen)} directives"
+
+    bad = check_inventories(inventory_dir=inventory,
                             rules_dir=str(repo / ".claude/rules"))
     assert bad == [], (
         "rule-split inventory drift: a snapshotted directive is no longer a sentence of "

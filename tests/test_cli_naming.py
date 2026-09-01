@@ -57,6 +57,33 @@ def _root_cli_scripts():
     )
 
 
+# The corpus floor. MEASURED 2026-09-01: 204 files match `scripts/*.py` at the
+# root, 17 of them snake_case. A sweep is green over an empty corpus, so a glob
+# that stops matching - the directory renamed, the tree relocated, `_root_cli_scripts`
+# tightened by one predicate too many - would report a clean pass having looked at
+# nothing. Well below the measured number on purpose: this pins "the walk found the
+# tree", not the tree's exact size, which grows every week.
+MIN_ROOT_SCRIPTS = 150
+
+
+def test_the_walk_actually_finds_the_scripts_directory():
+    """A floor, so the two sweeps below cannot pass over an empty corpus."""
+    assert SCRIPTS_DIR.is_dir(), f"{SCRIPTS_DIR} is not a directory"
+    found = _root_cli_scripts()
+    assert len(found) >= MIN_ROOT_SCRIPTS, (
+        f"_root_cli_scripts() found {len(found)} file(s), under the floor of "
+        f"{MIN_ROOT_SCRIPTS} measured 2026-09-01; the sweep below is checking "
+        "almost nothing"
+    )
+    # And it must still be seeing snake_case files at all, or the predicate that
+    # decides a violation has nothing to decide about.
+    snake = [p for p in found if "_" in p.stem]
+    assert len(snake) >= len(ALLOWED_SNAKE), (
+        f"only {len(snake)} snake_case script(s) reach the check while "
+        f"{len(ALLOWED_SNAKE)} are excluded by name; the glob is missing files"
+    )
+
+
 def test_standalone_cli_scripts_are_kebab_case():
     """Any snake_case script in scripts/ must be a documented exclusion."""
     violations = []

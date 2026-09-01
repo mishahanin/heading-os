@@ -219,7 +219,14 @@ def run_email_intel_status(workspace_root: Path) -> dict[str, Any]:
 
     try:
         data = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
+        # `ValueError`, not `json.JSONDecodeError`. `read_text(encoding="utf-8")`
+        # raises `UnicodeDecodeError` on non-UTF-8 bytes, which is a SIBLING of
+        # JSONDecodeError under ValueError, so the narrower tuple missed one of
+        # the two ways a state file is unreadable. MEASURED 2026-09-01: a
+        # state.json of `b"\xff\xfe\x00binary"` raised out of this check, and
+        # `run_all._wrap` then reported the whole panel as an exception instead
+        # of the named "state.json unreadable" line this branch exists to print.
         return {
             "status": "error",
             "output": f"Email Intelligence: state.json unreadable ({exc}).",
@@ -517,7 +524,14 @@ def run_dream_shadow(workspace_root: Path) -> dict[str, Any]:
     latest = reports[-1]
     try:
         text = latest.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
+        # `ValueError`, for the reason the two handlers above record.
+        # `UnicodeDecodeError` is a ValueError, not an OSError, so a report of
+        # non-UTF-8 bytes escaped the branch whose message is literally
+        # "unreadable". MEASURED 2026-09-01: the check raised, `run_all._wrap`
+        # caught it, and the panel reported a generic exception instead of the
+        # named line. The report is written by `scripts/dream-shadow.py` on a
+        # nightly timer, so a torn write is how it becomes undecodable.
         return {"status": "error", "output": f"dream-shadow report unreadable: {exc}",
                 "omit_if_empty": True}
 
@@ -574,7 +588,10 @@ def run_updates(workspace_root: Path) -> dict[str, Any]:
         return {"status": "skipped", "output": "", "omit_if_empty": True}
     try:
         state = json.loads(state_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
+        # `ValueError`, for the reason `run_email_intel_status` above records:
+        # `UnicodeDecodeError` is a sibling of `json.JSONDecodeError`, not a
+        # subclass, so the narrower tuple caught only half of "unreadable".
         return {"status": "error", "output": f"updates state unreadable: {exc}",
                 "omit_if_empty": True}
 

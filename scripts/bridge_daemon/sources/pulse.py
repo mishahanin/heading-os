@@ -873,7 +873,17 @@ def threads_state_preview(data_root: Path, today: date | None = None) -> dict | 
             continue
         try:
             text = p.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # See the identical guard in `threads.list_active_threads`.
+            # UnicodeDecodeError is a ValueError, so it escaped this handler and
+            # `pulse_data` calls this function with no wrapper of its own: one
+            # thread file that is not UTF-8 took the WHOLE /pulse payload down,
+            # not just the threads card. MEASURED 2026-08-31, `pulse_data`
+            # raised `UnicodeDecodeError` on a single Latin-1 thread file.
+            logging.warning(
+                "bridge.pulse.threads: skipping %s from the threads card; it "
+                "is not readable as UTF-8 text. Re-save it as UTF-8.", p,
+                exc_info=True)
             continue
         fm = _parse_thread_frontmatter(text)
         if not fm:

@@ -195,6 +195,8 @@ class Denylist:
         if not self.tokens:
             self._pattern = None
             self._loose_pattern = None
+            self._needle_singles = ()
+            self._needle_multi = ()
             return
         # Longest-first so a full name wins over its component word in reporting.
         ordered = sorted(self.tokens, key=len, reverse=True)
@@ -230,6 +232,27 @@ class Denylist:
         else:
             self._loose_pattern = None
 
+        # Needles for the prefilter in `scan_text`. Derived from `self.tokens`
+        # in the same place the patterns are compiled, so the three can never
+        # describe different token sets.
+        self._needle_singles = tuple(
+            t.lower() for t in ordered if " " not in t)
+        self._needle_multi = tuple(
+            tuple(w.lower() for w in t.split(" ")) for t in ordered if " " in t)
+
+    def _could_hold_a_token(self, low: str) -> bool:
+        """Could ANY denylist token match this already-lowercased text?
+
+        Necessary condition only. `False` means no pattern can match and the
+        scan may return early; `True` means run the real scan. Built from the
+        token list itself rather than a hand-kept copy, so a new token class
+        cannot be added and forgotten here.
+        """
+        for word in self._needle_singles:
+            if word in low:
+                return True
+        return any(all(w in low for w in words) for words in self._needle_multi)
+
     def scan_text(self, text: str) -> list[tuple[int, str, str]]:
         """Return (lineno, matched_text, category) for every denylist hit.
 
@@ -239,6 +262,46 @@ class Denylist:
         operator cannot know which line the scanner will report.
         """
         if self._pattern is None:
+            return []
+        # WHOLE-TEXT PREFILTER. The loops below run a 760-alternative regex once
+        # per LINE, which is the whole cost of this gate: measured 2026-08-31,
+        # `content-guard.py --all` spent 66 s of its 67 s here, over 2127 files,
+        # and three tests each pay that separately. Under a loaded machine it
+        # passed 300 s and timed three of them out.
+        #
+        # Skipping is SOUND, not a heuristic, and it rests on one property of the
+        # compiled patterns: they carry no `^`/`$` anchor and no `re.MULTILINE`,
+        # and their boundaries are lookarounds on `[A-Za-z0-9_]`. A line is a
+        # contiguous substring of `text` delimited by `\n`, and `\n` is not in
+        # that class, so every lookaround that holds at a line edge also holds at
+        # the same offset in the full text. A per-line match therefore IMPLIES a
+        # whole-text match, and no whole-text match implies no per-line match.
+        #
+        # The test is SUBSTRING containment, not a regex, and that choice is a
+        # measurement rather than a preference. Two earlier attempts were tried
+        # and thrown away on the same 400-file sample:
+        #
+        #   whole-text regex search   13.84s vs 10.91s per-line  -> 27% SLOWER
+        #     (one pass over the text costs the same character positions as all
+        #      its lines, and testing both patterns adds a second pass)
+        #   "any token word present"   0.12s, but said "maybe" for 400/400 files
+        #     -> 76x faster and 0% selective, so nothing was ever skipped
+        #   this one                   1.78s, skips 360/400 -> 12.79s to 3.06s
+        #
+        # Soundness. A match of `_pattern` needs the token verbatim, so for a
+        # single-word token that word must occur as a substring, and for a
+        # multi-word token every one of its words must. A match of
+        # `_loose_pattern` widens the internal spaces to `\s+`, so it still
+        # needs every word present. "All words" and not "any word" is the whole
+        # difference between 90% selectivity and 0%.
+        #
+        # This is a NECESSARY condition, never a sufficient one: a file that
+        # passes still goes through the full scan below. The only way it can be
+        # wrong is by claiming a hit is impossible when it is not, so
+        # `tests/test_a_prefilter_that_could_have_hidden_a_name.py` runs a
+        # differential against the unfiltered scan.
+        low = text.lower()
+        if not self._could_hold_a_token(low):
             return []
         lines = text.splitlines()
         suppressed = {n for n, line in enumerate(lines, 1)
@@ -310,6 +373,40 @@ def _add(tokens: dict[str, str], value: str, category: str) -> None:
         if len(v) < _MIN_WORD or not any(c.isalpha() for c in v):
             return
     tokens[v] = category
+
+
+class HarvestUnreadable(ValueError):
+    """A source file the harvest needs could not be decoded as UTF-8.
+
+    Raised in place of the bare ``UnicodeDecodeError`` so the message names the
+    PATH. That exception carries a codec, a byte and an offset and no filename
+    at all, and `build_denylist` prints only ``type(exc).__name__: exc`` before
+    `push-all` refuses the push. MEASURED 2026-09-01 on three config files, the
+    middle one carrying a lone 0xe9: the harvest aborted, the operator was told
+    to check `config/content-denylist.yaml`, and the file that actually broke
+    was never named anywhere.
+    """
+
+
+def _read_source(path: Path) -> str:
+    """Read a harvest source strictly, and name the file when it will not decode.
+
+    Deliberately STRICT, not ``errors="replace"``. These files hold the real
+    names the wall matches on, so replacing a bad byte with U+FFFD would harvest
+    a garbled token that matches nothing and let the push proceed believing the
+    wall was armed. Failing closed with a named file is the safe direction; a
+    quietly weakened denylist is not.
+
+    `_harvest_contact_frontmatter` keeps its own ``errors="replace"`` read, and
+    that stays correct: it scans note BODIES for e-mail addresses, which are
+    ASCII, so a replaced byte elsewhere in the note cannot hide one.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise HarvestUnreadable(
+            f"{path} is not valid UTF-8 ({exc.reason} at byte {exc.start}); "
+            f"the real-entity denylist cannot be built from it") from exc
 
 
 def _harvest_person_slugs(data_root: Path, tokens: dict[str, str], strict: bool) -> None:
@@ -448,7 +545,7 @@ def _harvest_executives(data_root: Path, tokens: dict[str, str]) -> None:
     # `degraded` False: the content-leak wall then scanned the public engine
     # tree with the exec names missing from its token set and printed "clean".
     # Let it reach build_denylist, which prints the cause and sets `degraded`.
-    data = json.loads(p.read_text(encoding="utf-8"))
+    data = json.loads(_read_source(p))
     if not isinstance(data, dict):
         raise ValueError(f"{p.name}: expected an object, got {type(data).__name__}")
     for ex in data.get("executives", []):
@@ -488,7 +585,7 @@ def _harvest_config(data_root: Path, tokens: dict[str, str], strict: bool) -> No
     # data-config is not a denylist token.
     for f in list(cfg.glob("*.json")) + list(cfg.glob("*.yaml")) + list(cfg.glob("*.yml")):
         try:
-            raw = f.read_text(encoding="utf-8")
+            raw = _read_source(f)
         except FileNotFoundError:
             continue  # globbed then removed; absence is not a failed harvest
         for email in _EMAIL_RE.findall(raw):
@@ -507,7 +604,7 @@ def _harvest_config(data_root: Path, tokens: dict[str, str], strict: bool) -> No
         # Present and unreadable is a failed harvest, not an absent one: see
         # _harvest_executives. `data = None` here meant a corrupt schedule
         # removed every speaker name from the wall's token set in silence.
-        data = json.loads(fs.read_text(encoding="utf-8"))
+        data = json.loads(_read_source(fs))
         for week in (data or {}).get("weeks", []) if isinstance(data, dict) else []:
             if not isinstance(week, dict):
                 continue
@@ -546,7 +643,7 @@ def _harvest_fireside_roster(data_root: Path, tokens: dict[str, str],
     # Present and unreadable is a failed harvest, not an absent one: see
     # _harvest_executives. The Telegram handles and member names of the whole
     # Tribe come from this one file.
-    roster = json.loads(p.read_text(encoding="utf-8"))
+    roster = json.loads(_read_source(p))
     for handle, member in _iter_member_dicts(roster):
         _add(tokens, handle, "handle")
         name = member.get("name") if isinstance(member, dict) else None
@@ -605,7 +702,7 @@ def _harvest_curated(data_root: Path, tokens: dict[str, str], curated_path: Path
     # partial wall that looks whole is worse than one that says it is blind, so
     # the failure propagates to build_denylist, which sets degraded.
     import yaml
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    data = yaml.safe_load(_read_source(path)) or {}
     for category in ("companies", "events", "codenames", "competitors", "tokens"):
         for val in (data.get(category) or []):
             if val:

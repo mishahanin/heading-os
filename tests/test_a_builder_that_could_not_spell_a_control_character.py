@@ -284,6 +284,99 @@ def test_the_trailing_empty_entry_is_dropped(tmp_path, reader) -> None:
     assert "" not in reader(repo)
 
 
+# The one line of `_tracked_files` that both readers comment and neither pinned:
+#
+#     # No `.strip()` filter: a filename may legally begin or end with
+#     # whitespace, and trimming it produces a path that matches neither a
+#     # routing rule nor anything on disk. Only the empty trailing entry `-z`
+#     # leaves is dropped.
+#
+# MEASURED 2026-09-01 in a scratch copy: changing the return in BOTH builders to
+# `[entry.strip() for entry in out.split("\0") if entry.strip()]` left this file
+# green at 27 passed. Every existing case here holds its whitespace in the
+# MIDDLE of the name (`docs/two words.md`, `docs/leak\tb.md`), which `.strip()`
+# never touches, so the comment was a claim nothing tested.
+#
+# The harm is silent, which is why it is worth a case. The copy loop in both
+# builders is `if not src.is_file(): continue`, so a trimmed name that opens no
+# file is DROPPED with no error, no warning and a `copied` count that quietly
+# under-reports. On the data side that is a private file missing from the
+# backup; on the engine side it is a file missing from the public build. Neither
+# run says anything.
+# The whitespace has to sit at an END OF THE WHOLE PATH, which is the only place
+# `.strip()` reaches. `docs/two words.md` and `docs/leak\tb.md` above hold theirs
+# in the middle and are untouched by it, which is exactly why they left the
+# comment unverified.
+EDGE_WHITESPACE_NAMES = (
+    "docs/trailing.md ",     # a space after the extension
+    "docs/tabbed.md\t",      # a tab, which `.strip()` also takes
+    " docs/leading.md",      # a top-level directory whose name starts with a space
+)
+
+
+@pytest.fixture(scope="module")
+def whitespace_names(tmp_path_factory) -> list[str]:
+    """The edge-whitespace names this filesystem will actually hold.
+
+    Some filesystems trim silently, so each candidate is created and then read
+    back from its own directory listing before it is trusted.
+    """
+    probe = tmp_path_factory.mktemp("whitespace-probe")
+    survivors = []
+    for name in EDGE_WHITESPACE_NAMES:
+        target = probe / name
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"x\n")
+        except OSError:
+            continue
+        listed = [p.name for p in target.parent.iterdir()]
+        if Path(name).name in listed:
+            survivors.append(name)
+    return survivors
+
+
+def test_the_filesystem_holds_a_trailing_whitespace_name(whitespace_names) -> None:
+    """The premise, so the two tests below cannot pass over an empty corpus."""
+    assert whitespace_names, (
+        "this filesystem trims trailing whitespace from a filename, so the "
+        "`.strip()` case cannot be exercised here and the readers' `No "
+        "`.strip()` filter` comment stays unverified"
+    )
+
+
+@READERS
+def test_a_trailing_whitespace_path_is_returned_verbatim(tmp_path, whitespace_names,
+                                                         reader) -> None:
+    """`.strip()` on each entry renames the file to one that does not exist."""
+    repo, created = _make_repo(tmp_path, whitespace_names)
+    assert created, "fixture created nothing"
+    got = reader(repo)
+    for name in created:
+        assert name in got, (
+            f"{name!r} came back as {got!r}. A trimmed name opens no file, and "
+            f"the copy loop's `if not src.is_file(): continue` then drops it "
+            f"with no error and no line in the report."
+        )
+
+
+@READERS
+def test_a_trailing_whitespace_path_still_names_a_file_on_disk(
+        tmp_path, whitespace_names, reader) -> None:
+    """The consequence, asserted the way the copy loop asks the question.
+
+    `src.is_file()` is the only thing standing between a returned path and a
+    silent drop, so that is what this checks rather than string equality.
+    """
+    repo, created = _make_repo(tmp_path, whitespace_names)
+    assert created, "fixture created nothing"
+    unopenable = [rel for rel in reader(repo) if not (repo / rel).is_file()]
+    assert unopenable == [], (
+        f"the reader returned {unopenable!r}, which the copy loop would skip "
+        f"without a word"
+    )
+
+
 # ============================================================
 # The routing consequence, end to end
 # ============================================================

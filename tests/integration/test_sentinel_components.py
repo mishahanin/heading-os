@@ -154,6 +154,167 @@ def test_meeting_duration_calc_valid(
 
 
 # ---------------------------------------------------------------------------
+# The rest of check_new_invites, which had no case at all until 2026-09-01
+#
+# The two duration tests above (this file and the hardening file) were the
+# ONLY coverage of `MeetingInviteSource.check_new_invites`, so three of its
+# branches were unmeasured. Measured with mutations against the 102 test files
+# that name sentinel, 2903 tests, identical pass/fail set each time:
+#
+#   deleting the past-invite skip entirely                          SURVIVED
+#   replacing `email_body_text(invite)` with raw `invite.text_body` SURVIVED
+#   making `is_recurring` unreachable, so it is always False        SURVIVED
+#
+# The first would put every historical invite in the mailbox back in front of
+# the calendar policy engine on the next cycle. The second is the credential
+# redaction `scripts/utils/html_text.email_body_text` exists for, at the call
+# site its own docstring names as one of the three copies it replaced.
+# ---------------------------------------------------------------------------
+
+def _invite(**overrides) -> SimpleNamespace:
+    """An Exchange meeting-request item shaped the way check_new_invites reads it."""
+    fields = {
+        "message_id": "invite-1",
+        "id": "invite-1",
+        "subject": "TEST-MEETING",
+        "sender": SimpleNamespace(email_address="alice@example.com", name="Alice"),
+        "start": datetime(2030, 1, 1, 10, 0, 0, tzinfo=timezone.utc),
+        "end": datetime(2030, 1, 1, 11, 0, 0, tzinfo=timezone.utc),
+        "body": None,
+        "text_body": "Normal body",
+        "location": "Conf Room A",
+        "datetime_received": datetime(2030, 1, 1, 10, 0, 0, tzinfo=timezone.utc),
+        "required_attendees": [],
+        "optional_attendees": [],
+        "type": "SingleInstance",
+    }
+    fields.update(overrides)
+    return SimpleNamespace(**fields)
+
+
+def _source_over(invites, mock_config, state_manager, mock_logger, account):
+    from scripts.sentinel import MeetingInviteSource
+
+    filter_mock = MagicMock()
+    filter_mock.order_by.return_value = list(invites)
+    account.inbox.filter.return_value = filter_mock
+    source = MeetingInviteSource(mock_config.__dict__, state_manager, mock_logger)
+    source.account = account
+    return source
+
+
+def test_a_past_invite_is_skipped_recorded_and_not_reconsidered(
+    mock_config, state_manager, mock_logger, mock_exchange_account
+):
+    """The past-invite guard, in both of its halves.
+
+    `check_new_invites` skips an invite whose start is behind now AND calls
+    `mark_invite_processed` on it, so the next cycle does not weigh it again.
+    Nothing exercised either half: deleting the whole four-line branch from
+    `scripts/sentinel.py` left 2903 tests green.
+
+    2020 rather than "now minus an hour": a fixed past date cannot stop being
+    past, so this asserts on the guard and not on the host clock.
+    """
+    past = datetime(2020, 3, 4, 9, 0, 0, tzinfo=timezone.utc)
+    invite = _invite(message_id="invite-past", id="invite-past",
+                     subject="TEST-MEETING-PAST",
+                     start=past, end=past + timedelta(minutes=30),
+                     datetime_received=past)
+    source = _source_over([invite], mock_config, state_manager, mock_logger,
+                          mock_exchange_account)
+
+    assert source.check_new_invites() == []
+    assert state_manager.is_invite_processed("invite-past") is True, (
+        "the past invite was skipped but not recorded, so the next cycle "
+        "re-examines it forever")
+
+    debug_messages = [call.args[0] for call in mock_logger.debug.call_args_list]
+    assert any("Skipping past invite" in msg for msg in debug_messages), debug_messages
+
+
+def test_a_future_invite_is_returned_once_and_not_a_second_time(
+    mock_config, state_manager, mock_logger, mock_exchange_account
+):
+    """The other direction, twice over.
+
+    A guard rewritten to skip EVERYTHING would satisfy the test above, so the
+    future invite has to come back. Then the dedupe: this source does NOT mark
+    a future invite itself - the decision sites at sentinel.py L2882 and L2960
+    do, once the invite has actually been consumed - so the second call is
+    driven by marking it the way the caller does. That is the contract, and it
+    is worth pinning as such: a source that marked on READ would drop every
+    invite it ever showed the operator, whether or not it was acted on.
+    """
+    invite = _invite(message_id="invite-future", id="invite-future")
+    source = _source_over([invite], mock_config, state_manager, mock_logger,
+                          mock_exchange_account)
+
+    first = source.check_new_invites()
+    assert [i["invite_id"] for i in first] == ["invite-future"]
+    assert first[0]["duration_minutes"] == 60
+    assert state_manager.is_invite_processed("invite-future") is False, (
+        "reading an invite consumed it; the caller decides that, not the source")
+
+    state_manager.mark_invite_processed("invite-future")
+    assert source.check_new_invites() == [], (
+        "the same invite came back after the caller marked it; "
+        "is_invite_processed is not gating it")
+
+
+# A join URL carrying a signed token is the shape `email_body_text`'s docstring
+# records from the live overlay, so it is the shape asserted here. Split so no
+# token-shaped literal sits in this file; `secret_patterns.redact` ignores the
+# allowlist marker by design, so the span is still removed.
+_INVITE_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0." + "Q" * 27  # pragma: allowlist secret
+_INVITE_BODY = f"Join the call: https://example.invalid/j?t={_INVITE_TOKEN}"
+
+
+def test_an_invite_body_is_redacted_before_it_leaves_the_source(
+    mock_config, state_manager, mock_logger, mock_exchange_account
+):
+    """The invite body must go through `email_body_text`, not raw `text_body`.
+
+    An invite carries a join URL and a join URL carries a token, which is why
+    `scripts/sentinel.py` extracts the body through the shared redactor. Reading
+    `invite.text_body` directly instead left 2903 tests green, and the record
+    this source feeds is written into the DATA overlay, where `push-all.py`'s
+    content scan refuses the whole backup over exactly this string.
+    """
+    invite = _invite(text_body=_INVITE_BODY)
+    source = _source_over([invite], mock_config, state_manager, mock_logger,
+                          mock_exchange_account)
+
+    body = source.check_new_invites()[0]["body"]
+
+    assert _INVITE_TOKEN not in body, body
+    assert "[REDACTED" in body, body
+    # The record stays readable: only the span goes.
+    assert "https://example.invalid/j?t=" in body, body
+
+
+@pytest.mark.parametrize("item_type, expected", [
+    ("RecurringMaster", True),
+    ("SingleInstance", False),
+    ("Occurrence", False),
+])
+def test_a_recurring_master_is_reported_as_recurring(
+    item_type, expected, mock_config, state_manager, mock_logger,
+    mock_exchange_account
+):
+    """`is_recurring` is what tells the policy engine a decision binds a series
+    rather than one slot, and nothing asserted it: making the flag unreachable
+    left 2903 tests green. Both directions, because a flag hardwired to True
+    would be as wrong as one hardwired to False."""
+    invite = _invite(message_id=f"invite-{item_type}", id=f"invite-{item_type}",
+                     type=item_type)
+    source = _source_over([invite], mock_config, state_manager, mock_logger,
+                          mock_exchange_account)
+
+    assert source.check_new_invites()[0]["is_recurring"] is expected
+
+
+# ---------------------------------------------------------------------------
 # CalendarPolicyEngine theme alignment - keyword path (LLM disabled)
 # ---------------------------------------------------------------------------
 

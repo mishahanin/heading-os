@@ -230,6 +230,49 @@ def test_an_engine_local_path_that_is_a_directory_is_chosen_and_never_raises(sea
     assert operator_identity.operator_is_default() is True
 
 
+def test_an_engine_local_file_in_a_non_utf8_encoding_degrades_instead_of_raising(seam):
+    """The decode class, on the read the module docstring promises never raises.
+
+    `_load` caught `(OSError, yaml.YAMLError)`. `UnicodeDecodeError` is a
+    `ValueError` and a SIBLING of `yaml.YAMLError`, and the decode fails inside
+    `read_text` before the parser sees anything, so both handlers walked past it.
+    An `operator.yaml` written in UTF-16 - or any single high byte from a Latin-1
+    editor - raised out of `get_operator()`. Several scripts bind this seam at
+    MODULE scope, so that traceback arrived during import, before argparse: the
+    exact failure the docstring says was closed on 2026-08-30 for the
+    `DataRootError` path, still open on the encoding path until 2026-09-01.
+
+    Measured before the fix: `RAISED: UnicodeDecodeError 'utf-8' codec can't
+    decode byte 0xff in position 0`.
+    """
+    seam.engine_local_file.write_bytes(ENGINE_LOCAL_YAML.encode("utf-16"))
+
+    path, is_real = operator_identity._resolve_file()
+    assert path == seam.engine_local_file
+    assert is_real is True
+
+    # No exception, and the documented sentinel rather than a half-read identity.
+    identity = resolved_identity()
+    assert identity["slug"] == "operator"
+    assert identity["name"] == "Operator"
+    assert operator_identity.operator_is_default() is True
+    # The file is genuinely undecodable, so the guard is not passing on a file
+    # that happened to be readable after all.
+    with pytest.raises(UnicodeDecodeError):
+        seam.engine_local_file.read_text(encoding="utf-8")
+
+
+def test_a_single_high_byte_in_the_overlay_file_degrades_too(seam):
+    """The Latin-1 shape, on the other file tier. One fix, both readers."""
+    seam.overlay_file.write_bytes(b"name: Andr\xe9 Citro\xebn\nslug: andre\n")
+
+    path, is_real = operator_identity._resolve_file()
+    assert path == seam.overlay_file
+    assert is_real is True
+    assert resolved_identity()["slug"] == "operator"
+    assert operator_identity.operator_is_default() is True
+
+
 def test_an_empty_engine_local_file_is_real_but_configures_nothing(seam):
     seam.engine_local_file.write_text("", encoding="utf-8")
 

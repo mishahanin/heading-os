@@ -325,6 +325,88 @@ def test_an_ordinary_slug_is_accepted(good):
     assert mc._CONTACT_SLUG_RE.fullmatch(good) is not None, good
 
 
+@pytest.fixture()
+def merge_rig(tmp_path, monkeypatch):
+    """Drive `main()` with both contacts directories under tmp_path.
+
+    Everything a real run would reach outside the guard is stubbed: the admin
+    gate, the config, and both directory resolvers. Nothing here touches the
+    operator's overlay.
+    """
+    from_dir = tmp_path / "from" / "crm" / "contacts"
+    into_dir = tmp_path / "into" / "crm" / "contacts"
+    from_dir.mkdir(parents=True)
+    into_dir.mkdir(parents=True)
+    (from_dir / "priya-anand.md").write_text(
+        "---\nname: Priya Anand\n---\n\nSource notes.\n", encoding="utf-8")
+    outsider = tmp_path / "address-book"
+    outsider.mkdir()
+    victim = outsider / "vip.md"
+    victim.write_text("PRIVATE - must not be touched\n", encoding="utf-8")
+
+    monkeypatch.setattr(mc, "validate_admin", lambda *a, **k: None)
+    monkeypatch.setattr(mc, "load_admin_config", lambda *a, **k: {"admin_slugs": []})
+    monkeypatch.setattr(mc, "get_workspace_root", lambda: tmp_path)
+    monkeypatch.setattr(mc, "get_crm_contacts_dir", lambda *a, **k: from_dir)
+    monkeypatch.setattr(
+        mc, "get_per_exec_contacts_dir",
+        lambda slug, *a, **k: from_dir if slug == "src" else into_dir)
+    return {"from": from_dir, "into": into_dir, "victim": victim}
+
+
+@pytest.mark.parametrize("bad", [
+    "../../address-book/vip",
+    "../escape",
+    "a/b",
+    ".hidden",
+    "with space",
+])
+def test_the_slug_guard_is_wired_into_the_command_not_only_declared(
+        merge_rig, monkeypatch, bad, capsys):
+    """The regex above proves the RULE; this proves the rule is CONSULTED.
+
+    MEASURED 2026-09-01: replacing the call site's condition with `if False:`
+    left every merge-contacts test in this repository green - 182 passed - while
+    the documented path-traversal control was gone. Only the pattern object was
+    ever asked a question, and a pattern nobody calls refuses nothing. This is
+    the same "assert it where it is USED" gap that
+    `test_a_queue_that_read_corrupt_as_empty.py` section 8 was written for.
+
+    A second, independent guard below the slug check re-resolves both paths and
+    refuses one that leaves its root, so the headline traversal is defence in
+    depth rather than the only wall. `a/b` and `.hidden` are the cases only the
+    slug rule catches: both resolve INSIDE the contacts directory and sail past
+    that second guard.
+    """
+    monkeypatch.setattr(
+        sys, "argv",
+        ["merge-contacts.py", "--contact", bad, "--from", "src", "--into", "dst"])
+
+    with pytest.raises(SystemExit) as exc:
+        mc.main()
+
+    assert exc.value.code == 2, exc.value.code
+    out = capsys.readouterr().out
+    assert "must be a bare slug" in out, out
+    assert merge_rig["victim"].read_text(encoding="utf-8") == (
+        "PRIVATE - must not be touched\n"), "the outside file was written"
+    assert (merge_rig["from"] / "priya-anand.md").exists(), "the source was moved"
+
+
+def test_an_ordinary_slug_gets_past_the_guard(merge_rig, monkeypatch, capsys):
+    """The negative case ON the line: a guard that refused every slug would pass
+    every assertion above and break the tool."""
+    monkeypatch.setattr(
+        sys, "argv",
+        ["merge-contacts.py", "--contact", "priya-anand",
+         "--from", "src", "--into", "dst"])
+
+    with contextlib.suppress(SystemExit, Exception):
+        mc.main()
+
+    assert "must be a bare slug" not in capsys.readouterr().out
+
+
 # ============================================================
 # 9 - a quoted comma is not a list separator
 # ============================================================

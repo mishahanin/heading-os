@@ -21,6 +21,7 @@ that the prose moves with it.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import re
 import sys
@@ -77,11 +78,63 @@ def test_the_skill_page_states_the_real_check_count(helper):
     )
 
 
+def _executor_width() -> str:
+    """The width the CODE opens its pool at, read from the call node.
+
+    This was `re.search(r"ThreadPoolExecutor\\(max_workers=(\\d+)\\)", source)`
+    over the whole file. The FIRST occurrence of that string in
+    `prime-health-parallel.py` is line 11, inside the module DOCSTRING, so the
+    test compared the skill page against a sentence of prose and never against
+    the executor. MEASURED 2026-09-01 with the mutation harness: rewriting the
+    real call to `max_workers=6` and leaving the docstring alone left this file
+    green, which is the whole defect it exists to catch, one layer down.
+
+    An AST walk cannot read a docstring, because a docstring is a Constant and
+    never a Call.
+    """
+    tree = ast.parse(HELPER.read_text(encoding="utf-8"))
+    widths = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = (func.attr if isinstance(func, ast.Attribute)
+                else getattr(func, "id", None))
+        if name != "ThreadPoolExecutor":
+            continue
+        for kw in node.keywords:
+            if kw.arg == "max_workers" and isinstance(kw.value, ast.Constant):
+                widths.append(str(kw.value.value))
+    assert widths, (
+        "no ThreadPoolExecutor(max_workers=...) CALL in prime-health-parallel.py. "
+        "A mention in the docstring is not the executor."
+    )
+    assert len(set(widths)) == 1, (
+        f"the module opens pools of differing widths {sorted(set(widths))}; the "
+        "page can only state one of them"
+    )
+    return widths[0]
+
+
+def test_the_modules_own_docstring_states_the_width_it_opens():
+    """The prose the old regex was accidentally reading, now bound on purpose.
+
+    Line 11 explains the bound to whoever changes the pool. Left unchecked it
+    drifts exactly like the skill page did, and it is the more dangerous of the
+    two because it sits in the file being edited.
+    """
+    width = _executor_width()
+    doc = ast.get_docstring(ast.parse(HELPER.read_text(encoding="utf-8"))) or ""
+    stated = set(re.findall(r"ThreadPoolExecutor\(max_workers=(\d+)\)", doc))
+    assert stated, "the module docstring no longer states the executor width"
+    assert stated == {width}, (
+        f"prime-health-parallel.py opens max_workers={width} and its own "
+        f"docstring says {sorted(stated)}"
+    )
+
+
 def test_the_skill_page_states_the_real_worker_count(helper):
-    source = HELPER.read_text(encoding="utf-8")
-    m = re.search(r"ThreadPoolExecutor\(max_workers=(\d+)\)", source)
-    assert m, "could not find the executor width in prime-health-parallel.py"
-    workers = m.group(1)
+    workers = _executor_width()
 
     text = SKILL.read_text(encoding="utf-8")
     named = set(re.findall(r"max_workers=(\d+)", text))

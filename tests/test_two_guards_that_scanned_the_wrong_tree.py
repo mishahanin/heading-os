@@ -42,6 +42,7 @@ Run: python3 -m pytest tests/test_two_guards_that_scanned_the_wrong_tree.py
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import os
@@ -328,12 +329,31 @@ def test_the_daemon_state_path_is_gone_from_the_counter():
 
     The correction quotes the old path in prose to explain it, so match on the
     path-join expression rather than on the substring.
+
+    The second half is asked of the AST, not of the text. `registry_path()`
+    appears in `_active_session_count`'s own docstring, one line of prose above
+    the call, so a text scan for it was satisfied by the explanation of the bug
+    it guards against. MEASURED 2026-09-01: replacing the call with a
+    hand-spelled `Path.home() / ".claude" / "state" / "sessions-v2.json"` left
+    this file green. `tests/bridge/test_heartbeat.py` catches that mutation
+    behaviourally, which is why this is a weakened guard rather than a blind
+    one; it is fixed here so the source-level half means what it says.
     """
-    source = (ROOT / "scripts" / "bridge_daemon" / "heartbeat.py").read_text(encoding="utf-8")
+    path = ROOT / "scripts" / "bridge_daemon" / "heartbeat.py"
+    source = path.read_text(encoding="utf-8")
     assert '"active-sessions.json"' not in source, (
         "the counter builds a path of its own again"
     )
-    assert "registry_path()" in source
+    fn = [n for n in ast.walk(ast.parse(source))
+          if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+          and n.name == "_active_session_count"]
+    assert len(fn) == 1, f"expected one _active_session_count in {path.name}"
+    called = {n.func.id for n in ast.walk(fn[0])
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    assert "registry_path" in called, (
+        "_active_session_count does not CALL registry_path(); the name appears "
+        f"in the source only as prose. Calls found: {sorted(called)}"
+    )
 
 
 def test_the_cwd_lookup_scans_values_not_keys(tmp_path):

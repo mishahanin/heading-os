@@ -17,6 +17,7 @@ JSONL entry to .sync/logs/crm-autolog-{date}.jsonl for observability.
 import contextlib
 import html as _html
 import json as _json
+import logging
 import os
 import re
 import stat
@@ -27,6 +28,8 @@ from datetime import datetime, timezone
 from scripts.utils.workspace import DataRootError, get_default_tz
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 # Ensure scripts.utils.markdown is importable when crm_autolog is invoked as a
 # library from elsewhere in the workspace.
@@ -169,7 +172,20 @@ def _build_email_index(ab_dir: Path) -> dict:
         try:
             text = entity_file.read_text(encoding="utf-8")
             fm, _body = parse_frontmatter(text)
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # `UnicodeDecodeError` is a `ValueError`, NOT an `OSError`, so one
+            # address-book entity that is not valid UTF-8 raised out of the
+            # whole walk rather than skipping its own iteration, and the index
+            # came back as an exception instead of a dict. MEASURED 2026-09-01
+            # on two entity files, one clean and one carrying a lone 0xe9.
+            #
+            # The cache above makes the silence worse: a caller that swallowed
+            # the raise saw no index at all, and nothing named the file. The
+            # sibling defect in `crm.contact_index_by_email` was fixed the same
+            # day, for the same reason.
+            logger.warning("skipping unreadable address-book entity %s; its "
+                           "addresses will be absent from the email index",
+                           entity_file, exc_info=True)
             continue
         emails = set()
         ce = (fm.get("canonical_email") or "").strip().lower()
@@ -283,15 +299,35 @@ def plain_snippet(body: str, limit: int = 200) -> str:
     Strips tags, unescapes entities, and collapses whitespace so the CRM
     interaction log never shows raw markup. send-email.py passes the raw HTML
     body (one line, no newlines), so the previous `split("\\n")[0]` approach
-    captured raw `<p>` tags. Safe on plain text (nothing to strip).
+    captured raw `<p>` tags.
+
+    Both `<`-matching rules require a tag NAME after the bracket, because a
+    less-than sign is ordinary prose and this snippet is what the operator's
+    interaction log records as the thing that was discussed. They used to be
+    `<[^>]+>` and `<[^>]*$`, which treat any `<` as the start of markup.
+    MEASURED 2026-09-01, before the fix:
+
+        'Budget is < 50k'      -> 'Budget is'
+        'temp < 0 degrees'     -> 'temp'
+        'Q3 revenue < target'  -> 'Q3 revenue'
+        'x < y and y > z'      -> 'x z'
+
+    The dangling rule was the worse half: it deletes every character from a
+    trailing `<` to the end of the string, so the loss is unbounded and silent,
+    and the docstring's promise that this is safe on plain text was false for
+    the one character the function is built around. Real markup always opens
+    with a letter, a `/`, or a `!` (comment, doctype), so requiring one keeps
+    every HTML case and gives prose back. A body cut off mid-tag still loses the
+    fragment, including a bare trailing `<`.
     """
     if not body:
         return ""
     # Block-level close tags and <br> become spaces so words don't run together.
     s = re.sub(r"(?is)<\s*br\s*/?\s*>", " ", body)
     s = re.sub(r"(?is)</\s*(p|div|li|tr|h[1-6]|ul|ol|table)\s*>", " ", s)
-    s = re.sub(r"(?is)<[^>]+>", "", s)  # strip all remaining tags
-    s = re.sub(r"<[^>]*$", "", s)  # drop a dangling unclosed tag (truncated body)
+    s = re.sub(r"(?is)</?[A-Za-z!][^>]*>", "", s)  # strip all remaining tags
+    # Drop a dangling unclosed tag (truncated body): "<", "<p", "</di".
+    s = re.sub(r"<(?:/?[A-Za-z!][^>]*)?$", "", s)
     s = _html.unescape(s)
     s = " ".join(s.split())  # collapse whitespace runs
     return s[:limit]

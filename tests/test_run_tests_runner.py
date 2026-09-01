@@ -10,9 +10,30 @@ That move is only safe as a PAIR. Dropping `--cov` from the runner without addin
 `--cov-fail-under` to CI leaves the floor enforced nowhere, and a coverage
 regression then ships in silence. So this file asserts both halves: the runner
 must NOT carry the flag, and ci.yml MUST.
+
+`main()` was unbound until 2026-09-01, and it is the half of this file that the
+push gate actually runs. `.githooks/pre-push` and `scripts/push-all.py` both
+invoke `scripts/run-tests.py` and read its EXIT STATUS; every test above and in
+`tests/test_run_tests_env.py` stops at `build_command` and `child_env`, which are
+inputs. Three one-token edits to `main` were measured on 2026-09-01 against those
+two files plus six neighbours (the floor guard, the six-walls sweep, the canopus
+contract, the git-hook installer, the data-repo gate) and all three SURVIVED:
+
+    return proc.returncode            -> return 0        a red suite pushes green
+    cmd = build_command(args.accept…) -> build_command(True)
+                                                         the gate runs the few
+                                                         acceptance gates instead
+                                                         of the regression suite
+    if proc.returncode == 0:          -> != 0            the banner says PASS
+                                                         over a failed run
+
+The first is `.claude/rules/lethal-trifecta`-adjacent in shape and identical to
+the shipped `.githooks/pre-push-data` defect: a gate that prints its verdict and
+returns success. The last three tests below are the ones that fail on each.
 """
 import importlib.util
 import re
+import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -66,3 +87,92 @@ def test_the_documented_floor_and_the_enforced_floor_agree():
         f"scripts/run-tests.py documents COVERAGE_FLOOR={documented} but CI enforces "
         f"{enforced}. One of the two is stale."
     )
+
+
+# ============================================================
+# main() — the surface the push gate reads
+# ============================================================
+
+
+def _fake_child(monkeypatch, returncode: int, seen: dict):
+    """Bind a stand-in `subprocess` INSIDE the module, never on the stdlib.
+
+    `monkeypatch.setattr(run_tests.subprocess, "run", ...)` would rebind
+    `subprocess.run` process-wide, for this test and every other one sharing the
+    interpreter. Rebinding the module's own `subprocess` NAME reaches only this
+    module's call site, which is the one under test.
+    """
+    def _run(cmd, **kwargs):
+        seen["cmd"] = list(cmd)
+        seen["kwargs"] = kwargs
+        return types.SimpleNamespace(returncode=returncode, args=cmd)
+
+    monkeypatch.setattr(run_tests, "subprocess",
+                        types.SimpleNamespace(run=_run))
+
+
+def test_a_failing_suite_leaves_the_gate_with_a_failing_exit_code(monkeypatch, capsys):
+    """The whole reason this script exists. `return 0` here is a silent push."""
+    seen = {}
+    _fake_child(monkeypatch, 1, seen)
+    monkeypatch.setattr("sys.argv", ["run-tests.py"])
+
+    assert run_tests.main() == 1, (
+        "scripts/run-tests.py reported success over a pytest child that exited "
+        "non-zero. .githooks/pre-push and scripts/push-all.py read this status "
+        "and nothing else, so a red suite would push."
+    )
+    assert "FAIL" in capsys.readouterr().out
+
+
+def test_a_passing_suite_exits_zero_and_says_so(monkeypatch, capsys):
+    """The paired green case, so 'always fail' is not a way to pass the test above."""
+    seen = {}
+    _fake_child(monkeypatch, 0, seen)
+    monkeypatch.setattr("sys.argv", ["run-tests.py"])
+
+    assert run_tests.main() == 0
+    assert "PASS" in capsys.readouterr().out
+
+
+def test_the_banner_and_the_exit_code_agree(monkeypatch, capsys):
+    """A human watching the terminal reads the banner, not the status.
+
+    `.githooks/pre-push-data` shipped printing its refusal and exiting 0, so the
+    two halves are pinned separately: a run that exits non-zero must not print
+    the success word.
+    """
+    _fake_child(monkeypatch, 2, {})
+    monkeypatch.setattr("sys.argv", ["run-tests.py"])
+
+    code = run_tests.main()
+    out = capsys.readouterr().out
+
+    assert code == 2
+    assert "PASS" not in out, out
+
+
+def test_the_default_invocation_runs_the_regression_suite_not_the_gates(monkeypatch):
+    """`build_command(True)` in main empties the gate and nothing else notices.
+
+    Acceptance mode is a handful of sign-off gates; running it instead of the
+    regression suite is a gate that passes because it measured almost nothing.
+    """
+    seen = {}
+    _fake_child(monkeypatch, 0, seen)
+    monkeypatch.setattr("sys.argv", ["run-tests.py"])
+
+    run_tests.main()
+
+    assert "not acceptance" in seen["cmd"], seen["cmd"]
+
+
+def test_the_acceptance_flag_still_reaches_the_child(monkeypatch):
+    """The other arm, so 'hardcode regression mode' cannot satisfy the test above."""
+    seen = {}
+    _fake_child(monkeypatch, 0, seen)
+    monkeypatch.setattr("sys.argv", ["run-tests.py", "--acceptance"])
+
+    run_tests.main()
+
+    assert "acceptance" in seen["cmd"] and "not acceptance" not in seen["cmd"]

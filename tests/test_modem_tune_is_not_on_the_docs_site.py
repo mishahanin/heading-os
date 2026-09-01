@@ -90,6 +90,11 @@ def test_the_search_index_carries_no_record_for_the_removed_anchor():
     """The index is generated from the HTML, so a stale one means the rebuild
     was skipped and the card is still reachable through the search box."""
     records = json.loads(SEARCH_INDEX.read_text(encoding="utf-8"))
+    # An empty or truncated index satisfies the assertion below without reading
+    # a single record. 509 on 2026-09-01; the floor sits well under that.
+    assert len(records) > 200, (
+        f"the search index holds only {len(records)} records, so the check "
+        f"below is asserting nothing about what the search box can reach")
     bad = [r for r in records
            if "modem" in json.dumps(r).lower() or "imei" in json.dumps(r).lower()]
     assert bad == [], (

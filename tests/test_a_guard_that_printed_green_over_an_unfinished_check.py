@@ -89,8 +89,52 @@ def test_a_pointer_file_is_found(lfs, tmp_path):
 
 
 def test_a_real_blob_is_not_a_pointer(lfs, tmp_path):
+    # NOTE: 4004 bytes, so it is the SIZE clause that decides this one, not the
+    # magic comparison. The magic is bound by
+    # `test_a_small_file_that_is_not_a_pointer_is_left_alone` below, which is
+    # under the cap and therefore actually reaches the read.
     (tmp_path / "fixture.docx").write_bytes(b"PK\x03\x04" + b"x" * 4000)
     assert lfs.scan(tmp_path) == ([], [], [])
+
+
+def _pointer_of_exactly(total: int) -> bytes:
+    """A pointer padded to `total` bytes with an extra key/value line."""
+    head = (b"version https://git-lfs.github.com/spec/v1\n"
+            b"oid sha256:" + _POINTER_OID.encode("ascii") + b"\nsize 12\n")
+    tail = b"x-pad "
+    padding = total - len(head) - len(tail) - 1
+    assert padding >= 0, total
+    return head + tail + b"p" * padding + b"\n"
+
+
+@pytest.mark.parametrize("size,found", [
+    (1024, True),    # exactly the spec cap: still a pointer
+    (1023, True),    # one below
+    (1025, False),   # one above: too big to be a pointer, so a real blob
+])
+def test_the_size_cap_is_the_spec_cap_and_is_inclusive(lfs, tmp_path, size, found):
+    """A bound with no case ON the line was a bound nothing measured.
+
+    `is_pointer` returns False for anything larger than `_POINTER_MAX_BYTES`,
+    and the spec caps a pointer at 1024 bytes INCLUSIVE, so the comparison must
+    be `>` and not `>=`. MEASURED 2026-09-01: mutating it to `>=`, and
+    separately widening the constant from 1024 to 100000, both left all 147
+    tests across the eight files green. Every fixture was either ~90 bytes or
+    4004, so nothing sat near the line.
+
+    The `>=` direction is the one that costs something: a pointer of exactly
+    1024 bytes would read as a real blob, the guard would report "no pointer
+    files under tests/", and the CI job it exists to fail would go green over
+    an unresolved fixture. That is the precise failure this file is named for.
+    """
+    target = tmp_path / "fixture.docx"
+    target.write_bytes(_pointer_of_exactly(size))
+    assert target.stat().st_size == size, "the fixture is not the size it claims"
+
+    pointers, unreadable, vanished = lfs.scan(tmp_path)
+
+    assert [p.name for p in pointers] == (["fixture.docx"] if found else [])
+    assert unreadable == [] and vanished == []
 
 
 def test_a_small_file_that_is_not_a_pointer_is_left_alone(lfs, tmp_path):

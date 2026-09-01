@@ -105,7 +105,12 @@ def read_snapshot(workspace_root: Path) -> dict | None:
         return None
     try:
         data = json.loads(f.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        # `UnicodeDecodeError` is a `ValueError` raised by `read_text` before
+        # `json.loads` runs, so neither of the other two ever covered it. A
+        # snapshot torn mid multi-byte character raised out of a function
+        # whose whole contract is "or None if missing/corrupt", and `/pulse`
+        # 500'd instead of taking its inline-compute fallback.
         return None
     # Shape check, not just parse. A snapshot holding valid non-object JSON --
     # a bare list from a partial or hand-rolled write -- came back as-is, and

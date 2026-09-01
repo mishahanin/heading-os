@@ -16,6 +16,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+from datetime import timezone
 from pathlib import Path
 
 import pytest
@@ -200,6 +201,20 @@ def test_a_declared_sensitivity_outranks_a_clear_payload(wired_runner, monkeypat
     assert json.loads((out / "trend.jsonl").read_text().splitlines()[-1])["status"] == "refused"
 
 
+def _order_recorder(monkeypatch):
+    """Record the ORDER of load_env / get_default_tz calls on the runner module.
+
+    Asserted on the calls rather than on a date string: the date itself depends
+    on a real .env this test must not require, while "the environment was loaded
+    before the timezone was read" is the behaviour that was missing.
+    """
+    order: list[str] = []
+    monkeypatch.setattr(runner, "load_env", lambda *a, **k: order.append("load_env"))
+    monkeypatch.setattr(runner, "get_default_tz",
+                        lambda *a, **k: order.append("tz") or timezone.utc)
+    return order
+
+
 def test_the_harness_loads_the_operators_timezone_before_dating_the_record(
     wired_runner, monkeypatch
 ):
@@ -211,15 +226,39 @@ def test_the_harness_loads_the_operators_timezone_before_dating_the_record(
     artifact was stamped UTC while the unit's OnCalendar ran on local time,
     putting each night's record under the previous day.
 
-    Asserted on the CALL rather than on a date string: the date itself depends on
-    a real .env this test must not require, while "the environment was loaded
-    before the timezone was read" is the behaviour that was missing.
+    Driven through `_run_harness` DIRECTLY, which is the call site this test
+    names. Until 2026-09-01 it drove `run()` and asserted only that load_env had
+    been called at all, and `run()` has a load_env of its own one frame above:
+    MEASURED, deleting the call inside `_run_harness` left the old assertion
+    green. The two call sites are deliberately separate (the module says why),
+    so each needs a test that fails when only that one is removed.
     """
-    calls = []
-    monkeypatch.setattr(runner, "load_env", lambda *a, **k: calls.append(True))
+    order = _order_recorder(monkeypatch)
+
+    assert runner._run_harness("sonnet") == 0
+
+    assert order, "_run_harness called neither load_env nor get_default_tz"
+    assert order[0] == "load_env", order
+    assert "tz" in order, "the record was dated without reading the timezone"
+
+
+def test_a_refusal_is_dated_after_the_environment_is_loaded_too(
+    wired_runner, monkeypatch
+):
+    """The other half of the pair, and the one that regressed once already.
+
+    A refusal never reaches `_run_harness`, so when the load_env call lived ONLY
+    there, `_record_refusal` stamped its date with .env unloaded: UTC, while the
+    unit fires on local time. MEASURED: deleting `run()`'s own load_env leaves
+    the test above green and turns this one red.
+    """
+    monkeypatch.setattr(runner, "sensitivity_is_declared", lambda: True)
+    order = _order_recorder(monkeypatch)
 
     assert runner.run("sonnet") == 0
-    assert calls, "_run_harness must load .env before get_default_tz() reads it"
+
+    assert order[0] == "load_env", order
+    assert "tz" in order, "the refusal record was dated without reading the timezone"
 
 
 def test_harness_failure_returns_nonzero(wired_runner, monkeypatch):
@@ -239,7 +278,13 @@ def test_classify_flags_single_skill_drop_tier_b():
     baseline = _rec(0.90, {"osint": 0.94, "recall": 0.90})  # osint -14pt
     sig = classify_router_accuracy(latest, baseline)
     assert sig["due"] is True
-    assert sig["severity"] in ("warn", "high")
+    # The exact band, not `in ("warn", "high")`. That hedge was here until
+    # 2026-09-01 and could not fail on a severity regression: this input is a
+    # 14-point single-skill drop against a 4-point aggregate, which is over
+    # ROUTER_ACCURACY_DROP_PCT and under ROUTER_ACCURACY_HIGH_PCT, so exactly one
+    # band is correct. MEASURED: with ROUTER_ACCURACY_HIGH_PCT moved 20 -> 10 the
+    # hedged assertion stayed green and this one goes red.
+    assert sig["severity"] == "warn"
     assert sig["value"]["worst_skill"] == "osint"
     assert sig["tier"] == "B"  # pins H1: Tier-A would be dropped before Telegram
     assert "osint" in sig["summary"]

@@ -237,13 +237,82 @@ def test_the_skill_resolves_its_outputs_dir_by_running_the_snippet():
 
 
 def test_the_extractor_actually_found_path_arguments():
-    """A parser that silently yields nothing reports every corpus as clean."""
+    """A parser that silently yields nothing reports every corpus as clean.
+
+    Floored per corpus, because the guard above is parametrized per corpus and
+    each one can go empty on its own. It used to floor the SKILL and
+    `design-studio.py` and say nothing about `design-engine.py`. MEASURED
+    2026-09-01: rewriting that file's six `python scripts/design-engine.py ...`
+    Usage lines to a spelling the extractor's `"scripts/" in ln` filter does not
+    match dropped its parsed set from 3 to 0, and all 7 tests here stayed green.
+    One third of this guard was reporting a clean sweep over nothing.
+
+    Counts on 2026-09-01: 12 out of the SKILL, 5 out of design-studio.py, 3 out
+    of design-engine.py. Floored below each so retiring one documented example
+    does not fail this test.
+    """
     skill_args = _skill_path_arguments()
     assert len(skill_args) >= 6, (
         f"only {len(skill_args)} path argument(s) parsed out of the design SKILL "
         f"bash blocks; the extractor has stopped seeing them: {skill_args}"
     )
-    assert _docstring_path_arguments(STUDIO), "no Usage examples parsed from design-studio.py"
+    studio_args = _docstring_path_arguments(STUDIO)
+    assert len(studio_args) >= 3, (
+        f"only {len(studio_args)} path argument(s) parsed out of "
+        f"design-studio.py's Usage examples: {studio_args}")
+    engine_args = _docstring_path_arguments(ENGINE)
+    assert len(engine_args) >= 2, (
+        f"only {len(engine_args)} path argument(s) parsed out of "
+        f"design-engine.py's Usage examples: {engine_args}")
+
+
+def test_every_path_option_the_two_scripts_accept_is_one_the_guard_asks_about():
+    """`PATH_OPTS` is a hand-written list, and the guard is only as wide as it.
+
+    A new `--out-dir` on either script would be documented, followed, and
+    invisible here, because the extractor only looks at options it was told
+    about. This derives the option set from the scripts' own `add_argument`
+    calls, keeps the ones whose help text says they name a file or a directory,
+    and asks whether the hand list still covers them.
+
+    Derived by AST rather than by grepping the help strings out of the file, so
+    a re-wrapped `add_argument` call keeps measuring.
+    """
+    documented: dict[str, set[str]] = {}
+    for script in (STUDIO, ENGINE):
+        tree = ast.parse(script.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "add_argument"):
+                continue
+            flags = [a.value for a in node.args
+                     if isinstance(a, ast.Constant) and isinstance(a.value, str)
+                     and a.value.startswith("-")]
+            help_text = ""
+            for kw in node.keywords:
+                if kw.arg == "help" and isinstance(kw.value, ast.Constant):
+                    help_text = str(kw.value.value).lower()
+            if not any(word in help_text for word in
+                       ("file path", "output file", "output directory",
+                        "image path", "path to")):
+                continue
+            for flag in flags:
+                documented.setdefault(flag, set()).add(script.name)
+
+    # Floor: an AST question that finds no path options passes trivially.
+    assert len(documented) >= 3, (
+        f"only {sorted(documented)} path-carrying options found across "
+        f"design-studio.py and design-engine.py; the AST question has stopped "
+        f"reaching the parsers")
+
+    missing = {flag: sorted(where) for flag, where in documented.items()
+               if flag not in PATH_OPTS}
+    assert not missing, (
+        "these options name a filesystem path and are NOT in PATH_OPTS, so a "
+        "documented example using one is invisible to the guard above:\n  "
+        + "\n  ".join(f"{flag} ({', '.join(where)})"
+                      for flag, where in sorted(missing.items())))
 
 
 def test_the_guard_fires_on_the_shape_it_exists_to_catch():

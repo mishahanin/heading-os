@@ -87,6 +87,29 @@ def test_classify_beat_no_timestamp_is_error(fh):
     assert fh._classify_beat({"status": "error", "daemon": "x"}, 120) == "error"
 
 
+def test_a_self_reported_error_wins_over_a_fresh_timestamp(fh):
+    """The `status == "error"` arm, which nothing could observe.
+
+    Both cases in the test above lack `last_heartbeat`, so both reach `error`
+    through the no-timestamp branch and the status check never decides either.
+    MEASURED 2026-09-01 by making that comparison unsatisfiable: this module and
+    seven sibling fleet-health files stayed green, while a daemon writing a
+    fresh beat that SAYS it is broken classified as `ok` and the fleet verdict
+    read healthy over it.
+
+    A daemon in trouble is exactly the one still beating: it is running, so the
+    heartbeat is current, and the record is the only place it can say so.
+    """
+    beat = {"daemon": "sentinel", "status": "error",
+            "last_heartbeat": (NOW - timedelta(seconds=5)).isoformat()}
+
+    assert fh._classify_beat(beat, 120) == "error"
+    # And the negative direction, so this is not satisfied by a classifier that
+    # answers "error" for everything: the same fresh beat without the flag is ok.
+    assert fh._classify_beat({k: v for k, v in beat.items() if k != "status"},
+                             120) == "ok"
+
+
 # ============================================================
 # M3: a stale beat degrades verdict + exit code under a green bridge
 # ============================================================

@@ -1293,7 +1293,26 @@ def main():
         ("init_git", lambda: init_git(state, args, workspace_dir, slug)),
         ("clone_corporate", lambda: clone_corporate(state, args, workspace_dir)),
         ("first_corporate_sync", lambda: first_corporate_sync(state, args, workspace_dir)),
-        ("create_crm_repo", lambda: create_crm_repo(state, args, workspace_dir, slug)),
+        # `create_crm_repo` was HERE, as step 7 of 11, until 2026-09-01. It ran
+        # `gh repo create 31c-crm-{slug}` and seeded a root-level `contacts/`.
+        # Both `31c-crm-central` and every per-exec `31c-crm-{slug}` were retired
+        # on 2026-08-30: an executive's CRM records now live in THEIR OWN data
+        # overlay at `../.heading-os-data-{slug}/crm/contacts/`, which
+        # `.heading-os-data/admin/provision/provision_exec.py` creates. So the
+        # step created a repository nobody reads, in a layout nobody looks for.
+        #
+        # It sat behind this file's own `HEADING_OS_ALLOW_LEGACY_PROVISION=1`
+        # escape hatch, so it was not reachable by accident. It was reachable
+        # DELIBERATELY, by anyone who set that variable to get at the rest of the
+        # pipeline, and that is the case being closed: the escape hatch is for
+        # the retired WORKSPACE layout, never a licence to mint a retired repo.
+        #
+        # The function is left in place and still tested by
+        # `tests/test_a_guard_set_that_never_left_the_admin_machine.py`, which
+        # pins its seed-failure semantics. Removing it from the PIPELINE is the
+        # decision; deleting the code is a separate one nobody has taken.
+        # `tests/test_a_retired_repo_the_provisioner_still_minted.py` holds this
+        # removal, so it is recorded mechanically rather than in this comment.
         ("register_in_exec_registry", lambda: register_in_exec_registry(state, args, workspace_dir, slug)),
         ("install_scheduled_sync", lambda: install_scheduled_sync(state, args, workspace_dir, slug)),
         ("copy_getting_started", lambda: copy_getting_started(state, args, workspace_dir)),

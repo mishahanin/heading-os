@@ -231,17 +231,60 @@ def test_an_engine_clone_wearing_the_data_root_does_not_double_count(
 # What counts as a path at all, and saying what was left out
 # ============================================================
 
-@pytest.mark.parametrize("token", [
-    "SKILL.md",                       # a bare filename: no directory to root
-    ".env",                           # same, and the index says it 11 times
-    "scripts/*.py",                   # a glob
-    ".claude/skills/{name}/SKILL.md",  # a template placeholder
-    "outputs/report-YYYY-MM-DD.md",   # a date stamp for a future file
-    "/etc/somewhere.conf",            # absolute
-    "~/.config/thing.json",           # home-relative
-    "../outside/thing.md",            # parent traversal in an example
-    "<data-root>/config/thing.yaml",  # the documentation form of the seam
-])
+# One fixture per REASON a token is not a literal path, and each date-stamp
+# fixture carries exactly ONE of `_NOT_A_LITERAL_PATH`'s alternatives.
+#
+# It read `outputs/report-YYYY-MM-DD.md` for all of them until 2026-09-01, which
+# is a surviving-twin: that one string is matched by `YYYY` AND by `MM-DD`, so
+# deleting either alternative left the suite green because the other still
+# accepted the fixture. MEASURED, three mutations against this file:
+#
+#   `\.\.|MM-DD|HH-MM`  (YYYY deleted)    25 passed, 1 skipped -- SURVIVED
+#   `\.\.|YYYY|HH-MM`   (MM-DD deleted)   25 passed, 1 skipped -- SURVIVED
+#   `\.\.|YYYY|MM-DD`   (HH-MM deleted)   25 passed, 1 skipped -- SURVIVED
+#
+# `HH-MM` was the worse of the two shapes: no fixture in this file contained it
+# at all, so that alternative had never been executed by any test.
+_SKIP_TOKENS = [
+    ("SKILL.md", "a bare filename: no directory to root"),
+    (".env", "same, and the index says it 11 times"),
+    ("scripts/*.py", "a glob"),
+    (".claude/skills/{name}/SKILL.md", "a template placeholder"),
+    ("outputs/report-YYYY.md", "a year stamp; `YYYY` alone"),
+    ("outputs/report-MM-DD.md", "a day stamp; `MM-DD` alone"),
+    ("outputs/log-HH-MM.txt", "a clock stamp; `HH-MM` alone"),
+    ("/etc/somewhere.conf", "absolute"),
+    ("~/.config/thing.json", "home-relative"),
+    ("../outside/thing.md", "parent traversal in an example"),
+    ("<data-root>/config/thing.yaml", "the documentation form of the seam"),
+]
+
+
+def test_every_date_stamp_alternative_has_a_fixture_only_it_catches(wh):
+    """The anti-twin control, derived from the pattern rather than listed.
+
+    Splitting the compiled source on `|` means a NEW alternative added to
+    `_NOT_A_LITERAL_PATH` fails here until someone writes the token that
+    exercises it, instead of riding into the tree on a fixture some older
+    alternative already matched. Each alternative must be the ONLY one its
+    fixture triggers, which is the property the three mutations above broke.
+    """
+    alternatives = wh._NOT_A_LITERAL_PATH.pattern.split("|")
+    assert len(alternatives) >= 2, alternatives
+
+    tokens = [tok for tok, _ in _SKIP_TOKENS]
+    for alt in alternatives:
+        sole = [t for t in tokens
+                if re.search(alt, t)
+                and not any(re.search(other, t)
+                            for other in alternatives if other != alt)]
+        assert sole, (
+            f"no fixture in _SKIP_TOKENS is caught by {alt!r} and by nothing "
+            f"else, so deleting that alternative leaves this file green")
+
+
+@pytest.mark.parametrize("token", [t for t, _ in _SKIP_TOKENS],
+                         ids=[r for _, r in _SKIP_TOKENS])
 def test_a_token_that_is_not_a_literal_path_is_never_reported_missing(
         wh, two_roots, capsys, token):
     """The old regex was written for a markdown TABLE in a different file.

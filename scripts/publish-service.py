@@ -176,6 +176,15 @@ def secret_scan(dest: Path) -> bool:
     tracked files whose names differ only by that byte come back as two names in
     bytes mode and as one under `text=True`. A mistranslated name is a file the
     scanner cannot open, published unscanned - the leak this gate exists for.
+
+    The HANDOFF is `--stdin0` for the same reason, and it was the surviving half
+    of that same defect. The list was decoded byte-exactly and then joined with
+    `"\n"` for a scanner that splits on `"\n"`, which undid the whole point one
+    line later. MEASURED 2026-09-01: a tracked `two\nlines.env` holding a
+    `ghp_`-shaped token reached the scanner as two names that name nothing, was
+    skipped without a word, and this function returned True. `creds.env` with
+    the same token was refused, so the control held and only the odd name
+    walked through.
     """
     listing = subprocess.run(
         ["git", "-C", str(dest), "ls-files", "-z", "--cached", "--others",
@@ -191,12 +200,13 @@ def secret_scan(dest: Path) -> bool:
     if not files:
         return True
     proc = subprocess.run(
-        [sys.executable, str(SCANNER), "--stdin"],
-        cwd=str(dest), input="\n".join(sorted(files)),
-        capture_output=True, text=True)
+        [sys.executable, str(SCANNER), "--stdin0"],
+        cwd=str(dest),
+        input=b"\0".join(f.encode("utf-8", "surrogateescape") for f in sorted(files)),
+        capture_output=True)
     if proc.returncode != 0:
-        sys.stdout.write(proc.stdout)
-        sys.stderr.write(proc.stderr)
+        sys.stdout.write(proc.stdout.decode("utf-8", "replace"))
+        sys.stderr.write(proc.stderr.decode("utf-8", "replace"))
         reason = ("secret-like CONTENT in a file about to be published"
                   if proc.returncode == 1 else "secret-scanner error")
         print(f"{RED}REFUSING TO PUBLISH -- {reason}.{RESET}")

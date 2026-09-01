@@ -42,6 +42,7 @@ from scripts.utils.paths import (  # noqa: F401
     read_env_value,
     require_outside_engine_clone,
     require_writable_data_root,
+    resolve_tz_name,
     state_dir,
 )
 
@@ -59,12 +60,20 @@ def get_default_tz_name() -> str:
     the environment alone answered UTC for every caller that did not separately
     call load_env() -- 61 of the 83 files that import this helper. Precedence is
     load_env's, unchanged: it uses setdefault, so an explicitly exported zone
-    still wins over the file. See tests/test_tz_reaches_python_callers.py."""
+    still wins over the file.
+
+    The name itself comes from paths.resolve_tz_name(), which owns the BLANK
+    case for both readers. This function read the variable directly until
+    2026-09-01 and answered "" for a `.env` carrying a bare `HEADING_OS_TZ=`,
+    so get_default_tz() raised ValueError out of a helper documented to default
+    to UTC, while `python -m scripts.utils.paths tz` answered UTC for the same
+    file. A fix that landed in one of two readers.
+    See tests/test_tz_reaches_python_callers.py."""
     global _TZ_ENV_LOADED
     if not _TZ_ENV_LOADED:
         load_env()
         _TZ_ENV_LOADED = True
-    return os.environ.get("HEADING_OS_TZ", "UTC")
+    return resolve_tz_name()[0]
 
 
 def get_default_tz():
@@ -781,6 +790,22 @@ def _load_routing_map_cached(path: str, mtime_ns: int, size: int) -> dict:
               file=sys.stderr)
         return {"default": "private", "rules": {}}
     legal = {"engine", "private", "corporate"}
+    # A destination LEAF has to be a string before it can be asked about. Both
+    # membership tests below hash the candidate against `legal`, and a list- or
+    # dict-valued leaf is unhashable, so it raised TypeError straight out of
+    # this loader. Measured 2026-08-31: `rules: {crm/: [private]}` and
+    # `default: [private]` each raised `TypeError: unhashable type: 'list'`,
+    # and `get_routing_destination` has no handler for it while its own
+    # docstring promises "Fails closed: load_routing_map() already defaults to
+    # 'private' on error". Same YAML slip as the `rules:`-written-as-a-list case
+    # guarded fifteen lines up, one level further down the tree and missed
+    # there. This resolver is called once per tracked file by the push wall and
+    # the engine-tree-clean hook, so it must answer rather than raise.
+    if not isinstance(default, str):
+        print(f"[workspace] routing-map `default:` is a {type(default).__name__}, "
+              f"not a destination name; failing closed to 'private'",
+              file=sys.stderr)
+        return {"default": "private", "rules": {}}
     if default not in legal:
         default = "private"
 
@@ -799,6 +824,13 @@ def _load_routing_map_cached(path: str, mtime_ns: int, size: int) -> dict:
     # value is a parse-level defect and this is the direction it must fail in.
     coerced = {}
     for key, value in rules.items():
+        if not isinstance(value, str):
+            print(f"[workspace] routing-map rule {key!r} has a "
+                  f"{type(value).__name__} where a destination name belongs; "
+                  f"treating {key!r} as 'private' rather than letting it fall "
+                  f"through to the '{default}' default", file=sys.stderr)
+            coerced[key] = "private"
+            continue
         if value in legal:
             coerced[key] = value
             continue

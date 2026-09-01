@@ -64,8 +64,20 @@ def ssh(remote_cmd: str, timeout: int = 30, host: str = None) -> str:
             "-o", f"ConnectTimeout={min(timeout, 20)}",
             f"{user}@{host}", remote_cmd,
         ]
+        # `text=True` alone decodes with the host locale and raises
+        # UnicodeDecodeError on the first byte that does not fit. The raise
+        # happens INSIDE `subprocess.run`, so it never reaches the drivers'
+        # `except (json.JSONDecodeError, TypeError)` and comes out of
+        # `modem-tune` as a traceback - in a module whose whole design is to
+        # refuse by name rather than crash. The bytes here are a router's AT
+        # output, which carries a carrier name in the modem's own charset; the
+        # value being read out of it is a 15-digit IMEI and a final result code,
+        # neither of which a replacement character can corrupt. Ask for UTF-8
+        # explicitly rather than the locale, for the same reason the engine leak
+        # wall does: the host's encoding is not a property of the router.
         p = subprocess.run(cmd, env=env, stdin=subprocess.DEVNULL,
-                           capture_output=True, text=True, timeout=timeout)
+                           capture_output=True, text=True, timeout=timeout,
+                           encoding="utf-8", errors="replace")
         # The noise filter belongs to the ssh CLIENT, which writes on stderr.
         # It used to run over stdout+stderr concatenated, so any line of genuine
         # router output carrying "Warning: " or "Permanently added" was deleted

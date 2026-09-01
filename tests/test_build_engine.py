@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from scripts.build_engine_repo import _tracked_files, partition
+from scripts.build_engine_repo import _suspicious_engine, _tracked_files, partition
 
 
 def _git(args, cwd):
@@ -49,3 +49,33 @@ def test_partition_routes_non_ascii_data_to_private(tmp_path):
     assert "scripts/foo.py" in buckets["engine"]
     # The non-ASCII data file must NOT leak into engine.
     assert "outputs/тест-файл.md" not in buckets["engine"]
+
+
+# --- the belt's second clause -------------------------------------------------
+#
+# `_suspicious_engine` tests each token two ways: `rel.startswith(t)`, and
+# `("/" + t) in rel` for a token that appears further down the path. Only the
+# first had any coverage. MEASURED 2026-09-01: deleting the `or ("/" + t) in rel`
+# clause left all 116 tests across the five files that import this module green,
+# so the branch that catches a data directory nested one level down was standing
+# unmeasured. That is the branch that matters for a tree carrying per-executive
+# overlays, where the private directory is never the first segment.
+
+def test_the_belt_refuses_a_data_token_nested_below_the_first_segment():
+    nested = "overlays/executive-01/crm/contacts/alpha.md"
+    assert _suspicious_engine([nested]) == [nested], (
+        "a nested private directory routed engine and the belt said nothing"
+    )
+    deep = "vendor/bundle/outputs/reports/q3.md"
+    assert _suspicious_engine([deep]) == [deep]
+
+
+def test_the_belt_does_not_fire_on_a_token_that_is_only_a_word_fragment():
+    """The negative case. `("/" + t) in rel` requires a real path separator, so a
+    filename that merely ENDS in the token stays clean; a belt that refused these
+    would block ordinary engine files and get switched off rather than fixed."""
+    assert _suspicious_engine([
+        "docs/build-outputs/README.md",     # "-outputs/", not "/outputs/"
+        "scripts/utils/subthreads/pool.py",  # "subthreads/", not "/threads/"
+        "examples/crm/contacts/alpha.md",    # the bundled demo tree is exempt
+    ]) == []

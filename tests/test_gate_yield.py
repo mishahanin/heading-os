@@ -157,6 +157,39 @@ def test_the_budget_is_the_operators_one_month():
     assert BUDGET_DAYS == 31
 
 
+def test_the_verdict_turns_over_exactly_ON_the_budget_day():
+    """The day ON the bound, which is the only place this off-by-one lives.
+
+    The two window tests above sit at 1 day and at 61 days, so `days >=
+    BUDGET_DAYS` and `days > BUDGET_DAYS` agree on both of them. MEASURED
+    2026-09-01: rewriting `>=` to `>` left this module and the three other files
+    naming `gate_yield` green, and every gate silent for exactly a month went on
+    reading TOO EARLY -- so the one verdict this report exists to deliver
+    arrived a day late, every time, with nothing to say it had.
+
+    Day 30 must read TOO EARLY, day 31 must read NO YIELD. Asserting both is
+    what separates a real comparison from a constant, and both are computed
+    from `BUDGET_DAYS` rather than typed, so moving the budget moves the test.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from scripts.utils.gate_yield import (BUDGET_DAYS, GATES, NO_YIELD,
+                                          TOO_EARLY, summarise)
+
+    start = datetime(2026, 8, 2, tzinfo=timezone.utc)
+
+    def verdicts(days: int) -> set[str]:
+        out = summarise(denials=[], since={"denials": start.isoformat()},
+                        now=(start + timedelta(days=days)).isoformat())
+        assert out["windows"] == {"denials": days}, out["windows"]
+        seen = {m["verdict"] for n, m in out["mechanisms"].items() if n in GATES}
+        assert seen, "no gate in the summary; this test has nothing to stand on"
+        return seen
+
+    assert verdicts(BUDGET_DAYS - 1) == {TOO_EARLY}
+    assert verdicts(BUDGET_DAYS) == {NO_YIELD}
+
+
 def test_the_report_counts_the_denial_log():
     """A1 and A2 are two halves of one question, not two reports."""
     from scripts.utils.gate_yield import summarise

@@ -150,6 +150,89 @@ def test_pipe_in_subject_row_is_skipped(tmp_path):
 
 
 # ============================================================
+# The two rows this source drops, and the silence it used to drop them in
+# ============================================================
+# `test_pipe_in_subject_row_is_skipped` above proves the wide row LEAVES, and
+# stops there. That is the whole assertion, and it is satisfied by a parser
+# that discards the row without a word, which is what this module did until
+# 2026-08-31. There was no logger in the file at all.
+#
+# MEASURED 2026-08-31 against the four-column form the module's own header
+# comment documents (`| 10:45 | Morning Sync | <zoom url> | 15m |`), with
+# logging configured at DEBUG so nothing could be missed:
+#
+#     pipes= 6 | 09:00 | Board review \| Q3 close | https://...  | 60m |
+#     pipes= 5 | 10:45 | Morning Sync             | https://...  | 15m |
+#     pipes= 5 | 13:00 | Customer call            | -            | 30m |
+#     events returned: 2 of 3 rows
+#
+# A 09:00 board review left the CEO's day and no record of it existed. The
+# escape `\|` is the correct markdown for a literal pipe in a cell, so the
+# operator wrote a valid file and had no way to learn a row was being refused.
+# Full-suite branch coverage the same day put `sources/agenda.py` at 95% with
+# `Missing 52, 63-64`. The drop paths were EXECUTED and simply had nothing
+# said about them.
+#
+# Both tests below therefore assert the report, and the third asserts the
+# silence on a clean file, without which "log every row" would pass the first
+# two and bury the warning in noise.
+
+def test_a_dropped_wide_row_is_reported_not_swallowed(tmp_path, caplog):
+    import logging
+
+    _write_today(tmp_path,
+        "| 09:00 | Board review \\| Q3 close | https://zoom.us/j/a | 60m |\n"
+        "| 10:45 | Morning Sync | https://zoom.us/j/b | 15m |\n",
+        "2026-05-18",
+    )
+    fake_now = datetime(2026, 5, 18, 4, 0, tzinfo=timezone.utc)  # 08:00 local
+    with caplog.at_level(logging.WARNING):
+        result = today_agenda(tmp_path, now=fake_now)
+
+    assert [e["time"] for e in result["events"]] == ["10:45"], (
+        "the well-formed row must still parse"
+    )
+    assert "Board review" in caplog.text, (
+        "a meeting vanished from today's agenda and nothing named it"
+    )
+    assert "6 pipes" in caplog.text, caplog.text
+
+
+def test_a_dropped_out_of_range_time_is_reported_too(tmp_path, caplog):
+    """The second drop path. `test_malformed_time_is_skipped` asserts only the
+    absence, which a silent `continue` satisfies exactly."""
+    import logging
+
+    _write_today(tmp_path,
+        "| 25:99 | Garbage row | - |\n"
+        "| 10:00 | Real meeting | - |\n",
+        "2026-05-18",
+    )
+    fake_now = datetime(2026, 5, 18, 5, 0, tzinfo=timezone.utc)
+    with caplog.at_level(logging.WARNING):
+        result = today_agenda(tmp_path, now=fake_now)
+    assert len(result["events"]) == 1
+    assert "25:99" in caplog.text, caplog.text
+
+
+def test_a_clean_calendar_logs_nothing(tmp_path, caplog):
+    """The negative case for the warnings themselves."""
+    import logging
+
+    _write_today(tmp_path,
+        "| Time | Subject | Location |\n"
+        "|------|---------|----------|\n"
+        "| 10:00 | Meeting | - |\n",
+        "2026-05-18",
+    )
+    fake_now = datetime(2026, 5, 18, 4, 0, tzinfo=timezone.utc)
+    with caplog.at_level(logging.WARNING):
+        result = today_agenda(tmp_path, now=fake_now)
+    assert len(result["events"]) == 1
+    assert [r for r in caplog.records if "agenda" in r.name] == [], caplog.text
+
+
+# ============================================================
 # Phase 1.33: minutes_until + minutes_to_next for Day drill-down
 # ============================================================
 def test_minutes_until_positive_for_future_event(tmp_path):

@@ -687,17 +687,88 @@ def test_the_generator_has_no_silent_exception_handler(source):
     assert _silent_handlers(source) == []
 
 
+def _inject_swallowed_read(src: str) -> str:
+    """Put a bare `pass` back on the handler of every file read in `src`.
+
+    Located by AST, not by a source literal. This was
+    `src.replace('        except (json.JSONDecodeError, OSError) as e:', ...)`,
+    an exact string lifted out of `collect_viraid` including its indentation
+    and its precise exception tuple. On 2026-09-01 that tuple gained
+    `UnicodeError` (a `read_text` decode failure is a ValueError, so neither
+    named clause caught it) and the replace stopped matching: `restored` was
+    the unmodified source, `_silent_handlers` correctly returned nothing, and
+    the only case that ever proved this detector can fire failed.
+
+    It failed loudly here only because the live file happens to have zero
+    offenders. Had one existed, the assertion would have passed on the real
+    file's offender while the injection did nothing at all, which is the shape
+    this whole file exists to refuse: a control that reports on something other
+    than what it claims to measure.
+    """
+    tree = ast.parse(src)
+    lines = src.splitlines()
+    edits = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        guarded = " ".join(ast.get_source_segment(src, s) or "" for s in node.body)
+        if "read_text" not in guarded or "fromisoformat" in guarded:
+            continue
+        for handler in node.handlers:
+            first = handler.body[0]
+            indent = " " * (first.col_offset)
+            edits.append((first.lineno - 1, handler.end_lineno, indent))
+    for start, end, indent in reversed(edits):
+        lines[start:end] = [f"{indent}pass"]
+    return "\n".join(lines) + "\n"
+
+
 def test_the_detector_refuses_a_swallowed_read(source):
-    """A detector never shown a real offender is a claim, not a control. This
-    restores the exact handler that was removed from collect_viraid."""
-    restored = source.replace(
-        '        except (json.JSONDecodeError, OSError) as e:',
-        '        except (json.JSONDecodeError, OSError):\n            pass\n'
-        '        except AttributeError as e:', 1)
+    """A detector never shown a real offender is a claim, not a control."""
+    restored = _inject_swallowed_read(source)
+    assert restored != source, (
+        "no file read in the generator was turned into a swallowed one, so the "
+        "case below would pass or fail for a reason other than the detector")
     assert _silent_handlers(restored), "the detector accepted a swallowed file read"
 
 
+def test_the_detector_refuses_a_swallowed_read_it_has_never_seen():
+    """The same claim on input no other shard can move out from under it.
+
+    The case above reads the live generator, so any edit to that file can
+    silence it. This one cannot drift: the offender is written here.
+    """
+    offender = (
+        "import json\n"
+        "def read_it(path):\n"
+        "    try:\n"
+        "        return json.loads(path.read_text(encoding='utf-8'))\n"
+        "    except OSError:\n"
+        "        pass\n"
+    )
+    assert _silent_handlers(offender), "the detector accepted a swallowed file read"
+
+
 def test_the_detector_still_permits_the_date_parsers(source):
-    """And it must not fire on the four it is written to allow."""
+    """And it must not fire on the four it is written to allow.
+
+    This asserted `_silent_handlers(source) == []`, which is the assertion
+    `test_the_generator_has_no_silent_exception_handler` already makes eight
+    lines up: over a file with no offenders it is satisfied by a detector that
+    permits everything, so the carve-out it names had no case. The synthetic
+    input below has a date-parse handler and nothing else, so the detector must
+    be quiet FOR THE STATED REASON, and the pair beneath it shows the same
+    handler reported once `fromisoformat` is gone.
+    """
+    permitted = (
+        "from datetime import date\n"
+        "def age(raw):\n"
+        "    try:\n"
+        "        return date.fromisoformat(raw)\n"
+        "    except ValueError:\n"
+        "        pass\n"
+    )
+    assert _silent_handlers(permitted) == []
+    assert _silent_handlers(permitted.replace("date.fromisoformat(raw)", "int(raw)")), (
+        "the carve-out is not keyed on the date parse at all")
     assert _silent_handlers(source) == []
-    assert source.count("except ValueError:\n                        pass") >= 1

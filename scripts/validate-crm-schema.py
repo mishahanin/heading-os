@@ -124,11 +124,22 @@ def parse_frontmatter(path: Path) -> dict | None:
     """
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError) as exc:
         # Named, not swallowed by a bare `except`. An unreadable FILE and a
         # malformed BLOCK are different findings, and the caller renders both as
         # "missing or malformed YAML frontmatter" -- so at least say which.
-        print(f"{YELLOW}warn:{RESET} {path}: could not be read", file=sys.stderr)
+        #
+        # `UnicodeDecodeError` was added 2026-09-01. It is a `ValueError`, so
+        # `except OSError` could not catch it, and it is the likeliest way a CRM
+        # card becomes unreadable: these files hold names. MEASURED that day on
+        # two cards, one clean and one carrying a lone 0xe9, this gate exited 1
+        # with a raw traceback naming a codec, a byte and an offset -- past the
+        # very handler written to make sure an unreadable file gets named. The
+        # verdict is unchanged and deliberate: returning None makes the record
+        # FAIL, because a card nobody could read has not been shown to satisfy
+        # the schema. Only the crash goes.
+        print(f"{YELLOW}warn:{RESET} {path}: could not be read "
+              f"({type(exc).__name__})", file=sys.stderr)
         return None
     fm_raw, _body, kind = split_frontmatter(text)
     if fm_raw is None or kind != FM_OK:

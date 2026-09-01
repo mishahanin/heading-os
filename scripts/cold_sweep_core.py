@@ -128,6 +128,22 @@ def _fetch_rows(workspace_root: Path) -> list[dict]:
     `utils/ops_signals.py` both grew their own guard for the same producer;
     this is the third, and it refuses out loud rather than degrading to zero,
     because an empty card list reads to the caller as "no one is overdue".
+
+    The third clause is the decode. `text=True` decodes STRICTLY and does it
+    INSIDE `subprocess.run` - before `json.loads`, before any handler here. A
+    `UnicodeDecodeError` is a `ValueError`: a sibling of `JSONDecodeError`, no
+    relation to `OSError` or `SubprocessError`, so it walked past both clauses
+    below and left `run()` as exactly the raw traceback the paragraph above says
+    this guard exists to prevent. MEASURED 2026-09-01 with a producer writing one
+    0xff byte to its own file descriptor: `UnicodeDecodeError: 'utf-8' codec
+    can't decode byte 0xff in position 12`.
+
+    It refuses rather than passing `errors="replace"`, and that is the whole
+    decision. Replacing decodes to `J��ane`, which is still valid JSON,
+    so the run would continue and the mangled name would go out in the subject
+    line of a real e-mail. Every other failure in this function is answered by
+    naming the producer; a name nobody can read is not a lesser failure than
+    prose where JSON was expected. Contract: `tests/test_cold_sweep_routing.py`.
     """
     cmd = [sys.executable, str(workspace_root / "scripts" / "crm-health.py"), "--json"]
     try:
@@ -137,6 +153,11 @@ def _fetch_rows(workspace_root: Path) -> list[dict]:
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise RuntimeError(f"crm-health.py --json could not be run: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise RuntimeError(
+            f"crm-health.py --json answered bytes that are not UTF-8 ({exc}); "
+            "refusing rather than guessing at a contact name that becomes an email"
+        ) from exc
     try:
         data = json.loads(out.stdout)
     except json.JSONDecodeError as exc:

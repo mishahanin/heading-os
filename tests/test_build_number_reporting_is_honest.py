@@ -142,6 +142,63 @@ def test_check_build_still_reports_an_absent_file_plainly(check_build, tmp_path,
     assert "Cannot read" in capsys.readouterr().out
 
 
+# --- a byte that is not UTF-8 -------------------------------------------------
+#
+# Both readers of BUILD.json carry a handler widened for the decode class, and
+# neither had a test standing on it. MEASURED 2026-09-01, over the 194 tests in
+# the seven files that name these two scripts: narrowing
+# `workspace-health.check_build_sync` back to `(OSError, json.JSONDecodeError)`
+# survived, and so did narrowing `check-build.load_json` back to `(OSError,
+# json.JSONDecodeError)`. `Path.read_text(encoding="utf-8")` raises
+# `UnicodeDecodeError` from inside the READ, before either parser is handed
+# anything, and that exception is a SIBLING of `JSONDecodeError` under
+# `ValueError` rather than a subclass of it - so the narrow tuple lets it through
+# and the whole health run dies on one byte in a file it was only reporting on.
+
+BAD_BYTE = b"\xff"
+
+
+def test_the_health_check_survives_an_undecodable_build_file(health, tmp_path,
+                                                             monkeypatch, capsys):
+    monkeypatch.setattr(health, "WORKSPACE", tmp_path / "heading-os")
+    corp = tmp_path / "heading-os-corporate"
+    corp.mkdir(parents=True)
+    (corp / "BUILD.json").write_bytes(b'{"build": 3, "note": "' + BAD_BYTE + b'"}')
+
+    rc = health.check_build_sync()
+
+    assert rc == 1, "an unusable BUILD.json is a reported issue, not a pass"
+    out = capsys.readouterr().out
+    assert "parse failed" in out, (
+        f"the failure was not reported as a parse problem: {out!r}"
+    )
+
+
+def test_check_build_survives_an_undecodable_build_file(check_build, tmp_path,
+                                                        monkeypatch, capsys):
+    bad = tmp_path / "BUILD.json"
+    bad.write_bytes(b'{"build": 3, "version": "1.0.0", "n": "' + BAD_BYTE + b'"}')
+    monkeypatch.setattr(check_build, "CORPORATE_BUILD", bad)
+
+    with pytest.raises(SystemExit) as exc:
+        check_build.main()
+
+    assert exc.value.code == 1
+    assert "Cannot read" in capsys.readouterr().out
+
+
+def test_a_decodable_build_file_is_still_read(check_build, tmp_path, monkeypatch,
+                                              capsys):
+    """The negative case. A reader that treated every file as unreadable would
+    satisfy both tests above while reporting nothing at all."""
+    good = tmp_path / "BUILD.json"
+    good.write_text(json.dumps({"build": 3, "version": "1.0.0"}), encoding="utf-8")
+    monkeypatch.setattr(check_build, "CORPORATE_BUILD", good)
+
+    assert check_build.load_json(good) == {"build": 3, "version": "1.0.0"}
+    assert capsys.readouterr().out == ""
+
+
 # --- the live state, pinned so a future reader does not re-derive it ----------
 
 def test_the_live_corporate_repo_still_has_no_build_number():

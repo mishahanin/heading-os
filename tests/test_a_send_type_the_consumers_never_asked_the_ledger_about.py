@@ -535,3 +535,152 @@ def test_an_emptied_send_capable_cannot_make_the_terminal_approve_send(
     # The transport raises if reached, so reaching here at all is the proof.
     assert res["result"] != "sent", res
     assert _status(path) != ["sent"]
+
+
+# ============================================================
+# The fallback the ledger documents, and the byte that walked past it
+# ============================================================
+#
+# `tool_risk.load` promises in its own comment that a "missing or malformed
+# ledger" yields an empty document, so `tier_for` resolves everything `gated`.
+# Until 2026-09-01 it caught `(OSError, json.JSONDecodeError)` only, and
+# `UnicodeDecodeError` is a SIBLING of `JSONDecodeError` under `ValueError`, not
+# a subclass - and it is raised by `read_text` before `json.loads` is handed
+# anything. So the commonest corruption of all, one byte that is not UTF-8, did
+# not reach the documented fallback.
+#
+# MEASURED that day against a copy of the shipped ledger with one 0xff byte
+# spliced in: `load()`, `send_capable_types()` and `tier_for("email_send")` each
+# raised a raw UnicodeDecodeError. `tier_for` IS the send gate, and
+# `approve_and_send` calls it outside any handler, so the CEO's approve command
+# answered a traceback rather than a refusal.
+#
+# Nothing sent, so this was never an open trifecta leg; it is the fail-safe
+# itself failing in an undocumented way, which is what the rest of this file
+# spends its length refusing to accept anywhere else.
+UNDECODABLE = b"\xff"
+
+
+@pytest.fixture
+def bytes_ledger(tmp_path, monkeypatch):
+    """Point `tool_risk` at a ledger written as RAW BYTES, and clear the cache.
+
+    Bytes rather than text because the whole subject here is a payload that
+    cannot be decoded, which `write_text` cannot express.
+    """
+    def _make(payload: bytes):
+        (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "config" / "tool-risk.json").write_bytes(payload)
+        monkeypatch.setattr(tool_risk, "get_workspace_root", lambda: tmp_path)
+        tool_risk._CACHE = None
+    yield _make
+    # Clear rather than reload: get_workspace_root is still patched here.
+    tool_risk._CACHE = None
+
+
+@pytest.fixture
+def undecodable_ledger(bytes_ledger):
+    """The REAL ledger's bytes with one 0xff spliced into the middle.
+
+    Built from the shipped file rather than from a short literal, so the
+    document is valid JSON in every respect except the one byte under test and
+    the failure cannot be blamed on a hand-written stub. The real file is read,
+    never written.
+    """
+    raw = LEDGER_PATH.read_bytes()
+    assert len(raw) > 80, "the shipped ledger is too small for this splice"
+    bytes_ledger(raw[:40] + UNDECODABLE + raw[40:])
+
+
+@pytest.fixture
+def valid_copy_ledger(bytes_ledger):
+    """The control: the same bytes, spliced at the same offset, minus the byte.
+
+    Without this the test below could pass over a fixture that was broken for
+    some other reason - a path that does not exist, a directory, an empty file -
+    and would say nothing about the decode at all.
+    """
+    raw = LEDGER_PATH.read_bytes()
+    bytes_ledger(raw[:40] + raw[40:])
+
+
+def test_the_control_ledger_is_intact(valid_copy_ledger):
+    """The splice itself must not be what breaks the case below."""
+    assert tool_risk.send_capable_types() == frozenset(_ledger_on_disk()["send_capable"])
+    assert tool_risk.tier_for("email_send") == tool_risk.GATED
+
+
+def test_an_undecodable_ledger_resolves_gated_rather_than_raising(undecodable_ledger):
+    """The documented fallback, over the one corruption that used to skip it."""
+    assert tool_risk.load() == {}, "a byte that will not decode must read as an empty ledger"
+    assert tool_risk.send_capable_types() == frozenset()
+    # Everything, not just the senders: an empty ledger has no `tiers` row for
+    # anything, and the unclassified fail-safe is what must answer.
+    for atype in SEND_TYPES + [UNKNOWN, "note", "pipeline_update"]:
+        assert tool_risk.tier_for(atype) == tool_risk.GATED, atype
+
+
+# `email_send` is deliberately NOT one of these, and the reason is the point of
+# the fix rather than an omission. Under a corrupt ledger `tier_for` answers
+# `gated` for everything, so an `email_send` card reaching `send_card` is a card
+# the CEO already approved and it is SUPPOSED to spawn the transport - measured
+# here on the first draft of these tests, where `_NoTransport` fired and the
+# assertion `result in ("skipped", "refused")` was wrong about the code rather
+# than the code being wrong. `gated` is "a human must click", never "refuse".
+#
+# These two types resolve `gated` and stop before any transport, so they
+# exercise the same `load()` and prove the same thing without asserting a
+# refusal the gate never promised.
+NO_TRANSPORT_TYPES = ["telegram_send", UNKNOWN]
+
+
+@pytest.mark.parametrize("atype", NO_TRANSPORT_TYPES)
+def test_an_undecodable_ledger_does_not_traceback_out_of_the_executors_gate(
+        undecodable_ledger, atype):
+    """`send_card`'s gate calls `tier_for` with no handler around it.
+
+    The batch `main()` has a broad `except Exception`, so before the fix this
+    surfaced as a `send_failed` result naming a mail problem that was really a
+    corrupt config file. `send_card` called directly, as here and as
+    `approve_and_send` calls it, simply raised.
+    """
+    res = aqx.send_card(ROOT, _card(atype))
+    assert res["result"] != "sent", res
+    assert res["action_id"] == "card0001"
+
+
+@pytest.mark.parametrize("atype", NO_TRANSPORT_TYPES)
+def test_an_undecodable_ledger_does_not_traceback_out_of_the_terminal_approve(
+        undecodable_ledger, queue, atype):
+    """`approve_and_send` calls `tier_for` at its first line, and `cmd_approve`
+    has no handler, so this used to reach the CEO's terminal as a traceback."""
+    data_root, path = queue(_card(atype))
+    res = aqcli.approve_and_send(ROOT, data_root, "card0001")
+    assert res["result"] != "sent", res
+    assert _status(path) != ["sent"]
+
+
+def test_the_corrupt_ledger_case_is_reached_through_the_gate_not_around_it(
+        undecodable_ledger, monkeypatch):
+    """The anchor: the two tests above must exercise `tier_for`, not bypass it.
+
+    A card that never reached the gate would also "not send", and would pass
+    them while measuring nothing about `load()`.
+    """
+    seen = []
+    real = tool_risk.tier_for
+    monkeypatch.setattr(tool_risk, "tier_for",
+                        lambda t: (seen.append(t), real(t))[1])
+    aqx.send_card(ROOT, _card(UNKNOWN))
+    assert UNKNOWN in seen, "the gate was not consulted at all"
+
+
+def test_a_ledger_that_is_not_json_at_all_still_resolves_gated(bytes_ledger):
+    """The neighbouring branch, so the fix cannot be read as decode-only.
+
+    Valid UTF-8, invalid JSON. This one always worked; asserting it beside the
+    case above is what makes the pair a bound, rather than one point on a line.
+    """
+    bytes_ledger(b"{not json at all")
+    assert tool_risk.load() == {}
+    assert tool_risk.tier_for("email_send") == tool_risk.GATED

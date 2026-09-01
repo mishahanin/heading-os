@@ -366,20 +366,25 @@ def test_no_push_updates_command_block_hand_runs_git_push():
     `git -C <path> push` is fine and is how the corporate repo is pushed: that
     repo is private, outside the engine wall, and push-all.py does not cover it.
     """
-    bad, inspected = [], 0
+    bad, inspected = [], {}
     for path in _PUSH_UPDATES_FILES:
+        inspected[path.name] = 0
         for n, line in _fenced_lines(path):
             if not re.match(r"\s*git\b", line):
                 continue
-            inspected += 1
+            inspected[path.name] += 1
             if re.match(r"\s*git\s+push\b", line):
                 bad.append(f"{path.relative_to(ROOT)}:{n}: {line.strip()}")
-    # Measured 10 git command lines across the two files on 2026-08-30. The floor
-    # guards the decay mode where the fences are reshaped and the matcher stops
-    # seeing anything, leaving `bad` empty for the wrong reason.
-    assert inspected >= 8, (
-        f"only {inspected} git command line(s) were inspected in the /push-updates "
-        "files; the fenced-block reader has drifted and this guard reads nothing"
+    # Measured 5 git command lines in EACH of the two files on 2026-09-01 (10 in
+    # total). The floor is PER SOURCE, not over the union: a union floor of 8 is
+    # satisfied while one of the two files contributes nothing, and the file that
+    # went quiet is then unread with no test saying so. It guards the decay mode
+    # where the fences are reshaped and the matcher stops seeing anything,
+    # leaving `bad` empty for the wrong reason.
+    assert all(n >= 3 for n in inspected.values()), (
+        f"per-file git command lines inspected in the /push-updates files: "
+        f"{inspected}. One source went quiet; the fenced-block reader has "
+        "drifted and this guard is no longer reading that file"
     )
     assert not bad, (
         "a /push-updates command block hand-runs `git push`. The engine repo is "
@@ -398,9 +403,10 @@ def test_no_push_updates_command_block_leaves_its_working_directory_implicit():
     directory nothing had set. Every command runs from the engine clone; a
     command acting elsewhere carries `git -C <path>`.
     """
-    bad, inspected = [], 0
+    bad, inspected = [], {}
     other_repos = ("heading-os-corporate", ".heading-os-data")
     for path in _PUSH_UPDATES_FILES:
+        inspected[path.name] = 0
         for n, line in _fenced_lines(path):
             stripped = line.strip()
             if re.match(r"cd\b", stripped):
@@ -408,13 +414,15 @@ def test_no_push_updates_command_block_leaves_its_working_directory_implicit():
                 continue
             if not re.match(r"git\b", stripped):
                 continue
-            inspected += 1
+            inspected[path.name] += 1
             if any(repo in stripped for repo in other_repos) and " -C " not in stripped:
                 bad.append(
                     f"{path.relative_to(ROOT)}:{n}: names another repo without -C: {stripped}")
-    assert inspected >= 8, (
-        f"only {inspected} git command line(s) were inspected; the fenced-block "
-        "reader has drifted and this guard reads nothing"
+    # Per source, for the reason argued at the sibling guard above.
+    assert all(n >= 3 for n in inspected.values()), (
+        f"per-file git command lines inspected: {inspected}. One source went "
+        "quiet; the fenced-block reader has drifted and this guard is no longer "
+        "reading that file"
     )
     assert not bad, (
         "a /push-updates command block leaves its working directory implicit. Run "
@@ -435,19 +443,24 @@ def test_push_updates_instruction_regions_name_no_retired_workspace():
     trees. A whole-file grep would fail that section and push the next author
     into deleting the explanation instead of the instruction.
     """
-    bad, inspected = [], 0
+    bad, inspected = [], {}
     for path in _PUSH_UPDATES_FILES:
+        inspected[path.name] = 0
         for n, line in _instruction_lines(path):
-            inspected += 1
+            inspected[path.name] += 1
             if _RETIRED_WORKSPACE in line:
                 bad.append(f"{path.relative_to(ROOT)}:{n}: {line.strip()[:110]}")
-    # Measured 125 instruction lines across the two files on 2026-08-30. The floor
-    # is set well below that and guards the same decay mode as its siblings: if the
-    # markdown shape changes and nothing is classified, `bad` is empty for the
-    # wrong reason.
-    assert inspected >= 60, (
-        f"only {inspected} instruction line(s) were classified in the /push-updates "
-        "files; the region reader has drifted and this guard reads nothing"
+    # Measured 2026-09-01: 48 instruction lines in SKILL.md and 77 in
+    # references/workflow.md, 125 in total. The floor is PER SOURCE. A union floor
+    # of 60 was satisfied by workflow.md ALONE, so SKILL.md could have been
+    # reshaped until the region reader classified none of it and this guard would
+    # have stayed green over a file it had stopped reading. That is the exact
+    # decay mode the floor exists for, arriving through the arithmetic of the
+    # floor itself.
+    assert all(n >= 20 for n in inspected.values()), (
+        f"per-file instruction lines classified in the /push-updates files: "
+        f"{inspected}. One source went quiet; the region reader has drifted and "
+        "this guard is no longer reading that file"
     )
     assert not bad, (
         f"a /push-updates instruction still names {_RETIRED_WORKSPACE!r} as a live "

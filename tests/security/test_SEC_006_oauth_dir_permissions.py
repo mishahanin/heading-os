@@ -2,8 +2,12 @@
 """SEC-006: Verify .sessions/ directories and files have restricted permissions.
 
 Behavioral (live os.stat) + AST guard. The live check walks the actual .sessions/
-tree; the AST check confirms the creation calls include mode=0o700 so new token
-stores are also locked down.
+tree; the AST check confirms the creation calls pass an integer `mode=` granting
+no group or other bits, so new token stores are also locked down.
+
+That second sentence read "include mode=0o700" until 2026-09-01 while the code
+checked only that the KEYWORD was present. Measured that day, `mode=0o755` on
+`gmail_auth`'s token directory left every test in this file green.
 
 Live check is skipped when .sessions/ doesn't exist (CI without real OAuth tokens).
 """
@@ -67,7 +71,23 @@ def test_sessions_dir_permissions():
 # ---- AST guard ----
 
 def _check_makedirs_has_mode(file_path: Path) -> list[str]:
-    """Parse AST: every os.makedirs call must include mode= keyword."""
+    """Parse AST: every os.makedirs call must pass a mode that locks the dir down.
+
+    The VALUE, not just the keyword. Until 2026-09-01 this asked only whether a
+    `mode=` keyword was present, while the module docstring three screens up
+    said it "confirms the creation calls include mode=0o700". MEASURED that day
+    by changing `gmail_auth`'s call to `mode=0o755`: every SEC-006 test stayed
+    green over a credential directory readable and traversable by every account
+    on the machine. That is `.claude/rules/scope-claims.md` in a security gate,
+    and the same "asked about the call, not the value" shape the workspace has
+    hit before.
+
+    The invariant asserted is that no group or other bit is granted
+    (`mode & 0o077 == 0`), rather than exactly 0o700, because 0o700 is not the
+    only safe answer and pinning one literal would refuse a correct 0o500. A
+    non-literal mode is a violation too: this reader cannot settle it, and a
+    security gate that cannot settle a value must not pass it.
+    """
     content = read_file_content(file_path)
     tree = ast.parse(content)
     violations = []
@@ -80,10 +100,24 @@ def _check_makedirs_has_mode(file_path: Path) -> list[str]:
                 and isinstance(func.value, ast.Name)
                 and func.value.id == "os"
             ):
-                kwarg_names = [kw.arg for kw in node.keywords]
-                if "mode" not in kwarg_names:
+                mode_kw = next((kw for kw in node.keywords if kw.arg == "mode"), None)
+                if mode_kw is None:
                     violations.append(
                         f"Line {node.lineno}: os.makedirs() without mode= parameter"
+                    )
+                elif not (isinstance(mode_kw.value, ast.Constant)
+                          and isinstance(mode_kw.value.value, int)
+                          and not isinstance(mode_kw.value.value, bool)):
+                    violations.append(
+                        f"Line {node.lineno}: os.makedirs() mode= is not an integer "
+                        f"literal ({ast.unparse(mode_kw.value)}), so this guard "
+                        f"cannot establish it locks the directory down"
+                    )
+                elif mode_kw.value.value & 0o077:
+                    violations.append(
+                        f"Line {node.lineno}: os.makedirs(mode="
+                        f"{oct(mode_kw.value.value)}) grants group or other bits "
+                        f"on a credential directory; expected owner-only"
                     )
     return violations
 
@@ -160,6 +194,63 @@ def test_oauth_script_makedirs_has_mode(scripts_dir, script_name):
         f"{script_name}: os.makedirs calls without mode=0o700:\n"
         + "\n".join(violations)
     )
+
+
+@pytest.mark.parametrize("mode,wanted", [
+    ("0o700", []), ("0o500", []), ("0o600", []),
+    ("0o755", ["grants group or other bits"]),
+    ("0o777", ["grants group or other bits"]),
+    ("0o710", ["grants group or other bits"]),
+    ("0o701", ["grants group or other bits"]),
+    ("os.environ.get('M')", ["not an integer literal"]),
+])
+def test_the_makedirs_reader_refuses_a_permissive_mode(tmp_path, mode, wanted):
+    """The case ON the line for the guard above.
+
+    Nothing ever made `_check_makedirs_has_mode` report a violation over a mode
+    VALUE, which is how `mode=0o755` on the OAuth token directory passed the
+    whole SEC-006 file. Each case here is a mode a real edit could introduce.
+    """
+    src = tmp_path / "sample.py"
+    src.write_text(f"import os\nos.makedirs('/tmp/x', mode={mode}, exist_ok=True)\n",
+                   encoding="utf-8")
+
+    violations = _check_makedirs_has_mode(src)
+
+    if not wanted:
+        assert violations == [], violations
+    else:
+        assert len(violations) == 1, violations
+        assert wanted[0] in violations[0], violations
+
+
+def test_the_makedirs_reader_still_catches_a_missing_mode(tmp_path):
+    """Anchor: the original check must survive the widening."""
+    src = tmp_path / "sample.py"
+    src.write_text("import os\nos.makedirs('/tmp/x', exist_ok=True)\n",
+                   encoding="utf-8")
+
+    violations = _check_makedirs_has_mode(src)
+
+    assert len(violations) == 1, violations
+    assert "without mode= parameter" in violations[0]
+
+
+def test_the_makedirs_reader_finds_the_calls_it_is_pointed_at(scripts_dir):
+    """A reader that matches no `os.makedirs` at all reports no violation
+    either, and every parametrized case above would then be measuring a
+    hand-written fixture and nothing in the tree."""
+    found = 0
+    for script_name in OAUTH_SCRIPTS:
+        tree = ast.parse(read_file_content(scripts_dir / script_name))
+        found += sum(
+            1 for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "makedirs" and isinstance(n.func.value, ast.Name)
+            and n.func.value.id == "os")
+    assert found >= 1, (
+        "no os.makedirs call in any OAUTH_SCRIPTS entry; "
+        "test_oauth_script_makedirs_has_mode asserts nothing")
 
 
 @pytest.mark.parametrize("script_name", OAUTH_SCRIPTS)

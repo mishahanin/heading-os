@@ -461,7 +461,54 @@ def test_the_output_path_goes_through_the_stripper():
 # content-guard.py — a gate says what it did not scan
 # ---------------------------------------------------------------------------
 
-def test_an_unreadable_file_is_reported_by_the_gate():
+@pytest.fixture
+def _synthetic_overlay(tmp_path):
+    """A DATA overlay holding invented entities, so the gate has a denylist.
+
+    Added 2026-09-01. Without it this test read the OPERATOR'S live overlay, and
+    that made it two different tests on two machines. `content-guard.py` exits 0
+    with "denylist unavailable; skipped" whenever the overlay yields no tokens --
+    documented behaviour, for the public-clone and CI state its module docstring
+    describes. The root `conftest.py` pins `HEADING_OS_DATA` only for the
+    `bridge` and `integration` packages, so a top-level test like this one
+    inherits whatever the machine has.
+
+    MEASURED 2026-09-01: with `HEADING_OS_DATA` pointed at an empty directory,
+    the guard answered `denylist unavailable (the overlay holds no entities to
+    guard); skipped.` at exit 0 and the assertion below failed. So on a clone
+    without the overlay -- which is every CI runner and every public checkout --
+    this test was RED, and on the operator's machine it passed for a reason that
+    is not in the test: his private CRM. Neither is what it claims to measure,
+    which is that an unreadable file refuses.
+
+    One invented contact is enough to make the denylist usable. The names are
+    fictional on purpose: the engine repo is public, and a fixture must never
+    reach for a real entity to make a gate fire.
+    """
+    contacts = tmp_path / "crm" / "contacts"
+    contacts.mkdir(parents=True)
+    (contacts / "zephyr-quillfeather.md").write_text(
+        "---\nname: Zephyr Quillfeather\ncompany: Vantablack Orbital\n---\n\nbody\n",
+        encoding="utf-8")
+    return tmp_path
+
+
+def test_the_synthetic_overlay_really_arms_the_gate(_synthetic_overlay):
+    """Anti-vacuity for the test below.
+
+    If the overlay produced no tokens the gate would skip, exit 0, and the
+    refusal assertion would fail loudly -- so this cannot go silently wrong. It
+    is here to name the cause when it does, rather than leave the next reader
+    to rediscover that a green gate means an empty denylist.
+    """
+    from scripts.utils.content_denylist import build_denylist
+
+    denylist = build_denylist(_synthetic_overlay)
+    assert denylist.tokens, "the synthetic overlay yielded no denylist tokens"
+    assert not denylist.degraded, "the synthetic overlay harvested only partially"
+
+
+def test_an_unreadable_file_is_reported_by_the_gate(_synthetic_overlay):
     """The gate must REFUSE a file it could not read, and say which one.
 
     Two things were wrong here until 2026-08-27, and they compounded.
@@ -486,7 +533,8 @@ def test_an_unreadable_file_is_reported_by_the_gate():
         proc = subprocess.run(
             [PY, str(ROOT / "scripts" / "content-guard.py"), "--files",
              bad.relative_to(ROOT).as_posix()],
-            cwd=ROOT, capture_output=True, text=True, timeout=120)
+            cwd=ROOT, capture_output=True, text=True, timeout=120,
+            env=dict(os.environ, HEADING_OS_DATA=str(_synthetic_overlay)))
         combined = proc.stdout + proc.stderr
         assert proc.returncode != 0, (
             "a gate whose whole purpose is that nothing unscanned ships exited "

@@ -63,7 +63,7 @@ from scripts.utils.pathnorm import (  # noqa: E402
     normalize_rel,
     normalize_segments,
 )
-from tests.repo_files import tracked_python_files  # noqa: E402
+from tests.repo_files import read_sources, tracked_python_files  # noqa: E402
 
 # The dispatcher writes a rate-limit counter, and it REFUSES once a window fills.
 # A single scratch file shared by the whole module made the tests order-dependent:
@@ -610,13 +610,40 @@ DECLARED_COLLAPSE_SITES = {
 
 
 def _corpus() -> list[tuple[str, str]]:
-    out = []
-    for path in tracked_python_files(("scripts", ".claude", "tests")):
-        try:
-            out.append((path.relative_to(ROOT).as_posix(),
-                        path.read_text(encoding="utf-8")))
-        except UnicodeDecodeError:  # pragma: no cover - not a python source
-            continue
+    """Every tracked Python source under the three trees, as (relpath, text).
+
+    Read through `read_sources` rather than by a hand-rolled `read_text` loop,
+    and that is the whole point of this function's shape.
+
+    The walk lists paths first and reads them afterwards. In a workspace where
+    several agents and several pytest workers share one checkout, a file can be
+    created and deleted inside that window. Two tests in this suite write a
+    temporary `.py` INTO `tests/` and remove it moments later
+    (`test_a_suite_that_only_passed_on_one_clock.py` writes a timezone probe,
+    `test_a_stop_hook_that_cried_wolf_at_its_own_agents.py` writes peer files),
+    and neither is gitignored, so both appear in a tracked walk.
+
+    MEASURED 2026-09-01: this function raised FileNotFoundError on
+    `tests/test_zz_tzprobe_1608021.py` during a full `-n auto` run and BLOCKED A
+    PUSH, on a tree where nothing was wrong. `read_sources` was written for this
+    exact race on 2026-08-30, after it killed a different sweep the same way;
+    this caller simply never adopted it.
+
+    The UnicodeDecodeError branch that stood here is gone deliberately, not
+    overlooked. It skipped an undecodable file and carried on, so a sweep whose
+    whole job is "no site in the tree does X" would have answered over a corpus
+    that quietly shrank. `read_sources` draws that line the other way and its
+    docstring says why: a vanished file is a race and is skipped WITH a warning,
+    while a decode failure is a real fault about a file that is really there and
+    still raises. A tracked `.py` that is not UTF-8 should stop the suite, not
+    slip past a guard.
+    """
+    vanished: list[Path] = []
+    out = [
+        (path.relative_to(ROOT).as_posix(), text)
+        for path, text in read_sources(
+            tracked_python_files(("scripts", ".claude", "tests")), vanished)
+    ]
     return out
 
 

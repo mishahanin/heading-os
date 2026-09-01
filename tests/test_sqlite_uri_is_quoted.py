@@ -33,6 +33,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from scripts.utils.sqlite_uri import read_only_uri  # noqa: E402
+from tests.repo_files import read_sources  # noqa: E402
 
 # The shape that was wrong, in any file under these trees, in any of the four
 # ways Python spells an f-string. The pattern read `f"file:\{` until 2026-09-01,
@@ -112,14 +113,19 @@ def test_no_caller_pastes_a_path_into_a_file_uri():
     offenders = []
     inspected = 0
     per_dir = {}
+    # SCAN: a file that vanished between the rglob and the read pastes no path
+    # into a URI, so skipping it is the right answer and `read_sources` warns
+    # naming it. The two counters moved INSIDE the read loop with this change:
+    # they exist to prove files were read, so counting a file that was walked
+    # but never opened would be the same lie the floors are here to catch.
+    vanished: list[Path] = []
     for base in _SCAN_DIRS:
         seen = 0
-        for path in base.rglob("*.py"):
-            if any(part in _SKIP for part in path.parts):
-                continue
+        candidates = [p for p in base.rglob("*.py")
+                      if not any(part in _SKIP for part in p.parts)]
+        for path, text in read_sources(candidates, vanished, errors="ignore"):
             inspected += 1
             seen += 1
-            text = path.read_text(encoding="utf-8", errors="ignore")
             for lineno, line in enumerate(text.splitlines(), 1):
                 if _PASTE.search(line) and "sqlite_uri" not in str(path):
                     offenders.append(f"{path.relative_to(ROOT)}:{lineno}")
@@ -138,7 +144,8 @@ def test_no_caller_pastes_a_path_into_a_file_uri():
     )
     assert offenders == [], (
         f"these build a SQLite file: URI by pasting an unquoted path: "
-        f"{offenders}. Use scripts.utils.sqlite_uri.read_only_uri()."
+        f"{offenders}. Use scripts.utils.sqlite_uri.read_only_uri(). "
+        f"({len(vanished)} file(s) vanished mid-walk)"
     )
 
 

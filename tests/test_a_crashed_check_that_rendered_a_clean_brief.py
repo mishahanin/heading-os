@@ -62,6 +62,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tests.repo_files import read_sources  # noqa: E402
+
 
 def _load(name: str, relpath: str):
     spec = importlib.util.spec_from_file_location(name, ROOT / relpath)
@@ -615,9 +617,12 @@ def test_no_python_file_carries_an_invalid_escape_sequence():
 
     offenders = []
     roots = [ROOT / "scripts", ROOT / "tests", ROOT / ".claude" / "hooks"]
+    # SCAN: a .py file that vanished between the rglob and the read carries no
+    # escape sequence to warn about, so skipping it is correct. `read_sources`
+    # warns naming it so the narrowing is not silent.
+    vanished: list[Path] = []
     for root in roots:
-        for path in sorted(root.rglob("*.py")):
-            src = path.read_text(encoding="utf-8")
+        for path, src in read_sources(sorted(root.rglob("*.py")), vanished):
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
                 try:
@@ -631,6 +636,7 @@ def test_no_python_file_carries_an_invalid_escape_sequence():
                     offenders.append(f"{rel}:{entry.lineno} {entry.message}")
     assert offenders == [], (
         "an unrecognised escape is a deprecation today and a SyntaxError "
-        "later; make the string raw or double the backslash:\n"
+        f"later; make the string raw or double the backslash "
+        f"({len(vanished)} file(s) vanished mid-walk):\n"
         + "\n".join(offenders)
     )

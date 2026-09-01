@@ -19,6 +19,33 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "scripts" / "dev" / "build-plugins.py"
 
+sys.path.insert(0, str(ROOT))
+
+from tests.repo_files import read_sources  # noqa: E402
+
+
+def _built_sources(paths, what):
+    """`(path, text)` for every built file, or a failure naming the one missing.
+
+    COMPLETENESS, not a scan: both callers assert something about EVERY file the
+    generator wrote, and a file dropped because it vanished between the rglob
+    and the read would be a file the guard certifies without reading. The walk
+    and the read are still two moments -- these bundles are built into a tmp dir
+    on a checkout several agents share -- so the race is read through
+    `read_sources`, retried once, and then FAILS naming the file.
+    """
+    lost: list[Path] = []
+    out = list(read_sources(paths, lost))
+    if lost:
+        still_gone: list[Path] = []
+        out += list(read_sources(lost, still_gone))
+        if still_gone:
+            raise AssertionError(
+                f"{what} disappeared between the walk and the read and is still "
+                "gone on retry; it cannot be certified unread: "
+                + ", ".join(str(p) for p in still_gone))
+    return out
+
 
 def _load_builder():
     spec = importlib.util.spec_from_file_location("build_plugins_mod", BUILDER)
@@ -353,8 +380,7 @@ def test_every_built_frontmatter_still_parses_as_yaml(built):
     targets = list((bundle / "skills").rglob("SKILL.md")) + \
         list((bundle / "commands").glob("*.md"))
     assert targets, "nothing to check - the bundle shipped no skills or commands"
-    for path in targets:
-        text = path.read_text(encoding="utf-8")
+    for path, text in _built_sources(targets, "a built skill/command file"):
         assert text.startswith("---"), f"{path.name} lost its frontmatter"
         front = text.split("---", 2)[1]
         try:
@@ -379,8 +405,9 @@ def test_every_bundle_parses_not_only_heading_core(tmp_path):
     targets = sorted(plugins.rglob("SKILL.md")) + sorted(plugins.rglob("commands/*.md"))
     assert len(targets) >= 10, f"only {len(targets)} files reached the guard"
     rewritten = 0
-    for path in targets:
-        text = path.read_text(encoding="utf-8")
+    # `rewritten` is a COUNT the assertion at the end depends on, so a silently
+    # dropped file would understate it. `_built_sources` fails naming the file.
+    for path, text in _built_sources(targets, "a built bundle file"):
         if "CLAUDE_PLUGIN_ROOT" in text:
             rewritten += 1
         try:

@@ -469,7 +469,29 @@ def build_bundle(name: str, spec: dict, out_root: Path, root: Path) -> None:
     # lines that the rewriter never opened - so the bundled script was there and
     # the documented way to run it still did not resolve.
     for md in (bundle / "skills").rglob("*.md"):
-        text = md.read_text(encoding="utf-8")
+        # Retried once, then REFUSED -- deliberately not the skip-and-warn that
+        # `scripts.utils.repo_files.read_sources` gives a per-file scanner. This
+        # walk is over the bundle THIS RUN just wrote, and what it produces is a
+        # published artifact that `completeness_gate` above has already certified
+        # as complete. Skipping one page would ship it with its `python
+        # scripts/...` lines unrewritten -- precisely the defect the comment
+        # above describes -- inside a bundle whose whole claim is that every
+        # reference resolves. The retry recovers a writer's unlink-and-rewrite
+        # window and nothing else; a page that is genuinely gone means something
+        # is mutating the build output underneath the build, so no bundle
+        # assembled over it can be trusted.
+        try:
+            text = md.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            try:
+                text = md.read_text(encoding="utf-8")
+            except FileNotFoundError as exc:
+                raise SystemExit(
+                    f"[{name}] {md} vanished between the bundle walk and the "
+                    f"script-path rewrite. The bundle changed while it was "
+                    f"being built, so it would ship that page unrewritten. "
+                    f"Re-run once the tree is quiet."
+                ) from exc
         new, n = rewrite_script_paths(text)
         if n:
             md.write_text(new, encoding="utf-8")

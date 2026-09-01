@@ -220,7 +220,34 @@ def build_graph(brain_root: Path, workspace_root: Path | None = None) -> BrainGr
                 rel = path.name
         if is_denied(rel):
             continue
-        text = path.read_text(encoding="utf-8", errors="replace")
+        # Retried once, then REFUSED -- deliberately NOT the skip-and-warn that
+        # `scripts.utils.repo_files.read_sources` gives a per-file scanner. What
+        # this walk builds is a GRAPH, and what runs over it is PageRank. A
+        # dropped note is not one missing row: it removes a node, every edge
+        # into it, and the rank mass those edges carried, and power iteration
+        # then redistributes that mass across everything else. Every remaining
+        # score changes, the ordering the caller acts on changes with it, and
+        # nothing in the output could say why. A narrowed scan reports less; a
+        # narrowed ranking reports something else, confidently.
+        #
+        # The retry recovers one shape only: a writer that unlinks and rewrites,
+        # leaving the path briefly absent. A note that is genuinely gone is
+        # still gone on the second look. Only the vanished case is caught -- a
+        # permission error is a real fault about a file that IS there and still
+        # raises, and `errors="replace"` already covers an undecodable byte.
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    f"{path} vanished between the brain walk and the read. The "
+                    f"brain changed while the graph was being built, so no "
+                    f"PageRank computed over it can be trusted: a missing node "
+                    f"moves every other note's score. Re-run once the tree is "
+                    f"quiet."
+                ) from exc
         fm = parse_frontmatter(text)
         node_id = str(fm.get("id") or "").strip()
         stem = path.stem

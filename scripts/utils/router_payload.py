@@ -65,9 +65,42 @@ def router_rules_text() -> str:
     parts = [ROUTER_RULE.read_text(encoding="utf-8")]
     if CATEGORY_DETAIL_DIR.exists():
         for detail in sorted(CATEGORY_DETAIL_DIR.glob("*.md")):
+            # Retried once, then REFUSED, and not the skip-and-warn of
+            # `scripts.utils.repo_files.read_sources`.
+            #
+            # The absent-directory branch one line up is not a precedent for
+            # skipping a file here. That one is a DECLARED degradation, decided
+            # once, on a condition a reader can see: a public clone has no
+            # detail directory and the judge is told so. A file that disappears
+            # mid-glob produces an UNDECLARED partial payload -- one category's
+            # exclusions silently missing from the system prompt -- and this
+            # function's whole reason for existing is that "a checker that
+            # rebuilds an outbound payload from its own idea of the sources is
+            # green forever while the sender quietly starts sending something
+            # else." Two calls straddling the race return different strings, so
+            # `tests/test_egress_proof.py` would certify a payload that was
+            # never sent, and the router-accuracy percentage would move for a
+            # reason no reader could reconstruct.
+            #
+            # The retry recovers a writer's unlink-and-rewrite window and
+            # nothing else; a file that is genuinely gone is still gone on the
+            # second look.
+            try:
+                body = detail.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                try:
+                    body = detail.read_text(encoding="utf-8")
+                except FileNotFoundError as exc:
+                    raise RuntimeError(
+                        f"{detail} vanished between the walk and the read. The "
+                        f"judge payload would silently lose that category's "
+                        f"exclusions, so neither the accuracy figure nor the "
+                        f"egress proof would be over the payload actually sent. "
+                        f"Re-run once the tree is quiet."
+                    ) from exc
             parts.append(
                 f"\n\n=== {detail.stem.upper()} DETAIL (exclusions + compound) ===\n"
-                f"{detail.read_text(encoding='utf-8')}"
+                f"{body}"
             )
     return "".join(parts)
 

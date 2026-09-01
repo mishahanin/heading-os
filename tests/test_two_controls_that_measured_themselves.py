@@ -258,9 +258,29 @@ def _parsed():
 
 
 def _script_sources() -> dict[str, str]:
-    """{filename: source} for every tracked top-level script."""
-    return {p.name: p.read_text(encoding="utf-8", errors="replace")
-            for p in tracked_paths(["scripts/*.py"])}
+    """{filename: source} for every tracked top-level script.
+
+    The walk lists the scripts and this reads them, so a file can go away in
+    between. Silently skipping one would SHRINK the reachable-transport set, and
+    `test_every_script_that_can_send_is_denied_whole` asserts
+    `reachable - denied == set()` - a script dropped from `reachable` is a
+    sending script that passes the deny-list control without being denied. That
+    is a false pass on a security control, so the race is retried once and then
+    named, never skipped.
+    """
+    out: dict[str, str] = {}
+    for p in tracked_paths(["scripts/*.py"]):
+        try:
+            out[p.name] = p.read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            try:
+                out[p.name] = p.read_text(encoding="utf-8", errors="replace")
+            except FileNotFoundError as gone:
+                raise AssertionError(
+                    f"{p} vanished between the walk and the read; the deny-list "
+                    f"checks below would answer over a corpus that quietly lost "
+                    f"a script that may reach a transport") from gone
+    return out
 
 
 def test_the_tree_still_has_a_transport_to_find():

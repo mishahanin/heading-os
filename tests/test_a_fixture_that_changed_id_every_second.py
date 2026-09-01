@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import ast
 import gzip
+import struct
 import subprocess
 import sys
 import time
@@ -66,18 +67,51 @@ def test_gzip_really_does_embed_the_clock(tmp_path):
     Without this, every assertion below rests on a sentence in a docstring. If
     a future CPython stopped writing the timestamp, this test would fail and
     tell the reader the guard is now unnecessary, which is the right outcome.
+
+    The METHOD changed on 2026-09-01, and only the method. This used to prove
+    "the output varies with the clock" by compressing twice across a
+    `time.sleep(1.1)` and requiring the two to differ, which asks the host
+    clock to have advanced. It failed once inside a full `-n auto` run: both
+    outputs came back byte-identical, mtime field included. NOT REPRODUCED, and
+    NO CULPRIT FOUND. The investigation came back a clean negative on every
+    static check (no freezegun, no time_machine, no libfaketime, no
+    `SOURCE_DATE_EPOCH`, no patch of `gzip` or of any time function anywhere in
+    the tree). No cause is written here because none was established, and
+    inventing one would be worse than the flake.
+
+    What changed is how the same two properties are proven. Neither one now
+    requires the host clock to ADVANCE, so a machine whose timekeeping moves
+    under it can no longer turn a library assertion red. Property 2 is the one
+    that carries the docstring's purpose: it is what goes red if a future
+    CPython pins the default mtime to a constant.
     """
     payload = b"caf\xe9 not utf-8"
-    first = gzip.compress(payload)
-    time.sleep(1.1)
-    second = gzip.compress(payload)
 
-    assert first != second, (
-        "gzip.compress no longer varies with the clock, so the defect this "
-        "file guards cannot occur and the guard should be retired")
-    assert first[4:8] != second[4:8], (
+    # Property 1: the mtime lands in the header and it changes the bytes. Two
+    # explicit, different mtimes; the clock is not consulted at all.
+    early = gzip.compress(payload, mtime=1_000_000_000)
+    later = gzip.compress(payload, mtime=2_000_000_000)
+    assert early != later, (
+        "gzip.compress no longer varies with the mtime it is handed, so the "
+        "defect this file guards cannot occur and the guard should be retired")
+    assert early[4:8] != later[4:8], (
         "the bytes differ somewhere other than the mtime field, so the "
         "measurement recorded in this file's docstring is wrong")
+
+    # Property 2: the DEFAULT path reads the clock rather than a constant.
+    # Read once and compare; `now + 1` is accepted so a second boundary
+    # crossed between the two reads is not a failure. A clock that jumps
+    # BACKWARDS cannot break this, which is the point of the change.
+    now = int(time.time())
+    default = gzip.compress(payload)
+    assert default[4:8] in (struct.pack("<I", now), struct.pack("<I", now + 1)), (
+        "gzip.compress with no mtime= did not write the current epoch second "
+        "into bytes 4:8, so its default no longer reads the clock. If CPython "
+        "pinned the default, the defect this file guards cannot occur and the "
+        f"guard should be retired. Header carried {default[4:8]!r}, expected "
+        f"{struct.pack('<I', now)!r} or {struct.pack('<I', now + 1)!r}")
+
+    # Property 3: unchanged. mtime=0 is the fix, and it is deterministic.
     assert gzip.compress(payload, mtime=0) == gzip.compress(payload, mtime=0), (
         "mtime=0 is no longer deterministic, so the fix does not fix it")
 

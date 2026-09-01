@@ -65,7 +65,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from tests.repo_files import tracked_paths  # noqa: E402
+from tests.repo_files import read_sources, tracked_paths  # noqa: E402
 
 DOCS = ROOT / "docs"
 CATALOG = DOCS / "skills-mcp-plugins.html"
@@ -107,10 +107,40 @@ def _category_pages() -> list[Path]:
     return [p for p in _all_pages() if p != CATALOG]
 
 
+def _sources(paths: list[Path], what: str) -> list[tuple[Path, str]]:
+    """`(path, text)` for a walked list, or a failure naming what disappeared.
+
+    The walk and the read are two moments, and on a checkout several agents
+    share a file can be gone by the second one. Every caller of this helper is
+    building one side of a SET COMPARISON -- which skills carry the key, which
+    cards carry the glyph, which pages carry the legend -- so a file dropped
+    quietly does not narrow the answer, it CHANGES it: a lost SKILL.md turns its
+    correctly-badged card into a card claiming a lock that does not exist, and a
+    lost page turns every skill carded only there into a skill with no card.
+    Both read as drift that is not there, and the opposite direction reads as
+    clean when it is not.
+
+    So the race is read through `read_sources`, retried once, and then FAILS
+    naming the file. This is the count/completeness half of the rule, not the
+    scan half: there is no correct answer to give over a corpus that shrank.
+    """
+    lost: list[Path] = []
+    out = list(read_sources(paths, lost))
+    if lost:
+        still_gone: list[Path] = []
+        out += list(read_sources(lost, still_gone))
+        if still_gone:
+            raise AssertionError(
+                f"{what} disappeared between the walk and the read and is still "
+                "gone on retry; the badge-versus-key comparison cannot be made "
+                "over a file nobody read: "
+                + ", ".join(str(p) for p in still_gone))
+    return out
+
+
 def _locked_skills() -> set[str]:
     locked = set()
-    for skill in _skill_files():
-        text = skill.read_text(encoding="utf-8")
+    for skill, text in _sources(_skill_files(), "a SKILL.md"):
         if not text.startswith("---"):
             continue
         frontmatter = text.split("---", 2)[1]
@@ -151,8 +181,8 @@ def _index_entries() -> dict[str, bool]:
 def _badged_cards() -> set[str]:
     """Cards whose badge shows the lock, entity or literal."""
     badged = set()
-    for page in _category_pages():
-        for anchor, badge in _CARD.findall(page.read_text(encoding="utf-8")):
+    for _page, text in _sources(_category_pages(), "a category page"):
+        for anchor, badge in _CARD.findall(text):
             if LOCK in html.unescape(badge):
                 badged.add(anchor)
     return badged
@@ -160,8 +190,8 @@ def _badged_cards() -> set[str]:
 
 def _all_cards() -> set[str]:
     cards = set()
-    for page in _category_pages():
-        cards |= set(re.findall(r'<h3 id="s-([a-z0-9-]+)"', page.read_text(encoding="utf-8")))
+    for _page, text in _sources(_category_pages(), "a category page"):
+        cards |= set(re.findall(r'<h3 id="s-([a-z0-9-]+)"', text))
     return cards
 
 
@@ -257,11 +287,22 @@ def test_the_deliberate_omissions_really_have_no_card():
 
 # --- the glyph must be readable by the same scan on every page -----------------
 
-@pytest.mark.parametrize("page", _all_pages(), ids=lambda p: p.name)
-def test_the_lock_glyph_is_written_literally(page):
+# Read at COLLECTION through the same `_sources` helper the rest of this file
+# uses, and parametrize over the text. The walk ran when the decorator was
+# evaluated and a per-case `page.read_text()` ran at execution -- minutes later
+# under `-n auto` -- so a page removed inside that window raised
+# FileNotFoundError from inside the glyph guard. This is a COMPLETENESS claim
+# ("every page writes the lock literally"), so a skip would be exactly wrong:
+# `_sources` retries once and then FAILS naming the file, which is this module's
+# stated position on a corpus that shrank.
+_PAGE_SOURCES = _sources(_all_pages(), "a skills page")
+
+
+@pytest.mark.parametrize("page,text", _PAGE_SOURCES,
+                         ids=[p.name for p, _ in _PAGE_SOURCES])
+def test_the_lock_glyph_is_written_literally(page, text):
     """One page used `&#128274;`. Both render, but a mixed corpus means every
     future check has to remember to unescape, and one will forget."""
-    text = page.read_text(encoding="utf-8")
     assert "&#128274;" not in text, (
         f"{page.name} writes the lock as an HTML entity; the other pages use "
         "the literal 🔒"
@@ -271,8 +312,9 @@ def test_the_lock_glyph_is_written_literally(page):
 def test_the_legend_still_defines_the_badge():
     """If the sentence goes, the badge means nothing and these tests guard a
     symbol with no stated meaning."""
-    for page in _all_pages():
-        text = page.read_text(encoding="utf-8")
+    # "every page carries the legend" is a completeness claim: a page skipped
+    # because it vanished would be a page this test reports on without reading.
+    for page, text in _sources(_all_pages(), "a skills page"):
         assert "explicit-invocation only" in text, (
             f"{page.name} lost the legend defining 🔒"
         )

@@ -43,11 +43,15 @@ apscheduler import statements. That hole was found by attacking the guard after
 it was written, which is the only way this kind of hole is ever found.
 """
 import ast
+import sys
 from pathlib import Path
 
 import pytest
 
 ENGINE = Path(__file__).resolve().parent.parent
+
+sys.path.insert(0, str(ENGINE))
+from tests.repo_files import read_sources  # noqa: E402
 
 # Every scheduler class APScheduler 3.x ships, not only the two in use, so a
 # future daemon reaching for a different one is covered on the day it lands.
@@ -259,8 +263,12 @@ def test_the_objection_names_the_line():
 
 def _tree_failures() -> list[str]:
     failures = []
-    for path in sorted((ENGINE / "scripts").rglob("*.py")):
-        src = path.read_text(encoding="utf-8")
+    # Read through `read_sources`: the rglob lists the modules and this loop
+    # reads them, and a module can be written and removed inside that window in
+    # a checkout several agents share. A module that is gone builds no
+    # scheduler, so skipping is the right answer for this scan and the helper
+    # warns rather than dropping it in silence.
+    for path, src in read_sources(sorted((ENGINE / "scripts").rglob("*.py"))):
         if not any(name in src for name in SCHEDULER_NAMES):
             continue
         rel = path.relative_to(ENGINE)
@@ -287,10 +295,16 @@ def test_the_tree_walk_actually_reaches_the_daemons():
     updated every time a daemon lands would be raised without thought.
     """
     found = 0
-    for path in sorted((ENGINE / "scripts").rglob("*.py")):
-        src = path.read_text(encoding="utf-8")
+    # Same walk-then-read race. This is a FLOOR, so a module the race skipped can
+    # only lower the count and make the assertion fail loudly - it can never turn
+    # a missing scheduler into a pass - and the skip count is reported with it.
+    vanished: list[Path] = []
+    for path, src in read_sources(sorted((ENGINE / "scripts").rglob("*.py")),
+                                  vanished):
         if not any(name in src for name in SCHEDULER_NAMES):
             continue
         found += sum(1 for _ in scheduler_constructions(src, path.name))
 
-    assert found >= 3, f"expected at least 3 scheduler constructions, saw {found}"
+    assert found >= 3, (
+        f"expected at least 3 scheduler constructions, saw {found} "
+        f"({len(vanished)} file(s) vanished mid-walk)")

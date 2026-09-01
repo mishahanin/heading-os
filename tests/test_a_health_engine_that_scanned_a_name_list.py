@@ -38,7 +38,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from tests.repo_files import tracked_python_files  # noqa: E402
+from tests.repo_files import read_sources, tracked_python_files  # noqa: E402
 
 from scripts.utils.markdown import frontmatter_date, parse_frontmatter  # noqa: E402
 
@@ -360,9 +360,16 @@ def _old_form_sites():
     """
     import ast
     found = {}
-    for path in tracked_python_files():
+    # A SCAN for offender sites, so it reads through `read_sources`: a file that
+    # a parallel worker removed between the walk and the read cannot carry the
+    # banned form, and skipping it with a warning that names it beats dying of
+    # FileNotFoundError inside the sweep. `test_the_registry_does_not_outlive_
+    # its_sites` below is what stops a shrunken corpus from passing quietly --
+    # a declared site that went missing shows up there as stale.
+    vanished = []
+    for path, text in read_sources(tracked_python_files(), vanished):
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            tree = ast.parse(text)
         except SyntaxError:  # pragma: no cover - a broken file is another test's job
             continue
         for node in ast.walk(tree):

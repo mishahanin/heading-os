@@ -24,6 +24,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests.repo_files import read_sources
+
 ROOT = Path(__file__).resolve().parent.parent
 SKILLS = ROOT / ".claude" / "skills"
 VOICE = ROOT / ".claude" / "rules" / "voice.md"
@@ -41,13 +43,17 @@ def _instruction_files() -> list[Path]:
 
 def test_no_skill_prescribes_an_em_dash_as_punctuation():
     offenders: dict[str, list[str]] = {}
-    for path in _instruction_files():
-        for line in path.read_text(encoding="utf-8").splitlines():
+    # SCAN: a skill file that vanished between the rglob and the read prescribes
+    # nothing to anybody, so skipping it is the right answer; `read_sources`
+    # warns naming it and the count rides the failure message.
+    vanished: list[Path] = []
+    for path, text in read_sources(_instruction_files(), vanished):
+        for line in text.splitlines():
             if PRESCRIBES.search(line):
                 offenders.setdefault(path.relative_to(ROOT).as_posix(), []).append(
                     line.strip()[:120]
                 )
-    assert offenders == {}, offenders
+    assert offenders == {}, (offenders, f"{len(vanished)} file(s) vanished mid-walk")
 
 
 def test_the_planning_gate_voice_section_now_agrees_with_the_others():

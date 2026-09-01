@@ -35,7 +35,7 @@ import re
 from pathlib import Path
 
 import yaml
-from tests.repo_files import tracked_paths
+from tests.repo_files import read_sources, tracked_paths
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
@@ -144,8 +144,34 @@ def _markdown_files() -> list[Path]:
         ("docs/*.md", "reference/*.md", ".claude/rules/*.md", "*.md"))
 
 
+def _read_marker_file_or_fail(path: Path) -> str:
+    """Read one markdown file, or fail naming it. Not a skip.
+
+    The two functions below share a corpus and part company here on purpose.
+    This one produces a TOTAL, and a total taken over a corpus that shrank is a
+    smaller number reported as the real one - the reader is then told the marker
+    pattern rotted when what happened is that a file went missing. The sweep in
+    `test_a_block_level_audit_skip_marker_is_alone_on_its_line` hunts offenders
+    instead, and a file that is gone holds no offending line, so that one skips
+    through `read_sources` and says so.
+
+    Retried once, in case the miss landed in a rewrite window.
+    """
+    try:
+        return path.read_text(encoding="utf-8", errors="ignore")
+    except FileNotFoundError:
+        pass
+    try:
+        return path.read_text(encoding="utf-8", errors="ignore")
+    except FileNotFoundError:
+        raise AssertionError(
+            f"{path} vanished between the walk and the read, so this count is "
+            f"not the corpus total it is about to be compared against"
+        ) from None
+
+
 def test_the_marker_guard_has_markers_to_check():
-    hits = sum(len(_MARKER.findall(p.read_text(encoding="utf-8", errors="ignore")))
+    hits = sum(len(_MARKER.findall(_read_marker_file_or_fail(p)))
                for p in _markdown_files())
     assert hits >= 4, f"only {hits} audit-skip markers found; the pattern rotted"
 
@@ -153,8 +179,13 @@ def test_the_marker_guard_has_markers_to_check():
 def test_a_block_level_audit_skip_marker_is_alone_on_its_line():
     bad = []
     inspected = 0
-    for path in _markdown_files():
-        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    # A SCAN for offending lines, so a file that vanished between the walk and
+    # the read is skipped with a warning naming it: it holds no line to offend.
+    # The `inspected` floor below is over lines actually read, so a corpus that
+    # shrank underneath the sweep still trips it.
+    vanished = []
+    for path, text in read_sources(_markdown_files(), vanished):
+        for n, line in enumerate(text.splitlines(), 1):
             if not _MARKER.match(line.lstrip()):
                 continue                      # inline pair mid-paragraph: allowed
             inspected += 1
@@ -165,7 +196,9 @@ def test_a_block_level_audit_skip_marker_is_alone_on_its_line():
     # `_MARKER.match(line.lstrip())` predicate stopped matching (a rotted
     # pattern, a marker syntax change), every line would be skipped, `bad`
     # would stay empty, and the guard would pass having read nothing.
-    assert inspected >= 10, f"only {inspected} block-level marker lines inspected"
+    assert inspected >= 10, (
+        f"only {inspected} block-level marker lines inspected "
+        f"({len(vanished)} file(s) vanished mid-walk)")
     assert not bad, (
         "prose shares a line with a block-level audit-skip marker. Under "
         "CommonMark the comment block runs to the end of that line, so the "

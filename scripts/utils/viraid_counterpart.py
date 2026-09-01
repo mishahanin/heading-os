@@ -130,7 +130,39 @@ def build_vocab(root: Path) -> dict:
 
     # 1. CRM contacts (primary, richest source)
     for p in sorted((root / "crm" / "contacts").glob("*.md")):
-        fm = _frontmatter(p.read_text(encoding="utf-8", errors="replace"))
+        # Retried once, then REFUSED, and not the skip-and-warn of
+        # `scripts.utils.repo_files.read_sources`. A vocabulary looks like a
+        # search corpus, where skipping is right; this one is not. It is the
+        # ONLY air-gap on the VIRAID source (module docstring, first paragraph),
+        # and it is a CLASSIFIER input, not a retrieval index. A card dropped
+        # here does not make the gate see less, it makes the gate decide
+        # differently: a token that this card would have registered `tribe` is
+        # either absent (the message drops, and a real business episode is lost
+        # with no trace) or registered `external` by people.md instead, which is
+        # failure mode 2 in the docstring -- internal-personal content admitted
+        # into episode collection. `_add`'s collision rule, "a token seen as
+        # tribe is never promoted to external", only holds if the tribe card was
+        # actually read.
+        #
+        # The retry recovers a writer's unlink-and-rewrite window; a card that
+        # is genuinely gone is still gone on the second look. Only the vanished
+        # case is caught -- `errors="replace"` already covers an undecodable
+        # byte, and a permission error is a real fault about a file that IS
+        # there.
+        try:
+            raw = p.read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            try:
+                raw = p.read_text(encoding="utf-8", errors="replace")
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    f"{p} vanished between the walk and the read. The CRM tree "
+                    f"changed while the counterpart vocabulary was being built "
+                    f"over it, and a vocabulary missing one card can admit "
+                    f"internal-personal content this gate exists to keep out. "
+                    f"Re-run once the tree is quiet."
+                ) from exc
+        fm = _frontmatter(raw)
         rel = (fm.get("relationship_type") or "").lower()
         company = fm.get("pipeline_company") or ""
         is_tribe = rel.startswith("tribe") or company.strip() == "31C"

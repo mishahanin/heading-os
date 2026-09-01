@@ -43,7 +43,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from tests.repo_files import tracked_paths  # noqa: E402
+from tests.repo_files import read_sources, tracked_paths  # noqa: E402
 
 docx = pytest.importorskip("docx")
 
@@ -265,15 +265,26 @@ def _scanned() -> list[Path]:
 
 
 def _corpus() -> list[tuple[str, str]]:
-    """(relative path, source) for every file the two rules below judge."""
-    out = []
-    for path in _scanned():
-        try:
-            out.append((path.relative_to(ROOT).as_posix(),
-                        path.read_text(encoding="utf-8")))
-        except UnicodeDecodeError:  # pragma: no cover - not a python source file
-            continue
-    return out
+    """(relative path, source) for every file the two rules below judge.
+
+    A SCAN, so it reads through `read_sources`: the walk and the read are two
+    moments, and a scratch `.py` a parallel worker writes into `tests/` and
+    removes can sit inside that window. A file that is gone carries no strip
+    site, so it is skipped WITH a warning naming it rather than killing the
+    sweep with FileNotFoundError. `test_the_sweep_reaches_a_real_corpus` holds
+    the floor over what was actually read.
+
+    The `UnicodeDecodeError: continue` branch that stood here is gone on
+    purpose. Everything walked is a tracked `.py`; one that is not UTF-8 is a
+    real fault about a file that IS there, and skipping it shrank the corpus
+    this sweep claims to have judged. `read_sources` draws that line the same
+    way and its docstring says why.
+    """
+    vanished = []
+    return [
+        (path.relative_to(ROOT).as_posix(), source)
+        for path, source in read_sources(_scanned(), vanished)
+    ]
 
 
 # The two rules are pure functions of (corpus, registry) so they can be measured

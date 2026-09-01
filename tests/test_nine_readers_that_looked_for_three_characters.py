@@ -44,7 +44,7 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from tests.repo_files import tracked_python_files  # noqa: E402
+from tests.repo_files import read_sources, tracked_python_files  # noqa: E402
 
 from scripts.utils.markdown import FM_OK, split_frontmatter  # noqa: E402
 from scripts.utils.threads_lib import parse_thread_file  # noqa: E402
@@ -428,9 +428,14 @@ KNOWN_REGEX_DIVERGENCE = {
 def _frontmatter_regexes():
     """Every `re.*` call whose pattern is anchored at the start and holds two fences."""
     found = []
-    for path in tracked_python_files():
+    # Read through `read_sources`: the walk lists the modules and this loop
+    # parses them, and a scratch `.py` written into `tests/` by a parallel agent
+    # can live and die inside that window. A module that is gone spells no
+    # frontmatter regex, so it is skipped and named in a warning rather than
+    # taking the guard down with a FileNotFoundError.
+    for path, source in read_sources(tracked_python_files()):
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            tree = ast.parse(source)
         except SyntaxError:  # pragma: no cover
             continue
         for node in ast.walk(tree):

@@ -45,6 +45,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tests.repo_files import read_sources  # noqa: E402
+
 _spec = importlib.util.spec_from_file_location(
     "merge_contacts", ROOT / "scripts" / "merge-contacts.py")
 mc = importlib.util.module_from_spec(_spec)
@@ -352,10 +354,16 @@ def test_the_live_records_still_round_trip():
     if len(files) < 50:
         pytest.skip(f"no CRM corpus here ({len(files)} records)")
     drift = []
-    for path in files:
-        text = path.read_text(encoding="utf-8")
+    # SCAN: a record that disappeared between the glob and the read cannot fail
+    # to round-trip, so skipping it is the right answer; `read_sources` warns
+    # naming it so the corpus never shrinks silently.
+    vanished: list[Path] = []
+    for path, text in read_sources(files, vanished):
         if not mc.FRONTMATTER_RE.match(text):
             continue
         if _roundtrip(text) != text:
             drift.append(path.stem)
-    assert not drift, f"{len(drift)} records no longer round-trip: {drift[:5]}"
+    assert not drift, (
+        f"{len(drift)} records no longer round-trip: {drift[:5]} "
+        f"({len(vanished)} record(s) vanished mid-walk)"
+    )

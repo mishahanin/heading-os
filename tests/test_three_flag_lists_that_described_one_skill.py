@@ -58,7 +58,36 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from tests.repo_files import tracked_paths  # noqa: E402
+from tests.repo_files import read_sources, tracked_paths  # noqa: E402
+
+
+def _sources(paths, what: str) -> list[tuple[Path, str]]:
+    """`(path, text)` for a walked list, or a failure naming what disappeared.
+
+    The walk and the read are two moments and a file can go missing between
+    them, which used to raise FileNotFoundError from inside the sweep.
+    `read_sources` absorbs that, but a QUIET skip is wrong for both callers
+    here, so this helper retries once and then fails naming the file:
+
+    * the corpus below is a completeness claim ("every /scrutinize prose file"),
+      and a dropped file is a flag list nobody compared to the catalog while the
+      test still printed clean;
+    * the option derivation is the set a cross-reference is checked against, so
+      a dropped script turns a real flag into a reported phantom - an answer
+      that is wrong, not merely narrower.
+    """
+    lost: list[Path] = []
+    out = list(read_sources(list(paths), lost))
+    if lost:
+        still_gone: list[Path] = []
+        out += list(read_sources(lost, still_gone))
+        if still_gone:
+            raise AssertionError(
+                f"{what} disappeared between the walk and the read and is still "
+                "gone on retry; the flag-list comparison cannot be made over a "
+                "file nobody read: " + ", ".join(str(p) for p in still_gone))
+    return out
+
 
 SKILL = ROOT / ".claude" / "skills" / "scrutinize" / "SKILL.md"
 CATALOG = ROOT / ".claude" / "skills" / "scrutinize" / "references" / "flags.md"
@@ -258,8 +287,10 @@ def _enumerating_surfaces() -> dict[str, str]:
 def _corpus() -> dict[str, str]:
     """Every /scrutinize prose file, plus the skill's card on the public docs site."""
     files = {
-        str(path.relative_to(ROOT)): path.read_text(encoding="utf-8")
-        for path in tracked_paths([".claude/skills/scrutinize/**/*.md"])
+        str(path.relative_to(ROOT)): text
+        for path, text in _sources(
+            tracked_paths([".claude/skills/scrutinize/**/*.md"]),
+            "a /scrutinize prose file")
     }
     card = docs_card(DOCS_CARD_PAGE.read_text(encoding="utf-8"), "s-scrutinize")
     files["docs/skills-operations-quality.html#s-scrutinize"] = card
@@ -348,9 +379,9 @@ def _other_script_options() -> set[str]:
     import ast
 
     found: set[str] = set()
-    for path in tracked_paths(["scripts/**/*.py"]):
+    for _path, source in _sources(tracked_paths(["scripts/**/*.py"]), "a script"):
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            tree = ast.parse(source)
         except (SyntaxError, UnicodeDecodeError):
             continue
         for node in ast.walk(tree):

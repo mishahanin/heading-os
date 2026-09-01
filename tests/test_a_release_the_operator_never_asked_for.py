@@ -39,7 +39,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from tests.repo_files import tracked_paths  # noqa: E402
+from tests.repo_files import read_sources, tracked_paths  # noqa: E402
 
 
 def _load():
@@ -615,14 +615,36 @@ def _derive_push_capable_entry_points():
     import ast
 
     scripts = ROOT / "scripts"
-    trees = {}
-    for p in sorted(scripts.rglob("*.py")):
-        if "__pycache__" in p.parts:
-            continue
-        try:
-            trees[p] = ast.parse(p.read_text(encoding="utf-8"), filename=str(p))
-        except (SyntaxError, UnicodeDecodeError) as exc:  # pragma: no cover
-            pytest.fail(f"cannot parse {p}: {exc}")
+    candidates = [p for p in sorted(scripts.rglob("*.py"))
+                  if "__pycache__" not in p.parts]
+
+    # COMPLETENESS, not a scan. The claim the callers make on this derivation is
+    # "every push-capable script in the repo is covered by the wall", and the
+    # closure below is transitive: a file dropped because it vanished between
+    # the rglob and the read can also drop the scripts that only reach a push
+    # THROUGH it. A quiet skip would therefore shrink the derived set and the
+    # test would still print green. So read through `read_sources` for the
+    # mid-walk race, retry the losses once, and fail naming the file if it is
+    # genuinely gone.
+    def _parse_all(paths, into):
+        vanished: list[Path] = []
+        for p, src in read_sources(paths, vanished):
+            try:
+                into[p] = ast.parse(src, filename=str(p))
+            except (SyntaxError, UnicodeDecodeError) as exc:  # pragma: no cover
+                pytest.fail(f"cannot parse {p}: {exc}")
+        return vanished
+
+    trees: dict = {}
+    lost = _parse_all(candidates, trees)
+    if lost:
+        still_gone = _parse_all(lost, trees)
+        if still_gone:
+            pytest.fail(
+                "script(s) disappeared between the walk and the read and are "
+                "still gone on retry; the push-coverage claim cannot be made "
+                "over a file nobody parsed: "
+                + ", ".join(str(p) for p in still_gone))
 
     def _scopes(tree):
         yield tree
@@ -783,13 +805,18 @@ def test_no_shell_script_pushes_behind_the_derivations_back():
         f"the tree and the absence assertion below would be vacuous")
 
     offenders = []
-    for p in scripts:
-        text = p.read_text(encoding="utf-8", errors="replace")
+    # SCAN: a `.sh` that vanished between the glob and the read cannot ship, and
+    # a script that cannot ship is not a hole in a release wall - the same
+    # reasoning the docstring already applies to a gitignored one. The skip is
+    # reported by `read_sources` and counted into the message below.
+    vanished: list[Path] = []
+    for p, text in read_sources(scripts, vanished, errors="replace"):
         if "git " + "push" in text:
             offenders.append(p.relative_to(ROOT).as_posix())
     assert not offenders, (
         "a shell script pushes; the AST derivation cannot see it, so either "
-        f"cover it in the wall by hand or move the push into Python: {offenders}")
+        f"cover it in the wall by hand or move the push into Python: {offenders} "
+        f"({len(vanished)} script(s) vanished mid-walk)")
 
 
 # ==========================================================================

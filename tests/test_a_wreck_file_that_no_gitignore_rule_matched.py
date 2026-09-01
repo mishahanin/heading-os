@@ -693,15 +693,43 @@ def _scanned() -> list[Path]:
 _CORPUS_DROPS: list[str] = []
 
 
+def _read_retrying(path: Path, rel: str) -> str:
+    """Read one source, absorbing a mid-walk vanish with a single retry.
+
+    NOT a skip, and deliberately not `read_sources`.
+    `test_the_sweep_INSPECTED_every_file_it_walked` asserts that the set READ
+    equals the set WALKED, so a file dropped quietly here comes back as "walked
+    but not read" and the reader is blamed for what was a race between two
+    agents sharing this checkout. One retry closes the window that opened when
+    a scratch file existed for the walk and not for the read; a file that is
+    still gone fails by name, which is the same discipline the drop recorder
+    below applies to a source it cannot decode.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        pass
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise AssertionError(
+            f"{rel} vanished between the walk and the read and was still gone "
+            f"one retry later. This sweep claims to have read every file it "
+            f"walked, so it cannot silently answer over one fewer."
+        ) from exc
+
+
 def _corpus() -> list[tuple[str, str]]:
     out = []
     _CORPUS_DROPS.clear()
     for path in _scanned():
         rel = path.relative_to(ROOT).as_posix()
         try:
-            out.append((rel, path.read_text(encoding="utf-8")))
+            text = _read_retrying(path, rel)
         except UnicodeDecodeError as exc:
             _CORPUS_DROPS.append(f"{rel}: UnicodeDecodeError: {exc}")
+        else:
+            out.append((rel, text))
     return out
 
 

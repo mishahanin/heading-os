@@ -255,6 +255,35 @@ def _write_program(tmp_path: Path, body: str) -> Path:
     return program
 
 
+def _corpus_snapshot(root: Path) -> list[tuple[Path, bytes]]:
+    """Every `.md` under ``root`` with its bytes, for a before/after comparison.
+
+    A walk and a read are two moments, and in this checkout a file can vanish
+    between them. This is a CHECKSUM, not a scan: skipping a file that
+    disappeared would shrink the baseline, and a shrunk baseline compared
+    against a full "after" reports a difference the sandbox never caused - or,
+    read the other way round, hides a mutation. So the read retries once and
+    then fails naming the file, rather than answering with a corpus that is not
+    the one it claims to have hashed.
+    """
+    snapshot: list[tuple[Path, bytes]] = []
+    for path in sorted(root.rglob("*.md")):
+        try:
+            snapshot.append((path, path.read_bytes()))
+        except FileNotFoundError:
+            try:
+                snapshot.append((path, path.read_bytes()))
+            except FileNotFoundError as exc:
+                raise AssertionError(
+                    f"{path} vanished between the walk and the read and was "
+                    f"still gone one retry later. This control compares the "
+                    f"corpus byte-for-byte before and after the sandbox runs, "
+                    f"so a skipped file would make the comparison answer about "
+                    f"a different corpus than the one it names."
+                ) from exc
+    return snapshot
+
+
 # ============================================================
 # CAP-1 - an aggregating question returns a structured, cited answer
 # ============================================================
@@ -373,13 +402,13 @@ def test_the_corpus_is_read_only(tmp_path):
         pathlib.Path("/out/answer.json").write_text(json.dumps({"verdict": verdict}))
     ''')
 
-    before = sorted((p, p.read_bytes()) for p in FIXTURE.rglob("*.md"))
+    before = _corpus_snapshot(FIXTURE)
     sandbox.run_sandboxed(program=program, corpus_paths=[FIXTURE],
                           out_dir=out, timeout_s=30)
     verdict = json.loads((out / "answer.json").read_text(encoding="utf-8"))["verdict"]
     assert verdict.startswith("refused:"), verdict
     # The refusal is the claim; the corpus being unchanged is the proof.
-    assert sorted((p, p.read_bytes()) for p in FIXTURE.rglob("*.md")) == before
+    assert _corpus_snapshot(FIXTURE) == before
 
 
 # ============================================================

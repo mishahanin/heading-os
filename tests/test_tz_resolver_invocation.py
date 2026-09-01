@@ -29,10 +29,19 @@ import sys
 from pathlib import Path
 
 import pytest
-from tests.repo_files import tracked_paths
+from tests.repo_files import read_sources, tracked_paths
 
 _ROOT = Path(__file__).resolve().parents[1]
 _INSTALLERS = tracked_paths(("scripts/install-*-timer.sh",))
+
+# Read the corpus ONCE, here, and parametrize over the text rather than the path.
+# The glob above runs at collection and a per-case `installer.read_text()` runs at
+# execution, which under `-n auto` is minutes later: an installer created and
+# removed inside that window would kill the case with a FileNotFoundError raised
+# from inside the guard. Reading here closes the window instead of narrowing it,
+# and `read_sources` warns once, naming anything that vanished.
+_INSTALLERS_VANISHED: list[Path] = []
+_INSTALLER_SOURCES = list(read_sources(_INSTALLERS, _INSTALLERS_VANISHED))
 
 
 def test_there_are_installers_to_check():
@@ -107,13 +116,18 @@ def test_the_shape_that_broke_no_longer_resolves_to_a_workspace_file():
     )
 
 
-@pytest.mark.parametrize("installer", _INSTALLERS, ids=lambda p: p.name)
-def test_no_installer_invokes_a_utils_file_by_path(installer):
+@pytest.mark.parametrize("installer,text", _INSTALLER_SOURCES,
+                         ids=[p.name for p, _ in _INSTALLER_SOURCES])
+def test_no_installer_invokes_a_utils_file_by_path(installer, text):
     """The guard that keeps the fix. An installer that reaches back to
     `"$PYTHON" ".../scripts/utils/<x>.py"` re-arms the shadow, and the failure
     is invisible because every one of these call sites has a `|| echo UTC`.
+
+    Parametrized over `(path, text)` rather than the path: this is a per-file
+    SCAN, but its partner below is the completeness half, and that one already
+    fails loudly on an installer nobody read. So the corpus is read once, at
+    collection, and there is no window left for a case to die in.
     """
-    text = installer.read_text(encoding="utf-8")
     offenders = [line.strip() for line in text.splitlines()
                  if "scripts/utils/" in line and ".py" in line
                  and "-m " not in line and not line.lstrip().startswith("#")]
@@ -125,6 +139,20 @@ def test_no_installer_invokes_a_utils_file_by_path(installer):
 def test_every_installer_resolves_the_zone_through_the_module_form():
     """The other jaw: an installer that stops resolving the zone at all would
     pass the test above by doing nothing. Each one must still ask."""
-    missing = [p.name for p in _INSTALLERS
-               if "-m scripts.utils.paths tz" not in p.read_text(encoding="utf-8")]
+    # COMPLETENESS, not a scan. The claim is that EVERY installer still asks,
+    # and this is the jaw that catches an installer which stopped asking - so an
+    # installer dropped because it vanished between the glob and the read is
+    # precisely the one the test would then pass over in silence. Read through
+    # `read_sources` for the walk/read race, retry once, and fail naming it.
+    lost = []
+    read = list(read_sources(_INSTALLERS, lost))
+    if lost:
+        still_gone = []
+        read += list(read_sources(lost, still_gone))
+        assert not still_gone, (
+            "installer(s) disappeared between the glob and the read and are "
+            "still gone on retry; this jaw cannot report clean over an "
+            "installer nobody read: " + ", ".join(str(p) for p in still_gone))
+    missing = [p.name for p, text in read
+               if "-m scripts.utils.paths tz" not in text]
     assert missing == [], f"these no longer resolve the operator zone: {missing}"

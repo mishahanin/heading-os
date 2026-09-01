@@ -5,6 +5,7 @@ import pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from scripts.rule_split_check import extract_imperatives, check_split, SEED
 from scripts.rule_split_check import _norm, check_inventories
+from tests.repo_files import read_sources
 
 
 def _n(t):
@@ -121,9 +122,23 @@ def test_committed_inventories_match_the_live_rules():
     assert len(snapshots) >= 2, (
         f"only {len(snapshots)} rule-split snapshots under {inventory}; the "
         f"drift check below would pass by having nothing to check")
-    for snap in snapshots:
-        frozen = [ln for ln in snap.read_text(encoding="utf-8").splitlines()
-                  if ln.strip()]
+    # The floor above is per-snapshot on purpose, so a snapshot silently dropped
+    # because it vanished between the glob and the read would be exactly the
+    # emptied file hiding behind a full sibling that this loop exists to catch.
+    # COUNT, not scan: read through `read_sources` for the walk/read race, retry
+    # once, then FAIL naming the snapshot rather than skip past it.
+    lost = []
+    read = list(read_sources(snapshots, lost))
+    if lost:
+        still_gone = []
+        read += list(read_sources(lost, still_gone))
+        assert not still_gone, (
+            "rule-split snapshot(s) disappeared between the glob and the read "
+            "and are still gone on retry; the per-snapshot floor cannot be "
+            "asserted over a file nobody read: "
+            + ", ".join(str(p) for p in still_gone))
+    for snap, text in read:
+        frozen = [ln for ln in text.splitlines() if ln.strip()]
         assert len(frozen) >= 5, f"{snap.name} froze only {len(frozen)} directives"
 
     bad = check_inventories(inventory_dir=inventory,

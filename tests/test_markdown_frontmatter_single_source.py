@@ -49,6 +49,14 @@ PARSER_NAMES = {
     "_parse_yaml_frontmatter",
     "split_frontmatter",
     "parse_frontmatter_strict",
+    # Added 2026-09-02, when `scripts/validate-crm-schema.py` split its parser
+    # into a path-taking reader and a text-taking parser so a caller holding
+    # already-read text does not re-open the file. The text half needed a name,
+    # and a name this set does not carry is a parser the sweep cannot see -- the
+    # exact blindness `parse_yaml_frontmatter` above records. Registering the
+    # spelling as it is introduced keeps the ratchet honest.
+    "parse_frontmatter_text",
+    "_parse_frontmatter_text",
 }
 
 # Files allowed to define their own parser, with the reason it cannot be a

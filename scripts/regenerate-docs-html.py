@@ -32,6 +32,7 @@ except ImportError:
     sys.exit(2)
 
 from scripts.utils.atomic import atomic_write_text  # noqa: E402
+from scripts.utils.repo_files import read_sources  # noqa: E402
 from scripts.utils.workspace import get_data_root, get_workspace_root  # noqa: E402
 
 ROOT = get_workspace_root()
@@ -521,8 +522,18 @@ def build_search_index(quiet: bool = False) -> int:
     pages = sorted(SITE_DIR.glob("*.html"))
     records = []
     truncated = 0
-    for html_path in pages:
-        title, sections = _extract_sections(html_path.read_text(encoding="utf-8"), html_path.stem)
+    indexed = 0
+    # Through `read_sources`, and SKIPPING is right here: an .html deleted
+    # between the glob and the read has no sections to index, and the index this
+    # writes is a search corpus, not a checksum -- one missing page costs its
+    # own findability and bends no other number. The alternative was a
+    # FileNotFoundError killing `--all` mid-pass and, with it, the docs drift
+    # gate. `indexed` rather than `len(pages)` in the summary below, because
+    # `read_sources` narrows the corpus and a count that still said "across N
+    # pages" would be asserting a coverage the pass no longer had.
+    for html_path, page_text in read_sources(pages):
+        indexed += 1
+        title, sections = _extract_sections(page_text, html_path.stem)
         for sec in sections:
             truncated += bool(sec["truncated"])
             records.append({
@@ -542,7 +553,7 @@ def build_search_index(quiet: bool = False) -> int:
     )
     if not quiet:
         kb = SEARCH_INDEX_PATH.stat().st_size / 1024
-        print(f"  search index: {len(records)} sections across {len(pages)} pages "
+        print(f"  search index: {len(records)} sections across {indexed} pages "
               f"-> assets/search-index.json ({kb:.0f} KB)")
         if truncated:
             # The cap is a deliberate size trade-off; the silence about it was

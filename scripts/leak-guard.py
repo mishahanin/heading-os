@@ -13,6 +13,7 @@ Usage:
 """
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -123,6 +124,10 @@ def check_paths(files) -> int:
     # instead of refusing. A crash at least fails closed under pre-commit; the
     # silent skip did not fail at all.
     unreadable = []
+    # Paths that vanished between the listing and the read AND are not staged,
+    # so they carry nothing into this commit. Reported, never blocking - see the
+    # FileNotFoundError branch below for why the staged half is not in here.
+    vanished = []
     for f in files:
         p = Path(f)
         rel = _rel(p)
@@ -144,6 +149,35 @@ def check_paths(files) -> int:
             continue
         try:
             text = p.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            # THE WALK-THEN-READ RACE, and here it gets the OPPOSITE answer from
+            # the one in `scripts/push-all.py`, on purpose.
+            #
+            # Both gates list paths and read them afterwards, and a file created
+            # and deleted inside that window made the read raise. In `push-all`
+            # the skip is safe, because that script stages with `git add -A`
+            # before it commits, so a path missing from the worktree is missing
+            # from the commit too.
+            #
+            # NOTHING RE-STAGES HERE. This gate runs as a pre-commit hook over
+            # an index somebody else built, and over `git ls-files` in CI. A
+            # tracked file deleted from the worktree still has its content in
+            # the INDEX, and that content is what the commit carries. Skipping
+            # on the missing worktree copy alone would let a hardcoded data path
+            # through by deleting the file after staging it - the same shape as
+            # the silent skip measured above, reached a different way.
+            #
+            # So the index is asked. Content that is still going to be committed
+            # is `unreadable` and BLOCKS. Only a path absent from the worktree
+            # AND the index carries nothing, and only that is dropped, in a
+            # visible line rather than in silence.
+            if _staged_in_index(p):
+                unreadable.append(
+                    (rel, "FileNotFoundError: gone from the worktree but still "
+                          "staged, so its content is in this commit"))
+            else:
+                vanished.append(rel)
+            continue
         except (OSError, UnicodeDecodeError) as exc:
             unreadable.append((rel, f"{type(exc).__name__}: {exc}"))
             continue
@@ -189,9 +223,63 @@ def check_paths(files) -> int:
             print(f"  {rel}  -> {why}")
         print("  Fix the file, or take it out of the commit. A file the gate "
               "cannot read is not a file the gate found clean.")
+    if vanished:
+        # Not a block. There is no content here for the commit to carry, so
+        # refusing would stop a commit over the gate's own timing. It is still
+        # SAID, because a corpus that shrank in silence is a narrowed check
+        # printing like a complete one (`.claude/rules/scope-claims.md`).
+        print(f"leak-guard: {len(vanished)} path(s) vanished between the "
+              f"listing and the read and are not staged, so they carry nothing "
+              f"into this commit and were not checked:")
+        for rel in vanished:
+            print(f"  {rel}")
     if violations or unreadable:
         return 1
     return 0
+
+
+def _staged_in_index(p: Path) -> bool:
+    """Is there content for this path in the index right now?
+
+    The question the FileNotFoundError branch above has to answer: a file gone
+    from the worktree is harmless only if it is gone from the commit too.
+
+    Fails CLOSED. A git call that cannot answer returns True, so the path is
+    treated as still-staged and BLOCKS. "I could not tell" must never resolve to
+    "nothing was there" in a gate whose whole job is refusing.
+    """
+    try:
+        rel = p.resolve().relative_to(get_workspace_root().resolve()).as_posix()
+    except (ValueError, OSError):
+        return True
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(get_workspace_root()), "ls-files", "-z", "--", rel],
+            capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return True
+    # `ls-files` AND NOT `cat-file -e`, and the difference is measured, not
+    # stylistic. MEASURED 2026-09-01 in this repository:
+    #
+    #     cat-file -e :<absent>  -> rc 128 + "fatal: path ... does not exist"
+    #     cat-file -e :<staged>  -> rc 0
+    #     ls-files -- <absent>   -> rc 0, empty stdout
+    #     ls-files -- <staged>   -> rc 0, the path on stdout
+    #     ls-files outside a repo-> rc 128
+    #
+    # `cat-file` answers "absent" and "git broke" with the SAME 128, so the two
+    # cannot be told apart and either every failure blocks or every absence
+    # passes. `ls-files` separates them: the verdict is stdout, and a non-zero
+    # exit is unambiguously "git did not answer" and fails closed.
+    #
+    # This also puts the split exactly where it belongs. A parallel worker's
+    # scratch file is UNTRACKED, so it is absent from the index and does not
+    # block -- that is the race this branch exists for. A TRACKED file that
+    # vanished mid-run still has content in the index that no gate has read, and
+    # that does block, which is the alarming case and should be.
+    if proc.returncode != 0:
+        return True
+    return bool(proc.stdout.strip())
 
 
 def _in_engine_repo() -> bool:

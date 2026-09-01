@@ -49,6 +49,7 @@ from scripts.bridge_daemon.sources.studio import (
 from scripts.bridge_daemon.sources.threads import (
     THREADS_BUSINESS_DIR, read_thread,
 )
+from tests.repo_files import read_sources
 
 # The prefixes `lstrip("./")` ate. Every one of these, prepended to an
 # otherwise-valid path, was swallowed whole before the prefix check ran.
@@ -209,17 +210,26 @@ def test_no_module_under_bridge_daemon_reintroduces_the_character_set_strip():
     """Guards the seventh copy. Five of six inherited this bug by paste."""
     repo = Path(__file__).resolve().parents[2]
     daemon = repo / "scripts" / "bridge_daemon"
-    scanned = sorted(daemon.rglob("*.py"))
-    assert len(scanned) > 20, (
-        f"only {len(scanned)} modules scanned under {daemon}; a guard over an "
-        f"empty-ish corpus passes for the wrong reason"
-    )
+    walked = sorted(daemon.rglob("*.py"))
+    # A SCAN: it looks for a shape and collects offenders. A module that
+    # vanished between the walk and the read cannot hold the seventh copy, so
+    # `read_sources` skips it with a warning naming it rather than dying of
+    # FileNotFoundError inside the guard. The floor below is asserted on what
+    # was actually READ, not on what was walked, so a corpus that shrank
+    # underneath the sweep still trips it.
     offenders = {}
-    for path in scanned:
-        source = path.read_text(encoding="utf-8")
+    vanished = []
+    read = 0
+    for path, source in read_sources(walked, vanished):
+        read += 1
         lines = _lstrip_dotslash_calls(ast.parse(source, filename=str(path)))
         if lines:
             offenders[str(path.relative_to(repo))] = lines
+    assert read > 20, (
+        f"only {read} modules read under {daemon} ({len(vanished)} vanished "
+        f"between the walk and the read); a guard over an empty-ish corpus "
+        f"passes for the wrong reason"
+    )
     assert offenders == {}, (
         f"{offenders} call .lstrip('./'), which strips a character SET, not a "
         f"prefix. Call scripts.bridge_daemon._safepath.normalize_rel_path."

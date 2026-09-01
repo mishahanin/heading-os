@@ -358,7 +358,24 @@ def test_the_shared_corpus_holds_a_card_of_each_shape(corpus):
 
     shapes = {"inline": 0, "entity_ref": 0}
     for p in sorted(corpus.crm.glob("*.md")):
-        fm = parse_frontmatter(p.read_text(encoding="utf-8")) or {}
+        # NOT a scan: these are COUNTS with a floor under each, over a six-card
+        # fixture that is curated to hold both shapes. A card skipped because it
+        # vanished between the glob and the read would drop a shape to zero and
+        # report "the corpus drifted back to one shape" about a corpus that did
+        # not drift. One retry absorbs a mid-walk race; a card that is genuinely
+        # gone fails by name.
+        try:
+            text = p.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            try:
+                text = p.read_text(encoding="utf-8")
+            except FileNotFoundError as exc:
+                raise AssertionError(
+                    f"{p} vanished between the walk and the read and was still "
+                    f"gone one retry later; this test counts the card shapes in "
+                    f"the fixture, so it cannot answer over one fewer."
+                ) from exc
+        fm = parse_frontmatter(text) or {}
         if (fm.get("name") or "").strip():
             shapes["inline"] += 1
         elif (fm.get("entity_ref") or "").strip():

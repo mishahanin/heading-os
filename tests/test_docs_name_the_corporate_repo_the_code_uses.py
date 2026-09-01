@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from tests.repo_files import tracked_paths
+from tests.repo_files import read_sources, tracked_paths
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -71,20 +71,37 @@ def test_the_canonical_name_is_readable():
 
 def test_the_guard_matches_something():
     """A detector that finds no references passes every rename silently."""
-    hits = sum(len(_refs(p.read_text(encoding="utf-8", errors="ignore")))
-               for p in _files())
+    # A COUNT, so a quiet skip would report a number nobody measured. Read
+    # through `read_sources` for the walk/read race, retry once, and fail naming
+    # the file if it is genuinely gone rather than tally around it.
+    files = _files()
+    lost: list[Path] = []
+    read = list(read_sources(files, lost, errors="ignore"))
+    if lost:
+        still_gone: list[Path] = []
+        read += list(read_sources(lost, still_gone, errors="ignore"))
+        assert not still_gone, (
+            "file(s) disappeared between the walk and the read and are still "
+            "gone on retry; the reference count would be short by an unknown "
+            "amount: " + ", ".join(str(p) for p in still_gone))
+    hits = sum(len(_refs(text)) for _p, text in read)
     assert hits >= 5, f"only {hits} corporate-repo references found; the pattern rotted"
 
 
 def test_no_document_names_a_corporate_repo_the_code_does_not_use():
     bad: list[str] = []
-    for path in _files():
-        for n, line in enumerate(path.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
+    # A SCAN, unlike the count above: a document that vanished between the walk
+    # and the read names no directory at all, so skipping it is the right
+    # answer. `read_sources` warns naming it, and the count rides the assertion.
+    vanished: list[Path] = []
+    for path, text in read_sources(_files(), vanished, errors="ignore"):
+        for n, line in enumerate(text.splitlines(), 1):
             for name in _refs(line):
                 if name != CANONICAL:
                     rel = path.relative_to(ROOT)
                     bad.append(f"{rel}:{n}: {name!r} (code uses {CANONICAL!r})")
     assert not bad, (
-        "documentation names a corporate repo directory the code does not use:\n"
+        "documentation names a corporate repo directory the code does not use "
+        f"({len(vanished)} file(s) vanished mid-walk):\n"
         + "\n".join(bad)
     )

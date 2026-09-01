@@ -48,6 +48,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from scripts.utils.workspace import get_classification  # noqa: E402
+from tests.repo_files import read_sources  # noqa: E402
 
 SKILL = ROOT / ".claude" / "skills" / "calibrate" / "SKILL.md"
 REFS = ROOT / ".claude" / "skills" / "calibrate" / "references"
@@ -260,13 +261,18 @@ def test_no_reference_file_still_targets_the_harness_store():
     """The examples and the detection prompts are what a run copies. A prose
     warning in SKILL.md does not help if the worked example names the cache."""
     offenders = []
-    for path in sorted(REFS.glob("*.md")):
-        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    # SCAN: a reference file that vanished between the glob and the read names
+    # no store at all, so skipping it is the right answer; `read_sources` warns
+    # naming it and the count goes into the message below.
+    vanished: list[Path] = []
+    for path, text in read_sources(sorted(REFS.glob("*.md")), vanished):
+        for i, line in enumerate(text.splitlines(), 1):
             if ".claude/projects/" in line and "memory" in line:
                 offenders.append(f"{path.name}:{i}: {line.strip()}")
     assert not offenders, (
         "A /calibrate reference file still targets the native harness memory "
-        "store instead of the canonical auto-memory store:\n  "
+        f"store instead of the canonical auto-memory store "
+        f"({len(vanished)} file(s) vanished mid-walk):\n  "
         + "\n  ".join(offenders)
     )
 

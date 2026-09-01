@@ -354,6 +354,31 @@ def test_the_real_memory_index_claims_no_managed_section():
 # No-mutation + single-file-write
 # ---------------------------------------------------------------------------
 
+def _memory_snapshot(mem: Path) -> dict:
+    """Every memory file's text and mtime. Fails naming a file, never skips it.
+
+    The two calls below bracket `gather()` and assert the two snapshots are
+    equal, which is a CHECKSUM over the whole directory rather than a sweep for
+    offenders. Dropping a file from `before` hides a mutation to it; dropping
+    one from `after` turns a file the detector DELETED into a memory store that
+    never changed. Both report clean over the exact breach this test exists to
+    catch, so a read that misses is retried once and then fails with the path.
+    """
+    snap = {}
+    for p in mem.glob("*.md"):
+        for attempt in (1, 2):
+            try:
+                snap[p.name] = (p.read_text(encoding="utf-8"), p.stat().st_mtime)
+                break
+            except FileNotFoundError:
+                if attempt == 2:
+                    pytest.fail(
+                        f"{p} vanished between the walk and the read. This "
+                        f"comparison cannot drop a file and still say memory "
+                        f"was not mutated.")
+    return snap
+
+
 def test_detector_never_mutates_memory(tmp_path, monkeypatch):
     mod = _load_hygiene()
     data_root = tmp_path / "data"
@@ -362,10 +387,10 @@ def test_detector_never_mutates_memory(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "get_data_root", lambda: data_root)
     _patch_slow_halves(mod, monkeypatch, errors=[])
 
-    before = {p.name: (p.read_text(encoding="utf-8"), p.stat().st_mtime) for p in mem.glob("*.md")}
+    before = _memory_snapshot(mem)
     mod.gather()
     mod.render_report(mod.gather(), "2026-06-26T00:00:00+04:00")
-    after = {p.name: (p.read_text(encoding="utf-8"), p.stat().st_mtime) for p in mem.glob("*.md")}
+    after = _memory_snapshot(mem)
     assert before == after
 
 

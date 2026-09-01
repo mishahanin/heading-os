@@ -65,6 +65,7 @@ from scripts.utils.embeddings import (
     index_embed_preference,
     model_digest,
 )
+from scripts.utils.repo_files import read_sources
 from scripts.utils.ollama_host import (
     LOCAL_HOST,
     OllamaHostUnavailable,
@@ -826,6 +827,10 @@ def _build_store(cfg, root, store_rel, layers, force) -> int:
     skipped_uptodate = 0
     denied_count = 0
     capped = 0
+    # Files a glob layer listed and that were gone by the time this pass reached
+    # them. Counted and NAMED, never a silent narrowing: the summary line below
+    # reports what was actually indexed, not what the walk listed.
+    vanished = []
     # Layers whose source raised, so their rows were KEPT rather than rebuilt.
     # This pass cannot speak for those vectors, whatever its layer list says.
     degraded = set()
@@ -959,7 +964,30 @@ def _build_store(cfg, root, store_rel, layers, force) -> int:
                 if rel in claimed:
                     continue            # first layer to claim keeps the label
                 claimed.add(rel)
-                mtime = fpath.stat().st_mtime
+                # The stat opens the same walk-then-read window the read below
+                # closes, and raises the same FileNotFoundError, so it gets the
+                # same answer. SKIPPING is correct here and nowhere near as
+                # obvious as it looks, so the whole chain is written down:
+                # the file is genuinely gone, this is an index for RETRIEVAL,
+                # and a note that no longer exists must not be retrievable. The
+                # bookkeeping already does the right thing with it -- `rel` is
+                # in `changed_paths`, whose DELETE at the end of this function
+                # drops the stale rows, and it is in `claimed`, so the prune
+                # leaves it alone this pass and the next walk (which will not
+                # list it at all) prunes it properly. Nothing downstream treats
+                # a missing note as an error; `recall` answers from the rows
+                # that are there.
+                #
+                # What skipping would otherwise cost is the claim, not the
+                # index: the summary line below counts records "in scope" from
+                # the walk, so a silent skip would report coverage this pass did
+                # not have. Hence `vanished`, which that line reports and which
+                # is printed by name.
+                try:
+                    mtime = fpath.stat().st_mtime
+                except FileNotFoundError:
+                    vanished.append(rel)
+                    continue
                 if (
                     not force
                     and rel in existing_by_path
@@ -968,9 +996,17 @@ def _build_store(cfg, root, store_rel, layers, force) -> int:
                     skipped_uptodate += 1
                     continue
                 changed_paths.add(rel)
-                info = parse_note(
-                    fpath.read_text(encoding="utf-8", errors="replace")
-                )
+                # Through the shared `read_sources`, which skips a vanished path
+                # and WARNS naming it. `errors="replace"` is preserved: a byte
+                # that does not decode is a real note, and the embedder wants its
+                # text. Only the vanished case is skipped -- a permission error
+                # or a directory here is a fault about a file that IS there and
+                # still raises.
+                sources = list(read_sources([fpath], errors="replace"))
+                if not sources:
+                    vanished.append(rel)
+                    continue
+                info = parse_note(sources[0][1])
                 title = info["title"]
                 if layer in chunk_layers:
                     pieces = chunk_text(
@@ -1022,13 +1058,26 @@ def _build_store(cfg, root, store_rel, layers, force) -> int:
     # "records", not "files". `claimed` holds a file path for a glob layer, a
     # `<repo>@<sha>` for a commit layer, and a path carrying a line range for a
     # symbol layer. Only one of the three is a file.
+    #
+    # `vanished` is on this line for the reason `.claude/rules/scope-claims.md`
+    # gives: "records in scope" comes from the walk, so without it a pass whose
+    # corpus shrank underneath it prints exactly like a pass that read
+    # everything. The names go to stderr beside it, because a count alone does
+    # not tell the operator which note is missing from the index.
     print(
         f"{CYAN}build:{RESET} {len(claimed)} records in scope "
         f"({skipped_uptodate} up-to-date, {len(changed_paths)} changed -> "
         f"{len(pending)} chunks to embed, {denied_count} denied, "
         f"{len(stale_paths)} records pruned"
-        + (f", {capped} hit chunk cap" if capped else "") + ")"
+        + (f", {capped} hit chunk cap" if capped else "")
+        + (f", {len(vanished)} listed but gone before the read" if vanished else "")
+        + ")"
     )
+    if vanished:
+        sys.stderr.write(
+            f"{YELLOW}{len(vanished)} file(s) vanished between the walk and the "
+            f"read and are NOT indexed:{RESET} " + ", ".join(vanished) + "\n"
+        )
 
     if pending:
         # Embed and commit per FILE. A file's chunks are contiguous in `pending`

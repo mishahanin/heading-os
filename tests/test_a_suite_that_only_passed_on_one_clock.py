@@ -145,7 +145,34 @@ def test_the_operator_zone_reaches_the_child_pinned_not_varied(tmp_path):
     coverage claim must be rewritten UPWARD rather than left describing a
     weaker guard than it has become.
     """
-    probe = ROOT / "tests" / f"test_zz_tzprobe_{os.getpid()}.py"
+    # WHY `tests/.tmp/` AND NOT `tests/` (2026-09-01), AND WHY NOT `tmp_path`.
+    #
+    # This wrote `tests/test_zz_tzprobe_<pid>.py` and removed it ~1.4s later.
+    # `scripts/run-tests.py` builds the pre-push gate as `-n auto -m "not
+    # acceptance"` and does NOT deselect `slow`, so this test runs INSIDE that
+    # gate while every other xdist worker is sweeping `tests/**/*.py`. Four
+    # sweeps read a path list and then read the files, and a file that vanishes
+    # inside that window raised FileNotFoundError from inside a guard. One
+    # `git push` was enough; no second agent was ever needed. That is what
+    # blocked a push on 2026-09-01.
+    #
+    # `.gitignore` already carries `.tmp/` with no leading slash, so it matches
+    # at any depth: the probe leaves every tracked walk at once, through an
+    # existing rule rather than a new bespoke pattern. A leftover from a crashed
+    # run is inert rather than invisible-and-armed - pytest's default
+    # `norecursedirs` includes `.*`, so a directory run never collects it, and
+    # the `runtime-state-guard` pre-commit hook refuses to stage any path
+    # containing `.tmp/`.
+    #
+    # `tmp_path` would break the test outright, which is why the fixture is
+    # unused here. pytest collects conftests by walking UP from the test file's
+    # own directory, so a probe outside the rootdir picks up no
+    # `tests/conftest.py`, sees the `Pacific/Kiritimati` it was launched with,
+    # and the assertion below measures nothing. MEASURED under `tests/.tmp/`:
+    # the probe still reports `Etc/GMT-4`, so the conftest pin still reaches it.
+    scratch = ROOT / "tests" / ".tmp"
+    scratch.mkdir(exist_ok=True)
+    probe = scratch / f"test_zz_tzprobe_{os.getpid()}.py"
     probe.write_text(_TZ_PROBE, encoding="utf-8")
     try:
         env = dict(os.environ, TZ="Pacific/Kiritimati",

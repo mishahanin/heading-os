@@ -38,6 +38,7 @@ from scripts.utils.colors import RED, GREEN, CYAN, YELLOW, RESET  # noqa: E402
 from scripts.utils.workspace import get_workspace_root  # noqa: E402
 from scripts.utils import markdown as md  # noqa: E402
 from scripts.utils.markdown import parse_frontmatter_strict  # noqa: E402
+from scripts.utils.repo_files import read_sources  # noqa: E402
 
 # ============================================================
 # Configuration
@@ -87,6 +88,26 @@ x-heading-routing:
 # ============================================================
 # Frontmatter parsing
 # ============================================================
+
+def _existing_text(path: Path) -> str | None:
+    """The file's text, or None when it is not there.
+
+    Replaces `path.read_text(...) if path.exists() else None` and the
+    `if not path.exists(): ... else: read_text(...)` pair below it. Both spelled
+    the same TOCTOU: a file present at the `exists()` call and gone by the read
+    raised FileNotFoundError out of a gate that already HAS a meaning for
+    "missing" -- write it at one site, report it as drift at the other.
+
+    Asking once and letting the answer be the absence removes the window
+    entirely, rather than narrowing it. Every other read error still raises: a
+    file that is there and cannot be read is a real fault, and this gate must
+    not quietly regenerate over it.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+
 
 def parse_frontmatter(skill_md: Path) -> tuple[dict, str]:
     """Return (frontmatter_dict, error_message); error_message is empty on success.
@@ -622,7 +643,7 @@ def cmd_split_write(rows: list[dict]) -> int:
     for category in CATEGORY_ORDER:
         path = CATEGORY_FILE_DIR / f"{category_slug(category)}.md"
         content = render_category_file(category, rows)
-        existing = path.read_text(encoding="utf-8") if path.exists() else None
+        existing = _existing_text(path)
         if existing != content:
             path.write_text(content, encoding="utf-8")
             wrote_any = True
@@ -659,22 +680,26 @@ def cmd_split_check(rows: list[dict]) -> int:
         slug = category_slug(category)
         path = CATEGORY_FILE_DIR / f"{slug}.md"
         content = render_category_file(category, rows)
-        if not path.exists():
+        existing = _existing_text(path)
+        if existing is None:
             drift.append((f"reference/skill-router/{slug}.md (MISSING)", "", content))
-        else:
-            existing = path.read_text(encoding="utf-8")
-            if existing != content:
-                drift.append((f"reference/skill-router/{slug}.md", existing, content))
+        elif existing != content:
+            drift.append((f"reference/skill-router/{slug}.md", existing, content))
 
     # Orphan detail files (a *.md not backed by a current category) are drift too.
     if CATEGORY_FILE_DIR.exists():
         expected = {f"{category_slug(c)}.md" for c in CATEGORY_ORDER}
-        for f in sorted(CATEGORY_FILE_DIR.glob("*.md")):
-            if f.name not in expected:
-                drift.append(
-                    (f"reference/skill-router/{f.name} (ORPHAN)",
-                     f.read_text(encoding="utf-8"), "")
-                )
+        orphans = [f for f in sorted(CATEGORY_FILE_DIR.glob("*.md"))
+                   if f.name not in expected]
+        # Through `read_sources`, and SKIPPING is right here. An orphan that
+        # disappeared between the glob and the read is an orphan that no longer
+        # exists, so declining to report it is the correct answer rather than a
+        # narrowed one -- and the alternative was a FileNotFoundError out of a
+        # pre-commit gate whose only finding had just deleted itself. The
+        # regenerated side is the empty string for every orphan (the file should
+        # not be there at all), so nothing here is a checksum a skip could bend.
+        for f, text in read_sources(orphans):
+            drift.append((f"reference/skill-router/{f.name} (ORPHAN)", text, ""))
 
     if not drift:
         print(f"{GREEN}OK{RESET}: core index + category files in sync with "

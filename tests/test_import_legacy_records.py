@@ -233,8 +233,26 @@ def test_traversal_is_refused(data_root, tmp_path):
         "the source symlink was followed and its target imported as a regular "
         "file; the importer's collection surface is no longer the four subtrees "
         "its docstring names")
-    imported = [p.read_text(encoding="utf-8")
-                for p in kd.rglob("*") if p.is_file()]
+    # NOT a scan to skip through: this asks whether ANY imported file carries
+    # content from outside the source tree, so a file dropped between the walk
+    # and the read is the one file that could hold it. The tree is the test's
+    # own destination directory, so a vanish here is a defect in the importer
+    # rather than a parallel agent; one retry, then fail by name.
+    imported = []
+    for p in kd.rglob("*"):
+        if not p.is_file():
+            continue
+        try:
+            imported.append(p.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            try:
+                imported.append(p.read_text(encoding="utf-8"))
+            except FileNotFoundError as exc:
+                raise AssertionError(
+                    f"{p} was listed in the destination and gone by the read, "
+                    f"twice; this assertion is about every imported file, so it "
+                    f"cannot answer with one of them missing."
+                ) from exc
     assert "original\n" not in imported, (
         f"content from outside the source tree reached the destination: {imported}")
 

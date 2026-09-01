@@ -194,7 +194,22 @@ def _run_case(name: str, tmp_path: Path) -> None:
         pytest.skip(f"golden fixtures rewritten for {name}")
 
     assert case_dir.is_dir(), f"no golden fixture for {name}; run with HEADING_OS_GOLDEN_UPDATE=1"
-    expected = {p.name: p.read_bytes() for p in sorted(case_dir.iterdir())}
+    # `iterdir` lists the fixtures and this reads them. Skipping one that went
+    # away in between would drop a part from `expected`, and the very next
+    # assertion reports the set of parts as CHANGED - a wrong verdict about the
+    # renderer, stated as fact. Retry once for the race, then fail naming it.
+    expected = {}
+    for p in sorted(case_dir.iterdir()):
+        try:
+            expected[p.name] = p.read_bytes()
+        except FileNotFoundError:
+            try:
+                expected[p.name] = p.read_bytes()
+            except FileNotFoundError as gone:
+                raise AssertionError(
+                    f"golden fixture {p} vanished between the listing and the "
+                    f"read; the part-set comparison below would blame the "
+                    f"renderer for a file that simply went away") from gone
     actual = {_fixture_name(k): v for k, v in produced.items()}
     assert sorted(actual) == sorted(expected), "the set of produced document parts changed"
     for part in sorted(expected):

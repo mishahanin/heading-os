@@ -55,7 +55,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from tests.repo_files import ignored_paths, tracked_paths  # noqa: E402
+from tests.repo_files import ignored_paths, read_sources, tracked_paths  # noqa: E402
 
 
 # ============================================================
@@ -409,15 +409,18 @@ def test_no_test_walks_the_repo_root_or_dot_claude_without_asking_git():
     the repository root and `**` matches zero or more directories, so
     `scripts/**/*.py` covers `scripts/a.py` too.
     """
-    modules = []
-    for path in _test_modules():
-        if path.name == Path(__file__).name:
-            continue
-        try:
-            modules.append((path.relative_to(ROOT).as_posix(),
-                            path.read_text(encoding="utf-8")))
-        except UnicodeDecodeError:  # pragma: no cover - another test's job
-            continue
+    # Read through `read_sources`. `_test_modules()` lists the paths and this
+    # loop reads them, and `tests/` is exactly where a parallel agent's scratch
+    # module appears and disappears; the FileNotFoundError would surface as this
+    # guard failing on a tree with nothing wrong in it. A module that is gone
+    # walks nothing, so the skip is correct and the helper warns. The decode
+    # branch is not carried over: a tracked `.py` that is not UTF-8 is a real
+    # fault about a file that IS there, and must still stop the suite.
+    modules = [
+        (path.relative_to(ROOT).as_posix(), text)
+        for path, text in read_sources(_test_modules())
+        if path.name != Path(__file__).name
+    ]
     violations = walk_violations(modules)
 
     assert not violations, (
@@ -572,15 +575,21 @@ def test_the_shared_helper_is_the_only_place_a_batch_filter_is_spelled():
     """
     owner = "scripts/utils/repo_files.py"
     holders = []
-    for path in _batch_rule_corpus():
+    # Same walk-then-read race as the sweep above, same verdict: a module that
+    # vanished spells no batch filter, so `read_sources` skips it with a warning
+    # and the count comes into the message below. `errors="ignore"` is kept, so
+    # this call reads exactly what the hand-rolled `read_text` did.
+    vanished: list[Path] = []
+    for path, text in read_sources(_batch_rule_corpus(), vanished, errors="ignore"):
         rel = path.relative_to(ROOT).as_posix()
         if rel in (owner, Path(__file__).relative_to(ROOT).as_posix()):
             continue
-        if spells_a_batch_filter(path.read_text(encoding="utf-8", errors="ignore")):
+        if spells_a_batch_filter(text):
             holders.append(rel)
     assert not holders, (
         f"these batch-filter through `git check-ignore --stdin` themselves "
-        f"instead of calling {owner}: {holders}")
+        f"instead of calling {owner}: {holders} "
+        f"({len(vanished)} file(s) vanished mid-walk)")
 
 
 def test_the_batch_rule_reaches_production_code_too():

@@ -46,6 +46,7 @@ import ast
 import importlib.util
 import logging
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -57,6 +58,35 @@ if str(ROOT) not in sys.path:
 from tests.repo_files import (  # noqa: E402
     tracked_python_files as _shared_tracked_python_files,
 )
+
+
+def _readable_sources(paths, vanished: list):
+    """`(path, text)` per path, skipping what vanished and what will not decode.
+
+    Both sweeps below are SCANS: a file a parallel agent created and deleted
+    between the walk and the read froze no path into a default, so skipping it
+    is the right answer, and it is named rather than dropped in silence.
+
+    `scripts/utils/repo_files.read_sources` is the shared fix this mirrors, and
+    it is not called directly because it decodes STRICTLY by contract: a source
+    that will not decode raises out of the generator and ends the walk, where
+    both sweeps here have always skipped that one file and carried on. The
+    vanished names go into the assertion messages, so a corpus that shrank
+    underneath a floor cannot look like a corpus that was always that size.
+    """
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            vanished.append(path.relative_to(ROOT).as_posix())
+            continue
+        except UnicodeDecodeError:
+            continue
+        yield path, text
+    if vanished:
+        warnings.warn(
+            f"{len(vanished)} path(s) vanished between the walk and the read "
+            f"and were not scanned: {', '.join(vanished)}", stacklevel=2)
 
 
 # ============================================================
@@ -720,10 +750,11 @@ def test_the_repository_sweep_finds_functions_that_carry_defaults_at_all():
     make the rule below pass over an empty world.
     """
     with_defaults = 0
-    for path in tracked_python_files():
+    vanished: list[str] = []
+    for _path, source in _readable_sources(tracked_python_files(), vanished):
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (SyntaxError, UnicodeDecodeError):
+            tree = ast.parse(source)
+        except SyntaxError:
             continue
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
@@ -731,7 +762,8 @@ def test_the_repository_sweep_finds_functions_that_carry_defaults_at_all():
                     or any(d is not None for d in node.args.kw_defaults)):
                 with_defaults += 1
     assert with_defaults > 200, (
-        f"only {with_defaults} functions with defaults found; the AST walk is not working")
+        f"only {with_defaults} functions with defaults found; the AST walk is "
+        f"not working ({len(vanished)} file(s) vanished mid-walk: {vanished})")
 
 
 def test_the_allow_list_currently_on_disk_carries_no_stale_entry():
@@ -778,12 +810,9 @@ def test_no_function_under_scripts_or_claude_freezes_a_path_into_its_defaults():
     exempt = {(relative, qualified, parameter)
               for relative, qualified, parameter, _ in ALLOWED}
     violations: list[str] = []
-    for path in tracked_python_files():
+    vanished: list[str] = []
+    for path, source in _readable_sources(tracked_python_files(), vanished):
         relative = path.relative_to(ROOT).as_posix()
-        try:
-            source = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
         try:
             hits = frozen_path_defaults(source)
         except SyntaxError:
@@ -794,5 +823,6 @@ def test_no_function_under_scripts_or_claude_freezes_a_path_into_its_defaults():
             violations.append(
                 f"{relative}:{lineno}  {qualified}({parameter}={default})")
     assert not violations, (
-        "these defaults capture a module-level path at import time, so patching "
-        "the global does not redirect them:\n  " + "\n  ".join(violations))
+        f"these defaults capture a module-level path at import time, so patching "
+        f"the global does not redirect them ({len(vanished)} file(s) vanished "
+        f"mid-walk: {vanished}):\n  " + "\n  ".join(violations))

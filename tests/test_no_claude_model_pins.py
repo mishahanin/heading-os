@@ -78,10 +78,27 @@ def _sources_matching(pattern: str) -> list[Path]:
     ]
 
 
-@pytest.mark.parametrize("path", _guarded_sources(), ids=lambda p: str(p.relative_to(ROOT)))
-def test_no_engine_script_pins_a_claude_release(path):
+sys.path.insert(0, str(ROOT))
+from tests.repo_files import read_sources  # noqa: E402
+
+# Read the ~390 guarded sources ONCE, at collection, and parametrize over the
+# text. `_guarded_sources()` walks the tree when the decorator is evaluated, and
+# a per-case `path.read_text()` runs at execution -- under `-n auto` that gap is
+# minutes, and a scratch file a parallel agent writes into `scripts/` and removes
+# would kill its case with a FileNotFoundError raised from inside the pin guard.
+# Reading here removes the window rather than narrowing it; `read_sources` warns
+# once, naming whatever vanished, and `test_the_scan_still_finds_the_sources`
+# below re-walks so a corpus that genuinely shrank is still red.
+_SOURCES_VANISHED: list[Path] = []
+_GUARDED_SOURCES = list(read_sources(_guarded_sources(), _SOURCES_VANISHED))
+
+
+@pytest.mark.parametrize(
+    "path,text", _GUARDED_SOURCES,
+    ids=[str(p.relative_to(ROOT)) for p, _ in _GUARDED_SOURCES])
+def test_no_engine_script_pins_a_claude_release(path, text):
     hits = []
-    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    for lineno, line in enumerate(text.splitlines(), 1):
         match = _PINNED_ID.search(line)
         if match:
             hits.append(f"{path.relative_to(ROOT)}:{lineno}: {match.group(0)!r}")

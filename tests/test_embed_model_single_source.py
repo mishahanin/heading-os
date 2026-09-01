@@ -31,7 +31,7 @@ import ast
 import sys
 import warnings
 from pathlib import Path
-from tests.repo_files import tracked_paths
+from tests.repo_files import read_sources, tracked_paths
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -100,7 +100,14 @@ def test_only_the_single_source_names_an_embedding_model():
     """A fourth copy fails here, with the file and the line that added it."""
     offenders: dict[str, list[tuple[int, str]]] = {}
     inspected = 0
-    for path in tracked_paths(("scripts/**/*.py",)):
+    # A SCAN: a file that vanished between the walk and the read names no
+    # embedding model, so skipping it is the right answer. `read_sources` warns
+    # naming it, and the `inspected` floor below carries the count, so a corpus
+    # that shrank cannot pass as one that was always this size. `errors="replace"`
+    # is preserved: a decode failure here is a file that IS there.
+    vanished: list[Path] = []
+    for path, source in read_sources(tracked_paths(("scripts/**/*.py",)), vanished,
+                                     errors="replace"):
         rel = _rel(path)
         if rel in ALLOWED:
             continue
@@ -109,7 +116,7 @@ def test_only_the_single_source_names_an_embedding_model():
             # a reason for this guard to add a warning to every suite run.
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", DeprecationWarning)
-                tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+                tree = ast.parse(source)
         except SyntaxError:  # not ours to judge here; py_compile owns that
             continue
         inspected += 1
@@ -122,7 +129,9 @@ def test_only_the_single_source_names_an_embedding_model():
     # returning something every path matches), zero trees would be walked, the
     # offender dict would be empty, and this guard would pass having checked
     # nothing.
-    assert inspected >= 240, f"only {inspected} script files reached the detector"
+    assert inspected >= 240, (
+        f"only {inspected} script files reached the detector "
+        f"({len(vanished)} vanished mid-walk: {vanished})")
     assert not offenders, (
         "these name an embedding model instead of asking "
         "scripts/utils/embeddings.index_embed_target():\n"

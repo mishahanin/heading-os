@@ -91,7 +91,22 @@ def _hash_tree(root: Path) -> str:
     h = hashlib.sha256()
     for p in files:
         h.update(p.relative_to(root).as_posix().encode())
-        h.update(p.read_bytes())
+        # `rglob` lists the paths and this loop reads them, so a file can go away
+        # in between. This is a CHECKSUM, not a scan: skipping the file would
+        # hash a different tree and still report a match or a mismatch as fact,
+        # which is the same defect as the empty-tree hash this helper already
+        # refuses. Retry once for the race, then fail naming the file.
+        try:
+            blob = p.read_bytes()
+        except FileNotFoundError:
+            try:
+                blob = p.read_bytes()
+            except FileNotFoundError as gone:
+                raise AssertionError(
+                    f"{p} vanished between the walk and the read, so this hash "
+                    f"would be taken over a different tree than the one listed"
+                ) from gone
+        h.update(blob)
     return h.hexdigest()
 
 

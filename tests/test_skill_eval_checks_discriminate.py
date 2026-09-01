@@ -151,10 +151,33 @@ def _benchmarks() -> list[Path]:
     return sorted(SKILLS.glob("*/evals/benchmark.json"))
 
 
+def _read_or_fail(path: Path) -> str:
+    """Read a benchmark the three checks below claim to have read ALL of.
+
+    The walk and the read are two moments and a file can disappear between
+    them. For a scan that is a skip, because an absent file violates nothing.
+    Not here: each of the three assertions is about EVERY benchmark - one
+    declares its label, one matches it against the data, one proves at least
+    one real baseline exists - so a quietly dropped file turns "all of them
+    declare it" into a claim about a corpus nobody named. One retry closes the
+    race window; a file that is still gone fails by name.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        try:
+            return path.read_text(encoding="utf-8")
+        except FileNotFoundError as exc:
+            raise AssertionError(
+                f"{path} vanished between the walk and the read and was still "
+                f"gone one retry later; these checks answer about every "
+                f"benchmark, so they cannot answer with one missing."
+            ) from exc
+
+
 def test_every_benchmark_declares_whether_its_baseline_is_a_self_seed():
     missing = [p.parent.parent.name for p in _benchmarks()
-               if "baseline_is_self_seed" not in
-               json.loads(p.read_text(encoding="utf-8"))]
+               if "baseline_is_self_seed" not in json.loads(_read_or_fail(p))]
     assert missing == [], missing
 
 
@@ -162,7 +185,7 @@ def test_the_label_matches_the_data():
     """A label nothing verifies would rot into a second lie."""
     wrong = []
     for path in _benchmarks():
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(_read_or_fail(path))
         baseline = dict(data["baseline"])
         baseline.pop("source", None)
         identical = (json.dumps(baseline, sort_keys=True)
@@ -175,7 +198,7 @@ def test_the_label_matches_the_data():
 def test_some_benchmarks_carry_a_real_baseline():
     """If every one were a self-seed, the label would be carrying no signal."""
     real = [p.parent.parent.name for p in _benchmarks()
-            if not json.loads(p.read_text(encoding="utf-8"))["baseline_is_self_seed"]]
+            if not json.loads(_read_or_fail(p))["baseline_is_self_seed"]]
     assert real, "no benchmark has ever been compared against a real baseline"
 
 

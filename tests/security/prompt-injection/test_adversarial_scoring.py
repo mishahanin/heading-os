@@ -30,6 +30,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
+from tests.repo_files import read_sources  # noqa: E402
+
 SUITE_PATH = ROOT / "tests" / "security" / "prompt-injection" / "run-adversarial-suite.py"
 ATTACKS_DIR = ROOT / "tests" / "security" / "prompt-injection" / "attacks"
 
@@ -241,7 +243,26 @@ def test_extract_text_concatenates_only_text_blocks():
 def _corpus():
     cases = sorted(ATTACKS_DIR.glob("*.json"))
     assert cases, "the attack corpus is empty; a suite over no cases certifies nothing"
-    return [(p, json.loads(p.read_text(encoding="utf-8"))) for p in cases]
+    # COMPLETENESS, not a scan. Every test below asserts over the WHOLE corpus,
+    # so a case dropped because it vanished between the glob and the read would
+    # be a case this file certifies without ever having examined it - the same
+    # shape as the empty corpus the assert above refuses. So: read through
+    # `read_sources` for the mid-walk race, retry the ones it lost once, and if
+    # a case is genuinely gone, FAIL naming it rather than certify around it.
+    loaded = []
+    vanished: list[Path] = []
+    for path, text in read_sources(cases, vanished):
+        loaded.append((path, json.loads(text)))
+    if vanished:
+        still_gone: list[Path] = []
+        for path, text in read_sources(vanished, still_gone):
+            loaded.append((path, json.loads(text)))
+        assert not still_gone, (
+            "attack case(s) disappeared between the glob and the read and are "
+            "still gone on retry; the corpus cannot be certified over a case "
+            "nobody read: " + ", ".join(str(p) for p in still_gone)
+        )
+    return sorted(loaded, key=lambda pair: pair[0])
 
 
 def test_no_corpus_case_can_be_scored_defended_on_an_empty_output():

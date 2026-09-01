@@ -24,6 +24,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tests.repo_files import read_sources  # noqa: E402
+
 CANONICAL = ROOT / ".claude" / "rules" / "hidden-chars.md"
 LITERAL = "Hidden characters: clean"
 
@@ -56,14 +58,16 @@ SEARCHED = (
 )
 
 
-def _sites() -> dict[str, list[int]]:
+def _sites(vanished: list[Path] | None = None) -> dict[str, list[int]]:
     found: dict[str, list[int]] = {}
+    # SCAN: the walk and the read are two moments, and a file that disappears
+    # between them cannot be pre-writing the clean outcome. `read_sources`
+    # skips it and WARNS naming it, so the corpus never shrinks silently.
     for base in SEARCHED:
         if not base.is_dir():
             continue
-        for path in sorted(base.rglob("*.md")):
-            lines = [n for n, line in
-                     enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        for path, text in read_sources(sorted(base.rglob("*.md")), vanished):
+            lines = [n for n, line in enumerate(text.splitlines(), 1)
                      if PREWRITTEN.search(line)]
             if lines:
                 found[path.relative_to(ROOT).as_posix()] = lines
@@ -71,10 +75,12 @@ def _sites() -> dict[str, list[int]]:
 
 
 def test_no_rule_or_skill_pre_writes_the_clean_outcome():
-    sites = _sites()
+    vanished: list[Path] = []
+    sites = _sites(vanished)
     assert sites == {}, (
         "these restate the confirmation line with the outcome already written in; "
-        "point them at .claude/rules/hidden-chars.md instead: "
+        f"point them at .claude/rules/hidden-chars.md instead "
+        f"({len(vanished)} file(s) vanished mid-walk): "
         + ", ".join(f"{path}:{lines}" for path, lines in sites.items())
     )
 

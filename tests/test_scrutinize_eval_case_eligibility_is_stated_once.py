@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from tests.repo_files import tracked_paths
+from tests.repo_files import read_sources, tracked_paths
 
 ROOT = Path(__file__).resolve().parent.parent
 DOC = ROOT / ".claude" / "skills" / "scrutinize" / "references" / "eval-case-template.md"
@@ -43,12 +43,22 @@ def test_the_file_is_the_one_place_the_gate_is_stated():
     # changed suffix would switch this guard off without failing anything.
     # Measured 2026-08-26: 17 markdown files under .claude/skills/scrutinize/.
     assert len(paths) >= 10, f"the scan collapsed to {len(paths)} files"
+    # A SCAN: a markdown file that vanished between the walk and the read
+    # restates nothing, so skipping it is correct and `read_sources` warns by
+    # name. The floor is re-asserted over what was READ, so the corpus cannot
+    # shrink underneath the "no second copy" claim without saying so.
     others = []
-    for path in paths:
+    vanished: list[Path] = []
+    read_count = 0
+    for path, text in read_sources(paths, vanished):
+        read_count += 1
         if path == DOC:
             continue
-        if "Promotion-eligibility" in path.read_text(encoding="utf-8"):
+        if "Promotion-eligibility" in text:
             others.append(path.relative_to(ROOT).as_posix())
+    assert read_count >= 10, (
+        f"only {read_count} of {len(paths)} files were read "
+        f"({len(vanished)} vanished mid-walk: {vanished})")
     assert others == [], f"the gate is restated in: {others}"
 
 

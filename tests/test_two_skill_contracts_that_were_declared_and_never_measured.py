@@ -36,12 +36,16 @@ first.
 """
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from tests.repo_files import read_sources  # noqa: E402
 SKILLS_DIR = ROOT / ".claude" / "skills"
 
 # Floors, well under the live counts (100 skills / 83 reference files as of
@@ -307,10 +311,15 @@ def test_every_consumed_by_pointer_names_its_own_owning_skill():
 def _bash_invocations() -> list[tuple[Path, Path, str, str]]:
     """(file, owning skill dir, script argument, whole command line) per hit."""
     found = []
-    for md in sorted(list(SKILLS_DIR.glob("*/SKILL.md"))
-                     + list(SKILLS_DIR.glob("*/references/*.md"))):
+    # A SCAN: a skill document that vanished between the glob and the read
+    # documents no command, so skipping it is the right answer and
+    # `read_sources` warns naming it. The corpus floor next door counts the
+    # same walk, so a shrunken corpus shows up there rather than nowhere.
+    docs = sorted(list(SKILLS_DIR.glob("*/SKILL.md"))
+                  + list(SKILLS_DIR.glob("*/references/*.md")))
+    for md, text in read_sources(docs):
         skill_dir = md.parents[1] if md.parent.name == "references" else md.parent
-        for block in BASH_FENCE_RE.finditer(md.read_text(encoding="utf-8")):
+        for block in BASH_FENCE_RE.finditer(text):
             for line in block.group(1).splitlines():
                 for script in PY_INVOCATION_RE.findall(line):
                     found.append((md, skill_dir, script, line.strip()))
@@ -318,12 +327,19 @@ def _bash_invocations() -> list[tuple[Path, Path, str, str]]:
 
 
 def test_the_bash_fence_corpus_is_not_empty():
-    blocks = sum(len(BASH_FENCE_RE.findall(md.read_text(encoding="utf-8")))
-                 for md in list(SKILLS_DIR.glob("*/SKILL.md"))
-                 + list(SKILLS_DIR.glob("*/references/*.md")))
+    # The anti-vacuity floor for the scan above, so it is the one place the
+    # narrowing has to be visible: a document skipped because it vanished
+    # lowers `blocks`, and the count of what vanished is reported beside it
+    # rather than left to look like a broken fence pattern.
+    docs = (list(SKILLS_DIR.glob("*/SKILL.md"))
+            + list(SKILLS_DIR.glob("*/references/*.md")))
+    vanished: list[Path] = []
+    blocks = sum(len(BASH_FENCE_RE.findall(text))
+                 for _md, text in read_sources(docs, vanished))
     assert blocks >= MIN_BASH_BLOCKS, (
         f"only {blocks} fenced bash blocks parsed out of the skill corpus; the "
-        f"fence pattern is broken and the invocation check below is vacuous"
+        f"fence pattern is broken and the invocation check below is vacuous "
+        f"({len(vanished)} of {len(docs)} documents vanished mid-walk: {vanished})"
     )
 
 

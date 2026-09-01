@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from scripts.utils.rmtree import rmtree_force  # noqa: E402
+from tests.repo_files import read_sources  # noqa: E402
 
 
 def _load(name, rel):
@@ -156,9 +157,20 @@ def test_no_script_passes_the_312_only_keyword():
         "the exempted file no longer contains the keyword it is exempted for, "
         "so the exemption is dead and should be removed rather than left to rot")
 
-    offenders = [p for p in scripts
-                 if "onexc=" in p.read_text(encoding="utf-8", errors="replace")
-                 and p.resolve() != canonical.resolve()]
+    # A SCAN: a file that vanished between the rglob and the read holds no
+    # `onexc=` to flag, so skipping it is the right answer and `read_sources`
+    # warns by name rather than dropping it in silence. `errors="replace"` is
+    # preserved: a decode failure is a real fault about a file that IS there.
+    vanished: list[Path] = []
+    offenders = [p for p, text in read_sources(scripts, vanished, errors="replace")
+                 if "onexc=" in text and p.resolve() != canonical.resolve()]
+    # The floor above counts what the walk found; this one counts what was
+    # actually read, so a corpus that shrank between the two cannot leave the
+    # emptiness claim standing over files nobody opened.
+    read_count = len(scripts) - len(vanished)
+    assert read_count >= 250, (
+        f"only {read_count} of {len(scripts)} scripts were read "
+        f"({len(vanished)} vanished mid-walk: {vanished})")
     assert offenders == [], offenders
 
 

@@ -56,6 +56,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 
+sys.path.insert(0, str(ROOT))
+from tests.repo_files import read_sources  # noqa: E402
+
 
 def _wizard():
     path = ROOT / "scripts" / "apply-wizard-answers.py"
@@ -214,18 +217,25 @@ def test_no_other_file_in_the_workspace_holds_any_run_of_the_key(answered,
     """Every file the run left behind, `.env` excepted. Not a named list: the
     defect this file was written for was a second file nobody had thought of."""
     checked = []
-    for path in sorted(workspace.rglob("*")):
-        if not path.is_file() or path.name == ".env":
-            continue
-        text = path.read_text(encoding="utf-8", errors="replace")
+    # Read through `read_sources`: the rglob lists the files the run left behind
+    # and this loop reads them, and the wizard's own subprocess may still be
+    # tidying inside that window. A file that is no longer on disk holds no key
+    # material, so skipping it is the correct answer for a leak scan; the two
+    # named anchors below are what keep the scan from going green over nothing,
+    # and they now carry the skip count.
+    vanished: list[Path] = []
+    for path, text in read_sources(
+            [p for p in sorted(workspace.rglob("*"))
+             if p.is_file() and p.name != ".env"],
+            vanished, errors="replace"):
         checked.append(path.relative_to(workspace).as_posix())
         assert not _leaks(text, E2E_KEY), (
             f"{path.relative_to(workspace)} holds key material: "
             f"{_leaks(text, E2E_KEY)}")
-    assert ".setup/answers.json" in checked, checked
+    assert ".setup/answers.json" in checked, (checked, f"{len(vanished)} vanished")
     assert ".setup/wizard.log" in checked, (
         f"the wizard's own diary was not written, so this test proved nothing "
-        f"about it. Files seen: {checked}")
+        f"about it. Files seen: {checked} ({len(vanished)} vanished mid-walk)")
 
 
 def test_neither_stream_carries_the_key(answered):

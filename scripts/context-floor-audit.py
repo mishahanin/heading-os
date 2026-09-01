@@ -93,6 +93,51 @@ def _tokens(byte_count: int) -> int:
     return byte_count // BYTES_PER_TOKEN
 
 
+def _read_or_refuse(path: Path) -> str:
+    """The file's text, retried once, REFUSING rather than skipping when it is gone.
+
+    Both walks below gather their paths and read them afterwards. Several agents
+    work against one checkout here, so a file can be created and deleted inside
+    that window and `read_text` then raises FileNotFoundError from the middle of
+    an audit that had found nothing wrong.
+
+    This deliberately does NOT use `scripts.utils.repo_files.read_sources`, the
+    shared answer for that race, because `read_sources` SKIPS the vanished path
+    and warns. That is right for a scanner whose verdict is per-file. It is wrong
+    here, because every byte this script reads is summed into a BUDGET that
+    `--baseline` ratchets. `measure_skills` already spells out the direction: "a
+    dropped skill makes the measured floor SMALLER: the gate would then pass on a
+    floor that grew, which is the one direction a gate must not fail in." A
+    warning beside a floor that is short by one file is still a floor that is
+    short by one file, and the ratchet reads it as a shrink.
+
+    The retry is not decoration and it is not a fix for deletion. It recovers one
+    shape only: a writer that unlinks and rewrites, leaving the path briefly
+    absent. A file that is genuinely gone is still gone on the second look, and
+    that is the case this refuses, naming it.
+
+    `errors="replace"` is kept from both call sites: a byte that does not decode
+    still has a length, and this script counts bytes. Only the vanished case is
+    caught; a permission error or a directory handed in where a file was expected
+    is a real fault about a file that IS there and still raises.
+    """
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        pass
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError as exc:
+        raise SystemExit(
+            f"{RED}{path}: listed by the walk and gone by the read. This audit "
+            f"sums a byte budget and --baseline is a growth ratchet, so a "
+            f"dropped file makes the floor read smaller and growth elsewhere "
+            f"passes as a shrink. No figure computed over a corpus that changed "
+            f"underneath it can be trusted; re-run once the tree is quiet."
+            f"{RESET}"
+        ) from exc
+
+
 def measure_skills(root: Path) -> dict:
     """The catalogue, split into the surface a caller can edit and the rest.
 
@@ -105,7 +150,11 @@ def measure_skills(root: Path) -> dict:
     per_skill = []
     unreadable: list[str] = []
     for path in sorted((root / ".claude" / "skills").glob("*/SKILL.md")):
-        text = path.read_text(encoding="utf-8", errors="replace")
+        # Refuses on a SKILL.md that vanished between this glob and the read,
+        # for the reason the docstring above already gives about a skill that
+        # drops out. See `_read_or_refuse` for why skipping is the wrong
+        # degradation for a budget.
+        text = _read_or_refuse(path)
         frontmatter, _body, kind = split_frontmatter(text)
         if frontmatter is None or kind != FM_OK:
             unreadable.append(f"{path.parent.name} ({kind})")
@@ -174,7 +223,12 @@ def _is_always_on(text: str) -> bool:
 def measure_rules(root: Path) -> dict:
     always, scoped = [], []
     for path in sorted((root / ".claude" / "rules").glob("*.md")):
-        text = path.read_text(encoding="utf-8", errors="replace")
+        # The second walk-then-read in this script, refused for the same reason
+        # as the first and fixed in the same change: `always_on_bytes` is a
+        # component of the ratcheted total, so a rule file that vanished mid-walk
+        # lowers the floor exactly like a dropped skill. A fix that lands in one
+        # of two copies is the copy that stops being fixed.
+        text = _read_or_refuse(path)
         row = {"rule": path.name, "bytes": len(text.encode("utf-8"))}
         (always if _is_always_on(text) else scoped).append(row)
     return {

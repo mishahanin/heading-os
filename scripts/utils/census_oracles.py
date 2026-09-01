@@ -322,8 +322,35 @@ def _contacts(corpus: CorpusPaths) -> list[tuple[Path, dict]]:
         return []
     contacts, unreadable = [], []
     for p in sorted(corpus.crm.glob("*.md")):
+        # The vanished case, split out of `_UNREADABLE` and named. `_UNREADABLE`
+        # is `(OSError, ValueError, yaml.YAMLError)`, so a card deleted between
+        # this glob and the read was already caught -- but it landed in the
+        # `unreadable` list under a bare "[Errno 2] No such file or directory",
+        # which reads as a broken card rather than as a corpus that moved, and
+        # it got no retry.
+        #
+        # It still REFUSES, and deliberately not the skip-and-warn of
+        # `scripts.utils.repo_files.read_sources`. This function computes the
+        # ORACLE the census benchmark scores an answer against. A dropped card
+        # lowers the truth, the measured answer agrees with the lowered truth,
+        # and the benchmark reports a pass over a corpus neither side saw whole
+        # -- the same reasoning `_threads` above states as "the truth would
+        # shrink silently". The retry recovers a writer's unlink-and-rewrite
+        # window; a card that is genuinely gone is still gone on the second look.
         try:
-            frontmatter = parse_frontmatter(p.read_text(encoding="utf-8"))
+            raw = p.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            try:
+                raw = p.read_text(encoding="utf-8")
+            except FileNotFoundError as exc:
+                raise UnreadableCorpus(
+                    f"{p.name} vanished between the walk and the read: the CRM "
+                    "corpus changed while the truth was being computed over it, "
+                    "so every count derived from it is short by that card and "
+                    "nothing downstream can tell. Re-run once the tree is quiet."
+                ) from exc
+        try:
+            frontmatter = parse_frontmatter(raw)
         except _UNREADABLE as exc:
             unreadable.append(f"{p.name}: {exc}")
             continue

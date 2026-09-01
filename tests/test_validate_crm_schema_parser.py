@@ -32,11 +32,15 @@ its own finding and is recorded in `main()`.
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from tests.repo_files import read_sources  # noqa: E402
 SCRIPT = ROOT / "scripts" / "validate-crm-schema.py"
 
 
@@ -99,12 +103,31 @@ def test_every_live_block_list_reads_as_an_array(vcs):
 
     block_key = re.compile(r"^([\w-]+):[ \t]*$\n(?:^[ \t]*-[ \t].*$\n?)+", re.M)
     checked = 0
-    for f in sorted(crm.glob("contacts/*.md")) + sorted(crm.glob("address-book/*.md")):
-        head = f.read_text(encoding="utf-8").partition("\n---\n")[0]
+    # A SCAN, and over the operator's LIVE overlay, where a record really can be
+    # written or removed while the suite runs: a card that vanished between the
+    # glob and the read has no block list to mis-parse, so skipping it is the
+    # right answer and `read_sources` warns naming it. `checked` still gates the
+    # skip-if-nothing below, and the vanished count rides in that skip reason so
+    # a corpus that shrank cannot present as a corpus that had nothing to check.
+    #
+    # The parse goes through `parse_frontmatter_text`, on the text `read_sources`
+    # already handed back, NOT through `parse_frontmatter(f)`. The path-taking
+    # one re-opens the record, which is a second window of the same race, one
+    # call narrower: the card can vanish between `read_sources` reading it and
+    # the parser opening it again, and `parse_frontmatter` renders that as None
+    # -- so the assertion below would report `tags parsed as None` against a
+    # record whose tags are fine. Passing the text removes the window instead of
+    # shrinking it. The two functions share one parser body, so this measures
+    # exactly what the gate runs.
+    records = (sorted(crm.glob("contacts/*.md"))
+               + sorted(crm.glob("address-book/*.md")))
+    vanished: list[Path] = []
+    for f, text in read_sources(records, vanished):
+        head = text.partition("\n---\n")[0]
         keys = [m.group(1) for m in block_key.finditer(head + "\n")]
         if not keys:
             continue
-        fm = vcs.parse_frontmatter(f) or {}
+        fm = vcs.parse_frontmatter_text(text) or {}
         for key in keys:
             assert isinstance(fm.get(key), list) and fm[key], (
                 f"{f.name}: {key} parsed as {fm.get(key)!r}, not an array"
@@ -112,4 +135,5 @@ def test_every_live_block_list_reads_as_an_array(vcs):
             checked += 1
 
     if not checked:
-        pytest.skip("no live record uses a block list")
+        pytest.skip(f"no live record uses a block list "
+                    f"({len(vanished)} of {len(records)} vanished mid-walk)")

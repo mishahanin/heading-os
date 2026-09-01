@@ -58,6 +58,42 @@ def answer(out_dir: Path) -> dict:
     return json.loads((out_dir / "answer.json").read_text(encoding="utf-8"))
 
 
+def snapshot(root: Path) -> dict[Path, bytes]:
+    """Every file under ``root``, mapped to its bytes. Fails, never skips.
+
+    The two callers below take one of these before the box runs and one after,
+    and assert the two are equal to prove the corpus was mounted read-only. That
+    is a CHECKSUM over a whole tree, so a file dropped from either side is not a
+    narrowed scan - it is the wrong answer. Drop it from `before` and a mutation
+    to that file is invisible; drop it from `after` and a file the box DELETED
+    reads as a corpus that never changed. Either way the control reports clean
+    over the breach it exists to catch.
+
+    So a read that misses is retried once, in case it landed in a rewrite
+    window, and then fails naming the file. `read_sources` is the right answer
+    for a sweep hunting offenders and the wrong one here, and it reads text
+    besides; these comparisons are over bytes.
+    """
+    snap: dict[Path, bytes] = {}
+    for p in sorted(root.rglob("*")):
+        if not p.is_file():
+            continue
+        try:
+            snap[p] = p.read_bytes()
+            continue
+        except FileNotFoundError:
+            pass
+        try:
+            snap[p] = p.read_bytes()
+        except FileNotFoundError:
+            pytest.fail(
+                f"{p} vanished between the corpus walk and the read. This "
+                f"comparison cannot drop a file and still say the corpus is "
+                f"unchanged, so it stops here."
+            )
+    return snap
+
+
 # ============================================================
 # Control 1 - no network inside the box
 # ============================================================
@@ -139,12 +175,12 @@ def test_the_corpus_cannot_be_written_and_does_not_change(tmp_path, out):
             results["create"] = f"refused: {exc.strerror}"
         pathlib.Path("/out/answer.json").write_text(json.dumps(results))
     ''')
-    before = {p: p.read_bytes() for p in sorted(FIXTURE.rglob("*"))if p.is_file()}
+    before = snapshot(FIXTURE)
     run_sandboxed(program=prog, corpus_paths=[FIXTURE], out_dir=out, timeout_s=60)
     got = answer(out)
     assert "Read-only file system" in got["overwrite"], got["overwrite"]
     assert "Read-only file system" in got["create"], got["create"]
-    after = {p: p.read_bytes() for p in sorted(FIXTURE.rglob("*")) if p.is_file()}
+    after = snapshot(FIXTURE)
     assert after == before, "the corpus changed despite the read-only mount"
 
 
@@ -313,7 +349,7 @@ def test_the_writable_output_may_not_CONTAIN_a_corpus_path(tmp_path):
     corpus = out / "corpus"
     corpus.mkdir(parents=True)
     (corpus / "note.md").write_text("original", encoding="utf-8")
-    before = {p: p.read_bytes() for p in sorted(corpus.rglob("*")) if p.is_file()}
+    before = snapshot(corpus)
 
     prog = program(tmp_path, '''
         import pathlib
@@ -328,7 +364,7 @@ def test_the_writable_output_may_not_CONTAIN_a_corpus_path(tmp_path):
     assert result.refused is not None
     assert "contains the corpus path" in result.refused, result.refused
     assert result.exit_code is None, "the traversal ran despite the refusal"
-    after = {p: p.read_bytes() for p in sorted(corpus.rglob("*")) if p.is_file()}
+    after = snapshot(corpus)
     assert after == before, "the corpus changed behind a refusal"
     assert not (corpus / "planted.md").exists()
 

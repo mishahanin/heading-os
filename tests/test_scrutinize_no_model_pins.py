@@ -54,10 +54,24 @@ def _skill_files():
     return [p for p in SKILL_DIR.rglob("*.md") if p.name not in _ALLOWED]
 
 
-@pytest.mark.parametrize("path", _skill_files(), ids=lambda p: p.name)
-def test_no_claude_version_literal_in_the_skill(path):
+from tests.repo_files import read_sources  # noqa: E402
+
+# Read the skill tree ONCE, at collection, and parametrize over the text. The
+# rglob runs when the decorator is evaluated; a per-case `path.read_text()` runs
+# at execution, and under `-n auto` those are minutes apart. A `.md` written and
+# removed inside the skill directory in that window would raise
+# FileNotFoundError from inside this guard instead of a verdict about a pin.
+# `test_the_scan_still_finds_the_skill_files` re-walks, so a corpus that really
+# shrank is red there rather than silently narrower here.
+_SKILL_VANISHED: list[Path] = []
+_SKILL_SOURCES = list(read_sources(_skill_files(), _SKILL_VANISHED))
+
+
+@pytest.mark.parametrize("path,text", _SKILL_SOURCES,
+                         ids=[p.name for p, _ in _SKILL_SOURCES])
+def test_no_claude_version_literal_in_the_skill(path, text):
     hits = []
-    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    for lineno, line in enumerate(text.splitlines(), 1):
         match = _VERSIONED_CLAUDE.search(line)
         if match:
             hits.append(f"{path.name}:{lineno}: {match.group(0)!r} in {line.strip()[:90]}")

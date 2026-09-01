@@ -37,6 +37,9 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from tests.repo_files import read_sources  # noqa: E402
 
 SLOW_ONLY = '''"""Fixture: one slow test, deselected by the lane's marker filter."""
 import pytest
@@ -105,10 +108,16 @@ def test_no_other_test_owns_these_fixture_names():
     """The 2026-08-23 xdist race: two files writing one probe path."""
     others = [p for p in (ROOT / "tests").rglob("test_*.py")
               if p.name != Path(__file__).name]
-    assert others, "empty corpus proves nothing"
+    # A SCAN for a name clash, so it reads through `read_sources`. This walk
+    # covers `tests/` itself - the directory whose scratch probes it exists to
+    # police - and one of those probes can be written and removed between the
+    # walk and the read. A file that is gone owns no fixture name, so it is
+    # skipped WITH a warning naming it; the floor counts what was READ.
+    vanished = []
+    corpus = list(read_sources(others, vanished, errors="replace"))
+    assert corpus, f"empty corpus proves nothing ({len(vanished)} vanished)"
     for name in (SLOW_FIXTURE_NAME, EMPTY_FIXTURE_NAME):
-        clashes = [p.name for p in others
-                   if name in p.read_text(encoding="utf-8", errors="replace")]
+        clashes = [p.name for p, text in corpus if name in text]
         assert not clashes, clashes
 
 

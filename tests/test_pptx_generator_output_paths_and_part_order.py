@@ -86,6 +86,20 @@ def _template_files() -> list[Path]:
 # Floored so a broken glob cannot make every guard below pass over an empty set.
 EXPECTED_TEMPLATE_COUNT = 22
 
+sys.path.insert(0, str(ROOT))
+from tests.repo_files import read_sources  # noqa: E402
+
+# The templates, read ONCE at collection, for the four guards that only need the
+# source text. `_template_files()` globs when a decorator is evaluated and a
+# per-case `path.read_text()` runs at execution; under `-n auto` that window is
+# minutes wide, and a template removed inside it would raise FileNotFoundError
+# from inside the guard rather than report on the template. Reading here removes
+# the window. `test_the_template_corpus_is_the_size_this_file_claims` re-globs
+# and asserts EXACTLY 22 files that all still exist, so a corpus that really
+# shrank is caught there, loudly, and not swallowed as a quieter parametrize.
+_TEMPLATES_VANISHED: list[Path] = []
+_TEMPLATE_SOURCES = list(read_sources(_template_files(), _TEMPLATES_VANISHED))
+
 
 def test_the_template_corpus_is_the_size_this_file_claims():
     found = _template_files()
@@ -262,9 +276,10 @@ def resolves_an_output_root(tree: ast.AST) -> bool:
 
 
 @pytest.mark.parametrize(
-    "path", _template_files(), ids=lambda p: p.name)
-def test_no_template_writes_to_a_bare_relative_path(path: Path):
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    "path,source", _TEMPLATE_SOURCES,
+    ids=[p.name for p, _ in _TEMPLATE_SOURCES])
+def test_no_template_writes_to_a_bare_relative_path(path: Path, source: str):
+    tree = ast.parse(source, filename=str(path))
     hits = bare_relative_data_sinks(tree)
     assert not hits, (
         f"{path.relative_to(ROOT)} hands a bare relative filename to an output "
@@ -275,9 +290,10 @@ def test_no_template_writes_to_a_bare_relative_path(path: Path):
 
 
 @pytest.mark.parametrize(
-    "path", _template_files(), ids=lambda p: p.name)
-def test_every_template_resolves_its_output_root(path: Path):
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    "path,source", _TEMPLATE_SOURCES,
+    ids=[p.name for p, _ in _TEMPLATE_SOURCES])
+def test_every_template_resolves_its_output_root(path: Path, source: str):
+    tree = ast.parse(source, filename=str(path))
     assert resolves_an_output_root(tree), (
         f"{path.relative_to(ROOT)} never reads os.environ or __file__, so its "
         "output directory can only be the process CWD."
@@ -366,6 +382,12 @@ def test_a_template_run_without_deck_dir_refuses_and_writes_nothing(tmp_path):
 COPYABLE_TEMPLATES = [p for p in _template_files()
                       if p.name != "generate-cookbook-preview.py"]
 
+# The same filter over the sources read at collection, for the structural guard.
+# `test_every_template_refuses_without_deck_dir` keeps taking the Path: it runs
+# the file in a subprocess and needs the path, not the text.
+_COPYABLE_SOURCES = [(p, s) for p, s in _TEMPLATE_SOURCES
+                     if p.name != "generate-cookbook-preview.py"]
+
 
 @pytest.mark.parametrize(
     "template", COPYABLE_TEMPLATES, ids=lambda p: p.name)
@@ -396,13 +418,14 @@ def test_every_template_refuses_without_deck_dir(template: Path, tmp_path):
 
 
 @pytest.mark.parametrize(
-    "template", COPYABLE_TEMPLATES, ids=lambda p: p.name)
-def test_no_template_gives_deck_dir_a_default(template: Path):
+    "template,source", _COPYABLE_SOURCES,
+    ids=[p.name for p, _ in _COPYABLE_SOURCES])
+def test_no_template_gives_deck_dir_a_default(template: Path, source: str):
     """The structural half of the same guard, and the cheaper one.
 
     `os.environ.get("DECK_DIR", <anything>)` is the exact shape that survived.
     """
-    tree = ast.parse(template.read_text(encoding="utf-8"))
+    tree = ast.parse(source)
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
@@ -572,15 +595,16 @@ def pep723_script_block(source: str) -> str | None:
 
 
 @pytest.mark.parametrize(
-    "path", _template_files(), ids=lambda p: p.name)
-def test_every_template_has_a_parseable_inline_script_block(path: Path):
+    "path,source", _TEMPLATE_SOURCES,
+    ids=[p.name for p, _ in _TEMPLATE_SOURCES])
+def test_every_template_has_a_parseable_inline_script_block(path: Path, source: str):
     """21 of 22 failed this before 2026-08-31.
 
     The shebang is `uv run`, so an unparseable block means the file cannot be
     executed the way it advertises. uv reported:
     `TOML parse error at line 5, column 4 | ///`.
     """
-    content = pep723_script_block(path.read_text(encoding="utf-8"))
+    content = pep723_script_block(source)
     assert content is not None, f"{path.name} has no PEP-723 script block"
     meta = tomllib.loads(content)
     assert meta["dependencies"] == ["python-pptx==1.0.2"], (

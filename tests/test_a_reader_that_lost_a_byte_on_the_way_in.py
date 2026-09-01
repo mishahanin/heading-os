@@ -42,6 +42,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tests.repo_files import read_sources  # noqa: E402
+
 SCRIPTS = ROOT / "scripts"
 TEXT_MODE_KWARGS = ("text", "encoding", "universal_newlines")
 
@@ -164,6 +166,33 @@ def _python_sources() -> list[Path]:
     return sorted(p for p in SCRIPTS.rglob("*.py") if "__pycache__" not in p.parts)
 
 
+def _read_or_fail(path: Path) -> str:
+    """Read a path a COUNT depends on, retrying once before failing.
+
+    The walk and the read are two moments, and a parallel agent can create and
+    delete a file between them. For a scan that is a skip: an absent file
+    violates nothing. For the corpus-size floor below it is not, because there
+    the number IS the claim - a quietly dropped file lowers `splits` and the
+    guard then reports a corpus that shrank when nothing shrank. One retry
+    absorbs the race; a file that is still gone fails by name.
+
+    Only FileNotFoundError is absorbed. A permission error or a decode failure
+    is a real fault about a file that IS there, and the strict default is kept
+    so a byte this test exists to protect cannot be silently replaced.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        try:
+            return path.read_text(encoding="utf-8")
+        except FileNotFoundError as exc:
+            raise AssertionError(
+                f"{path} vanished between the walk and the read and was still "
+                f"gone one retry later; this check COUNTS the NUL-split sites "
+                f"under scripts/, so skipping it would report a wrong total."
+            ) from exc
+
+
 def _is_nul_string_split(node: ast.AST) -> bool:
     """True for `<something>.split("\\0")` on a STR (bytes splits are correct)."""
     if not isinstance(node, ast.Call):
@@ -256,11 +285,18 @@ def _text_mode_dash_z_offenders(tree: ast.Module) -> list[int]:
     return sorted(set(bad))
 
 
-def _offenders() -> dict[str, list[str]]:
-    """{relative path: [reason, ...]} across every script."""
+def _offenders(vanished: list | None = None) -> dict[str, list[str]]:
+    """{relative path: [reason, ...]} across every script.
+
+    A SCAN: a file that vanished between the walk and the read decodes nothing
+    and offends nothing, so skipping it is the right answer and `read_sources`
+    warns naming it. The one place a skip could mislead is the KNOWN_UNFIXED
+    staleness check, which would read a dropped file as "no longer offends", so
+    that assertion carries the vanished list in its own message.
+    """
     found: dict[str, list[str]] = {}
-    for path in _python_sources():
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for path, source in read_sources(_python_sources(), vanished):
+        tree = ast.parse(source, filename=str(path))
         reasons = [f"line {n}: str .split(chr(0)) on a value never decoded here"
                    for n in _nul_split_offenders(tree)]
         reasons += [f"line {n}: git -z argv run in subprocess text mode"
@@ -274,10 +310,16 @@ def test_the_guard_inspects_a_nonempty_corpus():
     """A guard that walks nothing passes everything."""
     sources = _python_sources()
     assert len(sources) > 100, len(sources)
-    splits = sum(len(_nul_split_offenders(ast.parse(p.read_text(encoding="utf-8"))))
-                 + p.read_text(encoding="utf-8").count('.split("\\0")')
-                 + p.read_text(encoding="utf-8").count('.split(b"\\0")')
-                 for p in sources)
+    # `splits` is a COUNT with a floor under it, so a skipped file would answer
+    # "the corpus shrank" about a corpus that did not. `_read_or_fail` fails by
+    # name instead. Each file is also read ONCE now and the three tallies share
+    # the text, which closes two of the three race windows this line carried.
+    splits = 0
+    for p in sources:
+        source = _read_or_fail(p)
+        splits += (len(_nul_split_offenders(ast.parse(source)))
+                   + source.count('.split("\\0")')
+                   + source.count('.split(b"\\0")'))
     assert splits >= 15, f"the NUL-split corpus shrank to {splits}; re-check the guard"
 
 
@@ -312,7 +354,8 @@ def test_the_guard_flags_a_synthetic_bad_reader(tmp_path):
 
 
 def test_no_git_path_reader_runs_in_subprocess_text_mode():
-    offenders = _offenders()
+    vanished: list[Path] = []
+    offenders = _offenders(vanished)
     unexpected = {k: v for k, v in offenders.items() if k not in KNOWN_UNFIXED}
     assert not unexpected, (
         "these readers translate CR to LF on the way in:\n"
@@ -320,7 +363,8 @@ def test_no_git_path_reader_runs_in_subprocess_text_mode():
 
     stale = KNOWN_UNFIXED - set(offenders)
     assert not stale, (
-        f"{sorted(stale)} no longer offends; delete the row from KNOWN_UNFIXED")
+        f"{sorted(stale)} no longer offends; delete the row from KNOWN_UNFIXED "
+        f"({len(vanished)} file(s) vanished mid-walk: {vanished})")
 
 
 def test_the_detector_cannot_see_a_helper_that_builds_its_argv(tmp_path):

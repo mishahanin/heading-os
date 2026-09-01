@@ -18,6 +18,34 @@ sys.path.insert(0, str(ROOT))
 BRANDS = ROOT / ".claude" / "skills" / "pptx-generator" / "brands"
 
 
+def _read_config_or_fail(cfg: Path) -> str:
+    """Read one brand config, or fail naming it. Not a skip.
+
+    The glob and the reads are two moments, and in a checkout several workers
+    share a file can go between them. A sweep hunting offenders across hundreds
+    of files can skip such a file with a warning, because a file that is gone
+    violates nothing.
+
+    This corpus is two permanent, tracked configs and the floor below is one, so
+    a silent skip leaves both guards green over HALF the brands while their
+    messages still say "no brand config" and "every brand". A miss here is not a
+    scratch-file race either; it is an anomaly about a file that belongs in the
+    tree. Retried once for a rewrite window, then named.
+    """
+    try:
+        return cfg.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        pass
+    try:
+        return cfg.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise AssertionError(
+            f"{cfg} vanished between the glob and the read. With two brands in "
+            f"the corpus, skipping one would leave this guard reporting on half "
+            f"of it in the words of the whole."
+        ) from None
+
+
 def test_no_brand_config_carries_a_repo_relative_output_path():
     from scripts.utils.workspace import get_routing_destination
 
@@ -28,7 +56,7 @@ def test_no_brand_config_carries_a_repo_relative_output_path():
     assert len(configs) >= 1, f"the scan collapsed to {len(configs)} files"
     offenders = []
     for cfg in configs:
-        directory = (json.loads(cfg.read_text(encoding="utf-8"))
+        directory = (json.loads(_read_config_or_fail(cfg))
                      .get("output", {}).get("directory", ""))
         if not directory:
             continue
@@ -51,5 +79,5 @@ def test_every_brand_declares_an_output_directory():
     # gone missing. Measured 2 configs on 2026-08-26: 31c, template.
     assert len(configs) >= 1, f"the scan collapsed to {len(configs)} files"
     for cfg in configs:
-        d = json.loads(cfg.read_text(encoding="utf-8"))
+        d = json.loads(_read_config_or_fail(cfg))
         assert d.get("output", {}).get("directory"), f"{cfg.parent.name} declares none"

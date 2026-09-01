@@ -53,7 +53,25 @@ def _daemon_templates() -> list[str]:
     for unit in sorted(_TEMPLATES.glob("*.service")):
         if unit.with_suffix(".timer").exists():
             continue
-        if "Type=oneshot" in unit.read_text(encoding="utf-8"):
+        # Read-or-fail, never skip. This read decides whether a unit COUNTS as a
+        # daemon, and the caller's verdict is that every counted daemon is named
+        # in EXPECTED_DAEMONS. A template dropped because it vanished between
+        # the glob and the read leaves the set silently, so a long-running
+        # daemon nobody expects a beat from reads as a clean fleet - the exact
+        # failure this module exists to refuse, reached from a third side.
+        # Retried once for a rewrite window, then named.
+        try:
+            text = unit.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            try:
+                text = unit.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                raise AssertionError(
+                    f"{unit} vanished between the glob and the read; a unit "
+                    f"template dropped here leaves the derived daemon set "
+                    f"without leaving the claim that the set is complete"
+                ) from None
+        if "Type=oneshot" in text:
             continue
         out.append(unit.stem)
     return out

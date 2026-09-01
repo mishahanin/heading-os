@@ -400,8 +400,18 @@ def test_a_source_symlinks_target_content_is_not_imported(
     _run(importer, ["--from", str(old_root_with_a_link_out), "--only", "knowledge"])
     dest = _knowledge_dest()
     assert not (dest / "link.md").exists()
-    assert "UNIVERSAL EXPORTS PAYROLL" not in "".join(
-        p.read_text(encoding="utf-8") for p in dest.rglob("*") if p.is_file())
+    # `rglob` lists the paths and the generator reads them. This is a scan for a
+    # string, so a file that disappeared between the two moments cannot be
+    # carrying the secret and skipping it is the right answer; `read_sources`
+    # names what it skipped instead of dropping it in silence.
+    from tests.repo_files import read_sources
+    vanished: list[Path] = []
+    joined = "".join(
+        text for _p, text in read_sources(
+            [p for p in dest.rglob("*") if p.is_file()], vanished))
+    assert "UNIVERSAL EXPORTS PAYROLL" not in joined, (
+        f"imported content carries the linked-to secret "
+        f"({len(vanished)} file(s) vanished mid-walk)")
 
 
 def test_the_real_file_beside_the_symlink_is_still_imported(

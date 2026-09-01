@@ -24,6 +24,7 @@ import pytest
 from pathlib import Path
 
 from scripts.utils.paths import data_overlay_present, get_data_root
+from tests.repo_files import read_sources
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -36,8 +37,14 @@ _OWN_REFERENCE = re.compile(r"(?<![\w./-])references/([A-Za-z0-9][A-Za-z0-9_.-]*
 def _cited_references() -> list[tuple[str, Path]]:
     """(skill name, expected path) for every own-references citation in the tree."""
     cited = []
-    for skill_md in _skill_md_files():
-        text = skill_md.read_text(encoding="utf-8")
+    # A SCAN, so it reads through `read_sources`. `_skill_md_files()` globs the
+    # working tree on purpose rather than asking git (see its docstring), which
+    # makes this the corpus most exposed to a file that appears and disappears
+    # between the walk and the read. A SKILL.md that is gone cites nothing, so
+    # it is skipped WITH a warning naming it instead of killing the walk, and
+    # `test_the_citation_walk_reaches_the_tree` holds the floor.
+    vanished = []
+    for skill_md, text in read_sources(_skill_md_files(), vanished):
         for name in sorted(set(_OWN_REFERENCE.findall(text))):
             cited.append((skill_md.parent.name, skill_md.parent / "references" / name))
     return cited
@@ -145,14 +152,20 @@ def _skill_md_files():
 def test_no_bare_superpowers_spec_references():
     """No SKILL.md may reference docs/superpowers/specs/ without a data-overlay note."""
     violations = []
-    skill_mds = _skill_md_files()
-    assert len(skill_mds) > 50, (
-        f"only {len(skill_mds)} SKILL.md files walked; this check reports clean "
-        f"over an empty corpus, so the floor is the guard")
-    for skill_md in skill_mds:
-        for lineno, line in enumerate(skill_md.read_text(encoding="utf-8").splitlines(), 1):
+    # A SCAN for offending lines: a SKILL.md that vanished between the walk and
+    # the read carries none, so it is skipped with a warning naming it. The
+    # floor moves onto what was READ, because a corpus that shrank underneath
+    # the sweep reports clean exactly as loudly as an empty one.
+    vanished = []
+    read = 0
+    for skill_md, text in read_sources(_skill_md_files(), vanished):
+        read += 1
+        for lineno, line in enumerate(text.splitlines(), 1):
             if _BARE_SPEC_REF.search(line):
                 violations.append(f"{skill_md.relative_to(ROOT).as_posix()}:{lineno}: {line.strip()}")
+    assert read > 50, (
+        f"only {read} SKILL.md files read ({len(vanished)} vanished mid-walk); "
+        f"this check reports clean over an empty corpus, so the floor is the guard")
     assert not violations, (
         f"{len(violations)} bare docs/superpowers/specs/ reference(s) in SKILL.md files "
         f"(these resolve in the data overlay, not the engine clone). Append "
@@ -167,8 +180,11 @@ def test_annotated_spec_paths_exist_in_data_overlay():
         pytest.skip("Data root not present on this machine — skipping data-path existence check")
     data_root = get_data_root()
     missing = []
-    for skill_md in _skill_md_files():
-        for m in _OVERLAY_REF.finditer(skill_md.read_text(encoding="utf-8")):
+    # A SCAN again: a SKILL.md gone between the walk and the read carries no
+    # annotation to resolve, so it is skipped with a warning naming it.
+    vanished = []
+    for skill_md, text in read_sources(_skill_md_files(), vanished):
+        for m in _OVERLAY_REF.finditer(text):
             if not (data_root / m.group(1)).exists():
                 missing.append(f"{skill_md.relative_to(ROOT).as_posix()}: {data_root / m.group(1)}")
     assert not missing, "Data-overlay spec paths that do not exist:\n  " + "\n  ".join(missing)

@@ -29,6 +29,10 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from tests.repo_files import read_sources  # noqa: E402
+
 SKILL = ROOT / ".claude" / "skills" / "osint-advanced"
 HELPER = SKILL / "scripts" / "osint_api.py"
 
@@ -198,8 +202,16 @@ def test_no_reference_file_prescribes_an_ungranted_tool():
     # "no file prescribes curl" is green over zero files, so a renamed
     # references/ directory would switch this scan off in silence.
     # 3 files matched on 2026-08-26.
-    assert len(paths) >= 2, f"the scan collapsed to {len(paths)} files"
-    offenders = [p.name for p in paths if "curl" in p.read_text(encoding="utf-8")]
+    # A SCAN: a reference file that vanished between the glob and the read
+    # prescribes nothing, so skipping it is correct and `read_sources` warns by
+    # name. The floor moved onto what was READ rather than what was walked, so a
+    # corpus that shrank in that window cannot leave the emptiness claim standing.
+    vanished: list[Path] = []
+    sources = list(read_sources(paths, vanished))
+    assert len(sources) >= 2, (
+        f"the scan collapsed to {len(sources)} files "
+        f"({len(vanished)} vanished mid-walk: {vanished})")
+    offenders = [p.name for p, text in sources if "curl" in text]
     assert offenders == [], f"{offenders} still prescribe curl"
 
 
@@ -207,10 +219,14 @@ def test_no_reference_file_puts_a_credential_on_a_command_line():
     paths = sorted((SKILL / "references").glob("*.md"))
     # Same reason as above: an empty corpus makes this credential check pass
     # while reading nothing. 3 files matched on 2026-08-26.
-    assert len(paths) >= 2, f"the scan collapsed to {len(paths)} files"
-    offenders = [
-        p.name for p in paths if "load_api_key(" in p.read_text(encoding="utf-8")
-    ]
+    # Same judgement as above: a file that is gone carries no credential, and
+    # the floor counts what was read.
+    vanished: list[Path] = []
+    sources = list(read_sources(paths, vanished))
+    assert len(sources) >= 2, (
+        f"the scan collapsed to {len(sources)} files "
+        f"({len(vanished)} vanished mid-walk: {vanished})")
+    offenders = [p.name for p, text in sources if "load_api_key(" in text]
     assert offenders == [], (
         f"{offenders} still interpolate a key into a shell command"
     )

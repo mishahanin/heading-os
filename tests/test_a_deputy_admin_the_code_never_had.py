@@ -55,7 +55,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from tests.repo_files import tracked_paths  # noqa: E402
+from tests.repo_files import read_sources, tracked_paths  # noqa: E402
 
 WORKSPACE_PY = ROOT / "scripts" / "utils" / "workspace.py"
 LOADER = "load_admin_config"
@@ -263,12 +263,19 @@ def test_the_key_reader_follows_an_imported_alias():
 # ============================================================
 
 def _admin_config_readers() -> dict[str, set[str]]:
+    # Read through `read_sources`: the walk lists the paths and this loop reads
+    # them, and a parallel agent's scratch file can live and die inside that
+    # window. A file that is gone reads no key, so skipping is the right answer
+    # for this scan and the helper warns rather than dropping it in silence.
+    #
+    # The old `except UnicodeDecodeError: continue` is deliberately not carried
+    # over. A tracked `.py` that is not UTF-8 is a real fault about a file that
+    # IS there, and `read_sources` keeps that raising - the same line
+    # `tests/test_a_wall_that_answered_about_the_spelling.py` drew when it
+    # adopted the helper.
     out: dict[str, set[str]] = {}
-    for path in tracked_paths(("scripts/**/*.py", ".claude/**/*.py")):
-        try:
-            source = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:  # pragma: no cover - not a python source file
-            continue
+    for path, source in read_sources(
+            tracked_paths(("scripts/**/*.py", ".claude/**/*.py"))):
         if LOADER not in source:
             continue
         try:
@@ -440,15 +447,14 @@ def test_the_doc_rule_ignores_a_role_field_on_another_file():
 # ============================================================
 
 def _doc_corpus() -> list[tuple[str, str]]:
-    out = []
-    for path in tracked_paths(("docs/**/*.md", "*.md", "reference/**/*.md",
-                               ".claude/**/*.md")):
-        try:
-            out.append((path.relative_to(ROOT).as_posix(),
-                        path.read_text(encoding="utf-8")))
-        except UnicodeDecodeError:  # pragma: no cover - not text
-            continue
-    return out
+    # Same walk-then-read race, same verdict: a page that vanished documents
+    # nothing, so it is skipped WITH a warning. The decode branch is gone for the
+    # reason given in `_admin_config_readers` - an undecodable tracked document
+    # is a fault, not a race, and must still stop the suite.
+    return [(path.relative_to(ROOT).as_posix(), text)
+            for path, text in read_sources(
+                tracked_paths(("docs/**/*.md", "*.md", "reference/**/*.md",
+                               ".claude/**/*.md")))]
 
 
 def test_no_engine_document_claims_admin_json_carries_a_key_the_code_ignores():

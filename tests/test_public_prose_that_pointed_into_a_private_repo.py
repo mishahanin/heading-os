@@ -168,7 +168,24 @@ def test_no_integration_fixture_goes_unread():
     # `"sample_emails" + ".json"` left the file unread and the guard green.
     literals = set()
     for path in sources:
-        tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+        # Read-or-fail, not a skip. `literals` is the UNION over every source,
+        # and the verdict below is that a fixture no literal names is read by no
+        # test. Drop a source between the walk and the read and its literals go
+        # with it, so a fixture that IS wired up gets reported as an orphan -
+        # a wrong answer, not a narrowed one. Retried once for a rewrite
+        # window, then named.
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            try:
+                source = path.read_text(encoding="utf-8", errors="replace")
+            except FileNotFoundError:
+                raise AssertionError(
+                    f"{path} vanished between the walk and the read; without "
+                    f"its string literals this guard would name a wired-up "
+                    f"fixture as an orphan"
+                ) from None
+        tree = ast.parse(source)
         docstrings = {ast.get_docstring(n, clean=False) for n in ast.walk(tree)
                       if isinstance(n, (ast.Module, ast.ClassDef,
                                         ast.FunctionDef, ast.AsyncFunctionDef))}

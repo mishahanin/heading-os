@@ -36,6 +36,7 @@ Run:
 from __future__ import annotations
 
 import ast
+import functools
 import sys
 from pathlib import Path
 
@@ -209,36 +210,434 @@ def test_errors_replace_is_available_for_the_sweep_that_wants_it(tmp_path):
 
 
 # ============================================================
-# The sweeps that had the hole
+# The sweeps that had the hole, asked of the AST
+# ============================================================
+#
+# WHAT WAS HERE UNTIL 2026-09-01, AND WHY IT COULD NOT WORK.
+#
+# A tuple of seven file names, each checked with `"read_sources(" in source`.
+# Two independent failures, and the comment above it described an AST pass that
+# had been run by hand once and never encoded:
+#
+#   1. A HAND-MAINTAINED LIST detects reversion in seven known files and in
+#      nothing else. Measured 2026-09-01: 145 unprotected sites were live across
+#      89 files while this guard was green, including
+#      `tests/test_a_wall_that_answered_about_the_spelling.py`, which had been
+#      converted hours earlier and was never added to the list. A list a human
+#      maintains beside the thing it describes is the half that falls behind.
+#   2. A SUBSTRING OVER THE WHOLE FILE is satisfied by a comment, by a
+#      docstring, or by one adopted loop in a module whose other three loops
+#      still hand-roll `read_text`. It asks whether the words are present, not
+#      whether the read is protected.
+#
+# The replacement asks the structure. For every module under `tests/`,
+# `scripts/` and `.claude/`, a read of a name BOUND BY A LOOP over a
+# repository-wide walk must sit inside a `try` whose handler names OSError or
+# FileNotFoundError. Three indirections are followed, because between them they
+# account for most of the live hits and each one is a trivial evasion otherwise:
+# a walk assigned to a local, a helper function that returns a walk, and a
+# comprehension over either.
+#
+# WHAT THIS GUARD DOES NOT ESTABLISH, stated rather than left to be discovered:
+#
+# * `except OSError: continue` counts as compliant here. It survives the race,
+#   which is what this guard is about. It is ALSO the silent-narrowing shape
+#   `read_sources` exists to warn about - a sweep holding its verdict over a
+#   corpus that shrank in silence - and that is a real defect with a different
+#   fix. Accepting it here is deliberate, so this guard lands blocking the crash
+#   class instead of stalling on a second argument.
+# * A walk rooted at a fixture-owned directory is excluded only when the
+#   expression mentions a name containing "tmp". A fixture directory under some
+#   other name is reported. That is the over-reporting direction
+#   `.claude/rules/scope-claims.md` asks for.
+# * It sees `read_text`, `read_bytes` and `open`. A read reached some other way
+#   is invisible to it.
+
+_WALKERS = {"tracked_paths", "tracked_python_files", "not_ignored"}
+_COMPLIANT_WALKERS = {"read_sources"}   # the fix; a loop over it is safe by construction
+_GLOBS = {"glob", "rglob", "iterdir"}
+_READS = {"read_text", "read_bytes"}
+_PASSTHROUGH = {"sorted", "list", "set", "reversed", "enumerate", "tuple"}
+_SAFE_EXC = {"OSError", "FileNotFoundError", "EnvironmentError", "IOError", "Exception"}
+_SCANNED_TREES = ("tests", "scripts", ".claude")
+
+
+def _mentions_tmp(node: ast.AST) -> bool:
+    """A corpus the test itself built and owns. Nothing else can delete it."""
+    return any(isinstance(n, ast.Name) and "tmp" in n.id.lower()
+               for n in ast.walk(node))
+
+
+def _is_walk_call(node: ast.AST, walker_funcs: set[str]) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name) and (func.id in _WALKERS or func.id in walker_funcs):
+        return True
+    if isinstance(func, ast.Attribute):
+        if func.attr in _WALKERS:
+            return True
+        if func.attr in _GLOBS and not _mentions_tmp(func.value):
+            return True
+    return False
+
+
+def _derives_from_walk(node: ast.AST, walk_names: set[str],
+                       walker_funcs: set[str]) -> bool:
+    """Is this iterable expression a repository-wide walk?"""
+    if _mentions_tmp(node):
+        return False
+    if isinstance(node, ast.Name):
+        return node.id in walk_names
+    if isinstance(node, ast.Call):
+        func = node.func
+        if isinstance(func, ast.Name) and func.id in _COMPLIANT_WALKERS:
+            return False
+        if isinstance(func, ast.Name) and func.id in _PASSTHROUGH:
+            return any(_derives_from_walk(a, walk_names, walker_funcs)
+                       for a in node.args)
+        return _is_walk_call(node, walker_funcs)
+    if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
+        return any(_derives_from_walk(g.iter, walk_names, walker_funcs)
+                   for g in node.generators)
+    if isinstance(node, ast.BinOp):
+        return (_derives_from_walk(node.left, walk_names, walker_funcs)
+                or _derives_from_walk(node.right, walk_names, walker_funcs))
+    return False
+
+
+def _walker_returning_funcs(tree: ast.AST, walk_names: set[str]) -> set[str]:
+    """Functions whose body returns a walk. The third indirection, and the one
+    that hid roughly half the live hits behind a `_corpus()` helper."""
+    found: set[str] = set()
+    changed = True
+    while changed:                      # a helper may call another helper
+        changed = False
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if fn.name in found:
+                continue
+            local = set(walk_names)
+            for node in ast.walk(fn):
+                if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                        and isinstance(node.targets[0], ast.Name)
+                        and _derives_from_walk(node.value, local, found)):
+                    local.add(node.targets[0].id)
+            for node in ast.walk(fn):
+                if (isinstance(node, ast.Return) and node.value is not None
+                        and _derives_from_walk(node.value, local, found)):
+                    found.add(fn.name)
+                    changed = True
+                    break
+    return found
+
+
+def _protected(call: ast.AST, stop: ast.AST) -> bool:
+    """Does an enclosing `try` inside this loop catch the vanished file?"""
+    node = call
+    while node is not None and node is not stop:
+        parent = getattr(node, "_race_parent", None)
+        if isinstance(parent, ast.Try) and node in parent.body:
+            for handler in parent.handlers:
+                if handler.type is None:        # bare except: crude, but catches it
+                    return True
+                names = {n.id for n in ast.walk(handler.type)
+                         if isinstance(n, ast.Name)}
+                if names & _SAFE_EXC:
+                    return True
+        node = parent
+    return False
+
+
+def _parametrized_walk(fn, walk_names: set[str], walker_funcs: set[str]):
+    """The argument names a `parametrize` decorator binds to walked paths.
+
+    Returns `(names, values_expression)`, or `(set(), None)` when this function
+    is not parametrised over a repository walk.
+
+    Only the FIRST parameter of a multi-name `parametrize("a,b", ...)` is
+    treated as the path, because the values are tuples and this pass does not
+    unpack them. That under-reports rather than over-reports, and saying so here
+    is the point: a read of `b` in such a test is invisible to this guard.
+    """
+    for dec in fn.decorator_list:
+        if not isinstance(dec, ast.Call) or len(dec.args) < 2:
+            continue
+        func = dec.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "parametrize"):
+            continue
+        spec, values = dec.args[0], dec.args[1]
+        if not (isinstance(spec, ast.Constant) and isinstance(spec.value, str)):
+            continue
+        if not _derives_from_walk(values, walk_names, walker_funcs):
+            continue
+        parts = [p.strip() for p in spec.value.split(",") if p.strip()]
+        if parts:
+            return {parts[0]}, values
+    return set(), None
+
+
+def unprotected_reads(source: str) -> list[tuple[int, str]]:
+    """Every read of a walked path that no `except OSError` covers.
+
+    Public because both the guard below and its two synthetic detector fixtures
+    drive this one function. A detector proven on fixtures and then reimplemented
+    for the live scan proves nothing about the live scan.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            child._race_parent = node
+
+    walk_names: set[str] = set()
+    walker_funcs = _walker_returning_funcs(tree, walk_names)
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and _derives_from_walk(node.value, walk_names, walker_funcs)):
+            walk_names.add(node.targets[0].id)
+    walker_funcs |= _walker_returning_funcs(tree, walk_names)
+
+    findings: set[tuple[int, str]] = set()
+    for loop in ast.walk(tree):
+        if isinstance(loop, (ast.For, ast.AsyncFor)):
+            iterable, target, body = loop.iter, loop.target, loop.body
+        elif isinstance(loop, (ast.ListComp, ast.SetComp,
+                               ast.GeneratorExp, ast.DictComp)):
+            iterable, target, body = (loop.generators[0].iter,
+                                      loop.generators[0].target, [loop])
+        elif isinstance(loop, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # `@pytest.mark.parametrize("page", _pages())` binds a walked path
+            # to an ARGUMENT, and the read happens later in the body. Same race
+            # with a WIDER window: the walk runs at collection time and the read
+            # runs at execution time, minutes apart under `-n auto`, where a
+            # `for` loop's window is microseconds.
+            #
+            # Added 2026-09-01 after a converting agent reported two live sites
+            # this scan could not see, because it only ever looked at loops.
+            # A detector that misses a shape reports zero for it forever, which
+            # is the "green over an empty corpus" failure one level up.
+            names, values = _parametrized_walk(loop, walk_names, walker_funcs)
+            if not names:
+                continue
+            iterable, target, body = values, None, loop.body
+            bound = names
+        else:
+            continue
+        if target is not None:
+            if not _derives_from_walk(iterable, walk_names, walker_funcs):
+                continue
+            bound = {n.id for n in ast.walk(target) if isinstance(n, ast.Name)}
+        for stmt in body:
+            for call in ast.walk(stmt):
+                if not isinstance(call, ast.Call):
+                    continue
+                func, hit = call.func, None
+                if (isinstance(func, ast.Attribute)
+                        and func.attr in _READS | {"open"}
+                        and isinstance(func.value, ast.Name)
+                        and func.value.id in bound):
+                    hit = f"{func.value.id}.{func.attr}"
+                elif (isinstance(func, ast.Name) and func.id == "open"
+                      and call.args and isinstance(call.args[0], ast.Name)
+                      and call.args[0].id in bound):
+                    hit = f"open({call.args[0].id})"
+                if hit is not None and not _protected(call, loop):
+                    findings.add((call.lineno, hit))
+    return sorted(findings)
+
+
+# THERE IS NO BASELINE. The threshold is zero, and that is deliberate.
+#
+# This guard shipped on 2026-09-01 beside a shrink-only record of the 145 sites
+# then live across 89 files, so it could block new ones while the existing ones
+# came down. They all came down the same day, the record emptied, and the record
+# plus its regenerator were deleted rather than left at zero.
+#
+# Leaving an empty allowlist in place is how the next violation gets waved
+# through: the file exists, adding one line to it looks like maintenance rather
+# than like a regression, and the reviewer sees a JSON edit instead of a guard
+# being switched off. A bare `== 0` cannot be edited into permission.
+
+
+@functools.lru_cache(maxsize=1)
+def _live_sites() -> dict[str, list[tuple[int, str]]]:
+    """Cached: the walk parses ~1400 modules and two tests below both need it.
+
+    Measured 2026-09-01 at roughly 20s a call, so calling it twice put 40s on
+    every suite run to answer the same question twice.
+    """
+    from scripts.utils.repo_files import tracked_paths
+
+    sites: dict[str, list[tuple[int, str]]] = {}
+    for tree in _SCANNED_TREES:
+        for path, source in read_sources(tracked_paths((f"{tree}/**/*.py",), ROOT),
+                                         errors="replace"):
+            hits = unprotected_reads(source)
+            if hits:
+                sites[path.relative_to(ROOT).as_posix()] = hits
+    return sites
+
+
+def test_no_walk_then_read_is_left_unprotected():
+    """The headline. A read of a walked path must survive the file vanishing.
+
+    Zero, tree-wide. Measured 2026-09-01: 145 sites across 89 files at the start
+    of the day, 0 at the end.
+    """
+    offenders = []
+    for rel, hits in sorted(_live_sites().items()):
+        lines = ", ".join(f"line {n} ({what})" for n, what in hits)
+        offenders.append(f"{rel}: {len(hits)} unprotected read(s) -- {lines}")
+
+    assert not offenders, (
+        "A read of a path bound by a repository walk is not covered by an "
+        "`except OSError`. A file created and deleted between the walk and the "
+        "read makes this guard raise FileNotFoundError and report a violation "
+        "where nothing was violated -- and the pre-push gate produces exactly "
+        "that on its own, since `scripts/run-tests.py` runs `-n auto` without "
+        "deselecting `slow`.\n\n"
+        "Route the read through `read_sources` from `scripts.utils.repo_files` "
+        "when the sweep hunts offenders; a file that is gone cannot violate "
+        "anything. When the sweep computes a COUNT, a CHECKSUM or a "
+        "completeness claim, retry once and then FAIL naming the file, because "
+        "a silent skip there makes the answer wrong rather than narrower.\n  "
+        + "\n  ".join(offenders))
+
+
+# ============================================================
+# Anti-vacuity: the detector must detect, and the walk must reach files
 # ============================================================
 
-# Found by parsing every module under `tests/` and reporting each `read_text`
-# call made on a variable bound by a loop over a REPOSITORY-wide walk
-# (`tracked_paths`, `tracked_python_files`, or `.rglob`/`.glob` rooted at ROOT),
-# outside any `try`. Seven matched on 2026-08-30. A `tmp_path` walk is excluded:
-# the test that built that corpus owns it, and nothing else can delete it
-# underneath.
-_FIXED_SWEEPS = (
-    "tests/test_a_catch_all_rule_the_report_could_not_see.py",
-    "tests/test_a_rule_that_reached_one_of_six_generators.py",
-    "tests/test_a_shed_that_dropped_the_newer_turn.py",
-    "tests/test_a_state_redirect_that_covered_some_of_a_modules_tests.py",
-    "tests/test_checkpoint_session_scope.py",
-    "tests/test_subprocess_interpreter_guard.py",
-    "tests/test_ten_regexes_that_spelled_the_fence_themselves.py",
-)
+# Measured 2026-09-01: tests 987, scripts 386, .claude 57. The floors sit under
+# those with room for ordinary churn. PER TREE and never over the union, because
+# a union floor is satisfied while one source contributes zero - `tests/` alone
+# clears any total these three could share.
+_CORPUS_FLOORS = {"tests": 800, "scripts": 300, ".claude": 40}
 
 
-@pytest.mark.parametrize("rel", _FIXED_SWEEPS)
-def test_the_sweep_reads_through_the_shared_helper(rel):
-    """Each of the seven routes its read through one policy.
+@pytest.mark.parametrize("tree,floor", sorted(_CORPUS_FLOORS.items()))
+def test_the_scan_still_reaches_the_tree(tree, floor):
+    """A guard is green over an empty corpus. Ask what it actually walked."""
+    from scripts.utils.repo_files import tracked_paths
 
-    Named individually rather than counted, so a sweep that quietly reverts to a
-    bare `read_text` on its walked path is a named failure and not a number that
-    drifted.
-    """
-    source = (ROOT / rel).read_text(encoding="utf-8")
-    assert "read_sources(" in source, f"{rel} no longer reads through read_sources"
+    found = len(tracked_paths((f"{tree}/**/*.py",), ROOT))
+    assert found >= floor, (
+        f"the walk over {tree}/ collapsed to {found} file(s), under the floor "
+        f"of {floor}. Every assertion above is passing over almost nothing.")
+
+
+_FIXTURE_BARE = '''
+from scripts.utils.repo_files import tracked_paths
+def scan():
+    for path in tracked_paths(("scripts/**/*.py",)):
+        text = path.read_text(encoding="utf-8")
+        print(text)
+'''
+
+_FIXTURE_GUARDED = '''
+from scripts.utils.repo_files import tracked_paths
+def scan():
+    for path in tracked_paths(("scripts/**/*.py",)):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        print(text)
+'''
+
+_FIXTURE_VIA_LOCAL = '''
+from scripts.utils.repo_files import tracked_python_files
+def scan():
+    paths = tracked_python_files(("scripts",))
+    for p in paths:
+        print(p.read_bytes())
+'''
+
+_FIXTURE_VIA_HELPER = '''
+from scripts.utils.repo_files import tracked_paths
+def _corpus():
+    return tracked_paths(("tests/**/*.py",))
+def scan():
+    for p in _corpus():
+        print(p.read_text(encoding="utf-8"))
+'''
+
+_FIXTURE_COMPLIANT_HELPER = '''
+from scripts.utils.repo_files import tracked_paths, read_sources
+def scan():
+    for path, text in read_sources(tracked_paths(("scripts/**/*.py",))):
+        print(text)
+'''
+
+_FIXTURE_FIXTURE_OWNED = '''
+def test_something(tmp_path):
+    for p in sorted(tmp_path.rglob("*.py")):
+        print(p.read_text(encoding="utf-8"))
+'''
+
+# The parametrize shape. The walk runs at COLLECTION time and the read runs at
+# EXECUTION time, so its window is minutes wide under `-n auto` rather than
+# microseconds. This scan was blind to it until 2026-09-01 and reported zero.
+_FIXTURE_PARAM_BARE = '''
+import pytest
+from scripts.utils.repo_files import tracked_paths
+def _pages():
+    return tracked_paths(("docs/**/*.html",))
+@pytest.mark.parametrize("page", _pages())
+def test_x(page):
+    assert "a" in page.read_text(encoding="utf-8")
+'''
+
+_FIXTURE_PARAM_GUARDED = '''
+import pytest
+from scripts.utils.repo_files import tracked_paths
+def _pages():
+    return tracked_paths(("docs/**/*.html",))
+@pytest.mark.parametrize("page", _pages())
+def test_x(page):
+    try:
+        t = page.read_text(encoding="utf-8")
+    except OSError:
+        pytest.skip("gone")
+    assert "a" in t
+'''
+
+# A literal parameter list is not a walk. Without this the shape above could be
+# "supported" by reporting every parametrised test that opens anything.
+_FIXTURE_PARAM_LITERAL = '''
+import pytest
+@pytest.mark.parametrize("name", ["a", "b"])
+def test_x(name, tmp_path):
+    assert (tmp_path / name).read_text() == ""
+'''
+
+
+@pytest.mark.parametrize("label,source", [
+    ("bare read", _FIXTURE_BARE),
+    ("walk assigned to a local", _FIXTURE_VIA_LOCAL),
+    ("walk returned by a helper", _FIXTURE_VIA_HELPER),
+    ("parametrize over a walk", _FIXTURE_PARAM_BARE),
+])
+def test_the_detector_reports_a_violation_it_should(label, source):
+    """Without this, repointing the walk at nothing leaves the guard green."""
+    assert unprotected_reads(source), f"the detector missed: {label}"
+
+
+@pytest.mark.parametrize("label,source", [
+    ("read inside except OSError", _FIXTURE_GUARDED),
+    ("read through read_sources", _FIXTURE_COMPLIANT_HELPER),
+    ("walk the fixture owns (tmp_path)", _FIXTURE_FIXTURE_OWNED),
+    ("parametrize read inside except OSError", _FIXTURE_PARAM_GUARDED),
+    ("parametrize over a literal list", _FIXTURE_PARAM_LITERAL),
+])
+def test_the_detector_stays_quiet_when_it_should(label, source):
+    """The other jaw. A detector that reports everything is not a detector."""
+    assert not unprotected_reads(source), f"the detector false-positived on: {label}"
 
 
 def test_the_helper_lives_in_one_place():

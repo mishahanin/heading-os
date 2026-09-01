@@ -132,7 +132,29 @@ def test_every_golden_document_is_in_schema_order(doc_path):
     """
     from lxml import etree
 
-    tree = etree.fromstring(doc_path.read_bytes())
+    # The rglob in `_documents()` runs at collection and this read runs at
+    # execution -- minutes apart under `-n auto` -- so a fixture removed inside
+    # that window would raise FileNotFoundError from inside the guard and report
+    # a schema violation where nothing was violated.
+    #
+    # Skipped rather than parametrized over the text, and the reason is the
+    # BYTES: `read_sources` yields `str`, and `etree.fromstring` refuses a `str`
+    # carrying an XML encoding declaration ("Unicode strings with encoding
+    # declaration are not supported"). Re-encoding to get back to bytes would put
+    # this test's subject through a conversion the real consumer never does.
+    #
+    # A skip is safe here because the corpus floor is not this case: the
+    # `assert len(found) >= _MIN_GOLDEN_DOCUMENTS` in `_documents()` is what
+    # fails when a golden fixture is actually gone, and it fails at collection,
+    # loudly, before any of these cases run. Only the deleted-and-restored race
+    # reaches the skip, and a skip is visible in the report where a silent pass
+    # would not be.
+    try:
+        raw = doc_path.read_bytes()
+    except FileNotFoundError:
+        pytest.skip(f"{doc_path} vanished between collection and read")
+
+    tree = etree.fromstring(raw)
     offenders = []
     for name, seq in CONTAINERS.items():
         for element in tree.iter(f"{W}{name}"):

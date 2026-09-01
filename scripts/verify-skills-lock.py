@@ -50,6 +50,44 @@ RECIPE = "sha256-tree-v1"
 LOCK_PATH = get_workspace_root() / "skills-lock.json"
 
 
+class TreeChangedUnderVerification(Exception):
+    """A file listed by the walk was gone by the time the hash reached it."""
+
+
+def _locked_read(p: Path, read):
+    """``read(p)``, retried once, refusing rather than skipping when it is gone.
+
+    WHY THIS DOES NOT USE `scripts.utils.repo_files.read_sources`, which is the
+    shared answer for a walk-then-read race everywhere else in this tree.
+    `read_sources` SKIPS a vanished path and warns. That is right for a scanner
+    whose verdict is per-file; it is wrong here, because this walk feeds a
+    CHECKSUM. Dropping one file's line from `lines` silently redefines the tree
+    the digest covers. The immediate consequence is a mismatch against a lock
+    that is in fact correct, and the dangerous one is the mirror of it: under
+    `--relock` a skipped file would be written into `skills-lock.json` as the
+    new pin, so the next verification would accept a tree missing that file.
+    A lock over a tree that changed underneath the hash is not a lock, so this
+    fails loudly and names the file instead of hashing what is left.
+
+    The retry is not decoration and it is not a fix for deletion. It recovers
+    exactly one shape: a writer that unlinks and rewrites, leaving the path
+    briefly absent. A file that is genuinely gone is still gone on the second
+    look, and that is the case this refuses.
+    """
+    try:
+        return read(p)
+    except FileNotFoundError:
+        pass
+    try:
+        return read(p)
+    except FileNotFoundError as e:
+        raise TreeChangedUnderVerification(
+            f"{p} vanished between the tree walk and the hash. The vendored "
+            f"tree changed while it was being verified, so no digest computed "
+            f"over it can be trusted. Re-run once the tree is quiet."
+        ) from e
+
+
 def _tree_hash(tree_dir: Path) -> str:
     """Compute the sha256-tree-v1 digest over a vendored skill directory."""
     # `is_file()` FOLLOWS symlinks, so a vendored file replaced by a link to an
@@ -66,13 +104,13 @@ def _tree_hash(tree_dir: Path) -> str:
     for p in entries:
         rel = p.relative_to(tree_dir).as_posix()
         if p.is_symlink():
-            target = os.readlink(p)
+            target = _locked_read(p, os.readlink)
             lines.append(f"{rel}\nsymlink:{target}\n")
             continue
         # LF-normalize so the digest matches git's `* text=auto` storage and is
         # stable across checkouts (a CRLF working copy must hash the same as a
         # fresh LF CI checkout).
-        content = p.read_bytes().replace(b"\r\n", b"\n")
+        content = _locked_read(p, Path.read_bytes).replace(b"\r\n", b"\n")
         digest = hashlib.sha256(content).hexdigest()
         lines.append(f"{rel}\n{digest}\n")
     return hashlib.sha256("".join(lines).encode("utf-8")).hexdigest()
@@ -161,7 +199,16 @@ def verify(relock: bool, quiet: bool) -> int:
                   f"({tree_dir.relative_to(root) if tree_dir else 'no skillPath'})")
             issues += 1
             continue
-        actual = _tree_hash(tree_dir)
+        try:
+            actual = _tree_hash(tree_dir)
+        except TreeChangedUnderVerification as e:
+            # A clean FAIL line, like every other wrong shape in this file, and
+            # NOT a pass. `hashed` is deliberately not incremented: this entry
+            # was not verified, and the `not hashed` guard below exists so a
+            # gate cannot report success over trees it never hashed.
+            print(f"{RED}FAIL{RESET}  {name}: {e}")
+            issues += 1
+            continue
         hashed += 1
         expected = entry.get("computedHash")
         if relock:

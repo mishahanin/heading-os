@@ -51,7 +51,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from scripts.utils.markdown import frontmatter_date  # noqa: E402
-from tests.repo_files import tracked_python_files  # noqa: E402
+from tests.repo_files import read_sources, tracked_python_files  # noqa: E402
 
 PY = sys.executable
 
@@ -644,12 +644,21 @@ DECLARED_FENCE_SITES = {
 }
 
 
-def _fence_sites():
-    """Files with a call testing a string against the literal `---`."""
+def _fence_sites(vanished: list | None = None):
+    """Files with a call testing a string against the literal `---`.
+
+    A SCAN: a file that a parallel agent created and removed between the walk
+    and the read carries no fence test to declare, so skipping it is the right
+    answer and `read_sources` warns naming it. The one direction where a skip
+    could answer WRONG is the stale check below - a DECLARED file dropped from
+    `found` would read as a dead registry entry - so that test names whatever
+    vanished in its own message, and `test_every_declared_file_still_exists`
+    asks separately whether the declared files are still on disk.
+    """
     found = {}
-    for path in tracked_python_files():
+    for path, source in read_sources(tracked_python_files(), vanished):
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            tree = ast.parse(source)
         except SyntaxError:  # pragma: no cover - another test's job
             continue
         for node in ast.walk(tree):
@@ -682,9 +691,12 @@ def test_every_character_fence_site_is_declared():
 
 def test_the_fence_registry_does_not_outlive_its_sites():
     """A registry naming files that no longer carry the shape passes everything."""
-    found = _fence_sites()
+    vanished: list[Path] = []
+    found = _fence_sites(vanished)
     stale = sorted(set(DECLARED_FENCE_SITES) - set(found))
-    assert stale == [], f"DECLARED_FENCE_SITES entries with no matching site: {stale}"
+    assert stale == [], (
+        f"DECLARED_FENCE_SITES entries with no matching site: {stale} "
+        f"({len(vanished)} file(s) vanished mid-walk: {vanished})")
 
 
 def test_the_digest_left_the_fence_registry():

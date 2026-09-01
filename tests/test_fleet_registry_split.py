@@ -36,6 +36,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tests.repo_files import read_sources  # noqa: E402
+
 
 @pytest.fixture
 def fleet(tmp_path, monkeypatch):
@@ -237,14 +239,23 @@ def test_the_live_registries_do_not_contradict_each_other():
 
 def test_no_script_reads_a_removed_business_field():
     """A reader left behind would silently see None forever."""
-    scripts = sorted((ROOT / "scripts").rglob("*.py"))
+    # Read through `read_sources`: the rglob lists the scripts and the loop reads
+    # them, and a module can be created and removed inside that window in a
+    # checkout several agents share. A reader that is gone reads no removed
+    # field, so skipping is the right answer for this scan. The floor is taken
+    # over what was actually READ, not over the path list, so a corpus the race
+    # narrowed still has to clear it.
+    vanished: list[Path] = []
+    scripts = list(read_sources(sorted((ROOT / "scripts").rglob("*.py")),
+                                vanished, errors="replace"))
     # An empty offenders list is green over zero files, so a renamed directory
     # or a changed suffix would switch this guard off with no test failing.
     # Measured 371 files on 2026-08-26; the floor sits well under that.
-    assert len(scripts) >= 230, f"the scan collapsed to {len(scripts)} files"
+    assert len(scripts) >= 230, (
+        f"the scan collapsed to {len(scripts)} files "
+        f"({len(vanished)} vanished mid-walk)")
     offenders = []
-    for script in scripts:
-        text = script.read_text(encoding="utf-8", errors="replace")
+    for script, text in scripts:
         for n, line in enumerate(text.splitlines(), 1):
             stripped = line.strip()
             if stripped.startswith("#") or '"""' in stripped:

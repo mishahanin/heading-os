@@ -36,6 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import get_workspace_root  # noqa: E402
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET  # noqa: E402
+from scripts.utils.repo_files import read_sources  # noqa: E402
 
 # Data-class top-level dirs (mirror test_engine_tree_clean.DATA_DIRS).
 _DATA = re.compile(r"\b(outputs|crm|knowledge|threads|plans|datastore|auto-memory)/")
@@ -145,7 +146,21 @@ def scan_skill(path: Path) -> list[tuple[int, str]]:
     # raise UnicodeDecodeError - a ValueError, caught nowhere on the path - and
     # take the whole audit down naming no file. A replaced byte cannot invent or
     # conceal a `scripts/...` path, which is all this scanner matches on.
-    text = path.read_text(encoding="utf-8", errors="replace")
+    #
+    # Through `read_sources`, and SKIPPING is the right answer here rather than
+    # failing. `skill_files` walks the LIVE tree (see its docstring), several
+    # agents share one checkout, and a SKILL.md created and deleted inside the
+    # window between that glob and this read raised FileNotFoundError from
+    # inside a gate that had found nothing wrong. A skill that is not on disk
+    # cannot be over its baseline, so dropping it narrows the corpus without
+    # changing any verdict this scanner reaches -- and `read_sources` WARNS
+    # naming the file, so the narrowing is stated rather than hidden. `list()`
+    # rather than a `for`-with-`return`: the warning fires when the generator is
+    # exhausted, and an abandoned generator never warns.
+    sources = list(read_sources([path], errors="replace"))
+    if not sources:
+        return hits
+    text = sources[0][1]
     for i, line in enumerate(text.splitlines(), 1):
         stripped = line.strip()
         if stripped.startswith("```"):

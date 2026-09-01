@@ -243,7 +243,24 @@ def test_batch_asks_for_the_formats_its_flag_names(fc, wired, capsys):
 # ---- extract: a cost nobody measured ------------------------------------------
 
 def _cache_entries(cache_dir: Path) -> list[dict]:
-    return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(cache_dir.glob("*.json"))]
+    # The callers assert on `len(entries)` and index into it, so this is a COUNT.
+    # Dropping an entry that disappeared between the glob and the read would turn
+    # "one entry was written" into a wrong number presented as fact, so the race
+    # is retried once and then named rather than skipped.
+    out = []
+    for p in sorted(cache_dir.glob("*.json")):
+        try:
+            raw = p.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            try:
+                raw = p.read_text(encoding="utf-8")
+            except FileNotFoundError as gone:
+                raise AssertionError(
+                    f"cache entry {p} vanished between the glob and the read; "
+                    f"the entry count below would be short by at least one"
+                ) from gone
+        out.append(json.loads(raw))
+    return out
 
 
 def test_an_unmeasured_extract_cost_is_recorded_as_unknown(fc, wired, tmp_path, capsys):

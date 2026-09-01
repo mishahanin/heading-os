@@ -40,6 +40,31 @@ SOURCES = ROOT / "scripts" / "bridge_daemon" / "sources"
 
 sys.path.insert(0, str(ROOT))
 from scripts.bridge_daemon._safepath import contains_symlink  # noqa: E402
+from tests.repo_files import read_sources  # noqa: E402
+
+
+def _read_or_fail(path: Path) -> str:
+    """Read a path a COMPLETENESS claim depends on, retrying once first.
+
+    Skipping is the right answer for a scan - a file that vanished cannot
+    violate anything. It is the wrong answer where the corpus IS the claim:
+    dropping one file under `sources/` would delete its guarded functions from
+    a set that is compared for exact equality against `REFUSAL_CASES`, and the
+    failure would then name the registry rather than the race. One retry
+    absorbs the mid-walk window; a file that is still gone fails by name.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        try:
+            return path.read_text(encoding="utf-8")
+        except FileNotFoundError as exc:
+            raise AssertionError(
+                f"{path} vanished between the walk and the read and was still "
+                f"gone one retry later. This scan claims to name EXACTLY the "
+                f"guarded functions under sources/, so a skipped file would "
+                f"report a wrong set as fact."
+            ) from exc
 
 
 # --- the helper answers the question the guards meant to ask -----------------
@@ -181,7 +206,7 @@ def _describe(value, lineno, bindings, label, params) -> tuple[str, str | None]:
 _RESOLVED = "  # RESOLVED before the guard"
 
 
-def _guard_bindings() -> list[tuple[str, int, str, str | None]]:
+def _guard_bindings(vanished: list | None = None) -> list[tuple[str, int, str, str | None]]:
     """(file, line, what is guarded, the expression that bound it), per guard.
 
     Two things changed here, and the second is the bigger one.
@@ -220,8 +245,12 @@ def _guard_bindings() -> list[tuple[str, int, str, str | None]]:
     `X.is_symlink()` in real code.
     """
     out: list[tuple[str, int, str, str | None]] = []
-    for path in sorted(SOURCES.glob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+    # A SCAN: this collects offending guards, and a file that disappeared between
+    # the glob and the read carries no guard to offend with. `read_sources` skips
+    # it and warns by name, so the narrowing is visible instead of silent; the
+    # count floor below carries the same number into its message.
+    for path, source in read_sources(sorted(SOURCES.glob("*.py")), vanished):
+        tree = ast.parse(source)
         scopes = [tree] + [n for n in ast.walk(tree)
                            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
         module_bindings = _assignments(tree)
@@ -277,9 +306,11 @@ def test_the_detector_still_finds_a_guard():
     by two matches that were both comments, so "the detector found something"
     and "the detector found a guard" were not the same statement.
     """
-    sites = _guard_bindings()
+    vanished: list[Path] = []
+    sites = _guard_bindings(vanished)
     assert len(sites) >= 5, (
-        f"only {len(sites)} symlink guard(s) found under sources/, which is "
+        f"only {len(sites)} symlink guard(s) found under sources/ "
+        f"({len(vanished)} file(s) vanished mid-walk), which is "
         f"fewer than this daemon has ever had; if the guards were replaced "
         f"wholesale, retarget this detector rather than deleting it: {sites}"
     )
@@ -303,8 +334,12 @@ def test_every_reader_that_promises_no_symlinks_calls_the_live_guard():
     paths = sorted(SOURCES.glob("*.py"))
     missing = []
     promising = 0
-    for path in paths:
-        src = path.read_text(encoding="utf-8")
+    # A SCAN: a file that vanished between the glob and the read makes no promise
+    # to break, so skipping it is the correct answer. `read_sources` names what it
+    # skipped in a warning, and the floor below reports the same count, so the
+    # corpus cannot shrink underneath the verdict without saying so.
+    vanished: list[Path] = []
+    for path, src in read_sources(paths, vanished):
         if "symlinks not allowed" not in src:
             continue
         promising += 1
@@ -314,7 +349,9 @@ def test_every_reader_that_promises_no_symlinks_calls_the_live_guard():
     # a moved sources/ directory, or a changed suffix would turn this check off
     # without failing anything. 8 of the 19 files under sources/ carried the
     # "symlinks not allowed" string on 2026-08-26.
-    assert promising >= 5, f"the scan collapsed to {promising} files"
+    assert promising >= 5, (
+        f"the scan collapsed to {promising} files "
+        f"({len(vanished)} vanished mid-walk)")
     assert not missing, (
         "these files still return 'symlinks not allowed' from a check that "
         "cannot reach it: " + ", ".join(missing)
@@ -325,17 +362,22 @@ def test_the_promise_is_written_where_the_guard_runs():
     """Four readers advertise 'No symlinks' in their validation list. Pin that
     those files are the ones carrying the live guard."""
     promising = []
-    for path in sorted(SOURCES.glob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+    # A SCAN: a file that vanished mid-walk documents no promise, so skipping it
+    # is correct and `read_sources` warns by name. The source text is carried
+    # forward rather than re-read below, so the same corpus is not raced twice.
+    vanished: list[Path] = []
+    for path, src in read_sources(sorted(SOURCES.glob("*.py")), vanished):
+        tree = ast.parse(src)
         for node in ast.walk(tree):
             if not isinstance(node, ast.FunctionDef):
                 continue
             doc = ast.get_docstring(node) or ""
             if re.search(r"No symlinks", doc, re.IGNORECASE):
-                promising.append((path.name, node.name))
-    assert promising, "the documented promise vanished; retarget this test"
-    for fname, func in promising:
-        src = (SOURCES / fname).read_text(encoding="utf-8")
+                promising.append((path.name, node.name, src))
+    assert promising, (
+        f"the documented promise vanished; retarget this test "
+        f"({len(vanished)} file(s) vanished mid-walk)")
+    for fname, func, src in promising:
         assert "contains_symlink(" in src, (
             f"{fname}:{func} documents 'No symlinks' and the file has no live "
             "guard behind it"
@@ -571,8 +613,12 @@ def _guarded_functions() -> set[tuple[str, str]]:
     live guard in its OWN body. `_own_nodes` excludes nested scopes, so an
     inner helper is credited to itself rather than to the function around it."""
     out: set[tuple[str, str]] = set()
+    # NOT a scan: this set is compared for exact equality against REFUSAL_CASES,
+    # so a silently dropped file would delete real entries from it and the test
+    # would blame the registry for a mid-walk race. `_read_or_fail` retries once
+    # and then fails naming the file.
     for path in sorted(SOURCES.glob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = ast.parse(_read_or_fail(path))
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue

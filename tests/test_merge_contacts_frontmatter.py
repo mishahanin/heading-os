@@ -30,12 +30,16 @@ asked to touch is its own defect.
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "merge-contacts.py"
+
+sys.path.insert(0, str(ROOT))
+from tests.repo_files import read_sources  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -152,8 +156,12 @@ def test_every_live_crm_record_round_trips_byte_for_byte(mc):
 
     damaged = []
     inspected = 0
-    for f in records:
-        text = f.read_text(encoding="utf-8")
+    # The globs list the records and this loop reads them; the operator's CRM is
+    # a live tree that other tools write. A record that went away in between
+    # cannot be a damaged one, so `read_sources` skips it and warns, and the
+    # floor below already counts the records that were really round-tripped.
+    vanished: list[Path] = []
+    for f, text in read_sources(records, vanished):
         fm, body = mc.parse_frontmatter(text)
         if not fm:
             continue
@@ -171,7 +179,9 @@ def test_every_live_crm_record_round_trips_byte_for_byte(mc):
     # (a regex that stops matching the opening fence, say), every file would be
     # skipped, `damaged` would be empty, and the assertion below would pass
     # while nothing at all had been round-tripped.
-    assert inspected >= 200, f"only {inspected} of {len(records)} records were round-tripped"
+    assert inspected >= 200, (
+        f"only {inspected} of {len(records)} records were round-tripped "
+        f"({len(vanished)} vanished mid-walk)")
 
     assert not damaged, f"{len(damaged)} of {len(records)} rewritten: {damaged[:8]}"
 
@@ -217,8 +227,12 @@ def test_every_live_block_list_reads_back_as_a_list(mc):
 
     block_key = re.compile(r"^([\w-]+):[ \t]*$\n(?:^[ \t]*-[ \t].*$\n?)+", re.M)
     checked = 0
-    for f in sorted(crm.glob("contacts/*.md")) + sorted(crm.glob("address-book/*.md")):
-        text = f.read_text(encoding="utf-8")
+    # Same walk-then-read race over the live CRM. A record that vanished carries
+    # no block list to mis-parse, so it is skipped with a warning; `checked`
+    # counts what was really read and the skip below reports it.
+    vanished: list[Path] = []
+    records = sorted(crm.glob("contacts/*.md")) + sorted(crm.glob("address-book/*.md"))
+    for f, text in read_sources(records, vanished):
         head = text.partition("\n---\n")[0]
         keys = [m.group(1) for m in block_key.finditer(head + "\n")]
         if not keys:
@@ -231,4 +245,5 @@ def test_every_live_block_list_reads_back_as_a_list(mc):
             checked += 1
 
     if not checked:
-        pytest.skip("no live record uses a block list")
+        pytest.skip(f"no live record uses a block list "
+                    f"({len(vanished)} vanished mid-walk)")

@@ -21,6 +21,8 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(ROOT))
 
+from tests.repo_files import read_sources  # noqa: E402
+
 
 def _iter_py_files():
     return list(SCRIPTS.rglob("*.py"))
@@ -54,9 +56,15 @@ def test_check_exec_orphans_script_is_gone():
 
 def test_delete_orphans_symbol_absent():
     """The orphan-delete surface must not exist anywhere under scripts/."""
-    offenders = [p for p in _iter_py_files()
-                 if "_delete_orphans" in p.read_text(encoding="utf-8")]
-    assert not offenders, f"_delete_orphans resurfaced in: {offenders}"
+    # SCAN: a file that vanished between the walk and the read cannot be
+    # carrying the symbol, so skipping it is correct; `read_sources` warns
+    # naming it rather than shrinking the corpus in silence.
+    vanished: list[Path] = []
+    offenders = [p for p, text in read_sources(_iter_py_files(), vanished)
+                 if "_delete_orphans" in text]
+    assert not offenders, (
+        f"_delete_orphans resurfaced in: {offenders} "
+        f"({len(vanished)} file(s) vanished mid-walk)")
 
 
 def test_install_sync_schedule_symbol_absent():
@@ -68,12 +76,14 @@ def test_install_sync_schedule_symbol_absent():
     install_re = re.compile(r"(?<!un)install_sync_schedule")
     dryrun_re = re.compile(r"run_dry_run_validation")
     offenders = []
-    for p in _iter_py_files():
-        text = p.read_text(encoding="utf-8")
+    # SCAN, same reasoning as the sweep above.
+    vanished: list[Path] = []
+    for p, text in read_sources(_iter_py_files(), vanished):
         if install_re.search(text) or dryrun_re.search(text):
             offenders.append(p)
-    assert not offenders, \
-        f"retired sync-install symbols resurfaced in: {offenders}"
+    assert not offenders, (
+        f"retired sync-install symbols resurfaced in: {offenders} "
+        f"({len(vanished)} file(s) vanished mid-walk)")
 
 
 def test_uninstall_sync_schedule_survives():

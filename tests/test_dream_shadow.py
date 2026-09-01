@@ -37,6 +37,33 @@ def load_module():
     return mod
 
 
+def _memory_snapshot(mem: Path) -> dict[str, tuple[str, float]]:
+    """{name: (text, mtime)} for every memory file, for a before/after compare.
+
+    NOT a scan, so nothing is skipped. This is a CHECKSUM: the claim is that
+    the detector left auto-memory byte-for-byte alone, and a file dropped
+    between the glob and the read would take its own difference out of the
+    comparison - a deletion by the code under test would read as "unchanged".
+    One retry absorbs a filesystem race; a file that is still gone fails by
+    name, which is the finding this test exists to make.
+    """
+    snapshot: dict[str, tuple[str, float]] = {}
+    for p in sorted(mem.glob("*.md")):
+        try:
+            snapshot[p.name] = (p.read_text(encoding="utf-8"), p.stat().st_mtime)
+        except FileNotFoundError:
+            try:
+                snapshot[p.name] = (p.read_text(encoding="utf-8"), p.stat().st_mtime)
+            except FileNotFoundError as exc:
+                raise AssertionError(
+                    f"{p} was listed by the walk and gone by the read, twice. "
+                    f"This corpus belongs to the test, so the file was removed "
+                    f"while the snapshot was being taken - a mutation of "
+                    f"auto-memory, not a corpus to answer without."
+                ) from exc
+    return snapshot
+
+
 def _write(path: Path, text: str, days_old: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
@@ -212,10 +239,10 @@ def test_detector_never_mutates_auto_memory(tmp_path, monkeypatch):
         "ok": True, "pairs": [], "note": "fewer than 2 memory files"
     })
 
-    before = {p.name: (p.read_text(encoding="utf-8"), p.stat().st_mtime) for p in mem.glob("*.md")}
+    before = _memory_snapshot(mem)
     result = mod.gather()
     mod.render_report(result, "2026-07-16T03:10:00+00:00")
-    after = {p.name: (p.read_text(encoding="utf-8"), p.stat().st_mtime) for p in mem.glob("*.md")}
+    after = _memory_snapshot(mem)
     assert before == after
 
 

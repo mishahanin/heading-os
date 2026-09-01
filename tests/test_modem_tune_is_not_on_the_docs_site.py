@@ -28,12 +28,16 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
+
+sys.path.insert(0, str(ROOT))
+from tests.repo_files import read_sources  # noqa: E402
 SKILL = ROOT / ".claude" / "skills" / "modem-tune" / "SKILL.md"
 SEARCH_INDEX = DOCS / "assets" / "search-index.json"
 
@@ -63,27 +67,38 @@ def _site_files() -> list[Path]:
 def test_no_docs_page_names_the_tool_or_its_credentials(term):
     needle = term.lower()
     hits = []
-    for path in _site_files():
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
+    # Read through `read_sources`: `_site_files()` lists the pages and this loop
+    # reads them, so a regenerated asset can be gone by the time it is opened and
+    # the FileNotFoundError would surface as this guard reporting a disclosure.
+    # A page that is not on disk publishes nothing, so the skip is right and the
+    # helper names it. `errors="ignore"` replaces the old
+    # `except UnicodeDecodeError: continue` and is what the two sibling tests
+    # below already do over this same corpus; measured 2026-09-01, all 63 site
+    # files decode as UTF-8, so the two spellings scan the same set today.
+    vanished: list[Path] = []
+    for path, text in read_sources(_site_files(), vanished, errors="ignore"):
         for lineno, line in enumerate(text.splitlines(), 1):
             if needle in line.lower():
                 hits.append(f"{path.relative_to(ROOT)}:{lineno}")
     assert hits == [], (
         f"the published docs site names {term!r} at {hits}. The operator "
         "removed this tool from the site on 2026-08-23; the skill folder stays "
-        "in the repository, the documentation site does not carry it."
+        f"in the repository, the documentation site does not carry it. "
+        f"({len(vanished)} file(s) vanished mid-walk)"
     )
 
 
 def test_the_word_imei_appears_nowhere_on_the_site():
     """Broader than the term list: the concept, however it gets phrased. The
     site has no other reason to say IMEI."""
-    hits = [str(p.relative_to(ROOT)) for p in _site_files()
-            if "imei" in p.read_text(encoding="utf-8", errors="ignore").lower()]
-    assert hits == [], f"docs site mentions IMEI in {hits}"
+    # Same walk-then-read race, same verdict: a file that is gone mentions
+    # nothing, so it is skipped with a warning rather than crashing the guard.
+    vanished: list[Path] = []
+    hits = [str(p.relative_to(ROOT))
+            for p, text in read_sources(_site_files(), vanished, errors="ignore")
+            if "imei" in text.lower()]
+    assert hits == [], (f"docs site mentions IMEI in {hits} "
+                        f"({len(vanished)} file(s) vanished mid-walk)")
 
 
 def test_the_search_index_carries_no_record_for_the_removed_anchor():
@@ -107,9 +122,13 @@ def test_no_page_links_to_the_removed_anchor():
     """A dead `#s-modem-tune` link is worse than the card: it advertises the
     tool and 404s inside the page."""
     dangling = re.compile(r'href="[^"]*#s-modem-tune"')
-    hits = [str(p.relative_to(ROOT)) for p in _site_files()
-            if dangling.search(p.read_text(encoding="utf-8", errors="ignore"))]
-    assert hits == [], f"dangling links to the removed card: {hits}"
+    # Same walk-then-read race: a page that is gone links to nothing.
+    vanished: list[Path] = []
+    hits = [str(p.relative_to(ROOT))
+            for p, text in read_sources(_site_files(), vanished, errors="ignore")
+            if dangling.search(text)]
+    assert hits == [], (f"dangling links to the removed card: {hits} "
+                        f"({len(vanished)} file(s) vanished mid-walk)")
 
 
 # --- the rule that let this happen must now name the surface -------------------

@@ -140,10 +140,25 @@ def test_the_bundle_still_redacts(bundle, consumer):
     disk through the redactor, in the bundle as much as in the monorepo."""
     _save(bundle, consumer, "the key " + _api_key() + " was rotated")
 
-    bodies = [
-        p.read_text(encoding="utf-8")
-        for p in (consumer["project"] / ".claude" / "handoff").rglob("*.md")
-    ]
+    # Read-or-fail, never skip. The assertion below is that NO handoff body
+    # carries the credential, so a body dropped because it vanished between the
+    # walk and the read is a file the secret could have reached, reported as
+    # clean. Retry once in case the miss was a rewrite window, then fail naming
+    # it.
+    bodies = []
+    for p in (consumer["project"] / ".claude" / "handoff").rglob("*.md"):
+        try:
+            bodies.append(p.read_text(encoding="utf-8"))
+            continue
+        except FileNotFoundError:
+            pass
+        try:
+            bodies.append(p.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            pytest.fail(
+                f"{p} vanished between the walk and the read; a handoff body "
+                f"this check never opened cannot be called free of the key"
+            )
     assert bodies, "nothing was written"
     for body in bodies:
         assert _api_key() not in body, "a credential-shaped span reached disk"

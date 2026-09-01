@@ -55,7 +55,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from scripts.utils.pid_liveness import pid_is_running  # noqa: E402
-from tests.repo_files import tracked_python_files  # noqa: E402
+from tests.repo_files import read_sources, tracked_python_files  # noqa: E402
 
 
 def _load(stem: str, name: str):
@@ -350,14 +350,16 @@ DECLARED_LIVENESS_SITES = {
 
 
 def _corpus() -> list[tuple[str, str]]:
-    out = []
-    for path in tracked_python_files(("scripts", ".claude", "tests")):
-        try:
-            out.append((path.relative_to(ROOT).as_posix(),
-                        path.read_text(encoding="utf-8")))
-        except UnicodeDecodeError:  # pragma: no cover - not a python source
-            continue
-    return out
+    # Read through `read_sources`. The walk and the read are two moments, and
+    # two tests in this suite write a temporary `.py` INTO `tests/` and remove it
+    # moments later; on 2026-09-01 exactly that killed a sibling sweep with
+    # FileNotFoundError and blocked a push on a tree where nothing was wrong.
+    # This is a scan: a module that is gone asks liveness of nothing, so it is
+    # skipped and named in a warning. The decode branch is not carried over -
+    # a tracked `.py` that is not UTF-8 is a real fault and must still raise.
+    return [(path.relative_to(ROOT).as_posix(), text)
+            for path, text in read_sources(
+                tracked_python_files(("scripts", ".claude", "tests")))]
 
 
 def test_the_sweep_reaches_a_real_corpus():

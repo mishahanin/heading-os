@@ -16,7 +16,7 @@ in the frontmatter-coercion sweep. A call is a call; prose about a call is not.
 import ast
 from pathlib import Path
 
-from tests.repo_files import tracked_paths
+from tests.repo_files import read_sources, tracked_paths
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -136,10 +136,15 @@ def test_no_os_path_join_in_live_scripts():
     # 386 tracked files survived the archive filter on 2026-09-01.
     assert len(paths) >= 220, f"the scan collapsed to {len(paths)} files"
     violations = []
-    for py in paths:
-        for lineno in join_call_lines(py.read_text(encoding="utf-8")):
+    # SCAN: a script that vanished between the walk and the read calls nothing,
+    # so skipping it is the right answer. `read_sources` warns naming it, and
+    # the count rides the message so the narrowing is never invisible.
+    vanished: list[Path] = []
+    for py, text in read_sources(paths, vanished):
+        for lineno in join_call_lines(text):
             violations.append(f"{py.relative_to(ROOT).as_posix()}:{lineno}")
     assert not violations, (
         "the os.path join helper is called in live scripts/ - use pathlib.Path "
-        "instead (F-L2):\n  " + "\n  ".join(violations)
+        f"instead (F-L2) ({len(vanished)} file(s) vanished mid-walk):\n  "
+        + "\n  ".join(violations)
     )

@@ -14,6 +14,36 @@ import pytest
 ENGINE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ENGINE))
 
+from tests.repo_files import read_sources  # noqa: E402
+
+
+def _written_texts(paths, what: str) -> list[tuple[Path, str]]:
+    """`(path, text)` for every file the hook wrote, or a failure naming the gap.
+
+    A walk collects paths and the reads happen afterwards, so a file can be gone
+    by the time it is opened and `read_text` then raises FileNotFoundError from
+    inside the assertion loop. `read_sources` absorbs exactly that race.
+
+    Every caller here is a LEAK check: "no file the hook wrote carries this
+    marker", or "the quarantine really holds it". A quiet skip would be the
+    worst possible answer to that question - the file that vanished is precisely
+    the one nobody examined, and the test would still print clean over it. So
+    the read is retried once, and a file that is genuinely gone FAILS the test
+    naming it. A redaction guard may crash, and it may fail; it may not report
+    a clean tree it did not read.
+    """
+    lost: list[Path] = []
+    out = list(read_sources(list(paths), lost))
+    if lost:
+        still_gone: list[Path] = []
+        out += list(read_sources(lost, still_gone))
+        if still_gone:
+            raise AssertionError(
+                f"{what} disappeared between the walk and the read and is still "
+                "gone on retry; a redaction check cannot report clean over a "
+                "file it never read: " + ", ".join(str(p) for p in still_gone))
+    return out
+
 
 def _connection_string() -> str:
     """A URL carrying a userinfo pair. The literal that started this slice."""
@@ -609,7 +639,8 @@ def test_both_summary_carrying_files_are_redacted(tmp_path, monkeypatch):
     module = _run_hook(tmp_path, monkeypatch,
                        "remote " + _connection_string() + " here")
 
-    bodies = [p.read_text(encoding="utf-8") for p in module.HANDOFF_DIR.rglob("*.md")]
+    bodies = [text for _p, text in _written_texts(
+        module.HANDOFF_DIR.rglob("*.md"), "a summary-carrying handoff file")]
     assert len(bodies) >= 2
     for body in bodies:
         assert "not-a-real-token-value" not in body
@@ -668,8 +699,8 @@ def test_a_quarantined_summary_never_reaches_the_tracked_pointer(
     # And nothing outside the quarantine carries it either.
     outside = [p for p in module.HANDOFF_DIR.rglob("*")
                if p.is_file() and module.QUARANTINE_DIR not in p.parents]
-    for path in outside:
-        assert "SENSITIVE-MARKER-" + "abc123" not in path.read_text(encoding="utf-8")
+    for _path, text in _written_texts(outside, "a file outside the quarantine"):
+        assert "SENSITIVE-MARKER-" + "abc123" not in text
 
 
 def test_the_quarantine_pointer_names_both_forms_of_the_one_path(
@@ -746,8 +777,8 @@ def test_every_payload_field_is_redacted_not_only_the_summary(
     files = [p for p in module.HANDOFF_DIR.rglob("*") if p.is_file()]
     assert files, "the hook wrote nothing"
 
-    for path in files:
-        assert poison not in path.read_text(encoding="utf-8"), f"{path} carries it"
+    for path, text in _written_texts(files, "a file the hook wrote"):
+        assert poison not in text, f"{path} carries it"
         assert poison not in path.name, f"the filename carries it: {path.name}"
 
     result = subprocess.run(
@@ -828,13 +859,17 @@ def test_the_tracked_pointer_never_carries_the_exception_message(
         tmp_path, monkeypatch, marker + " and some ordinary prose",
         _boom_carrying_the_text)
 
-    for path in _outside_quarantine(module):
-        assert marker not in path.read_text(encoding="utf-8"), (
+    for path, text in _written_texts(_outside_quarantine(module),
+                                     "a file outside the quarantine"):
+        assert marker not in text, (
             f"{path} carries the summary text via the exception message")
 
     quarantined = [p for p in module.QUARANTINE_DIR.rglob("*") if p.is_file()]
     assert quarantined, "the handoff was lost"
-    assert any(marker in p.read_text(encoding="utf-8") for p in quarantined)
+    # A quiet skip here would weaken an `any()` into a false "the handoff was
+    # never saved", so this read fails on a genuinely missing file too.
+    assert any(marker in text for _p, text in
+               _written_texts(quarantined, "a quarantined handoff"))
 
     _, err = _system_message(capsys)
     assert marker in err, "the full exception must still reach stderr, which is not tracked"
@@ -1134,8 +1169,8 @@ def test_a_lost_body_leaks_the_summary_nowhere(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(module, "redact", _raise_exploded)
     _feed(module, monkeypatch, _LOSS_MARKER + " and some ordinary prose")
 
-    for path in _all_written(module):
-        assert _LOSS_MARKER not in path.read_text(encoding="utf-8"), f"{path} leaked it"
+    for path, text in _written_texts(_all_written(module), "a file the hook wrote"):
+        assert _LOSS_MARKER not in text, f"{path} leaked it"
     assert _LOSS_MARKER not in _state_file(module, tmp_path).read_text(encoding="utf-8")
 
     message, _err = _system_message(capsys)

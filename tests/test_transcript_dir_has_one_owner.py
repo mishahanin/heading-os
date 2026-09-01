@@ -34,7 +34,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tests.repo_files import tracked_paths
+from tests.repo_files import read_sources, tracked_paths
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -66,12 +66,22 @@ def test_only_one_module_implements_the_slug_rule():
     # "no offenders" is green over zero files, so a renamed directory or a
     # changed suffix would switch this guard off without failing anything.
     # Measured 2026-08-26: 428 files across the two patterns.
-    assert len(paths) >= 260, f"the scan collapsed to {len(paths)} files"
+    #
+    # A SCAN, so it reads through `read_sources`: a file that vanished between
+    # the walk and the read holds no second copy of the rule, and skipping it
+    # with a warning naming it beats dying of FileNotFoundError inside the
+    # guard. The floor is asserted on what was READ, so a corpus that shrank in
+    # that window trips it just as an empty walk would.
     offenders = []
-    for path in paths:
-        text = path.read_text(encoding="utf-8", errors="ignore")
+    vanished = []
+    read = 0
+    for path, text in read_sources(paths, vanished, errors="ignore"):
+        read += 1
         if '.replace("/", "-").replace(".", "-")' in text:
             offenders.append(str(path.relative_to(ROOT)))
+    assert read >= 260, (
+        f"the scan collapsed to {read} files read of {len(paths)} walked "
+        f"({len(vanished)} vanished mid-walk)")
     assert not offenders, (
         "the project-slug rule is duplicated outside its owner "
         "(scripts/utils/checkpoint_paths.py):\n  " + "\n  ".join(offenders)

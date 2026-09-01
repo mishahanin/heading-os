@@ -310,7 +310,21 @@ def test_the_exemption_covers_only_pep723_standalones_and_nothing_inside_the_old
         "silently stops being the reason this file gives"
     )
     for p in exempt:
-        head = p.read_text(encoding="utf-8").splitlines()[0]
+        # Read-or-fail, not a skip. This loop checks EVERY exempted file really
+        # is a uv-run standalone, and an exemption nobody opened is coverage
+        # deleted in advance with nothing left to say so. A file that vanished
+        # between the walk and this read is retried once, in case the miss was
+        # a rewrite window, and then named.
+        try:
+            text = p.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            try:
+                text = p.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                pytest.fail(
+                    f"{p} vanished between the walk and the read; an exemption "
+                    f"this test never opened cannot be called checked")
+        head = text.splitlines()[0]
         assert "uv run" in head, f"{p.relative_to(ROOT)} exempted without a uv run shebang"
 
     inside_old_glob = sorted(

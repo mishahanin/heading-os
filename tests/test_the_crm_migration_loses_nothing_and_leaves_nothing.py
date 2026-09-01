@@ -259,8 +259,28 @@ def test_the_legacy_file_is_in_the_backup(applied):
     backup = _backup_dir(data)
     survivors = list(backup.rglob("*.md"))
     assert survivors, f"nothing backed up under {backup}"
-    assert any("Met in Vienna" in p.read_text(encoding="utf-8")
-               for p in survivors), "the original body was not preserved"
+    # NOT a scan to skip through. The claim is that SOME backed-up file still
+    # carries the original body, so the one file dropped between the walk and
+    # the read is exactly the one that could carry it - skipping turns "the
+    # original body was not preserved" into a verdict about a corpus that was
+    # never read whole. The backup tree belongs to this test, so a vanish is a
+    # defect in the migration rather than a parallel agent: retry once, then
+    # fail by name.
+    bodies = []
+    for survivor in survivors:
+        try:
+            bodies.append(survivor.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            try:
+                bodies.append(survivor.read_text(encoding="utf-8"))
+            except FileNotFoundError as exc:
+                raise AssertionError(
+                    f"{survivor} was listed in the backup and gone by the read, "
+                    f"twice; this test asks whether the backup preserved the "
+                    f"body, so it cannot answer over a backup that lost a file."
+                ) from exc
+    assert any("Met in Vienna" in body for body in bodies), \
+        "the original body was not preserved"
 
 
 def test_the_interaction_log_survives_the_migration(applied):

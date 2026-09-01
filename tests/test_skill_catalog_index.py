@@ -41,10 +41,38 @@ def _category_pages() -> list[Path]:
     return [p for p in sorted(DOCS.glob("skills-*.html")) if p != CATALOG]
 
 
+def _read_page_or_fail(page: Path) -> str:
+    """Read one category page, or fail naming it. Deliberately not a skip.
+
+    The glob and the reads are two moments, and a file can go between them in a
+    checkout several workers share. A sweep hunting offenders may skip such a
+    file with a warning, because a file that is gone violates nothing.
+
+    `_documented()` is not that. It is one side of a SET COMPARISON run in both
+    directions, and a page dropped from it does not narrow the answer, it
+    inverts one: every card on that page turns into an index row pointing at a
+    card that does not exist, and the count check reports the page's own card as
+    overstating itself. So the read is retried once, for a rewrite window, and
+    then stops with the path.
+    """
+    try:
+        return page.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        pass
+    try:
+        return page.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise AssertionError(
+            f"{page} vanished between the glob and the read. Dropping it would "
+            f"turn its live cards into dead index rows, which is a wrong "
+            f"answer rather than a smaller one."
+        ) from None
+
+
 def _documented() -> dict[str, str]:
     found: dict[str, str] = {}
     for page in _category_pages():
-        for anchor in _CARD_ID.findall(page.read_text(encoding="utf-8")):
+        for anchor in _CARD_ID.findall(_read_page_or_fail(page)):
             found[anchor] = page.name
     return found
 

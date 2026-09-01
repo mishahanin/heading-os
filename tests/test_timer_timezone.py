@@ -48,7 +48,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from tests.repo_files import tracked_paths
+from tests.repo_files import read_sources, tracked_paths
 
 _ROOT = Path(__file__).resolve().parents[1]
 _TEMPLATES = _ROOT / "scripts" / "templates" / "systemd"
@@ -116,12 +116,20 @@ def test_every_oncalendar_carries_the_timezone_token():
     two hosts in the fleet disagree by four hours. Asserted over ALL templates
     rather than the five known-bad ones, so a sixth cannot be added silently."""
     offenders = []
-    for timer in _timer_templates():
-        for line in timer.read_text(encoding="utf-8").splitlines():
+    # Read through `read_sources`: the glob lists the templates and this loop
+    # reads them, so a template removed inside that window would take the guard
+    # down with a FileNotFoundError instead of returning a verdict. A template
+    # that is gone schedules no fire, so the skip is right and it is named.
+    vanished: list[Path] = []
+    for timer, text in read_sources(_timer_templates(), vanished):
+        for line in text.splitlines():
             if line.startswith("OnCalendar=") and "{{TZ}}" not in line:
                 offenders.append(f"{timer.name}: {line}")
 
-    assert not offenders, "OnCalendar without a {{TZ}} suffix fires on host time:\n" + "\n".join(offenders)
+    assert not offenders, (
+        "OnCalendar without a {{TZ}} suffix fires on host time:\n"
+        + "\n".join(offenders)
+        + f"\n({len(vanished)} template(s) vanished mid-walk)")
 
 
 # ---------------------------------------------------------------------------
@@ -164,14 +172,23 @@ def test_every_installer_substitutes_the_timezone_token():
     every one carries the token in code today, so the tightening costs nothing.
     """
     offenders = []
-    installers = tracked_paths(("scripts/install-*.sh",))
+    # The installers are listed by a walk and read afterwards, and each one used
+    # to be read twice inside the loop. Read once, up front, through
+    # `read_sources`: an installer that went away between the walk and the read
+    # renders nothing, so skipping it is right, and the count is carried into
+    # both assertions below because a skip here shows up as an EMPTY renderer
+    # list - a broken-pairing accusation about a file that merely went away.
+    vanished: list[Path] = []
+    installers = list(read_sources(tracked_paths(("scripts/install-*.sh",)), vanished))
     pairs = 0
     for timer in _timer_templates():
-        renderers = [i for i in installers if timer.name in i.read_text(encoding="utf-8")]
-        assert renderers, f"no installer references {timer.name}; the pairing is broken"
-        for installer in renderers:
+        renderers = [(i, text) for i, text in installers if timer.name in text]
+        assert renderers, (
+            f"no installer references {timer.name}; the pairing is broken "
+            f"({len(vanished)} installer(s) vanished mid-walk)")
+        for installer, text in renderers:
             pairs += 1
-            if "{{TZ}}" not in _shell_code(installer.read_text(encoding="utf-8")):
+            if "{{TZ}}" not in _shell_code(text):
                 offenders.append(
                     f"{installer.name} renders {timer.name} but never substitutes "
                     f"the TZ token outside a comment"
@@ -180,7 +197,9 @@ def test_every_installer_substitutes_the_timezone_token():
     # "no offenders" is what zero pairings produces, and the loop above only
     # floors each timer's renderer list, never the template glob itself.
     # Measured 2026-09-01: 14 timer templates, 15 pairings.
-    assert pairs >= 10, f"the pairing walk collapsed to {pairs} installer/timer pairs"
+    assert pairs >= 10, (
+        f"the pairing walk collapsed to {pairs} installer/timer pairs "
+        f"({len(vanished)} installer(s) vanished mid-walk)")
     assert not offenders, "\n".join(offenders)
 
 
@@ -243,8 +262,14 @@ def test_no_unit_template_names_an_operating_location():
     """
     offenders = []
     inspected = 0
-    for template in _timer_templates() + _service_templates():
-        for number, line in enumerate(template.read_text(encoding="utf-8").splitlines(), 1):
+    # Same walk-then-read race. A template that is gone publishes no location, so
+    # `read_sources` skips it with a warning; `inspected` already counts only the
+    # lines that were really read, and the floor below now says how many files
+    # the race took out of the corpus it is floored over.
+    vanished: list[Path] = []
+    for template, text in read_sources(_timer_templates() + _service_templates(),
+                                       vanished):
+        for number, line in enumerate(text.splitlines(), 1):
             if "{{TZ}}" in line:
                 continue
             inspected += 1
@@ -257,7 +282,9 @@ def test_no_unit_template_names_an_operating_location():
     # Two things would empty it in silence: both template globs going stale, and
     # the `{{TZ}}` guard widening to drop every line. Measured 2026-08-26: 32
     # templates, 568 lines reaching the search.
-    assert inspected >= 350, f"the scan reached only {inspected} template lines"
+    assert inspected >= 350, (
+        f"the scan reached only {inspected} template lines "
+        f"({len(vanished)} template(s) vanished mid-walk)")
     assert not offenders, "geographic literal in a public engine template:\n" + "\n".join(offenders)
 
 
@@ -267,14 +294,22 @@ def test_no_timer_installer_uses_the_operators_zone_as_its_example():
     example. Any other zone documents the flag equally well, so the engine
     settles on the one its own docstring already uses.
     """
-    installers = tracked_paths(("scripts/install-*-timer.sh",))
+    # Same walk-then-read race: an installer that is gone documents nothing, so
+    # it is skipped with a warning. The floor is taken over the installers
+    # actually READ rather than over the path list, so a corpus the race narrowed
+    # still has to clear it.
+    vanished: list[Path] = []
+    installers = list(read_sources(tracked_paths(("scripts/install-*-timer.sh",)),
+                                   vanished))
     # An empty offender list is green over zero installers, so a renamed script
     # prefix or a moved directory would switch this check off in silence.
     # Measured 2026-08-26: 14 installers match the glob.
-    assert len(installers) >= 9, f"the scan collapsed to {len(installers)} files"
+    assert len(installers) >= 9, (
+        f"the scan collapsed to {len(installers)} files "
+        f"({len(vanished)} vanished mid-walk)")
     offenders = []
-    for installer in installers:
-        for number, line in enumerate(installer.read_text(encoding="utf-8").splitlines(), 1):
+    for installer, text in installers:
+        for number, line in enumerate(text.splitlines(), 1):
             found = _GEO.search(line)
             if found and found.group(0) != "America/New_York":
                 offenders.append(f"{installer.name}:{number} names {found.group(0)!r}")
@@ -384,14 +419,17 @@ def test_no_service_template_pins_the_zone_variable_the_runtime_layer_reads():
     naive `date.today()`, and nothing reads `TZ` from `.env`, so it cannot become
     a staler copy of anything.
     """
+    # Same walk-then-read race: a template that is gone pins nothing.
+    vanished: list[Path] = []
     offenders = [
-        t.name for t in _service_templates()
-        if "Environment=HEADING_OS_TZ" in t.read_text(encoding="utf-8")
+        t.name for t, text in read_sources(_service_templates(), vanished)
+        if "Environment=HEADING_OS_TZ" in text
     ]
 
     assert not offenders, (
         "a unit-pinned HEADING_OS_TZ can never be corrected by .env: "
         + ", ".join(offenders)
+        + f" ({len(vanished)} template(s) vanished mid-walk)"
     )
 
 
@@ -418,7 +456,23 @@ def test_every_template_renders_to_a_unit_systemd_accepts(tmp_path):
     zone = "Etc/GMT-14"   # a real zone, and not the operator's
 
     for template in _timer_templates() + _service_templates():
-        rendered = (template.read_text(encoding="utf-8")
+        # EVERY template is rendered here and handed to systemd-analyze; that is
+        # the claim in the name. Skipping one that vanished between the glob and
+        # the read would leave the test green having validated a smaller set than
+        # it says - a narrowed check printing as a complete one. Retry once for
+        # the race, then fail naming the template.
+        try:
+            source = template.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            try:
+                source = template.read_text(encoding="utf-8")
+            except FileNotFoundError as gone:
+                raise AssertionError(
+                    f"{template} vanished between the walk and the read; this "
+                    f"test claims every template renders to a unit systemd "
+                    f"accepts and would be asserting that over a shorter list"
+                ) from gone
+        rendered = (source
                     .replace("{{WORKSPACE}}", str(tmp_path))
                     .replace("{{PYTHON}}", sys.executable)
                     .replace("{{TZ}}", zone)

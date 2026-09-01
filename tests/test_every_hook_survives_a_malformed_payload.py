@@ -54,9 +54,38 @@ MALFORMED = ['[]', '"x"', '3', 'null', '[{"tool_name": "Bash"}]']
 _READS_STDIN = re.compile(r"sys\.stdin\b")
 
 
+def _read_hook_or_fail(path: Path) -> str:
+    """Read one hook, or raise naming it. Deliberately not a skip.
+
+    The glob below lists paths and reads them a moment later, and a file can go
+    in that window when several workers share one checkout. A sweep hunting
+    offenders may skip such a file - `read_sources` does, with a warning -
+    because a file that is gone violates nothing.
+
+    This read decides WHICH HOOKS THE SWEEP REACHES. A hook dropped here is not
+    reported as unguarded; it is not tested at all, and the file's whole premise
+    is that a hook reading stdin is picked up automatically. Silently narrowing
+    the parametrisation is how a hook stops being covered without anyone
+    noticing, so a miss is retried once for a rewrite window and then stops the
+    run with the path.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        pass
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise RuntimeError(
+            f"{path} vanished between the hook glob and the read. Dropping it "
+            f"would remove a hook from this sweep without removing the sweep's "
+            f"claim to cover every stdin hook."
+        ) from None
+
+
 def _stdin_hooks() -> list[Path]:
     return sorted(p for p in HOOKS.glob("*.py")
-                  if _READS_STDIN.search(p.read_text(encoding="utf-8")))
+                  if _READS_STDIN.search(_read_hook_or_fail(p)))
 
 
 def _argv_for(hook: Path) -> list[str]:

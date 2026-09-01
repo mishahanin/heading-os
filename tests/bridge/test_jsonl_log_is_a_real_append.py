@@ -40,6 +40,7 @@ SOURCES = ROOT / "scripts" / "bridge_daemon"
 
 sys.path.insert(0, str(ROOT))
 from scripts.bridge_daemon._jsonl import append_jsonl, read_jsonl_capped  # noqa: E402
+from tests.repo_files import read_sources  # noqa: E402
 
 
 def _lines(p: Path) -> list[dict]:
@@ -54,10 +55,14 @@ def test_no_module_rebuilds_the_whole_log_to_add_one_line():
     through."""
     offenders = []
     inspected = 0
-    for path in sorted(SOURCES.rglob("*.py")):
+    # Read through `read_sources`: the rglob lists the paths and the loop reads
+    # them, and a file can be created and removed between those two moments in a
+    # checkout several agents share. A skip is the right answer for a scan - a
+    # file that is gone cannot hold the forbidden shape - and it warns.
+    vanished: list[Path] = []
+    for path, src in read_sources(sorted(SOURCES.rglob("*.py")), vanished):
         if path.name == "_jsonl.py":
             continue                      # its docstring quotes the old shape
-        src = path.read_text(encoding="utf-8")
         inspected += 1
         for n, line in enumerate(src.splitlines(), 1):
             if re.search(r"new_content\s*\+?=", line):
@@ -66,7 +71,9 @@ def test_no_module_rebuilds_the_whole_log_to_add_one_line():
     # retiring a module does not fail this test. If the `path.name == "_jsonl.py"`
     # skip ever widened to match every file, the offender list would be empty and
     # the scan below would pass while reading nothing.
-    assert inspected >= 28, f"only {inspected} modules reached the scan"
+    assert inspected >= 28, (
+        f"only {inspected} modules reached the scan "
+        f"({len(vanished)} vanished mid-walk)")
     assert not offenders, (
         "a read-modify-rewrite is back in an append-only log; use "
         "_jsonl.append_jsonl:\n  " + "\n  ".join(offenders)
@@ -75,9 +82,13 @@ def test_no_module_rebuilds_the_whole_log_to_add_one_line():
 
 def test_every_log_writer_goes_through_the_shared_primitive():
     """Pins the detector above: if nothing imports it, the scan proves nothing."""
-    users = [p.name for p in sorted(SOURCES.rglob("*.py"))
-             if "append_jsonl" in p.read_text(encoding="utf-8") and p.name != "_jsonl.py"]
-    assert len(users) >= 6, users
+    # Same walk-then-read race. Skipping is safe here because this is a FLOOR: a
+    # file that vanished can only make the count smaller, so the failure is loud
+    # rather than a wrong answer. The count is reported with it.
+    vanished: list[Path] = []
+    users = [p.name for p, src in read_sources(sorted(SOURCES.rglob("*.py")), vanished)
+             if "append_jsonl" in src and p.name != "_jsonl.py"]
+    assert len(users) >= 6, f"{users} ({len(vanished)} vanished mid-walk)"
 
 
 # --- the lost update, demonstrated -------------------------------------------

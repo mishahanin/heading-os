@@ -510,9 +510,37 @@ def engine_content_scan(repo: Path, data_root: Path) -> None:
         for lineno, matched, category in dl.scan_text(text):
             findings.append((label, lineno, matched, category))
 
+    gone: list[str] = []
     for rel in engine_text_files(repo, sorted(_push_delta_files(repo))):
         try:
             text = (repo / rel).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            # THE WALK-THEN-READ RACE. `_push_delta_files` lists paths and this
+            # loop reads them after, and `engine_text_files` filters on
+            # `is_file()` in between, so the window is narrow but open: a file
+            # created and deleted inside it made the read raise, landed in
+            # `unscanned`, and REFUSED a push carrying nothing wrong. A gate
+            # that blocks on its own timing is how an operator learns to reach
+            # for `--no-verify`.
+            #
+            # WHY SKIPPING IS SAFE HERE, and the reason is NOT "the file is
+            # gone" -- that argument is wrong in general, because a tracked file
+            # deleted from the worktree keeps its content in the INDEX, and a
+            # blind skip would let a staged secret past the last wall by
+            # deleting the file after staging it.
+            #
+            # It is safe because of what step 3 does. MEASURED 2026-09-01: this
+            # script stages with `git add -A` (see the commit step below), and
+            # `git add -A` STAGES THE DELETION -- a scratch repo with a file
+            # added and then removed from the worktree had an index entry
+            # holding the content before `add -A` and no entry after it. So a
+            # path absent from the worktree at scan time is absent from the
+            # commit this run makes, and there is no content for the push to
+            # carry. `tests/test_a_wall_that_refused_over_a_file_it_could_not_push.py`
+            # holds that dependency, so narrowing the staging command turns this
+            # skip back into a hole and fails there rather than in silence.
+            gone.append(rel)
+            continue
         except (OSError, UnicodeDecodeError) as exc:
             # Recorded, then refused below. A bare `continue` here meant an
             # engine-routed file whose bytes are not valid UTF-8 -- a note saved
@@ -543,6 +571,16 @@ def engine_content_scan(repo: Path, data_root: Path) -> None:
                   f"UNPUSHED COMMIT. Editing the file now does not remove it; the "
                   f"commit range has to be rewritten before this push can go.{RESET}")
         sys.exit(2)
+    if gone:
+        # Not a refusal. There is no content here for this push to carry, so
+        # refusing would block on the gate's own timing. It is still SAID, because
+        # a corpus that shrank in silence is a narrowed check printing like a
+        # complete one (`.claude/rules/scope-claims.md`).
+        print(f"{GRAY}content gate: {len(gone)} path(s) listed in the delta "
+              f"vanished before they could be read. `git add -A` stages that "
+              f"deletion, so this push carries no content for them:{RESET}")
+        for rel in gone:
+            print(f"{GRAY}  {rel}{RESET}")
     if unscanned:
         for note in unscanned:
             log_denial(mechanism="push:engine-content-scan", action="push",

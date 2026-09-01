@@ -48,9 +48,14 @@ shape worth copying -- it genuinely needs two roots (seven sources read DATA,
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+
+from tests.repo_files import read_sources  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 PKG = ROOT / "scripts" / "bridge_daemon"
@@ -239,13 +244,18 @@ def test_no_docstring_promises_a_fallback_to_the_engine_root():
     # 45 files matched on 2026-08-26.
     assert len(paths) >= 28, f"the scan collapsed to {len(paths)} files"
     offenders = []
-    for path in paths:
-        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    # SCAN: a file that vanished between the rglob and the read cannot be
+    # carrying a false fallback promise, so skipping it is the right answer and
+    # `read_sources` warns naming it rather than dropping it silently.
+    vanished: list[Path] = []
+    for path, text in read_sources(paths, vanished):
+        for n, line in enumerate(text.splitlines(), 1):
             if "falls back to ``workspace_root``" in line and "NOT to" not in line:
                 offenders.append(f"{path.relative_to(ROOT)}:{n}")
     assert not offenders, (
         "a docstring claims an unsupplied data_root falls back to "
-        "workspace_root; it falls back to get_data_root():\n  "
+        f"workspace_root; it falls back to get_data_root() "
+        f"({len(vanished)} file(s) vanished mid-walk):\n  "
         + "\n  ".join(offenders)
     )
 
@@ -260,10 +270,13 @@ def test_no_function_can_be_handed_the_same_root_twice():
     # silently become empty, and the test would still report green.
     # 45 files matched on 2026-08-26.
     assert len(paths) >= 28, f"the scan collapsed to {len(paths)} files"
-    for path in paths:
+    # SCAN, same reasoning as above: a file that is gone holds no double-root
+    # call site. The warning from `read_sources` keeps the narrowing visible.
+    vanished: list[Path] = []
+    for path, text in read_sources(paths, vanished):
         rel = path.relative_to(PKG).as_posix()
         dual = _dual_root_functions().get(rel, [])
-        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        for n, line in enumerate(text.splitlines(), 1):
             m = re.search(r"\b(\w+)\(\s*data_root\b[^)]*\bdata_root\s*=", line)
             if not m:
                 continue
@@ -273,4 +286,6 @@ def test_no_function_can_be_handed_the_same_root_twice():
             takes_both = any(callee in fns for fns in _dual_root_functions().values())
             if not takes_both and callee not in dual:
                 bad.append(f"{path.relative_to(ROOT)}:{n}: {line.strip()}")
-    assert not bad, "\n  ".join(bad)
+    assert not bad, (
+        f"({len(vanished)} file(s) vanished mid-walk)\n  " + "\n  ".join(bad)
+    )

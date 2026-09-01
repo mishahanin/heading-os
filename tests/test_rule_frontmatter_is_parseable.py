@@ -26,15 +26,30 @@ declares scoping, the harness must be able to read that declaration.
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
 
-RULES_DIR = Path(__file__).resolve().parent.parent / ".claude" / "rules"
+ROOT = Path(__file__).resolve().parent.parent
+RULES_DIR = ROOT / ".claude" / "rules"
+
+sys.path.insert(0, str(ROOT))
+from tests.repo_files import read_sources  # noqa: E402
 
 
 def _rule_files() -> list[Path]:
     return sorted(RULES_DIR.glob("*.md"))
+
+
+# Read the rules ONCE, at collection, and parametrize over the text. The glob
+# runs when the decorator is evaluated and a per-case `path.read_text()` would
+# run at execution, minutes later under `-n auto`; a rule created and removed
+# inside that window would raise FileNotFoundError from inside the gate rather
+# than report on it. The two floors below still count FILES from a fresh glob, so
+# a corpus that really shrank is caught there, loudly, not swallowed here.
+_RULES_VANISHED: list[Path] = []
+_RULE_SOURCES = list(read_sources(_rule_files(), _RULES_VANISHED))
 
 
 def _declares_scoping(text: str) -> bool:
@@ -47,9 +62,9 @@ def _declares_scoping(text: str) -> bool:
     return any(line.strip() == "paths:" for line in text.splitlines())
 
 
-@pytest.mark.parametrize("path", _rule_files(), ids=lambda p: p.name)
-def test_a_rule_declaring_paths_starts_with_its_frontmatter(path):
-    text = path.read_text(encoding="utf-8")
+@pytest.mark.parametrize("path,text", _RULE_SOURCES,
+                         ids=[p.name for p, _ in _RULE_SOURCES])
+def test_a_rule_declaring_paths_starts_with_its_frontmatter(path, text):
     if not _declares_scoping(text):
         return
     assert text.startswith("---\n"), (
@@ -83,10 +98,17 @@ def test_the_gate_still_has_scoped_rules_to_be_a_gate_over():
     that so ordinary churn does not trip it, and well over zero so a change of
     convention does.
     """
-    scoped = [p for p in _rule_files()
-              if _declares_scoping(p.read_text(encoding="utf-8"))]
+    # Read through `read_sources`: the glob lists the rules and this comprehension
+    # reads them, and a file removed inside that window would kill the floor with
+    # a FileNotFoundError instead of a verdict. This is a FLOOR, so a rule the
+    # race skipped can only make it harder to clear - never a wrong answer - and
+    # the skip count is reported with it.
+    vanished: list[Path] = []
+    scoped = [p for p, text in read_sources(_rule_files(), vanished)
+              if _declares_scoping(text)]
 
     assert len(scoped) >= 6, (
-        f"only {len(scoped)} of {len(_rule_files())} rules declare `paths:`, so "
+        f"only {len(scoped)} of {len(_rule_files())} rules declare `paths:` "
+        f"({len(vanished)} vanished mid-walk), so "
         f"the frontmatter gate above is asserting on almost nothing. If the "
         f"scoping convention changed, change `_declares_scoping` with it.")

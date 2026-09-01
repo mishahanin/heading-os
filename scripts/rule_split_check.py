@@ -40,6 +40,13 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+# This module is imported as `scripts.rule_split_check` by its tests (repo root
+# already on the path) AND run as `python scripts/rule_split_check.py` by CI,
+# where sys.path[0] is `scripts/` and the package is not importable. The insert
+# is the same one every sibling CLI script under `scripts/` carries.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts.utils.repo_files import read_sources  # noqa: E402
+
 INVENTORY_DIR = Path("config/rule-split-inventory")
 
 # Recall self-test fixture lives HERE (source of truth); the test imports it. Fixture
@@ -209,7 +216,17 @@ def _rule_union_sentences(stem: str, rules_dir: str = ".claude/rules",
     for extra in _declared_destinations(stem, inventory_dir, repo_root):
         if extra.is_file():
             paths.append(extra)
-    text = "\n".join(p.read_text(encoding="utf-8") for p in paths)
+    # Through `read_sources`: `paths` came from a glob plus an `is_file()` test,
+    # and a rule file rewritten between that walk and this read raised
+    # FileNotFoundError out of a gate that had found nothing wrong. SKIPPING is
+    # the correct degradation here, and the module docstring above is the reason:
+    # this gate fails SAFE, never dangerous. A successor file missing from the
+    # union can only make a frozen directive read as LOST, which is the false
+    # POSITIVE this design already accepts and routes to a human. It can never
+    # certify a dropped directive as retained. The skip is announced --
+    # `read_sources` warns naming the file -- so the human dismissing the
+    # finding can see the corpus shrank.
+    text = "\n".join(t for _, t in read_sources(paths))
     return {_norm(s) for s in _units(text) if _norm(s)}
 
 
@@ -229,10 +246,16 @@ def check_inventories(inventory_dir: Path | None = None,
     # For every snapshot, assert each frozen imperative is still an exact sentence of the
     # current core+detail union. Returns [(stem, dropped_line), ...]; empty = clean.
     bad = []
-    for inv in sorted(glob.glob(str(Path(inventory_dir) / "*.txt"))):
-        stem = Path(inv).name[:-4]  # strip ".txt"
+    # The SECOND walk-then-read in this gate, fixed in the same change as the one
+    # in `_rule_union_sentences`: a snapshot listed by the glob and gone by the
+    # read raised the identical FileNotFoundError out of the identical `--check`
+    # run, and a fix that lands in one of two copies is the copy that stops being
+    # fixed. Skipping loses that snapshot's coverage, which `read_sources`
+    # announces by name; it cannot turn a dropped directive into a retained one.
+    for inv, body in read_sources(sorted(Path(inventory_dir).glob("*.txt"))):
+        stem = inv.name[:-4]  # strip ".txt"
         union = _rule_union_sentences(stem, rules_dir, Path(inventory_dir))
-        for line in Path(inv).read_text(encoding="utf-8").splitlines():
+        for line in body.splitlines():
             if line.strip() and _norm(line) not in union:
                 bad.append((stem, line))
     return bad

@@ -28,12 +28,16 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
 ENGINE = Path(__file__).resolve().parent.parent
 SKILLS = ENGINE / ".claude" / "skills"
+
+sys.path.insert(0, str(ENGINE))
+from tests.repo_files import read_sources  # noqa: E402
 
 # The single source of truth, loaded by path (the filename has a hyphen).
 _spec = importlib.util.spec_from_file_location(
@@ -56,7 +60,26 @@ MIN_NEG = gate.TRIGGERS_MIN_NEG
 # files on this tree, so the choice costs nothing today; it is stated so the next
 # reader does not "fix" it into the narrower one. The floor below is the guard.
 CORPORA = sorted(SKILLS.glob("*/triggers.json"))
-IDS = [p.parent.name for p in CORPORA]
+
+# The four structural cases below parametrize over `(path, raw)` rather than the
+# path, so the corpus is read ONCE here, at collection. Four cases per skill each
+# opening the same file put four copies of the walk/read race in this module: the
+# glob above runs when the decorators are evaluated and the reads ran at
+# execution, minutes later under `-n auto`, so a corpus written for a new skill
+# and moved moments later would raise FileNotFoundError from inside four guards
+# at once. Reading here removes the window instead of narrowing it four times.
+#
+# The TEXT is what is handed on, not the parsed object: `test_the_corpus_is_a_
+# json_array` exists to report malformed JSON as a test FAILURE naming the skill,
+# and parsing at collection would turn that into a collection error instead.
+#
+# Two siblings still fail on a corpus that really went away --
+# `test_the_corpora_glob_finds_something` floors the glob above 50, and
+# `test_the_gate_and_this_file_agree_on_every_corpus` retries then fails naming
+# the file -- so nothing here can report clean over a set that shrank.
+_CORPORA_VANISHED: list[Path] = []
+CORPUS_SOURCES = list(read_sources(CORPORA, _CORPORA_VANISHED))
+IDS = [p.parent.name for p, _ in CORPUS_SOURCES]
 
 
 def test_the_corpora_glob_finds_something():
@@ -76,15 +99,15 @@ def test_the_thresholds_come_from_the_gate_not_from_here():
     assert isinstance(MIN_NEG, int) and MIN_NEG > 0
 
 
-@pytest.mark.parametrize("path", CORPORA, ids=IDS)
-def test_the_corpus_is_a_json_array(path: Path):
-    data = json.loads(path.read_text(encoding="utf-8"))
+@pytest.mark.parametrize("path,raw", CORPUS_SOURCES, ids=IDS)
+def test_the_corpus_is_a_json_array(path: Path, raw: str):
+    data = json.loads(raw)
     assert isinstance(data, list), f"{path.parent.name}/triggers.json must be an array"
 
 
-@pytest.mark.parametrize("path", CORPORA, ids=IDS)
-def test_every_case_has_the_required_fields(path: Path):
-    data = json.loads(path.read_text(encoding="utf-8"))
+@pytest.mark.parametrize("path,raw", CORPUS_SOURCES, ids=IDS)
+def test_every_case_has_the_required_fields(path: Path, raw: str):
+    data = json.loads(raw)
     name = path.parent.name
     for i, entry in enumerate(data):
         assert isinstance(entry, dict), f"{name} entry[{i}] is not an object"
@@ -96,9 +119,9 @@ def test_every_case_has_the_required_fields(path: Path):
             f"{name} entry[{i}]['should_trigger'] not a bool"
 
 
-@pytest.mark.parametrize("path", CORPORA, ids=IDS)
-def test_the_corpus_meets_the_gate_thresholds(path: Path):
-    data = json.loads(path.read_text(encoding="utf-8"))
+@pytest.mark.parametrize("path,raw", CORPUS_SOURCES, ids=IDS)
+def test_the_corpus_meets_the_gate_thresholds(path: Path, raw: str):
+    data = json.loads(raw)
     name = path.parent.name
     positives = [e for e in data if e.get("should_trigger") is True]
     negatives = [e for e in data if e.get("should_trigger") is False]
@@ -110,10 +133,10 @@ def test_the_corpus_meets_the_gate_thresholds(path: Path):
         f"{name}: {len(negatives)} negative < {MIN_NEG} required"
 
 
-@pytest.mark.parametrize("path", CORPORA, ids=IDS)
-def test_no_duplicate_queries_within_a_corpus(path: Path):
+@pytest.mark.parametrize("path,raw", CORPUS_SOURCES, ids=IDS)
+def test_no_duplicate_queries_within_a_corpus(path: Path, raw: str):
     """A corpus padded with repeats meets the count and tests nothing new."""
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(raw)
     seen: dict[str, int] = {}
     for entry in data:
         key = entry["query"].strip().lower()
@@ -130,7 +153,22 @@ def test_the_gate_and_this_file_agree_on_every_corpus():
     """
     disagreements = []
     for path in CORPORA:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        # The walk that built CORPORA and this read are two moments. Skipping a
+        # corpus that went missing in between would leave `disagreements` empty
+        # and print "no corpus may pass one contract and fail the other" over a
+        # set that quietly shrank - a narrowed check reported as a complete one.
+        # Retry once for the race, then fail naming the corpus.
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            try:
+                raw = path.read_text(encoding="utf-8")
+            except FileNotFoundError as gone:
+                raise AssertionError(
+                    f"{path} vanished between the walk and the read, so this "
+                    f"cross-check would report agreement over a corpus it never "
+                    f"compared") from gone
+        data = json.loads(raw)
         positives = sum(1 for e in data if e.get("should_trigger") is True)
         negatives = sum(1 for e in data if e.get("should_trigger") is False)
         here_ok = (len(data) >= MIN_CASES and positives >= MIN_POS

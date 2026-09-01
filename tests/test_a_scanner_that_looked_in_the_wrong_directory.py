@@ -89,6 +89,9 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 HOOKS = ROOT / ".claude" / "hooks"
 
+sys.path.insert(0, str(ROOT))
+from tests.repo_files import read_sources  # noqa: E402
+
 # The interpreter the settings files actually launch hooks with, NOT
 # `sys.executable`. The project venv carries an editable install of this repo, so
 # under `.venv/bin/python` every `import scripts.utils.*` inside a hook succeeds
@@ -455,9 +458,15 @@ def test_the_enumerator_leaves_an_unrelated_hook_alone():
 
 def path_reading_hooks() -> list[tuple[Path, str]]:
     """(hook, field) for every hook under `.claude/hooks/` that names a path."""
+    # The glob lists the hooks and the loop reads them; a file can be created and
+    # removed inside that window in a checkout several agents share, and the
+    # FileNotFoundError would come out of this guard as though it had caught
+    # something. A hook that is gone names no path field, so `read_sources`
+    # skips it and warns - the floor below then measures what was really read.
     pairs = []
-    for hook in sorted(HOOKS.glob("*.py")):
-        for field in sorted(path_fields_named(hook.read_text(encoding="utf-8"))):
+    vanished: list[Path] = []
+    for hook, text in read_sources(sorted(HOOKS.glob("*.py")), vanished):
+        for field in sorted(path_fields_named(text)):
             pairs.append((hook, field))
     return pairs
 

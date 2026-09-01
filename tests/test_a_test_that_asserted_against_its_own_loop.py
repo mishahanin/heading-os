@@ -49,6 +49,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tests.repo_files import read_sources  # noqa: E402
+
 # `watchdog` is needed by Defect 1 ONLY: `scripts.bridge_daemon.watcher` imports
 # `watchdog.observers` at module level. The Defect 2 tests drive
 # `.claude/hooks/prompt-guard.py` as a subprocess and touch nothing but stdlib.
@@ -434,19 +436,32 @@ def _guards_tool_input(tree: ast.Module) -> bool:
     return False
 
 
-def _classified_hooks() -> tuple[list[Path], list[Path]]:
+def _classified_hooks() -> tuple[list[Path], list[Path], dict[Path, str]]:
+    """Readers of `tool_input`, non-readers, and the source text of each.
+
+    The sources come back with the split so the two tests below assert over the
+    text this classification was made from, instead of opening each hook a
+    second time. SCAN judgement on the read: the walk and the read are two
+    moments, and a hook file that disappears between them used to raise
+    FileNotFoundError from inside the guard. A hook that is gone cannot be an
+    unguarded reader, so `read_sources` skips it and WARNS naming it, and the
+    anti-vacuity floors in the next test still redden if the directory
+    collapses.
+    """
     readers, others = [], []
-    for path in _hook_files():
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+    vanished: list[Path] = []
+    sources = dict(read_sources(_hook_files(), vanished))
+    for path, source in sources.items():
+        tree = ast.parse(source)
         (readers if _reads_tool_input(tree) else others).append(path)
-    return readers, others
+    return readers, others, sources
 
 
 def test_the_hook_directory_and_its_tool_input_readers_are_both_non_empty():
     """Anti-vacuity for both derived lists. A rule over an empty glob is green
     forever, and the sweep this pin exists for was reported as complete."""
     hooks = _hook_files()
-    readers, others = _classified_hooks()
+    readers, others, _ = _classified_hooks()
     assert len(hooks) >= 15, [p.name for p in hooks]
     assert len(readers) >= 5, [p.name for p in readers]
     assert others, "no hook was classified as a non-reader; the split is inert"
@@ -460,10 +475,10 @@ def test_every_hook_that_reads_tool_input_guards_it_the_same_way():
     added under `.claude/hooks/` inherits the check instead of repeating the
     2026-08-23 sweep's miss.
     """
-    readers, _ = _classified_hooks()
+    readers, _, sources = _classified_hooks()
     unguarded = [
         p.name for p in readers
-        if not _guards_tool_input(ast.parse(p.read_text(encoding="utf-8")))
+        if not _guards_tool_input(ast.parse(sources[p]))
     ]
     assert unguarded == [], (
         "these hooks read tool_input without checking it is an object, so a "
@@ -482,8 +497,8 @@ def test_the_hooks_left_out_never_mention_tool_input_at_all():
     variable key or a `**kwargs` splat, instead of quietly widening the
     exclusion to cover it.
     """
-    _, others = _classified_hooks()
-    leaked = [p.name for p in others if "tool_input" in p.read_text(encoding="utf-8")]
+    _, others, sources = _classified_hooks()
+    leaked = [p.name for p in others if "tool_input" in sources[p]]
     assert leaked == [], (
         "these hooks were excluded from the guard rule as non-readers, but they "
         f"mention tool_input, so the AST detector may be missing a read: {leaked}"

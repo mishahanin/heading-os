@@ -31,12 +31,16 @@ it serves every page, so a class unused on one page is normal there.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
+
+sys.path.insert(0, str(ROOT))
+from tests.repo_files import read_sources  # noqa: E402
 
 _STYLE = re.compile(r"<style>(.*?)</style>", re.S)
 _DECL = re.compile(r"\{[^}]*\}")
@@ -53,8 +57,22 @@ def _pages() -> list[Path]:
     return sorted(DOCS.glob("*.html"))
 
 
-def _dead_selectors(path: Path) -> list[str]:
-    text = path.read_text(encoding="utf-8")
+# Read the pages ONCE, at collection, and parametrize over the text below. The
+# glob runs when the decorator is evaluated and a per-case read would run at
+# execution, minutes later under `-n auto`: a page written and removed inside
+# that window raised FileNotFoundError from inside the guard. Reading here closes
+# the window instead of narrowing it. `test_the_detector_is_not_vacuous` re-walks
+# and floors at 9 styled pages, so a corpus that genuinely shrank is red there.
+_PAGES_VANISHED: list[Path] = []
+_PAGE_SOURCES = list(read_sources(_pages(), _PAGES_VANISHED))
+
+
+def _dead_selectors(text: str) -> list[str]:
+    """Takes the TEXT, not the path, so the read happens once at collection.
+
+    It used to open the file itself, which put a second copy of the same
+    walk-then-read race inside a helper where the detector could not see it.
+    """
     blocks = _STYLE.findall(text)
     if not blocks:
         return []
@@ -66,9 +84,10 @@ def _dead_selectors(path: Path) -> list[str]:
     return sorted(set(_SELECTOR_CLASS.findall(selectors)) - used)
 
 
-@pytest.mark.parametrize("page", _pages(), ids=lambda p: p.name)
-def test_every_inline_class_selector_matches_an_element_on_the_page(page):
-    dead = _dead_selectors(page)
+@pytest.mark.parametrize("page,text", _PAGE_SOURCES,
+                         ids=[p.name for p, _ in _PAGE_SOURCES])
+def test_every_inline_class_selector_matches_an_element_on_the_page(page, text):
+    dead = _dead_selectors(text)
     assert dead == [], (
         f"{page.relative_to(ROOT)} styles classes it never uses: {dead}. An "
         "inline <style> block is page-local, so these rules can never apply. "
@@ -76,10 +95,10 @@ def test_every_inline_class_selector_matches_an_element_on_the_page(page):
     )
 
 
-@pytest.mark.parametrize("page", _pages(), ids=lambda p: p.name)
-def test_h3_tags_balance(page):
+@pytest.mark.parametrize("page,text", _PAGE_SOURCES,
+                         ids=[p.name for p, _ in _PAGE_SOURCES])
+def test_h3_tags_balance(page, text):
     """Pins the refuted half of the audit finding, so it is not re-raised."""
-    text = page.read_text(encoding="utf-8")
     opens = len(re.findall(r"<h3\b", text))
     closes = len(re.findall(r"</h3>", text))
     assert opens == closes, (
@@ -90,14 +109,21 @@ def test_h3_tags_balance(page):
 def test_the_split_leftovers_are_gone_specifically():
     """Names the three dead regions, so a re-paste of the old block is caught by
     a test that says what happened rather than by a generic selector diff."""
-    pages = sorted(DOCS.glob("skills-*.html"))
+    # Read through `read_sources`: the glob lists the pages and the loop reads
+    # them, and a FileNotFoundError from that window would be reported as this
+    # guard catching something. A page that is gone re-grew no rules, so the skip
+    # is right; the floor is taken over the pages actually READ, so a scan
+    # narrowed by the race still has to clear it.
+    vanished: list[Path] = []
+    pages = list(read_sources(sorted(DOCS.glob("skills-*.html")), vanished))
     # Every assert below sits inside the loop, so over zero pages this test
     # passes without checking anything. A rename of the split output, or a move
     # of the docs directory, would switch the whole test off in silence. There
     # were 9 skills-*.html pages on 2026-08-26.
-    assert len(pages) >= 6, f"the scan collapsed to {len(pages)} files"
-    for page in pages:
-        text = page.read_text(encoding="utf-8")
+    assert len(pages) >= 6, (
+        f"the scan collapsed to {len(pages)} files "
+        f"({len(vanished)} vanished mid-walk)")
+    for page, text in pages:
         style = "".join(_STYLE.findall(text))
         assert "h3.cat" not in style, f"{page.name} re-grew the h3.cat rules"
         if page.name == "skills-mcp-plugins.html":
@@ -113,8 +139,15 @@ def test_the_split_leftovers_are_gone_specifically():
 
 def test_the_detector_is_not_vacuous():
     """A regex that finds no <style> block passes every test above."""
-    styled = [p.name for p in _pages() if _STYLE.search(p.read_text(encoding="utf-8"))]
-    assert len(styled) >= 9, f"only {len(styled)} pages carry an inline style block"
+    # Same walk-then-read race. This is a FLOOR, so a page skipped by the race
+    # can only make it harder to clear - a loud failure, never a wrong answer -
+    # and the count of skips is reported beside it.
+    vanished: list[Path] = []
+    styled = [p.name for p, text in read_sources(_pages(), vanished)
+              if _STYLE.search(text)]
+    assert len(styled) >= 9, (
+        f"only {len(styled)} pages carry an inline style block "
+        f"({len(vanished)} vanished mid-walk)")
     # And the parser must find real selectors in them, not an empty set.
     sample = DOCS / "skills-crm.html"
     style = "".join(_STYLE.findall(sample.read_text(encoding="utf-8")))

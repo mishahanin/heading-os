@@ -41,7 +41,7 @@ sys.path.insert(0, str(ROOT))
 
 from scripts.utils.markdown import frontmatter_list  # noqa: E402
 from scripts.utils.paths import log_dir  # noqa: E402
-from scripts.utils.repo_files import tracked_python_files  # noqa: E402
+from scripts.utils.repo_files import read_sources, tracked_python_files  # noqa: E402
 
 
 # ============================================================
@@ -152,19 +152,27 @@ def test_no_reader_spells_the_coercion_for_itself_again():
     # tree sweep in the suite carries this line - see
     # `tests/test_no_os_path_join.py`, `tests/test_per_exec_contacts_dir.py`,
     # `tests/test_transcript_dir_has_one_owner.py` - and this one did not.
-    # 443 files matched on 2026-09-01.
-    assert len(paths) >= 300, f"the scan collapsed to {len(paths)} files"
+    # 443 files matched on 2026-09-01. The floor is asserted on what was READ
+    # rather than on what was walked, because a corpus can also shrink between
+    # the two: `read_sources` skips a file that vanished in that window (it
+    # cannot hold the tenth copy) and warns naming it, and the count below is
+    # what the verdict was actually formed over.
     offenders = {}
-    for path in paths:
+    vanished = []
+    read = 0
+    for path, text in read_sources(paths, vanished, errors="replace"):
         if path.name == Path(__file__).name:
             continue
+        read += 1
         try:
-            lines = spells_a_lossy_list_default(
-                path.read_text(encoding="utf-8", errors="replace"))
+            lines = spells_a_lossy_list_default(text)
         except SyntaxError:
             continue
         if lines:
             offenders[str(path.relative_to(ROOT))] = lines
+    assert read >= 300, (
+        f"the scan collapsed to {read} files read of {len(paths)} walked "
+        f"({len(vanished)} vanished mid-walk)")
     assert not offenders, (
         "these take a list-shaped frontmatter field with a `[]` default, which "
         "yields None for a key written with no value. Use "

@@ -24,11 +24,15 @@ importable.
 """
 import importlib.util
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from tests.repo_files import read_sources  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
     "regen_docs_html", ROOT / "scripts" / "regenerate-docs-html.py")
@@ -197,12 +201,21 @@ def test_the_live_site_pages_are_the_corpus_this_guards(tmp_path):
     pages = sorted((ROOT / "docs").glob("*.html"))
     assert len(pages) >= 10, f"docs/ holds only {len(pages)} pages"
 
-    anchored = [p for p in pages
+    # A SCAN: a page that vanished between the glob and the read carries no
+    # anchor to be missing a search box, so skipping it is the right answer and
+    # `read_sources` warns naming it. Both floors below carry the vanished count,
+    # so a corpus that shrank underneath them cannot look like a corpus that was
+    # always that size. The page text is kept rather than re-read, so the second
+    # assertion measures the same bytes the first one classified.
+    vanished: list[Path] = []
+    anchored = [(p, text) for p, text in read_sources(pages, vanished)
                 if re.search(r'^[ \t]*<button class="menu-toggle"',
-                             p.read_text(encoding="utf-8"), flags=re.MULTILINE)]
-    assert len(anchored) >= 10, f"only {len(anchored)} pages carry the anchor"
-    for page in anchored:
-        assert 'id="doc-search"' in page.read_text(encoding="utf-8"), page.name
+                             text, flags=re.MULTILINE)]
+    assert len(anchored) >= 10, (
+        f"only {len(anchored)} pages carry the anchor "
+        f"({len(vanished)} vanished mid-walk: {vanished})")
+    for page, text in anchored:
+        assert 'id="doc-search"' in text, page.name
 
 
 # ============================================================

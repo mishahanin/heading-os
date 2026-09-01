@@ -33,6 +33,35 @@ def _hook_files(hooks_dir):
     return sorted(p for p in hooks_dir.glob("*.py") if p.is_file())
 
 
+def _read_hook(path):
+    """Read one hook, or FAIL naming it. Never skip it.
+
+    The walk and the read are two moments, and a file can go between them when
+    several agents or pytest workers share one checkout. `read_sources` skips
+    such a file with a warning, which is right for a scan: a file that is not
+    there cannot violate anything.
+
+    This is not a scan. Both callers below assert something about EVERY hook -
+    the floor counts handlers across the whole surface, and the silence check
+    claims no hook swallows a timeout. A skipped hook there is an unexamined
+    timeout handler reported as a clean control, which is the exact defect
+    SEC-007 exists to prevent. So: retry once, in case the miss was a rewrite
+    window, then fail with the path.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        pass
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        pytest.fail(
+            f"{path} vanished between the hook walk and the read. This control "
+            f"cannot skip a hook and still say no hook swallows a timeout in "
+            f"silence, so it stops here instead."
+        )
+
+
 def _timeout_handlers(tree, content):
     """Yield (lineno, handler_text) for every except that catches a timeout."""
     for node in ast.walk(tree):
@@ -63,7 +92,7 @@ def test_the_hook_surface_still_has_timeout_handlers_to_judge(hooks_dir):
 
     total = 0
     for path in files:
-        content = path.read_text(encoding="utf-8")
+        content = _read_hook(path)
         total += sum(1 for _ in _timeout_handlers(ast.parse(content), content))
     assert total >= 3, (
         f"only {total} timeout handler(s) across {len(files)} hooks. Either the "
@@ -75,7 +104,7 @@ def test_the_hook_surface_still_has_timeout_handlers_to_judge(hooks_dir):
 def test_no_hook_swallows_a_timeout_without_saying_so(hooks_dir):
     silent = []
     for path in _hook_files(hooks_dir):
-        content = path.read_text(encoding="utf-8")
+        content = _read_hook(path)
         for lineno, text, node in _timeout_handlers(ast.parse(content), content):
             if len(node.body) == 1 and isinstance(node.body[0], ast.Pass):
                 silent.append(f"{path.name}:{lineno}: handler is a bare pass")

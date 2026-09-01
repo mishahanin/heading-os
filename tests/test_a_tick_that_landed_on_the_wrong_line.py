@@ -885,6 +885,34 @@ def test_transfer_contact_docstring_documents_no_phantom_flag():
 # The shell and unit files nobody's test suite runs
 # ============================================================
 
+def _read_unit_or_fail(path):
+    """Read one systemd template, or FAIL naming it. Not a skip.
+
+    A walk lists paths and the reads happen afterwards, and a file can go in
+    between when several workers share one checkout. A sweep hunting offenders
+    can skip such a file (`read_sources` does, with a warning), because a file
+    that is gone violates nothing.
+
+    The two callers below are not that. One takes the UNION of every
+    placeholder in the template directory and asserts the exact set; the other
+    claims every scheduled unit whose timer names {{TZ}} sets it. A silently
+    dropped template makes the first answer a smaller set and the second report
+    clean over a unit it never opened - in the second case after the floor has
+    already counted it. So retry once, for a rewrite window, then stop.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        pass
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        pytest.fail(
+            f"{path} vanished between the template walk and the read. These "
+            f"checks are over the whole template set, so dropping one would "
+            f"narrow the answer without narrowing the claim."
+        )
+
 def test_the_marp_runner_checks_the_exit_code_of_every_native_call():
     code = _code_only(ROOT / "scripts" / "test-marp.ps1")
     assert "$LASTEXITCODE -ne 0" in code, (
@@ -928,7 +956,7 @@ def test_the_systemd_readme_placeholder_list_matches_the_templates():
     for p in tpl_dir.iterdir():
         if p.name == "README.md":
             continue
-        tokens |= set(_re.findall(r"\{\{[A-Z_]+\}\}", p.read_text(encoding="utf-8")))
+        tokens |= set(_re.findall(r"\{\{[A-Z_]+\}\}", _read_unit_or_fail(p)))
     readme = (tpl_dir / "README.md").read_text(encoding="utf-8")
     assert tokens == {"{{WORKSPACE}}", "{{PYTHON}}", "{{TZ}}"}, tokens
     for tok in tokens:
@@ -953,7 +981,7 @@ def test_every_systemd_unit_that_names_a_timezone_sets_the_tz_environment():
         if "{{TZ}}" not in timer.read_text(encoding="utf-8"):
             continue
         tz_scheduled += 1
-        text = svc.read_text(encoding="utf-8")
+        text = _read_unit_or_fail(svc)
         if "Environment=TZ={{TZ}}" not in text:
             missing.append(svc.name)
     # Two floors, because each filter can empty the set on its own. A glob that

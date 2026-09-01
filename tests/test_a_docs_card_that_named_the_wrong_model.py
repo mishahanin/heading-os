@@ -72,6 +72,38 @@ NOT_A_SKILL_MODEL_CLAIM = {
 }
 
 
+def _read_or_fail(path: Path) -> str:
+    """Read one file, or fail naming it. Deliberately not a skip.
+
+    The walk and the read are two moments, and a parallel worker sharing this
+    checkout can remove a file inside that window. Elsewhere in the suite the
+    answer is `read_sources`, which skips such a file with a warning, and for a
+    sweep hunting offenders that is right: a file that is gone cannot violate
+    anything.
+
+    Nothing here is that kind of sweep. Every read below feeds a COMPARISON
+    between two complete sets - the models the skills declare against the models
+    the cards state - and a set that quietly lost a member answers wrong rather
+    than crashing. A dropped SKILL.md turns an accurate card into
+    "no such skill on disk"; a dropped page hides every card on it from the
+    drift check while it still prints clean, and makes the exemptions on that
+    page look stale. So retry once, in case the miss was a rewrite window, and
+    then stop with the path.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        pass
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise AssertionError(
+            f"{path} vanished between the walk and the read. This file compares "
+            f"two complete sets and cannot drop a member of either without "
+            f"answering wrong, so it stops here instead of narrowing in silence."
+        ) from None
+
+
 def _skill_files() -> list[Path]:
     return tracked_paths((".claude/skills/*/SKILL.md",))
 
@@ -86,7 +118,7 @@ def frontmatter_models() -> dict[str, str | None]:
     """Every skill on disk, mapped to its declared model or None."""
     models: dict[str, str | None] = {}
     for skill in _skill_files():
-        text = skill.read_text(encoding="utf-8")
+        text = _read_or_fail(skill)
         block = text.split("---", 2)[1] if text.startswith("---") else ""
         found = _FRONTMATTER_MODEL.search(block)
         models[skill.parent.name] = found.group(1).strip().lower() if found else None
@@ -106,7 +138,7 @@ def documented_models() -> dict[str, str]:
     """Every card that states which model its skill runs on."""
     claims: dict[str, str] = {}
     for page in _category_pages():
-        for name, body in _cards(page.read_text(encoding="utf-8")):
+        for name, body in _cards(_read_or_fail(page)):
             stated = {m.group(m.lastgroup).lower() for m in _MODEL_CLAIM.finditer(body)}
             if stated:
                 # A card naming two different models contradicts itself; keep both
@@ -120,7 +152,7 @@ def undeclared_model_mentions() -> dict[str, list[str]]:
     loose: dict[str, list[str]] = {}
     claimed = documented_models()
     for page in _category_pages():
-        for name, body in _cards(page.read_text(encoding="utf-8")):
+        for name, body in _cards(_read_or_fail(page)):
             if name in NOT_A_SKILL_MODEL_CLAIM or name in claimed:
                 continue
             words = sorted({m.group(1).lower() for m in _MODEL_WORD.finditer(body)})
@@ -178,7 +210,7 @@ def test_the_declared_exceptions_still_mention_a_model():
     bodies = {
         name: body
         for page in _category_pages()
-        for name, body in _cards(page.read_text(encoding="utf-8"))
+        for name, body in _cards(_read_or_fail(page))
     }
     stale = sorted(
         name for name in NOT_A_SKILL_MODEL_CLAIM

@@ -187,6 +187,13 @@ def tracked_trigger_files(root: Path | None = None) -> list[Path]:
     only by that byte come back as one name. Here that name reaches
     `count_trigger_cases`, whose `read_text` then raises FileNotFoundError and
     takes the whole guard down over a filename that is not the one on disk.
+
+    That decode fix removed one CAUSE of an unopenable name; it left the general
+    case, which is a path that vanishes between this listing and the read. As of
+    2026-09-01 `count_trigger_cases` handles it: it re-reads once and then exits
+    with a message naming the file, instead of a bare FileNotFoundError
+    traceback. It still refuses rather than skipping, because the figure it
+    produces is a COUNT -- see that function's docstring for why.
     """
     repo = ROOT if root is None else root
     out = subprocess.run(
@@ -204,10 +211,37 @@ def count_trigger_cases(paths) -> int:
     length of that array. Anything else raises here rather than counting zero:
     a malformed file that silently contributed nothing would move the documented
     figure for a reason no reader could see.
+
+    A path that VANISHED between `tracked_trigger_files` and this read gets the
+    same refusal, for the same reason, and deliberately NOT the skip-and-warn
+    that `scripts/utils/repo_files.read_sources` gives a per-file scanner. What
+    this function returns is a COUNT that the guard then asserts against a
+    sentence in `docs/EXTENDING.md`. Dropping one file lowers the count by that
+    file's cases, and the guard would then either fail while naming the wrong
+    problem ("says 730, the tree holds 718") or, if the page happened to be
+    stale by the same amount, agree with a number nobody can reproduce. A
+    warning beside a wrong number is still a wrong number.
+
+    The read is retried once. That recovers a writer's unlink-and-rewrite
+    window and nothing else; a file that is genuinely gone is still gone on the
+    second look, and that case exits naming the file rather than raising a bare
+    FileNotFoundError traceback out of the guard.
     """
     total = 0
     for path in paths:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            try:
+                raw = path.read_text(encoding="utf-8")
+            except FileNotFoundError as e:
+                raise SystemExit(
+                    f"{RED}{path}: listed by `git ls-files` but not readable "
+                    f"({e.strerror}). The trigger-corpus count cannot be "
+                    f"derived over a corpus that changed underneath it; "
+                    f"re-run once the tree is quiet.{RESET}"
+                ) from e
+        data = json.loads(raw)
         if not isinstance(data, list):
             raise SystemExit(
                 f"{RED}{path}: triggers.json must be a JSON array of cases.{RESET}"

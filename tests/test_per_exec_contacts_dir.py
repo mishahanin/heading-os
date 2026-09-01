@@ -28,6 +28,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tests.repo_files import read_sources  # noqa: E402
 from scripts.utils.workspace import (  # noqa: E402
     get_per_exec_contacts_dir,
     get_per_exec_repo_path,
@@ -115,12 +116,22 @@ def test_no_caller_joins_contacts_onto_the_repo_root():
     # directory or a changed suffix would switch this guard off in silence.
     # Measured 386 files on 2026-09-01; the floor only catches a collapse.
     assert len(scripts) >= 220, f"the scan collapsed to {len(scripts)} files"
+    # A SCAN: a script that vanished between the rglob and the read joins
+    # nothing onto the repo root, so skipping it is the right answer and
+    # `read_sources` warns naming it. `errors="replace"` is kept, so a decode
+    # failure - a file that IS there - still raises. The floor above counts the
+    # walk; the one below counts what was actually opened.
+    vanished: list[Path] = []
     offenders = []
-    for script in scripts:
-        text = script.read_text(encoding="utf-8", errors="replace")
+    read_count = 0
+    for script, text in read_sources(scripts, vanished, errors="replace"):
+        read_count += 1
         for n, line in enumerate(text.splitlines(), 1):
             if _joins_contacts_too_high(line):
                 offenders.append(f"{script.relative_to(ROOT)}:{n}: {line.strip()[:90]}")
+    assert read_count >= 220, (
+        f"only {read_count} of {len(scripts)} files were read "
+        f"({len(vanished)} vanished mid-walk: {vanished})")
     assert offenders == [], (
         "join through get_per_exec_contacts_dir(slug) instead:\n  "
         + "\n  ".join(offenders)

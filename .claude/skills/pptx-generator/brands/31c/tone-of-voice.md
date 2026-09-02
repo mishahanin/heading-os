@@ -15,7 +15,7 @@
 
 ### 1. Authentic Over Corporate
 
-Real language beats polished language. "We built this from zero lines of code" beats "We developed a proprietary solution." Say it plainly. If it sounds like it came from a press release, rewrite it.
+Real language beats polished language. "We wrote every line of this ourselves" beats "We developed a proprietary solution." Say it plainly. If it sounds like it came from a press release, rewrite it.
 
 ### 2. Direct and Action-Oriented
 

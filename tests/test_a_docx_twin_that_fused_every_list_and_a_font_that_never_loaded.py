@@ -47,6 +47,7 @@ Found by the engine defect hunt, 2026-08-27.
 from __future__ import annotations
 
 import ast
+import json
 import sys
 from pathlib import Path
 
@@ -64,37 +65,56 @@ docx = pytest.importorskip("docx", reason="python-docx is an optional extra")
 # Fixtures: a synthetic brand tree, so CI needs no data overlay
 # ============================================================
 
-FONT_FILES = {
-    "GT Standard/GT-Standard-M-Standard-Light.ttf": b"light-face",
-    "GT Standard/GT-Standard-M-Standard-Medium.ttf": b"medium-face",
-    "Inter/Inter-Light.ttf": b"inter-light-face",
-    "Inter/Inter-Medium.ttf": b"inter-medium-face",
+# Every filename below is INVENTED. The real ones were spelled here until
+# 2026-09-02, when the operator ruled that a datastore filename is itself private
+# and this repository is public. `_resolve_brand_assets` now reads its filenames
+# from the private manifest, so the fixture supplies a scratch manifest of made-up
+# names and builds the tree from it: the test measures the resolution, not the
+# names, and it still needs no data overlay to run.
+BRAND_MANIFEST = {
+    "logo_primary": "brand/assets/logos/Northwind_Mark_Indigo.png",
+    "logo_on_dark": "brand/assets/logos/Northwind_Mark_White.png",
+    "logo_on_light": "brand/assets/logos/Northwind_Mark_Black.png",
+    "font_gt_m_light_ttf": "brand/fonts/GT Standard/Kestrel-Text-Light.ttf",
+    "font_gt_m_medium_ttf": "brand/fonts/GT Standard/Kestrel-Text-Medium.ttf",
+    "font_inter_light_ttf": "brand/fonts/Inter/Falcon-Light.ttf",
+    "font_inter_medium_ttf": "brand/fonts/Inter/Falcon-Medium.ttf",
 }
 
-LOGO_FILES = (
-    "31C_Logo_Palantinate_Blue_Color.png",
-    "31C_Logo_White_Color.png",
-    "31C_Logo_Black_Color.png",
-)
+# Distinct bytes per face, so a fix that embedded the wrong file still fails.
+FONT_PAYLOADS = {
+    "font_gt_m_light_ttf": b"light-face",
+    "font_gt_m_medium_ttf": b"medium-face",
+    "font_inter_light_ttf": b"inter-light-face",
+    "font_inter_medium_ttf": b"inter-medium-face",
+}
 
 
 @pytest.fixture()
-def brand_root(tmp_path):
+def brand_root(tmp_path, monkeypatch):
     """A workspace root whose `datastore/brand/` matches the real layout.
 
     `_resolve_under_corporate` tries `workspace_root / rel` first, so this tree
     wins over the machine's own overlay and the test measures the code rather
-    than this laptop.
+    than this laptop. `HEADING_OS_DATA` points at a SECOND scratch directory that
+    holds nothing but the manifest, which keeps the two lookups honestly
+    separate: the names come from the manifest, the bytes come from the tree.
     """
+    data = tmp_path / "data"
+    (data / "config").mkdir(parents=True)
+    (data / "config" / "brand-assets.json").write_text(
+        json.dumps(BRAND_MANIFEST), encoding="utf-8")
+    monkeypatch.setenv("HEADING_OS_DATA", str(data))
+
     brand = tmp_path / "datastore" / "brand"
-    for rel, payload in FONT_FILES.items():
-        path = brand / "fonts" / rel
+    for key, payload in FONT_PAYLOADS.items():
+        path = tmp_path / "datastore" / BRAND_MANIFEST[key]
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(payload)
     logos = brand / "assets" / "logos"
     logos.mkdir(parents=True, exist_ok=True)
-    for name in LOGO_FILES:
-        (logos / name).write_bytes(b"png-bytes")
+    for key in ("logo_primary", "logo_on_dark", "logo_on_light"):
+        (tmp_path / "datastore" / BRAND_MANIFEST[key]).write_bytes(b"png-bytes")
     return tmp_path
 
 
@@ -425,11 +445,12 @@ def test_a_missing_asset_is_reported_rather_than_returned_as_silence(brand_root,
     template from the same brand tree, so a file missing HERE is an anomaly, not
     a public clone with no overlay.
     """
-    (brand_root / "datastore" / "brand" / "fonts" / "Inter" / "Inter-Light.ttf").unlink()
+    victim = Path(BRAND_MANIFEST["font_inter_light_ttf"])
+    (brand_root / "datastore" / victim).unlink()
     assets = DR._resolve_brand_assets(brand_root)
     assert assets["FONT_INTER_LIGHT"] == ""
     err = capsys.readouterr().err
-    assert "Inter-Light.ttf" in err, f"the miss was silent; stderr was {err!r}"
+    assert victim.name in err, f"the miss was silent; stderr was {err!r}"
 
 
 def test_a_complete_brand_tree_says_nothing(brand_root, capsys):

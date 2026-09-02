@@ -25,6 +25,7 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts.utils.brand_assets import brand_asset_path
 from scripts.utils.html_templates import render_template
 from scripts.utils.image import load_logo_base64
 from scripts.utils.crm import parse_config as _crm_parse_config, scan_contacts as _crm_scan_contacts
@@ -132,25 +133,26 @@ def odin_brain_dir() -> Path:
     return get_knowledge_dir() / "odin-brain"
 
 
-# Canonical brand assets (per reference/corporate-style-guide.md)
-def brand_dir() -> Path:
-    return get_datastore_dir() / "brand"
-
-
+# Canonical brand assets (per reference/corporate-style-guide.md).
+# Each of the four asks the private manifest for its filename. They were spelled
+# here until 2026-09-02, when the operator ruled that a datastore filename is
+# itself private and this repository is public; the reasoning, and why a public
+# clone gets a named refusal rather than a plausible default, is in
+# scripts/utils/brand_assets.py.
 def logo_blue_path() -> Path:
-    return brand_dir() / "assets" / "logos" / "31C_Logo_Palantinate_Blue_Color.png"
+    return brand_asset_path("logo_primary")
 
 
 def logo_white_path() -> Path:
-    return brand_dir() / "assets" / "logos" / "31C_Logo_White_Color.png"
+    return brand_asset_path("logo_on_dark")
 
 
 def gt_light_font() -> Path:
-    return brand_dir() / "fonts" / "GT Standard" / "GT-Standard-L-Standard-Light.woff2"
+    return brand_asset_path("font_gt_l_light")
 
 
 def gt_medium_font() -> Path:
-    return brand_dir() / "fonts" / "GT Standard" / "GT-Standard-L-Standard-Medium.woff2"
+    return brand_asset_path("font_gt_l_medium")
 
 
 def load_font_b64(path):

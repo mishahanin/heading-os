@@ -250,7 +250,7 @@ Each checklist supplements (does not replace) the fundamentals. Apply the fundam
 - No stock photography of generic offices, hands at keyboards, lightbulbs, gears, or three-people-pointing-at-a-laptop.
 - Slide rhythm alternates: text-heavy slide followed by image-heavy or single-number slide.
 - Precise numbers, never rounded to vanity.
-- Brand authority: `datastore/products/odun-one/presentations/31C - ODUN.ONE Product Presentation (Master, 12-Apr-2026).pptx`.
+- Brand authority: the newest deck in `datastore/products/odun-one/presentations/` (its filename carries the revision date and is private, so it is not spelled here).
 
 ### 5.2 Product or sales deck
 

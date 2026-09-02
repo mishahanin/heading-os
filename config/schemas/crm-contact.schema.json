@@ -81,7 +81,7 @@
     "tags": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Free-form tags for radar filtering (e.g. ['mwc-2026', 'sovereign-dpi', 'priority'])"
+      "description": "Free-form tags for radar filtering (e.g. ['trade-show-2030', 'sovereign-dpi', 'priority']). Every example here is invented; a real tag from the operator's CRM does not belong in the public engine."
     },
     "entity_ref": {
       "type": "string",

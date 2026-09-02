@@ -5,7 +5,12 @@
  * Dual-mode (dark/light) with 7 core layouts
  * Brand-aligned with .claude/skills/pptx-generator/brands/31c/brand.json
  *
- * Font placeholder {FONTS_DIR} is substituted by marp-render.py at render time.
+ * Font placeholders are substituted by marp_render.py at render time:
+ * {FONTS_DIR} becomes a file:// URI for this directory's `fonts/` subfolder, and
+ * each {FONT_*} becomes a real filename read from the private brand manifest.
+ * The filenames were written out here until 2026-09-02, when the operator ruled
+ * that a datastore filename is itself private and this repository is public.
+ * See scripts/utils/brand_assets.py.
  *
  * Color cross-reference (brand.json canonical values):
  *   background:       #000000   |  accent:           #5B5FFF
@@ -21,7 +26,7 @@
 
 @font-face {
   font-family: 'GT Standard M';
-  src: url('{FONTS_DIR}/GT-Standard-M-Standard-Medium.woff2') format('woff2');
+  src: url('{FONTS_DIR}/{FONT_GT_M_MEDIUM}') format('woff2');
   font-weight: 500;
   font-style: normal;
   font-display: swap;
@@ -29,7 +34,7 @@
 
 @font-face {
   font-family: 'GT Standard M';
-  src: url('{FONTS_DIR}/GT-Standard-M-Standard-Medium-Oblique.woff2') format('woff2');
+  src: url('{FONTS_DIR}/{FONT_GT_M_MEDIUM_OBLIQUE}') format('woff2');
   font-weight: 500;
   font-style: oblique;
   font-display: swap;
@@ -37,7 +42,7 @@
 
 @font-face {
   font-family: 'GT Standard M';
-  src: url('{FONTS_DIR}/GT-Standard-M-Standard-Light.woff2') format('woff2');
+  src: url('{FONTS_DIR}/{FONT_GT_M_LIGHT}') format('woff2');
   font-weight: 300;
   font-style: normal;
   font-display: swap;
@@ -45,7 +50,7 @@
 
 @font-face {
   font-family: 'GT Standard M';
-  src: url('{FONTS_DIR}/GT-Standard-M-Standard-Light-Oblique.woff2') format('woff2');
+  src: url('{FONTS_DIR}/{FONT_GT_M_LIGHT_OBLIQUE}') format('woff2');
   font-weight: 300;
   font-style: oblique;
   font-display: swap;
@@ -53,7 +58,7 @@
 
 @font-face {
   font-family: 'GT Standard S';
-  src: url('{FONTS_DIR}/GT-Standard-S-Standard-Medium.woff2') format('woff2');
+  src: url('{FONTS_DIR}/{FONT_GT_S_MEDIUM}') format('woff2');
   font-weight: 500;
   font-style: normal;
   font-display: swap;
@@ -61,7 +66,7 @@
 
 @font-face {
   font-family: '31C Horizontal';
-  src: url('{FONTS_DIR}/31CHorizontalT03-Clarity.woff2') format('woff2');
+  src: url('{FONTS_DIR}/{FONT_DISPLAY_CLARITY}') format('woff2');
   font-weight: normal;
   font-style: normal;
   font-display: swap;

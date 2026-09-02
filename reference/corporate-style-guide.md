@@ -23,9 +23,9 @@ No single file owns the brand. The authorities below, collectively, are the refe
 
 | Layer | File |
 |---|---|
-| Visual authority (layout, color usage, typographic weight) | `datastore/products/odun-one/presentations/31C - ODUN.ONE Product Presentation (Master, 12-Apr-2026).pdf` |
-| DOCX master template | `datastore/brand/templates/31C - Master Template (New Identity 2026 v1.01).docx` |
-| DOCX Word template | `datastore/brand/templates/31C - Master Template (New Identity 2026 v1.01).dotx` |
+| Visual authority (layout, color usage, typographic weight) | the newest deck in `datastore/products/odun-one/presentations/` (its filename carries the revision date and is private, so it is not spelled here) |
+| DOCX master template | the newest `.docx` master in `datastore/brand/templates/`, resolved by `docx_helpers.brand_master_template` |
+| DOCX Word template | the newest `.dotx` master in the same directory, resolved the same way |
 | Logos (4 variants) | `datastore/brand/assets/logos/` |
 | Fonts: GT Standard (Light + Medium, optical sizes L/M/S) | `datastore/brand/fonts/GT Standard/` |
 | Fonts: 31C TypeFace (display / markers only) | `datastore/brand/fonts/31C_TypeFace/` |
@@ -118,8 +118,8 @@ Examples:
 - `2026-04-21_letter_agency-gov_partnership-invitation.pdf`
 - `2026-04-21_proposal_exampletelco_dpi-migration.pdf`
 - `2026-04-21_partnership_partnerco_channel-mou.pdf`
-- `2026-04-21_official_board-resolution-2026-q2.pdf`
-- `2026-04-21_xpager_odun-one-q2-2026.pdf`
+- `2026-04-21_official_northwind-board_capex-authorisation.pdf`
+- `2026-04-21_xpager_northwind-telecom_sovereign-dpi-sheet.pdf`
 
 Slugs are lowercase, hyphen-separated, ASCII only, max 40 chars per slug.
 

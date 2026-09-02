@@ -258,11 +258,84 @@ def theme_missing_result() -> dict:
                        f"Check the marp skill install, or the --theme-variant name."}
 
 
-def prepare_theme() -> Path:
-    """Substitute {FONTS_DIR} in theme template and write to temp file. Returns path.
+# A theme template names its faces as `{FONT_<KEY>}`, resolved against the
+# private brand manifest by lowercasing the token into `font_<key>`. One
+# mechanism, no per-template table: a new face is a placeholder in the CSS and an
+# entry in the manifest, and nothing in this file has to learn about it.
+_FONT_TOKEN_RE = re.compile(r"\{FONT_([A-Z0-9_]+)\}")
 
-    Raises OSError when the template is missing; callers turn that into
-    `theme_missing_result()`.
+# What a font placeholder becomes when the manifest cannot answer. It is not a
+# real filename and is not meant to resolve: the `src: url(...)` names a file
+# that is not there, so Chromium falls back to a system sans. That is EXACTLY
+# the state a public clone is already in, because the licensed faces in
+# `themes/fonts/` are gitignored and `themes/fonts/README.md` documents the
+# fallback as normal. Refusing to render instead would take a working deck away
+# from a clone that never had the fonts.
+_UNRESOLVED_FONT = "unresolved-brand-face.woff2"
+
+
+def substitute_theme_fonts(template_text: str) -> str:
+    """Replace every `{FONT_<KEY>}` in a theme template with a real filename.
+
+    The filenames were written into the two `.css.tmpl` themes until 2026-09-02,
+    when the operator ruled that a datastore filename is itself private and this
+    repository is public. `scripts/utils/brand_assets.py` carries the reasoning;
+    this is the substitution end of it, extending the `{FONTS_DIR}` mechanism
+    that was already here rather than inventing a second one.
+
+    Degrades rather than raises, and says so once on stderr. See `_UNRESOLVED_FONT`.
+    """
+    from scripts.utils.brand_assets import BrandAssetError, brand_asset_name
+
+    # `DataRootError` is deliberately NOT an OSError (scripts/utils/paths.py), so
+    # a set-but-missing `HEADING_OS_DATA` would otherwise walk out of here as a
+    # traceback and kill a render that used to succeed. `workspace_relative` in
+    # this same file already catches it and says so; this matches that, because
+    # resolving a font NAME is a read and cannot write anything anywhere wrong.
+    try:
+        manifest = load_brand_manifest()
+    except (BrandAssetError, DataRootError) as exc:
+        manifest = None
+        print(f"{GRAY}marp: {exc} Rendering with system fallback faces.{RESET}",
+              file=sys.stderr)
+
+    missing: list[str] = []
+
+    def resolve(match: re.Match) -> str:
+        key = f"font_{match.group(1).lower()}"
+        if manifest is None:
+            return _UNRESOLVED_FONT
+        try:
+            return brand_asset_name(key, manifest)
+        except BrandAssetError:
+            missing.append(key)
+            return _UNRESOLVED_FONT
+
+    resolved = _FONT_TOKEN_RE.sub(resolve, template_text)
+    if missing:
+        print(f"{GRAY}marp: the brand manifest has no entry for "
+              f"{', '.join(sorted(set(missing)))}; those faces fall back to a "
+              f"system sans.{RESET}", file=sys.stderr)
+    return resolved
+
+
+def load_brand_manifest() -> dict:
+    """Read the brand manifest once per render.
+
+    A thin seam of its own so a test can drive `substitute_theme_fonts` against a
+    scratch manifest without a data overlay, and so the read happens once rather
+    than once per placeholder.
+    """
+    from scripts.utils.brand_assets import load_manifest
+
+    return load_manifest()
+
+
+def prepare_theme() -> Path:
+    """Substitute {FONTS_DIR} and the font names in the theme template.
+
+    Writes the result to a temp file and returns its path. Raises OSError when
+    the template is missing; callers turn that into `theme_missing_result()`.
     """
     template_text = THEME_TEMPLATE.read_text(encoding="utf-8")
     # Path.as_uri() properly percent-encodes spaces and special characters
@@ -270,6 +343,7 @@ def prepare_theme() -> Path:
     # critical since marp-cli renders via Chromium which needs valid file:// URIs.
     fonts_uri = FONTS_DIR.resolve().as_uri()
     resolved = template_text.replace("{FONTS_DIR}", fonts_uri)
+    resolved = substitute_theme_fonts(resolved)
 
     tmp = tempfile.NamedTemporaryFile(
         mode="w", suffix=".css", prefix="31c-marp-",

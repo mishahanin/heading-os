@@ -34,7 +34,7 @@ Claude is not asked to be a designer. Claude is asked to produce visual artifact
 
 The principle behind this rule is that good design and human-reading design are the same thing measured from two ends. AI-default design is the statistical median of the training distribution made visible. It is locally inoffensive at every axis and globally unmistakable when stacked. The cure is parametric: measurable deviation at every axis where defaults exist, with concrete values named and audit gates that count deviations. This is the visual counterpart of `.claude/rules/humanization.md` for prose. The same shape, a different medium.
 
-Rule architecture: parametric leads, identity supplies the specifics. The mechanical fundamentals are constant. The concrete values (brand palette, typeface, spacing tokens) come from 31C's brand authority. The brand authority for 31C is the ODUN.ONE Product Presentation (Master, 12-Apr-2026) at `datastore/products/odun-one/presentations/`, in the private data overlay. The canonical 31C dashboard implementation is Heading OS v8, whose source is `scripts/bridge_daemon/web/index.html` in this repo. Read the file, not a description of it: the bridge daemon has been stopped and disabled since 2026-08-22, so the pages cannot be viewed running.
+Rule architecture: parametric leads, identity supplies the specifics. The mechanical fundamentals are constant. The concrete values (brand palette, typeface, spacing tokens) come from 31C's brand authority. The brand authority for 31C is the newest deck in `datastore/products/odun-one/presentations/` (its filename carries the revision date and is private, so it is not spelled here), in the private data overlay. The canonical 31C dashboard implementation is Heading OS v8, whose source is `scripts/bridge_daemon/web/index.html` in this repo. Read the file, not a description of it: the bridge daemon has been stopped and disabled since 2026-08-22, so the pages cannot be viewed running.
 
 ## Step 0 - Test before redesigning (calibration gate, mandatory)
 
@@ -211,7 +211,7 @@ In this repo:
 
 In the private data overlay, so a public clone will not have them:
 
-- `datastore/products/odun-one/presentations/` - the ODUN.ONE Product Presentation (Master, 12-Apr-2026), the brand authority for visual identity. Replaces the dead `reference_brand_authority`.
+- `datastore/products/odun-one/presentations/` - holds the newest deck, the brand authority for visual identity. Its filename carries the revision date and is private, so it is not spelled here. Replaces the dead `reference_brand_authority`.
 - Auto-memory `31c-deck-design-system-and-masters` - the 31C deck design system: palette, GT Standard L/M assignment, orange corner tab, footer, layout archetypes. Replaces the dead `reference_design_standards` and `feedback_design_standards`.
 - Auto-memory `pencil-deck-fonts-and-master-template` - where the fonts, logos and the master deck template live, and how family names resolve. Replaces the dead `reference_brand_assets`.
 

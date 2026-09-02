@@ -2,11 +2,16 @@
 
 /*
  * 31 Concept - Investor Deck MARP Master
- * Light-first, brand-forward. Reverse-engineered pixel-accurately from
- * "31C Investor Deck (Master, 03-Jul-2026)". Design spec + reference renders:
+ * Light-first, brand-forward. Reverse-engineered pixel-accurately from the
+ * current investor deck master. That deck's filename carries its revision date
+ * and lives at a `private` path, so it is not named here: this file is public.
+ * Design spec + reference renders:
  *   datastore/brand/design-system/31c-deck-design-system.md
  *
- * Font placeholder {FONTS_DIR} is substituted by marp_render.py at render time.
+ * Font placeholders are substituted by marp_render.py at render time: {FONTS_DIR}
+ * becomes a file:// URI for this directory's `fonts/` subfolder, and each {FONT_*}
+ * becomes a real filename read from the private brand manifest. Same reason the
+ * deck above is not named: this file is public. See scripts/utils/brand_assets.py.
  * Select with:  python scripts/marp_render.py --theme-variant 31c-investor render deck.md
  *
  * Palette (canonical hex, from the deck):
@@ -21,17 +26,17 @@
    1. Font Faces  (GT Standard L = display, M = body, 31C Horizontal = dot-matrix)
    ================================================================ */
 
-@font-face { font-family: 'GT Standard L'; src: url('{FONTS_DIR}/GT-Standard-L-Standard-Medium.woff2') format('woff2'); font-weight: 500; font-style: normal; font-display: swap; }
-@font-face { font-family: 'GT Standard L'; src: url('{FONTS_DIR}/GT-Standard-L-Standard-Medium-Oblique.woff2') format('woff2'); font-weight: 500; font-style: oblique; font-display: swap; }
-@font-face { font-family: 'GT Standard L'; src: url('{FONTS_DIR}/GT-Standard-L-Standard-Light.woff2') format('woff2'); font-weight: 300; font-style: normal; font-display: swap; }
-@font-face { font-family: 'GT Standard L'; src: url('{FONTS_DIR}/GT-Standard-L-Standard-Light-Oblique.woff2') format('woff2'); font-weight: 300; font-style: oblique; font-display: swap; }
+@font-face { font-family: 'GT Standard L'; src: url('{FONTS_DIR}/{FONT_GT_L_MEDIUM}') format('woff2'); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: 'GT Standard L'; src: url('{FONTS_DIR}/{FONT_GT_L_MEDIUM_OBLIQUE}') format('woff2'); font-weight: 500; font-style: oblique; font-display: swap; }
+@font-face { font-family: 'GT Standard L'; src: url('{FONTS_DIR}/{FONT_GT_L_LIGHT}') format('woff2'); font-weight: 300; font-style: normal; font-display: swap; }
+@font-face { font-family: 'GT Standard L'; src: url('{FONTS_DIR}/{FONT_GT_L_LIGHT_OBLIQUE}') format('woff2'); font-weight: 300; font-style: oblique; font-display: swap; }
 
-@font-face { font-family: 'GT Standard M'; src: url('{FONTS_DIR}/GT-Standard-M-Standard-Medium.woff2') format('woff2'); font-weight: 500; font-style: normal; font-display: swap; }
-@font-face { font-family: 'GT Standard M'; src: url('{FONTS_DIR}/GT-Standard-M-Standard-Medium-Oblique.woff2') format('woff2'); font-weight: 500; font-style: oblique; font-display: swap; }
-@font-face { font-family: 'GT Standard M'; src: url('{FONTS_DIR}/GT-Standard-M-Standard-Light.woff2') format('woff2'); font-weight: 300; font-style: normal; font-display: swap; }
-@font-face { font-family: 'GT Standard M'; src: url('{FONTS_DIR}/GT-Standard-M-Standard-Light-Oblique.woff2') format('woff2'); font-weight: 300; font-style: oblique; font-display: swap; }
+@font-face { font-family: 'GT Standard M'; src: url('{FONTS_DIR}/{FONT_GT_M_MEDIUM}') format('woff2'); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: 'GT Standard M'; src: url('{FONTS_DIR}/{FONT_GT_M_MEDIUM_OBLIQUE}') format('woff2'); font-weight: 500; font-style: oblique; font-display: swap; }
+@font-face { font-family: 'GT Standard M'; src: url('{FONTS_DIR}/{FONT_GT_M_LIGHT}') format('woff2'); font-weight: 300; font-style: normal; font-display: swap; }
+@font-face { font-family: 'GT Standard M'; src: url('{FONTS_DIR}/{FONT_GT_M_LIGHT_OBLIQUE}') format('woff2'); font-weight: 300; font-style: oblique; font-display: swap; }
 
-@font-face { font-family: '31C Horizontal'; src: url('{FONTS_DIR}/31CHorizontalT03-Clarity.woff2') format('woff2'); font-weight: normal; font-style: normal; font-display: swap; }
+@font-face { font-family: '31C Horizontal'; src: url('{FONTS_DIR}/{FONT_DISPLAY_CLARITY}') format('woff2'); font-weight: normal; font-style: normal; font-display: swap; }
 
 /* ================================================================
    2. Design Tokens

@@ -26,6 +26,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts.utils.brand_assets import brand_asset_path
 from scripts.utils.html_templates import load_template
 from scripts.utils.image import load_logo_base64
 from scripts.utils.markdown import parse_md_table
@@ -33,7 +34,6 @@ from scripts.utils.workspace import (
     get_crm_contacts_dir,
     get_data_config_dir,
     get_context_dir,
-    get_datastore_dir,
     get_default_tz,
     get_outputs_dir,
 )
@@ -84,10 +84,14 @@ def pipeline_file():
 
 
 def logo_path():
-    return (
-        get_datastore_dir() / "brand" / "assets"
-        / "logos" / "31C_Logo_White_Color.png"
-    )
+    """The white mark, asked for by key rather than by filename.
+
+    Its twin in `scripts/generate-dashboard.py` moved to the manifest on
+    2026-09-02, when the operator ruled that a datastore filename is itself
+    private and this repository is public. Moving one of two identical lookups
+    is how a fix half-lands, so this one moved with it.
+    """
+    return brand_asset_path("logo_on_dark")
 
 
 TODAY = datetime.now(get_default_tz()).date()

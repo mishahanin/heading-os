@@ -226,19 +226,38 @@ def _embed_asset(path: Path, mime: str) -> str:
 
 
 def _resolve_brand_assets(workspace_root: Path) -> dict:
+    """Embed every brand asset the locked templates reference.
+
+    The filenames come from the private manifest, never from this file. The
+    engine repository is public, and on 2026-09-02 the operator ruled that a
+    datastore filename is itself private; `scripts/utils/brand_assets.py` carries
+    the whole reasoning. Only the DIRECTORY lookups stay here, because
+    `_resolve_under_corporate` has to keep trying an explicit `workspace_root`
+    first for the fixtures that hand it a synthetic tree.
+    """
+    from scripts.utils.brand_assets import brand_asset_name, load_manifest
+
+    manifest = load_manifest()
     logos = _assets_dir(workspace_root) / "logos"
     fonts = _fonts_dir(workspace_root)
     inter = _inter_dir(workspace_root)
+
+    def logo(key: str) -> str:
+        return _embed_asset(logos / brand_asset_name(key, manifest), "image/png")
+
+    def face(directory: Path, key: str) -> str:
+        return _embed_asset(directory / brand_asset_name(key, manifest), "font/ttf")
+
     return {
-        "LOGO_BLUE": _embed_asset(logos / "31C_Logo_Palantinate_Blue_Color.png", "image/png"),
-        "LOGO_WHITE": _embed_asset(logos / "31C_Logo_White_Color.png", "image/png"),
-        "LOGO_BLACK": _embed_asset(logos / "31C_Logo_Black_Color.png", "image/png"),
+        "LOGO_BLUE": logo("logo_primary"),
+        "LOGO_WHITE": logo("logo_on_dark"),
+        "LOGO_BLACK": logo("logo_on_light"),
         # TTF (not WOFF2) so Chromium embeds the fonts in PDF as CIDFont Type 2
         # (TrueType subset with hinting) rather than as Type 3 outlines. Type 3
         # rendering thickens small solid glyphs — periods, commas, the middle
         # dot — making them read as bold against Light-weight letterforms.
-        "FONT_LIGHT": _embed_asset(fonts / "GT-Standard-M-Standard-Light.ttf", "font/ttf"),
-        "FONT_MEDIUM": _embed_asset(fonts / "GT-Standard-M-Standard-Medium.ttf", "font/ttf"),
+        "FONT_LIGHT": face(fonts, "font_gt_m_light_ttf"),
+        "FONT_MEDIUM": face(fonts, "font_gt_m_medium_ttf"),
         # Inter Light + Medium (SIL OFL) — Cyrillic fallback. GT Standard has
         # no Cyrillic glyphs; without these, Russian text falls back to system
         # Segoe UI / Arial at a heavier weight than the Latin column. Static
@@ -246,8 +265,8 @@ def _resolve_brand_assets(workspace_root: Path) -> dict:
         # subsets in PDF with hinting preserved; the variable font got
         # converted to Type 3 outlines for Cyrillic runs and the bold-weight
         # interpolation failed to a few characters fell through to Arial.
-        "FONT_INTER_LIGHT": _embed_asset(inter / "Inter-Light.ttf", "font/ttf"),
-        "FONT_INTER_MEDIUM": _embed_asset(inter / "Inter-Medium.ttf", "font/ttf"),
+        "FONT_INTER_LIGHT": face(inter, "font_inter_light_ttf"),
+        "FONT_INTER_MEDIUM": face(inter, "font_inter_medium_ttf"),
     }
 
 

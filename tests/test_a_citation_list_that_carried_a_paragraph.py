@@ -146,10 +146,22 @@ def test_a_source_list_is_bounded_too():
 
 
 def test_the_module_docstring_no_longer_claims_prose_is_impossible():
-    """Filenames in this corpus read like sentences -- one is
-    "Allot - Deep Packet Inspection - Solution Proposal Document (SPD) ...".
-    No shape rule can separate that from prose, so the docstring may promise a
-    narrow bounded channel and must not promise a closed one."""
+    """Filenames in this corpus read like sentences. An invented one of the
+    same shape is "Northwind Systems - Flow Telemetry - Commercial Offer
+    Summary (COS) for a regional carrier, rev 4".
+
+    Invented on purpose, and invented WHOLE. This docstring carried the
+    verbatim title of a real competitor document that lives at a `private` path
+    in the data overlay, so a public repository named a competitor and
+    disclosed that the operator holds its commercial proposal. The first repair
+    changed only the vendor name and left the rest of the real title in place;
+    `tests/test_a_public_engine_that_named_a_private_competitor.py` caught that
+    and is why every word here is now made up. The assertions below read
+    `cs.__doc__`, not this string, so the example never had to be real.
+
+    No shape rule can separate a filename like that from prose, so the
+    docstring under test may promise a narrow bounded channel and must not
+    promise a closed one."""
     doc = cs.__doc__
     assert "nowhere to sit" not in doc
     assert "bounded" in doc

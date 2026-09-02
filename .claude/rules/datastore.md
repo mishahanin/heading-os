@@ -5,54 +5,98 @@ paths:
   - "datastore/**"
 ---
 
-<!-- version: 1.0.0 | last-updated: 2026-04-28 -->
-# DataStore -- Source of Truth
+<!-- version: 2.0.0 | last-updated: 2026-09-02 -->
+# DataStore: source of truth
 
-Last Verified: 2026-06-08
+Last Verified: 2026-09-02
 
-The `datastore/` directory contains authoritative original documents (PDFs, contracts, presentations, spreadsheets). When making factual claims about 31C -- team size, pricing, partner details, market data, product capabilities -- **validate against the DataStore** before stating as fact.
+`datastore/` holds the authoritative original documents: contracts, decks,
+datasheets, spreadsheets, research. When you state a fact about 31C, whether it
+is a number, a price, a partner detail, a market figure or a product capability,
+**check it against the DataStore before you write it down.**
 
-## Structure (2026-04-20 restructure)
+## Everything in `datastore/` is private
 
-- `products/odun-one/` -- everything about the ODUN.ONE platform (architecture, datasheets, hardware, presentations, sales, reference)
-- `products/trustone/` -- TrustONE product materials (datasheets, presentations)
-- `corporate/presentations/` -- Company Brief and corporate-level decks
-- `investment/decks/` -- investor decks (public-facing)
-- `investment/ceo-only/` -- CEO-only financial correspondence (never synced to executives)
-- `intelligence/competitors/` -- competitor docs by vendor
-- `intelligence/industry/` -- analyst reports and industry research
-- `intelligence/market-reference/` -- telco use-case and monetization reference material
-- `operations/cybersecurity/` -- our cyber posture (internal)
-- `operations/partnerships/` -- partner enablement, partnership framework
-- `operations/engineering/` -- testing frameworks, pcap captures
-- `events/{event}/` -- event-specific contact DBs and schedules
-- `content/linkedin-archive/` -- Misha's published LinkedIn content
-- `brand/` -- design system (logos, fonts, templates, examples)
-- Each folder may contain an `_archive/` subfolder for superseded files.
+Operator directive, 2026-09-02. Nothing under `datastore/` may reach a public
+surface. That covers file CONTENTS and file NAMES alike, and it covers this
+repository, which is public.
 
-## Validation Workflow
+Three consequences, and none of them is optional:
 
-1. Browse `datastore/` by subject (products/, corporate/, investment/, intelligence/, operations/) to find relevant source documents
-2. Read the source document (or its `-extract.md` companion for binary files)
-3. Cross-reference your claim against the source
-4. If the DataStore contradicts context/ or reference/ files, the DataStore wins
+- **Never quote a datastore filename in engine code, prose, a comment, a
+  docstring, a test fixture or an example.** Invent one of the same shape.
+- **Engine code that loads a brand asset resolves it through the private
+  manifest**, so the filename lives in the data overlay and never in a public
+  file.
+- `corporate` routing is not an exception. It means shared down to executives,
+  through private repositories. It never means publishable.
 
-## When to Validate
+`tests/test_a_public_engine_that_named_a_private_competitor.py` enforces this
+mechanically. It exists because the rule alone did not hold: on 2026-09-02 a
+public test docstring was found quoting, verbatim, the title of a competitor's
+commercial proposal that lives at a `private` path.
 
-Any external-facing content (LinkedIn posts, proposals, investor materials, partner communications, keynote decks) that contains specific facts, numbers, or claims.
+## Where the structure is written down
 
-## Corporate Templates
+**Not here.** The inventory is generated into the private data overlay at
+`reference/datastore-map.md` by `python scripts/datastore-map.py`. It carries
+the real directory names, per-subtree file counts, the routing destination of
+each subtree, and how much of each is reachable by search.
 
-`datastore/brand/templates/` contains 31C brand identity 2026 templates. **Primary PowerPoint template:** `31C - Generic PP template.pptx` - use as the base for all presentations. **Brand reference:** `datastore/products/odun-one/presentations/31C - ODUN.ONE Product Presentation (Master, 12-Apr-2026).pptx` - use for design ideas and visual reference. Word template: `.dotx` v1.01.
+This file carried a hand-written copy of that map from 2026-04-20 until
+2026-09-02. It drifted: by the end it named fourteen subtrees and omitted three
+whole top-level directories, roughly 150 files. It also sat in the public
+repository while describing a private tree, so regenerating it in place would
+have published real counterparty names on the first run. Splitting policy from
+inventory fixes both problems at once, and the policy is what belongs in an
+always-loaded rule.
 
-## Corporate Fonts
+Read the generated map when you need the shape of the tree. Regenerate it when
+it looks stale; `python scripts/datastore-map.py --check` exits 1 when it is.
 
-The 31C corporate font set lives at `datastore/brand/fonts/` on the CEO workspace, and at `corporate/datastore/brand/fonts/` on executive workspaces (mirrored via the corporate sync). **Primary typeface:** GT Standard (Light + Medium weights, three optical sizes L/M/S, with oblique variants). Available in OTF, TTF, WOFF, and WOFF2. Use for all branded outputs - embed WOFF2 in HTML documents.
+## Validation workflow
 
-## Production Document Examples
+1. Find the source document. `python scripts/datastore-log.py summary` says what
+   appeared or changed recently; the generated map says what is there in total.
+2. Read the document, or its `-extract.md` companion when the original is a
+   binary.
+3. Cross-check your claim against it.
+4. **The DataStore wins.** If it contradicts anything in `context/` or
+   `reference/`, the DataStore is right and the other file is stale.
 
-`datastore/brand/examples/` contains real production documents used by 31C. This folder is updated periodically with new or revised versions. **Always check this folder before creating new corporate materials** to match current style and standards.
+### Binary documents are invisible until extracted
 
-## Competitive Intelligence
+A PDF, spreadsheet, deck or Word file cannot be read by search. It becomes
+reachable only when `python scripts/datastore-extract.py` writes its
+`-extract.md` companion beside it. MEASURED 2026-09-02: 983 files in the tree,
+593 of them binary, and only 11 of those 593 had a companion. So a document you
+cannot find may well be there and simply unreadable. Check the map's Opaque
+column before concluding something is absent.
 
-`datastore/intelligence/competitors/` contains competitor product documents organized by vendor. When comparing ODUN.ONE against competitors, preparing proposals, positioning content, or answering customer questions about competitive differentiation -- read the relevant competitor documents to ground claims in actual product capabilities, not assumptions.
+## When to validate
+
+Any external-facing content that carries a specific fact, number or claim:
+LinkedIn posts, proposals, investor materials, partner communications, keynote
+decks.
+
+## Brand assets
+
+Templates, fonts and logos live under `datastore/brand/`. Engine code never
+spells their filenames; it resolves them through the private manifest, for the
+reason at the top of this file. The typography, palette and letterhead rules
+themselves are policy and live in `reference/corporate-style-guide.md`.
+
+`datastore/brand/examples/` holds real production documents and is refreshed
+periodically. Read it before creating new corporate material, so the output
+matches current practice rather than a remembered version of it.
+
+## Competitive intelligence
+
+Competitor product documents are filed by vendor. When positioning ODUN.ONE
+against a competitor, preparing a proposal, or answering a customer question
+about differentiation, read the actual documents. Ground the claim in what the
+competitor's own material says, never in an assumption about it.
+
+Those documents are among the most sensitive in the tree. Their filenames name
+the vendor and often the end customer, so the rule at the top of this file
+applies to them with no exception whatsoever.

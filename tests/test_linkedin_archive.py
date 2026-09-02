@@ -37,7 +37,7 @@ def repo(tmp_path, monkeypatch):
     _git(r, "init", "-q")
     _git(r, "config", "user.email", "t@t.t")
     _git(r, "config", "user.name", "t")
-    md = r / "outputs" / "content" / "linkedin" / "2026-06-18_linkedin-post_milestone.md"
+    md = r / "outputs" / "content" / "linkedin" / "2030-02-14_linkedin-post_milestone.md"
     md.write_text("Body of the post.\n", encoding="utf-8")
     _git(r, "add", str(md))
     _git(r, "commit", "-qm", "stage post")
@@ -63,8 +63,8 @@ def test_external_image_copied_and_committed(repo, tmp_path):
 
     assert rc == 0
     dest = (repo / "datastore" / "content" / "linkedin-archive" / "posts"
-            / "2026-06-18_linkedin-post_milestone")
-    assert (dest / "2026-06-18_linkedin-post_milestone.md").exists()
+            / "2030-02-14_linkedin-post_milestone")
+    assert (dest / "2030-02-14_linkedin-post_milestone.md").exists()
     assert (dest / "shot.png").exists()                                  # image archived
     assert (dest / "shot.png").read_bytes() == b"\x89PNG\r\n\x1a\nfake-bytes"
     assert ext_img.exists()                                             # copy, not move

@@ -25,8 +25,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 sys.path.insert(0, str(ROOT))
+from scripts.utils.brand_assets import brand_asset_path
 from scripts.utils.html_templates import render_template
-from scripts.utils.workspace import get_datastore_dir, get_outputs_dir
+from scripts.utils.workspace import get_outputs_dir
 
 LIGHT_MODE = "--light" in sys.argv
 
@@ -34,8 +35,15 @@ LIGHT_MODE = "--light" in sys.argv
 # ============================================================
 # Helpers / Asset Loaders
 # ============================================================
-def load_logo_b64(filename):
-    path = get_datastore_dir() / "brand" / "assets" / "logos" / filename
+def load_logo_b64(key):
+    """Base64 the logo registered under `key` in the private brand manifest.
+
+    Took a filename until 2026-09-02, which meant the three call sites in
+    `main()` spelled three real datastore filenames in a public repository. The
+    operator ruled that day that a datastore filename is itself private;
+    `scripts/utils/brand_assets.py` holds the reasoning and the refusal.
+    """
+    path = brand_asset_path(key)
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode()
 
@@ -141,9 +149,9 @@ def build_html(header_logo_b64, blue_b64, black_b64):
 # CLI / Main
 # ============================================================
 def main():
-    white_b64 = load_logo_b64("31C_Logo_White_Color.png")
-    blue_b64 = load_logo_b64("31C_Logo_Palantinate_Blue_Color.png")
-    black_b64 = load_logo_b64("31C_Logo_Black_Color.png")
+    white_b64 = load_logo_b64("logo_on_dark")
+    blue_b64 = load_logo_b64("logo_primary")
+    black_b64 = load_logo_b64("logo_on_light")
 
     html = build_html(white_b64, blue_b64, black_b64)
 

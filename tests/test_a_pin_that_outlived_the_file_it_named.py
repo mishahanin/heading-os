@@ -52,6 +52,16 @@ from scripts.utils.docx_helpers import brand_master_template  # noqa: E402
 # The pin that outlived the file it named
 # ============================================================
 
+# An INVENTED prefix of the same shape as the real one, which is a versioned
+# stem ending in `v<major>.<minor>)`. The real master's filename used to be
+# spelled here, six times; the operator ruled on 2026-09-02 that a datastore
+# filename is private and this repository is public, so it now lives only in the
+# private manifest and `brand_master_template` takes the prefix as a parameter.
+# The version-sort logic under test does not care whose name it is, and a test
+# that needs no data overlay is the better test anyway.
+FAKE_PREFIX = "Northwind - Report Shell (Rev "
+
+
 def _templates(tmp_path: Path, *names: str) -> Path:
     d = tmp_path / "templates"
     d.mkdir()
@@ -60,58 +70,81 @@ def _templates(tmp_path: Path, *names: str) -> Path:
     return d
 
 
-def test_the_newest_version_wins(tmp_path):
-    d = _templates(tmp_path,
-                   "31C - Master Template (New Identity 2026 v1.00).dotx",
-                   "31C - Master Template (New Identity 2026 v1.01).dotx")
+def _master(version: str, suffix: str = ".dotx") -> str:
+    return f"{FAKE_PREFIX}{version}){suffix}"
 
-    got = brand_master_template(".dotx", templates_dir=d)
+
+def test_the_newest_version_wins(tmp_path):
+    d = _templates(tmp_path, _master("v1.00"), _master("v1.01"))
+
+    got = brand_master_template(".dotx", templates_dir=d, prefix=FAKE_PREFIX)
 
     assert got.name.endswith("v1.01).dotx")
 
 
 def test_the_sort_is_on_the_parsed_version_not_the_string(tmp_path):
     """`v1.9` sorts above `v1.10` as text. The whole point is that it must not."""
-    d = _templates(tmp_path,
-                   "31C - Master Template (New Identity 2026 v1.9).dotx",
-                   "31C - Master Template (New Identity 2026 v1.10).dotx")
+    d = _templates(tmp_path, _master("v1.9"), _master("v1.10"))
 
-    assert brand_master_template(".dotx", templates_dir=d).name.endswith("v1.10).dotx")
+    assert brand_master_template(
+        ".dotx", templates_dir=d, prefix=FAKE_PREFIX).name.endswith("v1.10).dotx")
 
 
 def test_the_suffix_selects_which_master(tmp_path):
     """The two generators want different ones out of the same directory."""
-    d = _templates(tmp_path,
-                   "31C - Master Template (New Identity 2026 v1.01).docx",
-                   "31C - Master Template (New Identity 2026 v1.01).dotx")
+    d = _templates(tmp_path, _master("v1.01", ".docx"), _master("v1.01", ".dotx"))
 
-    assert brand_master_template(".docx", templates_dir=d).suffix == ".docx"
-    assert brand_master_template(".dotx", templates_dir=d).suffix == ".dotx"
+    assert brand_master_template(
+        ".docx", templates_dir=d, prefix=FAKE_PREFIX).suffix == ".docx"
+    assert brand_master_template(
+        ".dotx", templates_dir=d, prefix=FAKE_PREFIX).suffix == ".dotx"
 
 
 def test_an_unrelated_file_is_not_mistaken_for_a_master(tmp_path):
-    d = _templates(tmp_path, "31C - Generic PP template.pptx",
-                   "31c-deck-design-master.pen")
+    d = _templates(tmp_path, "Northwind - Generic PP template.pptx",
+                   "northwind-deck-design-master.pen")
 
     with pytest.raises(FileNotFoundError):
-        brand_master_template(".dotx", templates_dir=d)
+        brand_master_template(".dotx", templates_dir=d, prefix=FAKE_PREFIX)
 
 
 def test_the_refusal_lists_what_the_directory_does_hold(tmp_path):
     """"Template not found" sends the reader to the wrong question."""
-    d = _templates(tmp_path, "31C - Generic PP template.pptx")
+    d = _templates(tmp_path, "Northwind - Generic PP template.pptx")
 
     with pytest.raises(FileNotFoundError) as exc:
-        brand_master_template(".dotx", templates_dir=d)
+        brand_master_template(".dotx", templates_dir=d, prefix=FAKE_PREFIX)
 
-    assert "31C - Generic PP template.pptx" in str(exc.value)
+    assert "Northwind - Generic PP template.pptx" in str(exc.value)
 
 
 def test_a_missing_directory_is_refused_and_says_so(tmp_path):
     with pytest.raises(FileNotFoundError) as exc:
-        brand_master_template(".dotx", templates_dir=tmp_path / "nope")
+        brand_master_template(".dotx", templates_dir=tmp_path / "nope",
+                              prefix=FAKE_PREFIX)
 
     assert "nope" in str(exc.value)
+
+
+def test_the_default_prefix_comes_from_the_manifest_and_never_from_code(monkeypatch,
+                                                                       tmp_path):
+    """The seam that removed the filename, measured rather than assumed.
+
+    Points the data root at a scratch overlay carrying an invented manifest, then
+    checks the prefix `brand_master_template` globs with is cut from THAT entry.
+    A prefix still hardcoded in `docx_helpers` would ignore the manifest and this
+    would fail.
+    """
+    from scripts.utils.docx_helpers import brand_template_prefix
+
+    data = tmp_path / "data"
+    (data / "config").mkdir(parents=True)
+    (data / "config" / "brand-assets.json").write_text(
+        '{"word_master_template": "brand/templates/Kestrel Shell (Rev v2.07).dotx"}',
+        encoding="utf-8")
+    monkeypatch.setenv("HEADING_OS_DATA", str(data))
+
+    assert brand_template_prefix() == "Kestrel Shell (Rev "
 
 
 @pytest.mark.parametrize("script", ["scripts/generate-usecases-docx.py",

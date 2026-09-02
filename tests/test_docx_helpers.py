@@ -37,7 +37,9 @@ from pathlib import Path
 
 import pytest
 
+from scripts.utils.brand_assets import BrandAssetError, manifest_path
 from scripts.utils.docx_helpers import brand_master_template
+from scripts.utils.paths import DataRootError
 from scripts.utils.workspace import get_datastore_dir
 
 REPO = Path(__file__).resolve().parent.parent
@@ -117,12 +119,31 @@ def _sandbox(tmp_path: Path, seeds: dict[str, str], templates: list[str]) -> Pat
     data_root.mkdir(parents=True, exist_ok=True)
     real_templates = get_datastore_dir() / "brand" / "templates"
     if templates:
+        # The brand-asset manifest travels WITH the templates, because since
+        # 2026-09-02 the master's filename lives in it rather than in
+        # `docx_helpers`: the operator ruled that a datastore filename is private
+        # and this repository is public. Copied rather than synthesised, matching
+        # how the templates themselves are staged, so the sandbox exercises the
+        # real key-to-filename map instead of a stand-in that could drift from it.
+        # Without this the generator subprocess resolved the manifest against the
+        # sandbox root, found nothing, and refused - correctly, but for a reason
+        # the fixture had not been told about.
+        try:
+            manifest = manifest_path()
+        except DataRootError as exc:                # pragma: no cover - env fault
+            pytest.skip(f"cannot resolve the data root: {exc}")
+        if not manifest.is_file():
+            pytest.skip(f"no brand-asset manifest in this clone: {manifest}")
+        sandbox_manifest = data_root / "config" / manifest.name
+        sandbox_manifest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(manifest, sandbox_manifest)
+
         dest = data_root.joinpath(*TEMPLATE_DIR)
         dest.mkdir(parents=True, exist_ok=True)
         for suffix in templates:
             try:
                 src = brand_master_template(suffix, templates_dir=real_templates)
-            except FileNotFoundError as exc:
+            except (FileNotFoundError, BrandAssetError) as exc:
                 pytest.skip(f"brand template not in this clone: {exc}")
             shutil.copy2(src, dest / src.name)
     for rel, fixture in seeds.items():

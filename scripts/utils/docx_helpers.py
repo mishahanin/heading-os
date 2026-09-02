@@ -48,12 +48,45 @@ def load_docx() -> SimpleNamespace:
     )
 
 
-BRAND_TEMPLATE_PREFIX = "31C - Master Template (New Identity "
 _BRAND_VERSION_RE = re.compile(r"v(\d+)\.(\d+)\)")
 
 
-def brand_master_template(suffix: str = ".dotx", *, templates_dir=None) -> Path:
+def brand_template_prefix(manifest=None) -> str:
+    """The filename stem the master templates share, up to the version marker.
+
+    Derived from the manifest entry rather than written here. It used to be the
+    module constant `BRAND_TEMPLATE_PREFIX`, spelling the real filename in a
+    public repository; the operator ruled on 2026-09-02 that a datastore filename
+    is private, and `scripts/utils/brand_assets.py` carries the reasoning. Cut at
+    the version match, so the one registered name yields the glob that finds every
+    version of it, which is what made this a prefix in the first place.
+
+    Raises `BrandAssetError` when the manifest is absent (a public clone) or the
+    registered name carries no version marker, because a prefix guessed from
+    either would glob a directory this workspace does not have.
+    """
+    from scripts.utils.brand_assets import BrandAssetError, brand_asset_name
+
+    name = brand_asset_name("word_master_template", manifest)
+    match = _BRAND_VERSION_RE.search(name)
+    if not match:
+        raise BrandAssetError(
+            f"the manifest entry for 'word_master_template' names {name!r}, "
+            "which carries no 'v<major>.<minor>)' version marker, so no prefix "
+            "can be cut from it and the newest-version lookup has nothing to "
+            "glob for"
+        )
+    return name[: match.start()]
+
+
+def brand_master_template(suffix: str = ".dotx", *, templates_dir=None,
+                          prefix: str | None = None) -> Path:
     """The NEWEST brand master template with `suffix`, read from the datastore.
+
+    `prefix` defaults to `brand_template_prefix()`, which reads the private
+    manifest. It is a parameter so a unit test can drive the version-sort logic
+    against an invented name in a scratch directory, with no data overlay and no
+    real filename anywhere in the test file.
 
     A version number written into a filename and then spelled out at each call
     site is a trap that springs quietly. The master went from v1.00 to v1.01,
@@ -76,9 +109,11 @@ def brand_master_template(suffix: str = ".dotx", *, templates_dir=None) -> Path:
 
         templates_dir = get_datastore_dir() / "brand" / "templates"
     templates_dir = Path(templates_dir)
+    if prefix is None:
+        prefix = brand_template_prefix()
 
     found: list[tuple[tuple[int, int], Path]] = []
-    for candidate in templates_dir.glob(f"{BRAND_TEMPLATE_PREFIX}*{suffix}"):
+    for candidate in templates_dir.glob(f"{prefix}*{suffix}"):
         match = _BRAND_VERSION_RE.search(candidate.name)
         if match:
             found.append(((int(match.group(1)), int(match.group(2))), candidate))
@@ -89,7 +124,7 @@ def brand_master_template(suffix: str = ".dotx", *, templates_dir=None) -> Path:
             present = [f"<unreadable: {exc}>"]
         raise FileNotFoundError(
             f"no brand master template matching "
-            f"'{BRAND_TEMPLATE_PREFIX}*{suffix}' in {templates_dir}; "
+            f"'{prefix}*{suffix}' in {templates_dir}; "
             f"it holds: {', '.join(present) or '(nothing)'}"
         )
     return max(found)[1]

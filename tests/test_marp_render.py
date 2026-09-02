@@ -4,6 +4,7 @@
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +28,7 @@ from scripts.marp_render import (
     check_version_match,
     get_pinned_version,
     prepare_theme,
+    substitute_theme_fonts,
     WORKSPACE_ROOT,
     WORD_OVERFLOW_THRESHOLD,
 )
@@ -343,13 +345,88 @@ def test_the_shim_holds_no_collision_or_force_handling():
 # --- Theme Preparation ---
 
 def test_theme_prepare_substitutes_fonts_dir():
+    """Both placeholder families have to be gone, not just the directory one.
+
+    The face names used to be literals in the `.css.tmpl`, so this test asserted
+    a real datastore filename fragment was present. On 2026-09-02 the operator
+    ruled that a datastore filename is private and this repository is public, so
+    the names moved to the manifest and the assertion moved with them: what is
+    checked now is that nothing is left unsubstituted, which is the property that
+    holds whether or not this clone has a data overlay.
+    """
     theme_path = prepare_theme()
     try:
         content = theme_path.read_text(encoding="utf-8")
         assert "{FONTS_DIR}" not in content
-        assert "GT-Standard" in content
+        assert not re.findall(r"\{FONT_[A-Z0-9_]+\}", content)
+        assert ".woff2" in content, "the @font-face src lines went missing"
     finally:
         theme_path.unlink(missing_ok=True)
+
+
+def test_a_theme_face_resolves_to_the_name_the_manifest_registers(tmp_path,
+                                                                  monkeypatch):
+    """The seam, driven by an invented manifest so no real name is in this file."""
+    data = tmp_path / "data"
+    (data / "config").mkdir(parents=True)
+    (data / "config" / "brand-assets.json").write_text(
+        json.dumps({"font_gt_m_medium": "brand/fonts/Kestrel/Kestrel-Text-Medium.woff2"}),
+        encoding="utf-8")
+    monkeypatch.setenv("HEADING_OS_DATA", str(data))
+
+    out = substitute_theme_fonts("src: url('{FONTS_DIR}/{FONT_GT_M_MEDIUM}')")
+
+    assert out == "src: url('{FONTS_DIR}/Kestrel-Text-Medium.woff2')"
+
+
+def test_a_missing_manifest_degrades_the_faces_and_says_so(tmp_path, monkeypatch,
+                                                           capsys):
+    """A public clone has no manifest and no licensed fonts, and must still render.
+
+    `themes/fonts/README.md` documents the system-font fallback as the normal
+    state there, so refusing would take a working deck away from a clone that
+    never had the faces. The refusal still has to be VISIBLE, or an operator who
+    does have the fonts cannot tell why the deck came out unbranded.
+    """
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setenv("HEADING_OS_DATA", str(empty))
+
+    out = substitute_theme_fonts("src: url('{FONTS_DIR}/{FONT_GT_M_MEDIUM}')")
+
+    assert "{FONT_" not in out
+    assert "unresolved-brand-face.woff2" in out
+    assert "brand-asset manifest could not be read" in capsys.readouterr().err
+
+
+def test_a_manifest_missing_one_key_names_that_key(tmp_path, monkeypatch, capsys):
+    """A partial manifest is the likelier fault than a missing one, and a face
+    that silently vanished is the failure this whole seam exists to avoid."""
+    data = tmp_path / "data"
+    (data / "config").mkdir(parents=True)
+    (data / "config" / "brand-assets.json").write_text(
+        json.dumps({"font_gt_m_light": "brand/fonts/Kestrel/Kestrel-Text-Light.woff2"}),
+        encoding="utf-8")
+    monkeypatch.setenv("HEADING_OS_DATA", str(data))
+
+    out = substitute_theme_fonts("url('{FONT_GT_M_LIGHT}') url('{FONT_GT_S_MEDIUM}')")
+
+    assert "Kestrel-Text-Light.woff2" in out
+    assert "unresolved-brand-face.woff2" in out
+    assert "font_gt_s_medium" in capsys.readouterr().err
+
+
+def test_an_unresolvable_data_root_does_not_kill_the_render(tmp_path, monkeypatch,
+                                                            capsys):
+    """`DataRootError` is deliberately not an `OSError`, so nothing upstream of
+    `prepare_theme` catches it. A set-but-missing HEADING_OS_DATA would have
+    turned a render that used to work into a traceback."""
+    monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path / "gone"))
+
+    out = substitute_theme_fonts("url('{FONT_GT_M_MEDIUM}')")
+
+    assert "unresolved-brand-face.woff2" in out
+    assert "HEADING_OS_DATA" in capsys.readouterr().err
 
 
 # --- Browser Probe ---

@@ -652,6 +652,21 @@ def pytest_sessionstart(session):
 def pytest_sessionfinish(session, exitstatus):
     if not _guard._WATCH_BEFORE:
         return
+    # A collect-only session imports modules and runs no test body, so it cannot
+    # be the writer, and every import-time write it could have seen is seen again
+    # by the ordinary run that imports the same modules. What it CAN do is fail
+    # over someone else's write: its window is under a second, and anything on
+    # the machine that touches the overlay inside that second lands on it.
+    #
+    # MEASURED 2026-09-02, and this is why the exemption exists. The full suite
+    # went red on ONE test, `test_the_guard_still_passes_on_this_repository`.
+    # `scripts/dev/check-readme-numbers.py` derives the security-test count by
+    # spawning `pytest tests/security --collect-only`, that child loaded this
+    # conftest, and the compaction hook wrote a handoff file into the operator's
+    # overlay while it collected. The child printed "556 tests collected", then
+    # exited 1. Nothing was wrong with the count, the guard, or the tree.
+    if session.config.getoption("collectonly", False):
+        return
     complaints = _guard.watch_complaints(_guard._WATCH_BEFORE, _guard._watch_snapshot())
     if not complaints:
         return

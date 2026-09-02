@@ -1,0 +1,70 @@
+{
+  "_comment": "Rotation ledger for scripts/audit-rotation.py. One entry per audited artifact, keyed by path, carrying the sha256 of the bytes that were audited. An artifact whose current hash differs from the recorded one is back in the queue.",
+  "entries": {
+    "scripts/lint-ratchet.py": {
+      "sha256": "6f50abdef952c02cd97fc49b8fc6161fc726468c938ee1a6d4448d833e4fe84b",
+      "date": "2026-09-02",
+      "verdict": "open",
+      "note": "found while building check-gate-integrity.py",
+      "findings": [
+        {
+          "summary": "no test names this gate, so its refusal has never been observed",
+          "severity": "medium",
+          "estimate_minutes": 45
+        }
+      ]
+    },
+    "scripts/overlay-writer-census.py": {
+      "sha256": "25ff2e00d8adb7817aa21ed9292a16c8e7d19e7970f55580b345ea0071cdea28",
+      "date": "2026-09-02",
+      "verdict": "open",
+      "note": "",
+      "findings": [
+        {
+          "summary": "a second copy of the full git index enumeration; consolidate onto repo_files.git_index_paths",
+          "severity": "low",
+          "estimate_minutes": 20
+        }
+      ]
+    },
+    "scripts/publish-corporate.py": {
+      "sha256": "4e142a5863543c3f07b883a21c545929449e58c3b93e53e28bfb20049f5bbd7a",
+      "date": "2026-09-02",
+      "verdict": "open",
+      "note": "",
+      "findings": [
+        {
+          "summary": "a filtered git index enumeration that could share the reader once it takes a pathspec",
+          "severity": "low",
+          "estimate_minutes": 30
+        }
+      ]
+    },
+    "scripts/run-integration-tests.py": {
+      "sha256": "9d8d8f06e3f510e57f44616f59ab658dcee6ffe253f2d18ff1a0422026a44709",
+      "date": "2026-09-02",
+      "verdict": "open",
+      "note": "found while building check-gate-integrity.py",
+      "findings": [
+        {
+          "summary": "no test names this gate, so its refusal has never been observed",
+          "severity": "medium",
+          "estimate_minutes": 45
+        }
+      ]
+    },
+    "scripts/utils/overlay_write_guard.py": {
+      "sha256": "a78aed72abd576d3049f7d0a525ec8bad03222f33162852324fe0b2c85d4cc9e",
+      "date": "2026-09-02",
+      "verdict": "open",
+      "note": "",
+      "findings": [
+        {
+          "summary": "a third copy of the full git index enumeration, inside a security-critical guard; consolidating must preserve its timeout and re-measure its refusal cases",
+          "severity": "medium",
+          "estimate_minutes": 60
+        }
+      ]
+    }
+  }
+}

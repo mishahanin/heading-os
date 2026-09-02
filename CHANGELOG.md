@@ -6,6 +6,35 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- **The Evidence Standard, and four machines that hold it.** The v0.14.0 campaign left a method and no written standard, so the method was derived from its own 144 commits and written into `.claude/rules/development-standards.md`: twelve obligations, each naming the gate that enforces it or stating plainly that none does. A rule that implies enforcement it does not have is the defect it exists to prevent.
+
+  The measurement that made this a set of gates rather than a paragraph of advice: of the 327 `scripts/*.py` files that campaign repaired, only **32** had no test at its start. The tests existed and were green. Stronger still, the campaign wrote 564 test files under maximum attention and rewrote **312** of them inside the same campaign, 184 in a single commit named "a suite that passed over the defects it was written to catch". Discipline is demonstrably not sufficient at this scale.
+
+  Four gates, all blocking, all ratcheted from the current tree, all mutation-verified with zero survivors:
+
+  - `scripts/check-test-vacuity.py` (pre-commit `test-vacuity` + CI) fails on a new test whose every assertion sits inside a loop over a corpus that can come back empty. Calibrated in three narrowing passes over 16,529 test functions: 362 candidates with a naive rule, 147 once a loop over a literal was exempted, **126** once a name bound to a literal was resolved. Those 126 are frozen in `config/test-vacuity-baseline.json` and the writer only ever removes entries. Mutation 13/13, plus one equivalent mutant documented in the test rather than left in the harness.
+  - `scripts/check-gate-integrity.py` (pre-commit `gate-integrity` + CI) reads the enforcement layer itself: a `files:` regex matching no tracked path scopes its hook to nothing, and a hook whose script no test names has never been observed refusing. It found two on its first run, `lint-ratchet.py` and `run-integration-tests.py`. Mutation 16/16.
+  - `crashed_wall_block` in `.claude/hooks/_dispatch.py` turns a crashed PreToolUse wall from an advisory into a block. Every remaining wall still runs, so an early crash cannot mask a later refusal, and reads plus edits under `.claude/hooks/` stay open so the crash is repairable. Mutation 11/11.
+  - `scripts/audit-rotation.py` replaces the campaign with a rotation. Each verdict is recorded against the artifact's **content hash**, so a changed file re-enters the queue by itself and a new one enters at the front; the inventory is derived from `git ls-files` on every run, never stored. An audit that found defects records `open` with a severity and a minute estimate per finding, and `open` does not count as checked. Mutation 16/16 and 11/11 across two passes.
+
+- **`scripts/night-repair.py`** turns an operator-approved batch into an unattended repair pass that leaves the working tree dirty for morning review. It cannot commit or push: its prompt carries no word from the release gate's own authorising lists, imported from `.claude/hooks/_dispatch.py` rather than copied, so a word added there tomorrow is checked tonight. It consumes the batch before starting, and it never writes `fixed` to the ledger, because an agent that repairs and then certifies its own repair is marking its own homework. Mutation 14/14 and 8/8.
+
+- **`config/automation-hold.json`**, a dated freeze both the night pass and the digest read. A corrupt or unparseable hold file HOLDS; only an absent one lapses, because absent carries the operator's intent and corrupt carries none. Nothing is armed: no timer is installed and no unit template exists.
+
+- **`scripts/utils/repo_files.git_index_paths`**, one reader of git's index. Two gates written the same afternoon had each grown a private copy within an hour of the rule against exactly that, and both copies carried the same two defects: a missing `-z`, so git C-quoted any non-ASCII path away, and `text=True`, so a carriage return in a filename arrived as a line feed. Pinned by tests over real repositories holding a newline, a carriage return, a non-UTF-8 byte and a Cyrillic name.
+
+### Changed
+
+- `.claude/hooks/_dispatch.py` renders every refusal through one `_terminate` function, which is the single call site of `_record_denial`. `tests/test_denial_counter.py` requires exactly one, so that a wall added tomorrow is counted by construction rather than by its author remembering.
+- `.pre-commit-config.yaml` excludes `config/audit-rotation-ledger.json` from detect-secrets, because its sha256 fields are hex digests by construction. `tests/test_an_exclusion_that_promised_another_scanner.py` proves the promise beside every such exclusion by planting a credential-shaped canary in a copy and requiring `scripts/secret-scanner.py` to fire.
+
+### Fixed
+
+- **The overlay sentinel accused a session that ran nothing.** `tests/conftest.py` snapshots the operator's live overlay at session start and fails the session when anything moved, which is right for a run that executes tests and wrong for one that only collects them. Measured 2026-09-02: the full suite went red on a single test because `scripts/dev/check-readme-numbers.py` derives the security-test count by spawning `pytest tests/security --collect-only`, and an unrelated hook wrote a file into the overlay during the 0.7 seconds that child spent collecting. The child printed "556 tests collected" and exited 1. A collect-only session is now exempt; it runs no test body, so it cannot be the writer, and any import-time write it could have seen is seen again by the ordinary run that imports the same modules. Reproduced end to end with a background writer touching a scratch overlay every 100 ms. Mutation 8/8.
+- The same guard reported a collection failure it could not explain: its message carried the tail of stderr, and pytest writes its diagnosis to stdout. It now carries both.
+
 ## [0.14.0] - 2026-09-02
 
 The largest release in the project's history, and the only one written from an

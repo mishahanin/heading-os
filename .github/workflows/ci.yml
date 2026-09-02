@@ -141,6 +141,10 @@ jobs:
         run: uv run python scripts/audit-skill-bash-paths.py
       - name: Prose path-reference audit
         run: uv run python scripts/check-path-references.py --check
+      - name: Test-vacuity ratchet
+        run: uv run python scripts/check-test-vacuity.py --check
+      - name: Gate-integrity ratchet
+        run: uv run python scripts/check-gate-integrity.py --check
       - name: Classification health (F-9.3)
         run: uv run python scripts/classification-health.py
       - name: requirements.txt in sync with the lock (F-7.1)

@@ -3221,6 +3221,122 @@ def check_release_gate(payload: dict) -> dict | None:
 
 
 # ============================================================
+# A crashed wall
+# ============================================================
+#
+# Until 2026-09-02 a check that raised was logged, turned into an advisory, and
+# skipped. The tool call then ran with that wall down, and the only thing
+# standing between the operator and an unguarded operation was the model reading
+# an advisory and choosing to stop. That is not a wall; it is a suggestion, and
+# it is the same shape as every other defect this workspace spent ten days
+# removing: a control that reports something other than what it established.
+#
+# So a crash now BLOCKS. Three properties make that safe enough to live with:
+#
+# * Every remaining check still runs. The crash is collected, not raised, so a
+#   later wall's real refusal is never lost behind an earlier wall's bug, and a
+#   genuine block still wins because the block path is terminal.
+# * The block is not total. Reading, searching and listing stay open, so the
+#   operator can diagnose the crash, and an edit to the hooks directory stays
+#   open, so the crash can be REPAIRED. A wall that cannot be fixed without
+#   itself being disarmed would get disarmed.
+# * The refusal names the wall and the exception, so the fix is one file away
+#   rather than a hunt.
+#
+# The exemption is deliberately narrow and deliberately not configurable. There
+# is no environment variable here, and there must not be: a switch that turns
+# this off is the wall's own disarm button, and `tests/security/` already holds
+# the cases proving no variable can flip a gate.
+
+_CRASH_READ_ONLY_TOOLS = frozenset({"Read", "Grep", "Glob"})
+_CRASH_REPAIR_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
+_CRASH_REPAIR_DIR = ".claude/hooks/"
+
+
+def crash_block_exemption(payload):
+    """Why a crashed wall must not block THIS call, or None to block it.
+
+    Pure, and returns the reason rather than a bool so the caller can say which
+    exemption applied instead of asserting one existed.
+    """
+    tool = payload.get("tool_name", "") or ""
+    if tool in _CRASH_READ_ONLY_TOOLS:
+        return "read-only tool: diagnosing the crash must stay possible"
+    if tool in _CRASH_REPAIR_TOOLS:
+        tool_input = payload.get("tool_input")
+        if not isinstance(tool_input, dict):
+            return None
+        target = (tool_input.get("file_path")
+                  or tool_input.get("notebook_path") or "")
+        if _CRASH_REPAIR_DIR in str(target).replace("\\", "/"):
+            return "edit inside .claude/hooks/: repairing the crash must stay possible"
+    return None
+
+
+def crashed_wall_block(crashed, exemption):
+    """The refusal for one or more walls that raised, or None when exempt.
+
+    `crashed` is a list of `(check_name, exception_text)`.
+    """
+    if not crashed or exemption is not None:
+        return None
+    listed = "\n".join(f"  {name}: {error}" for name, error in crashed)
+    return {
+        "decision": "block",
+        "_policy_deny": True,
+        "reason": (
+            f"HOOK WALL CRASHED: {len(crashed)} PreToolUse check(s) raised, so "
+            f"this operation would have run with that wall down.\n\n"
+            f"{listed}\n\n"
+            "Until 2026-09-02 this was an advisory and the call proceeded. A "
+            "wall that reports its own failure and then steps aside is not a "
+            "wall. Reading, searching and editing under .claude/hooks/ are "
+            "still allowed, so the crash can be diagnosed and repaired; "
+            "everything else stops until it is.\n\n"
+            "Fix the check named above. There is no flag, variable or setting "
+            "that turns this off, by design."
+        ),
+    }
+
+
+def _terminate(source, decision, payload):
+    """Record one refusal and render it. Never returns; always exits.
+
+    The ONLY call site of `_record_denial` in this file, and that is the
+    invariant `tests/test_denial_counter.py` holds: a counter called from
+    individual checks would leave a new check uncounted unless its author
+    remembered, and a step that depends on remembering is already dead. The
+    crashed-wall refusal came through here for the same reason -- a second call
+    site would have been a second thing to keep in step.
+
+    `source` is what refused: a check's `__name__`, or `crashed_wall`.
+    """
+    _record_denial(source, payload, decision.get("reason", ""))
+    # protect-personal-threads blocks are rendered as a PreToolUse permission
+    # deny (hookSpecificOutput / exit 0) so the CLI shows an intentional policy
+    # block with its reason, NOT a "hook error" -- the exit-2 + stderr path the
+    # harness labels as an error. The deny is just as binding as exit 2
+    # (claude-code-guide confirmed both paths block with 100% reliability); only
+    # the presentation changes.
+    if decision.get("_policy_deny"):
+        json.dump(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": decision.get("reason", ""),
+                }
+            },
+            sys.stdout,
+        )
+        sys.exit(0)
+    # Strip internal flags (defensive - shouldn't be present here).
+    public = {k: v for k, v in decision.items() if not k.startswith("_")}
+    json.dump(public, sys.stdout)
+    sys.exit(0)
+
+
+# ============================================================
 # Dispatcher main
 # ============================================================
 CHECKS = [
@@ -3255,6 +3371,7 @@ def main():
     if not isinstance(payload.get("tool_input"), dict):
         payload["tool_input"] = {}
     advisory = []
+    crashed = []
     for check in CHECKS:
         try:
             decision = check(payload)
@@ -3274,39 +3391,27 @@ def main():
                 f"HOOK INTERNAL ERROR in {check.__name__}: {e}. "
                 f"Verify this operation is safe before proceeding."
             )
+            crashed.append((check.__name__, str(e)))
+            # Still `continue`: the remaining walls must run, so an early crash
+            # can never hide a later wall's real refusal. The block for this
+            # crash is raised after the loop, where a genuine refusal has
+            # already had its chance to win.
             continue
         if decision is None:
             continue
         if decision.get("decision") == "block":
-            # One call site, ahead of both terminal renderings below, so every
-            # check's refusal is counted the same way and an eighth check inherits
-            # the counter without touching this file. A1 of the v2 design.
-            _record_denial(check.__name__, payload, decision.get("reason", ""))
-            # protect-personal-threads blocks are rendered as a PreToolUse
-            # permission deny (hookSpecificOutput / exit 0) so the CLI shows an
-            # intentional policy block with its reason, NOT a "hook error" — the
-            # exit-2 + stderr path the harness labels as an error. The deny is
-            # just as binding as exit 2 (claude-code-guide confirmed both paths
-            # block with 100% reliability); only the presentation changes.
-            if decision.get("_policy_deny"):
-                reason = decision.get("reason", "")
-                json.dump(
-                    {
-                        "hookSpecificOutput": {
-                            "hookEventName": "PreToolUse",
-                            "permissionDecision": "deny",
-                            "permissionDecisionReason": reason,
-                        }
-                    },
-                    sys.stdout,
-                )
-                sys.exit(0)
-            # Strip internal flags (defensive — shouldn't be present here).
-            public = {k: v for k, v in decision.items() if not k.startswith("_")}
-            json.dump(public, sys.stdout)
-            sys.exit(0)
+            _terminate(check.__name__, decision, payload)
         if decision.get("additionalContext"):
             advisory.append(decision["additionalContext"])
+
+    # After every wall has run, so a real refusal above already won and a crash
+    # here cannot mask one. Rendered through the same `_policy_deny` path the
+    # other refusals use, and recorded in the same denial log, so a crashed wall
+    # is counted rather than only printed.
+    crash_decision = crashed_wall_block(crashed, crash_block_exemption(payload))
+    if crash_decision is not None:
+        _terminate("crashed_wall", crash_decision, payload)
+
     if advisory:
         # Nested in `hookSpecificOutput`, not at the top level. The Claude Code
         # hooks documentation is explicit that a top-level `additionalContext`

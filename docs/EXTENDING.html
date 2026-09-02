@@ -249,6 +249,29 @@ uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </sp
   Placeholders, regex fragments and correct prose about deleted things are frozen
   in the scanner&rsquo;s <code>BASELINE</code>, each with the reason it should not exist. To add
   one, state the reason; to clean one up, delete the line.</li>
+<li><strong>The test-vacuity ratchet.</strong> <code>check-test-vacuity.py --check</code> runs as the
+  pre-commit hook <code>test-vacuity</code> and as a CI step. It fails on a new test whose
+  every assertion sits inside a loop. The corpus of that loop can come back
+  empty. The body then never runs, no assertion is evaluated, and the test is
+  green. Give the corpus a floor OUTSIDE the loop. Assert its size, with the
+  measured number and the date beside it. 126 pre-existing sites are frozen in
+  <code>config/test-vacuity-baseline.json</code>. The writer only removes entries, so
+  re-running it cannot launder a new one in.</li>
+<li><strong>The gate-integrity ratchet.</strong> <code>check-gate-integrity.py --check</code> reads the
+  enforcement layer itself. A <code>files:</code> regex that matches no tracked path scopes
+  its hook to nothing. That hook then passes every commit vacuously. A hook whose
+  script no test names has never been observed refusing. Pre-existing cases are
+  frozen in the scanner&rsquo;s <code>BASELINE</code>, each with a written reason.</li>
+<li><strong>The rotation.</strong> <code>audit-rotation.py</code> keeps the engine in working order without
+  another campaign. It selects a slice of artifacts to audit. It records each
+  verdict against the artifact&rsquo;s CONTENT HASH. A changed file therefore re-enters
+  the queue by itself, and a new one enters at the front. An audit that found
+  defects records <code>open</code>, with an estimate per finding. <code>open</code> does not count as
+  checked, so <code>--report</code> lists it until somebody fixes it. The script audits
+  nothing and calls no model. Selecting and recording are its whole job.
+  <code>night-repair.py</code> turns an approved batch into an unattended pass. That pass
+  leaves the working tree dirty for review. It cannot commit or push: its prompt
+  carries no word the release gate accepts.</li>
 <li><strong>The coverage report.</strong> <code>check-path-references.py --coverage</code> lists the engine
   Python files that no prose describes. Run it after you add a script, to see
   whether your documentation landed. It is advisory and gates nothing.</li>

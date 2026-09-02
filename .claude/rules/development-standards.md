@@ -2,17 +2,150 @@
 paths:
   - ".claude/skills/**"
   - ".claude/rules/**"
+  - ".claude/hooks/**"
   - "scripts/**"
+  - "tests/**"
   - "reference/**"
   - "templates/**"
 ---
 
-<!-- version: 1.3.3 | last-updated: 2026-08-31 -->
+<!-- version: 1.4.0 | last-updated: 2026-09-02 -->
 # Development Standards
 
-Last Verified: 2026-08-31
+Last Verified: 2026-09-02
 
 Quality gates for every workspace artifact (skills, scripts, reference files, rules) and all development work, not just specific features.
+
+## The Evidence Standard
+
+Added 2026-09-02, derived from the 144 commits of the hardening campaign that
+ran 24 August to 2 September. Every obligation below is a practice that campaign
+used, and each names what holds it. Where nothing mechanical holds it, that is
+stated, because a rule that implies enforcement it does not have is the same
+defect it exists to prevent.
+
+**The one sentence: a change carries evidence that it can fail.** Not an
+argument that the code is right. A measurement at which the code goes red.
+
+### Why this is a rule and not advice
+
+Of the 327 scripts the campaign repaired, 295 already had tests. The tests were
+green. So the problem was never missing tests, and "write good tests" would have
+prevented almost none of it. Stronger: the campaign wrote 564 test files under
+maximum attention and had to rewrite 312 of them in the same campaign, 184 in
+one commit named "a suite that passed over the defects it was written to catch".
+Discipline is not sufficient here. Machines are.
+
+### The obligations
+
+1. **Reproduce before repairing.** Never act on a written finding, an audit
+   report, or a memory of the code. Open the current file and make the defect
+   happen. Four in five findings in that campaign described code that no longer
+   existed. *No gate. Judgement.*
+
+2. **Measure, then state, with the date.** A claim in a commit body, a docstring
+   or a rule carries `MEASURED YYYY-MM-DD` and the observed before/after. An
+   argument is not a measurement. *Held for prose-about-code by
+   `scripts/check-path-references.py`, `scripts/dev/check-readme-numbers.py`,
+   `scripts/check-version-sync.py` and `tests/test_scope_claims.py`.*
+
+3. **Fix at the shared root.** This repository's dominant defect shape, 35
+   commits, is a fix that landed in one of N copies. Before repairing, ask what
+   else in the tree solves the same problem. Extract one function; repoint every
+   caller. *No gate. Judgement, and the most expensive one to get wrong.*
+
+4. **One test file per defect, named as a sentence about it.**
+   `tests/test_a_wall_that_read_the_present_and_shipped_the_past.py`. The module
+   docstring carries the pre-fix measurement, so the evidence lives beside the
+   regression test rather than only in a commit message. *Convention.*
+
+5. **Both directions, always.** The case that must be refused AND the case that
+   must still pass. A guard that refuses everything satisfies every refusal test
+   and breaks every honest caller. *No gate; the anchor is the author's.*
+
+6. **Drive the real entry point, assert the observable consequence.** An exit
+   code, bytes not written, a subprocess not spawned, a send not made. Never a
+   restated copy of the guard's own condition inside the test: a copy passes
+   while the real command still exits 0. *No gate. Judgement.*
+
+7. **A floor under every corpus.** A test whose only assertions sit inside a
+   loop over a discovered corpus passes when the corpus is empty. Assert the
+   size outside the loop, with the measured number and the date beside it. The
+   same obligation applies to a guard: it refuses rather than reporting clean
+   when its input collapses. *Held by `scripts/check-test-vacuity.py`
+   (pre-commit + CI, ratchet over `config/test-vacuity-baseline.json`).*
+
+8. **Ask the AST, not the text.** A substring scan goes red the moment a fix
+   quotes the bad pattern to explain it, which teaches people to stop
+   explaining. Roughly 49 commits made this swap. *No gate; a recurring review
+   finding.*
+
+9. **Mutation-verify the fix.** Plant deliberate breaks in the SOURCE, never in
+   an assertion, and every one must be caught. State the fraction. A survivor is
+   resolved as a real gap, an equivalent mutant recorded with its reason, or an
+   ambiguous anchor the harness refused to score; it is never made to pass by
+   weakening the test. Use `scripts/utils/mutation_harness.py`, which bounds the
+   child in wall clock and address space, backs up before the edit and verifies
+   the restore against a digest. *No gate: `scripts/canopus.py probe` is
+   uncalibrated and must not be wired into one. This is the largest remaining
+   piece of the standard that a machine does not hold.*
+
+10. **Name what was NOT fixed and what is NOT claimed.** In its own paragraph,
+    not implied by silence. *Governed by `.claude/rules/scope-claims.md`, held
+    for tool output by `tests/test_scope_claims.py`.*
+
+11. **Every gate has a scope and a test.** A `files:` pattern matching nothing
+    passes every commit vacuously; a wall no test names has never been observed
+    refusing. *Held by `scripts/check-gate-integrity.py` (pre-commit + CI).*
+
+12. **A control fails closed.** A PreToolUse wall that raises now BLOCKS rather
+    than advising and stepping aside; reads and edits under `.claude/hooks/`
+    stay open so the crash can be diagnosed and repaired. *Held by
+    `crashed_wall_block` in `.claude/hooks/_dispatch.py` and
+    `tests/test_a_wall_that_reported_its_own_failure_and_stepped_aside.py`.*
+
+### Staying in working order
+
+An audit that happens once, late, costs ten days. `scripts/audit-rotation.py`
+replaces the campaign with a rotation: it selects a small slice of artifacts, and
+records each verdict against the artifact's CONTENT HASH. A file that changes
+re-enters the queue by itself; a file that is new enters at the front, because
+the inventory is derived from `git ls-files` on every run rather than stored.
+`--status` prints the honest share of the tree that carries a verdict against
+the bytes on disk right now.
+
+It never audits anything and never calls a model. Selecting and recording are
+its whole job, and the separation is asserted in its tests, so a ledger cannot
+quietly become a standing campaign.
+
+**A finding is fixed, not filed.** Operator instruction, 2026-09-02. An artifact
+whose audit found defects is recorded `open` with one line per finding, each
+carrying a severity and an estimate in minutes, and `open` does NOT count toward
+coverage. The artifact stays in `--report` until the findings are closed.
+Recording a defect and moving on would mark the file done, which is the failure
+this rotation exists to prevent, one level above the code it audits.
+
+`--report` is the daily digest: what is open, in severity order, with the total
+time. `--notify` sends the same to the operator's own sink, which
+`.claude/rules/lethal-trifecta.md` exempts from the send gate because it can
+only reach the person who already holds the data. An estimate is a number a
+person or an agent wrote down; nothing derives one, and a missing estimate
+counts zero rather than being guessed into a total the operator schedules
+around.
+
+**Night repairs, morning acceptance.** `scripts/night-repair.py --approve` turns
+the open findings into a batch the operator approved, cut at a time budget.
+`--run` starts a headless session over it. Three bounds, each asserted by a test
+rather than promised: the prompt carries no word from the release gate's own
+authorising lists, imported from the hook so a word added there tomorrow is
+checked tonight; the batch is consumed before the session starts, so a crash
+cannot repeat a half-done pass; and the session writes nothing to the rotation
+ledger, because an agent that repairs and then certifies its own repair is
+marking its own homework. It leaves the tree dirty. The operator reads the diff
+and the evidence, and their word closes the finding.
+
+Nothing here is armed by default. There is no installed timer, and arming one is
+an explicit operator action, not a consequence of this rule existing.
 
 ## Before Building Anything
 

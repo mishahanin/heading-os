@@ -184,6 +184,53 @@ def tracked_python_files(directories=("scripts", ".claude"), root: Path | None =
     return tracked_paths([f"{d}/**/*.py" for d in directories], root)
 
 
+class IndexUnreadable(Exception):
+    """git could not be asked, or answered with nothing. No verdict is possible."""
+
+
+def git_index_paths(root: Path | None = None) -> list[str]:
+    """Every path in git's INDEX, read without losing a byte.
+
+    Different question from `tracked_paths` above, which globs the filesystem
+    and asks git what to ignore. This asks git what it is tracking, so a file
+    staged but not yet committed is included -- the property a pre-commit gate
+    needs, since pre-commit runs against staged content.
+
+    Three details, each of which has its own way of going wrong:
+
+    * ``-z``. Without it git C-quotes any path holding a non-ASCII byte, a quote
+      or a newline, and a reader splitting on newlines drops those files while
+      reporting a clean sweep over a corpus narrower than the one it names.
+    * NO ``text=True``. Text mode applies universal newlines, so a filename
+      containing a carriage return arrives with it silently turned into a line
+      feed: a different path, reported as if it were the real one.
+      `tests/test_a_reader_that_lost_a_byte_on_the_way_in.py` holds this.
+    * ``surrogateescape``. A path is bytes on POSIX and need not be valid UTF-8.
+      Strict decoding raises on a tree that git handles fine; ``replace`` would
+      corrupt the name into one that matches nothing.
+
+    Written 2026-09-02 as ONE implementation because there were about to be two.
+    `check-gate-integrity.py` and `audit-rotation.py` had each grown their own
+    copy of this reader within an hour, and both carried the same two defects.
+    A fix that lands in one of N copies is this repository's dominant defect
+    shape, 35 commits of the September campaign.
+    """
+    repo = ROOT if root is None else root
+    try:
+        proc = subprocess.run(["git", "ls-files", "-z"], cwd=repo,
+                              capture_output=True, check=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise IndexUnreadable(f"git ls-files failed: {exc}") from exc
+    raw = proc.stdout.decode("utf-8", errors="surrogateescape")
+    paths = [part for part in raw.split("\0") if part]
+    if not paths:
+        # Not "an empty repository". A listing that came back with nothing is a
+        # failure, and reading it as "no paths to check" is how a scanner
+        # reports clean over a tree it never enumerated.
+        raise IndexUnreadable("git ls-files returned nothing")
+    return paths
+
+
 def read_sources(paths, vanished: list | None = None, *, errors: str = "strict"):
     """Yield `(path, text)` for each path still on disk, skipping and reporting
     the ones that disappeared between the walk and the read.

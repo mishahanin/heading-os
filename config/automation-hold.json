@@ -1,0 +1,7 @@
+{
+  "_comment": "A dated freeze on the audit-rotation automation. `scripts/night-repair.py --run` and `scripts/audit-rotation.py --notify` refuse while it stands. It exists because a hold an assistant merely remembers is not a hold: the release that went out on an approval nobody had given, on 2026-08-31, was a permission remembered rather than read, and this is the same shape pointed the other way. Written from the operator's instruction on 2026-09-02: build it, arm nothing, run nothing for five days.",
+  "hold_until": "2026-09-07",
+  "reason": "Operator instruction 2026-09-02: nothing runs for five days.",
+  "set_by": "operator",
+  "set_on": "2026-09-02"
+}

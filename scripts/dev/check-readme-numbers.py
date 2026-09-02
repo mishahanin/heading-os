@@ -159,9 +159,15 @@ def derive_security_test_count() -> int:
         text=True,
     )
     if proc.returncode != 0:
+        # BOTH streams. pytest writes its own diagnosis to stdout and leaves
+        # stderr empty, so a message carrying stderr alone reports a failure it
+        # cannot explain. MEASURED 2026-09-02: this guard failed with exit 1 and
+        # printed "--- stderr tail ---" followed by nothing, and the sentence
+        # naming the cause was sitting unread in stdout.
         raise SystemExit(
             f"{RED}pytest collection of tests/security failed (exit {proc.returncode}). "
             f"Cannot derive the security-test count.{RESET}\n"
+            f"--- stdout tail ---\n{proc.stdout[-1500:]}\n"
             f"--- stderr tail ---\n{proc.stderr[-1500:]}"
         )
     matches = _COLLECTED_RE.findall(proc.stdout)

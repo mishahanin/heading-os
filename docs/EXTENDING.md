@@ -177,6 +177,29 @@ uv run python scripts/run-tests.py                      # the suite
   Placeholders, regex fragments and correct prose about deleted things are frozen
   in the scanner's `BASELINE`, each with the reason it should not exist. To add
   one, state the reason; to clean one up, delete the line.
+- **The test-vacuity ratchet.** `check-test-vacuity.py --check` runs as the
+  pre-commit hook `test-vacuity` and as a CI step. It fails on a new test whose
+  every assertion sits inside a loop. The corpus of that loop can come back
+  empty. The body then never runs, no assertion is evaluated, and the test is
+  green. Give the corpus a floor OUTSIDE the loop. Assert its size, with the
+  measured number and the date beside it. 126 pre-existing sites are frozen in
+  `config/test-vacuity-baseline.json`. The writer only removes entries, so
+  re-running it cannot launder a new one in.
+- **The gate-integrity ratchet.** `check-gate-integrity.py --check` reads the
+  enforcement layer itself. A `files:` regex that matches no tracked path scopes
+  its hook to nothing. That hook then passes every commit vacuously. A hook whose
+  script no test names has never been observed refusing. Pre-existing cases are
+  frozen in the scanner's `BASELINE`, each with a written reason.
+- **The rotation.** `audit-rotation.py` keeps the engine in working order without
+  another campaign. It selects a slice of artifacts to audit. It records each
+  verdict against the artifact's CONTENT HASH. A changed file therefore re-enters
+  the queue by itself, and a new one enters at the front. An audit that found
+  defects records `open`, with an estimate per finding. `open` does not count as
+  checked, so `--report` lists it until somebody fixes it. The script audits
+  nothing and calls no model. Selecting and recording are its whole job.
+  `night-repair.py` turns an approved batch into an unattended pass. That pass
+  leaves the working tree dirty for review. It cannot commit or push: its prompt
+  carries no word the release gate accepts.
 - **The coverage report.** `check-path-references.py --coverage` lists the engine
   Python files that no prose describes. Run it after you add a script, to see
   whether your documentation landed. It is advisory and gates nothing.

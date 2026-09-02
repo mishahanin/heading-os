@@ -67,9 +67,18 @@ repos:
         #   file is NOT unguarded: `scripts/secret-scanner.py` reads it at
         #   commit time and again inside the unbypassable push-time scan, and
         #   reports it clean on the pattern rules rather than on entropy.
+        # - config/audit-rotation-ledger.json: same shape as skills-lock. Every
+        #   entry records the sha256 of the bytes that were audited, BY
+        #   CONSTRUCTION, and the file grows one hex digest per artifact toward
+        #   558 of them. Baselining each would be 558 entries that go stale the
+        #   moment a file changes, which is what the rotation is for. Added
+        #   2026-09-02 with the ledger. Also not unguarded: the same
+        #   `scripts/secret-scanner.py` reads it at commit and at push on the
+        #   pattern rules.
         exclude: |
           (?x)^(
             skills-lock\.json|
+            config/audit-rotation-ledger\.json|
             outputs/operations/bridge/critical-items\.jsonl|
             outputs/operations/tribe-bootcamp/.*\.html|
             outputs/operations/keynotes/.*\.html|
@@ -348,6 +357,38 @@ repos:
       - id: skill-bash-paths
         name: HEADING OS SKILL bash-path audit (no new bare data-path misroute)
         entry: .venv/bin/python scripts/audit-skill-bash-paths.py --check
+        language: system
+        pass_filenames: false
+        always_run: true
+
+  # Gate-integrity ratchet. Checks the enforcement layer itself: a local hook
+  # whose files: regex matches no tracked path is scoped to nothing and passes
+  # every commit vacuously, and a hook whose script no test file names has never
+  # been observed refusing. Two walls disarmed by an `or` short-circuit went
+  # unnoticed for exactly that reason. Eight pre-existing cases are frozen in the
+  # scanner's BASELINE, each with the reason a person wrote.
+  - repo: local
+    hooks:
+      - id: gate-integrity
+        name: HEADING OS gate-integrity ratchet (every gate has a scope and a test)
+        entry: .venv/bin/python scripts/check-gate-integrity.py --check
+        language: system
+        pass_filenames: false
+        always_run: true
+
+  # Test-vacuity ratchet. Fails when tests/ gains a test whose every assertion
+  # sits inside a loop over a corpus that can come back empty -- the shape that
+  # passes because the loop body never ran. The campaign that ended 2026-09-02
+  # found it 23 times, and one sweep found 182 loop-only assertions in a single
+  # pass, so a habit is not enough and this is the mechanical version of the
+  # floor that campaign added by hand. 126 pre-existing sites are frozen in
+  # config/test-vacuity-baseline.json; the writer is shrink-only, so a new one
+  # cannot be laundered in by re-running it. 1.9s over 1,039 files.
+  - repo: local
+    hooks:
+      - id: test-vacuity
+        name: HEADING OS test-vacuity ratchet (no new test green over an empty corpus)
+        entry: .venv/bin/python scripts/check-test-vacuity.py --check
         language: system
         pass_filenames: false
         always_run: true

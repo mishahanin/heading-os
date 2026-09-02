@@ -1,8 +1,8 @@
 # Roadmap
 
-HEADING OS is `v0.13.0`. The architecture, the security model, and the engine/data seam are stable and load-bearing. This roadmap sketches direction, not dates. Interfaces may change between minor versions while the project is pre-1.0.
+HEADING OS is `v0.14.0`. The architecture, the security model, and the engine/data seam are stable and load-bearing. This roadmap sketches direction, not dates. Interfaces may change between minor versions while the project is pre-1.0.
 
-Last reviewed against the code on 2026-08-17. Items below are marked from what the tree actually holds, not from memory of having done them.
+Numbers on this page were re-measured on 2026-09-02. The item TEXT was last reviewed against the code on 2026-08-17, and 194 commits have landed since, so read a description as older than the count beside it. Items are marked from what the tree actually holds, not from memory of having done them.
 
 ## Shipped
 
@@ -17,7 +17,7 @@ Work that stood on this roadmap and is now in the engine, with where to read it.
 
 - **Routing precision as usage surfaces edge cases.** The generated registry and the coverage gate hold the mechanical half. What remains is accuracy itself. The nightly trend needs a longer baseline measured by one judge before a number is published. An instrument swap once read as a five-point regression that had never happened.
 - **A smoother first-run path for a fresh clone.** [`docs/QUICKSTART.md`](docs/QUICKSTART.md) is one page. Three defects an outside clone hit at v0.8.0 are fixed (issues #96, #97, #98). `/setup-wizard` polish is the half still open.
-- **A worked example of adding a daemon or a scheduled task.** The parts exist: unit templates in `scripts/templates/systemd/`, nineteen installers, and two rules that make reboot survival and late-job behaviour mandatory rather than optional. What is missing is one walk-through that adds one end to end.
+- **A worked example of adding a daemon or a scheduled task.** The parts exist: unit templates in `scripts/templates/systemd/`, twenty installers, and two rules that make reboot survival and late-job behaviour mandatory rather than optional. What is missing is one walk-through that adds one end to end.
 
 ## Exploring
 

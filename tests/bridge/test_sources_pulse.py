@@ -967,25 +967,55 @@ def test_pulse_data_includes_tribe_state(tmp_path):
     assert ts["members"][0]["name"] == "Morgan H"
 
 
-def _write_today_calendar(tmp_path, lines):
-    """Write a calendar file for local-today with the given event rows.
+def _write_calendar_for(tmp_path, day, lines):
+    """Write a calendar file for the STATED day with the given event rows.
 
-    The zone comes from `get_default_tz()`, the same seam the code under test
-    reads. It was the literal `Etc/GMT-4`, which happens to equal the conftest
-    pin, so the two agreed by coincidence rather than by construction: move the
-    pin and this fixture writes a file the code looks for four hours a day.
+    The day is a parameter, so the filename written here and the date
+    `sea_state` looks up come from ONE value. They used to come from two
+    separate clock reads, one in this helper and one inside the source, and a
+    run that crossed local midnight between them wrote a file the code never
+    opened. The window is sub-millisecond and it is real: under `-n auto` these
+    start at an arbitrary wall-clock instant, and the suite runs nightly.
+
+    The zone dropped out of this helper with the clock read. It still matters
+    for `_write_calendar_for_local_today`, which is the one place that has to
+    agree with the source about what "today" means.
     """
-    from datetime import datetime, timezone
-
-    from scripts.utils.workspace import get_default_tz
-    today_local = datetime.now(timezone.utc).astimezone(get_default_tz()).strftime("%Y-%m-%d")
     cal_dir = tmp_path / "outputs" / "_sync" / "calendar"
     cal_dir.mkdir(parents=True, exist_ok=True)
-    (cal_dir / f"{today_local}.md").write_text("\n".join(lines), encoding="utf-8")
+    (cal_dir / f"{day.isoformat()}.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_today_calendar(tmp_path, lines, day=PINNED_TODAY):
+    """`_write_calendar_for` on the file's pinned day. Kept for readability."""
+    _write_calendar_for(tmp_path, day, lines)
+
+
+def _write_calendar_for_local_today(tmp_path, lines):
+    """Write the same rows for local-today AND local-tomorrow.
+
+    For the two tests that must let the source read the real clock: the one
+    covering the un-injected default, and the guard proving an injected date
+    beats the clock. Writing BOTH candidate dates means the file is there
+    whichever side of local midnight the source lands on, so neither test can
+    flip on a boundary, and the guard stays deterministic in both directions
+    rather than merely improbable.
+
+    The zone comes from `get_default_tz()`, the same seam the code under test
+    reads. It was once the literal `Etc/GMT-4`, which happens to equal the
+    conftest pin, so the two agreed by coincidence rather than by construction:
+    move the pin and the fixture wrote a file the code looked for four hours a
+    day.
+    """
+    from datetime import timedelta
+
+    today_local = datetime.now(timezone.utc).astimezone(get_default_tz()).date()
+    for day in (today_local, today_local + timedelta(days=1)):
+        _write_calendar_for(tmp_path, day, lines)
 
 
 def test_sea_state_mood_open_when_no_events(tmp_path):
-    r = sea_state(tmp_path)
+    r = sea_state(tmp_path, today=PINNED_TODAY)
     assert r["mood"] == "open"
     assert r["events_today"] == 0
     assert r["mood_label"] == "mood open"
@@ -997,7 +1027,7 @@ def test_sea_state_mood_focused_for_few_events(tmp_path):
         "| 09:00 | A | - |",
         "| 13:00 | B | - |",
     ])
-    r = sea_state(tmp_path)
+    r = sea_state(tmp_path, today=PINNED_TODAY)
     assert r["events_today"] == 2
     assert r["mood"] == "focused"
 
@@ -1007,7 +1037,7 @@ def test_sea_state_mood_split_for_busy_day(tmp_path):
     _write_today_calendar(tmp_path, [
         f"| 0{i}:00 | E{i} | - |" for i in range(5)
     ])
-    r = sea_state(tmp_path)
+    r = sea_state(tmp_path, today=PINNED_TODAY)
     assert r["events_today"] == 5
     assert r["mood"] == "split"
 
@@ -1017,9 +1047,61 @@ def test_sea_state_mood_packed_for_dense_day(tmp_path):
     _write_today_calendar(tmp_path, [
         f"| {i:02d}:00 | E{i} | - |" for i in range(8, 16)
     ])
-    r = sea_state(tmp_path)
+    r = sea_state(tmp_path, today=PINNED_TODAY)
     assert r["events_today"] >= 7
     assert r["mood"] == "packed"
+
+
+def test_sea_state_mood_uses_the_injected_date_not_a_second_clock_read(tmp_path):
+    """The pin has to reach the calendar half too. This is the whole fix.
+
+    Five rows are written for local-today, and for local-tomorrow as well so
+    the file exists whichever side of midnight this runs. The call then pins a
+    date four months earlier, which has no calendar at all.
+
+    A source that honours the pin looks up 2026-01-15, finds nothing, and says
+    open. A source that reads the clock a second time of its own finds these
+    five rows and says split. Before 2026-09-02 it said split: `sea_state`
+    took `today`, passed it to the two overdue counts, and let
+    `_today_event_count` call `datetime.now` for itself.
+    """
+    _write_calendar_for_local_today(tmp_path, [
+        f"| 0{i}:00 | E{i} | - |" for i in range(5)
+    ])
+    r = sea_state(tmp_path, today=PINNED_EARLIER)
+    assert r["events_today"] == 0
+    assert r["mood"] == "open"
+
+
+def test_sea_state_mood_counts_the_calendar_of_the_injected_date(tmp_path):
+    """The pinned path can still FIND a calendar.
+
+    Without this, the guard above is satisfied by a source that answers zero
+    events for every injected date, which would be a different bug wearing the
+    fix's clothes. Same pinned date on both sides, and the rows come back.
+    """
+    _write_calendar_for(tmp_path, PINNED_EARLIER, [
+        "| 09:00 | A | - |",
+        "| 13:00 | B | - |",
+    ])
+    r = sea_state(tmp_path, today=PINNED_EARLIER)
+    assert r["events_today"] == 2
+    assert r["mood"] == "focused"
+
+
+def test_sea_state_mood_reads_the_clock_when_no_date_is_given(tmp_path):
+    """No pin means the live clock, which is what the daemon does.
+
+    `/sea-state` in `app.py` calls this with one argument, so the un-injected
+    path is production, not a test convenience. It has to keep working.
+    """
+    _write_calendar_for_local_today(tmp_path, [
+        "| 09:00 | A | - |",
+        "| 13:00 | B | - |",
+    ])
+    r = sea_state(tmp_path)
+    assert r["events_today"] == 2
+    assert r["mood"] == "focused"
 
 
 def test_sea_state_state_and_mood_independent(tmp_path):

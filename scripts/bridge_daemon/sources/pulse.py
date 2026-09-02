@@ -919,11 +919,27 @@ def threads_state_preview(data_root: Path, today: date | None = None) -> dict | 
     }
 
 
-def _today_event_count(data_root: Path) -> int:
-    """Total calendar events on today's agenda (local TZ). Returns 0 on any read failure."""
+def _today_event_count(data_root: Path, today: date | None = None) -> int:
+    """Total calendar events on ``today``'s agenda (local TZ). 0 on any read failure.
+
+    ``today`` names the local calendar date to count, and defaults to whatever
+    the clock says. It exists because the caller's own date was already
+    injectable and this half was not, so a caller that pinned a date still got
+    a second, independent clock read here. Across local midnight the two
+    disagreed and the agenda was looked up for the wrong day.
+
+    ``today_agenda`` takes a MOMENT and derives the local date from it, so the
+    date has to be widened back into one. Local noon is the only choice that
+    cannot land on a neighbouring date: midnight can be skipped or repeated by
+    a DST jump, and no real zone shifts at midday.
+    """
     try:
         from .agenda import today_agenda
-        agenda = today_agenda(data_root)
+        now = None
+        if today is not None:
+            now = datetime(today.year, today.month, today.day, 12, 0,
+                           tzinfo=get_default_tz())
+        agenda = today_agenda(data_root, now=now)
         return len(agenda.get("events") or [])
     except Exception:
         return 0
@@ -975,9 +991,12 @@ def sea_state(data_root: Path, today: date | None = None) -> dict:
             "mood_label": str,       # e.g. "mood focused"
         }
 
-    ``today`` is the local calendar date the two overdue counts are measured
-    against; see `watch_items` for why the pass-through was added. The mood
-    half reads today's agenda and is not date-injectable here.
+    ``today`` is the local calendar date BOTH halves are measured against; see
+    `watch_items` for why the pass-through was added. It reached the two
+    overdue counts and stopped there until 2026-09-02, so the mood half read
+    the clock again on its own. A caller that pinned a date got one half
+    pinned and one half live, and across local midnight the halves answered
+    for different days.
 
     HEADING OS engine/data split: pipeline, tasks and calendar are DATA,
     the single root this takes IS the data root (it used to take a
@@ -1001,7 +1020,7 @@ def sea_state(data_root: Path, today: date | None = None) -> dict:
         state = "moderate"
     else:
         state = "calm"
-    events_today = _today_event_count(data_root)
+    events_today = _today_event_count(data_root, today=today)
     mood = _derive_mood(events_today)
     return {
         "state": state,

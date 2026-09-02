@@ -2,12 +2,25 @@
 # ============================================================
 # Platform Setup Script
 # ============================================================
-# Detects the operating system and copies the correct
-# settings.local.json template for Claude Code hooks.
+# Detects the operating system and MERGES the correct
+# settings.local.json template into the live settings for Claude Code hooks.
 #
-# Usage:  bash scripts/setup-platform.sh
+# Usage:  bash scripts/setup-platform.sh [--force] [--dry-run]
 #
-# Safe to run multiple times (idempotent).
+# Safe to run multiple times. It did not used to be, and the header here said
+# it was: the script ended in an unconditional `cp "$TEMPLATE" "$TARGET"`, and
+# `scripts/vps-sync.sh` calls it from a cron whenever the template changes.
+#
+# MEASURED 2026-09-02 by comparing the two files on the live workspace: one run
+# would have discarded 29 permission entries and three top-level keys that no
+# template can carry because every one of them is per-instance. Among them
+# `autoMemoryDirectory`, the pointer at the private data overlay, whose loss
+# does not raise and silently redirects every memory write.
+#
+# It now merges: the template proposes, the live file disposes. A local value
+# is kept, a template addition is added, permission lists are unioned, and the
+# live file is backed up before any write. `--force` restores the old
+# destructive behaviour on purpose, and says which keys it discards.
 # ============================================================
 
 set -euo pipefail
@@ -32,8 +45,17 @@ case "$OS" in
         PLATFORM="Windows"
         ;;
     Darwin*)
-        # macOS — use Linux template (same Python3 paths)
-        TEMPLATE="$SETTINGS_DIR/settings.local.linux.json"
+        # macOS has its OWN template and it was reached by nothing. The comment
+        # here used to read "use Linux template (same Python3 paths)", while
+        # .claude/settings.local.macos.json sat beside its two siblings, was
+        # maintained, was covered by tests, and was installed by no code path
+        # on any platform. Prefer it; fall back to the Linux template only if
+        # it is genuinely absent, so an older clone still sets up.
+        if [ -f "$SETTINGS_DIR/settings.local.macos.json" ]; then
+            TEMPLATE="$SETTINGS_DIR/settings.local.macos.json"
+        else
+            TEMPLATE="$SETTINGS_DIR/settings.local.linux.json"
+        fi
         PLATFORM="macOS"
         ;;
     *)
@@ -51,8 +73,36 @@ if [ ! -f "$TEMPLATE" ]; then
     exit 1
 fi
 
-# Copy template to active settings
-cp "$TEMPLATE" "$TARGET"
 echo "Platform detected: $PLATFORM"
-echo "Settings copied:   $(basename "$TEMPLATE") -> settings.local.json"
+echo "Template:          $(basename "$TEMPLATE")"
+
+# First install needs no interpreter: there is no live file to preserve, so a
+# plain copy is both correct and the only thing that works on a clone whose
+# .venv does not exist yet. This script is step 1 of setup.
+if [ ! -e "$TARGET" ]; then
+    cp "$TEMPLATE" "$TARGET"
+    echo "Settings created:  settings.local.json"
+    echo "Done."
+    exit 0
+fi
+
+# A live file exists, so this is a MERGE and it needs JSON. Prefer the pinned
+# interpreter, fall back to whatever python3 is on PATH.
+PYTHON=""
+for candidate in "$WORKSPACE_ROOT/.venv/bin/python" "$(command -v python3 || true)"; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then PYTHON="$candidate"; break; fi
+done
+
+if [ -z "$PYTHON" ]; then
+    # REFUSE rather than fall back to the copy. Without an interpreter the only
+    # available action is the destructive one, and the whole point of this
+    # change is that the destructive one must never happen by default.
+    echo "ERROR: settings.local.json already exists and no python3 was found to" >&2
+    echo "       merge the template into it. Refusing to overwrite it: that would" >&2
+    echo "       discard every per-instance key, including autoMemoryDirectory." >&2
+    echo "       Install python3, or merge by hand." >&2
+    exit 2
+fi
+
+"$PYTHON" "$SCRIPT_DIR/merge-platform-settings.py" "$TEMPLATE" "$TARGET" "$@"
 echo "Done."

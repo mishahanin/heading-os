@@ -8,8 +8,16 @@
 # machine-local live file. The live .claude/settings.local.json is machine-local
 # (absolute paths, per-machine permission allow-lists) and is NEVER tracked in
 # the engine repo (code-only, eventually public). To change shipped hook wiring,
-# edit the per-OS templates; the live file is regenerated per machine.
+# edit the per-OS templates; the live file MERGES the template on each setup run
+# (it used to be overwritten, which discarded every per-instance key).
 .claude/settings.local.json
+# Backups and the atomic-write temp file from scripts/merge-platform-settings.py.
+# They are copies of the line above and carry the same per-instance content: the
+# operator's data-overlay path, their permission grants, their plugin choices.
+# Without these two patterns each backup would be an untracked candidate sitting
+# in a public repository.
+.claude/settings.local.json.bak-*
+.claude/settings.local.json.tmp
 
 # Python
 __pycache__/

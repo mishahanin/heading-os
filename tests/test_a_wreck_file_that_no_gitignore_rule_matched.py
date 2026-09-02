@@ -443,6 +443,24 @@ DECLARED_SIDECAR_SITES = {
         "unredacted handoff goes to handoff-archive/.quarantine/, ignored whole",
     ("scripts/utils/quarantine.py", "literal", ".quarantine"):
         "the one place the directory name is spelled for every other writer",
+    ("scripts/merge-platform-settings.py", "literal", ".bak-"):
+        "the backup of .claude/settings.local.json, taken before that file is "
+        "merged. `.claude/settings.local.json.bak-*` was added to .gitignore in "
+        "the same change and is MEASURED ignored; without it the backup would "
+        "sit untracked in a public repository carrying the operator's "
+        "data-overlay path, permission grants and plugin choices. Left VISIBLE "
+        "rather than routed to .quarantine/ on purpose: it is the operator's "
+        "own settings, the thing they reach for when a merge went wrong, and "
+        "burying it in a dot-directory would make the recovery path harder to "
+        "find than the mistake",
+    ("scripts/merge-platform-settings.py", "derived",
+     "f'{args.target.name}.bak-{stamp}'"):
+        "the same backup, with a local timestamp so a second merge cannot "
+        "overwrite the first one's copy. The dated form is what the .gitignore "
+        "glob `.bak-*` matches, and `tests/"
+        "test_a_setup_script_that_called_destruction_idempotent.py` asserts "
+        "that git really ignores a name of this shape rather than trusting the "
+        "pattern to be right",
     ("scripts/fireside-bot.py", "literal", ".bak.json"):
         "schedule.pre-<date>.bak.json lands in "
         "datastore/operations/tribe/fireside-state/, which the data overlay "

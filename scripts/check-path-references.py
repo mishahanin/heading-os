@@ -8,12 +8,34 @@ sweep found eight such sites that had accumulated over months, including a
 `/odin` source-ingest command that could not run and a `docs/SECURITY-MODEL.md`
 paragraph describing two hook files deleted in ba1affd.
 
-Scope, precisely (`.claude/rules/scope-claims.md`): this checks paths that the
-routing map classifies as **engine**, named in **git-tracked Markdown**, against
-the **engine working tree**. It says nothing about the private data overlay -- a
-path routing `private` or `corporate` is skipped, because the overlay is absent
-on a public clone and its absence is not evidence. It also says nothing about
-paths named in Python, YAML or JSON; those have their own callers and tests.
+Scope, precisely (`.claude/rules/scope-claims.md`): this checks paths named in
+**git-tracked Markdown** against the **engine working tree**, excluding only
+those a routing rule EXPLICITLY sends to the private overlay or to corporate,
+because the overlay is absent on a public clone and its absence is not evidence.
+It says nothing about paths named in Python, YAML or JSON; those have their own
+callers and tests.
+
+The word EXPLICITLY carries the whole scope, and it used to read "paths the
+routing map classifies as engine" instead. That phrasing was the code, and the
+code consulted `config/routing-map.yaml`'s top-level `default:`. Nearly every
+prefix this scanner recognises (`scripts/`, `docs/`, `tests/`, `config/`,
+`.claude/`, `.github/`, `examples/`) matches no rule key and therefore resolved
+through that default. MEASURED 2026-09-02 on a scratch workspace holding one
+Markdown file naming two nonexistent paths: with `default: engine` the scanner
+found 2 and `--check` exited 1; with the single word changed to `private` it
+found 0, printed `OK -- no new dangling path references.` and exited 0. One word
+in an unrelated config file switched the gate off and the gate said nothing,
+which is worse than having no gate, because a green is read as evidence.
+
+So the scope no longer reads the default at all. A path with no rule about it is
+CHECKED rather than skipped, which is the over-reporting direction
+`.claude/rules/scope-claims.md` requires when evidence is absent. The verdict on
+a healthy tree is unchanged: this repository's map carries no `engine` rule and
+its default is `engine`, so every path either matched a `private`/`corporate`
+rule before and still does, or fell through to `engine` before and is unmatched
+now. `main()` additionally refuses rather than passing when the corpus collapses
+to zero files or zero in-scope references, and when the map itself is missing or
+unparseable.
 
 Extraction is a regex over prose, so it is heuristic in BOTH directions: it can
 MISS a path (an unusual spelling), and it can capture a fragment that was never
@@ -44,14 +66,18 @@ Usage:
 Tests: tests/test_a_heading_match_that_was_never_anchored.py
 """
 import argparse
+import functools
 import json
 import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.utils.workspace import get_workspace_root, get_routing_destination  # noqa: E402
+from scripts.utils.workspace import (  # noqa: E402
+    get_workspace_root, get_routing_destination, matched_routing_rule,
+)
 from scripts.utils.paths import get_data_root, data_root_is_demo  # noqa: E402
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET  # noqa: E402
 from scripts.utils.repo_files import ignored_paths_or_none  # noqa: E402
@@ -108,6 +134,90 @@ BASELINE = {
 }
 
 
+ROUTING_MAP_REL = "config/routing-map.yaml"
+
+
+class ScopeCollapsed(RuntimeError):
+    """The scanner could not establish a corpus, so it must not report a pass.
+
+    Raised instead of returning an empty result. Every caller of `scan_scoped`
+    either handles this or dies on it; neither outcome can be mistaken for a
+    clean tree, which is the whole point. The message names what collapsed and
+    which file to look at.
+    """
+
+
+def require_routing_map(root: Path) -> dict:
+    """The routing map's rules, or `ScopeCollapsed` naming the file.
+
+    `load_routing_map()` cannot be asked this question. It fails CLOSED and
+    SILENTLY: an absent, unreadable or unparseable map returns
+    `{"default": "private", "rules": {}}`, indistinguishable from a real map
+    with no rules. That is the right answer for the leak wall, which must treat
+    an unknown path as data. It is the wrong answer here, because this scanner
+    would then read "no rule excludes anything", check every path in the tree,
+    and report every overlay path as rot. Refusing is the honest third option.
+
+    Reading the file a second time rather than teaching `load_routing_map()` to
+    raise is deliberate: 23 callers depend on that loader failing closed without
+    an exception, and several of them are the push-time leak gate.
+
+    The root is the one `get_workspace_root()` returns, because that is the map
+    `matched_routing_rule()` and `get_routing_destination()` consult. Passing a
+    different tree to `scan_scoped()` does not move the map they read, so this
+    check must not pretend otherwise.
+    """
+    import yaml
+
+    from scripts.utils import yamlio
+
+    path = root / ROUTING_MAP_REL
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = yamlio.safe_load(fh)
+    except OSError as exc:
+        raise ScopeCollapsed(
+            f"the routing map {path} could not be read ({exc}); this scanner "
+            f"decides what to inspect from that file's rules and will not "
+            f"report a pass without it") from exc
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise ScopeCollapsed(
+            f"the routing map {path} did not parse ({type(exc).__name__}); "
+            f"this scanner decides what to inspect from that file's rules and "
+            f"will not report a pass without it") from exc
+    rules = data.get("rules") if isinstance(data, dict) else None
+    if not isinstance(rules, dict) or not rules:
+        raise ScopeCollapsed(
+            f"the routing map {path} carries no `rules:` mapping, so nothing "
+            f"marks a path as overlay-owned and this scanner cannot state the "
+            f"scope it claims")
+    return rules
+
+
+@functools.lru_cache(maxsize=None)
+def in_engine_scope(path: str) -> bool:
+    """True when this scanner may judge `path`'s absence as documentation rot.
+
+    Only an EXPLICIT rule excludes a path. A path no rule mentions is judged,
+    not skipped: absence of a rule is absence of evidence, and
+    `.claude/rules/scope-claims.md` says to fail toward over-reporting there.
+
+    The predecessor asked `get_routing_destination(path) != "engine"`, which
+    routes an unmatched path through the map's top-level `default:`. Flipping
+    that one word to `private` therefore excluded every path in the tree and the
+    scanner printed OK over an empty scope. See the module docstring for the
+    measurement.
+
+    Cached because the live map holds ~90 rule keys and each call walks all of
+    them twice, once per helper, over the ~10^4 references the corpus extracts.
+    The map cannot change under a single run of this script, so a per-path cache
+    is sound here; it would not be inside a long-running daemon.
+    """
+    if matched_routing_rule(path) is None:
+        return True
+    return get_routing_destination(path) == "engine"
+
+
 def gitignored(root: Path, paths: list[str]) -> set[str]:
     """Of `paths`, those `.gitignore` covers -- absent from a clone by design.
 
@@ -159,25 +269,62 @@ def tracked_markdown(root: Path) -> list[str]:
     return [f for f in names if f not in _SKIP_FILES]
 
 
-def scan(root: Path) -> dict[str, list[tuple[str, int]]]:
-    """Return {dangling engine-routed path: [(file, lineno), ...]}."""
+class ScanResult(NamedTuple):
+    """A scan, plus the size of the corpus that produced it.
+
+    The counts are not diagnostics. `dangling` is empty both when the prose is
+    clean and when the scanner inspected nothing, and those two states have to
+    be told apart before anything prints OK. `files_read` and `in_scope` are
+    what tells them apart, so they travel with the result rather than being
+    recomputed by a caller that might forget to ask.
+    """
+
+    dangling: dict[str, list[tuple[str, int]]]
+    files_read: int
+    references_seen: int
+    in_scope: int
+
+
+def scan_scoped(root: Path) -> ScanResult:
+    """Scan `root`'s tracked Markdown, carrying the corpus size out with the hits.
+
+    The routing filter runs BEFORE the existence check, which is the reverse of
+    the original order. It has to: `in_scope` must count every reference this
+    scanner was willing to judge, not only the ones that turned out to be
+    missing, or a clean tree would look exactly like a disabled one.
+    """
     hits: dict[str, list[tuple[str, int]]] = {}
+    files_read = references_seen = in_scope = 0
     for rel in tracked_markdown(root):
         try:
             text = (root / rel).read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
             print(f"{YELLOW}skipped {rel}: {exc}{RESET}", file=sys.stderr)
             continue
+        files_read += 1
         for lineno, line in enumerate(text.splitlines(), 1):
             for path in _PATH.findall(line):
+                references_seen += 1
+                if not in_engine_scope(path):
+                    continue  # lives in an overlay this tool cannot see
+                in_scope += 1
                 if (root / path).exists():
                     continue
-                if get_routing_destination(path) != "engine":
-                    continue  # lives in an overlay this tool cannot see
                 hits.setdefault(path, []).append((rel, lineno))
     for path in gitignored(root, sorted(hits)):
         hits.pop(path, None)
-    return hits
+    return ScanResult(hits, files_read, references_seen, in_scope)
+
+
+def scan(root: Path) -> dict[str, list[tuple[str, int]]]:
+    """Return {dangling in-scope path: [(file, lineno), ...]}.
+
+    The dangling half of `scan_scoped()`, kept because callers that only want
+    the findings should not have to unpack a result they ignore. Anything that
+    decides whether to PRINT A PASS must call `scan_scoped()` instead, so the
+    corpus counts are in front of it.
+    """
+    return scan_scoped(root).dangling
 
 
 # ============================================================
@@ -276,6 +423,21 @@ def coverage(root: Path, data_root: Path | None) -> dict:
     }
 
 
+def refuse(reason: str, *, as_json: bool) -> int:
+    """Print a refusal in the caller's chosen format and return exit code 2.
+
+    `--json` gets an object carrying `error`, not a bare stderr line: a machine
+    consumer that only parses stdout would otherwise read the absence of
+    findings as an absence of problems, which is the same fail-open this whole
+    change is about. The human path writes to stderr so it survives a pipe.
+    """
+    if as_json:
+        print(json.dumps({"error": reason, "dangling": None, "new": None}, indent=2))
+    else:
+        print(f"{RED}{BOLD}REFUSED{RESET} -- {reason}", file=sys.stderr)
+    return 2
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--check", action="store_true", help="exit 1 on a dangling path not in BASELINE")
@@ -317,20 +479,52 @@ def main() -> int:
         for f in cov["undocumented"]:
             print(f"  {GRAY}{f}{RESET}")
         return 0
-    found = scan(root)
+    # Every refusal below exits 2, never 0 and never 1. 0 is "the prose is
+    # clean" and 1 is "the prose names something missing"; a scanner that
+    # inspected nothing has established neither, and borrowing either code
+    # hands a machine consumer a verdict no measurement backs.
+    try:
+        require_routing_map(root)
+    except ScopeCollapsed as exc:
+        return refuse(str(exc), as_json=args.json)
+
+    result = scan_scoped(root)
+    if result.files_read == 0:
+        return refuse(
+            f"no tracked Markdown was read under {root}, so nothing was "
+            f"checked. A pass over an empty corpus is not a pass.",
+            as_json=args.json)
+    if result.in_scope == 0:
+        return refuse(
+            f"{result.files_read} file(s) were read and "
+            f"{result.references_seen} path reference(s) extracted, but every "
+            f"one was excluded as overlay-owned, so nothing was checked. Look "
+            f"at {root / ROUTING_MAP_REL}: a rule that covers the whole tree "
+            f"silences this scanner.",
+            as_json=args.json)
+
+    found = result.dangling
     new = {p: sites for p, sites in found.items() if p not in BASELINE}
 
     if args.json:
         print(json.dumps(
             {"dangling": dict(sorted(found.items())),
              "new": sorted(new),
+             # The corpus this verdict rests on, published rather than left to
+             # be inferred. A machine consumer reading `"new": []` cannot
+             # otherwise tell a clean tree from a scan that inspected nothing,
+             # and that is exactly the confusion this scanner shipped with.
+             "files_read": result.files_read,
+             "references_seen": result.references_seen,
+             "in_scope": result.in_scope,
              "baseline": BASELINE},
             indent=2,
         ))
     else:
         print(f"{BOLD}{CYAN}Engine prose path references (advisory){RESET}")
-        print(f"{GRAY}Engine-routed paths in tracked Markdown, checked against the engine tree.")
-        print(f"Overlay-routed paths are not checked -- the overlay may be absent.{RESET}\n")
+        print(f"{GRAY}{result.in_scope} of {result.references_seen} path reference(s) in "
+              f"{result.files_read} tracked Markdown file(s), checked against the engine tree.")
+        print(f"The rest are excluded by an explicit routing rule -- the overlay may be absent.{RESET}\n")
         for path, sites in sorted(found.items()):
             reason = BASELINE.get(path)
             tag = f"{GREEN}baseline: {reason}{RESET}" if reason else f"{RED}NEW{RESET}"

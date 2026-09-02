@@ -38,7 +38,7 @@ Hooks, scanners, and the push wall block whether or not you have read about them
 - **Never pass `git commit --no-verify` (or `-n`).** It skips every commit gate.
 - **Never set `core.hooksPath`.** A literal path value once silently bypassed every hook.
 
-Run `pre-commit install` once per fresh clone or relocation, or the commit gates are not armed (`python scripts/install-hooks.py --check` verifies).
+Run `pre-commit install` once per fresh clone or relocation, or the commit gates are not armed. `python scripts/install-hooks.py --check` verifies it: it reads the hook file git would actually run, and exits non-zero unless that file exists, carries the marker the pre-commit framework stamps into what it generates, and is executable. It follows `core.hooksPath` rather than assuming `.git/hooks`, so a redirect that leads to no hook is reported rather than passed. It does NOT run the hook, so it cannot tell you whether the hook still matches `.pre-commit-config.yaml` or whether its checks pass. Until 2026-09-02 it checked only that `.pre-commit-config.yaml` existed, which is true in every clone, so it exited 0 on a clone with no commit gate at all.
 
 If a commit hook blocks your commit:
 1. Remove the secret from the file

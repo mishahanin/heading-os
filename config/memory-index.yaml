@@ -119,7 +119,15 @@ layers:
   - layer: knowledge
     glob: "knowledge/**/*.md"   # general /zk notes; odin-brain already claimed by `odin` above (first-claim)
   - layer: datastore-extract
-    glob: "datastore/**/*-extract.md"  # markdown companions of binary source-of-truth docs
+    # Every markdown file in the datastore, not only the `-extract.md`
+    # companions. MEASURED 2026-09-02: the old `datastore/**/*-extract.md` glob
+    # left 33 hand-written markdown files reachable by NO layer at all, 13 of
+    # them under intelligence/ and 7 under projects/, so `/recall` could not see
+    # notes the operator had written by hand inside the source-of-truth tree.
+    # The linkedin layer claims its own subtree first, and the `personal`
+    # segment is a hard-coded air-gap deny in scripts/utils/air_gap.py, so
+    # neither is pulled in by widening this.
+    glob: "datastore/**/*.md"  # binary companions AND hand-written notes
   - layer: memory
     glob: "auto-memory/*.md"  # canonical data auto-memory (kept in sync with the native harness store by .claude/hooks/memory-reconcile.py)
   # --- chronicle collection (dated history of past sessions, queried separately) ---

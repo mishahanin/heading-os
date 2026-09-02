@@ -839,6 +839,19 @@ _PROBE_PLAN = {
     "archive-transcripts.py": (["--dry-run"], False),
     "chronicle.py": (["build", "--sessions-dir", "{SESSIONS}", "--dry-run"], True),
     "council-models-notify.py": ([], False),
+    # It DOES read the zone, for the generation stamp, and `load_env` sits above
+    # that read. But the process probe cannot reach it: the scratch data root
+    # this fixture builds holds only `auto-memory/`, and the script refuses with
+    # exit 1 on a missing `datastore/` before it formats anything. That refusal
+    # is deliberate ("a map of an empty corpus is not a map"), so driving the
+    # probe to a read would mean weakening a guard to test a timezone, which is
+    # the wrong trade and the same one `ollama-guard.py` and
+    # `odin-cadence-notify.py` decline two entries below. `--stdout` because a
+    # probe must not write into the operator's overlay either way. The static
+    # walk in `test_every_timer_entrypoint_that_reads_local_time_loads_the_env`
+    # is what covers this one, and it is not a formality here: that test is what
+    # caught the missing `load_env` on 2026-09-02, the day the script landed.
+    "datastore-map.py": (["--stdout"], False),
     "dream-shadow.py": (["--no-report", "--quiet"], True),
     "memory-auto-retire.py": (["--dry-run"], True),
     "memory-hygiene.py": ([], True),

@@ -1,0 +1,18 @@
+[Unit]
+Description=Daily HEADING OS datastore map refresh (03:20, configured timezone)
+
+[Timer]
+# 03:20 in the configured timezone, chosen to sit in the gap between
+# dream-shadow at 03:10 and memory-index-refresh at 03:30. The ordering
+# matters: the map is regenerated BEFORE the memory index rebuilds, so a
+# freshly written map is indexed the same night rather than the next one.
+#
+# The installer substitutes {{TZ}} from HEADING_OS_TZ (default UTC); the
+# trailing timezone pins the fire even when the host's local timezone differs
+# (systemd >= 252). Persistent=true catches a fire missed because the host was
+# off, running it on next boot.
+OnCalendar=*-*-* 03:20:00 {{TZ}}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

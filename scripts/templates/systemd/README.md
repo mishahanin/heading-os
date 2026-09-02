@@ -33,6 +33,7 @@ installers, so copy a sibling rather than hand-rolling a new one.
 | Archive transcripts | `archive-transcripts.{service,timer}` | daily 02:50 | `install-archive-transcripts-timer.sh` |
 | Chronicle build | `chronicle.{service,timer}` | daily 03:00 | `install-chronicle-timer.sh` |
 | Council model freshness | `council-models-check.{service,timer}` | daily 08:30 | `install-council-models-timer.sh` |
+| DataStore map refresh | `datastore-map.{service,timer}` | daily 03:20 | `install-datastore-map-timer.sh` |
 | Dream shadow | `dream-shadow.{service,timer}` | daily 03:10 | `install-dream-shadow-timer.sh` |
 | Memory auto-retire | `memory-auto-retire.{service,timer}` | daily 07:20 | `install-memory-auto-retire-timer.sh` |
 | Memory hygiene | `memory-hygiene.{service,timer}` | Mon 07:34 | `install-memory-hygiene-timer.sh` |

@@ -1,0 +1,24 @@
+[Unit]
+Description=HEADING OS datastore map refresh (regenerates the private inventory)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{WORKSPACE}}
+ExecStart={{PYTHON}} {{WORKSPACE}}/scripts/datastore-map.py
+# TZ pins the generation stamp to the configured timezone regardless of the
+# host. The installer substitutes {{TZ}} from HEADING_OS_TZ (default UTC).
+#
+# The generator writes reference/datastore-map.md into the PRIVATE data
+# overlay, never into this repository, and refuses outright if the resolved
+# target lands inside the engine checkout. It also skips when
+# HEADING_OS_DATA_READONLY is set, so installing this unit on a pull-only
+# mirror cannot wedge that mirror's next `git pull --ff-only`.
+#
+# Exit 1 means the datastore is missing or empty, which is what a wrong data
+# root looks like from the outside. No SuccessExitStatus override: that state
+# should surface as `failed`, not be swallowed.
+Environment=TZ={{TZ}}
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal

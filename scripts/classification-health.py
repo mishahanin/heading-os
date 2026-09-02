@@ -23,6 +23,8 @@ import json
 import sys
 from pathlib import Path
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import (
     get_workspace_root, get_classification, get_outputs_dir, load_routing_map,
@@ -287,7 +289,78 @@ def print_outputs_drift(findings: list[dict], threshold: int = 5) -> None:
     print(f"{CYAN}Leave in place if inheritance is intended.{RESET}")
 
 
-def main():
+# Kept in step with the `legal` set in scripts/utils/workspace.py. A destination
+# outside it means the map is answering with something no consumer handles.
+LEGAL_DESTINATIONS = {"engine", "private", "corporate"}
+
+
+def routing_map_problems() -> list[str]:
+    """Problems with `config/routing-map.yaml`, as operator-readable lines.
+
+    `load_routing_map()` FAILS CLOSED, which is right for a resolver and
+    invisible here: a missing file, an unreadable stat, or unparseable YAML all
+    return `{"default": "private", "rules": {}}` and say nothing. This report
+    then classifies every file against an empty map and prints a full-looking
+    summary with no hint that the map never loaded.
+
+    A health check for classification is the one place that state has to be
+    named. Anything this returns is a failure, not a warning: the resolver every
+    other gate in the workspace calls is not answering from the map on disk.
+    """
+    problems: list[str] = []
+    path = get_workspace_root() / "config" / "routing-map.yaml"
+    if not path.is_file():
+        problems.append(f"routing map is not a file: {path}")
+        return problems
+
+    m = load_routing_map()
+    if not m.get("rules"):
+        problems.append(
+            "routing map carries no rules, so every path takes the default; "
+            "this is what a failed load looks like from the outside"
+        )
+        return problems
+
+    # The map IN EFFECT never carries an illegal destination, because the
+    # loader coerces one to 'private' and moves on. That coercion is correct
+    # (a typo must not let a CEO subtree fall through to the public default)
+    # and it is announced only on stderr, which nothing reads. So the check
+    # that matters is not "is the effective map legal" -- it always is -- but
+    # "does the map ON DISK say something the loader had to silently rewrite".
+    # A one-character typo in one value reclassifies a whole subtree, and this
+    # report is where an operator would look for it.
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        problems.append(f"routing map does not parse: {exc}")
+        return problems
+    if not isinstance(raw, dict):
+        problems.append(
+            f"routing map is a {type(raw).__name__}, not a mapping"
+        )
+        return problems
+
+    raw_default = raw.get("default", "private")
+    if raw_default not in LEGAL_DESTINATIONS:
+        problems.append(
+            f"routing map on disk says default: {raw_default!r}, which is not "
+            f"one of {sorted(LEGAL_DESTINATIONS)}; the loader silently used "
+            f"{m['default']!r} instead"
+        )
+    raw_rules = raw.get("rules") or {}
+    if isinstance(raw_rules, dict):
+        for key, value in sorted(raw_rules.items()):
+            if value not in LEGAL_DESTINATIONS:
+                problems.append(
+                    f"routing map on disk gives {key!r} the destination "
+                    f"{value!r}, which is not one of "
+                    f"{sorted(LEGAL_DESTINATIONS)}; the loader silently used "
+                    f"'private' instead"
+                )
+    return problems
+
+
+def main() -> int:
     parser = argparse.ArgumentParser(description="Classification health check")
     parser.add_argument("--json", action="store_true", help="JSON output")
     parser.add_argument("--corporate-only", action="store_true", help="List corporate files only")
@@ -302,12 +375,31 @@ def main():
 
     root = get_workspace_root()
 
+    # Every branch below resolves paths through the routing map, so an
+    # unloadable map makes every verdict meaningless. Checked first, on stderr
+    # so `--json` stays parseable, and it is a REFUSAL rather than a warning.
+    problems = routing_map_problems()
+    if problems:
+        for line in problems:
+            print(f"{RED}[FAIL]{RESET} {line}", file=sys.stderr)
+        return 1
+
     if args.outputs_drift:
         findings = detect_outputs_drift(threshold=args.drift_threshold)
         print_outputs_drift(findings, threshold=args.drift_threshold)
-        return
+        return 1 if findings else 0
 
     results = classify_files(root)
+
+    # A pass over an empty corpus is not a pass. This walk asks git what to
+    # skip, and `not_ignored` raises when git cannot answer -- but a workspace
+    # root pointed at the wrong directory returns zero files with no error, and
+    # every count below would then print a clean-looking zero.
+    if not results["total"]:
+        print(f"{RED}[FAIL]{RESET} the walk returned 0 files, so nothing was "
+              f"classified; a pass over an empty corpus is not a pass",
+              file=sys.stderr)
+        return 1
 
     if args.json:
         print_json(results)
@@ -317,7 +409,11 @@ def main():
         print_corporate(results)
     else:
         print_report(results)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    # `main()` used to end without a return and the call here discarded it, so
+    # the CI step named "Classification health" could not fail on any input. A
+    # deliberately corrupted routing map produced a full report and exit 0.
+    sys.exit(main())

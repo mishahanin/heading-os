@@ -122,6 +122,14 @@ rules:
   "config/modem.json": private                 # CEO travel-router device identity (TAC + factory IMEI); data-config (engine ships scripts/modem.example.json)
   "config/service-host.json": private          # managed service-host VM topology (vm repo path, fireside unit name, state-dir layout); data-config (engine ships scripts/service-host.example.json). The VM host ADDRESS is a secret and stays in .env (SERVICE_VM_HOST).
   "config/content-denylist.yaml": private    # curated real-entity denylist for the content gate (PII); data-config (engine ships scripts/content-denylist.example.yaml)
+  # The logical-key -> real-filename map for the brand assets under datastore/.
+  # Operator directive 2026-09-02: everything in datastore/ is private INCLUDING
+  # its filenames, and the engine repo is public, so the names the renderers load
+  # by moved out of the engine and into this file. Deliberately the one data-config
+  # with NO scripts/*.example.json twin: a stand-in filename resolves to nothing,
+  # and the renderers then emit a complete, plausible, entirely unbranded
+  # document. scripts/utils/brand_assets.py refuses instead, and says which key.
+  "config/brand-assets.json": private
   # --- decontaminated CODE -> engine (HEADING OS, 2026-06-14, NO EXCEPTIONS) ---
   # The one-off generators (bootcamp-roster, md-to-docx-*,
   # gen-exec-meeting-docx, crm_migrate), the Tribe fireside subsystem code +
@@ -170,6 +178,7 @@ rules:
   "datastore/operations/partnerships/deals/": private     # per-partner deal documents (LOIs, term sheets) — CEO-only; partner names live only in the private DATA overlay, not in this public engine map
   "datastore/brand/design-system/": private   # embeds CEO-only investor-deck renders + figures — CEO-only
   "reference/workspace-overview.md": private  # decision: live catalogue of this CEO instance's internals
+  "reference/datastore-map.md": private       # generated inventory of the datastore: real directory names, counts, routing. Written by scripts/datastore-map.py (engine code, private output). The public rule .claude/rules/datastore.md carries the POLICY and points here; it used to carry a hand-written copy of this map, which drifted until it omitted three top-level trees, and which would have published real counterparty names the first time anything regenerated it in place.
   # 2026-06-13 CEO audit: CEO strategic + personal reference content. Real partners
   # (PartnerCo, AllianceCo, DistributorCo), market-entry strategy, traction/financials,
   # geopolitical analysis, and personal/exec voice IP. Engine ships generic templates at cutover.

@@ -370,3 +370,104 @@ def test_the_module_has_no_bare_or_blanket_handler():
     assert "<bare except>" not in caught
     assert "Exception" not in caught
     assert "BaseException" not in caught
+
+
+# ============================================================
+# A grabber that is killed mid-write leaves no truncated PNG
+#
+# Shard `scripts-04-p1` F6. Both grabbers open `clip.png` for writing BEFORE
+# the tool runs, and the tool is killed at `timeout=5`. `TimeoutExpired` is a
+# `SubprocessError`, caught, returning False - so a slow grabber on a large
+# clipboard image left a nonzero, TRUNCATED PNG at the well-known path while
+# the operator was told "No image on clipboard." and given exit 1. `main` swept
+# only zero-byte leftovers, which is the one shape of the mess that could not
+# be mistaken for a capture.
+# ============================================================
+
+
+def _grabber_killed_mid_write(monkeypatch, tool: str, partial: bytes = b"\x89PNG\r\n\x1a\ntrunc"):
+    """`tool` writes part of a PNG and is then killed by the timeout.
+
+    The real sequence, in order: the parent opens the path (truncating it), the
+    child emits some bytes, `subprocess.run` raises `TimeoutExpired`. Nothing
+    here is a stand-in for the timeout; it is the exception the timeout raises.
+    """
+    monkeypatch.setattr(
+        clip.shutil, "which", lambda name: f"/usr/bin/{name}" if name == tool else None
+    )
+
+    def fake_run(args, **kwargs):
+        assert args[0] == tool, f"expected the {tool} fallback, got {args!r}"
+        kwargs["stdout"].write(partial)
+        kwargs["stdout"].flush()
+        raise subprocess.TimeoutExpired(args, 5)
+
+    monkeypatch.setattr(clip.subprocess, "run", fake_run)
+
+
+@pytest.mark.parametrize("tool", ["wl-paste", "xclip"])
+def test_a_grabber_killed_mid_write_leaves_no_truncated_png(
+    out_dir, monkeypatch, capsys, tool
+):
+    """Exit 1 and NO file, rather than exit 1 beside a corrupt one."""
+    _raises_no_grabber(monkeypatch)
+    _grabber_killed_mid_write(monkeypatch, tool)
+
+    rc = clip.main()
+    out = out_dir / "clipboard" / "clip.png"
+
+    assert rc != 0
+    assert not out.exists(), (
+        f"a killed {tool} left {out.stat().st_size} bytes of truncated PNG at "
+        f"the path callers read by convention"
+    )
+    assert capsys.readouterr().out.strip() == ""
+
+
+@pytest.mark.parametrize("tool", ["wl-paste", "xclip"])
+def test_a_grabber_that_exits_nonzero_leaves_no_partial_png(
+    out_dir, monkeypatch, capsys, tool
+):
+    """The second route to the same litter: bytes written, then a refusal.
+
+    `_only_wlpaste(payload=b"partial", returncode=1)` was already covered for
+    its RETURN VALUE, and the file it left behind was asserted by nothing.
+    """
+    _raises_no_grabber(monkeypatch)
+    helper = _only_wlpaste if tool == "wl-paste" else _only_xclip
+    helper(monkeypatch, payload=b"partial", returncode=1)
+
+    rc = clip.main()
+
+    assert rc != 0
+    assert not (out_dir / "clipboard" / "clip.png").exists()
+    assert capsys.readouterr().out.strip() == ""
+
+
+def test_a_failed_first_grabber_does_not_delete_the_second_ones_capture(
+    out_dir, monkeypatch, capsys
+):
+    """Cleanup that reaches past its own run would be a worse bug than the litter.
+
+    wl-paste is killed mid-write, xclip then succeeds. The surviving file must
+    be xclip's, whole.
+    """
+    _raises_no_grabber(monkeypatch)
+    monkeypatch.setattr(clip.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def fake_run(args, **kwargs):
+        if args[0] == "wl-paste":
+            kwargs["stdout"].write(b"\x89PNG\r\n\x1a\ntrunc")
+            kwargs["stdout"].flush()
+            raise subprocess.TimeoutExpired(args, 5)
+        kwargs["stdout"].write(PNG_BYTES)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(clip.subprocess, "run", fake_run)
+
+    rc = clip.main()
+    out = out_dir / "clipboard" / "clip.png"
+
+    assert rc == 0
+    assert out.read_bytes() == PNG_BYTES
+    assert capsys.readouterr().out.strip() == str(out)

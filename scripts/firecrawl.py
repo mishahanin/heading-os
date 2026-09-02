@@ -659,17 +659,23 @@ def cmd_crawl(args):
     result = _do_crawl()
 
     # CrawlJob has .data (list of Documents) and .credits_used
-    docs = []
     credits = 0
-    shape_ok = hasattr(result, "data")
-    if shape_ok:
-        docs = [document_to_dict(d) for d in result.data]
-    else:
+    if not hasattr(result, "data"):
         # An unrecognised return shape used to leave `docs` empty with no
         # message, and the empty result was then CACHED for 48 hours -- so one
         # SDK change made the command answer "0 pages" for two days.
+        #
+        # Not caching it was half the fix. The command still printed
+        # "Crawled 0 pages", wrote a zero-page document, and RETURNED 0, which
+        # is byte-for-byte what a site with nothing on it looks like to a
+        # caller. `cmd_batch` already exits 1 for its own version of this, and
+        # this is the same class: nothing was measured, so nothing may be
+        # rendered as a result.
         print(f"[error] crawl returned an unexpected shape ({type(result).__name__} "
-              f"with no .data); not caching this result", file=sys.stderr)
+              f"with no .data); nothing was crawled, so no result is written "
+              f"and nothing is cached", file=sys.stderr)
+        sys.exit(1)
+    docs = [document_to_dict(d) for d in result.data]
     if hasattr(result, "credits_used"):
         credits = result.credits_used
 
@@ -682,7 +688,10 @@ def cmd_crawl(args):
 
     print(f"[{credits} credits] Crawled {len(docs)} pages from {url}", file=sys.stderr)
 
-    if not args.no_cache and shape_ok:
+    # No `and shape_ok`: the shape failure exited above, so a second guard here
+    # would be unreachable, and two guards that make each other dead code is how
+    # a mutation survives with nobody able to say which one was load-bearing.
+    if not args.no_cache:
         write_cache(cache_key, crawl_data, "crawl", url, credits, ttl)
 
     return write_output(render_crawl(crawl_data, args.format), args.output)
@@ -725,27 +734,31 @@ def cmd_map(args):
     # empty payload used to be cached for 168 hours under "[1 credit] Mapped 0
     # URLs". One release note would have made this command answer "0 URLs" for a
     # week while charging for it.
-    shape_ok = hasattr(result, "links")
-    if not shape_ok:
+    if not hasattr(result, "links"):
+        # Exits, for the reason spelled out in `cmd_crawl`. Rendering
+        # "[1 credit] Mapped 0 URLs" and a "Found 0 URLs" site map at exit 0 is
+        # indistinguishable from a site that genuinely has no links.
         print(f"[error] map returned an unexpected shape ({type(result).__name__} "
-              f"with no .links); not caching this result", file=sys.stderr)
-    if shape_ok:
-        for link in result.links:
-            if hasattr(link, "url"):
-                links.append({"url": link.url, "title": getattr(link, "title", None), "description": getattr(link, "description", None)})
-            elif isinstance(link, str):
-                links.append({"url": link})
-            elif isinstance(link, dict):
-                links.append(link)
-            else:
-                print(f"[warn] map: skipping a link of unexpected type "
-                      f"{type(link).__name__}; links_found undercounts",
-                      file=sys.stderr)
+              f"with no .links); nothing was mapped, so no result is written "
+              f"and nothing is cached", file=sys.stderr)
+        sys.exit(1)
+    for link in result.links:
+        if hasattr(link, "url"):
+            links.append({"url": link.url, "title": getattr(link, "title", None), "description": getattr(link, "description", None)})
+        elif isinstance(link, str):
+            links.append({"url": link})
+        elif isinstance(link, dict):
+            links.append(link)
+        else:
+            print(f"[warn] map: skipping a link of unexpected type "
+                  f"{type(link).__name__}; links_found undercounts",
+                  file=sys.stderr)
 
     map_data = {"url": url, "links_found": len(links), "links": links}
     print(f"[1 credit] Mapped {len(links)} URLs from {url}", file=sys.stderr)
 
-    if not args.no_cache and shape_ok:
+    # No second shape guard: see the note in `cmd_crawl`.
+    if not args.no_cache:
         write_cache(cache_key, map_data, "map", url, 1, ttl)
 
     return write_output(render_map(map_data, args.format), args.output)
@@ -779,11 +792,17 @@ def cmd_search(args):
     # zero-result search and still caches; a MISSING `.web` is the SDK having
     # moved, and that answer was being cached for six hours as though the web
     # held nothing on the query.
-    shape_ok = hasattr(result, "web")
-    if not shape_ok:
+    if not hasattr(result, "web"):
+        # Exits, for the reason spelled out in `cmd_crawl`. An empty `.web` is a
+        # legitimate zero-result search and still renders and caches below; a
+        # MISSING `.web` is the SDK having moved, and rendering
+        # `results_count: 0` for it at exit 0 tells the caller the web holds
+        # nothing on the query.
         print(f"[error] search returned an unexpected shape ({type(result).__name__} "
-              f"with no .web); not caching this result", file=sys.stderr)
-    elif result.web:
+              f"with no .web); nothing was searched, so no result is written "
+              f"and nothing is cached", file=sys.stderr)
+        sys.exit(1)
+    if result.web:
         for item in result.web:
             results_list.append(document_to_dict(item))
 
@@ -822,7 +841,8 @@ def cmd_search(args):
 
     print(f"[{credits} credits] Search returned {len(results_list)} results", file=sys.stderr)
 
-    if not args.no_cache and shape_ok:
+    # No second shape guard: see the note in `cmd_crawl`.
+    if not args.no_cache:
         write_cache(cache_key, search_data, "search", query, credits, ttl)
 
     return write_output(render_search(search_data, args.format), args.output)

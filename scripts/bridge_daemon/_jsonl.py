@@ -71,6 +71,7 @@ def append_jsonl(path: Path, entry: dict, mode: int = 0o644) -> None:
             # Unreadable tail: append anyway rather than refuse the write. A
             # stray glued line is recoverable; a dropped critical mark is not.
             logger.warning("could not inspect the tail of %s", path, exc_info=True)
+    precreated = False
     if not existed:
         # Create it EMPTY, at the requested mode, before a byte goes in.
         # `open("a")` creates at the process umask -- commonly 0o644 -- and the
@@ -86,10 +87,28 @@ def append_jsonl(path: Path, entry: dict, mode: int = 0o644) -> None:
         # too NARROW, never too wide.
         try:
             os.close(os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, mode))
-        except OSError:  # pragma: no cover - the append below reports the real failure
+            precreated = True
+        except OSError:
             logger.warning("could not pre-create %s at mode %o", path, mode,
                            exc_info=True)
     with path.open("a", encoding="utf-8") as f:
+        if not existed and not precreated:
+            # The paragraph above said "before a byte goes in" over a body with
+            # a fallback in it, and this branch IS the fallback: when the
+            # pre-create raised, the `open("a")` a line up is what created the
+            # file, at the process umask, and the chmod at the bottom lands
+            # AFTER the record. That is the same window, reopened by the error
+            # path of the fix that closed it. These logs carry investor sends
+            # and critical items, so on a multi-user host it is a real
+            # disclosure and not a theoretical one. Narrow the descriptor we
+            # already hold, before any content: `fchmod` takes the open fd, so
+            # it cannot be redirected by a symlink swapped in underneath the
+            # path. Retired 2026-09-02.
+            try:
+                os.fchmod(f.fileno(), mode)
+            except (OSError, AttributeError):  # pragma: no cover - Windows has no fchmod
+                logger.warning("could not narrow %s to mode %o before writing",
+                               path, mode, exc_info=True)
         if needs_newline:
             f.write("\n")
         f.write(line)

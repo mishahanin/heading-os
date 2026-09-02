@@ -406,12 +406,30 @@ def test_unparseable_output_is_not_a_pass(evaluator, tmp_path, monkeypatch):
     assert "unparseable" in res["detail"]
 
 
-def test_the_deliberate_skip_is_still_a_clean_pass(evaluator, tmp_path,
-                                                   monkeypatch):
-    """Exit 3 means no API key. That is a real skip, not a broken run."""
+def test_the_deliberate_skip_is_a_non_verdict_not_a_pass(evaluator, tmp_path,
+                                                         monkeypatch):
+    """Exit 3 means no API key. That is a real skip, not a broken run.
+
+    This asserted `status == "pass"` until 2026-09-02, and the expectation was
+    wrong in the half it did not examine. "Not a broken run" is right; "a pass"
+    does not follow from it. Exit 3 means the harness never started, so nothing
+    about the skill's routing was measured, and `"pass"` counts toward `passed`
+    and `score` in both `print_report` and `build_json_output`. The consequence
+    is visible: a host with no `ANTHROPIC_API_KEY` scored HIGHER on every skill
+    than a host that ran the test and found a routing miss, because a miss is a
+    `warn` and the skip was a `pass`.
+
+    The file already carried the right shape for it, and this call site did not
+    reach for it: `passed=None` -> `status: None`, the non-verdict the manual
+    plan criteria use, kept out of the score denominator by `tally`. The two
+    assertions below are both load-bearing, since moving a false pass to a false
+    fail is not a fix either: `main` exits 1 on any `"fail"`, so a degraded host
+    would start refusing every skill it evaluated.
+    """
     monkeypatch.setattr(evaluator.subprocess, "run", lambda *a, **k: _done(3))
     res = evaluator.run_trigger_test(_skill_with_triggers(tmp_path))
-    assert res["status"] == "pass"
+    assert res["status"] is None, res
+    assert res["status"] != "fail", res
 
 
 def test_a_real_routing_result_still_reports_its_rate(evaluator, tmp_path,

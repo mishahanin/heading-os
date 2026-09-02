@@ -7,8 +7,21 @@ Exit codes:
     0 = validated
     1 = invalid (401/403)
     2 = rate-limited (429)
-    3 = network/timeout
+    3 = not established either way: the key was neither confirmed nor refused,
+        and is stored as-is. Every path that cannot settle the question lands
+        here, and the network is only one of them. Also: an HTTP status the
+        script does not classify (a 500 from the API, or any 2xx that is not
+        200), and a key the request header would not accept (`ValueError` out
+        of `http.client`, over a request that never left the machine). This
+        line read "network/timeout" until 2026-09-02, so the wizard told the
+        operator his connection had failed while the server had in fact
+        answered.
     4 = bad arguments, or a key holding a control character (nothing is sent)
+
+`main` both RETURNS these codes and, on a usage error, exits with one: argparse
+handles its own errors and `_Parser.error` calls `sys.exit(4)` rather than
+returning. A caller reading the process exit status sees the same number either
+way; an in-process caller of `main()` has to be ready for `SystemExit` too.
 
 The parser below exits 4 on a usage error, not argparse's default 2. 2 means
 "rate-limited, key likely valid" to the only caller

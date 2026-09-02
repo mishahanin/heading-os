@@ -13,8 +13,12 @@ protect it: the transcripts live outside both repositories, so no git and no
 `push-all.py` touches them, and a dead disk still takes everything.
 
 This archiver copies each finished transcript into the DATA overlay, compressed,
-where the normal backup already runs. It is append-only by construction: a
-finished transcript never changes, so an archived file is never rewritten.
+where the normal backup already runs. Most archives are written once and never
+touched again, which is not the same as "never rewritten": `SETTLE_SECONDS` is a
+heuristic, a resumed session appends, and `test_a_transcript_that_grew_is_re_
+archived_in_place` below is the case where the grown transcript replaces the
+truncated copy. This docstring carried the stronger claim until 2026-09-02,
+directly above the test that disproves it.
 """
 import calendar
 import gzip
@@ -303,3 +307,131 @@ def test_the_cli_says_why_it_refused_instead_of_raising(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "archive-transcripts:" in err
     assert "read-only examples" in err
+
+
+# ==========================================================================
+# Shard scripts-00-p2 finding 4 - a failed size marker reported as a failed
+# archive, after the archive had already landed
+# ==========================================================================
+
+def _marker_blocked(dest_root: Path, name: str, when: str = "2026-08-01") -> Path:
+    """Occupy the size marker's name with a DIRECTORY, so writing it raises.
+
+    `write_text` on a path that is a directory raises `IsADirectoryError`, an
+    `OSError`. This is the audit's own reproduction: a destination that accepts
+    the `os.replace` and refuses the marker write.
+    """
+    marker = dest_root / when[:4] / f"{when}-{name}.jsonl.gz.size"
+    marker.mkdir(parents=True)
+    return marker
+
+
+def test_a_failed_size_marker_does_not_unreport_the_archive_that_landed(tree):
+    """The archive is durable before the marker is written, so it counts.
+
+    `os.replace` had already put the `.jsonl.gz` in place when the marker write
+    raised, and the single `except (OSError, ValueError)` around both counted
+    the file as `failed` and printed "skip". The run then exited 1 to the cron
+    job over an archive that exists and is complete.
+    """
+    source, dest = tree
+    _write(source, "eeee5555")
+    _marker_blocked(dest, "eeee5555")
+
+    result = arch.archive(now=1_800_000_000.0)
+
+    assert result["archived"] == 1, (
+        f"the transcript was archived and counted {result}")
+    assert result["failed"] == 0, (
+        "a size-marker write is not the archive; it must not be counted a failure")
+    archives = list(dest.rglob("*.jsonl.gz"))
+    assert len(archives) == 1
+    with gzip.open(archives[0], "rt", encoding="utf-8") as fh:
+        assert fh.read() == (source / "eeee5555.jsonl").read_text(encoding="utf-8")
+
+
+def test_the_operator_is_told_the_size_marker_was_not_written(tree, capsys):
+    """Not counted a failure is not the same as not worth saying.
+
+    Without the marker the next run cannot tell the transcript is current and
+    re-compresses it every time, so the condition has to reach stderr.
+    """
+    source, dest = tree
+    _write(source, "ffff6666")
+    _marker_blocked(dest, "ffff6666")
+
+    arch.archive(now=1_800_000_000.0)
+
+    err = capsys.readouterr().err
+    assert "size marker" in err, err
+    assert "ffff6666" in err, err
+
+
+def test_a_run_whose_only_problem_was_the_marker_still_exits_zero(tree,
+                                                                  monkeypatch):
+    """The exit code is what the timer reads, and it said the run had failed."""
+    source, dest = tree
+    _write(source, "gggg7777")
+    _marker_blocked(dest, "gggg7777")
+    monkeypatch.setattr(arch, "transcript_dir", lambda s=source: s)
+
+    assert arch.main([]) == 0
+
+
+def test_a_genuinely_failed_archive_is_still_counted_and_still_exits_one(tree,
+                                                                        monkeypatch):
+    """The other direction, or the change above is just "never report failure".
+
+    The compression itself raises here, before `os.replace`, so nothing landed
+    and `failed` must carry it.
+    """
+    source, dest = tree
+    _write(source, "hhhh8888")
+
+    def _boom(*a, **k):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(arch.shutil, "copyfileobj", _boom)
+    monkeypatch.setattr(arch, "transcript_dir", lambda s=source: s)
+
+    result = arch.archive(now=1_800_000_000.0)
+    assert result["failed"] == 1 and result["archived"] == 0
+    assert list(dest.rglob("*.jsonl.gz")) == []
+    assert arch.main([]) == 1
+
+
+def test_a_healthy_run_still_writes_the_size_marker(tree):
+    """The marker is what `_needs_archiving` reads; losing it silently would
+    turn every later run into a re-compression of the same transcript."""
+    source, dest = tree
+    src = _write(source, "iiii9999")
+    arch.archive(now=1_800_000_000.0)
+    marker = next(dest.rglob("*.jsonl.gz.size"))
+    assert marker.read_text(encoding="utf-8").strip() == str(src.stat().st_size)
+
+
+# ==========================================================================
+# Shard scripts-00-p2 finding 5 - the module docstring contradicted
+# `_needs_archiving`
+# ==========================================================================
+
+def test_the_module_docstring_does_not_deny_the_rewrite_machinery_below_it():
+    """"Written once and never rewritten" is false by this file's own design.
+
+    `SETTLE_SECONDS` is a heuristic, a resumed session appends, and
+    `_needs_archiving` plus the `.gz.size` marker exist precisely to re-archive
+    the grown transcript in place. A reader trusting the old sentence could
+    delete that machinery as dead code, which
+    `test_a_transcript_that_grew_is_re_archived_in_place` above proves is
+    load-bearing.
+    """
+    doc = arch.__doc__ or ""
+    for claim in ("written once and never rewritten",
+                  "an archived file is never rewritten",
+                  "append-only by construction"):
+        assert claim not in doc.lower(), (
+            f"archive-transcripts.py's module docstring still claims {claim!r}, "
+            f"which `_needs_archiving` is written to falsify")
+    assert "_needs_archiving" in doc, (
+        "the docstring no longer points at the machinery that handles a resumed "
+        "session; deleting the false claim is not the same as replacing it")

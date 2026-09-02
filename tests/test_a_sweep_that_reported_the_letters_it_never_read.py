@@ -516,3 +516,258 @@ def test_the_domain_filter_ignores_case_on_the_filter(gal):
 def test_the_domain_filter_ignores_case_on_both_sides(gal):
     assert gal._in_domain("BOB@ACME.EXAMPLE", "acme.example")
     assert not gal._in_domain("BOB@NOTACME.EXAMPLE", "acme.example")
+
+
+# ============================================================
+# 6. The checkpoint guard that validated the container, not the entries
+#    (shard scripts-07-p2 finding 1)
+# ============================================================
+#
+# `load_checkpoint` promises that a truncated or hand-edited
+# `pulse-checkpoint.json` will not take the tool down, and it delivers on the
+# CONTAINER: a non-dict re-baselines, a missing key reads as `[]`. It said
+# nothing about the ENTRIES, and `main` built its delta key sets with
+# `{(s[0], s[1]) for s in prior.get("swap_events", [])}`, which asks each entry
+# to be subscriptable and at least two long.
+#
+# A checkpoint that is perfectly valid JSON and a dict, carrying entries of a
+# different shape (an older schema storing dicts, a one-element list, a partial
+# hand repair), raised `KeyError: 0` or `IndexError` straight out of `main`.
+# That is BEFORE `save_checkpoint`, so the tool never re-baselined: every later
+# run died the same way until someone deleted the file by hand. The exact
+# failure mode the guard above exists to end.
+
+def test_a_checkpoint_entry_shaped_as_a_dict_does_not_kill_the_run(fp, capsys):
+    """`{"ts": ...}[0]` is a KeyError, and it reached the operator as one."""
+    keys = fp._pair_keys([{"ts": "2026-01-01", "username": "u"}], "swap_events")
+    assert keys == set()
+    assert "cannot key" in capsys.readouterr().err
+
+
+def test_a_one_element_entry_does_not_kill_the_run(fp, capsys):
+    """The IndexError half of the same line."""
+    assert fp._pair_keys([["2026-01-01"]], "tribe_joins") == set()
+    assert "cannot key" in capsys.readouterr().err
+
+
+def test_an_entry_that_is_not_subscriptable_at_all_does_not_kill_the_run(fp):
+    """An integer or None where a pair was expected raises TypeError."""
+    assert fp._pair_keys([7, None], "swap_events") == set()
+
+
+def test_an_entry_holding_an_unhashable_element_does_not_kill_the_run(fp):
+    """The pair is used as a set key, so a list inside it raises on `add`."""
+    assert fp._pair_keys([[["a"], "b"]], "swap_events") == set()
+
+
+def test_a_non_list_value_under_the_key_does_not_kill_the_run(fp, capsys):
+    """`for entry in 5` raises before any element is touched."""
+    assert fp._pair_keys(5, "swap_events") == set()
+    assert "not a list" in capsys.readouterr().err
+
+
+def test_a_well_formed_entry_is_still_keyed(fp, capsys):
+    """Or the guard above is just "report every prior event as new, forever"."""
+    keys = fp._pair_keys([["2026-01-01", "ann"], ("2026-01-02", "bob")],
+                         "swap_events")
+    assert keys == {("2026-01-01", "ann"), ("2026-01-02", "bob")}
+    assert capsys.readouterr().err == "", "a healthy checkpoint printed a warning"
+
+
+def test_a_longer_entry_still_keys_on_its_first_two_fields(fp):
+    """The state writer may grow a third field; the key must not move."""
+    assert fp._pair_keys([["2026-01-01", "ann", "extra"]], "swap_events") == {
+        ("2026-01-01", "ann")}
+
+
+def test_a_mixed_checkpoint_keeps_the_entries_it_can_read(fp, capsys):
+    """One bad entry must not cost the good ones beside it."""
+    keys = fp._pair_keys([["2026-01-01", "ann"], {"ts": "x"}, ["short"]],
+                         "swap_events")
+    assert keys == {("2026-01-01", "ann")}
+    err = capsys.readouterr().err
+    assert "2 checkpoint swap_events" in err, err
+
+
+def _pulse_main(fp, tmp_path, monkeypatch, prior, state):
+    """Run `main()` over a given prior checkpoint and derived state.
+
+    Through `main`, deliberately. The two call sites are the defect, and a test
+    that called `_pair_keys` itself left them uncovered: reverting `main` to
+    `{(s[0], s[1]) for s in ...}` kept such a test green, which is the shard's
+    own "a guard the test never reaches" shape.
+    """
+    cp = tmp_path / "cp.json"
+    cp.write_text(json.dumps(prior), encoding="utf-8")
+    monkeypatch.setattr(fp, "WORKSPACE", tmp_path / "no-workspace")
+    monkeypatch.setattr(fp, "state_dir", lambda p=tmp_path: p)
+    monkeypatch.setattr(fp, "checkpoint", lambda p=cp: p)
+    monkeypatch.setattr(fp, "derive_state", lambda: state)
+    monkeypatch.setattr(fp, "_daemon_alive", lambda: (True, 4242))
+    fp.main()
+    return cp
+
+
+def _state(**over):
+    """Every key `derive_state` returns, so `main` is exercised, not stubbed."""
+    base = {"ts": "2026-01-05T10:00:00+04:00",
+            "started_uids": [], "swap_events": [], "tribe_joins": [],
+            "session_count": 0, "no_show_count": 0, "non_transient_errors": 0,
+            "last_poll_ts": None}
+    base.update(over)
+    return base
+
+
+def test_a_shaped_prior_checkpoint_does_not_kill_main(fp, tmp_path, monkeypatch,
+                                                      capsys):
+    """The defect as reported, driven through `main` rather than the helper.
+
+    Run one sets a baseline; run two is handed a checkpoint whose entries carry
+    an older shape. That raised `KeyError: 0` out of `main`, before
+    `save_checkpoint`, so the tool printed no status and never re-baselined:
+    every later run died the same way until the file was deleted by hand.
+    """
+    prior = {"started_uids": [], "swap_events": [{"ts": "2026-01-01"}],
+             "tribe_joins": [{"ts": "2026-01-02"}]}
+    state = _state(swap_events=[["2026-01-03", "ann"]],
+                   tribe_joins=[["2026-01-04", "bob"]])
+
+    cp = _pulse_main(fp, tmp_path, monkeypatch, prior, state)
+
+    out = capsys.readouterr().out
+    assert "new /swap from @ann" in out, out
+    assert "new tribe member joined: @bob" in out, out
+    assert json.loads(cp.read_text(encoding="utf-8"))["swap_events"] == [
+        ["2026-01-03", "ann"]], "the run did not re-baseline the shaped checkpoint"
+
+
+def test_a_short_prior_entry_does_not_kill_main(fp, tmp_path, monkeypatch,
+                                                capsys):
+    """The IndexError half, at the same call sites."""
+    prior = {"started_uids": [], "swap_events": [["2026-01-01"]],
+             "tribe_joins": [["2026-01-02"]]}
+    _pulse_main(fp, tmp_path, monkeypatch, prior,
+                _state(swap_events=[["2026-01-03", "ann"]]))
+    assert "new /swap from @ann" in capsys.readouterr().out
+
+
+def test_a_well_formed_prior_still_suppresses_what_it_already_saw(fp, tmp_path,
+                                                                  monkeypatch,
+                                                                  capsys):
+    """Or the widening above is just "report every event as new, every run"."""
+    prior = {"started_uids": [], "swap_events": [["2026-01-03", "ann"]],
+             "tribe_joins": []}
+    _pulse_main(fp, tmp_path, monkeypatch, prior,
+                _state(swap_events=[["2026-01-03", "ann"]]))
+    out = capsys.readouterr().out
+    assert "new /swap" not in out, out
+    assert "no changes" in out.lower() or "started" in out
+
+
+# ============================================================
+# 7. Two rules for one tribe denominator
+#    (shard scripts-07-p2 finding 2)
+# ============================================================
+#
+# `load_roster_names` keyed on `telegram_user_id`, so every member without one
+# mapped to the key `None` and two of them collapsed into a single entry. `main`
+# then used `len(names)` as the tribe denominator, so the printed total shrank
+# silently by the number of not-yet-linked members minus one. Meanwhile
+# `_PROBE_TEMPLATE`, the REMOTE path of this same script, reports
+# `len(roster)`. The same roster produced two different totals depending on
+# which deployment mode reported it, on the line the operator reads to decide
+# whether the daemon is healthy.
+
+def test_two_members_without_a_telegram_id_do_not_collapse_into_one(fp, tmp_path,
+                                                                    monkeypatch):
+    """The denominator counts roster members, not linked ones."""
+    _roster_dir(fp, tmp_path, monkeypatch,
+                '{"a": {"name": "A"}, "b": {"name": "B"}, '
+                '"c": {"name": "C", "telegram_user_id": 42}}')
+    assert fp.load_roster_size() == 3, (
+        "the two unlinked members collapsed under a single None key")
+
+
+def test_the_name_map_files_no_member_under_a_none_key(fp, tmp_path, monkeypatch):
+    """A `None` key is unreachable as a name and destructive as a count.
+
+    The map is only ever read as `names.get(uid, ...)` for a uid seen in the
+    event log, so a member with no id has no name to look up.
+    """
+    _roster_dir(fp, tmp_path, monkeypatch,
+                '{"a": {"name": "A"}, "c": {"name": "C", "telegram_user_id": 42}}')
+    names = fp.load_roster_names()
+    assert None not in names
+    assert names == {42: "C"}
+
+
+def test_the_local_denominator_matches_the_rule_the_remote_probe_uses(fp, tmp_path,
+                                                                      monkeypatch):
+    """One roster, one number, whichever mode reports it.
+
+    The probe runs `len(roster)` over the parsed file. This asks the local
+    reader for the same roster and requires the same answer, so the two
+    deployment modes cannot disagree about who is on the roster.
+    """
+    body = ('{"a": {"name": "A"}, "b": {"name": "B"}, '
+            '"c": {"name": "C", "telegram_user_id": 42}, "d": "not-a-dict"}')
+    _roster_dir(fp, tmp_path, monkeypatch, body)
+    remote_rule = len(json.loads(body))
+    assert fp.load_roster_size() == remote_rule
+
+
+def test_an_unreadable_roster_still_yields_no_denominator(fp, tmp_path,
+                                                          monkeypatch):
+    """The refusing direction is the whole point, and it must survive the fix.
+
+    0 is rendered by `main` as "?", never as a number. A size reader that
+    guessed, or carried a previous roster forward, would answer a membership
+    question from a file it could not read.
+    """
+    _roster_dir(fp, tmp_path, monkeypatch, '{"a": {"name": "A"')
+    assert fp.load_roster_size() == 0
+    _roster_dir(fp, tmp_path, monkeypatch, '["a", "b"]')
+    assert fp.load_roster_size() == 0
+
+
+def test_an_absent_roster_yields_no_denominator_and_says_nothing(fp, tmp_path,
+                                                                 monkeypatch,
+                                                                 capsys):
+    """An absent roster is not a failure, and the size reader must not say so."""
+    monkeypatch.setattr(fp, "state_dir", lambda p=tmp_path / "nothing-here": p)
+    assert fp.load_roster_size() == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_the_operator_is_told_once_when_the_roster_cannot_be_read(fp, tmp_path,
+                                                                  monkeypatch,
+                                                                  capsys):
+    """`main` consults the roster twice now; the message must not double.
+
+    `load_roster_names` announces and `load_roster_size` does not, which is why
+    `_read_roster` takes the flag at all.
+    """
+    _roster_dir(fp, tmp_path, monkeypatch, '{"a": {"name": "A"')
+    fp.load_roster_names()
+    fp.load_roster_size()
+    assert capsys.readouterr().err.count("unreadable") == 1
+
+
+def test_main_prints_the_roster_sized_denominator(fp, tmp_path, monkeypatch,
+                                                  capsys):
+    """End to end on the line the operator actually reads."""
+    _roster_dir(fp, tmp_path, monkeypatch,
+                '{"a": {"name": "A"}, "b": {"name": "B"}, '
+                '"c": {"name": "C", "telegram_user_id": 42}}')
+    monkeypatch.setattr(fp, "WORKSPACE", tmp_path / "no-workspace")
+    monkeypatch.setattr(fp, "checkpoint", lambda p=tmp_path / "cp.json": p)
+    monkeypatch.setattr(fp, "derive_state", lambda: {
+        "started_uids": [42], "swap_events": [], "tribe_joins": [],
+        "session_count": 0, "no_show_count": 0, "non_transient_errors": 0,
+        "last_poll_ts": None})
+    monkeypatch.setattr(fp, "_daemon_alive", lambda: (True, 4242))
+
+    fp.main()
+
+    out = capsys.readouterr().out
+    assert "started 1/3" in out, out

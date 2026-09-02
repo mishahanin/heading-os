@@ -43,6 +43,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tests.code_only import strip_comments  # noqa: E402
+
 
 def _load(name, rel):
     spec = importlib.util.spec_from_file_location(name, ROOT / rel)
@@ -135,7 +137,7 @@ def test_an_unscoped_query_still_sees_the_global_best():
 # ============================================================
 def test_a_near_miss_is_not_recorded_as_a_successful_recall():
     src = (ROOT / "scripts" / "memory-index.py").read_text(encoding="utf-8")
-    code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
+    code = strip_comments(src)
     assert "_emit(gap=False, hits_list=hits)" not in code, code
     assert code.count("_emit(gap=near_miss, hits_list=hits)") == 2
 

@@ -473,20 +473,36 @@ def list_investors(workspace_root: Path) -> dict:
                     "status_label": str,    # display label
                     "dossier_path": str or None,
                     "message_path": str or None,
+                    "sent_date": str or None,   # send-log join; None if unsent
+                    "sent_note": str,           # "" when nothing was logged
                 },
                 ...
             ] sorted by (status_rank ASC, region ASC, num ASC),
             "counts": {"first-5": N, "parallel-week-1-2": N, ...},
             "total": int,
+            "sent_total": int,              # firms carrying a send-log entry
             "raise_target": str | None,     # "$25-40M" parsed from header
             "data_time": ISO mtime of shortlist file or None,
         }
+
+    EVERY key above is on EVERY return, the two degraded ones included. Until
+    2026-09-02 `sent_total` was written only on the success path, so a caller
+    reading `payload["sent_total"]` raised KeyError on precisely the two paths
+    nobody watches: no shortlist file, and an OSError reading it. Both already
+    answer "nothing here", which is what an empty program looks like, so the
+    KeyError would have arrived long after the condition that caused it. The
+    three send-log keys went undocumented for the same span while the firm rows
+    carried them.
+
+    `tests/bridge/test_a_degraded_return_that_dropped_a_key_the_success_path_promised.py`
+    reads the LIVE keys off all three paths and off this docstring, so neither
+    the shape nor the prose can drift alone again.
     """
     program_path = workspace_root / PROGRAM_DIR
     shortlist_path = program_path / SHORTLIST_FILE
     if not shortlist_path.exists():
         return {
-            "firms": [], "counts": {}, "total": 0,
+            "firms": [], "counts": {}, "total": 0, "sent_total": 0,
             "raise_target": None, "data_time": None,
         }
     try:
@@ -494,7 +510,7 @@ def list_investors(workspace_root: Path) -> dict:
         mtime = shortlist_path.stat().st_mtime
     except OSError:
         return {
-            "firms": [], "counts": {}, "total": 0,
+            "firms": [], "counts": {}, "total": 0, "sent_total": 0,
             "raise_target": None, "data_time": None,
         }
 

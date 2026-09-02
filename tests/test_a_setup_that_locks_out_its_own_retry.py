@@ -33,6 +33,7 @@ import ast
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -41,6 +42,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+from tests.code_only import strip_comments  # noqa: E402
 
 from scripts.utils.pid_liveness import pid_is_running  # noqa: E402
 
@@ -457,7 +460,7 @@ def test_an_absent_pid_reads_as_not_running():
 def test_neither_daemon_file_keeps_a_private_copy():
     for rel in ("scripts/sync-exchange-daemon.py", "scripts/sync-exchange-pulse.py"):
         src = (ROOT / rel).read_text(encoding="utf-8")
-        code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
+        code = strip_comments(src)
         assert "except (ProcessLookupError, PermissionError)" not in code, rel
         assert "pid_is_running" in code, rel
 
@@ -585,3 +588,47 @@ def test_crlf_frontmatter_is_blanked_not_audited_as_prose():
 def test_an_lf_document_is_unaffected_by_the_normalisation():
     text = "# Title\n\nA short sentence.\n"
     assert "\r" not in ste.strip_noise(text)
+
+
+# ============================================================
+# 11 - the section headers name the step the code prints
+# ============================================================
+# Audit campaign 2026-08-24, shard `scripts-14-p4` finding 3, verified still
+# present and fixed 2026-09-02. `setup.py` carried two sections headed
+# "Step 12": one above `step_verify`, which prints `step_header(12, ...)`, and
+# one above `step_summary`, which `main` invokes under "# Step 13: Summary".
+# The file therefore had no step 13 at all, and anyone cross-referencing the
+# on-screen step count against the source landed on the verify section or
+# concluded a step was missing.
+
+
+def _setup_source():
+    return (Path(__file__).resolve().parent.parent
+            / "scripts" / "setup.py").read_text(encoding="utf-8")
+
+
+def test_no_two_setup_sections_claim_the_same_step_number():
+    """A duplicated number means one section is lying about which step it is."""
+    numbers = re.findall(r"^# Step (\d+): ", _setup_source(), re.M)
+    duplicates = sorted({n for n in numbers if numbers.count(n) > 1})
+    assert duplicates == [], (
+        f"step number(s) {duplicates} head more than one section of setup.py. "
+        "The on-screen step count comes from `step_header`, so a reader "
+        "matching the two lands in the wrong place.")
+
+
+def test_the_summary_section_is_headed_with_the_step_main_calls_it():
+    """The specific pair that was wrong, pinned by both spellings.
+
+    `main` labels the call "# Step 13: Summary" and `step_verify` prints 12, so
+    13 is the only number the summary section can carry.
+    """
+    source = _setup_source()
+    header, _sep, body = source.partition("def step_summary(")
+    assert body, "step_summary is gone; this test needs rewriting, not deleting"
+    section = header.rsplit("# ---", 3)[-1]
+    assert "# Step 13: Summary" in section, (
+        f"the section above step_summary reads: {section.strip()[:120]!r}")
+    assert "step_header(12," in source, (
+        "step_verify still has to be the step that prints 12, or the pairing "
+        "this test checks is no longer the right one")

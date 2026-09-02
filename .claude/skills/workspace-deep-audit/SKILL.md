@@ -16,7 +16,7 @@ description: >
   scope to a single subsystem.
 disable-model-invocation: true
 argument-hint: "[--mode={full|quick|focus}] [--focus={skills|rules|deps|security|architecture|observability}] [--vs=<previous_audit_path>]"
-allowed-tools: "Read, Write, Edit, Glob, Grep, Bash(python3:*), Bash(git:*), Bash(wc:*), Bash(ls:*), Bash(find:*), Bash(du:*), Bash(pre-commit:*), Bash(pip:*), Agent, WebSearch, WebFetch"
+allowed-tools: "Read, Write, Edit, Glob, Grep, Bash(python3:*), Bash(git:*), Bash(wc:*), Bash(du:*), Bash(pre-commit:*), Agent, WebSearch, WebFetch"
 context: fork
 # Backgrounded forks (the default since Claude Code 2.1.218) get the narrower
 # background-subagent tool set, which has no Agent tool. This skill dispatches

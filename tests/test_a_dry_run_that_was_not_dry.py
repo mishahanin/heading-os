@@ -60,6 +60,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tests.code_only import strip_comments  # noqa: E402
+
 
 def _load(name, rel):
     spec = importlib.util.spec_from_file_location(name, ROOT / rel)
@@ -469,7 +471,7 @@ def test_the_startup_condition_reads_only_the_enabled_flag():
     """`enabled OR not dry_run` is always true in live mode, so connect() ran
     anyway and raised ValueError on absent credentials with no handler."""
     src = (ROOT / "scripts" / "sentinel.py").read_text(encoding="utf-8")
-    code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
+    code = strip_comments(src)
     assert 'if self.config.telegram.get("enabled", True) or not self.dry_run:' not in code
     assert 'if self.config.telegram.get("enabled", True):' in code
 

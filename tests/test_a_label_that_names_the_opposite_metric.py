@@ -41,6 +41,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tests.code_only import strip_comments  # noqa: E402
+
 
 def _load(name, rel):
     spec = importlib.util.spec_from_file_location(name, ROOT / rel)
@@ -227,7 +229,7 @@ def _cluster_root(tmp_path, episodes):
 
 def test_the_report_calls_the_oldest_wait_the_oldest(tmp_path):
     src = (ROOT / "scripts" / "odin-cadence.py").read_text(encoding="utf-8")
-    code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
+    code = strip_comments(src)
     assert "| newest {age}" not in code, code
     assert "oldest unreviewed" in code
 

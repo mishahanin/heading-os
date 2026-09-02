@@ -182,7 +182,10 @@ class CheapClassifier:
             subject:        Email subject line (used for keyword + time-sensitivity).
             body_preview:   First ~500 chars of body (used for time-sensitivity).
                             Caller should truncate; this method enforces the cap.
-            now:            Override "now" for testability. Defaults to datetime.now(UTC).
+            now:            Override "now" for testability. Defaults to
+                            datetime.now(UTC). A naive value is read as UTC
+                            rather than rejected, so it can never reach the
+                            aware/naive comparison in `_score_threads`.
             recipients_to:  List of To recipient addresses (transient -- NOT stored).
                             Used by the Tribe-Leadership+To/CC rule only.
             recipients_cc:  List of Cc recipient addresses (transient -- NOT stored).
@@ -205,6 +208,18 @@ class CheapClassifier:
         """
         if now is None:
             now = datetime.now(timezone.utc)
+        elif now.tzinfo is None:
+            # A naive override is read as UTC, which is what the default one
+            # line up already is. `_parse_date` returns UTC-AWARE datetimes and
+            # `_score_threads` compares `last_touched < cutoff` against them,
+            # so a naive `now` made `cutoff` naive and raised "can't compare
+            # offset-naive and offset-aware datetimes" straight out of
+            # `classify`, killing the whole classification run. Unlike
+            # `_score_calendar`, nothing on that path swallows it. The
+            # docstring offered `now` as an override for testability and never
+            # said it had to carry a zone, so `datetime(2026, 9, 1)` was a
+            # reasonable thing for a caller to pass.
+            now = now.replace(tzinfo=timezone.utc)
 
         body_preview = body_preview[:_BODY_PREVIEW_CHARS] if body_preview else ""
 
@@ -393,11 +408,19 @@ class CheapClassifier:
         that contact's relationship_type is in the high-value set (tribe,
         tribe-leadership, customer, investor-active, prospect, and the rest of
         `_HIGH_VALUE_RELATIONSHIPS`).
+
+        `.strip()` before `.lower()`, matching the Tribe-Leadership test in
+        `classify`, which normalises the SAME field with
+        `relationship.strip().lower().startswith(...)`. This path only
+        lowercased, so a hand-edited card carrying `type: "customer "` was read
+        as current leadership by one reader and scored 1 instead of 3 by the
+        other. Two readers of one field disagreeing is enough to drop a
+        high-value external contact a whole tier.
         """
         record = self._crm_by_email().get(sender_email.lower())
         if record is None:
             return 0
-        if str(record.get("type", "")).lower() in _HIGH_VALUE_RELATIONSHIPS:
+        if str(record.get("type", "")).strip().lower() in _HIGH_VALUE_RELATIONSHIPS:
             return 3  # 1 baseline + 2 bonus
         return 1
 

@@ -230,20 +230,24 @@ def _parse(tmp_path, monkeypatch, failing=("b.pdf", "d.pdf"), names=None,
         files=[str(docs), *extra_paths], pages=None, dpi=100, no_cache=True,
         output_json=str(out_json), password=None)
     err = io.StringIO()
+    code = None
     with contextlib.redirect_stderr(err):
-        dp.cmd_parse(args)
-    return json.loads(out_json.read_text(encoding="utf-8")), err.getvalue()
+        try:
+            dp.cmd_parse(args)
+        except SystemExit as exc:
+            code = exc.code
+    return json.loads(out_json.read_text(encoding="utf-8")), err.getvalue(), code
 
 
 def test_the_archived_json_records_every_failure(tmp_path, monkeypatch):
-    data, _err = _parse(tmp_path, monkeypatch)
+    data, _err, _code = _parse(tmp_path, monkeypatch)
     assert [Path(f["file"]).name for f in data["failures"]] == ["b.pdf", "d.pdf"]
     assert all(f["error"] for f in data["failures"])
 
 
 def test_the_summary_carries_the_number_asked_for(tmp_path, monkeypatch):
     """`total_files` alone reads as "this is what there was"."""
-    data, _err = _parse(tmp_path, monkeypatch)
+    data, _err, _code = _parse(tmp_path, monkeypatch)
     s = data["summary"]
     assert s["total_files"] == 3
     assert s["total_failed"] == 2
@@ -251,15 +255,51 @@ def test_the_summary_carries_the_number_asked_for(tmp_path, monkeypatch):
 
 
 def test_the_operator_is_told_the_sweep_was_partial(tmp_path, monkeypatch):
-    _data, err = _parse(tmp_path, monkeypatch)
+    _data, err, _code = _parse(tmp_path, monkeypatch)
     assert "3 of 5 files" in err
     assert "2 file(s) failed" in err
     assert "b.pdf" in err and "d.pdf" in err
 
 
+def test_a_partial_sweep_does_not_exit_zero(tmp_path, monkeypatch):
+    """The exit code is the one channel automation reads, and it said "fine".
+
+    Everything the tool knew about the two failed documents went to stderr and
+    into the archived JSON. A cron job, a CI step, or a parent using
+    `subprocess.run(..., check=True)` reads neither: it reads the code, and a
+    sweep that missed two fifths of its corpus returned 0, indistinguishable
+    from a complete one.
+
+    1, not 2, because 2 is already taken by "nothing parsed at all" below. A
+    caller has to be able to tell a partial sweep from a total one.
+    """
+    _data, _err, code = _parse(tmp_path, monkeypatch)
+    assert code == 1, f"a sweep with 2 of 5 files failed exited {code!r}"
+
+
+def test_a_complete_sweep_still_exits_zero(tmp_path, monkeypatch):
+    """Or the check above is just "this command always fails"."""
+    data, _err, code = _parse(tmp_path, monkeypatch, failing=())
+    assert data["summary"]["total_failed"] == 0
+    assert code is None, f"a clean sweep exited {code!r}"
+
+
+def test_a_sweep_where_nothing_parsed_keeps_its_own_code(tmp_path, monkeypatch):
+    """2 is the pre-existing "no files were successfully parsed" code.
+
+    Asked explicitly, because the partial-failure exit added above sits
+    directly below it and a mistake in the ordering would collapse the two
+    states onto one code.
+    """
+    _data, err, code = _parse(tmp_path, monkeypatch,
+                              failing=("a.pdf", "b.pdf", "c.pdf", "d.pdf", "e.pdf"))
+    assert code == 2, f"a sweep where every file failed exited {code!r}"
+    assert "No files were successfully parsed" in err
+
+
 def test_a_complete_sweep_reports_plainly(tmp_path, monkeypatch):
     """The other half: no `of N` and no failure block when nothing failed."""
-    data, err = _parse(tmp_path, monkeypatch, failing=())
+    data, err, _code = _parse(tmp_path, monkeypatch, failing=())
     assert data["summary"]["total_failed"] == 0
     assert data["failures"] == []
     assert "5 files" in err
@@ -269,8 +309,8 @@ def test_a_complete_sweep_reports_plainly(tmp_path, monkeypatch):
 
 def test_a_named_path_that_does_not_exist_is_recorded(tmp_path, monkeypatch):
     """The loudest of the three failure paths, and the one nothing recorded."""
-    data, err = _parse(tmp_path, monkeypatch, failing=(),
-                       extra_paths=[str(tmp_path / "nowhere.pdf")])
+    data, err, _code = _parse(tmp_path, monkeypatch, failing=(),
+                              extra_paths=[str(tmp_path / "nowhere.pdf")])
     assert [Path(f["file"]).name for f in data["failures"]] == ["nowhere.pdf"]
     assert data["summary"]["total_requested"] == 6
     assert "not found" in err

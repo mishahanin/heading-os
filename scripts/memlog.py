@@ -248,7 +248,26 @@ def main(argv: list[str] | None = None) -> int:
     pset.set_defaults(func=cmd_set)
 
     args = p.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except ValueError as exc:
+        # The other half of "missing or malformed". `cmd_append` and `cmd_set`
+        # both read the file through `split`, which REFUSES a memlog whose
+        # frontmatter fence is absent or unterminated by raising ValueError --
+        # the only ValueError this module raises. The absence of the file was
+        # given a printed line and exit 2 on 2026-08-30; a `.memlog.md` a human
+        # or a host skill had hand-edited into a broken fence still reached the
+        # operator as a raw traceback until 2026-09-02. MEASURED that day on a
+        # scratch memlog holding the single line `no fence here`:
+        # `append --text hello` printed `ValueError: .memlog.md has no
+        # frontmatter` over eight frames.
+        #
+        # Caught once at the dispatch rather than at each of the two `split`
+        # call sites: a third command that reads the file inherits the refusal
+        # instead of re-earning it.
+        print(f"error: {memlog_path(args.workspace)} is malformed: {exc}",
+              file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

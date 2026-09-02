@@ -109,6 +109,13 @@ def test_an_index_naming_no_paths_is_not_a_pass(wh, two_roots, capsys):
 
     Distinct message from the absent-overlay case, because the remediation is
     different, and the operator was handed the wrong one before.
+
+    It REFUSES, and that is the change of 2026-09-02. Saying "verified nothing"
+    while returning 0 left `/push-updates` reading exit 0 as a clean gate, so
+    the prose and the exit code told the operator opposite things. There IS a
+    corpus here (the index is present and readable) and this section read none
+    of it; the absent-overlay case above, where no corpus exists at all, stays
+    inconclusive on purpose.
     """
     _engine, _data, write_index = two_roots
     write_index("# Workspace Overview\n\nProse with no backticked paths.\n")
@@ -116,7 +123,8 @@ def test_an_index_naming_no_paths_is_not_a_pass(wh, two_roots, capsys):
     issues = wh.check_reference_validation()
     out = _plain(capsys.readouterr().out)
 
-    assert issues == 0
+    assert issues == 1
+    assert "refuses to report clean" in out
     assert "0 paths checked" in out
     assert "this section verified nothing" in out
     assert "OK" not in out, out
@@ -179,7 +187,7 @@ def test_every_path_resolving_prints_the_count_it_examined(wh, two_roots,
     write_index("- `scripts/one.py`\n- `context/two.md`\n")
 
     assert wh.check_reference_validation() == 0
-    assert "All 2 reference path(s) resolve" in _plain(capsys.readouterr().out)
+    assert "2 of 2 reference path(s) resolve" in _plain(capsys.readouterr().out)
 
 
 # ============================================================
@@ -292,15 +300,24 @@ def test_a_token_that_is_not_a_literal_path_is_never_reported_missing(
     Applied to this index it matches hundreds of tokens that no root can
     resolve, and every one becomes a false "Missing:" line. That is how a
     useful check gets switched off.
+
+    The fixture carries one real, resolving path beside the token under test.
+    Without it the index names zero literal paths, and since 2026-09-02 that
+    trips the section's zero-inspected floor, which would turn every case here
+    red for a reason that has nothing to do with the token.
     """
-    _engine, _data, write_index = two_roots
-    write_index(f"- see `{token}` for detail\n")
+    engine, _data, write_index = two_roots
+    (engine / "scripts").mkdir()
+    (engine / "scripts" / "anchor.py").write_text("x", encoding="utf-8")
+    write_index(f"- see `{token}` for detail, and `scripts/anchor.py` to run it\n")
 
     issues = wh.check_reference_validation()
     out = _plain(capsys.readouterr().out)
 
     assert issues == 0, out
     assert "Missing" not in out, out
+    assert "1 of 1 reference path(s) resolve" in out, (
+        f"{token!r} was counted as a literal path")
 
 
 def test_the_skipped_tokens_are_counted_out_loud(wh, two_roots, capsys):
@@ -316,7 +333,7 @@ def test_the_skipped_tokens_are_counted_out_loud(wh, two_roots, capsys):
     assert wh.check_reference_validation() == 0
     out = _plain(capsys.readouterr().out)
     assert "2 path-shaped token(s) skipped" in out
-    assert "All 1 reference path(s) resolve" in out
+    assert "1 of 1 reference path(s) resolve" in out
 
 
 def test_a_repeated_path_is_examined_once(wh, two_roots, capsys):
@@ -327,7 +344,7 @@ def test_a_repeated_path_is_examined_once(wh, two_roots, capsys):
     write_index("`scripts/hot.py` again `scripts/hot.py` and `scripts/hot.py`\n")
 
     assert wh.check_reference_validation() == 0
-    assert "All 1 reference path(s) resolve" in _plain(capsys.readouterr().out)
+    assert "1 of 1 reference path(s) resolve" in _plain(capsys.readouterr().out)
 
 
 def test_paths_are_read_from_prose_not_from_table_rows(wh, two_roots, capsys):
@@ -342,7 +359,7 @@ def test_paths_are_read_from_prose_not_from_table_rows(wh, two_roots, capsys):
     write_index("Run `scripts/bullet.py` when the daemon is down.\n")
 
     assert wh.check_reference_validation() == 0
-    assert "All 1 reference path(s) resolve" in _plain(capsys.readouterr().out)
+    assert "1 of 1 reference path(s) resolve" in _plain(capsys.readouterr().out)
 
 
 # ============================================================

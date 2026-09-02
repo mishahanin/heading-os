@@ -120,6 +120,21 @@ def resolve_cli() -> list[str] | None:
     Prefers an installed `impeccable` whose version matches the pin, and falls
     back to `npx --yes <pin>`. Returns None when neither is available, which is
     a supported state, not an error: the regex engine still runs.
+
+    The local binary is accepted on an EXACT version token, never on substring
+    containment. `wanted in probe.stdout` was the old test, and `get_pinned_version`
+    one function up calls the exact pin "the only mitigation this integration
+    claims" - so a test that accepts any version merely CONTAINING the pinned
+    string is not that mitigation. MEASURED 2026-09-02: with the pin
+    `impeccable@3.5.0`, `"3.5.0" in "impeccable 13.5.0"` is True and so is
+    `"3.5.0" in "3.5.0-rc1"`, so a major-version-13 binary and a release candidate
+    both resolved ahead of the `npx --yes <pin>` path that does enforce the pin.
+
+    Stated narrowly: this splits stdout on whitespace and compares whole tokens
+    (a leading `v` removed), so it accepts `3.5.0`, `v3.5.0` and `impeccable 3.5.0`
+    and refuses `13.5.0`, `3.5.0-rc1` and `3.5.0-hotfix`. A CLI that printed its
+    version with no whitespace around it (`impeccable/3.5.0`) would fall through
+    to `npx`, which is the safe direction: the pin is still enforced there.
     """
     pin = get_pinned_version()
     wanted = pin.rsplit("@", 1)[-1] if "@" in pin else pin
@@ -130,7 +145,8 @@ def resolve_cli() -> list[str] | None:
             probe = subprocess.run(  # nosec B603 - resolved absolute path, fixed args
                 [local, "--version"], capture_output=True, text=True, timeout=30
             )
-            if probe.returncode == 0 and wanted in probe.stdout:
+            reported = {t.removeprefix("v") for t in (probe.stdout or "").split()}
+            if probe.returncode == 0 and wanted in reported:
                 return [local]
         except (OSError, subprocess.SubprocessError):
             pass
@@ -258,6 +274,24 @@ def is_plausible(finding: dict, profiles: dict | None = None) -> bool:
     Neither is a defect; both are the engine misreading something. Filtering on
     the VALUE rather than disabling the rule keeps the rule live for real hits -
     a genuine 96px h1 on a long headline still lands.
+
+    The number tested is the one carrying the rule's declared `unit`, not the
+    first digit run in the snippet. `_NUMBER.search` took whatever came first in
+    a free-form string, which fails in BOTH directions. MEASURED 2026-09-02
+    against `oversized-h1` with `max: 200`: the snippet
+    `"line 12 - h1 renders at 2856px"` was KEPT, because the leading `12` was
+    read as the value, and `"2856 scans later: h1 at 96px"` was DROPPED, because
+    the leading `2856` was. The second is the worse half - it is silent loss of a
+    real finding, in a module whose header commits every failure path to
+    "reporting MORE, never toward silence".
+
+    `config/visual-check-profiles.json` has carried a `unit` per rule since the
+    integration (`oversized-h1` is `px`, `tight-leading` is `ratio`) and NOTHING
+    read it. It is read here, and only as a preference: a snippet with no
+    unit-suffixed number falls back to the first number, which is what
+    `tight-leading` needs (its unit is `ratio` and its snippets read `0.11x`).
+    So the remaining exposure is the no-unit-in-snippet case, unchanged and
+    stated rather than papered over.
     """
     if profiles is None:
         profiles, _ = load_profiles()
@@ -265,7 +299,12 @@ def is_plausible(finding: dict, profiles: dict | None = None) -> bool:
     if not bounds:
         return True
 
-    match = _NUMBER.search(finding.get("snippet", "") or "")
+    snippet = finding.get("snippet", "") or ""
+    match = None
+    unit = bounds.get("unit") if isinstance(bounds, dict) else None
+    if isinstance(unit, str) and unit:
+        match = re.search(_NUMBER.pattern + re.escape(unit), snippet)
+    match = match or _NUMBER.search(snippet)
     if not match:
         return True
 
@@ -463,7 +502,28 @@ def load_baseline(path: Path | None = None) -> dict:
         print(f"impeccable: baseline at {path} is unreadable ({exc}); "
               f"treating it as an empty freeze", file=sys.stderr)
         return {}
-    return loaded.get("files", loaded) if isinstance(loaded, dict) else {}
+    frozen = loaded.get("files", loaded) if isinstance(loaded, dict) else {}
+    # Valid JSON is not a valid baseline, and only the UNPARSEABLE half was
+    # handled. `apply_baseline` does `{f: dict(rules) for f, rules in
+    # baseline.items()}`, so a hand edit or a truncate-then-repair that leaves
+    # the file parseable but wrong-shaped crashed the gate instead of degrading.
+    # MEASURED 2026-09-02: `{"files": ["docs/index.html"]}` raised
+    # `AttributeError: 'list' object has no attribute 'items'` and
+    # `{"files": {"docs/index.html": "x"}}` raised `ValueError: dictionary
+    # update sequence element #0 has length 1; 2 is required`.
+    #
+    # Refused whole, not repaired entry by entry, and for the same reason the
+    # unparseable branch above returns `{}`: an empty freeze un-suppresses every
+    # frozen finding, so the run goes noisy rather than quiet. A partial salvage
+    # would suppress on numbers nobody can vouch for.
+    if not isinstance(frozen, dict) or not all(
+        isinstance(rules, dict) for rules in frozen.values()
+    ):
+        print(f"impeccable: baseline at {path} is not a "
+              f"{{file: {{rule: count}}}} object; treating it as an empty freeze",
+              file=sys.stderr)
+        return {}
+    return frozen
 
 
 def record_baseline(findings: list[dict], path: Path | None = None) -> dict:

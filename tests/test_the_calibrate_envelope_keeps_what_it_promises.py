@@ -376,3 +376,104 @@ def test_a_transcript_that_vanishes_mid_sort_is_skipped(tmp_path, monkeypatch):
 
     monkeypatch.setattr(Path, "stat", flaky_stat)
     assert calibrate.locate_session(tmp_path) == tmp_path / "a.jsonl"
+
+
+# ---------------------------------------------------------------------------
+# The budget must be the thing that is actually printed
+# ---------------------------------------------------------------------------
+#
+# `envelope_bytes` measured the compact serialization and `main` printed
+# `indent=2`. The two are the same encoding and different byte counts, which is
+# precisely what the old docstring ("in the encoding `main` prints") papered
+# over: an envelope could converge under `--max-bytes`, raise no truncation
+# warning, and still put more than `--max-bytes` on stdout.
+
+def test_the_measured_size_is_the_size_that_reaches_stdout(tmp_path, monkeypatch, capsys):
+    """Measured end to end through `main`, not by comparing two serializers.
+
+    A test that asserted `envelope_bytes(e) == len(serialize(e))` would pass on
+    any pair of functions that agreed with each other while `main` printed a
+    third thing, which is the defect.
+    """
+    session = tmp_path / "s.jsonl"
+    session.write_text(
+        "\n".join(
+            '{"type":"user","timestamp":"2026-08-22T10:00:%02dZ",'
+            '"message":{"role":"user","content":"%s"}}' % (i, "padding " * 40)
+            for i in range(30)
+        ) + "\n",
+        encoding="utf-8")
+
+    budget = 4000
+    monkeypatch.setattr(sys, "argv", [
+        "calibrate.py", "--session", str(session), "--no-workspace",
+        "--max-bytes", str(budget)])
+    assert calibrate.main() == 0
+
+    cap = capsys.readouterr()
+    printed = len(cap.out.rstrip("\n").encode("utf-8"))
+    assert "[truncation warning]" not in cap.err, cap.err
+    assert printed <= budget, (
+        f"no truncation warning fired, so the run believes it met --max-bytes "
+        f"{budget}, and stdout carries {printed} bytes")
+    # Still real JSON, and still the envelope.
+    assert json.loads(cap.out)["truncated"] is True
+
+
+def test_a_run_that_cannot_meet_the_budget_still_says_so(tmp_path, monkeypatch, capsys):
+    """The other direction. A budget that no shedding can reach must warn, or
+    the assertion above is satisfied by a tool that always warns."""
+    session = tmp_path / "s.jsonl"
+    session.write_text(
+        '{"type":"user","timestamp":"2026-08-22T10:00:00Z",'
+        '"message":{"role":"user","content":"x"}}\n', encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", [
+        "calibrate.py", "--session", str(session), "--no-workspace",
+        "--max-bytes", "10"])
+    assert calibrate.main() == 0
+    assert "[truncation warning]" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# The optional workspace block must not take the command down
+# ---------------------------------------------------------------------------
+
+def test_an_unreadable_skills_directory_does_not_lose_the_envelope(tmp_path, capsys):
+    """`exists()` returning True does not make a directory readable, and this
+    block is the best-effort part of the envelope. The raise landed after all
+    parsing and truncation had succeeded and before a byte reached stdout."""
+    root = tmp_path / "ws"
+    (root / ".claude" / "skills").mkdir(parents=True)
+    (root / ".claude" / "rules").mkdir(parents=True)
+    (root / ".claude" / "rules" / "a.md").write_text("x", encoding="utf-8")
+
+    real_iterdir = Path.iterdir
+
+    def refuse(self, *a, **k):
+        if self == root / ".claude" / "skills":
+            raise PermissionError(13, "Permission denied")
+        return real_iterdir(self, *a, **k)
+
+    import pytest as _pytest
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(Path, "iterdir", refuse)
+        block = calibrate.populate_workspace_block(root)
+
+    assert block["skills"] == []
+    assert block["rules"] == ["a.md"], (
+        "the sibling read was lost with the one that failed")
+    assert "unreadable" in capsys.readouterr().err
+
+
+def test_a_readable_skills_directory_is_still_enumerated(tmp_path):
+    """Without this, a block that returned empty lists unconditionally would
+    satisfy the degrade test above."""
+    root = tmp_path / "ws"
+    (root / ".claude" / "skills" / "widget").mkdir(parents=True)
+    (root / ".claude" / "skills" / "archive").mkdir(parents=True)
+    (root / ".claude" / "rules").mkdir(parents=True)
+
+    block = calibrate.populate_workspace_block(root)
+
+    assert block["skills"] == ["widget"], "archive is excluded by design"

@@ -49,14 +49,30 @@ If a request unambiguously falls into one of the five types, Claude MUST announc
 
 ## Brand Enforcement (applies to all five types)
 
-Before drafting, every skill in this group loads:
+This section listed six files as one obligation until 2026-09-02, and four of the
+six could never be violated. They are two different things and are now written as
+two.
 
-1. `reference/corporate-style-guide.md` - locked colors, typography, letterhead, signature, footer, file naming, authoring checklist
-2. `.claude/rules/terminology.md` - Tribe, ODUN.ONE, DPI+, Five Principles
-3. `.claude/rules/voice.md` - writing rules
-4. `reference/misha-voice.md` (or the sender's executive voice file if present)
-5. `.claude/rules/voss.md` - negotiation overlay
-6. `.claude/rules/hidden-chars.md` - zero invisible characters
+**Already in context; nothing to load.** `.claude/rules/terminology.md` (Tribe,
+ODUN.ONE, DPI+, Five Principles), `.claude/rules/voice.md` (writing rules),
+`.claude/rules/voss.md` (negotiation overlay) and `.claude/rules/hidden-chars.md`
+(zero invisible characters) carry no `paths:` frontmatter, which in this
+workspace means always-on: they load every session whatever any skill does. A
+skill cannot fail to load them, so listing them as a per-skill duty was
+unfalsifiable, and it made a six-item list read as enforced when two items were.
+
+**Read before drafting.** These are on-demand, so a skill that does not open them
+has not read them:
+
+1. `reference/corporate-style-guide.md` - locked colors, typography, letterhead,
+   signature, footer, file naming, authoring checklist. Engine content, present
+   in every clone, and all five skills name it. Required, no exceptions.
+2. `reference/misha-voice.md`, or the sender's own executive voice file. It
+   routes `private`, so it ships in the operator's data overlay and an engine
+   clone without an overlay does not have it. When it is absent, continue on
+   `.claude/rules/voice.md`, which is always-on and carries the writing rules,
+   and say in the delivery that the voice file was unavailable. Never hold a
+   document for it, and never reconstruct its content from memory.
 
 After drafting, every skill runs:
 

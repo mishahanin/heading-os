@@ -31,6 +31,7 @@ Coverage targets (20 tests):
 from __future__ import annotations
 
 import textwrap
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -437,7 +438,30 @@ def test_classify_time_sensitivity_in_body_only(rules_engine, make_workspace):
 
 
 def test_classify_body_preview_truncated_to_500_chars(rules_engine, make_workspace):
-    """14. body_preview is 5000 chars with 'deadline' at position 600 -> NOT detected."""
+    """14. 'deadline' past char 500 reaches NEITHER reader of the body.
+
+    `time_sensitivity == 0` was the whole assertion until 2026-09-02, and the
+    body is read TWICE inside `classify`: once by `match_keywords` at
+    scripts/inbox_pulse/rules.py:250 and once by `_TIME_SENSITIVITY_RE` at
+    :369. The word this fixture puts at position 600 is `deadline`, which the
+    shared rules.yaml at the top of this file lists as a keyword override, so
+    a reader that saw past the cut would promote on a word the other reader
+    cannot see. Naming every detector is the point: the docstring's claim is
+    "NOT detected".
+
+    What the `keyword_override` assertion does NOT establish, corrected
+    2026-09-02. This paragraph said both readers "draw on the single
+    truncation at :224". There are TWO cuts, not one: `classify` truncates the
+    local at rules.py:224 and hands the already-short value to
+    `match_keywords`, which truncates again at overrides.py:290. So neither
+    site can be removed alone and be seen from here. Drop :224 and the regex
+    reads position 600, failing the older `time_sensitivity` assertion while
+    `keyword_override` stays None because the second cut still holds. Drop
+    overrides.py:290 and NOTHING here moves, because the input already arrived
+    short. The belt is real and it is worth keeping; what pins it is
+    `test_match_keywords_truncates_the_body_it_is_handed` below, which calls
+    the method directly with a body nobody cut first.
+    """
     clf = _make_classifier(rules_engine, make_workspace)
     # Build 600 chars of filler, then append 'deadline'
     filler = "x" * 600
@@ -450,6 +474,32 @@ def test_classify_body_preview_truncated_to_500_chars(rules_engine, make_workspa
     )
     # The truncation to 500 chars means 'deadline' at position 600 is cut off
     assert result["reason_breakdown"]["time_sensitivity"] == 0
+    assert result["reason_breakdown"]["keyword_override"] is None, (
+        "the keyword matcher read past the 500-char cut and promoted on a word "
+        "the time-sensitivity check could not see")
+    assert result["weight"] == 0, result["reason_breakdown"]
+
+
+def test_match_keywords_truncates_the_body_it_is_handed(rules_engine):
+    """The second cut, asked about directly rather than through `classify`.
+
+    `match_keywords` is public, its docstring promises "subject + first 500
+    chars of body_preview", and every caller inside `classify` hands it a body
+    that rules.py:224 already shortened. That is why the test above cannot see
+    this cut removed: the belt is invisible from behind the braces. Called
+    with a body nobody truncated first, it is the only assertion in this file
+    that overrides.py:290 has to satisfy.
+    """
+    body = "x" * 600 + "deadline"
+    assert rules_engine.match_keywords("Normal subject", body) is None, (
+        "match_keywords matched a keyword past the 500-char cut its own "
+        "docstring promises, so a caller that does not pre-truncate promotes "
+        "on text the rest of the classifier never reads")
+    near = "x" * 400 + " deadline"
+    assert rules_engine.match_keywords("Normal subject", near) == (
+        "promote_to_important"), (
+        "the anchor: a keyword INSIDE the window must still match, or a cut "
+        "that dropped the body entirely would satisfy the assertion above")
 
 
 def test_classify_combined_signals_aggregate_to_high_likely(rules_engine, make_workspace):
@@ -1332,3 +1382,133 @@ def test_the_recipient_demotion_still_fires_without_an_override(make_workspace, 
     )
     assert result["tier_guess"] == "LOW"
     assert result["reason_breakdown"]["sender_override"] == "internal_nonlead_to_normal"
+
+
+# ---------------------------------------------------------------------------
+# Shard 10-p2: two readers of one field, and a `now` that had to carry a zone
+# ---------------------------------------------------------------------------
+
+
+def test_a_naive_now_does_not_kill_the_whole_classification_run(
+        make_workspace, rules_engine):
+    """`_parse_date` returns UTC-AWARE datetimes and `_score_threads` compares
+    against them, so a naive `now` made `cutoff` naive and raised
+    "can't compare offset-naive and offset-aware datetimes" straight out of
+    `classify`. Nothing on that path swallows it, unlike `_score_calendar`.
+
+    The docstring offered `now` as an override for testability and never said
+    it had to carry a zone, so `datetime(2026, 9, 1)` or a `datetime.utcnow()`
+    was a reasonable thing for a caller to pass.
+    """
+    _write_thread(
+        make_workspace / "threads" / "business",
+        slug="2026-08-01-naive-now",
+        last_touched="2026-08-30",
+        body_extra="Contact: bob@vendor.test",
+    )
+    clf = _make_classifier(rules_engine, make_workspace)
+
+    # Naive on purpose. `fromisoformat` on a string carrying no offset is the
+    # naive constructor that does not trip DTZ001, and naiveness is precisely
+    # the input under test here rather than a lapse.
+    result = clf.classify(
+        sender_email="bob@vendor.test",
+        subject="Status",
+        now=datetime.fromisoformat("2026-09-01T00:00:00"),
+    )
+
+    assert result["reason_breakdown"]["threads"] == 1, (
+        "the naive `now` was accepted but the thread window moved; it must be "
+        "read as UTC, which is what the default already is")
+
+
+def test_a_naive_now_is_read_as_utc_rather_than_as_the_host_timezone(
+        make_workspace, rules_engine, monkeypatch):
+    """The counter-case. Coercing with `.astimezone()` instead of
+    `.replace(tzinfo=utc)` would also stop the TypeError, and would then make
+    the answer depend on the machine's offset.
+
+    TZ is pinned rather than inherited, so the assertion cannot go vacuous on a
+    UTC runner while passing on the operator's UTC+4 laptop. The window edge is
+    chosen so a 14-hour shift crosses it: `last_touched` is exactly
+    `_RECENT_THREAD_DAYS` days before the UTC instant under test.
+    """
+    monkeypatch.setenv("TZ", "Etc/GMT+12")  # UTC-12, no DST
+    time.tzset()
+
+    _write_thread(
+        make_workspace / "threads" / "business",
+        slug="2026-08-01-boundary",
+        last_touched="2026-08-02",
+        body_extra="Contact: bob@vendor.test",
+    )
+    clf = _make_classifier(rules_engine, make_workspace)
+
+    # The offset has to be NEGATIVE for a date-only `last_touched` to fall on
+    # different sides of the cutoff, which is why a UTC+14 zone was no test at
+    # all here. MEASURED: read as UTC the cutoff is 2026-08-02 00:00, and
+    # `last_touched < cutoff` is False, so the thread counts. Read as UTC-12
+    # the cutoff moves to 2026-08-02 12:00 and the same thread drops out.
+    #
+    # Naive on purpose: a naive `now` is the input the defect was about, so
+    # the DTZ001 the linter would raise here is the test's subject rather than
+    # an oversight.
+    naive = datetime.fromisoformat("2026-09-01T00:00:00")
+    aware = naive.replace(tzinfo=timezone.utc)
+
+    assert (clf.classify("bob@vendor.test", "s", now=naive)
+            == clf.classify("bob@vendor.test", "s", now=aware)), (
+        "a naive `now` and the same instant in UTC classified differently, so "
+        "the answer depends on the host's timezone")
+
+
+def test_a_relationship_type_with_trailing_space_still_scores_as_high_value(
+        make_workspace, rules_engine):
+    """`classify` normalises this field with `.strip().lower()` for the
+    Tribe-Leadership test; `_score_crm_contact` only lowercased.
+
+    A card written `type: "customer "` (an ordinary hand-edited YAML artifact)
+    was therefore read as current leadership by one reader and scored 1 instead
+    of 3 by the other. Two readers of one field disagreeing is enough to drop a
+    high-value external contact a whole tier.
+    """
+    _write_crm_contact(
+        make_workspace / "crm" / "contacts",
+        slug="trailing-space",
+        email="carol@customer.test",
+        relationship_type='"customer "',
+    )
+    clf = _make_classifier(rules_engine, make_workspace)
+
+    result = clf.classify(
+        sender_email="carol@customer.test",
+        subject="Renewal",
+        now=_fixed_now(),
+    )
+
+    assert result["reason_breakdown"]["crm_contact"] == 3, (
+        f"a trailing space in relationship_type cost the contact the +2 "
+        f"high-value bonus: {result}")
+    assert result["tier_guess"] == "MAYBE", result
+
+
+def test_a_relationship_type_that_is_not_high_value_still_scores_one(
+        make_workspace, rules_engine):
+    """The counter-case. Returning 3 unconditionally would pass the test above
+    and hand every stranger in the CRM a high-value score."""
+    _write_crm_contact(
+        make_workspace / "crm" / "contacts",
+        slug="ordinary-lead",
+        email="dave@lead.test",
+        relationship_type='"lead "',
+    )
+    clf = _make_classifier(rules_engine, make_workspace)
+
+    result = clf.classify(
+        sender_email="dave@lead.test",
+        subject="Hello",
+        now=_fixed_now(),
+    )
+
+    assert result["reason_breakdown"]["crm_contact"] == 1, result
+    assert result["tier_guess"] == "LOW", result

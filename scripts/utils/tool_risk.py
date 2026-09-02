@@ -23,6 +23,7 @@ Usage::
     tool_risk.tier_for("pipeline_update") # -> "notify"
     tool_risk.tier_for("unknown_type")    # -> "gated" (safe default)
     tool_risk.send_capable_types()        # -> frozenset({"email_send", ...})
+    tool_risk.classified_types()          # -> every action_type the ledger knows
 """
 from __future__ import annotations
 
@@ -112,6 +113,33 @@ def send_capable_types() -> frozenset[str]:
     if not isinstance(raw, list):
         return frozenset()
     return frozenset(x for x in raw if isinstance(x, str))
+
+
+def classified_types() -> frozenset[str]:
+    """Every ``action_type`` the ledger classifies: ``tiers`` keys + ``send_capable``.
+
+    The ONE place a consumer asks "is this a type this workspace knows about",
+    for the same reason ``send_capable_types`` above is the one place it asks
+    "is this a send". ``scripts/bridge_daemon/sources/action_queue.py`` held its
+    own ``ACTION_TYPES`` tuple until 2026-09-02 and it had fallen four types
+    behind the ledger (``crm_write``, ``knowledge_write``, ``task_create``,
+    ``telegram_send``), silently discarding every card carrying one.
+
+    The UNION matters, not the ``tiers`` keys alone. ``telegram_send`` ships as
+    a ``send_capable`` entry with no ``tiers`` row, so a derivation that read
+    only ``tiers`` would keep dropping the exact type that exposed the defect.
+
+    A missing or malformed ledger yields an EMPTY set, which is the safe
+    direction for the caller this exists for: an empty set refuses every
+    deposit, where treating "the classification is unreadable" as "everything
+    is classified" would admit an unclassified card at the moment the tier data
+    is least trustworthy. This is a membership question, never a tier decision -
+    ``tier_for`` stays the only answer to "how much friction", and it is total
+    over all action_types whatever this returns.
+    """
+    tiers = load().get("tiers")
+    keys = frozenset(k for k in tiers if isinstance(k, str)) if isinstance(tiers, dict) else frozenset()
+    return keys | send_capable_types()
 
 
 def tier_for(action_type: str) -> str:

@@ -69,9 +69,27 @@ def _active_session_count(workspace_root: Path) -> int:
     `workspace_root` is kept in the signature for the caller's sake; the
     registry is per-user, not per-workspace. Returns 0 on any error so a broken
     registry does not take down the heartbeat.
+
+    That promise was a claim about `read_registry`, which guards itself, and it
+    was made over a body with a SECOND call in it. `registry_path()` calls
+    `Path.home()`, which is guarded by nothing. MEASURED 2026-09-02 on
+    3.11.15 with `HOME` unset and `pwd.getpwuid` raising `KeyError`:
+    `RuntimeError: Could not determine home directory.` The caller reads this
+    inside the `payload` dict literal, which sits between `write_heartbeat`'s
+    two try blocks and is covered by neither, so on such a host every 60-second
+    tick raised out of a function whose own docstring promises a logged warning
+    instead. The promise is now made true rather than narrowed: `active_sessions`
+    is one field of the heartbeat, and losing the count is far cheaper than
+    losing the beat, the `last_error` it carries, and the fleet grid's only
+    liveness signal for this daemon.
     """
-    from .sessions import read_registry, registry_path
-    return len(read_registry(registry_path()))
+    try:
+        from .sessions import read_registry, registry_path
+        return len(read_registry(registry_path()))
+    except (OSError, RuntimeError):
+        logging.warning("session registry unavailable; reporting 0 active sessions",
+                        exc_info=True)
+        return 0
 
 
 def write_heartbeat(workspace_root: Path, config_version: str | None = None) -> None:

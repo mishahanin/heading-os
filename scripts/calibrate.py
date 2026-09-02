@@ -56,6 +56,11 @@ def _derive_sessions_dir() -> Path:
     return Path.home() / ".claude" / "projects" / slug
 
 
+# Import-time, and deliberately so. The audit that reached this line proposed a
+# lazy default because `get_workspace_root()` "can raise"; MEASURED 2026-09-02,
+# it cannot. It resolves WORKSPACE_ROOT, then walks for the marker pair, then
+# returns the labelled `_FALLBACK_ROOT`, with no raising path, so the failure the
+# proposal was built on does not exist. `scripts/chronicle.py` imports this name.
 DEFAULT_SESSIONS_DIR = _derive_sessions_dir()
 DEFAULT_MAX_BYTES = 800_000
 
@@ -329,9 +334,28 @@ def filter_since(events: list, since_utc: str) -> list:
     return out
 
 
+def serialize(envelope: dict) -> str:
+    """The one serialization of the envelope. `main` prints exactly this.
+
+    A single function because the two used to differ. `envelope_bytes` measured
+    the compact form and `main` printed `indent=2`, which is thousands of bytes
+    larger on a real envelope, so an envelope could converge under `--max-bytes`,
+    raise no truncation warning, and still put more than `--max-bytes` on stdout.
+    The old docstring here read "in the encoding `main` prints", which was true
+    of the encoding and false of the byte count, and that wording is exactly what
+    kept the gap from being noticed.
+
+    Compact rather than indented, because the budget has to be the thing that is
+    measured and the incremental shed arithmetic in `_entry_bytes` is exact only
+    for this form. The consumer is the /calibrate skill, not the eye; pipe
+    through `python -m json.tool` to read one by hand.
+    """
+    return json.dumps(envelope, ensure_ascii=False)
+
+
 def envelope_bytes(envelope: dict) -> int:
-    """Serialized size of the envelope, in the encoding `main` prints."""
-    return len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
+    """Byte count of what `main` writes to stdout."""
+    return len(serialize(envelope).encode("utf-8"))
 
 
 def _entry_bytes(entry, siblings_left: int) -> int:
@@ -465,12 +489,37 @@ def _ceo_only_paths() -> list[str]:
     return sorted(k for k, dest in rules.items() if dest == "private")
 
 
+def _listing(label: str, read) -> list[str]:
+    """Run one optional directory read, degrading loudly instead of raising.
+
+    `exists()` returning True does not make a directory readable, and this whole
+    block is the optional part of the envelope. A permission-restricted
+    `.claude/skills`, or a directory replaced by a file between the `exists()`
+    and the `iterdir()`, raised out of `populate_workspace_block` AFTER all
+    parsing and truncation had succeeded and BEFORE a single byte reached
+    stdout: the best-effort block took the whole command down and the operator
+    got a traceback instead of an envelope. `_ceo_only_paths` two functions up
+    degrades exactly this way already; its two siblings here did not.
+    """
+    try:
+        return sorted(read())
+    except OSError as exc:
+        print(f"{YELLOW}[workspace warning]{RESET} {label} unreadable "
+              f"({exc.__class__.__name__}: {exc}); listed as empty.",
+              file=sys.stderr)
+        return []
+
+
 def populate_workspace_block(repo_root: Path) -> dict:
     """Enumerate skills, rules, and ceo-only paths from the workspace."""
     skills_dir = repo_root / ".claude" / "skills"
     rules_dir = repo_root / ".claude" / "rules"
-    skills = sorted(p.name for p in skills_dir.iterdir() if p.is_dir() and p.name != "archive") if skills_dir.exists() else []
-    rules = sorted(p.name for p in rules_dir.glob("*.md")) if rules_dir.exists() else []
+    skills = _listing(str(skills_dir), lambda: (
+        p.name for p in skills_dir.iterdir() if p.is_dir() and p.name != "archive"
+    )) if skills_dir.exists() else []
+    rules = _listing(str(rules_dir), lambda: (
+        p.name for p in rules_dir.glob("*.md")
+    )) if rules_dir.exists() else []
     return {"skills": skills, "rules": rules, "ceo_only_paths": _ceo_only_paths()}
 
 
@@ -522,7 +571,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_workspace:
         envelope["workspace"] = populate_workspace_block(get_workspace_root())
 
-    print(json.dumps(envelope, ensure_ascii=False, indent=2))
+    print(serialize(envelope))
     return 0
 
 

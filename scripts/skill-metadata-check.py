@@ -112,10 +112,25 @@ def is_auto_routable(frontmatter: dict) -> bool:
 
 
 def corpus_issues(corpus_path: Path) -> list[str]:
-    """Validate a triggers.json corpus shape. Empty list == valid.
+    """Validate a triggers.json corpus SHAPE. Empty list == valid.
 
-    A JSON array of >= 6 {query, should_trigger} objects with >= 4 positives and
-    >= 2 negatives (hard negatives naming the neighbor skill they should route to).
+    A JSON array of >= 6 {query, should_trigger} objects with >= 4 cases whose
+    `should_trigger` is true and >= 2 whose `should_trigger` is false. That is
+    the whole enforced rule, and the counting below is all of it.
+
+    The parenthetical here read "hard negatives naming the neighbor skill they
+    should route to" until 2026-09-02, which is the AUTHORING standard from
+    `.claude/rules/development-standards.md`, not a property this function
+    measures. Nothing in a `{query, should_trigger}` case records a neighbor
+    skill, so two off-topic trivia queries satisfy the count and the F-6.1
+    coverage gate passes a corpus that cannot catch a routing hijack. Claiming
+    the stronger check made the gate read as coverage it never had, which is
+    worse than the gap itself.
+
+    Enforcing hard negatives would need a `routes_to` field on negative cases and
+    a migration of every committed corpus; that is a schema decision for the
+    F-6.1 owner, not something to imply in a docstring. Until then the standard
+    stands as a convention the author upholds, and this stays a shape check.
     """
     try:
         data = json.loads(corpus_path.read_text(encoding="utf-8"))

@@ -52,6 +52,7 @@ from scripts.utils.workspace import (  # noqa: E402
 # Fixed display order for /prime output blocks. Threads run concurrently;
 # results are rendered serially in this order after all threads finish.
 DISPLAY_ORDER = [
+    "hooks_armed",
     "crm_health",
     "knowledge_health",
     "memory_health",
@@ -68,6 +69,7 @@ DISPLAY_ORDER = [
 
 # Section banner for each block (matches /prime numbering for legibility)
 SECTION_BANNERS = {
+    "hooks_armed": "### 2.4 Session Hooks",
     "crm_health": "### 2.5 Relationship Radar",
     "knowledge_health": "### 2.7 Knowledge Base Health",
     "memory_health": "### 2.9 Memory Health",
@@ -89,6 +91,75 @@ CHECK_TIMEOUT = 60
 # ============================================================
 # Health Check Implementations
 # ============================================================
+
+def _platform_settings_template(workspace_root: Path) -> Path | None:
+    """The settings template this OS installs, chosen exactly as setup-platform.sh does.
+
+    Kept in step with that script by
+    `tests/test_a_clone_that_armed_one_hook_of_seventeen.py`, which reads the
+    shell source rather than trusting this comment.
+    """
+    settings_dir = workspace_root / ".claude"
+    if sys.platform.startswith("win") or sys.platform == "cygwin":
+        names = ["settings.local.windows.json"]
+    elif sys.platform == "darwin":
+        names = ["settings.local.macos.json", "settings.local.linux.json"]
+    else:
+        names = ["settings.local.linux.json"]
+    for name in names:
+        candidate = settings_dir / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def run_hooks_armed(workspace_root: Path) -> dict[str, Any]:
+    """Does the live settings file register every session hook the template does?
+
+    `.claude/settings.local.json` is gitignored, and it is the ONLY place the
+    session hooks are registered. The tracked `.claude/settings.json` registers
+    exactly one. MEASURED 2026-09-02 by comparing the two files: a clone where
+    `scripts/setup-platform.sh` has never run arms 1 hook of 17, and among the
+    16 absent is `_dispatch.py`, the single entry point for eleven PreToolUse
+    walls including the release gate and the secret scanner.
+
+    Nothing reported that state, and the step that fixes it was named in no
+    document a person setting the workspace up would read. So a workspace could
+    run for its whole life with its walls down and every surface calling it
+    healthy.
+
+    Renders nothing when armed: a boot line the operator reads every day and can
+    never act on is noise. A short clone gets the list at the top of the brief.
+    """
+    script = workspace_root / "scripts" / "merge-platform-settings.py"
+    template = _platform_settings_template(workspace_root)
+    if not script.exists() or template is None:
+        # Neither is optional in a clone of this repository, so their absence is
+        # reported rather than skipped: a check that quietly opts out over a
+        # missing file is the shape this whole finding was.
+        missing = "merge-platform-settings.py" if not script.exists() \
+            else f"a settings template for {sys.platform}"
+        return {"status": "missing",
+                "output": f"cannot check whether session hooks are armed: "
+                          f"{missing} is absent",
+                "omit_if_empty": False}
+    proc = subprocess.run(
+        [sys.executable, str(script), str(template),
+         str(workspace_root / ".claude" / "settings.local.json"), "--check"],
+        cwd=str(workspace_root),
+        capture_output=True,
+        text=True,
+        timeout=CHECK_TIMEOUT,
+    )
+    if proc.returncode == 0:
+        return {"status": "ok", "output": "", "omit_if_empty": True}
+    return {
+        "status": "error",
+        "output": proc.stdout.strip() or f"--check exited {proc.returncode}",
+        "stderr": proc.stderr.strip(),
+        "omit_if_empty": False,
+    }
+
 
 def run_crm_health(workspace_root: Path) -> dict[str, Any]:
     """Invoke scripts/crm-health.py and capture its stdout."""
@@ -632,6 +703,7 @@ def run_updates(workspace_root: Path) -> dict[str, Any]:
 
 # Map check key -> (callable, friendly label)
 CHECKS = {
+    "hooks_armed": (run_hooks_armed, "Session hooks armed"),
     "crm_health": (run_crm_health, "CRM health"),
     "knowledge_health": (run_knowledge_health, "Knowledge health"),
     "memory_health": (run_memory_health, "Memory health"),

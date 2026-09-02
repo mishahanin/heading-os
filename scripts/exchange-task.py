@@ -95,6 +95,25 @@ def connect(config: dict) -> Account:
         autodiscover=False,
         access_type=DELEGATE,
     )
+    # The claim is now MEASURED, because it was not. With `autodiscover=False`
+    # exchangelib does no network I/O while constructing an `Account`: the
+    # connection is made lazily, on the first folder access. So this printed a
+    # green "Connected as ..." before any authentication had been attempted, and
+    # a wrong password or an unreachable server surfaced later, inside
+    # `list_tasks` or `create_task`, where the traceback reads as a
+    # task-operations bug rather than the login failure it is. The operator was
+    # told the one thing that had not been tested.
+    #
+    # `account.tasks` is the folder every caller here uses, so resolving it is
+    # the cheapest access that proves the credentials and the server, and it
+    # costs nothing extra: the callers would have paid for it anyway.
+    try:
+        account.tasks  # noqa: B018 - the lazy resolution IS the connection test
+    except Exception as exc:  # noqa: BLE001 - exchangelib raises a wide family here
+        print(f"{RED}[ERROR]{RESET} Could not connect as "
+              f"{config['EXCHANGE_EMAIL']} to {config['EXCHANGE_SERVER']}: "
+              f"{exc.__class__.__name__}: {exc}", file=sys.stderr)
+        sys.exit(1)
     print(f"{GREEN}[OK]{RESET} Connected as {config['EXCHANGE_EMAIL']}")
     return account
 

@@ -29,9 +29,24 @@ private overlay actually backs it. Without the overlay it goes to gitignored
 `.claude/handoff/`, which is the case for any repository that installs the
 plugin bundle. See `handoff_dir()` for why the two questions are separate.
 
-Stdlib only, and it stays that way: `checkpoint-save.py` runs after the session
-context has been discarded, so an import this module cannot satisfy costs a
-handoff nobody can regenerate.
+Stdlib only at MODULE level, and it stays that way: `checkpoint-save.py` runs
+after the session context has been discarded, so an import this module cannot
+satisfy costs a handoff nobody can regenerate.
+
+The rule is about what importing this file can cost, not a ban on the workspace.
+Three in-tree names are reached from inside function bodies:
+
+  - `data_overlay_present`, in `handoff_dir`
+  - `get_outputs_dir`, in `handoff_dir`
+  - `get_default_tz`, in `local_now`
+
+Every one of them is deferred AND wrapped, so a missing, renamed or raising
+sibling degrades to the gitignored fallback instead of propagating. The
+sentence above read a flat "Stdlib only" until 2026-09-02, which described a
+file that has carried those three since before the guards were written: a reader
+weighing whether a fourth was safe would have been reading a rule nobody was
+following rather than the one this module actually keeps. Add a fourth the same
+way or not at all, and never at module level.
 """
 from __future__ import annotations
 

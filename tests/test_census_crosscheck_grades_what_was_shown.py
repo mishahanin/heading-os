@@ -68,9 +68,18 @@ def wired(tmp_path, monkeypatch):
         return [{"path": p, "score": 0.5} for p in calls["now"]]
 
     monkeypatch.setattr(bench, "query_at", _query_at)
+    # The last question's truth is a path the index never returns, so its
+    # ceiling is 0.000 whatever `now` holds and the run always has one question
+    # that COULD falsify the assumption. Before 2026-09-02 every question here
+    # had truth `a.md`, so a run with `now = ["a.md"]` checked nothing at all
+    # and the mode reported the favourable exit 0 over it; that run is now an
+    # instrument failure (exit 2), and a fixture that produces one measures the
+    # refusal instead of the behaviour each test below is about.
     monkeypatch.setattr(
         bench, "load_truth",
-        lambda *_a, **_k: {q: _Truth({"a.md"}) for q in bench.CROSSCHECK_QUESTIONS},
+        lambda *_a, **_k: {q: _Truth({"a.md"} if q != bench.CROSSCHECK_QUESTIONS[-1]
+                                     else {"never-shown.md"})
+                          for q in bench.CROSSCHECK_QUESTIONS},
     )
     monkeypatch.setattr(bench, "get_outputs_dir", lambda: tmp_path / "outputs")
     monkeypatch.setattr(bench, "_run_state", lambda *_a, **_k: {"corpus_sha": "abc"})

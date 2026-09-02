@@ -559,7 +559,24 @@ def scan_report(target_dir=None, force=False) -> ScanResult:
             continue
 
         if content:
-            companion.write_text(content, encoding="utf-8")
+            # The WRITE is per file too, and it was not. The try above covers
+            # only the parsers, so an `OSError` out of `write_text` left the
+            # loop exactly the way a parser exception used to: every later
+            # extractable file went unprocessed, the run ended on a traceback,
+            # and the `failures` report below was never printed. A read-only
+            # datastore folder, a full disk, or a path-length limit on the
+            # renamed `{stem}-{suffix}-extract.md` form is at least as common an
+            # operator condition as a corrupt zip, and the tool recovered from
+            # the corrupt zip only. MEASURED 2026-09-02 with a chmod 555
+            # subfolder: `PermissionError` escaped `scan_report` and a good file
+            # sorting after it was never extracted.
+            try:
+                companion.write_text(content, encoding="utf-8")
+            except OSError as exc:
+                print(f"  {RED}Failed{RESET}  {companion.name}: "
+                      f"{type(exc).__name__}: {exc}")
+                failures.append((filepath, f"{type(exc).__name__}: {exc}"))
+                continue
             print(f"  {GREEN}Created{RESET}  {companion.name}")
             extracted.append((filepath, companion))
         else:

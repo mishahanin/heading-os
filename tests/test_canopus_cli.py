@@ -1156,3 +1156,62 @@ def test_probe_without_the_flag_prints_no_gap_reading(tree, capsys):
     out = capsys.readouterr().out
     assert "after-build gap reading" not in out
     assert "candidates" in out
+
+
+# ---------------------------------------------------------------------------
+# A range shape nobody recognises must not be read as the one shape that is
+# ---------------------------------------------------------------------------
+#
+# `_NULL_END` is `0*`, which full-matches the empty string, and the test ran
+# over every element of `commit_range.split("..")`. MEASURED 2026-09-02:
+# `"A....B".split("..")` is `['A', '', 'B']`, so a malformed four-dot range hit
+# the empty middle element, was announced as a range that "names no push range",
+# and scoped C3 and C4 to nothing while the run reported clean.
+#
+# The same measurement clears the three-dot case: `"main...HEAD".split("..")` is
+# `['main', '.HEAD']`, two parts and neither empty, so git's symmetric-difference
+# notation never reached that branch. It is asserted below so the claim is the
+# code's, not a comment's.
+
+def _range_shas():
+    from scripts import canopus_check
+    return canopus_check._range_shas
+
+
+# `""` is in this list because requiring EXACTLY two endpoints broke it: it
+# splits to `['']`, one part, and went to `rev-list`, which refused it. It is
+# one of the three shapes CI produces, so the bound is at most two.
+@pytest.mark.parametrize("null_range", ["", "0000000..HEAD", "..HEAD", "HEAD..", "0..0"])
+def test_a_genuinely_null_endpoint_still_scopes_to_nothing(repo, capsys, null_range):
+    root, _sha = repo
+    assert _range_shas()(root, null_range) == set()
+    assert "names no push range" in capsys.readouterr().err
+
+
+def test_a_malformed_range_is_refused_rather_than_called_null(repo, capsys):
+    from scripts.canopus_check import CheckError
+
+    root, _sha = repo
+    with pytest.raises(CheckError) as excinfo:
+        _range_shas()(root, "HEAD....HEAD")
+
+    assert "could not be read" in str(excinfo.value)
+    assert "names no push range" not in capsys.readouterr().err, (
+        "a four-dot range was announced as the known null-endpoint case")
+
+
+def test_a_three_dot_range_is_handed_to_git_and_not_called_null(repo, capsys):
+    """The audit finding that prompted this, measured instead of assumed: it
+    reported `A...B` as misclassified, and it never was."""
+    root, sha = repo
+    scope = _range_shas()(root, f"{sha}...HEAD")
+
+    assert scope is not None
+    assert "names no push range" not in capsys.readouterr().err
+
+
+def test_no_range_at_all_still_means_every_note(repo):
+    """`None` is a different answer from an empty set, and the branch above
+    must not have collapsed the two."""
+    root, _sha = repo
+    assert _range_shas()(root, None) is None

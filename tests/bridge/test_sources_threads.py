@@ -157,6 +157,75 @@ def test_read_thread_size_cap(tmp_path):
     assert "too large" in r["error"].lower()
 
 
+def test_the_listing_applies_the_byte_cap_read_thread_applies(tmp_path):
+    """One cap, two readers, and only one of them was applying it.
+
+    Found by the 2026-08-24 campaign (shard `scripts-02-p2`, finding 4). The
+    comment on `THREAD_MAX_BYTES` says it is a "200 KB upper bound on any
+    thread body read", and `read_thread` refuses over it. The listing read
+    every body in full, so a 50 MB `.md` in `threads/business/` was pulled into
+    memory on every poll of `/threads` while the detail view refused to open
+    it. The comment described the intended invariant, so the code was the wrong
+    half.
+    """
+    from scripts.bridge_daemon.sources.threads import THREAD_MAX_BYTES
+    _write_thread(tmp_path, "small", title="Small", last_touched="2026-05-18")
+    _write_thread(tmp_path, "huge", title="Huge", last_touched="2026-05-18",
+                  body="\n" + "x" * (THREAD_MAX_BYTES + 1) + "\n")
+    r = list_active_threads(tmp_path)
+    paths = [t["path"] for t in r["threads"]]
+    assert "threads/business/small.md" in paths, (
+        "the honest thread stopped being listed, so the exclusion below proves "
+        f"nothing: {paths}")
+    assert "threads/business/huge.md" not in paths, (
+        f"a body over the {THREAD_MAX_BYTES}-byte cap was read whole by the "
+        f"listing that read_thread refuses to open: {paths}")
+    assert r["total"] == 1, (
+        f"an excluded thread must not be counted either: {r['total']}")
+
+
+def test_a_thread_exactly_at_the_cap_is_still_listed(tmp_path):
+    """The boundary, so the cap cannot be tightened into refusing everything.
+
+    `read_thread` refuses `size > THREAD_MAX_BYTES`, so the last accepted size
+    IS the cap. The listing has to draw the line in the same place or the two
+    readers disagree again, one file further along.
+    """
+    from scripts.bridge_daemon.sources.threads import THREAD_MAX_BYTES
+    p = _write_thread(tmp_path, "edge", title="Edge", last_touched="2026-05-18")
+    pad = THREAD_MAX_BYTES - len(p.read_bytes())
+    assert pad > 0, "the frontmatter alone already exceeds the cap"
+    p.write_bytes(p.read_bytes() + b"x" * pad)
+    assert p.stat().st_size == THREAD_MAX_BYTES
+    assert read_thread(tmp_path, "threads/business/edge.md")["ok"] is True
+    paths = [t["path"] for t in list_active_threads(tmp_path)["threads"]]
+    assert "threads/business/edge.md" in paths, paths
+
+
+def test_the_returns_docstring_names_every_key_the_function_emits(tmp_path):
+    """A Returns block that opens and closes the dict reads as exhaustive.
+
+    Found by the 2026-08-24 campaign (shard `scripts-02-p2`, finding 6):
+    `truncated` and `row_cap` were emitted by both return statements and
+    documented by neither, so a consumer of the truncation behaviour had to
+    read the code to learn the keys were there. Asserted against the LIVE keys
+    rather than a hand-written list, so a key added later fails here instead of
+    slipping in undocumented.
+
+    Both return paths are checked: the early return for a missing directory
+    once carried a different shape from the parsed one, which is the drift the
+    early return's own comment records being fixed.
+    """
+    doc = list_active_threads.__doc__ or ""
+    _write_thread(tmp_path, "a", title="A", last_touched="2026-05-18")
+    for root, which in ((tmp_path, "the parsed payload"),
+                        (tmp_path / "no-such-root", "the early return")):
+        for key in list_active_threads(root):
+            assert f'"{key}"' in doc, (
+                f"{which} emits {key!r} and the Returns block does not "
+                f"document it")
+
+
 def test_bucket_label_exposed_for_ui(tmp_path):
     """The bucket-label dict is importable so the frontend can mirror it."""
     assert THREADS_BUCKET_LABEL["today"] == "Today"

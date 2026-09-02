@@ -44,6 +44,7 @@ Run: python3 -m pytest tests/test_a_bundle_that_never_said_the_keys_were_live.py
 from __future__ import annotations
 
 import asyncio
+import codecs
 import importlib.util
 import json
 import logging
@@ -110,7 +111,21 @@ def _run_export(ag, monkeypatch, tmp_path, settings: bytes | None, *extra):
 # and nothing more. The entropy detector cannot tell the two apart.
 LIVE_SETTINGS = b'{"editor.fontSize": 13, "someExt.apiKey": "sk-live-value"}'  # pragma: allowlist secret
 # UTF-16-LE with a BOM: exactly what a Windows editor writes on "Unicode" save.
-UTF16_SETTINGS = '{"editor.fontSize": 13}'.encode("utf-16")
+#
+# Built explicitly since 2026-09-02. It was `.encode("utf-16")`, and that codec
+# emits the HOST's byte order: on a big-endian interpreter the fixture is
+# UTF-16-BE behind a `FE FF` BOM, so the comment above was true only by accident
+# of the machine the suite happened to run on. Nothing here needs to guess the
+# host, and a fixture that describes itself as one thing must be that thing.
+UTF16_SETTINGS = codecs.BOM_UTF16_LE + '{"editor.fontSize": 13}'.encode("utf-16-le")
+
+
+def test_the_utf16_fixture_is_what_its_comment_says():
+    """The three tests below rest on this shape; nothing else asserted it."""
+    assert UTF16_SETTINGS[:2] == b"\xff\xfe", UTF16_SETTINGS[:4]
+    assert UTF16_SETTINGS.decode("utf-16") == '{"editor.fontSize": 13}'
+    with pytest.raises(UnicodeDecodeError):
+        UTF16_SETTINGS.decode("utf-8")
 
 
 def test_a_no_mask_run_does_not_claim_a_scan_ran(ag, monkeypatch, tmp_path, capsys):
@@ -287,9 +302,15 @@ class _FakeClient:
         self.map_result = None
         self.search_result = None
         self.batch_result = None
+        # The override the other three already had. Without it `cmd_crawl` was
+        # the one command of the four whose unknown-SDK-shape path no test could
+        # reach, and it was also the one still exiting 0 on it.
+        self.crawl_result = None
 
     def crawl(self, url, **kwargs):
         self.crawl_calls.append(kwargs)
+        if self.crawl_result is not None:
+            return self.crawl_result
         return _Job([{"metadata": {"source_url": url},
                       "markdown": "MD BODY", "html": "<p>HTML BODY</p>"}])
 
@@ -423,9 +444,41 @@ def _cache_files(tmp_path: Path) -> list[Path]:
     return sorted((tmp_path / "cache").glob("*.json")) if (tmp_path / "cache").exists() else []
 
 
-def test_a_map_of_an_unknown_shape_is_not_cached(fc, wired, tmp_path, capsys):
+def test_a_crawl_of_an_unknown_shape_is_not_cached_and_does_not_exit_zero(
+        fc, wired, tmp_path, capsys):
+    """The third of the four commands, and the last one to be repaired.
+
+    `cmd_batch` was fixed first, then map and search here. `cmd_crawl` kept the
+    same shape: it printed the error, skipped the cache, then rendered
+    "Crawled 0 pages" and returned 0, which a caller cannot tell from a site
+    that genuinely has nothing to crawl.
+    """
+    wired.crawl_result = object()
+    with pytest.raises(SystemExit) as exc:
+        fc.cmd_crawl(_Args())
+    assert exc.value.code == 1, "an unmeasured answer must not exit 0"
+    assert _cache_files(tmp_path) == [], "an empty answer was cached for 48 hours"
+    out, err = capsys.readouterr()
+    assert "unexpected shape" in err
+    assert "Crawled 0 pages" not in err, (
+        "a run that measured nothing reported a page count")
+    assert out == "", "a zero-page document was rendered for an unmeasured crawl"
+
+
+def test_a_map_of_an_unknown_shape_is_not_cached_and_does_not_exit_zero(
+        fc, wired, tmp_path, capsys):
+    """Not caching it was only half. Exiting 0 was the other half.
+
+    Until 2026-09-02 the unknown shape printed to stderr, skipped the cache, and
+    then rendered "[1 credit] Mapped 0 URLs" plus a "Found 0 URLs" site map and
+    returned normally. A caller reading the exit code and the document could not
+    tell that from a site with no links on it. `cmd_batch` had already been
+    repaired for the same class.
+    """
     wired.map_result = object()
-    fc.cmd_map(_Args())
+    with pytest.raises(SystemExit) as exc:
+        fc.cmd_map(_Args())
+    assert exc.value.code == 1, "an unmeasured answer must not exit 0"
     assert _cache_files(tmp_path) == [], "an empty answer was cached for 168 hours"
     assert "unexpected shape" in capsys.readouterr().err
 
@@ -435,9 +488,15 @@ def test_a_map_of_a_known_shape_is_still_cached(fc, wired, tmp_path, capsys):
     assert len(_cache_files(tmp_path)) == 1
 
 
-def test_a_search_of_an_unknown_shape_is_not_cached(fc, wired, tmp_path, capsys):
+def test_a_search_of_an_unknown_shape_is_not_cached_and_does_not_exit_zero(
+        fc, wired, tmp_path, capsys):
+    """Same fix as map above. The pair below is the whole point: an EMPTY `.web`
+    is a real zero-result answer and still renders, caches and exits 0; a MISSING
+    `.web` is the SDK having moved and now exits 1."""
     wired.search_result = object()
-    fc.cmd_search(_Args(target="sovereign dpi"))
+    with pytest.raises(SystemExit) as exc:
+        fc.cmd_search(_Args(target="sovereign dpi"))
+    assert exc.value.code == 1, "an unmeasured answer must not exit 0"
     assert _cache_files(tmp_path) == []
     assert "unexpected shape" in capsys.readouterr().err
 

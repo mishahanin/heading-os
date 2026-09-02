@@ -41,6 +41,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tests.code_only import strip_comments  # noqa: E402
+
 
 def _load(name, rel):
     spec = importlib.util.spec_from_file_location(name, ROOT / rel)
@@ -290,7 +292,7 @@ def test_the_dead_filenotfound_catch_is_gone():
     src = (ROOT / "scripts" / "run-integration-tests.py").read_text(encoding="utf-8")
     # Comments stripped first: the fix's own comment QUOTES the removed clause,
     # so a plain substring search finds its own tombstone and passes forever.
-    code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
+    code = strip_comments(src)
     assert "except FileNotFoundError" not in code, code
     assert 'find_spec("pytest")' in code
 

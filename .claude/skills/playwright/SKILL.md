@@ -3,7 +3,7 @@ name: playwright
 x-heading-requires: ["browser"]   # F-7.1: optional-dependency extras this skill needs
 description: "Drive a real browser for a SCRIPTED, non-interactive job: screenshots, scraping a JS-rendered page, filling a form, PDF from a page, or reading a YouTube video's transcript. Do NOT use for a plain URL fetch that WebFetch already handles, and do NOT use for live interactive browsing (clicking around a session by hand) - that is agent-browser."
 argument-hint: "[url] [action]"
-allowed-tools: "Bash(python3:*), Bash(npx:*), Read"
+allowed-tools: "Bash(python3:*), Read"
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com

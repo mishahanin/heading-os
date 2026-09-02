@@ -45,7 +45,16 @@ pins the resolved set.
 2. `uv sync --all-extras --group dev`
 3. `cp .env.example .env`, then fill in your own credentials — never commit `.env`
 4. `pre-commit install` — once per fresh clone, or the commit gates are not armed
-5. `.venv/bin/python -m pytest tests/ -q` to verify the suite passes
+5. `bash scripts/setup-platform.sh` — once per fresh clone, or the SESSION hooks
+   are not armed. It writes the gitignored `.claude/settings.local.json`, which
+   registers 16 of the 17 hooks; the tracked `.claude/settings.json` registers
+   the one remaining. Among the 16 is `_dispatch.py`, the single entry point for
+   eleven PreToolUse walls including the release gate and the secret scanner. A
+   clone that skips this runs with those walls down and nothing says so. Re-run
+   it any time: it merges, keeping every local key. `bash
+   scripts/setup-platform.sh --check` reports the state and exits non-zero when
+   a registration is missing, and `/prime` runs the same check at session boot.
+6. `.venv/bin/python -m pytest tests/ -q` to verify the suite passes
 
 The `venv` + `pip` path still works for tooling that cannot run `uv`
 (`python -m venv .venv`, then `pip install -r requirements.txt`, dev tooling in

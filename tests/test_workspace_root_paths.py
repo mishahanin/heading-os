@@ -49,6 +49,8 @@ import pytest
 ENGINE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ENGINE))
 
+from tests.code_only import strip_comments_and_strings  # noqa: E402
+
 OBS_SRC = ENGINE / "scripts/utils/observability_safe.py"
 LLM_SRC = ENGINE / "scripts/utils/llm_fallback.py"
 
@@ -62,21 +64,14 @@ def _strip_comments_and_docstrings(src: str) -> str:
 
     The whole finding is that prose satisfied a search over code, so any search
     that stays in this file runs over what the interpreter would execute.
+
+    This walked the AST for `ast.Constant` string spans and then finished with
+    `ln.split("#", 1)[0]`. Both halves were partial: `ast.Constant` misses bytes
+    literals and gives f-string parts approximate offsets on 3.11, and the split
+    truncated at any surviving `#` whether it opened a comment or not.
+    `tokenize` answers both questions the way the interpreter's front end does.
     """
-    tree = ast.parse(src)
-    spans: list[tuple[int, int, int, int]] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            spans.append((node.lineno, node.col_offset,
-                          node.end_lineno, node.end_col_offset))
-    lines = src.splitlines()
-    for start_l, start_c, end_l, end_c in spans:
-        for i in range(start_l - 1, end_l):
-            line = lines[i]
-            lo = start_c if i == start_l - 1 else 0
-            hi = end_c if i == end_l - 1 else len(line)
-            lines[i] = line[:lo] + " " * (hi - lo) + line[hi:]
-    return "\n".join(ln.split("#", 1)[0] for ln in lines)
+    return strip_comments_and_strings(src)
 
 
 def _function(src: str, name: str) -> ast.FunctionDef:

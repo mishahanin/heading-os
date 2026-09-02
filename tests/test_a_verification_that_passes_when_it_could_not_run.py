@@ -60,6 +60,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tests.code_only import strip_comments  # noqa: E402
+
 # The interpreter running this test, not a hardcoded `<root>/.venv/bin/python`.
 # That path is one local convention, and it does not exist on a CI runner or in
 # a git worktree, where the subprocess below died on FileNotFoundError before it
@@ -77,15 +79,20 @@ def _load(name: str, relpath: str):
 
 
 def _code_only(src: str) -> str:
-    """Source with `#` comments stripped; the fixes quote what they removed."""
-    out = []
-    for line in src.splitlines():
-        if line.lstrip().startswith("#"):
-            continue
-        if "  # " in line:
-            line = line.split("  # ", 1)[0]
-        out.append(line)
-    return "\n".join(out)
+    """Source with `#` comments stripped; the fixes quote what they removed.
+
+    Token-aware since 2026-09-02. This hand-rolled a stripper that cut each line
+    at the first `"  # "`, which is not comment syntax: it is two spaces, a hash
+    and a space, and a STRING LITERAL containing that sequence was truncated
+    exactly as a comment would be. Five assertions below run over the result,
+    three of them NEGATIVE (a call that must not appear), and a negative
+    assertion that can be defeated by an unrelated literal earlier on the line
+    is the worst kind of hole: the regression it guards comes back with the
+    suite green. `tests/code_only.py` asks `tokenize` which hashes open a
+    comment, and raises rather than passing the source through when it cannot
+    parse it.
+    """
+    return strip_comments(src)
 
 
 # ---------------------------------------------------------------------------
@@ -594,3 +601,61 @@ def test_a_non_json_daemon_response_is_a_documented_exit():
         "traceback instead of one of the documented exit codes"
     )
     assert "not JSON" in src
+
+
+def test_the_stale_intro_sentence_aborts_rather_than_warning():
+    """The one guard in this tool that warned and carried on.
+
+    `intro.replace(_stale, ...)` silently no-ops when the monolith's intro drifts
+    from the literal, so all nine files were written and the process exited 0
+    with a rebuilt index telling readers the per-skill reference is "further
+    down this page", a section that same split had just removed from that page.
+    The comment above it described exactly that harm and then allowed it, on
+    stdout at exit 0, which no caller and no CI step acts on. Every sibling
+    guard here (divider count, divider identity, id-move, monolith title, meta
+    description) aborts, and `_find`'s docstring calls refusing on unexpected
+    input the tool's behaviour.
+
+    Asked of the AST, because the fix is a control-flow change: a version that
+    reworded the warning and still fell through would satisfy any string check.
+    """
+    import ast
+
+    tree = ast.parse(
+        (ROOT / "scripts" / "dev" / "split-skills-catalog.py").read_text(encoding="utf-8"))
+
+    guards = [n for n in ast.walk(tree)
+              if isinstance(n, ast.If) and "_stale not in intro" in ast.unparse(n.test)]
+    assert len(guards) == 1, (
+        f"expected one stale-intro guard, found {len(guards)}; this test has "
+        f"lost its subject")
+
+    returns = [n for n in ast.walk(guards[0])
+               if isinstance(n, ast.Return) and isinstance(n.value, ast.Constant)
+               and n.value.value == 1]
+    assert returns, (
+        "the stale-intro guard still falls through after printing. The replace "
+        "below it then no-ops and the tool ships the broken index it just "
+        "diagnosed, at exit 0.")
+
+
+def test_the_stale_intro_literal_is_still_the_one_the_page_carries():
+    """The anchor. An abort is only correct while the literal is right; if the
+    page were reworded and the script not updated, this guard would turn a
+    working tool into one that can never run, which is the opposite defect."""
+    page = ROOT / "docs" / "skills-mcp-plugins.html"
+    if not page.is_file():
+        import pytest as _pytest
+        _pytest.skip("docs/skills-mcp-plugins.html is absent on this clone")
+
+    splitter_src = (ROOT / "scripts" / "dev" / "split-skills-catalog.py").read_text(
+        encoding="utf-8")
+    text = page.read_text(encoding="utf-8")
+    already_split = "Skill reference by category" in text
+    stale_present = "further down this page." in text
+    assert already_split or stale_present, (
+        "the monolith carries neither the pre-split sentence the script looks "
+        "for nor the post-split one it writes, so the next run aborts on a "
+        "literal nobody has updated")
+    assert "further down this page." in splitter_src, (
+        "the script no longer looks for the sentence this test pins")

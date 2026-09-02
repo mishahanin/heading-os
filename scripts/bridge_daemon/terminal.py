@@ -89,7 +89,18 @@ _LINUX_TERMINAL_CANDIDATES = (
 
 
 def find_linux_terminal() -> str | None:
-    """Locate a Linux GUI terminal emulator. Returns path or None on headless."""
+    """Locate a Linux terminal emulator. Returns a path, or None when none of
+    the candidates is installed.
+
+    NOT a headless check, which the previous sentence ("None on headless")
+    claimed. This function reads nothing but `shutil.which`: on a headless host
+    with xterm installed it returns `/usr/bin/xterm`, and on a full desktop with
+    none of the six candidates installed it returns None. Whether a GUI session
+    exists is `_is_linux_gui_session()`'s question, asked by `spawn_or_focus`
+    before this is reached. A maintainer trusting the old sentence could drop
+    that caller-side gate as redundant and reintroduce GUI-attach attempts on
+    headless hosts.
+    """
     for name in _LINUX_TERMINAL_CANDIDATES:
         path = shutil.which(name)
         if path:
@@ -259,6 +270,12 @@ def _build_initial_prompt(action: str, context: dict | None) -> str:
     return ""
 
 
+# cmd.exe's command-line limit, applied to the whole `cmd /k <inner>` string
+# rather than to the base64 context blob inside it. `_encode_context` caps the
+# blob; this caps what the shell actually parses.
+CMD_INNER_MAX = 8191
+
+
 def _encode_context(context: dict | None) -> str | None:
     """Serialize the /launch caller's context dict to a base64-encoded
     JSON string for the BRIDGE_CONTEXT env var. Base64 avoids issues
@@ -270,12 +287,20 @@ def _encode_context(context: dict | None) -> str | None:
 
     Returns None when context is None or empty (caller skips the env var).
 
-    Caps the ENCODED string at 8 KB, which is what lands on the command line and
-    so what the cmd.exe length limit actually sees. Base64 inflates by 4/3, so
-    the usable payload is about 6 KB. This line said "caps payload at 8 KB",
-    which sizes the caller's dict against a limit the code does not apply: a
-    7 KB context was silently dropped and the skill lost its pre-population with
-    no error anywhere."""
+    Caps the ENCODED string at 8 KB. Base64 inflates by 4/3, so the usable
+    payload is about 6 KB. This line said "caps payload at 8 KB", which sizes
+    the caller's dict against a limit the code does not apply: a 7 KB context
+    was silently dropped and the skill lost its pre-population with no error
+    anywhere.
+
+    This cap is NOT the cmd.exe command-line limit, which the same sentence
+    used to claim ("what the cmd.exe length limit actually sees"). What cmd.exe
+    parses is the whole `cmd /k` inner string `build_wt_command` assembles, and
+    that wraps this blob in two `set` statements, `claude`, an optional
+    `--resume <id>`, and an optional quoted initial prompt. So an encoding that
+    passes here at 8,050 bytes still produced an inner string over the 8,191
+    character limit. `build_wt_command` owns that check, against the finished
+    string, because only the finished string is what the limit applies to."""
     if not context:
         return None
     try:
@@ -305,10 +330,26 @@ def build_wt_command(user_slug: str, title: str, cwd: str, action: str,
     # with the right context already loaded instead of a blank terminal.
     initial = _build_initial_prompt(action, context)
     prompt_suffix = f' "{initial}"' if initial else ""
-    if session_id:
-        inner = f"set BRIDGE_ORIGIN=browser&& set BRIDGE_ACTION={action}&& {ctx_prefix}claude --resume {session_id}{prompt_suffix}"
-    else:
-        inner = f"set BRIDGE_ORIGIN=browser&& set BRIDGE_ACTION={action}&& {ctx_prefix}claude{prompt_suffix}"
+
+    def _inner(prefix: str) -> str:
+        if session_id:
+            return (f"set BRIDGE_ORIGIN=browser&& set BRIDGE_ACTION={action}&& "
+                    f"{prefix}claude --resume {session_id}{prompt_suffix}")
+        return (f"set BRIDGE_ORIGIN=browser&& set BRIDGE_ACTION={action}&& "
+                f"{prefix}claude{prompt_suffix}")
+
+    inner = _inner(ctx_prefix)
+    if len(inner) > CMD_INNER_MAX and ctx_prefix:
+        # The cap in `_encode_context` sizes the base64 blob alone, and cmd.exe
+        # measures this whole string. The wrapper is 120 to 570 characters
+        # depending on the action and whether an initial prompt is built, so an
+        # encoding that passed the 8 KB cap could still overrun 8,191 here.
+        # cmd.exe answers "The input line is too long." and the launched window
+        # shows an error instead of running claude, which loses the session, not
+        # just the pre-population. Dropping the context keeps the launch: the
+        # skill opens without pre-populated state, which is what `_encode_context`
+        # already does when the blob alone is too big.
+        inner = _inner("")
     return [
         "wt.exe", "-w", f"31c-{user_slug}",
         "new-tab", "--title", safe_title, "-d", cwd,

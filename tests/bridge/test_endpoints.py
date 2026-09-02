@@ -9,7 +9,7 @@ import pytest
 pytest.importorskip("fastapi")  # F-7.1: skip on a core-only clone (needs the dashboard extra)
 
 from fastapi.testclient import TestClient
-from scripts.bridge_daemon.app import build_app
+from scripts.bridge_daemon.app import ALLOWED_RETURN_PAGES, build_app
 from scripts.bridge_daemon.state import State
 
 # On the POSIX branch `spawn_or_focus` now READS the tmux exit code, so a bare
@@ -919,6 +919,40 @@ def test_settings_endpoint_returns_components(workspace_root):
     # The bumped 'inbox' should have a non-None data_time.
     by_name = {c["name"]: c for c in body["components"]}
     assert by_name["inbox"]["data_time"] is not None
+
+
+def test_every_allowed_page_ships_the_freshness_envelope(workspace_root):
+    """Two renderable pages answered without the fields the sync pill reads.
+
+    Found by the 2026-08-24 campaign (shard `scripts-01-p1`, finding 1).
+    `_attach_freshness` calls `data_time`, `server_now` and `watching` "three
+    fields the UI's sync indicator depends on", and every page payload in
+    `app.py` carried them except `/settings` and `/search`. Both are in
+    `ALLOWED_RETURN_PAGES`, so both have a renderer and page-view telemetry and
+    the topbar renders over them: the pill had nothing to compute "Computed X
+    ago" from, and no `server_now` to correct client clock skew against.
+
+    Driven off `ALLOWED_RETURN_PAGES` rather than a hand-written page list, so
+    a page added to the allowlist without an envelope fails here. Only the two
+    that were missing are exercised by URL; a full sweep would need a fixture
+    per page and would measure the fixtures.
+    """
+    client, _ = _make_client(workspace_root, token="t1")
+    for page, url in (("settings", "/settings"), ("search", "/search?q=x")):
+        assert page in ALLOWED_RETURN_PAGES, (
+            f"{page} left the allowlist; retarget this test rather than "
+            f"dropping the page")
+        r = client.get(url, headers={"Authorization": "Bearer t1"})
+        assert r.status_code == 200, (page, r.status_code)
+        body = r.json()
+        for field in ("data_time", "server_now", "watching"):
+            assert field in body, (
+                f"{url} answers without {field!r}, so the sync pill on the "
+                f"{page} page has nothing to render from: {sorted(body)}")
+        assert body["data_time"] is not None, url
+        assert body["watching"] is False, (
+            f"{page} is read-on-demand; nothing keeps it fresh in the "
+            f"background, and saying otherwise makes the pill lie")
 
 
 def test_settings_requires_auth(workspace_root):

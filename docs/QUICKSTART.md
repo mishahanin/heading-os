@@ -65,13 +65,20 @@ pre-commit install
 # 3. Create your own private data repository (one command)
 uv run python scripts/create-data-repo.py
 
-# 4. Wire secrets
+# 4. Wire secrets and arm the session hooks
 cp .env.example .env        # fill in what you use
+bash scripts/setup-platform.sh
 
 # 5. Verify, then start
 uv run python scripts/workspace-health.py
+bash scripts/setup-platform.sh --check
 claude        # then /prime
 ```
+
+Do not skip `setup-platform.sh`. Git ignores the file it writes, and that file
+registers 16 of the 17 session hooks. A clone without it arms one hook. The
+secret scanner, the release gate and the other PreToolUse walls never load. Run
+`--check` to see the state. `/prime` runs the same check at every session boot.
 
 Core `uv sync` installs only the light always-on set. Each integration (email,
 Telegram, browser automation, document generation, ...) lives in an optional

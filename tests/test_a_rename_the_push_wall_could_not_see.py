@@ -231,3 +231,102 @@ def test_neither_half_of_the_wall_is_rename_blind(rel):
     assert not lines, (
         f"{rel} asks git for a diff without --no-renames at line(s) {lines}; "
         f"a `git mv` plus an edit is one R entry and --diff-filter=ACM drops it")
+
+
+# ============================================================
+# The letter after R: a typechange the same filter also dropped
+# ============================================================
+#
+# Added 2026-09-02. `--diff-filter=ACM` names three of git's status letters,
+# and `R` was not the only one missing. A tracked regular file replaced by a
+# symlink is ONE `T` entry, so the path appeared in no leg of the scan set and
+# this wall never opened it. The workspace forbids symlinks, which is why the
+# 2026-08-24 audit rated the gap unreachable and left it; a content wall that
+# holds only because a different rule holds is not a wall.
+#
+# MEASURED that day in a scratch repo, staging a regular file and then
+# replacing it with a symlink:
+#     git diff --name-status                  ->  T  f.txt
+#     git diff --no-renames --diff-filter=ACM  ->  (empty)
+#     git diff --no-renames --diff-filter=ACMT ->  f.txt
+
+def diff_filters_missing_typechange(source: str) -> list[int]:
+    """Line numbers of `git diff` argv lists whose --diff-filter omits T.
+
+    Same AST shape as the rename guard above, and pure for the same reason:
+    a substring sweep over this file would match the paragraph you are
+    reading. A list with no `--diff-filter` at all is NOT a hit; those legs
+    ask for every status letter and cannot drop one.
+    """
+    hits = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.List):
+            continue
+        words = [e.value for e in node.elts
+                 if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+        if not words or words[0] != "git":
+            continue
+        for word in words:
+            if word.startswith("--diff-filter=") and "T" not in word:
+                hits.append(node.lineno)
+    return hits
+
+
+NO_T = [
+    'x = ["git", "diff", "--no-renames", "--name-only", "--diff-filter=ACM"]',
+    'x = ["git", "diff", "--cached", "--diff-filter=AM"]',
+]
+HAS_T_OR_NO_FILTER = [
+    'x = ["git", "diff", "--no-renames", "--name-only", "--diff-filter=ACMT"]',
+    'x = ["git", "diff", "--name-only"]',            # no filter: nothing dropped
+    'x = ["git", "ls-files", "-z"]',                 # not a diff at all
+    'x = ["diff", "--diff-filter=ACM"]',             # not git
+]
+
+
+@pytest.mark.parametrize("snippet", NO_T)
+def test_the_rule_sees_a_filter_that_drops_a_typechange(snippet):
+    assert diff_filters_missing_typechange(snippet)
+
+
+@pytest.mark.parametrize("snippet", HAS_T_OR_NO_FILTER)
+def test_the_typechange_rule_leaves_everything_else_alone(snippet):
+    assert diff_filters_missing_typechange(snippet) == []
+
+
+@pytest.mark.parametrize("rel", ["scripts/push-all.py",
+                                 "scripts/utils/push_history.py"])
+def test_neither_half_of_the_wall_drops_a_typechange(rel):
+    lines = diff_filters_missing_typechange(
+        (ROOT / rel).read_text(encoding="utf-8"))
+    assert not lines, (
+        f"{rel} asks git for a diff whose --diff-filter omits T at line(s) "
+        f"{lines}; a tracked file replaced by a symlink is one T entry and "
+        f"falls out of the scan set entirely")
+
+
+def test_git_really_drops_a_typechange_from_ACM(tmp_path):
+    """The measurement above, run rather than quoted.
+
+    No commit is taken: staging the regular file and then replacing it on
+    disk produces the `T` against the index, which is all this needs. The
+    release gate refuses a commit in a scratch repo just as it does in a real
+    one, and it is right to.
+    """
+    import subprocess
+
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=tmp_path,
+                              capture_output=True, text=True, check=True).stdout
+
+    git("init", "-q", ".")
+    (tmp_path / "f.txt").write_text("hello\n", encoding="utf-8")
+    git("add", "f.txt")
+    (tmp_path / "f.txt").unlink()
+    (tmp_path / "f.txt").symlink_to("/etc/hostname")
+
+    assert git("diff", "--name-status").split() == ["T", "f.txt"]
+    assert git("diff", "--no-renames", "--name-only",
+               "--diff-filter=ACM").split() == []
+    assert git("diff", "--no-renames", "--name-only",
+               "--diff-filter=ACMT").split() == ["f.txt"]

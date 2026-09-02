@@ -194,7 +194,12 @@ def sandbox(tmp_path, monkeypatch):
     # The real .env must not reach os.environ from inside a test, and the audit
     # log must not reach the engine's .logs/.
     monkeypatch.setattr(retire, "load_env", lambda *a, **k: None)
-    monkeypatch.setattr(retire, "LOG_PATH", tmp_path / "audit.log")
+    # `_log_path()`, not the old `LOG_PATH` constant. That constant was
+    # evaluated at IMPORT, before `main()` calls `load_env()`, and `log_dir()`
+    # mkdirs, so merely importing this module created a directory under
+    # whatever data root happened to be resolved. It became a lazy function on
+    # 2026-09-02; a test that redirects the write has to redirect the function.
+    monkeypatch.setattr(retire, "_log_path", lambda: tmp_path / "audit.log")
     # retire_memory deletes `name` from EVERY store, including the operator's
     # real per-launch harness stores under ~/.claude/projects. Not from a test.
     # A named zero-argument stub, not `list`. Ruff's PIE807 autofix here is

@@ -2,7 +2,7 @@
 name: ast-grep
 description: Guide for writing ast-grep rules to perform structural code search and analysis. Use when users need to search codebases using Abstract Syntax Tree (AST) patterns, find specific code structures, or perform complex code queries that go beyond simple text search. This skill should be used when users ask to search for code patterns, find specific language constructs, or locate code with particular structural characteristics.
 argument-hint: "[search-query-or-pattern]"
-allowed-tools: "Read, Glob, Grep, Bash(ast-grep:*), Bash(sg:*)"
+allowed-tools: "Read, Glob, Grep, Bash(ast-grep:*)"
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
@@ -61,6 +61,31 @@ Use this skill when users:
 - Request searches that require understanding code structure rather than just text
 - Ask to search for code with particular AST characteristics
 - Need to perform complex code queries that traditional text search cannot handle
+
+## Step 0: Check the binary before anything else
+
+Run this first, every time:
+
+```bash
+command -v ast-grep
+```
+
+If it prints nothing, `ast-grep` is not installed. Say so and stop. Tell the
+operator to install it, then wait. Do not draft a rule, and do not write a test
+file. Every command below fails without the binary.
+
+**Never accept `sg` as proof that `ast-grep` is present.** Upstream ships `sg` as
+a short alias, but on Ubuntu `/usr/bin/sg` is a different program from the
+`login` package. It runs a command under another group ID, through `/bin/sh`.
+MEASURED on this machine 2026-09-02: `ast-grep` was absent while `command -v sg`
+still resolved. A check written against `sg` therefore reports a healthy
+install. Every command after it then fails.
+
+The same confusion reached the tool grant. This skill's `allowed-tools` carried
+`Bash(sg:*)` until 2026-09-02. A grant is a grant and never a limit, so that
+line permitted `sg <group> -c "<any command>"`, which is a general command
+runner. Nothing in this skill or its two reference files ever invoked `sg`, so
+the grant bought nothing. It is removed. Do not put it back.
 
 ## General Workflow
 

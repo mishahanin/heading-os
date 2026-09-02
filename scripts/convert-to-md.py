@@ -41,7 +41,14 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    sys.stdout.reconfigure(encoding="utf-8")
+    # `reconfigure` is a `TextIOWrapper` method, not a file-object one. Under
+    # `contextlib.redirect_stdout(io.StringIO())`, a test harness, or any
+    # embedded interpreter that substitutes `sys.stdout`, calling it raised
+    # AttributeError here, before argument parsing, so the usage-error and
+    # exit-1 paths below never ran. `scripts/compression-candidates.py` guards
+    # the identical call the same way.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
 
     args = parse_args()
 

@@ -127,20 +127,43 @@ def compact_history() -> int:
     Every state file in the directory is read, not just this session's, because
     the question is usually asked in a FRESH session about the previous one -
     and by then this session's own history is empty.
+
+    "Newest last" is a claim about ORDER, and until 2026-09-02 the code sorted
+    the filenames instead: `checkpoint-<slug>.json`, where the slug comes from
+    an opaque session id that carries no timestamp. Lexicographic filename order
+    is arbitrary with respect to recency, so a reader scanning the bottom of the
+    report for the most recent session read whichever slug happened to sort
+    last. The sort key is now each session's newest `at` stamp, which
+    `record_compaction` writes from `utc_now().isoformat()` - a UTC ISO string,
+    so lexicographic order over it IS chronological order.
     """
     state_dir = CP.state_path(CP.project_root(), "x").parent
-    files = sorted(state_dir.glob("checkpoint-*.json")) if state_dir.is_dir() else []
+    files = state_dir.glob("checkpoint-*.json") if state_dir.is_dir() else []
+
+    sessions = []
+    for path in files:
+        history = CP.read_json(path).get("compact_history")
+        if not isinstance(history, list) or not history:
+            continue
+        # A history of nothing but malformed entries sorts first under the empty
+        # default rather than dropping out. The old code printed its bare header
+        # too, and losing a session from the report to tidy the sort would be a
+        # second defect in the place the first one was.
+        newest = max(
+            (str(entry.get("at") or "") for entry in history
+             if isinstance(entry, dict)),
+            default="",
+        )
+        sessions.append((newest, path.stem.removeprefix("checkpoint-"), history))
+    sessions.sort(key=lambda item: (item[0], item[1]))
 
     point = CP.compact_point()
     print(f"configured: {point[0]}={point[1]}" if point
           else "configured: nothing in the environment sets a compaction point")
 
     rows = 0
-    for path in files:
-        history = CP.read_json(path).get("compact_history")
-        if not isinstance(history, list) or not history:
-            continue
-        print(f"\n{path.stem.removeprefix('checkpoint-')}")
+    for _newest, name, history in sessions:
+        print(f"\n{name}")
         for entry in history:
             if not isinstance(entry, dict):
                 continue
@@ -350,7 +373,33 @@ def done_marker(note: str) -> int:
     return 0
 
 
-def compact_at_switch(value: str) -> int:
+class _ThresholdRefused(Exception):
+    """Leave a `locked_state` block without writing anything.
+
+    `locked_state` writes what the block leaves in the dict when the block exits
+    normally, and writes nothing when it raises. The refusal below has to happen
+    inside the lock (see `compact_at_switch`) and must not mutate, so it leaves
+    by raising rather than by falling off the end.
+    """
+
+
+def _used_pct(state: dict) -> float | None:
+    """The last status-line context reading, or None when there is not one.
+
+    Guarded for the same reason `_session_hard` is: this file is hand-editable,
+    and a CLI that tracebacks on a bad sample is worse than one that says it
+    could not check (.claude/rules/scope-claims.md).
+    """
+    raw = state.get("used_percentage")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def compact_at_switch(value: str, *, may_raise: bool = True) -> int:
     """Set the threshold where THIS session compacts, or report it.
 
     The operator says "делаем compact на пороге 35%" at the start of important
@@ -370,6 +419,14 @@ def compact_at_switch(value: str) -> int:
     No cleanup path is needed. The state file is keyed by session and pruned with
     it, so the number dies with the window - which is the right lifetime for a
     choice made about one piece of work.
+
+    `may_raise` is False when the operator lowered `--unattended` or `--auto` in
+    the SAME invocation. `main` runs every action flag in declaration order, and
+    this one is last, so `--unattended off --compact-at 35` lowered the mode and
+    then had it raised straight back: the operator typed an explicit negative and
+    the tool left the switch up, printing "Only you lower it: --unattended off"
+    about the words he had just used. That is the scope claim this file's
+    `auto_switch` comment names, in the other direction.
     """
     project = CP.project_root()
     slug = CP.safe_slug(CP.session_id())
@@ -420,24 +477,6 @@ def compact_at_switch(value: str) -> int:
               file=sys.stderr)
         return 2
 
-    # Guarded for the same reason `_session_hard` is: this file is hand-editable,
-    # and a CLI that tracebacks on a bad sample is worse than one that says it
-    # could not check (.claude/rules/scope-claims.md).
-    raw_used = state.get("used_percentage")
-    try:
-        used = None if raw_used is None else float(raw_used)
-    except (TypeError, ValueError):
-        used = None
-    if used is not None and hard <= used:
-        # The reading is named as one render old, not as the present fill. Only
-        # `checkpoint-statusline.py` writes it, and only on a render that
-        # measured, so inside one long turn the true fill has already outrun it.
-        print(f"checkpoint-paths: refused. This session read {used}% used at its last "
-              f"status-line render, so a hard threshold of {hard} would fire at the very "
-              f"next pause. The reading is one render old and the window only grows. "
-              f"Pick a number above {used}, or run --compact-at off.", file=sys.stderr)
-        return 2
-
     # Setting a threshold RAISES unattended, inside the same lock. Operator
     # directive, 2026-08-22: he typed the two commands together every time, and
     # a threshold with both switches down moves the QUESTION and compacts
@@ -454,14 +493,35 @@ def compact_at_switch(value: str) -> int:
     # re-raising mid-run would hand a live stretch a fresh ceiling the operator
     # never asked for. A paused stretch needs no help from here either: any
     # instruction he types clears the pause through `unattended-resume.py`.
+    #
+    # The refusal below reads `used_percentage` from `fresh`, INSIDE the lock,
+    # and not from the copy read at the top of this function. `checkpoint-
+    # statusline.py` writes this same file on every render, so a render landing
+    # between that unlocked read and this write let the guard pass on the old,
+    # lower fill and write a threshold that fires at the very next pause - the
+    # exact outcome the refusal exists to prevent. Fixed 2026-09-02. Raising
+    # leaves the block without writing, so a refused value mutates nothing.
+    used = None
     raised = False
     try:
         with CP.locked_state(path) as fresh:
+            used = _used_pct(fresh)
+            if used is not None and hard <= used:
+                raise _ThresholdRefused
             fresh["session_hard_threshold"] = hard
             fresh["session_hard_threshold_at"] = CP.utc_now().isoformat()
-            if not CP.unattended_mode(fresh):
+            if may_raise and not CP.unattended_mode(fresh):
                 CP.raise_unattended(fresh)
                 raised = True
+    except _ThresholdRefused:
+        # The reading is named as one render old, not as the present fill. Only
+        # `checkpoint-statusline.py` writes it, and only on a render that
+        # measured, so inside one long turn the true fill has already outrun it.
+        print(f"checkpoint-paths: refused. This session read {used}% used at its last "
+              f"status-line render, so a hard threshold of {hard} would fire at the very "
+              f"next pause. The reading is one render old and the window only grows. "
+              f"Pick a number above {used}, or run --compact-at off.", file=sys.stderr)
+        return 2
     except OSError as exc:
         print(f"checkpoint-paths: could not write the threshold: {exc}", file=sys.stderr)
         return 1
@@ -474,6 +534,14 @@ def compact_at_switch(value: str) -> int:
     if raised:
         print(f"unattended is now on as well, so the hook compacts at {hard}% instead "
               "of asking. Only you lower it: --unattended off.")
+    elif not may_raise:
+        # Worded about the RAISE, not about the resulting mode. `--auto off
+        # --compact-at 35` also lands here, and unattended may well have been on
+        # already from an earlier command, so a sentence claiming it is now off
+        # would be the same kind of wrong this branch exists to stop.
+        print("the automatic raise was skipped, because you lowered a switch in this "
+              "same command. Nothing here turned anything on; the threshold is set "
+              "either way.")
     else:
         print("unattended was already on, and the running stretch was left untouched.")
     return 0
@@ -529,12 +597,20 @@ def main(argv=None) -> int:
     # only the first and never set the threshold. argparse accepts the
     # combination without complaint, so nothing told them half the command had
     # been dropped.
+    #
+    # Declaration order also means `--compact-at` runs LAST, and it raises
+    # unattended on an accepted number. So an explicit `off` typed in the same
+    # command was applied and then undone, silently. The operator's negative
+    # wins: it is the more specific instruction, and the raise is a convenience
+    # that exists because he usually types the two together.
+    lowered = "off" in (args.unattended, args.auto)
     actions = [
         (args.compact_history, lambda: compact_history()),
         (args.auto, lambda: auto_switch(args.auto)),
         (args.unattended, lambda: unattended_switch(args.unattended)),
         (args.done is not None, lambda: done_marker(args.done)),
-        (args.compact_at is not None, lambda: compact_at_switch(args.compact_at)),
+        (args.compact_at is not None,
+         lambda: compact_at_switch(args.compact_at, may_raise=not lowered)),
     ]
     requested = [run for wanted, run in actions if wanted]
     if requested:

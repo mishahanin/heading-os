@@ -26,6 +26,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 HOOK = Path(__file__).resolve().parents[2] / ".claude" / "hooks" / "bridge-hook.py"
 
 
@@ -368,6 +370,115 @@ def test_find_daemon_state_returns_none_when_absent(tmp_path):
     nested = tmp_path / "a" / "b"
     nested.mkdir(parents=True)
     assert hook_mod._find_daemon_state(nested) is None
+
+
+def _hook_module():
+    """The hook loaded in-process, for the paths a subprocess cannot reach.
+
+    `stop()` reads the keyboard, and a pytest subprocess has no tty, so what
+    the user TYPED can only be driven by replacing `_read_user_choice` on an
+    imported module.
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("bridge_hook_helpers", HOOK)
+    hook_mod = importlib.util.module_from_spec(spec)
+    sys.modules["bridge_hook_helpers"] = hook_mod
+    spec.loader.exec_module(hook_mod)
+    return hook_mod
+
+
+@pytest.mark.parametrize("typed", ["b", "browser", "B", "Browser ", " browser"])
+def test_the_word_the_prompt_offers_selects_the_browser(tmp_path, monkeypatch,
+                                                        capsys, typed):
+    """The prompt advertised "browser" and only the letter "b" matched it.
+
+    Found by the 2026-08-24 campaign (shard `hooks-00-p2`, finding 4). The
+    prompt reads `[stay (Enter) / browser (b)]`, presenting the full word as a
+    labelled option, and the match was exact equality against `"b"`. A user who
+    typed `browser` and pressed Enter produced `choice == "browser"`, fell into
+    the `else`, and was told "stay" - the opposite of the request, with nothing
+    saying the input had been rejected.
+
+    Case and surrounding whitespace are covered because `_read_user_choice`
+    already applies `.strip().lower()` to whatever it read, so those forms
+    reach `stop()` normalised and a match that missed them would be a second
+    bug of the same shape.
+    """
+    hook_mod = _hook_module()
+    monkeypatch.setenv("BRIDGE_ORIGIN", "browser")
+    monkeypatch.setattr(hook_mod, "_read_user_choice",
+                        lambda timeout: typed.strip().lower())
+    called = {}
+    monkeypatch.setattr(hook_mod, "_trigger_return",
+                        lambda sid, cwd: called.setdefault("sid", sid))
+
+    assert hook_mod.stop({"session_id": "sid-1", "cwd": str(tmp_path)}) == 0
+    err = capsys.readouterr().err
+    assert called.get("sid") == "sid-1", (
+        f"typing {typed!r} at a prompt that offers 'browser' did not return to "
+        f"the browser; the hook said: {err!r}")
+    assert "returning to browser" in err
+
+
+@pytest.mark.parametrize("typed", ["", "x", "stay", "brow", "browsers"])
+def test_anything_else_still_stays(tmp_path, monkeypatch, capsys, typed):
+    """The anchor. Without it the fix passes by returning to the browser always.
+
+    Empty string is the important member: it is what a timeout and a headless
+    run both produce, and "stay" is the documented default for both.
+    """
+    hook_mod = _hook_module()
+    monkeypatch.setenv("BRIDGE_ORIGIN", "browser")
+    monkeypatch.setattr(hook_mod, "_read_user_choice", lambda timeout: typed)
+
+    def _must_not_run(sid, cwd):
+        raise AssertionError(f"{typed!r} was read as a request for the browser")
+
+    monkeypatch.setattr(hook_mod, "_trigger_return", _must_not_run)
+    assert hook_mod.stop({"session_id": "sid-1", "cwd": str(tmp_path)}) == 0
+    assert "bridge: stay." in capsys.readouterr().err
+
+
+def test_the_headless_promise_names_the_platform_it_holds_on():
+    """A docstring that promised the POSIX answer for Windows too.
+
+    Found by the 2026-08-24 campaign (shard `hooks-00-p2`, finding 3). The line
+    read "If no tty is available (headless `claude -p`, CI, background daemon),
+    return empty string", unconditionally. On POSIX that is immediate: opening
+    `/dev/tty` raises and the handler catches it. On Windows in a process with
+    no console, `msvcrt.kbhit()` returns 0 rather than raising, so that handler
+    never fires and the empty string arrives only after the full timeout.
+
+    This pins the DOCUMENTATION, and says so: the win32 branch still has no
+    console detection, and nothing here can measure Windows. If someone adds
+    the detection, this test is the one that has to change, and its failure
+    message says so rather than leaving them to guess.
+    """
+    hook_mod = _hook_module()
+    doc = hook_mod._read_user_choice.__doc__ or ""
+    fn = next(n for n in ast.walk(ast.parse(Path(HOOK).read_text(encoding="utf-8")))
+              if isinstance(n, ast.FunctionDef) and n.name == "_read_user_choice")
+    # The docstring is DROPPED before the code is searched. It names
+    # `GetConsoleWindow` itself, as the thing a future author should add, and a
+    # whole-function match would read that instruction as the fix already
+    # landing. A test that cannot tell prose from code is the shape this
+    # workspace has been bitten by before.
+    body = [n for n in fn.body
+            if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)
+                    and isinstance(n.value.value, str))]
+    code = "\n".join(ast.unparse(n) for n in body)
+    if "GetConsoleWindow" in code:
+        raise AssertionError(
+            "the win32 branch now detects an absent console, so the docstring "
+            "caveat this test pins is obsolete: delete the caveat paragraph "
+            "and rewrite this test against the new behaviour")
+    assert "Windows" in doc and "timeout" in doc, (
+        "the docstring must say that the Windows no-console path costs the "
+        "full timeout rather than returning immediately, because the code "
+        "still has no console check")
+    assert "msvcrt.kbhit()" in doc, (
+        "name the call that makes the difference, or the next reader cannot "
+        "tell this caveat from hedging")
 
 
 def test_stop_handles_non_numeric_timeout_env(tmp_path, monkeypatch):

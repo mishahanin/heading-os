@@ -167,8 +167,17 @@ def _crosscheck(monkeypatch, tmp_path, answers: dict):
     answers_path.write_text(json.dumps(answers), encoding="utf-8")
 
     monkeypatch.setattr(bench, "_crosscheck_shown_path", lambda: shown_path)
+    # The last question's truth is a path the shown hits never carry, so its
+    # ceiling is 0.000 and this run has one question that COULD falsify the
+    # ceiling's meaning. Since 2026-09-02 a run where none can is an instrument
+    # failure (exit 2), and this helper used to build exactly that run: it would
+    # have measured the new refusal rather than the shape guards these tests are
+    # about.
     monkeypatch.setattr(bench, "load_truth", lambda q, c, t: {
-        qid: OracleAnswer(kind="paths", paths={"threads/business/a.md"}, value=1)
+        qid: OracleAnswer(
+            kind="paths", value=1,
+            paths={"threads/business/a.md"} if qid != bench.CROSSCHECK_QUESTIONS[-1]
+            else {"threads/business/never-shown.md"})
         for qid in bench.CROSSCHECK_QUESTIONS})
     monkeypatch.setattr(bench, "_run_state", lambda c, r, t: {})
     monkeypatch.setattr(bench, "states_comparable", lambda a, b, pins=None: (True, []))
@@ -234,8 +243,17 @@ def test_a_crosscheck_answers_path_that_is_not_there_is_named(tmp_path,
 
 
 def test_a_question_left_out_entirely_is_still_allowed(tmp_path, monkeypatch):
-    """An ABSENT answer is not a malformed one: the code reads it as `{}` and
-    grades it. Refusing it would make the guard stricter than the format."""
+    """An ABSENT answer is not a malformed one, and refusing the file would make
+    the guard stricter than the format.
+
+    What the absent answer is GRADED as changed on 2026-09-02. It used to be
+    read as `{}`, which matches no oracle and was therefore scored "wrong": a
+    question nobody answered, counted as an incorrect answer, in a mode whose
+    grading rests on holding the two apart. It is now an outcome of "refused".
+    That is pinned in
+    `tests/test_a_benchmark_that_reported_a_verdict_it_never_measured.py`; this
+    test keeps its own narrower claim, that the file is still accepted.
+    """
     code = _crosscheck(monkeypatch, tmp_path, {"agg-05": {"refused": True}})
     assert code in (0, 1)
 
@@ -312,9 +330,45 @@ def test_the_exit_table_covers_every_mode_that_returns_one():
 
 def test_the_modes_still_return_the_one_the_table_now_documents():
     """Guard the premise. A table describing returns the code no longer makes
-    is the same defect pointed the other way."""
+    is the same defect pointed the other way.
+
+    The crosscheck half was a grep for `return 1 if contradicted else 0` until
+    2026-09-02, when that expression was replaced: the mode gained a third
+    outcome (exit 2, no question could falsify the ceiling) and computes its
+    code once so the `--no-write` branch and the writing branch cannot disagree.
+    Grepping the source for a spelling was always the weak form of this check,
+    so the premise is now guarded by DRIVING the mode instead, which is what the
+    table actually promises a wrapper.
+    """
     src = (ROOT / "scripts" / "census-bench.py").read_text(encoding="utf-8")
     score = src.split("def mode_score")[1].split("\ndef ")[0]
     assert "return 0 if verdict_name == VERDICT_ACCEPTED else 1" in score
-    cross = src.split("def mode_recall_crosscheck")[1].split("\ndef ")[0]
-    assert "return 1 if contradicted else 0" in cross
+
+
+def test_a_contradicted_ceiling_still_returns_the_one_the_table_documents(
+        tmp_path, monkeypatch):
+    """The crosscheck half of the premise above, driven rather than grepped.
+
+    The model answers correctly out of hits that showed it nothing, which is the
+    contradiction this mode exists to catch, and the table calls that exit 1.
+    """
+    shown_path = tmp_path / "recall-crosscheck-shown.json"
+    shown_path.write_text(json.dumps({
+        "schema_version": 1, "run_state": {},
+        "shown": {qid: [] for qid in bench.CROSSCHECK_QUESTIONS},
+    }), encoding="utf-8")
+    monkeypatch.setattr(bench, "_crosscheck_shown_path", lambda: shown_path)
+    monkeypatch.setattr(bench, "load_truth", lambda q, c, t: {
+        qid: OracleAnswer(kind="paths", paths={"threads/business/a.md"}, value=1)
+        for qid in bench.CROSSCHECK_QUESTIONS})
+    monkeypatch.setattr(bench, "_run_state", lambda c, r, t: {})
+    monkeypatch.setattr(bench, "states_comparable", lambda a, b, pins=None: (True, []))
+
+    answers_path = tmp_path / "cc.json"
+    answers_path.write_text(json.dumps(
+        {qid: {"kind": "paths", "paths": ["threads/business/a.md"]}
+         for qid in bench.CROSSCHECK_QUESTIONS}), encoding="utf-8")
+    questions = [{"id": qid, "group": "g", "question_ru": "?"}
+                 for qid in bench.CROSSCHECK_QUESTIONS]
+    assert bench.mode_recall_crosscheck(questions, None, ROOT, date(2026, 8, 24),
+                                        str(answers_path), write=False) == 1

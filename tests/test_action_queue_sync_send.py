@@ -55,7 +55,11 @@ class _FakeProc:
 
 def _email_card(**over):
     c = {"id": "abc123", "action_type": "email_send", "status": "approved",
-         "to": "x@example.com", "subject": "s", "draft_body": "b",
+         # `.test` and not `example.com`: the recipient gate in `send_card`
+         # refuses the RFC 2606 documentation domains as unfilled placeholders,
+         # and `.test` is the reserved TLD this corpus already addresses its
+         # send fixtures at (see tests/test_send_body_never_reaches_argv.py).
+         "to": "x@b.test", "subject": "s", "draft_body": "b",
          "draft_status": "ready_for_review"}
     c.update(over)
     return c

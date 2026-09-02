@@ -5,7 +5,13 @@
 # Detects the operating system and MERGES the correct
 # settings.local.json template into the live settings for Claude Code hooks.
 #
-# Usage:  bash scripts/setup-platform.sh [--force] [--dry-run]
+# Usage:  bash scripts/setup-platform.sh [--force] [--dry-run] [--check]
+#
+# `--check` writes nothing. It reports whether this clone's live settings file
+# registers every session hook the template defines, and exits 1 when it does
+# not. MEASURED 2026-09-02: a clone where this script has never run arms 1 hook
+# of 17, and the 16 absent ones include the dispatcher behind eleven PreToolUse
+# walls. Nothing reported that state before this flag existed.
 #
 # Safe to run multiple times. It did not used to be, and the header here said
 # it was: the script ended in an unconditional `cp "$TEMPLATE" "$TARGET"`, and
@@ -76,6 +82,29 @@ fi
 echo "Platform detected: $PLATFORM"
 echo "Template:          $(basename "$TEMPLATE")"
 
+# Is --check among the arguments? Answered before anything below, because both
+# branches below WRITE and --check must never write.
+CHECK_ONLY=0
+for arg in "$@"; do
+    if [ "$arg" = "--check" ]; then CHECK_ONLY=1; fi
+done
+
+# A clone with no live file is unarmed, and saying so needs no JSON and no
+# interpreter. Answering it HERE, above the install branch, is what lets --check
+# work on a fresh clone with no python3 at all, which is the one state it exists
+# to detect and the one where an operator most needs a diagnosis.
+#
+# This is the ONLY gate between --check and the write below, deliberately. An
+# earlier draft also guarded the install branch with `$CHECK_ONLY -eq 0`, and
+# the mutation harness killed neither guard: each made the other unreachable,
+# so breaking either one alone changed no behaviour, which is the shape of dead
+# code rather than of defence in depth. One gate, and a mutation of it is fatal.
+if [ "$CHECK_ONLY" -eq 1 ] && [ ! -e "$TARGET" ]; then
+    echo "NOT ARMED: $TARGET does not exist, so no session hooks are registered."
+    echo "  Fix: bash scripts/setup-platform.sh"
+    exit 1
+fi
+
 # First install needs no interpreter: there is no live file to preserve, so a
 # plain copy is both correct and the only thing that works on a clone whose
 # .venv does not exist yet. This script is step 1 of setup.
@@ -94,6 +123,12 @@ for candidate in "$WORKSPACE_ROOT/.venv/bin/python" "$(command -v python3 || tru
 done
 
 if [ -z "$PYTHON" ]; then
+    if [ "$CHECK_ONLY" -eq 1 ]; then
+        # Cannot tell must never read as armed.
+        echo "ERROR: no python3 was found, so this clone cannot be checked." >&2
+        echo "       Treat the answer as unknown, not as armed." >&2
+        exit 2
+    fi
     # REFUSE rather than fall back to the copy. Without an interpreter the only
     # available action is the destructive one, and the whole point of this
     # change is that the destructive one must never happen by default.

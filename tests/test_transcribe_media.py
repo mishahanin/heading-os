@@ -255,3 +255,100 @@ def test_missing_file_exits_nonzero_without_loading_a_model(monkeypatch, capsys,
     monkeypatch.setattr(sys, "argv", ["transcribe-media.py", str(tmp_path / "nope.mp4")])
     assert transcribe_media.main() == 1
     assert "not a file" in capsys.readouterr().err
+
+
+# ---------------------------------------------------- probe_duration failures
+#
+# Shard scripts-15-p2 finding 6. `probe_duration`'s docstring calls itself a
+# cheap courtesy ("no decoding ... milliseconds of work") and its caller's
+# message says "assuming a long file", so a container it cannot open must
+# answer None. It caught `(OSError, ValueError)` only.
+#
+# PyAV raises its own hierarchy and only PART of it lands under those two names.
+# Measured against av 18.0.0: `InvalidDataError` happens to subclass
+# `ValueError`, but `FFmpegError` itself and about thirty siblings
+# (`DemuxerNotFoundError`, `ProtocolNotFoundError`, `ExternalError`, av's own
+# `EOFError`, `UnknownError`) subclass neither `OSError` nor `ValueError`. A
+# file that exists, and so passed `main`'s `is_file()` check, but carries an
+# unsupported or unopenable container therefore crashed the whole run with a
+# traceback out of the probe, before the model was even loaded. `main` calls it
+# unconditionally, so it aborted even when an explicit `--batched` or
+# `--sequential` meant the answer would have been discarded.
+
+import av  # noqa: E402
+
+
+class _Boom:
+    """An `av.open` that raises the class it was built with."""
+
+    def __init__(self, exc):
+        self.exc = exc
+
+    def __call__(self, *args, **kwargs):
+        raise self.exc
+
+
+@pytest.mark.parametrize("exc_name", [
+    "FFmpegError",
+    "DemuxerNotFoundError",
+    "ProtocolNotFoundError",
+    "ExternalError",
+    "UnknownError",
+    "InvalidDataError",
+])
+def test_a_container_pyav_cannot_open_answers_none_rather_than_raising(
+        exc_name, monkeypatch, tmp_path, capsys):
+    """Every one of these reaches `probe_duration` from a real damaged file."""
+    exc_cls = getattr(av.error, exc_name)
+    media = tmp_path / "corrupt.mp4"
+    media.write_bytes(b"not a container")
+    monkeypatch.setattr(av, "open", _Boom(exc_cls(1, "probe")))
+
+    assert transcribe_media.probe_duration(media) is None, (
+        f"{exc_name} escaped probe_duration instead of degrading to None")
+    assert "duration probe failed" in capsys.readouterr().err
+
+
+def test_the_named_uncaught_classes_really_are_outside_the_old_tuple():
+    """The floor under the parametrize above.
+
+    If PyAV ever reparents these under `OSError` or `ValueError`, the cases
+    above would pass against the un-widened `except (OSError, ValueError)` and
+    certify a guard that had been removed. This asserts they still sit outside
+    it, so the test is measuring the widening rather than the library.
+    """
+    outside = [n for n in ("FFmpegError", "DemuxerNotFoundError",
+                           "ProtocolNotFoundError", "ExternalError",
+                           "UnknownError")
+               if not issubclass(getattr(av.error, n), (OSError, ValueError))]
+    assert len(outside) == 5, (
+        f"only {outside} still fall outside (OSError, ValueError); re-pick the "
+        f"cases above so this file keeps measuring the widened handler")
+
+
+def test_a_readable_container_still_reports_its_duration(monkeypatch, tmp_path):
+    """Or the widening above is just "always return None"."""
+    media = tmp_path / "ok.mp4"
+    media.write_bytes(b"x")
+
+    class _Container:
+        duration = 5 * av.time_base
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(av, "open", lambda *a, **k: _Container())
+    assert transcribe_media.probe_duration(media) == pytest.approx(5.0)
+
+
+def test_an_unrelated_error_is_not_swallowed_by_the_widened_handler(monkeypatch,
+                                                                    tmp_path):
+    """The handler must stay a container guard, not a blanket one."""
+    media = tmp_path / "ok.mp4"
+    media.write_bytes(b"x")
+    monkeypatch.setattr(av, "open", _Boom(KeyboardInterrupt()))
+    with pytest.raises(KeyboardInterrupt):
+        transcribe_media.probe_duration(media)

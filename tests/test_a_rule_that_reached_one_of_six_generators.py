@@ -44,6 +44,7 @@ from scripts.utils.docx_helpers import (  # noqa: E402
     TCSHD_SUCCESSORS,
     insert_in_order,
 )
+from tests.code_only import code_lines  # noqa: E402
 from tests.repo_files import read_sources  # noqa: E402
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -277,17 +278,20 @@ _CONTAINERS = ("ppr", "rpr", "tcpr", "trpr", "tblpr", "sectpr")
 _APPEND = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:\(\))?\s*\.\s*append\s*\(")
 
 
-def _raw_property_appends(source: str) -> list[int]:
+def _raw_property_appends(source: str, where: str = "<snippet>") -> list[int]:
     """Line numbers of raw appends onto an OOXML property container.
 
     Appending is correct only while the container holds nothing that belongs
     later, which is a fact about the call site rather than about the line. Seven
     authors each judged it and five judged it wrong, so the rule here is simply:
     go through the funnel.
+
+    The comment strip is token-aware. `line.split("#", 1)[0]` stood here and cut
+    at a `#` inside a string as readily as at a comment, so an append sitting
+    after any `#`-bearing literal on its own line was invisible to the sweep.
     """
     offenders = []
-    for i, line in enumerate(source.splitlines(), start=1):
-        code = line.split("#", 1)[0]
+    for i, code in enumerate(code_lines(source, where=where), start=1):
         for match in _APPEND.finditer(code):
             name = match.group(1).replace("_", "").lower()
             name = name.removeprefix("getoradd")
@@ -302,7 +306,7 @@ def test_no_generator_appends_onto_a_property_container():
     scanned = 0
     for path, source in read_sources(sorted(SCRIPTS.rglob("*.py"))):
         scanned += 1
-        lines = _raw_property_appends(source)
+        lines = _raw_property_appends(source, where=str(path))
         if lines:
             offenders[str(path.relative_to(ROOT))] = lines
     # Corpus floor, added 2026-09-01 after measuring the gap: repointing SCRIPTS
@@ -322,19 +326,33 @@ def test_no_generator_appends_onto_a_property_container():
 
 
 def test_the_append_detector_refuses_a_known_offender():
-    """The exact line removed from generate-client-docx.py."""
-    assert _raw_property_appends("    pPr.append(pBdr)\n") == [1]
-    assert _raw_property_appends("    tcPr.append(tcBorders)\n") == [1]
+    """The exact line removed from generate-client-docx.py.
+
+    Dedented: the snippets are tokenized now, and a lone indented line is an
+    IndentationError rather than Python. The detector reads the same text.
+    """
+    assert _raw_property_appends("pPr.append(pBdr)\n") == [1]
+    assert _raw_property_appends("tcPr.append(tcBorders)\n") == [1]
     assert _raw_property_appends(
-        "    cell._tc.get_or_add_tcPr().append(shading)\n") == [1]
+        "cell._tc.get_or_add_tcPr().append(shading)\n") == [1]
+
+
+def test_the_append_detector_still_sees_past_a_hash_in_a_string():
+    """The hole the token-aware strip closes.
+
+    `line.split("#", 1)[0]` cut this line at `run#`, so the append never
+    reached the pattern and the sweep reported a clean tree.
+    """
+    assert _raw_property_appends(
+        'log("pass #2"); pPr.append(pBdr)\n') == [1]
 
 
 def test_the_append_detector_does_not_fire_on_a_comment_or_an_inner_element():
     """`md-to-docx-proposal.py` carries the offending line inside a comment that
     documents an older bug, and `pBdr.append(bottom)` builds the border element
     itself, which has no sequence to violate."""
-    assert _raw_property_appends("    # `tblPr.append(borders)` decorated a node\n") == []
-    assert _raw_property_appends("    pBdr.append(bottom)\n") == []
+    assert _raw_property_appends("# `tblPr.append(borders)` decorated a node\n") == []
+    assert _raw_property_appends("pBdr.append(bottom)\n") == []
 
 
 def test_the_append_detector_does_not_fire_on_numpr():
@@ -342,4 +360,4 @@ def test_the_append_detector_does_not_fire_on_numpr():
     docx.py appends them in that order into an element it just created empty.
     The first version of the pattern flagged both lines."""
     assert _raw_property_appends(
-        '    num_pr.append(parse_xml("<w:ilvl w:val=\'0\'/>"))\n') == []
+        'num_pr.append(parse_xml("<w:ilvl w:val=\'0\'/>"))\n') == []

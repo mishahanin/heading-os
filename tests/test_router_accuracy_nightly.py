@@ -313,6 +313,47 @@ def test_classify_aggregate_drop_escalates_high():
     assert sig["severity"] == "high"
 
 
+def test_an_aggregate_drop_has_no_warn_band_and_the_asymmetry_is_deliberate():
+    """The aggregate escalates at the DUE bar, not at the single-skill HIGH bar.
+
+    An audit read `overall_drop > ROUTER_ACCURACY_DROP_PCT` in the severity test
+    as a copy error for `ROUTER_ACCURACY_HIGH_PCT` and proposed changing it,
+    on the argument that every other classifier here has a warn band under its
+    high band. Three things already said otherwise, and none of them was a
+    single fact that could rot on its own: `ROUTER_ACCURACY_HIGH_PCT`'s inline
+    comment scopes it to "a bigger SINGLE-SKILL drop", the classifier docstring
+    says "a single skill dropping > ROUTER_ACCURACY_HIGH_PCT **or an aggregate
+    drop** escalates to high", and `test_classify_aggregate_drop_escalates_high`
+    above pins a 15-point aggregate - between the two constants - at high.
+
+    The design is that a regression across the WHOLE router is worse than one
+    skill's regression of the same size, so the aggregate has one band and it is
+    high. This test sits at 10.5 points, the smallest aggregate drop that is due
+    at all, because that is the only place the two readings differ: the proposed
+    change is silent everywhere above 20 and everywhere below 10.
+
+    The anchor is the second half: a single skill dropping the SAME 10.5 points
+    is warn. Without it a classifier that answered "high" to everything would
+    satisfy the first assertion.
+    """
+    flat = {"osint": 0.90, "recall": 0.90}
+    aggregate = classify_router_accuracy(_rec(0.795, flat), _rec(0.90, flat))
+    assert aggregate["due"] is True
+    assert aggregate["severity"] == "high", (
+        "an aggregate drop past the due bar is high; there is no aggregate warn band"
+    )
+
+    per_skill = classify_router_accuracy(
+        _rec(0.90, {"osint": 0.795, "recall": 0.90}),
+        _rec(0.90, {"osint": 0.90, "recall": 0.90}),
+    )
+    assert per_skill["due"] is True
+    assert per_skill["severity"] == "warn", (
+        "the same 10.5 points on ONE skill is warn, not high - the bands differ "
+        "by design and this half is what keeps the assertion above falsifiable"
+    )
+
+
 def _write_trend(data_root: Path, records: list[dict]) -> None:
     d = data_root / "datastore" / "operations" / "router-accuracy"
     d.mkdir(parents=True, exist_ok=True)

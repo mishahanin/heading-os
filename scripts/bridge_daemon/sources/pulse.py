@@ -726,8 +726,15 @@ def signals(data_root: Path, today: date | None = None, cap: int | None = None) 
     - context:  one-line explainer e.g. 'next: Send NDA · due 2026-05-10'
     - link:     '#/pipeline' for click-through
 
-    Sorted by severity (red first), then days_at_stage DESC. Capped at
-    `cap` (defaults to SIGNALS_CAP for the Pulse-embedded view; the
+    Sorted by severity (red first), then by each signal's OWN elapsed-days
+    figure, descending: `days_at_stage` for the two time-in-stage kinds, and
+    `days_late` for `pipeline-overdue-action`, which carries no `days_at_stage`
+    key at all and whose stage date may not even parse. The two interleave
+    inside a severity band, so a 40-day drift and an action 40 days late sort
+    together. This block read "then days_at_stage DESC" flat until 2026-09-02,
+    naming one key for three kinds when a third of the output never sets it.
+
+    Capped at `cap` (defaults to SIGNALS_CAP for the Pulse-embedded view; the
     dedicated /signals page passes SIGNALS_CAP_FULL).
 
     Returns [] (never None) so callers don't need to nil-check.
@@ -1105,8 +1112,10 @@ def today_activity(data_root: Path, today: date | None = None) -> dict:
     except Exception as e:
         logging.warning("bridge.pulse.today_activity.investors: source unavailable, skipping: %s", e)
 
-    # Pipeline touch-log. NO `undo` filter here, unlike the four blocks above,
-    # and that is not an omission: `sources/pipeline.py` writes no tombstone --
+    # Pipeline touch-log. NO `undo` filter here, unlike the investors block
+    # above and the three below (this is the second of five, and the comment
+    # said "the four blocks above" until 2026-09-02), and that is not an
+    # omission: `sources/pipeline.py` writes no tombstone --
     # there is no `undo_touch` and nothing sets the key. A filter for a record
     # that cannot exist reads as protection and tests as nothing. If a
     # tombstone ever lands there, this block needs the same first line its
@@ -1382,7 +1391,18 @@ def pulse_data(data_root: Path, odin_5_target: str | None = None,
     # pipeline.md carries no summary rows was told on every render that its
     # summary disagreed with its deals on both figures. A row that is not there
     # cannot have drifted.
-    value, deals = pipe.get("total_value_usd", 0), len(pipe.get("deals", []))
+    #
+    # The count is `total`, the rows PARSED, and not `len(deals)`, the rows
+    # SHIPPED. `list_pipeline` slices its list to PIPELINE_ROW_CAP (100) on the
+    # line before it returns, and returns `total` beside it for exactly this
+    # reader. Reading the length pinned `kpi.active_deals` at 100 while
+    # `total_value_usd`, which is summed before the slice, kept climbing, so past
+    # the cap the two figures on one card were measured over different row sets, and
+    # the drift report below then fired on a discrepancy the dashboard had
+    # manufactured itself. That is the same defect `list_pipeline` fixed on its
+    # own side when it dropped the `break` at the cap, and its comment there
+    # names this file as the consumer that would suffer it.
+    value, deals = pipe.get("total_value_usd", 0), pipe.get("total", 0)
     stated = pipeline_summary_stated(data_root)
     actual = {"value": value, "deals": deals}
     summary_drift = {

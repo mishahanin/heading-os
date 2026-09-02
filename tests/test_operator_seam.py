@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 import scripts.utils.operator_identity as operator_identity
+from tests.code_only import code_lines
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -163,6 +164,12 @@ def _scan(text: str, rel: str):
     """
     offenders = []
     inspected = 0
+    # Line-aligned, so `decommented[lineno - 1]` is this line without its
+    # comment. `line.split("#", 1)[0]` stood here and truncated at a `#` inside
+    # a string too, so `HEADERS = {"X-Run": "run#1", "owner": "misha-hanin"}`
+    # reached the regex as `HEADERS = {"X-Run": "run` and the guard passed over
+    # a planted literal without a word.
+    decommented = code_lines(text, where=rel)
     for lineno, line in _code_lines(text):
         inspected += 1
         if not _PERSONAL_RE.search(line):
@@ -172,7 +179,7 @@ def _scan(text: str, rel: str):
         if '"""' in line or "'''" in line or "e.g." in line or "help=" in line:
             continue
         # Allowlisted: a trailing inline comment carrying the token (prose).
-        code = line.split("#", 1)[0]
+        code = decommented[lineno - 1]
         if not _PERSONAL_RE.search(code):
             continue
         offenders.append(f"{rel}:{lineno}: {line.strip()}")
@@ -231,6 +238,23 @@ def test_the_seam_detector_flags_a_planted_literal():
     assert inspected == 3, f"the scanner skipped a code line: {inspected}"
     assert len(offenders) == 2, f"the detector missed a planted literal: {offenders}"
     assert "misha-hanin" in offenders[0] and "mishahanin" in offenders[1]
+
+
+def test_the_seam_detector_sees_past_a_hash_in_a_string():
+    """The blind spot the trailing-comment allowlist opened.
+
+    The allowlist was `line.split("#", 1)[0]`, which truncates at a `#` inside
+    a string as readily as at a comment. MEASURED 2026-09-02 on the line below:
+    the detector received `HEADERS = {"X-Run": "run` and reported no offender,
+    so a personal identity literal anywhere after a `#`-bearing literal on its
+    own line shipped in engine code with this guard green.
+    """
+    planted = ('import os\n'
+               'HEADERS = {"X-Run": "run#1", "owner": "misha-hanin"}\n')
+    offenders, inspected = _scan(planted, "planted.py")
+    assert inspected == 2, f"the scanner skipped a code line: {inspected}"
+    assert len(offenders) == 1, f"the `#` in the string still blinds it: {offenders}"
+    assert "misha-hanin" in offenders[0]
 
 
 def test_the_seam_detector_leaves_the_allowlisted_prose_alone():

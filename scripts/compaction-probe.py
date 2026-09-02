@@ -20,7 +20,7 @@ TIMESTAMP SEMANTICS, stated once because three earlier drafts disagreed:
 2. There are TWO clocks here and they must not be mixed. Transcript timestamps
    are UTC; archive filenames are stamped in the operator's own zone. So
    `assert_driven` compares UTC against UTC (`compact_requests[].at` is
-   `CP.utc_now()`) via `_event_stamp`, and `assert_handoff_precedes` compares
+   `CP.utc_now()`) via `_utc_moment`, and `assert_handoff_precedes` compares
    local against local via `_event_stamp_local`. Mixing them was a real defect,
    found 2026-08-23: on this UTC+4 host it produced 8 false violations and hid 2
    real ones out of 91 boundaries.
@@ -37,8 +37,8 @@ Assertions (each exits 1 on violation; a bare run asserts nothing and exits 0):
     --assert-handoff-precedes-compaction  every boundary has a PRE-compaction
                                           handoff before it
     --assert-no-native-compaction         no boundary carries trigger="auto"
-    --assert-no-cascade                   no two boundaries within N assistant
-                                          turns
+    --assert-no-cascade                   no two boundaries FEWER than N
+                                          assistant turns apart; N itself passes
 """
 
 import argparse
@@ -68,8 +68,18 @@ ARCHIVE_RE = re.compile(
 # against the archive each of them had caused.
 PRE_COMPACTION_KINDS = frozenset({"auto", "manual"})
 
-# The harness's own anti-thrash constant: it gives up after the context refills
-# within 3 turns of a compaction, 3 times running.
+# Where the default comes from: the harness's own anti-thrash constant, which
+# gives up after the context refills within 3 turns of a compaction, 3 times
+# running.
+#
+# It is a MINIMUM here, not an inclusive "within". `assert_no_cascade` flags
+# `turns < gap`, so with the default a gap of exactly 3 passes and 0, 1 and 2
+# violate. That reading is deliberate and pinned by
+# `tests/test_compaction_probe.py::test_the_cascade_gap_is_a_minimum_not_an_exclusive_bound`,
+# which exists precisely to hold the case on the line. The comment here and the
+# module docstring both read "within 3 turns" until 2026-09-02, which describes
+# `turns <= gap` and contradicted the code and that test; the prose was the
+# wrong side, so the prose moved.
 DEFAULT_CASCADE_TURNS = 3
 
 
@@ -149,20 +159,36 @@ def _archives(project: Path) -> tuple[dict[str, list[dict]], list[str]]:
     return grouped, []
 
 
-def _event_stamp(event: dict) -> str:
-    """The boundary timestamp, on the UTC clock, in stamp format.
+def _utc_moment(raw: str) -> datetime | None:
+    """One UTC datetime at FULL precision, or None when it will not parse.
 
     Compare this against anything SERIALIZED — `compact_requests[].at` is
     `CP.utc_now()`. For a handoff FILENAME use `_event_stamp_local`; see the
-    note on that function for why the two must not be merged.
+    note on that function for why the two clocks must not be merged.
+
+    Replaces the pair `_event_stamp` / `_stamp_of_request`, which both truncated
+    to whole seconds (`clock.split(".", 1)[0]`) before `assert_driven` compared
+    them with `<=`. Fractional seconds are present in the data (the transcript
+    writes `2026-08-21T13:08:05.200Z`), so truncating both sides made a request
+    written up to a second AFTER a boundary satisfy "precedes". MEASURED
+    2026-09-02: boundary `13:08:05.200Z` and request `13:08:05.900Z` both
+    truncated to `2026-08-21-130805`, `<=` held, and a boundary the hook had not
+    yet asked for was certified as driven. The assertion's whole guarantee is
+    that the request CAUSED the boundary; a 700 ms window in the wrong direction
+    is the one thing it must not tolerate.
+
+    Returns None on an unparseable value, matching the "" the two stamp helpers
+    returned; `assert_driven` then finds no qualifying request and reports a
+    violation, which is the fail-toward-reporting direction.
     """
-    raw = (event.get("timestamp") or "").replace("Z", "")
+    raw = (raw or "").strip()
+    if not raw:
+        return None
     try:
-        date, clock = raw.split("T", 1)
+        moment = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
-        return ""
-    clock = clock.split(".", 1)[0].replace(":", "")
-    return f"{date}-{clock[:6]}"
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 
 
 def _event_stamp_local(event: dict) -> str:
@@ -180,7 +206,7 @@ def _event_stamp_local(event: dict) -> str:
     `2026-08-21-170420` — 13:04:20 UTC, four minutes BEFORE the boundary it was
     reported as missing. The assertion's whole guarantee was noise.
 
-    Returns "" on an unparseable timestamp, matching `_event_stamp`; the caller
+    Returns "" on an unparseable timestamp, as `_utc_moment` returns None; the caller
     then finds no archive at or below "" and reports a violation, which is the
     fail-toward-reporting direction `.claude/rules/scope-claims.md` asks for.
     """
@@ -214,16 +240,6 @@ def _requests(project: Path, session: str) -> list[dict]:
     return []
 
 
-def _stamp_of_request(entry: dict) -> str:
-    raw = str(entry.get("at") or "").replace("Z", "")
-    try:
-        date, clock = raw.split("T", 1)
-    except ValueError:
-        return ""
-    clock = clock.split(".", 1)[0].replace(":", "")
-    return f"{date}-{clock[:6]}"
-
-
 # ============================================================
 # Assertions
 # ============================================================
@@ -244,11 +260,13 @@ def assert_driven(events: list[dict], project: Path) -> list[str]:
         session = event["session"]
         if session not in cache:
             cache[session] = _requests(project, session)
-        stamp = _event_stamp(event)
-        matched = [
-            r for r in cache[session]
-            if _stamp_of_request(r) and _stamp_of_request(r) <= stamp
-        ]
+        boundary = _utc_moment(event.get("timestamp") or "")
+        matched = []
+        if boundary is not None:
+            for request in cache[session]:
+                asked = _utc_moment(str(request.get("at") or ""))
+                if asked is not None and asked <= boundary:
+                    matched.append(request)
         if not matched:
             violations.append(
                 f"{session} @ {event['timestamp']} (trigger={event['trigger']}, "
@@ -369,7 +387,10 @@ def main() -> int:
     parser.add_argument("--assert-driven-compaction", action="store_true")
     parser.add_argument("--assert-handoff-precedes-compaction", action="store_true")
     parser.add_argument("--assert-no-native-compaction", action="store_true")
-    parser.add_argument("--assert-no-cascade", action="store_true")
+    parser.add_argument(
+        "--assert-no-cascade", action="store_true",
+        help="flag two boundaries FEWER than --cascade-turns assistant turns "
+             "apart; a gap of exactly that many passes")
     parser.add_argument("--cascade-turns", type=int, default=DEFAULT_CASCADE_TURNS)
     args = parser.parse_args()
 
@@ -386,7 +407,41 @@ def main() -> int:
         events = [e for e in events if (e["timestamp"] or "")[:10] >= args.since]
     events.sort(key=lambda e: (e["session"], e["timestamp"]))
 
+    requested = [
+        name for name, on in (
+            ("--assert-driven-compaction", args.assert_driven_compaction),
+            ("--assert-handoff-precedes-compaction",
+             args.assert_handoff_precedes_compaction),
+            ("--assert-no-native-compaction", args.assert_no_native_compaction),
+            ("--assert-no-cascade", args.assert_no_cascade),
+        ) if on
+    ]
+
     violations: list[str] = []
+    # An assertion over zero events is a verdict over nothing. Every assertion
+    # below is a per-event fold, so with no events in scope each returns an empty
+    # violation list, `main` exits 0 and the run prints "All requested assertions
+    # hold." MEASURED 2026-09-02: `--session does-not-exist-xyz
+    # --assert-driven-compaction` printed exactly that and exited 0, and so does a
+    # `--since` in the future or a pruned transcript directory. A typo turned
+    # every gate green with a success message.
+    #
+    # Refused rather than passed, matching `content-guard.py`'s "unverified is
+    # not clean" and the fail-toward-reporting direction
+    # `.claude/rules/scope-claims.md` asks for. The cause is named, because the
+    # three ways to get here need different things looked at.
+    if requested and not events:
+        cause = []
+        if args.session:
+            cause.append(f"--session {args.session} matched no transcript")
+        if args.since:
+            cause.append(f"--since {args.since} left the window empty")
+        cause.extend(skipped)
+        violations.append(
+            f"no compact_boundary events in scope, so {', '.join(requested)} "
+            f"asserted over nothing: "
+            f"{'; '.join(cause) or 'no transcript carried a boundary'}"
+        )
     if args.assert_driven_compaction:
         violations += assert_driven(events, project)
     if args.assert_handoff_precedes_compaction:

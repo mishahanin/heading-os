@@ -58,7 +58,7 @@ The argument is `recipient :: subject :: body` (double-colon separated). Any
 missing field falls back to a clearly-labelled placeholder so the card is always
 well-formed:
 
-- recipient -> `someone@example.com` (a placeholder; the human edits it before approving)
+- recipient -> `someone@example.com` (a placeholder; the human corrects it with `action-queue.py edit <id> --to <address>` before approving)
 - subject -> `Draft from /queue-draft`
 - body -> the whole argument if no `::` separators were given, else empty
 
@@ -109,7 +109,7 @@ Report the outcome plainly:
 
 - the deposited card's title and that it is `tier=gated`, `status=pending`;
 - that sending requires an explicit human approve (`python scripts/action-queue.py approve <id>` or `/queue approve`), which THIS skill and the headless runner cannot perform;
-- the placeholder recipient, if one was used, so the human edits it before approving.
+- the placeholder recipient, if one was used, and the exact command that corrects it: `python scripts/action-queue.py edit <id> --to <address>`. State that `approve` refuses the card until that address is real, so the human is not left holding a card they cannot move.
 
 ## NEVER
 

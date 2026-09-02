@@ -222,6 +222,28 @@ DECLARED_DIRECTIONAL_STRIPS = {
         "two together on the live corpus, so the duplication is held rather "
         "than merely hoped for. Both sites accept '- Consumed by:' and "
         "'**Consumed by:**', which that file's _POINTER_SHAPES pins",
+    ("tests/test_a_skill_that_halted_on_every_public_clone.py",
+     "lstrip", "('\"`"):
+        "unwraps a path token captured out of prose, where the opening wrapper "
+        "is any mix of '(', a quote and a backtick and has no fixed length: a "
+        "skill body writes `.claude/rules/voss.md`, ('outputs/x.md) and "
+        "\"reference/y.md\" in the same paragraph. A slice cannot express that, "
+        "and slicing a fixed count off an unwrapped token eats the leading "
+        "'.claude'. The set is deliberately NARROWER than its rstrip sibling "
+        "below: '.' is absent, because a leading dot is the first character of "
+        "every path in the .claude/ tree rather than punctuation around one",
+    ("tests/test_a_skill_that_halted_on_every_public_clone.py",
+     "rstrip", ".,;:)('\"`"):
+        "the closing half of the same unwrap, and the asymmetry IS the fix. A "
+        "symmetric .strip() of this set ate the leading dot of every "
+        "'.claude/...' path, so '.claude/rules/voss.md' arrived as "
+        "'claude/rules/voss.md', matched no prefix, and the whole .claude/ tree "
+        "went invisible to the sweep, including .claude/projects/ and "
+        ".claude/settings.local.json, which both route private. Found by "
+        "mutation, not by review: two mutants that moved a .claude/rules/ path "
+        "into a checked position both survived. A token may end with any mix "
+        "of sentence punctuation and closing wrappers ('voss.md).', "
+        "'`voss.md`,'), so the trailing run has no fixed length either",
 }
 
 

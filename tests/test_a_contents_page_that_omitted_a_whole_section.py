@@ -544,3 +544,58 @@ def test_the_typeface_reference_points_back_at_the_palette():
     usage = (ROOT / "reference" / "31c-typeface-usage.md").read_text(encoding="utf-8")
     assert "corporate-style-guide.md" in usage
     assert "orange-display" in usage
+
+
+# ---------------------------------------------------------------------------
+# The file's two accounts of the same historical bug must agree
+# ---------------------------------------------------------------------------
+#
+# `contents_lines`'s docstring said the old hand-written list "used to stop at
+# fifteen"; the comment above `toc_items = contents_lines()` said it "used to be
+# sixteen hand-written strings for a document with seventeen Heading 1s". Both
+# explain the same fix to the same list, and they cannot both be true, so a
+# maintainer reconstructing what the bug was got two different answers from one
+# file. MEASURED against the initial-import commit: 15 strings, 17
+# `add_heading(..., 1)` calls of which one is TABLE OF CONTENTS, so 16 sections.
+# The docstring was right and the comment was not.
+
+def test_the_two_accounts_of_the_old_contents_list_agree_on_its_length(od):
+    """Asked of the ACTIVE claim in each place, not of the whole text.
+
+    A whole-text match cannot work here, because the house style retires a false
+    sentence by quoting it beside the correction: the comment now carries both
+    the true numbers and, in its own correction paragraph, the sixteen and the
+    seventeen it replaced. So each account is read up to the sentence that
+    states what the old list held, and no further.
+    """
+    import inspect
+    import re
+
+    source = SOURCE.read_text(encoding="utf-8")
+    doc = " ".join((inspect.getdoc(od.contents_lines) or "").split())
+    assert "the list used to stop at fifteen" in doc, (
+        "the docstring no longer states the old list's length, or states a "
+        f"different one: {doc[-200:]!r}")
+
+    block = re.search(r"# Derived from SECTIONS.*?toc_items = contents_lines\(\)",
+                      source, re.S)
+    assert block, "the contents-page comment block is gone; this guard lost its subject"
+    active = " ".join(block.group(0).split()).split("until 2026-09-02")[0]
+    assert "used to be fifteen" in active and "sixteen sections" in active, (
+        f"the comment beside the code no longer agrees with the docstring: {active!r}")
+    assert "sixteen hand-written strings" not in active, (
+        "the retired count came back into the active claim; it belongs only in "
+        "the correction paragraph that explains why it was wrong")
+
+
+def test_the_length_both_accounts_name_is_the_one_history_carries(od):
+    """The agreement above is satisfied by two matching WRONG numbers. This is
+    what pins them to the measurement, without asking git at test time (a
+    history rewrite is a normal event here and would take the guard with it)."""
+    import inspect
+
+    assert "fifteen" in (inspect.getdoc(od.contents_lines) or ""), (
+        "the old hand-written list held 15 strings, ending at '15. Why ODUN.ONE'")
+    assert len(od.SECTIONS) == 16, (
+        "SECTIONS no longer holds 16 entries, so the historical narrative above "
+        "it needs rewriting rather than this assertion relaxing")

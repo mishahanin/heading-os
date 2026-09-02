@@ -426,3 +426,89 @@ def test_the_quoted_scalar_keeps_its_quotes_after_the_rewrite(built):
     text = (bundle / "skills" / "checkpoint" / "SKILL.md").read_text(encoding="utf-8")
     parsed = yaml.safe_load(text.split("---", 2)[1])
     assert '"${CLAUDE_PLUGIN_ROOT}"/scripts/checkpoint-paths.py' in parsed["allowed-tools"]
+
+
+# ---------------------------------------------------------------------------
+# --all must build every bundle that declares content
+# ---------------------------------------------------------------------------
+#
+# The filter read `skills or hooks or commands` while `scripts` is a first-class
+# manifest field that `collect_bundled_scripts`, `manifest_sources` and
+# `build_bundle` all consume. A scripts-only bundle was therefore skipped here
+# AND left out of `marketplace.json` by `write_marketplace(names, ...)`, so it
+# was never built and never published, at exit 0 with no message. The comment
+# above the filter already recorded this exact failure for `commands`, one field
+# earlier, which is why the list is now a named constant with a test on it.
+
+def test_the_content_fields_cover_every_field_the_builder_delivers():
+    """The structural guard. `--all` must not fall behind the manifest a third
+    time, so the tuple is held against the fields the rest of the file reads
+    rather than against a second hand-written list."""
+    import ast
+
+    mod = _load_builder()
+    tree = ast.parse(BUILDER.read_text(encoding="utf-8"))
+
+    # Every `spec.get("<field>", ...)` the builder makes deliverables from.
+    read = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in ("spec", "s")
+                and node.args and isinstance(node.args[0], ast.Constant)):
+            read.add(node.args[0].value)
+
+    # These two are configuration, not content: neither delivers anything on its
+    # own, so they are deliberately outside CONTENT_FIELDS.
+    not_content = {"description", "hook_events", "session_start_env"}
+    deliverable = read - not_content
+    assert deliverable, "no manifest fields were found; this guard went blind"
+    assert deliverable <= set(mod.CONTENT_FIELDS), (
+        f"the builder delivers from {sorted(deliverable - set(mod.CONTENT_FIELDS))}, "
+        f"which --all does not count as content. A bundle declaring only that "
+        f"field is silently never built and never published.")
+
+
+def test_a_scripts_only_bundle_is_built_and_published(tmp_path, monkeypatch):
+    """The behaviour, driven through `main(['--all'])` with a manifest that has
+    one scripts-only bundle in it."""
+    mod = _load_builder()
+    real = mod.load_manifest
+
+    def with_scripts_only(root):
+        manifest = dict(real(root))
+        manifest["heading-scratch"] = {
+            "description": "a bundle that declares only scripts",
+            "scripts": ["clip.py"],
+        }
+        return manifest
+
+    monkeypatch.setattr(mod, "load_manifest", with_scripts_only)
+    assert mod.main(["--all", "--out", str(tmp_path)]) == 0
+
+    mj = json.loads((tmp_path / ".claude-plugin" / "marketplace.json").read_text())
+    names = {p["name"] for p in mj["plugins"]}
+    assert "heading-scratch" in names, (
+        "a bundle declaring `scripts:` was left out of marketplace.json, so it "
+        "is never published")
+    assert (tmp_path / "plugins" / "heading-scratch").is_dir(), (
+        "the scripts-only bundle was never built")
+
+
+def test_a_bundle_declaring_nothing_is_still_skipped(tmp_path, monkeypatch):
+    """The anchor. A filter that accepted everything would satisfy the test
+    above and start publishing placeholders."""
+    mod = _load_builder()
+    real = mod.load_manifest
+
+    def with_placeholder(root):
+        manifest = dict(real(root))
+        manifest["heading-placeholder"] = {"description": "reserved, no content yet"}
+        return manifest
+
+    monkeypatch.setattr(mod, "load_manifest", with_placeholder)
+    assert mod.main(["--all", "--out", str(tmp_path)]) == 0
+
+    mj = json.loads((tmp_path / ".claude-plugin" / "marketplace.json").read_text())
+    assert "heading-placeholder" not in {p["name"] for p in mj["plugins"]}

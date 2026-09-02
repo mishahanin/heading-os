@@ -87,6 +87,11 @@ def test_norm_is_negation_invariant():
 def test_check_inventories_guards_against_drop(tmp_path):
     # Task 1e / D4: a snapshot frozen at split time must fail --check if a later edit
     # drops one of its directives. The snapshot survives across the core+detail union.
+    #
+    # The successor is DECLARED, in `widget.md.destinations`. It used to be found
+    # by the prefix glob `widget*.md`, which also swept in any unrelated rule
+    # sharing the opening word. See the test below, and the comment in
+    # `_rule_union_paths`.
     rules = tmp_path / "rules"
     rules.mkdir()
     (rules / "widget.md").write_text("You MUST scan the file.\n", encoding="utf-8")
@@ -94,6 +99,7 @@ def test_check_inventories_guards_against_drop(tmp_path):
     inv = tmp_path / "inv"
     inv.mkdir()
     (inv / "widget.md.txt").write_text("You MUST scan the file.\nNEVER skip the gate.\n", encoding="utf-8")
+    (inv / "widget.md.destinations").write_text("rules/widget-detail.md\n", encoding="utf-8")
 
     # Both directives present across the union -> clean.
     assert check_inventories(inventory_dir=inv, rules_dir=str(rules)) == []
@@ -102,6 +108,54 @@ def test_check_inventories_guards_against_drop(tmp_path):
     (rules / "widget-detail.md").write_text("some unrelated prose.\n", encoding="utf-8")
     bad = check_inventories(inventory_dir=inv, rules_dir=str(rules))
     assert bad == [("widget.md", "NEVER skip the gate.")]
+
+
+def test_an_undeclared_split_reads_as_a_drop_rather_than_passing_quietly(tmp_path):
+    """The cost of dropping the prefix glob, pinned so it is a choice and not a
+    surprise.
+
+    A split whose successor nobody declared now goes RED. That is the safe
+    direction: the gate says a frozen directive is missing and a human either
+    declares the destination or discovers a real loss. The alternative, guessing
+    the successor by name, is what the test below shows going wrong.
+    """
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "widget.md").write_text("You MUST scan the file.\n", encoding="utf-8")
+    (rules / "widget-detail.md").write_text("NEVER skip the gate.\n", encoding="utf-8")
+    inv = tmp_path / "inv"
+    inv.mkdir()
+    (inv / "widget.md.txt").write_text(
+        "You MUST scan the file.\nNEVER skip the gate.\n", encoding="utf-8")
+
+    assert check_inventories(inventory_dir=inv, rules_dir=str(rules)) == [
+        ("widget.md", "NEVER skip the gate.")]
+
+
+def test_an_unrelated_rule_sharing_the_opening_word_is_not_in_the_union(tmp_path):
+    """The hole the prefix glob left, in the direction that matters.
+
+    MEASURED on the live tree 2026-09-02: the union for `documentation.md` held
+    `documentation-style.md`, a separate always-on rule about writing style that
+    was never a successor to anything. It masked nothing that day, checked
+    directive by directive, but the shape is a false NEGATIVE: a directive
+    deleted from its own rule reads as retained because an unrelated rule happens
+    to carry the same sentence. Every other degradation in this gate fails the
+    other way, toward a false positive a human resolves.
+    """
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "widget.md").write_text("some unrelated prose.\n", encoding="utf-8")
+    # Not a successor. A different rule that starts with the same word.
+    (rules / "widget-style.md").write_text("NEVER skip the gate.\n", encoding="utf-8")
+    inv = tmp_path / "inv"
+    inv.mkdir()
+    (inv / "widget.md.txt").write_text("NEVER skip the gate.\n", encoding="utf-8")
+
+    assert check_inventories(inventory_dir=inv, rules_dir=str(rules)) == [
+        ("widget.md", "NEVER skip the gate.")], (
+        "a directive deleted from widget.md was certified as retained because an "
+        "unrelated rule sharing its opening word carries the same sentence")
 
 
 def test_committed_inventories_match_the_live_rules():

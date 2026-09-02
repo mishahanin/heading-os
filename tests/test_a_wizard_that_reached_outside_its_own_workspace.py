@@ -88,6 +88,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tests.code_only import strip_comments_and_strings  # noqa: E402
+
 HAVE_GIT = shutil.which("git") is not None
 
 
@@ -101,9 +103,27 @@ def _load(name: str, modname: str):
 
 
 def _code(name: str) -> str:
-    """Source minus whole-line comments; each fix left one quoting the old code."""
-    text = (ROOT / "scripts" / name).read_text(encoding="utf-8")
-    return "\n".join(ln for ln in text.split("\n") if not ln.lstrip().startswith("#"))
+    """Executable source only: comments removed, string literals blanked.
+
+    Token-aware since 2026-09-02. This was
+    `"\\n".join(ln for ln in text.split("\\n") if not ln.lstrip().startswith("#"))`
+    under the docstring "Source minus whole-line comments", and a line-shape
+    test is not comment syntax: a `#`-leading line INSIDE a triple-quoted
+    docstring was dropped as though it were a comment, and every other line of
+    prose was kept as though it were code. Five assertions run over the result,
+    three of them exact counts (`== 1`, `== 3`) and one an absence
+    (`"_PLACEHOLDER_TOKEN_RE.fullmatch(" not in code`), and every fix in this
+    file's subject quotes the code it retired in a docstring - which is exactly
+    the text that then satisfied or moved those searches. `tokenize` decides
+    which `#` opens a comment and which sits in a literal, and blanking the
+    literals leaves what the interpreter would execute, so prose can no longer
+    answer a question about code in either direction. Measured 2026-09-02
+    against `scripts/apply-wizard-answers.py`: all five assertions read the same
+    values under the old helper and the new one, so this changes what the guard
+    CAN see, not what it currently reports.
+    """
+    path = ROOT / "scripts" / name
+    return strip_comments_and_strings(path.read_text(encoding="utf-8"), where=str(path))
 
 
 @pytest.fixture(scope="module")

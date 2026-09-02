@@ -46,10 +46,19 @@ def _epoch(ts):
     a line can be valid JSON and still carry an unreadable `ts` — and the window
     filter used to hand that straight to `float()`, so one corrupt-but-parseable
     record killed `--days` with a traceback while every other path survived it.
+
+    `OverflowError` is in the list because `float()` raises it, not ValueError,
+    on an integer too large to convert. `read_denials` calls `json.loads` with
+    the stdlib defaults, so a hand-edited or torn line carrying a 400-digit
+    integer literal parses into a Python `int` and arrives here intact.
+    MEASURED 2026-09-02: `float(int("9" * 400))` raises
+    `OverflowError: int too large to convert to float`, which is an
+    ArithmeticError and was caught by nothing, so `--days` died on exactly the
+    record shape this function exists to absorb.
     """
     try:
         return float(ts)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -59,11 +68,24 @@ def _printable(value) -> str:
 
 
 def _stamp(ts) -> str:
-    # Display value, so the operator's local timezone, per the DTZ convention:
-    # serialized timestamps stay UTC epoch in the log, rendering is local.
+    """The record's timestamp rendered for the operator, or `"?"`.
+
+    Display value, so the operator's local timezone, per the DTZ convention:
+    serialized timestamps stay UTC epoch in the log, rendering is local.
+
+    `OverflowError` is the third member of the same family `_epoch` above
+    describes, and it was missing here while `_epoch` had already been widened
+    for the window filter. `json.loads` accepts the bare literal `Infinity` with
+    the stdlib defaults, so `{"ts": Infinity}` survives `read_denials`, passes
+    `_epoch` as a real float, and clears the `--days` cutoff. MEASURED
+    2026-09-02: `datetime.fromtimestamp(float("inf"))` raises
+    `OverflowError: timestamp out of range for platform time_t`, so one such
+    record ended `--detail` MID-TABLE and hid every entry after it, in the one
+    view that exists to show every refused path. `1e300` does the same.
+    """
     try:
         return datetime.fromtimestamp(float(ts), tz=get_default_tz()).strftime("%Y-%m-%d %H:%M")
-    except (TypeError, ValueError, OSError):
+    except (TypeError, ValueError, OSError, OverflowError):
         return "?"
 
 

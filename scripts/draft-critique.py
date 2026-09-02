@@ -14,8 +14,24 @@ Usage:
     python scripts/draft-critique.py --body-file draft.txt [--subject S] [--to ADDR]
     python scripts/draft-critique.py <id> --json             # machine-readable output
 
-Exit codes: 0 critique produced, 1 usage error or no critique produced
-(model unavailable / missing API key / empty body), 2 daemon not reachable.
+Exit codes:
+    0  critique produced.
+    1  usage error (including an argparse parse error, which `_Parser` below
+       remaps from argparse's stock 2); no critique produced (model
+       unavailable, missing API key, empty body); or a card that could not be
+       resolved. That last group is the one the contract used to omit: an HTTP
+       error from the daemon, a 200 whose body is not JSON, a 200 whose JSON is
+       not an action-queue payload, a 200 the daemon accepted and then stalled
+       on, no matching card, an ambiguous prefix, an unreadable ``--body-file``,
+       and a card that carries no draft body.
+    2  bridge daemon not reachable, and nothing else.
+
+Until 2026-09-02 this block promised "1 usage error or no critique produced,
+2 daemon not reachable" and held in neither direction: eight exit-1 paths were
+unlisted, so an operator read a 401 or a version-mismatched payload as a
+missing API key, and a typo'd flag exited 2 through stock argparse while the
+daemon was healthy, which is indistinguishable from `_die_no_daemon` and gets
+that function's advice ("use --body-file, which needs no daemon") wrong.
 
 Tests: tests/test_a_stall_after_the_headers_arrived.py
 """
@@ -50,6 +66,24 @@ def _read_state(root: Path, name: str) -> str | None:
     # daemon not reachable" that an unreadable state file should produce.
     except (OSError, UnicodeDecodeError):
         return None
+
+
+class _Parser(argparse.ArgumentParser):
+    """An argparse parse error exits 1, not argparse's stock 2.
+
+    This module reserves 2 for "bridge daemon not reachable", and `main` already
+    answers its OWN usage errors with 1 ("pass a card id-or-prefix, or
+    --body-file"). Stock `ArgumentParser.error()` calls `sys.exit(2)`, so one
+    kind of usage error exited 1 and another exited 2, and the second collided
+    with the daemon code: `--bogus-flag` against a perfectly healthy daemon was
+    indistinguishable from `_die_no_daemon()`. Overriding `error` is the whole
+    fix; `-h/--help` goes through `parser.exit(0)` and is untouched.
+    """
+
+    def error(self, message: str):
+        self.print_usage(sys.stderr)
+        print(f"{RED}usage error{RESET}: {message}", file=sys.stderr)
+        sys.exit(1)
 
 
 def _die_no_daemon() -> None:
@@ -135,7 +169,7 @@ def _print_human(card_id: str | None, result: dict) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Read-only advisory critique of an outbound draft.")
+    ap = _Parser(description="Read-only advisory critique of an outbound draft.")
     ap.add_argument("id", nargs="?", help="Action Queue card id or unique prefix")
     ap.add_argument("--body-file", help="critique an ad-hoc draft from this file (no daemon needed)")
     ap.add_argument("--subject", default=None, help="subject for --body-file mode")

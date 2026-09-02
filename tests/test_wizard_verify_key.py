@@ -195,3 +195,108 @@ def test_the_wizard_import_chain_stays_stdlib_only():
         f"a third-party module is now imported at module level in the wizard's "
         f"chain: {out.stdout.strip()}. The setup wizard runs before dependencies "
         f"are installed.")
+
+
+# ============================================================
+# Exit code 3 says what it means, and it is not "the network failed"
+# ============================================================
+# Audit campaign 2026-08-24, shard `scripts-15-p4` finding 6, verified still
+# present and fixed 2026-09-02. The module docstring's only caller-facing
+# contract said `3 = network/timeout`, while `main` returns 3 for every
+# `unknown` status - including an HTTP status the script does not classify and a
+# key the request header refuses. The wizard therefore told the operator his
+# connection had failed on runs where the server had demonstrably answered, and
+# the docstring itself stresses that the caller "reads the code and proceeds".
+
+
+def _codes_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "wizard_verify_key_codes", REPO / "scripts" / "wizard-verify-key.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _exit_code_paragraph(mod) -> str:
+    """The docstring's exit-code block, up to the blank line after code 4."""
+    doc = mod.__doc__ or ""
+    assert "Exit codes:" in doc, "the exit-code contract left the docstring"
+    return doc.split("Exit codes:", 1)[1]
+
+
+def test_a_server_answer_the_script_cannot_classify_is_not_called_a_network_failure(
+        monkeypatch):
+    """A 500 from the API is a completed exchange, and it exits 3.
+
+    So 3 cannot be documented as "network/timeout": that reading is false on
+    exactly this run, and it is the reading the wizard shows the operator.
+    """
+    import urllib.error
+    mod = _codes_module()
+    monkeypatch.setattr(mod.claude_models, "latest", lambda family: "test-model")
+
+    def five_hundred(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 500, "Server Error", {}, None)
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", five_hundred)
+
+    status, message = mod.verify_anthropic("TEST-FIXTURE-KEY")
+    assert status == "unknown"
+    assert "HTTP 500" in message
+
+    monkeypatch.setenv("WIZARD_VERIFY_KEY", "sk-fixture-value")
+    assert mod.main(["--provider", "anthropic"]) == 3, (
+        "the server answered and the run still exits 3, which is why 3 cannot "
+        "be documented as a network failure")
+
+    # The DEFINITION line only. The paragraph goes on to record what the line
+    # used to say, and a substring search over the whole block would match that
+    # history and fail a correct docstring.
+    definition = _exit_code_paragraph(mod).split("3 =", 1)[1].split("\n")[0]
+    assert "network/timeout" not in definition, (
+        f"code 3 is still defined as network/timeout: {definition!r}")
+
+
+def test_the_documented_meaning_of_three_covers_every_path_that_returns_it():
+    """The three unknown paths are each named where the operator reads them.
+
+    An unclassified HTTP status, a header the key cannot go into, and the actual
+    network failure all land on 3. Naming only the third is what made the
+    message wrong; naming all three is what keeps it honest when a fourth path
+    is added.
+    """
+    mod = _codes_module()
+    paragraph = _exit_code_paragraph(mod).split("4 =")[0].lower()
+    for phrase in ("http", "header", "network"):
+        assert phrase in paragraph, (
+            f"the docstring for exit code 3 never mentions {phrase!r}, and a "
+            f"path that returns 3 goes through it: {paragraph!r}")
+
+
+def test_the_docstring_admits_that_main_both_returns_and_exits():
+    """Two refusal paths, two mechanisms, one number.
+
+    `main` returns 4 for a key holding a control character and `_Parser.error`
+    calls `sys.exit(4)` for a usage error. The suite asserts both shapes, which
+    is correct and was read as a contradiction by an audit that could not see
+    the script. An in-process caller has to be ready for `SystemExit`, so the
+    docstring says so.
+    """
+    mod = _codes_module()
+    doc = mod.__doc__ or ""
+    assert "SystemExit" in doc, (
+        "nothing warns an in-process caller of main() that a usage error "
+        "raises rather than returns")
+
+
+def test_a_usage_error_raises_while_a_control_character_returns(monkeypatch):
+    """The behaviour the docstring now describes, measured on both paths."""
+    mod = _codes_module()
+    monkeypatch.setenv("WIZARD_VERIFY_KEY", "sk-fixture\x01value")
+    assert mod.main(["--provider", "anthropic"]) == 4
+
+    monkeypatch.delenv("WIZARD_VERIFY_KEY", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        mod.main(["--provider", "anthropic"])
+    assert exc.value.code == 4

@@ -628,9 +628,19 @@ def stop_comet(port: Optional[int] = None, timeout: float = 10.0) -> bool:
     if SIGTERM is ignored, and clears the lock file only on confirmed shutdown.
     A surviving browser leaves the lock in place so the caller can retry.
 
-    `port` alone is a complete instruction: with no lock file this stops
-    whatever holds that port. Only the no-lock AND no-port case has nothing to
-    act on.
+    `port` alone is a complete instruction ON POSIX: with no lock file this
+    stops whatever holds that port, because `_pids_for_cdp_port` can name the
+    owner from `ps`. It is NOT complete on Windows, where that function returns
+    an empty list by design and the owner can only come from the lock.
+
+    That qualifier was missing, and the sentence was false on exactly the
+    platform that creates the state it described. `_adopt_running_cdp` writes no
+    lock precisely when it cannot identify an owner, which on Windows is always,
+    so `stop --port N` there found no lock, no tracked PID and no port owner:
+    both signal rounds iterated an empty list, `_wait_until_cdp_down` burned the
+    full timeout twice, and the call returned False after about fifteen seconds
+    having signalled nothing at all. It refuses in one line now, and says what
+    the operator has to do instead.
     """
     lock = _active_lock_file()
     # An explicit `port` is enough on its own. A missing lock used to end the
@@ -674,6 +684,19 @@ def stop_comet(port: Optional[int] = None, timeout: float = 10.0) -> bool:
              else f"Nothing is holding CDP port {port}.", GREEN)
         _clear_lock(lock)
         return True
+
+    # Serving, and nothing to aim at. On POSIX that is a transient race worth
+    # signalling through; on Windows it is a permanent state, because
+    # `_pids_for_cdp_port` returns [] there by design and the tracked PID is the
+    # only owner this file can ever recover. Signalling an empty list twice and
+    # waiting out both timeouts told the operator nothing after fifteen seconds.
+    # Refuse in one line instead, and name the two ways out.
+    if not targets and sys.platform == "win32":
+        _log(f"CDP port {port} is serving but this platform cannot identify "
+             f"the process holding it, and no usable lock file names one. "
+             f"Close the browser window, or stop the process by hand "
+             f"(`netstat -ano | findstr :{port}` gives its PID).", RED)
+        return False
 
     sigkill = getattr(signal, "SIGKILL", signal.SIGTERM)
     for sig, label, wait in ((signal.SIGTERM, "SIGTERM", timeout),
@@ -768,6 +791,12 @@ def cmd_stop(args: argparse.Namespace) -> int:
     # cannot recover an owner from an unreadable lock. With no lock and no way
     # to name the port, `stop` printed "nothing tracked to stop" and exited 1
     # while the browser kept serving.
+    #
+    # The Windows half of that is a REFUSAL, not a fix, and this comment read as
+    # though `--port` had settled it. `_pids_for_cdp_port` returns [] on Windows
+    # by design, so a port with no lock behind it still cannot be stopped there;
+    # `stop_comet` now says so in one line rather than signalling an empty list
+    # twice and waiting out both timeouts. On POSIX `--port` really is enough.
     return 0 if stop_comet(port=getattr(args, "port", None)) else 1
 
 

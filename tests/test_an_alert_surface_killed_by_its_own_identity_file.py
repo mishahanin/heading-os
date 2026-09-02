@@ -551,8 +551,32 @@ def test_a_held_lock_makes_the_hook_wait_and_say_so(tmp_path):
 
 def test_an_uncontended_run_neither_waits_nor_complains(tmp_path):
     """The other direction. A lock that always reports busy would be a stall on
-    every exec session start, and this test would be green on it otherwise."""
-    root = _exec_tree(tmp_path)
+    every exec session start, and this test would be green on it otherwise.
+
+    `busy` is printed only when the wait EXPIRES, so the stderr assertion alone
+    would pass a hook that waited 1.9 of the 2.0 seconds and then acquired. The
+    elapsed assertion is what covers that, and it is measured against a CONTROL
+    run of the same hook on a tree with no marker at all, which never reaches
+    the lock block.
+
+    It used to be a fixed `elapsed < 1.5`, which measured the host rather than
+    the hook: in the full 16-worker suite run of 2026-09-02 the child
+    interpreter start alone reached 1.54s and this test went red while the lock
+    behaviour was entirely correct. Subtracting a control taken on the same
+    loaded machine cancels that, and the remaining 1.0s budget is half of
+    `LOCK_WAIT_SECONDS`, so a run that actually sat out the lock still cannot
+    pass. The control is the SLOWER of two runs, so an unluckily fast baseline
+    cannot fail the comparison on its own.
+    """
+    control_root = _exec_tree(tmp_path / "control")
+    baseline = 0.0
+    for _ in range(2):
+        started = time.monotonic()
+        control = _run(control_root, timeout=120)
+        baseline = max(baseline, time.monotonic() - started)
+        assert control.returncode == 0, control.stderr
+
+    root = _exec_tree(tmp_path / "measured")
     _update_marker(root)
     started = time.monotonic()
     proc = _run(root, timeout=120)
@@ -560,7 +584,10 @@ def test_an_uncontended_run_neither_waits_nor_complains(tmp_path):
 
     assert proc.returncode == 0, proc.stderr
     assert "busy" not in proc.stderr, proc.stderr
-    assert elapsed < 1.5, f"an uncontended run took {elapsed:.2f}s"
+    assert elapsed < baseline + 1.0, (
+        f"an uncontended run took {elapsed:.2f}s against a {baseline:.2f}s "
+        "control that never reaches the lock at all, so it spent the "
+        "difference waiting on a lock nothing was holding")
     assert "WORKSPACE UPDATE: v9.9" in proc.stdout, proc.stdout
 
 

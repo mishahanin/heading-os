@@ -423,26 +423,114 @@ def _iso_after(a: str, b: str) -> bool:
         return a > b
 
 
+def _template_context(answers: dict) -> dict:
+    """The `{{ }}` variables a rich template may read, with secrets left out.
+
+    ONE implementation because there were two, byte for byte, in `cmd_question`
+    and `_plan_question`, and a fix landing in one of two copies is a shape this
+    repository keeps finding.
+
+    A secret answer is stored under `value` as its `_mask_secret` stub, and that
+    stub carries the credential's REAL last four characters. Copying it into the
+    render context put those four into the rendered document under the secret's
+    own question id, and unlike `.env` that document is a tracked file that gets
+    committed and pushed. Reaching it needs only a question bank whose secret id
+    matches the `{{ }}` variable grammar and a template that names it; nothing
+    forbade either.
+
+    `env_written` is the marker, not the question's declared type, because that
+    key is written by exactly one place - the secret branch of `cmd_question` -
+    and it is on the answer itself, so neither caller has to carry the bank in
+    to ask.
+    """
+    ctx = {"generated_date": datetime.now().astimezone().date().isoformat()}
+    for aid, aentry in answers.items():
+        if aentry.get("env_written"):
+            continue
+        if isinstance(aentry.get("value"), str):
+            ctx[aid] = aentry["value"]
+        if aentry.get("draft"):
+            ctx[f"{aid}_draft"] = aentry["draft"]
+    return ctx
+
+
+def _unquote_porcelain_path(raw: str) -> str:
+    """One path out of `git status --porcelain`, with git's C quoting undone.
+
+    With `core.quotepath` at its default of true, git wraps any path holding a
+    non-ASCII byte, a quote, a backslash or a control character in double quotes
+    and escapes the contents C-style, so `docs/cafe.md` with an accented `e`
+    arrives as `"docs/caf\\303\\251.md"`. `cmd_reset` compares these against
+    `_git_rel` spellings, which are ordinary text.
+
+    Stripping the quotes and stopping there is what this did until 2026-09-02:
+    the octal escapes survived, so the compare could never match, a file the
+    wizard itself had written was classified as somebody else's uncommitted
+    work, and `--reset` refused. That is the always-failing gate the comment in
+    `cmd_reset` says was fixed once already, reached through quoting instead of
+    through separators.
+
+    `unicode_escape` decodes the C escapes to one Python character per byte,
+    which is why the round trip through latin-1 is there: it turns those back
+    into the original bytes, and git's bytes are UTF-8. An unquoted path is
+    returned untouched, and a path that will not decode is returned as it
+    arrived rather than raising - a wrong compare here refuses a reset, and a
+    traceback loses one.
+    """
+    if len(raw) < 2 or not (raw.startswith('"') and raw.endswith('"')):
+        return raw
+    try:
+        return (raw[1:-1]
+                .encode("utf-8")
+                .decode("unicode_escape")
+                .encode("latin-1")
+                .decode("utf-8"))
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return raw
+
+
 def _is_valid_env_var_name(name: str) -> bool:
     return bool(re.fullmatch(r"[A-Z_][A-Z0-9_]*", name))
+
+
+# Every character `str.splitlines()` breaks a line on, plus NUL. `_upsert_env_line`
+# reads the existing file with `splitlines()`, so this is the exact set that can
+# turn one written `KEY=...` into two on the next read.
+#
+# The guard listed `\r`, `\n` and `\x00` alone until 2026-09-02 while its
+# docstring promised that a control character was refused. The other seven split
+# a line just as effectively: a value holding `\x0b` was written verbatim as one
+# line, and the next `_upsert_env_line` read it back as `KEY=abc` plus an orphan
+# `def` that then sat in the operator's `.env` forever. Verified against CPython:
+# `"a\x0bb".splitlines()` is `["a", "b"]`.
+#
+# A tab is deliberately NOT here. It is a control character and the docstring no
+# longer claims otherwise, but `splitlines()` keeps it inside the line, so
+# refusing it would reject a legitimate paste for no corruption it can cause.
+#
+# Written as escapes, never as literals: `.claude/rules/hidden-chars.md` bans
+# invisible Unicode in generated text, and the PostToolUse scanner refuses
+# this file outright when U+2028 and U+2029 appear in it as themselves.
+_ENV_LINE_BREAKERS = "\r\n\x00\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"
 
 
 def _upsert_env_line(env_path: Path, key: str, value: str) -> None:
     """Set `key=value` in `.env`, atomically and with no readable window.
 
-    A control character in `value` is REFUSED. The value arrives as JSON on
-    stdin, where `"\\n"` is an ordinary character, and this function wrote
-    `f"{key}={value}"` verbatim until 2026-08-23: one paste with a trailing
-    newline, or a multi-line PEM, split into extra `KEY=...` lines that silently
-    defined variables nobody asked for and corrupted the file for every later
-    reader. Refusing is right here rather than escaping, because a secret with
-    an embedded newline is far more likely a paste accident than an intent.
+    A LINE-SPLITTING character in `value`, or a NUL, is REFUSED; the full set is
+    `_ENV_LINE_BREAKERS` above. The value arrives as JSON on stdin, where
+    `"\\n"` is an ordinary character, and this function wrote `f"{key}={value}"`
+    verbatim until 2026-08-23: one paste with a trailing newline, or a
+    multi-line PEM, split into extra `KEY=...` lines that silently defined
+    variables nobody asked for and corrupted the file for every later reader.
+    Refusing is right here rather than escaping, because a secret with an
+    embedded newline is far more likely a paste accident than an intent.
     """
-    if any(ch in value for ch in "\r\n\x00"):
+    if any(ch in value for ch in _ENV_LINE_BREAKERS):
         raise SchemaError(
-            f"the value for {key} contains a newline or NUL. A .env line cannot "
-            "carry one: it would split into extra KEY=... lines. Strip it and "
-            "pass the value again."
+            f"the value for {key} contains a line break or NUL. A .env line "
+            "cannot carry one: it would split into extra KEY=... lines. Strip "
+            "it and pass the value again."
         )
     lines = []
     if env_path.exists():
@@ -483,14 +571,23 @@ def _upsert_env_line(env_path: Path, key: str, value: str) -> None:
     # whatever mode it had. The fchmod lands before any byte of `body` is
     # written, and on the descriptor rather than the path, so nothing can be
     # swapped underneath it in between.
-    if os.name == "posix":
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            os.fchmod(handle.fileno(), 0o600)
-            handle.write(body)
-    else:
-        tmp.write_text(body, encoding="utf-8")
-    os.replace(tmp, env_path)
+    #
+    # The finally is the same cleanup the three output writers got on
+    # 2026-09-02, and this is the site where leaving the temp file behind costs
+    # the most: `.env.tmp` holds the credential itself. A write that dies
+    # partway used to leave it on disk, and the `os.open` comment above already
+    # records finding exactly such a leftover from a previous crashed run.
+    try:
+        if os.name == "posix":
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                os.fchmod(handle.fileno(), 0o600)
+                handle.write(body)
+        else:
+            tmp.write_text(body, encoding="utf-8")
+        os.replace(tmp, env_path)
+    finally:
+        tmp.unlink(missing_ok=True)
     if os.name == "nt":
         # Best-effort ACL restriction on Windows: remove inheritance, grant the
         # current user only. Reported, not swallowed: the comment here promised
@@ -666,8 +763,17 @@ def _apply_placeholder_substitution(path: Path, mapping: dict) -> bool:
     if new == original:
         return False
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(new, encoding="utf-8")
-    os.replace(tmp, path)
+    # try/finally, mirroring `archive-transcripts.py::archive`. A write that
+    # fails partway (a full disk) used to leave `<name>.tmp` beside the target
+    # forever: nothing cleaned it, and `cmd_all`'s planning glob does not match
+    # it, so it was invisible to the wizard and permanent in the workspace.
+    # After a successful `os.replace` the temp file is already gone, which is
+    # what `missing_ok` is for.
+    try:
+        tmp.write_text(new, encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
     return True
 
 
@@ -746,20 +852,37 @@ def build_parser() -> argparse.ArgumentParser:
         prog="apply-wizard-answers.py",
         description="Sole writer for setup wizard state and output files.",
     )
-    parser.add_argument("--question", metavar="ID",
-                        help="Apply a single question (with --value-from-stdin or --skip)")
+    # The five ACTION flags, exclusive to one another.
+    #
+    # `main` dispatches on the first one it finds and returns, so every other
+    # action the operator typed was discarded in silence: `--skip a --question b`
+    # never skipped, `--question b --all` never re-applied, and `--status
+    # --reset` dropped a destructive reset while printing a status that looked
+    # like the whole answer. For a script whose contract is "the operator knows
+    # what was written", a requested action going nowhere without a word is the
+    # defect, and argparse had no reason to complain.
+    #
+    # A group rather than a re-ordered dispatch: running two of these in one
+    # invocation is not a thing any caller wants. Checked before adding it -
+    # `.claude/skills/setup-wizard/SKILL.md` and `scripts/dev/wizard-simulate.py`
+    # issue exactly one action per call. `--value-from-stdin`, `--check`,
+    # `--audience`, `--force-ceo-master` and `--force` are MODIFIERS and stay
+    # outside; they qualify an action rather than being one.
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--question", metavar="ID",
+                        help="Apply a single question (with --value-from-stdin)")
     parser.add_argument("--value-from-stdin", action="store_true",
                         help="Read JSON payload from stdin for --question")
-    parser.add_argument("--skip", metavar="ID", help="Mark a question skipped")
-    parser.add_argument("--all", action="store_true",
+    action.add_argument("--skip", metavar="ID", help="Mark a question skipped")
+    action.add_argument("--all", action="store_true",
                         help="Re-apply every answered question. Plans all writes first and aborts before writing if the plan fails, but the writes themselves are sequential and are NOT rolled back if one of them fails partway.")
     parser.add_argument("--check", action="store_true", help="Dry run")
     parser.add_argument("--audience", choices=["public", "exec"],
                         help="Override detected audience")
     parser.add_argument("--force-ceo-master", action="store_true",
                         help="Required companion when overriding ceo-master detection")
-    parser.add_argument("--status", action="store_true", help="Print status JSON and exit")
-    parser.add_argument("--reset", action="store_true",
+    action.add_argument("--status", action="store_true", help="Print status JSON and exit")
+    action.add_argument("--reset", action="store_true",
                         help="Revert touched files to git-index state; preserve answers.json")
     parser.add_argument("--force", action="store_true",
                         help="Bypass safety checks on --reset (uncommitted changes)")
@@ -1096,12 +1219,7 @@ def cmd_question(args) -> int:
 
         template_text = _read_text(
             resolve_read_path(workspace_root, q["target"]["template"]))
-        ctx = {"generated_date": datetime.now().astimezone().date().isoformat()}
-        for aid, aentry in answers.items():
-            if isinstance(aentry.get("value"), str):
-                ctx[aid] = aentry["value"]
-            if aentry.get("draft"):
-                ctx[f"{aid}_draft"] = aentry["draft"]
+        ctx = _template_context(answers)
         ctx[q["id"]] = value
         ctx[f"{q['id']}_draft"] = draft
 
@@ -1118,8 +1236,12 @@ def cmd_question(args) -> int:
             files_changed = 0
         else:
             tmp = out_path.with_suffix(out_path.suffix + ".tmp")
-            tmp.write_text(rendered, encoding="utf-8")
-            os.replace(tmp, out_path)
+            # See `_apply_placeholder_substitution` for why the finally is here.
+            try:
+                tmp.write_text(rendered, encoding="utf-8")
+                os.replace(tmp, out_path)
+            finally:
+                tmp.unlink(missing_ok=True)
             files_changed = 1
 
         prev_entry = answers.get(q["id"], {})
@@ -1287,8 +1409,12 @@ def cmd_all(args) -> int:
                 continue
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(path.suffix + ".tmp")
-            tmp.write_text(new_bytes, encoding="utf-8")
-            os.replace(tmp, path)
+            # See `_apply_placeholder_substitution` for why the finally is here.
+            try:
+                tmp.write_text(new_bytes, encoding="utf-8")
+                os.replace(tmp, path)
+            finally:
+                tmp.unlink(missing_ok=True)
             files_changed += 1
         except OSError as e:
             print(f"ERROR: write failed for {path}: {e}", file=sys.stderr)
@@ -1338,12 +1464,7 @@ def _plan_question(workspace_root, q, entry, all_answers, audience):
     elif q["type"] == "rich":
         template_text = _read_text(
             resolve_read_path(workspace_root, q["target"]["template"]))
-        ctx = {"generated_date": datetime.now().astimezone().date().isoformat()}
-        for aid, aentry in all_answers.items():
-            if isinstance(aentry.get("value"), str):
-                ctx[aid] = aentry["value"]
-            if aentry.get("draft"):
-                ctx[f"{aid}_draft"] = aentry["draft"]
+        ctx = _template_context(all_answers)
         rendered = render_template(template_text, ctx)
         out_rel = (q["target"].get("output_exec")
                    if audience == "exec" and q["target"].get("output_exec")
@@ -1436,8 +1557,9 @@ def cmd_reset(args) -> int:
             if not line.strip() or line.startswith("??"):
                 continue
             # porcelain v1: two status columns, a space, then the path.
-            rel = line[3:].strip().strip('"')
+            rel = line[3:].strip()
             rel = rel.split(" -> ")[-1]          # a rename reports both sides
+            rel = _unquote_porcelain_path(rel)
             if rel not in ours:
                 dirty.append(line)
         if dirty:

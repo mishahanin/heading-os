@@ -19,7 +19,11 @@
 # reinvented. The timezone is read from the environment (no hardcoded locale), so
 # the templates carry no geographic signal and ship in the public engine.
 #
-# For unattended boot:  loginctl enable-linger "$USER"  (done automatically below)
+# This installer does NOT call `loginctl enable-linger`, and does not need to:
+# it enables no timer (see the RETIRED note at the bottom). The header claimed
+# linger was "done automatically below" until 2026-09-02, which was never true
+# here, because no `loginctl` line has ever existed in this file. The sibling
+# installers that DO enable a timer each call it themselves.
 
 set -euo pipefail
 

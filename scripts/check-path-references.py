@@ -236,7 +236,23 @@ def gitignored(root: Path, paths: list[str]) -> set[str]:
 
 
 def tracked_markdown(root: Path) -> list[str]:
-    """Tracked `*.md`, or an empty list outside a git repo.
+    """Tracked `*.md`, or an empty list when git cannot answer.
+
+    "Cannot answer" covers BOTH a git that ran and refused and a git that could
+    not be run at all. The second half arrived on 2026-09-02: the docstring
+    below already promised graceful degradation, and the code under it read the
+    refusal off a return code, which no missing executable ever produces.
+    `subprocess.run` raises before the process starts, so with no git on PATH
+    this function died on a traceback in a tool whose every other failure is a
+    printed line and a stated exit code. MEASURED 2026-09-02 with
+    `PATH=/nonexistent`: `FileNotFoundError: [Errno 2] No such file or
+    directory: 'git'`. `OSError` rather than `FileNotFoundError` alone, because
+    a git that is present and not executable raises `PermissionError` and says
+    just as little.
+
+    Returning [] hands `main()` a corpus of zero, which it already refuses with
+    `REFUSED -- no tracked Markdown was read ...` and exit 2. The empty list is
+    never mistaken for a clean tree.
 
     `check=True` made `git ls-files` failing OUTSIDE a repo raise
     CalledProcessError, and `scan()` and `named_paths()` both call this first
@@ -256,9 +272,14 @@ def tracked_markdown(root: Path) -> list[str]:
     mistranslated name opens nothing, so `scan()` skips it and the same coverage
     is lost that the paragraph above is about.
     """
-    out = subprocess.run(
-        ["git", "ls-files", "-z", "*.md"], cwd=root, capture_output=True,
-    )
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-z", "*.md"], cwd=root, capture_output=True,
+        )
+    except OSError as exc:
+        print(f"warning: could not run `git ls-files` in {root} ({exc}); "
+              f"no Markdown was scanned", file=sys.stderr)
+        return []
     if out.returncode != 0:
         detail = out.stderr.decode("utf-8", "replace").strip()[:200]
         print(f"warning: `git ls-files` failed in {root} ({detail}); "

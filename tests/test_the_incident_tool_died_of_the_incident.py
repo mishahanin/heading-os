@@ -28,6 +28,7 @@ Nothing here reaches the network or the GitHub API: the script exits before any
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import os
 import subprocess
@@ -255,3 +256,78 @@ def test_an_unresolvable_org_refuses_rather_than_reporting_clear(monkeypatch, tm
     # The reassuring wording must NOT appear: that was the original defect class.
     assert "not a direct collaborator" not in captured.out
     assert "[REVOKED]" not in captured.out
+
+
+# --------------------------------------------------------------------------
+# The header, and what the file says about the header.
+#
+# Shard `scripts-06-p2` F4: the docstring narrated its own header as still
+# uncorrected. The header carries the pre-disable promise "immediately revokes
+# all GitHub access" nowhere any more, and has not since the disable landed, but
+# the paragraph below it read "the argparse description and epilog were
+# corrected and this was not, so anyone reading the source ... got the old
+# promise". Reading that during an incident sends a maintainer hunting for a
+# dangerous sentence that is not in the file, at the worst possible moment.
+#
+# These bind the CLAIM, not its phrasing. A reword retires the pinned string and
+# the positive check below stands on its own.
+# --------------------------------------------------------------------------
+
+def _module_docstring() -> str:
+    """The docstring as pydoc and any generated docs would surface it.
+
+    Parsed out of the SOURCE rather than imported, so this test says nothing
+    about whether the module can be imported on this host: that is what the
+    tests above are for, and one of them is the overlay-less import.
+    """
+    tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+    doc = ast.get_docstring(tree)
+    assert doc, "the incident runbook has no module docstring at all"
+    return doc
+
+
+def _collapsed(text: str) -> str:
+    """One space between words, so a re-wrap is not a behaviour change."""
+    return " ".join(text.split())
+
+
+def test_the_header_leads_with_the_disabled_state():
+    """The first docstring line IS the header pydoc shows. It has one job."""
+    first = _module_docstring().splitlines()[0]
+    assert first.startswith("DISABLED."), f"header reads: {first!r}"
+
+
+def test_the_header_no_longer_carries_the_pre_disable_promise():
+    """The dangerous sentence itself, asserted absent as a plain claim.
+
+    Quoted inside this file, so the check has to look for it as an ASSERTION
+    about the script rather than as the words. The docstring is allowed to
+    RECOUNT the old promise (it does, in quotation marks); what it may not do is
+    state it.
+    """
+    doc = _collapsed(_module_docstring())
+    assert '"immediately revokes all GitHub access"' in doc, (
+        "the history note that explains the correction was deleted rather than "
+        "fixed; keep the account, drop the false present tense"
+    )
+    assert "This script revokes nothing." in doc
+
+
+def test_the_docstring_does_not_report_its_own_header_as_uncorrected():
+    """The F4 defect: a stale narrative outliving the thing it narrates.
+
+    Pinned as the exact stale assertion. The audit's reproduction was a reader
+    following it and finding nothing, so the regression this guards against is
+    that sentence coming back, in those words or any equivalent listed here.
+    """
+    doc = _collapsed(_module_docstring())
+    stale = [
+        "were corrected and this was not",
+        "anyone reading the source, or generated docs, gets the old promise",
+        "the header still says",
+    ]
+    hits = [phrase for phrase in stale if phrase in doc]
+    assert not hits, (
+        f"the docstring narrates its own header as uncorrected: {hits}. "
+        f"The header above it reads {_module_docstring().splitlines()[0]!r}."
+    )

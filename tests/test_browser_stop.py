@@ -234,3 +234,96 @@ def test_a_wrapped_ps_line_does_not_crash_the_parser():
     assert browser._parse_cdp_owner_pids(
         PS_WITH_A_WRAPPED_ARGV, 9222, self_pid=1
     ) == [2234786]
+
+
+# ---------------------------------------------------------------------------
+# The no-owner state on a platform that can never name an owner
+# ---------------------------------------------------------------------------
+#
+# `stop_comet`'s docstring said "`port` alone is a complete instruction: with no
+# lock file this stops whatever holds that port". It is complete on POSIX, where
+# `_pids_for_cdp_port` reads `ps`. On Windows that function returns [] by
+# design, and `_adopt_running_cdp` writes no lock precisely when it cannot
+# identify an owner, which on Windows is always. So `stop --port N` there had no
+# lock, no tracked PID and no port owner: both signal rounds iterated an empty
+# list, `_wait_until_cdp_down` burned the full timeout twice, and the call
+# returned False after about fifteen seconds having signalled nothing.
+
+def test_a_serving_port_with_no_owner_on_windows_refuses_at_once(monkeypatch, capsys):
+    monkeypatch.setattr(browser.sys, "platform", "win32")
+    monkeypatch.setattr(browser, "_active_lock_file", lambda: None)
+    monkeypatch.setattr(browser, "_pids_for_cdp_port", lambda port: [])
+    monkeypatch.setattr(browser, "_cdp_ready", lambda *a, **k: True)
+
+    waited = []
+    monkeypatch.setattr(browser, "_wait_until_cdp_down",
+                        lambda port, timeout: waited.append(timeout) or False)
+    sent = []
+    monkeypatch.setattr(browser.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+
+    assert browser.stop_comet(port=9222) is False
+    assert waited == [], (
+        f"it waited out {waited} seconds of timeout with nothing to signal")
+    assert sent == [], "it signalled something after reporting it had no owner"
+
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert "cannot identify" in combined, combined
+    assert "9222" in combined
+
+
+def test_the_same_state_on_posix_still_signals_and_waits(monkeypatch):
+    """The anchor, and the reason the refusal is platform-scoped. On POSIX an
+    empty owner list with the port still serving is a race worth signalling
+    through, not a permanent state."""
+    monkeypatch.setattr(browser.sys, "platform", "linux")
+    monkeypatch.setattr(browser, "_active_lock_file", lambda: None)
+    monkeypatch.setattr(browser, "_pids_for_cdp_port", lambda port: [])
+    monkeypatch.setattr(browser, "_cdp_ready", lambda *a, **k: True)
+
+    waited = []
+
+    def _down(port, timeout):
+        waited.append(timeout)
+        return True
+
+    monkeypatch.setattr(browser, "_wait_until_cdp_down", _down)
+
+    assert browser.stop_comet(port=9222) is True
+    assert waited, "POSIX stopped waiting for the port to close"
+
+
+def test_a_windows_session_with_a_tracked_pid_is_still_stoppable(monkeypatch):
+    """The other anchor. The refusal must fire only when there is nothing to
+    aim at, never when the lock named an owner."""
+    monkeypatch.setattr(browser.sys, "platform", "win32")
+    monkeypatch.setattr(browser, "_pids_for_cdp_port", lambda port: [])
+    monkeypatch.setattr(browser, "_pid_is_browser", lambda pid, name: True)
+    monkeypatch.setattr(browser, "_cdp_ready", lambda *a, **k: True)
+    monkeypatch.setattr(browser, "_wait_until_cdp_down", lambda port, timeout: True)
+    monkeypatch.setattr(browser, "_clear_lock", lambda lock: None)
+
+    sent = []
+    monkeypatch.setattr(browser.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+
+    class _Lock:
+        name = "browser-cdp.json"
+
+        def read_text(self):
+            return json.dumps({"port": 9222, "pid": 4242, "browser": "brave"})
+
+    monkeypatch.setattr(browser, "_active_lock_file", _Lock)
+
+    assert browser.stop_comet(port=9222) is True
+    assert [pid for pid, _sig in sent] == [4242], sent
+
+
+def test_the_docstring_no_longer_calls_the_port_complete_everywhere():
+    """The claim itself. The code fix above is a refusal, not a repair: a
+    Windows session with no lock still cannot be stopped by this tool, and the
+    docstring has to say which platform its promise holds on."""
+    doc = " ".join((browser.stop_comet.__doc__ or "").split())
+    active = doc.split("That qualifier was missing")[0]
+    assert "ON POSIX" in active, (
+        f"the promise is unqualified again: {active!r}")
+    assert "NOT complete on Windows" in active, active

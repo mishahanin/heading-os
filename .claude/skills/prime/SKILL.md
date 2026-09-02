@@ -125,7 +125,7 @@ hook, the writer count was zero and the file was absent. So this section had
 done nothing since the mechanism moved to the dated archive, while reading like
 a working feature.
 
-### 2.5-2.16 Parallel Health Block
+### 2.4-2.16 Parallel Health Block
 
 Run the health checks in parallel via one helper:
 
@@ -135,8 +135,9 @@ python scripts/prime-health-parallel.py
 
 **Run it from the workspace you launched in — do not navigate away.** In the HEADING OS split layout, scripts live in the ENGINE clone (`.heading-os`, your launch directory). The scripts themselves auto-resolve all data under the DATA root (`.heading-os-data`). So run the helper straight from the current directory. Do NOT `cd` into the data overlay, which has no `scripts/`. NEVER fall back to a different workspace such as `ceo-main`, because that reports a DIFFERENT workspace's data and silently misleads the briefing. If the helper errors, debug it in place; the correct invocation is always the bare `python scripts/prime-health-parallel.py` from the launch directory.
 
-This single invocation dispatches every check in the `CHECKS` registry of `scripts/prime-health-parallel.py` to a `ThreadPoolExecutor(max_workers=8)` and prints the aggregated output in the order /prime expects. The registry is the source of truth for the list; `tests/test_prime_health_registry.py` holds this page to it. Today it carries twelve. They are CRM health, Knowledge health, Memory file scan, Email-Intel state, and Threads archive-scan. Then Fireside daemon, Sync-Exchange daemon, Odin cadence, Ops-radar, Reminders due, Dream-shadow worklist, and the component update check. The last five render nothing when they have nothing to say:
+This single invocation dispatches every check in the `CHECKS` registry of `scripts/prime-health-parallel.py` to a `ThreadPoolExecutor(max_workers=8)` and prints the aggregated output in the order /prime expects. The registry is the source of truth for the list; `tests/test_prime_health_registry.py` holds this page to it. Today it carries thirteen. The first is Session hooks armed. Then CRM health, Knowledge health, Memory file scan, Email-Intel state, and Threads archive-scan. Then Fireside daemon, Sync-Exchange daemon, Odin cadence, Ops-radar, Reminders due, Dream-shadow worklist, and the component update check. Session hooks armed and the last five render nothing when they have nothing to say:
 
+- **### 2.4 Session Hooks** -- whether `.claude/settings.local.json` registers every session hook its platform template defines. It is gitignored, so a clone that never ran `bash scripts/setup-platform.sh` has none of them. Renders nothing when armed. A short clone gets the missing list and the fix command.
 - **### 2.5 Relationship Radar** -- RED contacts (overdue), YELLOW contacts (approaching), Active commitments due in the next 7 days, Total contacts tracked / individual CRM files. CEO workspace also surfaces company-wide CRM from the operator's own aggregate at `<data-root>/crm/aggregated/`.
 - **### 2.7 Knowledge Base Health** -- total notes and status breakdown (seeds / growing / evergreen). Also stale seeds (>7 days old still seed status), orphan notes count, and top 5 keywords.
 - **### 2.9 Memory Health** -- count of memory files, MEMORY.md N/200 line budget, and files >45 days flagged for review. Also orphan files, which sit in the memory directory but are not linked from MEMORY.md. All clean = "Memory: N files, M/200 lines. All healthy."

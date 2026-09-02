@@ -68,9 +68,17 @@ def wired(tmp_path, monkeypatch):
     monkeypatch.setattr(bench, "query_at",
                         lambda *_a, **_k: [{"path": p, "score": 0.5}
                                            for p in state["now"]])
+    # The last question's truth is never in the shown hits, so its ceiling is
+    # 0.000 and every run below has one question that COULD falsify the
+    # assumption. A run where no question can is an instrument failure (exit 2)
+    # since 2026-09-02, and this fixture used to produce exactly that: three
+    # questions whose truth `a.md` was always shown, checking nothing while the
+    # mode returned the favourable 0.
     monkeypatch.setattr(
         bench, "load_truth",
-        lambda *_a, **_k: {q: _Truth({"a.md"}) for q in bench.CROSSCHECK_QUESTIONS})
+        lambda *_a, **_k: {q: _Truth({"a.md"} if q != bench.CROSSCHECK_QUESTIONS[-1]
+                                     else {"never-shown.md"})
+                          for q in bench.CROSSCHECK_QUESTIONS})
     monkeypatch.setattr(bench, "get_outputs_dir", lambda: tmp_path / "outputs")
     monkeypatch.setattr(bench, "_run_state", lambda *_a, **_k: {"corpus_sha": "abc"})
     return state

@@ -171,8 +171,18 @@ def parse_frontmatter(skill_md: Path) -> tuple[dict, str]:
 # refusing it would fail a working SKILL.md over a symptom no reader can see.
 FORBIDDEN_IN_CELL = {"\n": "newline", "\r": "carriage return"}
 
+# `label` alone is rendered INSIDE a backtick code span, by both `render_row` and
+# `render_core_row`: `| `{label}` | ...`. So a backtick in it closes the span
+# early and the Skill cell of an always-on rule renders mangled - the same
+# deterministic corruption `--check` regenerates and passes that the two
+# characters above are refused for. Triggers, exclusions and compound are NOT in
+# a code span and backticks there are ordinary house style: measured on the live
+# corpus 2026-09-02, 30 of the 94 skills carry one, so refusing the character
+# everywhere would fail a third of the tree over nothing.
+FORBIDDEN_IN_CODE_SPAN = {"`": "backtick"}
 
-def _as_cell(value, *, field: str) -> str:
+
+def _as_cell(value, *, field: str, code_span: bool = False) -> str:
     """One string, safe to place in a markdown table cell.
 
     `_as_list` below guards the item TYPE and the container TYPE, and `compound`
@@ -187,6 +197,10 @@ def _as_cell(value, *, field: str) -> str:
     `{rel}: {err}` line this gate exists to print, and `label: no` - the YAML
     boolean False, which is falsy - vanished into the `or f"/{name}"` default
     with no word to the author who set it.
+
+    `code_span=True` adds the backtick refusal, and only `label` passes it,
+    because only `label` is rendered inside a code span. See
+    `FORBIDDEN_IN_CODE_SPAN`.
     """
     if not isinstance(value, str):
         raise ValueError(
@@ -198,6 +212,13 @@ def _as_cell(value, *, field: str) -> str:
                 f"{field}: contains a {name}, which ends the markdown table "
                 f"row: {value[:60]!r}. Write the value on one line - a folded "
                 f"scalar (`- >`) adds a trailing newline.")
+    if code_span:
+        for char, name in FORBIDDEN_IN_CODE_SPAN.items():
+            if char in value:
+                raise ValueError(
+                    f"{field}: contains a {name}, and this cell is rendered "
+                    f"inside a code span: {value[:60]!r}. The span closes on the "
+                    f"first one and the Skill column renders mangled. Remove it.")
     # An empty cell is refused rather than defaulted. `label: ""` renders an
     # empty code span in the Skill column, which is a broken row; and the
     # alternative - falling back to `/{name}` - is the same silent-ignore this
@@ -321,8 +342,12 @@ def load_routing_rows() -> tuple[list[dict], list[str]]:
         try:
             triggers = _as_list(routing.get("triggers"), field=f"{ROUTING_KEY}.triggers")
             exclusions = _as_list(routing.get("exclusions"), field=f"{ROUTING_KEY}.exclusions")
-            label = (_as_cell(raw_label, field=f"{ROUTING_KEY}.label")
-                     if raw_label is not None else f"/{name}")
+            # The DEFAULT is checked too, not only an authored `label`. It is
+            # built from `name`, which falls back to the directory name, and both
+            # reach the same code span.
+            label = _as_cell(
+                raw_label if raw_label is not None else f"/{name}",
+                field=f"{ROUTING_KEY}.label", code_span=True)
         except ValueError as exc:
             errors.append(f"{rel}: {exc}")
             continue
@@ -406,10 +431,19 @@ def escape_pipes(text: str) -> str:
     """Escape a raw ``|`` as ``\\|`` for markdown-table safety, leaving an already
     escaped ``\\|`` untouched.
 
-    Parity-aware. A plain negative lookbehind treated ANY preceding backslash as
-    an escape, so a literal backslash that is DATA (`C:\\|foo`) left its pipe
-    unescaped and split the table cell into a spurious column. A pipe is already
-    escaped only when preceded by an ODD run of backslashes.
+    Parity-aware: a pipe counts as already escaped only when the backslash run
+    before it is ODD. A plain negative lookbehind treated ANY preceding backslash
+    as an escape, so an EVEN run - a literal backslash that is DATA, written
+    ``C:\\\\|foo`` - left its pipe unescaped and split the table cell into a
+    spurious column. Parity escapes that one: ``C:\\\\|foo`` renders
+    ``C:\\\\\\|foo``.
+
+    ``C:\\|foo`` was named as the motivating example here until 2026-09-02, and
+    it is the case parity does NOT repair: one backslash is an odd run, so both
+    the old lookbehind and the parity rule read it as an existing escape and
+    leave the pipe bare. MEASURED that day, the two spellings agree on that
+    input and differ only on the even one. See ``unescape_pipes`` for what the
+    odd run costs on the way back.
     """
     def _fix(match: "re.Match") -> str:
         slashes = match.group(1)
@@ -419,7 +453,25 @@ def escape_pipes(text: str) -> str:
 
 
 def unescape_pipes(text: str) -> str:
-    """The exact inverse of ``escape_pipes``: drop the ONE backslash it added.
+    """Drop the ONE backslash ``escape_pipes`` added. NOT its exact inverse.
+
+    It was called the exact inverse until 2026-09-02 and that claim is false on
+    one shape: a pipe preceded by an ODD run of backslashes. ``escape_pipes``
+    reads such a run as an existing escape and passes the text through, so the
+    forward function is not injective and no backward function can undo it.
+    MEASURED 2026-09-02: ``unescape_pipes(escape_pipes("C:\\|foo"))`` is
+    ``"C:|foo"`` - the data backslash is gone. Every other input round-trips,
+    including the even runs ``escape_pipes`` was made parity-aware for.
+
+    Kept as a documented limit rather than repaired, because the repair is to
+    make ``escape_pipes`` escape unconditionally, and that would double the
+    backslash in every cell an author already escaped by hand. Those exist:
+    ``.claude/skills/workspace-deep-audit/SKILL.md`` writes
+    ``--mode={full\\|quick\\|focus}`` and ``.claude/skills/modem-tune/SKILL.md``
+    writes ``[status \\| revert]``, both hand-escaping the pipe for markdown, and
+    both correctly passed through untouched. The lossy case is the OTHER reading
+    of the same bytes - a backslash meant as data - which no live SKILL.md has,
+    and which this function cannot tell apart from those two.
 
     The parser in ``scripts/dev/extract-router-rows.py`` splits a row on
     unescaped pipes and, until 2026-08-27, handed the cell on with the escape
@@ -538,8 +590,16 @@ def render_category_file(category: str, rows: list[dict]) -> str:
 def splice_region(router_text: str, region: str) -> str:
     """Replace the text strictly between the two markers with ``region``.
 
-    Everything outside the markers is preserved byte-for-byte. Raises ValueError if a
-    marker is missing.
+    Everything outside the markers is preserved unchanged, LINE ENDINGS ASIDE, and
+    the qualifier is the module docstring's, not a hedge added here: ``read_text``
+    and ``write_text`` apply universal-newline translation, so a CRLF router file
+    is rewritten LF and the bytes outside the markers DO change. "byte-for-byte"
+    was the old wording in both places; the module docstring was narrowed and this
+    one, describing the same I/O, was left carrying the claim its own file had
+    already recorded as false.
+
+    Raises ValueError if a marker is missing, or if either marker appears more
+    than once.
     """
     if MARKER_BEGIN not in router_text or MARKER_END not in router_text:
         raise ValueError(

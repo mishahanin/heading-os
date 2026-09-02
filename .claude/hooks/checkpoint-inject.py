@@ -15,17 +15,34 @@ Two rules keep the injection honest:
     (.claude/rules/scope-claims.md). There is deliberately no fallback to
     "the newest handoff on disk": with several sessions open, the newest is
     usually somebody else's work, and no handoff beats a foreign one.
-  - No body on `compact`. The harness has just put a summary of THIS session
-    into context; re-injecting a pointer only competes with it. The text printed
-    on that path says what this hook DID and never what is on disk: it takes the
-    `compact` source as its whole evidence and never looks in the archive, and
-    until 2026-08-20 it asserted "this session's saved handoffs are under the
-    handoff archive" all the same. Measured that day: with zero pointer dirs for
-    the session, the sentence printed unchanged (.claude/rules/scope-claims.md).
-    The shared
-    `.latest/summary.md` still exists for scripts/next-signal.py, which asks a
-    different question ("the newest handoff in this workspace") where
-    last-writer-wins is the right answer.
+  - No body on `compact`, and in MANUAL mode no output at all. The harness has
+    just put a summary of THIS session into context; re-injecting a pointer only
+    competes with it. What happens next depends on the mode, and the two are not
+    the same run: in AUTO mode the hook prints one short continuation
+    instruction and stops there; in manual mode it prints nothing and exits 0,
+    because the operator drives the next turn himself and a "continue without
+    asking" instruction would take that decision away from him.
+
+    When there IS text - the auto path only - it says what this hook DID and
+    never what is on disk: it takes the `compact` source as its whole evidence
+    and never looks in the archive, and until 2026-08-20 it asserted "this
+    session's saved handoffs are under the handoff archive" all the same.
+    Measured that day: with zero pointer dirs for the session, the sentence
+    printed unchanged (.claude/rules/scope-claims.md).
+
+    Retired 2026-09-02, quoted for the record: "The text printed on that path
+    says what this hook DID and never what is on disk". That describes a run
+    that does not happen in manual mode, where there is no text. MEASURED that
+    day, driving this hook with `source=compact` against a scratch project and
+    data root: with CLAUDE_HANDOFF_AUTO unset, stdout was 0 bytes and the exit
+    code 0; with it set, 645 bytes beginning "# Checkpoint". The code was the
+    correct half and the sentence was corrected to it, because manual mode is
+    the mode in which `checkpoint-offer.py` ASKS the operator what to do rather
+    than compacting for him.
+
+    The shared `.latest/summary.md` still exists for scripts/next-signal.py,
+    which asks a different question ("the newest handoff in this workspace")
+    where last-writer-wins is the right answer.
 
 Silent on fresh sessions (matcher excludes 'startup' in settings registration).
 Silent when this session has no pointer files.

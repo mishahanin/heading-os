@@ -349,8 +349,13 @@ def test_two_action_flags_both_run(monkeypatch):
     cp = _load("cp_mod", "checkpoint-paths.py")
     ran = []
     monkeypatch.setattr(cp, "auto_switch", lambda v: ran.append(("auto", v)) or 0)
+    # `**kw` because `main` now tells `compact_at_switch` whether the operator
+    # lowered a switch in this same invocation (`may_raise`). This test is about
+    # both halves running, not about that flag, so it tolerates it and
+    # tests/test_a_switch_the_operator_lowered_and_the_tool_raised_back.py pins
+    # the value.
     monkeypatch.setattr(cp, "compact_at_switch",
-                        lambda v: ran.append(("compact_at", v)) or 0)
+                        lambda v, **kw: ran.append(("compact_at", v)) or 0)
     rc = cp.main(["--auto", "on", "--compact-at", "35"])
     assert rc == 0
     assert ran == [("auto", "on"), ("compact_at", "35")], (
@@ -363,7 +368,9 @@ def test_a_refusal_does_not_cancel_the_other_action(monkeypatch):
     cp = _load("cp_mod2", "checkpoint-paths.py")
     ran = []
     monkeypatch.setattr(cp, "auto_switch", lambda v: ran.append("auto") or 0)
-    monkeypatch.setattr(cp, "compact_at_switch", lambda v: ran.append("compact_at") or 2)
+    # `**kw`: see the note in the test above.
+    monkeypatch.setattr(cp, "compact_at_switch",
+                        lambda v, **kw: ran.append("compact_at") or 2)
     rc = cp.main(["--auto", "on", "--compact-at", "999"])
     assert ran == ["auto", "compact_at"]
     assert rc == 2, "the refusal has to reach the exit code"

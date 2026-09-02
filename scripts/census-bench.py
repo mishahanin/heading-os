@@ -50,7 +50,8 @@ outcome everywhere it appears, never an error.
          --recall-crosscheck  the ceiling's meaning as an upper bound was
                               contradicted by at least one answer
     2  instrument failure: empty truth, index missing, too few measurable
-       questions, an unreadable or malformed input file, or a mode that is not
+       questions, a --recall-crosscheck run in which no question could falsify
+       the ceiling, an unreadable or malformed input file, or a mode that is not
        implemented yet
     3  the retrieval layer could not be called
 
@@ -58,7 +59,12 @@ Until 2026-08-24 this table named only the two --baseline outcomes and gave
 them as the whole meaning of 1, so a wrapper reading exit codes labelled a
 NOT-COMPARABLE acceptance run, or a falsified ceiling, as FIX-RECALL.
 
+Until 2026-09-02 a --recall-crosscheck run whose questions all had a non-zero
+ceiling printed "nothing was checked" and returned 0, the favourable reading,
+over a run that could not have produced an unfavourable one.
+
 Tests: tests/test_a_typo_that_was_filed_as_a_falsified_benchmark.py
+       tests/test_a_benchmark_that_reported_a_verdict_it_never_measured.py
 """
 from __future__ import annotations
 
@@ -309,7 +315,34 @@ def query_index(root: Path, text: str, depth: int = QUERY_DEPTH) -> tuple[list[d
         payload = json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"memory-index returned non-JSON: {exc}") from exc
-    return payload.get("hits", []), elapsed
+    return _hits_of(payload), elapsed
+
+
+def _hits_of(payload: Any) -> list[dict]:
+    """The hit list out of a query response, or a retrieval failure.
+
+    UNPARSEABLE output was already covered: `query_index` converts it and
+    `json.JSONDecodeError` is in `QUERY_FAILURES` besides. Output that PARSES
+    and is not a query object was not, although a bare list, a string and a
+    number are all valid JSON: `.get` on them is an AttributeError, which is in
+    neither `QUERY_FAILURES` nor `main`, so the run exited 1 where the table
+    documents 3, "the retrieval layer could not be called". Exit 1 is a real
+    benchmark verdict everywhere it appears. `RuntimeError` is what puts this
+    failure back in `QUERY_FAILURES`.
+
+    The `hits` field is checked for the same reason one level down: every caller
+    iterates the return value and calls `.get` on each element, so a string
+    there fails identically a few frames later.
+    """
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            f"memory-index returned a bare {type(payload).__name__}, "
+            f"not a query object")
+    hits = payload.get("hits", [])
+    if not isinstance(hits, list):
+        raise RuntimeError(
+            f"memory-index returned hits as {type(hits).__name__}, not a list")
+    return hits
 
 
 def measure_question(root: Path, question: dict, answer: OracleAnswer) -> QuestionResult:
@@ -712,7 +745,21 @@ def grade_one(answer_record: dict, truth: OracleAnswer,
     elif kind == "paths" and truth.kind == "paths":
         correct = set(_seq("paths")) == set(truth.paths)
     elif kind == "pairs" and truth.kind == "pairs":
-        correct = ({tuple(p) for p in _seq("pairs") if isinstance(p, (list, tuple))}
+        given_pairs = [p for p in _seq("pairs") if isinstance(p, (list, tuple))]
+        # `tuple(p)` is unhashable the moment `p` holds a list or an object, so
+        # building the comparison set raised TypeError, which `main` does not
+        # catch, and `--score` exited 1: the code the table reserves for a
+        # REJECTED verdict. The answers file is LLM-emitted, so `[["a"], "b"]`
+        # is a shape that arrives. A list and an object are the whole unhashable
+        # set here, because JSON carries nothing else that is not hashable.
+        nested = [p for p in given_pairs
+                  if any(isinstance(x, (list, dict)) for x in p)]
+        if nested:
+            # Graded wrong rather than refused: a malformed pair is the model's
+            # output, not the operator's input, and this is the column that
+            # measures the model.
+            return STATUS_WRONG, f"pairs holds a nested list or object: {nested[:1]}"
+        correct = ({tuple(p) for p in given_pairs}
                    == {tuple(p) for p in (truth.value or [])})
     else:
         return STATUS_WRONG, f"answer kind {kind!r} does not answer a {truth.kind!r} question"
@@ -909,11 +956,32 @@ def acceptance_verdict(per_class: dict, confidently_wrong: int,
 
 
 def _today_from(state: dict) -> date:
+    """The date the answers were produced against, or the host clock, said aloud.
+
+    WARN rather than REFUSE, and the choice is not obvious. The oracles are
+    date-sensitive and this is the acceptance gate, so substituting a different
+    day silently is exactly the "graded against a different world" failure that
+    `states_comparable` exists to catch. Refusing would close it hardest.
+
+    It is a warning because of who reaches this line. `main` always computes a
+    date (from `--today` or the operator zone) and passes it, so no CLI run
+    reaches the fallback at all; refusing would guard a path no operator walks
+    while breaking the library callers that legitimately grade date-insensitive
+    shapes with no `run_state` at all. What was actually wrong was the silence:
+    a substituted grading date is a dropped measurement, and this file's stated
+    principle is that a dropped measurement is named, never silent.
+    """
     raw = state.get("today")
     try:
         return date.fromisoformat(raw)
     except (TypeError, ValueError):
-        return datetime.now(tz=get_default_tz()).date()
+        fallback = datetime.now(tz=get_default_tz()).date()
+        print(f"{YELLOW}run_state.today is {raw!r}, so the oracles are being "
+              f"graded against the host clock ({fallback.isoformat()}) and not "
+              f"against the day these answers were produced. The oracles are "
+              f"date-sensitive; pass --today to pin the date.{RESET}",
+              file=sys.stderr)
+        return fallback
 
 
 def _baseline_comparison(stated: dict) -> tuple[dict | None, bool, list[str]]:
@@ -954,7 +1022,9 @@ def query_at(root: Path, text: str, depth: int, threshold: float) -> list[dict]:
                           timeout=300, check=False)
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip()[-400:])
-    return json.loads(proc.stdout).get("hits", [])
+    # Shared with `query_index`: valid JSON that is not a query object is a
+    # retrieval failure (exit 3), never a benchmark verdict (exit 1).
+    return _hits_of(json.loads(proc.stdout))
 
 
 def best_ceiling_at(root: Path, question: dict, expected: set[str],
@@ -1173,6 +1243,22 @@ def mode_recall_crosscheck(questions: list[dict], corpus: CorpusPaths,
         print(f"{RED}показанная выдача не покрывает {', '.join(missing)}. "
               f"Перезапустите печатающий проход.{RESET}", file=sys.stderr)
         return 2
+    # The per-question VALUE, checked for the same reason as the record and the
+    # `shown` field above it. Key coverage was checked and the value was not, so
+    # a string or a null under one question reached `{h.get("path") for h in
+    # shown[qid]}` and raised AttributeError or TypeError, neither of which is
+    # in `main`'s except chain: exit 1, which this mode documents as "the
+    # ceiling was contradicted". A corrupt handoff file was filed as a falsified
+    # benchmark. An EMPTY list is not corrupt: a question whose /recall query
+    # returned nothing is the zero-ceiling case this mode exists to measure.
+    bad_shown = sorted(qid for qid in CROSSCHECK_QUESTIONS
+                       if not isinstance(shown[qid], list)
+                       or any(not isinstance(h, dict) for h in shown[qid]))
+    if bad_shown:
+        print(f"{RED}поле shown должно хранить список хитов-объектов; "
+              f"повреждено для: {', '.join(bad_shown)}: {shown_path}{RESET}",
+              file=sys.stderr)
+        return 2
 
     comparable, diverged = states_comparable(
         record.get("run_state") or {}, _run_state(corpus, root, today))
@@ -1225,12 +1311,20 @@ def mode_recall_crosscheck(questions: list[dict], corpus: CorpusPaths,
     rows = []
     for qid in CROSSCHECK_QUESTIONS:
         expected = truth[qid]
-        answer = given.get(qid) or {}
+        answer = given.get(qid)
         got = {h.get("path") for h in shown[qid]}
         denom = len(expected.paths) or 1
         ceiling = len(expected.paths & got) / denom
 
-        if answer.get("refused"):
+        # A question with no answer at all was read as `{}` and then scored
+        # "wrong", because an empty answer matches no oracle. It is a REFUSAL:
+        # nobody gave a wrong answer here, and the refused-versus-wrong split is
+        # what the grading in this file is built on. The scorer beside this one
+        # already treats an unanswered question that way, with "not answered" in
+        # its `why` column. `answered` carries the same distinction into the
+        # report, because a forgotten question and a stated "I cannot" are not
+        # the same event and the mode must not report them as one.
+        if answer is None or answer.get("refused"):
             outcome = "refused"
         elif expected.kind == "paths":
             outcome = ("correct" if set(answer.get("paths", [])) == expected.paths
@@ -1245,8 +1339,8 @@ def mode_recall_crosscheck(questions: list[dict], corpus: CorpusPaths,
         matched = (predicted == "unconstrained"
                    or outcome in ("wrong", "refused"))
         rows.append({"id": qid, "ceiling_operating": round(ceiling, 3),
-                     "outcome": outcome, "prediction": predicted,
-                     "matched": matched})
+                     "outcome": outcome, "answered": qid in given,
+                     "prediction": predicted, "matched": matched})
         colour = GREEN if matched else RED
         print(f"{qid:<8} потолок {ceiling:>5.3f}  исход {outcome:<9} "
               f"{colour}{'совпало' if matched else 'РАСХОЖДЕНИЕ'}{RESET}")
@@ -1270,6 +1364,24 @@ def mode_recall_crosscheck(questions: list[dict], corpus: CorpusPaths,
               f"вопросов, которые МОГЛИ опровергнуть допущение "
               f"(потолок 0.000). Остальные его не проверяют.{RESET}")
 
+    # One place, so the `--no-write` branch and the writing branch cannot say
+    # different things. A run with nothing `constrained` exits 2, not 0: the
+    # comment beside `constrained` already named that run as the same shape of
+    # defect the step-1 manual check had, and it returned 0 anyway, which the
+    # table defines as "the run produced the favourable reading". Nothing was
+    # read. The workspace calls this class "a pass over an empty corpus is not a
+    # pass" and refuses it with the instrument-failure code in
+    # `scripts/ste-check.py` and `scripts/validate-crm-schema.py`; it belongs to
+    # the same family as "too few measurable questions", which exit 2 covers
+    # already. A CONTRADICTION still outranks it: that run falsified something,
+    # so it is a verdict and keeps exit 1.
+    if contradicted:
+        code = 1
+    elif not constrained:
+        code = 2
+    else:
+        code = 0
+
     out_dir = get_outputs_dir() / "operations" / "census-bench"
     stem = (f"{datetime.now(tz=get_default_tz()).date().isoformat()}"
             "_recall-crosscheck_census")
@@ -1277,7 +1389,10 @@ def mode_recall_crosscheck(questions: list[dict], corpus: CorpusPaths,
     # grading pass reads back, not a report, so `--no-write` must not skip it.
     if not write:
         print(f"{GRAY}--no-write: отчёт не записан{RESET}")
-        return 1 if contradicted else 0
+        return code
+    # Written even when the run refused for having nothing to falsify: the
+    # refusal's evidence IS `falsifiable_questions: 0`, and dropping the report
+    # would leave the operator an exit code and no record of why.
     atomic_write_text(out_dir / f"{stem}.json", json.dumps({
         "schema_version": 1, "mode": "recall-crosscheck",
         "generated": datetime.now(tz=get_default_tz()).isoformat(),
@@ -1291,7 +1406,7 @@ def mode_recall_crosscheck(questions: list[dict], corpus: CorpusPaths,
         "falsifiable_questions": len(constrained),
     }, ensure_ascii=False, indent=2) + "\n")
     print(f"{GREEN}Отчёт:{RESET} {out_dir / (stem + '.json')}")
-    return 1 if contradicted else 0
+    return code
 
 
 def mode_score(path: str, today: date | None = None, write: bool = True) -> int:

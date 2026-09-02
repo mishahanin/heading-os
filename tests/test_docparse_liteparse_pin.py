@@ -171,3 +171,151 @@ def test_the_installer_uses_the_constant_rather_than_a_literal():
     assert "LITEPARSE_VERSION" in install_line, (
         "setup --install hardcodes a version again: " + install_line.strip()
     )
+
+
+# ==========================================================================
+# `report` must not need liteparse when it has nothing to screenshot
+# ==========================================================================
+#
+# Found by the 2026-08-24 audit, shard scripts-05-p3 finding 4. Two couplings
+# in one function. `from liteparse import LiteParse` sat at the TOP of
+# `cmd_report`, above the "Parse JSON not found" / "Citations JSON not found"
+# checks, so on a machine without the package the command died with a raw
+# ImportError instead of its own diagnostics, even when the inputs were
+# invalid anyway. And `LiteParse()` was then constructed unconditionally,
+# including for zero citations, every citation ambiguous, or every cited page
+# <= 0, where no screenshot can be taken and the HTML report renders its
+# explicit "no page image" notes. A broken install killed a report that needed
+# nothing from it.
+
+
+class _NoLiteparse:
+    """Make `import liteparse` raise, without uninstalling anything.
+
+    A `None` entry in `sys.modules` is the documented way to make an import of
+    that name fail. Restoring the previous entry, rather than deleting the key,
+    keeps a real installed package available to every later test.
+    """
+
+    def __init__(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "liteparse", None)
+
+
+def _report_args(tmp_path, *, citations, parse_files=None, missing_parse=False):
+    import json
+    import types
+
+    parse_path = tmp_path / "parsed.json"
+    cit_path = tmp_path / "citations.json"
+    if not missing_parse:
+        parse_path.write_text(json.dumps({"files": parse_files or []}),
+                              encoding="utf-8")
+    cit_path.write_text(
+        json.dumps({"question": "q", "answer_md": "a", "citations": citations}),
+        encoding="utf-8")
+    return types.SimpleNamespace(
+        parse_json=str(parse_path), citations=str(cit_path),
+        output_dir=str(tmp_path / "out"), title="T", no_pdf=True,
+        max_pages=docparse.MAX_REPORT_PAGES)
+
+
+def test_a_missing_input_is_reported_before_liteparse_is_imported(tmp_path,
+                                                                  monkeypatch,
+                                                                  capsys):
+    """The diagnostics this command owns must outrank an optional dependency."""
+    _NoLiteparse(monkeypatch)
+    args = _report_args(tmp_path, citations=[], missing_parse=True)
+    try:
+        docparse.cmd_report(args)
+    except ImportError as exc:  # pragma: no cover - this is the defect
+        raise AssertionError(
+            "cmd_report imported liteparse before checking its inputs, so a "
+            f"missing parse JSON surfaced as {exc!r} instead of the tool's own "
+            "'Parse JSON not found' message") from exc
+    except SystemExit as exc:
+        assert exc.code == 2, f"expected the input-not-found code 2, got {exc.code!r}"
+    else:
+        raise AssertionError("a missing parse JSON did not exit at all")
+    assert "Parse JSON not found" in capsys.readouterr().err
+
+
+def test_a_report_with_no_page_to_capture_never_touches_liteparse(tmp_path,
+                                                                  monkeypatch):
+    """Zero citations means zero screenshots, so the parser is not needed."""
+    _NoLiteparse(monkeypatch)
+    args = _report_args(tmp_path, citations=[])
+    docparse.cmd_report(args)
+    html = Path(args.output_dir) / "docparse-report.html"
+    assert html.is_file(), "the report was not written"
+    assert html.stat().st_size > 0
+
+
+def test_a_citation_on_page_zero_also_needs_no_parser(tmp_path, monkeypatch):
+    """The other empty-screenshot route: every cited page is filtered out.
+
+    Distinct from "no citations at all", because the `page <= 0` filter sits
+    inside the loop and an empty `pages_to_screenshot` is reached with a
+    non-empty citation list. A guard written only against `not citations`
+    would pass the test above and still construct the parser here.
+    """
+    _NoLiteparse(monkeypatch)
+    args = _report_args(tmp_path,
+                        citations=[{"file": "a.pdf", "page": 0, "quote": "q"}])
+    docparse.cmd_report(args)
+    assert (Path(args.output_dir) / "docparse-report.html").is_file()
+
+
+# ==========================================================================
+# `_setup_check`'s comment must not deny the version checks above it
+# ==========================================================================
+
+_SETUP_CHECK_DENIALS = (
+    "never compared a single version",
+    "never compares a single version",
+    "compared no version",
+)
+
+
+def _setup_check() -> ast.FunctionDef:
+    for node in ast.walk(ast.parse(SOURCE)):
+        if isinstance(node, ast.FunctionDef) and node.name == "_setup_check":
+            return node
+    raise AssertionError("_setup_check not found in scripts/docparse.py")
+
+
+def _setup_check_source() -> str:
+    func = _setup_check()
+    lines = SOURCE.splitlines()
+    return "\n".join(lines[func.lineno - 1:func.end_lineno])
+
+
+def test_setup_check_really_does_compare_both_versions():
+    """The fact the comment has to agree with, established first.
+
+    Asked of the AST rather than of the prose, so this half cannot be satisfied
+    by the same text the next test reads.
+    """
+    body = _setup_check_source()
+    assert "major >= 18" in body, (
+        "_setup_check no longer compares the Node major version")
+    assert "!= LITEPARSE_VERSION" in body, (
+        "_setup_check no longer compares the installed liteparse version")
+    assert "version_unknown" in body, (
+        "_setup_check no longer tracks whether a version could be confirmed")
+
+
+def test_the_setup_check_comment_does_not_deny_the_checks_beside_it():
+    """A comment that describes the code as it was, in the tense of now.
+
+    Found by the 2026-08-24 audit, shard scripts-05-p3 finding 3. The closing
+    comment read "over a method that never compared a single version" while the
+    two blocks directly above it compared two, and a reader auditing why the
+    summary sentence is worded as it is would conclude version drift was still
+    unchecked here. It is checked, and downgraded to a WARN that sets
+    `version_unknown`, which the summary is then gated on.
+    """
+    body = _setup_check_source()
+    present = [claim for claim in _SETUP_CHECK_DENIALS if claim in body]
+    assert not present, (
+        "_setup_check carries a comment claiming it compares no version, while "
+        f"the test above proves it compares two: {present}")

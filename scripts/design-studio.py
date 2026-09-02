@@ -78,13 +78,16 @@ def scratch_name(prefix: str, suffix: str) -> str:
     without giving up the human-readable timestamp.
 
     It covers the DEFAULT OUTPUT names too, and for a while it did not. The
-    collision was diagnosed here, fixed for the throwaway HTML, and left on the
-    artifact the operator keeps: `outputs/design/render-{timestamp()}.png` is
-    the same one-second name in the same shared directory, and
-    `save_source_html` writes its `.html` twin beside it. The orchestrator
-    dispatches design agents in parallel by design (skill-orchestrator Pattern
-    4), so the losing render is a deliverable overwritten with no error. A
-    caller that passes `-o` still gets exactly the path it asked for.
+    collision was diagnosed here, fixed for the throwaway HTML, and LEFT for a
+    while on the artifact the operator keeps: `cmd_render` and `cmd_pdf` built
+    `outputs/design/render-{timestamp()}.png` directly, which was the same
+    one-second name in the same shared directory, and `save_source_html` wrote
+    its `.html` twin beside it. The orchestrator dispatches design agents in
+    parallel by design (skill-orchestrator Pattern 4), so the losing render was
+    a deliverable overwritten with no error. Both callers now route their
+    default through here, so that half is fixed as well; the paragraph is kept
+    as the history of why this function exists at all. A caller that passes
+    `-o` still gets exactly the path it asked for.
     """
     global _SCRATCH_SEQ
     _SCRATCH_SEQ += 1
@@ -139,7 +142,16 @@ def inject_brand_css(html_content: str, brand: str) -> str:
     style_tag = f"<style>\n{css}\n</style>"
 
     if "</head>" in html_content.lower():
-        return re.sub(r'</head>', f'{style_tag}\n</head>', html_content, count=1, flags=re.IGNORECASE)
+        # A FUNCTION replacement, because the string form is a TEMPLATE: `re.sub`
+        # reads backslash escapes in it. `brand.css` is font-heavy CSS, which is
+        # exactly where glyph rules live, and `content: "\e900"` raised
+        # `re.error: bad escape \e` out of the render while `content: "\f0c9"`
+        # exited 0 and shipped a PNG whose injected CSS held a form feed
+        # followed by `0c9`. A function is handed the match and its return value
+        # is used literally, so no character in the CSS is special.
+        replacement = f'{style_tag}\n</head>'
+        return re.sub(r'</head>', lambda _m: replacement, html_content,
+                      count=1, flags=re.IGNORECASE)
     else:
         return (
             f'<!DOCTYPE html>\n<html>\n<head>\n<meta charset="utf-8">\n'
@@ -221,10 +233,20 @@ def render_pdf(html: str, output_path: Path) -> Path:
 
 
 def save_source_html(html: str, output_path: Path, from_inline: bool) -> Path | None:
-    """Save source HTML alongside the output if it came from --html."""
+    """Save source HTML BESIDE the output, never over it, if it came from --html.
+
+    `with_suffix(".html")` returns the path unchanged when the output already
+    ends `.html`, and nothing compared the two. `render -o /tmp/post.html` wrote
+    the screenshot to that path, printed "[OK] Screenshot saved", and then
+    overwrote it with the HTML source: the operator was left with no PNG at all
+    under a message saying one existed. The source is a convenience twin, so it
+    yields the name and the artifact keeps it.
+    """
     if not from_inline:
         return None
     source_path = output_path.with_suffix(".html")
+    if source_path == output_path:
+        source_path = output_path.with_name(output_path.name + ".source.html")
     source_path.write_text(html, encoding="utf-8")
     return source_path
 

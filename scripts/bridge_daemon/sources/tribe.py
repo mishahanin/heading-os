@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 
 TRIBE_TYPES = {"tribe", "tribe-leadership"}
 
+# Upper bound on any contact body read by this module. It was the bare literal
+# `500_000` inside `read_contact` and nowhere else, which is part of why the
+# walker below never got it: a cap with no name is a cap with no second caller.
+CONTACT_MAX_BYTES = 500_000
+
 # Phase 1.37: org roster spreadsheet. The Tribe page shows the full
 # roster from this file, enriched with CRM data where a person matches.
 TRIBE_ROSTER_XLSX = "datastore/operations/tribe/31C_Tribe.xlsx"
@@ -293,8 +298,31 @@ def list_tribe(data_root: "Path | None" = None, today: date | None = None) -> di
     if contacts_dir.exists():
         for p in contacts_dir.glob("*.md"):
             try:
+                # `read_contact` at the bottom of this module refuses a
+                # symlinked contact and refuses a body over CONTACT_MAX_BYTES.
+                # This walker refused neither until 2026-09-02, so the same
+                # file was PUBLISHED on /tribe by the listing and REFUSED by
+                # the detail view for the same slug: a link planted in
+                # crm/contacts/ had its display name, role and frontmatter
+                # served out of the listing while clicking the row answered
+                # "symlinks not allowed". `threads.py` took exactly this fix on
+                # its own walker and this file got only the
+                # `UnicodeDecodeError` half of it. A guard on one of two
+                # readers of the same files is a guard on neither.
+                if contains_symlink(contacts_dir, p):
+                    logger.warning(
+                        "tribe: skipping %s from the /tribe listing; it is a "
+                        "symlink, and read_contact refuses to open it.", p)
+                    continue
+                stat_result = p.stat()
+                if stat_result.st_size > CONTACT_MAX_BYTES:
+                    logger.warning(
+                        "tribe: skipping %s from the /tribe listing; it is %d "
+                        "bytes, over the %d-byte cap read_contact applies.",
+                        p, stat_result.st_size, CONTACT_MAX_BYTES)
+                    continue
                 text = p.read_text(encoding="utf-8")
-                mtime = p.stat().st_mtime
+                mtime = stat_result.st_mtime
             except (OSError, UnicodeDecodeError):
                 # UnicodeDecodeError is a ValueError, NOT an OSError, so ONE
                 # contact file saved in anything but UTF-8 aborted this walk and
@@ -434,7 +462,7 @@ def read_contact(data_root: "Path | None", slug: str) -> dict:
         size = target.stat().st_size
     except OSError:
         return {"ok": False, "error": "stat failed"}
-    if size > 500_000:
+    if size > CONTACT_MAX_BYTES:
         return {"ok": False, "error": f"file too large ({size} bytes)"}
     try:
         text = target.read_text(encoding="utf-8")

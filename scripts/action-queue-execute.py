@@ -58,7 +58,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.utils import dead_letter, tool_risk
+from scripts.utils import dead_letter, recipient, tool_risk
 from scripts.utils.timeparse import parse_iso
 from scripts.utils.workspace import get_outputs_dir, get_workspace_root
 
@@ -145,6 +145,25 @@ def send_card(engine_root: Path, card: dict, now: datetime | None = None) -> dic
         return {"action_id": aid, "result": "send_failed",
                 "error": "draft not written (run /cold-sweep to fill the body)",
                 "classification": "permanent", "attempt": attempt}
+    # THE RECIPIENT GATE. A card may be deposited before a real recipient is
+    # known - `/queue-draft` documents a reserved placeholder as its fallback -
+    # and until 2026-09-02 nothing checked that the human had replaced it. The
+    # documented workflow therefore ended at a transport call addressed to
+    # `someone@example.com`, with no CLI flag able to correct it (`edit` took
+    # `--subject` and `--body-file` and nothing else).
+    #
+    # It sits HERE, in the one function that can send, rather than in the
+    # terminal approve path, so the batch executor is covered by the same copy.
+    # `refused` and not `send_failed`: nothing was attempted, so the caller puts
+    # its claim back and the card stays approvable once the address is fixed.
+    # Recording a send_failure would offer `retry`, which would repeat a send
+    # that never ran and cannot succeed.
+    refusal = recipient.refusal_reason(to)
+    if refusal:
+        return {"action_id": aid, "result": "refused",
+                "error": (f"refusing to send: {refusal}. Correct it with "
+                          f"`action-queue.py edit {aid} --to <address>`"),
+                "classification": "none"}
     send_script = engine_root / "scripts" / "send-email.py"
     # The body goes on STDIN, never in argv. Two reasons, both measured
     # 2026-08-23. An argv element is readable by any local account via `ps` for

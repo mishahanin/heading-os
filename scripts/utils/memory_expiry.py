@@ -102,10 +102,39 @@ def find_expired(memory_dir: Path, today: datetime.date) -> list[tuple[str, date
     return out
 
 
-# One LINK in the index: `[title](name.md)`. The title is non-greedy and forbids
-# `]`, so two links on one line can never be read as one. This is the grammar of
-# a link and nothing more, which is what a READER of the index needs.
-_LINK_RE = re.compile(r"\[[^\]]*?\]\((?P<target>[^)]+)\)")
+# One LINK in the index: `[title](name.md)`.
+#
+# The title admits ONE level of balanced brackets. It used to be `[^\]]*?`,
+# forbidding `]` outright, and that is wrong for this index: a memory hook is
+# often a fragment of code, and code carries brackets. MEASURED 2026-09-02
+# against the live index, this line
+#
+#     - Code scanners: [the mode is args[0] on Path.open, args[1] on open](a-scanner-....md)
+#
+# matched nothing at all. `[^\]]*?` cannot cross the `]` of `args[0]`, so the
+# engine tried to end the title there, found ` on Path.open` instead of `(`, and
+# no amount of backtracking could recover: the whole pointer was invisible.
+#
+# It cost two things, and the second is the serious one.
+#
+#   * `memory_health.compute_memory_defects` reported that memory as an ORPHAN,
+#     one line below the pointer that names it. A false orphan in a report whose
+#     whole job is "which memories has the index lost" is a report the operator
+#     stops believing.
+#   * `_POINTER_RE` below is built from THIS pattern, and `strip_index_pointers`
+#     removes with it. So retiring such a record would have deleted the file from
+#     every store and left its pointer standing, pointing at nothing. The reader
+#     going blind is a wrong number; the remover going blind is a dangling
+#     pointer to a fact that no longer exists.
+#
+# Two links on one line still cannot be read as one, which is the property the
+# old comment credited to the `]` ban. It survives for a different reason: both
+# alternatives below stop dead at `]`, so the title can never reach across the
+# `](` that closes the first link. One level of nesting is deliberate rather
+# than a general balanced-bracket matcher; `args[0]` is the shape that occurs,
+# and the two branches are disjoint on their first character, so this cannot
+# backtrack catastrophically.
+_LINK_RE = re.compile(r"\[(?:[^\[\]]|\[[^\[\]]*\])*\]\((?P<target>[^)]+)\)")
 
 # One pointer to REMOVE: the link plus any trailing note, up to the next `·`
 # separator or the end of the line, so retiring a memory takes its note with it.

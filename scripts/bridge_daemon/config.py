@@ -395,7 +395,21 @@ def revert_config_to(workspace_root: Path, snapshot_name: str) -> Path:
         raise RuntimeError(
             f"snapshot {snapshot_name!r} not found. Available: {available}"
         )
-    raw = target.read_text(encoding="utf-8")
+    # The docstring above promises RuntimeError for an invalid or missing
+    # snapshot, and every check up to here keeps that promise. This read did
+    # not: a snapshot the operator can no longer read (permissions, a mount
+    # that went away) raised `OSError`, and one written by a different tool in
+    # a non-UTF-8 encoding raised `UnicodeDecodeError`, which is a `ValueError`
+    # and so is caught by neither the `OSError` handlers around this call site
+    # nor anything reading the contract above. `is_file()` two lines up already
+    # narrowed the case to a real file that simply cannot be read as text, and
+    # a snapshot that cannot be read IS invalid for the purpose of a revert.
+    try:
+        raw = target.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RuntimeError(
+            f"snapshot {snapshot_name!r} exists but could not be read: {exc}"
+        ) from exc
     user_layer, is_layered = _user_layer_of_snapshot(raw)
     if is_layered:
         # Schema 2: the snapshot kept the layers apart, so the revert puts back

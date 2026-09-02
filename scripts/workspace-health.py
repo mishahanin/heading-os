@@ -25,6 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
+from scripts.utils.repo_files import ignored_paths_or_none
 from scripts.utils.workspace import (
     get_workspace_root, get_context_dir, get_outputs_dir, get_datastore_dir,
     get_templates_dir, get_data_root, get_default_tz,
@@ -88,6 +89,213 @@ _RELATIVE_FILE = re.compile(
 _NOT_A_LITERAL_PATH = re.compile(r"\.\.|YYYY|MM-DD|HH-MM")
 
 
+# Two registries of paths whose absence is not a documentation defect. Both are
+# EXACT tokens, never shapes: a rule of the form "ignore anything that looks
+# like an example" widens silently, and the whole point of this section is that
+# its findings can be believed. Neither may accumulate cover for a reference
+# nobody writes any more, so an entry the live index no longer names fails
+# `tests/test_a_health_check_that_cried_wolf_seventy_three_times.py`. That check
+# lives in the test rather than in this section, because the section also runs
+# over scratch fixtures and would judge every one of them against the operator's
+# index.
+
+# A stand-in inside a sentence ABOUT paths, naming no real file.
+PLACEHOLDER_PATHS = {
+    "scripts/x.py":
+        "stand-in for any root-relative script in the shell-drift guard's "
+        "description; names no script that has ever existed",
+    ".claude/hooks/x.py":
+        "the same stand-in, in the same sentence, for the hooks directory",
+}
+
+# A path whose absence is its normal state, and which no root's ignore rules
+# exclude, so `_ignored_by_every_root` cannot derive it. Anything git already
+# ignores belongs there and must NOT be duplicated here. Two shapes qualify: a
+# file written only while something runs, and an override the resolver that
+# reads it documents as normally absent.
+ABSENT_BY_DESIGN_PATHS = {
+    # The two `outputs/` keys carry `leak-guard: ok` because this dict is a
+    # REGISTRY OF STRINGS, not a path builder. Both are only ever the right
+    # operand of `in` (lines 419 and 423) or a message lookup (line 463); no
+    # branch joins either to a root, which is the construction the guard
+    # exists to stop. They are the comparison-key case its own suppression
+    # comment names.
+    "outputs/operations/handoff.md":  # leak-guard: ok (comparison key)
+        "written only when a session hands off, read by /prime at the next "
+        "start, then moved into outputs/operations/handoff-archive/",
+    "outputs/browser/browser-cdp.json":  # leak-guard: ok (comparison key)
+        "the CDP endpoint scripts/browser.py writes while a browser is "
+        "attached, and removes when it is not",
+    "config/claude-models.json":
+        "the optional first step of the Claude model resolution order, which "
+        "the index itself records as normally absent; the cache and the live "
+        "API answer when it is",
+    ".claude/ralph-loop.local.md":
+        "written by the ralph-loop plugin for the duration of a loop and "
+        "removed on every terminal path it has",
+}
+
+# Paths that are absent because the thing was DELETED, and are named on purpose
+# in a record that says so. A different class from ABSENT_BY_DESIGN_PATHS above,
+# which is about files that come and go at runtime.
+#
+# Why this exists. The reference index is a catalogue, and a catalogue that
+# silently drops a retired subsystem is how someone re-creates it. So a removal
+# gets a bullet naming what went, in which commit, and what carries the property
+# now. Every one of those bullets then read here as a MISSING reference: measured
+# 2026-09-02, 24 of the 27 flagged paths were removal records, and each one is a
+# red ACTION line the operator can do nothing about. A check whose findings are
+# mostly unactionable is a check that gets skimmed, and the three real ones were
+# sitting in the same list.
+#
+# Hand-maintained on purpose, and narrowly. The alternative considered was a
+# regex over the sentence around the path ("RETIRED", "was removed", ...), which
+# is a guess about prose: it would suppress a live path in a sentence that merely
+# mentions a deletion, and miss a removal record worded any other way. A named
+# path with a stated reason is a claim someone made and can be held to, and the
+# floor below holds it: an entry whose path EXISTS again fails, so this registry
+# cannot outlive its sites.
+REMOVED_AND_RECORDED_PATHS = {
+    "config/classification.json":
+        "replaced by config/routing-map.yaml, removed 2026-06-14",
+    "corporate/requirements.txt":
+        "the copy-into-workspace path; setup.py reads .corporate-repo/"
+        "requirements.txt in place since the copy step was deleted",
+    "docs/SETUP-GUIDE.md":
+        "retired doc; its links were repointed to docs/DEPLOYMENT.md",
+    "reference/31c-docs-dark-theme.css":
+        "removed with the setup-guide builder",
+    "scripts/build-setup-guide-html.py":
+        "removed with docs/SETUP-GUIDE.md and the dark theme",
+    "scripts/canary-smoke.py":
+        "deleted 2026-08-23 with the canary gate (22e6997)",
+    "scripts/depth-gate.py":
+        "deleted 2026-08-07 with the depth calibration (28ce7e4)",
+    "scripts/eval-drift-daemon.py":
+        "retired 2026-08-03 (58aa77d); its input set was empty by construction",
+    "scripts/export-sync.py":
+        "left with the AIOS segregation, 2026-04-25",
+    "scripts/promote-corporate.py":
+        "deleted 2026-08-23 with the canary gate (22e6997)",
+    "scripts/rollback-corporate.py":
+        "deleted 2026-08-23 with the canary gate (22e6997)",
+    "scripts/scrutinize-fp-aggregate.py":
+        "removed 2026-08-09 with its _fp_aggregate.md",
+    "scripts/slice-cycle-time.py":
+        "deleted 2026-08-07; it read a ledger nothing writes (70e10bb)",
+    "scripts/slice-depth.py":
+        "deleted 2026-08-07 with the depth calibration (28ce7e4)",
+    "scripts/slice-rollback.py":
+        "deleted 2026-08-07; it read a ledger nothing writes (70e10bb)",
+    "scripts/sync-all-execs.py":
+        "no-op stub removed 2026-08-20 (0ce4506)",
+    "scripts/utils/canopus_freeze.py":
+        "deleted 2026-08-07 with the freeze lifecycle (28ce7e4)",
+    "scripts/utils/canopus_gate.py":
+        "deleted 2026-08-07 with the freeze lifecycle (8520623)",
+    "scripts/utils/slice_depth.py":
+        "deleted 2026-08-07 with the depth calibration (28ce7e4)",
+    "scripts/workspace-sync.py":
+        "the copy-and-orphan-delete sync engine, removed 2026-06-26",
+    "tests/test_canary_branch_switch.py":
+        "deleted 2026-08-23 with scripts/canary-smoke.py (22e6997)",
+    "tests/test_eval_drift_aggregation.py":
+        "deleted 2026-08-03 with the eval-drift daemon (58aa77d)",
+    "tests/test_slice_rollback.py":
+        "deleted 2026-08-07 with scripts/slice-rollback.py (70e10bb)",
+}
+
+
+def _resolves_under(path_str: str, roots) -> bool:
+    """Does `path_str` name a file that exists under any of `roots`?
+
+    Two forms, because the index writes both. The plain form is relative to a
+    root (`scripts/send-email.py`, `context/pipeline.md`). The other is written
+    from the directory that HOLDS the roots, and appears wherever the index has
+    to distinguish the two stores by repo (`.heading-os-data/.memory-index/
+    index.db` beside `.heading-os/.memory-index-code/index.db`). The leading
+    component is compared against each root's OWN directory name, so a clone
+    that lives somewhere else, or under a different name, still resolves; no
+    repo name is written down here.
+    """
+    head, _, tail = path_str.partition("/")
+    for root in roots:
+        if (root / path_str).exists():
+            return True
+        if tail and head == root.name and (root / tail).exists():
+            return True
+    return False
+
+
+def _ignored_by_every_root(paths, roots) -> set:
+    """The subset of `paths` that EVERY root's ignore rules exclude.
+
+    A runtime artefact is derived here rather than listed: a path no root would
+    ever track is a file something writes while it runs, and its absence is the
+    normal state, not an action item. `.fireside/daemon.pid` and
+    `.daemon-state/config.yaml` are the shape.
+
+    EVERY root, never any root. The engine ignores whole DATA directories -
+    `plans/`, `outputs/`, `datastore/`, `threads/` - because they belong to the
+    overlay, not because anything about them is runtime. MEASURED 2026-09-02
+    over this index: the union rule matched 28 paths and the intersection 3, and
+    25 of the 28 were the archived-plan and stale-thread references this section
+    exists to report. A union here would have deleted the findings instead of
+    the noise.
+
+    Fails toward over-reporting: if git cannot answer (not installed, not a
+    repository), nothing is excluded and the paths stay in the report.
+    """
+    if not paths:
+        return set()
+    excluded = set(paths)
+    for root in roots:
+        try:
+            ignored = ignored_paths_or_none(sorted(paths), root)
+        except OSError:
+            # `ignored_paths_or_none` reports git's own non-verdict exit codes
+            # as None, but it cannot report a git that never STARTED (not on
+            # PATH), which surfaces here as FileNotFoundError. So this branch
+            # stays. The old `subprocess.SubprocessError` half is dropped: the
+            # shared helper passes no `timeout=`, so TimeoutExpired cannot
+            # arise, and it passes `check=False`, so neither can
+            # CalledProcessError. That does drop the 30s bound this call used to
+            # carry, which is the same unbounded shape the two other callers of
+            # the helper already run with over the whole tree.
+            return set()
+        # None = git could not answer (not a repository, bad option). The two
+        # verdict exits, 0 (some path ignored) and 1 (none), come back as a set.
+        if ignored is None:
+            return set()
+        excluded &= ignored
+        if not excluded:
+            return set()
+    return excluded
+
+
+def _archived_plan(path_str: str, roots):
+    """Where an active-plan reference went, if it was archived.
+
+    `.claude/rules/documentation.md` § Plans Lifecycle makes archiving the
+    normal end of every plan: `git mv plans/<f> plans/archive/<year>/<f>`. The
+    file still exists and the index's pointer at it no longer does, which is a
+    real finding with a known fix, so this returns the destination rather than
+    suppressing it. Only `plans/<file>` is considered; a path already under
+    `plans/archive/` is left alone.
+    """
+    head, _, tail = path_str.partition("/")
+    if head != "plans" or not tail or "/" in tail:
+        return None
+    for root in roots:
+        archive = root / "plans" / "archive"
+        if not archive.is_dir():
+            continue
+        for year in sorted(archive.iterdir()):
+            if (year / tail).exists():
+                return f"plans/archive/{year.name}/{tail}"
+    return None
+
+
 # Sections that RAN but verified nothing: an absent target, an empty corpus. A
 # zero from one of these means "no answer", not "clean". Without this the
 # summary folds the two together and prints "Section 'refs' passed." one line
@@ -142,8 +350,15 @@ def check_reference_validation():
     matches a heading or a phrase: the whole index file IS the reference
     section, so there is no section to find and no substring to guess at.
 
-    Zero is never a pass. Both zero-path outcomes say "verified nothing" and
-    print no OK line.
+    Zero is never a pass, and since 2026-09-02 it is not a zero either. A
+    present, readable index over which this section inspected NOTHING is a
+    checker that stopped reading, so it REFUSES: one issue, non-zero exit, the
+    floor `scripts/ste-check.py` and `scripts/validate-crm-schema.py` already
+    carry over their own corpora. The narrower outcome above it - no index at
+    all, which is the normal state of a public clone with no data overlay - is
+    deliberately NOT folded into that floor. There is no corpus to have read, and
+    exiting 1 on every public clone would retire the tool rather than arm it. It
+    stays inconclusive, which the summary already refuses to print as clean.
     """
     header("Reference Validation")
 
@@ -156,7 +371,8 @@ def check_reference_validation():
         # same way).
         warn(f"reference index not present at "
              f"<data-root>/{REFERENCE_INDEX_RELPATH.as_posix()}; "
-             f"0 paths checked (this section verified nothing)")
+             f"0 paths checked (this section verified nothing). Every path it "
+             f"would name is not checkable on this clone, never missing")
         inconclusive("refs", "no reference index (no data overlay on this clone)")
         return 0
 
@@ -196,26 +412,87 @@ def check_reference_validation():
         roots.append(data_root)
 
     if not paths:
-        warn("the reference index names no workspace-relative file paths; "
-             "0 paths checked (this section verified nothing)")
+        action("the reference index names no workspace-relative file paths; "
+               "0 paths checked, 0 inspected (this section verified nothing "
+               "and refuses to report clean)")
         inconclusive("refs", "the reference index names no paths")
-        return 0
+        return 1
 
-    missing = [p for p in paths if not any((root / p).exists() for root in roots)]
+    unresolved = [p for p in paths if not _resolves_under(p, roots)]
+    resolved = len(paths) - len(unresolved)
+
+    placeholder = [p for p in unresolved if p in PLACEHOLDER_PATHS]
+    by_design = [p for p in unresolved if p in ABSENT_BY_DESIGN_PATHS]
+    recorded = [p for p in unresolved if p in REMOVED_AND_RECORDED_PATHS]
+    rest = [p for p in unresolved
+            if p not in PLACEHOLDER_PATHS
+            and p not in ABSENT_BY_DESIGN_PATHS
+            and p not in REMOVED_AND_RECORDED_PATHS]
+    runtime = sorted(_ignored_by_every_root(rest, roots))
+    rest = [p for p in rest if p not in set(runtime)]
+
+    # The registry may not outlive its sites. A path listed as removed that now
+    # EXISTS again is either a re-creation nobody updated the record for, or an
+    # entry added to silence a finding that was real. Both are worse than the
+    # noise this registry removes, so both fail here rather than passing quietly.
+    revived = sorted(p for p in REMOVED_AND_RECORDED_PATHS
+                     if _resolves_under(p, roots))
+    for path_str in revived:
+        action(f"Recorded as removed, but present again: {path_str} - "
+               f"{REMOVED_AND_RECORDED_PATHS[path_str]}. Update the record and "
+               f"drop the REMOVED_AND_RECORDED_PATHS entry.")
+
+    moved = [(p, dest) for p in rest if (dest := _archived_plan(p, roots))]
+    missing = [p for p in rest if p not in {p for p, _ in moved}]
+
+    for path_str, dest in moved:
+        action(f"Moved: {path_str} is now {dest}")
     for path_str in missing:
         action(f"Missing: {path_str}")
+
+    # Inspected means the existence question was actually ASKED of that path.
+    # An excluded path was never asked, so it cannot be counted as coverage -
+    # which is what makes the floor below reachable rather than decorative: an
+    # index whose every path landed in an exclusion bucket has been read by a
+    # section that settled nothing.
+    inspected = (len(paths) - len(placeholder) - len(by_design)
+                 - len(recorded) - len(runtime))
+    flagged = len(moved) + len(missing) + len(revived)
 
     if skipped:
         ok(f"{skipped} path-shaped token(s) skipped as globs, placeholders, "
            f"absolute or home-relative; not checked")
-    if missing:
-        warn(f"{len(paths) - len(missing)} of {len(paths)} reference path(s) "
-             f"resolve; {len(missing)} named by the index exist under neither "
-             f"the engine root nor the data overlay")
-    else:
-        ok(f"All {len(paths)} reference path(s) resolve under the engine root "
-           f"or the data overlay")
-    return len(missing)
+    for path_str in sorted(placeholder):
+        ok(f"placeholder, not checked: {path_str} - {PLACEHOLDER_PATHS[path_str]}")
+    for path_str in sorted(by_design):
+        ok(f"absent by design, not checked: {path_str} - "
+           f"{ABSENT_BY_DESIGN_PATHS[path_str]}")
+    for path_str in runtime:
+        ok(f"absent by design, not checked: {path_str} - ignored by every "
+           f"root in this workspace, so nothing ever tracks it")
+    for path_str in sorted(recorded):
+        ok(f"removed and recorded, not checked: {path_str} - "
+           f"{REMOVED_AND_RECORDED_PATHS[path_str]}")
+
+    # Coverage beside verdict, both out of the same arithmetic: a section that
+    # stopped reading cannot look clean, because the count it inspected is
+    # printed next to the count it flagged (`.claude/rules/scope-claims.md`).
+    # Every excluded bucket is named with its size for the same reason - silence
+    # about an exclusion reads as coverage.
+    coverage = (f"{resolved} of {len(paths)} reference path(s) resolve; "
+                f"{inspected} inspected, {flagged} flagged "
+                f"({len(moved)} moved, {len(missing)} missing, "
+                f"{len(revived)} recorded-but-present); excluded: "
+                f"{len(runtime) + len(by_design)} absent by design, "
+                f"{len(recorded)} removed and recorded, "
+                f"{len(placeholder)} prose placeholder(s)")
+    if inspected == 0:
+        action(f"{coverage}; this section verified nothing and refuses to "
+               f"report clean")
+        inconclusive("refs", "every reference path was excluded or unsettled")
+        return max(flagged, 1)
+    (warn if flagged else ok)(coverage)
+    return flagged
 
 
 def check_context_freshness(max_days=30):

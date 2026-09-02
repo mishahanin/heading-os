@@ -13,7 +13,8 @@ Usage:
 
 Tests: tests/test_a_day_that_could_not_be_read_and_was_called_quiet.py,
        tests/test_inbox_pulse_unreachable.py,
-       tests/test_a_catch_all_rule_the_report_could_not_see.py
+       tests/test_a_catch_all_rule_the_report_could_not_see.py,
+       tests/test_a_report_column_that_named_a_denominator_it_did_not_use.py
 
 Options:
     --days N     Number of calendar days to include (default 1 - today only).
@@ -262,9 +263,21 @@ def _pattern_matches_domain(pattern: str, domain: str) -> bool:
     # instead disagrees with it about any address carrying two, which is what
     # `sender_domain` in the log would then hold.
     #
-    # `local != "*"` also rejects a pattern with no `@` at all: `rpartition`
-    # leaves the local part empty in that case, so a separate emptiness test
-    # for the separator was unreachable.
+    # `local != "*"` also rejects a pattern with no `@` at all: `partition`
+    # puts the WHOLE pattern in `local` when the separator is absent, so
+    # `example.com` fails that test and returns False right here.
+    #
+    # `not pat_domain` is the explicit refusal for `"*"` and `"*@"`, which are
+    # the two patterns that pass the `local != "*"` test above with nothing
+    # after the separator. MEASURED with the guard removed: both still answer
+    # False, because `fnmatch(domain, "")` is False and so is
+    # `fnmatch(domain, "*.")`. So it is a stated refusal rather than the only
+    # one, and deleting it changes no answer this function gives today.
+    #
+    # This comment used to name `rpartition`, which is not the call below it,
+    # and to call the second test unreachable, which it is not. Both splitters
+    # reject the same inputs here, so nothing ever misbehaved; the note was
+    # simply describing different code from the code it sat on.
     local, _, pat_domain = pattern.partition("@")
     if local != "*" or not pat_domain:
         return False
@@ -505,7 +518,23 @@ def _compute_daily_distribution(
     all_entries_by_date: dict[date, list[dict[str, Any]]],
     today: date,
 ) -> dict[str, Any]:
-    """Compute today + 7-day avg for tier distribution."""
+    """Compute today + the mean over past days that carried mail.
+
+    The divisor is the count of NON-EMPTY past days, and that is deliberate:
+    a day this report holds nothing for is absent data, not a measured zero
+    (`fetch_jsonl_for_date` answers `[]` both for a log file that is missing
+    and for one that exists and is empty, so the two cannot be told apart
+    here). Averaging silent days in would halve every reported figure after
+    one quiet weekend and the operator would read that as a drop in volume.
+    `test_a_silent_day_inside_a_working_window_does_not_enter_the_divisor` and
+    its counter-test `test_a_day_with_fewer_entries_does_enter_the_divisor`
+    pin both directions.
+
+    What follows from that, and what the report used to get wrong: the mean is
+    then per ACTIVE day, never per calendar day, so a column headed "7-day avg"
+    was naming a denominator it did not use. `days_in_avg` is returned so the
+    caller can state the real one instead of implying seven.
+    """
     today_entries = all_entries_by_date.get(today, [])
     today_counts = {TIER_HIGH: 0, TIER_MAYBE: 0, TIER_LOW: 0}
     for e in today_entries:
@@ -544,6 +573,7 @@ def _compute_daily_distribution(
     result = {
         "today": today_counts,
         "avg": avg_counts,
+        "days_in_avg": len(past_7_non_empty),
         "trend": {
             tier: trend(today_counts[tier], avg_counts[tier] if avg_counts else None)
             for tier in (TIER_HIGH, TIER_MAYBE, TIER_LOW)
@@ -619,8 +649,20 @@ def render_report(
     window_start: date,
     state_json: dict[str, Any],
     entries_total_in_window: int,
+    unreachable: "list[date] | None" = None,
 ) -> str:
-    """Render the full markdown report."""
+    """Render the full markdown report.
+
+    `unreachable` is the in-window days whose log could not be read. It has to
+    reach the FILE, not only stderr and the exit code: this markdown is written
+    to `outputs/operations/inbox-pulse/`, opened in VS Code and archived, and
+    without it the artifact stated "Total emails classified: N" and, when today
+    was the unread day, "No emails classified today." A later reader, or a
+    scheduler that files the report without propagating the exit code, was
+    handed exactly the quiet-inbox misreading the `ssh_read` redesign exists to
+    prevent.
+    """
+    unreachable = sorted(unreachable or [])
     high = agg["high"]
     maybe = agg["maybe"]
     low = agg["low"]
@@ -654,12 +696,27 @@ def render_report(
     lines.append(f"# Inbox Pulse shadow report -- {today}")
     lines.append(f"Window: {window_label}")
     lines.append(f"Total emails classified: {total}")
+    if unreachable:
+        lines.append("")
+        lines.append(
+            f"**Incomplete coverage: {len(unreachable)} day(s) in this window "
+            f"could not be read from the classifier host "
+            f"({', '.join(d.isoformat() for d in unreachable)}). The total "
+            f"above EXCLUDES them, so it is a lower bound. This is not a quiet "
+            f"inbox.**"
+        )
     lines.append("")
 
     # At a glance
     lines.append("## At a glance -- today")
     lines.append("")
-    if today_total == 0:
+    if today in unreachable:
+        # Never "No emails classified today" for a day nobody could read.
+        lines.append(
+            "Today's log could not be read from the classifier host, so the "
+            "numbers below are unknown rather than zero."
+        )
+    elif today_total == 0:
         lines.append("No emails classified today.")
     else:
         lines.append(
@@ -756,13 +813,28 @@ def render_report(
     lines.append("")
     trend_symbols = {"up": "up", "dn": "dn", "=": "~", "-": "-"}
     if has_7day and avg_dist:
-        lines.append("| Tier | Today | 7-day avg | Trend |")
+        # The column said "7-day avg" and the divisor is the number of past
+        # days that CARRIED MAIL, which is at most seven and routinely fewer.
+        # `_compute_daily_distribution` excludes silent days on purpose (a day
+        # with no log is absent data, not a measured zero), so the arithmetic
+        # is right and the heading was the part that lied: six quiet days plus
+        # one busy one reported that busy day's count as the "7-day avg". Name
+        # the real denominator instead of implying a calendar week.
+        days_in_avg = daily_dist.get("days_in_avg", 0)
+        lines.append("| Tier | Today | Avg per active day | Trend |")
         lines.append("|---|---|---|---|")
         for tier in (TIER_HIGH, TIER_MAYBE, TIER_LOW):
             t = today_dist[tier]
             a = avg_dist[tier]
             tr = trend_symbols.get(trend[tier], "-")
             lines.append(f"| {tier} | {t} | {a:.1f} | {tr} |")
+        lines.append("")
+        lines.append(
+            f"_Averaged over the {days_in_avg} of the past 7 day(s) that "
+            f"carried mail. Days the daemon logged nothing for are left out "
+            f"of the divisor, so this is a per-active-day mean and not a "
+            f"per-calendar-day one._"
+        )
     else:
         lines.append("| Tier | Today |")
         lines.append("|---|---|")
@@ -904,6 +976,7 @@ def main() -> int:
         window_start=window_start,
         state_json=state_json,
         entries_total_in_window=len(all_entries),
+        unreachable=unreachable,
     )
 
     # Write output

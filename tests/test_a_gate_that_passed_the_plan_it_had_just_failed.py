@@ -34,6 +34,8 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from tests.code_only import code_of, strip_comments  # noqa: E402
+
 
 def _load(script: str, name: str):
     spec = importlib.util.spec_from_file_location(name, str(ROOT / "scripts" / script))
@@ -58,13 +60,49 @@ def roster():
 
 
 def _code(script: str) -> str:
-    """Source with whole-line `#` comments stripped.
+    """Source with its comments stripped, string literals left intact.
 
     A fix whose comment quotes the code it removed is found by a plain grep for
     that code. The comment must stay a `#` comment: docstrings are NOT stripped.
+
+    Routed through `tests/code_only.py` on 2026-09-02. The implementation was
+    `ln for ln in lines if not ln.lstrip().startswith("#")`, which drops any
+    PHYSICAL line beginning with `#` - including one inside a triple-quoted
+    docstring, where a `#` is string content and not a comment at all. So the
+    sentence above was false of the code beneath it, and the three sweeps built
+    on this helper could not see a `#`-leading line of a docstring in
+    `artifact-evaluator.py`, `audit-deps.py` or `bootcamp-roster.py`. The
+    shared helper asks `tokenize`, which is the front end's own answer to which
+    `#` opens a comment, and it refuses rather than passing untouched source
+    back when a file will not parse.
     """
-    lines = (ROOT / "scripts" / script).read_text(encoding="utf-8").splitlines()
-    return "\n".join(ln for ln in lines if not ln.lstrip().startswith("#"))
+    return code_of(ROOT / "scripts" / script)
+
+
+def test_the_code_stripper_removes_comments_and_keeps_docstrings():
+    """The helper's own contract, which nothing measured until 2026-09-02.
+
+    Row 2 is the one the line-based predecessor got wrong: a `#`-leading line
+    INSIDE a docstring is string content, and dropping it made the sentence in
+    `_code`'s own docstring false.
+    """
+    module = (
+        '"""Title.\n'
+        '\n'
+        '# plan_criteria regression sentinel\n'
+        '"""\n'
+        '# a real whole-line comment naming plan_criteria\n'
+        'FLAG = "--no-hashes"  # a trailing comment naming plan_criteria\n'
+    )
+    stripped = strip_comments(module, where="<synthetic>")
+
+    assert "# plan_criteria regression sentinel" in stripped, (
+        "a `#` line inside a docstring was stripped; it is string content, not "
+        "a comment, and this helper promises docstrings survive")
+    assert "a real whole-line comment" not in stripped
+    assert "a trailing comment" not in stripped
+    assert 'FLAG = "--no-hashes"' in stripped, (
+        "the code before a trailing comment must survive byte for byte")
 
 
 # ============================================================

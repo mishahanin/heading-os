@@ -379,7 +379,27 @@ def _range_shas(root: Path, commit_range: str | None) -> set | None:
     """
     if commit_range is None:
         return None
-    if any(_NULL_END.fullmatch(end) for end in commit_range.split("..")):
+    # AT MOST two endpoints, because `0*` full-matches the empty string and a
+    # split that yields three parts puts an empty one in the middle. MEASURED
+    # 2026-09-02: `"A....B".split("..")` is `['A', '', 'B']`, so a malformed
+    # four-dot range was read as the known null-endpoint case and scoped C3 and
+    # C4 to NOTHING while reporting clean, with a stderr line calling it a range
+    # that "names no push range". Failing closed on a shape nobody recognises is
+    # defensible; describing it as the one shape that is understood is not. It
+    # falls through to `rev-list` now, which refuses it and raises CheckError
+    # naming the range.
+    #
+    # The same measurement clears the three-dot case the audit reported here:
+    # `"main...HEAD".split("..")` is `['main', '.HEAD']`, two parts and neither
+    # empty, so git's symmetric-difference notation never took this branch and
+    # was already handed to `rev-list`, which understands it.
+    #
+    # AT MOST rather than EXACTLY two, because `--range ""` splits to `['']`, a
+    # single part. That is one of the three shapes CI really produces and it
+    # must keep reading as "names no push". Requiring exactly two sent it to
+    # `rev-list`, which refused it, and the empty case went red.
+    ends = commit_range.split("..")
+    if len(ends) <= 2 and any(_NULL_END.fullmatch(end) for end in ends):
         print(f"canopus-check: {commit_range!r} names no push range, so C3 and C4 "
               "run over nothing; C1 and C2 still run over every note", file=sys.stderr)
         return set()

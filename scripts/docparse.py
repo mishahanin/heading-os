@@ -979,10 +979,17 @@ def _setup_check() -> bool:
         print(f"         Install: pip install liteparse=={LITEPARSE_VERSION}")
         all_ok = False
 
-    # What the sentence may claim is what the three checks above established:
-    # that node, the CLI and the package are PRESENT. It said "All
-    # prerequisites met", which reads as a verdict on the whole setup, over a
-    # method that never compared a single version.
+    # What the sentence may claim is what the checks above established. It once
+    # said "All prerequisites met", which reads as a verdict on the whole setup,
+    # while the method behind it only asked whether node, the CLI and the
+    # package were PRESENT.
+    #
+    # Both halves have since moved. The Node block compares `major >= 18` and
+    # the liteparse block compares `installed != LITEPARSE_VERSION`, and a
+    # mismatch is a WARN that sets `version_unknown` rather than a FAIL. So the
+    # summary is gated on `all_ok` AND `version_unknown`, and it names presence
+    # and the expected versions. `all_ok` alone would print it over a drifted
+    # install, which is the state this command exists to catch.
     if all_ok and not version_unknown:
         print(f"\n{GREEN}Node.js, the LiteParse CLI and the Python package are "
               f"present, at the versions this tool expects.{RESET}")
@@ -1154,6 +1161,15 @@ def cmd_parse(args):
         print(f"\n{RED}Error: No files were successfully parsed.{RESET}", file=sys.stderr)
         sys.exit(2)
 
+    if s["total_failed"]:
+        # The exit code is the one channel automation reads, and a partial sweep
+        # said "fine" on it. Three of five documents raising printed the failures
+        # to stderr, where a cron job or a `check=True` parent never looks, and
+        # then exited 0: a sweep that missed two fifths of the corpus was
+        # indistinguishable from a complete one. Exit 1, distinct from the 2
+        # above, so a caller can tell "some failed" from "nothing parsed".
+        sys.exit(1)
+
 
 # ============================================================
 # Subcommand: report
@@ -1161,8 +1177,6 @@ def cmd_parse(args):
 
 def cmd_report(args):
     """Generate visual citation HTML report."""
-    from liteparse import LiteParse
-
     parse_path = Path(args.parse_json)
     cit_path = Path(args.citations)
 
@@ -1225,35 +1239,48 @@ def cmd_report(args):
     # setup. So `report` raised TypeError before taking a single screenshot
     # while `parse` worked fine, which is the hardest kind of breakage to
     # place. `shutil.which` is kept as the availability check it now is.
-    if not shutil.which("liteparse"):
-        print(f"{YELLOW}Warning:{RESET} the liteparse CLI is not on PATH; "
-              f"screenshots may fail.", file=sys.stderr)
-    parser = LiteParse()
+    #
+    # Both the import and the construction are HERE, not at the top of the
+    # function, and both are skipped when there is nothing to capture. The
+    # import ran before the "Parse JSON not found" / "Citations JSON not found"
+    # checks above, so on a machine without the package `report` died with a
+    # raw ImportError instead of its own diagnostics, even when the inputs were
+    # invalid anyway; and `LiteParse()` was constructed even for zero citations,
+    # every citation ambiguous, or every cited page <= 0, where no screenshot
+    # can be taken and the HTML report renders its "no page image" notes. A
+    # broken liteparse install killed a report that needed nothing from it.
     page_screenshots: dict[tuple[str, int], bytes] = {}
+    if pages_to_screenshot:
+        from liteparse import LiteParse
 
-    # Group by file for efficient screenshotting
-    file_pages: dict[str, list[int]] = {}
-    for (fname, page), fpath in pages_to_screenshot.items():
-        file_pages.setdefault(fpath, []).append(page)
+        if not shutil.which("liteparse"):
+            print(f"{YELLOW}Warning:{RESET} the liteparse CLI is not on PATH; "
+                  f"screenshots may fail.", file=sys.stderr)
+        parser = LiteParse()
 
-    for fpath, page_nums in file_pages.items():
-        page_str = ",".join(str(p) for p in sorted(set(page_nums)))
-        try:
-            shots = parser.screenshot(
-                fpath, target_pages=page_str, dpi=DEFAULT_DPI, load_bytes=True
-            )
-            for shot in shots.screenshots:
-                file_name = Path(fpath).name
-                # Convert PNG to JPEG for size reduction
-                img_bytes = _png_to_jpeg(shot.image_bytes)
-                page_screenshots[(file_name, shot.page_num)] = img_bytes
-                print(
-                    f"  {GREEN}SCREENSHOT{RESET}  {file_name} p{shot.page_num} "
-                    f"({len(img_bytes)} bytes)",
-                    file=sys.stderr,
+        # Group by file for efficient screenshotting
+        file_pages: dict[str, list[int]] = {}
+        for (fname, page), fpath in pages_to_screenshot.items():
+            file_pages.setdefault(fpath, []).append(page)
+
+        for fpath, page_nums in file_pages.items():
+            page_str = ",".join(str(p) for p in sorted(set(page_nums)))
+            try:
+                shots = parser.screenshot(
+                    fpath, target_pages=page_str, dpi=DEFAULT_DPI, load_bytes=True
                 )
-        except Exception as e:
-            print(f"  {RED}ERROR{RESET}  Screenshot {fpath}: {e}", file=sys.stderr)
+                for shot in shots.screenshots:
+                    file_name = Path(fpath).name
+                    # Convert PNG to JPEG for size reduction
+                    img_bytes = _png_to_jpeg(shot.image_bytes)
+                    page_screenshots[(file_name, shot.page_num)] = img_bytes
+                    print(
+                        f"  {GREEN}SCREENSHOT{RESET}  {file_name} p{shot.page_num} "
+                        f"({len(img_bytes)} bytes)",
+                        file=sys.stderr,
+                    )
+            except Exception as e:
+                print(f"  {RED}ERROR{RESET}  Screenshot {fpath}: {e}", file=sys.stderr)
 
     # Generate HTML
     report_html = _generate_report_html(

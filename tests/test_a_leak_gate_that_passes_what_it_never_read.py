@@ -40,6 +40,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tests.code_only import strip_comments  # noqa: E402
+
 
 def _load(name, rel):
     spec = importlib.util.spec_from_file_location(name, ROOT / rel)
@@ -307,7 +309,7 @@ def test_cc_and_bcc_are_refused_in_threaded_mode_not_dropped():
     stops any subprocess from reaching the parser.
     """
     src = (ROOT / "scripts" / "send-email.py").read_text(encoding="utf-8")
-    code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
+    code = strip_comments(src)
     # BOTH halves. Asserting the message alone left the guard removable: disable
     # the branch and the string still sits in the file.
     assert "--cc/--bcc are not supported with --" in code

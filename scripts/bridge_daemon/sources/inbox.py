@@ -74,12 +74,16 @@ def read_dismiss_log(data_root: Path) -> set[str]:
 def dismiss_log_recent(data_root: Path, limit: int = 20) -> list[dict]:
     """Return the most-recent active dismiss entries (tombstoned omitted).
 
-    Each entry: {conv_id, ts, date, note}. Ordered by ts DESC. Used by
+    Each entry: {conv_id, topic, ts, date, note}. Ordered by ts DESC. Used by
     the /inbox 'Recently dismissed' footer so the CEO can restore an
     accidental dismiss.
 
     Pulls the conversation topic from _latest-fetch.json when present so
     the UI can show a readable label, falling back to conv_id otherwise.
+    `topic` was missing from the shape line above until 2026-09-02, though the
+    rows have carried it since the footer was written and the paragraph you are
+    reading has always described where it comes from. The one place a caller
+    looks for the row shape was the one place it was not named.
 
     HEADING OS engine/data split: the dismiss log + the fetch file are DATA,
     so the single root this takes IS the data root (it used to take a ``workspace_root`` too, which the body never read).

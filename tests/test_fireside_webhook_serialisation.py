@@ -286,6 +286,93 @@ async def test_a_handler_that_raises_does_not_hold_the_lock():
     assert ran == [1, 2]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_from", [["not", "a", "dict"], "someone", 42, [{}]])
+@pytest.mark.parametrize("envelope", ["message", "callback_query"])
+async def test_a_truthy_non_dict_from_is_a_400_not_a_500(envelope, bad_from):
+    """The `or {}` guard only converted FALSY non-dicts, so a truthy one 500'd.
+
+    The handler states its own boundary in a comment: "a malformed body is the
+    caller's error, not the server's", and it enforced that for `message` and
+    `callback_query` with `isinstance`. The nested `from` got `or {}` instead,
+    which converts `None` and `{}` and nothing else. MEASURED 2026-09-02:
+    `{"update_id": 1, "message": {"from": ["not", "a", "dict"], "text": "hi"}}`
+    raised `AttributeError: 'list' object has no attribute 'get'` out of the
+    endpoint, which FastAPI serves as a 500 on a publicly reachable endpoint.
+
+    A 400 is acceptable here and so is a 200: the preview is cosmetic and
+    `_handle_update` does its own type checks. What is not acceptable is the
+    AttributeError, so this asserts the absence of the crash rather than a
+    status code the handler never promised.
+    """
+    state: dict = {}
+    app = fw.create_app(_fb_module(state, lambda *a: None), "s3cret", LOGGER)
+    handler = _post_handler(app)
+
+    body = {"update_id": 1, envelope: {"from": bad_from, "text": "hi", "data": "d"}}
+    try:
+        await handler(_Request(body), "s3cret")
+    except AttributeError as exc:                     # pragma: no cover - the defect
+        pytest.fail(f"a truthy non-dict {envelope}.from crashed the handler: {exc}")
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 400, (
+            f"expected a 400 or a clean accept, got {exc!r}")
+    await _drain(app)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("envelope,field", [("message", "text"),
+                                            ("callback_query", "data")])
+@pytest.mark.parametrize("bad_value", [42, 3.5, True, {"a": 1}])
+async def test_an_unsliceable_preview_field_is_not_a_500_either(
+        envelope, field, bad_value):
+    """The same half-guard one line over from `from`, which the audit missed.
+
+    `(msg.get("text") or "")[:40]` slices whatever it is handed. MEASURED
+    2026-09-02: `{"message": {"text": 42}}` and
+    `{"callback_query": {"data": 42}}` both raised
+    `TypeError: 'int' object is not subscriptable` out of the endpoint, from
+    the same public surface and for the same reason as the `from` defect. A
+    fix that closed one of the two would have left the endpoint 500-able on a
+    body one character different.
+    """
+    state: dict = {}
+    app = fw.create_app(_fb_module(state, lambda *a: None), "s3cret", LOGGER)
+    handler = _post_handler(app)
+
+    body = {"update_id": 1, envelope: {field: bad_value,
+                                       "from": {"username": "u"}}}
+    try:
+        await handler(_Request(body), "s3cret")
+    except (TypeError, AttributeError) as exc:    # pragma: no cover - the defect
+        pytest.fail(f"a non-string {envelope}.{field} crashed the handler: {exc}")
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 400, (
+            f"expected a 400 or a clean accept, got {exc!r}")
+    await _drain(app)
+
+
+@pytest.mark.asyncio
+async def test_a_well_formed_from_still_reaches_the_log_preview(caplog):
+    """ANCHOR. A guard that answered `{}` for every `from` would pass above.
+
+    The username has to survive, or the fix is "stop reading the field".
+    """
+    state: dict = {}
+    app = fw.create_app(_fb_module(state, lambda *a: None), "s3cret", LOGGER)
+    handler = _post_handler(app)
+
+    with caplog.at_level(logging.INFO, logger=LOGGER.name):
+        await handler(_Request({"update_id": 5, "message": {
+            "from": {"username": "helmsman_fixture"}, "text": "ahoy"}}), "s3cret")
+    await _drain(app)
+
+    blob = "\n".join(r.getMessage() for r in caplog.records)
+    assert "helmsman_fixture" in blob, (
+        f"the username was dropped from the preview; log was:\n{blob}")
+    assert "ahoy" in blob, f"the text preview was dropped; log was:\n{blob}"
+
+
 # --- plumbing -------------------------------------------------------------
 
 class _Request:

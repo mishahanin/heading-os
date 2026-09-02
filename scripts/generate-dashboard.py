@@ -18,6 +18,7 @@ import argparse
 import base64
 import html
 import json
+import math
 import re
 import subprocess
 import sys
@@ -293,8 +294,18 @@ def collect_crm_health():
                     "file": c.get("file", ""),
                 })
             except (KeyError, AttributeError, TypeError, ValueError) as e:
+                # The name is read behind an isinstance check, not with a bare
+                # `c.get(...)`. That call is the SAME operation that raises for
+                # a record which is not a mapping at all, so the handler raised
+                # a second AttributeError out of itself, the broad `except`
+                # below caught THAT, and one non-mapping record set
+                # `result["failed"]` and returned the empty skeleton. The
+                # comment at the top of this loop promises the opposite: "A bad
+                # contact is now dropped alone, and named." A handler must not
+                # be able to fail in the way it exists to survive.
+                name = c.get("name", "?") if isinstance(c, dict) else "?"
                 print(f"[generate-dashboard] skipping malformed contact "
-                      f"{c.get('name', '?')!r}: {e}", file=sys.stderr)
+                      f"{name!r}: {e}", file=sys.stderr)
 
         result["contacts"] = contacts
         result["total"] = len(contacts)
@@ -503,12 +514,14 @@ def _as_percent(value):
     `completion_rate` arrives from the viraid `state.json`, where only
     JSONDecodeError and OSError were ever caught -- the VALUE's type was never
     looked at, and it reached an f-string as `{rate:.0f}%` in the build phase.
-    Two ways that went wrong, and the second is worse than the first:
+    Three ways that went wrong, and the first is the least bad of them:
 
     * a string ("75") raised at format time and took the whole dashboard down
       after every collector had already succeeded;
     * a fraction (0.87) rendered as "1%" -- a wrong number, on the CEO's
-      dashboard, with nothing anywhere saying it was wrong.
+      dashboard, with nothing anywhere saying it was wrong;
+    * NaN rendered as "100%". The type check let it past and the clamp could
+      not refuse it; see the comment on the finiteness guard below.
 
     A value in 0..1 is read as a fraction and scaled. That is a JUDGEMENT, not
     a fact the producer states, so it is made once, here, where it can be seen
@@ -528,6 +541,23 @@ def _as_percent(value):
     if not isinstance(value, (int, float)):
         print(f"[generate-dashboard] viraid completion_rate has type "
               f"{type(value).__name__}; showing 0%", file=sys.stderr)
+        return 0.0
+    # NaN and the two infinities are floats, so the type check above waves them
+    # through, and the clamp at the bottom CANNOT refuse them. That is the
+    # non-obvious part: every comparison against NaN is False, so `min` and
+    # `max` silently keep whichever operand they started with rather than
+    # raising or propagating. `min(100.0, nan)` is 100.0 and `max(0.0, nan)` is
+    # 0.0, which is order-dependence in a place nobody reads as a branch.
+    #
+    # MEASURED before this guard existed: NaN rendered as 100%, +inf as 100%,
+    # -inf as 0%, all three with nothing on stderr. `json.loads` accepts the
+    # bare tokens `NaN`, `Infinity` and `-Infinity`, so a corrupt state.json
+    # reaches here by the ordinary door, and the clamp put the BEST possible
+    # completion rate on the CEO's page. Every other refusal in this function
+    # returns 0.0 and says so; a value that is not a number gets the same.
+    if not math.isfinite(value):
+        print(f"[generate-dashboard] viraid completion_rate is {value!r}, "
+              f"which is not a finite number; showing 0%", file=sys.stderr)
         return 0.0
     if 0 < value <= 1:
         value *= 100
@@ -1802,6 +1832,22 @@ def build_content_cadence(cadence):
         li_color = "var(--green)" if li_status == "ON TRACK" else "var(--red)"
         li_detail = f"{li_count} posts/drafts this week"
 
+    # The dots band the same three states the captions beside them do. Each was
+    # `'g' if status == 'ON TRACK' else 'r'`, a two-way test on a three-value
+    # status, so NO DATA drew the BEHIND dot next to a grey NO DATA label: one
+    # fact, on one card, in two colours, and the red one is a verdict on a
+    # cadence nothing had measured. The colour variables above were given the
+    # third state and the dots were left behind. `.heading-dot.gray` is already
+    # in the stylesheet, mapping to the same var(--ink35) the captions use, and
+    # no builder had ever asked for it.
+    def _dot(status):
+        if status == "ON TRACK":
+            return "g"
+        return "gray" if status == "NO DATA" else "r"
+
+    nl_dot = _dot(nl_status)
+    li_dot = _dot(li_status)
+
     return f"""
 <div class="section">
   <div class="section-num">09</div>
@@ -1810,7 +1856,7 @@ def build_content_cadence(cadence):
     <div style="flex:1;padding:14px 16px;border:1px solid var(--ink12);border-radius:4px;">
       <div class="sync-label">Newsletter (Target: Weekly)</div>
       <div style="display:flex;align-items:center;gap:10px;margin-top:6px;">
-        <div class="heading-dot {'g' if nl_status == 'ON TRACK' else 'r'}"></div>
+        <div class="heading-dot {nl_dot}"></div>
         <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:{nl_color};font-weight:700;">{esc(nl_status)}</span>
       </div>
       <div class="alert-sub" style="margin-top:6px;">{nl_detail}</div>
@@ -1818,7 +1864,7 @@ def build_content_cadence(cadence):
     <div style="flex:1;padding:14px 16px;border:1px solid var(--ink12);border-radius:4px;">
       <div class="sync-label">LinkedIn (Target: 2+/week)</div>
       <div style="display:flex;align-items:center;gap:10px;margin-top:6px;">
-        <div class="heading-dot {'g' if li_status == 'ON TRACK' else 'r'}"></div>
+        <div class="heading-dot {li_dot}"></div>
         <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:{li_color};font-weight:700;">{esc(li_status)}</span>
       </div>
       <div class="alert-sub" style="margin-top:6px;">{esc(li_detail)}</div>
@@ -1836,46 +1882,69 @@ def build_viraid(viraid):
     aging = viraid["aging"]
     rate = viraid["completion_rate"]
 
+    tasks_read = bool(viraid.get("tasks_read"))
+    rate_known = bool(viraid.get("rate_known"))
+
     # `active == 0` was the test, so a tasks.md that was never opened and one
     # read to the end with nothing outstanding produced the same sentence - and
     # the branch also threw away `completion_rate`, which comes from a DIFFERENT
     # file and may have been read perfectly well. An empty in-tray is a result;
     # a file nobody opened is not.
-    if not viraid.get("tasks_read"):
+    #
+    # That second half was written down and then not built: `rate_str` was
+    # computed inside this `else`, so an absent tasks.md still discarded a rate
+    # `state.json` had handed over cleanly, and the panel printed one sentence
+    # about two files. The two sources are banded separately now. Only the case
+    # where NEITHER was read keeps the plain sentence, because then there is
+    # genuinely nothing measured to draw.
+    if not tasks_read and not rate_known:
         body = '<div style="color:var(--ink35);font-style:italic;">No Viraid tasks data available</div>'
     else:
-        aging_cls = "danger" if aging > 5 else ("accent" if aging > 0 else "up")
+        # The counts all come from tasks.md, so they are dashes when it was not
+        # read - the same rule `rate_str` follows one file over, and the same
+        # rule `_empty_row` follows two panels up. A "0" here would be a
+        # measurement nobody took.
+        def _count(n):
+            return str(n) if tasks_read else "-"
+
+        aging_cls = ("danger" if aging > 5 else ("accent" if aging > 0 else "up")) \
+            if tasks_read else ""
         # "0%" is a measurement. An unreadable state.json is not one, and drew
         # the same three characters.
-        rate_str = f"{rate:.0f}%" if viraid.get("rate_known") else "-"
+        rate_str = f"{rate:.0f}%" if rate_known else "-"
+        # Named on the page, not inferred from a row of dashes.
+        unread_note = "" if tasks_read else (
+            '<div style="color:var(--red);font-style:italic;margin-top:8px;">'
+            'Viraid tasks.md not read: the task counts above are '
+            'unknown, not zero.</div>')
 
         body = f"""
 <div class="metrics-strip">
   <div class="metric-box">
-    <div class="metric-val accent">{active}</div>
+    <div class="metric-val accent">{_count(active)}</div>
     <div class="metric-label">Active Tasks</div>
   </div>
   <div class="metric-box">
-    <div class="metric-val danger">{p1}</div>
+    <div class="metric-val danger">{_count(p1)}</div>
     <div class="metric-label">P1 Tasks</div>
   </div>
   <div class="metric-box">
-    <div class="metric-val accent">{p2}</div>
+    <div class="metric-val accent">{_count(p2)}</div>
     <div class="metric-label">P2 Tasks</div>
   </div>
   <div class="metric-box">
-    <div class="metric-val">{p3}</div>
+    <div class="metric-val">{_count(p3)}</div>
     <div class="metric-label">P3 Tasks</div>
   </div>
   <div class="metric-box">
-    <div class="metric-val {aging_cls}">{aging}</div>
+    <div class="metric-val {aging_cls}">{_count(aging)}</div>
     <div class="metric-label">Aging (&gt;3d)</div>
   </div>
   <div class="metric-box">
     <div class="metric-val">{rate_str}</div>
     <div class="metric-label">Completion</div>
   </div>
-</div>"""
+</div>{unread_note}"""
 
     return f"""
 <div class="section">

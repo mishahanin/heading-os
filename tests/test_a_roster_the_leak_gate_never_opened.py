@@ -1,7 +1,16 @@
 """Shard scripts-06-p1: the fireside bot, and the guard that never read its roster.
 
-Five findings, one theme. Each of these tools printed a confident sentence over
+Nine findings, one theme. Each of these tools printed a confident sentence over
 something it had not actually established.
+
+The header said "Five findings" until 2026-09-02 and the file already carried
+nine, in seven section groups: the five enumerated below, then the log-session
+contract the `/fireside` help got wrong, then three the Kimi k3 read of the same
+file turned up (a duplicate-handle sheet swallowed into an empty roster, the
+spelled-out vice-president titles the seniority test missed, and a routine
+membership event filed as an error). A count is a claim about coverage, so a
+reader reconciling this shard against the audit record was told four of its
+findings were not pinned here when every one of them is.
 
 1. THE LEAK GATE HARVESTED NO TRIBE MEMBER AT ALL. `content_denylist` exists
    because the six structural layers check WHERE a file routes and never WHAT is
@@ -35,6 +44,7 @@ something it had not actually established.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import sys
@@ -298,8 +308,19 @@ def test_a_date_with_no_weekday_still_names_one(fb):
 
 
 def test_a_date_label_never_opens_on_a_comma(fb):
+    """Both spellings of "no day", each handed over as it stands.
+
+    The call was `_format_dm_date("2026-06-08", day or "")`, which turned the
+    `None` case into the `""` case one character before the boundary: the loop
+    read as two cases and ran one. A formatter narrowed to `day.strip() or ...`
+    would raise `AttributeError` on a real `None` and this test would still have
+    passed. `None` is not hypothetical here - `session_date`/`day` come out of
+    `config/fireside-schedule.json`, where `"day": null` is a legal value that
+    arrives at the call site as `c["day"]`, and `_handle_a_tap` spells its own
+    read `ctx.get("a_day") or ""` precisely because the key can be absent.
+    """
     for day in ("", None):
-        assert not fb._format_dm_date("2026-06-08", day or "").startswith(",")
+        assert not fb._format_dm_date("2026-06-08", day).startswith(",")
 
 
 def test_a_supplied_weekday_still_wins(fb):
@@ -322,11 +343,19 @@ def test_the_day_of_month_is_not_zero_padded(fb):
     assert fb._format_dm_date("2026-06-08", "") == "Mon, 8 Jun"
 
 
-def test_the_swap_kickoff_records_a_days_own_slot_day(fb, monkeypatch):
-    """`_handle_a_tap` reads ctx["a_day"]; nothing ever wrote it.
+def test_the_no_candidate_path_logs_the_outcome_it_reached(fb, monkeypatch):
+    """What this path actually promises, asserted instead of asserted-at.
 
-    The label is correct now whether or not the key lands, but the absence is
-    what made the defect invisible: `.get("a_day") or ""` reads as a default.
+    Renamed and rewritten 2026-09-02. It was
+    `test_the_swap_kickoff_records_a_days_own_slot_day` over the single
+    assertion `assert logged`, which is true of ANY log line and so measured
+    nothing its name promised. The name was wrong twice over: nothing writes
+    `a_day` anywhere in the module (see the test below), and a bare
+    truthiness check on a list could not have seen it if something did.
+
+    The contract this path really carries is the one the CEO acts on: an
+    outcome the operator can filter for, the member's handle, and a manual
+    hand-off DM naming the exact slot to move. All three are asserted here.
     """
     today = fb._today_local_date()
     a_date = (today + timedelta(days=7)).isoformat()
@@ -336,16 +365,64 @@ def test_the_swap_kickoff_records_a_days_own_slot_day(fb, monkeypatch):
     monkeypatch.setattr(fb, "load_state",
                         lambda n: schedule if n == fb.SCHEDULE else {})
     monkeypatch.setattr(fb, "find_swap_candidates", lambda *a, **k: [])
-    monkeypatch.setattr(fb, "misha_user_id", lambda: 0)
+    monkeypatch.setattr(fb, "misha_user_id", lambda: 77)
     logged = []
     monkeypatch.setattr(fb, "_log_event", lambda *a, **k: logged.append((a, k)))
 
+    sent = []
+
     class _Bot:
-        def send_message(self, *a, **k):
+        def send_message(self, uid, text, **k):
+            sent.append((uid, text))
             return {"message_id": 1}
 
     fb._swap_kickoff_for_a(_Bot(), 55, "aperson")
+
     assert logged, "the no-candidate path must still record the request"
+    (event, *_), kwargs = logged[0]
+    assert event == "swap_requested"
+    assert kwargs["outcome"] == "no_candidates", (
+        "the outcome is what separates this path from a served swap in the "
+        f"event log; got {kwargs.get('outcome')!r}")
+    assert kwargs["username"] == "aperson"
+
+    to_misha = [text for uid, text in sent if uid == 77]
+    assert to_misha, "nobody told the CEO a manual swap is waiting"
+    assert a_date in to_misha[0] and "#1" in to_misha[0], (
+        "the hand-off DM must name the slot to move, or it is a notification "
+        f"with nothing to act on: {to_misha[0]!r}")
+
+
+def test_nothing_in_the_module_writes_the_a_day_key(fb):
+    """`_handle_a_tap` reads `ctx.get("a_day")`; no writer exists.
+
+    The read is harmless because `_format_dm_date` derives the weekday from
+    the date when the day is blank, and the label is correct either way. It is
+    pinned rather than deleted because `.get("a_day") or ""` READS as a
+    default with a value behind it, and that appearance is what kept the
+    absence invisible through one audit. If a writer ever lands, this test
+    fails and the reader stops being phantom; until then the source says so.
+    """
+    src = (Path(fb.__file__).read_text(encoding="utf-8"))
+    tree = ast.parse(src)
+    writes = []
+    for node in ast.walk(tree):
+        # ctx["a_day"] = ... and {"a_day": ...} are the two shapes a writer
+        # would take in this module; both are asked for.
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (isinstance(target, ast.Subscript)
+                        and isinstance(target.slice, ast.Constant)
+                        and target.slice.value == "a_day"):
+                    writes.append(node.lineno)
+        if isinstance(node, ast.Dict):
+            for key in node.keys:
+                if isinstance(key, ast.Constant) and key.value == "a_day":
+                    writes.append(node.lineno)
+    assert writes == [], (
+        "something now writes `a_day`; the reader at `_handle_a_tap` is no "
+        f"longer phantom, so update its comment and this test: lines {writes}")
+    assert "a_day" in src, "the phantom read is gone; delete this guard with it"
 
 
 # ============================================================

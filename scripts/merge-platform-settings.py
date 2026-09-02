@@ -33,11 +33,29 @@ permission is a grant and dropping one breaks a workflow that used to run.
 
 Reads and writes JSON only, with no dependency beyond the standard library, so
 it runs on a fresh clone under the system interpreter before `.venv` exists.
+
+## `--check`: is this clone armed?
+
+`.claude/settings.local.json` is gitignored, and it is the ONLY place the session
+hooks are registered. The tracked `.claude/settings.json` registers exactly one.
+
+MEASURED 2026-09-02 by comparing the two files: a clone where this script has
+never run arms 1 hook of 17. The 16 absent ones include `_dispatch.py`, which is
+the single entry point for eleven PreToolUse walls, the release gate and the
+secret scanner among them. Nothing anywhere reported that state, and the step
+that fixes it (`bash scripts/setup-platform.sh`) was named in no document a
+person setting the workspace up would read.
+
+`--check` compares the two files and names every registration the live file
+lacks. It exits 1 when the live file is absent or short, so it can be read by a
+gate. It says only what a file comparison establishes: a hook is REGISTERED, not
+that a hook RAN.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sys
 from datetime import datetime
@@ -100,6 +118,46 @@ def merge_settings(template: dict, live: dict) -> dict:
     return merged
 
 
+#: Any `*.py` token inside a hook's command string. The commands wrap the hook
+#: in a `python3 -c` bootstrap, so the script name is the only stable part of
+#: them; the surrounding bootstrap differs between platforms and has been
+#: rewritten twice without any hook changing.
+_PY_TOKEN = re.compile(r"[\w.-]+\.py")
+
+
+def hook_registrations(settings: dict) -> set[tuple[str, str]]:
+    """Every `(event, hook script)` pair a settings mapping registers.
+
+    Pure, and deliberately tolerant of a malformed `hooks` block: a settings
+    file that has been hand-edited into a shape this does not recognise yields
+    FEWER pairs, so `--check` reports it as short rather than as armed. Failing
+    toward over-reporting is the required direction here, per
+    `.claude/rules/scope-claims.md`.
+    """
+    out: set[tuple[str, str]] = set()
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        return out
+    for event, groups in hooks.items():
+        if not isinstance(groups, list):
+            continue
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            entries = group.get("hooks")
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                command = entry.get("command")
+                if not isinstance(command, str):
+                    continue
+                for name in _PY_TOKEN.findall(command):
+                    out.add((str(event), name))
+    return out
+
+
 def _load(path: Path, what: str) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -134,6 +192,43 @@ def _describe(before: dict, after: dict) -> list[str]:
     return lines
 
 
+def _check(template_path: Path, target_path: Path) -> int:
+    """Name every hook registration the live file lacks. 0 armed, 1 short."""
+    template = _load(template_path, "template")
+    expected = hook_registrations(template)
+
+    if not expected:
+        # A template that registers nothing would make every clone pass, which
+        # is a guard green over an empty corpus. Refuse instead.
+        print(f"{template_path} registers no hooks at all. Refusing to certify "
+              f"any clone against it.", file=sys.stderr)
+        return 1
+
+    if not target_path.exists():
+        print(f"NOT ARMED: {target_path} does not exist, so 0 of "
+              f"{len(expected)} session hook registrations are present.")
+        print(f"  Fix: bash scripts/setup-platform.sh")
+        return 1
+
+    live = _load(target_path, "live settings file")
+    missing = sorted(expected - hook_registrations(live))
+
+    if missing:
+        print(f"NOT ARMED: {target_path.name} is missing "
+              f"{len(missing)} of {len(expected)} hook registration(s) that "
+              f"{template_path.name} defines:")
+        for event, script in missing:
+            print(f"  {event:18s} {script}")
+        print(f"  Fix: bash scripts/setup-platform.sh")
+        return 1
+
+    # Says only what a comparison of two files establishes. It does not say a
+    # hook ran, and it cannot: this process never sees the harness load them.
+    print(f"armed: {target_path.name} registers all {len(expected)} hook(s) "
+          f"that {template_path.name} defines")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Merge a settings template into the live settings file.")
@@ -144,11 +239,17 @@ def main() -> int:
                              "discarding every local key. Backed up first.")
     parser.add_argument("--dry-run", action="store_true",
                         help="report what would change; write nothing")
+    parser.add_argument("--check", action="store_true",
+                        help="report whether the live file registers every hook "
+                             "the template does; write nothing; exit 1 if not")
     args = parser.parse_args()
 
     if not args.template.is_file():
         print(f"template not found: {args.template}", file=sys.stderr)
         return 1
+
+    if args.check:
+        return _check(args.template, args.target)
 
     if not args.target.exists():
         # First install. No merge to do and nothing to lose, so this path needs

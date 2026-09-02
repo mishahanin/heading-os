@@ -11,6 +11,15 @@ NLM="$(command -v nlm 2>/dev/null || echo C:/Users/<you>/AppData/Roaming/Python/
 NO_COLOR=1 PYTHONIOENCODING=utf-8 "$NLM" <subcommand> [flags]
 ```
 
+Every `download` mode below writes into the DATA overlay. Bash is not covered by
+the data-path-redirect hook, so resolve the overlay root once per download and
+pass `-o` a path under it. A bare `outputs/...` misroutes the file into the
+engine clone, where `.gitignore` hides it and nothing else notices.
+
+```bash
+OUTPUTS_DIR="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import get_outputs_dir; print(get_outputs_dir())")"
+```
+
 ---
 
 ## Mode: `status`
@@ -141,7 +150,7 @@ Generate an audio overview (AI podcast synthesis) from notebook sources.
    If max iterations reached: "Audio generation timed out after 5 minutes. Check notebooklm.google.com."
 6. Download the completed audio (Bash, timeout 60000):
    ```bash
-   NO_COLOR=1 PYTHONIOENCODING=utf-8 "$NLM" download audio <notebook-id> <artifact-id> -o "outputs/content/notebooklm/audio/YYYY-MM-DD-<slug>.mp3"
+   NO_COLOR=1 PYTHONIOENCODING=utf-8 "$NLM" download audio <notebook-id> <artifact-id> -o "$OUTPUTS_DIR/content/notebooklm/audio/YYYY-MM-DD-<slug>.mp3"
    ```
    Where `<slug>` is a kebab-case version of the notebook title, max 40 characters.
 7. Display:
@@ -232,7 +241,7 @@ Generate a briefing report grounded in the notebook's sources.
    ```
 6. Download completed report (Bash, timeout 60000):
    ```bash
-   NO_COLOR=1 PYTHONIOENCODING=utf-8 "$NLM" download report <artifact-id> --format pdf -o "outputs/content/notebooklm/reports/YYYY-MM-DD-<slug>.pdf"
+   NO_COLOR=1 PYTHONIOENCODING=utf-8 "$NLM" download report <artifact-id> --format pdf -o "$OUTPUTS_DIR/content/notebooklm/reports/YYYY-MM-DD-<slug>.pdf"
    ```
 7. Display: "Report saved to `outputs/content/notebooklm/reports/[filename]`"
 8. Offer: "Also download as PPTX? Capture this? (`/odin log` for CEO; `/zk distill` to the knowledge base)"
@@ -278,6 +287,6 @@ Download any artifact from a notebook.
    | mind-map | `download mind-map` | `--format markdown` |
 4. Run (Bash, timeout 60000):
    ```bash
-   NO_COLOR=1 PYTHONIOENCODING=utf-8 "$NLM" download <type> <notebook-id> <artifact-id> -o "outputs/content/notebooklm/downloads/YYYY-MM-DD-<slug>.<ext>"
+   NO_COLOR=1 PYTHONIOENCODING=utf-8 "$NLM" download <type> <notebook-id> <artifact-id> -o "$OUTPUTS_DIR/content/notebooklm/downloads/YYYY-MM-DD-<slug>.<ext>"
    ```
 5. Display: "Downloaded to `outputs/content/notebooklm/downloads/[filename]`"

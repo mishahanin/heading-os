@@ -269,14 +269,67 @@ def test_log_dir_still_makes_a_directory(part, tmp_path, monkeypatch):
     assert made.is_dir()
 
 
-def test_the_retire_log_is_a_file_and_can_be_written(tmp_path, monkeypatch):
-    monkeypatch.setenv("WORKSPACE_LOG_DIR", str(tmp_path))
+def _retire_module():
     spec = importlib.util.spec_from_file_location(
         "memory_auto_retire_probe", ROOT / "scripts" / "memory-auto-retire.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
 
-    assert not module.LOG_PATH.is_dir()
+
+def test_the_retire_log_is_a_file_and_can_be_written(tmp_path, monkeypatch):
+    monkeypatch.setenv("WORKSPACE_LOG_DIR", str(tmp_path))
+    module = _retire_module()
+
+    assert not module._log_path().is_dir()
     module._log_line("a line the audit trail should keep")
-    assert module.LOG_PATH.is_file()
-    assert "should keep" in module.LOG_PATH.read_text(encoding="utf-8")
+    assert module._log_path().is_file()
+    assert "should keep" in module._log_path().read_text(encoding="utf-8")
+
+
+def test_importing_the_retire_script_creates_no_log_directory(tmp_path, monkeypatch):
+    """Import must be inert. `LOG_PATH = log_dir() / ...` at module level ran
+    `log_dir()`, which mkdirs, so merely loading this file to read `--help` or
+    to inspect it left a `.logs` directory behind.
+    """
+    monkeypatch.setenv("WORKSPACE_LOG_DIR", str(tmp_path / "unwanted"))
+    _retire_module()
+    assert not (tmp_path / "unwanted").exists(), (
+        "importing memory-auto-retire.py created its log directory")
+
+
+def test_a_redirect_set_after_the_import_still_moves_the_audit_trail(tmp_path, monkeypatch):
+    """The ordering the fix is really about.
+
+    `main()` calls `load_env()` as its first statement because this process
+    starts without the gitignored `.env` loaded, and `log_dir()` reads
+    `WORKSPACE_LOG_DIR` from `os.environ`. A path frozen at import is resolved
+    before that, so the audit trail of a destructive edit could land somewhere
+    the run's own configuration does not name.
+    """
+    monkeypatch.setenv("WORKSPACE_LOG_DIR", str(tmp_path / "at-import"))
+    module = _retire_module()
+
+    monkeypatch.setenv("WORKSPACE_LOG_DIR", str(tmp_path / "after-load-env"))
+    module._log_line("written after the environment was loaded")
+
+    late = tmp_path / "after-load-env" / module.LOG_NAME
+    assert late.is_file(), "the audit line did not follow the environment"
+    assert "after the environment" in late.read_text(encoding="utf-8")
+    assert not (tmp_path / "at-import" / module.LOG_NAME).exists(), (
+        "the audit line went to the path frozen at import time")
+
+
+def test_an_unwritable_audit_trail_is_reported_rather_than_swallowed(tmp_path, monkeypatch, capsys):
+    """The handler said `pass`. That is how an IsADirectoryError hid for eight
+    weeks while every run reported success and wrote nothing."""
+    monkeypatch.setenv("WORKSPACE_LOG_DIR", str(tmp_path))
+    module = _retire_module()
+    trap = tmp_path / module.LOG_NAME
+    trap.mkdir(parents=True)
+
+    module._log_line("this cannot be written")
+
+    err = capsys.readouterr().err
+    assert "NOT written" in err and str(trap) in err, (
+        f"an audit write failed in silence; stderr was {err!r}")

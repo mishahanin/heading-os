@@ -24,7 +24,10 @@ Usage:
   python scripts/memory-hygiene.py --json     # structured result to stdout
   python scripts/memory-hygiene.py --quiet     # one summary line only
 
-Exit codes: 0 clean, 1 objective defect(s) present, 2 script error.
+Exit codes: 0 clean (or skipped: no data overlay, nothing to scan), 1 objective
+defect(s) present, 2 script error OR a refusal to report a pass over a corpus
+this run could not read. A pass is only ever printed over memory files that were
+actually opened; see `coverage()`.
 """
 from __future__ import annotations
 
@@ -47,6 +50,7 @@ from scripts.utils.memory_health import (  # noqa: E402
     scan_dangling_links,
 )
 from scripts.utils.workspace import (  # noqa: E402
+    data_overlay_present,
     get_data_root,
     get_default_tz,
     get_outputs_dir,
@@ -170,6 +174,57 @@ def scan_live_state_rows(memory_dir: Path) -> dict:
     }
 
 
+GATE_CATEGORIES = ("orphans", "over_budget", "temporal_errors")
+
+
+def coverage(memory_dir: Path, mem: dict, *, brain_ok: bool) -> dict:
+    """What this run was actually able to READ, separate from what it found.
+
+    The two are different questions and the summary line used to answer only the
+    second: "0 objective defect(s) across 0 categories", in green, exit 0. That
+    sentence is printed both by a healthy 266-file corpus with nothing wrong in
+    it and by a run that opened no file at all, and nothing distinguishes them.
+    MEASURED 2026-09-02 with `pathlib.Path.read_text`/`open` counted per run: the
+    operator's overlay gave 267 distinct files opened under the memory dir and
+    exit 1 on a real orphan, while `HEADING_OS_DATA` pointed at an empty
+    directory gave 0 files opened, the identical green line, and exit 0. A bare
+    public clone reaches the same place by resolving `get_data_root()` to
+    `<root>/examples`, which carries no `auto-memory/` at all.
+
+    `fact_files` is counted off the directory rather than taken from
+    `compute_memory_defects()["file_count"]`, which includes `MEMORY.md`: an
+    index with no facts under it must read as an empty corpus, not as one file.
+
+    A category counts as EVALUATED only where its input was read:
+      - `orphans` needs the fact-file list, so it needs the directory.
+      - `over_budget` needs `MEMORY.md`; with no readable index the line count is
+        0 and "not over budget" is a verdict over nothing.
+      - `temporal_errors` needs the Odin brain compile.
+    """
+    memory_dir = Path(memory_dir)
+    fact_files = (
+        [p.name for p in memory_dir.glob("*.md") if p.name != "MEMORY.md" and p.is_file()]
+        if memory_dir.is_dir()
+        else []
+    )
+    evaluated = []
+    if mem.get("status") == "ok":
+        evaluated.append("orphans")
+    if mem.get("index_readable"):
+        evaluated.append("over_budget")
+    if brain_ok:
+        evaluated.append("temporal_errors")
+    return {
+        "memory_dir": str(memory_dir),
+        "overlay_present": data_overlay_present(),
+        "corpus_status": mem.get("status", "missing"),
+        "fact_files": len(fact_files),
+        "categories_total": len(GATE_CATEGORIES),
+        "categories_evaluated": evaluated,
+        "categories_not_evaluated": [c for c in GATE_CATEGORIES if c not in evaluated],
+    }
+
+
 def gather() -> dict:
     """Collect both halves and split defects into gate vs advisory."""
     mem_dir = get_data_root() / "auto-memory"
@@ -208,6 +263,7 @@ def gather() -> dict:
         "brain_note": brain["note"],
         "gate": gate,
         "gate_count": gate_count,
+        "coverage": coverage(mem_dir, mem, brain_ok=brain["ok"]),
         "advisory": advisory,
         "redundancy": redundancy,
         "volatile_hooks": volatile,
@@ -234,6 +290,15 @@ def render_report(result: dict, generated_iso: str) -> str:
         f"**Auto-memory:** `{mem['memory_dir']}` "
         f"({mem['file_count']} files, {mem['memory_md_lines']}/200 lines)"
     )
+    cov = result.get("coverage")
+    if cov:
+        lines.append(
+            f"**Coverage:** {cov['fact_files']} memory file(s) read, "
+            f"{len(cov['categories_evaluated'])}/{cov['categories_total']} gate "
+            f"categories evaluated"
+            + (f" (not evaluated: {', '.join(cov['categories_not_evaluated'])})"
+               if cov["categories_not_evaluated"] else "")
+        )
     if result["brain_ok"]:
         lines.append("**Odin brain:** compiled")
     else:
@@ -433,24 +498,72 @@ def main() -> int:
         print(f"{RED}ERROR{RESET}: memory-hygiene failed: {exc}", file=sys.stderr)
         return 2
 
+    # The floor, BEFORE a report is written. A report headed "0 objective
+    # defects" over a corpus nobody opened is the artifact this run exists to
+    # not produce, and it outlives the terminal it was printed in.
+    cov = result["coverage"]
+    n_eval = len(cov["categories_evaluated"])
+    if cov["fact_files"] == 0 or n_eval == 0:
+        if not cov["overlay_present"]:
+            # A bare public clone: `get_data_root()` resolved to the bundled
+            # `examples/`, which ships no memory. Nothing is wrong and nothing
+            # was checked, and the second half is the half that has to be said
+            # out loud (.claude/rules/scope-claims.md). Same shape as
+            # `workspace-health.py`'s absent-`templates/` branch: warn, name the
+            # zero, return the non-failing code.
+            note = (
+                f"no private data overlay ({cov['memory_dir']} is not backed by "
+                f"one) - 0 memory files read, 0 of {cov['categories_total']} gate "
+                f"categories evaluated. NOTHING was checked."
+            )
+            if args.json:
+                print(json.dumps({"status": "skipped", "reason": note,
+                                  "coverage": cov}, indent=2, default=str))
+            else:
+                print(f"{YELLOW}SKIP{RESET}: memory-hygiene: {note}", file=sys.stderr)
+            return 0
+        # An overlay IS present and the scan still read nothing. That is a
+        # setup defect (a moved corpus, a mis-set HEADING_OS_DATA, a wiped
+        # directory), never a clean memory store, so it refuses instead of
+        # passing -- the shape `validate-crm-schema.py` uses for an empty CRM.
+        # Exit 2 = script/setup error, distinct from exit 1 = defects found.
+        reason = (
+            f"read {cov['fact_files']} memory file(s) from {cov['memory_dir']} "
+            f"and evaluated {n_eval} of {cov['categories_total']} gate categories "
+            f"(not evaluated: {', '.join(cov['categories_not_evaluated']) or 'none'})."
+        )
+        if args.json:
+            print(json.dumps({"status": "refused", "reason": reason,
+                              "coverage": cov}, indent=2, default=str))
+        else:
+            print(f"{RED}memory-hygiene REFUSES to report a pass: {reason}{RESET}",
+                  file=sys.stderr)
+            print(f"{RED}A private data overlay is present, so an unread corpus "
+                  f"is a setup defect, not a clean one.{RESET}", file=sys.stderr)
+        return 2
+
     now = datetime.now(get_default_tz())
     generated_iso = now.isoformat(timespec="seconds")
-    report_text = render_report(result, generated_iso)
-
+    # Inside a guard, like `gather()` above. `render_report` raising on an
+    # unexpected shape, or `write_report` meeting a full or read-only disk, used
+    # to leave as a traceback and exit 1, and 1 is the code this file's own
+    # contract reserves for "objective defect(s) present". An infrastructure
+    # failure was therefore indistinguishable from a dirty memory store on the
+    # one line a cron reads. The scan already succeeded at this point, so its
+    # result is still printed below; only the exit code changes.
+    report_error = None
     report_path = None
-    if not args.no_report:
-        report_path = write_report(report_text, now)
+    try:
+        report_text = render_report(result, generated_iso)
+        if not args.no_report:
+            report_path = write_report(report_text, now)
+    except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+        report_error = exc
+        print(f"{RED}ERROR{RESET}: memory-hygiene scanned the corpus and could "
+              f"not produce its report: {exc.__class__.__name__}: {exc}",
+              file=sys.stderr)
 
     gate_count = result["gate_count"]
-    cats = sum(
-        1
-        for present in (
-            result["gate"]["temporal_errors"],
-            result["gate"]["memory_orphans"],
-            [1] if result["gate"]["over_budget"] else [],
-        )
-        if present
-    )
 
     if args.json:
         out = dict(result)
@@ -459,9 +572,15 @@ def main() -> int:
         print(json.dumps(out, indent=2, default=str))
     else:
         color = RED if gate_count else GREEN
+        # Counts the categories EVALUATED, not the ones with findings. The old
+        # line said "across {cats} categories" where `cats` was how many gate
+        # categories came back non-empty, so a clean corpus and an unread one
+        # both printed "across 0 categories" in green. Same words, opposite
+        # facts.
         summary = (
-            f"{color}memory-hygiene: {gate_count} objective defect(s) "
-            f"across {cats} categor{'y' if cats == 1 else 'ies'}{RESET}"
+            f"{color}memory-hygiene: {gate_count} objective defect(s) over "
+            f"{cov['fact_files']} memory file(s); {n_eval}/{cov['categories_total']} "
+            f"gate categories evaluated{RESET}"
         )
         if report_path:
             summary += f" {GRAY}- report: {report_path}{RESET}"
@@ -475,6 +594,9 @@ def main() -> int:
             if g["over_budget"]:
                 print(f"  {RED}-{RESET} MEMORY.md over budget ({g['memory_md_lines']}/200)")
             print(f"  {GRAY}resolve via /dream (this tool never mutates memory){RESET}")
+        if not args.quiet and cov["categories_not_evaluated"]:
+            print(f"  {YELLOW}note{RESET}: not evaluated this run: "
+                  f"{', '.join(cov['categories_not_evaluated'])}")
         if not args.quiet and not result["brain_ok"]:
             print(f"  {YELLOW}note{RESET}: {result['brain_note']}")
         vol = result.get("volatile_hooks", {})
@@ -493,6 +615,11 @@ def main() -> int:
                 f"read the live set with `python scripts/thread.py list`"
             )
 
+    if report_error is not None:
+        print(f"{RED}memory-hygiene exits 2 (script error): the scan finished "
+              f"and the report did not. The defect count above stands and is "
+              f"not what this exit code is about.{RESET}", file=sys.stderr)
+        return 2
     return 1 if gate_count else 0
 
 

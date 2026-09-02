@@ -11,7 +11,10 @@ Usage:
 
 If --output-dir is omitted, saves to outputs/intel/newsletters/YYYY-MM-DD/
 
-Tests: tests/test_a_morning_calendar_shifted_by_its_own_timezone.py, tests/test_a_table_that_lost_a_deal_and_a_revert_that_froze_the_source.py
+Tests: tests/test_a_morning_calendar_shifted_by_its_own_timezone.py,
+       tests/test_a_table_that_lost_a_deal_and_a_revert_that_froze_the_source.py,
+       tests/test_a_newsletter_that_died_on_the_json_it_was_handed.py,
+       tests/test_a_pdf_that_needed_the_internet_to_print_a_local_file.py
 """
 
 import json
@@ -48,6 +51,12 @@ LOGO_PATH = (
     / "assets"
     / "31C_Logo_Black_Color.png"
 )
+
+
+# Every section name `--images` will render. One name today, and the set is
+# named rather than inlined so the CLI check and the consumer in
+# `generate_newsletter` cannot drift apart the way a hardcoded list would.
+IMAGE_SECTIONS = frozenset({"sea_state"})
 
 
 # ============================================================
@@ -137,11 +146,20 @@ def markdown_to_html(text):
     """Minimal markdown-to-HTML for newsletter body content.
 
     Supports: paragraphs, **bold**, [links](url), bullet lists (- item).
+
+    Coerced with `str()` because the body it renders comes out of the input
+    JSON, whose types are not ours. `build_the_heading` was hardened with
+    `str(data.get("body", "") or "")` and its three siblings were not, so
+    `"sea_state": {"body": 42}` passed the falsy guard above (42 is truthy),
+    reached `.strip()`, raised AttributeError, and no newsletter was produced
+    at all. Coercing HERE rather than at each caller is the fix the file's own
+    `build_masthead` comment asks for: "fixing one of the two is this
+    repository's usual defect", and this was one of four.
     """
     if not text:
         return ""
 
-    lines = text.strip().split("\n")
+    lines = str(text).strip().split("\n")
     paragraphs = []
     current = []
 
@@ -175,8 +193,16 @@ def markdown_to_html(text):
         # `[x](javascript:alert(1))` in any body field became a live
         # javascript: link. Escaping upstream contained the quote breakout;
         # it never touched the scheme.
+        # The URL group balances one level of parentheses. It was `(.+?)`,
+        # lazy, so the capture stopped at the FIRST `)` rather than the one
+        # closing the link: `[Wikipedia](https://en.wikipedia.org/wiki/Gulf_
+        # (geography))` produced an href ending `Gulf_(geography` and left a
+        # stray `)` as body text. The scheme check still passed on the
+        # truncated string, so the dead link shipped in silence. Parenthesised
+        # Wikipedia and docs URLs are ordinary content in Further Reading,
+        # which is fed from scraped external links.
         p = re.sub(
-            r"\[(.+?)\]\((.+?)\)",
+            r"\[(.+?)\]\(((?:[^()]|\([^()]*\))*)\)",
             lambda m: (f'<a href="{m.group(2)}" target="_blank">{m.group(1)}</a>'
                        if url_scheme_ok(m.group(2)) else m.group(1)),
             p,
@@ -308,12 +334,25 @@ def build_hero(hero_data):
 
 
 def build_indicators(items):
-    """Indicator bar with 5 equal columns."""
+    """Indicator bar, one equal-width column per item in the list.
+
+    The docstring read "with 5 equal columns" and no count check exists, so
+    three indicators rendered three columns and seven rendered seven. The CSS
+    is the arbiter: `.indicators` is `display:flex` and `.ind` is `flex:1`, so
+    any count lays out correctly and the code was right. The promise of five
+    was the wrong half.
+    """
     if not items:
         return ""
 
     cols = []
     for item in items:
+        # A list entry that is not an object, the crash `build_signal_watch`
+        # was already fixed for: a bare number or string raised AttributeError
+        # on `.get` and no newsletter was produced at all. A scalar can only be
+        # the value, so it is read as one.
+        if not isinstance(item, dict):
+            item = {"value": item}
         val = esc(item.get("value", ""))
         label = esc(item.get("label", ""))
         style = item.get("style", "neutral")
@@ -480,6 +519,16 @@ def build_navigation_chart(data, section_num=3):
 
     header = build_section_header(section_num, "Regional Intelligence", "Navigation Chart")
 
+    # A section given as a plain string, which every sibling builder already
+    # tolerates through `data if isinstance(data, str) else data.get(...)`.
+    # This one assumed a dict unconditionally: the comprehension below iterated
+    # a string as characters and then `data.get(key)` raised AttributeError,
+    # uncaught, so `"navigation_chart": "GCC and CIS update"` produced no
+    # newsletter at all. Read as one unlabelled region body, which is the whole
+    # of what a bare string carries.
+    if not isinstance(data, dict):
+        data = {"": data}
+
     rows = []
     # "afr" and "africa" are aliases, so a document carrying both used to
     # render Africa twice. First one present wins.
@@ -589,6 +638,11 @@ def build_market_depth(data, section_num=4):
         # Stats overlay
         stat_items = []
         for s in stats:
+            # Same non-object guard as `build_indicators` and
+            # `build_signal_watch`: a bare string or number in `stats` raised
+            # AttributeError on `.get` and cost the whole newsletter.
+            if not isinstance(s, dict):
+                s = {"value": s}
             style_class = s.get("style", "")
             stat_items.append(f"""
         <div class="mstat">
@@ -713,6 +767,14 @@ def build_recommended_reading(items, section_num=7):
 
     read_items = []
     for i, item in enumerate(items, 1):
+        # Same non-object guard as `build_indicators` and
+        # `build_signal_watch`. A bare entry such as
+        # `"recommended_reading": ["https://example.test/article"]` raised
+        # AttributeError on `.get` and no newsletter was produced. Read as the
+        # title, the only field a scalar can fill; `safe_url` then answers `#`
+        # for the absent url rather than trusting the scalar as one.
+        if not isinstance(item, dict):
+            item = {"title": item}
         title = esc(item.get("title", ""))
         url = safe_url(item.get("url"))
         source = esc(item.get("source", ""))
@@ -923,6 +985,7 @@ def count_words(html_doc):
 def generate_pdf(html_path, pdf_path):
     """Generate a single-page PDF from the HTML newsletter using Playwright."""
     try:
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
         from playwright.sync_api import sync_playwright
     except ImportError:
         print("Warning: playwright not installed. Skipping PDF generation.")
@@ -940,7 +1003,22 @@ def generate_pdf(html_path, pdf_path):
             browser = p.chromium.launch()
             page = browser.new_page()
             page.goto(file_url)
-            page.wait_for_load_state("networkidle")
+            # Bounded, and a timeout here is not fatal. The rendered document
+            # links a Google Fonts stylesheet, and `networkidle` waits for ALL
+            # network to settle, so on an offline or firewalled host that
+            # request never resolves: the wait ran to Playwright's ~30s
+            # navigation default, raised, and the blanket handler below turned
+            # it into "Warning: PDF generation failed" with no PDF and no word
+            # about the remote font being the cause. The page itself is a local
+            # file with its CSS inlined, so it is fully laid out either way and
+            # the only loss is the webfont.
+            try:
+                page.wait_for_load_state("networkidle", timeout=5000)
+            except PlaywrightTimeoutError:
+                print("Warning: the page never went network-idle within 5s. On "
+                      "an offline or firewalled host the remote Google Fonts "
+                      "stylesheet is the cause. Rendering the PDF with the "
+                      "fonts that did load.", file=sys.stderr)
 
             # Measure full page height for single-page output
             height = page.evaluate("document.documentElement.scrollHeight")
@@ -977,6 +1055,16 @@ def main():
     with open(input_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
+    # `json.load` accepts any JSON VALUE, so a file holding a list, a string or
+    # a number parsed fine and then died on `data.get` with a raw traceback.
+    # This script produces a clean `Error:` line for a missing file, a
+    # malformed `--images` mapping and a bad date; the most basic input check
+    # of all was the one that did not have one.
+    if not isinstance(data, dict):
+        print(f"Error: {input_path} must hold a JSON object, not a "
+              f"{type(data).__name__}", file=sys.stderr)
+        sys.exit(1)
+
     # Parse image paths
     image_paths = {}
     if args.images:
@@ -993,6 +1081,17 @@ def main():
         for mapping in args.images:
             section, path = mapping.split("=", 1)
             image_paths[section] = path
+        # A well-formed mapping naming a section nothing renders was accepted,
+        # stored and never read: `--images sea-stat=/tmp/img.png` succeeded,
+        # produced no image and said nothing. That is the same silent failure
+        # the malformed-mapping branch above and `embed_image` were both fixed
+        # for, so it gets the same refusal.
+        unknown = sorted(set(image_paths) - IMAGE_SECTIONS)
+        if unknown:
+            print(f"Error: --images knows only "
+                  f"{', '.join(sorted(IMAGE_SECTIONS))}. Not rendered: "
+                  f"{', '.join(repr(s) for s in unknown)}", file=sys.stderr)
+            sys.exit(2)
 
     # Determine output directory
     # `date` is a field of the input document, and it used to become a path

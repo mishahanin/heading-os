@@ -21,11 +21,16 @@ Directories are auto-discovered for supported file types.
 
 ### Generate Visual Citation Report
 
+`--output-dir` names a path under the DATA overlay. Bash is not covered by the
+data-path-redirect hook, so resolve the overlay root first and never hand
+`docparse.py` a bare `outputs/...`.
+
 ```bash
+OUTPUTS_DIR="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import get_outputs_dir; print(get_outputs_dir())")"
 python scripts/docparse.py report \
   --parse-json /tmp/parsed.json \
   --citations /tmp/citations.json \
-  [--output-dir outputs/intel/docparse/2026-04-09/] \
+  [--output-dir "$OUTPUTS_DIR/intel/docparse/YYYY-MM-DD/"] \
   [--title "Analysis Report"] \
   [--no-pdf]
 ```
@@ -105,9 +110,11 @@ boxes = find_boxes_for_quote(doc["pages"][0]["text_items"], "exact quote", dpi=1
 ### From `/deal-strategy` (research phase)
 
 ```bash
-# Parse prospect's RFP document
+# Parse prospect's RFP document. The datastore lives in the DATA overlay, so a
+# bare `datastore/...` here reads from the engine clone and finds nothing.
+DATASTORE_DIR="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import get_datastore_dir; print(get_datastore_dir())")"
 python scripts/docparse.py parse \
-  --files "datastore/deals/prospect-rfp.pdf" \
+  --files "$DATASTORE_DIR/deals/prospect-rfp.pdf" \
   --output-json /tmp/prospect-parsed.json
 # Then read the JSON and analyze requirements
 ```
@@ -116,8 +123,9 @@ python scripts/docparse.py parse \
 
 ```bash
 # Parse source document for claim verification
+DATASTORE_DIR="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import get_datastore_dir; print(get_datastore_dir())")"
 python scripts/docparse.py parse \
-  --files "datastore/source-doc.pdf" \
+  --files "$DATASTORE_DIR/source-doc.pdf" \
   --output-json /tmp/source-parsed.json
 # Compare claims against parsed text with page references
 ```

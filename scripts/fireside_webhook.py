@@ -40,6 +40,34 @@ def _ensure_fastapi():
     from fastapi import FastAPI, Header, HTTPException, Request
 
 
+def _dict_or_empty(value: Any) -> dict:
+    """`value` when it is a mapping, `{}` otherwise. Never `or {}`.
+
+    `or {}` converts only FALSY non-dicts, so a truthy one (`["x"]`, `"hi"`, a
+    number) survives the guard and reaches `.get`. The webhook's logging
+    preview reads three nested fields out of an attacker-reachable body, and
+    each one needs the same question asked.
+    """
+    return value if isinstance(value, dict) else {}
+
+
+def _preview(value: Any) -> str:
+    """A 40-character log preview of an arbitrary JSON value. Never `or ""`.
+
+    Same half-guard, one line over from `from`, and the audit named only
+    `from`. `(msg.get("text") or "")[:40]` slices whatever it is handed, so a
+    truthy unsliceable value raised instead. MEASURED 2026-09-02,
+    `{"message": {"text": 42}}` and `{"callback_query": {"data": 42}}` both
+    raised `TypeError: 'int' object is not subscriptable` out of the handler,
+    which FastAPI serves as a 500 on the same public endpoint. Telegram's own
+    schema says these are strings; the endpoint's contract is that a body which
+    is not is the caller's error, and a preview is cosmetic either way.
+    """
+    if value is None:
+        return ""
+    return (value if isinstance(value, str) else repr(value))[:40]
+
+
 def create_app(fb_module: Any, secret_token: str, logger: logging.Logger):
     """Build the webhook FastAPI app.
 
@@ -174,22 +202,30 @@ def create_app(fb_module: Any, secret_token: str, logger: logging.Logger):
         update_id = update.get("update_id")
         if "message" in update:
             kind = "message"
-            # `or {}` on both, matching the callback_query branch below. A body
-            # with `"message": null`, `"message": "hi"`, or `"from": null` hit
-            # `.get` on a non-dict and left as a 500 AttributeError -- past this
-            # handler's own stated boundary two comments up, that a malformed
-            # body is the caller's error. Only the logging preview needs these;
-            # `_handle_update` does its own type checks.
-            msg = update["message"] if isinstance(update["message"], dict) else {}
-            text_preview = (msg.get("text") or "")[:40]
-            user = (msg.get("from") or {}).get("username", "?")
+            # `isinstance` on both, matching the callback_query branch below. A
+            # body with `"message": null`, `"message": "hi"`, or `"from": null`
+            # hit `.get` on a non-dict and left as a 500 AttributeError -- past
+            # this handler's own stated boundary two comments up, that a
+            # malformed body is the caller's error. Only the logging preview
+            # needs these; `_handle_update` does its own type checks.
+            #
+            # `or {}` was the first spelling and it half-enforced that boundary:
+            # it converts only FALSY non-dicts, so a TRUTHY one still reached
+            # `.get`. MEASURED 2026-09-02, `{"message": {"from": ["not", "a",
+            # "dict"], "text": "hi"}}` raised `AttributeError: 'list' object has
+            # no attribute 'get'` out of the handler, which FastAPI serves as a
+            # 500 on a publicly reachable endpoint. `_dict_or_empty` asks the
+            # only question that settles it.
+            msg = _dict_or_empty(update.get("message"))
+            text_preview = _preview(msg.get("text"))
+            user = _dict_or_empty(msg.get("from")).get("username", "?")
             logger.info("webhook: recv update=%s message from=@%s text=%r",
                         update_id, user, text_preview)
         elif "callback_query" in update:
             kind = "callback_query"
-            cq = update["callback_query"] if isinstance(update["callback_query"], dict) else {}
-            data_preview = (cq.get("data") or "")[:40]
-            user = (cq.get("from") or {}).get("username", "?")
+            cq = _dict_or_empty(update.get("callback_query"))
+            data_preview = _preview(cq.get("data"))
+            user = _dict_or_empty(cq.get("from")).get("username", "?")
             logger.info("webhook: recv update=%s callback_query from=@%s data=%r",
                         update_id, user, data_preview)
         else:

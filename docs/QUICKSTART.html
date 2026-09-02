@@ -125,13 +125,19 @@ pre-commit<span class="w"> </span>install
 <span class="c1"># 3. Create your own private data repository (one command)</span>
 uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/create-data-repo.py
 
-<span class="c1"># 4. Wire secrets</span>
+<span class="c1"># 4. Wire secrets and arm the session hooks</span>
 cp<span class="w"> </span>.env.example<span class="w"> </span>.env<span class="w">        </span><span class="c1"># fill in what you use</span>
+bash<span class="w"> </span>scripts/setup-platform.sh
 
 <span class="c1"># 5. Verify, then start</span>
 uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/workspace-health.py
+bash<span class="w"> </span>scripts/setup-platform.sh<span class="w"> </span>--check
 claude<span class="w">        </span><span class="c1"># then /prime</span>
 </code></pre></div>
+<p>Do not skip <code>setup-platform.sh</code>. Git ignores the file it writes, and that file
+registers 16 of the 17 session hooks. A clone without it arms one hook. The
+secret scanner, the release gate and the other PreToolUse walls never load. Run
+<code>--check</code> to see the state. <code>/prime</code> runs the same check at every session boot.</p>
 <p>Core <code>uv sync</code> installs only the light always-on set. Each integration (email,
 Telegram, browser automation, document generation, &hellip;) lives in an optional
 extra you arm on demand: <code>uv sync --extra &lt;name&gt;</code>. A script that needs a dormant

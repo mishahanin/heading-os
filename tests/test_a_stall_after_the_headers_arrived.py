@@ -1,4 +1,10 @@
-"""Shard 05-p1: two exit-code contracts that a late failure walked straight out of.
+"""Shard 05-p1: exit-code contracts that a late failure walked straight out of.
+
+Three now, not two. The third arrived from shard 05-p4 on 2026-09-02 and is
+about the CONTRACT rather than a code path: ``draft-critique``'s docstring
+promised three exit codes and described neither direction correctly. See the
+comment above ``test_a_parse_error_no_longer_impersonates_an_unreachable_daemon``
+at the bottom of this file.
 
 * ``draft-critique._fetch_card`` handles HTTPError, URLError and a
   non-JSON body, and its comments say why each was added: a docstring
@@ -331,3 +337,109 @@ def test_no_report_skips_the_write_and_still_exits_zero(monkeypatch, capsys):
 
     assert _run_main(monkeypatch,
                      ("dream-shadow.py", "--quiet", "--no-report")) == 0
+
+
+# ============================================================
+# The exit-code contract that held in neither direction
+# ============================================================
+#
+# Shard 05-p4 finding 1. The module docstring promised "0 critique produced,
+# 1 usage error or no critique produced (model unavailable / missing API key /
+# empty body), 2 daemon not reachable", and both halves were false.
+#
+# Upward: stock `argparse.ArgumentParser.error()` calls `sys.exit(2)`, so a
+# typo'd flag exited through the code reserved for an unreachable daemon while
+# the daemon was healthy, and `_die_no_daemon`'s advice ("use --body-file,
+# which needs no daemon") is the wrong instruction for a parse error. `main`
+# already answered its OWN usage errors with 1, so the module had two usage
+# exits that disagreed.
+#
+# Downward: eight paths exit 1 that the enumeration never named, all of them
+# in the tests above this line. An operator reading the docstring diagnosed a
+# 401 or a version-mismatched daemon payload as a missing API key.
+
+def test_a_parse_error_no_longer_impersonates_an_unreachable_daemon(monkeypatch,
+                                                                    capsys):
+    monkeypatch.setattr(sys, "argv", ["draft-critique.py", "--bogus-flag"])
+
+    with pytest.raises(SystemExit) as se:
+        critique.main()
+    assert se.value.code == 1, (
+        "an argparse parse error still exits 2, which this module reserves for "
+        "an unreachable bridge daemon")
+    err = capsys.readouterr().err
+    assert "usage error" in err
+    assert "not reachable" not in err, (
+        "a parse error must not be reported as a daemon problem")
+
+
+def test_an_unreachable_daemon_still_owns_exit_two(wired, monkeypatch, capsys):
+    """The anchor. A parser that exited 1 for everything would pass the test
+    above while destroying the code the whole contract is built around."""
+    def _boom(*_a, **_kw):
+        raise urllib.error.URLError("connection refused")
+    monkeypatch.setattr(critique.urllib.request, "urlopen", _boom)
+
+    with pytest.raises(SystemExit) as se:
+        critique._fetch_card(ROOT, "abc123")
+    assert se.value.code == 2
+    assert "not reachable" in capsys.readouterr().err
+
+
+def test_help_still_exits_zero_through_the_overridden_parser():
+    """The other anchor. `-h` goes through `parser.exit(0)`, not `error()`;
+    an override that caught both would turn the help screen into a failure."""
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setattr(sys, "argv", ["draft-critique.py", "--help"])
+        with pytest.raises(SystemExit) as se:
+            critique.main()
+    finally:
+        monkey.undo()
+    assert se.value.code == 0
+
+
+_UNNAMED_EXIT_ONE_CAUSES = {
+    "an HTTP error from the daemon": "http",
+    "a 200 whose body is not JSON": "not json",
+    "a 200 whose JSON is the wrong shape": "action-queue payload",
+    "a 200 the daemon stalled on": "stalled",
+    "no matching card": "no matching card",
+    "an ambiguous prefix": "ambiguous prefix",
+    "an unreadable --body-file": "body-file",
+    "a card carrying no draft body": "no draft body",
+}
+
+
+def _exit_code_section() -> str:
+    """The docstring's exit-code block alone, lowercased.
+
+    Sliced, not searched whole. The Usage block three lines above already
+    contains "--body-file", so a whole-docstring search reported that cause as
+    documented while the enumeration never named it: measured 2026-09-02 by
+    restoring the old one-line block, where seven of the eight causes failed
+    and the `--body-file` one passed on the usage text.
+    """
+    doc = (ast.get_docstring(
+        ast.parse((ROOT / "scripts" / "draft-critique.py")
+                  .read_text(encoding="utf-8"))) or "").lower()
+    assert "exit codes:" in doc, "the exit-code block has gone entirely"
+    start = doc.index("exit codes:")
+    end = doc.index("tests:", start)
+    return doc[start:end]
+
+
+@pytest.mark.parametrize("cause,phrase", sorted(_UNNAMED_EXIT_ONE_CAUSES.items()))
+def test_the_exit_one_enumeration_names_every_way_this_module_exits_one(cause,
+                                                                       phrase):
+    assert phrase in _exit_code_section(), (
+        f"the exit-code block does not name {cause}, which exits 1; an "
+        f"operator reading it diagnoses that as a missing API key")
+
+
+def test_the_exit_code_block_still_reserves_two_for_the_daemon():
+    """The anchor for the docstring guard. A block that listed every phrase
+    while losing the 0/2 contract would pass every case above."""
+    section = _exit_code_section()
+    assert "0  critique produced" in section
+    assert "2  bridge daemon not reachable, and nothing else" in section

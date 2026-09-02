@@ -9,8 +9,11 @@ WARNING+ record in a thread-safe deque keyed by timestamp; the
 heartbeat writer reads `recent_count()` + `last_error()` on each
 60-second tick.
 
-Singleton pattern: one tracker per process. install_handler() is
-idempotent - safe to call from start_daemon() on every reload.
+Singleton pattern: one tracker per process, attached to ONE logger.
+install_handler() is idempotent for the reload case - safe to call from
+start_daemon() on every reload with the same target. A call naming a
+DIFFERENT logger does not instrument it, and warns rather than returning
+False in silence; see install_handler for why one logger is the design.
 """
 from __future__ import annotations
 
@@ -108,10 +111,33 @@ def install_handler(logger: logging.Logger | None = None) -> bool:
     Idempotent: re-calling has no effect. Returns True iff the handler
     was newly installed (False on subsequent calls). Tests use the
     return value to assert single-attachment semantics.
+
+    ONE logger per process, and that is deliberate rather than an oversight.
+    The idempotency is keyed on the module-level `_INSTALLED`, not on the
+    target, so a second call naming a DIFFERENT logger attaches nothing to it.
+    Making it per-logger would be the wrong repair: a record logged on a child
+    logger fires that child's handler and then PROPAGATES to root's, so a
+    process with the handler on both would count every such record twice, and
+    `recent_error_count` is the number the heartbeat publishes.
+
+    What was actually wrong is that the skip was silent and this docstring said
+    "re-calling has no effect" without saying which calls it means. A repeat
+    call with the SAME target is the reload case the module header describes
+    and stays silent; a call naming a different one is a misconfiguration, and
+    it now says so instead of returning False and leaving that logger
+    uninstrumented with no trace.
     """
     global _INSTALLED, _ATTACHED
     with _INSTALL_LOCK:
         if _INSTALLED:
+            requested = logger if logger is not None else logging.getLogger()
+            if _ATTACHED is not None and _ATTACHED[0] is not requested:
+                logging.getLogger(__name__).warning(
+                    "the error tracker is already attached to logger %r; "
+                    "logger %r is NOT instrumented and its WARNING+ records "
+                    "will not reach recent_error_count. One tracker per "
+                    "process is by design; see install_handler.",
+                    _ATTACHED[0].name, requested.name)
             return False
         target = logger if logger is not None else logging.getLogger()
         handler = _TrackerHandler(_GLOBAL_TRACKER)

@@ -643,6 +643,47 @@ def load_checkpoint():
     return data
 
 
+def _pair_keys(entries, label):
+    """The (first, second) key of every checkpoint entry that HAS one.
+
+    `load_checkpoint` promises that a truncated or hand-edited checkpoint will
+    not take this tool down, and it delivers on the CONTAINER: a non-dict
+    re-baselines, a missing key reads as `[]`. It says nothing about the
+    ENTRIES, and `main` built these key sets with `{(s[0], s[1]) for s in ...}`,
+    which asks each entry to be a subscriptable of length two. A checkpoint that
+    is perfectly valid JSON and a dict, carrying entries of a different shape
+    (an older schema storing dicts, a one-element list, a partial hand repair),
+    raised `KeyError: 0` or `IndexError` straight out of `main`. That happens
+    BEFORE `save_checkpoint`, so the tool never re-baselined and every later run
+    died the same way until someone deleted the file: exactly the failure mode
+    the guard above exists to end.
+
+    An entry this cannot key is treated as ABSENT, which is the safe direction
+    here. The consequence is that a real event behind an unreadable entry is
+    reported as new once, and the run then writes a well-formed checkpoint that
+    ends it. The count is printed rather than swallowed, so a checkpoint quietly
+    rotting into a shape nothing can read is visible on stderr.
+    """
+    if not isinstance(entries, (list, tuple)):
+        print(f"pulse: checkpoint {label} is a {type(entries).__name__}, not a "
+              f"list; treating it as empty", file=sys.stderr)
+        return set()
+    keys = set()
+    unusable = 0
+    for entry in entries:
+        try:
+            key = (entry[0], entry[1])
+            hash(key)                     # an unhashable element cannot be a key
+        except (KeyError, IndexError, TypeError):
+            unusable += 1
+            continue
+        keys.add(key)
+    if unusable:
+        print(f"pulse: {unusable} checkpoint {label} entr(ies) have a shape this "
+              f"tool cannot key; treating them as absent", file=sys.stderr)
+    return keys
+
+
 def save_checkpoint(state):
     """Write the checkpoint atomically, on a scratch path nobody else can hold.
 
@@ -668,8 +709,8 @@ def save_checkpoint(state):
         raise
 
 
-def load_roster_names():
-    """Return dict of {user_id: name} for friendly output, {} when unreadable.
+def _read_roster(announce=True):
+    """The parsed `tribe-roster.json`, or None when there is not a usable one.
 
     Guarded the way `load_checkpoint` above it already is, and for the same
     reason: a truncated or hand-edited `tribe-roster.json` raised straight out of
@@ -677,15 +718,18 @@ def load_roster_names():
     all. The roster is decoration here -- names instead of raw ids, and the
     denominator -- so its absence degrades the line rather than the run.
 
-    Degrades in the REFUSING direction, and that is deliberate. `{}` costs the
+    Degrades in the REFUSING direction, and that is deliberate. None costs the
     caller its `tribe_size`, which `main()` then prints as "started 12/?"
     rather than inventing a denominator; it never widens who counts as on the
     roster. A reader that guessed a size, or fell back to a previous roster,
     would answer a membership question from a file it could not read.
+
+    `announce=False` reads without printing, so the two public readers below can
+    both consult this file within one run and the operator is told once.
     """
     path = state_dir() / "tribe-roster.json"
     if not path.exists():
-        return {}
+        return None
     try:
         with path.open(encoding="utf-8") as f:
             roster = json.load(f)
@@ -699,15 +743,55 @@ def load_roster_names():
     # says this guard exists to prevent. `load_checkpoint` above already
     # carries this widening for the same reason.
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        print(f"pulse: roster at {path} is unreadable ({exc}); "
-              f"names and the tribe total are unavailable", file=sys.stderr)
-        return {}
+        if announce:
+            print(f"pulse: roster at {path} is unreadable ({exc}); "
+                  f"names and the tribe total are unavailable", file=sys.stderr)
+        return None
     if not isinstance(roster, dict):
-        print(f"pulse: roster at {path} is a {type(roster).__name__}, not an "
-              f"object; names and the tribe total are unavailable", file=sys.stderr)
+        if announce:
+            print(f"pulse: roster at {path} is a {type(roster).__name__}, not an "
+                  f"object; names and the tribe total are unavailable",
+                  file=sys.stderr)
+        return None
+    return roster
+
+
+def load_roster_names():
+    """Return dict of {user_id: name} for friendly output, {} when unreadable.
+
+    Keyed on `telegram_user_id`, and a member WITHOUT one is skipped rather than
+    filed under `None`. This dict is only ever read as `names.get(uid, ...)` for
+    a uid seen in the event log, so a `None` key was unreachable as a name and
+    destructive as a count: two not-yet-linked members collapsed into one
+    mapping entry, and `main()` was using `len(names)` as the tribe
+    denominator, so the printed total silently shrank by the number of such
+    members minus one. The denominator now comes from `load_roster_size` below,
+    which counts the roster the way the remote probe does.
+    """
+    roster = _read_roster()
+    if roster is None:
         return {}
-    return {m.get("telegram_user_id"): m.get("name", k)
-            for k, m in roster.items() if isinstance(m, dict)}
+    return {m["telegram_user_id"]: m.get("name", k)
+            for k, m in roster.items()
+            if isinstance(m, dict) and m.get("telegram_user_id") is not None}
+
+
+def load_roster_size():
+    """How many members the roster lists, or 0 when it cannot be read.
+
+    One rule for one number. The local status line derived its denominator from
+    `len(load_roster_names())` while `_PROBE_TEMPLATE`, the remote path of this
+    same script, reports `len(roster)`. The same roster therefore produced two
+    different totals depending on which deployment mode reported it: the remote
+    one counted every entry, the local one counted only dict-valued entries
+    after the `None`-key collapse above. This is the remote rule, so the two
+    paths now agree.
+
+    0 is the refusing answer, not a measured one: `main()` renders a falsy size
+    as "?" rather than a number nothing on this machine established.
+    """
+    roster = _read_roster(announce=False)
+    return len(roster) if roster else 0
 
 
 def poll_age_minutes(last_poll_ts):
@@ -769,7 +853,10 @@ def main():
     # No invented denominator. `or 55` printed "started 12/55" when the roster
     # was absent, unreadable or empty -- a ratio against a number nothing on
     # this machine had measured.
-    tribe_size = len(names)
+    # `load_roster_size`, not `len(names)`. The name map is keyed on
+    # `telegram_user_id`, so it counts LINKED members, not roster members, and
+    # it disagreed with the remote probe's `len(roster)` for the same file.
+    tribe_size = load_roster_size()
     # "?" rather than a number the roster never supplied. A denominator of 0
     # renders as "12/0", which reads as a bug; "12/?" reads as what it is.
     tribe_label = str(tribe_size) if tribe_size else "?"
@@ -818,14 +905,14 @@ def main():
         deltas.append(f"new /start ({len(new_names)}): " + ", ".join(new_names))
 
     # New swaps
-    prior_swap_keys = {(s[0], s[1]) for s in prior.get("swap_events", [])}
+    prior_swap_keys = _pair_keys(prior.get("swap_events", []), "swap_events")
     new_swaps = [s for s in state["swap_events"] if tuple(s) not in prior_swap_keys]
     if new_swaps:
         for ts, u in new_swaps:
             deltas.append(f"new /swap from @{u} at {ts[:19]}")
 
     # New tribe_join
-    prior_join_keys = {(t[0], t[1]) for t in prior.get("tribe_joins", [])}
+    prior_join_keys = _pair_keys(prior.get("tribe_joins", []), "tribe_joins")
     new_joins = [t for t in state["tribe_joins"] if tuple(t) not in prior_join_keys]
     if new_joins:
         for ts, u in new_joins:

@@ -5,11 +5,13 @@
 2, because the legacy 31c-crm-central path it automates was retired and nothing
 below it has been re-pointed at the per-exec model. Tracking: scrutinize H4.
 
-The header used to say it "immediately revokes all GitHub access", which was the
-contract BEFORE the disable and is the worst possible thing for a file header to
-say during an incident: the argparse description and epilog were corrected and
-this was not, so anyone reading the source, or generated docs, got the old
-promise. `--reason` is accepted and unused.
+This header once said the script "immediately revokes all GitHub access", the
+contract from BEFORE the disable and the worst possible thing for a file header
+to say during an incident. The argparse description and epilog were corrected
+first and this line was left behind, so for a while anyone reading the source,
+or generated docs, got the old promise. It was corrected too: the first line
+above is the header, it leads with DISABLED, and nothing here still carries the
+revocation promise. `--reason` is accepted and unused.
 
 The revocation functions below are kept for a re-enable and are NOT dead by
 accident. Two of their defects must be fixed before that happens, and both are

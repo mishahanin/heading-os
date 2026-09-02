@@ -75,13 +75,26 @@ def floorp_cookies_for_playwright(profile_name: str = "ClaudeCode") -> list[dict
     return cookies
 
 
-def check_session_alive(cookies: dict[str, str], slug: str) -> tuple[bool, str]:
+def check_session_alive(cookies: dict[str, str], slug: str,
+                        proxy_url: str | None = None) -> tuple[bool, str]:
     """Probe a strictly auth-gated endpoint to confirm the li_at session is live.
 
     Uses `/in/{slug}/` which requires auth for a real response. `/feed/` is a false
     positive: it returns 200 for everyone. LinkedIn signals session termination by
     setting `li_at=delete me; Max-Age=0` in the response.
     Returns (is_alive, reason).
+
+    `proxy_url` is the SAME Decodo slot the browser is about to launch with, and
+    passing it is not optional dressing. The probe used to go out from the real
+    IP while the browser went out through Decodo seconds later, which is two
+    source IPs for one li_at inside one run: exactly the IP travel that this
+    script's own `--proxy-slot` help warns invalidates a session. Routing the
+    probe was chosen over skipping it, because the probe's whole value is
+    catching a dead session before the expensive browser launch, and dropping it
+    whenever a slot is selected would remove that check on the runs where the
+    session is most fragile. Honest limit: a rotating residential slot can still
+    hand out a different exit IP per request, so matching slots is the closest
+    guarantee available here, not proof of a single IP.
     """
     try:
         import requests
@@ -91,6 +104,9 @@ def check_session_alive(cookies: dict[str, str], slug: str) -> tuple[bool, str]:
     jar = RequestsCookieJar()
     for n, v in cookies.items():
         jar.set(n, v, domain=".linkedin.com", path="/")
+    if proxy_url and "://" not in proxy_url:
+        proxy_url = f"http://{proxy_url}"
+    proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
     try:
         r = requests.get(
             f"https://www.linkedin.com/in/{slug}/",
@@ -99,6 +115,7 @@ def check_session_alive(cookies: dict[str, str], slug: str) -> tuple[bool, str]:
                                    "Gecko/20100101 Firefox/128.0"},
             timeout=10,
             allow_redirects=False,
+            proxies=proxies,
         )
     except requests.RequestException as exc:
         return True, f"pre-flight probe failed ({exc}) - proceeding anyway"
@@ -108,8 +125,14 @@ def check_session_alive(cookies: dict[str, str], slug: str) -> tuple[bool, str]:
     if r.status_code == 429:
         return False, "429 Too Many Requests - back off and retry in 10+ minutes"
     if r.status_code == 302:
+        # Only the walls count. `/in/{slug}` was on this list until 2026-09-02,
+        # which matched LinkedIn's own canonicalisation redirect (a trailing
+        # slash, a case-folded slug) and reported a perfectly valid session as
+        # invalidated, sending the operator off to log in again. A logged-out
+        # request lands on /authwall or /login, and those are what the probe is
+        # actually looking for.
         loc = r.headers.get("Location", "")
-        if f"/in/{slug}" in loc or "/authwall" in loc or "/login" in loc:
+        if "/authwall" in loc or "/login" in loc:
             return False, f"bounced to {loc[:80]} - session invalidated"
     return True, f"status={r.status_code}"
 
@@ -129,6 +152,12 @@ def scroll_until(page, min_posts: int, max_scrolls: int = 10) -> int:
         except PlaywrightTimeout:
             time.sleep(1.5)  # feed may have already rendered; proceed
     return page.locator(selector).count()
+
+
+def _activity_id(urn: str) -> int:
+    """The numeric id inside `urn:li:activity:<id>`, 0 when there is none."""
+    m = re.search(r"urn:li:activity:(\d+)", urn)
+    return int(m.group(1)) if m else 0
 
 
 def extract_posts(html: str, limit: int) -> list[dict]:
@@ -195,17 +224,31 @@ def extract_posts(html: str, limit: int) -> list[dict]:
     for urn, rec in posts.items():
         rec.setdefault("url", f"https://www.linkedin.com/feed/update/{urn}/")
 
-    # Sort by date desc (fall back to urn as tiebreak - higher urn = more recent)
+    # Sort by date desc, falling back to the activity id. "Higher urn = more
+    # recent" is true of the id inside `urn:li:activity:<id>`, a 64-bit value
+    # whose high bits are a creation time, but it is true NUMERICALLY and the
+    # tiebreak compared the urn as text: a 19-digit id sorts below an 18-digit
+    # one, so the older post came first. Only bpr-derived records reach that
+    # tiebreak, and those are precisely the ones carrying no date to fall back
+    # on, so the wrong order was the only order they ever got.
     ordered = sorted(
         posts.values(),
-        key=lambda r: (r.get("date", ""), r.get("urn", "")),
+        key=lambda r: (r.get("date", ""), _activity_id(r.get("urn", ""))),
         reverse=True,
     )
     return ordered[:limit]
 
 
-def render_markdown(posts: list[dict], slug: str) -> str:
-    lines = [f"# LinkedIn Recent Activity - {slug}", "", f"_Scraped via Playwright + Floorp auth + Decodo proxy_", ""]
+def render_markdown(posts: list[dict], slug: str, egress: str) -> str:
+    """`egress` is stated by the caller and has no default on purpose.
+
+    This line was the literal `+ Decodo proxy` on every run while `--proxy-slot`
+    defaults to 0, so the artifact recorded the wrong source IP for the traffic
+    on the common path. A default here would let the next caller re-introduce
+    the same wrong claim by omission.
+    """
+    lines = [f"# LinkedIn Recent Activity - {slug}", "",
+             f"_Scraped via Playwright + Floorp auth, {egress}_", ""]
     for i, p in enumerate(posts, 1):
         metrics = []
         for label, key in [("likes", "numLikes"), ("comments", "numComments"), ("shares", "numShares"), ("views", "numImpressions")]:
@@ -247,6 +290,7 @@ def main() -> int:
 
     import os
     proxy_cfg = None
+    proxy_url = None
     if args.proxy_slot:
         proxy_url = os.environ.get(f"DECODO_PROXY_{args.proxy_slot}")
         if not proxy_url:
@@ -262,7 +306,9 @@ def main() -> int:
     print(f"{GRAY}Loaded {len(cookies)} cookies from Floorp {args.profile} profile{RESET}")
 
     raw_cookies = {c["name"]: c["value"] for c in cookies}
-    alive, reason = check_session_alive(raw_cookies, args.slug)
+    # The same slot the browser launches with, so both requests leave from one
+    # egress rather than travelling between two IPs on one cookie.
+    alive, reason = check_session_alive(raw_cookies, args.slug, proxy_url)
     if not alive:
         print(f"{RED}ERROR: LinkedIn session invalid - {reason}{RESET}", file=sys.stderr)
         print(f"{YELLOW}FIX: Open Floorp, visit linkedin.com, log in (may require "
@@ -270,6 +316,7 @@ def main() -> int:
         return 3
     print(f"{GRAY}Pre-flight: session alive ({reason}){RESET}")
 
+    from playwright.sync_api import TimeoutError as PlaywrightTimeout
     from playwright.sync_api import sync_playwright
 
     url = f"https://www.linkedin.com/in/{args.slug}/recent-activity/all/"
@@ -299,7 +346,23 @@ def main() -> int:
             print(f"{CYAN}Navigating to {url}{RESET}")
             response = page.goto(url, wait_until="domcontentloaded")
             status = response.status if response else None
-            page.wait_for_load_state("networkidle", timeout=args.timeout)
+            try:
+                page.wait_for_load_state("networkidle", timeout=args.timeout)
+            except PlaywrightTimeout:
+                # Continue on the page as loaded; do not abort. Navigation has
+                # already succeeded, and LinkedIn's feed holds long-poll and
+                # telemetry sockets open, so networkidle often never settles
+                # even once every activity card is rendered. `scroll_until`
+                # earlier in this file treats the identical wait exactly this
+                # way, so the repaired pattern was already here.
+                # Everything below reads `page.url` and `page.content()`, both
+                # valid on a partial page, so the 429 and auth-wall checks still
+                # run; a feed that genuinely rendered nothing still lands on the
+                # "no posts extracted" exit with the HTML written to disk, which
+                # names the problem better than the traceback this used to throw
+                # away a working page for.
+                print(f"{YELLOW}networkidle did not settle within {args.timeout}ms; "
+                      f"continuing with the page as loaded{RESET}")
 
             if status == 429 or "/hp?" in page.url or "Too Many Requests" in page.content()[:2000]:
                 print(f"{RED}ERROR: LinkedIn returned 429 (rate limited on this IP).{RESET}", file=sys.stderr)
@@ -322,7 +385,9 @@ def main() -> int:
         print(f"{YELLOW}WARNING: no posts extracted. See linkedin-activity-rendered.html{RESET}")
         return 4
 
-    md = render_markdown(posts, args.slug)
+    egress = (f"Decodo proxy slot {args.proxy_slot}" if args.proxy_slot
+              else "direct connection, no proxy")
+    md = render_markdown(posts, args.slug, egress)
     md_path = out_dir / "linkedin-activity-auth.md"
     json_path = out_dir / "linkedin-activity-auth.json"
     md_path.write_text(md, encoding="utf-8")

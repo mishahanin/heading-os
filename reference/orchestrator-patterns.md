@@ -325,12 +325,19 @@ DEGRADATION: If OSINT finds minimal data, /deal-strategy still runs with competi
 **Reality (corrected 2026-06-08):** Pattern 6 does NOT dispatch subagents. Unlike Patterns 1–5 and 7, `/prime`'s health block runs **in-process** in `scripts/prime-health-parallel.py`, which executes its read-only checks concurrently in a `ThreadPoolExecutor(max_workers=8)` and renders each result as an output block. No subagent and no per-check model call is involved — each check shells out to an existing health script or reads a state file. The Principle-5 concurrency cap therefore does not apply to `/prime`. The list below documents the checks, not agent prompts. (This section previously described "5 parallel Haiku agents"; that was doc drift from an abandoned dispatch model.)
 
 **Announcement:**
-> Running session boot. Read-only health checks in-process (ThreadPoolExecutor) — CRM, knowledge, memory, email-intel state, threads, fireside, sync-exchange, Odin cadence, ops radar, reminders, dream shadow.
+> Running session boot. Read-only health checks in-process (ThreadPoolExecutor), the full set listed under Checks below.
+
+The announcement used to spell the check names out. That was a THIRD copy of the
+registry, and no test read it, so it lagged silently: measured 2026-09-02 it
+named 11 checks against a registry of 13, missing `hooks_armed` and `updates`.
+It now points at the list below, which the test does read. A copy nothing
+verifies is not documentation, it is a claim waiting to go stale.
 
 **Mechanism:** in-process `ThreadPoolExecutor(max_workers=8)`, one worker per check, aggregated by `run_all()`. A check that errors or times out is reported inline and never aborts the others.
 
-**Checks (12, defined in the `CHECKS` registry).** `scripts/prime-health-parallel.py` is the source of truth. This list mirrors it, and saying it "can lag" is not a control: on 2026-08-23 it had lagged, at 11 against the registry's 12, while the `/prime` docs page said seven. `tests/test_prime_check_registry_matches_its_docs.py` now derives the count and the key list from the registry and fails here and on that page, so the drift is caught instead of disclaimed.
+**Checks (13, defined in the `CHECKS` registry).** `scripts/prime-health-parallel.py` is the source of truth. This list mirrors it, and saying it "can lag" is not a control: on 2026-08-23 it had lagged, at 11 against the registry's 12, while the `/prime` docs page said seven. `tests/test_prime_check_registry_matches_its_docs.py` now derives the count and the key list from the registry and fails here and on that page, so the drift is caught instead of disclaimed.
 
+- `hooks_armed`: session hooks armed. Runs `scripts/merge-platform-settings.py --check`, which compares the platform settings template against the live `.claude/settings.local.json` and names every hook registration the live file lacks. Writes nothing, starts no daemon; renders nothing when armed.
 - `crm_health` — CRM health. `scripts/crm-health.py` (read-only): contact count, overdue-per-cadence, type-mismatch warnings.
 - `knowledge_health` — knowledge-base health. Walks `knowledge/` (+ `knowledge/odin-brain/`): note counts, oldest unedited note, orphans.
 - `memory_health` — auto-memory registry health (`memory/MEMORY.md` + per-key files): count, last consolidation, stale/contradictory entries.
@@ -346,7 +353,7 @@ DEGRADATION: If OSINT finds minimal data, /deal-strategy still runs with competi
 
 **Safety floor (each check):**
 
-- Ten of the twelve are read-only, and any check added here must be.
+- Eleven of the thirteen are read-only, and any check added here must be.
 - Do NOT write to any workspace file.
 - Do NOT modify state.json or any registry.
 - **Two are not read-only, and the floor above never covered them.** `fireside_health`

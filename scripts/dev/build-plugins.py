@@ -51,6 +51,16 @@ except ImportError:  # pragma: no cover - yaml is a core dependency
 MARKETPLACE_NAME = "heading-os-marketplace"
 OWNER = {"name": "Misha Hanin", "email": "misha.hanin@odinix.com"}
 
+#: The manifest fields that make a bundle worth building. A bundle declaring any
+#: one of them has content to deliver; a bundle declaring none of them is a
+#: placeholder and `--all` skips it.
+#:
+#: `hook_events` and `session_start_env` are deliberately NOT here. Neither
+#: delivers anything on its own: `hook_events` only wires hooks that must appear
+#: in `hooks:`, which `manifest_sources` enforces, and `session_start_env` is a
+#: switch on a bundle that already carries something.
+CONTENT_FIELDS = ("skills", "hooks", "commands", "scripts")
+
 # Rewrite `python|python3|bash <ws> scripts/` -> `... "${CLAUDE_PLUGIN_ROOT}"/scripts/`
 # Only the scripts/ prefix token is touched; the path suffix and args are left intact.
 _REWRITE_RE = re.compile(r"\b(python3?|bash)(\s+)scripts/")
@@ -596,11 +606,22 @@ def main(argv=None) -> int:
         names = [args.bundle]
     else:
         # --all builds every bundle that declares content (skip placeholders).
-        # `commands` is in the test because it became a first-class field on
-        # 2026-08-21 and this filter was not updated with it: a commands-only
-        # bundle was silently never built, and `--all` said nothing about it.
+        #
+        # The field list is a NAMED CONSTANT rather than a chain of `or`s,
+        # because this filter has now fallen behind the manifest twice. First
+        # `commands`, which became a first-class field on 2026-08-21: a
+        # commands-only bundle was silently never built and `--all` said nothing
+        # about it. Then `scripts`, which `collect_bundled_scripts`,
+        # `manifest_sources` and `build_bundle` have all consumed from the
+        # start: a scripts-only bundle was skipped here AND left out of
+        # `marketplace.json` by `write_marketplace(names, ...)` below, so it was
+        # never published either, at exit 0 with no message.
+        #
+        # `tests/test_a_bundle_filter_that_fell_behind_its_own_manifest.py` now
+        # holds this tuple against the fields the rest of the file reads, so a
+        # seventh field cannot arrive without this line failing.
         names = [n for n, s in manifest.items()
-                 if s.get("skills") or s.get("hooks") or s.get("commands")]
+                 if any(s.get(field) for field in CONTENT_FIELDS)]
 
     out_root.mkdir(parents=True, exist_ok=True)
     for name in names:

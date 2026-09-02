@@ -629,89 +629,105 @@ def _queue_pending(path: Path, session: str) -> bool:
     # U+2029, which appear 22 times in that same transcript - and a cut record
     # is a `queue-operation` this counter never sees, which is the difference
     # between halting for the operator and talking over them.
+    # The OPEN and the READ both fail, and only the open was guarded until
+    # 2026-09-02. The transcript is appended to by the harness WHILE this runs
+    # (88 MB measured on the largest), so a read that begins successfully can
+    # still raise part way down: a truncation, an I/O error, a WSL2 filesystem
+    # hiccup on a file crossing the Windows boundary. `errors="replace"` covers
+    # decoding and nothing else. An unhandled raise here escapes a Stop hook,
+    # which is the one place a traceback costs the operator the turn rather than
+    # a message.
+    #
+    # Both paths return True, and True is the conservative answer: it means "he
+    # may have typed something", so the hook stands down and lets him speak. The
+    # opposite default talks over an instruction he has already sent.
     try:
         handle = path.open(encoding="utf-8", errors="replace")
     except OSError:
         return True
     pending = 0
     owed = 0  # our own /compact enqueues whose consuming record is still to come
-    with handle:
-        for line in handle:
-            if '"queue-operation"' not in line:
-                continue
-            try:
-                entry = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(entry, dict) or entry.get("type") != "queue-operation":
-                continue
-            if session and entry.get("sessionId") not in (None, session):
-                continue
-            operation = entry.get("operation")
-            if entry.get("content") == HA.COMPACT_COMMAND:
-                # OUR OWN submission. `_request_compaction` sends this literal
-                # through HERDR, and the harness records the queueing as an
-                # ordinary `queue-operation`, indistinguishable from the operator
-                # pressing Enter mid-turn. Counting it means the hook reads its
-                # own request as a waiting message from him - and because the
-                # request only clears at a turn boundary the block prevents, the
-                # miscount is permanent. Observed live 2026-08-20: two such
-                # enqueues, no matching remove, and `_queue_pending` true from
-                # then on.
-                #
-                # Skipping it on the +1 side alone was not symmetric. Measured
-                # against this session's transcript on 2026-08-25: `enqueue`
-                # (327) and `remove` (258) ALWAYS carry `content`, `dequeue`
-                # (68) NEVER does. So the record that CONSUMES our own submission
-                # is a contentless `dequeue`, it could not match this filter, and
-                # every driven compaction cost the count one unit it never
-                # gained. `owed` carries the debt forward so the consuming
-                # decrement is cancelled instead of charged to the operator.
-                #
-                # The debt is paid HERE too, and not only by the contentless
-                # `dequeue` below. `remove` always carries `content`, so the
-                # operator deleting our own queued `/compact` from the input
-                # line records `remove` with `content: "/compact"` - which lands
-                # in this branch, and before 2026-08-31 continued without paying
-                # anything. `owed` then stayed at 1 for the life of the session,
-                # his next real message's contentless `dequeue` was charged to
-                # the debt instead of to `pending`, and `pending` stuck at 1
-                # permanently: `_queue_pending` true at every later pause,
-                # `_wait_out_the_grace` returning at once, and unattended mode
-                # halting in silence for the rest of the session. That is the
-                # exact outcome the paragraph above records fixing, arriving
-                # through the other door.
-                #
-                # MEASURED 2026-08-31 on a synthetic transcript of the four
-                # records (`enqueue /compact`, `remove /compact`, `enqueue` a
-                # real message, contentless `dequeue`): `_queue_pending` True
-                # before this line, False after. LATENT rather than live -
-                # replaying the same accounting over the six newest transcripts
-                # of this project found 49 `/compact` enqueues and ZERO
-                # `/compact` records of any other operation, and the fixed
-                # accounting answers identically on all six.
+    try:
+        with handle:
+            for line in handle:
+                if '"queue-operation"' not in line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(entry, dict) or entry.get("type") != "queue-operation":
+                    continue
+                if session and entry.get("sessionId") not in (None, session):
+                    continue
+                operation = entry.get("operation")
+                if entry.get("content") == HA.COMPACT_COMMAND:
+                    # OUR OWN submission. `_request_compaction` sends this literal
+                    # through HERDR, and the harness records the queueing as an
+                    # ordinary `queue-operation`, indistinguishable from the operator
+                    # pressing Enter mid-turn. Counting it means the hook reads its
+                    # own request as a waiting message from him - and because the
+                    # request only clears at a turn boundary the block prevents, the
+                    # miscount is permanent. Observed live 2026-08-20: two such
+                    # enqueues, no matching remove, and `_queue_pending` true from
+                    # then on.
+                    #
+                    # Skipping it on the +1 side alone was not symmetric. Measured
+                    # against this session's transcript on 2026-08-25: `enqueue`
+                    # (327) and `remove` (258) ALWAYS carry `content`, `dequeue`
+                    # (68) NEVER does. So the record that CONSUMES our own submission
+                    # is a contentless `dequeue`, it could not match this filter, and
+                    # every driven compaction cost the count one unit it never
+                    # gained. `owed` carries the debt forward so the consuming
+                    # decrement is cancelled instead of charged to the operator.
+                    #
+                    # The debt is paid HERE too, and not only by the contentless
+                    # `dequeue` below. `remove` always carries `content`, so the
+                    # operator deleting our own queued `/compact` from the input
+                    # line records `remove` with `content: "/compact"` - which lands
+                    # in this branch, and before 2026-08-31 continued without paying
+                    # anything. `owed` then stayed at 1 for the life of the session,
+                    # his next real message's contentless `dequeue` was charged to
+                    # the debt instead of to `pending`, and `pending` stuck at 1
+                    # permanently: `_queue_pending` true at every later pause,
+                    # `_wait_out_the_grace` returning at once, and unattended mode
+                    # halting in silence for the rest of the session. That is the
+                    # exact outcome the paragraph above records fixing, arriving
+                    # through the other door.
+                    #
+                    # MEASURED 2026-08-31 on a synthetic transcript of the four
+                    # records (`enqueue /compact`, `remove /compact`, `enqueue` a
+                    # real message, contentless `dequeue`): `_queue_pending` True
+                    # before this line, False after. LATENT rather than live -
+                    # replaying the same accounting over the six newest transcripts
+                    # of this project found 49 `/compact` enqueues and ZERO
+                    # `/compact` records of any other operation, and the fixed
+                    # accounting answers identically on all six.
+                    if operation == "enqueue":
+                        owed += 1
+                    elif operation in ("remove", "dequeue") and owed > 0:
+                        owed -= 1
+                    continue
                 if operation == "enqueue":
-                    owed += 1
-                elif operation in ("remove", "dequeue") and owed > 0:
-                    owed -= 1
-                continue
-            if operation == "enqueue":
-                pending += 1
-            elif operation == "popAll":
-                pending = 0
-                owed = 0
-            elif operation in ("remove", "dequeue"):
-                if "content" not in entry and owed > 0:
-                    owed -= 1
-                else:
-                    pending -= 1
-            # A floor, not an accounting nicety. Any unmatched decrement - a
-            # record shape this parser has not met, a transcript that begins
-            # mid-queue - pushes the count below zero, and a negative count is
-            # DEAF: the operator's next real message only brings it back to 0,
-            # `_queue_pending` answers False, and the hook talks over an
-            # instruction he has already sent.
-            pending = max(pending, 0)
+                    pending += 1
+                elif operation == "popAll":
+                    pending = 0
+                    owed = 0
+                elif operation in ("remove", "dequeue"):
+                    if "content" not in entry and owed > 0:
+                        owed -= 1
+                    else:
+                        pending -= 1
+                # A floor, not an accounting nicety. Any unmatched decrement - a
+                # record shape this parser has not met, a transcript that begins
+                # mid-queue - pushes the count below zero, and a negative count is
+                # DEAF: the operator's next real message only brings it back to 0,
+                # `_queue_pending` answers False, and the hook talks over an
+                # instruction he has already sent.
+                pending = max(pending, 0)
+    except OSError:
+        # A read that began fine can still raise part way down.
+        return True
     return pending > 0
 
 

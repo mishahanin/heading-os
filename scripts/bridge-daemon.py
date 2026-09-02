@@ -390,7 +390,23 @@ def _register_spine_jobs(sched, cfg: dict, workspace_root: Path, state,
         except Exception:
             _critique_ok = False
         if _critique_ok:
-            max_per_tick = int(crit.get("max_per_tick", 3) or 3)
+            try:
+                max_per_tick = int(crit.get("max_per_tick", 3) or 3)
+            except (ValueError, TypeError):
+                # Every other config read in this function is coerced
+                # defensively; this one was bare. `.daemon-state/config.yaml` is
+                # hand-editable, so `max_per_tick: "lots"` raised ValueError and
+                # `max_per_tick: [3]` raised TypeError, straight out of
+                # `_register_spine_jobs` into `start_daemon`'s `except
+                # Exception: ... raise`. The WHOLE daemon then failed to boot
+                # over one optional knob on an optional, default-off feature: no
+                # observer, no scheduler, no uvicorn. Four docstrings in this
+                # file promise these spine jobs self-disable and that a failure
+                # "must never take the daemon down".
+                logging.warning(
+                    "critique: max_per_tick=%r is not a number; using 3",
+                    crit.get("max_per_tick"))
+                max_per_tick = 3
             model = crit.get("model") or None
             sched.add_job(
                 _critique_job, "interval", minutes=2,
@@ -1047,6 +1063,18 @@ def check_health():
                 print("# The port file is stale, or another process took the "
                       "port. Showing what answered:", file=sys.stderr)
                 print(json.dumps(payload, indent=2))
+                # This branch took exit 1 without ever reading the heartbeat,
+                # and 1 is documented as "fell back to heartbeat". A foreign
+                # process on the named port is the daemon-probably-dead case the
+                # fallback was written for, and it was the one case that lost
+                # the last known pid, version, uptime and `last_heartbeat` - the
+                # field that says WHEN the real daemon died. Every other failure
+                # path here falls back first; the corrupt-port-file branch above
+                # carries a comment saying so.
+                hb = _read_heartbeat_fallback()
+                if hb is not None:
+                    print("# Showing last heartbeat from disk:", file=sys.stderr)
+                    print(json.dumps(hb, indent=2))
                 sys.exit(1)
             print(json.dumps(payload, indent=2))
             return

@@ -216,7 +216,26 @@ def _is_always_on(text: str) -> bool:
         # An inline empty list is always-on; a bare `paths:` needs its block read.
         if trailing == "[]":
             return True
-        return not re.search(r"^\s+-\s+\S", body[found.end():], re.M)
+        # Read ONLY the block that belongs to `paths:`. It ends at the next
+        # top-level key, which in this frontmatter grammar is any line starting
+        # at column 0.
+        #
+        # This scanned to the END of the frontmatter and asked whether ANY
+        # indented list item appeared anywhere after `paths:`. So a rule with an
+        # empty `paths:` (always-on) that also carried a later YAML list of any
+        # kind was classified path-scoped. MEASURED 2026-09-02:
+        # `paths:\ntags:\n  - alpha` returned False, the same frontmatter
+        # without the later list returned True. One unrelated key decided it.
+        #
+        # The direction is the dangerous one. `always_on_bytes` is a component
+        # of the ratcheted total this script gates growth on, so a rule wrongly
+        # called path-scoped takes its bytes OUT of the floor. The floor then
+        # drops, the `--baseline` comparison sees room, and the gate passes over
+        # a context budget that actually grew.
+        rest = body[found.end():]
+        next_key = re.search(r"^\S", rest, re.M)
+        block = rest[:next_key.start()] if next_key else rest
+        return not re.search(r"^\s+-\s+\S", block, re.M)
     return False
 
 

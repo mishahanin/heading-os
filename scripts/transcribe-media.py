@@ -157,12 +157,24 @@ def probe_duration(media: Path) -> float | None:
     require("av", extra="media")
     import av
 
+    # `av.error.FFmpegError` belongs in this tuple and was missing. PyAV raises
+    # its own hierarchy, and only PART of it lands under the two names here:
+    # measured against av 18.0.0, `InvalidDataError` happens to subclass
+    # `ValueError`, but `FFmpegError` itself and 30-odd of its siblings
+    # (`DemuxerNotFoundError`, `ProtocolNotFoundError`, `ExternalError`, av's
+    # own `EOFError`, `UnknownError`) subclass neither `OSError` nor
+    # `ValueError`. So a file that exists, and therefore passed `main`'s
+    # `is_file()` check, but carries an unsupported or unopenable container
+    # crashed the whole run with a traceback out of a probe this docstring calls
+    # a cheap courtesy, before the model was even loaded. `main` calls this
+    # unconditionally, so it aborted even when an explicit `--batched` or
+    # `--sequential` meant the answer would have been discarded.
     try:
         with av.open(str(media)) as container:
             if container.duration is None:
                 return None
             return float(container.duration) / av.time_base
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, av.error.FFmpegError) as exc:
         print(f"{GRAY}duration probe failed ({exc}); assuming a long file{RESET}", file=sys.stderr)
         return None
 

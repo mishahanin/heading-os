@@ -33,7 +33,6 @@ a hyphen would be an illegal module name (development-standards script-naming ru
 """
 from __future__ import annotations
 import argparse
-import glob
 import re
 import subprocess
 import sys
@@ -46,8 +45,29 @@ from pathlib import Path
 # is the same one every sibling CLI script under `scripts/` carries.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.repo_files import read_sources  # noqa: E402
+from scripts.utils.workspace import get_workspace_root  # noqa: E402
 
-INVENTORY_DIR = Path("config/rule-split-inventory")
+ROOT = get_workspace_root()
+
+# Anchored on the repository, never on the process cwd. Both were bare relative
+# paths until 2026-09-02, and a relative path in a gate is not a smaller bug than
+# a wrong one: MEASURED that day, `--check` from the repo root handed 6 files to
+# `read_sources` (2 snapshots, 3 rule files, 1 declared destination) and printed
+# "inventory check: OK"; the identical command from `/tmp` handed it 0 files and
+# printed the identical line at the identical exit 0. The glob that found nothing
+# and the glob that found everything intact are indistinguishable in the output,
+# which is the whole reason `corpus_floor()` below exists.
+INVENTORY_DIR = ROOT / "config/rule-split-inventory"
+RULES_DIR = ROOT / ".claude/rules"
+
+# Floors for `--check`. A gate whose corpus can silently shrink to nothing is
+# green over nothing, so refuse rather than pass. These are FLOORS, not
+# expectations: they are set below the live counts on purpose so that adding a
+# rule or a snapshot never has to touch them, and they only ever move up when
+# the operator decides the coverage baseline has risen.
+MIN_SNAPSHOTS = 2            # committed snapshots under INVENTORY_DIR
+MIN_RULE_FILES = 10          # *.md under RULES_DIR (26 live on 2026-09-02)
+MIN_FROZEN_DIRECTIVES = 5    # non-blank lines in each snapshot
 
 # Recall self-test fixture lives HERE (source of truth); the test imports it. Fixture
 # uses REAL rule-file grammar (markdown bullets, **bold**, lowercase "must have:",
@@ -163,11 +183,16 @@ def check_split(original_text: str, successor_texts: list[str]) -> list[str]:
 
 
 def _declared_destinations(stem: str, inventory_dir: Path, repo_root: Path) -> list[Path]:
-    """Files OUTSIDE `.claude/rules/` that a rule declared as an offload target.
+    """Files a rule declared as an offload target, wherever they live.
 
-    One path per line in `<inventory_dir>/<stem>.destinations`; blank lines and
-    `#` comments ignored. Absent file means no destinations, which is the common
-    case and stays free.
+    One repo-relative path per line in `<inventory_dir>/<stem>.destinations`;
+    blank lines and `#` comments ignored. Absent file means no destinations,
+    which is the common case and stays free.
+
+    This said "Files OUTSIDE `.claude/rules/`" until 2026-09-02, describing what
+    it was first written for rather than what it does. The code never restricted
+    the location, and since `_rule_union_paths` stopped guessing sibling rule
+    files by name shape, a split INSIDE `.claude/rules/` is declared here too.
 
     Why this exists: the union was `rules_dir/<base>*.md` only, so it could see a
     rule SPLIT into a sibling but not a rule OFFLOADED into `docs/` or
@@ -195,15 +220,44 @@ def _declared_destinations(stem: str, inventory_dir: Path, repo_root: Path) -> l
     return out
 
 
-def _rule_union_sentences(stem: str, rules_dir: str = ".claude/rules",
-                          inventory_dir: Path | None = None) -> set[str]:
+def _rule_union_paths(stem: str, rules_dir=None,
+                      inventory_dir: Path | None = None) -> list[Path]:
+    """Every file whose sentences may retain `stem`'s frozen directives.
+
+    Split out of `_rule_union_sentences` so `corpus_floor()` can report WHICH
+    rule files the snapshots actually reach without reading them twice.
+    """
     inventory_dir = INVENTORY_DIR if inventory_dir is None else inventory_dir
-    # stem is a basename like "development-standards.md"; glob its core+detail siblings
-    # so the snapshot survives a later split (development-standards.md + -detail.md),
-    # plus any file the rule declared as an offload destination.
+    rules_dir = RULES_DIR if rules_dir is None else rules_dir
+    # The rule file itself, by EXACT name, plus whatever the snapshot declared as
+    # a destination. Nothing is guessed.
+    #
+    # This was `glob(f"{rules_dir}/{base}*.md")`, meant to pick up a `-detail.md`
+    # sibling after a split. A prefix glob cannot tell a successor from an
+    # unrelated rule that happens to share an opening word, and MEASURED
+    # 2026-09-02 it did not: the union for `documentation.md` pulled in
+    # `documentation-style.md`, a separate always-on rule about writing style.
+    #
+    # The direction of that error is what makes it worth removing rather than
+    # tolerating. Every other degradation in this module fails SAFE: a file
+    # missing from the union can only make a frozen directive read as LOST, which
+    # is a false positive routed to a human. A file wrongly ADDED to the union
+    # fails the other way. It can certify a directive as retained because some
+    # unrelated rule happens to contain the same sentence, and this gate exists to
+    # notice exactly that kind of loss.
+    #
+    # It masks nothing today. Measured the same day over `documentation.md`'s 17
+    # frozen directives: 0 were retained only via `documentation-style.md`, and 0
+    # read as lost either way. So this is closing a hole, not fixing an outage.
+    #
+    # The cost is that a future split has to DECLARE its successor in
+    # `<stem>.destinations` instead of being found by name shape. That is the
+    # trade `_declared_destinations` already argues for in its own docstring: a
+    # named file is a claim someone made and can be held to, and an undeclared
+    # split now goes red rather than quietly widening the search.
     base = stem[:-3] if stem.endswith(".md") else stem
-    pattern = f"{rules_dir}/{base}*.md"
-    paths = [Path(p) for p in sorted(glob.glob(pattern))]
+    core = Path(rules_dir) / f"{base}.md"
+    paths = [core] if core.is_file() else []
     # A destination path is repo-relative, so it needs the repo root. Derive it
     # from rules_dir by stripping the `.claude/rules` tail when it is there, and
     # otherwise take the parent — which is what a test fixture's `<tmp>/rules`
@@ -216,7 +270,13 @@ def _rule_union_sentences(stem: str, rules_dir: str = ".claude/rules",
     for extra in _declared_destinations(stem, inventory_dir, repo_root):
         if extra.is_file():
             paths.append(extra)
-    # Through `read_sources`: `paths` came from a glob plus an `is_file()` test,
+    return paths
+
+
+def _rule_union_sentences(stem: str, rules_dir=None,
+                          inventory_dir: Path | None = None) -> set[str]:
+    paths = _rule_union_paths(stem, rules_dir, inventory_dir)
+    # Through `read_sources`: `paths` came from an `is_file()` test above,
     # and a rule file rewritten between that walk and this read raised
     # FileNotFoundError out of a gate that had found nothing wrong. SKIPPING is
     # the correct degradation here, and the module docstring above is the reason:
@@ -230,18 +290,77 @@ def _rule_union_sentences(stem: str, rules_dir: str = ".claude/rules",
     return {_norm(s) for s in _units(text) if _norm(s)}
 
 
+def _anchor(p: str) -> Path:
+    # A relative argument names a repo path, not a cwd path. `--snapshot
+    # .claude/rules/voice.md` from anywhere but the root used to raise
+    # FileNotFoundError; the same relative string in `--dump` did too.
+    path = Path(p)
+    return path if path.is_absolute() else ROOT / path
+
+
 def snapshot_inventory(rule_path: str) -> Path:
     # Freeze the current extracted imperatives of one rule file. Written at compress/split
     # time so --check has a baseline to guard against a FUTURE edit that drops a directive.
-    inv = INVENTORY_DIR / (Path(rule_path).name + ".txt")
+    src = _anchor(rule_path)
+    inv = INVENTORY_DIR / (src.name + ".txt")
     inv.parent.mkdir(parents=True, exist_ok=True)
-    imps = extract_imperatives(Path(rule_path).read_text(encoding="utf-8"))
+    imps = extract_imperatives(src.read_text(encoding="utf-8"))
     inv.write_text("\n".join(imps) + "\n", encoding="utf-8")
     return inv
 
 
+def corpus_floor(inventory_dir: Path | None = None,
+                 rules_dir=None) -> tuple[list[str], dict]:
+    """Refuse a `--check` that would pass by having read (almost) nothing.
+
+    `check_inventories` globs `<dir>/*.txt` and returns `[]` when the glob is
+    empty, which is byte-for-byte the answer it gives over a clean tree. A
+    renamed directory, a snapshot deleted with the rule it guarded, a `.txt`
+    convention that moves, or -- until 2026-09-02 -- simply running from a
+    different working directory, each report "no directive was dropped" while
+    reading nothing at all.
+
+    So the corpus is derived from the tree and then held against a floor before
+    any verdict is printed. Returns `(problems, counts)`; `problems` empty means
+    the corpus is big enough for the verdict below it to mean something.
+    `counts` is reported on every run, pass or fail, because `.claude/rules/
+    scope-claims.md` asks a tool to state the coverage its method established:
+    two snapshots reaching three of twenty six rule files is a true and narrow
+    result, and printing only "OK" hides the narrowness rather than the result.
+    """
+    inventory_dir = INVENTORY_DIR if inventory_dir is None else Path(inventory_dir)
+    rules_dir = RULES_DIR if rules_dir is None else Path(rules_dir)
+
+    rule_files = sorted(rules_dir.glob("*.md"))
+    snapshots = sorted(inventory_dir.glob("*.txt"))
+    covered: set[Path] = set()
+    thin: list[str] = []
+    for snap, body in read_sources(snapshots):
+        frozen = [ln for ln in body.splitlines() if ln.strip()]
+        if len(frozen) < MIN_FROZEN_DIRECTIVES:
+            thin.append(f"{snap.name} froze {len(frozen)} directive(s), "
+                        f"floor is {MIN_FROZEN_DIRECTIVES}")
+        for p in _rule_union_paths(snap.name[:-4], rules_dir, inventory_dir):
+            if p.parent == rules_dir:
+                covered.add(p)
+
+    counts = {"rules_dir": rules_dir, "inventory_dir": inventory_dir,
+              "rule_files": len(rule_files), "snapshots": len(snapshots),
+              "covered_rule_files": len(covered)}
+
+    problems = []
+    if len(rule_files) < MIN_RULE_FILES:
+        problems.append(f"read {len(rule_files)} rule file(s) under {rules_dir}, "
+                        f"expected at least {MIN_RULE_FILES}")
+    if len(snapshots) < MIN_SNAPSHOTS:
+        problems.append(f"read {len(snapshots)} snapshot(s) under {inventory_dir}, "
+                        f"expected at least {MIN_SNAPSHOTS}")
+    problems.extend(thin)
+    return problems, counts
+
+
 def check_inventories(inventory_dir: Path | None = None,
-                      rules_dir: str = ".claude/rules") -> list[tuple[str, str]]:
+                      rules_dir=None) -> list[tuple[str, str]]:
     inventory_dir = INVENTORY_DIR if inventory_dir is None else inventory_dir
     # For every snapshot, assert each frozen imperative is still an exact sentence of the
     # current core+detail union. Returns [(stem, dropped_line), ...]; empty = clean.
@@ -287,13 +406,26 @@ def main() -> int:
         print(f"snapshot: {snapshot_inventory(a.snapshot)}")
         return 0
     if a.check:
+        problems, counts = corpus_floor()
+        # Printed before the verdict, and on the failing path too, so the reader
+        # never has to infer the corpus from a bare "OK".
+        print(f"corpus: {counts['snapshots']} snapshot(s) under "
+              f"{counts['inventory_dir']}; {counts['covered_rule_files']} of "
+              f"{counts['rule_files']} rule file(s) under {counts['rules_dir']} "
+              f"are covered by one")
+        if problems:
+            for p in problems:
+                print(f"CORPUS FAIL: {p}")
+            print("inventory check: REFUSED (corpus below floor; a pass here "
+                  "would mean nothing)")
+            return 2
         bad = check_inventories()
         for stem, line in bad:
             print(f"CHECK FAIL {stem}: dropped {line!r}")
         print("inventory check: OK" if not bad else f"inventory check: {len(bad)} dropped")
         return 1 if bad else 0
     if a.dump:
-        imps = extract_imperatives(Path(a.dump).read_text(encoding="utf-8"))
+        imps = extract_imperatives(_anchor(a.dump).read_text(encoding="utf-8"))
         for i, s in enumerate(imps, 1):
             print(f"{i:3d}. {s}")
         print(f"\n-- {len(imps)} regex-recognized imperatives. "

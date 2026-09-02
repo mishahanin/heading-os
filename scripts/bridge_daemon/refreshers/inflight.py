@@ -16,6 +16,7 @@ subdirectory of a scanned directory is not picked up.
 import json
 import logging
 import re
+import stat
 import time
 from pathlib import Path
 
@@ -78,9 +79,20 @@ def scan_inflight(workspace_root: Path, retention_hours: int = 24) -> list[dict]
             # catches it, so the price was the entire scan: every LinkedIn and
             # OSINT row already collected was thrown away and the component
             # version left alone, until a tick happened to race nothing.
+            #
+            # "ONE stat" was false when it was written: `p.stat()` followed by
+            # `p.is_file()` is two, because `is_file()` stats again. Corrected
+            # 2026-09-02 by making the code true rather than the comment
+            # weaker. `is_file()` is exactly "stat, following symlinks, then
+            # S_ISREG", so reading the mode off the stat already taken is the
+            # same test with the second syscall removed. Only the enclosing
+            # handler kept the extra window harmless, and a later reader has no
+            # way to tell that handler is load-bearing from a comment that says
+            # the race is not there.
             try:
-                mtime = p.stat().st_mtime
-                if not p.is_file() or mtime < cutoff:
+                st = p.stat()
+                mtime = st.st_mtime
+                if not stat.S_ISREG(st.st_mode) or mtime < cutoff:
                     continue
                 text = p.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):

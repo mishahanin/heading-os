@@ -215,9 +215,22 @@ def _read_user_choice(timeout: int) -> str:
 
     The hook payload is delivered on stdin and consumed in main(), so stdin
     is at EOF here. We read from the user's real keyboard: /dev/tty on POSIX
-    or the Win32 console via msvcrt on Windows. If no tty is available
-    (headless `claude -p`, CI, background daemon), return empty string and
-    let the caller default to stay.
+    or the Win32 console via msvcrt on Windows. With no keyboard to read,
+    return empty string and let the caller default to stay.
+
+    WHEN that empty string arrives differs by platform, and this docstring
+    promised the POSIX answer for both. On POSIX it is immediate: opening
+    `/dev/tty` on a headless `claude -p`, in CI, or in a background daemon
+    raises, the handler below catches it, and nothing waits. On Windows in a
+    process with no console, `msvcrt.kbhit()` returns 0 rather than raising, so
+    that handler never fires and the empty string arrives only after the loop
+    spends the full `timeout`. Bounded, never indefinite, but not immediate.
+
+    The blast radius is small and is not a reason to leave the sentence wrong:
+    `stop()` runs only under BRIDGE_ORIGIN=browser, which the daemon's launcher
+    sets and background daemons never see. Whoever narrows that gap should
+    detect the absent console up front (`GetConsoleWindow`) and return early,
+    and delete this paragraph in the same change.
     """
     try:
         if sys.platform == "win32":
@@ -354,7 +367,13 @@ def stop(payload: dict) -> int:
 
     choice = _read_user_choice(timeout)
 
-    if choice == "b":
+    # The prompt one line up offers "browser" as a labelled option, and the
+    # match was exact equality against "b". Typing the word the prompt shows
+    # produced choice == "browser", fell into the else, and the hook answered
+    # "stay" - the opposite of the request, with nothing saying the input was
+    # rejected. Accept both spellings rather than relabel the prompt: the label
+    # is what makes the single letter guessable.
+    if choice in ("b", "browser"):
         print("bridge: returning to browser...", file=sys.stderr)
         _trigger_return(payload.get("session_id", ""), payload.get("cwd"))
     else:

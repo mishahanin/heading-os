@@ -320,7 +320,7 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
                 "size_bytes": st.st_size,
                 "mtime_iso": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
             })
-        return {
+        payload = {
             "pid": os.getpid(),
             "version": __version__,
             "uptime_s": int(time.time() - started_at),
@@ -330,6 +330,14 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
             "refresh_config": refresh_cfg,
             "config_snapshots": snapshots,
         }
+        # `settings` is in ALLOWED_RETURN_PAGES: it has a renderer and page-view
+        # telemetry, so the topbar sync pill renders over it like any other
+        # page. It shipped without the envelope `_attach_freshness` calls "three
+        # fields the UI's sync indicator depends on", so the pill had nothing to
+        # compute "Computed X ago" from and no `server_now` to correct client
+        # clock skew against. Every other page payload in this file attaches it.
+        _attach_freshness(payload, "settings")
+        return payload
 
     from .sources.ops import read_telemetry_summary as _ops_telemetry
     from .sources.ops import read_log_tail as _ops_log_tail
@@ -956,8 +964,12 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
         # Both roots: search spans DATA sources and the ENGINE skill catalog.
         # Passing data_root alone made the capability results come from
         # `<data-root>/.claude/skills` — 1 skill instead of 96 (fixed 2026-08-23).
-        return _search_source(data_root, q, limit=bounded_limit,
-                              workspace_root=workspace_root)
+        payload = _search_source(data_root, q, limit=bounded_limit,
+                                 workspace_root=workspace_root)
+        # `search` is the other ALLOWED_RETURN_PAGES entry that shipped without
+        # the envelope. See the note on /settings above.
+        _attach_freshness(payload, "search")
+        return payload
 
     from pydantic import BaseModel
     from . import terminal as terminal_mod

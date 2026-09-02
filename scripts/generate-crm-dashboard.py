@@ -13,7 +13,9 @@ Usage:
     python scripts/generate-crm-dashboard.py --json           # raw data as JSON
     python scripts/generate-crm-dashboard.py --output-dir DIR # custom output dir
 
-Tests: tests/test_a_data_root_override_that_was_silently_ignored.py, tests/test_html_generators_render.py
+Tests: tests/test_a_data_root_override_that_was_silently_ignored.py,
+tests/test_a_ceo_page_that_stated_more_than_it_measured.py,
+tests/test_html_generators_render.py
 """
 
 import argparse
@@ -131,6 +133,58 @@ def count_files_in_dir(dirpath):
 
 
 # ============================================================
+# Health classification
+# ============================================================
+HEALTH_CLASSES = ("RED", "YELLOW", "GREEN", "GRAY")
+BADGE_CLASS = {"RED": "badge-red", "YELLOW": "badge-yellow",
+               "GREEN": "badge-green", "GRAY": "badge-gray"}
+
+_HEALTH_WARNED: set[tuple[str, str]] = set()
+
+
+def normalise_health(raw, name="?"):
+    """The ONE health class a contact carries, whichever surface asks.
+
+    `collect_radar` used to upper-case the Health cell and stop there, which is
+    not normalisation, so each consumer decided for itself what an unrecognised
+    value meant. A row reading "amber" was counted GRAY by the cards, sorted
+    BELOW every GRAY in the table (`order.get(..., 4)` against a GRAY of 3),
+    and badged with its own raw text. One contact, three treatments, one page,
+    and the page was headed CEO Eyes Only. The value is resolved here now, at
+    the collector, so nothing downstream has a decision left to make.
+
+    An unrecognised value resolves GRAY and is NAMED on stderr, so resolving it
+    never becomes hiding it. Named once per offending contact and value, for
+    the life of the process: the resolution runs at collection AND at every
+    render and export that asks, so an undeduped print put one warning per
+    caller on the console for a single bad cell.
+    """
+    h = str(raw or "").strip().upper()
+    if h in HEALTH_CLASSES:
+        return h
+    key = (str(name), str(raw))
+    if key not in _HEALTH_WARNED:
+        _HEALTH_WARNED.add(key)
+        print(f"  Warning: contact {name!r} has health "
+              f"{raw!r}; counted as GRAY", file=sys.stderr)
+    return "GRAY"
+
+
+def _health_counts(contacts):
+    """Contacts per health card. Every contact lands in exactly one.
+
+    Both call sites did `if h in counts: counts[h] += 1`, so a contact whose
+    Health column read "BLUE", "amber" or nothing at all was counted in the
+    header's total and in none of the four cards. The cards stopped summing to
+    the total and nothing said why.
+    """
+    counts = dict.fromkeys(HEALTH_CLASSES, 0)
+    for c in contacts:
+        counts[normalise_health(c.get("health"), c.get("name", "?"))] += 1
+    return counts
+
+
+# ============================================================
 # Data Collectors
 # ============================================================
 def refresh_aggregated_data():
@@ -165,8 +219,8 @@ def collect_radar():
     rows = parse_md_table(content, source=str(radar_file))
     contacts = []
     for r in rows:
-        health = r.get("Health", "GRAY").strip().upper()
         name = r.get("Name", "").strip()
+        health = normalise_health(r.get("Health", "GRAY"), name or "?")
         company = r.get("Company", "").strip()
         ctype = r.get("Type", "").strip()
         owner = r.get("Owner", "").strip()
@@ -218,10 +272,19 @@ def collect_ownership(exec_registry):
                 if ex.get("slug") == slug:
                     title = ex.get("title", "")
                     break
+            # No `types` and no `contacts`. Both were initialised here, never
+            # written by anything below, and exported under "executives" in
+            # crm-command-center.json, so every exec object shipped
+            # `"types": {}, "contacts": []` as though the parse had looked and
+            # found nothing. An empty structure that reads as a measurement is
+            # worse than an absent one, and nothing in this repository read
+            # either key. The numbers themselves do exist upstream:
+            # `aggregate-crm.generate_ownership_map` writes a per-exec Type
+            # table and contact list into this same file, so populating them is
+            # a parser away if a consumer ever needs them.
             current_exec = {
                 "name": name, "slug": slug, "title": title,
                 "total": 0, "red": 0, "yellow": 0, "green": 0, "gray": 0,
-                "types": {}, "contacts": [],
             }
             continue
 
@@ -284,9 +347,17 @@ def collect_exec_registry():
 
 def collect_heartbeat():
     """Count contact files per exec by reading per-exec CRM repos."""
-    from scripts.utils.workspace import get_all_active_exec_slugs, get_per_exec_contacts_dir
     heartbeat = {}
+    # Inside the try, not above it. The import was the ONLY statement in this
+    # function that could raise the ImportError this handler names, and it sat
+    # on the line above the try, so the handler was written for an error it
+    # could never see. A renamed or missing helper took the whole dashboard
+    # down while every other collector in this file degrades and says so.
     try:
+        from scripts.utils.workspace import (
+            get_all_active_exec_slugs,
+            get_per_exec_contacts_dir,
+        )
         slugs = list(get_all_active_exec_slugs())
     except (OSError, ImportError, KeyError, ValueError) as e:
         print(f"[generate-crm-dashboard] heartbeat roster unreadable: {e}",
@@ -327,31 +398,48 @@ def collect_pipeline_companies():
 
 
 def correlate_pipeline_crm(radar_contacts, pipeline_companies):
-    """Match CRM contacts by company against pipeline deals."""
+    """Match CRM contacts by company against pipeline deals, with a strength.
+
+    Substring matching alone reported "Meridian" and "Meridian Dental Group" as
+    a correlation, with a stage and a deal value attached, and rendered it
+    identically to a match that WAS the same company. Nothing on the page said
+    which of the two the CEO was reading.
+
+    Equality is the only rule that carries no doubt, and on its own it is too
+    strict for pipeline text: a deal row spelling a legal suffix the CRM card
+    omits is a real correlation worth surfacing. So the weaker matches survive
+    and are labelled `partial` instead of shipped as equals, and
+    `build_pipeline_correlation` renders them visibly weaker.
+    """
     matches = []
     seen_companies = set()
     for deal in pipeline_companies:
-        deal_company_lower = deal["company"].lower()
+        deal_company_lower = deal["company"].strip().lower()
         for contact in radar_contacts:
-            contact_company_lower = contact["company"].lower()
+            contact_company_lower = contact["company"].strip().lower()
             if not contact_company_lower or not deal_company_lower:
                 continue
-            # Check if the CRM company appears in the deal company or vice versa
-            if (contact_company_lower in deal_company_lower
+            if contact_company_lower == deal_company_lower:
+                strength = "exact"
+            elif (contact_company_lower in deal_company_lower
                     or deal_company_lower in contact_company_lower):
-                key = (deal["company"], contact["name"])
-                if key not in seen_companies:
-                    seen_companies.add(key)
-                    matches.append({
-                        "deal_company": deal["company"],
-                        "contact_name": contact["name"],
-                        "contact_company": contact["company"],
-                        "stage": deal["stage"],
-                        "value": deal["value"],
-                        "crm-health": contact["health"],
-                        "crm_owner": contact["owner"],
-                        "deal_owner": deal["owner"],
-                    })
+                strength = "partial"
+            else:
+                continue
+            key = (deal["company"], contact["name"])
+            if key not in seen_companies:
+                seen_companies.add(key)
+                matches.append({
+                    "deal_company": deal["company"],
+                    "contact_name": contact["name"],
+                    "contact_company": contact["company"],
+                    "stage": deal["stage"],
+                    "value": deal["value"],
+                    "crm-health": contact["health"],
+                    "crm_owner": contact["owner"],
+                    "deal_owner": deal["owner"],
+                    "match": strength,
+                })
     return matches
 
 
@@ -407,39 +495,6 @@ def active_exec_count(exec_registry):
     """
     return sum(1 for e in exec_registry.get("executives", [])
                if e.get("status") == "active")
-
-
-_HEALTH_WARNED: set[tuple[str, str]] = set()
-
-
-def _health_counts(contacts):
-    """Contacts per health card. Every contact lands in exactly one.
-
-    Both call sites did `if h in counts: counts[h] += 1`, so a contact whose
-    Health column read "BLUE", "amber" or nothing at all was counted in the
-    header's total and in none of the four cards. The cards stopped summing to
-    the total and nothing said why. An unrecognised value is GRAY, and named
-    on stderr so the source row can be fixed.
-
-    "Named ONCE" is what this used to promise and could not keep: the helper
-    runs two or three times per invocation (the health cards, the exec
-    scorecards' source data, the JSON export, and since 2026-08-24 the console
-    summary too), so one bad row printed one warning per call. The dedupe set
-    below makes the claim true again -- once per offending contact and value,
-    for the life of the process, no matter how many callers ask.
-    """
-    counts = {"RED": 0, "YELLOW": 0, "GREEN": 0, "GRAY": 0}
-    for c in contacts:
-        h = str(c.get("health") or "").strip().upper()
-        if h not in counts:
-            key = (str(c.get("name", "?")), str(c.get("health")))
-            if key not in _HEALTH_WARNED:
-                _HEALTH_WARNED.add(key)
-                print(f"  Warning: contact {c.get('name', '?')!r} has health "
-                      f"{c.get('health')!r}; counted as GRAY", file=sys.stderr)
-            h = "GRAY"
-        counts[h] += 1
-    return counts
 
 
 def build_health_summary(contacts):
@@ -558,18 +613,22 @@ def build_radar_table(contacts, limit=50):
   <div class="empty">No radar data available.</div>
 </div>
 """
-    # Sort: RED first, then YELLOW, GREEN, GRAY
+    # Sort: RED first, then YELLOW, GREEN, GRAY. Through `normalise_health`,
+    # like the cards, so the table has the same four classes the cards do. The
+    # key was `order.get(c["health"], 4)`, a fifth rank for anything the four
+    # did not spell, which sorted an unrecognised contact below every GRAY
+    # while the card beside it counted that same contact AS a GRAY.
     order = {"RED": 0, "YELLOW": 1, "GREEN": 2, "GRAY": 3}
-    sorted_contacts = sorted(contacts, key=lambda c: (order.get(c["health"], 4), -(c["days_since"] or 0)))
+    sorted_contacts = sorted(
+        contacts,
+        key=lambda c: (order[normalise_health(c["health"], c.get("name", "?"))],
+                       -(c["days_since"] or 0)))
 
     total = len(sorted_contacts)
     display = sorted_contacts[:limit]
     rows_html = ""
     for c in display:
-        badge_cls = {
-            "RED": "badge-red", "YELLOW": "badge-yellow",
-            "GREEN": "badge-green", "GRAY": "badge-gray",
-        }.get(c["health"], "badge-gray")
+        health = normalise_health(c["health"], c.get("name", "?"))
         days_str = str(c["days_since"]) if c["days_since"] is not None else "-"
         rows_html += f"""
 <tr>
@@ -578,7 +637,7 @@ def build_radar_table(contacts, limit=50):
   <td>{esc(c['type'])}</td>
   <td>{esc(c['owner'])}</td>
   <td style="text-align:right;">{esc(days_str)}</td>
-  <td><span class="badge {badge_cls}">{esc(c['health'])}</span></td>
+  <td><span class="badge {BADGE_CLASS[health]}">{esc(health)}</span></td>
 </tr>"""
 
     truncate_html = ""
@@ -680,9 +739,13 @@ def build_top_overdue(contacts, limit=15):
     display = overdue[:limit]
 
     if not display:
-        return """
+        # `limit`, not a hardcoded 15. The populated branch below already reads
+        # the argument; this one printed 15 whatever it was handed, so the two
+        # headings of one function disagreed the moment anyone passed anything
+        # but the single call site's default.
+        return f"""
 <div class="section">
-  <div class="section-title">Top 15 Overdue</div>
+  <div class="section-title">Top {limit} Overdue</div>
   <div class="empty">No overdue contacts.</div>
 </div>
 """
@@ -719,19 +782,34 @@ def build_pipeline_correlation(correlations):
 </div>
 """
     rows_html = ""
+    partials = 0
     for m in correlations:
-        badge_cls = {
-            "RED": "badge-red", "YELLOW": "badge-yellow",
-            "GREEN": "badge-green", "GRAY": "badge-gray",
-        }.get(m["crm-health"], "badge-gray")
+        health = normalise_health(m.get("crm-health"), m.get("contact_name", "?"))
+        # Anything not labelled `exact` is the weaker one, including a row that
+        # carries no label at all. An unlabelled correlation is not evidence
+        # that the two company names were equal.
+        if m.get("match") == "exact":
+            match_html = "exact"
+        else:
+            partials += 1
+            match_html = '<span class="badge badge-gray">partial</span>'
         rows_html += f"""
 <tr>
   <td>{esc(m['deal_company'])}</td>
   <td>{esc(m['contact_name'])}</td>
   <td>{esc(m['stage'])}</td>
   <td>{esc(m['value'])}</td>
-  <td><span class="badge {badge_cls}">{esc(m['crm-health'])}</span></td>
+  <td><span class="badge {BADGE_CLASS[health]}">{esc(health)}</span></td>
+  <td>{match_html}</td>
 </tr>"""
+
+    note_html = ""
+    if partials:
+        note_html = (
+            '<div class="truncate-note">'
+            f'{partials} of these rows matched on a partial company name, not '
+            'an identical one. Read the stage and value beside them as a lead, '
+            'not as a confirmed correlation.</div>')
 
     return f"""
 <div class="section">
@@ -739,10 +817,11 @@ def build_pipeline_correlation(correlations):
   <table class="data-table">
     <thead><tr>
       <th>Deal / Company</th><th>CRM Contact</th><th>Stage</th>
-      <th>Est. Value</th><th>CRM Health</th>
+      <th>Est. Value</th><th>CRM Health</th><th>Match</th>
     </tr></thead>
     <tbody>{rows_html}</tbody>
   </table>
+  {note_html}
 </div>
 """
 
@@ -822,19 +901,34 @@ def build_json_export(radar_contacts, ownership_data, shared, heartbeat,
 # ============================================================
 # CLI / Main
 # ============================================================
+def warn_if_aggregate_missing():
+    """Report a missing aggregate AFTER the refresh that would have made it.
+
+    This check used to run before `refresh_aggregated_data()`, so every cold
+    start printed "Run aggregate-crm.py first" to stderr, then ran
+    aggregate-crm.py, then succeeded. A warning that is wrong on the ordinary
+    path trains its reader to skip the channel, and this is the same channel
+    that carries the unrecognised-Health lines from `normalise_health` and the
+    corrupt-registry line from `collect_exec_registry`. Those are the warnings
+    that matter, and they were being buried under a false one.
+
+    Returns True when the data really is absent, so a caller can act on it.
+    """
+    aggregated = aggregated_dir()
+    if aggregated.exists():
+        return False
+    print(f"{YELLOW}Warning: aggregated CRM data is still absent at "
+          f"{aggregated} after the refresh above. Every section below is "
+          f"built from it and will render empty.{RESET}", file=sys.stderr)
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(description="31C CRM Command Center Dashboard")
     parser.add_argument("--output-dir", help="Custom output directory")
     parser.add_argument("--pdf", action="store_true", help="Also generate PDF via html-to-pdf.py")
     parser.add_argument("--json", action="store_true", help="Output raw data as JSON")
     args = parser.parse_args()
-
-    # Preflight: check aggregated data directory exists (created by aggregate-crm.py)
-    aggregated = aggregated_dir()
-    if not aggregated.exists():
-        print(f"{YELLOW}Warning: Aggregated CRM data not found at {aggregated}{RESET}",
-              file=sys.stderr)
-        print("Run aggregate-crm.py first to generate aggregated data.", file=sys.stderr)
 
     # Determine output directory
     if args.output_dir:
@@ -850,6 +944,9 @@ def main():
     print(f"\n{CYAN}Refreshing aggregated data...{RESET}")
     refreshed = refresh_aggregated_data()
     print(f"  Aggregation: {'refreshed' if refreshed else 'using cached data'}")
+
+    # Preflight, here rather than above the refresh. See the docstring.
+    warn_if_aggregate_missing()
 
     # Step 2: Collect all data sources
     print(f"\n{CYAN}Collecting data...{RESET}")

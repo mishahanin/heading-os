@@ -88,13 +88,39 @@ def ignored_paths_or_none(paths, root: Path | None = None) -> set[str] | None:
         return set()
     walked = inside
     payload = b"\0".join(p.encode() for p in walked) + b"\0"
-    proc = subprocess.run(
-        ["git", "-C", str(repo), "check-ignore", "--stdin", "-z"],
-        input=payload, capture_output=True, check=False,
-    )
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "check-ignore", "--stdin", "-z"],
+            input=payload, capture_output=True, check=False,
+        )
+    except OSError:
+        # Git could not be RUN at all, which is the same unanswered question as
+        # a 128 and returns down the same path: `ignored_paths` turns it into
+        # its named RuntimeError and `check-path-references.py` continues
+        # unfiltered, both instead of a traceback out of a tree sweep.
+        #
+        # Retired 2026-09-02. The comment below used to read "Anything else
+        # (128: not a git repository, git missing) means the question went
+        # unanswered", filing a missing git among the RETURN CODES. There is no
+        # return code when the executable is absent: `subprocess.run` raises
+        # before a process is ever started, so the sentence claiming the case
+        # was handled is precisely why nobody handled it. MEASURED 2026-09-02
+        # with `PATH=/nonexistent`: `ignored_paths_or_none`, `ignored_paths`,
+        # `not_ignored` and `tracked_paths` each died on `FileNotFoundError:
+        # [Errno 2] No such file or directory: 'git'`.
+        #
+        # `OSError`, not `FileNotFoundError` alone, because "cannot ask git"
+        # also arrives as a `PermissionError` (a git on PATH that is not
+        # executable) and a `NotADirectoryError` (a file where a PATH component
+        # should be a directory). All three are the same non-answer.
+        #
+        # Caught HERE, at this module's ONE git call site, rather than at each
+        # of the four public functions: every one of them reaches git through
+        # this line, and a per-call-site guard is what let the gap survive.
+        return None
     # check-ignore exits 1 when nothing matched, which is a normal outcome here.
-    # Anything else (128: not a git repository, git missing) means the question
-    # went unanswered.
+    # Anything else (128: not a git repository) means the question went
+    # unanswered.
     if proc.returncode not in (0, 1):
         return None
     return {chunk.decode() for chunk in proc.stdout.split(b"\0") if chunk}

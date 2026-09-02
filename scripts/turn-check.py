@@ -49,13 +49,27 @@ the pinned environment does not use. The failure was the interpreter, not the
 code, and the same run under `.venv/bin/python` was clean. `sys.executable` is
 whatever launched this script; it is not the environment the suite is pinned to.
 
+One budget, for the whole run. `--timeout` is the wall-clock ceiling on
+EVERYTHING below, not a per-lane cap, and it defaults to a number DERIVED from
+the `Stop` timeout the settings files register for this checker's hook. Until
+2026-09-02 the lanes each carried their own cap and, being sequential, those
+caps added: 20s x 2 git calls, 20s for the deletion scan, 60s for the import
+probe, then up to three test-lane children at the full cap each (the run, the
+xdist collection-race retry, and the exit-5 empty-file probe). At the 140s the
+Stop wrapper hands in, that is 540 seconds of permitted wall time inside a hook
+the harness was registered to kill at 100. A hook killed by the harness has its
+output discarded, so the gate went silent on exactly the big turn that made it
+slow, and silence from this hook is byte-for-byte what a clean tree looks like.
+
 Usage:
     .venv/bin/python scripts/turn-check.py         # human output, exit 1 on failure
     .venv/bin/python scripts/turn-check.py --json  # machine output for the Stop hook
     .venv/bin/python scripts/turn-check.py --no-cache    # ignore the pass cache
-    .venv/bin/python scripts/turn-check.py --timeout 60  # cap the test lane (default 120s)
+    .venv/bin/python scripts/turn-check.py --timeout 300 # widen the whole-run budget
 
 Exit codes: 0 clean or nothing to check, 1 a lane failed, 2 bad arguments.
+
+Tests: tests/test_turn_check.py, tests/test_a_stop_gate_that_budgeted_past_its_own_kill.py
 """
 from __future__ import annotations
 
@@ -65,6 +79,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -107,7 +122,124 @@ WATCHED_PREFIXES = ("scripts/", "tests/", ".claude/hooks/")
 # defect this script was already fixed for once (.claude/rules/scope-claims.md).
 CONTRACT_PREFIX = "tests/contract/"
 
-DEFAULT_TEST_TIMEOUT = 120
+# ============================================================
+# The budget, and where it comes from
+# ============================================================
+#
+# The whole run is bounded by ONE number. These are the per-lane ceilings, and
+# each child actually receives `min(its ceiling, what is left of the budget)`,
+# so a ceiling can only ever make a lane FINISH EARLIER than the budget - it can
+# never spend past it. That distinction is the fix: sequential lanes with
+# independent caps add up, and the sum was five times the hook's registration.
+GIT_TIMEOUT = 20
+IMPORT_TIMEOUT = 60
+
+# What the harness charges to the hook that is NOT this process: the wrapper's
+# own interpreter start (the registration runs `python3 -c` with a `runpy`
+# preamble), reading the payload, spawning this checker, and then formatting and
+# printing the block message after it returns. The harness clock starts before
+# python does. `.claude/hooks/turn-check.py` also kills this child ten seconds
+# before its own budget expires so that an honest "did not finish" survives, and
+# that ten seconds lives inside this reserve too.
+HOOK_RESERVE_SECONDS = 30
+
+# The budget when no registration can be read at all: a public clone with no
+# `.claude/settings.local*.json`, or a hand run from a tree that has one. There
+# is no harness to be killed by in that case, so this is a comfort number rather
+# than a ceiling, and it is the value this module carried as its only budget
+# until 2026-09-02.
+FALLBACK_BUDGET_SECONDS = 120
+
+# A derived budget never goes below this. A registration small enough to push it
+# lower is a misconfiguration, and the honest response is to run the lanes and
+# report "did not finish" rather than to skip them silently.
+MIN_BUDGET_SECONDS = 30
+
+# The clock, behind a module attribute so a test can bound wall time without
+# spending any, and so nothing here rebinds `time.monotonic` for the whole
+# interpreter. Monotonic, not `time.time`: an NTP step mid-run must not hand a
+# lane a negative budget or an hour of one.
+_now = time.monotonic
+
+# When this run must be finished, on `_now`'s scale. `None` outside a `run`.
+#
+# Module state and not a parameter, deliberately. Three helpers and four lanes
+# sit between `run` and the children, and every one of those signatures is a
+# seam the existing tests monkeypatch BY SHAPE - `tests/test_turn_check.py` and
+# two others replace `changed_python_files` with a zero-argument lambda.
+# Threading a `deadline` argument through broke eight of them, which is a lot of
+# blast radius to buy an attribute that is set exactly once per process. `run`
+# restores the previous value on the way out, so a later direct call to a lane
+# is not silently capped by a budget that expired minutes ago.
+_DEADLINE: "float | None" = None
+
+
+def registered_hook_timeout(root: "Path | None" = None) -> "int | None":
+    """The smallest `Stop` timeout any settings file registers for this checker.
+
+    The number is DATA, not a property of this file. It lives in
+    `.claude/settings.local*.json` - one live file plus three tracked per-OS
+    templates - and a constant here would be a copy that describes whichever of
+    them was current when it was written. That is exactly how this defect
+    happened: three files each carried a number, each defensible alone.
+
+    The SMALLEST, because the templates are meant to agree and the conservative
+    reading of a disagreement is the one that gets killed first. `None` means no
+    registration was readable, which is a different answer from a small one and
+    must not be collapsed into a default by the caller silently.
+    """
+    root = ROOT if root is None else Path(root)
+    found: list[int] = []
+    for path in sorted((root / ".claude").glob("settings.local*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        hooks = data.get("hooks")
+        if not isinstance(hooks, dict):
+            continue
+        for group in hooks.get("Stop") or []:
+            if not isinstance(group, dict):
+                continue
+            for entry in group.get("hooks") or []:
+                if not isinstance(entry, dict):
+                    continue
+                command = entry.get("command")
+                if not isinstance(command, str) or "turn-check.py" not in command:
+                    continue
+                timeout = entry.get("timeout")
+                if isinstance(timeout, int) and not isinstance(timeout, bool):
+                    found.append(timeout)
+    return min(found) if found else None
+
+
+def budget_seconds(root: "Path | None" = None) -> int:
+    """Wall seconds this run may spend, derived from the registration."""
+    registered = registered_hook_timeout(root)
+    if registered is None:
+        return FALLBACK_BUDGET_SECONDS
+    return max(MIN_BUDGET_SECONDS, registered - HOOK_RESERVE_SECONDS)
+
+
+def _left() -> "float | None":
+    """Seconds remaining, or None when this run is not on a deadline."""
+    return None if _DEADLINE is None else _DEADLINE - _now()
+
+
+def _cap(ceiling: float) -> float:
+    """A child's timeout: its own ceiling, or what is left, whichever is less."""
+    left = _left()
+    if left is None:
+        return float(ceiling)
+    return max(0.0, min(float(ceiling), left))
+
+
+def _spent() -> bool:
+    left = _left()
+    return left is not None and left <= 0
+
 
 # Matched-file count at which the lane switches to `-n auto`.
 #
@@ -191,10 +323,16 @@ def _git(args: list[str]) -> list[str]:
     nothing, `is_file()` is False, and the edit is dropped without a word - the
     same false coverage claim the paragraph above exists to prevent.
     """
+    cap = _cap(GIT_TIMEOUT)
+    if cap <= 0:
+        # No time left to spend, so do not spend the fork either. The caller
+        # sees the same empty list a failed git gives it, and `run` notices the
+        # blown deadline and says so rather than reporting an empty changed set.
+        return []
     try:
         out = subprocess.run(
             ["git", *args],
-            cwd=str(ROOT), capture_output=True, timeout=20,
+            cwd=str(ROOT), capture_output=True, timeout=cap,
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
@@ -328,11 +466,15 @@ def lane_import(paths: list[Path]) -> list[str]:
     probe = "import importlib\n" + "\n".join(
         f"importlib.import_module({m!r})" for m in modules
     )
+    cap = _cap(IMPORT_TIMEOUT)
+    if cap <= 0:
+        return [f"import probe never ran over {len(modules)} module(s): the "
+                f"run budget was already spent"]
     try:
         out = subprocess.run(
             [PYTHON, "-c", probe],
             cwd=str(ROOT), capture_output=True, text=True,
-            errors="replace", timeout=60,
+            errors="replace", timeout=cap,
         )
     except subprocess.TimeoutExpired:
         return [f"import probe timed out over {len(modules)} module(s)"]
@@ -481,10 +623,13 @@ def _files_holding_no_test(targets: list[Path], timeout: int) -> int:
         PYTHON, "-m", "pytest", "-q", "-p", "no:randomly",
         "--collect-only", "--no-header", *[str(t) for t in targets],
     ]
+    cap = _cap(timeout)
+    if cap <= 0:
+        return len(targets)
     try:
         out = subprocess.run(
             args, cwd=str(ROOT), capture_output=True, text=True,
-            errors="replace", timeout=timeout
+            errors="replace", timeout=cap
         )
     except (subprocess.TimeoutExpired, OSError):
         return len(targets)
@@ -572,9 +717,13 @@ def lane_tests(paths: list[Path],
         *[str(t) for t in targets],
     ]
     try:
+        # `_cap` and not `timeout`. This is the lane the defect was measured in:
+        # three children could each be handed the FULL cap, and the git and
+        # import lanes had already spent their own before any of them started.
+        # Asking for what is LEFT is what makes the whole run fit one number.
         out = subprocess.run(
             args, cwd=str(ROOT), capture_output=True, text=True,
-            errors="replace", timeout=timeout
+            errors="replace", timeout=_cap(timeout)
         )
         # ONE retry, on ONE error string, and only under `-n auto`.
         #
@@ -620,7 +769,7 @@ def lane_tests(paths: list[Path],
                 (out.stdout or "") + (out.stderr or "")):
             out = subprocess.run(
                 args, cwd=str(ROOT), capture_output=True, text=True,
-                errors="replace", timeout=timeout
+                errors="replace", timeout=_cap(timeout)
             )
     except subprocess.TimeoutExpired:
         return [
@@ -658,8 +807,56 @@ def lane_tests(paths: list[Path],
     return [], len(targets), skipped, dropped, 0, 0
 
 
+def _out_of_budget(budget: int, lane: str, files: int, foreign: int,
+                   scope_known: bool) -> dict:
+    """The result for a run the wall clock stopped before `lane` could start.
+
+    Reported as a FAILURE rather than as an idle pass, and that is the whole
+    point of the branch. When the budget ran out during the git scan the changed
+    set came back empty, and an empty changed set is `status: "idle"` with the
+    reason "no uncommitted Python edits" - byte-for-byte what a genuinely clean
+    tree returns. `.claude/rules/scope-claims.md` obligation 3: when the
+    evidence is unavailable, say the state is unknown; failing toward silence is
+    the one direction that is never allowed.
+
+    `unmeasured` carries the number of files this run knows about, which is what
+    that field means everywhere else. It is 0 when the budget died inside the
+    git scan, because at that point the count itself was never established - so
+    the sentence below states the exclusion in words rather than leaning on a
+    count it does not have.
+    """
+    return {
+        "status": "fail", "lane": lane,
+        "failures": [f"the {budget}s run budget was spent before the {lane} "
+                     f"lane could start, so nothing was measured; re-run with "
+                     f"a longer --timeout"],
+        "files": files, "tests_run": 0, "skipped_foreign": foreign,
+        "scope_unknown": not scope_known, "skipped_contract": 0,
+        "deselected_slow": 0, "collected_nothing": 0, "unmeasured": files,
+    }
+
+
 def run(timeout: int, use_cache: bool, transcript=None) -> dict:
-    """Run the lanes and return a result dict. Never raises."""
+    """Run the lanes and return a result dict. Never raises.
+
+    `timeout` is the wall-clock budget for the WHOLE run, not for the test lane
+    alone. Every child is handed what is LEFT of it, so the sequential lanes
+    below cannot each spend one.
+
+    The deadline is armed here and restored on the way out, including on an
+    early return, so nothing outside a run is capped by a budget that has since
+    expired.
+    """
+    global _DEADLINE
+    previous = _DEADLINE
+    _DEADLINE = _now() + timeout
+    try:
+        return _run_lanes(timeout, use_cache, transcript)
+    finally:
+        _DEADLINE = previous
+
+
+def _run_lanes(timeout: int, use_cache: bool, transcript) -> dict:
     paths = changed_python_files()
     # `scope_known` is False when the write set could not be established at all:
     # no transcript, an absent or unreadable one, or ANY ONE unreadable subagent
@@ -672,6 +869,8 @@ def run(timeout: int, use_cache: bool, transcript=None) -> dict:
     # with no exclusion line, over a file another session had written.
     paths, foreign, scope_known = narrow_with_scope(paths, transcript)
     deleted = deleted_python_files()
+    if _spent():
+        return _out_of_budget(timeout, "scan", len(paths), foreign, scope_known)
     if not paths:
         reason = "no uncommitted Python edits"
         if foreign:
@@ -701,6 +900,9 @@ def run(timeout: int, use_cache: bool, transcript=None) -> dict:
     collected_nothing = 0
     unmeasured = 0
     if not failures:
+        if _spent():
+            return _out_of_budget(timeout, "tests", len(paths), foreign,
+                                  scope_known)
         (failures, tests_run, skipped_contract, deselected_slow,
          collected_nothing, unmeasured) = lane_tests(paths, timeout)
         lane = "tests"
@@ -832,18 +1034,27 @@ def main(argv=None) -> int:
                         help="Emit the result as JSON instead of prose.")
     parser.add_argument("--no-cache", action="store_true",
                         help="Re-run even if this exact tree already passed.")
-    parser.add_argument("--timeout", type=int, default=DEFAULT_TEST_TIMEOUT,
-                        help=f"Cap the test lane, seconds (default {DEFAULT_TEST_TIMEOUT}).")
+    parser.add_argument("--timeout", type=int, default=None,
+                        help="Wall-clock budget for the WHOLE run, seconds. "
+                             "Default is derived from the Stop timeout the "
+                             "settings files register for this checker's hook, "
+                             f"less a {HOOK_RESERVE_SECONDS}s wrapper reserve.")
     parser.add_argument("--session-transcript", default=None,
                         help="Session transcript; narrows the check to files this "
                              "session wrote. Omitted means the whole working tree.")
     args = parser.parse_args(argv)
 
-    if args.timeout <= 0:
+    if args.timeout is not None and args.timeout <= 0:
         print(f"{YELLOW}--timeout must be positive{RESET}", file=sys.stderr)
         return 2
 
-    result = run(timeout=args.timeout, use_cache=not args.no_cache,
+    # An explicit value is the operator's word and is honoured as given: a hand
+    # run from a terminal has no harness to be killed by, and the "did not
+    # finish" message this tool prints tells its reader to come back with
+    # `--timeout 300`. Only the DEFAULT is derived.
+    timeout = args.timeout if args.timeout is not None else budget_seconds()
+
+    result = run(timeout=timeout, use_cache=not args.no_cache,
                  transcript=args.session_transcript or current_transcript())
     print(json.dumps(result, ensure_ascii=False) if args.json else render(result))
     return 1 if result["status"] == "fail" else 0

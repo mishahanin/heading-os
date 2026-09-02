@@ -13,9 +13,17 @@ behind that attribute is `[hidden] { display: none }` - which any later
 one selector at a time: five per-selector `[hidden]` guards, and three panels
 that needed one and never got it. Measured from `app.js`: eight elements ship
 with the attribute, four of them set `display: flex`, and only one of those four
-carried a guard. The other three - "Recently done" on /tasks, "Recently sent" on
-/approvals, "Recently dismissed" and "Deferred" on /inbox - rendered as an empty
-bordered box while collapsed. One `[hidden]` reset replaces all five guards and
+carried a guard. The unit there is the CLASS, not the panel: the other three
+classes render four panels, because /inbox ships `.inbox-dismissed-expanded`
+twice under two ids. "Recently done" on /tasks, "Recently sent" on /approvals,
+and both the "Recently done" and "Deferred" footers on /inbox rendered as an
+empty bordered box while collapsed. Until 2026-09-02 that sentence read "The
+other three - "Recently done" on /tasks, "Recently sent" on /approvals,
+"Recently dismissed" and "Deferred" on /inbox", a count of three followed by
+four names, and nothing said which one to believe. The count is the right one;
+`test_the_two_inbox_footers_share_one_panel_class` now measures why, so the
+paragraph cannot drift from `app.js` again unnoticed.
+One `[hidden]` reset replaces all five guards and
 covers any panel written next; the first test below derives the panel list from
 `app.js` rather than restating it, so a new one cannot be missed the same way.
 
@@ -88,6 +96,22 @@ def test_the_hidden_scan_still_finds_the_panels_it_is_about():
     for cls in ("pulse-activity-expanded", "task-done-expanded",
                 "appr-sent-expanded", "inbox-dismissed-expanded"):
         assert cls in found, f"app.js no longer ships .{cls} with the hidden attribute"
+
+
+def test_the_two_inbox_footers_share_one_panel_class():
+    """Four panels, three classes: the /inbox pair is one class under two ids.
+
+    This is what reconciles the module docstring's count with its list. If
+    `inbox-deferred-expanded` ever grows a class of its own, the scan above
+    stops covering it and a fourth guard is owed, so the sharing is asserted
+    rather than assumed.
+    """
+    shipped = set(re.findall(
+        r'<div class="inbox-dismissed-expanded" id="([a-z-]+)"[^>]*\bhidden\b', JS))
+    assert shipped == {"inbox-dismissed-expanded", "inbox-deferred-expanded"}, (
+        f"the /inbox footers no longer share one panel class: {sorted(shipped)}; "
+        "the docstring's three-classes-four-panels count is now wrong, and any "
+        "id that broke away needs its own entry in the scan above")
 
 
 def test_the_stylesheet_carries_one_reset_for_the_hidden_attribute():

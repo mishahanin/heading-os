@@ -49,7 +49,11 @@ def _bash_commands(path: Path) -> list[str]:
 
     Deliberately NOT a scan of the file's source text. A skill may name the wrong form
     in prose to explain why it is wrong, and a grep would punish it for documenting its
-    own trap. Fence selection mirrors `_mod.scan_skill` so both read the same blocks.
+    own trap. Fence selection CALLS `_mod.fence_language`, so both read the same blocks
+    by construction. It was a hand-copied `stripped.strip("`").lower()` until
+    2026-09-02, and the copy carried the same defect as the original: an info
+    string after the language (```` ```bash linenos ````) hid the whole block from
+    both. See `tests/test_a_fence_whose_info_string_hid_the_whole_block.py`.
     """
     commands: list[str] = []
     in_block = False
@@ -59,7 +63,7 @@ def _bash_commands(path: Path) -> list[str]:
         stripped = line.strip()
         if stripped.startswith("```"):
             if not in_block:
-                is_bash = stripped.strip("`").lower() in _mod._BASH_FENCES
+                is_bash = _mod.fence_language(stripped) in _mod._BASH_FENCES
             in_block = not in_block
             pending = None
             continue
@@ -121,9 +125,13 @@ def test_the_ratchet_is_not_green_over_an_empty_corpus():
     """
     files = _mod.skill_files(get_workspace_root())
     assert len(files) >= 60, (
-        f"the audit corpus fell to {len(files)} SKILL.md files; the ratchet above "
+        f"the audit corpus fell to {len(files)} markdown files; the ratchet above "
         "reports a clean tree over an empty one")
-    assert all(p.name == "SKILL.md" and p.is_file() for p in files), files[:5]
+    # Every markdown file a skill ships since 2026-09-02, not only its SKILL.md.
+    # The coverage floor that pins the widening in place lives in
+    # tests/test_a_path_audit_that_never_opened_a_reference_file.py; this one keeps
+    # asking the union question it always asked.
+    assert all(p.suffix == ".md" and p.is_file() for p in files), files[:5]
 
 
 def test_scan_all_reads_every_file_in_that_corpus():

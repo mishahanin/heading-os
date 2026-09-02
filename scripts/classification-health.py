@@ -15,7 +15,16 @@ Usage:
     python scripts/classification-health.py --outputs-drift  # flag outputs/ subdirs >5 files
                                                               # without explicit config entries
 
-Tests: tests/test_a_topic_list_shredded_into_single_letters.py
+Tests: tests/test_a_classification_gate_whose_main_returned_nothing.py
+       tests/test_a_report_that_counted_426_files_git_ignores.py
+       tests/test_a_topic_list_shredded_into_single_letters.py
+
+The third of those is named for a chronicle defect and covers this file too: its
+last four tests drive `print_outputs_drift` here. It was the only file cited
+until 2026-09-02, so a reader following the pointer landed on a module-summary
+bug and reasonably concluded the pointer was a copy-paste. The two files above
+it hold this script's own regressions. Every path named here is checked against
+the tree by tests/test_a_tests_pointer_that_named_another_modules_bug.py.
 """
 
 import argparse

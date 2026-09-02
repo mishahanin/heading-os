@@ -40,6 +40,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tests.code_only import strip_comments  # noqa: E402
+
 from scripts.utils.workspace import data_root_is_demo  # noqa: E402
 
 
@@ -183,7 +185,7 @@ def test_the_swap_uses_os_replace_not_a_cross_filesystem_move():
     catch."""
     src = (ROOT / "scripts" / "updaters" / "cliproxyapi_update.py").read_text(
         encoding="utf-8")
-    code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
+    code = strip_comments(src)
     assert "shutil.move(str(newbin), str(BIN))" not in code, code
     assert "os.replace(side, BIN)" in code
 

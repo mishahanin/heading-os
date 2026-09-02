@@ -165,3 +165,48 @@ def test_undecodable_producer_output_is_refused_by_name_not_a_raw_traceback(tmp_
     with pytest.raises(RuntimeError) as exc:
         csc._fetch_rows(root)
     assert "crm-health.py" in str(exc.value), str(exc.value)
+
+
+# ============================================================
+# The card must carry the address the routing check validated
+#
+# Shard `scripts-04-p1` F5. `route()` decides email_send on
+# `(row.get("email") or "").strip()`, so a padded CRM field routes as a real
+# address; `build_cards` then stamped `card["to"] = row.get("email")`, the raw
+# value. `to` on an email_send card is what a drafter and then a sender use
+# verbatim, and nothing between here and the transport normalises it.
+# ============================================================
+
+PADDED = "  jane@acme.com  "
+
+
+def test_a_padded_address_reaches_the_card_stripped():
+    cards = csc.build_cards([_row(email=PADDED)], now=NOW)
+    assert cards[0]["to"] == "jane@acme.com", repr(cards[0]["to"])
+
+
+def test_the_card_carries_exactly_what_route_validated():
+    """The invariant behind the assertion above, stated as the relation.
+
+    `route()` and `build_cards` read the same field and must agree on its value.
+    Written as a comparison rather than a literal so it keeps binding if the
+    fixture address ever changes.
+    """
+    row = _row(email="\tjane@acme.com\n")
+    routed = csc.route(row, NOW)
+    assert routed is not None and routed[2] == "email_send"
+
+    card = csc.build_cards([row], now=NOW)[0]
+    assert card["to"] == (row["email"] or "").strip()
+    assert card["to"] == card["to"].strip(), "the card carries an unstrippable address"
+
+
+def test_a_whitespace_only_address_still_routes_to_a_note():
+    """The other side of the same `.strip()`: padding is not an address.
+
+    Regression cover for a fix applied the wrong way round, stripping in
+    `build_cards` while leaving `route()` to see a truthy blank string.
+    """
+    cards = csc.build_cards([_row(email="   ")], now=NOW)
+    assert cards[0]["action_type"] == "note"
+    assert "to" not in cards[0]

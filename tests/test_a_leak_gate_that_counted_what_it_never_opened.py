@@ -60,6 +60,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tests.code_only import strip_comments  # noqa: E402
+
 SANITIZE_TEXT = ROOT / "scripts" / "sanitize-text.py"
 SANITIZE_CHECK = ROOT / "scripts" / "sanitize-check.py"
 SECRET_SCANNER = ROOT / "scripts" / "secret-scanner.py"
@@ -147,7 +149,7 @@ def test_the_sanitize_form_also_reports_the_unreadable_path():
 
 def test_the_entry_point_propagates_the_return_value():
     src = SANITIZE_TEXT.read_text(encoding="utf-8")
-    code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
+    code = strip_comments(src)
     assert "sys.exit(main())" in code
     # The bare call must be gone: its own fix comment quotes it, so strip
     # comments before searching or the tombstone answers for the corpse.
@@ -789,7 +791,7 @@ def test_the_artifact_evaluator_reads_stderr_for_the_reason():
     """The scanner names an unreadable path on stderr; reading stdout alone now
     yields an empty detail beside a failed check."""
     src = (ROOT / "scripts" / "artifact-evaluator.py").read_text(encoding="utf-8")
-    code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
+    code = strip_comments(src)
     assert "result.stdout.strip() or result.stderr.strip()" in code
 
 

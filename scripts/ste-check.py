@@ -6,7 +6,9 @@ Implements the checkable part of .claude/rules/documentation-style.md, an
 ASD-STE100 Part 1 subset applied to the engine's procedural documentation.
 Companion to scripts/humanization-check.py, which audits the opposite surface:
 that script checks prose written to be read, this one checks text written to be
-executed. Neither is a gate.
+executed. That one is advisory. This one GATES: `.pre-commit-config.yaml` and
+`.github/workflows/ci.yml` both run `--all --quiet` and `--skills --quiet`, and
+an error exits 1 and fails the commit.
 
 Part 2 of ASD-STE100 (the ~900-word approved dictionary) is NOT implemented and
 must not be claimed - see the rule file for why.
@@ -14,7 +16,7 @@ must not be claimed - see the rule file for why.
 Usage:
   python scripts/ste-check.py <file>              # Audit one file
   python scripts/ste-check.py --all               # Audit the 14 gated pages
-  python scripts/ste-check.py --skills --quiet    # Audit skill bodies (ungated)
+  python scripts/ste-check.py --skills --quiet    # Gate form: skill bodies
   python scripts/ste-check.py --strict <file>     # Fail on warnings too
   python scripts/ste-check.py --json <file>       # JSON output for CI
   python scripts/ste-check.py --text "string"     # Inline text audit
@@ -36,6 +38,23 @@ Exit codes:
   1 - findings present (errors or, in strict mode, warnings)
   2 - script error
 """
+
+# The two gate claims in the docstring above were their own opposite until
+# 2026-09-02. The companion sentence asserted that neither this script nor
+# humanization-check enforces anything, and the `--skills` usage line was
+# annotated as unenforced, while six lines away the `--all` usage line called
+# itself the gate form, `--quiet`'s help called itself the gate form,
+# `SKILLS_HELP` recorded the skills half as enforced since 2026-08-17, and the
+# empty-scope guard in `main` exists only because this script gates. Two hooks
+# in `.pre-commit-config.yaml` and two steps in `.github/workflows/ci.yml` run
+# it. humanization-check is in neither, so "advisory" is right for that one and
+# was never right for this one.
+#
+# The retired wording is quoted HERE, in a comment, and not in the docstring:
+# `tests/test_a_gate_whose_docstring_said_it_was_not_one.py` reads the module
+# docstring through `ast.get_docstring` and refuses any sentence denying gate
+# status, so a docstring that quoted its own retired falsehood would trip the
+# guard that exists to keep it retired.
 
 import sys
 import re

@@ -22,8 +22,9 @@
 #   PYTHON=/path/to/python scripts/install-memory-auto-retire-timer.sh   # override interpreter
 #
 # Renders scripts/templates/systemd/memory-auto-retire.{service,timer}
-# (substituting {{WORKSPACE}} and {{PYTHON}}) into ~/.config/systemd/user/, then
-# enables a DAILY timer (07:20 host-local, Persistent) that runs
+# (substituting {{WORKSPACE}} and {{PYTHON}}) into ~/.config/systemd/user/, and
+# ENABLES NOTHING. The rendered timer would fire daily (07:20 in the configured
+# zone, Persistent) and run
 # `scripts/memory-auto-retire.py` -- the safe, deterministic slice of /dream that
 # retires ONLY memories whose author stamped an explicit expires: date now in the
 # past. Orphans, redundancy pairs, and rewording stay a human-gated /dream call.
@@ -34,7 +35,11 @@
 # frontmatter + routing), and a systemd unit does not inherit the interactive
 # shell profile -- so the venv python must be named explicitly.
 #
-# For unattended boot:  loginctl enable-linger "$USER"  (done automatically below)
+# This installer does NOT call `loginctl enable-linger`, and does not need to:
+# it enables no timer (see the RETIRED note at the bottom). It claimed linger was
+# "done automatically below" until 2026-09-02, when the enable it accompanied was
+# removed. Reversing the directive means running BOTH commands the script prints,
+# and linger is one of them.
 
 set -euo pipefail
 
@@ -137,20 +142,39 @@ if ! systemd-analyze calendar "$RENDERED_CAL" >/dev/null 2>&1; then
 fi
 
 systemctl --user daemon-reload
-systemctl --user enable --now memory-auto-retire.timer
 
-# Belt-and-braces for unattended firing (the bridge daemon already holds WSL up).
-if ! loginctl show-user "$USER" 2>/dev/null | grep -q '^Linger=yes'; then
-    loginctl enable-linger "$USER" 2>/dev/null \
-        || echo "  [hint] run once for unattended boot: loginctl enable-linger $USER"
-fi
+# RETIRED: the timer is RENDERED but never ENABLED, even past the override.
+#
+# The operator disabled memory-auto-retire.timer by hand on 2026-08-07 under the
+# standing directive that auto-memory is never pruned or retired on a clock
+# (`.claude/rules/memory-discipline.md`: "auto-memory is never pruned, and
+# deletion happens only on an explicit instruction from the operator"). The
+# MACHINE is right; an installer that re-armed it would silently overturn that
+# decision on the next fresh clone or re-run.
+#
+# What fires here is not an annotation. `scripts/memory-auto-retire.py` calls
+# `retire_memory()`, which `unlink()`s the record from EVERY store (the canonical
+# DATA auto-memory plus every native harness store), then strips its pointer line
+# out of MEMORY.md. The service's ExecStart passes no `--dry-run`. So the cost of
+# getting this line wrong is deleted memories, not a noisy log.
+#
+# Same shape as scripts/install-odin-cadence-timer.sh: render the units so
+# reversing the decision stays a one-line change, and leave arming the timer as a
+# separate, explicit act by the operator. If a stale enabled instance exists from
+# an install predating this change, disable it.
+#
+# Do NOT "fix" this back to `enable --now`. Reversing the directive is the
+# operator's call, and it is the two commands echoed below, typed by hand.
+systemctl --user disable --now memory-auto-retire.timer 2>/dev/null || true
 
-echo "  [ok] systemd user timer installed and enabled: memory-auto-retire.timer"
+echo "  [ok] memory-auto-retire units rendered; timer NOT enabled (never armed on a clock)."
 echo "       interpreter: ${PYTHON}"
 echo ""
-echo "  Next fire:"
-systemctl --user list-timers memory-auto-retire.timer --no-pager || true
+echo "  The units are on disk and inert. Arming them DELETES memories that carry an"
+echo "  expired 'expires:' date, from every store, and strips their MEMORY.md pointers."
+echo "  If the no-prune directive is genuinely being reversed, arm it by hand:"
+echo "      systemctl --user enable --now memory-auto-retire.timer"
+echo "      loginctl enable-linger \"\$USER\"   # or it stays silent after a reboot"
 echo ""
-echo "  Status:  systemctl --user status memory-auto-retire.timer"
+echo "  Dry run (mutates nothing):  ${PYTHON} ${WORKSPACE}/scripts/memory-auto-retire.py --dry-run"
 echo "  Logs:    journalctl --user -u memory-auto-retire.service -f"
-echo "  Test:    systemctl --user start memory-auto-retire.service  # run a pass now"

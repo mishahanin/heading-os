@@ -515,6 +515,61 @@ def _case_read_thread(tmp_path: Path) -> Verdict:
                          read_thread(tmp_path, f"{THREADS_BUSINESS_DIR}/link.md"))
 
 
+def _case_list_active_threads(tmp_path: Path) -> Verdict:
+    """The LISTING half of the same files `read_thread` guards.
+
+    Found by the 2026-08-24 campaign (shard `scripts-02-p2`, finding 4): the
+    listing had no guard at all, so a link planted in `threads/business/`
+    published its title and frontmatter through `/threads` while the detail
+    view answered "symlinks not allowed" for the same row. Both threads here
+    carry active frontmatter, so the only difference between them is the link.
+    """
+    from scripts.bridge_daemon.sources.threads import (
+        THREADS_BUSINESS_DIR,
+        list_active_threads,
+    )
+    d = tmp_path / THREADS_BUSINESS_DIR
+    d.mkdir(parents=True)
+    body = "---\nid: {0}\ntitle: {0}\nstatus: active\ntype: deal\n---\n"
+    (d / "real.md").write_text(body.format("real"), encoding="utf-8")
+    (d / "planted-target.md").write_text(body.format("planted"), encoding="utf-8")
+    os.symlink(d / "planted-target.md", d / "link.md")
+    ids = {t["id"] for t in list_active_threads(tmp_path)["threads"]}
+    # `planted-target.md` is itself a real file in the served directory and is
+    # LISTED; what must not appear is the row the symlink `link.md` would add.
+    # Asserting on the id would pass while the link was still being read, so the
+    # path is what gets checked.
+    paths = {t["path"] for t in list_active_threads(tmp_path)["threads"]}
+    return Verdict("real" in ids,
+                   f"{THREADS_BUSINESS_DIR}/link.md" not in paths,
+                   (ids, paths))
+
+
+def _case_list_tribe(tmp_path: Path) -> Verdict:
+    """The LISTING half of the files `read_contact` guards.
+
+    The same defect as `list_active_threads` above and found the same way, one
+    file later: `threads.py` took the fix on 2026-08-31 and `tribe.py` took
+    only the `UnicodeDecodeError` half of it, so until 2026-09-02 a link
+    planted in `crm/contacts/` was published on `/tribe` with its display name,
+    role and frontmatter while clicking the row answered "symlinks not
+    allowed". Both contacts here are ordinary tribe rows, so the only
+    difference between them is the link.
+    """
+    from scripts.bridge_daemon.sources.tribe import list_tribe
+    d = tmp_path / "crm" / "contacts"
+    d.mkdir(parents=True)
+    body = "---\nrelationship_type: tribe\nlast_touch: 2026-05-15\n---\n\n# {0}\n"
+    (d / "real.md").write_text(body.format("Real Person"), encoding="utf-8")
+    (d / "planted-target.md").write_text(body.format("Planted"), encoding="utf-8")
+    os.symlink(d / "planted-target.md", d / "link.md")
+    slugs = {m["slug"] for m in list_tribe(data_root=tmp_path)["members"]}
+    # `planted-target.md` is a real file in the served directory and IS listed;
+    # what must not appear is the row `link.md` would add. The slug is derived
+    # from the file name, so the link contributes a distinct one.
+    return Verdict("real" in slugs, "link" not in slugs, slugs)
+
+
 def _case_read_dossier(tmp_path: Path) -> Verdict:
     from scripts.bridge_daemon.sources.investors import PROGRAM_DIR, read_dossier
     d = tmp_path / PROGRAM_DIR
@@ -603,7 +658,9 @@ REFUSAL_CASES = {
     ("studio", "_artifact_md_is_readable"): _case_artifact_md_is_readable,
     ("studio", "_artifact_folder"): _case_artifact_folder,
     ("studio", "resolve_artifact_image"): _case_resolve_artifact_image,
+    ("threads", "list_active_threads"): _case_list_active_threads,
     ("threads", "read_thread"): _case_read_thread,
+    ("tribe", "list_tribe"): _case_list_tribe,
     ("tribe", "read_contact"): _case_read_contact,
 }
 

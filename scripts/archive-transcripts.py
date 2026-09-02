@@ -13,8 +13,12 @@ stops the deletions; it does not protect the files, which live outside both
 repositories where no git and no `push-all.py` reaches them.
 
 This copies each SETTLED transcript into the DATA overlay, gzipped, where the
-normal backup already runs. Append-only by construction: a finished transcript
-never changes, so an archived file is written once and never rewritten.
+normal backup already runs. A settled transcript is USUALLY final, so most
+archives are written once and never touched again. But "never rewritten" is not
+a property this script may assume, and `_needs_archiving` and the `.gz.size`
+marker exist because it is false. `SETTLE_SECONDS` is a heuristic, a resumed
+session appends, and the grown transcript is then re-archived in place over the
+truncated copy. Read that machinery as load-bearing, not as dead code.
 
 Compression is stdlib gzip (measured 3.8x on a real 88 MB transcript). `zstd -19`
 reaches 6.3x on the same file and would cut roughly 2.2 GB/year to 1.3 GB, but it
@@ -189,10 +193,23 @@ def archive(*, now: float | None = None, dry_run: bool = False) -> dict:
             with open(source, "rb") as raw, gzip.open(tmp, "wb", compresslevel=6) as out:
                 shutil.copyfileobj(raw, out)
             os.replace(tmp, dest)
-            dest.with_suffix(".gz.size").write_text(
-                str(source.stat().st_size), encoding="utf-8"
-            )
+            # The archive is DURABLE at this line. Everything after it is the
+            # size marker, which is a hint for the next run's `_needs_archiving`
+            # and no part of the archive. Both used to sit inside one `try`, so
+            # a marker write that raised (a read-only directory, a full disk, a
+            # pre-existing directory occupying the marker's name) counted the
+            # file as `failed`, printed "skip", and exited 1 to the cron job
+            # over a `.jsonl.gz` that had already landed. Say what went wrong
+            # and keep the count honest; the missing marker makes the next run
+            # re-compress, which is wasteful and correct.
             counts["archived"] += 1
+            try:
+                dest.with_suffix(".gz.size").write_text(
+                    str(source.stat().st_size), encoding="utf-8"
+                )
+            except OSError as exc:
+                print(f"{YELLOW}archived {dest.name} but its size marker was "
+                      f"not written:{RESET} {exc}", file=sys.stderr)
         except (OSError, ValueError) as exc:
             # Counted and printed, never swallowed: one unreadable transcript must
             # not cost the rest of the run.

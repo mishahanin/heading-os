@@ -84,20 +84,32 @@ TOKEN_MODE = 0o600
 
 
 def _enforce_token_mode(token_file: Path) -> None:
-    """Narrow an over-permissive token file to 0600, and say so when it was.
+    """Narrow an OVER-permissive token file to 0600, and say so when it was.
 
     Best-effort by design: a filesystem with no POSIX modes cannot honour this,
     and refusing to serve there would be worse than the exposure. The WARNING
     is the point either way -- a token that was readable by other local accounts
     should be treated as disclosed and rotated, and a silent chmod would hide
     the one fact that decides that.
+
+    Only over-permissive. The test used to be `current == TOKEN_MODE`, which is
+    false for a mode that is STRICTER than 0600, so a token file at 0400 was
+    chmodded to 0600 and the operator was told it "was mode 400" and that
+    anything able to read it may hold the bearer token. Both halves were wrong
+    in the same direction: this function WIDENED the file it exists to narrow,
+    handing back owner-write nobody asked for, and then raised a disclosure
+    alarm about a file that had never been exposed. A read-only token is a
+    deliberate hardening, and the daemon only ever reads it here.
     """
     try:
         current = stat.S_IMODE(token_file.stat().st_mode)
     except OSError:
         logger.warning("could not read the mode of %s", token_file, exc_info=True)
         return
-    if current == TOKEN_MODE:
+    # Every bit outside owner read/write: group, other, and the setuid/setgid/
+    # sticky triple. If none is set the file is at most as permissive as 0600
+    # and there is nothing to narrow, whether it is 0600, 0400 or 0000.
+    if not current & ~TOKEN_MODE:
         return
     try:
         os.chmod(token_file, TOKEN_MODE)
@@ -130,7 +142,40 @@ def get_or_create_token(workspace_root: Path) -> str:
     any other local account, and nothing in the system would have noticed.
     """
     token_file = workspace_root / ".daemon-state" / "token"
-    if token_file.exists():
+    # ONE stat, and everything below reads it. `Path.exists()` was the test
+    # here, and it is True for a DIRECTORY, so the read raised
+    # `IsADirectoryError`, the handler swallowed it as "unreadable,
+    # regenerating", and `atomic_write_text` then raised the same error uncaught
+    # out of daemon startup. The operator saw a traceback from a write and no
+    # statement of what was wrong.
+    #
+    # It is one stat rather than `exists()` plus `is_file()` because those are
+    # two, and the file can go between them. `is_file()` swallows the resulting
+    # OSError and answers False, which reads as "exists but is not a regular
+    # file" and would turn a concurrent token rotation into the fatal refusal
+    # below. MEASURED 2026-09-02: written as two calls, this raised RuntimeError
+    # in `test_a_token_that_vanishes_before_the_mode_check_still_serves`, a test
+    # whose whole subject is that a vanished token must still serve.
+    try:
+        token_stat = token_file.stat()
+    except OSError:
+        # Absent is the normal first-boot case. Unreadable for any other reason
+        # falls through to the read below, which logs and regenerates; that path
+        # already exists and is the right degradation.
+        token_stat = None
+    # Refusing, by name, is the whole fix for the non-regular case. Nothing this
+    # function can do is safe: writing a token over the path would destroy
+    # whatever is there, and choosing a different path would authenticate
+    # against a file the operator does not know about. The daemon cannot serve
+    # without a token, so this is fatal either way. The difference is that the
+    # operator is told what to move and why.
+    if token_stat is not None and not stat.S_ISREG(token_stat.st_mode):
+        raise RuntimeError(
+            f"the daemon token path {token_file} exists but is not a regular "
+            f"file. Move or remove it by hand, then start the daemon again. "
+            f"Nothing is written over it here, because whatever is there was "
+            f"not put there by this daemon.")
+    if token_stat is not None:
         try:
             existing = token_file.read_text(encoding="utf-8").strip()
         except (OSError, UnicodeDecodeError):

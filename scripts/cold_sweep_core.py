@@ -110,7 +110,12 @@ def build_cards(rows: list[dict], *, now: datetime, cooldown_days: int = 14) -> 
             "contact_file": contact_file,
         }
         if action_type == "email_send":
-            card["to"] = row.get("email")
+            # The STRIPPED address, which is the value `route()` validated. It
+            # tested `(row.get("email") or "").strip()` and the card then
+            # carried the raw one, so a padded CRM field routed to email_send
+            # on a clean address and handed a drafter `"  a@b.com  "` to send
+            # to. Nothing downstream of here normalises it.
+            card["to"] = (row.get("email") or "").strip()
             card["subject"] = ""
             card["draft_body"] = ""
             card["draft_status"] = "needs_draft"

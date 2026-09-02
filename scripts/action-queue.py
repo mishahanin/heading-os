@@ -23,7 +23,7 @@ Usage:
     python scripts/action-queue.py show <id-or-prefix>
     python scripts/action-queue.py approve <id-or-prefix>     # synchronous send
     python scripts/action-queue.py retry <id-or-prefix>       # re-send a failed card
-    python scripts/action-queue.py edit <id-or-prefix> [--subject S] [--body-file F]
+    python scripts/action-queue.py edit <id-or-prefix> [--to A] [--subject S] [--body-file F]
     python scripts/action-queue.py dismiss <id-or-prefix> [--reason R]
     python scripts/action-queue.py deposit --file <cards.json>
 
@@ -39,7 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.utils import dead_letter, tool_risk
+from scripts.utils import dead_letter, recipient, tool_risk
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.workspace import get_data_root, get_workspace_root
 from scripts.bridge_daemon.sources.action_queue import (
@@ -240,8 +240,9 @@ def approve_and_send(engine_root: Path, data_root: Path, id_or_prefix: str) -> d
             release_claim(data_root, aid, prev_status)
             raise
         if res.get("result") in ("skipped", "refused"):
-            # A gated type with no executor, or one the executor's own gate
-            # refused. Nothing was attempted and nothing left the workspace, so
+            # A gated type with no executor, one the executor's own gate
+            # refused, or a card still addressed to a placeholder recipient.
+            # Nothing was attempted and nothing left the workspace, so
             # put the claim back rather than record a send_failed for a send
             # that never ran - `retry` would then offer to repeat it.
             release_claim(data_root, aid, prev_status)
@@ -396,9 +397,19 @@ def cmd_edit(engine_root: Path, data_root: Path, args) -> int:
     # unguarded, so a mistyped --body-file path produced a raw OSError traceback
     # against a file whose own contract says "Exit codes: 0 ok, 1 request/usage
     # error". Checking it first also names the typo the operator actually made.
-    if args.subject is None and not args.body_file:
-        print(f"{RED}nothing to edit - pass --subject and/or --body-file{RESET}", file=sys.stderr)
+    if args.to is None and args.subject is None and not args.body_file:
+        print(f"{RED}nothing to edit - pass --to, --subject and/or --body-file{RESET}",
+              file=sys.stderr)
         return 1
+    # A recipient correction is checked WHEN TYPED, not only at approve. The
+    # send-time gate in `send_card` is the real guard and is unconditional; this
+    # one exists so a typo is named at the keystroke that made it rather than
+    # after the operator believes the card is ready.
+    if args.to is not None:
+        why = recipient.refusal_reason(args.to)
+        if why:
+            print(f"{RED}refusing that recipient{RESET}: {why}", file=sys.stderr)
+            return 1
     body = None
     if args.body_file:
         try:
@@ -409,7 +420,7 @@ def cmd_edit(engine_root: Path, data_root: Path, args) -> int:
             return 1
     items = list_action_queue(data_root).get("items", [])
     aid = _resolve_id(items, args.id)
-    edit_card(data_root, aid, subject=args.subject, draft_body=body,
+    edit_card(data_root, aid, to=args.to, subject=args.subject, draft_body=body,
               draft_status="ready_for_review")
     print(f"{GREEN}edited{RESET} {aid[:8]} (draft_status -> ready_for_review)")
     return 0
@@ -430,6 +441,22 @@ def cmd_deposit(engine_root: Path, data_root: Path, args) -> int:
         print(f"{RED}cards file must be a JSON array of card objects{RESET}", file=sys.stderr)
         return 1
     res = append_cards(data_root, cards)
+    # `append_cards` refuses ATOMICALLY: one unclassified `action_type` and
+    # nothing at all is written. Until 2026-09-02 this line read only `added`
+    # and `skipped`, so a total refusal printed a green `deposited added=0
+    # skipped=0` and exited 0. The caller was told it had deposited nothing
+    # successfully, when in fact its whole batch had been thrown away. The
+    # `logger.error` inside `append_cards` reached stderr through
+    # `logging.lastResort`, which is a message beside a contradicting green
+    # line and a zero exit, and the exit code is what a script reads.
+    if not res.get("ok", True):
+        print(f"{RED}refused{RESET}: {res.get('error', 'append_cards returned ok=False')}",
+              file=sys.stderr)
+        for bad in res.get("rejected") or []:
+            print(f"  card {bad.get('index')}: action_type="
+                  f"{bad.get('action_type')!r} {bad.get('reason', '')}", file=sys.stderr)
+        print("  nothing was written.", file=sys.stderr)
+        return 1
     print(f"{GREEN}deposited{RESET} added={res.get('added', 0)} skipped={res.get('skipped', 0)}")
     return 0
 
@@ -447,8 +474,10 @@ def main(argv=None) -> int:
     p_dis = sub.add_parser("dismiss", help="tombstone a card")
     p_dis.add_argument("id")
     p_dis.add_argument("--reason", default="")
-    p_edit = sub.add_parser("edit", help="rewrite an email card's subject/body")
+    p_edit = sub.add_parser("edit", help="rewrite an email card's recipient/subject/body")
     p_edit.add_argument("id")
+    p_edit.add_argument("--to", default=None,
+                        help="correct the recipient address before approving")
     p_edit.add_argument("--subject", default=None)
     p_edit.add_argument("--body-file", default=None)
     p_dep = sub.add_parser("deposit", help="append cards from a JSON array file (daemon-free)")

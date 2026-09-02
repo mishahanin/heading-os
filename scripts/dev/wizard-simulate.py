@@ -114,6 +114,20 @@ def main(argv=None):
         print(f"ERROR: `skipped:` is a {type(skipped).__name__}, not a list of "
               f"question ids.", file=sys.stderr)
         return 2
+    # The ELEMENTS, not only the containers. Both checks above pin the shape of
+    # the collection and neither looked inside it, so a question id that YAML
+    # parsed as something other than a string reached `subprocess.run` and
+    # raised `TypeError: expected str, bytes or os.PathLike object, not int` in
+    # a harness whose whole design is a clean `ERROR: ...` and exit 2 over
+    # malformed canned input. `answers: {7: "Acme"}` is enough: an unquoted
+    # numeric key is ordinary YAML, not a contrived one.
+    bad_ids = [qid for qid in list(answers) + list(skipped)
+               if not isinstance(qid, str)]
+    if bad_ids:
+        shown = ", ".join(f"{qid!r} ({type(qid).__name__})" for qid in bad_ids)
+        print(f"ERROR: question ids must be strings; {args.answers} carries "
+              f"{shown}. Quote them in the YAML.", file=sys.stderr)
+        return 2
     # Resolve apply-wizard-answers.py relative to this harness's location.
     # If the harness is ever moved out of scripts/dev/, fail fast with a clear error.
     apply_script = Path(__file__).resolve().parent.parent / "apply-wizard-answers.py"

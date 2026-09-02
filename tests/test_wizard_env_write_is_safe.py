@@ -279,8 +279,19 @@ AQ = _load("scripts/action-queue.py", "action_queue_body_file")
 
 
 class _EditArgs:
+    """Every field `cmd_edit` reads, because argparse always supplies all of them.
+
+    `to` was missing until 2026-09-02. `cmd_edit` grew a `--to` option that
+    day and its first guard reads `args.to`, so both tests below stopped
+    measuring the body-file guard and started raising `AttributeError` two
+    lines above it. A double that carries fewer fields than the real Namespace
+    does not fail on the field it dropped; it fails on whatever reads that
+    field first, and the test's own subject is then never reached.
+    """
+
     def __init__(self, body_file):
         self.id = "whatever"
+        self.to = None
         self.subject = None
         self.body_file = body_file
 

@@ -46,17 +46,35 @@ ROOT = get_workspace_root()
 # ============================================================
 
 
-def check(name, passed, detail="", warn=False):
+def check(name, passed, detail="", warn=False, advisory=False):
     """Build a single check result dict.
 
     `passed=None` means UNVERIFIABLE and is passed through as `status=None`.
     It used to be folded into the falsy branch, so every plan criterion that
     "requires manual verification" was stamped `"fail"` in `--json` -- an
     unverified item reported as a verified failure, which any pipeline reading
-    that field would rightly block on.
+    that field would rightly block on. `run_trigger_test` reaches for the same
+    non-verdict when the harness could not run at all, and `build_json_output`
+    keeps a None out of the score denominator; see both.
+
+    `warn` and `advisory` point in OPPOSITE directions and are not
+    interchangeable. `warn` downgrades a FAILURE: the check's real verdict is
+    `fail`, and the caller is saying that failure is advisory rather than
+    blocking. Every call site below passes it as a literal `True` for exactly
+    that. `advisory` raises a PASS: the artifact is inside the limit and the
+    caller wants to say it is running out of room.
+
+    Two call sites needed the second and reached for the first, computing
+    `warn=(line_count >= 450 and ok)` -- a condition true only when `passed` is
+    true, while the line below emitted `"warn"` only when `passed` was false.
+    Mutually exclusive, so from the initial import until 2026-09-02 no
+    near-threshold warning had ever been emitted by either one. MEASURED before
+    the fix: `check("x", True, "d", warn=True)["status"]` was `"pass"`.
     """
     if passed is None:
         return {"name": name, "status": None, "detail": detail}
+    if passed and advisory:
+        return {"name": name, "status": "warn", "detail": detail}
     status = "warn" if (warn and not passed) else ("pass" if passed else "fail")
     return {"name": name, "status": status, "detail": detail}
 
@@ -372,16 +390,32 @@ def evaluate_skill(skill_path):
         # Name format (kebab-case)
         name = fm.get("name", "")
         if name and isinstance(name, str):
-            kebab_ok = bool(re.match(r"^[a-z0-9][a-z0-9-]*[a-z0-9]$", name)) or (len(name) == 1 and name.isalpha())
+            # The escape hatch is load-bearing and narrowed rather than removed:
+            # the regex needs two characters (a leading class, a trailing class),
+            # so a legitimate one-character skill name fails it outright.
+            # It read `len(name) == 1 and name.isalpha()`, and `str.isalpha` is
+            # true across the whole Unicode letter category and both cases, so
+            # `A` and an accented letter were each stamped "is kebab-case" by a
+            # check whose regex is ASCII lowercase. Explicit bounds here rather
+            # than `isascii() and islower()`, which would still admit a
+            # lowercase non-letter from another script.
+            kebab_ok = bool(re.match(r"^[a-z0-9][a-z0-9-]*[a-z0-9]$", name)) or (
+                len(name) == 1 and "a" <= name <= "z")
             results.append(check("name_format", kebab_ok,
                                  f"'{name}' is kebab-case" if kebab_ok else f"'{name}' should be kebab-case"))
 
     # Line count
     line_count = len(lines)
     ok = line_count < 500
+    # `advisory`, not `warn`: this notice is for a SKILL.md that is still under
+    # the cap and running out of room. `warn` means the opposite (a failure that
+    # is only advisory), which is why the old `warn=(line_count >= 450 and ok)`
+    # could never fire -- see `check`. The `and ok` conjunct is dropped because
+    # `check` already ignores `advisory` on a failing check, so a 600-line file
+    # still reports `fail` rather than being softened to a warning.
     results.append(check("line_count", ok,
                          f"{line_count} lines" + ("" if ok else " (max 500)"),
-                         warn=(line_count >= 450 and ok)))
+                         advisory=line_count >= 450))
 
     # Phase structure
     phase_pattern = re.compile(r"^#{1,3}\s+(Phase|Step)\s+\d", re.IGNORECASE | re.MULTILINE)
@@ -627,9 +661,10 @@ def evaluate_rule(file_path):
     threshold = 250 if registry_like else 80
     line_count = len(lines)
     ok = line_count < threshold
+    # `advisory` for the reason given at the SKILL.md line-count check above.
     results.append(check("concise", ok,
                          f"{line_count} lines" + ("" if ok else f" (rules should be < {threshold} lines)"),
-                         warn=(line_count >= int(threshold * 0.75) and ok)))
+                         advisory=line_count >= int(threshold * 0.75)))
 
     # Hidden chars
     results.append(run_hidden_char_scan(file_path))
@@ -645,6 +680,55 @@ def evaluate_rule(file_path):
 # ---------------------------------------------------------------------------
 # Plan criteria evaluation
 # ---------------------------------------------------------------------------
+
+# A path is one whitespace-free token that does not open with `-`, and that
+# carries either a directory separator or a short file extension. Anything else
+# in an inline-code span is a flag, an identifier, or a command line.
+_CRITERION_PATH = re.compile(r"^(?!-)\S+$")
+_HAS_EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,5}$")
+
+
+def criterion_path(item):
+    """The file path a success criterion names, or None when it names none.
+
+    A plan criterion is prose, and `evaluate_plan_criteria` used to resolve its
+    FIRST inline-code span as `ROOT / span` no matter what the span held.
+    MEASURED 2026-09-02 on the criterion "The CLI supports `--json` output":
+    the result was `{"status": "fail", "detail": "... file NOT found: --json"}`,
+    and `main` folds plan criteria into `sys.exit(1 if failed else 0)`, so a
+    plan that merely mentions a CLI flag failed the gate for a file nobody ever
+    meant to exist. The same happened to `` `get_data_root()` ``, to a bare
+    status word, and to a whole quoted command line.
+
+    What separates a path from a flag or an identifier in that position is
+    SHAPE, not meaning, and shape is all this can read.
+
+    What this does NOT catch, stated so the next reader does not assume more:
+
+    - An extensionless file at the repository root (`Makefile`, `LICENSE`,
+      `CONTRIBUTING`) carries neither signal, so a criterion naming one now
+      reads as manual. It is no longer verified in either direction, which is
+      the deliberate trade: a missed verification is recoverable, a fabricated
+      failure stops a pipeline.
+    - A span mixing a real path with arguments or prose
+      (`` `python scripts/x.py --json` ``) holds whitespace and is manual too,
+      even though a path is sitting inside it.
+    - Nothing here knows meaning. `a/b` written to mean "a or b" still resolves
+      as a path, and a glob or a `{placeholder}` is looked up as the literal
+      name it spells and reported missing.
+    - Only the first inline-code span in a criterion is considered at all. That
+      was true before this function existed and is unchanged.
+    """
+    match = re.search(r"`([^`]+)`", item)
+    if not match:
+        return None
+    span = match.group(1).strip()
+    if not _CRITERION_PATH.match(span):
+        return None
+    if "/" not in span and not _HAS_EXTENSION.search(span):
+        return None
+    return span
+
 
 def evaluate_plan_criteria(plan_path):
     """Extract and check success criteria from a plan file."""
@@ -672,14 +756,15 @@ def evaluate_plan_criteria(plan_path):
 
     for i, item in enumerate(items, 1):
         item = item.strip()
-        # Try to verify simple file-existence criteria
-        file_match = re.search(r"`([^`]+)`", item)
-        if file_match:
-            ref_path = ROOT / file_match.group(1)
-            if ref_path.exists():
+        # Try to verify simple file-existence criteria. `criterion_path` decides
+        # whether the span is a path at all; a flag or an identifier falls to the
+        # manual arm rather than being resolved and reported missing.
+        named = criterion_path(item)
+        if named:
+            if (ROOT / named).exists():
                 results.append(check(f"criterion_{i}", True, f"{item} - file exists"))
             else:
-                results.append(check(f"criterion_{i}", False, f"{item} - file NOT found: {file_match.group(1)}"))
+                results.append(check(f"criterion_{i}", False, f"{item} - file NOT found: {named}"))
         else:
             results.append(check(f"criterion_{i}", None, f"{item} - requires manual verification"))
 
@@ -738,6 +823,37 @@ STATUS_SYMBOLS = {
     "accepted": f"{GRAY} OK {RESET}",
 }
 
+# `status is None` means the check produced no verdict: nobody could run it, or
+# nobody has looked. It is not a key in the table above on purpose -- a dict
+# lookup on None would need a sentinel key that reads like a fifth status.
+NO_VERDICT = f"{GRAY}----{RESET}"
+
+
+def status_symbol(status):
+    """The four verdicts, plus the non-verdict that is none of them."""
+    return NO_VERDICT if status is None else STATUS_SYMBOLS.get(status, "?")
+
+
+def tally(checks):
+    """(passed, warned, failed, accepted, skipped, total) over a check list.
+
+    `total` EXCLUDES the non-verdicts, so `score = passed / total` measures the
+    checks that actually ran. Counting a skip in the denominator drags the score
+    down exactly as a failure would, which is the same lie in slower motion:
+    `run_trigger_test` returns a non-verdict on a host with no API key, and that
+    host has not produced a worse artifact.
+
+    One function rather than two, because `print_report` and `build_json_output`
+    computed these counts separately and the terminal and the JSON have already
+    disagreed about the same list once (see `print_report`'s plan-criteria loop).
+    """
+    passed = sum(1 for c in checks if c["status"] in ("pass", "accepted"))
+    warned = sum(1 for c in checks if c["status"] == "warn")
+    failed = sum(1 for c in checks if c["status"] == "fail")
+    accepted = sum(1 for c in checks if c["status"] == "accepted")
+    skipped = sum(1 for c in checks if c["status"] is None)
+    return passed, warned, failed, accepted, skipped, len(checks) - skipped
+
 
 
 def print_report(artifact_path, artifact_type, checks, plan_criteria=None):
@@ -748,14 +864,10 @@ def print_report(artifact_path, artifact_type, checks, plan_criteria=None):
     print(f"  Time: {datetime.now(get_default_tz()).strftime('%Y-%m-%d %H:%M:%S')}")
     print()
 
-    passed = sum(1 for c in checks if c["status"] in ("pass", "accepted"))
-    warned = sum(1 for c in checks if c["status"] == "warn")
-    failed = sum(1 for c in checks if c["status"] == "fail")
-    accepted = sum(1 for c in checks if c["status"] == "accepted")
-    total = len(checks)
+    passed, warned, failed, accepted, skipped, total = tally(checks)
 
     for c in checks:
-        symbol = STATUS_SYMBOLS.get(c["status"], "?")
+        symbol = status_symbol(c["status"])
         print(f"  {symbol}  {c['name']}: {GRAY}{c['detail']}{RESET}")
 
     print()
@@ -763,7 +875,11 @@ def print_report(artifact_path, artifact_type, checks, plan_criteria=None):
     print(f"  {color}{BOLD}Score: {passed}/{total} passed{RESET}"
           + (f", {YELLOW}{warned} warnings{RESET}" if warned else "")
           + (f", {RED}{failed} failures{RESET}" if failed else "")
-          + (f", {GRAY}{accepted} accepted{RESET}" if accepted else ""))
+          + (f", {GRAY}{accepted} accepted{RESET}" if accepted else "")
+          # Named, never silently dropped. A denominator that shrank without
+          # saying so is `.claude/rules/scope-claims.md`'s defect exactly: the
+          # score would read as coverage of checks nobody ran.
+          + (f", {GRAY}{skipped} skipped{RESET}" if skipped else ""))
 
     if plan_criteria:
         print(f"\n{BOLD}Plan Criteria{RESET}")
@@ -771,12 +887,12 @@ def print_report(artifact_path, artifact_type, checks, plan_criteria=None):
             # Look the status up directly. This read `"pass" if c["status"]
             # else "fail"`, and `c["status"]` is a STRING -- so `"fail"` is
             # truthy and every failed criterion printed as PASS, while the
-            # `is None` arm above was dead because `check` could not emit None.
-            # The terminal said everything passed; --json said the manual items
-            # failed. Two opposite lies about the same list.
-            symbol = (f"{GRAY}----{RESET}" if c["status"] is None
-                      else STATUS_SYMBOLS.get(c["status"], "?"))
-            print(f"  {symbol}  {c['detail']}")
+            # `is None` arm beside it was dead because `check` could not emit
+            # None. The terminal said everything passed; --json said the manual
+            # items failed. Two opposite lies about the same list. The None arm
+            # moved into `status_symbol` on 2026-09-02, so the checks loop above
+            # renders a non-verdict the same way this one always has.
+            print(f"  {status_symbol(c['status'])}  {c['detail']}")
 
     print()
 
@@ -784,8 +900,9 @@ def print_report(artifact_path, artifact_type, checks, plan_criteria=None):
 def run_trigger_test(artifact_path, threshold=0.9):
     """Advisory: shell out to skill-trigger-test.py for a skill with a sibling triggers.json.
 
-    Returns a single check dict (status pass/warn, never fail - the LLM-judge is
-    non-deterministic, so a routing miss is a warning, not a hard evaluation failure).
+    Returns a single check dict (status pass/warn/None, never fail - the
+    LLM-judge is non-deterministic, so a routing miss is a warning, not a hard
+    evaluation failure, and a harness that could not start is no verdict at all).
     Returns None when the artifact is not a skill or has no triggers.json (nothing to add).
     """
     skill_dir = Path(artifact_path)
@@ -814,8 +931,20 @@ def run_trigger_test(artifact_path, threshold=0.9):
         return check("trigger_test", False, f"trigger-test could not run: {e}", warn=True)
 
     if proc.returncode == 3:
-        # Degraded: no API key or SDK. Advisory skip, not a failure.
-        return check("trigger_test", True, "trigger-test skipped (no ANTHROPIC_API_KEY / SDK)", warn=False)
+        # Degraded: no API key or SDK. NOTHING RAN, so this is neither a pass
+        # nor a failure - it is the same non-verdict the manual plan criteria
+        # use, `passed=None` -> `status: None`, kept out of the score
+        # denominator by `build_json_output` and `print_report`.
+        #
+        # It returned `check(..., True, ...)` until 2026-09-02, which renders
+        # "pass" and counts toward `passed` and `score`. A host with no API key
+        # therefore scored HIGHER on every skill than a host that ran the test
+        # and found a routing miss, because the miss is a `warn` and the skip
+        # was a `pass`. A check that could not run must never read as a check
+        # that passed. Reporting it as a failure would be the mirror-image lie:
+        # `main` exits 1 on any "fail", so a degraded host would start refusing
+        # every skill it evaluated.
+        return check("trigger_test", None, "trigger-test skipped (no ANTHROPIC_API_KEY / SDK)")
     try:
         data = json.loads(proc.stdout)
     except (json.JSONDecodeError, ValueError):
@@ -832,11 +961,7 @@ def run_trigger_test(artifact_path, threshold=0.9):
 
 def build_json_output(artifact_path, artifact_type, checks, plan_criteria=None):
     """Build JSON output dict."""
-    passed = sum(1 for c in checks if c["status"] in ("pass", "accepted"))
-    warned = sum(1 for c in checks if c["status"] == "warn")
-    failed = sum(1 for c in checks if c["status"] == "fail")
-    accepted = sum(1 for c in checks if c["status"] == "accepted")
-    total = len(checks)
+    passed, warned, failed, accepted, skipped, total = tally(checks)
     score = passed / total if total > 0 else 0.0
 
     output = {
@@ -845,11 +970,15 @@ def build_json_output(artifact_path, artifact_type, checks, plan_criteria=None):
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "checks": checks,
         "summary": {
+            # `total` counts the checks that reached a verdict. `skipped` is
+            # published beside it so a consumer can see the denominator moved
+            # rather than inferring a clean run from a small one.
             "total": total,
             "passed": passed,
             "warned": warned,
             "failed": failed,
             "accepted": accepted,
+            "skipped": skipped,
             "score": round(score, 2),
         },
     }

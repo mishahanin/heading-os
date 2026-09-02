@@ -6,8 +6,8 @@
       "source": "ast-grep/agent-skill",
       "sourceType": "github",
       "skillPath": ".claude/skills/ast-grep/SKILL.md",
-      "computedHash": "819a0e0cccf1972995a07334deec63b271d9939a69c1d758f416ae4b1409432a",
-      "note": "In-repo copy carries a documentation-style adaptation (one 41-word sentence split in three, per .claude/rules/documentation-style.md). Re-apply it after any re-vendor from upstream, then --relock."
+      "computedHash": "e2619a91d9a374424d997522588a82b94ebba5f98d89e7ef21d1f98aecb50dd2",
+      "note": "In-repo copy carries THREE adaptations; re-apply all three after any re-vendor from upstream, then --relock. (1) A documentation-style split of one 41-word sentence into three, per .claude/rules/documentation-style.md. (2) `Bash(sg:*)` REMOVED from allowed-tools, 2026-09-02. Upstream ships `sg` as ast-grep's short alias, but on Ubuntu /usr/bin/sg is a different program from the login package that runs a command under another group through /bin/sh. A skill grant is a grant and never a limit, so that line permitted `sg <group> -c \"<any command>\"`: a general command runner. Nothing in the skill or its two reference files ever invoked `sg`. Do not restore it on a re-vendor. (3) A Step 0 binary preflight, because the skill is router: auto while ast-grep may be absent, and `command -v sg` resolves to the wrong program."
     },
     "frontend-design": {
       "source": "anthropics/skills",

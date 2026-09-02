@@ -42,6 +42,7 @@ import threading
 import unicodedata
 import urllib.error
 import urllib.request
+import zlib
 from pathlib import Path
 
 import pytest
@@ -265,11 +266,85 @@ def test_an_uncompressed_reply_still_reads(monkeypatch):
     assert search_mod._get_json("http://x/y", {}) == PAYLOAD
 
 
-def test_brave_search_asks_for_the_encoding_the_reader_handles():
-    """The two used to disagree; that disagreement WAS the defect."""
-    source = (ROOT / "scripts" / "utils" / "search.py").read_text(encoding="utf-8")
-    assert '"Accept-Encoding": "gzip"' in source
-    assert 'gzip.decompress' in source
+_ENCODERS = {
+    "gzip": lambda b: gzip.compress(b, mtime=0),
+    "x-gzip": lambda b: gzip.compress(b, mtime=0),
+    "deflate": zlib.compress,
+    "identity": lambda b: b,
+}
+
+
+def _accept_encoding_tokens(headers: dict) -> list[str]:
+    """The encodings a request asks for, lower-cased, q-values dropped.
+
+    `urllib.request.Request` stores header names `.capitalize()`d, so the key is
+    `Accept-encoding` and never the spelling the caller typed. Matching
+    case-insensitively is what keeps this about the header rather than about how
+    the header dict was built.
+    """
+    value = next((v for k, v in headers.items()
+                  if k.lower() == "accept-encoding"), "")
+    return [part.split(";")[0].strip().lower()
+            for part in str(value).split(",") if part.strip()]
+
+
+def _brave_request_headers(monkeypatch) -> dict:
+    """Run `brave_search` against a captured `urlopen`; return the headers it built."""
+    captured: dict = {}
+
+    def _capture(req, *_a, **_k):
+        captured["headers"] = dict(req.headers)
+        return _response(json.dumps(PAYLOAD).encode(), None)
+
+    monkeypatch.setattr(search_mod, "load_api_key",
+                        lambda name, required=False: "test-key")
+    monkeypatch.setattr(urllib.request, "urlopen", _capture)
+    search_mod.brave_search("q")
+    return captured["headers"]
+
+
+def test_the_encoding_brave_asks_for_is_one_the_reader_actually_decodes(monkeypatch):
+    """The property: the request header and the response decoder agree, end to end.
+
+    What this test is really about is the AGREEMENT between two halves that live
+    in different functions - what `brave_search` puts in `Accept-Encoding` and
+    what `_decode_body` can turn back into text. Their disagreement WAS the
+    defect: a compressing endpoint raised UnicodeDecodeError past
+    `search_with_fallback`, so Brave took the whole search call down instead of
+    being fallen back to.
+
+    Until 2026-09-02 the agreement was asserted by grepping `search.py` for two
+    source-text literals, retired here and quoted for the record:
+
+        assert '"Accept-Encoding": "gzip"' in source
+        assert 'gzip.decompress' in source
+
+    Both failure modes were real. Rewriting the dict literal with single quotes,
+    or wrapping that line, changes nothing about the request and false-FAILED the
+    test. And `gzip.decompress` staying in the file on a branch nothing reaches
+    any more - the exact shape of the original bug, a reader that no longer
+    handles what the sender asks for - keeps the literal present and
+    false-PASSES it. Neither literal is read by anything at run time.
+
+    Asked instead by running both halves: capture the header `brave_search`
+    actually sends, then hand `_get_json` a body compressed in precisely that
+    encoding and require the parsed JSON back. A header the test cannot encode
+    is a failure, not a skip: an encoding this suite does not know is one nobody
+    has checked the reader against.
+    """
+    asked = _accept_encoding_tokens(_brave_request_headers(monkeypatch))
+    assert asked, "brave_search sent no Accept-Encoding at all"
+
+    for token in asked:
+        assert token in _ENCODERS, (
+            f"brave_search asks for {token!r}, which this test cannot build a "
+            "body in, so nothing here establishes that the reader handles it")
+        body = _ENCODERS[token](json.dumps(PAYLOAD).encode())
+        _patched(monkeypatch, _response(body, token))
+
+        assert search_mod._get_json("http://x/y", {}) == PAYLOAD, (
+            f"brave_search asks the server for {token!r} and the reader cannot "
+            "decode a reply in it")
 
 
 @pytest.mark.parametrize("body,encoding", [

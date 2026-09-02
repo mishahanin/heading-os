@@ -561,7 +561,17 @@ def test_the_blind_spot_still_names_the_narrower_prose_rule(bp):
 
 def test_a_commands_only_bundle_is_built_by_all(bp):
     """`commands` became a first-class field and this filter was not updated
-    with it, so such a bundle was skipped and nothing said so."""
-    src = (ROOT / "scripts" / "dev" / "build-plugins.py").read_text(encoding="utf-8")
-    body = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
-    assert 's.get("commands")' in body
+    with it, so such a bundle was skipped and nothing said so.
+
+    Asked of the FIELD SET, not of the source text. This was
+    `assert 's.get("commands")' in body` until 2026-09-02, over a file whose
+    filter was a chain of `s.get(...)` calls. The chain became the
+    `CONTENT_FIELDS` tuple that same day, for the reason this test exists (a
+    field can be added to the builder and forgotten here), and the assertion
+    then failed over a change that FIXED its subject. A test pinned to one
+    spelling of a filter cannot survive the filter being made harder to
+    forget, which is the wrong way round.
+    """
+    assert "commands" in bp.CONTENT_FIELDS, (
+        "a bundle declaring only `commands:` is skipped by --all and left out "
+        f"of marketplace.json, silently: {bp.CONTENT_FIELDS}")

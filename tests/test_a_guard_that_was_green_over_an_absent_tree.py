@@ -148,12 +148,25 @@ def test_scan_keeps_the_two_outcomes_in_separate_buckets(tmp_path, monkeypatch):
 
 
 def test_a_real_pointer_is_still_caught_beside_a_deleted_file(tmp_path, monkeypatch):
-    """The tolerance must not swallow the defect the guard exists for."""
+    """The tolerance must not swallow the defect the guard exists for.
+
+    The OID was `sha256:00` until 2026-09-02, two hex characters where the v1
+    spec says sixty-four, so the file this test calls "a real pointer" was not
+    one and the run below could not tell "the guard still refuses a pointer"
+    from "the guard refuses anything carrying the version line". The sibling
+    fixture in `test_a_guard_that_printed_green_over_an_unfinished_check.py`
+    was corrected for the same reason and is asserted against the spec there.
+    64 is the correct length; `is_pointer` reads only the magic, so the digest
+    was free to be wrong and nothing said so.
+    """
     lfs = _load("lfs_under_test8", "scripts/dev/check-lfs-fixtures.py")
     tree = tmp_path / "tests"
     tree.mkdir()
+    oid = ("0123456789abcdef" * 4).encode("ascii")
+    assert len(oid) == 64, len(oid)
     (tree / "pointer.docx").write_bytes(
-        b"version https://git-lfs.github.com/spec/v1\noid sha256:00\nsize 1\n")
+        b"version https://git-lfs.github.com/spec/v1\noid sha256:"
+        + oid + b"\nsize 1\n")
     (tree / "gone.docx").write_bytes(b"x")
     real_is_pointer = lfs.is_pointer
 

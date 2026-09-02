@@ -2,6 +2,44 @@
 # Install: pip install pre-commit && pre-commit install
 # Run all: pre-commit run --all-files
 # Note: Runs alongside the existing custom .git/hooks/pre-commit (secret-scanner.py)
+#
+# INTERPRETER PIN. Every `repo: local` hook below invokes `.venv/bin/python`,
+# never a bare `python3`. `language: system` resolves an entry against PATH, and
+# on this machine PATH `python3` is /usr/bin/python3 (3.12.3) while the pinned
+# environment is .venv (3.11.15) built by `uv sync`. MEASURED 2026-09-02 with a
+# probe hook printing sys.executable: 21 of the 23 local hooks ran under
+# /usr/bin/python3, so the commit gate, secret scanner included, executed a
+# different program from the one the test suite validates. `scripts/turn-check.py`
+# records the same class of failure from the other direction.
+#
+# pre-commit sets the repo root as the CWD, so the relative path resolves. A
+# clone that has not run `uv sync` FAILS with "Executable `.venv/bin/python` not
+# found" and exit 1; it never falls back to another interpreter. The two bash
+# entries carry their own explicit check for the same reason.
+#
+# `language: python` plus `default_language_version` was rejected: it pins the
+# VERSION but builds an isolated env holding none of the project's locked
+# packages, and these hooks import pytest, yaml, ruff and the repo's own modules.
+# It would swap a wrong interpreter for a right interpreter with the wrong
+# package set. `python3.11` is also absent from PATH here, so that key would not
+# even resolve. Guard: tests/test_a_commit_gate_that_ran_a_different_python.py.
+#
+# THE FOUR REMOTE REPOS are deliberately left alone, and this paragraph exists so
+# the next reader does not "finish the job" by pinning them too. They run in
+# pre-commit's own isolated environments and none of them imports a project
+# module: detect-secrets, bandit, ruff and pre-commit-hooks are standalone tools,
+# so the package-set argument above does not reach them, and the version argument
+# does not either. Ruff takes its syntax target from `target-version = "py311"` in
+# pyproject.toml rather than from the interpreter running it, and 3.11 source is
+# valid input to a 3.12 parser, so bandit and the yaml/json checks read the same
+# tree either way.
+#
+# MEASURED 2026-09-02 in ~/.cache/pre-commit: each of the four repos holds a
+# `py_env-python3` built at 3.11.15, which is the pinned .venv version, and three
+# of them additionally hold a stale `py_env-python3.12` that nothing in THIS
+# config requests. So the remote hooks already run on the pin today. Adding
+# `language_version: python3.11` would not harden that, it would break it: the
+# name has to resolve on PATH and `python3.11` does not exist here.
 
 repos:
   # Secret scanning - catches credentials before they enter git
@@ -19,8 +57,19 @@ repos:
         #   not a credential. Pattern covers all rendered HTML output under
         #   outputs/operations/tribe-bootcamp/, outputs/operations/keynotes/,
         #   and outputs/content/partner-enablement/.
+        # - skills-lock.json: the file exists to record a sha256 tree hash per
+        #   vendored skill, so its `computedHash` fields are hex digests BY
+        #   CONSTRUCTION and every re-lock writes new ones. A baseline entry
+        #   would pin one digest and go stale on the next `--relock`, which is
+        #   the shape that teaches people to refresh a baseline without reading
+        #   it. Added 2026-09-02, when an ordinary edit to a vendored SKILL.md
+        #   changed a hash and the entropy detector called it a secret. The
+        #   file is NOT unguarded: `scripts/secret-scanner.py` reads it at
+        #   commit time and again inside the unbypassable push-time scan, and
+        #   reports it clean on the pattern rules rather than on entropy.
         exclude: |
           (?x)^(
+            skills-lock\.json|
             outputs/operations/bridge/critical-items\.jsonl|
             outputs/operations/tribe-bootcamp/.*\.html|
             outputs/operations/keynotes/.*\.html|
@@ -66,7 +115,7 @@ repos:
     hooks:
       - id: vault-guard
         name: Block stray _secure/ paths from commits
-        entry: python3 -c "import sys; leaked=[f for f in sys.argv[1:] if '_secure/' in f.replace(chr(92),'/')]; print('BLOCKED - vault files staged for commit') if leaked else None; [print('  ' + f) for f in leaked]; sys.exit(1 if leaked else 0)"
+        entry: .venv/bin/python -c "import sys; leaked=[f for f in sys.argv[1:] if '_secure/' in f.replace(chr(92),'/')]; print('BLOCKED - vault files staged for commit') if leaked else None; [print('  ' + f) for f in leaked]; sys.exit(1 if leaked else 0)"
         language: system
         pass_filenames: true
 
@@ -75,7 +124,7 @@ repos:
     hooks:
       - id: runtime-state-guard
         name: Block runtime state (.tmp/, scheduled_tasks.*) from commits
-        entry: python3 -c "import sys; pats=['.tmp/', '.claude/scheduled_tasks.json', '.claude/scheduled_tasks.lock']; leaked=[f for f in sys.argv[1:] if any(p in f.replace(chr(92),'/') for p in pats)]; print('BLOCKED - runtime state staged for commit (add to .gitignore, unstage, retry)') if leaked else None; [print('  ' + f) for f in leaked]; sys.exit(1 if leaked else 0)"
+        entry: .venv/bin/python -c "import sys; pats=['.tmp/', '.claude/scheduled_tasks.json', '.claude/scheduled_tasks.lock']; leaked=[f for f in sys.argv[1:] if any(p in f.replace(chr(92),'/') for p in pats)]; print('BLOCKED - runtime state staged for commit (add to .gitignore, unstage, retry)') if leaked else None; [print('  ' + f) for f in leaked]; sys.exit(1 if leaked else 0)"
         language: system
         pass_filenames: true
 
@@ -85,7 +134,7 @@ repos:
     hooks:
       - id: sentinel-integration-tests
         name: Run sentinel integration tests (smart trigger)
-        entry: python3 scripts/run-integration-tests.py --quiet --no-cov
+        entry: .venv/bin/python scripts/run-integration-tests.py --quiet --no-cov
         language: system
         files: '^(scripts/sentinel\.py|tests/integration/)'
         pass_filenames: false
@@ -98,7 +147,7 @@ repos:
     hooks:
       - id: skill-router-sync
         name: Skill-router registry generated from SKILL.md frontmatter (no drift)
-        entry: python3 scripts/generate-skill-router.py --check
+        entry: .venv/bin/python scripts/generate-skill-router.py --check
         language: system
         files: '^(\.claude/(skills/.*/SKILL\.md|rules/skill-router\.md)|reference/skill-router/.*\.md|scripts/generate-skill-router\.py)$'
         pass_filenames: false
@@ -115,7 +164,7 @@ repos:
     hooks:
       - id: skill-size-budget
         name: SKILL.md size budget + triggers.json coverage gate
-        entry: python3 scripts/skill-metadata-check.py --summary
+        entry: .venv/bin/python scripts/skill-metadata-check.py --summary
         language: system
         files: '^(\.claude/skills/.*/(SKILL\.md|triggers\.json)|config/triggers-coverage-baseline\.json)$'
         pass_filenames: false
@@ -126,7 +175,7 @@ repos:
     hooks:
       - id: version-sync
         name: Verify README/CHANGELOG/ROADMAP version matches pyproject.toml
-        entry: python3 scripts/check-version-sync.py --quiet
+        entry: .venv/bin/python scripts/check-version-sync.py --quiet
         language: system
         files: '^(README\.md|CHANGELOG\.md|ROADMAP\.md|pyproject\.toml)$'
         pass_filenames: false
@@ -138,7 +187,7 @@ repos:
     hooks:
       - id: verify-skills-lock
         name: Verify vendored-skill hashes against skills-lock.json
-        entry: python3 scripts/verify-skills-lock.py --check --quiet
+        entry: .venv/bin/python scripts/verify-skills-lock.py --check --quiet
         language: system
         files: '^(skills-lock\.json|\.claude/skills/ast-grep/)'
         pass_filenames: false
@@ -160,7 +209,7 @@ repos:
       # (a public clone), so running it unconditionally is the honest form.
       - id: crm-schema-validate
         name: Validate CRM contact frontmatter against config/schemas/crm-contact.schema.json
-        entry: python3 scripts/validate-crm-schema.py --quiet
+        entry: .venv/bin/python scripts/validate-crm-schema.py --quiet
         language: system
         always_run: true
         pass_filenames: false
@@ -173,7 +222,7 @@ repos:
     hooks:
       - id: adversarial-suite-validate
         name: Validate adversarial prompt-injection fixtures (dry-run)
-        entry: python3 tests/security/prompt-injection/run-adversarial-suite.py --dry-run --quiet
+        entry: .venv/bin/python tests/security/prompt-injection/run-adversarial-suite.py --dry-run --quiet
         language: system
         files: '^tests/security/prompt-injection/(attacks/.*\.json|run-adversarial-suite\.py)$'
         pass_filenames: false
@@ -189,7 +238,7 @@ repos:
     hooks:
       - id: pip-audit-cve
         name: Scan requirements.txt for known CVEs (pip-audit)
-        entry: python3 -c "import importlib.util, os, subprocess, sys; venv = os.path.join('.venv', 'bin', 'pip-audit'); cmd = [venv] if os.path.exists(venv) else ([sys.executable, '-m', 'pip_audit'] if importlib.util.find_spec('pip_audit') else None); sys.exit(subprocess.run(cmd + ['--requirement', 'requirements.txt', '--strict']).returncode) if cmd else (print('pip-audit-cve SKIPPED - pip-audit is installed nowhere this hook can reach, so the CVE gate did NOT run. CI dependency-audit still covers it.') or sys.exit(0))"
+        entry: .venv/bin/python -c "import importlib.util, os, subprocess, sys; venv = os.path.join('.venv', 'bin', 'pip-audit'); cmd = [venv] if os.path.exists(venv) else ([sys.executable, '-m', 'pip_audit'] if importlib.util.find_spec('pip_audit') else None); sys.exit(subprocess.run(cmd + ['--requirement', 'requirements.txt', '--strict']).returncode) if cmd else (print('pip-audit-cve SKIPPED - pip-audit is installed nowhere this hook can reach, so the CVE gate did NOT run. CI dependency-audit still covers it.') or sys.exit(0))"
         language: system
         files: '^(requirements\.txt|requirements-dev\.txt)$'
         pass_filenames: false
@@ -209,7 +258,7 @@ repos:
     hooks:
       - id: lint-ratchet
         name: Full-ruleset lint ratchet (fails on new lint debt)
-        entry: python3 scripts/lint-ratchet.py check
+        entry: .venv/bin/python scripts/lint-ratchet.py check
         language: system
         files: '\.py$'
         pass_filenames: false
@@ -223,7 +272,7 @@ repos:
     hooks:
       - id: secret-scanner-31c
         name: 31C secret scanner (workspace credential patterns)
-        entry: python3 scripts/secret-scanner.py
+        entry: .venv/bin/python scripts/secret-scanner.py
         language: system
         pass_filenames: true
 
@@ -239,7 +288,7 @@ repos:
     hooks:
       - id: content-guard-31c
         name: Block real-entity content (PII/real names) in engine-routed files
-        entry: python3 scripts/content-guard.py --quiet --files
+        entry: .venv/bin/python scripts/content-guard.py --quiet --files
         language: system
         pass_filenames: true
 
@@ -251,12 +300,12 @@ repos:
     hooks:
       - id: leak-guard-paths
         name: HEADING OS leak guard (no hardcoded data paths in engine code)
-        entry: python3 scripts/leak-guard.py check-paths --files
+        entry: .venv/bin/python scripts/leak-guard.py check-paths --files
         language: system
         files: '\.(py|sh)$'
       - id: leak-guard-staged
         name: HEADING OS leak guard (no private/corporate content in engine repo)
-        entry: python3 scripts/leak-guard.py check-staged --files
+        entry: .venv/bin/python scripts/leak-guard.py check-staged --files
         language: system
         pass_filenames: true
 
@@ -271,7 +320,7 @@ repos:
     hooks:
       - id: data-root-bypass-guard
         name: HEADING OS data-root guard (no data dir joined to an engine root)
-        entry: python3 -m pytest tests/test_data_root_no_bypass.py -q
+        entry: .venv/bin/python -m pytest tests/test_data_root_no_bypass.py -q
         language: system
         pass_filenames: false
         always_run: true
@@ -285,7 +334,7 @@ repos:
     hooks:
       - id: engine-tree-clean
         name: HEADING OS engine-tree-clean (no data artifact in the engine clone)
-        entry: python3 -m pytest tests/test_engine_tree_clean.py -q
+        entry: .venv/bin/python -m pytest tests/test_engine_tree_clean.py -q
         language: system
         pass_filenames: false
         always_run: true
@@ -298,7 +347,7 @@ repos:
     hooks:
       - id: skill-bash-paths
         name: HEADING OS SKILL bash-path audit (no new bare data-path misroute)
-        entry: python3 scripts/audit-skill-bash-paths.py --check
+        entry: .venv/bin/python scripts/audit-skill-bash-paths.py --check
         language: system
         pass_filenames: false
         always_run: true
@@ -313,7 +362,7 @@ repos:
     hooks:
       - id: path-references
         name: HEADING OS prose path audit (no new dangling engine path)
-        entry: python3 scripts/check-path-references.py --check
+        entry: .venv/bin/python scripts/check-path-references.py --check
         language: system
         pass_filenames: false
         always_run: true
@@ -321,15 +370,18 @@ repos:
   # Docs HTML drift guard (F-8.1) -- the early-catch sibling of the CI "Docs HTML in
   # sync" step. Regenerates docs/ (--all: md pairs + nav/search injection + search
   # index) and fails if the working tree drifts, so an edited .md or hand-authored
-  # page committed without regenerating is caught before push. Runs through `uv run`
+  # page committed without regenerating is caught before push. Runs `.venv/bin/python`
   # so it uses the SAME locked toolchain (markdown + pygments) CI uses -- the ambient
-  # python3 can carry a different pygments and produce false codehilite drift. Skips
-  # cleanly when uv is absent; CI is the authoritative gate. pass_filenames: false.
+  # python3 can carry a different pygments and produce false codehilite drift. It went
+  # through `uv run` until 2026-09-02, which did resolve the venv, but skipped silently
+  # when uv was absent and would BUILD a fresh env at any version satisfying
+  # requires-python (>=3.11) when .venv was absent. It now refuses by name instead.
+  # pass_filenames: false.
   - repo: local
     hooks:
       - id: docs-html-drift
         name: Docs HTML in sync (regenerate + git diff docs/)
-        entry: bash -c 'command -v uv >/dev/null 2>&1 || { echo "uv not found; skipping docs-html-drift (CI is authoritative)"; exit 0; }; uv run python scripts/regenerate-docs-html.py --all --quiet && git diff --exit-code docs/'
+        entry: bash -c '[ -x .venv/bin/python ] || { echo "docs-html-drift needs .venv/bin/python, which is missing. Run uv sync --all-extras --group dev first."; exit 1; }; .venv/bin/python scripts/regenerate-docs-html.py --all --quiet && git diff --exit-code docs/'
         language: system
         files: '^(docs/.*\.(md|html)|scripts/regenerate-docs-html\.py)$'
         pass_filenames: false
@@ -346,7 +398,7 @@ repos:
     hooks:
       - id: documentation-style
         name: Documentation style (ASD-STE100 subset, errors only)
-        entry: python3 scripts/ste-check.py --all --quiet
+        entry: .venv/bin/python scripts/ste-check.py --all --quiet
         language: system
         files: '^(docs/(QUICKSTART|DEPLOYMENT|INTEGRATIONS-SETUP|MODELS-SETUP|CONFIGURATION|TROUBLESHOOTING|EMERGENCY-PROCEDURES|MAKE-IT-YOURS|PLUGINS|HOOKS-REFERENCE|DOCS-PIPELINE|GLOSSARY|EXTENDING|TELEGRAM-AND-ALERTS)\.md|scripts/ste-check\.py)$'
         pass_filenames: false
@@ -362,21 +414,22 @@ repos:
       # to end. Errors only, like its sibling above.
       - id: documentation-style-skills
         name: Documentation style - skill bodies (ASD-STE100 subset, errors only)
-        entry: python3 scripts/ste-check.py --skills --quiet
+        entry: .venv/bin/python scripts/ste-check.py --skills --quiet
         language: system
         files: '^(\.claude/skills/.+/SKILL\.md|scripts/ste-check\.py)$'
         pass_filenames: false
 
   # README numbers guard (F-8.3) -- re-derives the security-test + guard-layer counts
-  # and fails if README.md or docs/index.html "By the numbers" disagrees. Runs through
-  # `uv run` so the pytest collection of tests/security sees the locked dependency set
-  # (the ambient python3 lacks the extras and cannot collect). Skips when uv is absent;
-  # CI is the authoritative gate.
+  # and fails if README.md or docs/index.html "By the numbers" disagrees. Runs
+  # `.venv/bin/python` so the pytest collection of tests/security sees the locked
+  # dependency set (the ambient python3 lacks the extras and cannot collect). It went
+  # through `uv run` until 2026-09-02, alongside a `command -v uv` guard that skipped
+  # the gate silently; it now refuses by name when the venv is missing.
   - repo: local
     hooks:
       - id: readme-numbers
         name: Documented numbers in sync (derived vs README/index/EXTENDING)
-        entry: bash -c 'command -v uv >/dev/null 2>&1 || { echo "uv not found; skipping readme-numbers (CI is authoritative)"; exit 0; }; uv run python scripts/dev/check-readme-numbers.py --quiet'
+        entry: bash -c '[ -x .venv/bin/python ] || { echo "readme-numbers needs .venv/bin/python, which is missing. Run uv sync --all-extras --group dev first."; exit 1; }; .venv/bin/python scripts/dev/check-readme-numbers.py --quiet'
         language: system
         files: '^(README\.md|ROADMAP\.md|SECURITY\.md|docs/index\.html|docs/EXTENDING\.md|\.claude/skills/[^/]+/triggers\.json|scripts/dev/check-readme-numbers\.py)$'
         pass_filenames: false

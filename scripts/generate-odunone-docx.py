@@ -443,13 +443,22 @@ def build_document():
     # ============================================================
     add_heading(doc, "TABLE OF CONTENTS", 1)
 
-    # Derived from SECTIONS, never re-typed. The list here used to be sixteen
-    # hand-written strings for a document with seventeen Heading 1s: LICENSING &
+    # Derived from SECTIONS, never re-typed. The list here used to be fifteen
+    # hand-written strings for a document with sixteen sections: LICENSING &
     # SUPPORT was missing from the contents page entirely, and entry 10 read "AI
     # Analytics for Telco & Law Enforcement: Training Scenarios" against a
     # heading that says "AI ANALYTICS: TELCO & LAW ENFORCEMENT TRAINING
     # SCENARIOS" -- close enough to look right, different enough that searching
     # the contents entry against the body finds nothing.
+    #
+    # The two numbers above were sixteen and seventeen until 2026-09-02, which
+    # contradicted `contents_lines`'s own docstring ("the list used to stop at
+    # fifteen") about the same list at the same moment. MEASURED against the
+    # initial-import commit: the hand-written list held 15 strings, the file made
+    # 17 `add_heading(..., 1)` calls, and one of those 17 is TABLE OF CONTENTS
+    # itself, which `SECTIONS` deliberately does not carry. So the real pair is
+    # fifteen against sixteen, and the seventeen was the TOC heading counted as a
+    # section.
     toc_items = contents_lines()
     for item in toc_items:
         p = doc.add_paragraph(style='Normal')

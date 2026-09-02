@@ -24,6 +24,7 @@ import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -129,6 +130,33 @@ def _reaches_eof(read_fd: int, timeout: float = EOF_TIMEOUT_S) -> bool:
             return False
 
 
+def _wait_for_log_text(log: Path, needle: str,
+                       timeout: float = EOF_TIMEOUT_S) -> bool:
+    """Poll `log` for `needle`. A log that is not there YET is a poll, not an error.
+
+    The poll used to call `log.read_text()` unguarded. Today `launch_comet` opens
+    the launch log before it spawns the wrapper, so by the time the poll starts
+    the file exists and the bare call happens to be safe - it is safe by an
+    ordering nothing in this file asserts. Move the open to after the CDP wait
+    and the first iteration raises FileNotFoundError, so the test ERRORS instead
+    of polling and reports a broken test where the real finding is a launcher
+    that logs later than it used to.
+
+    An absent file is the only tolerated failure. A permission error or a
+    directory in the log's place is a real fault and still propagates.
+    """
+    deadline = time.time() + timeout
+    while True:
+        try:
+            if needle in log.read_text(encoding="utf-8", errors="replace"):
+                return True
+        except FileNotFoundError:
+            pass
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
 def _reap(tmp_path: Path) -> None:
     pidfile = tmp_path / "child.pid"
     if not pidfile.exists():
@@ -158,17 +186,42 @@ def test_launched_browser_does_not_hold_the_callers_stdout(monkeypatch, tmp_path
 def test_browser_output_goes_to_the_launch_log(monkeypatch, tmp_path):
     """Detaching the streams must not throw the output away."""
     read_fd = _launch_with_stdout_on_a_pipe(monkeypatch, tmp_path)
-    log = tmp_path / "launch.log"
     try:
         # The browser writes on its own schedule; launch_comet does not wait
         # for it, so poll rather than read once.
-        deadline = time.time() + EOF_TIMEOUT_S
-        while time.time() < deadline and "browser starting" not in log.read_text():
-            time.sleep(0.05)
-        assert "browser starting" in log.read_text()
+        assert _wait_for_log_text(tmp_path / "launch.log", "browser starting"), (
+            "the launch log never received the browser's output, so detaching "
+            "the streams threw it away instead of redirecting it"
+        )
     finally:
         os.close(read_fd)
         _reap(tmp_path)
+
+
+def test_the_log_poll_reports_an_absent_log_rather_than_erroring(tmp_path):
+    """The tolerance, asked to refuse: no log, no exception, a False verdict."""
+    missing = tmp_path / "never-written.log"
+    assert not missing.exists(), "fixture broken: the log must be absent"
+
+    assert _wait_for_log_text(missing, "browser starting", timeout=0.15) is False
+
+
+def test_the_log_poll_still_sees_text_that_arrives_after_it_starts(tmp_path):
+    """The anchor. A poll that answered False for everything would pass above.
+
+    The text lands 0.15s in, after the first iteration has already found the
+    file absent, so this also pins that the tolerated FileNotFoundError keeps
+    the loop going rather than ending it.
+    """
+    log = tmp_path / "late.log"
+    writer = threading.Timer(
+        0.15, lambda: log.write_text("browser starting\n", encoding="utf-8"))
+    writer.start()
+    try:
+        assert _wait_for_log_text(log, "browser starting", timeout=3.0) is True
+    finally:
+        writer.cancel()
+        writer.join()
 
 
 def test_launched_browser_does_not_hold_the_callers_stderr(monkeypatch, tmp_path):

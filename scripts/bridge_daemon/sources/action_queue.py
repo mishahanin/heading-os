@@ -56,7 +56,26 @@ COOLDOWN_DAYS = 14            # dismissed contact not re-proposed within this wi
 PRUNE_TERMINAL_DAYS = 90     # drop terminal cards older than this (bound growth)
 ROW_CAP = 100                # max active cards returned to the UI
 
-ACTION_TYPES = ("email_send", "note", "pipeline_update", "alert")
+# Which action_types may be deposited is DERIVED, at call time, from
+# `config/tool-risk.json` via `tool_risk.classified_types()`. There is no tuple
+# here any more.
+#
+# There was one until 2026-09-02: `("email_send", "note", "pipeline_update",
+# "alert")`. It was a second copy of a taxonomy the ledger already owns, and a
+# hand-maintained security-adjacent list is a list that falls behind in silence.
+# MEASURED that day against the shipped ledger, it was four types short -
+# `crm_write`, `knowledge_write`, `task_create` and `telegram_send` - and
+# `append_cards` discarded every card carrying one of them while returning
+# `{"ok": True, "added": 0, "skipped": 1}`.
+#
+# `telegram_send` is the one that shows the cost. It is `send_capable`, floors
+# at `gated`, is shown in the UI, and `scripts/action-queue-execute.py` carries
+# a 501 refusal branch built for it. It could not be deposited at all, so that
+# branch had never been reachable through this door.
+#
+# Read at call time, never bound at import: `tool_risk` caches the ledger and
+# re-reads on `load(force=True)`, and a module-level constant would freeze one
+# process's first read for the life of that process.
 
 # The CLAIM. A card sits here for the life of one synchronous send and nothing
 # else may send it. Measured 2026-08-30 before it existed: two threads calling
@@ -283,11 +302,65 @@ def append_cards(workspace_root: Path, cards: list[dict]) -> dict:
 
     Skips a card whose dedup key already has a pending/approved card, or was
     dismissed within COOLDOWN_DAYS. Normalises id/created_at/status/trace_id.
-    Prunes terminal cards older than PRUNE_TERMINAL_DAYS. Returns
-    {ok, added, skipped, ids}.
+    Prunes terminal cards older than PRUNE_TERMINAL_DAYS.
+
+    Two outcomes, and they are different shapes on purpose:
+
+    - ``{ok: True, added, skipped, ids}`` - every card was ACCEPTABLE. ``skipped``
+      now counts dedup and cooldown, and nothing else, which is the only thing
+      the callers printing it have ever claimed it meant.
+    - ``{ok: False, error, rejected, added: 0, skipped: 0, ids: []}`` - at least
+      one card was not acceptable, and NOTHING was written. ``rejected`` carries
+      one ``{index, action_type, reason}`` per bad card.
+
+    A card is acceptable when it is an object carrying an ``action_type`` the
+    ledger classifies (``tool_risk.classified_types()``). Validation runs BEFORE
+    the lock and before any write, so a refusal is atomic: a partial write
+    reported as a failure leaves a caller unable to say what is in the queue.
+
+    Until 2026-09-02 an unrecognised type was counted into ``skipped`` and the
+    call returned ``ok: True``. A caller could not separate "deduplicated
+    against a live card", which is correct and expected, from "discarded because
+    I do not know this type", which is a defect - and all three CLI callers
+    print the count under a dedup label.
+
+    Refusing the whole batch is the strict end of the two safe answers. The
+    other is depositing an unknown type and letting ``tier_for`` floor it to
+    ``gated``; that admits a typo'd ``action_type`` into the queue as a gated
+    card with no executor behind it, so it is not taken here.
     """
     if not isinstance(cards, list):
         return {"ok": False, "error": "cards must be a list"}
+
+    known = tool_risk.classified_types()
+    rejected: list[dict] = []
+    for i, raw in enumerate(cards):
+        if not isinstance(raw, dict):
+            rejected.append({"index": i, "action_type": None,
+                             "reason": f"card is not an object ({type(raw).__name__})"})
+            continue
+        atype = raw.get("action_type")
+        if atype not in known:
+            rejected.append({"index": i, "action_type": atype,
+                             "reason": "action_type is not classified in "
+                                       "config/tool-risk.json"})
+    if rejected:
+        summary = ", ".join(f"#{r['index']} {r['action_type']!r}" for r in rejected)
+        # ERROR, not a silent return. Three of the callers here are short-lived
+        # CLIs that configure no logging, where `logging.lastResort` puts this on
+        # stderr - the only channel that reaches an operator who is reading a
+        # line printed from `res["added"]` and `res["skipped"]` alone.
+        logger.error(
+            "refusing to deposit %d card(s) of %d: %s. Nothing was written. An "
+            "action_type must be classified in config/tool-risk.json before a "
+            "card carrying it can be queued.",
+            len(rejected), len(cards), summary,
+        )
+        return {"ok": False,
+                "error": f"{len(rejected)} card(s) carry an action_type that is "
+                         f"not classified in config/tool-risk.json: {summary}",
+                "rejected": rejected, "added": 0, "skipped": 0, "ids": []}
+
     now = datetime.now(timezone.utc)
     added_ids: list[str] = []
     skipped = 0
@@ -302,14 +375,12 @@ def append_cards(workspace_root: Path, cards: list[dict]) -> dict:
             if k:
                 by_key.setdefault(k, []).append(c)
 
+        # Every card here is already known to be an object with a classified
+        # action_type - the validation pass above returned rather than fall
+        # through. `skipped` from this point on means dedup or cooldown, and
+        # re-adding a shape check here would put the two reasons back into one
+        # number.
         for raw in cards:
-            if not isinstance(raw, dict):
-                skipped += 1
-                continue
-            atype = raw.get("action_type")
-            if atype not in ACTION_TYPES:
-                skipped += 1
-                continue
             key = _dedup_key(raw)
             if key and key in by_key:
                 existing = by_key[key]
@@ -381,9 +452,29 @@ def apply_status(workspace_root: Path, action_id: str, status: str,
 
     Used by approve/dismiss and by the daemon's executor-result application
     (sent / send_failed). Returns {ok, card} or {ok: False, error}.
+
+    `status` is CHECKED against the two tuples, and the check runs before the
+    lock and before any write, so a refusal writes nothing. The comment above
+    `TERMINAL_STATUSES` states the invariant this enforces: a card is either
+    ACTIVE or TERMINAL, there is no third state, and every writer of `status`
+    has to land in one of the two. Nothing held the writers to it until
+    2026-09-02, and this is the writer four callers reach for.
+
+    What a third state cost, on a card stamped `"approve"` for `"approved"`:
+    `list_action_queue` filters on ACTIVE_STATUSES, so the card vanished from
+    the only surface that could approve, dismiss or undo it; the prune in
+    `append_cards` filters on TERMINAL_STATUSES, so it was never dropped at any
+    age, under a comment promising bound growth; and the dedup check in
+    `append_cards` also reads ACTIVE_STATUSES, so re-depositing the same key
+    minted a SECOND live card. That last one is the duplicate outbound message
+    the dedup exists to stop. The call returned `{"ok": True}` throughout.
     """
     if not action_id:
         return {"ok": False, "error": "action_id required"}
+    if status not in ACTIVE_STATUSES and status not in TERMINAL_STATUSES:
+        return {"ok": False,
+                "error": f"unknown status {status!r}; must be one of "
+                         f"{ACTIVE_STATUSES + TERMINAL_STATUSES}"}
     with _queue_lock(workspace_root):
         data = _load_queue(workspace_root)
         card = _find(data["actions"], action_id)
@@ -545,9 +636,17 @@ def annotate_card(workspace_root: Path, action_id: str, **fields) -> dict:
 
 
 def edit_card(workspace_root: Path, action_id: str, *, subject: str | None = None,
-              draft_body: str | None = None, draft_status: str | None = None) -> dict:
-    """Rewrite an email card's subject / draft_body (and optionally flip
-    draft_status). Atomic + logged. Returns {ok, card} or {ok: False, error}."""
+              draft_body: str | None = None, draft_status: str | None = None,
+              to: str | None = None) -> dict:
+    """Rewrite an email card's recipient / subject / draft_body (and optionally
+    flip draft_status). Atomic + logged. Returns {ok, card} or {ok: False, error}.
+
+    ``to`` is here because a depositor may not know the recipient yet. Without
+    it the only correction path for a placeholder address was hand-editing
+    queue.json, which every skill in this workspace is told never to do.
+    Plausibility of the address is the CALLER's check (see
+    ``scripts/utils/recipient.py``); this helper only writes what it is given.
+    """
     if not action_id:
         return {"ok": False, "error": "action_id required"}
     with _queue_lock(workspace_root):
@@ -555,6 +654,8 @@ def edit_card(workspace_root: Path, action_id: str, *, subject: str | None = Non
         card = _find(data["actions"], action_id)
         if card is None:
             return {"ok": False, "error": "not found"}
+        if to is not None:
+            card["to"] = to
         if subject is not None:
             card["subject"] = subject
         if draft_body is not None:

@@ -85,6 +85,69 @@ def test_session_for_cwd_picks_the_newest_of_several(tmp_path):
     assert session_for_cwd(f, "/work/foo") == "new"
 
 
+def test_a_newer_session_in_another_offset_is_not_beaten_by_an_older_one(tmp_path):
+    """"Newest" was decided by comparing the ISO strings as strings.
+
+    Found by the 2026-08-24 campaign (shard `scripts-01-p2`, finding 2). ISO
+    text only orders correctly when every value carries the same format and the
+    same UTC offset. `2026-08-24T10:00:00+02:00` is 08:00Z, an hour OLDER than
+    `2026-08-24T09:00:00+00:00`, and it sorts ABOVE it as text. `/launch` then
+    resolved the dead session and, per this function's own docstring, spawned a
+    fresh terminal beside the live one.
+
+    The registry lives at `~/.claude/state/active-sessions.json`, a per-user
+    file shared by every project on the machine, and `sessions.py` records one
+    unannounced schema change already, so "the hook always writes UTC" is not a
+    guarantee this reader may lean on.
+    """
+    f = tmp_path / "active-sessions.json"
+    f.write_text(json.dumps({
+        "sid-old": {"session_id": "sid-old", "cwd": "/w",
+                    "started_at": "2026-08-24T10:00:00+02:00"},   # 08:00Z
+        "sid-new": {"session_id": "sid-new", "cwd": "/w",
+                    "started_at": "2026-08-24T09:00:00+00:00"},   # 09:00Z
+    }), encoding="utf-8")
+    assert session_for_cwd(f, "/w") == "sid-new", (
+        "the older session won because '10' sorts above '09' as text")
+
+
+def test_a_naive_timestamp_is_read_as_utc_not_as_a_shorter_string(tmp_path):
+    """The other half of the same defect: mixed naive and offset-bearing forms.
+
+    `2026-08-24T09:00:00` and `2026-08-24T08:00:00+00:00` are an hour apart,
+    and as text the naive one sorts higher on its first differing character
+    while being the LATER moment only by accident of that character. Pin the
+    workspace DTZ convention `parse_iso` encodes: a serialized timestamp with
+    no offset is UTC.
+    """
+    f = tmp_path / "active-sessions.json"
+    f.write_text(json.dumps({
+        "sid-a": {"session_id": "sid-a", "cwd": "/w",
+                  "started_at": "2026-08-24T09:00:00"},           # 09:00Z
+        "sid-b": {"session_id": "sid-b", "cwd": "/w",
+                  "started_at": "2026-08-24T23:00:00+00:00"},     # 23:00Z
+    }), encoding="utf-8")
+    assert session_for_cwd(f, "/w") == "sid-b"
+
+
+def test_an_unreadable_started_at_never_displaces_a_readable_one(tmp_path):
+    """Absent and older are different facts, and guessing costs a dead attach.
+
+    Ordering is asserted BOTH ways round, because a dict preserves insertion
+    order and a rule that only holds when the good entry happens to come first
+    is not a rule.
+    """
+    good = {"session_id": "sid-good", "cwd": "/w",
+            "started_at": "2026-08-24T09:00:00+00:00"}
+    junk = {"session_id": "sid-junk", "cwd": "/w", "started_at": "not a date"}
+    for order in (("good", "junk"), ("junk", "good")):
+        f = tmp_path / f"registry-{order[0]}.json"
+        f.write_text(json.dumps({
+            k: (good if k == "good" else junk) for k in order
+        }), encoding="utf-8")
+        assert session_for_cwd(f, "/w") == "sid-good", order
+
+
 @pytest.mark.parametrize("payload,what", [
     ('[{"session_id": "abc", "cwd": "/work/foo"}]', "a JSON array"),
     ('"abc"', "a bare session-id string"),

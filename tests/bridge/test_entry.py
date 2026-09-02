@@ -319,6 +319,169 @@ def test_check_health_rejects_out_of_range_port(entry_module, tmp_path, monkeypa
     assert exc.value.code == 2
 
 
+def test_a_foreign_server_on_the_port_still_shows_the_heartbeat(
+        entry_module, tmp_path, monkeypatch, capsys):
+    """Exit 1 means "fell back to heartbeat", and this branch never fell back.
+
+    Found by the 2026-08-24 campaign (shard `scripts-00-p4`, finding 2). A
+    stale port file plus another process now bound to that port is the
+    daemon-probably-dead case the fallback exists for, and it was the one path
+    that took exit 1 without reading `heartbeat.json` - losing the last known
+    pid, version, uptime and `last_heartbeat`, the field that says WHEN the
+    real daemon died. The corrupt-port-file branch above it carries a comment
+    reading "Every other failure path here falls back first; this one now does
+    too"; this one did not.
+    """
+    import json
+
+    class _Body:
+        def read(self):
+            return b'{"status": "ok"}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    state_dir = tmp_path / ".daemon-state"
+    state_dir.mkdir()
+    (state_dir / "port").write_text("31415", encoding="utf-8")
+    (state_dir / "heartbeat.json").write_text(json.dumps({
+        "pid": 4321, "version": "0.9.9",
+        "last_heartbeat": "2026-08-24T09:00:00+00:00",
+    }), encoding="utf-8")
+    monkeypatch.setattr(entry_module, "WORKSPACE_ROOT", tmp_path)
+    import urllib.request as _ur
+    monkeypatch.setattr(_ur, "urlopen", lambda *a, **k: _Body())
+
+    with pytest.raises(SystemExit) as exc:
+        entry_module.check_health()
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "not this daemon" in captured.err, (
+        "the operator must still be told the responder is a stranger")
+    docs = [json.loads(chunk) for chunk in _json_documents(captured.out)]
+    assert {"status": "ok"} in docs, (
+        f"what answered must still be shown so the operator can identify it: "
+        f"{captured.out!r}")
+    assert any(d.get("pid") == 4321 for d in docs), (
+        f"the heartbeat was never read, so exit 1 lied about what it did: "
+        f"{captured.out!r}")
+
+
+def _json_documents(text: str):
+    """Split a stdout stream holding several pretty-printed JSON documents.
+
+    `json.dumps(..., indent=2)` starts every document at column 0 with `{` and
+    ends it at column 0 with `}`, so the closing brace on its own line is the
+    boundary. Written rather than assuming one document, because this path now
+    prints two and asserting on the concatenation would pass on either alone.
+    """
+    buf: list[str] = []
+    for line in text.splitlines():
+        buf.append(line)
+        if line == "}":
+            yield "\n".join(buf)
+            buf = []
+
+
+def test_a_foreign_server_with_no_heartbeat_still_exits_one(
+        entry_module, tmp_path, monkeypatch, capsys):
+    """The fallback is an addition, not a replacement.
+
+    With no heartbeat on disk there is nothing to add, and the branch must
+    still refuse the stranger rather than being softened into exit 2 or into
+    printing the stranger as this daemon.
+    """
+    import json
+
+    class _Body:
+        def read(self):
+            return b'{"status": "ok"}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    state_dir = tmp_path / ".daemon-state"
+    state_dir.mkdir()
+    (state_dir / "port").write_text("31415", encoding="utf-8")
+    monkeypatch.setattr(entry_module, "WORKSPACE_ROOT", tmp_path)
+    import urllib.request as _ur
+    monkeypatch.setattr(_ur, "urlopen", lambda *a, **k: _Body())
+
+    with pytest.raises(SystemExit) as exc:
+        entry_module.check_health()
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "not this daemon" in captured.err
+    assert json.loads(captured.out) == {"status": "ok"}
+
+
+def test_a_hand_edited_max_per_tick_does_not_take_the_daemon_down(
+        entry_module, tmp_path, monkeypatch):
+    """One optional knob on an optional, default-off feature killed boot.
+
+    Found by the 2026-08-24 campaign (shard `scripts-00-p4`, finding 1). Every
+    other config read in `_register_spine_jobs` is coerced defensively;
+    `int(crit.get("max_per_tick", 3) or 3)` was bare. `.daemon-state/config.yaml`
+    is hand-edited, so `max_per_tick: "lots"` raised ValueError and
+    `max_per_tick: [3]` raised TypeError, out of `_register_spine_jobs` and into
+    `start_daemon`'s `except Exception: ... raise`. The whole daemon then failed
+    to start: no observer, no scheduler, no uvicorn. Four docstrings in that
+    file promise the spine jobs self-disable and that a failure "must never take
+    the daemon down".
+    """
+    pytest.importorskip("apscheduler")
+
+    class _Sched:
+        def __init__(self):
+            self.jobs = {}
+
+        def add_job(self, fn, *a, **kw):
+            self.jobs[kw.get("id")] = kw.get("args")
+
+    for bad in ("lots", [3], {"n": 3}, "3.5"):
+        sched = _Sched()
+        cfg = {"daemon": {"critique": {"enabled": True, "max_per_tick": bad}}}
+        entry_module._register_spine_jobs(
+            sched, cfg, tmp_path, object(), data_root=tmp_path)
+        assert "critique" in sched.jobs, (
+            f"max_per_tick={bad!r} stopped the critique job being scheduled at "
+            f"all; the knob is optional and the job is not what it configures")
+        # args = [workspace_root, max_per_tick, model, data_root]
+        assert sched.jobs["critique"][1] == 3, (
+            f"max_per_tick={bad!r} should fall back to the documented default "
+            f"of 3, got {sched.jobs['critique'][1]!r}")
+
+
+def test_a_valid_max_per_tick_is_still_honoured(entry_module, tmp_path):
+    """The anchor. Without it the guard passes by always returning 3.
+
+    A string is included because YAML quotes numbers freely and `int("7")` is
+    the coercion this line was written for; refusing it would be the guard
+    overshooting into a new defect.
+    """
+    pytest.importorskip("apscheduler")
+
+    class _Sched:
+        def __init__(self):
+            self.jobs = {}
+
+        def add_job(self, fn, *a, **kw):
+            self.jobs[kw.get("id")] = kw.get("args")
+
+    for good, expected in ((7, 7), ("7", 7), (0, 3)):
+        sched = _Sched()
+        cfg = {"daemon": {"critique": {"enabled": True, "max_per_tick": good}}}
+        entry_module._register_spine_jobs(
+            sched, cfg, tmp_path, object(), data_root=tmp_path)
+        assert sched.jobs["critique"][1] == expected, (good, sched.jobs)
+
+
 def test_rotate_token_prints_restart_warning(entry_module, tmp_path, monkeypatch, capsys):
     """rotate_token prints a clear warning that the running daemon must be restarted."""
     (tmp_path / ".daemon-state").mkdir()

@@ -72,8 +72,17 @@ def list_active_threads(data_root: Path) -> dict:
             "counts": {"today": N, "this_week": N, "older": N},
             "bucket_order": list[str] (only buckets with entries),
             "total": int (pre-cap),
+            "truncated": bool (total > the number of rows returned),
+            "row_cap": int (THREADS_ROW_CAP, the cap that produced it),
             "data_time": ISO 8601 UTC of most-recent file mtime,
         }
+
+    `truncated` and `row_cap` were emitted by both return statements and
+    documented by neither, while this block opens and closes the dict literal
+    and so reads as the exhaustive shape. A consumer of the truncation
+    behaviour had to read the code to learn the keys existed. Same defect
+    `tasks.py` records fixing for `task_key`, `done_filtered` and
+    `done_log_count`.
     """
     biz_dir = data_root / THREADS_BUSINESS_DIR
     if not biz_dir.is_dir():
@@ -91,8 +100,32 @@ def list_active_threads(data_root: Path) -> dict:
         if not p.is_file():
             continue
         try:
-            text = p.read_text(encoding="utf-8")
+            # `read_thread` below refuses a symlinked thread and refuses a body
+            # over THREAD_MAX_BYTES; this walker refused neither, so the same
+            # files were served by one reader and rejected by the other.
+            #
+            # `p.is_file()` follows symlinks, so a link planted in
+            # threads/business/ was read and its title and frontmatter were
+            # published by the listing while the detail view answered "symlinks
+            # not allowed" for the very same row. And the cap on
+            # THREAD_MAX_BYTES says it bounds "any thread body read" while this
+            # loop pulled every body in whole on every poll. studio.py's
+            # `_artifact_md_is_readable` names this bug class from its own
+            # incident: a guard on one of two readers of the same files is a
+            # guard on neither.
+            if contains_symlink(biz_dir, p):
+                logger.warning(
+                    "threads: skipping %s from the /threads listing; it is a "
+                    "symlink, and read_thread refuses to open it.", p)
+                continue
             stat_result = p.stat()
+            if stat_result.st_size > THREAD_MAX_BYTES:
+                logger.warning(
+                    "threads: skipping %s from the /threads listing; it is %d "
+                    "bytes, over the %d-byte cap read_thread applies.",
+                    p, stat_result.st_size, THREAD_MAX_BYTES)
+                continue
+            text = p.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             # UnicodeDecodeError is a ValueError, NOT an OSError, so ONE thread
             # file saved in anything but UTF-8 used to abort this walk with a

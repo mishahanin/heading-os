@@ -507,6 +507,19 @@ DECLARED_SIDECAR_SITES = {
     ("scripts/datastore-extract.py", "derived",
      "f'{filepath.stem}-{suffix}-extract.md'"):
         "the multi-part form of the same output",
+    ("scripts/design-studio.py", "derived", "output_path.name + '.source.html'"):
+        "the source twin of a render, and a DELIVERABLE rather than a wreck: "
+        "`save_source_html` writes it only when the HTML came from `--html`, so "
+        "the operator keeps the markup that produced the PNG, and `cmd_render` "
+        "prints its path. The name is only reached when the output itself ends "
+        "`.html`, where `with_suffix('.html')` would return the output path and "
+        "overwrite the artifact. MEASURED 2026-09-02 on the default location "
+        "`outputs/design/`: `git check-ignore -v` in the ENGINE exits 0 naming "
+        "`.gitignore:328 /outputs/`, and in the DATA overlay exits 1 -- not "
+        "ignored, because outputs/ is what that repository is for. Left VISIBLE "
+        "for the same reason as the settings backup above: burying a file the "
+        "operator was just told the path of would make it harder to find than "
+        "the render it belongs to",
     ("scripts/utils/crm.py", "derived", "f'{base}-{suffix}'"):
         "stamped_backup_path, for merge-contacts and transfer-contact. The "
         "original crm/contacts/<name>.md is TRACKED, not ignored, and both tools "

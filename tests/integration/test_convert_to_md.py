@@ -217,3 +217,88 @@ def test_sanitizer_missing_on_disk(tmp_path):
     assert result.returncode == 1
     stderr = result.stderr.decode("utf-8")
     assert "Sanitizer missing" in stderr or "sanitizer missing" in stderr.lower()
+
+
+# ==========================================================================
+# Shard scripts-04-p2 finding 6 - a substituted stdout crashed the CLI before
+# argument parsing
+# ==========================================================================
+#
+# `reconfigure` is a `TextIOWrapper` method, not a file-object one. `main`
+# called it unguarded on its first line, so under
+# `contextlib.redirect_stdout(io.StringIO())`, a test harness, an IDE console,
+# or any embedded interpreter that substitutes `sys.stdout`, it raised
+# AttributeError before argparse ran: the documented usage-error and exit-1
+# paths could not be reached at all. `scripts/compression-candidates.py` guards
+# the identical call with `hasattr`; `scripts/context7.py` guards by platform.
+# The inconsistency is how the failure mode was already known here.
+
+
+def _run_main_under(stdout_obj, argv):
+    """Execute `convert-to-md.main()` in-process with a substituted stdout."""
+    import contextlib
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("convert_to_md_probe", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    old_argv = sys.argv
+    sys.argv = ["convert-to-md.py", *argv]
+    try:
+        with contextlib.redirect_stdout(stdout_obj):
+            return mod.main()
+    finally:
+        sys.argv = old_argv
+
+
+def test_a_substituted_stdout_does_not_crash_before_argument_parsing(tmp_path):
+    """The exact reproduction from the audit, run rather than described.
+
+    A path that does not exist, so `main` must reach its own "File not found"
+    branch and return 1. Before the guard it never got past line one.
+    """
+    import io
+
+    buf = io.StringIO()
+    missing = tmp_path / "nowhere.docx"
+    try:
+        code = _run_main_under(buf, [str(missing)])
+    except AttributeError as exc:
+        raise AssertionError(
+            "convert-to-md.py called sys.stdout.reconfigure unguarded, so a "
+            f"substituted stdout crashed it before argparse: {exc!r}") from exc
+    assert code == 1
+
+
+def test_a_substituted_stdout_still_reaches_the_usage_error(tmp_path):
+    """The other documented path the crash pre-empted: argparse's own exit 2."""
+    import io
+
+    with pytest.raises(SystemExit) as exited:
+        _run_main_under(io.StringIO(), [])
+    assert exited.value.code == 2
+
+
+def test_a_real_stdout_is_still_reconfigured_to_utf8():
+    """The guard must skip the call, not delete it.
+
+    A `TextIOWrapper` on a non-UTF-8 default encoding is the case the line was
+    written for: markdown out of a Russian .docx has to survive the write. This
+    asks the object under a `hasattr` guard, so a fix that removed the call
+    entirely fails here.
+    """
+    import ast
+
+    tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+    calls = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and n.func.attr == "reconfigure"]
+    assert len(calls) == 1, (
+        f"expected one sys.stdout.reconfigure call in convert-to-md.py, "
+        f"found {len(calls)}")
+    assert any(
+        isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        and n.func.id == "hasattr"
+        for n in ast.walk(tree)), (
+        "the reconfigure call is no longer behind a hasattr guard")

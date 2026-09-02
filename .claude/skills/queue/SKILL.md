@@ -1,7 +1,7 @@
 ---
 name: queue
 description: Terminal-native Action Queue - the one lane where proactive agents (cold-sweep, email-intel, viraid) deposit drafted actions for the CEO's go/no-go. Runs scripts/action-queue.py to list drafts, show one, approve (= SYNCHRONOUS send, watched, in the same command), edit a draft, dismiss, or retry a failed send. Daemon-free and browser-free. Use when the user says "queue", "action queue", "show my drafts", "what's waiting to send", "approve/send the first one", "retry that failed send", or wants to review the pending-draft backlog. Do NOT use to see what is overdue across the whole workspace (use /radar), to draft cold-contact nudges (use /cold-sweep), or for inbox triage (use /email-intel). This is the approve/send surface those skills FEED.
-argument-hint: "[list | show <id> | approve <id> | edit <id> | dismiss <id> | retry <id>]"
+argument-hint: "[list | show <id> | approve <id> | edit <id> [--to A] | dismiss <id> | retry <id>]"
 allowed-tools: "Read, Bash(python3:*), Bash(python:*)"
 model: sonnet
 metadata:
@@ -26,7 +26,8 @@ x-heading-capability:
     send-gate is intact (only the human approve sends; nothing auto-sends).
   how: >
     Run /queue to list; /queue show <id> for the full draft; /queue approve <id>
-    to send it now (watched); /queue edit <id> to rewrite a draft; /queue dismiss
+    to send it now (watched); /queue edit <id> to rewrite a draft or correct its
+    recipient with --to; /queue dismiss
     <id> to suppress it; /queue retry <id> to re-send a failed card. All via
     scripts/action-queue.py, no bridge daemon required.
   when: >
@@ -85,15 +86,17 @@ Print the full card so the CEO can read the recipient, subject, and body before 
 python scripts/action-queue.py approve <id-or-prefix>
 ```
 
-This SENDS the card right now and prints `sent` or `send failed (reason)` in the same command. For an `email_send` card it requires `draft_status: ready_for_review` (edit it first otherwise) and refuses anything that does not resolve `gated`. Report the outcome exactly as the command returned it - if it failed, surface the reason and note the card is kept as `send_failed` for `retry`. Another terminal may already hold the `sending` claim on that card. Then `approve` returns `blocked`. That is the duplicate guard doing its job: surface the message, and do NOT retry. If a terminal died mid-send, its claim frees after five minutes; `dismiss` the card to clear it sooner. Approve ONE card per explicit instruction; "approve the first one" means only the first.
+This SENDS the card right now and prints `sent` or `send failed (reason)` in the same command. For an `email_send` card it requires `draft_status: ready_for_review` (edit it first otherwise) and refuses anything that does not resolve `gated`. It also refuses a recipient that is still a placeholder. Fix that one with `edit <id> --to`, then approve again. Report the outcome exactly as the command returned it - if it failed, surface the reason and note the card is kept as `send_failed` for `retry`. Another terminal may already hold the `sending` claim on that card. Then `approve` returns `blocked`. That is the duplicate guard doing its job: surface the message, and do NOT retry. If a terminal died mid-send, its claim frees after five minutes; `dismiss` the card to clear it sooner. Approve ONE card per explicit instruction; "approve the first one" means only the first.
 
 ## Phase 4 - Edit a draft
 
 ```bash
-python scripts/action-queue.py edit <id> --subject "..." --body-file <path>
+python scripts/action-queue.py edit <id> --to "..." --subject "..." --body-file <path>
 ```
 
-Rewrite the subject, the body, or both. That flips `draft_status` to `ready_for_review`. For voice, follow `reference/misha-voice.md` and the humanisation rule; hyphens, never em-dashes. Write the body to a temp file and validate (`sanitize-text.py --scan`, `humanization-check.py`) before the edit.
+Rewrite the recipient, the subject, the body, or any combination. That flips `draft_status` to `ready_for_review`. For voice, follow `reference/misha-voice.md` and the humanisation rule; hyphens, never em-dashes. Write the body to a temp file and validate (`sanitize-text.py --scan`, `humanization-check.py`) before the edit.
+
+`--to` is how a placeholder recipient gets corrected. A depositing skill can stage a card before it knows the address, so `/queue-draft` falls back to a reserved documentation address. `approve` REFUSES such a card: it attempts no send, names the fault, and leaves the card pending. Correct the address with `--to`, then approve. The CLI refuses an implausible address at the keystroke as well, so a second placeholder is caught here rather than at the send gate.
 
 ## Phase 5 - Dismiss / retry
 

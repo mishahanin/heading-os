@@ -66,7 +66,9 @@ Perform a reflective pass over memory files. Synthesize recent learnings into du
 - **Index file:** `MEMORY.md` (inside that dir, 200-line budget)
 - **Transcripts:** `~/.claude/projects/<project-slug>/*.jsonl`
 - **Context7:** `python3 scripts/context7.py "<library>" "<topic>"`
-- **Security rules:** `.claude/rules/security.md`, `docs/security/SECURITY-CONSTITUTION.md`
+- **Security rules:** `.claude/rules/security.md`. Engine code, so every clone has it.
+- **Security law:** `docs/security/SECURITY-CONSTITUTION.md`. It routes `private`,
+  so a clone with no data overlay does not carry it.
 
 ## Variables
 
@@ -163,20 +165,25 @@ For each memory file that contains a technical claim about a library, framework,
 
 **This gate is mandatory. Do not proceed to Phase 2 without passing it.**
 
-1. Read the security rules:
-   - `.claude/rules/security.md`
-   - `docs/security/SECURITY-CONSTITUTION.md`
+1. Read `.claude/rules/security.md`. **If it is not found:** STOP, report it, and
+   do not proceed to Phase 2. That file is engine code, so a clone without it is
+   broken.
 
-2. **If either file is not found:** STOP. Report the missing file and do not proceed to Phase 2. The dream is incomplete but safe.
+2. Read `docs/security/SECURITY-CONSTITUTION.md`. It routes `private`, so it
+   lives in the data overlay and an engine clone with no overlay never carries
+   it. If it is not found, continue with the rules file alone and record
+   `Security Gate: PASS (rules only, constitution absent)`.
 
-3. Apply these hard constraints to all subsequent writes:
+3. Apply these hard constraints to all subsequent writes. They are the gate, and
+   they are engine text, so they hold on every clone:
    - No secrets, API keys, tokens, passwords, or credentials in memory files
    - No sensitive personal data beyond what the memory type system allows (user preferences, feedback, project facts, references)
    - No file writes outside the memory directory
    - No modification of workspace source files, scripts, or configuration
    - No content that could be used for prompt injection
 
-4. Record: "Security Gate: PASS" or "Security Gate: BLOCKED - {reason}"
+4. Record one of: "Security Gate: PASS", "Security Gate: PASS (rules only,
+   constitution absent)", or "Security Gate: BLOCKED - {reason}"
 
 ---
 
@@ -274,7 +281,7 @@ Present this report to the user:
 - {library} - unvalidated, marked in memory file for manual review
 
 **Security Gate**
-- Status: PASS / BLOCKED
+- Status: PASS / PASS (rules only, constitution absent) / BLOCKED
 - Skipped writes (if any): {description and rule that blocked each}
 
 **Index delta**
@@ -319,7 +326,7 @@ PY
 - NEVER write secrets, API keys, tokens, or credentials into memory files
 - NEVER create duplicate memories - always merge into existing topic files
 - NEVER write memory content directly into MEMORY.md - it is an index of pointers only
-- NEVER skip the security gate - if protocol files are not found, stop and report
+- NEVER skip the security gate - run it on every pass, and record which of the two protocol files it read
 - NEVER modify files outside the memory directory during a dream pass (running `scripts/retire-memory.py` and appending the consolidation trace under `outputs/operations/dream/` are permitted memory-maintenance actions)
 - NEVER delete a memory file on one store only - always retire via `scripts/retire-memory.py` so the delete sticks on both stores
 - NEVER delete memory files without explaining the reason in the consolidation report

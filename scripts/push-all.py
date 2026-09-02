@@ -213,13 +213,24 @@ def _push_delta_files(repo: Path) -> set[str]:
         # step 5 pushed the token. Only the bypassable pre-commit hook
         # stood in the way, which is exactly what this wall backstops.
         # Turning renames off restores the `A` for the destination path.
+        #
+        # `T` (typechange) joined `ACM` on 2026-09-02, for the same reason one
+        # letter further along. A tracked regular file replaced by a symlink
+        # is ONE `T` entry and nothing else, so the path fell out of every leg
+        # and this wall never opened it. MEASURED that day in a scratch repo:
+        # `git diff --name-status` reported `T f.txt` while
+        # `--diff-filter=ACM` returned the empty set and `--diff-filter=ACMT`
+        # returned `f.txt`. The workspace forbids symlinks, which is why the
+        # gap was rated unreachable; a content wall that relies on another
+        # rule holding is a wall with a hole in it, and widening a filter can
+        # only ever add files to the scan.
         for args in (
             ["git", "diff", "-z", "--no-renames", "--name-only",
-             "--diff-filter=ACM", "origin/main..HEAD"],
+             "--diff-filter=ACMT", "origin/main..HEAD"],
             ["git", "diff", "-z", "--cached", "--no-renames", "--name-only",
-             "--diff-filter=ACM"],
+             "--diff-filter=ACMT"],
             ["git", "diff", "-z", "--no-renames", "--name-only",
-             "--diff-filter=ACM"],
+             "--diff-filter=ACMT"],
         ):
             files.update(_z_paths(args, repo))
     else:

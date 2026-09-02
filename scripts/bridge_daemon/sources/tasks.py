@@ -12,6 +12,7 @@ items from its own surface. Each task gets a derived stable key
 (captured | priority | first chars of description) since tasks.md has
 no explicit IDs.
 """
+import hashlib
 import logging
 import re
 import threading
@@ -34,18 +35,63 @@ DONE_LOG_FILE = "outputs/operations/viraid/_done-log.jsonl"  # leak-guard: ok (r
 DONE_LOG_MAX_BYTES = 1_000_000
 DONE_NOTE_MAX_CHARS = 200
 TASK_KEY_DESC_PREFIX = 64  # chars of description used in the stable key
+TASK_KEY_DIGEST_CHARS = 12  # hex chars appended when the description was cut
+_DIGEST_SUFFIX_RE = re.compile(r"\|[0-9a-f]{%d}\Z" % TASK_KEY_DIGEST_CHARS)
 _DONE_LOG_LOCK = threading.Lock()
 
 
 def _task_key(captured: str, priority: str, description: str) -> str:
     """Stable identifier for a task row.
 
-    Format: '{captured}|{priority}|{first N chars of description}'.
+    Format: '{captured}|{priority}|{first N chars of description}', plus
+    '|{12 hex}' when and only when the description was longer than N and the
+    prefix therefore does not identify it.
+
     If the CEO edits the description meaningfully, the key changes and
     the row reappears in the listing - that's acceptable.
+
+    **The truncation alone was not an identifier.** Two tasks captured the same
+    day at the same priority whose descriptions share a 64-character prefix
+    produced one key, so marking either done hid BOTH from /tasks and
+    `done_filtered` counted two rows for one action. Two P2 rows opening
+    "Follow up with the regional procurement office about the pilot contract ..."
+    is an ordinary shape for this file, not a contrived one. Fixed 2026-09-02.
+
+    On-disk compatibility, checked before choosing the shape: the key is
+    persisted verbatim as the `task_key` field of every line in
+    `<data_root>/outputs/operations/viraid/_done-log.jsonl`, read back by
+    `read_done_log` and `done_log_recent`, and matched by string equality
+    against a key recomputed from tasks.md. A key that changes therefore
+    re-surfaces an already-done row. That is why the suffix is CONDITIONAL: a
+    description of N characters or fewer keeps a byte-identical key, so every
+    existing entry whose key was unambiguous still matches. Only the long ones
+    move, and those are exactly the ambiguous ones - they re-surface once,
+    which is the documented and visible behaviour of this key, where the
+    alternative is going on silently hiding an unrelated task.
+
+    The digest is a shortened SHA-256 of the FULL stripped description. It is
+    an identifier, not a security control.
     """
-    desc = (description or "").strip()[:TASK_KEY_DESC_PREFIX]
-    return f"{captured}|{priority}|{desc}"
+    desc = (description or "").strip()
+    prefix = desc[:TASK_KEY_DESC_PREFIX]
+    if len(desc) <= TASK_KEY_DESC_PREFIX:
+        return f"{captured}|{priority}|{prefix}"
+    digest = hashlib.sha256(desc.encode("utf-8")).hexdigest()[:TASK_KEY_DIGEST_CHARS]
+    return f"{captured}|{priority}|{prefix}|{digest}"
+
+
+def _key_label(task_key: str) -> str:
+    """The readable description component of a key, for display only.
+
+    Drops the disambiguating digest `_task_key` appends to a truncated
+    description; matching never uses this, only the whole key. A description
+    that genuinely ends in '|' plus twelve lowercase hex characters loses that
+    component from its LABEL, which is cosmetic and cannot affect which row is
+    hidden.
+    """
+    parts = task_key.split("|", 2)
+    body = parts[2] if len(parts) == 3 else task_key
+    return _DIGEST_SUFFIX_RE.sub("", body)
 
 
 def read_done_log(data_root: Path) -> set[str]:
@@ -100,9 +146,13 @@ def done_log_recent(data_root: Path, limit: int = 20) -> list[dict]:
         active[key] = entry
     rows = []
     for key, entry in active.items():
-        # Surface the description prefix from the key for a readable label.
+        # Surface the description prefix from the key for a readable label,
+        # minus the disambiguating digest `_task_key` appends to a truncated
+        # description. `sources/pulse.py` renders the same field with its own
+        # inline split and is not touched here, so its "task_done" line shows
+        # the digest; cosmetic, and it truncates to 80 characters anyway.
         parts = key.split("|", 2)
-        description = parts[2] if len(parts) == 3 else key
+        description = _key_label(key)
         priority = parts[1] if len(parts) >= 2 else ""
         rows.append({
             "task_key": key,

@@ -6,24 +6,38 @@ Implementation per:
   - Plan: docs/superpowers/plans/2026-05-03-tribe-fireside-bot-implementation.md (v1.3)
   - Operating model: runs on Misha's workstation, state in datastore/operations/tribe/fireside-state/
 
-Subcommands (current implementation status in parentheses):
-  bootstrap                 - One-time: enumerate Telegram group, build initial roster (Phase 2)
-  poll                      - Process Telegram updates, every 5 min (Phase 3)
-  speaker-dms               - Send 2-week + 3-day speaker reminders (Phase 3)
-  sunday-preview            - Post pinned weekly preview to 31C Tribe (Phase 3)
-  dayof-reminders           - DM speakers Zoom link 3h before session (Phase 3)
-  helmsman-brief            - Brief next week's Helmsman 7 days ahead (Phase 3)
+Subcommands. Every entry in `main()`'s `handlers` dict appears here, and
+`tests/test_fireside_helmsman.py` fails when the two drift apart. Until
+2026-09-02 this list ended at `init-state` and omitted nine implemented
+commands, all of Phase 4 among them, while its own header claimed to state
+"current implementation status" and so read as the authoritative surface.
+
+  bootstrap                 - One-time: enumerate Telegram group, build initial roster
+  poll                      - Process Telegram updates, every 5 min
+  speaker-dms               - Send 2-week + 3-day speaker reminders
+  sunday-preview            - Post pinned weekly preview to 31C Tribe
+  dayof-reminders           - DM speakers Zoom link 3h before session
+  helmsman-brief            - Brief next week's Helmsman 7 days ahead
   helmsman set|list|gaps    - Assign / list / audit Helmsman coverage
   speaker-gaps              - List members with no slot this cycle; exits 1 if any
-  weekly-discrepancy-report - Report Telegram-vs-xlsx mismatches (Phase 3)
-  email-backup              - Email reminder for unresponsive Tribe (Phase 3)
-  stats                     - Generate stats markdown report (Phase 3)
-  health-check              - Alert if poll hasn't run in 30 min (Phase 3)
-  unpin-weekly              - Unpin Sunday preview after Wed session (Phase 3)
-  log-session               - Log session result, manual command (Phase 3)
-  test-telegram             - Smoke test: send DM to Misha (Phase 1) [IMPLEMENTED]
-  xlsx-check                - Print xlsx loader summary (Phase 1 helper) [IMPLEMENTED]
-  init-state                - Initialise state directory + files (Phase 1 helper) [IMPLEMENTED]
+  weekly-discrepancy-report - Report Telegram-vs-xlsx mismatches
+  email-backup              - Email reminder for unresponsive Tribe
+  stats                     - Generate stats markdown report
+  health-check              - Alert if poll hasn't run in 30 min
+  unpin-weekly              - Unpin Sunday preview after Wed session
+  log-session               - Log session result, manual command
+  topic-nudge               - Nudge the Tribe for topic ideas mid-cycle
+  topic-digest              - Post the running topic backlog to the group
+  cycle-end-invite          - Draft the cycle-end topic invite to the CEO for approval
+  cycle-rollover            - Roll the schedule into the next cycle
+  topic-ideas               - List the ideas collected for a cycle
+  set-webhook               - Register the Telegram webhook URL
+  delete-webhook            - Remove the Telegram webhook registration
+  webhook-info              - Print Telegram's view of the current webhook
+  heartbeat                 - Liveness ping for the daemon's healthcheck
+  test-telegram             - Smoke test: send DM to Misha
+  xlsx-check                - Print xlsx loader summary
+  init-state                - Initialise state directory + files
 
 Usage:
   python scripts/fireside-bot.py <subcommand> [args]
@@ -52,6 +66,7 @@ import argparse
 import contextlib
 import json
 import os
+import re
 import socket
 import tempfile
 from datetime import datetime
@@ -146,6 +161,36 @@ VP_TITLE_FRAGMENTS = (
     "chief ", "vp ", "svp ", "vp,", "svp,", "vice president",
     "founder", "co-founder",
 )
+
+
+def _vp_title_pattern(fragments=VP_TITLE_FRAGMENTS):
+    """One case-insensitive pattern, each fragment held to word boundaries.
+
+    The fragments were matched as bare substrings, which is safe for the ones
+    carrying a space or a comma and wrong for the nine bare trigrams: "cio"
+    matched "precious" and "ex officio", "clo" matched "clothing", "cso" matched
+    any compound containing those three letters. A member titled "Clothing and
+    Apparel Lead" came back is_vp. The 2026-08-25 pass on this list added the
+    spelled-out "vice president" and never touched the boundary problem.
+
+    A boundary is only added on a side where the fragment itself ends in a word
+    character, so "vp " keeps its trailing space as the separator it was written
+    to be and "co-founder" is not split at its hyphen.
+    """
+    parts = []
+    for frag in fragments:
+        lead = r"\b" if frag[:1].isalnum() else ""
+        tail = r"\b" if frag[-1:].isalnum() else ""
+        parts.append(f"{lead}{re.escape(frag)}{tail}")
+    return re.compile("|".join(parts), re.IGNORECASE)
+
+
+_VP_TITLE_RE = _vp_title_pattern()
+
+
+def is_vp_title(title: str) -> bool:
+    """True when a job title names a senior leader."""
+    return bool(_VP_TITLE_RE.search(title or ""))
 
 # Cycle-1 speaker schedule is per-instance DATA: real names, themes, and the cycle
 # start date live in the data overlay at <data-root>/config/fireside-schedule.json
@@ -722,8 +767,7 @@ def load_tribe_metadata() -> dict:
         if email_col is not None and row[email_col] is not None:
             email = str(row[email_col]).strip()
 
-        title_lower = title.lower()
-        is_vp = any(frag in title_lower for frag in VP_TITLE_FRAGMENTS)
+        is_vp = is_vp_title(title)
 
         if username.lower() in seen_usernames:
             raise ValueError(
@@ -1189,7 +1233,7 @@ def cmd_bootstrap(args) -> None:
     print(f"{CYAN}1. Loading xlsx roster...{RESET}")
     try:
         xlsx_roster = load_tribe_metadata()
-    except (FileNotFoundError, ValueError) as e:
+    except (FileNotFoundError, *_UNREADABLE_SHEET) as e:
         print(f"{RED}xlsx load failed:{RESET} {e}", file=sys.stderr)
         print(f"{YELLOW}Hint: complete Phase 0 task 0.5 (add Telegram Username column "
               f"to xlsx and populate for all 54 Tribe members).{RESET}", file=sys.stderr)
@@ -1316,7 +1360,7 @@ def cmd_xlsx_check(args) -> None:
     """Print xlsx loader output summary. Verifies load_tribe_metadata() works."""
     try:
         roster = load_tribe_metadata()
-    except (FileNotFoundError, ValueError) as e:
+    except (FileNotFoundError, *_UNREADABLE_SHEET) as e:
         print(f"{RED}xlsx load failed:{RESET} {e}", file=sys.stderr)
         sys.exit(1)
 
@@ -1546,17 +1590,50 @@ def _current_or_upcoming_week(schedule: list, today=None) -> Optional[int]:
     return upcoming[0]["week"]
 
 
+def _first_name(raw, fallback: str) -> str:
+    """The greeting name, or `fallback` when there is nothing to greet with.
+
+    One implementation for the four send loops that need it. Three of them
+    carried their own copy of `raw.split()[0] if raw else <fallback>`, each
+    above a comment recording that a blank name had already crashed a live send
+    loop mid-flight. The fourth, `cmd_helmsman_brief`, was written without the
+    guard and read `entry.get("name", "Helmsman").split()[0]`, where the `.get`
+    default never applies because the key is PRESENT and empty: `""` reaches
+    `[0]` and raises IndexError, `None` raises AttributeError. That one runs on
+    a daily cron and raises before the entry is stamped `briefed`, so the job
+    picks the same candidate again the next day, and the next, and no Helmsman
+    is ever briefed. Its healthcheck goes red by silence at the same time.
+    """
+    text = str(raw or "").strip()
+    return text.split()[0] if text else fallback
+
+
+def _roster_entry(roster: dict, username: Optional[str]) -> Optional[dict]:
+    """The roster record for `username`, matched exactly then case-insensitively.
+
+    Roster keys keep whatever case the xlsx column held; a schedule row carries
+    whatever case the cycle config or the swap machinery produced, and nothing
+    normalises either side at write time. Two of the three call sites already
+    fell back to a lowercase comparison and the third, `cmd_email_backup`, did a
+    bare `roster.get(username)`, so a case mismatch there classified the member
+    as `not-in-roster` and the one person that command exists to reach, an
+    unresponsive speaker, was named in a summary line instead of emailed.
+    """
+    if not username:
+        return None
+    entry = roster.get(username)
+    if entry is not None:
+        return entry
+    lowered = str(username).lower()
+    for key, data in roster.items():
+        if str(key).lower() == lowered:
+            return data
+    return None
+
+
 def _resolve_speaker_user_id(roster: dict, speaker_username: Optional[str]) -> Optional[int]:
     """Look up a speaker's telegram_user_id from the roster by username."""
-    if not speaker_username:
-        return None
-    entry = roster.get(speaker_username)
-    if entry is None:
-        # try lowercase match
-        for username, data in roster.items():
-            if username.lower() == speaker_username.lower():
-                entry = data
-                break
+    entry = _roster_entry(roster, speaker_username)
     return entry.get("telegram_user_id") if entry else None
 
 
@@ -1977,8 +2054,25 @@ def _new_request_id() -> str:
     return _secrets.token_hex(4)
 
 
-def _format_dm_date(date_iso: str, day: str) -> str:
+def _format_dm_date(date_iso: str, day: str | None) -> str:
     """'2026-06-08' + 'Mon' -> 'Mon, 8 Jun'. A blank day is read off the date.
+
+    `day` is `str | None` because `or` already accepted both and one caller can
+    supply either. The annotation said `str` while the test beside it passed
+    `day or ""`, so neither declared nor measured the case the code handles.
+
+    Where a None comes from, corrected 2026-09-02. This paragraph first said
+    `c["day"]` "comes straight out of `config/fireside-schedule.json`, where
+    `"day": null` is legal", which is false in both halves: that file carries
+    `week`/`theme`/`mon`/`wed` and no `day` key at all, and every `day` in a
+    schedule entry is the literal "Mon" or "Wed" that `build_schedule` writes.
+    The value reaches here through the PERSISTED schedule state, read back as
+    `entries[0].get("day", "")` in `find_swap_candidates` and carried into the
+    candidate dict the tap handlers store and re-read. A missing key yields ""
+    from that default; a key present and null yields None, which is what a
+    hand-edited or half-written state file produces. That is the case the
+    annotation now declares, and it is the reason `or` is load-bearing rather
+    than decorative.
 
     Three call sites pass no day at all. `_handle_a_tap` reads `ctx["a_day"]`,
     which `_swap_kickoff_for_a` has never written, and `_handle_b_tap` passes ""
@@ -2551,6 +2645,28 @@ def _handle_cycle_invite_tap(bot: TelegramBot, cq_id, data: str,
                 pass
         return
 
+    # The tapped card must be the card this draft was drafted onto. Telegram
+    # keeps an old inline keyboard tappable forever, and `cycle-end-invite`
+    # overwrites `pending_cycle_invite` when a new cycle comes round, so the
+    # cycle-1 approval message stayed in the CEO's history showing cycle-1 text
+    # while the pending draft underneath it had become cycle 2. Tapping "Send to
+    # Tribe" on that card posted the cycle-2 invite: the text on screen and the
+    # text sent were different, on the one flow whose whole purpose is the CEO
+    # approving exact wording. Refused now, and the dead keyboard is cleared so
+    # the card cannot be tapped again.
+    approval_msg_id = pending.get("approval_msg_id")
+    if approval_msg_id is not None and msg_id is not None and msg_id != approval_msg_id:
+        _log_event("cycle_end_invite_stale_tap", cycle=pending.get("cycle"),
+                   tapped_msg_id=msg_id, pending_msg_id=approval_msg_id)
+        try:
+            bot.answer_callback_query(
+                cq_id, text="This draft was replaced by a newer one. Nothing was sent.")
+            if msg_chat_id:
+                bot.edit_message_reply_markup(msg_chat_id, msg_id, None)
+        except TelegramAPIError:
+            pass
+        return
+
     choice = data.split(":", 1)[1]
     if choice == "cancel":
         state["pending_cycle_invite"] = None
@@ -3061,7 +3177,7 @@ def _handle_message(bot: TelegramBot, message: dict) -> None:
             return
         schedule = load_state(SCHEDULE) or []
         roster = load_state(TRIBE_ROSTER) or {}
-        name = (roster.get(_resolve_my_username(user_id) or "", {}) or {}).get("name", "")
+        name = (_roster_entry(roster, _resolve_my_username(user_id)) or {}).get("name", "")
         ft.append_idea(
             state_dir(),
             now_iso=local_now().isoformat(),
@@ -3258,8 +3374,7 @@ def cmd_speaker_dms(args) -> None:
         # healthcheck went red-by-silence at best and the partial send was
         # invisible. A handle is a worse greeting than a first name and a much
         # better one than a dead job.
-        raw_name = str(entry.get("speaker_name") or "").strip()
-        name = raw_name.split()[0] if raw_name else f"@{username}"
+        name = _first_name(entry.get("speaker_name"), f"@{username}")
         session_day = d.strftime("%a")
         theme = entry["theme"]
 
@@ -3506,6 +3621,25 @@ def cmd_cycle_end_invite(args) -> None:
         print(f"{RED}cycle-end-invite draft DM failed: {e}{RESET}", file=sys.stderr)
         return
 
+    # Disarm the card this draft replaces. `pending` here is a draft for an
+    # EARLIER cycle that the CEO never answered: the guard above only skipped on
+    # a match, so an unanswered cycle-1 draft was silently discarded while its
+    # message kept live buttons in the DM history. Best effort, and reported: if
+    # the edit fails the stale card stays tappable, and the tap handler refuses
+    # it on the message id, so nothing can be posted under the wrong text.
+    if pending and pending.get("approval_msg_id"):
+        _log_event("cycle_end_invite_superseded",
+                   cycle=pending.get("cycle"), new_cycle=cycle,
+                   approval_msg_id=pending.get("approval_msg_id"))
+        try:
+            bot.edit_message_text(
+                misha_id, pending["approval_msg_id"],
+                f"⏳ Superseded by the cycle {cycle} draft below. Nothing was sent.",
+                parse_mode="", reply_markup=None)
+        except TelegramAPIError as e:
+            log_error(f"cycle-end-invite: could not retire the cycle "
+                      f"{pending.get('cycle')} approval card: {e}")
+
     state["pending_cycle_invite"] = {
         "text": invite,                      # the exact text posted on approval
         "approval_msg_id": result.get("message_id"),
@@ -3675,8 +3809,7 @@ def cmd_dayof_reminders(args) -> None:
         # speaker_name raised IndexError mid-loop, and this is the day-of DM
         # carrying the Zoom link, so the speakers after the blank row lost the
         # only message that tells them where to be.
-        raw_name = str(entry.get("speaker_name") or "").strip()
-        name = raw_name.split()[0] if raw_name else f"@{username}"
+        name = _first_name(entry.get("speaker_name"), f"@{username}")
         text = SPEAKER_DM_DAYOF.format(name=name, zoom_link=zoom, helmsman_name=helmsman_name)
         try:
             bot.send_dm(user_id, text)
@@ -3913,7 +4046,12 @@ def cmd_helmsman_brief(args) -> None:
         f"  - @{w['username']}" for w in opt_ins.get("wildcard", [])
     ) or "  (none yet - opt-ins are still open in the 31C Tribe group)"
 
-    name = helmsman_entry.get("name", "Helmsman").split()[0]
+    # Guarded like the three send loops, through the one helper they now share.
+    # A hand-edited helmsmen.json with an empty or null `name` used to raise out
+    # of this daily job before the entry was stamped `briefed`.
+    handle = helmsman_entry.get("username")
+    name = _first_name(helmsman_entry.get("name"),
+                       f"@{handle}" if handle else "Helmsman")
     text = HELMSMAN_BRIEF.format(
         name=name,
         week_starting=target_week_start,
@@ -4005,8 +4143,7 @@ def cmd_helmsman(args) -> Optional[int]:
 
     roster = load_state(TRIBE_ROSTER) or {}
     username = args.username.lstrip("@")
-    entry = roster.get(username) or next(
-        (v for k, v in roster.items() if k.lower() == username.lower()), None)
+    entry = _roster_entry(roster, username)
     if entry is None:
         print(f"{RED}helmsman set: @{username} is not in the roster{RESET}", file=sys.stderr)
         return 1
@@ -4085,7 +4222,7 @@ def cmd_weekly_discrepancy_report(args) -> None:
 
     try:
         xlsx_roster = load_tribe_metadata()
-    except (FileNotFoundError, ValueError) as e:
+    except (FileNotFoundError, *_UNREADABLE_SHEET) as e:
         print(f"{RED}weekly-discrepancy-report: xlsx load failed: {e}{RESET}", file=sys.stderr)
         return
 
@@ -4200,7 +4337,7 @@ def cmd_email_backup(args) -> None:
         days_until = (d - today).days
         if not (1 <= days_until <= 14):
             continue  # only current 2-week window
-        roster_entry = roster.get(username)
+        roster_entry = _roster_entry(roster, username)
         if not roster_entry:
             not_in_roster.append(str(username))
             continue
@@ -4237,8 +4374,7 @@ def cmd_email_backup(args) -> None:
         # summary line below was never reached -- a partial send that reported
         # nothing at all. A handle is a worse greeting than a first name and a
         # better one than a dead job.
-        raw_name = str(roster_entry.get("name") or "").strip()
-        name = raw_name.split()[0] if raw_name else f"@{username}"
+        name = _first_name(roster_entry.get("name"), f"@{username}")
         subject = EMAIL_BACKUP_SUBJECT.format(session_date=entry["session_date"])
         # The "reach a human" line used to be a tenant mailbox literal, in a
         # template that goes OUT as email. On any other deployment that invites
@@ -4613,7 +4749,11 @@ def cmd_log_session(args) -> None:
     docstring produced an error rather than a silent no-op -- but the error names
     the date, not the thing that was actually wrong.
 
-    CLI: python scripts/fireside-bot.py log-session --date 2026-05-12 \
+    The date was a second reason the same example could never work: 2026-05-12
+    is a Tuesday, and a schedule only ever holds Mon and Wed rows, so the zero
+    match was guaranteed whatever names were passed. It is a Monday now.
+
+    CLI: python scripts/fireside-bot.py log-session --date 2026-05-11 \
                                                     --shared "Vesper Lynd,Felix Leiter" \
                                                     --no-shows ""
     """

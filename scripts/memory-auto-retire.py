@@ -30,12 +30,35 @@ from scripts.utils.workspace import get_auto_memory_dir, get_default_tz
 from scripts.utils.paths import load_env, log_dir
 
 INDEX_NAME = "MEMORY.md"
-# `log_dir(*parts)` mkdirs the WHOLE joined path, so passing the filename made
-# `.logs/memory-auto-retire.log` a DIRECTORY. Every append then raised
-# IsADirectoryError into the `except OSError` below, and the retire audit
-# trail recorded nothing from 2026-07-06 until this was found on 2026-08-29.
-# Directory from the helper, filename here, as every other caller does.
-LOG_PATH = log_dir() / "memory-auto-retire.log"
+LOG_NAME = "memory-auto-retire.log"
+
+
+def _log_path() -> Path:
+    """Where the retire audit trail goes, resolved at CALL time.
+
+    Two reasons it is a function and not the module constant it used to be.
+
+    `log_dir()` reads `WORKSPACE_LOG_DIR` out of `os.environ`, and `main()`
+    calls `load_env()` as its first statement precisely because this process
+    starts without the gitignored `.env` loaded. A constant evaluated at import
+    is resolved BEFORE that, so the audit trail of a destructive edit could be
+    written somewhere other than where the run's own configuration says. It is
+    the same ordering the comment above `load_env()` describes for the clock,
+    one import line higher up.
+
+    `log_dir()` also mkdirs, so the constant created a directory as a side
+    effect of importing this module: on `--help`, on a `python -c "import"`, and
+    in any test that loads the file to inspect it. Nothing that only reads
+    should leave a directory behind, and a redirect a test sets after the import
+    could never take effect.
+
+    `log_dir(*parts)` mkdirs the WHOLE joined path, so passing the filename made
+    `.logs/memory-auto-retire.log` a DIRECTORY. Every append then raised
+    IsADirectoryError into the handler below, which swallowed it, and the audit
+    trail recorded nothing from 2026-07-06 until this was found on 2026-08-29.
+    Directory from the helper, filename here, as every other caller does.
+    """
+    return log_dir() / LOG_NAME
 
 
 def _pointers_removed(before: str, after: str) -> int:
@@ -69,12 +92,20 @@ def _pointers_removed(before: str, after: str) -> int:
 def _log_line(msg: str) -> None:
     """Append a timestamped audit line locally (console-first: also printed)."""
     ts = datetime.datetime.now(get_default_tz()).isoformat(timespec="seconds")
+    path = _log_path()
     try:
-        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with LOG_PATH.open("a", encoding="utf-8") as fh:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
             fh.write(f"{ts} {msg}\n")
-    except OSError:
-        pass  # a failed audit write must not block the retire itself
+    except OSError as exc:
+        # A failed audit write must not block the retire, and it must not be
+        # invisible either. `pass` is what let this exact handler hide an
+        # IsADirectoryError for eight weeks while every run reported success and
+        # wrote nothing. The retire still proceeds; the operator is told the
+        # trail is not being kept.
+        print(f"memory-auto-retire: audit line NOT written to {path} "
+              f"({exc.__class__.__name__}: {exc}); the retire itself continues",
+              file=sys.stderr)
 
 
 def main() -> int:

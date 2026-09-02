@@ -669,3 +669,90 @@ def test_no_bytecode_survives_a_real_run(tmp_path):
                                          memory_limit_bytes=0, python=sys.executable)
     assert outcome == "pass"
     assert list(tmp_path.rglob("__pycache__")) == []
+
+
+# ============================================================
+# The install path that announced a dead scanner and exited 0
+# ============================================================
+
+def _legacy_repo(tmp_path: Path) -> Path:
+    """A git repo with NO `.pre-commit-config.yaml`.
+
+    That absence is the only state in which this legacy installer still installs
+    anything; with the framework config present it refuses and exits 1 much
+    earlier, so a fixture that forgets this measures the refusal instead.
+    """
+    repo = tmp_path / "legacy"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
+    return repo
+
+
+def _hook_with_a_dead_scanner(repo: Path) -> Path:
+    """A hook carrying the marker, with the scanner below an unconditional exit.
+
+    This is the shape the file's own header docstring is about, reproduced here
+    against the INSTALL path rather than `--check`. git-lfs writes a hook ending
+    in `exit 0`, and the merge used to append below it.
+    """
+    hook = repo / ".git" / "hooks" / "pre-commit"
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text(
+        "#!/bin/sh\n"
+        "echo 'somebody else's hook'\n"
+        "exit 0\n"
+        "\n"
+        f"{ih.SCANNER_BLOCK}\n",
+        encoding="utf-8")
+    hook.chmod(0o755)
+    assert ih.HOOK_MARKER in hook.read_text(encoding="utf-8"), (
+        "the fixture does not carry the marker, so install_pre_commit would "
+        "take the merge branch and this test would measure nothing")
+    reachable, _why = ih.scanner_reachability(hook.read_text(encoding="utf-8"))
+    assert not reachable, "the fixture's scanner is reachable; nothing is dead here"
+    return hook
+
+
+def test_install_mode_refuses_when_it_finds_a_dead_scanner(tmp_path, monkeypatch,
+                                                           capsys):
+    """It printed "scanner present but DEAD" and then "Done." at exit 0.
+
+    Three lines apart, in the same run. Only `--check` read the return value of
+    `install_pre_commit`; the install branch printed a green Done whatever came
+    back. An installer that reports a dead secret scanner and exits 0 tells its
+    caller the gate is armed, and the caller here is a setup script that reads
+    the code and nothing else.
+    """
+    repo = _legacy_repo(tmp_path)
+    _hook_with_a_dead_scanner(repo)
+    monkeypatch.setattr(ih, "get_workspace_root", lambda: repo)
+    monkeypatch.setattr(sys, "argv", ["install-hooks.py"])
+
+    with pytest.raises(SystemExit) as exc:
+        ih.main()
+    assert exc.value.code == 1, (
+        "the installer exited 0 over a secret scanner it had just declared dead")
+
+    out = capsys.readouterr().out
+    assert "DEAD" in out, "the diagnosis itself went missing"
+    assert "Done." not in out, (
+        "a run that armed nothing still printed the success line")
+
+
+def test_install_mode_does_not_rewrite_the_hook_it_refuses(tmp_path, monkeypatch):
+    """The refusal must not repair by overwriting somebody else's hook.
+
+    The dead case means another author's content sits above the scanner block.
+    Rewriting it here would destroy work this script did not author, which is
+    why the fix refuses and names the remedy instead of merging again.
+    """
+    repo = _legacy_repo(tmp_path)
+    hook = _hook_with_a_dead_scanner(repo)
+    before = hook.read_bytes()
+    monkeypatch.setattr(ih, "get_workspace_root", lambda: repo)
+    monkeypatch.setattr(sys, "argv", ["install-hooks.py"])
+
+    with pytest.raises(SystemExit):
+        ih.main()
+    assert hook.read_bytes() == before, (
+        "the refusal path rewrote a hook this script did not author")

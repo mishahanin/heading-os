@@ -106,6 +106,46 @@ def test_a_rule_with_an_empty_paths_list_is_always_on(tree):
     assert [r["rule"] for r in result["always_on"]] == ["router.md"]
 
 
+def test_an_unrelated_key_after_an_empty_paths_does_not_scope_the_rule(tree):
+    """An empty `paths:` is always-on whatever else the frontmatter carries.
+
+    The block scan used to run to the END of the frontmatter and ask whether ANY
+    indented list item appeared after `paths:`. So a rule with an empty `paths:`
+    plus a later YAML list of any kind read as path-scoped. MEASURED 2026-09-02:
+    `paths:` followed by `tags:\\n  - alpha` returned False, and the identical
+    frontmatter without that later list returned True. One unrelated key decided
+    whether the rule counted.
+
+    The direction is what makes it worth a test. `always_on_bytes` feeds the
+    ratcheted total this script gates growth on, so a rule wrongly called
+    path-scoped takes its bytes OUT of the floor. The floor drops, `--baseline`
+    sees room that is not there, and the gate passes over a context budget that
+    actually grew. A gate that fails open is worse than no gate, because the
+    green reading is believed.
+    """
+    _rule(tree, "router.md",
+          "---\npaths:\ntags:\n  - alpha\n  - beta\n---\n\nbody\n")
+    result = audit.measure_rules(tree)
+    assert [r["rule"] for r in result["always_on"]] == ["router.md"], (
+        "an empty paths: was read as path-scoped because a LATER key carried a "
+        "list, so this rule's bytes left the ratcheted floor")
+    assert result["path_scoped"] == []
+
+
+def test_real_paths_entries_still_scope_the_rule_when_another_key_follows(tree):
+    """The other direction, so the fix above cannot be a blanket 'always-on'.
+
+    Narrowing the scan to the `paths:` block must not stop it seeing the entries
+    that ARE in that block. Without this, a fix that simply returned True would
+    pass the test above and quietly move every path-scoped rule into the floor.
+    """
+    _rule(tree, "scoped.md",
+          '---\npaths:\n  - "scripts/**"\ntags:\n  - alpha\n---\n\nbody\n')
+    result = audit.measure_rules(tree)
+    assert [r["rule"] for r in result["path_scoped"]] == ["scoped.md"]
+    assert result["always_on"] == []
+
+
 def test_a_rule_with_paths_is_scoped_and_left_out_of_the_total(tree):
     _rule(
         tree, "scope.md",

@@ -226,6 +226,103 @@ def test_context_oversize_silently_drops():
     assert "BRIDGE_CONTEXT" not in inner
 
 
+def test_a_context_under_the_blob_cap_still_overran_the_command_line():
+    """The cap sized the base64 blob; cmd.exe measures the whole inner string.
+
+    Found by the 2026-08-24 campaign (shard `scripts-02-p3`, finding 2).
+    `_encode_context` refuses an encoding over 8192 bytes and its docstring
+    called that "what the cmd.exe length limit actually sees". It is not.
+    `build_wt_command` wraps the blob in `set BRIDGE_ORIGIN=browser&& set
+    BRIDGE_ACTION=<action>&& `, `claude`, an optional `--resume <id>` and an
+    optional quoted initial prompt, and cmd.exe's 8,191 character limit applies
+    to that finished string. So an encoding that PASSED the cap at just under
+    8,192 produced an inner string over the limit: cmd.exe answers "The input
+    line is too long." and the window shows an error instead of running claude.
+
+    The context here is sized to pass `_encode_context` deliberately, so this
+    test measures the wrapper and not the blob cap. `email-respond` is the
+    action whose initial prompt is the long one, which is what made the overrun
+    reachable with an ordinary payload rather than a contrived one.
+    """
+    from scripts.bridge_daemon.terminal import CMD_INNER_MAX, _encode_context
+
+    ctx = {"conv_id": "AAQkAD123", "pad": "x" * 6050}
+    encoded = _encode_context(ctx)
+    assert encoded is not None and len(encoded) <= 8192, (
+        f"the fixture must PASS the blob cap or it measures the wrong guard: "
+        f"{None if encoded is None else len(encoded)}")
+
+    cmd = build_wt_command("misha", "t", r"C:\work", "email-respond",
+                           "abc123", context=ctx)
+    inner = cmd[-1]
+    assert len(inner) <= CMD_INNER_MAX, (
+        f"the cmd.exe inner string is {len(inner)} characters, over the "
+        f"{CMD_INNER_MAX} limit; cmd.exe refuses the line and the launch shows "
+        f"an error instead of a session")
+    assert "BRIDGE_CONTEXT" not in inner, (
+        "the context is what gets dropped to fit; the launch itself must "
+        "survive")
+    assert "claude --resume abc123" in inner, (
+        "dropping the context must not cost the session it was resuming")
+
+
+def test_a_context_that_fits_the_whole_line_is_still_carried():
+    """The anchor. Without it the fix above passes by dropping every context.
+
+    `test_context_oversize_silently_drops` proves an oversized blob is dropped
+    and `..._overran_the_command_line` proves an oversized LINE is dropped;
+    neither would fail if the wrapper check started refusing everything.
+    """
+    cmd = build_wt_command("misha", "t", r"C:\work", "osint", None,
+                           context={"conv_id": "AAQkAD123"})
+    inner = cmd[-1]
+    assert "set BRIDGE_CONTEXT=" in inner, inner
+
+
+def test_find_linux_terminal_says_what_it_measures():
+    """A docstring that named a condition the function never reads.
+
+    Found by the 2026-08-24 campaign (shard `scripts-02-p3`, finding 3). The
+    line read "Returns path or None on headless", and the function consults
+    only `shutil.which`: on a headless host with xterm installed it returns a
+    path, and on a full desktop with no candidate installed it returns None.
+    Headless is `_is_linux_gui_session()`'s question, asked by the caller. A
+    maintainer trusting the old line could delete that caller-side gate as
+    redundant and reintroduce GUI-attach attempts on headless hosts, which is
+    why this is pinned rather than left as prose.
+    """
+    from scripts.bridge_daemon.terminal import (
+        _is_linux_gui_session,
+        find_linux_terminal,
+    )
+
+    doc = find_linux_terminal.__doc__ or ""
+    # The SUMMARY paragraph only, up to the first blank line. That is the
+    # sentence a reader acts on, and it is the part that was wrong. The prose
+    # below it has to be free to quote the retired wording while explaining it,
+    # which a whole-docstring match would forbid.
+    summary = doc.strip().split("\n\n", 1)[0]
+    import ast
+    import inspect
+    body = ast.parse(inspect.getsource(find_linux_terminal).lstrip())
+    reads_display = "DISPLAY" in ast.dump(body)
+    assert not reads_display, (
+        "find_linux_terminal now reads DISPLAY, so this test is the stale one; "
+        "rewrite it against the new behaviour rather than deleting it")
+    assert "headless" not in summary.lower(), (
+        "the summary line promises a headless verdict this function cannot "
+        f"reach: it calls shutil.which and nothing else. Got: {summary!r}")
+    assert "installed" in summary.lower(), (
+        f"the summary must say what None actually means: {summary!r}")
+    assert "_is_linux_gui_session" in doc, (
+        "the docstring must name where the headless question IS answered, or "
+        "the next reader deletes the caller's gate as redundant")
+    # The gate the docstring points at is real and reads what the docstring
+    # says it reads, so the pointer cannot rot into a name that does nothing.
+    assert "DISPLAY" in ast.dump(ast.parse(
+        inspect.getsource(_is_linux_gui_session).lstrip()))
+
+
 def test_an_object_json_cannot_encode_is_stringified_not_dropped():
     """Named for what happens, and asserting it.
 

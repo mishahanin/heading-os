@@ -436,6 +436,16 @@ def _save_outputs(urls: list, output_path: Path, name_from_bytes: bool) -> list:
     for idx, url in enumerate(urls):
         dest = (output_path.parent / f"{output_path.stem}_{idx + 1}{output_path.suffix}"
                 if numbered else output_path)
+        if numbered and name_from_bytes:
+            # The caller uniquified the UN-NUMBERED base name, and a multi-URL
+            # result writes only numbered ones. Two same-second `--count 2` runs
+            # therefore both found `design-<ts>.png` free, and the second wrote
+            # over the first run's `design-<ts>_1.png` and `_2.png` without a
+            # word: the exact data loss `_unique_path` exists to prevent,
+            # reachable through the gap between the name checked and the names
+            # written. `name_from_bytes` is the same condition that function
+            # documents, so an operator's own `-o` path is still theirs.
+            dest = _unique_path(dest)
         data = _download(url, dest)
         actual = _sniff_ext(data)
         if actual and actual != dest.suffix.lower():

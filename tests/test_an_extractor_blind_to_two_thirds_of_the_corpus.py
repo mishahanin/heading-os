@@ -605,3 +605,111 @@ def test_the_scan_target_follows_the_environment(monkeypatch, tmp_path):
     assert extract.datastore_dir() == second, (
         "the datastore path was frozen at import and no longer follows the "
         "environment the caller set")
+
+
+# ==========================================================================
+# 7 - the companion that could not be WRITTEN
+# ==========================================================================
+#
+# The per-file `try` covers the parsers and stops there, so the write sat
+# outside it and an `OSError` out of `write_text` left the loop exactly the way
+# a parser exception used to before section 4 was written: every later file went
+# unprocessed and the failure report at the end of the scan never printed. A
+# read-only datastore folder, a full disk, or a path-length limit is at least as
+# ordinary an operator condition as a corrupt zip.
+#
+# The unwritable companion here is a DIRECTORY standing where the `.md` file
+# belongs, which raises `IsADirectoryError` (an `OSError`) for every user
+# including root. A `chmod` fixture would silently stop refusing under a root
+# test runner and take the teeth of this section with it.
+
+def _block_companion(target_dir: Path, stem: str) -> Path:
+    """Put a directory where `{stem}-extract.md` must be written."""
+    blocked = target_dir / f"{stem}-extract.md"
+    blocked.mkdir()
+    return blocked
+
+
+def test_a_companion_that_cannot_be_written_is_counted_as_a_failure(tmp_path):
+    _write_docx(tmp_path / "aa-blocked.docx", ["Parsed fine, cannot be saved"])
+    _block_companion(tmp_path, "aa-blocked")
+
+    result = extract.scan_report(target_dir=tmp_path, force=True)
+
+    assert len(result.failures) == 1, (
+        f"an unwritable companion passed silently: {result.failures}")
+    path, why = result.failures[0]
+    assert path.name == "aa-blocked.docx"
+    assert "IsADirectoryError" in why, (
+        f"the write failure was not named, only counted: {why}")
+
+
+def test_a_companion_that_cannot_be_written_is_not_reported_as_extracted(tmp_path):
+    """`extracted` is what `update_index` writes INDEX.md rows from."""
+    _write_docx(tmp_path / "aa-blocked.docx", ["Parsed fine, cannot be saved"])
+    _block_companion(tmp_path, "aa-blocked")
+
+    result = extract.scan_report(target_dir=tmp_path, force=True)
+
+    assert result.extracted == [], (
+        "a file whose companion was never written was reported as extracted, "
+        "so INDEX.md would carry a row for a document nothing can read")
+
+
+def test_an_unwritable_companion_does_not_stop_the_batch(tmp_path):
+    """`aa-blocked.docx` sorts first, so the good file comes after the bad one."""
+    _write_docx(tmp_path / "aa-blocked.docx", ["Parsed fine, cannot be saved"])
+    _block_companion(tmp_path, "aa-blocked")
+    _write_docx(tmp_path / "zz-later.docx", ["This paragraph must still arrive"])
+
+    result = extract.scan_report(target_dir=tmp_path, force=True)
+
+    assert (tmp_path / "zz-later-extract.md").is_file(), (
+        "one unwritable companion ended the loop and every later file went "
+        "unextracted")
+    assert len(result.extracted) == 1
+
+
+def test_an_unwritable_companion_is_named_in_the_report(tmp_path):
+    """The end-of-scan summary is printed only if the loop reaches it."""
+    import contextlib
+    import io
+
+    _write_docx(tmp_path / "aa-blocked.docx", ["Parsed fine, cannot be saved"])
+    _block_companion(tmp_path, "aa-blocked")
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        extract.scan_report(target_dir=tmp_path, force=True)
+    out = buf.getvalue()
+
+    assert "1 file(s) could not be extracted" in out, out
+    assert "aa-blocked.docx" in out, out
+
+
+def test_the_exit_code_reflects_an_unwritable_companion(tmp_path, monkeypatch):
+    _write_docx(tmp_path / "aa-blocked.docx", ["Parsed fine, cannot be saved"])
+    _block_companion(tmp_path, "aa-blocked")
+    monkeypatch.setattr(sys, "argv",
+                        ["datastore-extract.py", str(tmp_path), "--force"])
+
+    assert extract.main() == 1, (
+        "the run reported success in its exit status while one of its "
+        "companions was never written")
+
+
+def test_a_writable_companion_is_still_written(tmp_path):
+    """The anchor: a guard that treated every write as a failure would pass above.
+
+    Same `force=True` scan shape as the four tests above, with nothing in the
+    way, so the only difference between them is the blocked path.
+    """
+    _write_docx(tmp_path / "aa-blocked.docx", ["This one really is writable"])
+
+    result = extract.scan_report(target_dir=tmp_path, force=True)
+
+    companion = tmp_path / "aa-blocked-extract.md"
+    assert companion.is_file(), "no companion was written for a writable path"
+    assert "This one really is writable" in companion.read_text(encoding="utf-8")
+    assert result.failures == [], result.failures
+    assert len(result.extracted) == 1, result.extracted

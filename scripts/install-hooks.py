@@ -389,10 +389,37 @@ def main():
     print(f"{BOLD}Git hooks {'status' if args.check else 'installation'}:{RESET}")
     installed = install_pre_commit(hooks_dir, check_only=args.check)
 
-    if args.check:
-        sys.exit(0 if installed else 1)
-    else:
-        print(f"\n{GREEN}Done.{RESET}")
+    # The result decides the exit code in BOTH modes.
+    #
+    # Only `--check` used to read it. The install branch printed a green "Done."
+    # and exited 0 whatever came back, and `install_pre_commit` returns False on
+    # a path it reaches in install mode too: a hook that carries the marker but
+    # whose scanner block is UNREACHABLE. So the script printed
+    # "pre-commit: scanner present but DEAD" and then "Done." at exit 0, three
+    # lines apart. An installer that reports a dead secret scanner and exits 0
+    # is telling a caller the gate is armed, and a caller is usually a setup
+    # script that only reads the code.
+    #
+    # Not repaired automatically, deliberately. The dead case means somebody's
+    # own hook content sits above the scanner block, and rewriting it here would
+    # destroy work this script did not author. Refusing by name is the honest
+    # move; the remedy is one documented command.
+    # The success path RETURNS rather than exiting, which is not a style choice:
+    # `main()` is driven in-process by
+    # `tests/test_a_hook_check_that_passed_on_an_unarmed_clone.py`, and a
+    # `sys.exit(0)` here turns every one of those calls into a SystemExit the
+    # test has to catch to assert anything about the hook that was written. The
+    # process exit code is 0 either way.
+    if installed:
+        if not args.check:
+            print(f"\n{GREEN}Done.{RESET}")
+        return
+    if not args.check:
+        print(f"\n{RED}Not installed.{RESET} The commit gate is NOT armed, so "
+              f"nothing above scanned anything.")
+        print(f"Arm it with {BOLD}pre-commit install{RESET} in {root}, then "
+              f"re-run {BOLD}python scripts/install-hooks.py --check{RESET}.")
+    sys.exit(1)
 
 
 if __name__ == "__main__":

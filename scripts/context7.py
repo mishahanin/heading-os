@@ -111,6 +111,34 @@ def handle_response(resp, context=""):
         sys.exit(1)
 
 
+def json_body(resp, context=""):
+    """The parsed body of a 200 response, or a clean exit 1.
+
+    `handle_response` only runs when the status is NOT 200, so it never sees
+    this: a 200 carrying a non-JSON body - a proxy error page, a captive
+    portal, a truncated upstream - reached a bare `resp.json()` and left the
+    CLI as an uncaught `requests.exceptions.JSONDecodeError` traceback.
+    MEASURED 2026-09-02 with a stub returning `200 OK` and the body
+    `<html>Bad Gateway</html>`: both `fetch_docs_json` and `search_libraries`
+    raised. `handle_response` already anticipates exactly this shape for ERROR
+    bodies, with its own `except ValueError` debug branch; the success path had
+    no such guard.
+
+    Both call sites go through here rather than one, because the defect the
+    audit named in `fetch_docs_json` was a verbatim copy of the line in
+    `search_libraries`, and a fix that lands in one of two copies is the shape
+    this file keeps rediscovering.
+    """
+    try:
+        return resp.json()
+    except ValueError as exc:
+        prefix = f"{context}: " if context else ""
+        print(f"{prefix}Context7 returned HTTP {resp.status_code} with a body that "
+              f"is not JSON ({exc}). The upstream or a proxy in front of it is "
+              f"misbehaving; try again shortly.", file=sys.stderr)
+        sys.exit(1)
+
+
 def search_libraries(library_name, query="documentation"):
     """Search for libraries matching the given name."""
     try:
@@ -127,7 +155,8 @@ def search_libraries(library_name, query="documentation"):
         print("Request timed out. Try again.", file=sys.stderr)
         sys.exit(1)
     handle_response(resp, "Search")
-    return resp.json().get("results", [])
+    body = json_body(resp, "Search")
+    return body.get("results", []) if isinstance(body, dict) else []
 
 
 def fetch_docs_text(library_id, query, limit=None):
@@ -171,7 +200,7 @@ def fetch_docs_json(library_id, query, limit=None):
         print("Request timed out. The library may be too large. Try --limit.", file=sys.stderr)
         sys.exit(1)
     handle_response(resp, f"Fetch '{library_id}'")
-    return resp.json()
+    return json_body(resp, f"Fetch '{library_id}'")
 
 
 def pick_best_match(results, library_name):

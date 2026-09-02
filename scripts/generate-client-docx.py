@@ -58,7 +58,13 @@ APPENDICES = (
     ('D', 'Competitive Advantage Summary'),
 )
 
-# docx names + brand colours are bound lazily (F-2.1: import stays pure).
+# docx names + brand colours are bound lazily, so importing this module does not
+# need python-docx installed (F-2.1). That is the whole claim, and the narrower
+# one: the import is not pure. `sys.path.insert(...)` and `ensure_venv()` at the
+# top of this file both run at import, and `ensure_venv()` there is the workspace
+# convention rather than an oversight. This comment read "import stays pure"
+# until 2026-09-02, which asserted a property of the module while two lines of
+# that module were side effects.
 Document = Inches = Pt = Cm = RGBColor = Emu = None
 WD_ALIGN_PARAGRAPH = WD_TABLE_ALIGNMENT = WD_ORIENT = qn = nsdecls = parse_xml = None
 DARK_NAVY = BRAND_BLUE = BRAND_ORANGE = DARK_GRAY = MEDIUM_GRAY = LIGHT_GRAY = WHITE = None

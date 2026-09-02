@@ -814,8 +814,13 @@ def step_verify(state: dict) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Step 12: Summary
+# Step 13: Summary
 # ---------------------------------------------------------------------------
+# It read "Step 12" until 2026-09-02, which is the number `step_verify` prints
+# through `step_header(12, ...)` one section above. `main` invokes this one
+# under "# Step 13: Summary", so the file carried two step 12s and no step 13,
+# and anyone cross-referencing the on-screen step count against the source
+# landed on the verify section or concluded a step was missing.
 
 def step_summary(identity: dict):
     """Print success summary with next steps."""

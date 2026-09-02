@@ -32,8 +32,18 @@ A case the judge never returns a usable verdict for is UNMEASURED, not a routing
 it is retried once, then counted in `errored` and excluded from the pass rate, so an
 API hiccup or a more verbose judge cannot masquerade as a router regression.
 
-Exit codes: 0 completed (advisory, or strict-pass), 1 strict-threshold breached or a
-skill left unmeasured, 2 setup error, 3 API/key error.
+Exit codes: 0 completed (advisory, or strict-pass), 1 UNDER --strict, either the
+threshold was breached or a skill was left unmeasured, 2 setup error, 3 API/key error.
+
+That "under --strict" is the correction, made 2026-09-02. The line read "1
+strict-threshold breached or a skill left unmeasured", which states the unmeasured
+case unconditionally and so contradicted both the code and the sentence eight lines
+above it promising the default "always exit 0 on a completed run". `main` gates on
+`if args.strict and (breached or unmeasured)`, and the strict-only reading is the
+intended one - `--strict` means "gate on a clean measurement". So an advisory run
+in which a skill ships an empty triggers.json and is skipped completes and exits 0.
+A caller that needs to know whether everything was measured reads the `unmeasured`
+field in --json; exit status alone has never carried it.
 """
 from __future__ import annotations
 

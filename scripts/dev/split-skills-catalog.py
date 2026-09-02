@@ -266,13 +266,20 @@ def _run(args) -> int:
     _stale = ('in <a href="#reference">Skill reference: every skill in detail</a> '
               'further down this page.')
     if _stale not in intro:
-        # An exact-literal replacement that silently no-ops leaves the intro
-        # pointing readers at a per-skill reference the split just removed from
-        # this page. Everything else in this tool refuses to run on unexpected
-        # input; this one transform used to be unverified.
+        # ABORTS, like every other guard in this file. It used to warn and carry
+        # on, which meant `intro.replace(_stale, ...)` no-opped, all nine files
+        # were written and the process exited 0: the rebuilt index shipped
+        # telling readers the per-skill reference is "further down this page",
+        # a section this very split removes from that page. The comment here
+        # described that harm exactly and then let it happen, on stdout at exit
+        # 0, which no caller and no CI step acts on. Narrating a bad output is
+        # not verifying it.
         print(f"{YELLOW}the intro's 'further down this page' sentence has "
-              f"changed wording; it now points at a section this split "
-              f"removes. Update the literal in this script.{RESET}")
+              f"changed wording, so the rebuilt index would point readers at a "
+              f"section this split removes. Update the literal in this script. "
+              f"Aborting.{RESET}")
+        print(f"  looked for: {_stale}")
+        return 1
     intro = intro.replace(
         _stale,
         'on the per-category pages linked from <a href="#reference">Skill reference by category</a> below.',

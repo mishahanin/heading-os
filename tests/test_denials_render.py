@@ -203,3 +203,117 @@ def test_leak_guard_records_the_token_not_the_matched_literal(tmp_path):
     blob = json.dumps(records)
     assert "verysecretclientname" not in blob, "the record carried the refused content"
     assert "outputs/" in blob, "the record lost the token class"
+
+
+# ==========================================================================
+# A timestamp that is valid JSON and cannot be turned into a date
+# ==========================================================================
+#
+# `read_denials` calls `json.loads` with the stdlib defaults, which accept the
+# bare literal `Infinity`, and a JSON integer of any length parses into a Python
+# `int`. Both survive the "corrupt line" skip because both lines are correct
+# JSON. What they hit is arithmetic, not parsing: `float("inf")` succeeds and
+# then `datetime.fromtimestamp` raises `OverflowError`, and `float()` on a
+# 400-digit int raises `OverflowError` outright. `OverflowError` is an
+# `ArithmeticError`, so neither `_epoch`'s nor `_stamp`'s catch list saw it, and
+# one such record ended the run of a tool whose whole question is whether a
+# guard caught anything.
+
+def _write_raw(log_root: Path, line: str):
+    """Append a literal line, so a value `json.dumps` will not emit can be tested."""
+    target = log_root / "denials"
+    target.mkdir(parents=True, exist_ok=True)
+    with (target / "denials.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
+
+
+_UNRENDERABLE_TS = (
+    # json.loads accepts this literal; float() takes it; fromtimestamp does not.
+    ("infinity", 'Infinity'),
+    # In range for float, out of range for platform time_t.
+    ("1e300", '1e300'),
+    # A JSON integer with no float at all: float() itself raises OverflowError.
+    ("huge_int", "9" * 400),
+)
+
+
+@pytest.mark.parametrize("label,literal",
+                         _UNRENDERABLE_TS, ids=[c[0] for c in _UNRENDERABLE_TS])
+def test_a_timestamp_that_overflows_does_not_end_the_detail_table(
+        tmp_path, label, literal):
+    """The record renders as `?` and every LATER record still prints.
+
+    The second half is the finding: `--detail` died mid-table, so the corrupt
+    record cost the whole rest of the history, not just its own date.
+    """
+    _write_raw(tmp_path, '{"ts": ' + literal + ', "mechanism": "corrupt", '
+               '"action": "Write", "path": "outputs/first.txt"}')
+    _write_record(tmp_path, mechanism="later", path="outputs/second.txt")
+
+    proc = _run(_CLI, ["--detail"], tmp_path)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Traceback" not in proc.stderr, proc.stderr
+    assert "outputs/first.txt" in proc.stdout, (
+        "the record with the unreadable timestamp was not rendered at all")
+    assert "outputs/second.txt" in proc.stdout, (
+        "the table ended at the corrupt record and every later refusal was "
+        "hidden")
+
+
+@pytest.mark.parametrize("label,literal",
+                         _UNRENDERABLE_TS, ids=[c[0] for c in _UNRENDERABLE_TS])
+def test_a_timestamp_that_overflows_does_not_end_the_days_window(
+        tmp_path, label, literal):
+    """`--days` is the sibling path, and it reads `ts` through `_epoch`."""
+    _write_raw(tmp_path, '{"ts": ' + literal + ', "mechanism": "corrupt", '
+               '"action": "Write", "path": "outputs/first.txt"}')
+
+    proc = _run(_CLI, ["--days", "36500"], tmp_path)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Traceback" not in proc.stderr, proc.stderr
+
+
+def test_a_real_timestamp_still_renders_as_a_date(tmp_path):
+    """The anchor: a guard that answered `?` to everything would pass above.
+
+    `_write_record`'s default `ts` is 1785000000.0, which is 2026-07-25 in UTC.
+    The renderer applies the operator's configured timezone, so the day can land
+    either side of midnight; the prefix is pinned to the day PAIR rather than to
+    one day, and the shape is pinned separately so a truncated render cannot
+    satisfy it.
+    """
+    import re
+
+    _write_record(tmp_path, path="outputs/dated.txt")
+
+    proc = _run(_CLI, ["--detail"], tmp_path)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    line = [ln for ln in proc.stdout.splitlines() if "outputs/dated.txt" in ln]
+    assert line, proc.stdout
+    assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s", line[0]), (
+        f"a readable timestamp rendered as something other than a date: "
+        f"{line[0]!r}")
+    assert line[0][:9] == "2026-07-2", (
+        f"the rendered date is not the one the record carries: {line[0]!r}")
+
+
+def test_a_real_timestamp_is_still_placed_inside_the_days_window(tmp_path):
+    """The anchor for `_epoch`: widening its catch must not drop a good record.
+
+    An `_epoch` that returned None for everything would satisfy the window test
+    above, count every record as undated, and print zero refusals.
+    """
+    import time
+
+    _write_record(tmp_path, ts=time.time(), path="outputs/recent.txt")
+
+    proc = _run(_CLI, ["--days", "1", "--json"], tmp_path)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["total"] == 1, (
+        f"a record inside the window was dropped from it: {payload}")
+    assert payload["undated_excluded"] == 0, payload

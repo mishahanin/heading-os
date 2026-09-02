@@ -1276,6 +1276,7 @@ all = [
     { name = "markitdown", extra = ["docx", "outlook", "pdf", "pptx", "xlsx"] },
     { name = "openai" },
     { name = "openpyxl" },
+    { name = "pdfminer-six" },
     { name = "playwright" },
     { name = "python-docx" },
     { name = "python-pptx" },
@@ -1295,6 +1296,7 @@ dashboard = [
 documents = [
     { name = "markitdown", extra = ["docx", "outlook", "pdf", "pptx", "xlsx"] },
     { name = "openpyxl" },
+    { name = "pdfminer-six" },
     { name = "python-docx" },
     { name = "python-pptx" },
 ]
@@ -1355,6 +1357,7 @@ requires-dist = [
     { name = "numpy", specifier = "==2.4.6" },
     { name = "openai", marker = "extra == 'ai-extra'", specifier = "==2.48.0" },
     { name = "openpyxl", marker = "extra == 'documents'", specifier = "==3.1.5" },
+    { name = "pdfminer-six", marker = "extra == 'documents'", specifier = "==20260107" },
     { name = "pillow", specifier = "==12.3.0" },
     { name = "playwright", marker = "extra == 'browser'", specifier = "==1.61.0" },
     { name = "pymdown-extensions", specifier = "==11.0.1" },

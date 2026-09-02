@@ -75,6 +75,17 @@ documents = [
     "python-pptx==1.0.2",
     "openpyxl==3.1.5",
     "markitdown[pdf,docx,pptx,xlsx,outlook]==0.1.6",
+    # DIRECT, not transitive, and that is the whole point of the line.
+    # `scripts/datastore-extract.py` imports pdfminer to turn a PDF into its
+    # readable `-extract.md` companion, which is the only way a PDF reaches
+    # `/recall` at all. MEASURED 2026-09-02: it was declared NOWHERE in this
+    # project and arrived through markitdown's `pdf` extra, by way of
+    # pdfplumber. Narrowing that extra, for a lighter install or any other
+    # reason, would have removed PDF extraction with NOTHING failing to warn:
+    # the extraction tests skip when the import is missing, so the suite would
+    # have stayed green while 142 documents went quietly unreadable. Same
+    # version that was already resolved; only the owner of the decision changes.
+    "pdfminer.six==20260107",
 ]
 media = [
     "youtube-transcript-api==1.2.4",

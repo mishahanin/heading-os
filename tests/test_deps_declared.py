@@ -129,3 +129,95 @@ def test_the_exact_pin_rule_rejects_the_shapes_it_exists_to_catch():
                      "fastapi<1.0", "uvicorn[standard]>=0.51.0",
                      "requests==2.34.2 --hash=sha256:abc"):
         assert not _EXACT_PIN.match(rejected), rejected
+
+
+# ---------------------------------------------------------------------------
+# A dependency the project never asked for
+# ---------------------------------------------------------------------------
+
+# import name -> distribution name, for the cases where the two differ.
+_IMPORT_TO_DIST = {
+    "pptx": "python-pptx",
+    "docx": "python-docx",
+    "pdfminer": "pdfminer.six",
+    "yaml": "PyYAML",
+    "dateutil": "python-dateutil",
+    "PIL": "Pillow",
+}
+
+# Entrypoints whose third-party imports must be OWNED, not inherited. Each one
+# is a tool whose failure is silent: the tests that exercise it skip when the
+# import is missing, so a suite that went green would still be a suite over a
+# capability that had quietly disappeared.
+_MUST_OWN_ITS_IMPORTS = ("scripts/datastore-extract.py",)
+
+
+def _declared_distributions() -> set[str]:
+    """Every distribution `pyproject.toml` asks for by name, normalised.
+
+    Read from the file rather than from the installed environment, because the
+    question is what this project DECLARES. An installed package that nothing
+    declares is exactly the state this test exists to fail on.
+    """
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    names = set()
+    for raw in re.findall(r'^\s*"([^"]+)"\s*,?\s*$', text, re.MULTILINE):
+        head = re.split(r"[<>=!~\[;]", raw, maxsplit=1)[0].strip()
+        if head:
+            names.add(head.casefold().replace("_", "-"))
+    return names
+
+
+@pytest.mark.parametrize("relative", _MUST_OWN_ITS_IMPORTS)
+def test_an_entrypoint_owns_every_library_it_imports(relative):
+    """A transitive dependency is a decision somebody else can revoke.
+
+    MEASURED 2026-09-02: `scripts/datastore-extract.py` imported pdfminer to
+    turn a PDF into its readable companion, and pdfminer was declared NOWHERE in
+    this project. It arrived through `markitdown[pdf]`, by way of pdfplumber.
+    Narrowing that extra, for a lighter install or any other reason, would have
+    removed PDF extraction from 142 documents with NOTHING failing to warn: the
+    extraction tests skip when the import is missing, so the suite would have
+    stayed green over a capability that no longer existed.
+
+    Scoped to entrypoints listed above rather than to the whole tree, because a
+    sweep over every script would flag the many places where an optional import
+    IS the intended design. The list is short on purpose; add a file to it when
+    that file's failure mode is a silent skip rather than a crash.
+    """
+    source = (ROOT / relative).read_text(encoding="utf-8")
+    declared = _declared_distributions()
+
+    imported = set(re.findall(r"^\s*(?:from|import)\s+([A-Za-z_][A-Za-z0-9_]*)",
+                              source, re.MULTILINE))
+    missing = []
+    for module in sorted(imported):
+        dist = _IMPORT_TO_DIST.get(module)
+        if dist is None:
+            continue  # stdlib, a workspace module, or a name with no mapping
+        if dist.casefold().replace("_", "-") not in declared:
+            missing.append(f"{module} -> {dist}")
+
+    assert not missing, (
+        f"{relative} imports libraries this project never declares, so it "
+        f"depends on somebody else's extra staying wide: "
+        + ", ".join(missing)
+        + ". Add an exact pin to pyproject.toml, then re-export requirements.txt."
+    )
+
+
+def test_the_import_map_still_describes_a_real_import():
+    """Anti-vacuity. A map whose keys no entrypoint imports proves nothing.
+
+    Without this, deleting the pdfminer import would leave the test above green
+    for the wrong reason, and the pin it guards could then be dropped unnoticed.
+    """
+    joined = "\n".join((ROOT / rel).read_text(encoding="utf-8")
+                       for rel in _MUST_OWN_ITS_IMPORTS)
+    hits = [m for m in _IMPORT_TO_DIST
+            if re.search(rf"^\s*(?:from|import)\s+{re.escape(m)}\b", joined,
+                         re.MULTILINE)]
+    assert len(hits) >= 3, (
+        f"only {len(hits)} mapped modules are actually imported by the listed "
+        f"entrypoints ({hits}); the map no longer describes the code"
+    )

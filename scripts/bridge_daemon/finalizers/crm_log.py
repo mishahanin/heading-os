@@ -28,6 +28,7 @@ from scripts.utils.crm_autolog import (
     append_log_entry,
     atomic_write,
     bump_last_touch_in_text,
+    data_is_readonly,
 )
 from scripts.utils.paths import get_data_root
 
@@ -135,6 +136,24 @@ def log_to_crm(conv_id: str, data_root: "Path | None" = None) -> dict:
     # date, falling back to today if it is missing or malformed.
     raw_dt = conv.get("latest_datetime") or ""
     log_date = _interaction_date(raw_dt)
+
+    # THE SECOND DOOR INTO THE SAME ROOM. `HEADING_OS_DATA_READONLY` was added to
+    # `crm_autolog.log_outbound` and `bump_inbound` on 2026-09-02, after a daemon
+    # host's send path rewrote five contact cards and wedged that host's
+    # pull-only mirror for three and a half days. This finalizer reaches the same
+    # contact file WITHOUT going through either of them: it calls
+    # `bump_last_touch_in_text` and `append_log_entry` directly and does its own
+    # `atomic_write`. So the guard there does not cover it, and a dashboard
+    # crm-log click on a mirror host would dirty the tree exactly as before.
+    #
+    # Refused BEFORE the lock, so a host that must not write never contends for
+    # it, and the answer carries the dashboard's normal error shape rather than
+    # a silent no-op that looks like a successful click.
+    if data_is_readonly():
+        return {"ok": False,
+                "error": f"HEADING_OS_DATA_READONLY is set: this host mirrors "
+                         f"the data repo and must not write to it, so {slug} "
+                         f"was not logged"}
 
     # Locked: this is a read-modify-write on a shared contact file with no
     # atomicity of its own. Two crm-log clicks for the same contact both read

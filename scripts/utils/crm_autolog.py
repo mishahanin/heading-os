@@ -12,6 +12,9 @@ address-book directory mtime change. Lookup is O(1) after first call.
 
 Audit log: every log_outbound / bump_inbound / multi-match conflict appends a
 JSONL entry to .sync/logs/crm-autolog-{date}.jsonl for observability.
+
+Read-only hosts: `HEADING_OS_DATA_READONLY` stops both record writers. See
+`data_is_readonly` for the measurement that produced it.
 """
 
 import contextlib
@@ -140,6 +143,54 @@ def _audit_log(event: dict, workspace_root: Optional[Path] = None) -> None:
         # Best-effort: never raise into the caller. Surface to stderr so
         # daemon logs capture the failure for operator review.
         print(f"[crm_autolog] audit log failed: {e}", file=sys.stderr)
+
+
+DATA_READONLY_ENV = "HEADING_OS_DATA_READONLY"
+
+# Spelled out in BOTH directions on purpose. A value that is neither reads as
+# ON, because the only way this name is non-empty is that somebody set it, and a
+# guard whose typo reads as "off" is the defect it exists to prevent. The
+# workspace already has that scar: `resolve_mode` in
+# `scripts/utils/overlay_write_guard.py` carries the same reasoning for
+# `HEADING_OS_OVERLAY_GUARD=recrod`. Erring toward ON costs an announced,
+# recoverable skip; erring toward OFF costs the frozen mirror below.
+_READONLY_ON = frozenset({"1", "true", "yes", "on"})
+_READONLY_OFF = frozenset({"", "0", "false", "no", "off"})
+
+
+def data_is_readonly() -> bool:
+    """Whether this host is forbidden from mutating the CRM records it holds.
+
+    MEASURED 2026-08-30 on the operator's Steward VM. That host executes scripts
+    and runs three daemons, and it keeps a PULL-ONLY clone of the private DATA
+    repo: a sync script runs `git pull --ff-only` hourly and nothing there ever
+    commits or pushes. At 15:00:00 the `steward-fireside` daemon's
+    `email-backup` job shelled out to `scripts/send-email.py`, whose
+    `_autolog_to` calls `log_outbound` for every recipient unconditionally - no
+    environment flag, no host check, no mode switch - and five contact cards
+    were rewritten in the mirror's working tree between 15:00:03 and 15:00:21.
+    `git pull --ff-only` aborted on every hour that followed, so the mirror sat
+    five commits behind for about three and a half days. The sync script printed
+    a warning and still exited 0, and systemd reported success the whole time.
+
+    The operator's ruling: a host that executes scripts must never mutate the
+    data repo. The control lives here rather than in each daemon's own
+    configuration so it holds on every mirror host, and not by convention.
+
+    Reads `os.environ` only, never the `.env` FILE. A caller that runs
+    `load_env()` first therefore sees a `.env` value - `send-email.py` does,
+    inside `load_config()`, before any send - while a caller that does not must
+    have the name exported, which is the systemd `Environment=` case this was
+    written for.
+    """
+    raw = os.environ.get(DATA_READONLY_ENV, "").strip().lower()
+    if raw in _READONLY_OFF:
+        return False
+    if raw in _READONLY_ON:
+        return True
+    print(f"[crm_autolog] {DATA_READONLY_ENV}={raw!r} is not a value this "
+          f"understands; treating the data root as read-only", file=sys.stderr)
+    return True
 
 
 # Process-level email-index cache. Keyed by (ab_dir, mtime-signature).
@@ -374,9 +425,10 @@ def log_outbound(
 ) -> bool:
     """Log an outbound email to the matching relationship record.
 
-    Returns True if a log entry was written, False if no match (or conflict).
-    Writes a JSONL audit entry to .sync/logs/crm-autolog-{date}.jsonl on every
-    invocation regardless of match outcome.
+    Returns True if a log entry was written, False if no match (or conflict),
+    and False on a read-only host (`data_is_readonly`). Writes a JSONL audit
+    entry to .sync/logs/crm-autolog-{date}.jsonl on every invocation regardless
+    of match outcome.
     """
     target = (recipient_email or "").strip().lower()
     rel_path = resolve_recipient(recipient_email, workspace_root=workspace_root)
@@ -385,6 +437,33 @@ def log_outbound(
             "kind": "outbound",
             "email": target,
             "matched": False,
+        }, workspace_root=workspace_root)
+        return False
+    if data_is_readonly():
+        # Checked HERE, after the resolve and before the read-modify-write: it
+        # is the narrowest point that still names the record, and the no-match
+        # branch above is untouched because it never wrote anything anyway.
+        #
+        # Announced, never silent. This line is what reaches the daemon journal
+        # on the mirror host, and it is the operator's only signal that an
+        # interaction went unfiled. A skip nobody can see is how five contact
+        # cards got rewritten without anyone noticing for three days.
+        print(f"crm-autolog: DATA_READONLY, not logging to {rel_path.stem} "
+              f"(to={target}, subject={subject or '(no subject)'})",
+              file=sys.stderr)
+        # The audit entry still goes down. `.sync/` is gitignored in the DATA
+        # repo (`/.sync/`, .gitignore line 23; confirmed with `git check-ignore
+        # -v` on 2026-09-02), so neither the JSONL nor the `mkdir` that creates
+        # its directory shows up in `git status`, and neither can be what aborts
+        # the mirror's `git pull --ff-only`. Dropping it would throw away the
+        # only durable record that the send happened at all.
+        _audit_log({
+            "kind": "outbound",
+            "email": target,
+            "matched": True,
+            "slug": rel_path.stem,
+            "subject": subject or "",
+            "skipped": "data_readonly",
         }, workspace_root=workspace_root)
         return False
     date = date or datetime.now(get_default_tz()).strftime("%Y-%m-%d")
@@ -413,7 +492,10 @@ def bump_inbound(
     Returns True if the sender resolved to a known contact (regardless of
     whether the last_touch value actually changed — duplicate inbound on the
     same day is a no-op write but still a match). Returns False on no match
-    or multi-match conflict. Writes a JSONL audit entry on every invocation.
+    or multi-match conflict, and False on a read-only host
+    (`data_is_readonly`) even though the sender resolved, because the caller
+    reads the return as "the touch is recorded" and on such a host it is not.
+    Writes a JSONL audit entry on every invocation.
     """
     target = (sender_email or "").strip().lower()
     rel_path = resolve_recipient(sender_email, workspace_root=workspace_root)
@@ -422,6 +504,18 @@ def bump_inbound(
             "kind": "inbound",
             "email": target,
             "matched": False,
+        }, workspace_root=workspace_root)
+        return False
+    if data_is_readonly():
+        # Same placement and the same reasoning as `log_outbound`; see there.
+        print(f"crm-autolog: DATA_READONLY, not bumping last_touch on "
+              f"{rel_path.stem} (from={target})", file=sys.stderr)
+        _audit_log({
+            "kind": "inbound",
+            "email": target,
+            "matched": True,
+            "slug": rel_path.stem,
+            "skipped": "data_readonly",
         }, workspace_root=workspace_root)
         return False
     date = date or datetime.now(get_default_tz()).strftime("%Y-%m-%d")

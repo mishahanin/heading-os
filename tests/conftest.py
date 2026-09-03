@@ -329,6 +329,11 @@ from scripts.utils import overlay_write_guard as _guard  # noqa: E402
 
 _NETWORK_MARKERS = ("network", "integration", "acceptance")
 _NETWORK_ALLOWED = False        # flipped per test by _no_egress below
+# `requires_ollama` is declared in `pyproject.toml` and, until 2026-09-03,
+# deselected nothing and gated nothing. It is now what opens the gateway leg of
+# the guard; see `_refuse_egress` for the four tests that measured a daemon.
+_OLLAMA_MARKERS = _NETWORK_MARKERS + ("requires_ollama",)
+_OLLAMA_ALLOWED = False         # flipped per test by _no_egress below
 _RESTORE_SOCKET_GUARD = None
 
 
@@ -416,9 +421,51 @@ def address_is_local(address) -> bool:
     return ip.is_loopback or ip.is_unspecified
 
 
+def _is_wsl_host_gateway(address) -> bool:
+    """The one address `address_is_local` calls local that is another machine."""
+    if not isinstance(address, tuple) or not address:
+        return False
+    host = address[0]
+    if isinstance(host, (str, bytes)):
+        try:
+            text = os.fsdecode(host) if isinstance(host, bytes) else host
+        except (TypeError, ValueError):
+            return False
+        return text.split("%", 1)[0] == wsl_host_gateway()
+    return False
+
+
 def _refuse_egress(address, verb):
     if _NETWORK_ALLOWED:
         return
+    # THE HOLE THIS CLOSES. `address_is_local` calls the WSL host gateway local,
+    # deliberately and with a comment saying it is where the embedder lives. It
+    # is the one address on that list that is a DIFFERENT MACHINE running a
+    # DIFFERENT daemon, so the guard stood aside for exactly the traffic whose
+    # presence or absence decides a test's verdict.
+    #
+    # MEASURED 2026-09-03: four unit tests reached ollama on the gateway with no
+    # marker asking for it, and two of them CHANGED VERDICT when the daemon's
+    # state changed and nothing else did. `test_ollama_accel_state_fs` passed
+    # with the daemon down and no pin, failed with a pin set; the four
+    # `test_recall_cross_lingual` cases went from skipped to passed when the
+    # daemon came up. The same day, `scan_redundancy`'s corruption warning was
+    # found to be suppressed by the same outage, and the test that should have
+    # caught it had been green by luck since it was written.
+    #
+    # `requires_ollama` already existed in `pyproject.toml` and deselected
+    # nothing. It is now the opt-in: a test that genuinely needs the daemon says
+    # so and gets through here; every other test is told, loudly, at the socket.
+    if _is_wsl_host_gateway(address) and not _OLLAMA_ALLOWED:
+        raise NetworkAccessRefused(
+            f"a test tried to {verb} {address!r}, the ollama host on the other "
+            f"side of the WSL boundary. Its verdict would then be decided by "
+            f"whether a foreign daemon happens to be running, not by this "
+            f"repository's code. Inject the embedder (`scan_redundancy` and "
+            f"`memory-index` both take one), patch "
+            f"`scripts.utils.ollama_host.probe`, or mark the test "
+            f"`@pytest.mark.requires_ollama` if it genuinely needs the daemon."
+        )
     if address_is_local(address):
         return
     raise NetworkAccessRefused(
@@ -499,15 +546,51 @@ def pytest_configure(config):
 @pytest.fixture(autouse=True)
 def _no_egress(request):
     """Open the gate only for a test that has asked for it, then close it again."""
-    global _NETWORK_ALLOWED
-    previous = _NETWORK_ALLOWED
+    global _NETWORK_ALLOWED, _OLLAMA_ALLOWED
+    previous = _NETWORK_ALLOWED, _OLLAMA_ALLOWED
     _NETWORK_ALLOWED = any(
         request.node.get_closest_marker(name) is not None for name in _NETWORK_MARKERS
+    )
+    _OLLAMA_ALLOWED = any(
+        request.node.get_closest_marker(name) is not None for name in _OLLAMA_MARKERS
     )
     try:
         yield
     finally:
-        _NETWORK_ALLOWED = previous
+        _NETWORK_ALLOWED, _OLLAMA_ALLOWED = previous
+
+
+@pytest.fixture(autouse=True)
+def _no_inherited_embed_pin(request, monkeypatch):
+    """A test must not inherit THIS machine's embedding pin.
+
+    Third ring of the same containment as `_mute_telegram_targets` above, and
+    for the same reason: a name in the ambient environment silently decides a
+    verdict. `HEADING_OS_OLLAMA_EMBED_HOST` is source 2 of
+    `embeddings.index_embed_preference`, so a shell that exports it repoints
+    every embed caller in the suite at a host the test never named.
+
+    MEASURED 2026-09-03: `tests/test_ops_signals.py::test_ollama_accel_state_fs`
+    passes with the name unset and FAILS with it set to `auto:11434,11436` --
+    its very first assertion, "no config -> not configured", because
+    `ops_signals.ollama_accel_state` reads that name as a fallback source. The
+    test writes its own config into a `tmp_path` precisely to control this, and
+    the environment reached around it.
+
+    `setenv(..., "")` rather than `delenv`: blanking is the documented no-op
+    for every reader of this name (all use `os.environ.get(name, "")`), and
+    `monkeypatch.delenv(raising=False)` on an ALREADY-ABSENT name records no
+    undo entry at all -- the trap this file's Telegram containment above was
+    written for.
+
+    A test that genuinely needs the operator's pin marks itself
+    `requires_ollama` and keeps it, which is the same switch that opens the
+    gateway leg of the egress guard.
+    """
+    if not any(request.node.get_closest_marker(name) is not None
+               for name in _OLLAMA_MARKERS):
+        monkeypatch.setenv("HEADING_OS_OLLAMA_EMBED_HOST", "")
+    yield
 
 
 # ============================================================

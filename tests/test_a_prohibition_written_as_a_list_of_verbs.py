@@ -220,9 +220,12 @@ NOT_AN_ENTRY_POINT = {
         "reached from safe-push.py, which is guarded at its own main().",
     "scripts/marp_render.py":
         "spawns `marp --watch --server`, a local slide-preview server. It is "
-        "not a HEADING OS daemon: no unit, no PID file the fleet reads, no "
-        "state outside the deck being previewed. NAMED to the operator on "
-        "2026-09-03 as a decision he owns rather than gated silently.",
+        "not a HEADING OS daemon: the operator's category is a unit or a PID "
+        "file the fleet reads, and this has neither -- no state outside the "
+        "deck being previewed. A guard here would break `/marp` in a YARD, "
+        "which is ordinary engine work and exactly what a YARD is for. NAMED "
+        "to the operator on 2026-09-03 rather than gated silently; he ruled "
+        "on 2026-09-04 that it stays unguarded, for that reason.",
 }
 
 
@@ -380,3 +383,39 @@ def test_the_driven_set_is_not_empty_and_is_a_subset_of_the_registry():
     assert len(DRIVEN) == 7
     for name in DRIVEN:
         assert name in DAEMON_ENTRY_POINTS, f"{name} is driven but not registered"
+
+
+def test_nothing_here_drives_a_script_that_changes_a_live_unit():
+    """A live daemon as a side effect of a test run is a defect, not a cost.
+
+    The same class as a mutation that writes the real tree: the run leaves the
+    machine in a state nobody asked for, and on 2026-09-03 that is exactly what
+    happened -- `restart-bridge-daemon.sh --help` was run from a main clone to
+    prove the guard let it through, `--help` never reached the delegate, and a
+    daemon the operator had deliberately stopped came up. Operator ruling,
+    2026-09-04: a test looks at the REFUSAL and at the ARGUMENTS, never at a
+    process that really started.
+
+    So the lifecycle scripts are asserted about by READING only, and this pins
+    it: nothing whose name says it installs, restarts or launches may enter the
+    driven set, whose members are all invoked from a worktree where they refuse.
+    """
+    lifecycle = ("restart", "install", "uninstall", "launch", "setup")
+    for name in DRIVEN:
+        assert not any(word in name for word in lifecycle), (
+            f"{name} manages a unit and is in the driven set. If its guard is "
+            f"ever removed, this file starts or stops a daemon on the "
+            f"operator's machine as a side effect of running the tests.")
+
+    # And no test here may ask for a main clone to run something in. Asked of
+    # the AST -- a parameter list -- because a substring scan of this file
+    # matches the sentence explaining the rule, which is how the first version
+    # of this assertion failed against itself.
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    borrowers = [n.name for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and any(a.arg == "armed_main_clone" for a in n.args.args)]
+    assert not borrowers, (
+        f"{borrowers} take `armed_main_clone`. Proving a guard PERMITS "
+        f"something means performing the thing it permits; the permitted "
+        f"direction is asked of the AST above, never driven.")

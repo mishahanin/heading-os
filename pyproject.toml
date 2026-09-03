@@ -250,6 +250,7 @@ filterwarnings = ["error::pytest.PytestReturnNotNoneWarning"]
 markers = [
     "integration: integration tests (mocked external services)",
     "slow: tests that take >5 seconds",
+    "flaky: observed failing without a reproduced cause. The marker deselects nothing and silences nothing; it records that a failure here is not yet evidence of a defect, and every marked test's docstring must state what was NOT established.",
     "acceptance: A+ sign-off gates; excluded from the per-push run (run explicitly in Phase 4)",
     "requires_exchange: needs exchangelib (uv sync --extra email)",
     "requires_telegram: needs Telethon (uv sync --extra telegram)",

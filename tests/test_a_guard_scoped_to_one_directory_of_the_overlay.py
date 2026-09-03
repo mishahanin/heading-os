@@ -73,8 +73,14 @@ def test_a_truncated_file_is_reported(cf):
     after = _snap(**{"auto-memory index": {"MEMORY.md": 20}})
     complaints = cf.watch_complaints(before, after)
     assert len(complaints) == 1
-    assert "1 file(s) rewrote" in complaints[0]
+    # "changed", not "rewrote", since 2026-09-03. The verb was the claim: a
+    # whole-session before/after diff sees that the tree moved and cannot see
+    # who moved it, and this machine has daemons writing the overlay on their
+    # own schedule. The detection is unchanged and is what this test is about.
+    assert "1 file(s) changed" in complaints[0]
     assert "MEMORY.md" in complaints[0]
+    assert "rewrote" not in complaints[0], (
+        "the verb attributes authorship the diff cannot establish")
 
 
 def test_a_set_comparison_alone_would_have_missed_it(cf):

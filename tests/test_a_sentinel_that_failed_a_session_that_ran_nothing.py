@@ -93,38 +93,95 @@ class _Session:
         self.exitstatus = 0
 
 
-def _armed(monkeypatch, complaints):
+def _armed(monkeypatch, complaints, reachable=0, baseline=16, owner=True):
     """Arm the sentinel's decision inputs without touching any filesystem.
 
     The snapshot and the diff are the guard's, tested in its own file. What is
-    under test here is the conftest hook's DECISION, so the two are replaced by
+    under test here is the conftest hook's DECISION, so they are replaced by
     fixed answers and the hook is then run for real.
+
+    `reachable` and `baseline` were added 2026-09-03 with the decision itself.
+    The hook no longer fails a session because the overlay tree moved: on this
+    machine the overlay has permanent competing writers, so "the run wrote
+    these" is a claim a before/after diff can never establish. What it CAN
+    establish, with no race against anybody, is how many of the run's own
+    children had the live data root reachable, and that is now the refusal.
     """
     monkeypatch.setattr(_guard, "_WATCH_BEFORE", {"live": (ROOT, {})}, raising=True)
     monkeypatch.setattr(_guard, "_watch_snapshot", lambda: {"live": (ROOT, {})})
     monkeypatch.setattr(_guard, "watch_complaints", lambda before, after: list(complaints))
     monkeypatch.setattr(_guard, "_CHILD_SPAWNS", [], raising=True)
+    monkeypatch.setattr(_guard, "_CHILD_SPAWN_COUNT", reachable, raising=True)
+    monkeypatch.setattr(root_conftest, "_overlay_reachability_baseline",
+                        lambda: baseline)
+    monkeypatch.setattr(root_conftest, "_OWNS_OVERLAY_WATCH", owner, raising=True)
 
 
 # ============================================================
 # Both directions
 # ============================================================
 
-def test_a_session_that_ran_tests_is_still_failed(monkeypatch):
-    """The refusal this sentinel exists for, and nothing tested it before today.
+def test_a_run_that_reached_the_live_root_more_than_the_budget_is_failed(
+        monkeypatch):
+    """The refusal this sentinel exists for, moved onto a claim it can make.
 
-    A wall no test has watched refuse has never been observed refusing.
+    A wall no test has watched refuse has never been observed refusing, so this
+    case stays. What changed is WHICH condition refuses: the run's own children
+    reaching the live data root, rather than the tree having moved.
     """
     reporter = _Reporter()
     session = _Session(reporter, collectonly=False)
-    _armed(monkeypatch, ["1 file(s) appeared in the operator's live overlay"])
+    _armed(monkeypatch, [], reachable=17, baseline=16)
 
     root_conftest.pytest_sessionfinish(session, 0)
 
     assert session.exitstatus == 1
     assert any("ERROR:" in line for line in reporter.lines)
-    assert any("appeared in the operator's live overlay" in line
-               for line in reporter.lines)
+    assert any("17 child process(es)" in line for line in reporter.lines)
+
+
+def test_a_moved_tree_is_reported_and_does_not_fail_the_run(monkeypatch):
+    """The direction this repair exists for, and the harder half.
+
+    MEASURED 2026-09-03: `sync-exchange-daemon.service` was active, its journal
+    showed job-start 15:53:08 / job-ok 15:53:29, and the two files the sentinel
+    named had mtimes inside that window 0.0007 s apart, alongside eight more it
+    did not name including a week of calendar. A test run cannot write next
+    week's calendar. It was the second such accusation in two days.
+
+    So a moved tree is REPORTED, in full, and does not fail anybody.
+    """
+    reporter = _Reporter()
+    session = _Session(reporter, collectonly=False)
+    _armed(monkeypatch, ["1 file(s) appeared under the operator's live overlay"],
+           reachable=3, baseline=16)
+
+    root_conftest.pytest_sessionfinish(session, 0)
+
+    assert session.exitstatus == 0, "a diff alone must no longer fail the run"
+    assert any("appeared under the operator's live overlay" in line
+               for line in reporter.lines), "the observation must still be shown"
+    assert any("NOT established" in line for line in reporter.lines), (
+        "the report must say what it did not establish, not merely stop "
+        "saying what it could not")
+    assert not any("ERROR:" in line for line in reporter.lines)
+
+
+def test_a_nested_pytest_is_not_judged_against_the_parents_budget(monkeypatch):
+    """A child scoped to one directory inherits a number written for the whole
+    suite. MEASURED 2026-09-03: three tests failed exactly that way."""
+    reporter = _Reporter()
+    session = _Session(reporter, collectonly=False)
+    # A complaint is supplied so the hook reports at all: with nothing observed
+    # AND nothing over budget it stays silent, which is the correct quiet path
+    # and not what this case is about.
+    _armed(monkeypatch, ["1 file(s) appeared under the operator's live overlay"],
+           reachable=99, baseline=16, owner=False)
+
+    root_conftest.pytest_sessionfinish(session, 0)
+
+    assert session.exitstatus == 0
+    assert any("not enforced: nested pytest" in line for line in reporter.lines)
 
 
 def test_a_collect_only_session_is_not_accused(monkeypatch):
@@ -162,7 +219,10 @@ def test_the_exemption_is_decided_by_the_option_and_not_by_a_missing_reporter(mo
     gets its exit status set. Before the reporter was ever consulted this was
     the only signal, and losing it would make a whole class of runs silent."""
     session = _Session(None, collectonly=False)
-    _armed(monkeypatch, ["1 file(s) appeared"])
+    # Over budget, not merely a moved tree: since 2026-09-03 the exit status
+    # follows the claim the method can establish. The property this case exists
+    # for is unchanged -- a run with no reporter must still be told.
+    _armed(monkeypatch, ["1 file(s) appeared"], reachable=17, baseline=16)
 
     root_conftest.pytest_sessionfinish(session, 0)
 
@@ -326,7 +386,7 @@ def test_the_guard_derives_its_count_while_the_overlay_is_being_written(
 
 
 @pytest.mark.slow
-def test_a_child_that_runs_tests_is_still_accused_under_the_same_churn(
+def test_a_child_that_runs_tests_still_reports_the_churn(
         monkeypatch, tmp_path):
     """The exemption narrows the sentinel; it must not have removed it.
 
@@ -334,6 +394,12 @@ def test_a_child_that_runs_tests_is_still_accused_under_the_same_churn(
     collecting one. Asserted on the sentinel's own message rather than on the
     exit status: a child whose tests failed would exit 1 too, and that would let
     this test pass over a dead sentinel.
+
+    Renamed from "is still accused" on 2026-09-03. The sentinel must still SEE
+    and SAY that the tree moved -- that is what this case protects -- but it no
+    longer accuses the run of moving it, because a before/after diff of a live
+    tree cannot establish who wrote. The message assertion below is the part
+    that mattered all along.
     """
     overlay = _scratch_overlay(tmp_path)
     env = {**dict(__import__("os").environ), "HEADING_OS_DATA": str(overlay)}
@@ -346,10 +412,51 @@ def test_a_child_that_runs_tests_is_still_accused_under_the_same_churn(
             env=env, timeout=300)
 
     assert churn.written >= 1
-    assert "in the operator's" in proc.stdout or "ERROR:" in proc.stdout, (
+    # "under the operator's" since 2026-09-03: the preposition changed with the
+    # verb, when "N file(s) rewrote in ... during the run" became "N file(s)
+    # changed under ... between the start and the end of the run".
+    assert "under the operator's" in proc.stdout, (
         "a run that executed tests while a watched overlay changed said nothing "
         f"about it.\n{proc.stdout[-2000:]}")
     assert str(overlay) in proc.stdout, (
         "the session-scoped scratch root was not among the watched roots, so "
         "this test measured the live overlay's weather instead of its own churn")
-    assert proc.returncode == 1
+    assert "NOT established" in proc.stdout, (
+        "the report must name what it could not determine, or a reader takes "
+        "the observation for an accusation again")
+    # The exit status is deliberately NOT asserted. It followed the diff until
+    # 2026-09-03 and now follows the reachability budget, and this child is
+    # under budget: a moved tree is reported, not blamed. Asserting 1 here
+    # would be asserting the accusation this change removed.
+    assert proc.returncode == 0, proc.stdout[-2000:]
+
+
+def test_a_sharded_run_reports_its_shard_and_enforces_nothing(monkeypatch):
+    """`_CHILD_SPAWN_COUNT` is per PROCESS, and under `-n auto` every xdist
+    worker is a process. MEASURED 2026-09-03 on one tree: `-n auto` reported
+    16 and a single-process run over a subset reported 654. A budget frozen
+    from the first and enforced against the second is a number about nothing.
+    """
+    reporter = _Reporter()
+    session = _Session(reporter, collectonly=False)
+    session.config.workerinput = {"workerid": "gw3"}
+    _armed(monkeypatch, ["1 file(s) appeared under the operator's live overlay"],
+           reachable=9999, baseline=16)
+
+    root_conftest.pytest_sessionfinish(session, 0)
+
+    assert session.exitstatus == 0, "a shard cannot be judged against the whole"
+    assert any("sharded run" in line for line in reporter.lines)
+
+
+def test_a_single_process_run_does_enforce(monkeypatch):
+    """The other direction. Without this the rule above reads as "never
+    enforce", which is a guard switched off with extra words."""
+    reporter = _Reporter()
+    session = _Session(reporter, collectonly=False)
+    _armed(monkeypatch, [], reachable=17, baseline=16)
+
+    root_conftest.pytest_sessionfinish(session, 0)
+
+    assert session.exitstatus == 1
+    assert any("17 child process(es)" in line for line in reporter.lines)

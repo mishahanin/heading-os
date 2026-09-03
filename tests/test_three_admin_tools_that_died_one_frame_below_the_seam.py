@@ -54,6 +54,20 @@ PYTHON = REPO / ".venv" / "bin" / "python"
 FAKE_ORG = "blackbriar-labs"
 FAKE_ADMIN_ORG = "treadstone-holdings"
 
+# The clone guard, and how far into each script it reaches. Both scripts below
+# call `require_main_clone(__file__)` in `main()` and exit 2 from a worktree.
+# They are driven as CHILD processes here, which no in-process monkeypatch can
+# reach, and `clone_guard.py` deliberately offers no environment override, so
+# from a YARD the cases that need to get PAST that call have no honest way to
+# run. `admin-health.py` carries no such guard at all.
+HELM_ONLY_SCRIPTS = {"offboard-exec.py", "provision-exec.py"}
+
+# Narrower, and measured rather than assumed: only `offboard-exec.py` calls the
+# guard BEFORE `parse_args`, so only its `--help` dies from a worktree.
+# `provision-exec.py` calls it after argparse, so `--help` still answers there
+# and that parametrisation must keep running.
+HELM_ONLY_BEFORE_ARGPARSE = {"offboard-exec.py"}
+
 
 @pytest.fixture
 def clean_seam(monkeypatch):
@@ -220,8 +234,10 @@ def test_a_write_guard_is_not_widened_by_this(monkeypatch, tmp_path):
     "offboard-exec.py",
     "provision-exec.py",
 ])
-def test_help_survives_a_missing_overlay(script, tmp_path):
+def test_help_survives_a_missing_overlay(script, tmp_path, request):
     """--help is a documented path and must not need the private data overlay."""
+    if script in HELM_ONLY_BEFORE_ARGPARSE:
+        request.getfixturevalue("main_clone_only")
     proc = subprocess.run(
         [str(PYTHON), str(REPO / "scripts" / script), "--help"],
         cwd=str(REPO), capture_output=True, text=True, timeout=120,
@@ -246,7 +262,7 @@ def test_help_survives_a_missing_overlay(script, tmp_path):
      ["--name", "James Bond", "--title", "CSO",
       "--email", "james.bond@example.com", "--role", "cso"], 2),
 ])
-def test_an_unresolved_org_stops_the_run(script, argv, expected_code, tmp_path):
+def test_an_unresolved_org_stops_the_run(script, argv, expected_code, tmp_path, request):
     """Each of the three must STOP before it touches GitHub with a guessed path.
 
     Every repo path would be `/{name}`: admin-health would render a complete
@@ -255,6 +271,8 @@ def test_an_unresolved_org_stops_the_run(script, argv, expected_code, tmp_path):
     workspace against repos that were never created. The exit code is each
     script's own existing refusal code, not a new one.
     """
+    if script in HELM_ONLY_SCRIPTS:
+        request.getfixturevalue("main_clone_only")
     proc = subprocess.run(
         [str(PYTHON), str(REPO / "scripts" / script), *argv],
         cwd=str(REPO), capture_output=True, text=True, timeout=120,

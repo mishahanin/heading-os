@@ -214,8 +214,17 @@ def test_the_two_files_agree_on_the_marker_text(ph):
     )
 
 
-def test_the_summary_line_does_not_call_an_outage_zero(ds, monkeypatch, capsys):
+def test_the_summary_line_does_not_call_an_outage_zero(ds, monkeypatch, capsys,
+                                                       unguard_main_clone):
     """`--quiet` prints ONLY this line, and it is the mode a check would use."""
+    # `dream-shadow.main()` opens with `require_main_clone(__file__)`, which
+    # exits 2 from a worktree before the summary line under test is printed.
+    # `ds` is module-scoped and this fixture is function-scoped, so the
+    # neutralisation is applied per test, on that loaded module only. The guard
+    # keeps its own owners: tests/test_guarded_entry_points_refuse_from_a_worktree.py
+    # pins through the AST that the call is main()'s first statement and is
+    # passed `__file__`, and tests/test_clone_guard.py pins that it fires.
+    unguard_main_clone(ds)
     monkeypatch.setattr(ds, "gather", lambda: {
         "memory_dir": _MEM_DIR, "dormant": [], "merge": _DOWN})
     monkeypatch.setattr(sys, "argv", ["dream-shadow.py", "--quiet", "--no-report"])
@@ -227,7 +236,9 @@ def test_the_summary_line_does_not_call_an_outage_zero(ds, monkeypatch, capsys):
     assert "UNAVAILABLE" in out
 
 
-def test_the_summary_still_counts_a_real_scan(ds, monkeypatch, capsys):
+def test_the_summary_still_counts_a_real_scan(ds, monkeypatch, capsys,
+                                              unguard_main_clone):
+    unguard_main_clone(ds)
     monkeypatch.setattr(ds, "gather", lambda: {
         "memory_dir": _MEM_DIR, "dormant": [], "merge": _PAIR})
     monkeypatch.setattr(sys, "argv", ["dream-shadow.py", "--quiet", "--no-report"])
@@ -235,8 +246,10 @@ def test_the_summary_still_counts_a_real_scan(ds, monkeypatch, capsys):
     assert "1 merge candidate(s)" in capsys.readouterr().out
 
 
-def test_a_clean_scan_reports_zero_which_is_true(ds, monkeypatch, capsys):
+def test_a_clean_scan_reports_zero_which_is_true(ds, monkeypatch, capsys,
+                                                 unguard_main_clone):
     """Anchor: zero is the right word when the scan ran and found nothing."""
+    unguard_main_clone(ds)
     monkeypatch.setattr(ds, "gather", lambda: {
         "memory_dir": _MEM_DIR, "dormant": [], "merge": _CLEAN})
     monkeypatch.setattr(sys, "argv", ["dream-shadow.py", "--quiet", "--no-report"])

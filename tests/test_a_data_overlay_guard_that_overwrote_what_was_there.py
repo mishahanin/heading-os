@@ -15,6 +15,7 @@ text, and not on its exit status alone.
 """
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -52,11 +53,39 @@ def _hook(overlay: Path) -> Path:
     return overlay / ".git" / "hooks" / "pre-commit"
 
 
+def _place_hook(overlay: Path) -> Path:
+    """Put the tracked hook body where git will run it, without the installer.
+
+    The cases below the "hook itself" banner are about the HOOK's behaviour;
+    the installer is only how that file normally arrives. Placing the body
+    directly keeps them running from a YARD as well as from HELM, where
+    driving the installer as a child process would exit 2 on the clone guard.
+
+    COVERAGE HANDOFF: that the installer writes exactly these bytes is asserted
+    by `test_the_installed_hook_is_byte_for_byte_the_tracked_body`, which is
+    clone-gated. So on a YARD the hook cases prove the body refuses correctly,
+    and the identity of installer output to that body goes unchecked until the
+    suite runs in HELM. Nothing here restates the installer's behaviour.
+    """
+    hook = _hook(overlay)
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(BODY, hook)
+    hook.chmod(0o755)
+    return hook
+
+
 # ============================================================
 # Installing
 # ============================================================
+#
+# Every case in this section and the next drives `install-data-overlay-guard.py`
+# as a CHILD process, and that script is HELM-only: `main()` calls
+# `require_main_clone(__file__)` and exits 2 from a worktree before any of the
+# behaviour below runs. A child cannot be reached by an in-process monkeypatch,
+# and `clone_guard.py` deliberately offers no environment override, so these
+# cases have no honest way to run from a YARD.
 
-def test_an_absent_hook_is_installed_and_executable(tmp_path):
+def test_an_absent_hook_is_installed_and_executable(main_clone_only, tmp_path):
     overlay = _repo(tmp_path)
     result = _install(overlay)
     assert result.returncode == 0, result.stderr
@@ -66,7 +95,7 @@ def test_an_absent_hook_is_installed_and_executable(tmp_path):
     assert "HEADING_OS_YARD" in hook.read_text(encoding="utf-8")
 
 
-def test_installing_twice_is_a_no_op_refresh(tmp_path):
+def test_installing_twice_is_a_no_op_refresh(main_clone_only, tmp_path):
     overlay = _repo(tmp_path)
     assert _install(overlay).returncode == 0
     first = _hook(overlay).read_bytes()
@@ -75,7 +104,7 @@ def test_installing_twice_is_a_no_op_refresh(tmp_path):
     assert _hook(overlay).read_bytes() == first
 
 
-def test_a_foreign_hook_is_refused_and_left_untouched(tmp_path):
+def test_a_foreign_hook_is_refused_and_left_untouched(main_clone_only, tmp_path):
     """The defect this test exists for. Additions only, without exception."""
     overlay = _repo(tmp_path)
     hook = _hook(overlay)
@@ -97,7 +126,7 @@ def test_a_foreign_hook_is_refused_and_left_untouched(tmp_path):
 # Reporting
 # ============================================================
 
-def test_check_reports_missing_without_installing(tmp_path):
+def test_check_reports_missing_without_installing(main_clone_only, tmp_path):
     overlay = _repo(tmp_path)
     result = _install(overlay, "--check")
     assert result.returncode == 1
@@ -105,7 +134,7 @@ def test_check_reports_missing_without_installing(tmp_path):
     assert not _hook(overlay).exists(), "--check must change nothing"
 
 
-def test_check_reports_armed_after_installation(tmp_path):
+def test_check_reports_armed_after_installation(main_clone_only, tmp_path):
     overlay = _repo(tmp_path)
     assert _install(overlay).returncode == 0
     result = _install(overlay, "--check")
@@ -113,7 +142,7 @@ def test_check_reports_armed_after_installation(tmp_path):
     assert "armed" in result.stdout
 
 
-def test_check_reports_a_foreign_hook_distinctly(tmp_path):
+def test_check_reports_a_foreign_hook_distinctly(main_clone_only, tmp_path):
     """Absent and foreign are different states with different remedies.
 
     A guard that cannot tell them apart tells the operator to run the installer
@@ -128,7 +157,7 @@ def test_check_reports_a_foreign_hook_distinctly(tmp_path):
     assert "foreign" in result.stdout
 
 
-def test_print_emits_the_body_and_installs_nothing(tmp_path):
+def test_print_emits_the_body_and_installs_nothing(main_clone_only, tmp_path):
     overlay = _repo(tmp_path)
     result = _install(overlay, "--print")
     assert result.returncode == 0
@@ -139,6 +168,10 @@ def test_print_emits_the_body_and_installs_nothing(tmp_path):
 # ============================================================
 # The hook itself, driving real commits
 # ============================================================
+#
+# These place the hook with `_place_hook` rather than running the installer, so
+# they exercise the hook from a YARD as well as from HELM. Only the last case in
+# this section is about the installer, and it is gated with the section above.
 
 def _commit(overlay: Path, filename: str, marked: bool):
     (overlay / filename).write_text("x\n", encoding="utf-8")
@@ -163,7 +196,7 @@ def _commit_count(overlay: Path) -> int:
 
 def test_a_commit_from_a_yard_does_not_land(tmp_path):
     overlay = _repo(tmp_path)
-    assert _install(overlay).returncode == 0
+    _place_hook(overlay)
     assert _commit(overlay, "first.txt", marked=False).returncode == 0
     before = _commit_count(overlay)
 
@@ -178,7 +211,7 @@ def test_a_commit_from_helm_still_lands(tmp_path):
     """The pair. A hook that refused every commit would pass the test above and
     make the overlay unusable from HELM, which is where every commit belongs."""
     overlay = _repo(tmp_path)
-    assert _install(overlay).returncode == 0
+    _place_hook(overlay)
     assert _commit(overlay, "first.txt", marked=False).returncode == 0
     before = _commit_count(overlay)
     assert _commit(overlay, "second.txt", marked=False).returncode == 0
@@ -188,7 +221,7 @@ def test_a_commit_from_helm_still_lands(tmp_path):
 def test_the_refusal_names_what_is_still_allowed(tmp_path):
     """A refusal that does not say what to do instead gets worked around."""
     overlay = _repo(tmp_path)
-    assert _install(overlay).returncode == 0
+    _place_hook(overlay)
     _commit(overlay, "first.txt", marked=False)
     result = _commit(overlay, "second.txt", marked=True)
     combined = result.stderr + result.stdout
@@ -205,7 +238,7 @@ def test_only_the_exact_marker_refuses(tmp_path, value):
     own commits.
     """
     overlay = _repo(tmp_path)
-    assert _install(overlay).returncode == 0
+    _place_hook(overlay)
     (overlay / "f.txt").write_text("x\n", encoding="utf-8")
     env = dict(os.environ, HEADING_OS_YARD=value)
     subprocess.run(["git", "add", "f.txt"], cwd=str(overlay), check=True, env=env)
@@ -216,10 +249,16 @@ def test_only_the_exact_marker_refuses(tmp_path, value):
     assert result.returncode == 0, result.stderr
 
 
-def test_the_installed_hook_is_byte_for_byte_the_tracked_body(tmp_path):
+def test_the_installed_hook_is_byte_for_byte_the_tracked_body(main_clone_only, tmp_path):
     """One body, in one file. The draft this replaces inlined the hook's text
     into the bootstrap script as a heredoc while also keeping it in a file, so
-    there were two copies of one hook waiting to diverge."""
+    there were two copies of one hook waiting to diverge.
+
+    Clone-gated for the same reason as the installer section: it runs the
+    HELM-only installer as a child, which no in-process patch can reach. This
+    case owns the installer-output-equals-BODY claim that `_place_hook` hands
+    off to it.
+    """
     overlay = _repo(tmp_path)
     assert _install(overlay).returncode == 0
     assert _hook(overlay).read_bytes() == BODY.read_bytes()

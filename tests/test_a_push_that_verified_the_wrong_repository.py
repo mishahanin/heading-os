@@ -79,6 +79,21 @@ def _load(stem: str, name: str):
 sp = _load("safe-push", "safe_push_s49")
 
 
+@pytest.fixture(autouse=True)
+def _reach_safe_push_main(unguard_main_clone):
+    """`safe-push.main()` opens with `require_main_clone(__file__)`, which exits
+    2 from a worktree before the CLI-level refusals below are reached.
+    Neutralised on THIS loaded module, for the duration of one test.
+
+    Not a silenced guard: it is owned by
+    `tests/test_guarded_entry_points_refuse_from_a_worktree.py`, which pins
+    through the AST that the call is the first statement of `main()` and is
+    passed `__file__`, and by `tests/test_clone_guard.py`, which pins that it
+    fires. This file owns the behaviour behind it.
+    """
+    unguard_main_clone(sp)
+
+
 def _git(args, cwd):
     return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
                           text=True, check=True)

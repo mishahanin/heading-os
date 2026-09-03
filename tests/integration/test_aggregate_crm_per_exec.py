@@ -27,7 +27,13 @@ last_touch: {last_touch}
 """, encoding="utf-8")
 
 
-def test_aggregate_reads_new_data_repo_model(tmp_path):
+# Both cases drive `scripts/aggregate-crm.py` as a CHILD process, and its
+# `main()` calls `require_main_clone(__file__)` and exits 2 from a worktree
+# before any aggregation happens. A child process is out of reach of an
+# in-process monkeypatch, and `clone_guard.py` refuses an environment escape
+# hatch by design, so there is no honest way to run these from a YARD.
+
+def test_aggregate_reads_new_data_repo_model(main_clone_only, tmp_path):
     """aggregate-crm.py reads admin/executives.json and pulls heading-os-data-{slug}/crm/contacts/."""
     workspace = tmp_path / "main-workspace"
     workspace.mkdir()
@@ -87,7 +93,7 @@ def test_aggregate_reads_new_data_repo_model(tmp_path):
     assert "Bob" in radar, "exec contact (new data-repo model) missing"
 
 
-def test_aggregate_ceo_only_flag_skips_exec_clones(tmp_path):
+def test_aggregate_ceo_only_flag_skips_exec_clones(main_clone_only, tmp_path):
     """--ceo-only aggregates only CEO own contacts, and the exec is REALLY there.
 
     This registered an EMPTY fleet and asserted only that the CEO's own contact

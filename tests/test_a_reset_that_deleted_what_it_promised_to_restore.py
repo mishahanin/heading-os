@@ -364,9 +364,18 @@ def test_the_mask_docstring_no_longer_denies_the_file_mode():
 # ============================================================
 
 def test_an_unresolved_transcript_dir_is_not_exit_zero(tmp_path, monkeypatch,
-                                                       capsys):
+                                                       capsys,
+                                                       unguard_main_clone):
     """Exit 0 here reads as success to a cron job, which does not read stderr."""
-    arch = _load("archive-transcripts.py")
+    # `archive-transcripts.main()` opens with `require_main_clone(__file__)`,
+    # which exits 2 from a worktree before the counts-to-exit-code mapping under
+    # test is reached. The module is loaded inside each test here, so the
+    # neutralisation is applied per test, on that copy. The guard itself stays
+    # measured by the two files that own it:
+    # `tests/test_guarded_entry_points_refuse_from_a_worktree.py` (the call is
+    # `main()`'s first statement, passed `__file__`, pinned through the AST) and
+    # `tests/test_clone_guard.py` (it fires).
+    arch = unguard_main_clone(_load("archive-transcripts.py"))
     monkeypatch.setattr(arch, "archive",
                         lambda dry_run=False: {"archived": 0, "skipped": 0,
                                                "too_fresh": 0, "failed": 0,
@@ -392,18 +401,18 @@ def _require_a_writable_data_root() -> None:
                     "(0 for a clean run, 1 for a failed one) is not measured")
 
 
-def test_a_normal_archive_run_still_exits_zero(monkeypatch):
+def test_a_normal_archive_run_still_exits_zero(monkeypatch, unguard_main_clone):
     _require_a_writable_data_root()
-    arch = _load("archive-transcripts.py")
+    arch = unguard_main_clone(_load("archive-transcripts.py"))
     monkeypatch.setattr(arch, "archive",
                         lambda dry_run=False: {"archived": 3, "skipped": 1,
                                                "too_fresh": 2, "failed": 0})
     assert arch.main([]) == 0
 
 
-def test_a_failed_archive_still_exits_one(monkeypatch):
+def test_a_failed_archive_still_exits_one(monkeypatch, unguard_main_clone):
     _require_a_writable_data_root()
-    arch = _load("archive-transcripts.py")
+    arch = unguard_main_clone(_load("archive-transcripts.py"))
     monkeypatch.setattr(arch, "archive",
                         lambda dry_run=False: {"archived": 1, "skipped": 0,
                                                "too_fresh": 0, "failed": 2})

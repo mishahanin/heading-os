@@ -248,7 +248,8 @@ def test_the_helper_refuses_when_sourced_into_a_bare_shell(tmp_path):
     assert "cannot determine which script is running" in result.stderr
 
 
-def test_the_shell_predicate_agrees_with_the_python_one(armed_worktree):
+def test_the_shell_predicate_agrees_with_the_python_one(armed_main_clone,
+                                                        armed_worktree):
     """The two copies of one rule must not drift.
 
     `clone_guard.py` cannot be used by the shell helper: an installer is run
@@ -262,7 +263,11 @@ def test_the_shell_predicate_agrees_with_the_python_one(armed_worktree):
         "require_main_clone\n"
         'echo MAIN\n'
     )
-    for checkout, expected in ((ROOT, True), (armed_worktree, False)):
+    # `armed_main_clone`, not ROOT: the True side needs a checkout that really
+    # is a main clone, and ROOT is a YARD worktree whenever this suite is run
+    # from one. MEASURED 2026-09-03: both predicates answered False for ROOT
+    # here, which is correct of them and made the pair fail.
+    for checkout, expected in ((armed_main_clone, True), (armed_worktree, False)):
         script = checkout / "scripts" / "_predicate-probe.sh"
         script.write_text(probe, encoding="utf-8")
         try:

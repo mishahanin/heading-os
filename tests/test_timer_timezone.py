@@ -946,8 +946,13 @@ _verdict("NO_READ")
 '''
 
 
+# Timer entrypoints whose `main()` calls `require_main_clone(__file__)`.
+_HELM_ONLY_ENTRYPOINTS = {"dream-shadow.py"}
+
+
 @pytest.mark.parametrize("script", _timer_driven_scripts(), ids=lambda p: p.name)
-def test_the_process_itself_never_reads_the_zone_before_loading_the_env(script, tmp_path):
+def test_the_process_itself_never_reads_the_zone_before_loading_the_env(
+        script, tmp_path, request):
     """SC-3, the runtime proof, and the answer to the limit static analysis
     cannot lift.
 
@@ -973,6 +978,15 @@ def test_the_process_itself_never_reads_the_zone_before_loading_the_env(script, 
         f"than leaving it unobserved"
     )
     argv, expect_read = plan
+
+    # `dream-shadow.py` calls `require_main_clone(__file__)` and exits 2 from a
+    # worktree, so the probe runs it as a CHILD and never reaches the zone read
+    # (verdict NO_READ). A child cannot be reached by an in-process monkeypatch,
+    # and `clone_guard.py` refuses an environment override by design. Only this
+    # parametrisation is gated; the other timer entrypoints carry no clone guard
+    # and keep running here.
+    if script.name in _HELM_ONLY_ENTRYPOINTS:
+        request.getfixturevalue("main_clone_only")
 
     workspace = tmp_path / "ws"
     (workspace / "scripts").mkdir(parents=True)

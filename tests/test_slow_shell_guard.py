@@ -91,7 +91,13 @@ SERIAL_SUITE_COMMANDS = [
     ".venv/bin/python -m pytest tests/ -q",
     "pytest tests/",
     ".venv/bin/python -m pytest tests/ -q 2>&1 | tail -n 15",
-    'cd /home/administrator/ai/claude-workspaces/.heading-os\n.venv/bin/python -m pytest tests/ -q -p no:randomly',
+    # A neutral directory, not HELM. This case is about a NEWLINE-separated
+    # serial command, and nothing else. MEASURED 2026-09-03: with the literal
+    # main-clone path here, running the suite from a YARD made the first line a
+    # cd INTO HELM, which the YARD write guard denies earlier in the dispatcher
+    # than the slow-shell wall, so the reason carried no run-tests.py pointer
+    # and this case failed on a refusal it never meant to provoke.
+    'cd /tmp\n.venv/bin/python -m pytest tests/ -q -p no:randomly',
     ".venv/bin/python -m pytest -q",
 ]
 

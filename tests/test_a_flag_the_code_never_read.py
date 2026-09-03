@@ -129,8 +129,16 @@ def _ops_signal_invocations() -> list[tuple[str, str, list[str]]]:
     return out
 
 
-def test_every_argv_ops_signals_builds_is_accepted_by_its_callee():
+def test_every_argv_ops_signals_builds_is_accepted_by_its_callee(main_clone_only):
     """The guard that would have caught this on the day it was written.
+
+    Clone-gated. The flags are read by running each callee's `--help` in a CHILD
+    process, and `publish-corporate.py` calls `require_main_clone(__file__)`
+    ahead of argparse, so from a worktree it exits 2 and the scan reports it
+    unresolvable. A child is out of reach of an in-process monkeypatch, and
+    `clone_guard.py` refuses an environment override by design; excluding the
+    HELM-only callees instead would silently drop them from the corpus this
+    guard exists to cover.
 
     `verify_admin_identity()` runs inside `main`, which is why nobody could
     write this test before: `publish-corporate.py` grew a `build_parser` so an
@@ -549,8 +557,15 @@ def _help_flags(cache: dict, script: str, subs: tuple[str, ...]) -> set[str] | N
     return cache[key]
 
 
-def test_every_documented_flag_exists_in_the_script_that_is_invoked():
+def test_every_documented_flag_exists_in_the_script_that_is_invoked(main_clone_only):
     """A runbook step that exits 2 is worse than no step at all.
+
+    Clone-gated for the same reason as the ops-signals case above: it resolves
+    each documented flag by running that script's `--help` in a CHILD process,
+    and the HELM-only ones (`install-data-overlay-guard.py`,
+    `publish-corporate.py`, `push-all.py`) exit 2 from a worktree before
+    argparse. The `unresolved` assertion below is precisely the one that must
+    not be relaxed to accommodate that.
 
     `docs/EMERGENCY-PROCEDURES.md` told the operator to revive a dead Sentinel
     with `python scripts/sentinel.py --check`; the parser defines `--test`, so

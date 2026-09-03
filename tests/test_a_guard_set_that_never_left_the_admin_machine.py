@@ -323,8 +323,18 @@ def test_the_registry_step_does_not_claim_the_corporate_repo(px):
 # ===========================================================================
 
 @pytest.fixture
-def pc(tmp_path, monkeypatch):
-    mod = _load("pc_11p3", "scripts/publish-corporate.py")
+def pc(tmp_path, monkeypatch, unguard_main_clone):
+    """`publish-corporate.main()` opens with `require_main_clone(__file__)`,
+    which exits 2 from a worktree before the CLI behaviour under test runs, so
+    it is neutralised on this loaded module for the duration of one test.
+
+    Not a silenced control: it is owned by
+    `tests/test_guarded_entry_points_refuse_from_a_worktree.py`, which pins
+    through the AST that the call is the first statement of `main()` and is
+    passed `__file__`, and by `tests/test_clone_guard.py`, which pins that it
+    fires. This file owns the behaviour behind it.
+    """
+    mod = unguard_main_clone(_load("pc_11p3", "scripts/publish-corporate.py"))
     monkeypatch.setattr(mod, "CORPORATE_ROOT", tmp_path / "corp")
     monkeypatch.setattr(mod, "source_root", lambda p=tmp_path / "src": p)
     (tmp_path / "corp").mkdir()
@@ -476,8 +486,14 @@ def test_every_exit_code_the_module_returns_is_documented(pc):
 # ===========================================================================
 
 @pytest.fixture
-def ps():
-    return _load("ps_11p3", "scripts/publish-service.py")
+def ps(unguard_main_clone):
+    """Same neutralisation as `pc` above, for `publish-service.main()`, and for
+    the same reason: the sibling-name wall under test sits behind
+    `require_main_clone(__file__)`, which exits 2 from a worktree first.
+    `tests/test_guarded_entry_points_refuse_from_a_worktree.py` and
+    `tests/test_clone_guard.py` own that guard.
+    """
+    return unguard_main_clone(_load("ps_11p3", "scripts/publish-service.py"))
 
 
 def test_an_absolute_downstream_repo_is_refused(ps, tmp_path):

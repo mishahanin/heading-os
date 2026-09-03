@@ -224,10 +224,21 @@ def test_a_failed_archive_reaches_the_verdict(gh):
 
 
 @pytest.fixture
-def main_env(monkeypatch, tmp_path):
+def main_env(monkeypatch, tmp_path, unguard_main_clone):
     """`main()` with every external step stubbed, so only the wiring is under
     test. The verdict plumbing is the point: a failed archive has to travel from
-    the archive step to the exit code."""
+    the archive step to the exit code.
+
+    `offboard-exec.main()` opens with `require_main_clone(__file__)`, which
+    exits 2 from a worktree before any of that wiring runs, so the guard is
+    neutralised on this loaded module for the duration of each test that uses
+    this fixture. That leaves it measured, not silenced:
+    `tests/test_guarded_entry_points_refuse_from_a_worktree.py` pins through the
+    AST that the call is the first statement of `main()` and is passed
+    `__file__`, and `tests/test_clone_guard.py` pins that it fires. Those files
+    own the control; this one owns the behaviour behind it.
+    """
+    unguard_main_clone(ofb)
     monkeypatch.setattr(sys, "argv", ["offboard-exec.py", "--exec", "marlow-carter"])
     for name, value in (
         # Pinned first, and for the reason `TEST_ORG` records: unpinned, `main()`

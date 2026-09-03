@@ -69,7 +69,7 @@ def structural(cf):
 # 0. The resolver counts the right number of parents
 # ============================================================
 
-def test_the_structural_root_is_derived_from_the_real_engine_root(cf):
+def test_the_structural_root_is_derived_from_the_real_engine_root(cf, helm_root):
     """The one number the 2026-08-31 move out of `tests/conftest.py` changed.
 
     `_structural_overlay_root()` walks up from its own `__file__` to the engine
@@ -82,18 +82,25 @@ def test_the_structural_root_is_derived_from_the_real_engine_root(cf):
 
     Derived here from this test file's own location, which is an independent
     path, rather than from any constant the guard exports.
+
+    Two roots, and they are not the same one whenever the suite runs from a
+    YARD. The DEPTH is a property of the checkout the guard module was loaded
+    from, which is this one. The OVERLAY is resolved by the guard through
+    `_main_clone_root()`, so it is the sibling of HELM. MEASURED 2026-09-03:
+    reading both off this file's location compared the real overlay against a
+    directory beside a worktree that does not exist, and the test failed.
     """
-    engine = Path(__file__).resolve().parent.parent
-    assert (engine / "pyproject.toml").is_file(), "this test mislocated the engine root"
+    checkout = Path(__file__).resolve().parent.parent
+    assert (checkout / "pyproject.toml").is_file(), "this test mislocated the engine root"
 
     guard_file = Path(cf.__file__).resolve()
-    assert guard_file.parents[2] == engine, (
-        f"the guard at {guard_file} is {len(guard_file.relative_to(engine).parts)} "
-        f"levels below {engine}; `_structural_overlay_root()` counts parents by "
+    assert guard_file.parents[2] == checkout, (
+        f"the guard at {guard_file} is {len(guard_file.relative_to(checkout).parts)} "
+        f"levels below {checkout}; `_structural_overlay_root()` counts parents by "
         f"hand and must be updated in the same change that moves this file")
 
     root = cf._structural_overlay_root()
-    sibling = engine.parent / ".heading-os-data"
+    sibling = helm_root.parent / ".heading-os-data"
     if sibling.is_dir():
         assert root == sibling.resolve(), (
             "the guard derived a different overlay than the sibling data repo "

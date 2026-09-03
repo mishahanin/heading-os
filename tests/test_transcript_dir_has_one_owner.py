@@ -154,9 +154,17 @@ def test_status_marks_the_directory_unresolved(monkeypatch):
     assert s["live_count"] == 0
 
 
-def test_the_cli_reports_the_refusal_instead_of_zero(monkeypatch, capsys):
+def test_the_cli_reports_the_refusal_instead_of_zero(monkeypatch, capsys,
+                                                    unguard_main_clone):
     """The defect was not the wrong slug. It was that a wrong slug produced a
     clean `live 0 file(s)` and exit 0 on every run, forever."""
+    # `archive-transcripts.main()` opens with `require_main_clone(__file__)`,
+    # which exits 2 from a worktree before `--status` reports anything.
+    # Neutralised on this loaded module, for this test only; the guard itself is
+    # owned by tests/test_guarded_entry_points_refuse_from_a_worktree.py (the
+    # call is main()'s first statement, passed `__file__`, pinned through the
+    # AST) and tests/test_clone_guard.py (it fires).
+    unguard_main_clone(ARCH)
     monkeypatch.setattr(ARCH, "transcript_dir", lambda: None)
     rc = ARCH.main(["--status"])
     out = capsys.readouterr()

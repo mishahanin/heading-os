@@ -43,6 +43,21 @@ sys.modules["archive_transcripts_mod"] = arch
 _spec.loader.exec_module(arch)
 
 
+@pytest.fixture(autouse=True)
+def _reach_main(unguard_main_clone):
+    """`archive-transcripts.main()` opens with `require_main_clone(__file__)`,
+    which exits 2 from a worktree before the CLI behaviour below runs.
+    Neutralised on THIS loaded module, for the duration of one test.
+
+    The guard keeps its own tests:
+    `tests/test_guarded_entry_points_refuse_from_a_worktree.py` pins through the
+    AST that the call is the first statement of `main()` and is passed
+    `__file__`, and `tests/test_clone_guard.py` pins that it fires. This file
+    owns the archiving behaviour behind it.
+    """
+    unguard_main_clone(arch)
+
+
 @pytest.fixture
 def tree(tmp_path, monkeypatch):
     """A fake transcript source and a fake DATA root."""

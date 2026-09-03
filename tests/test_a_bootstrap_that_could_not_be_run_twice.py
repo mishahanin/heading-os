@@ -281,8 +281,15 @@ def test_the_public_push_refusal_the_help_text_promises_exists():
     assert "only the engine may push to a public repository" in source
 
 
-def test_the_end_to_end_bootstrap_is_resumable(tmp_path):
-    """The whole point: run it twice, get exit 0 twice."""
+def test_the_end_to_end_bootstrap_is_resumable(main_clone_only, tmp_path):
+    """The whole point: run it twice, get exit 0 twice.
+
+    Clone-gated: `create-data-repo.py` is HELM-only and its `main()` calls
+    `require_main_clone(__file__)`, exiting 2 from a worktree before it
+    scaffolds anything. It is driven here as a CHILD process, which no
+    in-process monkeypatch can reach, and `clone_guard.py` deliberately offers
+    no environment override.
+    """
     target = tmp_path / "data"
     for _ in range(2):
         proc = subprocess.run(

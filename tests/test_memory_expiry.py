@@ -182,8 +182,13 @@ def test_the_refusal_is_reached_before_anything_is_resolved(tmp_path):
         "the installer created its destination tree before refusing")
 
 
-def test_the_override_flag_gets_past_the_gate(tmp_path):
+def test_the_override_flag_gets_past_the_gate(main_clone_only, tmp_path):
     """The other direction: a guard that refuses everything measures nothing.
+
+    Clone-gated: past the refusal the shell installer reaches
+    `require_main_clone` and exits 2 from a worktree, and a shell child has no
+    in-process seam to patch at all. `clone_guard.py` refuses an environment
+    override by design, so there is nothing honest to reach here from a YARD.
 
     Stopped at the systemctl probe (exit 5) by the pinned PATH, so the run
     proves the gate opened without ever enabling a timer. The warning line is
@@ -196,8 +201,13 @@ def test_the_override_flag_gets_past_the_gate(tmp_path):
     assert _rendered_units(home) == []
 
 
-def test_the_override_env_var_gets_past_the_gate(tmp_path):
-    """The second documented override, which the flag branch does not cover."""
+def test_the_override_env_var_gets_past_the_gate(main_clone_only, tmp_path):
+    """The second documented override, which the flag branch does not cover.
+
+    Clone-gated for the same reason as the flag case above: the open gate hands
+    the run to a HELM-only shell installer, and a shell child cannot be patched
+    in process.
+    """
     proc, home = _run_installer(tmp_path, override=True)
     assert proc.returncode != 9, (proc.stdout, proc.stderr)
     assert "DELETES memories" in proc.stderr

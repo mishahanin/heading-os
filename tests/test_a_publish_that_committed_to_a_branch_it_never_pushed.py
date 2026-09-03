@@ -153,7 +153,15 @@ def _wire(pub, monkeypatch, tmp_path, repo: Path):
 
 
 def test_main_refuses_a_side_branch_before_it_rewrites_the_mirror(
-        pub, monkeypatch, tmp_path):
+        pub, monkeypatch, tmp_path, unguard_main_clone):
+    # `publish-service.main()` opens with `require_main_clone(__file__)`, which
+    # exits 2 from a worktree before the branch wall under test is reached.
+    # `pub` is module-scoped and this fixture is function-scoped, so it is
+    # applied per test, on that loaded module only. The guard keeps its own
+    # owners: tests/test_guarded_entry_points_refuse_from_a_worktree.py pins
+    # through the AST that the call is main()'s first statement and is passed
+    # `__file__`, and tests/test_clone_guard.py pins that it fires.
+    unguard_main_clone(pub)
     # The clone must be a SIBLING of the workspace: downstream_dest requires it.
     workspace_parent = tmp_path
     repo = _clone(workspace_parent)
@@ -169,8 +177,9 @@ def test_main_refuses_a_side_branch_before_it_rewrites_the_mirror(
 
 
 def test_main_proceeds_normally_when_the_clone_is_on_main(
-        pub, monkeypatch, tmp_path):
+        pub, monkeypatch, tmp_path, unguard_main_clone):
     """The other direction: a guard that refuses everything is not a guard."""
+    unguard_main_clone(pub)
     repo = _clone(tmp_path)
     calls = _wire(pub, monkeypatch, tmp_path, repo)
 

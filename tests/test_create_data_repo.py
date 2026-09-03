@@ -69,8 +69,15 @@ def test_dry_run_makes_no_changes(tmp_path):
     assert not target.exists(), "dry-run must not create the target tree"
 
 
-def test_no_remote_flow_is_local_only(tmp_path, monkeypatch):
+def test_no_remote_flow_is_local_only(tmp_path, monkeypatch, unguard_main_clone):
     """main() with --no-remote scaffolds, writes files, and inits git — no gh."""
+    # `create-data-repo.main()` opens with `require_main_clone(__file__)`, which
+    # exits 2 from a worktree before the local flow under test runs. Neutralised
+    # on this loaded module, for this test only. The guard stays measured by
+    # tests/test_guarded_entry_points_refuse_from_a_worktree.py, which pins
+    # through the AST that the call is main()'s first statement and is passed
+    # `__file__`, and by tests/test_clone_guard.py, which pins that it fires.
+    unguard_main_clone(cdr)
     target = tmp_path / ".heading-os-data"
     monkeypatch.setattr("sys.argv", ["create-data-repo.py", "--path", str(target), "--no-remote"])
     # Provide a git identity for the commit step.

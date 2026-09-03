@@ -91,8 +91,17 @@ def test_an_unreadable_config_falls_back_instead_of_raising(agg, tmp_path, capsy
         os.chmod(cfg, stat.S_IRUSR | stat.S_IWUSR)
 
 
-def test_the_whole_run_survives_an_undecodable_config(agg, tmp_path, monkeypatch, capsys):
+def test_the_whole_run_survives_an_undecodable_config(agg, tmp_path, monkeypatch,
+                                                     capsys, unguard_main_clone):
     """The blast radius, not just the function: `main` catches nothing here."""
+    # `aggregate-crm.main()` opens with `require_main_clone(__file__)`, which
+    # exits 2 from a worktree before the blast radius under test is reached.
+    # `agg` is module-scoped and this fixture is function-scoped, so it is
+    # applied per test, on that loaded module only. The guard keeps its own
+    # owners: tests/test_guarded_entry_points_refuse_from_a_worktree.py pins
+    # through the AST that the call is main()'s first statement and is passed
+    # `__file__`, and tests/test_clone_guard.py pins that it fires.
+    unguard_main_clone(agg)
     cfg = tmp_path / "config.md"
     cfg.write_bytes(b"\xff\xfe\n")
     monkeypatch.setattr(agg, "get_crm_config_path", lambda: cfg)

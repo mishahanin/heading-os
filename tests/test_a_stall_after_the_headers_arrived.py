@@ -56,6 +56,21 @@ critique = _load("draft_critique_under_test", "scripts/draft-critique.py")
 dream = _load("dream_shadow_under_test", "scripts/dream-shadow.py")
 
 
+@pytest.fixture(autouse=True)
+def _reach_dream_main(unguard_main_clone):
+    """`dream-shadow.main()` opens with `require_main_clone(__file__)`, which
+    exits 2 from a worktree before the exit-code contract under test is
+    reached. Neutralised on THIS loaded module, for the duration of one test.
+    `draft-critique.py` carries no such guard and is left untouched.
+
+    The guard is still measured, by its own owners:
+    `tests/test_guarded_entry_points_refuse_from_a_worktree.py` pins through the
+    AST that the call is the first statement of `main()` and is passed
+    `__file__`, and `tests/test_clone_guard.py` pins that it fires.
+    """
+    unguard_main_clone(dream)
+
+
 # ============================================================
 # The read that stalled after the headers
 # ============================================================

@@ -15,12 +15,30 @@ same reason as `tests/test_push_all_gate.py`.
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 
 _spec = importlib.util.spec_from_file_location(
     "push_all_orchestration", ROOT / "scripts" / "push-all.py")
 push_all = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(push_all)
+
+
+@pytest.fixture(autouse=True)
+def _reach_main(unguard_main_clone):
+    """`main()`'s first statement is `require_main_clone(__file__)`, which exits
+    2 from a worktree before any orchestration below runs. Neutralised on THIS
+    loaded module, for the duration of one test.
+
+    The guard is not left untested by this: it is owned by
+    `tests/test_guarded_entry_points_refuse_from_a_worktree.py`, which pins
+    through the AST that the call is the first statement of `main()` and is
+    passed `__file__`, and by `tests/test_clone_guard.py`, which pins that it
+    fires. This file owns the behaviour BEHIND the guard, and without this could
+    not reach it.
+    """
+    unguard_main_clone(push_all)
 
 
 class _Args:

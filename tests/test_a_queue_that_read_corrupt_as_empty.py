@@ -158,8 +158,17 @@ def test_the_empty_document_still_reports_errors(capsys):
     assert doc["errors"] == ["one repo could not be pulled"]
 
 
-def test_main_prints_the_empty_document_before_exiting(monkeypatch, capsys):
+def test_main_prints_the_empty_document_before_exiting(monkeypatch, capsys,
+                                                      unguard_main_clone):
     """The whole finding: stdout was silent and the exit code said success."""
+    # `aggregate-crm.main()` opens with `require_main_clone(__file__)`, which
+    # exits 2 from a worktree before the JSON document under test is printed.
+    # Neutralised on this loaded module, for this test only. The guard is still
+    # measured by the two files that own it:
+    # tests/test_guarded_entry_points_refuse_from_a_worktree.py (the call is
+    # main()'s first statement, passed `__file__`, pinned through the AST) and
+    # tests/test_clone_guard.py (it fires).
+    unguard_main_clone(AGG)
     monkeypatch.setattr(AGG, "scan_all_contacts", lambda *a, **k: ([], []))
     monkeypatch.setattr(AGG, "load_admin_config", dict)
     monkeypatch.setattr(AGG, "parse_config", lambda p: AGG.DEFAULT_CADENCE.copy())
@@ -170,7 +179,9 @@ def test_main_prints_the_empty_document_before_exiting(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["total_contacts"] == 0
 
 
-def test_main_stays_quiet_on_stdout_without_the_json_flag(monkeypatch, capsys):
+def test_main_stays_quiet_on_stdout_without_the_json_flag(monkeypatch, capsys,
+                                                         unguard_main_clone):
+    unguard_main_clone(AGG)
     monkeypatch.setattr(AGG, "scan_all_contacts", lambda *a, **k: ([], []))
     monkeypatch.setattr(AGG, "load_admin_config", dict)
     monkeypatch.setattr(AGG, "parse_config", lambda p: AGG.DEFAULT_CADENCE.copy())
@@ -671,9 +682,11 @@ def test_a_readable_neighbour_survives_an_unreadable_file(overlay, monkeypatch):
     assert AH.find_shared_contacts([("jane", Path("/n")), ("alex", Path("/n"))]) == 1
 
 
-def test_the_empty_json_document_carries_the_errors_main_collected(monkeypatch, capsys):
+def test_the_empty_json_document_carries_the_errors_main_collected(
+        monkeypatch, capsys, unguard_main_clone):
     """J3 at the call site. The direct-call test passed its own errors in and
     never exercised what `main` hands over."""
+    unguard_main_clone(AGG)
     monkeypatch.setattr(AGG, "scan_all_contacts",
                         lambda *a, **k: ([], ["exec jane: repo unreachable"]))
     monkeypatch.setattr(AGG, "load_admin_config", dict)

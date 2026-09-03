@@ -84,6 +84,14 @@ _WATCH_BEFORE = None
 # recording costs nothing and turns "the overlay changed and nothing can say who"
 # into a short suspect list. Capped, because a 19,000-test suite spawns a lot.
 _CHILD_SPAWNS: list[tuple[str, str]] = []
+
+# How many children reached the live overlay, counted WITHOUT the cap that
+# bounds the example list. The two were one number until 2026-09-03, and the
+# report printed "200 child process(es) ran with the live data root reachable"
+# when 200 was `_CHILD_SPAWN_CAP` and the true figure was unknown and larger. A
+# ceiling presented as a count is the same defect the surrounding message has:
+# stating more than the method established.
+_CHILD_SPAWN_COUNT = 0
 _CHILD_SPAWN_CAP = 200
 
 # Wall-clock moment `_WATCH_BEFORE` was taken. Recorded because the overlay is a
@@ -869,10 +877,13 @@ def _install_overlay_write_guard():
         return any(prefix.rstrip(os.sep) in pinned for prefix in _OVERLAY_PREFIXES)
 
     def _record_spawn(cmd, kwargs):
-        if len(_CHILD_SPAWNS) >= _CHILD_SPAWN_CAP:
-            return
+        global _CHILD_SPAWN_COUNT
         try:
             if not _child_reaches_live_overlay(kwargs):
+                return
+            _CHILD_SPAWN_COUNT += 1
+            # The cap bounds the EXAMPLES kept, never the count above.
+            if len(_CHILD_SPAWNS) >= _CHILD_SPAWN_CAP:
                 return
             head = " ".join(str(a) for a in cmd)[:120] if isinstance(cmd, (list, tuple)) \
                 else str(cmd)[:120]
@@ -1089,6 +1100,20 @@ def _installed_owner():
     return getattr(builtins.open, _OWNER_ATTR, None)
 
 
+def _carry_spawn_count(extra: int) -> None:
+    """Add a displaced copy's reachable-child count to this one's.
+
+    A function rather than an inline `+=` inside `arm()`, and that is not
+    style. An augmented assignment to a module global inside a function makes
+    the name LOCAL for that whole function, so `arm()` raised UnboundLocalError
+    on its first read and every caller of the guard silently stopped arming.
+    MEASURED 2026-09-03: nine tests went red, including the one that drives a
+    real refused write, and the guard reported nothing at all.
+    """
+    global _CHILD_SPAWN_COUNT
+    _CHILD_SPAWN_COUNT += extra
+
+
 def arm(mode=None, snapshot=None, structural_only=False):
     """Install the wrappers, and optionally take the before-snapshot.
 
@@ -1215,6 +1240,7 @@ def arm(mode=None, snapshot=None, structural_only=False):
         owner["_OVERLAY_PREFIXES"] = ()
         # Spawns recorded before the handover are still suspects, so carry them.
         _CHILD_SPAWNS.extend(owner.get("_CHILD_SPAWNS") or ())
+        _carry_spawn_count(owner.get("_CHILD_SPAWN_COUNT") or 0)
     # Install ONCE per process. A second `arm()` refreshes the mode, the prefixes
     # and the snapshot, and deliberately does NOT wrap again. Two layers of
     # wrappers is not a cosmetic problem: `restore()` unwinds exactly one, so the
@@ -1301,10 +1327,11 @@ def watch_complaints(before, after):
             n for n in set(snapshot) & set(now)
             if snapshot[n] is not None and snapshot[n] != now[n]
         )
-        for what, names in (("appeared", added), ("vanished", removed), ("rewrote", resized)):
+        for what, names in (("appeared", added), ("vanished", removed), ("changed", resized)):
             if names:
                 complaints.append(
-                    f"{len(names)} file(s) {what} in the operator's live {label} "
-                    f"at {directory} during the run: {names[:5]}"
+                    f"{len(names)} file(s) {what} under the operator's live "
+                    f"{label} at {directory} between the start and the end of "
+                    f"the run: {names[:5]}"
                 )
     return complaints

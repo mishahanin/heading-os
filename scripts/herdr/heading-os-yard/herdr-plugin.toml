@@ -1,6 +1,18 @@
 id = "heading-os.yard"
 name = "HEADING OS — YARD bootstrap"
 version = "1.0.0"
+# 0.8.0 for a NON-OBVIOUS reason, written down because the next reader will
+# otherwise lower it: CHANGELOG 0.8.0 says "Relative plugin commands now resolve
+# from the plugin root". Every `command` below is relative, so on 0.7.x none of
+# them resolves at all.
+#
+# It does NOT protect against the event payload changing shape. That is
+# versioned by `protocol` (20) and `schema_version` (1), neither of which is
+# handed to a plugin. Hence the parser in `yard-bootstrap.sh` reads
+# `data.worktree.path` first, falls back to `checkout_path` and then
+# `workspace_cwd`, and REFUSES rather than guessing when none of them answers.
+# That refusal is the only reason the 2026-09-03 breakage cost nothing worse
+# than a YARD that was never provisioned.
 min_herdr_version = "0.8.0"
 description = "Provisions each new YARD worktree and proves the engine's guards can fire inside it before an agent starts."
 platforms = ["linux", "macos"]
@@ -11,6 +23,18 @@ platforms = ["linux", "macos"]
 # remembering is a step that is skipped on the day it matters.
 [[events]]
 on = "worktree.created"
+command = ["bash", "yard-bootstrap.sh"]
+
+# Creation is not the only way to arrive in an unprovisioned YARD, and until
+# 2026-09-03 it was the only one covered. Three real routes reach one without
+# ever firing `worktree.created`: `herdr worktree open`, the `keys.open_worktree`
+# binding, and closing a workspace and opening it again.
+#
+# Cheap enough not to argue about: the idempotency check near the top of the
+# script short-circuits on `status: ok`, so on a healthy YARD this whole
+# subscription costs one stat of the status file.
+[[events]]
+on = "worktree.opened"
 command = ["bash", "yard-bootstrap.sh"]
 
 # Re-run the contour check on an existing YARD without re-provisioning it.

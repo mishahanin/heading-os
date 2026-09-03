@@ -34,6 +34,17 @@ ROOT = Path(__file__).resolve().parent.parent
 DISPATCH_REL = Path(".claude") / "hooks" / "_dispatch.py"
 DATA_SIBLING = ROOT.parent / ".heading-os-data"
 
+# ROOT is the checkout the suite was LAUNCHED from, and this suite is run from a
+# YARD whenever engine work is in progress. So ROOT is not HELM, and the guard
+# does not think it is either: `check_yard_write_guard` resolves HELM with
+# `main_clone_path(WORKSPACE)`, which for the worktree these cases run in is the
+# operator's real main clone. MEASURED 2026-09-03, from this YARD: every case
+# below that named ROOT as HELM described a path outside HELM, so the refusals
+# came back permitted and eleven of them failed. `worktree_origin` is the path the
+# guard actually computes; `armed_main_clone` is used where the dispatcher has
+# to RUN inside a main clone. Neither command is ever executed - the wall
+# answers before the tool runs - so the HELM paths here are pure data.
+
 
 def _run(checkout: Path, payload: dict) -> dict | None:
     """Feed one payload to the dispatcher in `checkout`. Return its decision."""
@@ -117,8 +128,13 @@ def _bash(command, cwd) -> dict:
 # The wall is silent in HELM
 # ============================================================
 
-def test_helm_may_write_inside_itself():
-    assert not _yard_denied(_run(ROOT, _write(ROOT / "scripts" / "x.py", ROOT)))
+def test_helm_may_write_inside_itself(armed_main_clone):
+    # The paired permitted direction for the three refusals below, so it has to
+    # RUN in a main clone. From ROOT this asserted only that a YARD may write
+    # into itself, which another test already covers.
+    assert not _yard_denied(
+        _run(armed_main_clone,
+             _write(armed_main_clone / "scripts" / "x.py", armed_main_clone)))
 
 
 def test_helm_may_run_git_in_the_data_overlay():
@@ -131,35 +147,47 @@ def test_helm_may_run_git_in_the_data_overlay():
         ROOT, _bash(f"git -C {DATA_SIBLING} commit -m x", ROOT)) is None
 
 
-def test_helm_may_push_as_far_as_this_wall_is_concerned():
+def test_helm_may_push_as_far_as_this_wall_is_concerned(armed_main_clone):
+    # The permitted direction needs the dispatcher to be RUNNING in a main
+    # clone; from ROOT the wall is looking at a worktree and refuses correctly.
     assert _call_the_guard_directly(
-        ROOT, _bash("git push origin main", ROOT)) is None
+        armed_main_clone,
+        _bash("git push origin main", armed_main_clone)) is None
 
 
 # ============================================================
 # Writes: into HELM refused, everywhere else permitted
 # ============================================================
 
-def test_a_write_into_helm_from_a_yard_is_refused(armed_worktree):
-    decision = _run(armed_worktree, _write(ROOT / "scripts" / "x.py",
+def test_a_write_into_helm_from_a_yard_is_refused(armed_worktree, worktree_origin):
+    # The destination has to be inside the main clone the guard resolves for
+    # this worktree, which is HELM; a path under ROOT is another YARD.
+    decision = _run(armed_worktree, _write(worktree_origin / "scripts" / "x.py",
                                            armed_worktree))
     assert _yard_denied(decision)
     assert "HELM" in _reason(decision)
 
 
-def test_a_write_into_helm_is_still_refused_after_cd_into_helm(armed_worktree):
+def test_a_write_into_helm_is_still_refused_after_cd_into_helm(armed_worktree,
+                                                               worktree_origin):
     """`cwd` is the agent's, not the guard's evidence.
 
     The predicate is the SHAPE of this checkout's `.git`, so moving the shell
     into HELM changes nothing. An earlier design read `CLAUDE_PROJECT_DIR` and
     would have concluded "this session is HELM" and allowed the write.
     """
-    decision = _run(armed_worktree, _write(ROOT / "scripts" / "x.py", ROOT))
+    # Both the destination and the claimed cwd are HELM's, which is the shape
+    # the case is about; ROOT is a YARD and would land outside HELM entirely.
+    decision = _run(armed_worktree,
+                    _write(worktree_origin / "scripts" / "x.py", worktree_origin))
     assert _yard_denied(decision)
 
 
-def test_a_relative_write_that_resolves_into_helm_is_refused(armed_worktree):
-    decision = _run(armed_worktree, _write("scripts/x.py", ROOT))
+def test_a_relative_write_that_resolves_into_helm_is_refused(armed_worktree,
+                                                             worktree_origin):
+    # The relative path only resolves INTO HELM when the cwd it is joined to is
+    # HELM's. Same correction as above.
+    decision = _run(armed_worktree, _write("scripts/x.py", worktree_origin))
     assert _yard_denied(decision)
 
 
@@ -207,9 +235,13 @@ def test_an_edit_with_no_destination_is_refused(armed_worktree):
     "cd {helm} && rm -rf scripts",
     "cd {helm} && echo x > y",
 ])
-def test_a_bash_command_reaching_into_helm_is_refused(armed_worktree, command):
+def test_a_bash_command_reaching_into_helm_is_refused(armed_worktree, command,
+                                                      worktree_origin):
+    # `{helm}` must spell the main clone this worktree resolves, or the command
+    # names a path outside HELM and is correctly permitted. Nothing is run: the
+    # wall answers on the payload, so these destructive strings stay strings.
     decision = _run(armed_worktree,
-                    _bash(command.format(helm=ROOT), armed_worktree))
+                    _bash(command.format(helm=worktree_origin), armed_worktree))
     assert _yard_denied(decision), command
 
 
@@ -229,14 +261,20 @@ def test_a_read_only_bash_command_is_permitted_from_a_yard(
     ), command
 
 
-def test_the_same_refused_commands_are_permitted_from_helm():
+def test_the_same_refused_commands_are_permitted_from_helm(armed_main_clone):
     """The pair that stops this suite being satisfied by a guard that denies
-    everything."""
+    everything.
+
+    Sent from a real main clone, because that is the direction being claimed.
+    From ROOT it said only that a YARD may reach into itself.
+    """
     for command in ("rm -rf {helm}/scratch",
                     "cat {helm}/x; rm -rf {helm}/y",
                     "cd {helm} && rm -rf scratch"):
-        assert not _yard_denied(_run(ROOT, _bash(command.format(helm=ROOT), ROOT))), \
-            command
+        assert not _yard_denied(
+            _run(armed_main_clone,
+                 _bash(command.format(helm=armed_main_clone),
+                       armed_main_clone))), command
 
 
 # ============================================================

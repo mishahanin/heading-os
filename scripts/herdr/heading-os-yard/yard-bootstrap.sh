@@ -39,6 +39,30 @@
 set -uo pipefail
 
 HERDR="${HERDR_BIN_PATH:-herdr}"
+
+# THE SWITCHES HAVE TO LIVE SOMEWHERE THE OPERATOR CAN REACH.
+#
+# An event hook inherits the herdr SERVER's environment, not the shell the
+# operator typed in. So `HEADING_OS_AUTOSTART=0 herdr worktree create ...` sets
+# nothing, and until 2026-09-03 the off switch for the autostart below did not
+# effectively exist. The documented channel is this plugin's own config
+# directory; `herdr plugin config-dir heading-os.yard` prints the path.
+#
+# PARSED, never sourced. `. "$file"` executes whatever is in it, which is the
+# shell's `eval` and is forbidden here. Only the two names this script actually
+# honours are read, so a stray line in that file cannot reach the environment.
+PLUGIN_ENV="$("$HERDR" plugin config-dir heading-os.yard 2>/dev/null)/.env"
+if [ -f "$PLUGIN_ENV" ]; then
+  while IFS='=' read -r key value; do
+    case "$key" in
+      HEADING_OS_AUTOSTART|HEADING_OS_AGENT_CMD)
+        value="${value%\"}"; value="${value#\"}"
+        export "$key=$value"
+        ;;
+    esac
+  done < "$PLUGIN_ENV"
+fi
+
 AGENT_CMD="${HEADING_OS_AGENT_CMD:-claude}"
 AUTOSTART="${HEADING_OS_AUTOSTART:-1}"
 BOOTSTRAP_VERSION="5.0"
@@ -48,60 +72,216 @@ DOCTOR_ONLY=0
 
 log() { printf '[YARD] %s\n' "$*" >&2; }
 
+# THE TOKEN IS NOT A SURFACE. `--title` IS.
+#
+# `hos=<state>` renders only where the operator listed `$hos` in
+# `ui.sidebar.agents.rows`, and the default does not. MEASURED 2026-09-03: this
+# machine's config has no `ui.sidebar` section at all, so every badge this
+# script has ever written went into the API and was displayed by nothing.
+#
+# The pane TITLE needs no configuration and cannot be missed, so it carries the
+# state now and the token stays beside it for anyone who has configured a row.
+# Both are no-ops without a target pane, which is what makes `--doctor-only`
+# and every by-hand run safe: no event, no pane, nothing written anywhere.
+badge() {           # badge <state> <title>
+  [ -n "$PANE_ID" ] || return 0
+  "$HERDR" pane report-metadata "$PANE_ID" --source heading-os.yard \
+    --token "hos=$1" --title "$2" >/dev/null 2>&1 || true
+}
+
+# `notification.show` answers {"shown":bool,"reason":...}, and `reason` is one
+# of shown | disabled | rate_limited | no_foreground_client | busy (from the
+# protocol schema). We discarded that answer into /dev/null, which threw away
+# the only field that says whether the operator was told anything at all.
+#
+# `ui.toast.delivery` DEFAULTS TO "off". This machine sets it to "herdr", which
+# is why toasts work here and would not in a fresh clone. A failure nobody sees
+# is the failure mode this whole script exists to remove, so when the toast does
+# not land, say so on stderr where the plugin log keeps it.
+notify() {          # notify <title> <body> [sound]
+  local response reason
+  local -a sound=()
+  [ -n "${3:-}" ] && sound=(--sound "$3")
+  response="$("$HERDR" notification show "$1" --body "$2" "${sound[@]}" 2>/dev/null)"
+  reason="$(printf '%s' "$response" | python3 -c '
+import json, sys
+try:
+    result = json.load(sys.stdin)["result"]
+except (ValueError, KeyError, TypeError):
+    print("unreadable"); raise SystemExit(0)
+print("shown" if result.get("shown") else (result.get("reason") or "not shown"))
+' 2>/dev/null || printf "unreadable")"
+  [ "$reason" = "shown" ] || log "the operator was NOT shown this ($reason); ui.toast.delivery defaults to \"off\""
+}
+
 # ─────────────────────────────────────────────────────────────
 # 0. Where were we called for?
 # ─────────────────────────────────────────────────────────────
-CTX="${HERDR_PLUGIN_EVENT_JSON:-${HERDR_PLUGIN_CONTEXT_JSON:-}}"
-WT_PATH=""; WS_ID="${HERDR_WORKSPACE_ID:-}"; PANE_ID="${HERDR_PANE_ID:-}"; BRANCH=""
+# THE IDENTIFIERS COME FROM THE EVENT AND FROM NOWHERE ELSE.
+#
+# These read `${HERDR_WORKSPACE_ID:-}` and `${HERDR_PANE_ID:-}` until
+# 2026-09-03, and the JSON only filled them IF STILL EMPTY -- so an inherited
+# value always won. Those two variables name the CALLER's workspace and the
+# CALLER's FOCUSED pane (the schema field is `focused_pane_id`), not the target.
+#
+# The by-hand re-run this script's own header prescribes, and that
+# `scripts/herdr/README.md` and `.claude/hooks/session-start.py` both prescribe,
+# is typed in SOMEBODY ELSE'S pane. With the old code that run would
+# `workspace rename` the caller's workspace to YARD/<branch> and then
+# `pane run "<caller pane>" "exec claude"` -- replacing a live session with a
+# fresh agent. With `--no-focus` the focused pane is HELM's, so the target was
+# HELM even during an ordinary create.
+#
+# OBSERVED 2026-09-03, live: `herdr pane list --workspace w3Q` returned
+# `"tokens":{"hos":"ok"}` on w3Q, whose label is HELM and whose
+# `is_linked_worktree` is false. A badge this script writes, standing on a
+# checkout that is not a worktree at all.
+#
+# So: empty here, filled from the event below, and every step that needs one is
+# SKIPPED when the event did not supply it. Acting at the wrong address is worse
+# than not acting.
+WT_PATH=""; WS_ID=""; PANE_ID=""; BRANCH=""
 
-if [ -n "$CTX" ] && command -v python3 >/dev/null 2>&1; then
-  # Several candidate keys: Herdr documents the event NAME (`worktree.created`)
-  # but not the payload's shape per field, so this reads the plausible spellings
-  # and stops if none of them yields a directory.
-  read -r WT_PATH WS_ID_J PANE_ID_J BRANCH <<EOF
-$(printf '%s' "$CTX" | python3 -c '
-import json, sys
-try:
-    d = json.load(sys.stdin)
-except Exception:
-    print("- - - -"); raise SystemExit(0)
-if not isinstance(d, dict):
-    print("- - - -"); raise SystemExit(0)
-def dig(*path):
-    cur = d
+# THE PAYLOAD SHAPE, MEASURED RATHER THAN GUESSED.
+#
+# This read `worktree.path` until 2026-09-03 and Herdr sends `data.worktree.path`
+# -- one level deeper. Every YARD created the ordinary way therefore hit the
+# refusal below, and MEASURED that day by catching the environment with a
+# throwaway probe plugin outside the repository:
+#
+#   bootstrap exit 1, no status file written at all
+#   "[YARD] STOP: the event did not say which worktree to provision"
+#   no .venv, no .env, NO .claude/settings.local.json
+#   remote push url still https://github.com/mishahanin/heading-os.git -- LIVE
+#
+# So a real YARD ran with the eleven PreToolUse walls unregistered and a working
+# push url into a PUBLIC repository, and the only thing that said so was a
+# plugin log nobody reads.
+#
+# The tests did not catch it because they fed the script a payload shape their
+# own author had invented. A fixture derived from the code under test measures
+# nothing. The real payload is now pinned as a file, in
+# tests/fixtures/herdr-worktree-created-event.json, captured from a live event.
+#
+# BOTH documents are read, not one or the other. EVENT_JSON carries the path
+# under `data`; CONTEXT_JSON carries `worktree.checkout_path` and
+# `workspace_cwd` at the TOP level, and is an independent second source. The
+# old code took EVENT_JSON *or* CONTEXT_JSON with `:-`, so whenever the event
+# arrived the context was never consulted.
+#
+# Order: first non-empty wins. If none yields a path, this still REFUSES rather
+# than guessing -- and the refusal is right, because the plugin command's cwd is
+# HERDR_PLUGIN_ROOT and never the worktree, so $PWD could not stand in for it.
+if command -v python3 >/dev/null 2>&1; then
+  IFS=$'\x1f' read -r WT_PATH WS_ID_J PANE_ID_J BRANCH <<EOF
+$(python3 -c '
+import json, os
+
+
+def load(name):
+    try:
+        doc = json.loads(os.environ.get(name) or "")
+    except Exception:
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+event = load("HERDR_PLUGIN_EVENT_JSON")
+context = load("HERDR_PLUGIN_CONTEXT_JSON")
+
+
+def dig(doc, *path):
+    cur = doc
     for key in path:
         if not isinstance(cur, dict):
             return ""
         cur = cur.get(key, "")
     return cur if isinstance(cur, str) else ""
-print(dig("worktree","path") or dig("worktree","cwd") or dig("workspace","cwd")
-      or dig("cwd") or "-",
-      dig("workspace","workspace_id") or dig("workspace_id") or "-",
-      dig("workspace","root_pane","pane_id") or dig("pane","pane_id")
-      or dig("pane_id") or "-",
-      dig("worktree","branch") or dig("branch") or "-")
+
+
+path = (
+    dig(event, "data", "worktree", "path")
+    or dig(event, "data", "workspace", "worktree", "checkout_path")
+    or dig(context, "worktree", "checkout_path")
+    or dig(context, "workspace_cwd")
+    # The hand-made shape an operator can still pipe in by hand. Kept
+    # deliberately: the documented emergency procedure uses it.
+    or dig(event, "worktree", "path")
+    or dig(event, "worktree", "cwd")
+    or dig(event, "workspace", "cwd")
+    or dig(event, "cwd")
+)
+workspace = (
+    dig(event, "data", "workspace", "workspace_id")
+    or dig(event, "workspace", "workspace_id")
+    or dig(event, "workspace_id")
+    or dig(context, "workspace_id")
+)
+pane = (
+    dig(event, "data", "workspace", "root_pane", "pane_id")
+    or dig(event, "workspace", "root_pane", "pane_id")
+    or dig(event, "pane", "pane_id")
+    or dig(event, "pane_id")
+)
+branch = (
+    dig(event, "data", "worktree", "branch")
+    or dig(event, "worktree", "branch")
+    or dig(event, "branch")
+)
+# US (0x1f), never a space: a checkout path may contain one, and the previous
+# space-joined line would have split such a path across two fields.
+print("\x1f".join((path, workspace, pane, branch)))
 ')
 EOF
-  [ "${WT_PATH:-}" = "-" ] && WT_PATH=""
-  [ "${BRANCH:-}"  = "-" ] && BRANCH=""
-  [ -z "$WS_ID" ]   && [ "${WS_ID_J:-}" != "-" ]   && WS_ID="${WS_ID_J:-}"
-  [ -z "$PANE_ID" ] && [ "${PANE_ID_J:-}" != "-" ] && PANE_ID="${PANE_ID_J:-}"
+  # Unconditional. There is no inherited value to lose, and there must not be.
+  WS_ID="${WS_ID_J:-}"
+  PANE_ID="${PANE_ID_J:-}"
+fi
+
+# The event for `worktree_created` cannot carry a pane id: its `WorkspaceInfo`
+# carries `active_tab_id` and has no `root_pane` field at all (MEASURED
+# 2026-09-03 against `herdr api schema --json`, the protocol's own contract,
+# `WorkspaceInfo.required`). So the pane is resolved FROM THE TARGET WORKSPACE,
+# which the event does give. `pane list --workspace <id>` is anchored to that
+# workspace; the ambient focus is not, and that is the whole difference.
+if [ -z "$PANE_ID" ] && [ -n "$WS_ID" ] && command -v python3 >/dev/null 2>&1; then
+  PANE_ID="$("$HERDR" pane list --workspace "$WS_ID" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    panes = json.load(sys.stdin)["result"]["panes"]
+except (ValueError, KeyError, TypeError):
+    raise SystemExit(0)
+for pane in panes:
+    if isinstance(pane, dict) and isinstance(pane.get("pane_id"), str):
+        print(pane["pane_id"])
+        break
+' 2>/dev/null)"
 fi
 
 if [ -z "$WT_PATH" ] && [ -n "$WS_ID" ] && command -v python3 >/dev/null 2>&1; then
+  # `result.workspace.cwd` until 2026-09-03. There is no `cwd` key at any depth
+  # of this response -- VERIFIED by a live `herdr workspace get w3Q` and against
+  # `WorkspaceInfo` in `herdr api schema --json`, whose only path field is
+  # `worktree.checkout_path`. So this raised KeyError on every call, and a bare
+  # `except Exception: pass` ate it. A silent recovery path that could never
+  # recover, written by us, in the shape we spend this repository hunting.
+  #
+  # `worktree` is nullable in the schema (a workspace need not be a worktree),
+  # so TypeError is caught beside KeyError rather than assumed away.
   WT_PATH="$("$HERDR" workspace get "$WS_ID" 2>/dev/null | python3 -c '
 import json, sys
 try:
-    print(json.load(sys.stdin)["result"]["workspace"]["cwd"])
-except Exception:
-    pass')"
+    print(json.load(sys.stdin)["result"]["workspace"]["worktree"]["checkout_path"])
+except (ValueError, KeyError, TypeError) as exc:
+    print(f"workspace get gave no checkout path: {type(exc).__name__}",
+          file=sys.stderr)')"
 fi
 
 if [ -z "$WT_PATH" ] || [ ! -d "$WT_PATH" ]; then
   log "STOP: the event did not say which worktree to provision, and this"
   log "      script does not guess. Nothing was changed."
-  "$HERDR" notification show "YARD: bootstrap could not find the worktree" \
-    --body "HERDR_PLUGIN_EVENT_JSON carried no usable path" >/dev/null 2>&1 || true
+  notify "YARD: bootstrap could not find the worktree" \
+    "HERDR_PLUGIN_EVENT_JSON carried no usable path"
   exit 1
 fi
 
@@ -127,12 +307,6 @@ write_status() {   # write_status <status> <step>
     > "${STATUS_FILE}.tmp" && mv "${STATUS_FILE}.tmp" "$STATUS_FILE"
 }
 
-badge() {
-  [ -n "$PANE_ID" ] || return 0
-  "$HERDR" pane report-metadata "$PANE_ID" --source heading-os.yard \
-    --token "hos=$1" >/dev/null 2>&1 || true
-}
-
 cleanup_probe() {
   [ -n "$PROBE" ] && rm -f "$PROBE"
   PROBE=""
@@ -143,9 +317,8 @@ fail() {           # fail <step> <reason>
   cleanup_probe
   write_status "failed" "$1"
   log "STOP at step $1: $2"
-  badge "BROKEN"
-  "$HERDR" notification show "YARD: the engine/data contour is broken" \
-    --body "step $1: $2" --sound request >/dev/null 2>&1 || true
+  badge "BROKEN" "YARD BROKEN"
+  notify "YARD: the engine/data contour is broken" "step $1: $2" request
   exit 1
 }
 
@@ -251,7 +424,7 @@ if [ "$DOCTOR_ONLY" -eq 0 ]; then
   # `--extra all` resolve to the same set; the flag is used because it needs no
   # maintenance when a tenth extra lands.
   # ───────────────────────────────────────────────────────────
-  LAST_STEP=4; badge "setup"
+  LAST_STEP=4; badge "setup" "YARD provisioning"
   command -v uv >/dev/null 2>&1 || fail 4 "uv is not on PATH"
   uv sync --all-extras --group dev --quiet \
     || fail 4 "uv sync --all-extras --group dev failed"
@@ -440,7 +613,7 @@ write_status "in_progress" 10
 # ─────────────────────────────────────────────────────────────
 LAST_STEP=11
 write_status "ok" 11
-badge "ok"
+badge "ok" "YARD ready"
 log "contour intact"
 
 if [ "$DOCTOR_ONLY" -eq 0 ]; then

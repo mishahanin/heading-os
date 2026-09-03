@@ -1,0 +1,7 @@
+{
+  "reachable_children": 9659,
+  "measured": "2026-09-03",
+  "shape": "pytest -n auto -m \"not acceptance\", the shape the suite is actually run in",
+  "also_measured": {"single_process": 9460},
+  "note": "Shrink-only. The count varies with run shape: 9460 in one process (37 min), 9659 across xdist workers (8 min). NOT ESTABLISHED: the run-to-run variance within one shape, which needs a second sharded measurement. If this gate starts flapping, that is the reason and the fix is to measure it, not to raise the number."
+}

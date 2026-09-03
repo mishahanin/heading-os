@@ -9,6 +9,8 @@ See scripts.utils.workspace.get_default_tz().
 This file also holds the re-exec guard for the whole suite; see below.
 """
 import os
+import shutil
+import sys
 import time
 from pathlib import Path
 
@@ -639,6 +641,177 @@ def _pin_model_resolution(request):
 
 
 # ============================================================
+# Which checkout is this? Asked, never assumed
+# ============================================================
+#
+# `Path(__file__).parents[1]` is the checkout the SUITE WAS LAUNCHED FROM. It is
+# HELM only sometimes, and in this workspace it is a YARD whenever engine work is
+# in progress, which is whenever anybody is running these tests on purpose.
+#
+# MEASURED 2026-09-03. The same commit reports `24377 passed, 1 skipped, 0
+# failed` in HELM and 97 failures in the YARD at `.yard/.heading-os/test-123`.
+# Not one of the 97 is a code regression. They are assumptions about where the
+# suite runs, in two shapes:
+#
+#   25 treat that path AS the main clone -- feeding it to `is_main_clone()`
+#      expecting True, contrasting a synthetic yard against it, or requiring a
+#      write into it to be refused. Every one of those polarities inverts when
+#      the launching checkout is itself a worktree.
+#   72 drive a script whose `main()` calls `require_main_clone(__file__)`, which
+#      exits 2 from a worktree before the behaviour under test runs at all.
+#
+# Three fixtures below, one per shape. They exist here rather than in each file
+# because a fix that lands in one of N copies is this repository's dominant
+# defect, and N is 27 here.
+
+
+@pytest.fixture(scope="session")
+def helm_root() -> Path:
+    """Absolute path of the MAIN CLONE this checkout belongs to.
+
+    For a test that needs HELM's path as DATA -- a substring in a message, an
+    argument handed to a predicate but never executed. When the test needs to
+    RUN the tree under test as a main clone, use `armed_main_clone`: this one
+    points at the operator's real HELM, whose working tree is whatever they
+    have checked out, not what this branch changed.
+    """
+    from scripts.utils.clone_guard import main_clone_path
+    return main_clone_path(Path(__file__).resolve().parent.parent)
+
+
+@pytest.fixture
+def armed_main_clone(tmp_path, request) -> Path:
+    """A real MAIN CLONE carrying THIS checkout's working tree.
+
+    The exact mirror of `armed_worktree` below, and the reason it has to exist:
+    a worktree's `.git` is a file and the main clone's is a directory, so
+    `is_main_clone()` can only answer True for something shaped like this. A
+    test that asserts the True side needs one, and pointing at the operator's
+    HELM would test THEIR committed code rather than the change under test.
+
+    `git clone --shared` because it is cheap: the object database is shared
+    rather than copied. MEASURED 2026-09-03 on this repository: the clone's
+    `.git` is a directory, `--git-dir` equals `--git-common-dir`,
+    `is_main_clone()` answers True and `main_clone_path()` returns the clone
+    itself. Uncommitted and untracked files are copied over afterwards, the
+    same way `armed_worktree` does, so the code under test is the code in this
+    working tree.
+    """
+    import shutil
+    import subprocess
+
+    root = Path(__file__).resolve().parent.parent
+    target = tmp_path / "main-clone-under-test"
+    created = subprocess.run(
+        ["git", "clone", "--quiet", "--shared", str(root), str(target)],
+        capture_output=True, text=True,
+    )
+    if created.returncode != 0:
+        pytest.skip(f"could not clone a main checkout: {created.stderr.strip()}")
+
+    # THE DIRECTORY IS NOT THE WHOLE OF IT.
+    #
+    # `git clone` registers nothing, so on the happy path there is nothing here
+    # to clean. But a teardown that only removes the directory is one that
+    # cannot clean up if this fixture ever produces a LINKED worktree instead,
+    # and on 2026-09-03 it did: a mutation run replacing this fixture's
+    # `git clone` with `git worktree add` left 8 prunable registrations in the
+    # shared git directory, one per mutant and per xdist worker. They outlive
+    # the session, the branch and the machine's patience.
+    #
+    # So the registration is read from the target's OWN `.git` -- the only place
+    # it can be read, because git appends a collision suffix and the name cannot
+    # be predicted -- and read NOW, before the rmtree destroys the file that
+    # names it. Only that one entry is removed.
+    #
+    # NEVER `git worktree prune`. It reaches every other worktree of this
+    # repository, including ones other processes are using right now. The same
+    # reasoning, and the incident behind it, is recorded at `temporary_worktree`
+    # below; this is the second copy of the technique and deliberately so, since
+    # the two fixtures create their checkouts by different commands.
+    registration = own_worktree_registration(target)
+
+    def _remove_only_ours():
+        shutil.rmtree(target, ignore_errors=True)
+        drop_worktree_registration(registration)
+
+    request.addfinalizer(_remove_only_ours)
+
+    # The working tree, not just the commit. A guard being changed on this
+    # branch has to be the guard under test.
+    listing = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all", "-z"],
+        cwd=str(root), capture_output=True, check=True,
+    )
+    for entry in listing.stdout.decode("utf-8", "surrogateescape").split("\0"):
+        if len(entry) < 4:
+            continue
+        rel = entry[3:]
+        source = root / rel
+        if not source.is_file():
+            continue
+        destination = target / rel
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+    return target
+
+
+@pytest.fixture
+def unguard_main_clone(monkeypatch):
+    """Neutralise `require_main_clone` on a module the test loaded itself.
+
+    For the 45 failures that load a script with `spec_from_file_location` and
+    call `main()`: the guard exits 2 before any of the behaviour under test
+    runs. Patching the loaded module's own attribute reaches only that copy,
+    for that test.
+
+    This does NOT leave the guard untested, and that distinction is the whole
+    argument for doing it this way rather than skipping.
+    `tests/test_guarded_entry_points_refuse_from_a_worktree.py` pins, through
+    the AST and with a floor over the corpus, that the call is the first
+    statement of `main()` and is passed `__file__`;
+    `tests/test_clone_guard.py` pins that it fires. Those files own the
+    control. These files own the behaviour behind it, and could not reach it.
+    """
+    def apply(module):
+        if not hasattr(module, "require_main_clone"):
+            raise AssertionError(
+                f"{getattr(module, '__name__', module)!r} does not import "
+                f"require_main_clone; this fixture is patching nothing, which "
+                f"is how a neutralised guard becomes an unnoticed one")
+        monkeypatch.setattr(module, "require_main_clone", lambda *a, **k: None)
+        return module
+
+    return apply
+
+
+# The reason string every clone-gated skip carries. One literal, so
+# `tests/test_a_suite_that_could_not_run_where_the_work_happens.py` can count
+# them and refuse a new silent one.
+MAIN_CLONE_SKIP = (
+    "runs a HELM-only entry point in a child process, which refuses from a "
+    "worktree with no in-process seam to patch; see conftest MAIN_CLONE_SKIP"
+)
+
+
+@pytest.fixture
+def main_clone_only():
+    """Skip, out loud, when the suite is not running in the main clone.
+
+    Only for the 27 failures where the guard fires in a CHILD process. There is
+    no environment escape hatch by design -- `clone_guard.py` rejected one
+    because a variable "can be lost by a new shell" -- and adding one to make a
+    test pass would weaken the control in production.
+
+    A skip nobody counts is a green suite that checks nothing, so the count is
+    asserted elsewhere against a measured number rather than left to grow.
+    """
+    from scripts.utils.clone_guard import is_main_clone
+    if not is_main_clone(Path(__file__).resolve().parent.parent):
+        pytest.skip(MAIN_CLONE_SKIP)
+
+
+# ============================================================
 # A stub `herdr`, because the real one is shared across every worktree
 # ============================================================
 #
@@ -667,6 +840,49 @@ def _pin_model_resolution(request):
 # `HERDR="${HERDR_BIN_PATH:-herdr}"`. One fixture fills it, and every test that
 # executes the script goes through this fixture rather than carrying its own
 # copy.
+
+
+
+# ============================================================
+# One checkout's own worktree registration
+# ============================================================
+#
+# Extracted 2026-09-03. Two fixtures below need the same three facts, and the
+# second copy of a technique is the one that stops being fixed:
+#
+#   * a LINKED worktree's `.git` is a FILE reading `gitdir: <shared>/worktrees/<n>`;
+#     a MAIN clone's `.git` is a DIRECTORY and has no registration at all;
+#   * the name cannot be predicted, because git appends a collision suffix when
+#     two checkouts share a basename -- four concurrent xdist workers produced
+#     four different ones on 2026-09-03;
+#   * so it must be READ WHILE THE CHECKOUT STILL EXISTS, before any teardown
+#     deletes the file that names it.
+
+
+def own_worktree_registration(checkout: Path) -> Path | None:
+    """The shared git dir entry `checkout` is registered under, or None."""
+    try:
+        content = (checkout / ".git").read_text(encoding="utf-8").strip()
+    except OSError:
+        # IsADirectoryError for a main clone, FileNotFoundError for a path that
+        # is not a checkout. Neither has a registration, and neither is an error.
+        return None
+    if not content.startswith("gitdir:"):
+        return None
+    return Path(content.split(":", 1)[1].strip())
+
+
+def drop_worktree_registration(registration: Path | None) -> None:
+    """Remove ONE registration, the caller's own.
+
+    NEVER `git worktree prune`. Prune reaches every worktree of this repository,
+    including ones other processes are holding open right now -- several Claude
+    sessions run against this repo at once and each may hold one. A cleanup
+    scoped to "this test" that is in fact scoped to the whole machine is the
+    same defect as the leak it would be fixing.
+    """
+    if registration is not None and registration.is_dir():
+        shutil.rmtree(registration, ignore_errors=True)
 
 
 class HerdrStub:
@@ -700,22 +916,43 @@ class HerdrStub:
         return env
 
 
-def write_herdr_stub(directory: Path, *, exit_code: int = 0) -> HerdrStub:
+def write_herdr_stub(directory: Path, *, exit_code: int = 0,
+                     validate: bool = True) -> HerdrStub:
     """Create a `herdr` stub in `directory`. Used by the fixture and by tests
-    that need a deliberately hostile one."""
+    that need a deliberately hostile one.
+
+    IT VALIDATES. Until 2026-09-03 this stub recorded argv and exited 0 for
+    anything at all, which made it a recorder rather than a check: it confirmed
+    every shape it was handed, and three wrong ones reached the operator's
+    machine behind a green suite. It now refuses argv that the CAPTURED herdr
+    grammar rejects, with exit 2, which is what herdr 0.8.2 was measured to do.
+
+    `validate=False` exists for the tests that drive the checker itself. It is
+    not a way out of a failing call: a call this rejects is a call the real
+    binary rejects, and the fix belongs in the caller.
+    """
     directory.mkdir(parents=True, exist_ok=True)
     binary = directory / "herdr"
     log = directory / "herdr-calls.log"
+    tests_dir = Path(__file__).resolve().parent
     # US (0x1f) between argv elements, not a space: a herdr argument can hold
     # spaces (a workspace label is one), and a space-joined log would not
     # round-trip into `HerdrStub.calls`.
     binary.write_text(
-        '#!/usr/bin/env bash\n'
-        f'LOG="{log}"\n'
-        'sep=""\n'
-        'for a in "$@"; do printf \'%s%s\' "$sep" "$a" >> "$LOG"; sep=$\'\\x1f\'; done\n'
-        "printf '\\n' >> \"$LOG\"\n"
-        f'exit {exit_code}\n',
+        f"#!{sys.executable}\n"
+        "import sys, pathlib\n"
+        f"sys.path.insert(0, {str(tests_dir)!r})\n"
+        f"log = pathlib.Path({str(log)!r})\n"
+        "argv = sys.argv[1:]\n"
+        'with log.open("a", encoding="utf-8") as handle:\n'
+        '    handle.write("\\x1f".join(argv) + "\\n")\n'
+        f"if {validate!r}:\n"
+        "    from herdr_contract import check\n"
+        "    problem = check(argv)\n"
+        "    if problem:\n"
+        '        sys.stderr.write("herdr: " + problem + "\\n")\n'
+        "        raise SystemExit(2)\n"
+        f"raise SystemExit({exit_code})\n",
         encoding="utf-8")
     binary.chmod(0o755)
     return HerdrStub(binary, log)
@@ -771,7 +1008,39 @@ def temporary_worktree(tmp_path, request):
     import shutil
     import subprocess
 
-    root = Path(__file__).resolve().parent.parent
+    # THE FIXTURE IS CLOSED ON ITS OWN CLONE, NOT ON THE OPERATOR'S HELM.
+    #
+    # This ran `git worktree add` with `cwd` set to THIS checkout until
+    # 2026-09-03, and this checkout's `--git-common-dir` is HELM's `.git`. So
+    # every worktree the test suite made was registered in the same directory as
+    # the operator's live YARDs, alongside them.
+    #
+    # MEASURED 2026-09-03, and it is why this is isolation rather than tidier
+    # deletion. A mutation planted against the cleanup helper below replaced
+    # `shutil.rmtree(registration)` with
+    #
+    #     for entry in registration.parent.iterdir():
+    #         shutil.rmtree(entry, ignore_errors=True)
+    #
+    # `registration.parent` IS `<helm>/.git/worktrees`, so `iterdir()` listed
+    # every worktree of the repository and the loop removed all of them. The
+    # directory was left empty and the live YARD the suite was running in lost
+    # its own registration: `git rev-parse --git-common-dir` then exited 128 and
+    # the session could not run another command until the operator rebuilt the
+    # entry by hand from HELM.
+    #
+    # No amount of care in the deleting code fixes that, because the code being
+    # careful is the code under test. The fix is that a test fixture must not be
+    # able to name a live YARD at all. It clones first -- shared object database,
+    # so it is cheap -- and adds its worktree to THAT.
+    engine = Path(__file__).resolve().parent.parent
+    root = tmp_path / "origin"
+    cloned = subprocess.run(
+        ["git", "clone", "--quiet", "--shared", str(engine), str(root)],
+        capture_output=True, text=True,
+    )
+    if cloned.returncode != 0:
+        pytest.skip(f"could not clone for a worktree: {cloned.stderr.strip()}")
     target = tmp_path / "yard-under-test"
     registration: list[Path] = []
 
@@ -783,7 +1052,7 @@ def temporary_worktree(tmp_path, request):
         # Only ours. `git worktree remove` leaves the registration behind when
         # it half-fails, and pruning globally would reach other processes'.
         for path in registration:
-            shutil.rmtree(path, ignore_errors=True)
+            drop_worktree_registration(path)
 
     request.addfinalizer(_remove)
     created = subprocess.run(
@@ -792,17 +1061,27 @@ def temporary_worktree(tmp_path, request):
     )
     if created.returncode != 0:
         pytest.skip(f"git worktree add failed: {created.stderr.strip()}")
-    try:
-        # `.git` in a worktree is a FILE reading `gitdir: <shared>/worktrees/<n>`.
-        marker = (target / ".git").read_text(encoding="utf-8").strip()
-        if marker.startswith("gitdir:"):
-            registration.append(Path(marker.split(":", 1)[1].strip()))
-    except OSError:
-        pass                       # nothing to clean up beyond `remove --force`
+    own = own_worktree_registration(target)
+    if own is not None:
+        registration.append(own)
     try:
         yield target
     finally:
         _remove()
+
+
+@pytest.fixture
+def worktree_origin(tmp_path) -> Path:
+    """The main clone `temporary_worktree` was cut from.
+
+    For a test asserting what a worktree POINTS BACK AT. That used to be
+    `helm_root`, the operator's real HELM, because the fixture registered its
+    worktrees there. It no longer does, and the property under test is unchanged
+    -- a linked worktree resolves to the main clone it belongs to -- so only the
+    address moved. Same `tmp_path`, so this is the very clone that worktree came
+    from, not a second one.
+    """
+    return tmp_path / "origin"
 
 
 @pytest.fixture
@@ -844,6 +1123,43 @@ def armed_worktree(temporary_worktree):
     return temporary_worktree
 
 
+# Only the OUTERMOST pytest enforces the reachability ratchet. The same owner
+# check `WS_RATE_LIMIT_STATE` needs sixty lines up, for the same measured
+# reason: this suite spawns pytest CHILDREN and each imports this file. A child
+# scoped to one directory would be judged against the whole suite's frozen
+# number, which is both too generous for it and, at a baseline of 0, fatal.
+# MEASURED 2026-09-03: three tests failed exactly that way, each because the
+# child pytest it drives exited 1 on a budget written for the parent.
+_OWNS_OVERLAY_WATCH = "WS_OVERLAY_WATCH_OWNER" not in os.environ
+os.environ["WS_OVERLAY_WATCH_OWNER"] = "1"
+
+
+# Reachable-child counts collected from xdist workers as each finishes. A list
+# rather than an int so the hook can mutate it without a `global`, which is the
+# shape that silently made a module name local and broke `arm()` earlier today.
+_WORKER_REACHABLE_TOTAL = [0]
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error):
+    """Sum each worker's reachable-child count into the controller's total.
+
+    `optionalhook=True` is not decoration. This hook belongs to xdist, and a
+    run started with `-p no:xdist` has no such hookspec: pluggy then rejects
+    the whole conftest with `PluginValidationError: unknown hook`, which
+    surfaces as INTERNALERROR and takes the session down. MEASURED 2026-09-03 —
+    and it also explains why the first aggregation attempt reported 0 under
+    `-n auto`: the hook was never registered at all, so nothing was ever
+    summed.
+
+    `workeroutput` is xdist's own channel for exactly this. Without it the
+    controller sees only its own process, which spawns no test children, and
+    the total it enforces against is zero regardless of what the run did.
+    """
+    output = getattr(node, "workeroutput", None) or {}
+    _WORKER_REACHABLE_TOTAL[0] += int(output.get("overlay_reachable", 0) or 0)
+
+
 def pytest_sessionstart(session):
     global _RESTORE_SOCKET_GUARD
     _RESTORE_SOCKET_GUARD = _install_socket_guard()
@@ -853,6 +1169,29 @@ def pytest_sessionstart(session):
     # a measurement and forgot. A suite that records instead of refusing is a
     # suite whose isolation failures all pass.
     _guard.arm(_guard.MODE_REFUSE)
+
+
+# The frozen number of children this suite is known to spawn with the
+# operator's live data root reachable. Read from a committed file, never
+# hardcoded here, so lowering it is a visible diff and raising it is a
+# deliberate act rather than an edit inside a 1000-line conftest.
+_REACHABILITY_BASELINE = _ENGINE_ROOT / "config" / "overlay-reachability-baseline.json"
+
+
+def _overlay_reachability_baseline() -> int:
+    """The frozen count, or 0 when the file is missing or unreadable.
+
+    Fails toward STRICT: an absent or corrupt baseline means every reachable
+    child is over budget and the run goes red. The opposite default would turn
+    a deleted file into a silently disabled guard, which is the shape this
+    whole repair is about.
+    """
+    import json
+    try:
+        data = json.loads(_REACHABILITY_BASELINE.read_text(encoding="utf-8"))
+        return int(data["reachable_children"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -873,35 +1212,134 @@ def pytest_sessionfinish(session, exitstatus):
     # exited 1. Nothing was wrong with the count, the guard, or the tree.
     if session.config.getoption("collectonly", False):
         return
+    # NOT `if not complaints: return`. The ratchet below is about this run's
+    # own children, not about the tree, and a run that reached the live root
+    # while writing nothing is exactly the case a diff cannot see. Checking it
+    # only when a file happened to move would make the guard's coverage depend
+    # on whether a daemon fired.
     complaints = _guard.watch_complaints(_guard._WATCH_BEFORE, _guard._watch_snapshot())
-    if not complaints:
-        return
     # A child process writes outside this interpreter, so no wrapper in the guard
     # can see it and the snapshot alone cannot say who. `_CHILD_SPAWNS` is the
     # list of children that COULD have reached the live overlay, each with the
     # test that spawned it. It is a suspect list, never an accusation: on
     # 2026-08-31 the previous wording of this report sent an agent hunting a test
     # that had written nothing, when the writer was a concurrent agent.
+    # WHAT FAILS THE SESSION, and why it is no longer the diff.
+    #
+    # The diff is a whole-session before/after walk of a LIVE tree. On this
+    # machine the overlay has permanent competing writers: MEASURED 2026-09-03,
+    # `sync-exchange-daemon.service` was active, its journal showed
+    # `job-start 15:53:08` / `job-ok 15:53:29`, and the two files this guard
+    # named had mtimes of 15:53:29.1418 and 15:53:29.1425 -- inside that window,
+    # 0.0007 s apart. The same sweep rewrote eight more files the guard did not
+    # name, including a week of calendar. A test run cannot write next week's
+    # calendar. It was the daemon, and it was the SECOND time: the same
+    # accusation is already recorded in CHANGELOG for 2026-09-02.
+    #
+    # So "the run changed these files" is a claim this method can never
+    # establish, in any run, and `scope-claims.md` obligation 1 says resolve the
+    # claim rather than narrow it. The invariant the method CAN establish is a
+    # different one, and it is the one that actually matters: no child of this
+    # run had the operator's live data root reachable. `_CHILD_SPAWN_COUNT`
+    # measures exactly that, with no race against anybody.
+    #
+    # It is a RATCHET rather than a flat zero because zero is not today's tree:
+    # measured the same day, this suite spawns hundreds of such children. A hard
+    # flip would paint every run red and teach people to ignore it. The baseline
+    # only ever shrinks, the same shape as `config/test-vacuity-baseline.json`.
+    #
+    # No filename exclusions, deliberately. A list of "files daemons touch"
+    # would go quiet the first time a new daemon wrote something, which is
+    # precisely when it should shout.
+    reachable = _guard._CHILD_SPAWN_COUNT
+    baseline = _overlay_reachability_baseline()
+    # SHARDED RUNS DO NOT ENFORCE, and this is not a convenience.
+    #
+    # `_CHILD_SPAWN_COUNT` is per PROCESS. Under `-n auto` every xdist worker is
+    # its own process with its own counter, so each reports a shard of the
+    # total and none of them can see the run. MEASURED 2026-09-03, the same
+    # tree twice: `-n auto` reported 16, and a single-process run over a subset
+    # reported 654. A budget frozen from the first and enforced against the
+    # second is a number about nothing -- the "baseline frozen from a truncated
+    # view" trap, and it took a turn-check to notice because the sharded figure
+    # looked plausible.
+    #
+    # So the ratchet binds only where one process sees everything. A sharded
+    # run still REPORTS its shard, labelled as one.
+    worker = hasattr(session.config, "workerinput")
+    if worker:
+        # A worker cannot judge, but it can REPORT UPWARD. Without this the
+        # ratchet binds only to single-process runs, and MEASURED 2026-09-03 a
+        # serial full run takes 37 minutes against 8 under `-n auto` -- so the
+        # gate would be dormant in every run anybody actually performs. A guard
+        # that only fires where nobody looks is decoration.
+        output = getattr(session.config, "workeroutput", None)
+        if output is not None:
+            output["overlay_reachable"] = reachable
+    else:
+        reachable += _WORKER_REACHABLE_TOTAL[0]
+
+    # DID THE AGGREGATION ACTUALLY ARRIVE? MEASURED 2026-09-03: it did not.
+    # Under `-n auto` the controller reported 0 while a serial run over the same
+    # tree counted 9460, because `pytest_testnodedown` and the controller's
+    # `pytest_sessionfinish` do not order the way this assumed. Enforcing
+    # against a total of 0 would pass every sharded run while printing a number
+    # and a baseline, which is a gate that looks armed and is not -- the exact
+    # shape this whole repair exists to remove. So a sharded run whose workers
+    # reported nothing SAYS SO and enforces nothing.
+    controller_sharded = (not worker) and bool(
+        session.config.getoption("numprocesses", None))
+    aggregation_lost = controller_sharded and _WORKER_REACHABLE_TOTAL[0] == 0
+
+    enforced = _OWNS_OVERLAY_WATCH and not worker and not aggregation_lost
+    over = enforced and reachable > baseline
+
+    established = [
+        f"{len(complaints)} observation(s) about the overlay tree: "
+        + "; ".join(complaints),
+        f"{reachable} child process(es) of this run had the operator's live "
+        f"data root reachable (frozen baseline {baseline}"
+        + ("" if enforced else ", not enforced: " + (
+            "sharded run, this is one worker's shard reported upward" if worker
+            else "sharded run and no worker total arrived, so this number is "
+                 "NOT the run's" if aggregation_lost
+            else "nested pytest"))
+        + ")",
+    ]
     spawns = _guard._CHILD_SPAWNS
     if spawns:
         shown = spawns[:10]
-        complaints.append(
-            f"{len(spawns)} child process(es) ran with the live data root "
-            f"reachable, any of which could be the writer: "
+        established.append(
+            "examples: "
             + "; ".join(f"{nodeid} -> {cmd}" for nodeid, cmd in shown)
-            + ("" if len(spawns) <= 10 else f" (+{len(spawns) - 10} more)")
+            + ("" if len(spawns) <= 10 else f" (+{len(spawns) - 10} more kept)")
         )
-    # Reported through the reporter rather than an exception: a raise here is
-    # attributed to no test and reads as a harness crash.
-    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
-    message = (
-        "; ".join(complaints)
-        + ". Pass HEADING_OS_DATA pointing at a tmp_path to anything that writes."
+
+    not_established = (
+        "NOT established: which process performed those writes. This is a "
+        "before/after diff of a live tree, and daemons write it on their own "
+        "schedule. The half that CAN name a culprit is the in-process wrapper, "
+        "which refuses at the moment of the write and puts the test in the "
+        "traceback; it did not fire, so no test in this interpreter wrote there."
     )
+
+    if not over and not complaints:
+        return   # nothing observed and nothing new reached: say nothing
+
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     if reporter is not None:
         reporter.write_line("")
-        reporter.write_line(f"ERROR: {message}", red=True)
-    session.exitstatus = 1
+        label = "ERROR" if over else "NOTE"
+        reporter.write_line(f"{label}: overlay watch. " + " | ".join(established),
+                            red=over, yellow=not over)
+        reporter.write_line(not_established, yellow=True)
+        if over:
+            reporter.write_line(
+                f"More children reached the live data root than the frozen "
+                f"{baseline}. Pass HEADING_OS_DATA pointing at a tmp_path to "
+                f"whatever this run added.", red=True)
+    if over:
+        session.exitstatus = 1
 
 
 def pytest_collection_modifyitems(config, items):

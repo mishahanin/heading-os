@@ -1,0 +1,28 @@
+{
+  "_provenance": "HERDR_PLUGIN_EVENT_JSON, captured from a live `herdr worktree create` on 2026-09-03 by a throwaway probe plugin outside this repository. THE KEY NESTING IS VERBATIM. Only the absolute path root was replaced with /WS, because this repository is public and the captured value was the operator's home directory. The parser under test reads keys, never path values, so the substitution removes nothing the test measures. Stated rather than left to be noticed.",
+  "event": "worktree_created",
+  "data": {
+    "type": "worktree_created",
+    "workspace": {
+      "workspace_id": "w48",
+      "label": "yard-probe2",
+      "worktree": {
+        "repo_key": "/WS/.heading-os/.git",
+        "repo_name": ".heading-os",
+        "repo_root": "/WS/.heading-os",
+        "checkout_path": "/WS/.yard/.heading-os/yard-probe2",
+        "is_linked_worktree": true
+      }
+    },
+    "worktree": {
+      "path": "/WS/.yard/.heading-os/yard-probe2",
+      "branch": "yard-probe2",
+      "is_bare": false,
+      "is_detached": false,
+      "is_prunable": false,
+      "is_linked_worktree": true,
+      "open_workspace_id": "w48",
+      "label": ".heading-os..."
+    }
+  }
+}

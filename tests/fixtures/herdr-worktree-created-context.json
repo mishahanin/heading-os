@@ -1,0 +1,12 @@
+{
+  "_provenance": "HERDR_PLUGIN_CONTEXT_JSON, captured in the same live event as its sibling fixture on 2026-09-03. THE KEY NESTING IS VERBATIM; the absolute path root was replaced with /WS for the same reason stated there. Note that this document carries the checkout path at the TOP level, where the event document carries it under `data` -- which is why the bootstrap must read BOTH and not one-or-the-other.",
+  "workspace_id": "w48",
+  "workspace_cwd": "/WS/.yard/.heading-os/yard-probe2",
+  "worktree": {
+    "repo_key": "/WS/.heading-os/.git",
+    "repo_name": ".heading-os",
+    "repo_root": "/WS/.heading-os",
+    "checkout_path": "/WS/.yard/.heading-os/yard-probe2",
+    "is_linked_worktree": true
+  }
+}

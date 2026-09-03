@@ -51,6 +51,7 @@ from scripts.utils.operator_identity import operator_slug, operator_org
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
 from scripts.utils.markdown import parse_frontmatter_str as _parse_frontmatter
 from scripts.utils.crm import contact_identity_key, is_contact_file, normalize_name
+from scripts.utils.clone_guard import require_main_clone
 
 TODAY = datetime.now(get_default_tz()).date()
 
@@ -849,6 +850,7 @@ def print_json_stats(contacts: list, exec_count: int, shared: list, errors: list
 # ---------------------------------------------------------------------------
 
 def main():
+    require_main_clone(__file__)
     parser = argparse.ArgumentParser(
         description="31C CRM Aggregation -- per-exec repo model"
     )

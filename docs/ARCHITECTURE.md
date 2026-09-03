@@ -1,7 +1,7 @@
-<!-- version: 1.1.0 | last-updated: 2026-08-20 -->
+<!-- version: 1.2.0 | last-updated: 2026-09-03 -->
 # Architecture
 
-Last Updated: 2026-08-20. Consumed by: readers of the docs site, and
+Last Updated: 2026-09-03. Consumed by: readers of the docs site, and
 `.claude/rules/console-first.md`. That rule keeps the console-first obligations, and
 points at § 5 below for the rationale and the scope boundary.
 
@@ -156,6 +156,112 @@ All three are detailed in the **[Security model](SECURITY-MODEL.html)**.
 | understand the data layout | [Data overlay structure](data-structure.html) |
 | understand the security model | [Security model](SECURITY-MODEL.html) |
 | build on the engine | [Extending the engine](EXTENDING.html) |
+
+## 8. HELM and YARD: working on the engine and the data at once
+
+Two pieces of work that share one folder collide. Two Claude sessions in the same
+clone edit the same files: one rewrites a module while the other writes tests for
+what it just replaced. A terminal multiplexer gives each session its own window,
+and windows are not walls.
+
+The answer is two roles with no overlap.
+
+**HELM** is the main clone on `main`. One session. Everything live: the data
+overlay, the daemons, mail and calendar, memory, `/backup`, `/sync`, every git
+operation in the data overlay, and the review and merge of finished branches.
+
+**YARD** is a git worktree of the engine on its own branch, checked out under
+Herdr's `worktrees.directory` — outside the engine clone, so a file created by
+accident inside a task cannot land in the engine's working tree. Herdr lays the
+checkouts out as `<directory>/<repo>/<branch-slug>`, and that middle segment is
+its own, not configurable: `worktrees.directory` is the only key under
+`worktrees.` in the 0.8.2 configuration reference. Nothing here is live. The
+engine can be taken apart here while HELM keeps running on the merged version.
+
+*Are you using the assistant, or rebuilding it?* Using is HELM. Rebuilding is
+YARD. Cooking dinner and rebuilding the stove are different activities even
+though both happen in the kitchen; the second you do with the gas off.
+
+### The one rule
+
+**Anyone may write files into the data overlay. Only HELM may record its
+history.**
+
+Files differ per task, so they do not collide. What collides is the moment of
+recording: the overlay has one git index shared by HELM and every worktree, so a
+commit from a task sweeps up a neighbour's half-finished draft and whatever the
+mail sync is writing at that instant into a single commit nobody reviewed.
+
+### The gap parallel work opens, and how it is closed
+
+The engine's layers that keep private data out of the code all run on this
+machine. The strongest of them stands on the sanctioned upload path in
+`scripts/push-all.py` and has no off switch — but "no off switch" means on that
+path. A finished task pushing its branch with an ordinary `git push` would go
+around it entirely, and the engine repository is public, so any branch pushed is
+visible to everyone immediately.
+
+The repair is not another wall on the road out. It is removing the second road:
+**a task sends nothing.** Every worktree shares one repository, so HELM can
+already see a task's branch with nothing transferred. Three independent
+mechanisms hold it:
+
+| Mechanism | Where | What gets past it |
+|---|---|---|
+| `remote.origin.pushurl` disabled per worktree | git config | nothing but manual reconfiguration |
+| `require_main_clone()` in publishing and maintenance entry points | the scripts | nothing; exit 2 naming HELM |
+| `check_yard_write_guard` | `.claude/hooks/_dispatch.py` | nothing; refused before the command runs |
+
+### The predicate, and why it is not a variable
+
+Telling a worktree from the main clone is a property of git, not an agreement.
+MEASURED 2026-09-03 on this repository: `<root>/.git` is a DIRECTORY in the main
+clone and a FILE in a worktree, and `rev-parse --git-dir` equals
+`--git-common-dir` only in the main clone. That cannot be faked, forgotten, or
+lost by a new shell. `scripts/utils/clone_guard.py` is the one implementation;
+`scripts/lib/require-main-clone.sh` mirrors it in bash builtins for callers that
+run with a pinned PATH, and a test asserts the two agree.
+
+Earlier designs used a marker file and `CLAUDE_PROJECT_DIR`. Both answer "this is
+the main clone, allow it" when the thing they read is simply missing, which is
+fail-open in the one place that must fail closed.
+
+### Proving a guard can fire
+
+A guard pointed at the wrong tree reports clean, and a clean report is what a
+healthy guard produces. The two states are indistinguishable by their result.
+
+So provisioning a YARD ends with a canary: a decoy file is written to a path the
+engine itself classifies as private, and the tree-clean wall is REQUIRED to fail
+on it. If it passes, the wall is looking at another tree and the task does not
+start. The probe path is chosen rather than assumed — the wall reads
+`git ls-files --others --exclude-standard`, so a decoy git ignores is invisible
+to it, and MEASURED 2026-09-03 six of the eight obvious candidates are gitignored.
+
+Every guard added or changed from here ships with a bidirectional test: one case
+proving it stays quiet on a clean tree, one proving it fires on a real violation
+in the checkout under test. The failing case must fail against the previous
+version of the guard; if it passes there too, it proves nothing.
+
+### What a fresh worktree does NOT have
+
+MEASURED 2026-09-03, and each of these looks healthy:
+
+- `.claude/settings.local.json` — absent, so eleven PreToolUse walls including
+  the release gate and the secret scanner are unregistered.
+- `.env` — absent, so `get_data_root()` falls through to the bundled `examples`
+  tree. Every guard gated on "the data root differs from the workspace root"
+  stays armed, against example data.
+- `.venv` — absent, which is why the bootstrap writes its status with `printf`
+  and calls no pinned interpreter before `uv sync`.
+
+`WORKSPACE_ROOT` is the mirror hazard: `get_workspace_root()` reads it first, so
+one line copied from HELM's `.env` points every guard at the untouched main
+clone. The bootstrap strips it and then verifies the resolved root, because
+checking the intent is not checking the result.
+
+Operating guide, the eleven bootstrap steps, and diagnosis:
+`scripts/herdr/README.md`.
 
 ---
 

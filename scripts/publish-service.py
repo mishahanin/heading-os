@@ -27,6 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.utils.clone_guard import require_main_clone
 from scripts.utils.workspace import get_workspace_root, get_data_config_dir
 from scripts.utils.atomic import atomic_write_text
 from scripts.utils.rmtree import rmtree_force
@@ -300,6 +301,7 @@ def publish(dest: Path, push: bool) -> int:
 
 
 def main() -> int:
+    require_main_clone(__file__)
     parser = argparse.ArgumentParser(description="Publish ceo-main code to the downstream service-host repo.")
     parser.add_argument("--push", action="store_true",
                         help="Also push to origin/main (default: commit locally only).")

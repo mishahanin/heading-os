@@ -45,6 +45,7 @@ from scripts.utils.workspace import (
     load_github_org,
 )
 from scripts.utils.atomic import atomic_write_text
+from scripts.utils.clone_guard import require_main_clone
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
 from scripts.utils.knowledge import KNOWLEDGE_TYPES
 
@@ -1223,6 +1224,14 @@ def main():
     parser.add_argument("--reprovisioning", action="store_true",
                         help="Re-run prerequisite checks even if already passed")
     args = parser.parse_args()
+
+    # AFTER argparse, deliberately. This script creates repositories and grants
+    # collaborators, so it belongs to HELM; but the `--help` passthrough above
+    # exists because reading this tool's interface used to exit 2 with a banner
+    # and no usage, and a guard placed at the top of main() would restore that
+    # defect for anyone in a worktree. argparse has already handled `-h` by the
+    # time control reaches here.
+    require_main_clone(__file__)
 
     # An unresolved org is a refusal, not a warning. `load_github_org()` answers
     # '' rather than raising (see its docstring) so that --help survives a

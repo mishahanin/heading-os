@@ -32,6 +32,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.utils.clone_guard import require_main_clone  # noqa: E402
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RESET  # noqa: E402
 from scripts.utils.markdown import parse_frontmatter  # noqa: E402
 from scripts.utils.memory_health import STALE_DAYS, scan_redundancy  # noqa: E402
@@ -246,6 +247,8 @@ def write_report(text: str, generated_dt: datetime) -> Path:
 
 
 def main() -> int:
+    require_main_clone(__file__)
+
     # First, before anything reads the clock. `get_default_tz()` reads os.environ
     # ONLY, and HEADING_OS_TZ lives in the gitignored .env, which nothing exports
     # -- so without this the 03:10 fire dates its report, and every memory mtime

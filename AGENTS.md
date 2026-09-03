@@ -182,6 +182,37 @@ argparse-based `scripts/<name>.py`) or chat path (a skill) first; a web view,
 if any, comes after and stays optional. Full rule:
 `.claude/rules/console-first.md`.
 
+## HELM and YARD — which checkout you are in
+
+This repository is worked on from two kinds of checkout, and they are not
+interchangeable. **HELM** is the main clone on `main`: the live one, where the
+data overlay, the daemons, publishing and `/backup` belong. **YARD** is a git
+worktree of this repository on its own branch, checked out outside the engine
+clone, where engine code is changed. Nothing in a YARD is live.
+
+Telling them apart needs no configuration and cannot be faked: `<root>/.git` is
+a DIRECTORY in the main clone and a FILE in a worktree. `scripts/utils/clone_guard.py`
+is the single implementation; `scripts/lib/require-main-clone.sh` mirrors it in
+bash builtins for callers that run with a pinned PATH.
+
+From a YARD these refuse mechanically, with exit status 2 or a PreToolUse block:
+writing anywhere inside HELM; `git push` (this repository is public, so any
+branch pushed is visible immediately, not only `main`); the daemon install,
+restart and uninstall scripts; `scripts/push-all.py`; maintenance passes that
+write under the data root.
+
+**The one rule.** Writing FILES into the private data overlay from a YARD is
+allowed and expected. Running git in it is not: the overlay's index is shared by
+every checkout, so a commit from a task captures other tasks' unfinished work.
+
+When adding a guard of any kind, derive the tree it inspects from the CURRENT
+checkout — never from a constant, from the common git directory, or from
+`${CLAUDE_PROJECT_DIR}`. A guard pointed at the wrong tree reports clean, which
+is exactly what a healthy guard reports. Ship every new or changed guard with a
+bidirectional test whose failing half fails against the previous version.
+
+Full design: `docs/ARCHITECTURE.md` § 8. Operating guide: `scripts/herdr/README.md`.
+
 ## Project layout
 
 | Path | What it holds |

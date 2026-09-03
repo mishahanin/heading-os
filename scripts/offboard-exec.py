@@ -30,6 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.atomic import atomic_write_text
+from scripts.utils.clone_guard import require_main_clone
 from scripts.utils.workspace import (
     get_workspace_root, validate_admin, get_exec_slug, load_exec_registry,
     get_data_config_dir,
@@ -782,6 +783,8 @@ def print_manual_checklist(slug: str, exec_info: dict) -> None:
 
 
 def main():
+    require_main_clone(__file__)
+
     parser = argparse.ArgumentParser(
         description="Offboard an executive from the 31C workspace ecosystem.",
         formatter_class=argparse.RawDescriptionHelpFormatter,

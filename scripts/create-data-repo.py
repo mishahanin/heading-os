@@ -45,6 +45,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.utils.clone_guard import require_main_clone
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.git_push import supervised_push
 from scripts.utils.workspace import get_workspace_root
@@ -252,6 +253,7 @@ def print_wiring(target: Path) -> None:
 
 
 def main() -> int:
+    require_main_clone(__file__)
     ap = argparse.ArgumentParser(description="Bootstrap a private HEADING OS data repository.")
     default_path = get_workspace_root().parent / ".heading-os-data"
     ap.add_argument("--path", default=str(default_path),

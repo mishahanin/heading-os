@@ -47,6 +47,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.utils.clone_guard import require_main_clone  # noqa: E402
 from scripts.utils.colors import BOLD, GRAY, GREEN, RESET, YELLOW  # noqa: E402
 from scripts.utils import checkpoint_paths as CP  # noqa: E402
 from scripts.utils.workspace import (  # noqa: E402
@@ -278,6 +279,7 @@ def _human(n: int) -> str:
 
 
 def main(argv=None) -> int:
+    require_main_clone(__file__)
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--dry-run", action="store_true",
                         help="report what would be archived, write nothing")

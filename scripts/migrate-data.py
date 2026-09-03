@@ -23,6 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.atomic import atomic_write_text
+from scripts.utils.clone_guard import require_main_clone
 from scripts.utils.colors import GREEN, YELLOW, RED, GRAY, BOLD, RESET
 from scripts.utils.paths import (
     DATA_SCHEMA_VERSION,
@@ -138,6 +139,7 @@ def cmd_stamp(dry_run: bool) -> int:
 
 
 def main() -> int:
+    require_main_clone(__file__)
     parser = argparse.ArgumentParser(description="Data-overlay migration runner (F-9.7)")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--status", action="store_true", help="show current vs pending")

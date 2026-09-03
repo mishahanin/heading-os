@@ -63,6 +63,18 @@ if [[ -z "$OVERRIDE" ]]; then
     echo "          MEMORY_AUTO_RETIRE_OVERRIDE=1)." >&2
     exit 9
 fi
+
+# HELM only, and deliberately BELOW the retirement gate above rather than at the
+# top like its eighteen siblings. That gate is asserted to be the first
+# statement after `set -euo pipefail`, ahead of the workspace-root resolution
+# and the interpreter probe, and its test pins PATH to `dirname` alone to prove
+# nothing runs before it. A clone-type check placed first would answer with
+# exit 2 instead of the refusal this script exists to give, and would need git
+# on a PATH the caller deliberately emptied. Nothing is weakened: the gate
+# already stops the default run outright, and this guard still runs before any
+# unit is rendered or any directory created.
+source "$(dirname "$0")/lib/require-main-clone.sh"
+require_main_clone
 echo "[warn] installing a timer that DELETES memories. The no-prune directive is" >&2
 echo "       being overridden deliberately (docs/memory-lifecycle.md)." >&2
 

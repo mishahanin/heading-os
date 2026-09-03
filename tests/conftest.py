@@ -638,6 +638,120 @@ def _pin_model_resolution(request):
         claude_models._FETCH_FAILED = False
 
 
+# ============================================================
+# A real git worktree, created and guaranteed removed
+# ============================================================
+#
+# HELM/YARD work needs tests that run against a SEPARATE CHECKOUT of this
+# repository, because the whole class of defect it guards against is a check
+# that inspects the wrong tree and reports clean. A guard pointed at the
+# untouched main clone produces exactly the result a healthy guard produces, so
+# nothing short of a real worktree can tell the two apart.
+#
+# Teardown is doubled on purpose. `git worktree add` writes a registration into
+# `.git/worktrees/<name>` in the SHARED git directory, so a leaked one outlives
+# the test process and shows up in every later `git worktree list` on the
+# operator's real repository. `try/finally` covers the ordinary failure; the
+# finalizer covers an error raised inside another fixture's setup after this one
+# yielded. `--force` because a test that dirtied the checkout is the normal case
+# here.
+#
+# It does NOT call `git worktree prune`, and that is the point of this
+# paragraph. `prune` operates on the whole SHARED registration directory, not on
+# the worktree the fixture created, so it reaches every OTHER process holding a
+# worktree of this repository at the same time. MEASURED 2026-09-03: with the
+# full suite running under `-n auto` and a second `turn-check` lane started
+# beside it, `git ls-files -z` inside a fixture worktree exited 128 and two
+# guard tests failed, in a run whose 24318 other tests passed and which did not
+# reproduce serially. `remove --force` already drops this worktree's own
+# registration; the half-failed case it was there for is covered by deleting
+# THIS worktree's registration directory, read from its own `.git` file, and
+# nobody else's.
+
+
+@pytest.fixture
+def temporary_worktree(tmp_path, request):
+    """Yield a Path to a throwaway git worktree of THIS repository.
+
+    Detached HEAD, so the fixture never competes with a branch the operator has
+    checked out and two tests can hold worktrees at once.
+    """
+    import shutil
+    import subprocess
+
+    root = Path(__file__).resolve().parent.parent
+    target = tmp_path / "yard-under-test"
+    registration: list[Path] = []
+
+    def _remove():
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(target)],
+            cwd=str(root), capture_output=True,
+        )
+        # Only ours. `git worktree remove` leaves the registration behind when
+        # it half-fails, and pruning globally would reach other processes'.
+        for path in registration:
+            shutil.rmtree(path, ignore_errors=True)
+
+    request.addfinalizer(_remove)
+    created = subprocess.run(
+        ["git", "worktree", "add", "--detach", str(target), "HEAD"],
+        cwd=str(root), capture_output=True, text=True,
+    )
+    if created.returncode != 0:
+        pytest.skip(f"git worktree add failed: {created.stderr.strip()}")
+    try:
+        # `.git` in a worktree is a FILE reading `gitdir: <shared>/worktrees/<n>`.
+        marker = (target / ".git").read_text(encoding="utf-8").strip()
+        if marker.startswith("gitdir:"):
+            registration.append(Path(marker.split(":", 1)[1].strip()))
+    except OSError:
+        pass                       # nothing to clean up beyond `remove --force`
+    try:
+        yield target
+    finally:
+        _remove()
+
+
+@pytest.fixture
+def armed_worktree(temporary_worktree):
+    """A worktree carrying this checkout's UNCOMMITTED state, not just HEAD.
+
+    `git worktree add` checks out a commit, so a test that drives a guard which
+    is not committed yet would run against a copy that does not have it and
+    fail for entirely the wrong reason. Copying the modified and
+    untracked-not-ignored files makes the worktree reflect the tree under test.
+    Once the work is committed this is a no-op for those files and the fixture
+    stays correct either way, so no test needs to know which side of a commit
+    it is on.
+
+    Deletions are skipped: the worktree already lacks a file this checkout
+    deleted from HEAD only if the deletion is committed, and copying cannot
+    express a removal. A test that turns on a deleted file should say so.
+    """
+    import subprocess
+
+    root = Path(__file__).resolve().parent.parent
+    out = subprocess.run(
+        ["git", "status", "--porcelain", "-z", "--untracked-files=all"],
+        cwd=str(root), capture_output=True, check=True,
+    ).stdout.decode("utf-8", "surrogateescape")
+    for entry in out.split("\0"):
+        if len(entry) < 4:
+            continue
+        status, rel = entry[:2], entry[3:]
+        if "D" in status:
+            continue
+        source = root / rel
+        if not source.is_file():
+            continue
+        destination = temporary_worktree / rel
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
+        destination.chmod(source.stat().st_mode)
+    return temporary_worktree
+
+
 def pytest_sessionstart(session):
     global _RESTORE_SOCKET_GUARD
     _RESTORE_SOCKET_GUARD = _install_socket_guard()

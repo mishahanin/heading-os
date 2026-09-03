@@ -33,6 +33,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.atomic import atomic_write_text
+from scripts.utils.clone_guard import require_main_clone
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.workspace import (
     get_outputs_dir,
@@ -140,6 +141,7 @@ def _suspicious_engine(engine: list[str]) -> list[str]:
 
 
 def main() -> int:
+    require_main_clone(__file__)
     ap = argparse.ArgumentParser(description="Build the HEADING OS engine working tree")
     ap.add_argument("--dry-run", action="store_true", help="Report only; copy nothing.")
     ap.add_argument("--target", help="Target dir (default: ../.heading-os).")

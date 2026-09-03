@@ -63,6 +63,56 @@ hand-edited. Invoke `.venv/bin/python` explicitly rather than a bare `python`, s
 a machine-wide interpreter without the pinned dependencies cannot silently run
 the suite.
 
+## HELM and YARD
+
+Several Claude sessions may run against this repository at once, and the roles
+are not interchangeable.
+
+**HELM** is the main clone on `main`. One session. Everything live happens here:
+the data overlay, the daemons, mail and calendar, memory, document generation,
+`/backup`, `/sync`, **every git operation in the data overlay**, and the review
+and merge of finished task branches. HELM does not change engine code.
+
+**YARD** is a git worktree of this repository on its own branch, checked out
+under Herdr's configured `worktrees.directory` — physically outside the engine
+clone. Nothing here is live. Engine code is changed here.
+
+Which is which: *will this end in a commit to the engine repository?* Then YARD.
+Everything else is HELM.
+
+**The one rule.** Writing FILES into the data overlay from a YARD is allowed and
+expected. Running git in it is not. Files differ per task; the git index is
+shared, so a commit from a task sweeps up other tasks' unfinished work and the
+daemons' in-flight writes into one unreviewed commit. A task that needs its work
+recorded says so and stops.
+
+**Never from a YARD:** editing anything inside HELM; `git push` (this repository
+is public, so any branch pushed is visible immediately, not only `main`);
+daemon install, restart or uninstall; `scripts/push-all.py`, `/backup`;
+maintenance passes that write under the data root. These refuse mechanically
+rather than by instruction — see `scripts/utils/clone_guard.py`,
+`scripts/lib/require-main-clone.sh`, and `check_yard_write_guard` in
+`.claude/hooks/_dispatch.py`.
+
+**When engine work comes up during a HELM session:** name what you would change
+and in which files, then stop, and say it belongs in a YARD task. This holds for
+one-line changes and typos as much as for large work. The exception is an
+emergency: if the live workspace is broken and a task cannot be created, make
+the smallest possible fix, commit it immediately with an `emergency:` prefix,
+and say plainly that the emergency path was used.
+
+**Guards must be armed inside the task.** A worktree is a separate checkout, so
+every guard has to be asked which tree it is actually looking at. Derive it from
+the current checkout, never from a constant, the common git directory, or
+`${CLAUDE_PROJECT_DIR}`. In particular, `WORKSPACE_ROOT` in a copied `.env`
+repoints `get_workspace_root()` and with it every guard downstream; the YARD
+bootstrap strips it and then verifies the resolved root. Every guard added or
+changed ships with a bidirectional test, the failing half of which must fail
+against the previous version.
+
+Full design, the measurements behind it, and the operating guide:
+`docs/ARCHITECTURE.md` § 8 and `scripts/herdr/README.md`.
+
 ## Contributing & security
 
 Read `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, and `SECURITY.md` first. Never commit

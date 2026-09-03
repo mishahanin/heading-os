@@ -128,6 +128,12 @@ PATH_FACTORIES = frozenset({
     "get_personal_root", "get_shared_knowledge_dir", "get_templates_dir",
     "home", "log_dir", "private_cache_dir",
     "require_outside_engine_clone", "require_writable_data_root", "state_dir",
+    # Added 2026-09-03, when `assert_data_root_external()` landed in
+    # `scripts/utils/paths.py`. It is annotated `-> Path` and returns the
+    # resolved private-data root, so a module constant built from it is exactly
+    # the value a test redirects, and a default capturing it would be frozen at
+    # import like every other entry here.
+    "assert_data_root_external",
 })
 
 # The two modules that define the data-root seam. A helper that returns a path

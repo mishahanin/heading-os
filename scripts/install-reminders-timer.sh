@@ -23,6 +23,12 @@
 # For unattended boot:  loginctl enable-linger "$USER"  (done automatically below)
 
 set -euo pipefail
+
+# HELM only. The systemd unit templates substitute the workspace path into
+# WorkingDirectory= and ExecStart=, so running this from a YARD worktree
+# points a LIVE daemon at a checkout that is deleted two days later.
+source "$(dirname "$0")/lib/require-main-clone.sh"
+require_main_clone
 WORKSPACE="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${PYTHON:-$(command -v python3 || command -v python || true)}"
 # Unit timezone: resolved through the workspace resolver rather than read from

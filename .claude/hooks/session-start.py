@@ -676,6 +676,68 @@ def _thread_panel_lines(project_dir):
     return lines, ""
 
 
+def check_yard_bootstrap(workspace_root):
+    """Warn when a session opens in a YARD whose provisioning did not finish.
+
+    A YARD is a git worktree of this engine. Its `.git` is a FILE rather than a
+    directory (MEASURED 2026-09-03), which is how this tells the two apart
+    without running anything.
+
+    The bootstrap that provisions a YARD does not start an agent unless it
+    reached `status: ok`, so in the ordinary flow this never fires. It exists
+    for the session an operator opens BY HAND in a worktree directory: there is
+    no bootstrap in that path, and the state it would have refused looks exactly
+    like a healthy one.
+
+    What is at stake is not tidiness. MEASURED 2026-09-03 in a fresh worktree:
+    `.claude/settings.local.json` is gitignored and therefore ABSENT, so eleven
+    PreToolUse walls -- the release gate and the secret scanner among them --
+    are unregistered, and nothing anywhere says so. `.env` is absent too, so the
+    data root collapses to the bundled `examples` tree while every guard gated
+    on "data root differs from workspace root" stays armed and reports clean.
+
+    An alert, not a block: SessionStart cannot refuse a session, and a hook that
+    pretended otherwise would be describing a wall it does not have.
+    """
+    try:
+        if not (workspace_root / ".git").is_file():
+            return None                       # the main clone, or not a repo
+    except OSError:
+        return None
+
+    status_file = workspace_root / ".claude" / ".yard-bootstrap-status"
+    hint = ("Re-run it: cd here, then FORCE_BOOTSTRAP=1 "
+            "HERDR_PLUGIN_EVENT_JSON='{\"worktree\":{\"path\":\"'\"$PWD\"'\"}}' "
+            "bash scripts/herdr/heading-os-yard/yard-bootstrap.sh")
+
+    if not status_file.exists():
+        return ("YARD NOT PROVISIONED: this is a worktree and the bootstrap "
+                "never ran here. The PreToolUse walls are probably "
+                "unregistered and the data root probably resolves to the demo "
+                "tree, both of which look healthy. " + hint)
+
+    try:
+        state = json.loads(status_file.read_text(encoding="utf-8"))
+        status = state.get("status")
+        step = state.get("step")
+    except (OSError, json.JSONDecodeError, AttributeError) as exc:
+        # Unreadable is not the same as absent, and neither is "fine". A guard
+        # that cannot tell corrupt from missing reports one as the other.
+        return (f"YARD BOOTSTRAP STATUS UNREADABLE ({type(exc).__name__}): "
+                f"{status_file}. Treat this worktree as unprovisioned. " + hint)
+
+    if status == "ok":
+        return None
+    # The narrow sentence is deliberate. This function reads a status file; it
+    # never asks which PreToolUse walls are registered, so it must not say what
+    # this session is running with. `setup-platform.sh --check` is the thing
+    # that answers that, and it is named instead of paraphrased.
+    return (f"YARD BOOTSTRAP DID NOT COMPLETE: status={status!r} at step "
+            f"{step}. Whatever the steps after {step} arm was never armed. "
+            f"`bash scripts/setup-platform.sh --check` reports which hook "
+            f"registrations are missing here. " + hint)
+
+
 def main():
     try:
         input_data = json.loads(sys.stdin.read())
@@ -729,6 +791,10 @@ def main():
 
     identity = get_workspace_type(project_dir)
     alerts = []
+
+    yard_alert = check_yard_bootstrap(workspace_root)
+    if yard_alert:
+        alerts.append(yard_alert)
 
     # Check sync status (exec workspaces only)
     sync_alert = check_sync_status(project_dir, identity)

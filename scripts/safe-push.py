@@ -36,6 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.utils.clone_guard import require_main_clone
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.git_push import (
     enclosing_repo_root,
@@ -116,6 +117,7 @@ def _print_verdict(v: dict) -> None:
 
 
 def main() -> int:
+    require_main_clone(__file__)
     ap = argparse.ArgumentParser(description="Deterministic supervised git push.")
     ap.add_argument("--repo", choices=["engine", "data", "all"], required=True)
     ap.add_argument("--branch", default="main")

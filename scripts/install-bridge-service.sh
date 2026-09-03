@@ -9,5 +9,11 @@
 
 set -euo pipefail
 
+# HELM only. The systemd unit templates substitute the workspace path into
+# WorkingDirectory= and ExecStart=, so running this from a YARD worktree
+# points a LIVE daemon at a checkout that is deleted two days later.
+source "$(dirname "$0")/lib/require-main-clone.sh"
+require_main_clone
+
 DIR="$(cd "$(dirname "$0")" && pwd)"
 exec "$DIR/install-daemon-service.sh" bridge "$@"

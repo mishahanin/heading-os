@@ -37,6 +37,7 @@ None on a Bash payload for the plainer reason that it carries no `file_path` at
 all.
 """
 from __future__ import annotations
+import contextlib
 import fnmatch
 import hashlib
 import json
@@ -3221,6 +3222,322 @@ def check_release_gate(payload: dict) -> dict | None:
 
 
 # ============================================================
+# YARD write guard — a worktree may not write into HELM, or run git in the data
+# ============================================================
+#
+# HELM is the main clone of the engine, on `main`, where everything live runs. A
+# YARD is a git worktree of the same repository on its own branch, checked out
+# outside the engine clone, where engine code is taken apart while HELM keeps
+# sailing on the merged version.
+#
+# This check lives HERE, inside the dispatcher, and not in a hook file of its
+# own. That is the load-bearing decision of the whole design, because six things
+# the earlier drafts got wrong are already settled in this file, MEASURED
+# 2026-09-03:
+#
+#   1. `WORKSPACE` (top of this file) is `Path(__file__).parent.parent.parent`.
+#      In a YARD this file IS the YARD's copy, so `WORKSPACE` is the YARD. There
+#      is no `CLAUDE_PROJECT_DIR` to be ambiguous about, because nothing here
+#      reads it. Three plan revisions argued over what that variable holds in a
+#      worktree and built a `session_root.py` to resolve the argument; the
+#      question does not arise.
+#   2. The payload schema is `tool_name` / `tool_input` / `cwd`, not `tool` /
+#      `input`. A separate hook would have had to guess, and the guess in the
+#      earlier drafts was wrong, which would have made the guard permit
+#      everything while looking installed.
+#   3. The block protocol is this file's: return a dict, and `_terminate`
+#      renders `permissionDecision: deny`. A separate hook printing
+#      `{"allowed": false}` blocks nothing.
+#   4. `sys.path` already carries WORKSPACE, so `scripts.utils` imports work. A
+#      separate hook in `.claude/hooks/` importing `scripts/utils/` raised
+#      `ImportError` in the draft, and the draft's own diagnostic command proved
+#      it had never once been run.
+#   5. Registration is `setup-platform.sh`, which already registers this
+#      dispatcher. No second matcher, no second thing to forget.
+#   6. A raise here is caught by `crashed_wall_block` below and BLOCKS. A
+#      separate hook gets no such treatment.
+#
+# Writing FILES into the data overlay from a YARD is PERMITTED and expected:
+# reports, decks, PDFs. Only two things are refused, and the rule is short
+# enough to hold in your head: not into HELM, and no git in the data overlay.
+# The git index of the overlay is shared by every checkout, so a commit from a
+# task sweeps up a neighbour's half-finished work and whatever the mail sync is
+# writing at that moment into one unreviewed commit.
+
+# Resolved once per process. The hook runs on every Write, Edit, MultiEdit,
+# NotebookEdit, Bash, Read, Grep, Glob and Agent call, so this must cost a stat
+# and not a subprocess. `.git` is a directory in a main clone and a file in a
+# worktree; `None` means neither, which is the only case worth asking git about.
+_DOT_GIT = WORKSPACE / ".git"
+if _DOT_GIT.is_dir():
+    _IN_A_YARD = False
+elif _DOT_GIT.is_file():
+    _IN_A_YARD = True
+else:
+    _IN_A_YARD = None  # undetermined; resolved lazily, and fail-closed
+
+_YARD_READ_ONLY_VERBS = frozenset((
+    "cat", "less", "more", "head", "tail", "diff", "rg", "grep", "egrep",
+    "ls", "stat", "wc", "file", "find", "sed", "awk", "cut", "sort", "uniq",
+    "cd", "pwd", "echo", "test", "["
+))
+
+# Read-only git verbs. Anything else spelled `git` and aimed at HELM or at the
+# data overlay is refused.
+_YARD_READ_ONLY_GIT = frozenset((
+    "log", "show", "diff", "status", "branch", "remote", "rev-parse",
+    "describe", "blame", "shortlog", "ls-files", "cat-file", "worktree",
+))
+
+# Splits a command into the links of its chain. Checking only the START of the
+# whole string, which is what the previous plan revision did, let
+# `cat <HELM>/x; rm -rf <HELM>/y` through because the string began with `cat`,
+# and refused `cd /tmp && cat <HELM>/x` because it did not. Both are fixed by
+# asking about each link.
+_YARD_CHAIN_RE = re.compile(r"(?:&&|\|\||;|\||\n)")
+
+
+def _yard_in_a_yard() -> bool:
+    """True when this checkout is a worktree. Raises when it cannot be told."""
+    if _IN_A_YARD is not None:
+        return _IN_A_YARD
+    from scripts.utils.clone_guard import is_main_clone
+    return not is_main_clone(WORKSPACE)
+
+
+def _yard_segments(command: str) -> list[str]:
+    return [seg.strip() for seg in _YARD_CHAIN_RE.split(command) if seg.strip()]
+
+
+def _yard_words(segment: str) -> list[str]:
+    """Words of one link, with a leading `sudo`/`env`/`time` prefix stripped.
+
+    A prefix would otherwise make every command look like an unknown verb and
+    the guard would refuse `env FOO=1 cat <HELM>/x`, which is a read.
+    """
+    words = segment.split()
+    while words and (words[0] in ("sudo", "env", "time", "nice", "nohup")
+                     or "=" in words[0] and not words[0].startswith("-")):
+        words = words[1:]
+    return words
+
+
+# `2>&1`, `>&2` and `2>/dev/null` are plumbing, not writes. Everything else
+# containing `>` sends bytes to a file.
+_YARD_REDIRECT_NOISE_RE = re.compile(r"\d?>&\d|\d?>\s*/dev/null")
+
+
+def _yard_segment_is_read_only(segment: str) -> bool:
+    # A redirection settles it before the verb is even looked at. `echo` is on
+    # the read-only list and belongs there, but `echo x > <HELM>/scripts/x.py`
+    # writes a file, and reading the verb alone permitted exactly that until a
+    # test drove the real command and caught it. The same shape reaches HELM as
+    # `cd <HELM> && echo x > y`.
+    #
+    # Deliberately blunt: `rg "a>b" file` reads as a write and is refused. That
+    # is the safe direction, it costs one `cd` to work around from HELM, and a
+    # shell-accurate parse here would be a second shell in this file.
+    if ">" in _YARD_REDIRECT_NOISE_RE.sub("", segment):
+        return False
+    words = _yard_words(segment)
+    if not words:
+        return True
+    verb = words[0].rsplit("/", 1)[-1]
+    if verb == "git":
+        subcommand = next((w for w in words[1:] if not w.startswith("-")), "")
+        # `git -C <path> log` puts a value between the flag and the verb, so the
+        # first non-flag word can be the path. Take the last candidate instead.
+        candidates = [w for w in words[1:] if not w.startswith("-")]
+        if candidates:
+            subcommand = next(
+                (w for w in candidates if w in _YARD_READ_ONLY_GIT), "")
+        return subcommand in _YARD_READ_ONLY_GIT
+    return verb in _YARD_READ_ONLY_VERBS
+
+
+def _yard_data_roots(helm: Path) -> list[Path]:
+    """Every path that names the shared data overlay, as a caller might spell it.
+
+    Two candidates rather than one. `get_data_root()` is the authority, but in a
+    YARD with no `.env` it answers `<yard>/examples` (demo mode, MEASURED
+    2026-09-03), which names nothing a `git -C` would be pointed at. The sibling
+    of HELM is the path an operator or an agent actually types.
+    """
+    roots: list[Path] = []
+    sibling = helm.parent / ".heading-os-data"
+    if sibling.is_dir():
+        roots.append(sibling.resolve())
+    try:
+        from scripts.utils.paths import data_root_is_demo, get_data_root
+        if not data_root_is_demo():
+            resolved = get_data_root().resolve()
+            if resolved not in roots:
+                roots.append(resolved)
+    except Exception as exc:  # noqa: BLE001
+        # Logged, never swallowed. The sibling candidate still stands, and the
+        # dispatcher's crash handling covers a genuinely broken import.
+        print(f"[_dispatch:yard] data root unresolvable ({type(exc).__name__}: "
+              f"{exc}); falling back to the sibling candidate only",
+              file=sys.stderr)
+    return roots
+
+
+def _yard_is_under(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def _yard_segment_names(segment: str, root: Path) -> bool:
+    """True when the command text names `root` or something inside it.
+
+    A plain `str(root) in segment` is WRONG here and the test caught it:
+    HELM is `.../.heading-os` and the data overlay is `.../.heading-os-data`,
+    so every `git -C <data-root> commit` matched the HELM branch as a string
+    prefix and was refused with the wrong reason. The exec overlays
+    (`.heading-os-data-<slug>`) have the same shape, and a path that merely
+    starts with the same characters is not a path inside it.
+
+    A boundary is therefore required after the root: a separator, whitespace,
+    a quote, or the end of the segment. `Path.relative_to` cannot be used
+    because this is command TEXT, not a resolved path.
+    """
+    return re.search(
+        re.escape(str(root)) + r"""(?=/|\s|['"]|$)""", segment) is not None
+
+
+def _yard_deny(reason: str) -> dict:
+    return {"decision": "block", "reason": reason, "_policy_deny": True}
+
+
+def check_yard_write_guard(payload: dict) -> dict | None:
+    tool_name = payload.get("tool_name", "")
+    # Read, Grep, Glob and the Agent matchers reach this dispatcher too. None of
+    # them writes, so they are none of this wall's business. Named rather than
+    # inferred, because "the matcher will not send it" is an assumption about a
+    # settings file and this file has been burned by one before.
+    if tool_name not in ("Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"):
+        return None
+
+    try:
+        if not _yard_in_a_yard():
+            return None                       # HELM. This wall stays silent.
+    except Exception as exc:  # noqa: BLE001
+        return _yard_deny(
+            f"YARD write guard: could not establish whether this checkout is "
+            f"the main clone or a worktree ({type(exc).__name__}: {exc}). "
+            f"Refusing in the safe direction."
+        )
+
+    from scripts.utils.clone_guard import CloneGuardError, main_clone_path
+    try:
+        helm = main_clone_path(WORKSPACE)
+    except CloneGuardError as exc:
+        return _yard_deny(
+            f"YARD write guard: this is a worktree, but the main clone could "
+            f"not be resolved ({exc}). Refusing in the safe direction."
+        )
+
+    cwd = Path(payload.get("cwd") or WORKSPACE)
+
+    if tool_name in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+        raw = (payload.get("tool_input", {}) or {}).get("file_path") \
+            or (payload.get("tool_input", {}) or {}).get("notebook_path") or ""
+        if not raw:
+            return _yard_deny(
+                "YARD write guard: this edit carries no destination path, so "
+                "where it would land cannot be established. Refusing.")
+        target = Path(raw)
+        target = target.resolve() if target.is_absolute() else (cwd / target).resolve()
+        if _yard_is_under(target, helm):
+            return _yard_deny(
+                f"YARD write guard — intentional policy block, not an error. "
+                f"This is a YARD worktree, and the write lands inside HELM at "
+                f"{target}. A task changes only its own checkout; HELM is the "
+                f"live clone and reviews the branch afterwards.\n\n"
+                f"Writing files into the data overlay from here is allowed and "
+                f"expected. Only HELM is closed."
+            )
+        return None
+
+    command = (payload.get("tool_input", {}) or {}).get("command", "") or ""
+    if not command:
+        return None
+    helm_str = str(helm)
+    data_roots = _yard_data_roots(helm)
+
+    # `cd` is followed across the chain, and that is not a refinement. Splitting
+    # on `&&` and asking each link about the paths IT spells lets
+    # `cd <HELM> && rm -rf x` through: the first link is a read-only verb and
+    # the second names no path at all. The same shape reaches the data overlay
+    # as `cd <data-root> && git commit`. So a link that changes directory is
+    # remembered, and every later link is judged against where it would run.
+    #
+    # Its limit, stated rather than left to be found: a directory spelled
+    # through a shell variable or a command substitution (`cd "$HOME/..."`)
+    # cannot be resolved here, so only literal paths are followed. Nothing is
+    # weakened relative to not following `cd` at all.
+    current = cwd
+    for segment in _yard_segments(command):
+        words = _yard_words(segment)
+        if not words:
+            continue
+        verb = words[0].rsplit("/", 1)[-1]
+
+        if verb == "cd":
+            if len(words) > 1 and not words[1].startswith("-"):
+                candidate = Path(words[1].strip("'\""))
+                candidate = candidate if candidate.is_absolute() else current / candidate
+                # An unresolvable `cd` leaves `current` where it was, which is
+                # the safe direction: the tracked directory stays the last one
+                # this guard could actually name, so a later segment is still
+                # judged against a real path rather than against a guess.
+                with contextlib.suppress(OSError):
+                    current = candidate.resolve()
+            continue
+
+        read_only = _yard_segment_is_read_only(segment)
+        if (_yard_segment_names(segment, helm)
+                or _yard_is_under(current, helm)) and not read_only:
+            return _yard_deny(
+                f"YARD write guard — intentional policy block, not an error. "
+                f"This shell command reaches into HELM from a YARD worktree, "
+                f"and is not one of the read-only forms:\n\n  {segment[:300]}\n\n"
+                f"Read it from here if you need to (git log, cat, diff, rg, ls, "
+                f"head, tail). Change it in HELM."
+            )
+
+        if verb == "git":
+            if "push" in words[1:]:
+                return _yard_deny(
+                    "YARD write guard — intentional policy block, not an error. "
+                    "The engine repository is PUBLIC, and any branch pushed to "
+                    "it is visible to everyone immediately, not only `main`. A "
+                    "task never publishes: commit on the task branch and stop. "
+                    "Every worktree shares one repository, so HELM can already "
+                    "see the branch with nothing transferred, and it is HELM "
+                    "that reviews and publishes."
+                )
+            for root in data_roots:
+                reaches = (_yard_segment_names(segment, root)
+                           or _yard_is_under(current, root))
+                if reaches and not read_only:
+                    return _yard_deny(
+                        f"YARD write guard — the one rule. Writing FILES into "
+                        f"the data overlay from a YARD is allowed; running git "
+                        f"in it is not.\n\n  {segment[:300]}\n\n"
+                        f"Every checkout shares that repository's index, so a "
+                        f"commit from a task sweeps up other tasks' unfinished "
+                        f"work and whatever the daemons are writing at that "
+                        f"moment into one commit nobody reviewed. HELM records "
+                        f"the data's history."
+                    )
+    return None
+
+
+# ============================================================
 # A crashed wall
 # ============================================================
 #
@@ -3345,6 +3662,7 @@ CHECKS = [
     check_protect_personal_threads,
     check_protect_corporate,
     check_protect_docs,
+    check_yard_write_guard,
     check_cwd_anchor,
     check_slow_shell,
     check_rate_limit,

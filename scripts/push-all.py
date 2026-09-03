@@ -70,6 +70,7 @@ from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
 
+from scripts.utils.clone_guard import require_main_clone
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.content_denylist import build_denylist
 from scripts.utils.denial_log import CONTEXT_ENV, log_denial
@@ -991,6 +992,7 @@ def _report_skips(skipped: list[tuple[str, str]], args, attempted: int) -> None:
 
 
 def main() -> None:
+    require_main_clone(__file__)
     ap = argparse.ArgumentParser(description="Push both HEADING OS repos to their private remotes.")
     ap.add_argument("-m", "--message", help="commit message (default: dated backup message)")
     ap.add_argument("--no-commit", action="store_true", help="push existing commits only; do not commit working-tree changes")

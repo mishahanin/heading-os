@@ -320,6 +320,89 @@ def require_outside_engine_clone(path: Path, what: str) -> Path:
     return resolved
 
 
+def assert_data_root_external() -> Path:
+    """Return the data root, or raise `DataRootError` naming what is wrong.
+
+    The precondition a YARD (a git worktree of the engine) has to clear before
+    an agent starts in it, and the one that no existing check covered.
+
+    The leak guard and the data-path redirect both auto-activate on
+    ``get_data_root() != get_workspace_root()``. That predicate is TRUE in demo
+    mode as well, because ``<root>/examples`` is not ``<root>``, so both stay
+    armed and the workspace looks healthy while every classification decision is
+    being made against the bundled example tree instead of the operator's real
+    layout. Nothing errors and nothing warns.
+
+    MEASURED 2026-09-03 in a fresh worktree of this repository, with no `.env`
+    (it is gitignored, so a new checkout never has one):
+
+        get_workspace_root()   -> <worktree>            correct
+        get_data_root()        -> <worktree>/examples   DEMO
+        data_overlay_present() -> False
+
+    Sibling auto-discovery is what collapses: a YARD lives under
+    ``~/ai/claude-workspaces/.yard/<name>/``, so ``../.heading-os-data`` resolves
+    to ``.yard/.heading-os-data``, which does not exist. Hence the absolute
+    ``HEADING_OS_DATA`` a YARD's `.env` carries, and hence this assertion, which
+    checks the RESULT rather than trusting that the variable was written.
+
+    Five refusals, each with its own message:
+
+      1. ``HEADING_OS_DATA`` set to a relative path. It would mean a different
+         directory to a daemon, to a systemd unit and to a shell, and only one
+         of them would be right. (A set-but-missing value already raises inside
+         ``env_data_root``; this catches the value that exists but is ambiguous.)
+      2. Demo mode: the bundled read-only ``examples`` tree.
+      3. The data root IS the workspace root.
+      4. The data root sits inside the workspace root.
+      5. The data root is not a git repository, so nothing there can be
+         committed and `/backup` would silently do nothing.
+
+    Cases 3 and 4 are delegated to ``require_outside_engine_clone`` rather than
+    reimplemented, so there is one containment rule in this file and not two
+    that can drift apart.
+
+    Demo is checked BEFORE containment even though ``<root>/examples`` is inside
+    the clone and would be caught there. The two refusals have different
+    remedies: containment says "point the variable somewhere else", and demo
+    says "in a worktree this is what an UNSET variable looks like, because
+    sibling discovery cannot find `../.heading-os-data` from a checkout that is
+    not beside it". Ordering it second is what lets the message name the actual
+    cause instead of a symptom.
+    """
+    env = os.environ.get("HEADING_OS_DATA")
+    if env and not Path(env).expanduser().is_absolute():
+        raise DataRootError(
+            f"HEADING_OS_DATA is set to the relative path {env!r}. It would "
+            f"resolve against whatever directory the caller happened to be in, "
+            f"so a daemon, a systemd unit and a shell would each reach a "
+            f"different tree. Set it to an absolute path."
+        )
+
+    root = get_data_root()
+    if data_root_is_demo():
+        raise DataRootError(
+            f"The data root resolved to {root}, the bundled read-only examples "
+            f"tree. In a worktree this is what an unset HEADING_OS_DATA looks "
+            f"like: sibling auto-discovery cannot find ../.heading-os-data from "
+            f"a checkout that is not beside it. The workspace will look healthy "
+            f"and classify every path against example data. Set HEADING_OS_DATA "
+            f"to the absolute path of the real overlay."
+        )
+
+    # Raises for cases 3 and 4, naming the resolved path and the engine clone.
+    require_outside_engine_clone(root, "The data root")
+
+    if not (root / ".git").exists():
+        raise DataRootError(
+            f"The data root {root} is not a git repository. Its history is how "
+            f"the overlay is backed up, so a root without one loses every write "
+            f"silently. Check HEADING_OS_DATA, or run "
+            f"`python scripts/create-data-repo.py`."
+        )
+    return root
+
+
 # ============================================================
 # Home + data/state/log dir helpers
 # ============================================================

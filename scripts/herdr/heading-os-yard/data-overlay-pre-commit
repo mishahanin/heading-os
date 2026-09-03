@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+#
+# HEADING OS — pre-commit hook for the DATA OVERLAY repository.
+#
+# Installed once, from HELM, by:  python scripts/install-data-overlay-guard.py
+# Never by a YARD's bootstrap: a task must not write to a shared resource
+# outside its own checkout, and doing it per task would overwrite whatever was
+# there each time a worktree was created.
+#
+# THE ONE RULE
+#
+#   Writing FILES into the data overlay from a YARD is allowed and expected.
+#   Running git in it is not.
+#
+# Files differ per task, so they do not collide. What collides is the moment of
+# recording: the overlay has ONE git index shared by HELM and every worktree, so
+# a commit made from a task sweeps up a neighbour's half-finished draft and
+# whatever the mail sync happens to be writing, into a single commit nobody
+# reviewed. HELM records the data's history.
+#
+# HOW IT KNOWS, AND WHAT IT CANNOT KNOW
+#
+# `HEADING_OS_YARD=1` is exported into the AGENT PROCESS when a YARD starts
+# (`herdr pane run <pane> "HEADING_OS_YARD=1 exec claude ..."`), so every Bash
+# call the agent makes inherits it, and so does git, and so does this hook.
+# That is process inheritance, not file loading — and the difference matters:
+# an earlier revision of this design wrote the marker into `.env` and called it
+# a mechanical rule, but the Bash tool does not load `.env`, so the variable was
+# never set and this hook passed every commit while looking installed.
+#
+# Its limit, stated here rather than left to be discovered: a shell the operator
+# opens BY HAND inside a YARD directory does not carry the marker, and this hook
+# will let that commit through. Nothing in the git hook environment distinguishes
+# it — git runs hooks with the working directory set to the repository being
+# committed to, so `$PWD` is the overlay in every case and says nothing about
+# where the caller came from.
+#
+# That gap is covered from the other side and does not need closing here. The
+# PRIMARY mechanism is `check_yard_write_guard` in `.claude/hooks/_dispatch.py`,
+# which refuses the command before git is reached and decides from the SHAPE of
+# the checkout rather than from any variable. This hook is the second, independent
+# mechanism: it catches an agent that reaches git by a spelling the first one did
+# not anticipate. Two mechanisms that fail for different reasons is the point.
+#
+# Do NOT "harden" this by reading a file: a file read is not more trustworthy
+# than the environment here, and it would fire inside the test suite, which
+# blanks these variables deliberately.
+
+if [ "${HEADING_OS_YARD:-0}" = "1" ]; then
+    echo "REFUSED: committing to the data overlay from a YARD is not allowed." >&2
+    echo "" >&2
+    echo "  Writing FILES here is fine. Recording history is not: this" >&2
+    echo "  repository's git index is shared by HELM and every worktree, so a" >&2
+    echo "  commit from a task would capture other tasks' unfinished work and" >&2
+    echo "  the daemons' in-flight writes in one unreviewed commit." >&2
+    echo "" >&2
+    echo "  Say what needs recording and stop. HELM commits." >&2
+    exit 1
+fi
+
+exit 0

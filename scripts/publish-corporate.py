@@ -50,6 +50,7 @@ from pathlib import Path
 _BOOTSTRAP_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_BOOTSTRAP_ROOT))
 
+from scripts.utils.clone_guard import require_main_clone  # noqa: E402
 from scripts.utils.colors import CYAN, GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
 from scripts.utils.workspace import (  # noqa: E402
     get_corporate_repo_path,
@@ -566,6 +567,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    require_main_clone(__file__)
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.json and not args.preview:

@@ -391,6 +391,16 @@ def print_manual_checklist(slug: str, exec_info: dict) -> None:
 
 
 def main():
+    # DELIBERATELY NOT GUARDED with `require_main_clone`, unlike its thirteen
+    # siblings in the HELM/YARD change of 2026-09-03. This script revokes
+    # nothing: it is disabled fail-closed, writes no file, touches no repository,
+    # and its entire remaining value is printing the manual checklist below and
+    # exiting 2. Two comments in this very function record that `--help` and that
+    # checklist were once unreachable behind an early exit, and that having them
+    # unreachable was worse than the gap they describe. A clone-type guard here
+    # would restore exactly that at 3am for a reader who happens to be in a
+    # worktree, and would buy nothing, because there is no action to prevent.
+    #
     # This script is DISABLED, deliberately and fail-closed: the legacy
     # 31c-crm-central revoke path it automates no longer exists, so running it
     # would report success against a repo that is gone. Tracking: scrutinize H4.

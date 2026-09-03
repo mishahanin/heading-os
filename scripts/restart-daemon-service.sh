@@ -8,6 +8,12 @@
 
 set -euo pipefail
 
+# HELM only. The systemd unit templates substitute the workspace path into
+# WorkingDirectory= and ExecStart=, so running this from a YARD worktree
+# points a LIVE daemon at a checkout that is deleted two days later.
+source "$(dirname "$0")/lib/require-main-clone.sh"
+require_main_clone
+
 if [[ $# -lt 1 ]]; then
     echo "Usage: $0 <name>" >&2
     echo "  bridge | sentinel | fireside-bot | sync-exchange" >&2

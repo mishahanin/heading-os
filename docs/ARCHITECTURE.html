@@ -78,9 +78,9 @@
 <main class="content">
   <h1>Architecture</h1>
   <p class="page-meta">How the pieces fit. Claude Code is the agent; HEADING OS is the structure built around it that turns a general assistant into an operations engine with durable memory, a catalog of skills, and a hard…</p>
-  <!-- version: 1.1.0 | last-updated: 2026-08-20 -->
+  <!-- version: 1.2.0 | last-updated: 2026-09-03 -->
 
-<p>Last Updated: 2026-08-20. Consumed by: readers of the docs site, and
+<p>Last Updated: 2026-09-03. Consumed by: readers of the docs site, and
 <code>.claude/rules/console-first.md</code>. That rule keeps the console-first obligations, and
 points at § 5 below for the rationale and the scope boundary.</p>
 <p>How the pieces fit. Claude Code is the agent; HEADING OS is the structure built around
@@ -272,6 +272,110 @@ from that rule on 2026-08-20.</p>
 </tr>
 </tbody>
 </table>
+<h2 id="8-helm-and-yard-working-on-the-engine-and-the-data-at-once">8. HELM and YARD: working on the engine and the data at once</h2>
+<p>Two pieces of work that share one folder collide. Two Claude sessions in the same
+clone edit the same files: one rewrites a module while the other writes tests for
+what it just replaced. A terminal multiplexer gives each session its own window,
+and windows are not walls.</p>
+<p>The answer is two roles with no overlap.</p>
+<p><strong>HELM</strong> is the main clone on <code>main</code>. One session. Everything live: the data
+overlay, the daemons, mail and calendar, memory, <code>/backup</code>, <code>/sync</code>, every git
+operation in the data overlay, and the review and merge of finished branches.</p>
+<p><strong>YARD</strong> is a git worktree of the engine on its own branch, checked out under
+Herdr&rsquo;s <code>worktrees.directory</code> — outside the engine clone, so a file created by
+accident inside a task cannot land in the engine&rsquo;s working tree. Herdr lays the
+checkouts out as <code>&lt;directory&gt;/&lt;repo&gt;/&lt;branch-slug&gt;</code>, and that middle segment is
+its own, not configurable: <code>worktrees.directory</code> is the only key under
+<code>worktrees.</code> in the 0.8.2 configuration reference. Nothing here is live. The
+engine can be taken apart here while HELM keeps running on the merged version.</p>
+<p><em>Are you using the assistant, or rebuilding it?</em> Using is HELM. Rebuilding is
+YARD. Cooking dinner and rebuilding the stove are different activities even
+though both happen in the kitchen; the second you do with the gas off.</p>
+<h3 id="the-one-rule">The one rule</h3>
+<p><strong>Anyone may write files into the data overlay. Only HELM may record its
+history.</strong></p>
+<p>Files differ per task, so they do not collide. What collides is the moment of
+recording: the overlay has one git index shared by HELM and every worktree, so a
+commit from a task sweeps up a neighbour&rsquo;s half-finished draft and whatever the
+mail sync is writing at that instant into a single commit nobody reviewed.</p>
+<h3 id="the-gap-parallel-work-opens-and-how-it-is-closed">The gap parallel work opens, and how it is closed</h3>
+<p>The engine&rsquo;s layers that keep private data out of the code all run on this
+machine. The strongest of them stands on the sanctioned upload path in
+<code>scripts/push-all.py</code> and has no off switch — but &ldquo;no off switch&rdquo; means on that
+path. A finished task pushing its branch with an ordinary <code>git push</code> would go
+around it entirely, and the engine repository is public, so any branch pushed is
+visible to everyone immediately.</p>
+<p>The repair is not another wall on the road out. It is removing the second road:
+<strong>a task sends nothing.</strong> Every worktree shares one repository, so HELM can
+already see a task&rsquo;s branch with nothing transferred. Three independent
+mechanisms hold it:</p>
+<table>
+<thead>
+<tr>
+<th>Mechanism</th>
+<th>Where</th>
+<th>What gets past it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>remote.origin.pushurl</code> disabled per worktree</td>
+<td>git config</td>
+<td>nothing but manual reconfiguration</td>
+</tr>
+<tr>
+<td><code>require_main_clone()</code> in publishing and maintenance entry points</td>
+<td>the scripts</td>
+<td>nothing; exit 2 naming HELM</td>
+</tr>
+<tr>
+<td><code>check_yard_write_guard</code></td>
+<td><code>.claude/hooks/_dispatch.py</code></td>
+<td>nothing; refused before the command runs</td>
+</tr>
+</tbody>
+</table>
+<h3 id="the-predicate-and-why-it-is-not-a-variable">The predicate, and why it is not a variable</h3>
+<p>Telling a worktree from the main clone is a property of git, not an agreement.
+MEASURED 2026-09-03 on this repository: <code>&lt;root&gt;/.git</code> is a DIRECTORY in the main
+clone and a FILE in a worktree, and <code>rev-parse --git-dir</code> equals
+<code>--git-common-dir</code> only in the main clone. That cannot be faked, forgotten, or
+lost by a new shell. <code>scripts/utils/clone_guard.py</code> is the one implementation;
+<code>scripts/lib/require-main-clone.sh</code> mirrors it in bash builtins for callers that
+run with a pinned PATH, and a test asserts the two agree.</p>
+<p>Earlier designs used a marker file and <code>CLAUDE_PROJECT_DIR</code>. Both answer &ldquo;this is
+the main clone, allow it&rdquo; when the thing they read is simply missing, which is
+fail-open in the one place that must fail closed.</p>
+<h3 id="proving-a-guard-can-fire">Proving a guard can fire</h3>
+<p>A guard pointed at the wrong tree reports clean, and a clean report is what a
+healthy guard produces. The two states are indistinguishable by their result.</p>
+<p>So provisioning a YARD ends with a canary: a decoy file is written to a path the
+engine itself classifies as private, and the tree-clean wall is REQUIRED to fail
+on it. If it passes, the wall is looking at another tree and the task does not
+start. The probe path is chosen rather than assumed — the wall reads
+<code>git ls-files --others --exclude-standard</code>, so a decoy git ignores is invisible
+to it, and MEASURED 2026-09-03 six of the eight obvious candidates are gitignored.</p>
+<p>Every guard added or changed from here ships with a bidirectional test: one case
+proving it stays quiet on a clean tree, one proving it fires on a real violation
+in the checkout under test. The failing case must fail against the previous
+version of the guard; if it passes there too, it proves nothing.</p>
+<h3 id="what-a-fresh-worktree-does-not-have">What a fresh worktree does NOT have</h3>
+<p>MEASURED 2026-09-03, and each of these looks healthy:</p>
+<ul>
+<li><code>.claude/settings.local.json</code> — absent, so eleven PreToolUse walls including
+  the release gate and the secret scanner are unregistered.</li>
+<li><code>.env</code> — absent, so <code>get_data_root()</code> falls through to the bundled <code>examples</code>
+  tree. Every guard gated on &ldquo;the data root differs from the workspace root&rdquo;
+  stays armed, against example data.</li>
+<li><code>.venv</code> — absent, which is why the bootstrap writes its status with <code>printf</code>
+  and calls no pinned interpreter before <code>uv sync</code>.</li>
+</ul>
+<p><code>WORKSPACE_ROOT</code> is the mirror hazard: <code>get_workspace_root()</code> reads it first, so
+one line copied from HELM&rsquo;s <code>.env</code> points every guard at the untouched main
+clone. The bootstrap strips it and then verifies the resolved root, because
+checking the intent is not checking the result.</p>
+<p>Operating guide, the eleven bootstrap steps, and diagnosis:
+<code>scripts/herdr/README.md</code>.</p>
 <hr />
 <p><em>HEADING OS · Architecture · maintained by Misha Hanin · the Navigation Principle in
 software: durable state over one-shot prompts, verified completion over hopeful

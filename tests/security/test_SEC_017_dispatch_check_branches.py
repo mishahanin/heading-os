@@ -11,8 +11,9 @@ payload, so we exercise them directly rather than via subprocess. Goals:
    so the dispatcher behaves identically when invoked from Windows VSCode
    or from WSL/Linux Claude Code against the same files.
 
-Corrected 2026-08-30. This said "eight distinct checks" and "All eight checks
-are stateless", and both halves were false. `CHECKS` carries TEN entries
+Corrected 2026-08-30, count refreshed 2026-09-03. This said "eight distinct
+checks" and "All eight checks are stateless", and both halves were false.
+`CHECKS` carries TWELVE entries
 (`test_checks_list_has_ten_branches` pins the list and its order), and two of
 them are not pure functions of the payload: `check_rate_limit` and
 `check_tool_budget` load and save `.claude/state/dispatch-rate.json`. That is
@@ -22,7 +23,7 @@ who trusted the old sentence would conclude the whole pipeline can be exercised
 without isolating persisted state, which is the mistake the budget test had to
 fix.
 
-So: eight checks are stateless and exercised via direct payloads; the two
+So: every check but those two is exercised via a direct payload; the two
 rate/budget checks persist state and must be run under `_isolate_rate_state`.
 (The `_secure/` vault and its `check_protect_secure` branch were removed in
 Plan 5; sensitivity is now the fail-closed `SENSITIVE_MODE` flag, covered by
@@ -363,10 +364,21 @@ def test_checks_list_has_ten_branches(dispatch):
     (something irreversible leaving the machine) outranks every working-method
     rule below it.
 
+    `check_yard_write_guard` joined on 2026-09-03, directly after
+    `check_protect_docs` and so last of the content guards. It fires only in a
+    YARD (a git worktree of this repository), where it refuses a write that
+    reaches back into the HELM clone, a git command in the data overlay, a push,
+    and a daemon install. It sits below the four content guards because those
+    four hold in EVERY checkout and this one holds in a worktree only: a command
+    that both leaks a credential and reaches into HELM must be refused for the
+    credential. It sits above `check_cwd_anchor` because that one is a
+    working-method correction (a relative path run from the wrong directory),
+    and this one protects the live workspace of another session.
+
     The tripwire is the point. This assertion does not drift with the list; a
     new check fails it until its author writes down where in the order it
     belongs and why."""
-    assert len(dispatch.CHECKS) == 11
+    assert len(dispatch.CHECKS) == 12
     names = [c.__name__ for c in dispatch.CHECKS]
     assert names == [
         "check_prevent_secrets",
@@ -374,6 +386,7 @@ def test_checks_list_has_ten_branches(dispatch):
         "check_protect_personal_threads",
         "check_protect_corporate",
         "check_protect_docs",
+        "check_yard_write_guard",
         "check_cwd_anchor",
         "check_slow_shell",
         "check_rate_limit",

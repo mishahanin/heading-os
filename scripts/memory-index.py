@@ -56,6 +56,7 @@ except ImportError as exc:
 
 from scripts.utils import salience
 from scripts.utils.air_gap import is_denied
+from scripts.utils.clone_guard import require_main_clone
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.commit_source import iter_commits
 from scripts.utils.symbol_source import iter_symbols
@@ -2024,6 +2025,14 @@ def main() -> int:
     p_stats.set_defaults(func=cmd_stats)
 
     args = parser.parse_args()
+    # Only build writes under the data root; the read paths stay open from a YARD.
+    # Asked of the resolved handler rather than of `args.cmd`, so a renamed
+    # subcommand cannot silently unguard the write path. Placed here and not in
+    # `cmd_build`, because seven test modules call `cmd_build` directly and a
+    # guard inside it would refuse them for reasons that have nothing to do with
+    # what they are testing.
+    if args.func is cmd_build:
+        require_main_clone(__file__)
     return args.func(args)
 
 

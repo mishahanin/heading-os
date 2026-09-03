@@ -25,6 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.atomic import atomic_write_text
+from scripts.utils.clone_guard import require_main_clone
 from scripts.utils.colors import BOLD, GREEN, RED, RESET, YELLOW
 from scripts.utils.paths import DATA_SCHEMA_VERSION
 from scripts.utils.workspace import get_routing_destination, get_workspace_root
@@ -84,6 +85,7 @@ def partition(root: Path) -> dict[str, list[str]]:
 
 
 def main() -> int:
+    require_main_clone(__file__)
     ap = argparse.ArgumentParser(description="Build the HEADING OS data overlay")
     ap.add_argument("--dry-run", action="store_true", help="Report only; copy nothing.")
     ap.add_argument("--target", help="Target dir (default: ../.heading-os-data).")

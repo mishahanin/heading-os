@@ -93,6 +93,14 @@ DENIAL_MECHANISMS = (
     # and mean the wall is gone. Telling those two apart is the whole reason
     # this list exists.
     "check_release_gate",
+    # Added 2026-09-03 with the wall itself. It refuses a write from a YARD (a
+    # git worktree of the engine) into HELM (the main clone), and refuses
+    # running git inside the private data overlay from a YARD, while leaving
+    # file writes into that overlay alone. A task that stays in its own
+    # checkout never trips it, so long runs of zero catches are the intended
+    # state -- and zero-with-a-name is exactly what this list exists to tell
+    # apart from absent-entirely.
+    "check_yard_write_guard",
 )
 
 # ============================================================
@@ -159,6 +167,14 @@ WALL_REASONS = {
         "directions are not comparable, since over-friction costs the operator "
         "one typed word and under-friction cost this workspace an unauthorised "
         "commit and push on 2026-08-30",
+    "check_yard_write_guard":
+        "a YARD writing into HELM edits the live clone behind the review that "
+        "the task branch exists to receive, and a git command run in the data "
+        "overlay from a YARD sweeps other tasks' unfinished work and whatever "
+        "the daemons are writing at that moment into one commit nobody read; "
+        "both are recorded history rather than a correction, and the write "
+        "into the overlay this wall PERMITS is the measure of how narrowly it "
+        "is aimed",
 }
 
 WALLS = tuple(WALL_REASONS)

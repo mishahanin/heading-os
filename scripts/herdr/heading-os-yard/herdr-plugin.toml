@@ -1,0 +1,22 @@
+id = "heading-os.yard"
+name = "HEADING OS — YARD bootstrap"
+version = "1.0.0"
+min_herdr_version = "0.8.0"
+description = "Provisions each new YARD worktree and proves the engine's guards can fire inside it before an agent starts."
+platforms = ["linux", "macos"]
+
+# Fires whenever Herdr creates a git worktree, however it was created: the
+# keybinding, the mouse, or `herdr worktree create`. There is deliberately no
+# wrapper command for the operator to remember, because a step that depends on
+# remembering is a step that is skipped on the day it matters.
+[[events]]
+on = "worktree.created"
+command = ["bash", "yard-bootstrap.sh"]
+
+# Re-run the contour check on an existing YARD without re-provisioning it.
+# Implemented: the script parses `--doctor-only` on its first line.
+[[actions]]
+id = "doctor"
+title = "YARD: re-check the engine/data contour"
+contexts = ["workspace"]
+command = ["bash", "yard-bootstrap.sh", "--doctor-only"]

@@ -135,7 +135,7 @@ bash<span class="w"> </span>scripts/setup-platform.sh<span class="w"> </span>--c
 claude<span class="w">        </span><span class="c1"># then /prime</span>
 </code></pre></div>
 <p>Do not skip <code>setup-platform.sh</code>. Git ignores the file it writes, and that file
-registers 16 of the 17 session hooks. A clone without it arms one hook. The
+registers 15 of the 17 session hooks. A clone without it arms 2 hooks of 17. The
 secret scanner, the release gate and the other PreToolUse walls never load. Run
 <code>--check</code> to see the state. <code>/prime</code> runs the same check at every session boot.</p>
 <p>Core <code>uv sync</code> installs only the light always-on set. Each integration (email,

@@ -119,7 +119,7 @@ def run_hooks_armed(workspace_root: Path) -> dict[str, Any]:
     `.claude/settings.local.json` is gitignored, and it is the ONLY place the
     session hooks are registered. The tracked `.claude/settings.json` registers
     exactly one. MEASURED 2026-09-02 by comparing the two files: a clone where
-    `scripts/setup-platform.sh` has never run arms 1 hook of 17, and among the
+    `scripts/setup-platform.sh` has never run arms 2 hooks of 17, and among the
     16 absent is `_dispatch.py`, the single entry point for eleven PreToolUse
     walls including the release gate and the secret scanner.
 

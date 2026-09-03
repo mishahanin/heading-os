@@ -111,7 +111,7 @@ uv run python scripts/create-data-repo.py
 # 4. Wire secrets and arm both gates
 cp .env.example .env             # fill in what you use
 pre-commit install               # the commit-time secret gate
-bash scripts/setup-platform.sh   # the session hooks (16 of the 17 live only here)
+bash scripts/setup-platform.sh   # the session hooks (15 of the 17 live only here)
 
 # 5. Verify, then start
 uv run python scripts/workspace-health.py
@@ -120,7 +120,7 @@ claude       # then /prime
 ```
 
 Step 4 is not optional. `.claude/settings.local.json` is gitignored, and it is
-where 16 of the 17 session hooks are registered. Skip it and the clone arms one:
+where 15 of the 17 session hooks are registered. Skip it and the clone arms 2 hooks of 17:
 the eleven PreToolUse walls, the secret scanner and the release gate never load,
 and nothing else reports it. `--check` in step 5 is the detector, and `/prime`
 runs the same check at every session boot.

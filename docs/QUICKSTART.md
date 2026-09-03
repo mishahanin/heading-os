@@ -76,7 +76,7 @@ claude        # then /prime
 ```
 
 Do not skip `setup-platform.sh`. Git ignores the file it writes, and that file
-registers 16 of the 17 session hooks. A clone without it arms one hook. The
+registers 15 of the 17 session hooks. A clone without it arms 2 hooks of 17. The
 secret scanner, the release gate and the other PreToolUse walls never load. Run
 `--check` to see the state. `/prime` runs the same check at every session boot.
 

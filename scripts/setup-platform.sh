@@ -9,8 +9,8 @@
 #
 # `--check` writes nothing. It reports whether this clone's live settings file
 # registers every session hook the template defines, and exits 1 when it does
-# not. MEASURED 2026-09-02: a clone where this script has never run arms 1 hook
-# of 17, and the 16 absent ones include the dispatcher behind eleven PreToolUse
+# not. MEASURED 2026-09-03: a clone where this script has never run arms 2 hooks
+# of 17, and the 15 absent ones include the dispatcher behind eleven PreToolUse
 # walls. Nothing reported that state before this flag existed.
 #
 # Safe to run multiple times. It did not used to be, and the header here said

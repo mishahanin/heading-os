@@ -97,6 +97,14 @@ TEMPLATES = (
 )
 LIVE = ".claude/settings.local.json"
 
+# Where session-start.py is registered SINCE 2026-09-03. It moved out of the
+# three platform templates and into the tracked file, because it carries the
+# YARD-NOT-PROVISIONED warning and the gitignored file that used to register it
+# is written by the very provisioning whose absence that warning reports.
+# Registering it in both would run it twice: nothing deduplicates across the two
+# files. So the timeout guard below follows it rather than staying where it was.
+TRACKED = ".claude/settings.json"
+
 
 @pytest.fixture(autouse=True)
 def _sys_path_restored():
@@ -331,8 +339,8 @@ def _registered_timeout(rel: str) -> int | None:
     return None
 
 
-@pytest.mark.parametrize("rel", TEMPLATES)
-def test_each_template_registers_the_timeout_the_hook_budgets_for(hook, rel):
+def test_the_tracked_settings_registers_the_timeout_the_hook_budgets_for(hook):
+    rel = TRACKED
     """The hook's arithmetic is written against a number it does not own. When
     the two drift, the budget is correct by coincidence, which is exactly how
     `checkpoint-offer.py` came to budget for 90 against a possible 60."""
@@ -344,6 +352,19 @@ def test_each_template_registers_the_timeout_the_hook_budgets_for(hook, rel):
         f"{rel} registers timeout={registered} while the hook budgets for "
         f"{hook.REGISTERED_TIMEOUT_SECONDS}. Claude Code discards the output of "
         "a hook that outruns its registration, so every alert would be lost.")
+
+
+@pytest.mark.parametrize("rel", TEMPLATES)
+def test_no_template_registers_it_a_second_time(rel):
+    """The other direction of the move.
+
+    Left in a template as well, the hook would be registered twice and run
+    twice per session: `merge-platform-settings.py` merges a template into the
+    live local file and never reads the tracked one.
+    """
+    assert _registered_timeout(rel) is None, (
+        f"{rel} still registers session-start.py, which the tracked "
+        f"{TRACKED} now registers too")
 
 
 def test_the_live_settings_agree_too_when_present(hook):

@@ -380,9 +380,11 @@ PROSE = {
     "docs/QUICKSTART.md": "{template} of the {union} session hooks",
     "docs/DEPLOYMENT.md": "{template} of the {union} session hooks",
     "CLAUDE.md": "{template} of the {union} hooks",
-    "scripts/merge-platform-settings.py": "{tracked} hook of {union}",
-    "scripts/setup-platform.sh": "{tracked} hook of {union}",
-    "scripts/prime-health-parallel.py": "{tracked} hook of {union}",
+    # "hooks", plural, since 2026-09-03: session-start.py moved into the
+    # tracked file, so a fresh clone arms 2 and not 1.
+    "scripts/merge-platform-settings.py": "{tracked} hooks of {union}",
+    "scripts/setup-platform.sh": "{tracked} hooks of {union}",
+    "scripts/prime-health-parallel.py": "{tracked} hooks of {union}",
     ".claude/skills/prime/SKILL.md": "session hook",
 }
 

@@ -380,10 +380,10 @@ bash<span class="w"> </span>scripts/setup-platform.sh<span class="w">   </span><
 authoritative, unbypassable secret scan runs again at push time regardless.</p>
 <p><strong>The session hooks are local and per-clone too.</strong> <code>setup-platform.sh</code> writes
 <code>.claude/settings.local.json</code>, which <code>.gitignore</code> excludes. That file registers
-16 of the 17 session hooks, <code>_dispatch.py</code> among them. <code>_dispatch.py</code> is the
+15 of the 17 session hooks, <code>_dispatch.py</code> among them. <code>_dispatch.py</code> is the
 single entry point for eleven PreToolUse walls, including the release gate.
-A clone that skips this step arms one hook, from the tracked
-<code>.claude/settings.json</code>, and nothing else reports the other 16 as absent.
+A clone that skips this step arms 2 hooks of 17, from the tracked
+<code>.claude/settings.json</code>, and nothing else reports the other 15 as absent.
 Verify with <code>bash scripts/setup-platform.sh --check</code>, which exits non-zero and
 names every missing registration. It compares two files, so it establishes
 that a hook is REGISTERED, never that a hook ran. Running the step again on an
@@ -568,7 +568,7 @@ the engine, stop — see the troubleshooting table.</p>
 </tr>
 <tr>
 <td>No hook ever fires: no session-start brief, no PreToolUse wall, no release gate</td>
-<td>The <code>bash scripts/setup-platform.sh</code> step in §7 was skipped, so <code>.claude/settings.local.json</code> does not exist. It is gitignored and registers 16 of the 17 session hooks. Run the step, then verify with <code>bash scripts/setup-platform.sh --check</code>, which names every missing registration and exits non-zero. It compares two files, so a zero exit says a hook is registered, not that a hook ran.</td>
+<td>The <code>bash scripts/setup-platform.sh</code> step in §7 was skipped, so <code>.claude/settings.local.json</code> does not exist. It is gitignored and registers 15 of the 17 session hooks. Run the step, then verify with <code>bash scripts/setup-platform.sh --check</code>, which names every missing registration and exits non-zero. It compares two files, so a zero exit says a hook is registered, not that a hook ran.</td>
 </tr>
 <tr>
 <td><code>which claude</code> / <code>node</code> shows <code>/mnt/c/…</code></td>

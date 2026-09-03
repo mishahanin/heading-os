@@ -40,7 +40,7 @@ it runs on a fresh clone under the system interpreter before `.venv` exists.
 hooks are registered. The tracked `.claude/settings.json` registers exactly one.
 
 MEASURED 2026-09-02 by comparing the two files: a clone where this script has
-never run arms 1 hook of 17. The 16 absent ones include `_dispatch.py`, which is
+never run arms 2 hooks of 17. The 15 absent ones include `_dispatch.py`, which is
 the single entry point for eleven PreToolUse walls, the release gate and the
 secret scanner among them. Nothing anywhere reported that state, and the step
 that fixes it (`bash scripts/setup-platform.sh`) was named in no document a

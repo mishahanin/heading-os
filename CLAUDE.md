@@ -47,10 +47,14 @@ pins the resolved set.
 4. `pre-commit install` — once per fresh clone, or the commit gates are not armed
 5. `bash scripts/setup-platform.sh` — once per fresh clone, or the SESSION hooks
    are not armed. It writes the gitignored `.claude/settings.local.json`, which
-   registers 16 of the 17 hooks; the tracked `.claude/settings.json` registers
-   the one remaining. Among the 16 is `_dispatch.py`, the single entry point for
+   registers 15 of the 17 hooks; the tracked `.claude/settings.json` registers
+   the other 2. Among the 15 is `_dispatch.py`, the single entry point for
    eleven PreToolUse walls including the release gate and the secret scanner. A
-   clone that skips this runs with those walls down and nothing says so. Re-run
+   clone that skips this runs with those walls down and nothing says so. The 2
+   tracked ones are the data-path redirect and, since 2026-09-03, the
+   session-start brief: it carries the YARD-NOT-PROVISIONED warning, so leaving
+   it in the gitignored file meant the warning was installed by the very
+   provisioning whose absence it exists to report. Re-run
    it any time: it merges, keeping every local key. `bash
    scripts/setup-platform.sh --check` reports the state and exits non-zero when
    a registration is missing, and `/prime` runs the same check at session boot.

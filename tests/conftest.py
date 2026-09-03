@@ -543,54 +543,85 @@ def pytest_configure(config):
     )
 
 
-@pytest.fixture(autouse=True)
-def _no_egress(request):
-    """Open the gate only for a test that has asked for it, then close it again."""
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    """Open the gate only for a test that has asked for it, then close it again.
+
+    A HOOK, not an autouse fixture, and the difference is the whole repair.
+
+    MEASURED 2026-09-04 in the operator's main clone: the four
+    `tests/test_recall_cross_lingual.py` cases carry
+    `pytestmark = pytest.mark.requires_ollama` -- they are marked, correctly,
+    and they still hit `NetworkAccessRefused`. They arrive as ERRORS rather than
+    failures, which is the tell: it is fixture SETUP that refuses, not a test
+    body.
+
+    The cause is fixture ordering. pytest instantiates higher-scoped fixtures
+    FIRST, and that file resolves its embedder in two `scope="module"` fixtures.
+    An autouse function-scoped fixture has not run when they do, so the flag it
+    flips is still closed and the marker that would have opened it has not been
+    read. A per-test switch cannot cover work that happens before the per-test
+    phase begins.
+
+    `pytest_runtest_protocol` brackets the ENTIRE protocol for an item -- setup
+    (including every higher-scoped fixture instantiated on its behalf), call,
+    and teardown -- so a marked test's module fixture is inside the window. The
+    same window is why the restore in the `finally` matters here in a way it
+    did not before: a module fixture is torn down during the last item of its
+    module, and that item is the one whose markers opened the gate.
+
+    This was visible only where the daemon is REACHABLE. In a worktree with no
+    pin the module fixtures skip before they open a socket, so the same code
+    reported four honest skips and the defect could not appear. Green here and
+    red in HELM meant different visibility, not a regression -- the second time
+    that happened in one evening.
+    """
     global _NETWORK_ALLOWED, _OLLAMA_ALLOWED
     previous = _NETWORK_ALLOWED, _OLLAMA_ALLOWED
+    wants_ollama = any(
+        item.get_closest_marker(name) is not None for name in _OLLAMA_MARKERS
+    )
     _NETWORK_ALLOWED = any(
-        request.node.get_closest_marker(name) is not None for name in _NETWORK_MARKERS
+        item.get_closest_marker(name) is not None for name in _NETWORK_MARKERS
     )
-    _OLLAMA_ALLOWED = any(
-        request.node.get_closest_marker(name) is not None for name in _OLLAMA_MARKERS
-    )
+    _OLLAMA_ALLOWED = wants_ollama
+
+    # THE INHERITED EMBEDDING PIN is contained in the SAME window, and for the
+    # same reason. It lived in an autouse function-scoped fixture until
+    # 2026-09-04, so a module-scoped fixture resolving
+    # `embeddings.index_embed_preference` read the ambient value before the
+    # containment existed.
+    #
+    # Third ring of the containment `_mute_telegram_targets` above performs for
+    # the notification targets: a name in the ambient environment silently
+    # decides a verdict. `HEADING_OS_OLLAMA_EMBED_HOST` is source 2 of that
+    # resolution, so a shell that exports it repoints every embed caller in the
+    # suite at a host the test never named. MEASURED 2026-09-03:
+    # `tests/test_ops_signals.py::test_ollama_accel_state_fs` passes with the
+    # name unset and FAILS with it set to `auto:11434,11436`, on its very first
+    # assertion -- the test writes its own config into a `tmp_path` precisely to
+    # control this, and the environment reached around it.
+    #
+    # Blanked rather than deleted: every reader uses
+    # `os.environ.get(name, "")`, so an empty value is the documented no-op,
+    # while a deleted name is recreated by the first `load_env()` any test
+    # performs. A test that genuinely needs the operator's pin marks itself
+    # `requires_ollama` and keeps it -- the same switch that opens the gateway
+    # leg of the egress guard.
+    pin = "HEADING_OS_OLLAMA_EMBED_HOST"
+    had_pin = pin in os.environ
+    pin_was = os.environ.get(pin)
+    if not wants_ollama:
+        os.environ[pin] = ""
     try:
         yield
     finally:
         _NETWORK_ALLOWED, _OLLAMA_ALLOWED = previous
-
-
-@pytest.fixture(autouse=True)
-def _no_inherited_embed_pin(request, monkeypatch):
-    """A test must not inherit THIS machine's embedding pin.
-
-    Third ring of the same containment as `_mute_telegram_targets` above, and
-    for the same reason: a name in the ambient environment silently decides a
-    verdict. `HEADING_OS_OLLAMA_EMBED_HOST` is source 2 of
-    `embeddings.index_embed_preference`, so a shell that exports it repoints
-    every embed caller in the suite at a host the test never named.
-
-    MEASURED 2026-09-03: `tests/test_ops_signals.py::test_ollama_accel_state_fs`
-    passes with the name unset and FAILS with it set to `auto:11434,11436` --
-    its very first assertion, "no config -> not configured", because
-    `ops_signals.ollama_accel_state` reads that name as a fallback source. The
-    test writes its own config into a `tmp_path` precisely to control this, and
-    the environment reached around it.
-
-    `setenv(..., "")` rather than `delenv`: blanking is the documented no-op
-    for every reader of this name (all use `os.environ.get(name, "")`), and
-    `monkeypatch.delenv(raising=False)` on an ALREADY-ABSENT name records no
-    undo entry at all -- the trap this file's Telegram containment above was
-    written for.
-
-    A test that genuinely needs the operator's pin marks itself
-    `requires_ollama` and keeps it, which is the same switch that opens the
-    gateway leg of the egress guard.
-    """
-    if not any(request.node.get_closest_marker(name) is not None
-               for name in _OLLAMA_MARKERS):
-        monkeypatch.setenv("HEADING_OS_OLLAMA_EMBED_HOST", "")
-    yield
+        if not wants_ollama:
+            if had_pin:
+                os.environ[pin] = pin_was
+            else:
+                os.environ.pop(pin, None)
 
 
 # ============================================================

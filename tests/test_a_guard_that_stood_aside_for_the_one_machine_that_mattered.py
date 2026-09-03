@@ -147,6 +147,52 @@ def test_loopback_is_still_permitted_without_any_marker():
 # ============================================================
 
 # ============================================================
+# A marker has to cover the fixtures built on the test's behalf
+# ============================================================
+
+@pytest.fixture(scope="module")
+def _gateway_from_a_module_fixture():
+    """Reaches the gateway from MODULE scope, which pytest builds first.
+
+    The exact shape of the defect: `tests/test_recall_cross_lingual.py`
+    resolves its embedder in two `scope="module"` fixtures, so the socket is
+    opened before any function-scoped fixture has run.
+    """
+    if GATEWAY is None:
+        return "no gateway"
+    try:
+        socket.create_connection((GATEWAY, 11434), timeout=1).close()
+    except C.NetworkAccessRefused:
+        return "refused"
+    except OSError:
+        pass            # daemon down; the guard still stood aside, which is
+                        # the whole question here.
+    return "allowed"
+
+
+@not_on_wsl
+@pytest.mark.requires_ollama
+def test_a_marked_test_covers_its_module_scoped_fixture(
+        _gateway_from_a_module_fixture):
+    """The failing half, and it failed against the version before this change.
+
+    MEASURED 2026-09-04 in the operator's main clone, with the daemon live: the
+    four `test_recall_cross_lingual` cases carry
+    `pytestmark = pytest.mark.requires_ollama` and were STILL refused, arriving
+    as ERRORS rather than failures because it was fixture setup that refused.
+    pytest instantiates higher-scoped fixtures FIRST, so an autouse
+    function-scoped switch has not run when they reach the socket.
+
+    Invisible from a worktree: with no pin the module fixtures skip before
+    opening anything, so the same code reported four honest skips there. Green
+    in the YARD and red in HELM meant different VISIBILITY, not a regression.
+    """
+    assert _gateway_from_a_module_fixture == "allowed", (
+        "a module-scoped fixture of a `requires_ollama` test was refused, so "
+        "the marker does not cover the fixtures pytest builds on its behalf")
+
+
+# ============================================================
 # The second way the host reached in: an inherited pin
 # ============================================================
 
@@ -200,12 +246,12 @@ def test_the_switch_is_restored_rather_than_only_reassigned():
     class _Request:
         node = _Node()
 
-    # `__wrapped__`, because pytest refuses a direct call on the decorated name.
-    # The attribute is the undecorated function, so this drives the real body
-    # rather than a copy of it.
-    body = C._no_egress.__wrapped__
+    # The hook itself. It was an autouse fixture until 2026-09-04 and moved to
+    # `pytest_runtest_protocol` because a per-test fixture does not cover the
+    # higher-scoped fixtures pytest builds FIRST on that test's behalf -- which
+    # is how four correctly-marked tests were refused at the socket.
     before_network, before_ollama = C._NETWORK_ALLOWED, C._OLLAMA_ALLOWED
-    generator = body(_Request())
+    generator = C.pytest_runtest_protocol(_Node(), None)
     try:
         next(generator)
         assert C._OLLAMA_ALLOWED is True, (

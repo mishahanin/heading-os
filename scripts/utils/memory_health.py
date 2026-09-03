@@ -401,20 +401,30 @@ def scan_redundancy(memory_dir, *, threshold=0.86, embedder=None, timeout=120) -
     files -- on CPU-only ollama that can exceed 120s as the corpus grows, so a
     background/cron caller with no interactive latency pressure (e.g.
     dream-shadow.py) should pass a longer value. Ignored when a custom
-    `embedder` callable is supplied (the caller owns its own timeout then)."""
+    `embedder` callable is supplied (the caller owns its own timeout then).
+
+    The corpus is READ before the embedder is resolved, so an unreadable memory
+    file is named and counted even on a run that has no embedder at all. See the
+    comment at the walk for the measurement behind that order."""
     files = sorted(p for p in Path(memory_dir).glob("*.md") if p.name != "MEMORY.md")
     if len(files) < 2:
         return {"ok": True, "pairs": [], "note": "fewer than 2 memory files"}
-    if embedder is None:
-        try:
-            from scripts.utils.embeddings import embed, index_embed_target
-
-            host, model = index_embed_target()
-
-            def embedder(ts):
-                return embed(ts, model=model, host=host, timeout=timeout)
-        except Exception as e:
-            return {"ok": False, "pairs": [], "note": f"embedder unavailable: {e}"}
+    # THE CORPUS IS READ BEFORE THE EMBEDDER IS RESOLVED, and the order is the
+    # point rather than an accident. `index_embed_target()` PROBES when a host is
+    # pinned, and a pin REFUSES rather than degrading, so on a machine whose
+    # pinned ollama is down this function used to return at the old line above
+    # without opening a single file. MEASURED 2026-09-03: on a corpus of one
+    # clean note, one accented note and one carrying a lone 0xe9, with
+    # `HEADING_OS_OLLAMA_EMBED_HOST=auto:11434,11436` and nothing answering
+    # there, the walk below never ran and the undecodable file was named on no
+    # stream at all. An unrelated outage silenced a corruption signal: whether a
+    # memory file can be READ is a fact about the corpus and owes the embedder
+    # nothing.
+    #
+    # The cost of reading first is one pass over auto-memory (258 small files on
+    # 2026-09-03) on a run that is going to fail anyway, against a corrupt fact
+    # file staying invisible for as long as the daemon is down.
+    #
     # Every other reader in this module guards `OSError`; this one did not, and
     # it runs over a directory the auto-retire sweep mutates. MEASURED
     # 2026-08-30: one memory file at mode 000 raised `PermissionError` straight
@@ -440,13 +450,26 @@ def scan_redundancy(memory_dir, *, threshold=0.86, embedder=None, timeout=120) -
             continue
         readable.append(f)
     files = readable
+    skipped = f"; {unreadable} unreadable file(s) skipped" if unreadable else ""
     if len(files) < 2:
         return {"ok": False, "pairs": [],
                 "note": f"fewer than 2 readable memory files ({unreadable} unreadable)"}
+    if embedder is None:
+        try:
+            from scripts.utils.embeddings import embed, index_embed_target
+
+            host, model = index_embed_target()
+
+            def embedder(ts):
+                return embed(ts, model=model, host=host, timeout=timeout)
+        except Exception as e:
+            return {"ok": False, "pairs": [],
+                    "note": f"embedder unavailable: {e}{skipped}"}
     try:
         vecs = embedder(texts)
     except Exception as e:
-        return {"ok": False, "pairs": [], "note": f"embedder unavailable: {e}"}
+        return {"ok": False, "pairs": [],
+                "note": f"embedder unavailable: {e}{skipped}"}
     pairs = []
     for i in range(len(files)):
         for j in range(i + 1, len(files)):
@@ -454,6 +477,5 @@ def scan_redundancy(memory_dir, *, threshold=0.86, embedder=None, timeout=120) -
             if cos >= threshold:
                 pairs.append({"a": files[i].name, "b": files[j].name, "score": round(cos, 4)})
     pairs.sort(key=lambda p: p["score"], reverse=True)
-    skipped = f"; {unreadable} unreadable file(s) skipped" if unreadable else ""
     return {"ok": True, "pairs": pairs,
             "note": f"{len(pairs)} near-duplicate pair(s){skipped}"}

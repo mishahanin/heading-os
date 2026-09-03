@@ -76,6 +76,24 @@ CLEAN_NOTE = "---\nname: clean-note\ndescription: a readable note\n---\n\nBody t
 ACCENTED_NOTE = "---\nname: accented-note\ndescription: caf\u00e9 latt\u00e9\n---\n\nR\u00e9sum\u00e9.\n"
 
 
+def _TWIN_VECTORS(texts):
+    """A stub embedder, so these two tests measure the code and not the host.
+
+    MEASURED 2026-09-03: with no `embedder=` argument, `scan_redundancy`
+    resolves a real ollama host, and where one is PINNED and down it returns
+    before reading a file. Both tests below were then decided by whether a
+    daemon on this machine's Windows side happened to be up -- green by luck in
+    a fresh worktree (no gitignored `config/ollama-hosts.yaml`, so no pin) and
+    red in the operator's main clone (pin present, daemon stopped). Injecting
+    the embedder is what makes their verdict a fact about the walk.
+
+    That the walk now runs even when NO embedder can be resolved is a separate
+    property, held by
+    `tests/test_a_scan_that_stopped_reading_when_a_daemon_stopped_answering.py`.
+    """
+    return [[1.0, 0.0]] * len(texts)
+
+
 def _corpus(tmp_path: Path) -> Path:
     """One clean file, one accented-but-valid file, one undecodable file.
 
@@ -136,17 +154,20 @@ def test_memory_health_redundancy_scan_survives_and_counts(tmp_path):
     the one input most likely to break a read.
     """
     corpus = _corpus(tmp_path)
-    result = memory_health.scan_redundancy(corpus)
+    result = memory_health.scan_redundancy(corpus, embedder=_TWIN_VECTORS)
     assert isinstance(result, dict), (
         "scan_redundancy raised instead of degrading, which is what its own "
         "note about unreadable files says it does")
-    assert "note" in result or "pairs" in result
+    # `"note" in result or "pairs" in result` stood here until 2026-09-03 and is
+    # true on every return path this function has, including the one that never
+    # opens a file. The name promises a COUNT, so the count is what is asserted.
+    assert result["note"].endswith("1 unreadable file(s) skipped"), result["note"]
 
 
 def test_memory_health_names_the_file_it_dropped(tmp_path, caplog):
     corpus = _corpus(tmp_path)
     with caplog.at_level(logging.WARNING, logger="scripts.utils.memory_health"):
-        memory_health.scan_redundancy(corpus)
+        memory_health.scan_redundancy(corpus, embedder=_TWIN_VECTORS)
     assert "b-broken.md" in caplog.text, (
         f"the dropped file was not named in any warning: {caplog.text!r}")
 

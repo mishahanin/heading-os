@@ -132,12 +132,69 @@ def _structural_overlay_root():
     unwatched; that is a known gap, reported rather than silently widened here,
     because bringing them in changes which writes a run is allowed to make.
     """
-    engine = Path(__file__).resolve().parents[2]
+    engine = _main_clone_root(Path(__file__).resolve().parents[2])
     sibling = engine.parent / ".heading-os-data"
     try:
         return sibling.resolve() if sibling.is_dir() else None
     except OSError:
         return None
+
+
+def _main_clone_root(engine):
+    """`engine` when it is the main clone, else the main clone it belongs to.
+
+    The sibling-overlay rule above holds for the MAIN clone and for nothing
+    else. A git worktree lives wherever it was created: this repository's YARDs
+    sit at `<workspaces>/.yard/.heading-os/<task>`, three levels away from the
+    overlay, so `engine.parent / ".heading-os-data"` names a directory that has
+    never existed.
+
+    MEASURED 2026-09-03 in the YARD at `.yard/.heading-os/test-123`:
+    `_structural_overlay_root()` returned None, `_watched_roots()` was empty,
+    and `arm_process_wide()` therefore wrapped nothing while reporting itself
+    armed. Five tests in
+    `tests/test_a_guard_that_armed_under_pytest_and_nowhere_else.py` prove it
+    and had been SKIPPED, because the `.pth` they require is removed by
+    `uv sync` and the bootstrap never put it back -- so the suite could not say
+    it either. Every YARD on this machine ran unguarded, and the report said
+    otherwise. CLAUDE.md § HELM and YARD states the rule this broke: derive the
+    tree from the current checkout, never from a constant.
+
+    Import-free on purpose, like its caller. This runs from a `.pth` during
+    `site.py`, and importing anything under `scripts.` there binds the name
+    `scripts` in `sys.modules` for the whole interpreter -- the defect that put
+    62 tests red on 2026-08-31 and the reason `_structural_overlay_root` walks
+    `__file__` instead of calling `get_data_root()`. `git rev-parse` is not
+    available either: no subprocess at interpreter startup.
+
+    So the link is read the way git writes it. A worktree's `.git` is a FILE
+    holding `gitdir: <main>/.git/worktrees/<name>`; the main clone's `.git` is a
+    directory. Anything unexpected returns `engine` unchanged, which is the
+    previous behaviour and fails toward the public-clone case rather than toward
+    a stranger's directory.
+    """
+    dotgit = engine / ".git"
+    try:
+        if dotgit.is_dir() or not dotgit.is_file():
+            return engine
+        text = dotgit.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return engine
+    if not text.startswith("gitdir:"):
+        return engine
+    gitdir = Path(text[len("gitdir:"):].strip())
+    if not gitdir.is_absolute():
+        # `normpath`, not `resolve`. The `..` segments have to go, or `parents`
+        # below counts them as components and returns a path spelled through
+        # the worktree it was supposed to leave. `resolve` would also follow
+        # symlinks, and a repository reached through one is still that
+        # repository; the question here is spelling, not identity.
+        gitdir = Path(os.path.normpath(engine / gitdir))
+    # <main>/.git/worktrees/<name>  ->  <main>
+    parents = gitdir.parents
+    if len(parents) < 3 or parents[0].name != "worktrees" or parents[1].name != ".git":
+        return engine
+    return parents[2]
 
 
 def _overlay_root():

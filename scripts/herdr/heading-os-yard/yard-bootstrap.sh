@@ -268,6 +268,51 @@ if [ "$DOCTOR_ONLY" -eq 0 ]; then
   # ───────────────────────────────────────────────────────────
   LAST_STEP=5
   ./scripts/setup-platform.sh >/dev/null 2>&1 || fail 5 "setup-platform.sh failed"
+
+  # The overlay write guard, armed and PROVEN. It belongs to this step because
+  # this is the arming step, and it comes after step 4 because `uv sync`
+  # rebuilds site-packages and deletes the `.pth` that arms the guard outside
+  # pytest. Nothing put it back, so MEASURED 2026-09-03 every YARD on this
+  # machine ran with the guard off in every process except pytest.
+  #
+  # A report is not proof, and this is the case that shows why. The guard also
+  # reported itself armed while wrapping NOTHING, because
+  # `_structural_overlay_root()` looked for `.heading-os-data` beside the
+  # checkout and a worktree does not sit beside it. Armed-over-nothing and
+  # armed-and-working printed the same word. So the check below is a real
+  # write into the real overlay that MUST be refused, in the same spirit as the
+  # canary at step 10.
+  ".venv/bin/python" scripts/overlay-guard-install.py --install >/dev/null 2>&1 \
+    || fail 5 "the overlay write guard could not be installed into this venv"
+  HEADING_OS_OVERLAY_GUARD=refuse ".venv/bin/python" - <<'PROBE' \
+    || fail 5 "the overlay write guard did not refuse a write into the operator's overlay"
+import os
+import sys
+
+sys.path.insert(0, os.getcwd())
+from scripts.utils.overlay_write_guard import _structural_overlay_root
+
+root = _structural_overlay_root()
+if root is None:
+    # A public clone with no overlay beside it. Nothing to guard, and saying so
+    # is honest; claiming a passed proof would not be.
+    print("no overlay beside this clone", file=sys.stderr)
+    sys.exit(0)
+
+probe = os.path.join(str(root), ".yard-overlay-guard-canary")
+try:
+    with open(probe, "w") as handle:
+        handle.write("canary")
+except Exception:
+    sys.exit(0)          # refused: the guard is real
+
+# It did NOT refuse. Remove what should never have been written, then fail.
+try:
+    os.unlink(probe)
+except OSError:
+    pass
+sys.exit(1)
+PROBE
   write_status "in_progress" 5
 
   LAST_STEP=6

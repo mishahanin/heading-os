@@ -223,10 +223,38 @@ if [ "$DOCTOR_ONLY" -eq 0 ]; then
     || fail 3 "cannot disable the push url for this worktree"
   write_status "in_progress" 3
 
+  # ───────────────────────────────────────────────────────────
   # 4. Dependencies. Nothing above here used .venv, because there was none.
+  #
+  # The flags are NOT optional, and they are the ones CLAUDE.md § Setup step 2
+  # already prescribes for a fresh clone: `uv sync --all-extras --group dev`.
+  # A YARD is a fresh clone in every sense that matters here, so it needs the
+  # same environment; anything less builds a checkout that cannot run the suite
+  # it exists to run.
+  #
+  # This read `uv sync --quiet` until 2026-09-03, which installs the core
+  # dependencies only. MEASURED 2026-09-03 in the YARD at .yard/.heading-os/
+  # test-123 against HELM: `import telethon` and `import cryptography` both
+  # succeeded in HELM's .venv and both raised ModuleNotFoundError in the YARD's,
+  # and the full suite reported 229 failures there against a HELM-shaped
+  # environment. The failures were pure environment noise -- absent optional
+  # extras, plus pytest-xdist and pre-commit from the dev group.
+  #
+  # Why that is worse than a slow first run. A YARD exists so engine work can be
+  # judged in isolation, and a task cannot tell its own regression from 229
+  # pre-existing failures it did not cause. The bare sync did not slow the YARD
+  # down; it removed the YARD's reason to exist. The first run costs more
+  # wall-clock, once, per worktree.
+  #
+  # `--all-extras` covers every name in [project.optional-dependencies]. The
+  # `all` extra there is an aggregate of the other nine, so `--all-extras` and
+  # `--extra all` resolve to the same set; the flag is used because it needs no
+  # maintenance when a tenth extra lands.
+  # ───────────────────────────────────────────────────────────
   LAST_STEP=4; badge "setup"
   command -v uv >/dev/null 2>&1 || fail 4 "uv is not on PATH"
-  uv sync --quiet || fail 4 "uv sync failed"
+  uv sync --all-extras --group dev --quiet \
+    || fail 4 "uv sync --all-extras --group dev failed"
   write_status "in_progress" 4
 
   # ───────────────────────────────────────────────────────────

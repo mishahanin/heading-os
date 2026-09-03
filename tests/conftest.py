@@ -639,6 +639,98 @@ def _pin_model_resolution(request):
 
 
 # ============================================================
+# A stub `herdr`, because the real one is shared across every worktree
+# ============================================================
+#
+# `yard-bootstrap.sh` talks to the herdr server at six places: `workspace get`,
+# `workspace rename`, `pane report-metadata` (on every step, through `badge`),
+# `pane run`, and two `notification show`. There is ONE server per machine, so
+# every one of those reaches the operator's live session and any OTHER worktree
+# open beside it.
+#
+# MEASURED 2026-09-03. A mutation run over the bootstrap tests put
+# "YARD: the engine/data contour is broken - step 6: the PreToolUse walls are
+# not registered in this copy" on the operator's screen, from a test. The
+# notification is the visible half. The dangerous half is silent: the script
+# reads `WS_ID="${HERDR_WORKSPACE_ID:-}"` and `PANE_ID="${HERDR_PANE_ID:-}"`
+# from the environment, the test helpers build their env from `os.environ`, and
+# inside a herdr-managed session both are SET and name the operator's real
+# workspace and pane. `workspace rename "$WS_ID" "$LABEL"` and
+# `pane run "$PANE_ID" ...` were therefore aimed at a live pane belonging to
+# somebody else's work.
+#
+# This is the same shape as the `git worktree prune` defect described below,
+# against a different shared resource: an operation scoped to "this test" that
+# is in fact scoped to the whole machine.
+#
+# The seam already existed and nothing used it: line 41 of the bootstrap reads
+# `HERDR="${HERDR_BIN_PATH:-herdr}"`. One fixture fills it, and every test that
+# executes the script goes through this fixture rather than carrying its own
+# copy.
+
+
+class HerdrStub:
+    """An executable that records every call and never reaches the server."""
+
+    def __init__(self, binary: Path, log: Path):
+        self.binary = binary
+        self.log = log
+
+    @property
+    def calls(self) -> list[list[str]]:
+        """Each invocation's argv, in order."""
+        if not self.log.exists():
+            return []
+        return [line.split("\x1f") for line in
+                self.log.read_text(encoding="utf-8").splitlines() if line]
+
+    def env(self, base: dict | None = None) -> dict:
+        """`base` (default `os.environ`) with the bootstrap pointed at the stub.
+
+        `HERDR_WORKSPACE_ID` and `HERDR_PANE_ID` are dropped as well. The stub
+        alone makes the calls harmless, but a test that inherits them is still
+        naming the operator's live pane in its arguments, and a future caller
+        that spawns the real binary would aim at it. Removing the identifiers
+        means there is nothing to aim.
+        """
+        env = dict(os.environ if base is None else base)
+        env["HERDR_BIN_PATH"] = str(self.binary)
+        for name in ("HERDR_WORKSPACE_ID", "HERDR_PANE_ID"):
+            env.pop(name, None)
+        return env
+
+
+def write_herdr_stub(directory: Path, *, exit_code: int = 0) -> HerdrStub:
+    """Create a `herdr` stub in `directory`. Used by the fixture and by tests
+    that need a deliberately hostile one."""
+    directory.mkdir(parents=True, exist_ok=True)
+    binary = directory / "herdr"
+    log = directory / "herdr-calls.log"
+    # US (0x1f) between argv elements, not a space: a herdr argument can hold
+    # spaces (a workspace label is one), and a space-joined log would not
+    # round-trip into `HerdrStub.calls`.
+    binary.write_text(
+        '#!/usr/bin/env bash\n'
+        f'LOG="{log}"\n'
+        'sep=""\n'
+        'for a in "$@"; do printf \'%s%s\' "$sep" "$a" >> "$LOG"; sep=$\'\\x1f\'; done\n'
+        "printf '\\n' >> \"$LOG\"\n"
+        f'exit {exit_code}\n',
+        encoding="utf-8")
+    binary.chmod(0o755)
+    return HerdrStub(binary, log)
+
+
+@pytest.fixture
+def herdr_stub(tmp_path) -> HerdrStub:
+    """The one herdr stub. Every test that executes `yard-bootstrap.sh` uses it.
+
+    Read `HerdrStub.env()` for what it neutralises and why it is not optional.
+    """
+    return write_herdr_stub(tmp_path / "herdr-stub")
+
+
+# ============================================================
 # A real git worktree, created and guaranteed removed
 # ============================================================
 #

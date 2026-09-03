@@ -210,14 +210,47 @@ def test_only_the_operators_own_words_authorise(prompt, action, expected):
 @pytest.mark.parametrize("prompt", [
     "не пушь пока",
     "don't push yet",
-    "do not commit this",
-    "push it but don't commit",
 ])
-def test_a_negation_anywhere_refuses(prompt):
+def test_a_push_negation_refuses_both(prompt):
     """Blunt on purpose. "не пушь пока" and "пуш" differ by one token, and a
-    wall that has to parse intent gets it wrong in the expensive direction."""
+    wall that has to parse intent gets it wrong in the expensive direction.
+
+    Both, because a commit is the step before a push: refusing the push and
+    allowing the commit that feeds it would be a wall that slows the breach
+    down rather than stopping it. Only when the operator ALSO says a commit
+    word does the commit go through -- see the case below.
+    """
     assert D.prompt_authorises(prompt, "push") is False
     assert D.prompt_authorises(prompt, "commit") is False
+
+
+@pytest.mark.parametrize("prompt,action,expected", [
+    # CHANGED 2026-09-03, and this case is the whole reason. It read
+    # "a negation ANYWHERE refuses EVERYTHING", so `"закоммить всё и не пушь"`
+    # refused the COMMIT as well. That is the single most common instruction in
+    # this workspace, and a wall that cannot express it teaches the operator to
+    # drop the prohibition from the sentence in order to be obeyed -- which is
+    # the wall removing its own safety word.
+    ("закоммить всё и не пушь", "commit", True),
+    ("закоммить всё и не пушь", "push", False),
+    ("do not push, just commit", "commit", True),
+    ("do not push, just commit", "push", False),
+    # The mirror image. "push it" is an explicit push instruction and the
+    # commit is the one refused.
+    ("push it but don't commit", "push", True),
+    ("push it but don't commit", "commit", False),
+    # A prohibition spelled in words no negation list enumerates. MEASURED
+    # against the previous version: these returned True for a PUSH, because a
+    # push WORD anywhere returned True for every action, so writing the
+    # prohibition was indistinguishable from writing the permission.
+    ("пуш запрещён, только коммить", "push", False),
+    ("пуш запрещён, только коммить", "commit", True),
+    ("push is forbidden here", "push", False),
+    ("пушить нельзя", "push", False),
+])
+def test_a_negation_refuses_its_own_action_and_not_the_other(
+        prompt, action, expected):
+    assert D.prompt_authorises(prompt, action) is expected
 
 
 # ==========================================================================

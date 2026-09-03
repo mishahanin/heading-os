@@ -2673,10 +2673,17 @@ def check_fanout_first(payload: dict):
 # ACTUAL most recent words at the instant of the action, so belief is replaced
 # by evidence and a stale belief cannot survive a single turn.
 #
-# `last-prompt` records in the session transcript carry `lastPrompt`, the
-# operator's typed text verbatim, re-emitted at every leaf. Task notifications,
-# Stop-hook feedback and tool results are NOT last-prompts, so a synthetic
-# message cannot authorise anything. The model does not write the transcript.
+# The transcript carries two records of what the operator typed, and the wall
+# needs BOTH. `last-prompt` records re-emit it at every leaf and the model does
+# not write them, so they establish PROVENANCE -- a task notification, Stop-hook
+# feedback or a tool result is not a last-prompt, and a synthetic message cannot
+# authorise anything. But `lastPrompt` is TRUNCATED at 200 characters plus an
+# ellipsis: MEASURED 2026-09-03 over one session's transcript, 166 records, max
+# length exactly 201, 83 of them on the cap. So the TEXT comes from the same
+# turn's `type: "user"` record with `promptSource: "typed"`, whose
+# `message.content` is the full string, and the capped record confirms it by
+# prefix. They disagree, or the typed record is missing its confirmation, and
+# the wall refuses.
 #
 # Fail-closed everywhere: an unreadable transcript, a missing field or an
 # unrecognised command shape all refuse. A gate that opens when it cannot see is
@@ -2773,14 +2780,37 @@ _COMMIT_WORDS = (
     "commit", "коммит", "закоммить", "зафиксируй",
 )
 
-# Any of these anywhere in the prompt refuses, whatever else it says. Deliberately
-# blunt: "не пушь пока" and "push" differ by one token, and a wall that has to
-# parse intent is a wall that gets it wrong in the expensive direction.
-_NEGATIONS = (
-    "не пуш", "не коммить", "не комить", "не отправляй", "не заливай",
-    "не публикуй", "без пуша", "без коммита",
+# PER ACTION, since 2026-09-03. These were one list, and any entry refused the
+# WHOLE prompt, so `"закоммить всё и не пушь"` refused the COMMIT as well. The
+# wall's vocabulary could not express "commit, but do not push", which is the
+# most common instruction in this workspace; the operator had to authorise
+# commits in a separate message that omitted the prohibition, which is a wall
+# teaching people to drop their own safety words.
+#
+# Deliberately blunt, and blunt in the REFUSING direction: "не пушь пока" and
+# "push" differ by one token, and a wall that has to parse intent gets it wrong
+# in the expensive direction. A false refusal is visible and cheap; a missed
+# push is invisible and is the whole point.
+_PUSH_NEGATIONS = (
+    "не пуш", "не отправляй", "не заливай", "не публикуй", "без пуша",
     "don't push", "dont push", "do not push", "no push",
+)
+_COMMIT_NEGATIONS = (
+    "не коммить", "не комить", "без коммита",
     "don't commit", "dont commit", "do not commit", "no commit",
+)
+
+# A prohibition said in words the lists above do not enumerate. MEASURED
+# 2026-09-03 against the previous version: `"пуш запрещён, только коммить"`
+# returned True for a PUSH, and so did `"push is forbidden here"` -- writing the
+# prohibition was indistinguishable from writing the permission, because a push
+# WORD appearing anywhere returned True for every action.
+#
+# These refuse a PUSH only. They deliberately do not touch a commit: the operator
+# writes "пуш запрещён" beside a commit instruction constantly, and reading that
+# as a refusal of both is the defect above facing the other way.
+_PROHIBITIONS = (
+    "запрещ", "запрет", "нельзя", "forbidden", "prohibited", "not allowed",
 )
 
 
@@ -3062,19 +3092,70 @@ def prompt_authorises(prompt: str, action: str) -> bool:
     if not prompt or not action:
         return False
     low = prompt.lower()
-    if any(n in low for n in _NEGATIONS):
-        return False
-    if any(w in low for w in _PUSH_WORDS):
-        return True
-    return action == "commit" and any(w in low for w in _COMMIT_WORDS)
+
+    push_refused = (any(w in low for w in _PUSH_NEGATIONS)
+                    or any(w in low for w in _PROHIBITIONS))
+    commit_refused = any(w in low for w in _COMMIT_NEGATIONS)
+
+    if action == "push":
+        return not push_refused and any(w in low for w in _PUSH_WORDS)
+
+    if action == "commit":
+        if commit_refused:
+            return False
+        if any(w in low for w in _COMMIT_WORDS):
+            return True
+        # A push the operator asked for implies the commit that precedes it --
+        # but only while the push is not itself refused.
+        return not push_refused and any(w in low for w in _PUSH_WORDS)
+
+    return False
+
+
+def _flatten(text: str) -> str:
+    """Whitespace collapsed, for comparing two spellings of one prompt."""
+    return " ".join((text or "").split())
+
+
+def _reconcile(typed: str | None, capped: str | None) -> str | None:
+    """The operator's words, full length, or None.
+
+    `capped` is the harness-written `last-prompt`, which the model cannot forge
+    and which is therefore the provenance guarantee this wall rests on. `typed`
+    is the same turn's `type: "user"` record with `promptSource: "typed"`, whose
+    `message.content` is the SAME TEXT UNTRUNCATED.
+
+    Both, not either: reading `message.content` alone would give up the
+    provenance, so the capped record has to confirm it. A prefix, because that
+    is exactly the relationship between them.
+    """
+    if typed is None:
+        # A session recorded before `promptSource` existed. The capped text is
+        # all there is, and it is CUT AT 200 CHARACTERS PLUS AN ELLIPSIS, so
+        # anything the operator wrote past that is invisible here.
+        return capped
+    if capped is None:
+        return None                       # unconfirmed origin: refuse
+    head = _flatten(capped).rstrip("…").rstrip()
+    if head and _flatten(typed).startswith(head):
+        return typed
+    return None
 
 
 def _last_operator_prompt(transcript_path: str) -> str | None:
     """The operator's verbatim most recent typed prompt, or None.
 
+    IT USED TO RETURN A TRUNCATED COPY. `lastPrompt` is capped: MEASURED
+    2026-09-03 over this session's own transcript, 166 `last-prompt` records,
+    maximum length exactly 201, and 83 of them on that cap. Half the operator's
+    prompts arrived here cut off, and with a 303-character prompt that asks for
+    a push and forbids it at the end, the full text refused the push while the
+    201-character copy AUTHORISED it. The wall lost the one word it exists to
+    obey.
+
     Reads the tail first, because the transcript reached 127,337 lines in the
     session this wall was written in and this runs inside a synchronous hook.
-    Falls back to the whole file when the tail holds no `last-prompt`, which
+    Falls back to the whole file when the tail holds neither record, which
     happens after a very long single turn. None on any failure, and the caller
     treats None as a refusal.
     """
@@ -3084,20 +3165,29 @@ def _last_operator_prompt(transcript_path: str) -> str | None:
     if not p.is_file():
         return None
 
-    def _scan(blob: bytes, partial_first: bool) -> str | None:
+    def _scan(blob: bytes, partial_first: bool) -> tuple[str | None, str | None]:
         lines = blob.splitlines()
         if partial_first and lines:
             lines = lines[1:]
+        typed = capped = None
         for raw in reversed(lines):
-            if b'"last-prompt"' not in raw:
-                continue
-            rec = _loads_or_none(raw)
-            if rec is None or rec.get("type") != "last-prompt":
-                continue
-            val = rec.get("lastPrompt")
-            if isinstance(val, str):
-                return val
-        return None
+            if capped is None and b'"last-prompt"' in raw:
+                rec = _loads_or_none(raw)
+                if rec is not None and rec.get("type") == "last-prompt":
+                    val = rec.get("lastPrompt")
+                    if isinstance(val, str):
+                        capped = val
+            if typed is None and b'"typed"' in raw:
+                rec = _loads_or_none(raw)
+                if (rec is not None and rec.get("type") == "user"
+                        and rec.get("promptSource") == "typed"):
+                    message = rec.get("message")
+                    if (isinstance(message, dict)
+                            and isinstance(message.get("content"), str)):
+                        typed = message["content"]
+            if typed is not None and capped is not None:
+                break
+        return typed, capped
 
     try:
         size = p.stat().st_size
@@ -3105,12 +3195,12 @@ def _last_operator_prompt(transcript_path: str) -> str | None:
         with p.open("rb") as fh:
             if size > window:
                 fh.seek(size - window)
-                found = _scan(fh.read(), partial_first=True)
-                if found is not None:
-                    return found
+                typed, capped = _scan(fh.read(), partial_first=True)
+                if typed is not None or capped is not None:
+                    return _reconcile(typed, capped)
                 fh.seek(0)
-                return _scan(fh.read(), partial_first=False)
-            return _scan(fh.read(), partial_first=False)
+                return _reconcile(*_scan(fh.read(), partial_first=False))
+            return _reconcile(*_scan(fh.read(), partial_first=False))
     except OSError:
         return None
 

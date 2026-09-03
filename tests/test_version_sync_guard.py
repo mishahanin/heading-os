@@ -79,6 +79,10 @@ def test_every_surface_names_the_pyproject_version(guard):
     assert guard._readme_status_version(ROOT) == truth
     assert guard._changelog_latest_version(ROOT) == truth
     assert guard._roadmap_version(ROOT) == truth
+    # Added 2026-09-03 with the lock surface. Enumerating four resolvers while
+    # the guard runs five would leave the newest one asserted nowhere on this
+    # tree, which is the shape that let ROADMAP.md drift for six releases.
+    assert guard._uv_lock_version(ROOT, guard._pyproject_name(ROOT)) == truth
 
 
 def test_the_guard_passes_on_this_tree(guard):
@@ -117,11 +121,12 @@ def test_the_changelog_resolver_ignores_the_unreleased_heading(guard, tmp_path):
 def test_the_hook_pattern_covers_every_guarded_surface():
     """A surface missing from `files:` is a surface the gate never runs for.
 
-    The hook passes no filenames and re-reads all four files itself, so the
+    The hook passes no filenames and re-reads all five files itself, so the
     pattern decides only WHEN the guard runs. ROADMAP.md drifted for six
-    releases while the pattern named three files.
+    releases while the pattern named three files, and uv.lock drifted across
+    the v0.14.0 release while the pattern named four.
     """
-    assert len(SURFACES) >= 4, (
+    assert len(SURFACES) >= 5, (
         f"the AST walk found only {SURFACES} in {SCRIPT.name}; a guard that "
         f"reads nothing is covered by a pattern that names nothing"
     )
@@ -137,8 +142,12 @@ def test_the_surface_list_is_read_off_the_guard_not_typed_here():
     pattern at all, and the floor alone does not prove the names came from the
     script rather than from a literal in this file.
     """
+    # uv.lock joined 2026-09-03. It is pinned here rather than appended
+    # loosely, because the point of this assertion is that a NEW resolver
+    # cannot land unnoticed: the set is exact on purpose, and widening it is
+    # the deliberate act that accompanies widening the guard.
     assert set(SURFACES) == {"README.md", "CHANGELOG.md", "ROADMAP.md",
-                             "pyproject.toml"}, SURFACES
+                             "pyproject.toml", "uv.lock"}, SURFACES
     assert _guarded_surfaces.__doc__  # the reasoning travels with the helper
     src = SCRIPT.read_text(encoding="utf-8")
     for name in SURFACES:

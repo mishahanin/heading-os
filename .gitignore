@@ -366,6 +366,24 @@ config/skill-custom/*.user.toml
 
 .claude/worktrees/
 
+# Per-worktree bootstrap receipt, written by scripts/herdr/heading-os-yard/
+# yard-bootstrap.sh step 11 and read by .claude/hooks/session-start.py to decide
+# whether a YARD is provisioned. It records the status, the step it stopped at
+# and a timestamp for THIS checkout, so it is worthless in any other one and
+# must never travel.
+# MEASURED 2026-09-03 on a YARD at .yard/.heading-os/test-123: `git check-ignore
+# -v .claude/.yard-bootstrap-status` exited 1, meaning no rule matched. The file
+# sat untracked in `git status` and a `git add -A` inside a task would have
+# committed it to a PUBLIC repository.
+# The engine-tree-clean wall does not cover this: it hunts artifacts that route
+# `private`, and `.claude/` routes `engine`, so a runtime marker under it is
+# exactly the shape that wall was never built to see. Hence a .gitignore line,
+# which is the layer that should have caught it first.
+# Narrow on purpose. `.claude/` holds 471 tracked engine files (measured
+# 2026-09-03 via `git ls-files .claude/ | wc -l`); a wider glob here would hide
+# skills and rules from git rather than one receipt.
+.claude/.yard-bootstrap-status
+
 # Scratch slash-commands minted by the /skill-creator eval harness. They MUST be
 # written into the real, tracked `.claude/commands/` because that is the only
 # place `claude -p` discovers a project command; a temp dir outside the repo

@@ -183,10 +183,13 @@ repos:
   - repo: local
     hooks:
       - id: version-sync
-        name: Verify README/CHANGELOG/ROADMAP version matches pyproject.toml
+        name: Verify README/CHANGELOG/ROADMAP/uv.lock version matches pyproject.toml
         entry: .venv/bin/python scripts/check-version-sync.py --quiet
+        # uv.lock joined the pattern 2026-09-03. Without it a commit touching
+        # ONLY the lock never fires this hook, which is how uv.lock sat at
+        # 0.13.0 against pyproject 0.14.0 across a release.
+        files: '^(README\.md|CHANGELOG\.md|ROADMAP\.md|pyproject\.toml|uv\.lock)$'
         language: system
-        files: '^(README\.md|CHANGELOG\.md|ROADMAP\.md|pyproject\.toml)$'
         pass_filenames: false
 
   # Vendored-skill integrity (F-9.5). Recompute the sha256-tree-v1 hashes in

@@ -62,6 +62,7 @@ so the next person does not read one as the other.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -102,12 +103,41 @@ def _run_at(zone: str) -> subprocess.CompletedProcess:
         HEADING_OS_TZ=zone,
         PYTHONDONTWRITEBYTECODE="1",
     )
+    # The child's output is PARSED, so it must not be decorated. MEASURED
+    # 2026-09-03: this file's two parametrised cases failed with
+    # `ValueError: invalid literal for int() with base 10: '\x1b[32m\x1b[32m\x1b[1m234'`
+    # because the agent harness exports FORCE_COLOR=3, the child inherited it,
+    # and pytest colourised into a pipe. Nothing about this repository was
+    # wrong; a variable in the surrounding environment decided whether the
+    # guard could read its own measurement.
+    #
+    # Two layers, because they fail differently. `--color=no` stops pytest
+    # colourising whatever the environment asks, and dropping the variables
+    # stops anything else in the child doing it. `_passed_count` below strips
+    # ANSI anyway, so a third colouriser nobody predicted still parses.
+    for forced in ("FORCE_COLOR", "CLICOLOR_FORCE"):
+        env.pop(forced, None)
+    env["NO_COLOR"] = "1"
     return subprocess.run(
         [sys.executable, "-m", "pytest", *CLOCK_SENSITIVE,
          "-q", "-p", "no:cacheprovider", "--no-header", "-p", "no:xdist",
-         "-m", "not acceptance", "--tb=line"],
+         "-m", "not acceptance", "--tb=line", "--color=no"],
         cwd=str(ROOT), capture_output=True, text=True, timeout=600, env=env,
     )
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _passed_count(out: str) -> int:
+    """The number pytest reported as passed, read through any decoration.
+
+    Kept separate from the assertion that uses it so it can be driven directly:
+    a parser that only works on the harness of the day is the defect this
+    replaces.
+    """
+    plain = _ANSI.sub("", out)
+    return int(plain.split(" passed")[0].split()[-1])
 
 
 def test_every_clock_sensitive_file_still_exists():
@@ -209,7 +239,7 @@ def test_the_clock_sensitive_files_pass_away_from_the_operator_zone(zone):
     # Floor first. A run that collected nothing exits 5, and a run that
     # collected one test proves nothing about eight files.
     assert " passed" in out, f"no test reported as passed at {zone}:\n{out[-3000:]}"
-    passed = int(out.split(" passed")[0].split()[-1])
+    passed = _passed_count(out)
     assert passed >= 100, (
         f"only {passed} test(s) ran at {zone}; the guard measured almost "
         f"nothing:\n{out[-2000:]}"
